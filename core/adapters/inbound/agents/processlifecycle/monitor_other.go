@@ -20,7 +20,9 @@ func NewMonitor(handler exitHandler) (*pidMonitor, error) {
 
 func (m *pidMonitor) Watch(pid int, sessionID string) error { return nil }
 
-func (m *pidMonitor) Unwatch(pid int) {}
+func (m *pidMonitor) Unwatch(pid int) {
+	// no-op — this platform has no exit-signal primitive to unregister
+}
 
 // Run blocks until ctx is cancelled, matching the other implementations.
 func (m *pidMonitor) Run(ctx context.Context) error {

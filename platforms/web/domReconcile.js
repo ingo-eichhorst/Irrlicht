@@ -6,6 +6,20 @@
 // that lives alongside it. No app state — pure DOM manipulation.
 
 // --- DOM Reconciliation ---
+
+// The slot immediately after prevNode (or the parent's first child when
+// there is no prevNode yet) — where the next reconciled item belongs.
+function expectedRef(parent, prevNode) {
+  return prevNode ? prevNode.nextSibling : parent.firstChild;
+}
+
+// Inserts/moves `el` so it sits directly before `ref` (or at the end of
+// `parent` when there is no ref), matching native `before`/`appendChild`.
+function insertBeforeRef(parent, el, ref) {
+  if (ref) ref.before(el);
+  else parent.appendChild(el);
+}
+
 // Keyed reconcile: patches children of `parent` to match `items`.
 export function reconcile(parent, items, keyFn, createFn, updateFn) {
   const existingByKey = new Map();
@@ -25,15 +39,12 @@ export function reconcile(parent, items, keyFn, createFn, updateFn) {
     if (el) {
       updateFn(el, item);
       // Move to correct position if needed
-      const expected = prevNode ? prevNode.nextSibling : parent.firstChild;
-      if (el !== expected) {
-        parent.insertBefore(el, expected);
-      }
+      const expected = expectedRef(parent, prevNode);
+      if (el !== expected) insertBeforeRef(parent, el, expected);
     } else {
       el = createFn(item);
       el.dataset.key = key;
-      const ref = prevNode ? prevNode.nextSibling : parent.firstChild;
-      parent.insertBefore(el, ref);
+      insertBeforeRef(parent, el, expectedRef(parent, prevNode));
     }
     prevNode = el;
   }
@@ -41,7 +52,7 @@ export function reconcile(parent, items, keyFn, createFn, updateFn) {
   // Remove orphans
   for (const [key, el] of existingByKey) {
     if (!desiredKeys.has(key)) {
-      parent.removeChild(el);
+      el.remove();
     }
   }
 }

@@ -19,7 +19,7 @@ printf 'model = "%s"\n' "${CODEX_MODEL:-gpt-4o-mini}" > "$HOME/.codex/config.tom
 # tmux session before the driver is ready to handle it. `--with-api-key` reads
 # from stdin and stores the key in ~/.codex/; OPENAI_API_KEY in the env suffices
 # for inference itself, but without this the interactive wizard fires first.
-if [ -n "${OPENAI_API_KEY:-}" ]; then
+if [[ -n "${OPENAI_API_KEY:-}" ]]; then
   echo "$OPENAI_API_KEY" | codex login --with-api-key 2>/dev/null || true
 fi
 

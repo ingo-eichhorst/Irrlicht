@@ -80,6 +80,12 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 	switch partType {
 	case "step-start":
+		// go:S1871 — same body as default below, kept as its own case
+		// deliberately: "step-start" is step-finish's documented counterpart
+		// (both are real, named opencode part types, unlike default's true
+		// catch-all for part types this parser doesn't model), so it stays
+		// named here for symmetry with step-finish even though there is
+		// nothing to extract from it today.
 		ev.Skip = true
 		return ev
 
@@ -111,56 +117,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 func parseStepFinish(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer.ParsedEvent {
 	reason, _ := raw["reason"].(string)
 
-	// Extract tokens and cost regardless of reason.
-	if tokens, ok := raw["tokens"].(map[string]interface{}); ok {
-		snap := &tailer.TokenSnapshot{}
-		if v, ok := tokens["input"].(float64); ok {
-			snap.Input = int64(v)
-		}
-		if v, ok := tokens["output"].(float64); ok {
-			snap.Output = int64(v)
-		}
-		if cache, ok := tokens["cache"].(map[string]interface{}); ok {
-			if v, ok := cache["read"].(float64); ok {
-				snap.CacheRead = int64(v)
-			}
-			if v, ok := cache["write"].(float64); ok {
-				snap.CacheCreation = int64(v)
-			}
-		}
-		if v, ok := tokens["total"].(float64); ok {
-			snap.Total = int64(v)
-		}
-		ev.Tokens = snap
-
-		// Build a PerTurnContribution from the step-finish token data.
-		// OpenCode reports per-step tokens (not cumulative), so each
-		// step-finish that isn't a mid-turn tool-calls pause directly
-		// represents a billable turn (or a billable partial-step on
-		// interrupt / error / length).
-		if reason != "tool-calls" {
-			usage := tailer.UsageBreakdown{
-				Input:     snap.Input,
-				Output:    snap.Output,
-				CacheRead: snap.CacheRead,
-				// OpenCode's cache.write maps to ephemeral cache creation.
-				CacheCreation5m: snap.CacheCreation,
-			}
-			modelName, _ := raw["_model"].(string)
-			if modelName != "" {
-				ev.ModelName = modelName
-			}
-			cost := extractCost(raw)
-			contrib := &tailer.PerTurnContribution{
-				Model: modelName,
-				Usage: usage,
-			}
-			if cost > 0 {
-				contrib.ProviderCostUSD = &cost
-			}
-			ev.Contribution = contrib
-		}
-	}
+	applyStepFinishTokens(raw, reason, ev)
 
 	switch reason {
 	case "stop":
@@ -186,6 +143,62 @@ func parseStepFinish(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer
 		ev.EventType = "assistant_message"
 	}
 	return ev
+}
+
+// applyStepFinishTokens extracts tokens and cost from a step-finish event,
+// regardless of reason, and — for every reason except "tool-calls" (a
+// mid-turn pause) — builds a PerTurnContribution from it. OpenCode reports
+// per-step tokens (not cumulative), so each non-tool-calls step-finish
+// directly represents a billable turn (or a billable partial-step on
+// interrupt / error / length).
+func applyStepFinishTokens(raw map[string]interface{}, reason string, ev *tailer.ParsedEvent) {
+	tokens, ok := raw["tokens"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	snap := &tailer.TokenSnapshot{}
+	if v, ok := tokens["input"].(float64); ok {
+		snap.Input = int64(v)
+	}
+	if v, ok := tokens["output"].(float64); ok {
+		snap.Output = int64(v)
+	}
+	if cache, ok := tokens["cache"].(map[string]interface{}); ok {
+		if v, ok := cache["read"].(float64); ok {
+			snap.CacheRead = int64(v)
+		}
+		if v, ok := cache["write"].(float64); ok {
+			snap.CacheCreation = int64(v)
+		}
+	}
+	if v, ok := tokens["total"].(float64); ok {
+		snap.Total = int64(v)
+	}
+	ev.Tokens = snap
+
+	if reason == "tool-calls" {
+		return
+	}
+	usage := tailer.UsageBreakdown{
+		Input:     snap.Input,
+		Output:    snap.Output,
+		CacheRead: snap.CacheRead,
+		// OpenCode's cache.write maps to ephemeral cache creation.
+		CacheCreation5m: snap.CacheCreation,
+	}
+	modelName, _ := raw["_model"].(string)
+	if modelName != "" {
+		ev.ModelName = modelName
+	}
+	cost := extractCost(raw)
+	contrib := &tailer.PerTurnContribution{
+		Model: modelName,
+		Usage: usage,
+	}
+	if cost > 0 {
+		contrib.ProviderCostUSD = &cost
+	}
+	ev.Contribution = contrib
 }
 
 // parseTextPart handles text parts — assistant text output during a turn.

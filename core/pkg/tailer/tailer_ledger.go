@@ -62,16 +62,7 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 		return
 	}
 	t.lastOffset = s.LastOffset
-	if len(s.CumByModel) > 0 {
-		// Deep-copy so the caller's map doesn't alias the tailer's.
-		t.cumByModel = make(map[string]*UsageBreakdown, len(s.CumByModel))
-		for k, v := range s.CumByModel {
-			if v != nil {
-				copied := *v
-				t.cumByModel[k] = &copied
-			}
-		}
-	}
+	t.restoreCumByModel(s.CumByModel)
 	t.cumProviderCostUSD = s.CumProviderCostUSD
 	if s.ModelName != "" {
 		t.metrics.ModelName = s.ModelName
@@ -96,11 +87,7 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 		t.lastAssistantText = s.LastAssistantText
 		t.metrics.LastAssistantText = s.LastAssistantText
 	}
-	if s.ParserState != nil {
-		if pp, ok := t.parser.(ParserStateProvider); ok {
-			pp.SetParserLedger(*s.ParserState)
-		}
-	}
+	t.restoreParserState(s.ParserState)
 	if len(s.Tasks) > 0 {
 		t.tasks = append([]Task(nil), s.Tasks...)
 	}
@@ -110,21 +97,49 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 	// been pruned, desyncing every later TaskCreate from Claude's monotonic
 	// numbering (issue #615).
 	t.taskSeq = max(s.TaskSeq, len(t.tasks))
-	if len(s.PendingTaskCreates) > 0 {
-		t.pendingTaskCreates = make(map[string]string, len(s.PendingTaskCreates))
-		maps.Copy(t.pendingTaskCreates, s.PendingTaskCreates)
-	}
-	if len(s.BackgroundProcs) > 0 {
-		t.openBackgroundProcs = make(map[string]string, len(s.BackgroundProcs))
-		maps.Copy(t.openBackgroundProcs, s.BackgroundProcs)
-	}
-	if len(s.PendingBashPolls) > 0 {
-		t.pendingBashPolls = make(map[string]string, len(s.PendingBashPolls))
-		maps.Copy(t.pendingBashPolls, s.PendingBashPolls)
-	}
+	restoreStringMap(&t.pendingTaskCreates, s.PendingTaskCreates)
+	restoreStringMap(&t.openBackgroundProcs, s.BackgroundProcs)
+	restoreStringMap(&t.pendingBashPolls, s.PendingBashPolls)
 	t.lastTaskEstimate = s.LastTaskEstimate
 	t.firstTaskEstimate = s.FirstTaskEstimate
 	t.lastTaskSummary = s.LastTaskSummary
 	t.firstUserText = s.FirstUserText
 	t.lastTaskQuestion = s.LastTaskQuestion
+}
+
+// restoreCumByModel deep-copies a persisted per-model usage breakdown into
+// the tailer's live map so it doesn't alias the caller's.
+func (t *TranscriptTailer) restoreCumByModel(m map[string]*UsageBreakdown) {
+	if len(m) == 0 {
+		return
+	}
+	t.cumByModel = make(map[string]*UsageBreakdown, len(m))
+	for k, v := range m {
+		if v != nil {
+			copied := *v
+			t.cumByModel[k] = &copied
+		}
+	}
+}
+
+// restoreParserState hands a persisted parser ledger back to a stateful
+// parser, if it implements ParserStateProvider.
+func (t *TranscriptTailer) restoreParserState(ps *ParserLedger) {
+	if ps == nil {
+		return
+	}
+	if pp, ok := t.parser.(ParserStateProvider); ok {
+		pp.SetParserLedger(*ps)
+	}
+}
+
+// restoreStringMap deep-copies src into a freshly allocated map assigned to
+// *dst, leaving *dst untouched when src is empty. Shared by SetLedgerState's
+// three identically-shaped string-to-string ledger maps.
+func restoreStringMap(dst *map[string]string, src map[string]string) {
+	if len(src) == 0 {
+		return
+	}
+	*dst = make(map[string]string, len(src))
+	maps.Copy(*dst, src)
 }

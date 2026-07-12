@@ -2,6 +2,7 @@ package services_test
 
 import (
 	"context"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/inbound"
 )
 
 // readyTransitions counts recorded working/waiting→ready transitions for sid.
@@ -127,6 +129,130 @@ func TestSessionDetector_BackgroundProcess_HoldsWorkingThenReady(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+// A session already `ready` (e.g. a prior background job just finished and
+// settled it) that then shows a *fresh* background spawn on the very next
+// activity event must be pulled back to working and held there while that new
+// process is alive — not skip the liveness probe because the pass started
+// from `ready`. Reproduces issue #937: a retried `git push -u
+// run_in_background:true` launched right after the session had settled ready
+// was silently invisible to the liveness gate, and the session bounced
+// ready→working→ready in the same pass despite the push still running.
+func TestSessionDetector_BackgroundProcess_FreshSpawnFromReady_HoldsWorking(t *testing.T) {
+	const sid = "bg3"
+	const path = "/home/.claude/projects/-Users-test/bg3.jsonl"
+
+	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
+		return &session.SessionMetrics{
+			LastEventType:            "turn_done",
+			BackgroundProcessCount:   1,
+			BackgroundProcessOutputs: []string{"/tmp/x/tasks/retry.output"},
+		}, nil
+	}}
+
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	repo.states[sid] = &session.SessionState{
+		SessionID:      sid,
+		State:          session.StateReady,
+		TranscriptPath: path,
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	rec := &mockRecorder{}
+	det.SetRecorder(rec)
+
+	var probeLive atomic.Bool
+	probeLive.Store(true)
+	det.SetBackgroundProbeForTest(func(paths []string) bool {
+		return probeLive.Load()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sid,
+		ProjectDir:     "-Users-test",
+		TranscriptPath: path,
+		Terminal:       false,
+	}
+	time.Sleep(250 * time.Millisecond) // allow the async probe + any self-trigger to settle
+	if n := readyTransitions(rec, sid); n != 0 {
+		t.Fatalf("session flipped to ready %d time(s) while its freshly-spawned background process is alive", n)
+	}
+
+	// Background process exits — probe now reports it gone → session goes ready.
+	probeLive.Store(false)
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sid,
+		ProjectDir:     "-Users-test",
+		TranscriptPath: path,
+		Terminal:       true,
+	}
+	waitForReadyTransition(t, rec, sid)
+
+	cancel()
+	<-done
+}
+
+// The ready→working force-bounce (see forceReadyToWorkingIfActive) must be
+// logged via LogInfo, not just recorded to the lifecycle trace — otherwise it
+// changes session state with zero trace in the daemon's human-readable log.
+// See issue #953.
+func TestSessionDetector_ForceReadyToWorking_LogsTransition(t *testing.T) {
+	const sid = "force-log"
+	const path = "/home/.claude/projects/-Users-test/force-log.jsonl"
+
+	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
+		return &session.SessionMetrics{LastEventType: "turn_done"}, nil
+	}}
+
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	repo.states[sid] = &session.SessionState{
+		SessionID:      sid,
+		State:          session.StateReady,
+		TranscriptPath: path,
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	log := &mockLogger{}
+	deps := defaultSessionDetectorDeps(pw, repo, nil)
+	deps.Log = log
+	deps.Metrics = metrics
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, deps)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+	defer func() { <-done }()
+	defer cancel()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sid,
+		ProjectDir:     "-Users-test",
+		TranscriptPath: path,
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if slices.Contains(log.infoSnapshot(), services.ForceReadyToWorkingReason) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("session %s: force ready→working bounce was never logged via LogInfo", sid)
 }
 
 // A dead probe verdict must also purge the processes from the tailer's open
@@ -358,6 +484,12 @@ func TestSessionDetector_BackgroundMixed_IndependentLivenessAndPurge(t *testing.
 		det.SetBackgroundProbeForTest(func([]string) bool { return outAlive })
 		det.SetBackgroundPIDProbeForTest(func([]string) bool { return pidAlive })
 
+		// godre:S8188 wants cancel deferred here, but this helper is invoked
+		// from inside each t.Run subtest below and returns before the
+		// subtest's assertions run — a bare `defer` at this scope would
+		// cancel det.Run mid-subtest. t.Cleanup(subtest t) is the correct
+		// mechanism: it defers cancel+drain to the END of whichever subtest
+		// called runMixed, not to this helper's own return.
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func() { done <- det.Run(ctx) }()
@@ -379,48 +511,66 @@ func TestSessionDetector_BackgroundMixed_IndependentLivenessAndPurge(t *testing.
 
 	t.Run("output alive, PID dead -> held working, only PID purged", func(t *testing.T) {
 		rec, metrics, path := runMixed(t, true, false)
-		if n := readyTransitions(rec, "bgmix"); n != 0 {
-			t.Fatalf("session flipped to ready %d time(s) while the output process is alive", n)
-		}
-		if _, called := metrics.purgedProcsFor(path); called {
-			t.Error("the live output process must not be purged")
-		}
-		got, called := metrics.purgedPIDsFor(path)
-		if !called {
-			t.Fatal("the dead PID must be purged")
-		}
-		if len(got) != 1 || got[0] != pid {
-			t.Errorf("purged PIDs = %v, want [%s]", got, pid)
-		}
+		assertNoReadyTransition(t, rec, "bgmix", "the output process is alive")
+		assertNotPurged(t, metrics.purgedProcsFor, path, "output process")
+		assertPurgedExactly(t, metrics.purgedPIDsFor, purgeExpectation{Path: path, SingularNoun: "PID", PluralNoun: "PIDs", Want: pid})
 	})
 
 	t.Run("output dead, PID alive -> held working, only output purged", func(t *testing.T) {
 		rec, metrics, path := runMixed(t, false, true)
-		if n := readyTransitions(rec, "bgmix"); n != 0 {
-			t.Fatalf("session flipped to ready %d time(s) while the PID process is alive", n)
-		}
-		if _, called := metrics.purgedPIDsFor(path); called {
-			t.Error("the live PID must not be purged")
-		}
-		got, called := metrics.purgedProcsFor(path)
-		if !called {
-			t.Fatal("the dead output process must be purged")
-		}
-		if len(got) != 1 || got[0] != outPath {
-			t.Errorf("purged outputs = %v, want [%s]", got, outPath)
-		}
+		assertNoReadyTransition(t, rec, "bgmix", "the PID process is alive")
+		assertNotPurged(t, metrics.purgedPIDsFor, path, "PID")
+		assertPurgedExactly(t, metrics.purgedProcsFor, purgeExpectation{Path: path, SingularNoun: "output process", PluralNoun: "outputs", Want: outPath})
 	})
 
 	t.Run("both dead -> settles ready, both purged", func(t *testing.T) {
 		rec, metrics, path := runMixed(t, false, false)
 		waitForReadyTransition(t, rec, "bgmix")
-		gotProcs, procsCalled := metrics.purgedProcsFor(path)
-		gotPIDs, pidsCalled := metrics.purgedPIDsFor(path)
-		if !procsCalled || len(gotProcs) != 1 || gotProcs[0] != outPath {
-			t.Errorf("dead output purge = %v (called=%v), want [%s]", gotProcs, procsCalled, outPath)
-		}
-		if !pidsCalled || len(gotPIDs) != 1 || gotPIDs[0] != pid {
-			t.Errorf("dead PID purge = %v (called=%v), want [%s]", gotPIDs, pidsCalled, pid)
-		}
+		assertPurgedExactly(t, metrics.purgedProcsFor, purgeExpectation{Path: path, SingularNoun: "output process", PluralNoun: "outputs", Want: outPath})
+		assertPurgedExactly(t, metrics.purgedPIDsFor, purgeExpectation{Path: path, SingularNoun: "PID", PluralNoun: "PIDs", Want: pid})
 	})
+}
+
+// purgeQuery mirrors funcMetrics' purgedProcsFor/purgedPIDsFor query methods.
+type purgeQuery func(transcriptPath string) ([]string, bool)
+
+// assertNoReadyTransition fails t when sessionID transitioned to ready while
+// becauseAlive describes why it should have been held.
+func assertNoReadyTransition(t *testing.T, rec *mockRecorder, sessionID, becauseAlive string) {
+	t.Helper()
+	if n := readyTransitions(rec, sessionID); n != 0 {
+		t.Fatalf("session flipped to ready %d time(s) while %s", n, becauseAlive)
+	}
+}
+
+// assertNotPurged fails t if query reports path was purged — used for the
+// still-alive half of a mixed liveness pair.
+func assertNotPurged(t *testing.T, query purgeQuery, path, noun string) {
+	t.Helper()
+	if _, called := query(path); called {
+		t.Errorf("the live %s must not be purged", noun)
+	}
+}
+
+// purgeExpectation bundles assertPurgedExactly's expected-purge fields,
+// keeping its parameter list within CodeScene's argument-count limit
+// instead of threading each field through individually.
+type purgeExpectation struct {
+	Path         string
+	SingularNoun string
+	PluralNoun   string
+	Want         string
+}
+
+// assertPurgedExactly fails t unless query reports exp.Path was purged with
+// exactly [exp.Want] — used for the dead half of a mixed liveness pair.
+func assertPurgedExactly(t *testing.T, query purgeQuery, exp purgeExpectation) {
+	t.Helper()
+	got, called := query(exp.Path)
+	if !called {
+		t.Fatalf("the dead %s must be purged", exp.SingularNoun)
+	}
+	if len(got) != 1 || got[0] != exp.Want {
+		t.Errorf("purged %s = %v, want [%s]", exp.PluralNoun, got, exp.Want)
+	}
 }

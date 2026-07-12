@@ -56,6 +56,32 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	// have in that case.
 	env, _ := osProc.EnvOf(pid)
 
+	l := launcherFromEnv(env)
+
+	// The ancestry walk is cached because three guarded blocks below may
+	// all need it (kitty TermProgram override, hardened-runtime TermProgram
+	// fallback, kitty field back-fill). Walking the ppid chain once instead
+	// of up to three times keeps ReadLauncherEnv bounded — each readProcInfo
+	// is a `ps` shellout with a 2s ceiling.
+	ancestry := memoizedAncestry(pid)
+	applyAncestryFallbacks(l, pid, ancestry)
+
+	// Capture the controlling TTY so Terminal.app (and potentially others)
+	// can target the exact tab — Terminal.app's AppleScript dictionary
+	// matches tabs by `tty` but has no session-UUID analog.
+	l.TTY = processTTY(pid)
+	if l.IsEmpty() {
+		return nil
+	}
+	return l
+}
+
+// launcherFromEnv builds a Launcher from the whitelisted per-PID env vars
+// alone, with no process-ancestry lookups. Split out of ReadLauncherEnv so
+// the env-only assembly (TERM_PROGRAM and friends, tmux socket parsing,
+// VS Code / JetBrains inference) can be reasoned about independently of the
+// ancestry-walk fallbacks.
+func launcherFromEnv(env map[string]string) *session.Launcher {
 	l := &session.Launcher{
 		TermProgram:    env["TERM_PROGRAM"],
 		ITermSessionID: env["ITERM_SESSION_ID"],
@@ -94,22 +120,34 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	if l.TermProgram == "" && env["TERMINAL_EMULATOR"] == "JetBrains-JediTerm" {
 		l.TermProgram = "jetbrains"
 	}
-	// The ancestry walk is cached because three guarded blocks below may
-	// all need it (kitty TermProgram override, hardened-runtime TermProgram
-	// fallback, kitty field back-fill). Walking the ppid chain once instead
-	// of up to three times keeps ReadLauncherEnv bounded — each readProcInfo
-	// is a `ps` shellout with a 2s ceiling.
+	return l
+}
+
+// memoizedAncestry returns a closure resolving pid's process ancestry via
+// resolveHostFromAncestry at most once, caching the result for repeat calls.
+// ReadLauncherEnv's ancestry-dependent fallbacks may all need the same walk;
+// this keeps it bounded to a single `ps` shellout chain instead of up to
+// three.
+func memoizedAncestry(pid int) func() (term string, hostPID int) {
 	var ancestryTerm string
 	var ancestryHostPID int
 	ancestryResolved := false
-	ancestry := func() (term string, hostPID int) {
+	return func() (string, int) {
 		if !ancestryResolved {
 			ancestryTerm, ancestryHostPID = resolveHostFromAncestry(pid)
 			ancestryResolved = true
 		}
 		return ancestryTerm, ancestryHostPID
 	}
+}
 
+// applyAncestryFallbacks fills in Launcher fields that require walking pid's
+// process ancestry — cases the env alone can't resolve: kitty's missing
+// TERM_PROGRAM, hardened-runtime processes with no readable env at all, the
+// generic top-level-.app host fallback, and kitty field back-fill for
+// Apple-signed agents. ancestry is expected to be memoized by the caller so
+// this can call it from multiple guarded blocks at no extra cost.
+func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term string, hostPID int)) {
 	// kitty intentionally does not set TERM_PROGRAM (upstream kitty issue
 	// #4793), so the env-captured value may be inherited from whatever
 	// process launched kitty.app (e.g. a VS Code integrated terminal). When
@@ -144,25 +182,29 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	// Without this, clicking the session in the UI raises kitty but can't
 	// target the right tab — exactly the symptom reported for pi sessions
 	// in issue #326.
-	if l.TermProgram == "kitty" && l.KittyPID == 0 {
-		if term, kpid := ancestry(); term == "kitty" && kpid > 0 {
-			l.KittyPID = kpid
-			if l.KittyListenOn == "" {
-				l.KittyListenOn = kittyListenOnFor(kpid)
-			}
-			if l.KittyListenOn != "" && l.KittyWindowID == "" {
-				l.KittyWindowID = kittyWindowIDForPID(l.KittyListenOn, pid)
-			}
-		}
+	applyKittyAncestryBackfill(l, pid, ancestry)
+}
+
+// applyKittyAncestryBackfill fills in KittyPID/KittyListenOn/KittyWindowID
+// for a session whose env yielded no kitty signals despite ancestry saying
+// kitty is the host (Apple-signed agents like `pi`, hardened-runtime
+// binaries) — split out of applyAncestryFallbacks so its nested guards don't
+// compound that function's cognitive complexity (go:S3776).
+func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry func() (term string, hostPID int)) {
+	if l.TermProgram != "kitty" || l.KittyPID != 0 {
+		return
 	}
-	// Capture the controlling TTY so Terminal.app (and potentially others)
-	// can target the exact tab — Terminal.app's AppleScript dictionary
-	// matches tabs by `tty` but has no session-UUID analog.
-	l.TTY = processTTY(pid)
-	if l.IsEmpty() {
-		return nil
+	term, kpid := ancestry()
+	if term != "kitty" || kpid <= 0 {
+		return
 	}
-	return l
+	l.KittyPID = kpid
+	if l.KittyListenOn == "" {
+		l.KittyListenOn = kittyListenOnFor(kpid)
+	}
+	if l.KittyListenOn != "" && l.KittyWindowID == "" {
+		l.KittyWindowID = kittyWindowIDForPID(l.KittyListenOn, pid)
+	}
 }
 
 // ReadArgv returns pid's argument vector (argv[0] is the executable as invoked),
@@ -203,7 +245,15 @@ func parseProcargs2(buf []byte) map[string]string {
 	if !ok {
 		return out
 	}
-	// Skip argv entries.
+	p = skipProcargs2ArgvEntries(buf, argc, p)
+	collectProcargs2EnvEntries(buf, p, out)
+	return out
+}
+
+// skipProcargs2ArgvEntries advances past the argc NUL-terminated argv[]
+// strings starting at offset p, returning the offset of the first envp
+// entry (or len(buf) if the buffer ends first).
+func skipProcargs2ArgvEntries(buf []byte, argc, p int) int {
 	for i := 0; i < argc && p < len(buf); i++ {
 		for p < len(buf) && buf[p] != 0 {
 			p++
@@ -212,15 +262,20 @@ func parseProcargs2(buf []byte) map[string]string {
 			p++ // skip NUL
 		}
 	}
-	// Remaining NUL-terminated strings are env entries until we hit an empty
-	// string or the end of the buffer.
+	return p
+}
+
+// collectProcargs2EnvEntries reads NUL-terminated "KEY=VALUE" envp entries
+// starting at offset p until an empty string or the end of the buffer,
+// recording the whitelisted ones into out.
+func collectProcargs2EnvEntries(buf []byte, p int, out map[string]string) {
 	for p < len(buf) {
 		start := p
 		for p < len(buf) && buf[p] != 0 {
 			p++
 		}
 		if p == start {
-			break
+			return
 		}
 		entry := string(buf[start:p])
 		if eq := strings.IndexByte(entry, '='); eq > 0 {
@@ -233,7 +288,6 @@ func parseProcargs2(buf []byte) map[string]string {
 			p++
 		}
 	}
-	return out
 }
 
 // procargs2ArgvOffset reads the int32 argc header of a KERN_PROCARGS2 buffer

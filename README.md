@@ -10,6 +10,9 @@
 
 [![CodeScene](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fingo-eichhorst%2F9f14c8e5f25c1ccf5d6500c1685fd9fb%2Fraw%2Fcodescene.json)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/codescene-badge.yml)
 [![ARS](https://img.shields.io/badge/ARS-Agent--Ready%208.1%2F10-green)](https://github.com/ingo-eichhorst/agent-readyness)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=ingo-eichhorst_Irrlicht&metric=security_rating)](https://sonarcloud.io/summary/overall?id=ingo-eichhorst_Irrlicht)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=ingo-eichhorst_Irrlicht&metric=reliability_rating)](https://sonarcloud.io/summary/overall?id=ingo-eichhorst_Irrlicht)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=ingo-eichhorst_Irrlicht&metric=sqale_rating)](https://sonarcloud.io/summary/overall?id=ingo-eichhorst_Irrlicht)
 
 [🌐 Landing Page](https://ingo-eichhorst.github.io/Irrlicht/) · [📖 Documentation](https://ingo-eichhorst.github.io/Irrlicht/docs/quickstart.html) · [📦 Latest Release](https://github.com/ingo-eichhorst/Irrlicht/releases/latest)
 
@@ -81,7 +84,7 @@ Stages: `stable` production-ready · `beta` feature-complete, edge cases remain 
 | Web dashboard         | beta    | `http://127.0.0.1:7837`   |
 | CLI                   | alpha   | `irrlicht-ls` (`-w` for watch) — on PATH after install; DMG drag-installs: Settings → Install Command-Line Tool |
 | VS Code extension     | planned | tracked in [#350](https://github.com/ingo-eichhorst/Irrlicht/issues/350) |
-| Linux (daemon-only)   | alpha   | `curl -fsSL https://irrlicht.io/install.sh \| sh` |
+| Linux (**daemon**-only — background service, no menu-bar UI) | alpha   | `curl -fsSL https://irrlicht.io/install.sh \| sh` |
 | Windows               | planned | —                         |
 | iOS / iPadOS          | planned | —                         |
 
@@ -137,7 +140,7 @@ Irrlicht is agent-verifiable by design — every session lives as atomic JSON at
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/chart?repos=ingo-eichhorst/Irrlicht&type=date&legend=top-left)](https://www.star-history.com/?repos=ingo-eichhorst%2FIrrlicht&type=date&legend=top-left)
+[![Star History Chart](assets/star-history.svg)](https://www.star-history.com/?repos=ingo-eichhorst%2FIrrlicht&type=date&legend=top-left)
 
 ## License
 

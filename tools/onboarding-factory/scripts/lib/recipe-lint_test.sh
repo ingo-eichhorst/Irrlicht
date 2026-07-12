@@ -28,9 +28,11 @@ printf '{"meta":{},"scenarios":[]}\n' > "$IR_SCENARIOS_FILE"
 # shard <name> <recipe-json> — write the agent "fake"'s metadata.json (keyed by
 # scenario_id == <name>) carrying the recipe. recipe-lint reads it by scenario_id.
 shard() {
-  local cell="$IR_AGENTS_DIR/fake/scenarios/$1"
+  local name="$1" recipe="$2"
+  local cell="$IR_AGENTS_DIR/fake/scenarios/$name"
   mkdir -p "$cell"
-  printf '{"scenario_id":"%s","details":{"recipe":%s}}\n' "$1" "$2" > "$cell/metadata.json"
+  printf '{"scenario_id":"%s","details":{"recipe":%s}}\n' "$name" "$recipe" > "$cell/metadata.json"
+  return 0
 }
 
 # Fixture driver: a sparse interactive driver dispatching on $type, with one
@@ -69,9 +71,22 @@ shard gap-cell '{"script":[{"type":"send","text":"hi"},{"type":"sigkill"},{"type
 shard headless '{"prompt":"reply ok"}'
 
 fails=0
-pass() { echo "  PASS: $1"; }
-fail() { echo "  FAIL: $1 — expected [$2] got [$3]"; fails=$((fails + 1)); }
-assert_eq() { [[ "$2" == "$3" ]] && pass "$1" || fail "$1" "$2" "$3"; }
+pass() {
+  local label="$1"
+  echo "  PASS: $label"
+  return 0
+}
+fail() {
+  local label="$1" expected="$2" got="$3"
+  echo "  FAIL: $label — expected [$expected] got [$got]"
+  fails=$((fails + 1))
+  return 0
+}
+assert_eq() {
+  local label="$1" expected="$2" actual="$3"
+  [[ "$expected" == "$actual" ]] && pass "$label" || fail "$label" "$expected" "$actual"
+  return 0
+}
 
 echo "== driver_step_types_from_file: case-arm extraction (splits send|slash) =="
 assert_eq "handled set is sorted-unique, grouped arm split, default dropped" \

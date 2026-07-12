@@ -50,22 +50,23 @@ done
 
 # Every module in go.work — govulncheck/gosec run per module, matching how
 # go.work itself scopes builds (see tools/preflight.sh's `go` group for the
-# narrower go-test set: only core + onboarding-factory have test suites
-# today, but a vuln/SAST scan doesn't need tests to pass, so all five run).
-GO_MODULES=(core tools/onboarding-factory tools/wsload tools/seed-demo-sessions tools/eta-research)
+# narrower go-test set: only core, onboarding-factory, and starhistory have
+# test suites today, but a vuln/SAST scan doesn't need tests to pass, so all
+# six run).
+GO_MODULES=(core tools/onboarding-factory tools/wsload tools/seed-demo-sessions tools/eta-research tools/starhistory)
 WEB_TREES=(platforms/web tools/onboarding-factory/internal/viewer/web)
 
 FAILED=0
-fail() { echo "FAIL: $1" >&2; FAILED=1; }
-warn() { echo "WARN: $1" >&2; }
-ok()   { echo "OK: $1"; }
+fail() { local msg="$1"; echo "FAIL: $msg" >&2; FAILED=1; return 0; }
+warn() { local msg="$1"; echo "WARN: $msg" >&2; return 0; }
+ok()   { local msg="$1"; echo "OK: $msg"; return 0; }
 
 # ---- GitHub-native alerts (full mode only) --------------------------------
 
 gh_alert_gate() {
   local label="$1" endpoint="$2" severity_filter="$3"
   local raw rc
-  raw=$(gh api --paginate "$endpoint" -f state=open --jq '.[]' 2>&1)
+  raw=$(gh api --method GET --paginate "$endpoint" -f state=open --jq '.[]' 2>&1)
   rc=$?
   if [[ $rc -ne 0 ]]; then
     fail "$label: \`gh api $endpoint\` failed — auth or missing scope? output: $raw"

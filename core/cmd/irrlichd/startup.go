@@ -88,6 +88,15 @@ func pruneOrphanLedgers(fsRepo *filesystem.SessionRepository, logger outbound.Lo
 	if err != nil {
 		return
 	}
+	removed := removeOrphanLedgerFiles(dir, entries, expectedLedgerNames(allSessions))
+	if removed > 0 {
+		logger.LogInfo("startup", "", fmt.Sprintf("pruned %d orphan ledger files", removed))
+	}
+}
+
+// expectedLedgerNames maps each session with a transcript to its ledger
+// filename, the set of ledger files that are still owned by a known session.
+func expectedLedgerNames(allSessions []*session.SessionState) map[string]struct{} {
 	expected := make(map[string]struct{}, len(allSessions))
 	for _, s := range allSessions {
 		if s.TranscriptPath == "" {
@@ -95,6 +104,12 @@ func pruneOrphanLedgers(fsRepo *filesystem.SessionRepository, logger outbound.Lo
 		}
 		expected[metrics.LedgerFilename(s.TranscriptPath)] = struct{}{}
 	}
+	return expected
+}
+
+// removeOrphanLedgerFiles deletes every ledger-suffixed file in dir/entries
+// that isn't in expected, returning the count removed.
+func removeOrphanLedgerFiles(dir string, entries []os.DirEntry, expected map[string]struct{}) int {
 	removed := 0
 	for _, e := range entries {
 		if e.IsDir() {
@@ -111,9 +126,7 @@ func pruneOrphanLedgers(fsRepo *filesystem.SessionRepository, logger outbound.Lo
 			removed++
 		}
 	}
-	if removed > 0 {
-		logger.LogInfo("startup", "", fmt.Sprintf("pruned %d orphan ledger files", removed))
-	}
+	return removed
 }
 
 // pruneDeadProcSessions removes proc-<pid> session files whose backing
@@ -338,6 +351,11 @@ func setupProcessWatcher(demoMode bool, detector **services.SessionDetector, log
 		logger.LogError("startup", "", fmt.Sprintf("ProcessWatcher init failed (non-fatal): %v", err))
 		return nil, nil
 	}
+	// godre:S8188 flags procCancel as not deferred here — intentional:
+	// procCancel is bundled into the returned cleanup closure for the CALLER
+	// to defer at daemon-shutdown scope (see the doc comment above), not
+	// within this setup function. A bare `defer procCancel()` here would
+	// cancel the watcher the instant setupProcessWatcher returns.
 	procCtx, procCancel := context.WithCancel(context.Background())
 	go func() {
 		if err := pw.Run(procCtx); err != nil && err != context.Canceled {
@@ -350,31 +368,33 @@ func setupProcessWatcher(demoMode bool, detector **services.SessionDetector, log
 	}
 }
 
+// registerCoreRoutesDeps bundles registerCoreRoutes' dependencies.
+type registerCoreRoutesDeps struct {
+	FSRepo            *filesystem.SessionRepository
+	CachedRepo        outbound.SessionRepository
+	HistoryTracker    *services.HistoryTracker
+	Push              outbound.PushBroadcaster
+	AllAgents         []agent.Agent
+	Version           string
+	PublishController *relay.PublishController
+	Cfg               config.Config
+}
+
 // registerCoreRoutes wires the always-on API surface: session state, the
 // WebSocket stream, agent/version metadata, relay publish status, pprof, and
 // the diagnostics bundle. The sessions endpoint itself is registered
 // separately by registerSessionRoutes, once orchMonitor is available.
-func registerCoreRoutes(
-	mux *http.ServeMux,
-	fsRepo *filesystem.SessionRepository,
-	cachedRepo outbound.SessionRepository,
-	historyTracker *services.HistoryTracker,
-	push outbound.PushBroadcaster,
-	allAgents []agent.Agent,
-	version string,
-	publishController *relay.PublishController,
-	cfg config.Config,
-) {
-	mux.HandleFunc("GET /state", handleGetState(cachedRepo))
+func registerCoreRoutes(mux *http.ServeMux, deps registerCoreRoutesDeps) {
+	mux.HandleFunc("GET /state", handleGetState(deps.CachedRepo))
 
-	hub := wshub.NewHub(push, historySnapshotProvider(historyTracker))
+	hub := wshub.NewHub(deps.Push, historySnapshotProvider(deps.HistoryTracker))
 	mux.HandleFunc("GET /api/v1/sessions/stream", hub.ServeWS)
-	mux.HandleFunc("GET /api/v1/agents", handleGetAgents(allAgents))
-	mux.HandleFunc("GET /api/v1/version", handleGetVersion(version))
-	mux.HandleFunc("GET /api/v1/relay/publish", handleGetPublishStatus(publishController))
+	mux.HandleFunc("GET /api/v1/agents", handleGetAgents(deps.AllAgents))
+	mux.HandleFunc("GET /api/v1/version", handleGetVersion(deps.Version))
+	mux.HandleFunc("GET /api/v1/relay/publish", handleGetPublishStatus(deps.PublishController))
 	// PUT reconfigures publishing on the running daemon (issue #722). Loopback
 	// only: it mutates forwarder config and carries the relay token in its body.
-	mux.HandleFunc("PUT /api/v1/relay/publish", localhostOnly(handlePutPublishStatus(publishController)))
+	mux.HandleFunc("PUT /api/v1/relay/publish", localhostOnly(handlePutPublishStatus(deps.PublishController)))
 
 	// pprof debug endpoints for runtime profiling (localhost only).
 	mux.HandleFunc("GET /debug/pprof/", localhostOnly(pprof.Index))
@@ -387,7 +407,7 @@ func registerCoreRoutes(
 	// per-PID liveness, trimmed logs, and config for bug reports. Localhost
 	// only — it carries session paths and (pre-redaction) process argv. Reads
 	// fsRepo directly for a fresh, uncached snapshot.
-	diagSvc := buildDiagnostics(fsRepo, allAgents, cfg)
+	diagSvc := buildDiagnostics(deps.FSRepo, deps.AllAgents, deps.Cfg)
 	mux.HandleFunc("GET /debug/bundle", localhostOnly(handleDiagnosticsBundle(diagSvc)))
 }
 
@@ -538,23 +558,26 @@ func gastownEffects(orchCtx context.Context, orchMonitor *services.OrchestratorM
 	return start, stop
 }
 
+// registerSessionRoutesDeps bundles registerSessionRoutes' dependencies.
+type registerSessionRoutesDeps struct {
+	CachedRepo   outbound.SessionRepository
+	OrchMonitor  *services.OrchestratorMonitor
+	CostTracker  outbound.CostTracker
+	InputService *atomic.Pointer[services.InputService]
+	SockPath     string
+	Push         outbound.PushBroadcaster
+	Logger       outbound.Logger
+	GitResolver  *git.Adapter
+}
+
 // registerSessionRoutes wires the sessions/history/focus endpoints. Kept
 // separate from registerCoreRoutes because it needs orchMonitor and the
 // not-yet-published inputService: a session only reports controllable once
 // setupBackchannel has run.
-func registerSessionRoutes(
-	mux *http.ServeMux,
-	cachedRepo outbound.SessionRepository,
-	orchMonitor *services.OrchestratorMonitor,
-	costTracker outbound.CostTracker,
-	inputService *atomic.Pointer[services.InputService],
-	sockPath string,
-	push outbound.PushBroadcaster,
-	logger outbound.Logger,
-) {
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(cachedRepo, orchMonitor, costTracker,
+func registerSessionRoutes(mux *http.ServeMux, deps registerSessionRoutesDeps) {
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(deps.CachedRepo, deps.OrchMonitor, deps.CostTracker,
 		func(sessionID string) bool {
-			if s := inputService.Load(); s != nil {
+			if s := deps.InputService.Load(); s != nil {
 				return s.Controllable(sessionID)
 			}
 			return false
@@ -565,11 +588,29 @@ func registerSessionRoutes(
 	// chart=yield (per-project productive-vs-reverted spend over sessions). Phase
 	// 3 (#751) adds chart=agents, a concurrent-agents series reconstructed from
 	// the lifecycle recordings (read-only; empty unless --record has been used).
-	concurrencyTracker := filesystem.NewConcurrencyTrackerWithDir(resolveRecordingsDir(sockPath))
-	mux.HandleFunc("GET /api/v1/history", handleGetHistory(costTracker, cachedRepo, concurrencyTracker))
+	// #951 adds chart=dora, computed on request from deps.GitResolver — no
+	// persistence, no background sweep.
+	concurrencyTracker := filesystem.NewConcurrencyTrackerWithDir(resolveRecordingsDir(deps.SockPath))
+	mux.HandleFunc("GET /api/v1/history", handleGetHistory(deps.CostTracker, deps.CachedRepo, concurrencyTracker, deps.GitResolver))
 
-	focusService := services.NewFocusService(cachedRepo, push, logger)
-	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, logger))
+	focusService := services.NewFocusService(deps.CachedRepo, deps.Push, deps.Logger)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, deps.Logger))
+}
+
+// buildDetectorDeps bundles buildDetector's dependencies.
+type buildDetectorDeps struct {
+	DemoMode         bool
+	PWPort           outbound.ProcessWatcher
+	CachedRepo       outbound.SessionRepository
+	Logger           outbound.Logger
+	GitResolver      *git.Adapter
+	MetricsCollector outbound.MetricsCollector
+	Push             outbound.PushBroadcaster
+	Version          string
+	Cfg              config.Config
+	AllAgents        []agent.Agent
+	CostTracker      outbound.CostTracker
+	HistoryTracker   *services.HistoryTracker
 }
 
 // buildDetector constructs the SessionDetector (orchestrating Watchers +
@@ -580,26 +621,13 @@ func registerSessionRoutes(
 // factory that the PermissionService invokes only when the user grants that
 // agent's observe permission — and cancels on revoke. Skipped entirely
 // under demo mode, which serves only what's already on disk in instances/.
-func buildDetector(
-	demoMode bool,
-	pwPort outbound.ProcessWatcher,
-	cachedRepo outbound.SessionRepository,
-	logger outbound.Logger,
-	gitResolver *git.Adapter,
-	metricsCollector outbound.MetricsCollector,
-	push outbound.PushBroadcaster,
-	version string,
-	cfg config.Config,
-	allAgents []agent.Agent,
-	costTracker outbound.CostTracker,
-	historyTracker *services.HistoryTracker,
-) (*services.SessionDetector, map[string]services.WatcherFactory) {
+func buildDetector(deps buildDetectorDeps) (*services.SessionDetector, map[string]services.WatcherFactory) {
 	// Suppress ghost proc pre-sessions for live processes whose real session
 	// is already persisted. The PID discriminator in HasRealSessionForPID
 	// prevents historical sessions on disk (GH #113, within MaxSessionAge)
 	// from blocking new processes in the same project.
 	realSessionCheck := func(projectDir string, pid int) bool {
-		sessions, err := cachedRepo.ListAll()
+		sessions, err := deps.CachedRepo.ListAll()
 		if err != nil {
 			return false
 		}
@@ -607,41 +635,48 @@ func buildDetector(
 	}
 
 	var watcherFactories map[string]services.WatcherFactory
-	if !demoMode {
-		watcherFactories = make(map[string]services.WatcherFactory, len(allAgents))
-		for _, a := range allAgents {
+	if !deps.DemoMode {
+		watcherFactories = make(map[string]services.WatcherFactory, len(deps.AllAgents))
+		for _, a := range deps.AllAgents {
 			watcherFactories[a.Identity.Name] = func() []inbound.Watcher {
-				ws, _ := buildAgentWatchers(a, cfg.MaxSessionAge, realSessionCheck)
+				ws, _ := buildAgentWatchers(a, deps.Cfg.MaxSessionAge, realSessionCheck)
 				return ws
 			}
 		}
 	}
 
-	pidDiscovers := agents.PIDDiscoverers(allAgents)
-	processNames := agents.ProcessNames(allAgents)
+	pidDiscovers := agents.PIDDiscoverers(deps.AllAgents)
+	processNames := agents.ProcessNames(deps.AllAgents)
 
-	detector := services.NewSessionDetector(
-		nil, pwPort,
-		cachedRepo, logger, gitResolver, metricsCollector, push,
-		version, cfg.ReadySessionTTL,
-		pidDiscovers, processNames, processlifecycle.LiveCWDs,
-	)
-	if costTracker != nil {
-		detector.SetCostTracker(costTracker)
+	detector := services.NewSessionDetector(nil, services.SessionDetectorDeps{
+		PW:           deps.PWPort,
+		Repo:         deps.CachedRepo,
+		Log:          deps.Logger,
+		Git:          deps.GitResolver,
+		Metrics:      deps.MetricsCollector,
+		Broadcaster:  deps.Push,
+		Version:      deps.Version,
+		ReadyTTL:     deps.Cfg.ReadySessionTTL,
+		PIDDiscovers: pidDiscovers,
+		ProcessNames: processNames,
+		LiveCWDs:     processlifecycle.LiveCWDs,
+	})
+	if deps.CostTracker != nil {
+		detector.SetCostTracker(deps.CostTracker)
 	}
-	detector.SetHistoryTracker(historyTracker)
+	detector.SetHistoryTracker(deps.HistoryTracker)
 
 	// Cache-creation regression detector (#374): per-project baseline from the
 	// session repo; findings logged to events.log for the ir:agent-releases
 	// consumer. Self-disables when cacheBloatThreshold <= 0 (the kill switch).
 	detector.SetCacheBloatDetector(services.NewCacheBloatDetector(
-		cachedRepo,
-		services.NewLoggerCacheBloatSink(logger),
+		deps.CachedRepo,
+		services.NewLoggerCacheBloatSink(deps.Logger),
 		services.CacheBloatConfig{
-			BaselineDays:       cfg.CacheBloatBaselineDays,
-			Threshold:          cfg.CacheBloatThreshold,
-			VersionDeltaTokens: cfg.CacheBloatVersionDeltaTokens,
-			MinTurns:           cfg.CacheBloatMinTurns,
+			BaselineDays:       deps.Cfg.CacheBloatBaselineDays,
+			Threshold:          deps.Cfg.CacheBloatThreshold,
+			VersionDeltaTokens: deps.Cfg.CacheBloatVersionDeltaTokens,
+			MinTurns:           deps.Cfg.CacheBloatMinTurns,
 		},
 	))
 
@@ -655,26 +690,32 @@ func buildDetector(
 // that makes the wizard appear when a new agent shows up. Under demo mode
 // the factories and detection are nil — the daemon never monitors anything
 // live.
-func setupPermissionService(
-	mux *http.ServeMux,
-	detector *services.SessionDetector,
-	push outbound.PushBroadcaster,
-	logger outbound.Logger,
-	cfg config.Config,
-	allAgents []agent.Agent,
-	watcherFactories map[string]services.WatcherFactory,
-	demoMode bool,
-	home string,
-	startGastown, stopGastown func() error,
-) *services.PermissionService {
-	permStore := filesystem.NewPermissionStore(dataDir(home))
+// setupPermissionServiceDeps bundles setupPermissionService's dependencies.
+type setupPermissionServiceDeps struct {
+	Detector         *services.SessionDetector
+	Push             outbound.PushBroadcaster
+	Logger           outbound.Logger
+	Cfg              config.Config
+	AllAgents        []agent.Agent
+	WatcherFactories map[string]services.WatcherFactory
+	DemoMode         bool
+	Home             string
+	StartGastown     func() error
+	StopGastown      func() error
+}
+
+func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps) *services.PermissionService {
+	detector := deps.Detector
+	logger := deps.Logger
+	allAgents := deps.AllAgents
+	permStore := filesystem.NewPermissionStore(dataDir(deps.Home))
 	// Fold the pre-wizard task-eta consent record (activation.json, issue
 	// #558) into the store before the service loads it (issue #577).
-	services.MigrateLegacyTaskEtaConsent(dataDir(home), permStore,
+	services.MigrateLegacyTaskEtaConsent(dataDir(deps.Home), permStore,
 		claudecode.AdapterName, claudecode.PermissionKeyInstructions, logger)
 
 	var hasLive services.HasLiveProcessFunc
-	if !demoMode {
+	if !deps.DemoMode {
 		hasLive = processlifecycle.HasLiveProcess
 	}
 	// The consent catalog is the agent adapters plus three daemon-wide
@@ -684,13 +725,19 @@ func setupPermissionService(
 	// remote-control config patch (writes kitty.conf for tab-precise
 	// click-to-focus, #425).
 	permissionAgents := append(append([]agent.Agent{}, allAgents...),
-		gastownadapter.PermissionDeclaration(startGastown, stopGastown),
+		gastownadapter.PermissionDeclaration(deps.StartGastown, deps.StopGastown),
 		processlifecycle.LauncherPermissionDeclaration(),
 		processlifecycle.KittyPermissionDeclaration())
-	permService := services.NewPermissionService(
-		permissionAgents, permStore, push, logger,
-		cfg.PermissionMode, detector, watcherFactories, hasLive,
-	)
+	permService := services.NewPermissionService(services.PermissionServiceDeps{
+		Agents:    permissionAgents,
+		Store:     permStore,
+		Push:      deps.Push,
+		Log:       logger,
+		Mode:      deps.Cfg.PermissionMode,
+		Registrar: detector,
+		Factories: deps.WatcherFactories,
+		HasLive:   hasLive,
+	})
 	// Gas Town is detected by root-directory presence (stat-only), not by
 	// a live process matcher.
 	permService.SetDetectionProbe(gastownadapter.Name, gastownadapter.RootDetected)
@@ -740,7 +787,7 @@ func setupPermissionService(
 	// --bg-spare pool helper outlives every session, so a mis-bound session
 	// would otherwise never be reaped (#727). Demo mode never tracks live
 	// processes, so leave the reaper unwired there.
-	if !demoMode {
+	if !deps.DemoMode {
 		detector.SetInfraReaper(agents.ArgvExcluders(allAgents), processlifecycle.ReadArgv)
 		// Reject a candidate PID launched by something other than a known
 		// terminal or IDE before a session is ever created — e.g. CodexBar
@@ -773,6 +820,19 @@ func setupPermissionService(
 	return permService
 }
 
+// setupBackchannelDeps bundles setupBackchannel's dependencies.
+type setupBackchannelDeps struct {
+	CachedRepo        outbound.SessionRepository
+	Push              outbound.PushBroadcaster
+	PermService       *services.PermissionService
+	Detector          *services.SessionDetector
+	Logger            outbound.Logger
+	Home              string
+	InputService      *atomic.Pointer[services.InputService]
+	RelayControlStore *filesystem.RelayControlStore
+	AllAgents         []agent.Agent
+}
+
 // setupBackchannel wires control discovered agents by scripting their
 // terminal backend (issue #724). A default-OFF master toggle gates the whole
 // capability; the per-adapter "control" consent and a usable backend target
@@ -780,28 +840,18 @@ func setupPermissionService(
 // controllable) for both the manual HTTP path and the event→action rule
 // engine. Routes are localhostOnly + a Sec-Fetch-Site guard on the mutating
 // verbs, since injected input drives a live agent.
-func setupBackchannel(
-	mux *http.ServeMux,
-	cachedRepo outbound.SessionRepository,
-	push outbound.PushBroadcaster,
-	permService *services.PermissionService,
-	detector *services.SessionDetector,
-	logger outbound.Logger,
-	home string,
-	inputService *atomic.Pointer[services.InputService],
-	relayControlStore *filesystem.RelayControlStore,
-	allAgents []agent.Agent,
-) (*services.BackchannelEngine, *services.TerminalObserver) {
-	backchannelStore := filesystem.NewBackchannelStore(dataDir(home))
-	controlController := control.NewController(cachedRepo, push, logger)
-	in := services.NewInputService(cachedRepo, controlController, permService, backchannelStore.Enabled, logger)
-	inputService.Store(in) // publish to the HTTP/forwarder readers
+func setupBackchannel(mux *http.ServeMux, deps setupBackchannelDeps) (*services.BackchannelEngine, *services.TerminalObserver) {
+	logger := deps.Logger
+	backchannelStore := filesystem.NewBackchannelStore(dataDir(deps.Home))
+	controlController := control.NewController(deps.CachedRepo, deps.Push, logger)
+	in := services.NewInputService(deps.CachedRepo, controlController, deps.PermService, backchannelStore.Enabled, logger)
+	deps.InputService.Store(in) // publish to the HTTP/forwarder readers
 	mux.HandleFunc("/api/v1/activation/backchannel",
 		localhostOnly(activationhandler.NewBackchannelHandler(backchannelStore, logger)))
 	// Remote-control toggle (#724): default OFF; gates whether the relay
 	// forwarder acts on inbound control frames (the outer remote gate).
 	mux.HandleFunc("/api/v1/activation/relay-control",
-		localhostOnly(activationhandler.NewToggleHandler(relayControlStore, "relay_control_enabled", logger)))
+		localhostOnly(activationhandler.NewToggleHandler(deps.RelayControlStore, "relay_control_enabled", logger)))
 	mux.HandleFunc("POST /api/v1/sessions/{id}/input",
 		localhostOnly(sessionshandler.NewInputHandler(in, logger)))
 	mux.HandleFunc("POST /api/v1/sessions/{id}/interrupt",
@@ -811,8 +861,8 @@ func setupBackchannel(
 	// context_pressure → /compact). The engine consumes the push stream and
 	// fires through inputService, so the same toggle+consent+controllable
 	// gates apply. Started under detectorCtx by startBackgroundLoops.
-	backchannelRules := filesystem.NewBackchannelRulesStore(dataDir(home))
-	backchannelEngine := services.NewBackchannelEngine(backchannelRules, in, agents.ControlPresets(allAgents), push, backchannelStore.Enabled, logger)
+	backchannelRules := filesystem.NewBackchannelRulesStore(dataDir(deps.Home))
+	backchannelEngine := services.NewBackchannelEngine(backchannelRules, in, agents.ControlPresets(deps.AllAgents), deps.Push, backchannelStore.Enabled, logger)
 	mux.HandleFunc("/api/v1/backchannel/rules",
 		localhostOnly(backchannelhandler.NewRulesHandler(backchannelRules, logger)))
 
@@ -823,8 +873,8 @@ func setupBackchannel(
 	// inputService — master-toggle + per-adapter "control" consent — so a
 	// disabled backchannel reads nothing. Started under detectorCtx by
 	// startBackgroundLoops.
-	terminalReader := control.NewReader(cachedRepo, logger)
-	terminalObserver := services.NewTerminalObserver(cachedRepo, terminalReader, permService, backchannelStore.Enabled, detector, logger)
+	terminalReader := control.NewReader(deps.CachedRepo, logger)
+	terminalObserver := services.NewTerminalObserver(deps.CachedRepo, terminalReader, deps.PermService, backchannelStore.Enabled, deps.Detector, logger)
 
 	return backchannelEngine, terminalObserver
 }
@@ -871,7 +921,9 @@ func setupRecording(detector *services.SessionDetector, sockPath string, logger 
 	rec, err := recorder.NewJSONLRecorder(recordingsDir)
 	if err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("failed to init lifecycle recorder: %v", err))
-		return func() {}
+		return func() {
+			// no-op cleanup — recorder never initialized
+		}
 	}
 	detector.SetRecorder(rec)
 	logger.LogInfo("startup", "", fmt.Sprintf("lifecycle recording enabled: %s", rec.Path()))
@@ -899,45 +951,49 @@ func sweepZombies(demoMode bool, detector *services.SessionDetector, logger outb
 // launches the detection poller. Effects run synchronously so a grant-all
 // daemon (demo/record/test) is fully monitoring before startup proceeds.
 // Returns the cancel func for the shared context; the caller defers it.
-func startBackgroundLoops(
-	detector *services.SessionDetector,
-	backchannelEngine *services.BackchannelEngine,
-	cachedRepo outbound.SessionRepository,
-	gitResolver *git.Adapter,
-	terminalObserver *services.TerminalObserver,
-	permService *services.PermissionService,
-	cfg config.Config,
-	demoMode bool,
-	logger outbound.Logger,
-) context.CancelFunc {
+// startBackgroundLoopsDeps bundles startBackgroundLoops' dependencies.
+type startBackgroundLoopsDeps struct {
+	Detector          *services.SessionDetector
+	BackchannelEngine *services.BackchannelEngine
+	CachedRepo        outbound.SessionRepository
+	GitResolver       *git.Adapter
+	TerminalObserver  *services.TerminalObserver
+	PermService       *services.PermissionService
+	Cfg               config.Config
+	DemoMode          bool
+	Logger            outbound.Logger
+}
+
+func startBackgroundLoops(deps startBackgroundLoopsDeps) context.CancelFunc {
+	logger := deps.Logger
 	detectorCtx, detectorCancel := context.WithCancel(context.Background())
 	go func() {
-		if err := detector.Run(detectorCtx); err != nil && err != context.Canceled {
+		if err := deps.Detector.Run(detectorCtx); err != nil && err != context.Canceled {
 			logger.LogError("session-detector", "", fmt.Sprintf("detector error: %v", err))
 		}
 	}()
 
-	go backchannelEngine.Run(detectorCtx)
+	go deps.BackchannelEngine.Run(detectorCtx)
 
 	// Yield sweep (issue #373): periodically correlates `git revert` commits
 	// back to the sessions that authored the reverted work, flipping their
 	// YieldState to reverted. Read-mostly and fault-tolerant, so it runs in
 	// every mode.
-	go services.NewYieldSweeper(cachedRepo, gitResolver, logger, cfg.YieldSweepInterval).Run(detectorCtx)
+	go services.NewYieldSweeper(deps.CachedRepo, deps.GitResolver, logger, deps.Cfg.YieldSweepInterval).Run(detectorCtx)
 
 	go func() {
-		if err := terminalObserver.Run(detectorCtx); err != nil && err != context.Canceled {
+		if err := deps.TerminalObserver.Run(detectorCtx); err != nil && err != context.Canceled {
 			logger.LogError("terminal-observer", "", fmt.Sprintf("observer error: %v", err))
 		}
 	}()
 
-	if !demoMode {
-		permService.Start(detectorCtx)
+	if !deps.DemoMode {
+		deps.PermService.Start(detectorCtx)
 		// The installed hooks POST via curl; without it they silently no-op
 		// and tool-use permission prompts never surface as `waiting`. Warn
 		// loudly so this isn't an invisible failure (the transcript
 		// heuristic still covers held file-edit prompts). See #488.
-		if permService.Granted(claudecode.AdapterName, claudecode.PermissionKeyHooks) &&
+		if deps.PermService.Granted(claudecode.AdapterName, claudecode.PermissionKeyHooks) &&
 			!claudecode.HookDeliveryAvailable() {
 			logger.LogError("startup", "", "curl not found on PATH — Claude Code permission-prompt detection is degraded: hooks POST via curl, so without it permission prompts may not surface as 'waiting'. Install curl to restore full detection (#488).")
 		}

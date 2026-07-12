@@ -72,7 +72,7 @@ describe('web session-list HTML snapshot artifacts (#757)', () => {
 
       // CI gate: a broken render (no rows) fails `npm test`.
       const rows = document.querySelectorAll('#session-list .session-row')
-      expect(rows.length).toBe(scene.expectedRows)
+      expect(rows).toHaveLength(scene.expectedRows)
 
       const html = serializeSessionList(document, {
         theme: scene.theme,

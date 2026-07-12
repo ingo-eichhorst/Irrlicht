@@ -37,7 +37,9 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shard-lib.sh"
 #     a metadata.json). A recorded dir NOT in this set is an orphan (no cell to
 #     --re-record from).
 ci_recipe_dir_names() {
-  shard_recipe_dir_names "$1"
+  local agent="$1"
+  shard_recipe_dir_names "$agent"
+  return $?
 }
 
 # ci_coverage_id_for_dir <dir-name> <agent>
@@ -45,7 +47,9 @@ ci_recipe_dir_names() {
 #     metadata.json at scenarios/<dir-name>/, else <dir-name> itself (already a
 #     coverage_id). Used to resolve the cell's assessment.
 ci_coverage_id_for_dir() {
-  shard_coverage_for_dir "$1" "$2"
+  local dir_name="$1" agent="$2"
+  shard_coverage_for_dir "$dir_name" "$agent"
+  return $?
 }
 
 # ci_is_recorded <cell-dir>  → exit 0 iff the dir claims a recording.
@@ -67,7 +71,7 @@ ci_is_recorded() {
 #     recording lives under recordings/<name>/; expected.jsonl is the cell-root
 #     spec. Each recording must be self-complete (events + transcript + golden).
 ci_missing_artifacts() {
-  local agent="$1" name="$2" dir="$3" sdir="$4"
+  local agent="$1" name="$2" dir="$3"
   local problems=() r recname
 
   # recipe row — the folder must be a live cell (holds a metadata.json).

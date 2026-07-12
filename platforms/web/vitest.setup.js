@@ -8,7 +8,7 @@ export const SETUP_BODY = `
   <button id="summary-collapse-all"></button>
   <button id="settings-toggle"></button>
   <button id="settings-close"></button>
-  <div id="settings-backdrop"></div>
+  <dialog id="settings-backdrop"></dialog>
   <div id="settings-providers"></div>
   <div id="session-list"></div>
   <div id="app-version"></div>
@@ -21,12 +21,12 @@ export const SETUP_BODY = `
   <div id="connection-banner"></div>
   <div id="settings-perm-note"></div>
   <button id="settings-review-permissions"></button>
-  <div id="permissions-backdrop">
+  <dialog id="permissions-backdrop">
     <h2 id="permissions-title"></h2>
     <p id="permissions-intro"></p>
     <div id="permissions-body"></div>
     <button id="permissions-apply"></button>
-  </div>
+  </dialog>
 `;
 document.body.innerHTML = SETUP_BODY;
 
@@ -64,8 +64,8 @@ class MockWebSocket {
     this.readyState = 0; // CONNECTING
     global.lastMockWebSocket = this;
   }
-  addEventListener() {}
-  send() {}
+  addEventListener() { /* unused: tests dispatch via onopen/onmessage/onerror/onclose property assignment instead */ }
+  send() { /* unused: no test currently asserts on outgoing frames */ }
   close() {
     this.readyState = 3; // CLOSED
     if (this.onclose) this.onclose({ code: 1000, reason: '' });
@@ -88,5 +88,4 @@ global.fetch = () => Promise.reject(new Error('no server'));
 global.Notification = class {
   static permission = 'default';
   static requestPermission() { return Promise.resolve('default'); }
-  constructor() {}
 };

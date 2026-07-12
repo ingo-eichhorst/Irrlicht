@@ -30,9 +30,14 @@ import {
   histTokens,
   histCount,
   histCO2,
+  histDoraPerWeek,
+  histDoraPercent,
+  histDoraHours,
   CHART_LABELS,
   DRILL_NEXT,
   historyRunningSum,
+  CO2_EQUIVALENTS,
+  pickCO2Equivalents,
 } from './irrlicht.js'
 
 describe('resolvedTheme', () => {
@@ -430,6 +435,22 @@ describe('taskEtaPresentation', () => {
     ...((over && over.metrics) || {}),
   })
 
+  test('missing completed_rounds falls back to the zero-rounds "estimating…" chip, not a broken undefined/N label', () => {
+    // Regression: `completed_rounds <= 0` is false for undefined (unlike the
+    // intended `!(completed_rounds > 0)`), which would otherwise fall through
+    // to the rounds-only/projected paths and render "undefined/10 rounds".
+    const info = taskEtaPresentation(metricsFor({ est: { completed_rounds: undefined, updated_at: undefined }, metrics: { task_completion_eta: undefined } }), 'working', now)
+    expect(info).not.toBeNull()
+    expect(info.text).toBe('estimating…')
+  })
+
+  test('missing total_rounds (alongside zero completed_rounds) returns null instead of a broken 0/undefined label', () => {
+    // Same regression class as the completed_rounds case above, in
+    // zeroRoundsEtaPresentation's own total_rounds guard.
+    const info = taskEtaPresentation(metricsFor({ est: { completed_rounds: 0, total_rounds: undefined } }), 'working', now)
+    expect(info).toBeNull()
+  })
+
   test('point estimate at the marker once half the rounds are done', () => {
     const info = taskEtaPresentation(metricsFor({ est: { updated_at: now } }), 'working', now)
     expect(info).not.toBeNull()
@@ -802,6 +823,26 @@ describe('historyQuery cross-filters (#750 faceted)', () => {
   })
 })
 
+describe('historyQuery dora project (#951)', () => {
+  const base = { range: 'day', chart: 'dora', group: 'project', forecast: true, start: null, end: null, scope: null }
+
+  test('emits project when chart=dora and a project is selected', () => {
+    const q = new URLSearchParams(historyQuery({ ...base, doraProject: 'irrlicht' }))
+    expect(q.get('chart')).toBe('dora')
+    expect(q.get('project')).toBe('irrlicht')
+  })
+
+  test('omits project when none selected', () => {
+    const q = new URLSearchParams(historyQuery({ ...base, doraProject: null }))
+    expect(q.get('project')).toBeNull()
+  })
+
+  test('omits project for non-dora charts even if doraProject is set', () => {
+    const q = new URLSearchParams(historyQuery({ ...base, chart: 'cost', doraProject: 'irrlicht' }))
+    expect(q.get('project')).toBeNull()
+  })
+})
+
 describe('historyRunningSum (cumulative chart)', () => {
   test('produces a monotonic running total', () => {
     expect(historyRunningSum([1, 0, 2, 0, 3])).toEqual([1, 1, 3, 3, 6])
@@ -859,5 +900,89 @@ describe('co2 chart (issue #829)', () => {
     expect(histCO2(158.7)).toBe('158.7g')
     expect(histCO2(2850)).toBe('2.85kg')
     expect(histCO2(undefined)).toBe('0mg')
+  })
+})
+
+describe('dora chart (#951)', () => {
+  test('chart=dora serializes with the selected project', () => {
+    const q = new URLSearchParams(historyQuery({
+      range: 'day', chart: 'dora', group: 'project', forecast: true, start: null, end: null, scope: null, doraProject: 'irrlicht',
+    }))
+    expect(q.get('chart')).toBe('dora')
+    expect(q.get('project')).toBe('irrlicht')
+  })
+
+  test('CHART_LABELS includes DORA', () => {
+    expect(CHART_LABELS.dora).toBe('DORA')
+  })
+
+  test('histDoraPerWeek renders one decimal place', () => {
+    expect(histDoraPerWeek(2.551)).toBe('2.6/week')
+    expect(histDoraPerWeek(undefined)).toBe('0.0/week')
+  })
+
+  test('histDoraPercent rounds to a whole percent', () => {
+    expect(histDoraPercent(42.9)).toBe('43%')
+    expect(histDoraPercent(0)).toBe('0%')
+  })
+
+  test('histDoraHours is unit-adaptive: hours below a day, days at or above', () => {
+    expect(histDoraHours(8)).toBe('8 hours')
+    expect(histDoraHours(23.9)).toBe('24 hours')
+    expect(histDoraHours(24)).toBe('1.0 days')
+    expect(histDoraHours(48)).toBe('2.0 days')
+    expect(histDoraHours(undefined)).toBe('0 hours')
+  })
+})
+
+describe('CO2 equivalents (issue #952)', () => {
+  test('CO2_EQUIVALENTS is ascending by grams with no duplicate ids', () => {
+    for (let i = 1; i < CO2_EQUIVALENTS.length; i++) {
+      expect(CO2_EQUIVALENTS[i].grams).toBeGreaterThan(CO2_EQUIVALENTS[i - 1].grams)
+    }
+    expect(new Set(CO2_EQUIVALENTS.map(e => e.id)).size).toBe(CO2_EQUIVALENTS.length)
+  })
+
+  test('pickCO2Equivalents returns nothing for a zero or negative axis', () => {
+    expect(pickCO2Equivalents(0)).toEqual([])
+    expect(pickCO2Equivalents(-5)).toEqual([])
+    expect(pickCO2Equivalents(undefined)).toEqual([])
+  })
+
+  test('a tiny axis (below the smallest equivalent) draws no lines', () => {
+    expect(pickCO2Equivalents(0.05)).toEqual([])
+  })
+
+  test('every pick sits under the axis ceiling and none repeat', () => {
+    const picks = pickCO2Equivalents(2_000_000)
+    expect(picks.length).toBeGreaterThan(0)
+    for (const eq of picks) expect(eq.grams).toBeLessThan(2_000_000 * 0.98)
+    expect(new Set(picks.map(e => e.id)).size).toBe(picks.length)
+  })
+
+  test('picks are sorted ascending by grams', () => {
+    const picks = pickCO2Equivalents(1_000_000)
+    for (let i = 1; i < picks.length; i++) expect(picks[i].grams).toBeGreaterThan(picks[i - 1].grams)
+  })
+
+  test('a small axis only surfaces small-scale equivalents (no flights for a few grams)', () => {
+    const picks = pickCO2Equivalents(100)
+    expect(picks.every(eq => eq.grams < 100)).toBe(true)
+    expect(picks.some(eq => eq.id.startsWith('flight'))).toBe(false)
+  })
+
+  test('a large axis is capped at 3 reference lines', () => {
+    expect(pickCO2Equivalents(5_000_000).length).toBeLessThanOrEqual(3)
+  })
+
+  test('the list is dense across ~100g to ~100 tonnes, not just the original 10 entries', () => {
+    expect(CO2_EQUIVALENTS.length).toBeGreaterThanOrEqual(17)
+    expect(CO2_EQUIVALENTS[CO2_EQUIVALENTS.length - 1].grams).toBeGreaterThanOrEqual(100_000_000)
+  })
+
+  test('a 50kg axis picks ~1.5kg/~8.9kg/~43.8kg, matching the reported real-world example', () => {
+    const picks = pickCO2Equivalents(50_000)
+    expect(picks.map(e => e.id)).toEqual(['laundry', 'gasoline-gallon', 'flight-short'])
+    expect(picks.map(e => e.grams)).toEqual([1500, 8900, 43800])
   })
 })

@@ -4,6 +4,12 @@ import UniformTypeIdentifiers
 import UserNotifications
 
 struct SettingsView: View {
+    /// Placeholder/default relay address shown until the user sets their own
+    /// (SonarQube swift:S1075 flags the literal; this is intentionally fixed
+    /// — it's an example value, not something worth threading through as a
+    /// parameter for its three call sites here).
+    private static let defaultRelayURLPlaceholder = "ws://localhost:7839"  // NOSONAR (swift:S1075) — see doc comment above
+
     @Binding var isPresented: Bool
     /// Swaps the panel body to the permission wizard in review mode (issue #570).
     /// A binding (not a closure) so SettingsView's inputs stay diff-stable — the
@@ -34,6 +40,18 @@ struct SettingsView: View {
     @AppStorage("advancedSettingsExpanded") private var advancedSettingsExpanded: Bool = false
     @AppStorage("providerMode_anthropic") private var providerModeAnthropic: String = ProviderModePreference.auto.rawValue
     @AppStorage("providerMode_openai") private var providerModeOpenAI: String = ProviderModePreference.auto.rawValue
+    // Menu bar icon content (issue #909): dots / quota bars / both. Default
+    // .lights keeps today's icon unchanged for existing users.
+    @AppStorage(MenuBarStyle.storageKey) private var menuBarStyle: String = MenuBarStyle.lights.rawValue
+    @AppStorage(MenuBarQuotaProvider.storageKey) private var menuBarQuotaProvider: String = ""
+    @AppStorage(QuotaVisualStyle.storageKey) private var menuBarQuotaVisual: String = QuotaVisualStyle.bars.rawValue
+    // Master gate (issue #940): collapses the whole Notifications section
+    // when off, instead of showing three always-visible event rows to users
+    // who don't want any of it. A brand-new key defaults to false, but
+    // `reconcileNotificationsMasterDefault()` flips it true once on first
+    // appearance for anyone upgrading with an event already enabled, so
+    // existing notification setups don't silently vanish.
+    @AppStorage("notificationsEnabled") private var notificationsEnabled: Bool = false
     @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = false
     @AppStorage(NotificationEvent.waiting.enabledKey) private var notifyOnWaiting: Bool = false
     @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = false
@@ -63,33 +81,29 @@ struct SettingsView: View {
 
     var body: some View {
         // Header and footer are pinned; only the settings sections scroll.
-        // This keeps the "Done" button visible no matter how many sections
-        // expand — the old fixed `height: 860` frame overflowed the menu-bar
-        // popover and clipped the footer. The scroll area is capped the same
-        // way SessionListView caps its list (see `groupListMaxHeight`).
-        // Horizontal insets live on the header, footer, scroll *content*, and
-        // dividers — NOT on the outer container — so the ScrollView spans the
-        // full panel width and its scroll track sits flush against the right
-        // edge, while the text stays inset.
+        // This keeps the footer visible no matter how many sections expand —
+        // the old fixed `height: 860` frame overflowed the menu-bar popover
+        // and clipped it. The scroll area is capped the same way
+        // SessionListView caps its list (see `groupListMaxHeight`).
+        // Horizontal insets live on the scroll *content* only — NOT on the
+        // outer container or the dividers (issue #940: dividers run full-bleed
+        // everywhere, matching History) — so the ScrollView spans the full
+        // panel width and its scroll track sits flush against the right edge,
+        // while the text stays inset.
         VStack(alignment: .leading, spacing: 0) {
-            Text("Settings")
-                .font(.headline)
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-                .padding(.bottom, 12)
+            PanelHeader(title: "Settings", onBack: { isPresented = false })
 
             Divider()
-                .padding(.horizontal, 20)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: IrrSpacing.sp4) {
                     LeadingToggle(
                         isOn: $showCostDisplay,
                         label: "Show Estimated Cost",
                         info: "Display estimated USD cost per session and per project group. Cost estimates are approximate."
                     )
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
                         LeadingToggle(
                             isOn: $showQuotaForecast,
                             label: "Show Quota Forecast",
@@ -110,7 +124,63 @@ struct SettingsView: View {
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
+                        HStack(spacing: 6) {
+                            Text("Menu Bar Icon")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundColor(.secondary)
+                            InfoIcon(text: "Lights shows session-state dots (today's default). Usage replaces them with 5h/7d subscription quota bars. Combined shows both side by side.")
+                            Spacer()
+                        }
+                        // A real Picker(pickerStyle: .segmented) only centers
+                        // within extra width instead of stretching into it —
+                        // EqualWidthSegmentedControl bridges to NSSegmentedControl
+                        // so the three segments split the full row edge to edge
+                        // (issue #940), tinted with the app's accent instead of
+                        // the system default blue.
+                        EqualWidthSegmentedControl(
+                            labels: MenuBarStyle.allCases.map(\.label),
+                            values: MenuBarStyle.allCases.map(\.rawValue),
+                            selection: $menuBarStyle,
+                            tint: IrrColors.working
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 22)
+
+                        if menuBarStyle != MenuBarStyle.lights.rawValue {
+                            HStack(spacing: 6) {
+                                Text("Quota provider")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Picker("", selection: $menuBarQuotaProvider) {
+                                    Text("Auto").tag("")
+                                    ForEach(knownQuotaProviderKeys, id: \.self) { key in
+                                        Text(quotaProviderLabel(key)).tag(key)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(maxWidth: 140)
+                            }
+                            HStack(spacing: 6) {
+                                Text("Quota shape")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Picker("", selection: $menuBarQuotaVisual) {
+                                    ForEach(QuotaVisualStyle.allCases) { visual in
+                                        Text(visual.label).tag(visual.rawValue)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+                                .frame(maxWidth: 140)
+                                .tint(IrrColors.working)
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
                         LeadingToggle(
                             isOn: $launchAtLogin,
                             label: "Open at Login",
@@ -145,7 +215,7 @@ struct SettingsView: View {
 
                     Divider()
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
                         HStack(spacing: 6) {
                             Text("Permissions")
                                 .font(.subheadline)
@@ -163,7 +233,7 @@ struct SettingsView: View {
 
                     Divider()
 
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
                         HStack(spacing: 6) {
                             Text("Notifications")
                                 .font(.subheadline)
@@ -172,62 +242,72 @@ struct SettingsView: View {
                             Spacer()
                         }
 
-                        NotificationEventRow(
-                            event: .ready,
-                            enabled: $notifyOnReady,
-                            sampleText: "Agent ready",
-                            onImportError: { customImportError = $0 }
-                        )
-                        NotificationEventRow(
-                            event: .waiting,
-                            enabled: $notifyOnWaiting,
-                            sampleText: "Agent waiting for input",
-                            onImportError: { customImportError = $0 }
-                        )
-                        NotificationEventRow(
-                            event: .contextPressure,
-                            enabled: $notifyOnContextPressure,
-                            sampleText: "Context pressure: 80% threshold reached",
-                            onImportError: { customImportError = $0 }
-                        )
-                        ContextThresholdRow(enabled: notifyOnContextPressure)
-                            .padding(.leading, 18)
+                        LeadingToggle(isOn: $notificationsEnabled, label: "Enable notifications")
 
-                        if let error = customImportError {
-                            Text(error)
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                        if notificationsEnabled {
+                            VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
+                                NotificationEventRow(
+                                    event: .ready,
+                                    enabled: $notifyOnReady,
+                                    sampleText: "Agent ready",
+                                    onImportError: { customImportError = $0 }
+                                )
+                                NotificationEventRow(
+                                    event: .waiting,
+                                    enabled: $notifyOnWaiting,
+                                    sampleText: "Agent waiting for input",
+                                    onImportError: { customImportError = $0 }
+                                )
+                                NotificationEventRow(
+                                    event: .contextPressure,
+                                    enabled: $notifyOnContextPressure,
+                                    sampleText: "Context pressure: 80% threshold reached",
+                                    onImportError: { customImportError = $0 }
+                                )
+                                ContextThresholdRow(enabled: notifyOnContextPressure)
+                                    .padding(.leading, IrrSpacing.sp4)
+                            }
 
-                        if notificationsDenied && (notifyOnReady || notifyOnWaiting || notifyOnContextPressure) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundColor(.orange)
-                                    .font(.caption)
-                                    .tooltip("Notifications blocked in System Settings")
-                                Text("Notifications are blocked.")
+                            if let error = customImportError {
+                                Text(error)
                                     .font(.caption)
                                     .foregroundColor(.orange)
-                                Button("Open Settings") {
-                                    if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings") {
-                                        NSWorkspace.shared.open(url)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            if notificationsDenied && (notifyOnReady || notifyOnWaiting || notifyOnContextPressure) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.orange)
+                                        .font(.caption)
+                                        .tooltip("Notifications blocked in System Settings")
+                                    Text("Notifications are blocked.")
+                                        .font(.caption)
+                                        .foregroundColor(.orange)
+                                    Button("Open Settings") {
+                                        if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings") {
+                                            NSWorkspace.shared.open(url)
+                                        }
                                     }
+                                    .font(.caption)
+                                    .buttonStyle(.link)
+                                    .tooltip("Open System Settings → Notifications")
                                 }
-                                .font(.caption)
-                                .buttonStyle(.link)
-                                .tooltip("Open System Settings → Notifications")
                             }
                         }
                     }
-                    .onAppear { checkNotificationAuth() }
+                    .onAppear {
+                        reconcileNotificationsMasterDefault()
+                        checkNotificationAuth()
+                    }
+                    .onChange(of: notificationsEnabled) { _ in checkNotificationAuth() }
                     .onChange(of: notifyOnReady) { _ in checkNotificationAuth() }
                     .onChange(of: notifyOnWaiting) { _ in checkNotificationAuth() }
                     .onChange(of: notifyOnContextPressure) { _ in checkNotificationAuth() }
 
                     Divider()
 
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
                         Text("Updates")
                             .font(.subheadline)
                             .fontWeight(.medium)
@@ -270,7 +350,7 @@ struct SettingsView: View {
                     // Advanced Settings (#694): power-user and still-maturing
                     // controls, collapsed by default. Disclosure state persists
                     // via @AppStorage("advancedSettingsExpanded").
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
                         Button {
                             withAnimation(IrrMotion.easeOut(duration: IrrMotion.fast)) {
                                 advancedSettingsExpanded.toggle()
@@ -378,10 +458,10 @@ struct SettingsView: View {
 
                             if backchannelActivation {
                                 BackchannelRulesView()
-                                    .padding(.leading, 16)
+                                    .padding(.leading, IrrSpacing.sp4)
                             }
 
-                            VStack(alignment: .leading, spacing: 8) {
+                            VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
                                 HStack(spacing: 6) {
                                     Text("Sources")
                                         .font(.subheadline)
@@ -412,7 +492,7 @@ struct SettingsView: View {
                                 // them whenever either subscribe or publish is on.
                                 if useRelayServer || publishToRelay {
                                     HStack(spacing: 6) {
-                                        TextField("ws://localhost:7839", text: $relayURLDraft)
+                                        TextField(Self.defaultRelayURLPlaceholder, text: $relayURLDraft)
                                             .textFieldStyle(.roundedBorder)
                                             .font(.system(.caption, design: .monospaced))
                                             .autocorrectionDisabled(true)
@@ -472,13 +552,13 @@ struct SettingsView: View {
                             }
                             .onChange(of: useRelayServer) { on in
                                 if on && relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    relayURLDraft = "ws://localhost:7839"
+                                    relayURLDraft = Self.defaultRelayURLPlaceholder
                                 }
                                 commitRelayURL()
                             }
                             .onChange(of: publishToRelay) { on in
                                 if on && relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    relayURLDraft = "ws://localhost:7839"
+                                    relayURLDraft = Self.defaultRelayURLPlaceholder
                                 }
                                 commitRelayURL()
                                 daemonManager.publishSettingsDidChange()
@@ -489,28 +569,29 @@ struct SettingsView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
+                .padding(.horizontal, IrrSpacing.sp4)
+                .padding(.vertical, IrrSpacing.sp4)
             }
             .frame(maxHeight: 520)
             .fixedSize(horizontal: false, vertical: true)
 
             Divider()
-                .padding(.horizontal, 20)
 
+            // "Back" in the header above is the only way to close this panel
+            // now (issue #940 — no separate footer "Done" button), so the
+            // footer is just the version string, matching History's footer-less
+            // pattern as closely as Settings' still-useful version display allows.
             HStack {
                 Text("Irrlicht v\(appVersion)")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
-                Button("Done") { isPresented = false }
-                    .keyboardShortcut(.defaultAction)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 20)
+            .padding(.horizontal, IrrSpacing.sp4)
+            .padding(.top, IrrSpacing.sp3)
+            .padding(.bottom, IrrSpacing.sp4)
         }
-        .frame(width: 360)
+        .frame(width: SessionListView.panelWidth)
         .background(Color(NSColor.windowBackgroundColor))
         .toggleStyle(IrrlichtSwitchToggleStyle())
         .background(
@@ -538,7 +619,7 @@ struct SettingsView: View {
                 .font(.callout)
                 .frame(width: 80, alignment: .leading)
             // A .menu (not .segmented) picker: the "Subscription" option makes a
-            // segmented control ~315pt wide, which overflows the 360pt panel and
+            // segmented control ~315pt wide, which overflows the panel and
             // clips the whole settings stack. The dropdown stays compact.
             Picker("", selection: selection) {
                 ForEach(ProviderModePreference.allCases) { mode in
@@ -549,6 +630,45 @@ struct SettingsView: View {
             .labelsHidden()
             .fixedSize()
             Spacer()
+        }
+    }
+
+    /// Provider keys with a rate_limit-carrying session right now, for the
+    /// Usage/Combined quota-provider picker. Not persisted anywhere else —
+    /// recomputed from whatever sessions happen to be visible when Settings
+    /// is open. Excludes Gas Town-owned sessions to match exactly what
+    /// MenuBarImageBuilder.combinedImage feeds into QuotaMenuBarRenderer —
+    /// offering a provider here that the icon can never actually render
+    /// (because its only carrying sessions are Gas Town's) would leave the
+    /// picker selection pointing at a permanently-empty quota display.
+    private var knownQuotaProviderKeys: [String] {
+        let gasTownProvider = sessionManager.gasTownProvider
+        let eligibleSessions = gasTownProvider?.isDaemonRunning == true
+            ? sessionManager.sessions.filter { !(gasTownProvider?.ownsSession($0) ?? false) }
+            : sessionManager.sessions
+        var keys = Set<String>()
+        for session in eligibleSessions {
+            guard let snap = session.metrics?.rateLimit, !snap.windows.isEmpty else { continue }
+            keys.insert(snap.providerKey(adapter: session.adapter) ?? "unknown:\(session.adapter ?? "")")
+        }
+        return keys.sorted()
+    }
+
+    /// `providerKey(adapter:)` returns nil for plan types/adapters it
+    /// doesn't recognize (e.g. Team/Enterprise plans, or a wrapper adapter
+    /// like Pi/OpenCode whose inherited snapshot carries no plan type) —
+    /// `knownQuotaProviderKeys` then falls back to a raw `"unknown:<adapter>"`
+    /// bucket key. Surface the adapter name instead of that internal-looking
+    /// string so the picker still reads as a plausible option rather than
+    /// leaking implementation detail.
+    private func quotaProviderLabel(_ key: String) -> String {
+        switch key {
+        case "anthropic": return "Claude"
+        case "openai": return "Codex"
+        default:
+            guard key.hasPrefix("unknown:") else { return key }
+            let adapter = key.dropFirst("unknown:".count)
+            return adapter.isEmpty ? "Other" : adapter.capitalized
         }
     }
 
@@ -563,6 +683,17 @@ struct SettingsView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             loginItemStatus = LoginItemManager.status
         }
+    }
+
+    /// One-time migration for the new master "Enable notifications" toggle
+    /// (issue #940): a brand-new `@AppStorage` key defaults to `false`, which
+    /// would hide an existing user's already-configured per-event toggles
+    /// behind a collapsed, seemingly-off section. Runs only while the key is
+    /// still absent from `UserDefaults` — once set (by this reconcile or by
+    /// the user), it's never overridden again.
+    private func reconcileNotificationsMasterDefault() {
+        guard UserDefaults.standard.object(forKey: "notificationsEnabled") == nil else { return }
+        notificationsEnabled = notifyOnReady || notifyOnWaiting || notifyOnContextPressure
     }
 
     private func checkNotificationAuth() {
@@ -614,7 +745,7 @@ private struct CLIToolSection: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
             Text("Command-Line Tool")
                 .font(.subheadline)
                 .fontWeight(.medium)
@@ -668,7 +799,7 @@ private struct CLIToolSection: View {
 
 private struct WindowAccessor: NSViewRepresentable {
     let onWindow: (NSWindow) -> Void
-    func makeNSView(context: Context) -> NSView {
+    func makeNSView(context _: Context) -> NSView {
         let v = NSView()
         // Defer one runloop so NSView.window is populated (nil during makeNSView).
         DispatchQueue.main.async { [weak v] in
@@ -676,7 +807,11 @@ private struct WindowAccessor: NSViewRepresentable {
         }
         return v
     }
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_: NSView, context _: Context) {
+        // NSViewRepresentable requires this method; there's nothing to
+        // update — onWindow already fired from makeNSView once the view
+        // had a window.
+    }
 }
 
 /// The "Alert at [value] [% / tokens]" control under the context-pressure
@@ -695,7 +830,7 @@ private struct ContextThresholdRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: IrrSpacing.sp2) {
             Text("Alert at")
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -760,9 +895,14 @@ private struct NotificationEventRow: View {
     @State private var selection: SoundChoice = .default
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            LeadingToggle(isOn: $enabled, label: event.displayName)
-            HStack(spacing: 8) {
+        // One row (issue #940): toggle + label + sound picker + preview all
+        // share a line — LeadingToggle's trailing Spacer absorbs the gap
+        // between the label and the fixed-width picker/button, so this
+        // stays a single line regardless of how long `event.displayName` is.
+        VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
+            HStack(spacing: IrrSpacing.sp2) {
+                LeadingToggle(isOn: $enabled, label: event.displayName)
+
                 Picker("", selection: $selection) {
                     ForEach(SoundChoice.builtIns, id: \.self) { choice in
                         Text(choice.displayName).tag(choice)
@@ -780,7 +920,8 @@ private struct NotificationEventRow: View {
                 }
                 .labelsHidden()
                 .disabled(!enabled)
-                .frame(maxWidth: .infinity)
+                .frame(width: 112)
+                .tooltip(selection.displayName)
                 .onChange(of: selection) { newValue in
                     handle(newValue)
                 }
@@ -789,9 +930,10 @@ private struct NotificationEventRow: View {
                     SoundPlayer.preview(selection, sampleText: sampleText)
                 } label: {
                     Image(systemName: "play.fill")
-                        .frame(width: 14, height: 14)
+                        .frame(width: 10, height: 10)
                 }
                 .buttonStyle(.bordered)
+                .controlSize(.small)
                 .disabled(!enabled || selection == .none)
                 .tooltip("Preview")
             }
@@ -809,7 +951,7 @@ private struct NotificationEventRow: View {
                         Image(systemName: "arrow.down.circle")
                         Text("Manage \(voice.displayName) in System Settings")
                     }
-                    .font(.caption)
+                    .font(.caption2)
                 }
                 .buttonStyle(.link)
                 .tooltip("Open System Settings → Accessibility → Spoken Content")
@@ -930,10 +1072,18 @@ struct InfoIcon: View {
 /// Internal (not private): PermissionWizardView applies it too.
 struct IrrlichtSwitchToggleStyle: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: IrrSpacing.sp2) {
             ZStack(alignment: configuration.isOn ? .trailing : .leading) {
                 Capsule()
-                    .fill(configuration.isOn ? IrrColors.ready : IrrColors.cancelled.opacity(0.4))
+                    // Off state needs its own visible fill + stroke, not just a
+                    // dim tint of the on-color — at 0.4 opacity the old fill
+                    // read as almost invisible against the dark background,
+                    // leaving off switches looking like a bare floating knob
+                    // rather than a switch (issue #940).
+                    .fill(configuration.isOn ? IrrColors.ready : Color.primary.opacity(0.14))
+                    .overlay(
+                        Capsule().strokeBorder(Color.primary.opacity(configuration.isOn ? 0 : 0.20), lineWidth: 1)
+                    )
                 Circle()
                     .fill(Color.white)
                     .shadow(color: Color.black.opacity(0.18), radius: 1, x: 0, y: 0.5)

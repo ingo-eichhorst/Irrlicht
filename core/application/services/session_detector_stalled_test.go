@@ -7,6 +7,100 @@ import (
 	"irrlicht/core/domain/session"
 )
 
+// markStalledEditToolCase is one TestMarkStalledEditTool table row.
+type markStalledEditToolCase struct {
+	name      string
+	openSince map[string]int64
+	metrics   *session.SessionMetrics
+	now       int64
+
+	wantStalled bool
+
+	// The open-since-window assertion is opt-in per case (most of the
+	// original subtests didn't check it): checkOpenSince false means skip
+	// it entirely; true + wantOpenSinceGone means the key must be absent;
+	// true + !wantOpenSinceGone means it must equal wantOpenSince.
+	checkOpenSince    bool
+	wantOpenSinceGone bool
+	wantOpenSince     int64
+}
+
+// markStalledEditToolCases builds TestMarkStalledEditTool's table. Split out
+// of the test function itself so TestMarkStalledEditTool stays under
+// CodeScene's Large Method line threshold (the table's fixtures are the bulk
+// of its length, not test logic).
+func markStalledEditToolCases(threshold int64) []markStalledEditToolCase {
+	editOpen := func() *session.SessionMetrics {
+		return &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Edit"}}
+	}
+	editOpenPending := func() *session.SessionMetrics {
+		m := editOpen()
+		m.PermissionPending = true
+		return m
+	}
+
+	return []markStalledEditToolCase{
+		{
+			name:           "fresh edit tool is not flagged, window recorded",
+			openSince:      map[string]int64{},
+			metrics:        editOpen(),
+			now:            1000,
+			wantStalled:    false,
+			checkOpenSince: true,
+			wantOpenSince:  1000,
+		},
+		{
+			name:        "edit tool open past window is flagged",
+			openSince:   map[string]int64{"s": 1000},
+			metrics:     editOpen(),
+			now:         1000 + threshold,
+			wantStalled: true,
+		},
+		{
+			// kiro-cli's pending write-approval picker holds an open lowercase
+			// `write` tool; it must flag stalled just like claudecode's
+			// PascalCase Write (#588).
+			name:        "lowercase write (kiro) open past window is flagged",
+			openSince:   map[string]int64{"s": 1000},
+			metrics:     &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"write"}},
+			now:         1000 + threshold,
+			wantStalled: true,
+		},
+		{
+			name:        "edit tool just under window is not flagged",
+			openSince:   map[string]int64{"s": 1000},
+			metrics:     editOpen(),
+			now:         1000 + threshold - 1,
+			wantStalled: false,
+		},
+		{
+			name:        "permission-pending edit tool defers to the hook",
+			openSince:   map[string]int64{"s": 1000},
+			metrics:     editOpenPending(),
+			now:         1000 + threshold + 100,
+			wantStalled: false,
+		},
+		{
+			name:              "non-edit tool is never flagged and clears the window",
+			openSince:         map[string]int64{"s": 1000},
+			metrics:           &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}},
+			now:               1000 + threshold + 100,
+			wantStalled:       false,
+			checkOpenSince:    true,
+			wantOpenSinceGone: true,
+		},
+		{
+			name:              "closing the tool clears the window",
+			openSince:         map[string]int64{"s": 1000},
+			metrics:           &session.SessionMetrics{HasOpenToolCall: false},
+			now:               1000 + threshold + 100,
+			wantStalled:       false,
+			checkOpenSince:    true,
+			wantOpenSinceGone: true,
+		},
+	}
+}
+
 // TestMarkStalledEditTool covers the transcript-based stalled-edit-tool
 // fallback (#488): an open permission-gated edit tool that lingers past the
 // stale-refresh interval is flagged OpenToolStalled, while a fresh one, a
@@ -16,116 +110,77 @@ import (
 func TestMarkStalledEditTool(t *testing.T) {
 	threshold := int64(staleWorkingRefreshInterval.Seconds())
 
-	editOpen := func() *session.SessionMetrics {
-		return &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Edit"}}
+	for _, tt := range markStalledEditToolCases(threshold) {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &SessionDetector{editToolOpenSince: tt.openSince}
+			d.markStalledEditTool("s", tt.metrics, tt.now)
+			assertOpenToolStalled(t, tt.metrics, tt.wantStalled)
+			if !tt.checkOpenSince {
+				return
+			}
+			if tt.wantOpenSinceGone {
+				assertOpenSinceCleared(t, d, "s")
+				return
+			}
+			assertOpenSinceEquals(t, d, "s", tt.wantOpenSince)
+		})
 	}
-
-	t.Run("fresh edit tool is not flagged, window recorded", func(t *testing.T) {
-		d := &SessionDetector{editToolOpenSince: map[string]int64{}}
-		m := editOpen()
-		d.markStalledEditTool("s", m, 1000)
-		if m.OpenToolStalled {
-			t.Fatal("fresh edit tool must not be flagged stalled")
-		}
-		if got, ok := d.editToolOpenSince["s"]; !ok || got != 1000 {
-			t.Fatalf("open-since window: got (%d,%v), want (1000,true)", got, ok)
-		}
-	})
-
-	t.Run("edit tool open past window is flagged", func(t *testing.T) {
-		d := &SessionDetector{editToolOpenSince: map[string]int64{"s": 1000}}
-		m := editOpen()
-		d.markStalledEditTool("s", m, 1000+threshold)
-		if !m.OpenToolStalled {
-			t.Fatalf("edit tool open for %ds must be flagged stalled", threshold)
-		}
-	})
-
-	// kiro-cli's pending write-approval picker holds an open lowercase `write`
-	// tool; it must flag stalled just like claudecode's PascalCase Write (#588).
-	t.Run("lowercase write (kiro) open past window is flagged", func(t *testing.T) {
-		d := &SessionDetector{editToolOpenSince: map[string]int64{"s": 1000}}
-		m := &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"write"}}
-		d.markStalledEditTool("s", m, 1000+threshold)
-		if !m.OpenToolStalled {
-			t.Fatalf("lowercase write open for %ds must be flagged stalled", threshold)
-		}
-	})
-
-	t.Run("edit tool just under window is not flagged", func(t *testing.T) {
-		d := &SessionDetector{editToolOpenSince: map[string]int64{"s": 1000}}
-		m := editOpen()
-		d.markStalledEditTool("s", m, 1000+threshold-1)
-		if m.OpenToolStalled {
-			t.Fatal("edit tool under the window must not be flagged stalled")
-		}
-	})
-
-	t.Run("permission-pending edit tool defers to the hook", func(t *testing.T) {
-		d := &SessionDetector{editToolOpenSince: map[string]int64{"s": 1000}}
-		m := editOpen()
-		m.PermissionPending = true
-		d.markStalledEditTool("s", m, 1000+threshold+100)
-		if m.OpenToolStalled {
-			t.Fatal("must not set OpenToolStalled when PermissionPending already fired")
-		}
-	})
-
-	t.Run("non-edit tool is never flagged and clears the window", func(t *testing.T) {
-		d := &SessionDetector{editToolOpenSince: map[string]int64{"s": 1000}}
-		m := &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}}
-		d.markStalledEditTool("s", m, 1000+threshold+100)
-		if m.OpenToolStalled {
-			t.Fatal("a long-running Bash must not be flagged stalled")
-		}
-		if _, ok := d.editToolOpenSince["s"]; ok {
-			t.Fatal("non-edit tool must clear the open-since window")
-		}
-	})
-
-	t.Run("closing the tool clears the window", func(t *testing.T) {
-		d := &SessionDetector{editToolOpenSince: map[string]int64{"s": 1000}}
-		m := &session.SessionMetrics{HasOpenToolCall: false}
-		d.markStalledEditTool("s", m, 1000+threshold+100)
-		if m.OpenToolStalled {
-			t.Fatal("a closed tool must not be flagged stalled")
-		}
-		if _, ok := d.editToolOpenSince["s"]; ok {
-			t.Fatal("closing the tool must clear the open-since window")
-		}
-	})
 
 	t.Run("nil metrics clears the window safely", func(t *testing.T) {
 		d := &SessionDetector{editToolOpenSince: map[string]int64{"s": 1000}}
 		d.markStalledEditTool("s", nil, 9999)
-		if _, ok := d.editToolOpenSince["s"]; ok {
-			t.Fatal("nil metrics must clear the open-since window")
-		}
+		assertOpenSinceCleared(t, d, "s")
 	})
+}
 
-	// Realistic sequence: a held Edit prompt observed across two passes flips
-	// to stalled on the second (a stale-refresh) pass; an arriving tool_result
-	// then clears the window.
-	t.Run("held prompt sequence", func(t *testing.T) {
-		d := &SessionDetector{editToolOpenSince: map[string]int64{}}
-		start := time.Now().Unix()
+// assertOpenToolStalled fails the test if m.OpenToolStalled doesn't match want.
+func assertOpenToolStalled(t *testing.T, m *session.SessionMetrics, want bool) {
+	t.Helper()
+	if m.OpenToolStalled != want {
+		t.Fatalf("OpenToolStalled = %v, want %v", m.OpenToolStalled, want)
+	}
+}
 
-		m1 := editOpen()
-		d.markStalledEditTool("s", m1, start) // live tool_use write
-		if m1.OpenToolStalled {
-			t.Fatal("first observation must not be stalled")
-		}
+// assertOpenSinceCleared fails the test if d.editToolOpenSince[key] is set.
+func assertOpenSinceCleared(t *testing.T, d *SessionDetector, key string) {
+	t.Helper()
+	if got, ok := d.editToolOpenSince[key]; ok {
+		t.Fatalf("expected open-since window cleared, got %d", got)
+	}
+}
 
-		m2 := editOpen()
-		d.markStalledEditTool("s", m2, start+threshold) // stale-refresh
-		if !m2.OpenToolStalled {
-			t.Fatal("second (stale) observation must be stalled")
-		}
+// assertOpenSinceEquals fails the test if d.editToolOpenSince[key] isn't
+// exactly want.
+func assertOpenSinceEquals(t *testing.T, d *SessionDetector, key string, want int64) {
+	t.Helper()
+	if got, ok := d.editToolOpenSince[key]; !ok || got != want {
+		t.Fatalf("open-since window: got (%d,%v), want (%d,true)", got, ok, want)
+	}
+}
 
-		m3 := &session.SessionMetrics{HasOpenToolCall: false} // approval → tool_result
-		d.markStalledEditTool("s", m3, start+threshold+1)
-		if _, ok := d.editToolOpenSince["s"]; ok {
-			t.Fatal("approval must clear the window")
-		}
-	})
+// TestMarkStalledEditTool_HeldPromptSequence covers a realistic sequence: a
+// held Edit prompt observed across two passes flips to stalled on the second
+// (a stale-refresh) pass; an arriving tool_result then clears the window.
+func TestMarkStalledEditTool_HeldPromptSequence(t *testing.T) {
+	threshold := int64(staleWorkingRefreshInterval.Seconds())
+	d := &SessionDetector{editToolOpenSince: map[string]int64{}}
+	start := time.Now().Unix()
+
+	m1 := &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Edit"}}
+	d.markStalledEditTool("s", m1, start) // live tool_use write
+	if m1.OpenToolStalled {
+		t.Fatal("first observation must not be stalled")
+	}
+
+	m2 := &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Edit"}}
+	d.markStalledEditTool("s", m2, start+threshold) // stale-refresh
+	if !m2.OpenToolStalled {
+		t.Fatal("second (stale) observation must be stalled")
+	}
+
+	m3 := &session.SessionMetrics{HasOpenToolCall: false} // approval → tool_result
+	d.markStalledEditTool("s", m3, start+threshold+1)
+	if _, ok := d.editToolOpenSince["s"]; ok {
+		t.Fatal("approval must clear the window")
+	}
 }

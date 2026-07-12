@@ -15,9 +15,10 @@ import (
 // out per controllable session (issue #732).
 const terminalObserveInterval = 1 * time.Second
 
-// uiSink receives edge-triggered terminal read-back signals and applies them on
-// the session-detector's single writer goroutine. SessionDetector implements it.
-type uiSink interface {
+// uiEnqueuer receives edge-triggered terminal read-back signals and applies
+// them on the session-detector's single writer goroutine. SessionDetector
+// implements it.
+type uiEnqueuer interface {
 	EnqueueTerminalUISignal(sessionID string, ui backchannel.UIKind)
 }
 
@@ -35,9 +36,9 @@ type uiSink interface {
 type TerminalObserver struct {
 	repo    outbound.SessionRepository
 	reader  outbound.TerminalReader
-	consent consentGate
+	consent consentGranter
 	betaOn  func() bool
-	sink    uiSink
+	sink    uiEnqueuer
 	logger  outbound.Logger
 
 	// lastUI tracks the last UI kind seen per session so only edges
@@ -48,7 +49,7 @@ type TerminalObserver struct {
 
 // NewTerminalObserver constructs a TerminalObserver. betaOn reports whether the
 // backchannel master-toggle is on (default false), shared with InputService.
-func NewTerminalObserver(repo outbound.SessionRepository, reader outbound.TerminalReader, consent consentGate, betaOn func() bool, sink uiSink, logger outbound.Logger) *TerminalObserver {
+func NewTerminalObserver(repo outbound.SessionRepository, reader outbound.TerminalReader, consent consentGranter, betaOn func() bool, sink uiEnqueuer, logger outbound.Logger) *TerminalObserver {
 	return &TerminalObserver{
 		repo:    repo,
 		reader:  reader,

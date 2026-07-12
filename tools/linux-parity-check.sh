@@ -42,11 +42,11 @@ set -euo pipefail
 
 fail() { echo "✗ $*" >&2; exit 1; }
 
-[ $# -eq 2 ] || { echo "usage: $0 <macos-events.jsonl> <linux-events.jsonl>" >&2; exit 2; }
+[[ $# -eq 2 ]] || { echo "usage: $0 <macos-events.jsonl> <linux-events.jsonl>" >&2; exit 2; }
 MAC="$1"; LINUX="$2"
 command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 2; }
-[ -f "$MAC" ]   || { echo "no such file: $MAC" >&2; exit 2; }
-[ -f "$LINUX" ] || { echo "no such file: $LINUX" >&2; exit 2; }
+[[ -f "$MAC" ]]   || { echo "no such file: $MAC" >&2; exit 2; }
+[[ -f "$LINUX" ]] || { echo "no such file: $LINUX" >&2; exit 2; }
 
 # Project an events.jsonl into the user-observable state-machine sequence:
 # per-session state transitions plus a single terminal "removed" marker, with
@@ -56,12 +56,13 @@ command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 2; }
 # timing that legitimately differs between inotify and kqueue/FSEvents.
 # Consecutive duplicate tokens are collapsed (e.g. repeated transcript_removed).
 project() {
+    local events_file="$1"
     jq -r '
         if .kind == "state_transition" then "\(.session_id)\t\(.new_state)"
         elif (.kind == "transcript_removed" or .kind == "presession_removed" or .kind == "process_exited")
         then "\(.session_id)\tremoved"
         else empty end
-    ' "$1" \
+    ' "$events_file" \
     | awk -F'\t' '
         { if (!($1 in seen)) { seen[$1] = n++ }
           tok = seen[$1] ":" $2
@@ -80,8 +81,8 @@ echo
 # compare empty sequences — an empty-vs-empty diff is not a parity proof.
 mac_seq=$(project "$MAC")     || fail "could not project $MAC (malformed events.jsonl?)"
 linux_seq=$(project "$LINUX") || fail "could not project $LINUX (malformed events.jsonl?)"
-[ -n "$mac_seq" ]   || fail "$MAC projected to an empty state sequence — nothing to compare"
-[ -n "$linux_seq" ] || fail "$LINUX projected to an empty state sequence — nothing to compare"
+[[ -n "$mac_seq" ]]   || fail "$MAC projected to an empty state sequence — nothing to compare"
+[[ -n "$linux_seq" ]] || fail "$LINUX projected to an empty state sequence — nothing to compare"
 
 if diff -u <(printf '%s\n' "$mac_seq") <(printf '%s\n' "$linux_seq"); then
     echo

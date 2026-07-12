@@ -115,6 +115,11 @@ func readAuthCache(path string, parse func([]byte) (authCacheEntry, bool)) (auth
 const (
 	ProviderAnthropic = "anthropic"
 	ProviderOpenAI    = "openai"
+
+	// authFileName is the credential file name shared by Codex, Pi, and
+	// OpenCode's on-disk auth stores (each under a different parent
+	// directory).
+	authFileName = "auth.json"
 )
 
 // AccountKey identifies a subscription bucket: the provider name plus
@@ -152,21 +157,47 @@ func (k AccountKey) IsSingleton() bool {
 // monkeypatching os.UserHomeDir; production callers pass "" to use the
 // real home.
 func InheritRateLimits(sessions []*session.SessionState, userHome string) {
-	home := userHome
-	if home == "" {
-		h, err := os.UserHomeDir()
-		if err != nil {
-			return
-		}
-		home = h
+	home, ok := resolveHome(userHome)
+	if !ok {
+		return
 	}
 
-	// Build donor map. Prefer the freshest snapshot per key when more
-	// than one session can donate (multiple Claude Code sessions all
-	// share the anthropic singleton, for example).
+	donors := buildDonorMap(sessions, home)
+	if len(donors) == 0 {
+		return
+	}
+
+	applyDonors(sessions, home, donors)
+}
+
+// resolveHome returns the home directory to use for auth-file lookups:
+// userHome verbatim when set (test injection), otherwise the real user
+// home directory. ok is false when neither is available.
+func resolveHome(userHome string) (home string, ok bool) {
+	if userHome != "" {
+		return userHome, true
+	}
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+	return h, true
+}
+
+// hasOwnRateLimit reports whether s already carries its own rate_limit
+// snapshot (donor-eligible, or recipient-ineligible).
+func hasOwnRateLimit(s *session.SessionState) bool {
+	return s != nil && s.Metrics != nil && s.Metrics.RateLimit != nil
+}
+
+// buildDonorMap collects the freshest rate_limit snapshot per AccountKey
+// across sessions that have one and map to a donor key. Prefer the freshest
+// snapshot per key when more than one session can donate (multiple Claude
+// Code sessions all share the anthropic singleton, for example).
+func buildDonorMap(sessions []*session.SessionState, home string) map[AccountKey]*session.RateLimitSnapshot {
 	donors := map[AccountKey]*session.RateLimitSnapshot{}
 	for _, s := range sessions {
-		if s == nil || s.Metrics == nil || s.Metrics.RateLimit == nil {
+		if !hasOwnRateLimit(s) {
 			continue
 		}
 		key, ok := donorKey(s, home)
@@ -178,17 +209,15 @@ func InheritRateLimits(sessions []*session.SessionState, userHome string) {
 			donors[key] = s.Metrics.RateLimit
 		}
 	}
-	if len(donors) == 0 {
-		return
-	}
+	return donors
+}
 
-	// Apply to recipients. Skip any session that already has a snapshot
-	// — its own data is more authoritative than inherited data.
+// applyDonors copies each matching donor snapshot into recipient sessions
+// that don't already have their own snapshot — its own data is more
+// authoritative than inherited data.
+func applyDonors(sessions []*session.SessionState, home string, donors map[AccountKey]*session.RateLimitSnapshot) {
 	for _, s := range sessions {
-		if s == nil {
-			continue
-		}
-		if s.Metrics != nil && s.Metrics.RateLimit != nil {
+		if s == nil || hasOwnRateLimit(s) {
 			continue
 		}
 		key, ok := recipientKey(s, home)
@@ -284,7 +313,7 @@ func ProviderForSession(s *session.SessionState, userHome string) string {
 // failure — the caller treats absence as "no donor available", which
 // is the safe default.
 func readCodexAccountID(home string) string {
-	entry, ok := readAuthCache(filepath.Join(home, ".codex", "auth.json"), parseCodexAuth)
+	entry, ok := readAuthCache(filepath.Join(home, ".codex", authFileName), parseCodexAuth)
 	if !ok {
 		return ""
 	}
@@ -315,7 +344,7 @@ func parseCodexAuth(data []byte) (authCacheEntry, bool) {
 // prefer OpenAI over Anthropic when both are configured; either choice
 // is defensible for a single-provider Pi user.
 func readPiInheritKey(home string) (AccountKey, bool) {
-	entry, ok := readAuthCache(filepath.Join(home, ".pi", "agent", "auth.json"), parsePiAuth)
+	entry, ok := readAuthCache(filepath.Join(home, ".pi", "agent", authFileName), parsePiAuth)
 	if !ok {
 		return AccountKey{}, false
 	}
@@ -345,7 +374,7 @@ func parsePiAuth(data []byte) (authCacheEntry, bool) {
 // (no account anchor). OpenAI account_id is recovered from the JWT
 // access_token's payload via openCodeJWTAccountID.
 func readOpenCodeInheritKey(home string) (AccountKey, bool) {
-	entry, ok := readAuthCache(filepath.Join(home, ".local", "share", "opencode", "auth.json"), parseOpenCodeAuth)
+	entry, ok := readAuthCache(filepath.Join(home, ".local", "share", "opencode", authFileName), parseOpenCodeAuth)
 	if !ok {
 		return AccountKey{}, false
 	}

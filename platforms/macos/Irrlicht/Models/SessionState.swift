@@ -89,6 +89,15 @@ struct RateLimitWindowInfo: Codable, Hashable {
         case resetsAt = "resets_at"
     }
 
+    /// Explicit memberwise initializer for tests — `init(from:)` below
+    /// suppresses Swift's synthesized one, mirroring the pattern already
+    /// used on SessionMetrics for the same reason.
+    init(usedPercent: Double, windowMinutes: Int, resetsAt: Date) {
+        self.usedPercent = usedPercent
+        self.windowMinutes = windowMinutes
+        self.resetsAt = resetsAt
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         usedPercent = try c.decode(Double.self, forKey: .usedPercent)
@@ -200,6 +209,16 @@ struct RateLimitInfo: Codable, Hashable {
         case credits
         case reachedType = "reached_type"
         case sampledAt = "sampled_at"
+    }
+
+    /// Explicit memberwise initializer for tests — see RateLimitWindowInfo's
+    /// for why one isn't synthesized.
+    init(windows: [RateLimitWindowInfo], planType: String? = nil, credits: CreditsInfo? = nil, reachedType: String? = nil, sampledAt: Date) {
+        self.windows = windows
+        self.planType = planType
+        self.credits = credits
+        self.reachedType = reachedType
+        self.sampledAt = sampledAt
     }
 
     init(from decoder: Decoder) throws {
@@ -366,6 +385,7 @@ struct SessionMetrics: Codable {
     let taskEstimate: TaskEstimateInfo?    // agent-authored task progress from the in-band marker (issue #558)
     let taskCompletionEta: Date?           // projected task completion (nil when no marker / no progress yet)
     let cacheBloat: Bool?                  // cache-creation regression detected for this session (issue #374)
+    let cacheBloatPercent: Int?            // how far above the project baseline, as a rounded percent (issue #946)
     let cacheBloatTooltip: String?         // hover text naming the regressing version (empty when no attribution)
     let cacheBloatExplanation: String?     // longer plain-language hover text, composed daemon-side (issue #827)
 
@@ -390,6 +410,7 @@ struct SessionMetrics: Codable {
         case taskEstimate = "task_estimate"
         case taskCompletionEta = "task_completion_eta"
         case cacheBloat = "cache_bloat"
+        case cacheBloatPercent = "cache_bloat_percent"
         case cacheBloatTooltip = "cache_bloat_tooltip"
         case cacheBloatExplanation = "cache_bloat_explanation"
     }
@@ -428,6 +449,7 @@ struct SessionMetrics: Codable {
             taskCompletionEta = nil
         }
         cacheBloat = try c.decodeIfPresent(Bool.self, forKey: .cacheBloat)
+        cacheBloatPercent = try c.decodeIfPresent(Int.self, forKey: .cacheBloatPercent)
         cacheBloatTooltip = try c.decodeIfPresent(String.self, forKey: .cacheBloatTooltip)
         cacheBloatExplanation = try c.decodeIfPresent(String.self, forKey: .cacheBloatExplanation)
     }
@@ -456,6 +478,7 @@ struct SessionMetrics: Codable {
         taskEstimate: TaskEstimateInfo? = nil,
         taskCompletionEta: Date? = nil,
         cacheBloat: Bool? = nil,
+        cacheBloatPercent: Int? = nil,
         cacheBloatTooltip: String? = nil,
         cacheBloatExplanation: String? = nil
     ) {
@@ -479,6 +502,7 @@ struct SessionMetrics: Codable {
         self.taskEstimate = taskEstimate
         self.taskCompletionEta = taskCompletionEta
         self.cacheBloat = cacheBloat
+        self.cacheBloatPercent = cacheBloatPercent
         self.cacheBloatTooltip = cacheBloatTooltip
         self.cacheBloatExplanation = cacheBloatExplanation
     }
@@ -505,6 +529,7 @@ struct SessionMetrics: Codable {
         try c.encodeIfPresent(taskEstimate, forKey: .taskEstimate)
         try c.encodeIfPresent(taskCompletionEta.map { $0.timeIntervalSince1970 }, forKey: .taskCompletionEta)
         try c.encodeIfPresent(cacheBloat, forKey: .cacheBloat)
+        try c.encodeIfPresent(cacheBloatPercent, forKey: .cacheBloatPercent)
         try c.encodeIfPresent(cacheBloatTooltip, forKey: .cacheBloatTooltip)
         try c.encodeIfPresent(cacheBloatExplanation, forKey: .cacheBloatExplanation)
     }
@@ -623,7 +648,7 @@ struct SessionMetrics: Codable {
         }
         if grams < 1 { return String(format: "%.0fmg", grams * 1000) }
         if grams < 1000 { return String(format: "%.1fg", grams) }
-        return String(format: "%.2fkg", grams / 1000)
+        return String(format: "%.1fkg", grams / 1000)
     }
 
     // co2TierTooltip explains the confidence behind the CO2 estimate — every

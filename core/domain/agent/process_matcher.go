@@ -14,7 +14,9 @@ type ExactName struct {
 	Name string
 }
 
-func (ExactName) isProcessMatcher() {}
+func (ExactName) isProcessMatcher() {
+	// sealing marker — deliberately empty
+}
 
 // CommandPattern matches via `pgrep -f Regex` — the full command line is
 // matched, not just argv[0]. Use when the OS process name does not match
@@ -25,4 +27,6 @@ type CommandPattern struct {
 	Regex *regexp.Regexp
 }
 
-func (CommandPattern) isProcessMatcher() {}
+func (CommandPattern) isProcessMatcher() {
+	// sealing marker — deliberately empty
+}

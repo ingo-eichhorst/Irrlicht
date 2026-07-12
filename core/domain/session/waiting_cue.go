@@ -9,6 +9,7 @@ package session
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // trailingMarkdownNoise are characters that commonly appear AFTER a
@@ -63,6 +64,7 @@ func ExtractQuestionSnippet(text string) string {
 	if text == "" {
 		return ""
 	}
+	text = foldCombiningDiacritics(text)
 	sentences := splitSentences(text)
 	for i, s := range sentences {
 		trimmed := strings.TrimSpace(s)
@@ -73,7 +75,7 @@ func ExtractQuestionSnippet(text string) string {
 		if stripped == "" {
 			continue
 		}
-		if stripped[len(stripped)-1] != '?' {
+		if !endsWithQuestionMark(stripped) {
 			continue
 		}
 		if isRhetorical(sentences, i) {
@@ -128,6 +130,27 @@ var waitingCuePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bis (?:that|this) (?:right|correct|ok|okay|fine|good|what you wanted)\b`),
 }
 
+// waitingCueExclusions veto an otherwise-matched cue when the sentence names
+// an explicitly non-human wait target. "its"/"their"/"it" as the object of
+// wait/waiting unambiguously refer to something already named elsewhere in
+// the text (an agent, a job, a process) — never to the user being addressed
+// directly, unlike "for you"/"for your". Scoped narrowly to "wait(ing)
+// for/on <pronoun>" so it can't accidentally veto an unrelated cue earlier
+// in the same sentence. See #897: "I'll wait for its completion
+// notification" must not register as waiting on the user.
+var waitingCueExclusions = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bwait(?:ing)?\s+(?:for|on)\s+(?:its|their|it)\b`),
+}
+
+func isSelfReferentialWait(s string) bool {
+	for _, re := range waitingCueExclusions {
+		if re.MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+
 // ExtractWaitingCue returns the trailing sentence that carries an imperative
 // or implicit waiting cue, or "" when none is present. Unlike
 // ExtractQuestionSnippet it does not require a literal '?'; it matches the
@@ -138,6 +161,7 @@ func ExtractWaitingCue(text string) string {
 	if text == "" {
 		return ""
 	}
+	text = foldCombiningDiacritics(text)
 	// Walk the tail newest-first so when both the last and second-to-last
 	// sentence match a cue, the more recent (and usually more natural for
 	// display) sentence is returned.
@@ -148,7 +172,10 @@ func ExtractWaitingCue(text string) string {
 		if stripped == "" {
 			continue
 		}
-		for _, re := range waitingCuePatterns {
+		if isSelfReferentialWait(stripped) {
+			continue
+		}
+		for _, re := range allWaitingCuePatterns {
 			if re.MatchString(stripped) {
 				return s
 			}
@@ -206,7 +233,7 @@ func looksLikeAnswer(s string) bool {
 		return false
 	}
 	lower := strings.ToLower(s)
-	for _, p := range answerPrefixes {
+	for _, p := range allAnswerPrefixes {
 		if strings.HasPrefix(lower, p) {
 			return true
 		}
@@ -214,31 +241,81 @@ func looksLikeAnswer(s string) bool {
 	return false
 }
 
-// splitSentences splits text on sentence terminators (`.`, `!`, `?`) and
-// newlines. A terminator only ends a sentence when followed by whitespace,
-// end-of-string, or markdown wrappers leading to either — so URL `?` and
-// abbreviations like `e.g.` don't split. Each returned sentence retains its
-// terminator and any wrapper characters.
+// questionTerminators are the runes that end a question sentence across
+// scripts: ASCII `?`, full-width `？` (CJK), `؟` (Arabic), and `;`
+// (Greek question mark — NOT the ASCII semicolon it visually resembles).
+// See issue #933: question detection was ASCII-`?`-only, missing every
+// non-Latin question mark.
+const questionTerminators = "?？؟;"
+
+// cjkSentenceTerminators additionally end a *sentence* (for splitSentences)
+// without requiring a following whitespace/EOS — CJK text is typically
+// written without spaces between sentences, unlike Latin/Arabic/Greek.
+const cjkSentenceTerminators = "？！。"
+
+func endsWithQuestionMark(s string) bool {
+	r, _ := utf8.DecodeLastRuneInString(s)
+	return strings.ContainsRune(questionTerminators, r)
+}
+
+func isCJKSentenceTerminator(r rune) bool {
+	return strings.ContainsRune(cjkSentenceTerminators, r)
+}
+
+// isSentenceTerminatorRune reports whether r ends a sentence in any of the
+// scripts splitSentences handles: ASCII `.`/`!`/`?`, Arabic `؟`, the Greek
+// question mark, or a CJK terminator.
+func isSentenceTerminatorRune(r rune) bool {
+	return r == '.' || r == '!' || r == '?' || r == '؟' || r == ';' || isCJKSentenceTerminator(r)
+}
+
+// skipMarkdownWrapper advances j past any run of markdown-wrapper characters
+// (e.g. the `**` in `?**`) starting at j, without crossing whitespace.
+func skipMarkdownWrapper(text string, j int) int {
+	for j < len(text) && strings.IndexByte(markdownWrapper, text[j]) >= 0 {
+		j++
+	}
+	return j
+}
+
+// sentenceBoundaryAfter decodes the rune at i and reports where to resume
+// scanning next, plus whether that position is a sentence boundary. next is
+// always a valid resume point (whether or not boundary is true), so the
+// caller never needs to re-decode. A position is a boundary when the rune
+// is a newline, or a terminator (`.`/`!`/`?`/Arabic/Greek/CJK) that actually
+// ends the sentence there — for Latin/Arabic/Greek terminators, only at
+// end-of-string or before whitespace, so `e.g.` and URL fragments don't
+// split; CJK terminators (`？！。`) always end the sentence, since CJK text
+// is conventionally written without inter-sentence spaces.
+func sentenceBoundaryAfter(text string, i int) (next int, boundary bool) {
+	r, size := utf8.DecodeRuneInString(text[i:])
+	if r == '\n' {
+		return i + size, true
+	}
+	if !isSentenceTerminatorRune(r) {
+		return i + size, false
+	}
+	j := skipMarkdownWrapper(text, i+size)
+	if isCJKSentenceTerminator(r) || j == len(text) || isSentenceBreak(text[j]) {
+		return j, true
+	}
+	return i + size, false
+}
+
+// splitSentences splits text on sentence terminators (`.`, `!`, `?`, and
+// their CJK/Arabic/Greek counterparts) and newlines, via sentenceBoundaryAfter.
+// Each returned sentence retains its terminator and any wrapper characters.
 func splitSentences(text string) []string {
 	var sentences []string
 	start := 0
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		switch c {
-		case '.', '!', '?':
-			j := i + 1
-			for j < len(text) && strings.IndexByte(markdownWrapper, text[j]) >= 0 {
-				j++
-			}
-			if j == len(text) || isSentenceBreak(text[j]) {
-				sentences = append(sentences, text[start:j])
-				start = j
-				i = j - 1
-			}
-		case '\n':
-			sentences = append(sentences, text[start:i])
-			start = i + 1
+	for i := 0; i < len(text); {
+		next, boundary := sentenceBoundaryAfter(text, i)
+		if !boundary {
+			i = next
+			continue
 		}
+		sentences = append(sentences, text[start:next])
+		start, i = next, next
 	}
 	if start < len(text) {
 		sentences = append(sentences, text[start:])

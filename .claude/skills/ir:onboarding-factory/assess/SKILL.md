@@ -152,7 +152,7 @@ Write the machine-checkable spec as JSONL. The first line is the meta object;
 subsequent lines are phases:
 
 ```jsonl
-{"schema_version":1,"notes":"<what this asserts>","observations":{"model":"<id>","cost_nonzero":true,"tokens_nonzero":true,"agent":"<agent>"}}
+{"schema_version":1,"notes":"<what this asserts>","observations":{"model":"<id>","cost_nonzero":true,"tokens_nonzero":true}}
 {"phase":"birth","anchor":"start", ...}
 {"phase":"settle","from":"working","to":"ready", ...}
 ```
@@ -179,7 +179,7 @@ subsequent lines are phases:
     nearly every multi-phase presession cell PARTIAL until `record` re-anchored
     it. Template from the codex sibling spec.
 - **Observations** assert the websocket metric vector the verify engine checks —
-  exact-match categorical fields (`model`, `agent`), non-zero + tolerance for
+  exact-match categorical fields (`model`), non-zero + tolerance for
   `cost`/`tokens`. This is the widened verify the factory added: a recording is
   verified on token/usage/cost/model, not just lifecycle state.
   **Don't hard-pin a doc-guessed `model`.** Vendor docs lag the binary, and a

@@ -10,3 +10,10 @@ platforms/macos/.build
 *.pkg
 *.tar.gz
 .claude/worktrees
+
+# Never let local secrets ride along on a recursive COPY (SonarQube
+# docker:S6470) — .env holds SONAR_TOKEN and friends and is gitignored, so it
+# exists on disk for plenty of contributors even though it's untracked.
+.env
+.env.*
+!.env.example

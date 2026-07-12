@@ -76,9 +76,23 @@ func (s *YieldSweeper) Sweep() int {
 		return 0
 	}
 
-	// Index un-reverted, git-tracked sessions by their HEAD commit, and collect
-	// one representative directory per unique repo root so each project's
-	// history is scanned exactly once.
+	byCommit, rootDirs := s.indexByCommit(sessions)
+	if len(byCommit) == 0 {
+		return 0
+	}
+
+	reverted := s.collectRevertedSHAs(rootDirs)
+	if len(reverted) == 0 {
+		return 0
+	}
+
+	return s.flipReverted(byCommit, reverted)
+}
+
+// indexByCommit indexes un-reverted, git-tracked sessions by their HEAD
+// commit, and collects one representative directory per unique repo root so
+// each project's history is scanned exactly once.
+func (s *YieldSweeper) indexByCommit(sessions []*session.SessionState) (map[string][]*session.SessionState, map[string]string) {
 	byCommit := make(map[string][]*session.SessionState)
 	rootDirs := make(map[string]string)
 	for _, st := range sessions {
@@ -86,59 +100,78 @@ func (s *YieldSweeper) Sweep() int {
 			continue
 		}
 		byCommit[st.HeadCommit] = append(byCommit[st.HeadCommit], st)
-		if st.CWD != "" {
-			if root := s.git.GetGitRoot(st.CWD); root != "" {
-				if _, seen := rootDirs[root]; !seen {
-					rootDirs[root] = st.CWD
-				}
-			}
-		}
+		s.recordRootDir(rootDirs, st.CWD)
 	}
-	if len(byCommit) == 0 {
-		return 0
-	}
+	return byCommit, rootDirs
+}
 
-	// Gather every reverted SHA across the deduped project roots.
+// recordRootDir resolves cwd's git root and, if no representative directory
+// is recorded for that root yet, records cwd as its sample directory for the
+// revert scan. A no-op for a non-git or empty cwd.
+func (s *YieldSweeper) recordRootDir(rootDirs map[string]string, cwd string) {
+	if cwd == "" {
+		return
+	}
+	root := s.git.GetGitRoot(cwd)
+	if root == "" {
+		return
+	}
+	if _, seen := rootDirs[root]; !seen {
+		rootDirs[root] = cwd
+	}
+}
+
+// collectRevertedSHAs gathers every reverted commit SHA across the deduped
+// project roots.
+func (s *YieldSweeper) collectRevertedSHAs(rootDirs map[string]string) map[string]bool {
 	reverted := make(map[string]bool)
 	for _, dir := range rootDirs {
 		for _, sha := range s.git.RevertedCommits(dir) {
 			reverted[sha] = true
 		}
 	}
-	if len(reverted) == 0 {
-		return 0
-	}
+	return reverted
+}
 
+// flipReverted flips YieldState to reverted for every session indexed under a
+// reverted commit SHA, and returns the count actually flipped.
+func (s *YieldSweeper) flipReverted(byCommit map[string][]*session.SessionState, reverted map[string]bool) int {
 	flipped := 0
 	for sha := range reverted {
 		for _, snap := range byCommit[sha] {
-			// Re-load fresh immediately before writing: the snapshot from
-			// ListAll above is stale by the time the per-project git scans
-			// finish, and the detector may have re-saved this session in the
-			// meantime. Writing back the fresh state (with only YieldState
-			// flipped) avoids stomping a concurrent update.
-			fresh, err := s.store.Load(snap.SessionID)
-			if err != nil || fresh == nil {
-				continue
+			if s.flipOne(snap, sha) {
+				flipped++
 			}
-			// The session may already be reverted (idempotent) or have moved
-			// its HEAD since the snapshot, in which case the correlation no
-			// longer holds — leave it for the next sweep.
-			if fresh.YieldState == session.YieldReverted || fresh.HeadCommit != sha {
-				continue
-			}
-			// UpdatedAt is deliberately not bumped: the cost was incurred when
-			// the session ran, so it must stay in its original yield window
-			// even though the revert was detected later.
-			fresh.YieldState = session.YieldReverted
-			if err := s.store.Save(fresh); err != nil {
-				s.logError(fmt.Sprintf("failed to persist reverted yield for %s", fresh.SessionID), err)
-				continue
-			}
-			flipped++
 		}
 	}
 	return flipped
+}
+
+// flipOne re-loads snap fresh immediately before writing — the snapshot from
+// Sweep's ListAll is stale by the time the per-project git scans finish, and
+// the detector may have re-saved this session in the meantime — and, if it's
+// still un-reverted with the same HEAD commit sha, flips its YieldState to
+// reverted and persists it. Returns true when the flip was made.
+func (s *YieldSweeper) flipOne(snap *session.SessionState, sha string) bool {
+	fresh, err := s.store.Load(snap.SessionID)
+	if err != nil || fresh == nil {
+		return false
+	}
+	// The session may already be reverted (idempotent) or have moved its HEAD
+	// since the snapshot, in which case the correlation no longer holds —
+	// leave it for the next sweep.
+	if fresh.YieldState == session.YieldReverted || fresh.HeadCommit != sha {
+		return false
+	}
+	// UpdatedAt is deliberately not bumped: the cost was incurred when the
+	// session ran, so it must stay in its original yield window even though
+	// the revert was detected later.
+	fresh.YieldState = session.YieldReverted
+	if err := s.store.Save(fresh); err != nil {
+		s.logError(fmt.Sprintf("failed to persist reverted yield for %s", fresh.SessionID), err)
+		return false
+	}
+	return true
 }
 
 func (s *YieldSweeper) logError(msg string, err error) {

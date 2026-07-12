@@ -19,14 +19,15 @@ const QUOTA_FORECAST_KEY = 'showQuotaForecast';
 export function showQuotaForecast() {
   // Default ON, mirroring macOS @AppStorage("showQuotaForecast") default.
   const v = localStorage.getItem(QUOTA_FORECAST_KEY);
-  if (v === '0' || v === 'false') return false;
-  return true;
+  return v !== '0' && v !== 'false';
 }
 export function setShowQuotaForecast(on) {
   // Safari Private mode and storage-disabled contexts throw on
   // setItem — swallow per the project pattern (see persistCollapsedGroups
   // at line ~1099 and the settings save loop).
-  try { localStorage.setItem(QUOTA_FORECAST_KEY, on ? '1' : '0'); } catch (e) {}
+  try { localStorage.setItem(QUOTA_FORECAST_KEY, on ? '1' : '0'); } catch (e) {
+    console.debug('quotaChips: failed to persist showQuotaForecast', e);
+  }
 }
 
 // Provider-icon registry. SVGs are byte-for-byte copies of
@@ -77,7 +78,9 @@ function setProviderModePreference(providerKey, mode) {
   try {
     if (mode === 'auto') localStorage.removeItem(providerModeStorageKey(providerKey));
     else localStorage.setItem(providerModeStorageKey(providerKey), mode);
-  } catch (e) {}
+  } catch (e) {
+    console.debug('quotaChips: failed to persist provider mode preference', e);
+  }
 }
 
 function chipModeFor(snap, providerKey) {
@@ -87,7 +90,7 @@ function chipModeFor(snap, providerKey) {
   // Auto: a credits balance without a plan tier means the API-key /
   // usage path; everything else (plan_type set or no credits) renders
   // bars. Same rule as Swift's resolveChipMode.
-  if (snap && snap.credits && !snap.plan_type) return 'usage';
+  if (snap?.credits && !snap.plan_type) return 'usage';
   return 'subscription';
 }
 
@@ -105,7 +108,7 @@ function imminentWindow(snap) {
 // Returns where the user *should be* in the window if pacing evenly,
 // anchored to now (not sampled_at) — matches macOS quotaPacePercent.
 function paceFor(w, nowMs) {
-  if (!w || !w.window_minutes || w.window_minutes <= 0) return null;
+  if (!w?.window_minutes || w.window_minutes <= 0) return null;
   if (!w.resets_at || w.resets_at <= 0) return null;
   const windowMs = w.window_minutes * 60 * 1000;
   const startMs = w.resets_at * 1000 - windowMs;
@@ -165,10 +168,36 @@ function formatClockTime(unixSec) {
 // Fold session snapshots into one bucket per provider. Rules mirror
 // macOS mergeIntoBuckets: subscription beats usage; fresh beats stale;
 // among same-staleness snapshots, the highest sampled_at wins.
+// mergeChipIntoBucket folds one more session's snapshot into an existing
+// provider bucket, applying the subscription-beats-usage / fresh-beats-
+// stale / newest-sampled_at-wins precedence (mirrors Swift's mergeIntoBuckets).
+function mergeChipIntoBucket(existing, snap, s, mode, imm, stale) {
+  // Subscription wins over usage when both are seen (rare — one OAuth
+  // account on both paths). Bars are the richer signal, but only when
+  // the subscription snap is at least as fresh as the usage snap.
+  if (existing.mode === 'usage' && mode === 'subscription' && (!stale || existing.isStale)) {
+    existing.mode = 'subscription';
+    existing.snapshot = snap;
+    existing.session = s;
+    existing.imminent = imm;
+    existing.isStale = stale;
+  } else if (existing.isStale && !stale) {
+    // Always prefer fresh over stale, regardless of sampled_at.
+    existing.snapshot = snap;
+    existing.session = s;
+    existing.imminent = imm;
+    existing.isStale = false;
+  } else if (existing.isStale === stale && (snap.sampled_at || 0) > (existing.snapshot.sampled_at || 0)) {
+    existing.snapshot = snap;
+    existing.session = s;
+    existing.imminent = imm;
+  }
+}
+
 function bucketChips(sessions, nowMs) {
   const buckets = new Map();
   for (const s of sessions) {
-    const snap = s && s.metrics && s.metrics.rate_limit;
+    const snap = s?.metrics?.rate_limit;
     if (!snap) continue;
     // Match Swift's mergeIntoBuckets stale rule exactly: any window
     // whose resets_at is in the past (or zero — Date(0) is 1970, well
@@ -182,7 +211,7 @@ function bucketChips(sessions, nowMs) {
     // (icon only, no bars) while hiding the app title. Skip them entirely.
     if (mode === 'subscription' && !Array.isArray(snap.windows)) continue;
     const imm = imminentWindow(snap);
-    const cost = (s.metrics && s.metrics.estimated_cost_usd) || 0;
+    const cost = s.metrics?.estimated_cost_usd || 0;
     const existing = buckets.get(key);
     if (!existing) {
       buckets.set(key, {
@@ -196,31 +225,50 @@ function bucketChips(sessions, nowMs) {
       });
       continue;
     }
-    // Subscription wins over usage when both are seen (rare — one OAuth
-    // account on both paths). Bars are the richer signal, but only when
-    // the subscription snap is at least as fresh as the usage snap.
-    if (existing.mode === 'usage' && mode === 'subscription' && (!stale || existing.isStale)) {
-      existing.mode = 'subscription';
-      existing.snapshot = snap;
-      existing.session = s;
-      existing.imminent = imm;
-      existing.isStale = stale;
-    } else if (existing.isStale && !stale) {
-      // Always prefer fresh over stale, regardless of sampled_at.
-      existing.snapshot = snap;
-      existing.session = s;
-      existing.imminent = imm;
-      existing.isStale = false;
-    } else if (existing.isStale === stale && (snap.sampled_at || 0) > (existing.snapshot.sampled_at || 0)) {
-      existing.snapshot = snap;
-      existing.session = s;
-      existing.imminent = imm;
-    }
+    mergeChipIntoBucket(existing, snap, s, mode, imm, stale);
     existing.totalCostUSD += cost;
   }
-  return Array.from(buckets.values()).sort((a, b) =>
-    a.key < b.key ? -1 : a.key > b.key ? 1 : 0
-  );
+  return Array.from(buckets.values()).sort((a, b) => a.key.localeCompare(b.key));
+}
+
+// subscriptionWindowLine renders one quota window's tooltip line: percent
+// used, pace verdict (if computable), and reset countdown.
+function subscriptionWindowLine(w, nowMs) {
+  const used = Math.round(w.used_percent || 0);
+  const label = quotaWindowLabel(w.window_minutes || 0);
+  const pace = paceFor(w, nowMs);
+  let line = label + ': ' + used + '% used';
+  if (pace != null) {
+    const delta = used - Math.round(pace);
+    let verdict = 'on pace';
+    if (delta > 0) verdict = delta + 'pt over pace';
+    else if (delta < 0) verdict = (-delta) + 'pt under pace';
+    line += ' · ' + verdict;
+  }
+  if (w.resets_at) line += ' · resets in ' + formatTimeUntil(w.resets_at);
+  return line;
+}
+
+// subscriptionForecastLine returns the cap-forecast tooltip line, or null
+// when there's neither a projected ETA nor any observed usage to reason
+// about.
+function subscriptionForecastLine(chip) {
+  const eta = chip.session?.metrics?.rate_limit_forecast_eta;
+  if (eta) return 'Projected cap: ' + formatClockTime(eta);
+  if ((chip.snapshot.windows || []).some(w => (w.used_percent || 0) > 0)) {
+    return "Forecast: won't hit cap this window";
+  }
+  return null;
+}
+
+// usageCreditsLine returns the credits sub-line for usage-mode chips, or
+// null when there's nothing worth reporting.
+function usageCreditsLine(c) {
+  if (!c) return null;
+  if (c.unlimited === true) return 'Credits: unlimited';
+  if (typeof c.balance === 'number') return 'Credits balance: $' + c.balance.toFixed(2);
+  if (c.has_credits) return 'Credits: available';
+  return null;
 }
 
 function quotaTooltip(chip, nowMs) {
@@ -230,32 +278,14 @@ function quotaTooltip(chip, nowMs) {
   if (chip.isStale) lines.push('⚠️ snapshot pre-dates current window — waiting for next statusline tick');
   if (chip.mode === 'subscription') {
     for (const w of (chip.snapshot.windows || [])) {
-      const used = Math.round(w.used_percent || 0);
-      const label = quotaWindowLabel(w.window_minutes || 0);
-      const pace = paceFor(w, nowMs);
-      let line = label + ': ' + used + '% used';
-      if (pace != null) {
-        const delta = used - Math.round(pace);
-        const verdict = delta > 0 ? (delta + 'pt over pace')
-                      : delta < 0 ? ((-delta) + 'pt under pace')
-                      : 'on pace';
-        line += ' · ' + verdict;
-      }
-      if (w.resets_at) line += ' · resets in ' + formatTimeUntil(w.resets_at);
-      lines.push(line);
+      lines.push(subscriptionWindowLine(w, nowMs));
     }
-    const eta = chip.session && chip.session.metrics && chip.session.metrics.rate_limit_forecast_eta;
-    if (eta) lines.push('Projected cap: ' + formatClockTime(eta));
-    else if ((chip.snapshot.windows || []).some(w => (w.used_percent || 0) > 0))
-      lines.push("Forecast: won't hit cap this window");
+    const forecast = subscriptionForecastLine(chip);
+    if (forecast) lines.push(forecast);
   } else {
     lines.push(formatUsageCost(chip.totalCostUSD) + ' · cumulative spend across active sessions');
-    const c = chip.snapshot.credits;
-    if (c) {
-      if (c.unlimited === true) lines.push('Credits: unlimited');
-      else if (typeof c.balance === 'number') lines.push('Credits balance: $' + c.balance.toFixed(2));
-      else if (c.has_credits) lines.push('Credits: available');
-    }
+    const creditsLine = usageCreditsLine(chip.snapshot.credits);
+    if (creditsLine) lines.push(creditsLine);
   }
   if (chip.snapshot.reached_type) lines.push('⚠️ rate limit reached: ' + chip.snapshot.reached_type);
   return lines.join('\n');
@@ -279,7 +309,7 @@ function adapterIconHTML(adapterKey) {
            || '';
   if (!svg) return '';
   try { return '<img alt="" src="data:image/svg+xml;base64,' + btoa(svg) + '">'; }
-  catch (e) { return ''; }
+  catch (e) { console.debug('quotaChips: failed to encode adapter icon svg', e); return ''; }
 }
 
 function buildQuotaRowDOM(w, compact, nowMs) {
@@ -331,7 +361,7 @@ function buildQuotaChipDOM(chip, compact, nowMs) {
   const icon = document.createElement('span');
   icon.className = 'quota-chip-icon';
   const svg = providerIconHTML(chip.key)
-            || adapterIconHTML(chip.session && chip.session.adapter);
+            || adapterIconHTML(chip.session?.adapter);
   if (svg) icon.innerHTML = svg;
   root.appendChild(icon);
 
@@ -409,7 +439,7 @@ export function renderHeaderTitle() {
     if (hidden.length > 0) host.appendChild(buildOverflowChipDOM(hidden));
     header.classList.add('has-quota-chips');
   } catch (e) {
-    try { console.error('quota chip render failed:', e); } catch (_) {}
+    console.error('quota chip render failed:', e);
     host.innerHTML = '';
     header.classList.remove('has-quota-chips');
   }
@@ -437,7 +467,7 @@ export function refreshProviderSettings() {
 
     const name = document.createElement('span');
     name.className = 'provider-name';
-    const iconSvg = providerIconHTML(c.key) || adapterIconHTML(c.session && c.session.adapter);
+    const iconSvg = providerIconHTML(c.key) || adapterIconHTML(c.session?.adapter);
     if (iconSvg) {
       const iconSpan = document.createElement('span');
       iconSpan.innerHTML = iconSvg;

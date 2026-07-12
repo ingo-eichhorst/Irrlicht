@@ -32,6 +32,71 @@ func TestParser_ParseLine_IsNoOp(t *testing.T) {
 	}
 }
 
+// firstEventWithVersion returns the first event carrying a non-empty
+// AgentVersion, or nil.
+func firstEventWithVersion(events []*tailer.ParsedEvent) *tailer.ParsedEvent {
+	for _, e := range events {
+		if e.AgentVersion != "" {
+			return e
+		}
+	}
+	return nil
+}
+
+// firstEventWithModelName returns the first event carrying a non-empty
+// ModelName, or nil.
+func firstEventWithModelName(events []*tailer.ParsedEvent) *tailer.ParsedEvent {
+	for _, e := range events {
+		if e.ModelName != "" {
+			return e
+		}
+	}
+	return nil
+}
+
+// firstEventOfType returns the first event with the given EventType, or nil.
+func firstEventOfType(events []*tailer.ParsedEvent, eventType string) *tailer.ParsedEvent {
+	for _, e := range events {
+		if e.EventType == eventType {
+			return e
+		}
+	}
+	return nil
+}
+
+// assertUserMessage checks the shared expectations for the baseline-hello
+// user_message event.
+func assertUserMessage(t *testing.T, userEv *tailer.ParsedEvent) {
+	t.Helper()
+	if userEv == nil {
+		t.Fatal("no user_message emitted")
+	}
+	if userEv.AssistantText != "Reply with exactly the word: ok" {
+		t.Errorf("user text mismatch: got %q", userEv.AssistantText)
+	}
+	if !userEv.ClearToolNames {
+		t.Error("user_message should clear tool names")
+	}
+}
+
+// assertAssistantMessage checks the shared expectations for the
+// baseline-hello assistant_message event emitted by `> Tokens:`.
+func assertAssistantMessage(t *testing.T, asstEv *tailer.ParsedEvent) {
+	t.Helper()
+	if asstEv == nil {
+		t.Fatal("no assistant_message emitted on `> Tokens:` line")
+	}
+	if asstEv.AssistantText != "ok" {
+		t.Errorf("assistant text mismatch: got %q", asstEv.AssistantText)
+	}
+	if asstEv.Contribution == nil {
+		t.Fatal("expected Contribution on assistant_message")
+	}
+	if asstEv.Contribution.Usage.Input != 771 || asstEv.Contribution.Usage.Output != 1 {
+		t.Errorf("token counts wrong: in=%d out=%d", asstEv.Contribution.Usage.Input, asstEv.Contribution.Usage.Output)
+	}
+}
+
 func TestParser_BaselineHello_FullTurn(t *testing.T) {
 	// Mirrors the sample transcript in issue #212.
 	lines := []string{
@@ -57,72 +122,25 @@ func TestParser_BaselineHello_FullTurn(t *testing.T) {
 	}
 
 	// The version banner emits a Skip event carrying AgentVersion (#374).
-	var verEv *tailer.ParsedEvent
-	for _, e := range events {
-		if e.AgentVersion != "" {
-			verEv = e
-			break
-		}
-	}
+	verEv := firstEventWithVersion(events)
 	if verEv == nil || verEv.AgentVersion != "0.86.2" {
 		t.Errorf("expected a Skip event with AgentVersion=0.86.2, got %+v", verEv)
 	}
 
 	// The model declaration is a Skip event carrying ModelName.
-	var modelEv *tailer.ParsedEvent
-	for _, e := range events {
-		if e.ModelName != "" {
-			modelEv = e
-			break
-		}
-	}
+	modelEv := firstEventWithModelName(events)
 	if modelEv == nil || !modelEv.Skip {
 		t.Errorf("expected a Skip event with ModelName, got %+v", modelEv)
 	}
 
 	// User message.
-	var userEv *tailer.ParsedEvent
-	for _, e := range events {
-		if e.EventType == "user_message" {
-			userEv = e
-			break
-		}
-	}
-	if userEv == nil {
-		t.Fatal("no user_message emitted")
-	}
-	if userEv.AssistantText != "Reply with exactly the word: ok" {
-		t.Errorf("user text mismatch: got %q", userEv.AssistantText)
-	}
-	if !userEv.ClearToolNames {
-		t.Error("user_message should clear tool names")
-	}
+	assertUserMessage(t, firstEventOfType(events, "user_message"))
 
 	// `> Tokens:` emits assistant_message — NOT turn_done. The turn stays
 	// open until IdleFlush fires.
-	var asstEv *tailer.ParsedEvent
-	for _, e := range events {
-		if e.EventType == "assistant_message" {
-			asstEv = e
-			break
-		}
-	}
-	if asstEv == nil {
-		t.Fatal("no assistant_message emitted on `> Tokens:` line")
-	}
-	if asstEv.AssistantText != "ok" {
-		t.Errorf("assistant text mismatch: got %q", asstEv.AssistantText)
-	}
-	if asstEv.Contribution == nil {
-		t.Fatal("expected Contribution on assistant_message")
-	}
-	if asstEv.Contribution.Usage.Input != 771 || asstEv.Contribution.Usage.Output != 1 {
-		t.Errorf("token counts wrong: in=%d out=%d", asstEv.Contribution.Usage.Input, asstEv.Contribution.Usage.Output)
-	}
-	for _, e := range events {
-		if e.EventType == "turn_done" {
-			t.Fatalf("turn_done must NOT be emitted by `> Tokens:`; only IdleFlush synthesizes it. Got %+v", e)
-		}
+	assertAssistantMessage(t, firstEventOfType(events, "assistant_message"))
+	if e := firstEventOfType(events, "turn_done"); e != nil {
+		t.Fatalf("turn_done must NOT be emitted by `> Tokens:`; only IdleFlush synthesizes it. Got %+v", e)
 	}
 
 	// IdleFlush after the threshold synthesizes turn_done so the state
@@ -271,6 +289,24 @@ func TestParser_MainModel_AfterSlashCommand(t *testing.T) {
 // LastAssistantText, which session.IsWaitingForUserInput inspects on the
 // subsequent (synthesized) turn_done. Don't relax this without updating the
 // classifier.
+// assertLastAssistantMessageEndsInQuestionMark drives lines through a fresh
+// Parser and pins that the last assistant_message event's AssistantText ends
+// in '?' — the contract session.IsWaitingForUserInput relies on.
+func assertLastAssistantMessageEndsInQuestionMark(t *testing.T, lines []string) {
+	t.Helper()
+	events := drive(&Parser{}, lines)
+	asst := firstEventOfType(events, "assistant_message")
+	if asst == nil {
+		t.Fatal("no assistant_message emitted")
+	}
+	if asst.AssistantText == "" {
+		t.Fatal("AssistantText must be non-empty for the classifier to inspect")
+	}
+	if last := asst.AssistantText[len(asst.AssistantText)-1]; last != '?' {
+		t.Errorf("AssistantText must end in '?', got %q (full=%q)", last, asst.AssistantText)
+	}
+}
+
 func TestParser_TrailingQuestionMark_PreservedForWaitingClassification(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -297,22 +333,7 @@ func TestParser_TrailingQuestionMark_PreservedForWaitingClassification(t *testin
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			events := drive(&Parser{}, tc.lines)
-			var asst *tailer.ParsedEvent
-			for _, e := range events {
-				if e.EventType == "assistant_message" {
-					asst = e
-				}
-			}
-			if asst == nil {
-				t.Fatal("no assistant_message emitted")
-			}
-			if asst.AssistantText == "" {
-				t.Fatal("AssistantText must be non-empty for the classifier to inspect")
-			}
-			if last := asst.AssistantText[len(asst.AssistantText)-1]; last != '?' {
-				t.Errorf("AssistantText must end in '?', got %q (full=%q)", last, asst.AssistantText)
-			}
+			assertLastAssistantMessageEndsInQuestionMark(t, tc.lines)
 		})
 	}
 }

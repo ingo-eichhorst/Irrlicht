@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -38,12 +39,8 @@ func main() {
 	flag.StringVar(&f.adapter, "adapter", "", "filter: agent adapter (e.g. claude-code, codex)")
 	flag.Parse()
 
-	if format != "text" && format != "json" {
-		fmt.Fprintf(os.Stderr, "error: unknown format %q (want text or json)\n", format)
-		os.Exit(1)
-	}
-	if f.state != "" && f.state != session.StateWorking && f.state != session.StateWaiting && f.state != session.StateReady {
-		fmt.Fprintf(os.Stderr, "error: unknown state %q (want working, waiting or ready)\n", f.state)
+	if err := validateFlags(format, f.state); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -72,20 +69,9 @@ func main() {
 			fmt.Print("\033[H\033[2J") // clear screen — never into a JSON stream
 		}
 
-		if format == "json" {
-			if groups == nil {
-				groups = []*session.AgentGroup{}
-			}
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			if err := enc.Encode(map[string]any{"groups": groups}); err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-		} else if len(groups) == 0 {
-			fmt.Println("no sessions")
-		} else {
-			renderGroups(os.Stdout, groups, useColor, showYield)
+		if err := emitOutput(os.Stdout, groups, format, useColor, showYield); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
 		}
 
 		if !watch {
@@ -125,4 +111,37 @@ func filterSessions(sessions []*session.SessionState, f filterSpec) []*session.S
 func stdoutIsTTY() bool {
 	fi, err := os.Stdout.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// validateFlags checks the format and state flag values, returning a
+// non-nil error with a user-facing message when either is invalid.
+func validateFlags(format, state string) error {
+	if format != "text" && format != "json" {
+		return fmt.Errorf("unknown format %q (want text or json)", format)
+	}
+	if state != "" && state != session.StateWorking && state != session.StateWaiting && state != session.StateReady {
+		return fmt.Errorf("unknown state %q (want working, waiting or ready)", state)
+	}
+	return nil
+}
+
+// emitOutput writes groups to w in the requested format: JSON (one
+// indented document) or the human-readable text dashboard. It returns any
+// JSON-encoding error so the caller can report it and exit, matching the
+// pre-extraction inline behavior.
+func emitOutput(w io.Writer, groups []*session.AgentGroup, format string, useColor, showYield bool) error {
+	if format == "json" {
+		if groups == nil {
+			groups = []*session.AgentGroup{}
+		}
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(map[string]any{"groups": groups})
+	}
+	if len(groups) == 0 {
+		fmt.Fprintln(w, "no sessions")
+		return nil
+	}
+	renderGroups(w, groups, useColor, showYield)
+	return nil
 }

@@ -11,11 +11,16 @@ import (
 	"irrlicht/core/pkg/transcript"
 )
 
-// dbBackedPathSentinel marks a TranscriptPath that encodes a DB-backed
-// session (e.g. OpenCode's "…/opencode.db-wal?session=ses_xxx"). The query
-// string carries the session ID since the WAL itself is shared across all
-// sessions in the DB. Used by isDBBackedTranscriptPath.
-const dbBackedPathSentinel = '?'
+const (
+	// dbBackedPathSentinel marks a TranscriptPath that encodes a DB-backed
+	// session (e.g. OpenCode's "…/opencode.db-wal?session=ses_xxx"). The query
+	// string carries the session ID since the WAL itself is shared across all
+	// sessions in the DB. Used by isDBBackedTranscriptPath.
+	dbBackedPathSentinel = '?'
+
+	// jsonlExt is the file extension shared by all transcript JSONL files.
+	jsonlExt = ".jsonl"
+)
 
 // isDBBackedTranscriptPath reports whether path encodes a DB-backed adapter
 // session. Such paths can't be stat'd for mtime-based staleness (the WAL is
@@ -83,7 +88,7 @@ func isNewestTranscriptInDir(path string) bool {
 	}
 	base := filepath.Base(path)
 	for _, e := range entries {
-		if e.IsDir() || e.Name() == base || !strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.IsDir() || e.Name() == base || !strings.HasSuffix(e.Name(), jsonlExt) {
 			continue
 		}
 		sibling, err := e.Info()
@@ -222,7 +227,7 @@ func geminiSiblingParentStem(chatsDir, tag string) string {
 	if err != nil {
 		return ""
 	}
-	suffix := "-" + tag + ".jsonl"
+	suffix := "-" + tag + jsonlExt
 	var match string
 	for _, e := range entries {
 		if e.IsDir() {
@@ -239,7 +244,7 @@ func geminiSiblingParentStem(chatsDir, tag string) string {
 	if match == "" {
 		return ""
 	}
-	return strings.TrimSuffix(match, ".jsonl")
+	return strings.TrimSuffix(match, jsonlExt)
 }
 
 // deriveParentSessionID extracts a parent session ID from a subagent transcript path.

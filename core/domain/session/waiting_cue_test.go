@@ -2,15 +2,36 @@ package session
 
 import "testing"
 
+// boolCueCase is the shared table shape for the four suites in this file
+// that assert a text-to-bool classification; runBoolCueCases is their
+// shared harness, so each suite only declares its case table and the
+// function under test.
+type boolCueCase struct {
+	name string
+	text string
+	want bool
+}
+
+func runBoolCueCases(t *testing.T, cases []boolCueCase, detect func(string) bool) {
+	t.Helper()
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := detect(c.text); got != c.want {
+				t.Errorf("text=%q: got %v, want %v", c.text, got, c.want)
+			}
+		})
+	}
+}
+
+func isWaitingForUserInput(text string) bool {
+	return (&SessionMetrics{LastAssistantText: text}).IsWaitingForUserInput()
+}
+
 func TestIsWaitingForUserInput_TrailingMarkdown(t *testing.T) {
 	// Models routinely wrap questions in markdown; the literal last
 	// byte is often a delimiter, not '?'. Pin that the classifier
 	// strips trailing markdown noise before the check.
-	cases := []struct {
-		name string
-		text string
-		want bool
-	}{
+	cases := []boolCueCase{
 		{"plain", "What now?", true},
 		{"trailing whitespace", "What now?   \n", true},
 		{"bold", "**What now?**", true},
@@ -39,15 +60,12 @@ func TestIsWaitingForUserInput_TrailingMarkdown(t *testing.T) {
 		{"joke with Because answer across newline", "Why do programmers prefer dark mode?\nBecause light attracts bugs.", false},
 		{"Since-prefixed answer is rhetorical", "Why bother? Since the cache already has it, we skip.", false},
 		{"rhetorical Q followed by real Q", "Why? Because reasons. Should I proceed?", true},
+		// Non-Latin question marks — issue #933.
+		{"CJK full-width question mark", "続けますか？", true},
+		{"Arabic question mark", "هل تريد أن أتابع؟", true},
+		{"Greek question mark", "Θέλετε να συνεχίσω;", true},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			m := &SessionMetrics{LastAssistantText: c.text}
-			if got := m.IsWaitingForUserInput(); got != c.want {
-				t.Errorf("text=%q: got %v, want %v", c.text, got, c.want)
-			}
-		})
-	}
+	runBoolCueCases(t, cases, isWaitingForUserInput)
 }
 
 func TestExtractQuestionSnippet(t *testing.T) {
@@ -74,6 +92,22 @@ func TestExtractQuestionSnippet(t *testing.T) {
 		{"joke with Because across newline returns empty", "Why do programmers prefer dark mode?\nBecause light attracts bugs.", ""},
 		{"rhetorical Q followed by real Q returns the real one", "Why? Because reasons. Should I proceed?", "Should I proceed?"},
 		{"non-answer continuation is not rhetorical", "What would you like? In the meantime I'll move on.", "What would you like?"},
+		// Non-Latin question marks — issue #933.
+		{"CJK full-width question mark", "続けますか？", "続けますか？"},
+		{"CJK question with trailing status, no space (no inter-sentence spaces)", "続けますか？念のため確認します。", "続けますか？"},
+		{"Arabic question mark", "هل تريد أن أتابع؟", "هل تريد أن أتابع؟"},
+		{"Greek question mark", "Θέλετε να συνεχίσω;", "Θέλετε να συνεχίσω;"},
+		{"CJK question wrapped in bold markdown", "**続けますか？**", "**続けますか？**"},
+		// Rhetorical Q&A veto in other languages — issue #933.
+		{"de: rhetorical weil-answer returns empty", "Warum? Weil der Cache das schon hat.", ""},
+		{"es: rhetorical porque-answer returns empty", "¿Por qué? Porque el caché ya lo tiene.", ""},
+		// Cross-language word collisions in the rhetorical veto — issue #933
+		// code review. German "da" ("since") and French "car" ("because")
+		// are also common English words/names; a bare-prefix veto on them
+		// would wrongly suppress a real English question followed by an
+		// unrelated sentence that happens to start with the same word.
+		{"en: 'Da Vinci' does not trigger German da-veto", "Should we proceed? Da Vinci's sketches are relevant background.", "Should we proceed?"},
+		{"en: 'Car trouble' does not trigger French car-veto", "What broke the build? Car analogies aside, let's debug.", "What broke the build?"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -88,11 +122,7 @@ func TestExtractWaitingCue(t *testing.T) {
 	// Issue #381: agents often end a turn with an imperative or implicit
 	// cue rather than a literal `?`. ExtractWaitingCue covers that gap.
 	// Each case mirrors a row in the coverage matrix.
-	cases := []struct {
-		name string
-		text string
-		want bool // true = a cue is detected
-	}{
+	cases := []boolCueCase{
 		// 24 of the 30 matrix rows from issue #381; the remaining 6 are
 		// `?`-bearing and stay the responsibility of ExtractQuestionSnippet
 		// (covered by TestExtractQuestionSnippet).
@@ -114,6 +144,8 @@ func TestExtractWaitingCue(t *testing.T) {
 		{"19 drop the API key", "Drop the API key in .env and I'll re-run.", true},
 		{"20 once you've reviewed", "Once you've reviewed, ship it.", true},
 		{"21 I'll wait", "I'll wait for your green light before pushing.", true},
+		{"21b I'll wait until you're free", "I'll wait until you're free to look at this.", true},
+		{"21c I'll wait on your input", "I'll wait on your input before proceeding.", true},
 		{"23 lmk", "Lmk if you'd rather I split the PR.", true},
 		{"24 tell me", "Tell me which approach you prefer.", true},
 		{"25 please review", "Please review the diff.", true},
@@ -134,15 +166,52 @@ func TestExtractWaitingCue(t *testing.T) {
 		{"neg test failures substring", "Use a fixture, e.g. small.json. The tests pass.", false},
 		{"neg empty", "", false},
 		{"neg statement", "I am done.", false},
+		// #897: "I'll wait" on a background subagent's own completion is not
+		// a wait on the user — vetoed by waitingCueExclusions ("its"/"their"/
+		// "it" as the wait object), not by narrowing the inclusion pattern
+		// (that regressed recall for genuine human-directed waits lacking a
+		// literal "for you"/"for your", per code review on this fix).
+		{"neg wait for background agent (its)", "The Go agent is doing significant interface-renaming work — I'll wait for its completion notification before touching any Go/JS files myself.", false},
+		{"neg wait for background agents (their)", "The Go and JS agents are still running — I'll wait for their completion before merging.", false},
+		{"neg wait for it", "The background job is almost done — I'll wait for it to finish before continuing.", false},
+
+		// Non-English cue patterns — issue #933.
+		{"de: sag mir bescheid", "Sag mir Bescheid, bevor ich fortfahre.", true},
+		{"de: bitte + verb", "Bitte prüfe die Änderungen.", true},
+		{"es: avísame", "Avísame si quieres que continúe.", true},
+		{"es: por favor + verb", "Por favor confirma el despliegue.", true},
+		{"fr: dis-moi", "Dis-moi si tu veux que je continue.", true},
+		{"fr: s'il te plaît + verb", "S'il te plaît vérifie le diff.", true},
+		{"pt: me avise", "Me avise se quiser que eu continue.", true},
+		{"pt: por favor + verb", "Por favor confirme o deploy.", true},
+		{"ja: kakunin shite kudasai", "変更を確認してください。", true},
+		{"zh: qing quren", "请确认部署是否正确。", true},
+		// NFD-decomposed (combining-mark) input — issue #933 code review.
+		// The i18n patterns use precomposed (NFC) accented runes; a
+		// transcript source emitting NFD text (base letter + combining
+		// mark as separate runes) must still match after foldCombiningDiacritics.
+		{"es: NFD-decomposed avísame still matches", "Avísame si quieres que continúe.", true},
+		{"fr: NFD-decomposed plaît still matches", "S'il te plaît vérifie le diff.", true},
+		// Non-English negatives — plain statements must not trigger.
+		{"neg de: statement", "Ich habe die Änderungen vorgenommen.", false},
+		{"neg fr: statement", "J'ai terminé les modifications.", false},
+		// Ambiguous formal-possessive false positives — issue #933 code
+		// review. "ihre"/"su"/"sua" mean her/their/formal-your all at once
+		// in these languages (unlike English "its"/"their"), so a background
+		// job's completion described with the formal possessive must not be
+		// misread as addressed to the user, mirroring #897 for English.
+		{"neg de: warte auf ihre (ambiguous, background job)", "Der andere Agent arbeitet noch. Ich warte auf ihre Fertigstellung.", false},
+		{"neg es: esperando su (ambiguous, background job)", "El otro agente sigue trabajando — estoy esperando su finalización.", false},
+		{"neg pt: aguardo sua (ambiguous, background job)", "O outro agente ainda está rodando — aguardo sua finalização.", false},
+		// Further cross-language word collisions — issue #933, found by an
+		// independent Opus review pass. Spanish "dime" (tell me) is also the
+		// English coin; Portuguese "revise" is literally an English verb
+		// with the same meaning, not just a lookalike.
+		{"neg en: 'a dime' does not trigger Spanish dime-cue", "The fix costs a dime.", false},
+		{"neg en: 'turn on a dime' does not trigger Spanish dime-cue", "It could turn on a dime.", false},
+		{"neg en: 'I'll revise' does not trigger Portuguese revise-cue", "I'll revise my approach and continue.", false},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := ExtractWaitingCue(c.text) != ""
-			if got != c.want {
-				t.Errorf("ExtractWaitingCue(%q) detected=%v, want %v (snippet=%q)", c.text, got, c.want, ExtractWaitingCue(c.text))
-			}
-		})
-	}
+	runBoolCueCases(t, cases, func(text string) bool { return ExtractWaitingCue(text) != "" })
 }
 
 func TestIsWaitingForUserInput_ImperativeCues(t *testing.T) {
@@ -150,11 +219,7 @@ func TestIsWaitingForUserInput_ImperativeCues(t *testing.T) {
 	// detector, turns that end with an imperative gate now register as
 	// waiting. Sample the most representative shapes from issue #381 so a
 	// future regression at either layer surfaces here too.
-	cases := []struct {
-		name string
-		text string
-		want bool
-	}{
+	cases := []boolCueCase{
 		{"take a look + let me know", "Take a look at the icon and let me know if it's right.", true},
 		{"ready for your review", "Pushed PR #379 as draft. Ready for your review.", true},
 		{"your call", "Two options — A) revert, B) re-roll. Your call.", true},
@@ -168,12 +233,5 @@ func TestIsWaitingForUserInput_ImperativeCues(t *testing.T) {
 		{"all green pushed stays ready", "All green. Pushed to main.", false},
 		{"confirmed past tense stays ready", "Confirmed: the migration ran cleanly.", false},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			m := &SessionMetrics{LastAssistantText: c.text}
-			if got := m.IsWaitingForUserInput(); got != c.want {
-				t.Errorf("text=%q: got %v, want %v", c.text, got, c.want)
-			}
-		})
-	}
+	runBoolCueCases(t, cases, isWaitingForUserInput)
 }

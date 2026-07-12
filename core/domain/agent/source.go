@@ -3,6 +3,12 @@ package agent
 // Source is a sealed sum describing where session data lives and how
 // the runtime discovers it. Each adapter picks exactly one variant; the
 // daemon constructs the appropriate watcher from the variant.
+//
+// Deliberately not renamed for godre:S8196 ("-er" suffix convention for
+// single-method interfaces): isSource is a sealing marker method, not a
+// behavior contract, and Source is the exported domain noun referenced
+// throughout adapters/ and application/ — renaming it would be an
+// architectural change to the domain vocabulary, not a mechanical lint fix.
 type Source interface {
 	isSource()
 }
@@ -46,7 +52,9 @@ type FilesUnderRoot struct {
 	SessionIDFromPath func(path string) string
 }
 
-func (FilesUnderRoot) isSource() {}
+func (FilesUnderRoot) isSource() {
+	// sealing marker — deliberately empty
+}
 
 // RootDirFor returns the directory the runtime should watch for this source
 // on the given OS (pass runtime.GOOS): the DirByOS override when one is set
@@ -76,7 +84,9 @@ type FilesUnderCWD struct {
 	Parser   RawLineParser
 }
 
-func (FilesUnderCWD) isSource() {}
+func (FilesUnderCWD) isSource() {
+	// sealing marker — deliberately empty
+}
 
 // ProcessOwnedStore — session state lives in a structured store (SQLite,
 // typically) whose path is derivable from the process PID or a stable
@@ -89,4 +99,6 @@ type ProcessOwnedStore struct {
 	Reader     MetricsReader
 }
 
-func (ProcessOwnedStore) isSource() {}
+func (ProcessOwnedStore) isSource() {
+	// sealing marker — deliberately empty
+}

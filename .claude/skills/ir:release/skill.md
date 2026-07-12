@@ -558,8 +558,9 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
 5. **Write a resolved `Info.plist`** to `$APP_STAGING/Contents/Info.plist`.
    This is a hand-written file, *not* a copy of `platforms/macos/Irrlicht/Resources/Info.plist`
    (which contains unresolved Xcode variables like `$(PRODUCT_NAME)`). Use
-   the full template below verbatim, substituting only `$NEW_VERSION` and
-   the build number.
+   the full template below verbatim, substituting `$NEW_VERSION` for both
+   `CFBundleShortVersionString` and `CFBundleVersion` — `tools/build-release.sh`
+   has no separate build-number scheme.
 
    **Coupling rule:** the entitlement is **not** currently claimed.
    `com.apple.developer.focus-status` was stripped in v0.4.7 (AMFI POSIX
@@ -598,7 +599,7 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
        <key>CFBundleShortVersionString</key>
        <string>$NEW_VERSION</string>
        <key>CFBundleVersion</key>
-       <string>$BUILD_NUMBER</string>
+       <string>$NEW_VERSION</string>
        <key>LSApplicationCategoryType</key>
        <string>public.app-category.developer-tools</string>
        <key>LSMinimumSystemVersion</key>

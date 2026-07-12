@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +67,30 @@ func normalizeRelayURL(raw string) string {
 	return s
 }
 
+// validateDialURL rejects a relay URL that isn't a well-formed ws/wss target
+// before it reaches DialContext — defense in depth against a malformed or
+// attacker-influenced IRRLICHT_RELAY_URL / publish-config value (CWE-918).
+// normalizeRelayURL already coerces the scheme and appends the fixed stream
+// path, so this only catches a value malformed enough (unparsable, a
+// non-ws(s) scheme normalizeRelayURL's switch didn't rewrite, no host, or
+// embedded userinfo) that dialing it would be unsafe or meaningless.
+func validateDialURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid relay url: %w", err)
+	}
+	if u.Scheme != "ws" && u.Scheme != "wss" {
+		return fmt.Errorf("invalid relay url: scheme must be ws or wss, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("invalid relay url: missing host")
+	}
+	if u.User != nil {
+		return fmt.Errorf("invalid relay url: must not embed credentials")
+	}
+	return nil
+}
+
 // SnapshotFunc returns the daemon's current sessions and adapter registry,
 // captured to build the daemon_snapshot sent on each (re)connect so the relay
 // reconciles its cache without waiting for the next per-session delta.
@@ -104,22 +129,33 @@ type Forwarder struct {
 	lastErr string
 }
 
-// NewForwarder builds a Forwarder targeting relayURL. push and snapshot are
-// required; logger may be nil. token is sent in the hello for an auth-enabled
-// relay and may be empty (a no-auth relay ignores it). control + controlEnabled
-// gate inbound remote control (issue #724): a control frame is dispatched only
-// when controlEnabled() reports the relay-control toggle on; both may be nil to
-// disable remote control entirely.
-func NewForwarder(relayURL string, id Identity, token string, push outbound.PushBroadcaster, snapshot SnapshotFunc, control ControlHandler, controlEnabled func() bool, logger outbound.Logger) *Forwarder {
+// ForwarderDeps bundles NewForwarder's dependencies beyond the relay URL and
+// identity. Push and Snapshot are required; Logger may be nil. Token is sent
+// in the hello for an auth-enabled relay and may be empty (a no-auth relay
+// ignores it). Control + ControlEnabled gate inbound remote control (issue
+// #724): a control frame is dispatched only when ControlEnabled() reports
+// the relay-control toggle on; both may be nil to disable remote control
+// entirely.
+type ForwarderDeps struct {
+	Token          string
+	Push           outbound.PushBroadcaster
+	Snapshot       SnapshotFunc
+	Control        ControlHandler
+	ControlEnabled func() bool
+	Logger         outbound.Logger
+}
+
+// NewForwarder builds a Forwarder targeting relayURL.
+func NewForwarder(relayURL string, id Identity, deps ForwarderDeps) *Forwarder {
 	return &Forwarder{
 		url:            normalizeRelayURL(relayURL),
 		identity:       id,
-		token:          token,
-		push:           push,
-		snapshot:       snapshot,
-		control:        control,
-		controlEnabled: controlEnabled,
-		logger:         logger,
+		token:          deps.Token,
+		push:           deps.Push,
+		snapshot:       deps.Snapshot,
+		control:        deps.Control,
+		controlEnabled: deps.ControlEnabled,
+		logger:         deps.Logger,
 		dialer:         websocket.DefaultDialer,
 		minBackoff:     time.Second,
 		maxBackoff:     30 * time.Second,
@@ -206,36 +242,11 @@ func (f *Forwarder) Run(ctx context.Context) {
 // or a write fails.
 func (f *Forwarder) runOnce(ctx context.Context) error {
 	f.setState(PublishConnecting, "")
-	conn, _, err := f.dialer.DialContext(ctx, f.url, nil)
+	conn, err := f.handshake(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-
-	if err := conn.WriteJSON(Hello{
-		Type:            MsgHello,
-		ProtocolVersion: ProtocolVersion,
-		Role:            RoleDaemon,
-		DaemonID:        f.identity.DaemonID,
-		DaemonLabel:     f.identity.DaemonLabel,
-		Token:           f.token,
-	}); err != nil {
-		return err
-	}
-
-	// Wait for the relay's reply before declaring the link up. The relay sends
-	// a hello_ack once it has accepted our token; an auth-enabled relay that
-	// rejects the token closes here with CloseRevoked (4401) instead. Reading
-	// this reply before sending the snapshot makes the auth verdict race-free:
-	// Run classifies a CloseRevoked close as auth_failed regardless of whether
-	// it arrives now or mid-stream. We don't act on the ack's contents (v1 has
-	// nothing to negotiate), only on whether the relay accepted us.
-	conn.SetReadLimit(maxRelayFrameBytes)
-	conn.SetReadDeadline(time.Now().Add(helloAckTimeout))
-	if _, _, err := conn.ReadMessage(); err != nil {
-		return err
-	}
-	conn.SetReadDeadline(time.Time{}) // clear; the read pump reads with no deadline
 
 	// Subscribe BEFORE capturing the snapshot. Otherwise a broadcast that
 	// fires between snapshotState() and Subscribe() is in neither the snapshot
@@ -256,8 +267,55 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 	f.setState(PublishConnected, "")
 	f.logInfo(fmt.Sprintf("connected to relay %s as %q (%s)", f.url, f.identity.DaemonLabel, f.identity.DaemonID))
 
-	// Read pump: dispatch inbound control frames (issue #724) and surface the
-	// relay closing the socket (incl. a mid-stream revoke close).
+	readErr := f.startControlReadPump(conn)
+	return f.forwardLoop(ctx, conn, ch, readErr)
+}
+
+// handshake dials the relay and completes the hello/hello_ack exchange.
+// Wait for the relay's reply before declaring the link up. The relay sends
+// a hello_ack once it has accepted our token; an auth-enabled relay that
+// rejects the token closes here with CloseRevoked (4401) instead. Reading
+// this reply before sending the snapshot makes the auth verdict race-free:
+// Run classifies a CloseRevoked close as auth_failed regardless of whether
+// it arrives now or mid-stream. We don't act on the ack's contents (v1 has
+// nothing to negotiate), only on whether the relay accepted us. On error the
+// dialed connection, if any, is closed before returning.
+func (f *Forwarder) handshake(ctx context.Context) (*websocket.Conn, error) {
+	if err := validateDialURL(f.url); err != nil {
+		return nil, err
+	}
+	conn, _, err := f.dialer.DialContext(ctx, f.url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := conn.WriteJSON(Hello{
+		Type:            MsgHello,
+		ProtocolVersion: ProtocolVersion,
+		Role:            RoleDaemon,
+		DaemonID:        f.identity.DaemonID,
+		DaemonLabel:     f.identity.DaemonLabel,
+		Token:           f.token,
+	}); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	conn.SetReadLimit(maxRelayFrameBytes)
+	conn.SetReadDeadline(time.Now().Add(helloAckTimeout))
+	if _, _, err := conn.ReadMessage(); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	conn.SetReadDeadline(time.Time{}) // clear; the read pump reads with no deadline
+
+	return conn, nil
+}
+
+// startControlReadPump runs a read pump that dispatches inbound relay
+// control frames (issue #724) and surfaces the relay closing the socket
+// (incl. a mid-stream revoke close) on the returned channel.
+func (f *Forwarder) startControlReadPump(conn *websocket.Conn) <-chan error {
 	readErr := make(chan error, 1)
 	go func() {
 		for {
@@ -274,7 +332,13 @@ func (f *Forwarder) runOnce(ctx context.Context) error {
 			}
 		}
 	}()
+	return readErr
+}
 
+// forwardLoop forwards push events to the relay until ctx is cancelled, the
+// read pump reports the relay dropped the connection (readErr), or a write
+// fails.
+func (f *Forwarder) forwardLoop(ctx context.Context, conn *websocket.Conn, ch chan outbound.PushMessage, readErr <-chan error) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -348,6 +412,9 @@ func shouldForward(msg outbound.PushMessage) bool {
 }
 
 // jitter returns a random duration in [0, d/2] to spread reconnect attempts.
+// math/rand is intentional here (SonarQube go:S2245): this only smooths
+// thundering-herd reconnects, nothing security-sensitive that would call for
+// crypto/rand.
 func jitter(d time.Duration) time.Duration {
 	if d <= 0 {
 		return 0

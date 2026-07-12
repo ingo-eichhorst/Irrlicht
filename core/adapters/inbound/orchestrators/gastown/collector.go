@@ -12,6 +12,10 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// rigsFilename is the name of the Gas Town rig manifest file, located
+// directly under GT_ROOT.
+const rigsFilename = "rigs.json"
+
 // collector detects Gas Town, resolves GT_ROOT, and watches daemon/state.json
 // and rigs.json for changes. It implements inbound.GasTownCollector.
 type collector struct {
@@ -118,7 +122,7 @@ func (c *collector) Watch(ctx context.Context) error {
 			switch base {
 			case "state.json":
 				c.reload(statePath)
-			case "rigs.json":
+			case rigsFilename:
 				c.reloadRigs(rigsFilePath(c.root))
 			}
 		case err, ok := <-watcher.Errors:
@@ -227,7 +231,7 @@ func isGasTownRoot(dir string) bool {
 	if err != nil || !info.IsDir() {
 		return false
 	}
-	_, err = os.Stat(filepath.Join(dir, "rigs.json"))
+	_, err = os.Stat(filepath.Join(dir, rigsFilename))
 	return err == nil
 }
 
@@ -238,7 +242,7 @@ func stateFilePath(root string) string {
 
 // rigsFilePath returns the rigs.json path under root.
 func rigsFilePath(root string) string {
-	return filepath.Join(root, "rigs.json")
+	return filepath.Join(root, rigsFilename)
 }
 
 // readStateFile reads and parses daemon/state.json.

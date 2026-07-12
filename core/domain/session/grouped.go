@@ -66,13 +66,35 @@ func BuildDashboard(sessions []*SessionState, orch *orchestrator.State) []*Agent
 	}
 
 	// 2. Index sessions and identify parent-child relationships.
+	childIDs, parentChildren := indexParentChildren(sessions)
+
+	// 3. Partition top-level sessions into orchestrator vs regular.
+	partition := partitionSessions(sessions, workerMap, parentChildren, childIDs)
+
+	// 4. Assemble result.
+	var result []*AgentGroup
+	if orchGroup := buildOrchGroup(orch, partition); orchGroup != nil {
+		result = append(result, orchGroup)
+	}
+	for _, key := range partition.regularOrder {
+		result = append(result, partition.regularGroupMap[key])
+	}
+
+	return result
+}
+
+// indexParentChildren identifies parent-child relationships among sessions:
+// childIDs marks sessions whose ParentSessionID resolves to another session
+// in the input, and parentChildren maps each such parent's SessionID to its
+// children (in input order).
+func indexParentChildren(sessions []*SessionState) (childIDs map[string]bool, parentChildren map[string][]*SessionState) {
 	byID := make(map[string]*SessionState, len(sessions))
 	for _, s := range sessions {
 		byID[s.SessionID] = s
 	}
 
-	childIDs := make(map[string]bool)
-	parentChildren := make(map[string][]*SessionState)
+	childIDs = make(map[string]bool)
+	parentChildren = make(map[string][]*SessionState)
 	for _, s := range sessions {
 		if s.ParentSessionID != "" {
 			if _, ok := byID[s.ParentSessionID]; ok {
@@ -81,85 +103,107 @@ func BuildDashboard(sessions []*SessionState, orch *orchestrator.State) []*Agent
 			}
 		}
 	}
+	return childIDs, parentChildren
+}
 
-	// 3. Partition top-level sessions into orchestrator vs regular.
-	var orchAgents []*Agent              // global agents (no rig)
-	rigAgentMap := map[string][]*Agent{} // rig name → agents
-	var rigOrder []string
+// dashboardPartition accumulates BuildDashboard's split of top-level
+// sessions into orchestrator-owned agents (global + per-rig) and regular
+// project groups, preserving first-seen order for deterministic output.
+type dashboardPartition struct {
+	orchAgents      []*Agent            // global agents (no rig)
+	rigAgentMap     map[string][]*Agent // rig name → agents
+	rigOrder        []string
+	regularGroupMap map[string]*AgentGroup
+	regularOrder    []string
+}
 
-	regularGroupMap := map[string]*AgentGroup{}
-	var regularOrder []string
-
+// partitionSessions builds an Agent tree for each top-level (non-child)
+// session and buckets it into the orchestrator or regular partition.
+func partitionSessions(sessions []*SessionState, workerMap map[string]*workerInfo, parentChildren map[string][]*SessionState, childIDs map[string]bool) *dashboardPartition {
+	p := &dashboardPartition{
+		rigAgentMap:     map[string][]*Agent{},
+		regularGroupMap: map[string]*AgentGroup{},
+	}
 	for _, s := range sessions {
 		if childIDs[s.SessionID] {
 			continue
 		}
 		agent := buildAgent(s, workerMap, parentChildren)
 
-		wi, isOrch := workerMap[s.SessionID]
-		if isOrch {
-			if wi.Rig != "" {
-				if _, exists := rigAgentMap[wi.Rig]; !exists {
-					rigOrder = append(rigOrder, wi.Rig)
-				}
-				rigAgentMap[wi.Rig] = append(rigAgentMap[wi.Rig], agent)
-			} else {
-				orchAgents = append(orchAgents, agent)
-			}
+		if wi, isOrch := workerMap[s.SessionID]; isOrch {
+			p.addOrchAgent(wi, agent)
 		} else {
-			key := s.ProjectName
-			if key == "" {
-				key = "unknown"
-			}
-			g, ok := regularGroupMap[key]
-			if !ok {
-				g = &AgentGroup{Name: key}
-				regularGroupMap[key] = g
-				regularOrder = append(regularOrder, key)
-			}
-			g.Agents = append(g.Agents, agent)
+			p.addRegularAgent(s, agent)
 		}
 	}
+	return p
+}
 
-	// 4. Assemble result.
-	var result []*AgentGroup
-
-	if orch != nil && orch.Running && (len(orchAgents) > 0 || len(rigAgentMap) > 0) {
-		orchGroupName := "Gas Town"
-		if orch.Root != "" {
-			orchGroupName = filepath.Base(orch.Root)
+// addOrchAgent files agent under its rig's bucket, or as a global agent when
+// wi has no rig.
+func (p *dashboardPartition) addOrchAgent(wi *workerInfo, agent *Agent) {
+	if wi.Rig != "" {
+		if _, exists := p.rigAgentMap[wi.Rig]; !exists {
+			p.rigOrder = append(p.rigOrder, wi.Rig)
 		}
+		p.rigAgentMap[wi.Rig] = append(p.rigAgentMap[wi.Rig], agent)
+		return
+	}
+	p.orchAgents = append(p.orchAgents, agent)
+}
 
-		orchGroup := &AgentGroup{
-			Name:   orchGroupName,
-			Type:   orch.Adapter,
-			Agents: orchAgents,
-		}
+// addRegularAgent files agent under its project's group, creating the group
+// on first sight ("unknown" when the session has no project name).
+func (p *dashboardPartition) addRegularAgent(s *SessionState, agent *Agent) {
+	key := s.ProjectName
+	if key == "" {
+		key = "unknown"
+	}
+	g, ok := p.regularGroupMap[key]
+	if !ok {
+		g = &AgentGroup{Name: key}
+		p.regularGroupMap[key] = g
+		p.regularOrder = append(p.regularOrder, key)
+	}
+	g.Agents = append(g.Agents, agent)
+}
 
-		// Build sub-groups for each rig.
-		for _, rigName := range rigOrder {
-			subGroup := &AgentGroup{
-				Name:   rigName,
-				Agents: rigAgentMap[rigName],
-			}
-			// Annotate with codebase status.
-			for _, cb := range orch.Codebases {
-				if cb.Name == rigName {
-					subGroup.Status = cb.Status
-					break
-				}
-			}
-			orchGroup.Groups = append(orchGroup.Groups, subGroup)
-		}
-
-		result = append(result, orchGroup)
+// buildOrchGroup assembles the top-level "Gas Town" group (global agents
+// plus a nested sub-group per rig) from partition, or returns nil when there
+// is no running orchestrator or it contributed no agents.
+func buildOrchGroup(orch *orchestrator.State, partition *dashboardPartition) *AgentGroup {
+	if orch == nil || !orch.Running || (len(partition.orchAgents) == 0 && len(partition.rigAgentMap) == 0) {
+		return nil
 	}
 
-	for _, key := range regularOrder {
-		result = append(result, regularGroupMap[key])
+	orchGroupName := "Gas Town"
+	if orch.Root != "" {
+		orchGroupName = filepath.Base(orch.Root)
 	}
 
-	return result
+	orchGroup := &AgentGroup{
+		Name:   orchGroupName,
+		Type:   orch.Adapter,
+		Agents: partition.orchAgents,
+	}
+
+	// Build sub-groups for each rig.
+	for _, rigName := range partition.rigOrder {
+		subGroup := &AgentGroup{
+			Name:   rigName,
+			Agents: partition.rigAgentMap[rigName],
+		}
+		// Annotate with codebase status.
+		for _, cb := range orch.Codebases {
+			if cb.Name == rigName {
+				subGroup.Status = cb.Status
+				break
+			}
+		}
+		orchGroup.Groups = append(orchGroup.Groups, subGroup)
+	}
+
+	return orchGroup
 }
 
 // buildAgent recursively creates an Agent tree from a session and its children.
@@ -258,7 +302,15 @@ func ComputeSubagentSummary(parent *SessionState, childSessions []*SessionState)
 // buildWorkerMap creates a sessionID → workerInfo index from orchestrator state.
 func buildWorkerMap(orch *orchestrator.State, sessions []*SessionState) map[string]*workerInfo {
 	m := make(map[string]*workerInfo)
+	addGlobalAgentWorkers(m, orch)
+	addCodebaseWorkers(m, orch)
+	addCWDFallbackWorkers(m, orch, sessions)
+	return m
+}
 
+// addGlobalAgentWorkers indexes orchestrator-level global agents (no rig)
+// into m.
+func addGlobalAgentWorkers(m map[string]*workerInfo, orch *orchestrator.State) {
 	for _, ga := range orch.GlobalAgents {
 		if ga.SessionID != "" {
 			m[ga.SessionID] = &workerInfo{
@@ -268,7 +320,10 @@ func buildWorkerMap(orch *orchestrator.State, sessions []*SessionState) map[stri
 			}
 		}
 	}
+}
 
+// addCodebaseWorkers indexes per-rig, per-worktree workers into m.
+func addCodebaseWorkers(m map[string]*workerInfo, orch *orchestrator.State) {
 	for _, cb := range orch.Codebases {
 		for _, wt := range cb.Worktrees {
 			for _, w := range wt.Workers {
@@ -285,27 +340,29 @@ func buildWorkerMap(orch *orchestrator.State, sessions []*SessionState) map[stri
 			}
 		}
 	}
+}
 
-	// CWD-based fallback for sessions not matched above.
-	if orch.Root != "" {
-		for _, s := range sessions {
-			if _, ok := m[s.SessionID]; ok {
-				continue
-			}
-			iconFn := orchestrator.IconLookup(func(role string) string {
-				return orch.RoleIcons[role]
-			})
-			ri := orchestrator.DeriveGasTownRole(s.CWD, orch.Root, iconFn)
-			if ri != nil {
-				m[s.SessionID] = &workerInfo{
-					Role: ri.Role,
-					Icon: ri.Icon,
-					Rig:  ri.Rig,
-					Name: ri.Name,
-				}
+// addCWDFallbackWorkers fills in workerInfo for sessions not matched by an
+// explicit orchestrator/worker SessionID above, by deriving a role from CWD.
+func addCWDFallbackWorkers(m map[string]*workerInfo, orch *orchestrator.State, sessions []*SessionState) {
+	if orch.Root == "" {
+		return
+	}
+	for _, s := range sessions {
+		if _, ok := m[s.SessionID]; ok {
+			continue
+		}
+		iconFn := orchestrator.IconLookup(func(role string) string {
+			return orch.RoleIcons[role]
+		})
+		ri := orchestrator.DeriveGasTownRole(s.CWD, orch.Root, iconFn)
+		if ri != nil {
+			m[s.SessionID] = &workerInfo{
+				Role: ri.Role,
+				Icon: ri.Icon,
+				Rig:  ri.Rig,
+				Name: ri.Name,
 			}
 		}
 	}
-
-	return m
 }

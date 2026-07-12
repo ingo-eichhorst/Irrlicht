@@ -179,13 +179,13 @@ boot_session() {
   tmux pipe-pane -t "$sess" -o "cat >> '$slot_stdout'"
   echo "[driver] tmux started: $sess (slot=$ACTIVE, cwd=$cwd, argv: $*)" >&2
 
-  local WAITED=0
-  while [[ $WAITED -lt 60 ]]; do
+  local waited=0
+  while [[ $waited -lt 60 ]]; do
     if [[ -f "$slot_stdout" ]] && grep -aq 'Ready' "$slot_stdout" 2>/dev/null; then
       break
     fi
     sleep 0.5
-    WAITED=$((WAITED + 1))
+    waited=$((waited + 1))
   done
   sleep 1  # extra grace for the input prompt to settle
 }

@@ -300,14 +300,13 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildFinishes(t *testing.T) {
 		TranscriptPath: "/home/.claude/projects/-Users-test/parent2/subagents/child2.jsonl",
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	waitForSessionState(repo, "parent2", session.StateReady, 500*time.Millisecond)
 
-	parent, _ := repo.Load("parent2")
-	if parent == nil {
-		t.Fatal("parent session should still exist")
-	}
-	if parent.State != session.StateReady {
-		t.Errorf("parent state: got %q, want ready (child finished, parent turn was done)", parent.State)
+	repo.mu.Lock()
+	got := repo.lastSavedState["parent2"]
+	repo.mu.Unlock()
+	if got != session.StateReady {
+		t.Errorf("parent state: got %q, want ready (child finished, parent turn was done)", got)
 	}
 
 	cancel()
@@ -624,11 +623,19 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildSweptByLiveness(t *testi
 	// The child-sweep path in PIDManager is gated on readyTTL > 0,
 	// so the default newDetector (readyTTL=0) would skip it entirely.
 	// Use a tiny TTL so the sweep actually runs its child-cleanup loop.
-	det := services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &mockGit{}, &mockMetrics{}, nil,
-		"test", 1*time.Second, nil, nil, nil,
-	)
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      &mockMetrics{},
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     1 * time.Second,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -738,11 +745,13 @@ func TestSessionDetector_ParentNotAffected_WhenNoChildren(t *testing.T) {
 		TranscriptPath: "/home/.claude/projects/-Users-test/solo1.jsonl",
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	waitForSessionState(repo, "solo1", session.StateReady, 500*time.Millisecond)
 
-	state, _ := repo.Load("solo1")
-	if state.State != session.StateReady {
-		t.Errorf("state: got %q, want ready (no children, turn done)", state.State)
+	repo.mu.Lock()
+	got := repo.lastSavedState["solo1"]
+	repo.mu.Unlock()
+	if got != session.StateReady {
+		t.Errorf("state: got %q, want ready (no children, turn done)", got)
 	}
 
 	cancel()
@@ -1011,10 +1020,15 @@ func TestSessionDetector_PermissionWaitingDoesNotFastForwardChildren(t *testing.
 	<-done
 }
 
-// TestSessionDetector_WaitingParent_DoesNotCleanupBackgroundChildren: a
-// background child still writing its transcript (within SubagentQuietWindow)
-// survives the parent's turn-done-waiting transition untouched (#593).
-func TestSessionDetector_WaitingParent_DoesNotCleanupBackgroundChildren(t *testing.T) {
+// TestSessionDetector_WaitingParent_HeldWorking_WhenBackgroundChildActive
+// covers #897: a parent whose turn ends in a waiting cue ("Want a summary
+// when it lands?") is held working — not waiting — while a background child
+// is still genuinely active (transcript freshly written, within
+// SubagentQuietWindow). Surfacing "waiting" here would read as "nothing
+// happening" on the dashboard even though the child is still running. The
+// child itself is left untouched either way (#593) — this only changes the
+// parent's own state.
+func TestSessionDetector_WaitingParent_HeldWorking_WhenBackgroundChildActive(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
@@ -1082,8 +1096,8 @@ func TestSessionDetector_WaitingParent_DoesNotCleanupBackgroundChildren(t *testi
 	if parent == nil {
 		t.Fatal("parent session should still exist")
 	}
-	if parent.State != session.StateWaiting {
-		t.Errorf("parent state: got %q, want waiting", parent.State)
+	if parent.State != session.StateWorking {
+		t.Errorf("parent state: got %q, want working — held by the active background child (#897)", parent.State)
 	}
 
 	child, _ := repo.Load("child-bg")
@@ -1217,11 +1231,19 @@ func TestSessionDetector_ParentBadgeCleared_WhenChildSweptWhileParentWaiting(t *
 	// The child-sweep path in PIDManager is gated on readyTTL > 0; wire a
 	// capturing broadcaster to assert the corrective parent push.
 	bc := &mockBroadcaster{}
-	det := services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &mockGit{}, &mockMetrics{}, bc,
-		"test", 1*time.Second, nil, nil, nil,
-	)
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      &mockMetrics{},
+		Broadcaster:  bc,
+		Version:      "test",
+		ReadyTTL:     1 * time.Second,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

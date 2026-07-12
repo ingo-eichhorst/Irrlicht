@@ -15,9 +15,9 @@ import (
 // or oscillating rule spamming a session, independent of per-rule cooldowns.
 const maxActionsPerSessionPerMinute = 6
 
-// ruleSource supplies the current rule set (satisfied by the filesystem
+// ruleLister supplies the current rule set (satisfied by the filesystem
 // rules store).
-type ruleSource interface {
+type ruleLister interface {
 	Rules() []backchannel.Rule
 }
 
@@ -26,7 +26,7 @@ type ruleSource interface {
 // on every call).
 type inputForwarder interface {
 	SendInput(sessionID string, data []byte) error
-	SendCommand(sessionID string, command string) error
+	SendCommand(sessionID, command string) error
 	Interrupt(sessionID string) error
 }
 
@@ -41,7 +41,7 @@ type inputForwarder interface {
 // per-session per-minute cap backstops oscillation. Actions run off the
 // consume loop so a slow backend can't make the engine miss other messages.
 type BackchannelEngine struct {
-	rules   ruleSource
+	rules   ruleLister
 	input   inputForwarder
 	presets map[string]map[string]string // adapter → (preset id → command text)
 	push    outbound.PushBroadcaster
@@ -60,7 +60,7 @@ type BackchannelEngine struct {
 // NewBackchannelEngine constructs an engine. enabled reports the backchannel
 // master-toggle (firing is suppressed when off, but edge bookkeeping continues
 // so re-enabling never causes a spurious fire).
-func NewBackchannelEngine(rules ruleSource, input inputForwarder, presets map[string]map[string]string, push outbound.PushBroadcaster, enabled func() bool, logger outbound.Logger) *BackchannelEngine {
+func NewBackchannelEngine(rules ruleLister, input inputForwarder, presets map[string]map[string]string, push outbound.PushBroadcaster, enabled func() bool, logger outbound.Logger) *BackchannelEngine {
 	return &BackchannelEngine{
 		rules:      rules,
 		input:      input,
@@ -140,35 +140,61 @@ func (e *BackchannelEngine) evaluate(s *session.SessionState) []backchannel.Rule
 	}
 
 	now := e.now()
+	// tr bundles the before/after state, utilization, and token values every
+	// rule's trigger check needs, so shouldFireLocked/triggered take it as
+	// one value instead of six separate params (go:S107).
+	tr := sessionTransition{prev: prev, cur: cur, prevUtil: prevUtil, util: util, prevTokens: prevTokens, tokens: tokens}
 	var fire []backchannel.Rule
 	for _, r := range e.rules.Rules() {
-		if !r.Enabled {
-			continue
+		if e.shouldFireLocked(r, s.Adapter, sid, tr, now) {
+			fire = append(fire, r)
 		}
-		if r.Adapter != "" && r.Adapter != s.Adapter {
-			continue
-		}
-		if !triggered(r.Trigger, prev, cur, prevUtil, util, prevTokens, tokens) {
-			continue
-		}
-		// Firing is gated on the master-toggle here (after bookkeeping, so a
-		// later enable doesn't replay a stale edge).
-		if e.enabled == nil || !e.enabled() {
-			continue
-		}
-		key := r.ID + "\x00" + sid
-		if last, ok := e.lastFired[key]; ok && now.Sub(last) < time.Duration(r.Cooldown())*time.Second {
-			continue
-		}
-		if e.overCapLocked(sid, now) {
-			e.logger.LogInfo("backchannel", sid, "rule "+r.ID+" suppressed: per-session action cap reached")
-			continue
-		}
-		e.lastFired[key] = now
-		e.recordFireLocked(sid, now)
-		fire = append(fire, r)
 	}
 	return fire
+}
+
+// sessionTransition bundles a session's before/after state, context-window
+// utilization, and token count — the values every trigger evaluation needs
+// together, threaded through shouldFireLocked/triggered as one value instead
+// of six separate params (go:S107).
+type sessionTransition struct {
+	prev       string
+	cur        string
+	prevUtil   float64
+	util       float64
+	prevTokens int64
+	tokens     int64
+}
+
+// shouldFireLocked evaluates a single rule against this transition and, if it
+// should fire, records the fire bookkeeping (lastFired + recent). Caller
+// holds e.mu. Mirrors evaluate's original inline per-rule loop body exactly.
+func (e *BackchannelEngine) shouldFireLocked(r backchannel.Rule, adapter, sid string, tr sessionTransition, now time.Time) bool {
+	if !r.Enabled {
+		return false
+	}
+	if r.Adapter != "" && r.Adapter != adapter {
+		return false
+	}
+	if !triggered(r.Trigger, tr) {
+		return false
+	}
+	// Firing is gated on the master-toggle here (after bookkeeping, so a
+	// later enable doesn't replay a stale edge).
+	if e.enabled == nil || !e.enabled() {
+		return false
+	}
+	key := r.ID + "\x00" + sid
+	if last, ok := e.lastFired[key]; ok && now.Sub(last) < time.Duration(r.Cooldown())*time.Second {
+		return false
+	}
+	if e.overCapLocked(sid, now) {
+		e.logger.LogInfo("backchannel", sid, "rule "+r.ID+" suppressed: per-session action cap reached")
+		return false
+	}
+	e.lastFired[key] = now
+	e.recordFireLocked(sid, now)
+	return true
 }
 
 // forget drops all per-session bookkeeping when a session ends, so the maps
@@ -194,16 +220,16 @@ func (e *BackchannelEngine) forget(sessionID string) {
 // fire on the edge into the state; context_pressure / context_pressure_tokens
 // fire on the rising crossing of the threshold (hysteresis is inherent in
 // prevUtil→util and prevTokens→tokens respectively).
-func triggered(t backchannel.Trigger, prev, cur string, prevUtil, util float64, prevTokens, tokens int64) bool {
+func triggered(t backchannel.Trigger, tr sessionTransition) bool {
 	switch t.Event {
 	case backchannel.EventWaiting, backchannel.EventReady, backchannel.EventWorking:
-		return cur == t.Event && prev != cur
+		return tr.cur == t.Event && tr.prev != tr.cur
 	case backchannel.EventContextPressure:
 		th := t.PressureThreshold()
-		return prevUtil < th && util >= th
+		return tr.prevUtil < th && tr.util >= th
 	case backchannel.EventContextTokens:
 		th := t.TokensThreshold()
-		return prevTokens < th && tokens >= th
+		return tr.prevTokens < th && tr.tokens >= th
 	default:
 		return false
 	}
@@ -228,7 +254,7 @@ func (e *BackchannelEngine) runActions(r backchannel.Rule, sid, adapter string) 
 				}
 				err = e.input.SendCommand(sid, cmd)
 			} else {
-				err = e.input.SendInput(sid, []byte(a.Data))
+				err = e.input.SendCommand(sid, a.Data)
 			}
 		case backchannel.ActionInterrupt:
 			err = e.input.Interrupt(sid)

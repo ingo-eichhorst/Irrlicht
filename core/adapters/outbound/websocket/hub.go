@@ -86,17 +86,8 @@ func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	// no tick or upgrade emitted between these two operations is lost; per-
 	// session tick generations on snapshot/tick messages let the client
 	// dedupe a tick that's already reflected in its snapshot.
-	if h.connectSnapshots != nil {
-		for _, snap := range h.connectSnapshots() {
-			data, err := json.Marshal(snap)
-			if err != nil {
-				continue
-			}
-			conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-				return
-			}
-		}
+	if !h.sendSnapshots(conn) {
+		return
 	}
 
 	// Set initial read deadline; reset on each pong.
@@ -107,15 +98,7 @@ func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Detect client disconnect via a read pump running concurrently.
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
-				return
-			}
-		}
-	}()
+	done := watchForDisconnect(conn)
 
 	// Ping ticker to keep the connection alive.
 	ticker := time.NewTicker(pingInterval)
@@ -127,21 +110,67 @@ func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			data, err := json.Marshal(msg)
-			if err != nil {
-				continue
-			}
-			conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			if !writeJSONMessage(conn, msg) {
 				return
 			}
 		case <-ticker.C:
-			conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			if !sendPing(conn) {
 				return
 			}
 		case <-done:
 			return
 		}
 	}
+}
+
+// sendSnapshots hydrates a freshly-attached client with one history_snapshot
+// per known session (h.connectSnapshots may be nil, in which case there's
+// nothing to send). It returns false if a write failed and the caller should
+// abort the connection.
+func (h *hub) sendSnapshots(conn *websocket.Conn) bool {
+	if h.connectSnapshots == nil {
+		return true
+	}
+	for _, snap := range h.connectSnapshots() {
+		if !writeJSONMessage(conn, snap) {
+			return false
+		}
+	}
+	return true
+}
+
+// watchForDisconnect runs a read pump goroutine that detects a client
+// disconnect (WebSocket clients otherwise send nothing but pong/close
+// frames) and closes the returned channel when the connection drops.
+func watchForDisconnect(conn *websocket.Conn) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+	return done
+}
+
+// writeJSONMessage marshals v and writes it as a text message. A marshal
+// failure is swallowed (the message is skipped, the connection stays open);
+// a write failure means the connection is dead, so it returns false to tell
+// the caller to abort.
+func writeJSONMessage(conn *websocket.Conn, v any) bool {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return true
+	}
+	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	return conn.WriteMessage(websocket.TextMessage, data) == nil
+}
+
+// sendPing writes a ping frame, returning false if the write failed and the
+// caller should abort the connection.
+func sendPing(conn *websocket.Conn) bool {
+	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	return conn.WriteMessage(websocket.PingMessage, nil) == nil
 }

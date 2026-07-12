@@ -13,7 +13,7 @@ final class HistoryProjectionTests: XCTestCase {
         return QuotaWindowVM.averagePaceCap(now: now, start: start, resetsAt: end, usedPercent: usedPercent)
     }
 
-    func testOverPace_HitsCapBeforeReset() {
+    func testOverPaceHitsCapBeforeReset() {
         // 60% used 40% into the window → mean rate reaches 100% at ~3h20m, before reset.
         let c = cap(usedPercent: 60, elapsedFraction: 0.4)
         let expected = start.addingTimeInterval(0.4 * windowSeconds * 100.0 / 60.0)
@@ -21,21 +21,21 @@ final class HistoryProjectionTests: XCTestCase {
         XCTAssertEqual(c!.timeIntervalSince1970, expected.timeIntervalSince1970, accuracy: 1)
     }
 
-    func testUnderPace_ReturnsNil() {
+    func testUnderPaceReturnsNil() {
         // 15% used 40% in → projects past reset → won't hit the cap this window.
         XCTAssertNil(cap(usedPercent: 15, elapsedFraction: 0.4))
     }
 
-    func testFlatUsage_ReturnsNil() {
+    func testFlatUsageReturnsNil() {
         XCTAssertNil(cap(usedPercent: 0, elapsedFraction: 0.5))
     }
 
-    func testAtOrOverCap_ReturnsNil() {
+    func testAtOrOverCapReturnsNil() {
         XCTAssertNil(cap(usedPercent: 100, elapsedFraction: 0.5))
         XCTAssertNil(cap(usedPercent: 120, elapsedFraction: 0.5))
     }
 
-    func testProjectedEndPercent_ClampsTo100() {
+    func testProjectedEndPercentClampsTo100() {
         let end = start.addingTimeInterval(windowSeconds)
         let now = start.addingTimeInterval(2 * 3600)
         let vm = QuotaWindowVM(

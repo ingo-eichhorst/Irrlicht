@@ -12,18 +12,37 @@ import SwiftUI
 
 /// Top-level History tabs. The three concerns are too different to share one
 /// control bar, so each is its own tab with only the controls it needs:
-/// Usage (cost/token time series), Yield (productive-vs-reverted), and Quota
+/// Usage (cost/token time series), Metrics (a growing set of derived
+/// analytics — Yield's productive-vs-reverted plus DORA, #951), and Quota
 /// (live per-provider subscription rate-limit forecast).
 enum HistoryTab: String, CaseIterable, Identifiable {
-    case usage, yield, quota
+    case usage, metrics, quota
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .usage: return "Usage"
-        case .yield: return "Yield"
+        case .metrics: return "Metrics"
         case .quota: return "Quota"
+        }
+    }
+}
+
+/// Which analytic is shown inside the Metrics tab (#951) — a single-selection
+/// inner picker, since both platforms render exactly one active
+/// chart/section at a time. Yield is #373's existing productive-vs-reverted
+/// aggregate; DORA is the first new section; more (AI-specific) metrics
+/// arrive later.
+enum MetricsSection: String, CaseIterable, Identifiable {
+    case yield, dora
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .yield: return "Yield"
+        case .dora: return "DORA"
         }
     }
 }
@@ -32,9 +51,10 @@ struct HistoryView: View {
     let onClose: () -> Void
 
     // Top-level view: each tab is a self-contained concern with its own controls
-    // (Usage = cost/token time series, Yield = productive-vs-reverted, Quota =
+    // (Usage = cost/token time series, Metrics = Yield + DORA sections, Quota =
     // live per-provider rate-limit forecast).
     @State private var tab: HistoryTab
+    @State private var metricsSection: MetricsSection = .yield
     @State private var range: HistoryRange = .day
     @State private var chart: HistoryChart = .cost
     @State private var group: HistoryGroup = .project
@@ -47,17 +67,16 @@ struct HistoryView: View {
     @State private var appliedCustomStart: Int64?
     @State private var appliedCustomEnd: Int64?
 
-    // Orthogonal cross-filters (#750): each narrows the others; the grouped
-    // dimension's filter is hidden. knownProviders/knownProjects accumulate the
-    // option lists seen across responses (token types are a fixed set).
-    @State private var filterProvider: Set<String> = []
-    @State private var filterTokenType: Set<HistoryTokenType> = []
-    @State private var filterProject: Set<String> = []
-    @State private var knownProviders: [String] = []
+    // DORA (#951) is inherently repo-scoped — needs exactly one project,
+    // unlike cost/yield's implicit "all projects." knownProjects accumulates
+    // the option list from any cost fetch grouped by project, so DORA's
+    // picker doesn't need a separate project-discovery fetch.
     @State private var knownProjects: [String] = []
+    @State private var doraProject: String?
 
     @State private var response: HistoryResponse?
     @State private var yieldResponse: HistoryYieldResponse?
+    @State private var doraResponse: HistoryDoraResponse?
     @State private var loadFailed = false
 
     init(onClose: @escaping () -> Void, initialTab: HistoryTab = .usage) {
@@ -65,29 +84,24 @@ struct HistoryView: View {
         self._tab = State(initialValue: initialTab)
     }
 
-    /// The cross-filters keyed by dimension, for `queryItems` and the query key.
-    private var filtersDict: [HistoryGroup: [String]] {
-        [.provider: Array(filterProvider),
-         .tokenType: filterTokenType.map(\.rawValue),
-         .project: Array(filterProject)]
-    }
-
     /// Re-runs the fetch via `.task(id:)` whenever the effective query changes.
     /// This is the macOS equivalent of the web's manual `historyFetchSeq`
     /// dedup — `.task(id:)` cancels the in-flight request when the key changes.
     private var queryKey: String {
-        let flt = "\(filterProvider.sorted().joined(separator: ","))|\(filterTokenType.map(\.rawValue).sorted().joined(separator: ","))|\(filterProject.sorted().joined(separator: ","))"
-        let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(flt)"
+        let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(doraProject ?? "")"
         if range == .custom {
             return "custom-\(appliedCustomStart ?? 0)-\(appliedCustomEnd ?? 0)-\(dims)"
         }
         return "\(range.rawValue)-\(dims)"
     }
 
-    /// The chart metric actually sent to the daemon: the Yield tab forces the
-    /// yield aggregate; otherwise the Usage tab's Cost/Tokens choice. (Quota does
-    /// not fetch.)
-    private var fetchChart: HistoryChart { tab == .yield ? .yieldRatio : chart }
+    /// The chart metric actually sent to the daemon: the Metrics tab forces
+    /// whichever section is active (Yield's aggregate or DORA); otherwise the
+    /// Usage tab's Cost/Tokens choice. (Quota does not fetch.)
+    private var fetchChart: HistoryChart {
+        guard tab == .metrics else { return chart }
+        return metricsSection == .dora ? .dora : .yieldRatio
+    }
 
     /// The stacking axis actually sent to the daemon: pinned to model/provider
     /// for the models/providers presets, else the user's group choice.
@@ -110,7 +124,9 @@ struct HistoryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            PanelHeader(title: "History", onBack: onClose)
+            Divider()
+            tabSwitcher
             Divider()
             // Quota has no controls (topControls renders EmptyView for it) —
             // skip the row entirely rather than showing a blank padded gap
@@ -131,75 +147,52 @@ struct HistoryView: View {
         // token concept); keep them consistent however either is changed.
         .onChange(of: group) { newGroup in
             if newGroup == .tokenType && chart != .tokens { chart = .tokens }
-            clearFilter(for: newGroup) // a dimension is never both axis and filter
         }
         .onChange(of: chart) { newChart in
             if newChart != .tokens && group == .tokenType { group = .project }
         }
         // Switching tabs drops any drilldown and keeps the Usage metric valid
-        // (Cost/Tokens only — Yield lives in its own tab now).
+        // (Cost/Tokens only — Yield/DORA live in the Metrics tab now).
         .onChange(of: tab) { newTab in
             scope = nil
-            if newTab == .usage, chart == .yieldRatio { chart = .cost }
-        }
-    }
-
-    /// Clears the filter on whichever dimension just became the stacking axis.
-    private func clearFilter(for group: HistoryGroup) {
-        switch group {
-        case .provider: filterProvider = []
-        case .tokenType: filterTokenType = []
-        case .project: filterProject = []
-        default: break
+            if newTab == .usage, chart == .yieldRatio || chart == .dora { chart = .cost }
         }
     }
 
     // MARK: Header
 
-    private var header: some View {
-        // A leading Back button, a centered tab switcher, and an invisible
-        // mirror of the Back button on the trailing side to balance the
-        // centering — the two Spacers guarantee a minimum gap on both sides
-        // of the switcher regardless of how wide Dynamic Type/accessibility
-        // text sizing makes the Back button, so it can never overlap it.
+    /// Tab switcher row, below the shared `PanelHeader` (issue #940 — the
+    /// header itself is now identical across every sub-panel; view-specific
+    /// controls live in their own row underneath it).
+    private var tabSwitcher: some View {
         HStack {
-            backButton
-            Spacer(minLength: IrrSpacing.sp2)
+            Spacer(minLength: 0)
             Picker("", selection: $tab) {
                 ForEach(HistoryTab.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
-            Spacer(minLength: IrrSpacing.sp2)
-            backButton.opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+            // App accent instead of system blue, matching Settings' Menu Bar
+            // Icon control and every session-state color (issue #940).
+            .tint(IrrColors.working)
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, IrrSpacing.sp4)
         .padding(.vertical, IrrSpacing.sp3)
     }
 
-    private var backButton: some View {
-        Button(action: onClose) {
-            HStack(spacing: 2) {
-                Image(systemName: "chevron.left")
-                Text("Back")
-            }
-            .foregroundColor(.secondary)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
     // MARK: Controls
 
     /// Only the controls that apply to the active tab — Quota needs none,
-    /// Yield needs just a range, Usage gets the full set (the tab selector
-    /// itself now lives in the header).
+    /// Metrics needs a section picker + range (+ a project picker for DORA),
+    /// Usage gets the full set (the tab selector itself lives in
+    /// `tabSwitcher`, above).
     private var topControls: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
             switch tab {
             case .usage: usageControls
-            case .yield: yieldControls
+            case .metrics: metricsControls
             case .quota: EmptyView()
             }
         }
@@ -207,9 +200,9 @@ struct HistoryView: View {
         .padding(.vertical, IrrSpacing.sp3)
     }
 
-    /// Range picker, shared by the Usage and Yield tabs. Labels are hidden —
-    /// with the row down to Range/Chart/Group/Filters, the value alone
-    /// ("Day", "Cost", "Proj") reads fine and keeps everything on one line.
+    /// Range picker for the Metrics tab's Yield/DORA sections (Usage builds
+    /// its own Range/Chart/Group row where all three share the width evenly,
+    /// so it doesn't reuse this).
     @ViewBuilder private var rangePicker: some View {
         Picker("Range", selection: $range) {
             ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
@@ -218,13 +211,20 @@ struct HistoryView: View {
         .fixedSize()
     }
 
-    /// Usage tab: cost/token time series. Range, Chart, Group, and the
-    /// cross-filters (as one "Filters" dropdown) all fit on a single row —
-    /// the models/providers presets are gone, they're just Cost grouped by
-    /// model/provider, which the Group axis already offers.
+    /// Usage tab: cost/token time series. Range, Chart, and Group share the
+    /// row evenly, each a third of the width (issue #940 — the "Filters"
+    /// cross-filter dropdown was dropped: narrowing to one project/branch/
+    /// model already works via drilldown, and the extra dimension wasn't
+    /// earning its row space) — the models/providers presets are gone too,
+    /// they're just Cost grouped by model/provider, which the Group axis
+    /// already offers.
     @ViewBuilder private var usageControls: some View {
         HStack(spacing: IrrSpacing.sp3) {
-            rangePicker
+            Picker("Range", selection: $range) {
+                ForEach(HistoryRange.allCases) { Text($0.label).tag($0) }
+            }
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
             Picker("Chart", selection: Binding(
                 get: { chart },
                 set: { chart = $0; scope = nil } // a new metric resets any drilldown
@@ -232,7 +232,7 @@ struct HistoryView: View {
                 ForEach(visibleCharts) { Text($0.label).tag($0) }
             }
             .labelsHidden()
-            .fixedSize()
+            .frame(maxWidth: .infinity)
             Picker("Group", selection: Binding(
                 get: { effectiveGroup },
                 set: { newGroup in
@@ -244,13 +244,7 @@ struct HistoryView: View {
                 ForEach(HistoryGroup.allCases) { Text($0.shortLabel).tag($0) }
             }
             .labelsHidden()
-            .fixedSize()
-            // Cross-filters (#750) as one dropdown (#750's three separate menus
-            // didn't fit the row); the daemon query still drops the grouped
-            // dimension and the token_type filter outside the tokens metric,
-            // so those act as no-ops rather than vanishing from the UI.
-            filtersMenu
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity)
         }
         .pickerStyle(.menu)
         .controlSize(.small)
@@ -259,10 +253,19 @@ struct HistoryView: View {
         if range == .custom { customRangeRow }
     }
 
-    /// Yield tab: a per-project aggregate over the range — just the range picker.
-    @ViewBuilder private var yieldControls: some View {
+    /// Metrics tab (#951): a section picker (Yield | DORA, more later) plus
+    /// the range picker Yield needs — and, only for the DORA section, a
+    /// project picker, since DORA is inherently repo-scoped and needs
+    /// exactly one project (unlike Yield's implicit "all projects").
+    @ViewBuilder private var metricsControls: some View {
         HStack(spacing: IrrSpacing.sp3) {
+            Picker("Section", selection: $metricsSection) {
+                ForEach(MetricsSection.allCases) { Text($0.label).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
             rangePicker
+            if metricsSection == .dora { doraProjectPicker }
             Spacer(minLength: 0)
         }
         .pickerStyle(.menu)
@@ -272,7 +275,25 @@ struct HistoryView: View {
         if range == .custom { customRangeRow }
     }
 
-    /// Custom-range date pickers, shared by the Usage and Yield tabs.
+    /// DORA's project picker (#951), sourced from knownProjects — already
+    /// populated from cost fetches grouped by project, so no separate
+    /// project-discovery fetch is needed. Capped with maxWidth (not
+    /// `.fixedSize()`, unlike its Section/Range siblings) because project
+    /// names are unbounded-length user data; without a ceiling a long name
+    /// pushes the row past the panel's fixed width (#962).
+    @ViewBuilder private var doraProjectPicker: some View {
+        Picker("Project", selection: Binding(
+            get: { doraProject ?? "" },
+            set: { doraProject = $0.isEmpty ? nil : $0 }
+        )) {
+            Text("Select a project…").tag("")
+            ForEach(knownProjects, id: \.self) { Text($0).tag($0) }
+        }
+        .labelsHidden()
+        .frame(maxWidth: 140)
+    }
+
+    /// Custom-range date pickers, shared by the Usage and Metrics tabs.
     private var customRangeRow: some View {
         HStack(spacing: IrrSpacing.sp2) {
             DatePicker("", selection: $customStart, displayedComponents: .date)
@@ -288,63 +309,6 @@ struct HistoryView: View {
     /// Metrics shown in the Chart dropdown — Cost, Tokens, and CO2 (issue #829;
     /// Yield is its own tab; the models/providers presets fold into the Group axis).
     private var visibleCharts: [HistoryChart] { [.cost, .tokens, .co2] }
-
-    // MARK: Cross-filter menus
-
-    private func filterLabel(_ name: String, count: Int) -> String {
-        count > 0 ? "\(name) (\(count))" : name
-    }
-
-    private func setBinding(_ set: Binding<Set<String>>, _ value: String) -> Binding<Bool> {
-        Binding(
-            get: { set.wrappedValue.contains(value) },
-            set: { on in if on { set.wrappedValue.insert(value) } else { set.wrappedValue.remove(value) } }
-        )
-    }
-
-    private func tokenBinding(_ tt: HistoryTokenType) -> Binding<Bool> {
-        Binding(
-            get: { filterTokenType.contains(tt) },
-            set: { on in if on { filterTokenType.insert(tt) } else { filterTokenType.remove(tt) } }
-        )
-    }
-
-    /// Total selections across all three filter dimensions, shown as the
-    /// "Filters" dropdown's badge count.
-    private var activeFilterCount: Int {
-        filterProvider.count + filterTokenType.count + filterProject.count
-    }
-
-    /// One dropdown holding all three cross-filters as submenus — Provider,
-    /// Type, and Project no longer need a row slot each.
-    @ViewBuilder private var filtersMenu: some View {
-        Menu(filterLabel("Filters", count: activeFilterCount)) {
-            Menu(filterLabel("Provider", count: filterProvider.count)) {
-                if knownProviders.isEmpty {
-                    Text("none seen yet")
-                } else {
-                    ForEach(knownProviders, id: \.self) { p in
-                        Toggle(p, isOn: setBinding($filterProvider, p))
-                    }
-                }
-            }
-            Menu(filterLabel("Type", count: filterTokenType.count)) {
-                ForEach(HistoryTokenType.allCases) { tt in
-                    Toggle(tt.label, isOn: tokenBinding(tt))
-                }
-            }
-            Menu(filterLabel("Project", count: filterProject.count)) {
-                if knownProjects.isEmpty {
-                    Text("none seen yet")
-                } else {
-                    ForEach(knownProjects, id: \.self) { p in
-                        Toggle(p, isOn: setBinding($filterProject, p))
-                    }
-                }
-            }
-        }
-        .fixedSize()
-    }
 
     // MARK: Content
 
@@ -368,7 +332,7 @@ struct HistoryView: View {
             VStack(alignment: .leading, spacing: 0) {
                 switch tab {
                 case .usage: usageContent
-                case .yield: yieldContent
+                case .metrics: metricsContent
                 case .quota: quotaContent
                 }
             }
@@ -398,10 +362,39 @@ struct HistoryView: View {
         }
     }
 
-    /// Yield tab: per-project productive-vs-reverted aggregate over the range.
+    /// Metrics tab (#951): whichever section is active. DORA with no project
+    /// selected is a distinct empty state, not a load failure or a spinner —
+    /// nothing was fetched at all (queryKey still changes on project
+    /// selection, so picking one triggers the fetch normally).
+    @ViewBuilder private var metricsContent: some View {
+        switch metricsSection {
+        case .yield: yieldContent
+        case .dora: doraContent
+        }
+    }
+
+    /// Yield section: per-project productive-vs-reverted aggregate over the range.
     @ViewBuilder private var yieldContent: some View {
         if let y = yieldResponse {
             HistoryYieldContentView(data: y, range: range)
+        } else if loadFailed {
+            loadFailedText
+        } else {
+            ProgressView()
+                .frame(maxWidth: .infinity, minHeight: 220)
+        }
+    }
+
+    /// DORA section (#951): a project must be selected first — its picker
+    /// lives in metricsControls above.
+    @ViewBuilder private var doraContent: some View {
+        if doraProject == nil {
+            Text("select a project to see its DORA metrics")
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 220)
+        } else if let d = doraResponse {
+            HistoryDoraContentView(data: d)
         } else if loadFailed {
             loadFailedText
         } else {
@@ -437,10 +430,17 @@ struct HistoryView: View {
 
     private func fetch() async {
         guard tab != .quota else { return }  // quota reads the live snapshot, no fetch
+        // DORA needs exactly one project — with none selected, there's
+        // nothing to fetch at all (a distinct empty state, not a load
+        // failure or a spinner; see doraContent).
+        if fetchChart == .dora, doraProject == nil { return }
         loadFailed = false
         var comps = URLComponents(string: "\(DaemonEndpoint.httpBase)/api/v1/history")
         // queryItems ignores the custom bounds unless range == .custom.
-        comps?.queryItems = range.queryItems(chart: fetchChart, group: effectiveGroup, scope: scope, filters: filtersDict, forecast: false, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
+        comps?.queryItems = range.queryItems(chart: fetchChart, group: effectiveGroup, scope: scope, forecast: false, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
+        if fetchChart == .dora, let doraProject {
+            comps?.queryItems?.append(URLQueryItem(name: "project", value: doraProject))
+        }
         guard let url = comps?.url else { return }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
@@ -449,7 +449,11 @@ struct HistoryView: View {
                 loadFailed = true
                 return
             }
-            if fetchChart == .yieldRatio {
+            if fetchChart == .dora {
+                let decoded = try JSONDecoder().decode(HistoryDoraResponse.self, from: data)
+                if Task.isCancelled { return }
+                doraResponse = decoded
+            } else if fetchChart == .yieldRatio {
                 let decoded = try JSONDecoder().decode(HistoryYieldResponse.self, from: data)
                 if Task.isCancelled { return }
                 yieldResponse = decoded
@@ -457,12 +461,10 @@ struct HistoryView: View {
                 let decoded = try JSONDecoder().decode(HistoryResponse.self, from: data)
                 if Task.isCancelled { return }
                 response = decoded
-                // Grow the provider/project filter vocabularies from any
-                // response grouped on that axis (token types are a fixed set).
-                if decoded.group == "provider" {
-                    knownProviders = mergeKnown(knownProviders, decoded.topContributors)
-                } else if decoded.group == "project" {
-                    knownProjects = mergeKnown(knownProjects, decoded.topContributors)
+                // Grows DORA's project picker vocabulary — no separate
+                // project-discovery fetch needed (#951).
+                if decoded.group == "project" {
+                    knownProjects = mergeKnownProjects(knownProjects, decoded.topContributors)
                 }
             }
         } catch {
@@ -470,9 +472,11 @@ struct HistoryView: View {
         }
     }
 
-    /// Merges a response's contributor labels into an accumulated option list,
-    /// dropping the synthetic "unknown" bucket and keeping it sorted.
-    private func mergeKnown(_ existing: [String], _ contribs: [HistoryContributor]) -> [String] {
+    /// Merges a response's contributor labels into an accumulated project
+    /// list, dropping the synthetic "unknown" bucket and keeping it sorted
+    /// (#951 — DORA's project picker; #750's broader multi-dimension
+    /// version of this was removed along with the Filters dropdown).
+    private func mergeKnownProjects(_ existing: [String], _ contribs: [HistoryContributor]) -> [String] {
         var set = Set(existing)
         for c in contribs where !c.label.isEmpty && c.label != "unknown" { set.insert(c.label) }
         return set.sorted()
@@ -494,7 +498,7 @@ struct HistoryView: View {
 // only part of History that needs `sessionManager`, which publishes on every
 // live session tick (as often as every ~100ms during active sessions). If
 // HistoryView itself subscribed, that churn would re-evaluate the whole body
-// — including the Usage tab's Filters menu — dismissing any open submenu.
+// — including the Usage tab's Chart/Group menus — dismissing any open one.
 
 private struct HistoryQuotaTabContent: View {
     @EnvironmentObject var sessionManager: SessionManager
@@ -589,8 +593,14 @@ struct HistoryContentView: View {
     var chart: HistoryChart = .cost
     var group: HistoryGroup = .project
     var scope: HistoryScope?
-    var onDrill: (HistoryGroup, String) -> Void = { _, _ in }
-    var onClearDrill: () -> Void = {}
+    // No-op defaults so previews/snapshot tests can host this view without
+    // wiring drill-down interaction.
+    var onDrill: (HistoryGroup, String) -> Void = { _, _ in
+        // no-op default
+    }
+    var onClearDrill: () -> Void = {
+        // no-op default
+    }
     let onExportCSV: () -> Void
     let onExportJSON: () -> Void
 
@@ -854,6 +864,66 @@ private struct HistoryYieldRow: View {
     }
 }
 
+// MARK: - DORA metrics (#951)
+
+struct HistoryDoraContentView: View {
+    let data: HistoryDoraResponse
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
+            Text("DORA · \(data.project)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if !data.available {
+                Text(data.message ?? "not enough data to compute DORA metrics")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 160)
+            } else {
+                VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
+                    HistoryDoraMetricRow(label: "Deployment Frequency", metric: data.deploymentFrequency, format: HistoryFormat.doraPerWeek)
+                    HistoryDoraMetricRow(label: "Lead Time for Changes", metric: data.leadTime, format: HistoryFormat.doraHours)
+                    HistoryDoraMetricRow(label: "Change Failure Rate", metric: data.changeFailureRate, format: HistoryFormat.doraPercent)
+                    HistoryDoraMetricRow(label: "Mean Time to Restore", metric: data.mttr, format: HistoryFormat.doraHours)
+                }
+            }
+        }
+        .padding(.horizontal, IrrSpacing.sp4)
+        .padding(.vertical, IrrSpacing.sp3)
+    }
+}
+
+private struct HistoryDoraMetricRow: View {
+    let label: String
+    let metric: DoraMetric
+    let format: (Double) -> String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if metric.available {
+                HStack(alignment: .firstTextBaseline, spacing: IrrSpacing.sp2) {
+                    Text(format(metric.value))
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                    if let message = metric.message {
+                        Text(message)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            } else {
+                Text(metric.message ?? "n/a")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+}
+
 // MARK: - Stacked-area cost chart (Swift Charts)
 
 private struct HistoryCostChart: View {
@@ -866,6 +936,16 @@ private struct HistoryCostChart: View {
         let date: Date
         let project: String
         let value: Double
+    }
+
+    /// One CO2-equivalent reference line, with `nearTop` flagging whether its
+    /// label should flip below the line (mirrors the web's pixel-space
+    /// `(y - padT) < 10` check — done here in data-space instead, since Swift
+    /// Charts doesn't expose rendered plot geometry to the view pre-macOS 14).
+    private struct CO2Line: Identifiable {
+        let id: String
+        let equivalent: CO2Equivalent
+        let nearTop: Bool
     }
 
     /// Densify the sparse series into a **cumulative** value for every (bucket,
@@ -891,6 +971,27 @@ private struct HistoryCostChart: View {
         return out
     }
 
+    /// Tallest stacked column across all buckets, ×1.12 headroom, floored at
+    /// 1 — the macOS twin of the web `historyMaxY` (no forecast term: the
+    /// daemon's history response carries no forecast field for this chart).
+    /// Only meaningful for the CO2 chart, but cheap enough to leave unguarded.
+    private var co2MaxY: Double {
+        var perDate: [Date: Double] = [:]
+        for d in costData { perDate[d.date, default: 0] += d.value }
+        let peak = perDate.values.max() ?? 0
+        return (peak > 0 ? peak : 1) * 1.12
+    }
+
+    /// Red dotted reference lines for relatable everyday CO2e activities
+    /// (issue #952) — empty for every chart type except CO2.
+    private var co2Lines: [CO2Line] {
+        guard chart.isCO2 else { return [] }
+        let maxY = co2MaxY
+        return CO2Equivalents.pick(maxY: maxY).map { eq in
+            CO2Line(id: eq.id, equivalent: eq, nearTop: eq.grams > maxY * 0.9)
+        }
+    }
+
     var body: some View {
         Chart {
             ForEach(costData) { d in
@@ -901,7 +1002,22 @@ private struct HistoryCostChart: View {
                 .foregroundStyle(by: .value("Project", d.project))
                 .interpolationMethod(.monotone)
             }
+            // Drawn after the AreaMarks, so painted on top of them — Swift
+            // Charts, like SwiftUI's ZStack, layers later marks over earlier
+            // ones with no explicit z-order API needed.
+            ForEach(co2Lines) { line in
+                RuleMark(y: .value("CO2 equivalent", line.equivalent.grams))
+                    .foregroundStyle(IrrColors.pressureHigh.opacity(0.8))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [1, 4]))
+                    .annotation(position: line.nearTop ? .bottom : .top, alignment: .leading) {
+                        Text("≈ \(line.equivalent.label)")
+                            .font(.caption2)
+                            .foregroundColor(IrrColors.pressureHigh)
+                            .lineLimit(1)
+                    }
+            }
         }
+        .modifier(CO2YScale(isCO2: chart.isCO2, maxY: co2MaxY))
         .chartForegroundStyleScale(
             domain: orderedProjects,
             range: orderedProjects.indices.map { HistoryPalette.color(at: $0) }
@@ -926,6 +1042,24 @@ private struct HistoryCostChart: View {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Applies an explicit Y domain only for the CO2 chart, leaving every other
+/// chart type's automatic Swift Charts scale untouched — `.chartYScale`
+/// takes a concrete, non-optional domain, so a ternary can't switch between
+/// "a range" and "no scale" inline. Gating this to CO2 only matters: applying
+/// it unconditionally would change tick-value selection for cost/tokens/
+/// models/providers too and risk their existing snapshot tests.
+private struct CO2YScale: ViewModifier {
+    let isCO2: Bool
+    let maxY: Double
+    func body(content: Content) -> some View {
+        if isCO2 {
+            content.chartYScale(domain: 0...maxY)
+        } else {
+            content
         }
     }
 }
@@ -1166,6 +1300,19 @@ enum HistoryPalette {
 enum HistoryFormat {
     /// `$X.XX`, matching the web `histDollar`.
     static func dollar(_ v: Double) -> String { String(format: "$%.2f", v) }
+
+    /// "X.X/week", for DORA Deployment Frequency (#951).
+    static func doraPerWeek(_ v: Double) -> String { String(format: "%.1f/week", v) }
+
+    /// "X%", for DORA Change Failure Rate (#951).
+    static func doraPercent(_ v: Double) -> String { String(format: "%.0f%%", v) }
+
+    /// Hours → "N hours" below a day, "X.X days" at or above — matching the
+    /// daemon's own format_hours convention for Lead Time / MTTR (#951).
+    static func doraHours(_ v: Double) -> String {
+        if v >= 24 { return String(format: "%.1f days", v / 24) }
+        return String(format: "%.0f hours", v)
+    }
 
     /// "5h" / "7d" from a canonical rate-limit window length in minutes.
     static func quotaWindowLabel(_ minutes: Int) -> String {

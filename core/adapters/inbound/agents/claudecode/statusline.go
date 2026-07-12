@@ -55,10 +55,10 @@ type statuslineWindow struct {
 	ResetsAt       int64   `json:"resets_at"`
 }
 
-// RateLimitTarget is the narrow interface the statusline handler depends on.
-// Satisfied by outbound.MetricsCollector — broken out so tests can supply a
-// fake without depending on the broader port surface.
-type RateLimitTarget interface {
+// RateLimitIngester is the narrow interface the statusline handler depends
+// on. Satisfied by outbound.MetricsCollector — broken out so tests can
+// supply a fake without depending on the broader port surface.
+type RateLimitIngester interface {
 	IngestRateLimit(transcriptPath string, snap *session.RateLimitSnapshot)
 }
 
@@ -71,7 +71,7 @@ type RateLimitTarget interface {
 // gate is the consent check for the "statusline" permission; while not
 // granted the payload is dropped with 200. A nil gate means no gating —
 // used by tests.
-func NewStatuslineHandler(target RateLimitTarget, gate ConsentGate, log outbound.Logger) http.HandlerFunc {
+func NewStatuslineHandler(target RateLimitIngester, gate ConsentGranter, log outbound.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

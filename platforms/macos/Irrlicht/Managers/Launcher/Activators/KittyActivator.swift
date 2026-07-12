@@ -39,7 +39,12 @@ struct KittyActivator: HostActivator {
             // activation — may pick the wrong instance when multiple kitties
             // run, but it's the best we can do.
             Self.logger.info("kitty: KITTY_PID unavailable for session \(session.id, privacy: .public); using bundle activation")
-            activated = AppActivator.activate(bundleID: bundleID) { _ in }
+            // `activated` already carries the synchronous result; the async
+            // `then` completion (fires once a cold-launched app finishes
+            // opening) isn't needed here.
+            activated = AppActivator.activate(bundleID: bundleID) { _ in
+                // completion not needed here
+            }
         }
 
         // 2. Switch to the right tab via kitty's remote control if the user
@@ -76,10 +81,10 @@ struct KittyActivator: HostActivator {
     private static let kittenPath: String? = {
         let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
         let candidates = [
-            "/Applications/kitty.app/Contents/MacOS/kitten",
-            "/usr/local/bin/kitten",
-            "/opt/homebrew/bin/kitten",
-            home + "/.local/bin/kitten",
+            "/Applications/kitty.app/Contents/MacOS/kitten",  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
+            "/usr/local/bin/kitten",  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
+            "/opt/homebrew/bin/kitten",  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
+            home + "/.local/bin/kitten",  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
         ]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }()

@@ -15,6 +15,26 @@ import {
 
 const SPEED_PRESETS = [1, 2, 5, 10, 25, 100];
 
+// RECORDING_SLUG_RE mirrors the backend's /api/scenarios/{agent}/{subtree}/{id}
+// validation (slugRE in internal/viewer/scenarios.go) — agent and id must be
+// lowercase-alnum-dash-underscore slugs, never containing "/", "?", or "#".
+const RECORDING_SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
+
+// pluralSuffix returns "" for a count of exactly 1, "s" otherwise — the
+// English-plural suffix used by every "N recording(s)" label in this file.
+function pluralSuffix(n) {
+  return n === 1 ? "" : "s";
+}
+
+// Strip control characters and cap length before logging a server-provided
+// string (SonarQube jssecurity:S5145 — fetch response fields are tainted
+// regardless of same-origin trust). Uses String(), not `value || ""`, so
+// null/undefined/empty/garbage stay distinguishable in the log instead of
+// all collapsing to the same blank output.
+function sanitizeForLog(value) {
+  return String(value).replace(/[\r\n]+/g, " ").slice(0, 300);
+}
+
 // inferDriverLabel returns "Interactive (tmux REPL)" when the adapter
 // entry has a non-empty script array, "Headless one-shot" otherwise.
 // Pure function — exported for unit tests.
@@ -80,7 +100,7 @@ let recipesByCoverageId = new Map(); // coverage_id → recipe entry
 // sidebar label, the detail-page title, and the recipe panel.
 function folderToCoverageId(folder, agent) {
   for (const r of recipesByCoverageId.values()) {
-    const folderForAgent = r.folder_by_agent && r.folder_by_agent[agent];
+    const folderForAgent = r.folder_by_agent?.[agent];
     if ((r.name === folder || folderForAgent === folder) && r.coverage_id) {
       return r.coverage_id;
     }
@@ -88,7 +108,11 @@ function folderToCoverageId(folder, agent) {
   return folder;
 }
 
-(async function init() {
+// loadInitData fetches the three starting payloads (scenarios, catalog,
+// recipes) in parallel, populates the module-level caches, and returns the
+// raw scenarios list so init() can decide whether to render the sidebar
+// tree or the empty-state note.
+async function loadInitData() {
   const [scenarios, catResp, recipesResp] = await Promise.all([
     fetch("/api/scenarios").then(r => r.json()),
     fetch("/api/catalog").then(async r => {
@@ -106,9 +130,13 @@ function folderToCoverageId(folder, agent) {
       if (r.coverage_id) recipesByCoverageId.set(r.coverage_id, r);
     }
   }
-  // Re-render the overview when a window resize changes how many agent
-  // columns fit (debounced; no-op on detail pages and when the fit count
-  // is unchanged). Registered once for both init paths below.
+  return scenarios;
+}
+
+// registerOverviewResizeListener re-renders the overview when a window
+// resize changes how many agent columns fit (debounced; no-op on detail
+// pages and when the fit count is unchanged). Registered once, from init().
+function registerOverviewResizeListener() {
   let resizeTimer = 0;
   window.addEventListener("resize", () => {
     clearTimeout(resizeTimer);
@@ -117,113 +145,169 @@ function folderToCoverageId(folder, agent) {
       if (h.startsWith("#/scenario/") || h.startsWith("#/recording/")) return;
       if (!catalog) return;
       const main = document.getElementById("main");
-      if (agentsPerPage((main && main.clientWidth) || 1200) !== lastPerPage) loadOverview();
+      if (agentsPerPage(main?.clientWidth || 1200) !== lastPerPage) loadOverview();
     }, 150);
   });
+}
 
-  // Map scenario id → catalog code (e.g. "5.4") so the sidebar can
-  // prefix labels and sort in the same order as the overview matrix.
-  // Regression-subtree recordings aren't in the catalog and stay
-  // uncoded — they fall through to alphabetical at the end.
+// buildCodeById maps scenario id → catalog code (e.g. "5.4") so the
+// sidebar can prefix labels and sort in the same order as the overview
+// matrix. Regression-subtree recordings aren't in the catalog and stay
+// uncoded — they fall through to alphabetical at the end.
+function buildCodeById() {
   const codeById = new Map();
   if (catalog && Array.isArray(catalog.scenarios)) {
     for (const sc of catalog.scenarios) {
       if (sc.code && sc.id) codeById.set(sc.id, sc.code);
     }
   }
-  const sidebar = document.getElementById("scenarios");
-  sidebar.innerHTML = "";
+  return codeById;
+}
 
-  // Overview button — always present. Click sets the hash; the router
-  // hashchange handler does the actual view swap.
+// buildOverviewButton creates the always-present "📊 Overview" sidebar
+// button. Click sets the hash; the router hashchange handler does the
+// actual view swap.
+function buildOverviewButton() {
   const overviewBtn = document.createElement("button");
   overviewBtn.className = "scn overview-btn";
   overviewBtn.dataset.route = "overview";
   overviewBtn.textContent = "📊 Overview";
   overviewBtn.addEventListener("click", () => navigate("#/"));
-  sidebar.appendChild(overviewBtn);
+  return overviewBtn;
+}
 
-  if (!scenarios || scenarios.length === 0) {
-    const note = document.createElement("div");
-    note.style.cssText = "padding: 8px; font-size: 12px; color: #888;";
-    note.textContent = "No recordings found under replaydata/agents/.";
-    sidebar.appendChild(note);
-    // Wire router even without recordings — overview view still works.
-    window.addEventListener("hashchange", route);
-    route();
-    return;
-  }
-  // Group by subtree (scenarios vs regressions) first, then by agent.
-  // Each level is a <details>/<summary> so the list stays scannable
-  // even when many recordings accumulate. Open/closed state persists
-  // in localStorage; the path leading to the currently-selected
-  // recording is force-expanded on render.
+// renderEmptySidebarNote shows the "no recordings" note in the sidebar
+// when /api/scenarios comes back empty.
+function renderEmptySidebarNote(sidebar) {
+  const note = document.createElement("div");
+  note.style.cssText = "padding: 8px; font-size: 12px; color: #888;";
+  note.textContent = "No recordings found under replaydata/agents/.";
+  sidebar.appendChild(note);
+}
+
+// groupScenariosBySubtree buckets scenarios by subtree (scenarios vs
+// regressions), then by agent, preserving discovery order within each
+// agent's list.
+function groupScenariosBySubtree(scenarios) {
   const bySubtree = {scenarios: {}, regressions: {}};
   for (const s of scenarios) {
     if (!bySubtree[s.subtree]) bySubtree[s.subtree] = {};
-    (bySubtree[s.subtree][s.agent] ||= []).push(s);
+    bySubtree[s.subtree][s.agent] ||= [];
+    bySubtree[s.subtree][s.agent].push(s);
   }
+  return bySubtree;
+}
+
+// buildRecordingButton builds one sidebar leaf button for a recording.
+// <button> rather than <a> so the element is reliably click-triggerable
+// from any input source (mouse, keyboard, accessibility tools, Chrome
+// MCP). data-rec-key lets the router find this button when restoring
+// active state from a deep link.
+function buildRecordingButton(s, codeById) {
+  const el = document.createElement("button");
+  el.className = "scn";
+  el.dataset.recKey = `${s.agent}/${s.subtree}/${s.id}`;
+  // Label by the resolved coverage_id (+ catalog code) so variant-folder
+  // recordings (e.g. agent-question-pending → user-blocking-question) read
+  // like their catalog row instead of the raw folder name.
+  const cid = folderToCoverageId(s.id, s.agent);
+  const code = codeById.get(cid);
+  // The on-disk folder is kept as a parenthetical ONLY when it's a genuine
+  // variant. Folders are id-prefixed (<dashed-code>_<name>), so a standard
+  // cell's folder is just the code + name already shown — appending it
+  // would be redundant noise. Show it only when the folder isn't the
+  // canonical <dashed-code>_<name> (the 2 real variants:
+  // user-esc-interrupt→2-20_interrupted-turn, user-blocking-question→
+  // 2-17_agent-question-pending); the detail breadcrumb shows it regardless.
+  const canonicalFolder = code ? `${code.replaceAll(".", "-")}_${cid}` : cid;
+  const labelId = s.id === canonicalFolder ? cid : `${cid} (${s.id})`;
+  el.textContent = code ? `${code} ${labelId}` : labelId;
+  el.addEventListener("click", () => navigate(`#/recording/${s.agent}/${s.subtree}/${s.id}`));
+  return el;
+}
+
+// buildAgentGroup builds one agent's collapsible group within a subtree.
+// Sort by catalog code (e.g. "5.4") so the order mirrors the overview
+// matrix. Resolve the folder→coverage_id per-agent so a variant-folder
+// cell sorts by the SAME code its label shows. Items without a code
+// (regression-only / orphan folders) sort to the end, alphabetically.
+function buildAgentGroup(subtree, agent, agentScenarios, codeById, activePath) {
+  const agentDet = makeSidebarGroup(
+    "agent-group", `sidebar.agent.${subtree}.${agent}`, agent, agentScenarios.length,
+    activePath.subtree === subtree && activePath.agent === agent,
+  );
+  agentScenarios.sort((a, b) => {
+    const [as, ai] = parseCatalogCode(codeById.get(folderToCoverageId(a.id, agent)));
+    const [bs, bi] = parseCatalogCode(codeById.get(folderToCoverageId(b.id, agent)));
+    if (as !== bs) return as - bs;
+    if (ai !== bi) return ai - bi;
+    return a.id.localeCompare(b.id);
+  });
+  for (const s of agentScenarios) {
+    agentDet.appendChild(buildRecordingButton(s, codeById));
+  }
+  return agentDet;
+}
+
+// buildSubtreeGroup builds one subtree's ("scenarios"/"regressions")
+// collapsible group, containing one agent group per agent with recordings
+// in that subtree.
+function buildSubtreeGroup(subtree, agentsMap, codeById, activePath) {
+  const totalCount = Object.values(agentsMap).reduce((n, arr) => n + arr.length, 0);
+  const subtreeDet = makeSidebarGroup("subtree-group", `sidebar.subtree.${subtree}`, subtree, totalCount, activePath.subtree === subtree);
+  for (const agent of Object.keys(agentsMap).sort((a, b) => a.localeCompare(b))) {
+    subtreeDet.appendChild(buildAgentGroup(subtree, agent, agentsMap[agent], codeById, activePath));
+  }
+  return subtreeDet;
+}
+
+// renderSidebarGroups builds the full scenarios/regressions × agent tree
+// under the sidebar's overview button. Group by subtree (scenarios vs
+// regressions) first, then by agent. Each level is a <details>/<summary>
+// so the list stays scannable even when many recordings accumulate.
+// Open/closed state persists in localStorage; the path leading to the
+// currently-selected recording is force-expanded on render.
+function renderSidebarGroups(sidebar, scenarios, codeById) {
+  const bySubtree = groupScenariosBySubtree(scenarios);
   const activePath = sidebarActivePath();
   for (const subtree of ["scenarios", "regressions"]) {
     const agents = bySubtree[subtree];
     if (!agents || Object.keys(agents).length === 0) continue;
-    const totalCount = Object.values(agents).reduce((n, arr) => n + arr.length, 0);
-    const subtreeDet = makeSidebarGroup("subtree-group", `sidebar.subtree.${subtree}`, subtree, totalCount, activePath.subtree === subtree);
-    for (const agent of Object.keys(agents).sort()) {
-      const agentDet = makeSidebarGroup("agent-group", `sidebar.agent.${subtree}.${agent}`, agent, agents[agent].length, activePath.subtree === subtree && activePath.agent === agent);
-      // Sort by catalog code (e.g. "5.4") so the order mirrors the overview
-      // matrix. Resolve the folder→coverage_id per-agent so a variant-folder
-      // cell sorts by the SAME code its label shows. Items without a code
-      // (regression-only / orphan folders) sort to the end, alphabetically.
-      agents[agent].sort((a, b) => {
-        const [as, ai] = parseCatalogCode(codeById.get(folderToCoverageId(a.id, agent)));
-        const [bs, bi] = parseCatalogCode(codeById.get(folderToCoverageId(b.id, agent)));
-        if (as !== bs) return as - bs;
-        if (ai !== bi) return ai - bi;
-        return a.id.localeCompare(b.id);
-      });
-      for (const s of agents[agent]) {
-        // <button> rather than <a> so the element is reliably
-        // click-triggerable from any input source (mouse, keyboard,
-        // accessibility tools, Chrome MCP). data-rec-key lets the
-        // router find this button when restoring active state from
-        // a deep link.
-        const el = document.createElement("button");
-        el.className = "scn";
-        el.dataset.recKey = `${s.agent}/${s.subtree}/${s.id}`;
-        // Label by the resolved coverage_id (+ catalog code) so variant-folder
-        // recordings (e.g. agent-question-pending → user-blocking-question) read
-        // like their catalog row instead of the raw folder name.
-        const cid = folderToCoverageId(s.id, s.agent);
-        const code = codeById.get(cid);
-        // The on-disk folder is kept as a parenthetical ONLY when it's a genuine
-        // variant. Folders are id-prefixed (<dashed-code>_<name>), so a standard
-        // cell's folder is just the code + name already shown — appending it
-        // would be redundant noise. Show it only when the folder isn't the
-        // canonical <dashed-code>_<name> (the 2 real variants:
-        // user-esc-interrupt→2-20_interrupted-turn, user-blocking-question→
-        // 2-17_agent-question-pending); the detail breadcrumb shows it regardless.
-        const canonicalFolder = code ? `${code.replace(/\./g, "-")}_${cid}` : cid;
-        const labelId = s.id === canonicalFolder ? cid : `${cid} (${s.id})`;
-        el.textContent = code ? `${code} ${labelId}` : labelId;
-        el.addEventListener("click", () => navigate(`#/recording/${s.agent}/${s.subtree}/${s.id}`));
-        agentDet.appendChild(el);
-      }
-      subtreeDet.appendChild(agentDet);
-    }
-    sidebar.appendChild(subtreeDet);
+    sidebar.appendChild(buildSubtreeGroup(subtree, agents, codeById, activePath));
+  }
+}
+
+{
+  const scenarios = await loadInitData();
+  // Re-render the overview when a window resize changes how many agent
+  // columns fit (debounced; no-op on detail pages and when the fit count
+  // is unchanged). Registered once for both init paths below.
+  registerOverviewResizeListener();
+
+  const codeById = buildCodeById();
+  const sidebar = document.getElementById("scenarios");
+  sidebar.innerHTML = "";
+
+  // Overview button — always present. Click sets the hash; the router
+  // hashchange handler does the actual view swap.
+  sidebar.appendChild(buildOverviewButton());
+
+  if (!scenarios || scenarios.length === 0) {
+    renderEmptySidebarNote(sidebar);
+  } else {
+    renderSidebarGroups(sidebar, scenarios, codeById);
   }
   // Wire the router and dispatch the initial route. Deep links land
   // directly on the requested view; bare `/` falls through to overview.
   window.addEventListener("hashchange", route);
   route();
-})();
+}
 
 // parseCatalogCode splits a catalog code ("5.4") into [section, index]
 // for numeric sort. Missing/blank codes sort to the end.
 function parseCatalogCode(code) {
   if (!code) return [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER];
-  const [s, i] = code.split(".").map(n => parseInt(n, 10));
+  const [s, i] = code.split(".").map(n => Number.parseInt(n, 10));
   return [Number.isFinite(s) ? s : Number.MAX_SAFE_INTEGER, Number.isFinite(i) ? i : Number.MAX_SAFE_INTEGER];
 }
 
@@ -263,7 +347,7 @@ function makeSidebarGroup(className, storageKey, label, count, forceOpen) {
 // auto-expand the path leading to the selection. {null, null}
 // otherwise.
 function sidebarActivePath() {
-  const m = (location.hash || "").match(/^#\/recording\/([^/]+)\/([^/]+)\/([^/]+)/);
+  const m = /^#\/recording\/([^/]+)\/([^/]+)\/([^/]+)/.exec(location.hash || "");
   if (!m) return {subtree: null, agent: null};
   return {agent: decodeURIComponent(m[1]), subtree: decodeURIComponent(m[2])};
 }
@@ -299,16 +383,17 @@ function navigate(hash) {
 function route() {
   const hash = location.hash || "#/";
   // Peel off the optional ?focus=<key> suffix before path matching.
-  const focusMatch = hash.match(/\?focus=([a-z]+)$/);
+  const focusMatch = /\?focus=([a-z]+)$/.exec(hash);
   const focus = focusMatch ? focusMatch[1] : "";
   const pathPart = focus ? hash.slice(0, hash.lastIndexOf("?")) : hash;
 
-  let m;
-  if ((m = pathPart.match(/^#\/scenario\/([^/]+)\/?$/))) {
+  let m = /^#\/scenario\/([^/]+)\/?$/.exec(pathPart);
+  if (m) {
     loadCoverageDetail(decodeURIComponent(m[1]));
     return;
   }
-  if ((m = pathPart.match(/^#\/recording\/([^/]+)\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/?$/))) {
+  m = /^#\/recording\/([^/]+)\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/?$/.exec(pathPart);
+  if (m) {
     const agent = decodeURIComponent(m[1]);
     const subtree = decodeURIComponent(m[2]);
     const id = decodeURIComponent(m[3]);
@@ -422,37 +507,72 @@ function loadOverview() {
 // unobservable / n.a. / unknown), rolled up daemon-side from
 // agent_supports + daemon_capability + driver_capability + the measured
 // recording status. Notes (if any) show in the tooltip.
-function renderCoverageMatrix(detail) {
-  // catalog.agents is [{id, onboarded}, …] — extract ids for column iteration.
-  const agents = (catalog.agents || []).map(a => typeof a === "string" ? a : a.id);
-  // Recording lookup: only "scenarios" subtree counts here; regression
-  // captures are not part of the coverage matrix.
-  const recIndex = new Map();
-  for (const r of scenariosList) {
-    if (r.subtree === "scenarios") recIndex.set(`${r.agent}/${r.id}`, r);
-  }
-
-  // Window the agent columns to what fits the pane (2–4); the pager in the
-  // panel header walks through the rest. The clamped page is written back so
-  // it survives re-renders.
-  const main = document.getElementById("main");
-  const perPage = agentsPerPage((main && main.clientWidth) || 1200);
-  lastPerPage = perPage;
-  const pg = paginateAgents(agents, agentPage, perPage);
-  agentPage = pg.page;
-
-  // Scenarios are agent-agnostic now (no section/feature) — list them flat in
-  // catalog (code) order; the per-row code chip carries the "<section>.<index>".
-  const panel = document.createElement("div");
-  panel.className = "panel";
+// buildCoverageHead builds the coverage panel's header (title + agent
+// pager when there's more than one page of agent columns). Extracted from
+// renderCoverageMatrix.
+function buildCoverageHead(agents, pg) {
   const head = document.createElement("div");
   head.style.cssText = "display: flex; align-items: baseline; gap: 12px; justify-content: space-between; flex-wrap: wrap;";
   const h3 = document.createElement("h3");
   h3.textContent = `Scenario coverage — ${catalog.scenarios.length} scenarios × ${agents.length} agents`;
   head.appendChild(h3);
   if (pg.pages > 1) head.appendChild(renderAgentPager(pg, agents));
-  panel.appendChild(head);
+  return head;
+}
 
+// buildCoverageCell builds one scenario×agent cell: an em-dash when the
+// agent has no coverage entry, otherwise the 7-segment pipeline strip.
+// recIndex is keyed by on-disk folder name; sc.id is the coverage_id.
+// Resolve coverage_id → folder via recipesByCoverageId so the
+// pipeline-strip chip lands on the recording detail page (not
+// /scenario/...) when folder name and coverage_id diverge. folder_by_agent
+// is per-agent (variant-folder aware); fall back to the recipe name then
+// the coverage_id. Extracted from renderCoverageMatrix.
+function buildCoverageCell(sc, agent, recIndex) {
+  const cov = sc.coverage?.[agent];
+  const cell = document.createElement("td");
+  cell.style.textAlign = "center";
+  cell.style.padding = "4px";
+  if (!cov) {
+    cell.textContent = "—";
+    cell.style.color = "#ccc";
+    cell.title = `${agent}: no entry`;
+    return cell;
+  }
+  const recipe = recipesByCoverageId.get(sc.id);
+  const folder = recipe?.folder_by_agent?.[agent] || recipe?.name || sc.id;
+  const rec = recIndex.get(`${agent}/${folder}`);
+  const strip = renderPipelineStrip(agent, sc.id, cov, rec);
+  cell.appendChild(strip);
+  return cell;
+}
+
+// buildCoverageRow builds one scenario's table row: the name cell (code
+// chip + coverage_id, clickable through to the scenario detail page) plus
+// one cell per visible agent column. Extracted from renderCoverageMatrix.
+function buildCoverageRow(sc, pg, recIndex) {
+  const row = document.createElement("tr");
+  const nameCell = document.createElement("td");
+  nameCell.style.cssText = "cursor: pointer;";
+  const nameLink = document.createElement("button");
+  nameLink.style.cssText = "background: transparent; border: 0; padding: 0; text-align: left; cursor: pointer; font: inherit; color: inherit;";
+  const codeChip = sc.code
+    ? `<span style="display: inline-block; min-width: 28px; padding: 1px 5px; margin-right: 6px; background: #e8e6da; color: #555; border-radius: 3px; font-size: 10px; font-weight: 600; font-family: monospace; vertical-align: 1px;">${escapeHtml(sc.code)}</span>`
+    : "";
+  nameLink.innerHTML = `${codeChip}<span style="font-weight: 600; color: #1f56a8; text-decoration: underline;">${sc.id}</span>`;
+  nameLink.addEventListener("click", () => navigate(`#/scenario/${sc.id}`));
+  nameCell.appendChild(nameLink);
+  row.appendChild(nameCell);
+  for (const agent of pg.visible) {
+    row.appendChild(buildCoverageCell(sc, agent, recIndex));
+  }
+  return row;
+}
+
+// buildCoverageTable builds the full scenario × agent matrix table (header
+// row + one body row per catalog scenario). Extracted from
+// renderCoverageMatrix.
+function buildCoverageTable(pg, recIndex) {
   const table = document.createElement("table");
   table.className = "overview-matrix";
   const thead = document.createElement("thead");
@@ -467,81 +587,71 @@ function renderCoverageMatrix(detail) {
 
   const tbody = document.createElement("tbody");
   for (const sc of catalog.scenarios) {
-    const row = document.createElement("tr");
-    const nameCell = document.createElement("td");
-    nameCell.style.cssText = "cursor: pointer;";
-    const nameLink = document.createElement("button");
-    nameLink.style.cssText = "background: transparent; border: 0; padding: 0; text-align: left; cursor: pointer; font: inherit; color: inherit;";
-    const codeChip = sc.code
-      ? `<span style="display: inline-block; min-width: 28px; padding: 1px 5px; margin-right: 6px; background: #e8e6da; color: #555; border-radius: 3px; font-size: 10px; font-weight: 600; font-family: monospace; vertical-align: 1px;">${escapeHtml(sc.code)}</span>`
-      : "";
-    nameLink.innerHTML = `${codeChip}<span style="font-weight: 600; color: #1f56a8; text-decoration: underline;">${sc.id}</span>`;
-    nameLink.addEventListener("click", () => navigate(`#/scenario/${sc.id}`));
-    nameCell.appendChild(nameLink);
-    row.appendChild(nameCell);
-    for (const agent of pg.visible) {
-      const cov = sc.coverage && sc.coverage[agent];
-      const cell = document.createElement("td");
-      cell.style.textAlign = "center";
-      cell.style.padding = "4px";
-      if (!cov) {
-        cell.textContent = "—";
-        cell.style.color = "#ccc";
-        cell.title = `${agent}: no entry`;
-        row.appendChild(cell);
-        continue;
-      }
-      // recIndex is keyed by on-disk folder name; sc.id is the
-      // coverage_id. Resolve coverage_id → folder via recipesByCoverageId
-      // so the pipeline-strip chip lands on the recording detail page
-      // (not /scenario/...) when folder name and coverage_id diverge.
-      // folder_by_agent is per-agent (variant-folder aware); fall back to the
-      // recipe name then the coverage_id.
-      const recipe = recipesByCoverageId.get(sc.id);
-      const folder = (recipe && recipe.folder_by_agent && recipe.folder_by_agent[agent]) || (recipe && recipe.name) || sc.id;
-      const rec = recIndex.get(`${agent}/${folder}`);
-      const strip = renderPipelineStrip(agent, sc.id, cov, rec);
-      cell.appendChild(strip);
-      row.appendChild(cell);
-    }
-    tbody.appendChild(row);
+    tbody.appendChild(buildCoverageRow(sc, pg, recIndex));
   }
   table.appendChild(tbody);
-  panel.appendChild(table);
-  detail.appendChild(panel);
+  return table;
+}
 
-  // Pipeline status — count cells by where they are in the workflow.
+// computeCoverageStages counts cells by where they are in the workflow
+// (blocked / awaiting recipe / awaiting spec / awaiting recording /
+// recorded), plus divergence between the capability verdict and the
+// measured outcome (mirrors renderPipelineStrip's outline logic).
+// Extracted from renderCoverageMatrix.
+// classifyCoverageCell resolves one (scenario, agent) cell's pipeline stage
+// — the same decision chain computeCoverageStages' loop used to run inline,
+// pulled out so the loop's own branching isn't compounded by it (SonarQube
+// javascript:S3776). Mirrors the original exactly: a "recorded" cell is
+// still tagged divergent on top of (not instead of) being recorded.
+function classifyCoverageCell(cov) {
+  if (cov.agent_supports === "no") return {stage: "blocked"};
+  const pipe = cov.pipeline || {};
+  if (!pipe.recipe?.authored) return {stage: "awaitingRecipe"};
+  if (!pipe.spec?.authored) return {stage: "awaitingSpec"};
+  const recCount = (pipe.recordings?.latest ? 1 : 0) + (pipe.recordings?.archive_count || 0);
+  if (recCount === 0) return {stage: "awaitingRecording"};
+  return {stage: "recorded", divergent: isCoverageCellDivergent(cov)};
+}
+
+// isCoverageCellDivergent reports whether a recorded cell's capability
+// verdict (daemon/driver) disagrees with its measured outcome — mirrors
+// renderPipelineStrip's outline logic.
+function isCoverageCellDivergent(cov) {
+  const daemon = cov.daemon_capability || "unknown";
+  const driver = cov.driver_capability || "ready";
+  const meas = cov.measurement || {};
+  const capable = (daemon === "full" && driver === "ready");
+  const verdictBlocks = (daemon === "incapable" || daemon === "bug" ||
+    String(driver).startsWith("gap:"));
+  return (
+    meas.status === "fail" ||
+    (meas.status === "known_failing" && capable) ||
+    (meas.status === "pass" && verdictBlocks) ||
+    meas.status === "known_failing_now_passing"
+  );
+}
+
+function computeCoverageStages(agents) {
   const stages = {blocked: 0, awaitingRecipe: 0, awaitingSpec: 0, awaitingRecording: 0, recorded: 0, divergent: 0};
   let total = 0, withEntry = 0;
   for (const sc of catalog.scenarios) {
     for (const agent of agents) {
       total++;
-      const cov = sc.coverage && sc.coverage[agent];
+      const cov = sc.coverage?.[agent];
       if (!cov) continue;
       withEntry++;
-      const sup = cov.agent_supports;
-      const daemon = cov.daemon_capability || "unknown";
-      const driver = cov.driver_capability || "ready";
-      const pipe = cov.pipeline || {};
-      const meas = cov.measurement || {};
-      if (sup === "no") { stages.blocked++; continue; }
-      const recipeOK = pipe.recipe && pipe.recipe.authored;
-      const specOK = pipe.spec && pipe.spec.authored;
-      const recCount = ((pipe.recordings && pipe.recordings.latest) ? 1 : 0) + ((pipe.recordings && pipe.recordings.archive_count) || 0);
-      if (!recipeOK) { stages.awaitingRecipe++; continue; }
-      if (!specOK) { stages.awaitingSpec++; continue; }
-      if (recCount === 0) { stages.awaitingRecording++; continue; }
-      stages.recorded++;
-      // Divergence flags (mirror renderPipelineStrip's outline logic)
-      const capable = (daemon === "full" && driver === "ready");
-      const verdictBlocks = (daemon === "incapable" || daemon === "bug" ||
-        String(driver).startsWith("gap:"));
-      if (meas.status === "fail") stages.divergent++;
-      else if (meas.status === "known_failing" && capable) stages.divergent++;
-      else if (meas.status === "pass" && verdictBlocks) stages.divergent++;
-      else if (meas.status === "known_failing_now_passing") stages.divergent++;
+      const result = classifyCoverageCell(cov);
+      stages[result.stage]++;
+      if (result.divergent) stages.divergent++;
     }
   }
+  return {stages, total, withEntry};
+}
+
+// buildCoverageSummary renders the "Pipeline: N blocked → N awaiting
+// recipe → …" status line beneath the matrix. Extracted from
+// renderCoverageMatrix.
+function buildCoverageSummary(stages, total, withEntry) {
   const sum = document.createElement("div");
   sum.style.cssText = "margin-top: 10px; display: flex; gap: 12px; font-size: 11px; color: #555; flex-wrap: wrap; align-items: center;";
   sum.innerHTML = `
@@ -558,11 +668,15 @@ function renderCoverageMatrix(detail) {
     ${stages.divergent > 0 ? `<span style="margin-left:14px;color:#c0392b;font-weight:600;background:#fff5f5;padding:1px 6px;border-radius:8px;">⚠ <b>${stages.divergent}</b> divergent</span>` : ""}
     <span style="margin-left:14px;color:#888;">${withEntry}/${total} cells assessed</span>
   `;
-  panel.appendChild(sum);
+  return sum;
+}
 
-  // Explainer / legend — describes the 7-segment strip and the full
-  // state vocabulary for each segment. Each row lists one segment, what
-  // it tests, and every glyph that can appear in it with its meaning.
+// buildCoverageLegend renders the static explainer describing the
+// 7-segment strip and the full state vocabulary for each segment. Each
+// row lists one segment, what it tests, and every glyph that can appear
+// in it with its meaning. Pure (no inputs). Extracted from
+// renderCoverageMatrix.
+function buildCoverageLegend() {
   const legend = document.createElement("div");
   legend.style.cssText = "margin-top: 10px; padding: 10px 12px; background: #fafaf2; border: 1px solid #e8e6da; border-radius: 4px; font-size: 11px; color: #444;";
   // Helper: render one inline state chip + its label.
@@ -617,7 +731,44 @@ function renderCoverageMatrix(detail) {
       <div style="margin-top:4px;color:#888;">Click a cell to open the recording (or scenario detail if none).</div>
     </div>
   `;
-  panel.appendChild(legend);
+  return legend;
+}
+
+function renderCoverageMatrix(detail) {
+  // catalog.agents is [{id, onboarded}, …] — extract ids for column iteration.
+  const agents = (catalog.agents || []).map(a => typeof a === "string" ? a : a.id);
+  // Recording lookup: only "scenarios" subtree counts here; regression
+  // captures are not part of the coverage matrix.
+  const recIndex = new Map();
+  for (const r of scenariosList) {
+    if (r.subtree === "scenarios") recIndex.set(`${r.agent}/${r.id}`, r);
+  }
+
+  // Window the agent columns to what fits the pane (2–4); the pager in the
+  // panel header walks through the rest. The clamped page is written back so
+  // it survives re-renders.
+  const main = document.getElementById("main");
+  const perPage = agentsPerPage(main?.clientWidth || 1200);
+  lastPerPage = perPage;
+  const pg = paginateAgents(agents, agentPage, perPage);
+  agentPage = pg.page;
+
+  // Scenarios are agent-agnostic now (no section/feature) — list them flat in
+  // catalog (code) order; the per-row code chip carries the "<section>.<index>".
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  panel.appendChild(buildCoverageHead(agents, pg));
+  panel.appendChild(buildCoverageTable(pg, recIndex));
+  detail.appendChild(panel);
+
+  // Pipeline status — count cells by where they are in the workflow.
+  const {stages, total, withEntry} = computeCoverageStages(agents);
+  panel.appendChild(buildCoverageSummary(stages, total, withEntry));
+
+  // Explainer / legend — describes the 7-segment strip and the full
+  // state vocabulary for each segment. Each row lists one segment, what
+  // it tests, and every glyph that can appear in it with its meaning.
+  panel.appendChild(buildCoverageLegend());
 }
 
 // renderAgentPager builds the ◀ "1–4 of 6 agents" ▶ control for the
@@ -712,7 +863,7 @@ async function loadCoverageDetail(scenarioId) {
     if (spec && (spec.description || spec.process || spec.acceptance_criteria)) {
       detail.appendChild(renderSpecPanel(spec));
     }
-  } catch (_) { /* spec unavailable — show recipe-only */ }
+  } catch (e) { console.debug('scenario spec unavailable — showing recipe-only', e); }
 
   // Recipe lookup by coverage_id — used by the per-agent plan panels below.
   // The old scenario-level "Recording recipe" panel was removed: a scenario has
@@ -758,6 +909,108 @@ function renderSpecPanel(spec) {
   return panel;
 }
 
+// _agentPlanHeaderHTML builds the per-agent card heading: agent name,
+// coverage badge, and the supports/daemon/driver summary line.
+function _agentPlanHeaderHTML(agent, cov) {
+  const sup = cov?.agent_supports || "unknown";
+  const daemon = cov?.daemon_capability || "unknown";
+  const driver = cov?.driver_capability || "ready";
+  const display = cov?.display_state || "unknown";
+  const {label, bg, fg} = coverageBadge(display);
+  return `
+    <h3 style="margin-top:0; display: flex; align-items: center; gap: 8px;">
+      ${agent}
+      <span style="background: ${bg}; color: ${fg}; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;">${label}</span>
+    </h3>
+    <div style="font-size: 11px; color: #555; margin-bottom: 6px;">
+      agent_supports: <b>${sup}</b> · daemon: <b>${daemon}</b> · driver: <b>${driver}</b>
+    </div>
+  `;
+}
+
+// _renderRecipeDriverHTML renders the driver-specific block (interactive
+// script vs headless prompt vs neither) for one agent's by_adapter entry.
+function _renderRecipeDriverHTML(agent, a, idleTag) {
+  if (Array.isArray(a.script)) {
+    let html = `<div style="font-size: 11px; color: #666; margin: 8px 0 4px;">
+        <b>Driver:</b> Interactive (tmux REPL) — <code>drive-${agent}-interactive.sh</code>${idleTag}
+      </div>`;
+    html += renderStepScript(a.script);
+    return html;
+  }
+  if (a.prompt) {
+    return `<div style="font-size: 11px; color: #666; margin: 8px 0 4px;">
+        <b>Driver:</b> Headless (<code>--print</code>) — <code>drive-${agent}.sh</code>${idleTag}
+      </div>
+      <pre style="background: #1e1e1e; color: #d4d4d4; padding: 8px; border-radius: 4px; font-size: 11px; white-space: pre-wrap; margin: 0;">${escapeHtml(a.prompt)}</pre>`;
+  }
+  return `<div style="font-size: 12px; color: #888;">Recipe entry exists but has no prompt or script.</div>`;
+}
+
+// _renderRecipeMetaHTML renders the optional timeout/settings footer line.
+function _renderRecipeMetaHTML(a) {
+  const timeout = a.timeout_seconds;
+  const settings = a.settings || {};
+  const meta = [];
+  if (typeof timeout === "number") meta.push(`timeout: ${timeout}s`);
+  if (Object.keys(settings).length) meta.push(`settings: <code>${escapeHtml(JSON.stringify(settings))}</code>`);
+  if (!meta.length) return "";
+  return `<div style="font-size: 11px; color: #888; margin-top: 6px;">${meta.join(" · ")}</div>`;
+}
+
+// _renderRecipeChecklistsHTML renders the preconditions/setup/verify
+// checklists — only present on recipes authored by the per-cell workflow.
+function _renderRecipeChecklistsHTML(a) {
+  let html = "";
+  if (Array.isArray(a.preconditions) && a.preconditions.length) {
+    html += renderChecklistBlock("Preconditions", a.preconditions, "□");
+  }
+  if (Array.isArray(a.setup) && a.setup.length) {
+    html += renderChecklistBlock("Setup (run-cell.sh handles this)", a.setup, "•");
+  }
+  if (Array.isArray(a.verify) && a.verify.length) {
+    html += renderChecklistBlock("Verify after recording", a.verify, "□");
+  }
+  return html;
+}
+
+// _renderRecipeSectionHTML composes the full recipe section per agent. Two
+// by_adapter shapes in scenarios.json:
+//   - by_adapter.<agent>.prompt → headless driver (drive-<adapter>.sh)
+//   - by_adapter.<agent>.script → interactive tmux driver (drive-<adapter>-interactive.sh)
+// Falls back to explanatory copy when the agent (or the recipe itself)
+// has no entry yet.
+function _renderRecipeSectionHTML(sc, agent, recipe) {
+  const entry = recipe?.by_adapter?.[agent];
+  if (!entry) {
+    return recipe
+      ? `<div style="font-size: 12px; color: #888; padding: 6px 0;">
+      No <code>by_adapter.${agent}</code> entry on the recipe — adapter doesn't
+      currently drive this scenario. Either the capability is missing, or the
+      recipe just hasn't been written yet.
+    </div>`
+      : `<div style="font-size: 12px; color: #888; padding: 6px 0;">
+      No recording recipe wired to this scenario (no <code>coverage_id: "${sc.id}"</code>
+      in scenarios.json yet).
+    </div>`;
+  }
+  // Idle-only badge when the recipe is observation-only (no prompts sent).
+  const idleTag = recipe.idle_only
+    ? ` <span style="background: #e0eaff; color: #1f3d8a; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 600; margin-left: 6px;">idle observation</span>`
+    : "";
+  return _renderRecipeDriverHTML(agent, entry, idleTag) +
+    _renderRecipeMetaHTML(entry) +
+    _renderRecipeChecklistsHTML(entry);
+}
+
+// _findAgentRecording resolves the on-disk recording for one (scenario,
+// agent) pair. Variant-folder aware: falls back to the recipe name when
+// folder_by_agent doesn't have an override for this agent.
+function _findAgentRecording(recipe, agent) {
+  const recFolder = recipe?.folder_by_agent?.[agent] || recipe?.name;
+  return scenariosList.find(r => r.subtree === "scenarios" && r.agent === agent && recFolder && r.id === recFolder);
+}
+
 // buildAgentPlanPanel composes one card per agent showing how this
 // scenario is (or would be) recorded for that agent: coverage verdict,
 // notes, driver choice, step-script or prompt, and any existing
@@ -767,86 +1020,16 @@ function buildAgentPlanPanel(sc, agent, recipe) {
   panel.className = "panel";
   panel.style.marginBottom = "12px";
 
-  const cov = sc.coverage && sc.coverage[agent];
-  const sup = cov && cov.agent_supports || "unknown";
-  const daemon = cov && cov.daemon_capability || "unknown";
-  const driver = cov && cov.driver_capability || "ready";
-  const display = cov && cov.display_state || "unknown";
-  const {label, bg, fg} = coverageBadge(display);
-
-  const headerHTML = `
-    <h3 style="margin-top:0; display: flex; align-items: center; gap: 8px;">
-      ${agent}
-      <span style="background: ${bg}; color: ${fg}; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;">${label}</span>
-    </h3>
-    <div style="font-size: 11px; color: #555; margin-bottom: 6px;">
-      agent_supports: <b>${sup}</b> · daemon: <b>${daemon}</b> · driver: <b>${driver}</b>
-    </div>
-  `;
-  let html = headerHTML;
-  if (cov && cov.notes) {
+  const cov = sc.coverage?.[agent];
+  let html = _agentPlanHeaderHTML(agent, cov);
+  if (cov?.notes) {
     html += `<div style="font-size: 12px; color: #444; padding: 6px 8px; background: #fafaf2; border-left: 3px solid #d8d6cc; margin-bottom: 8px;">${escapeHtml(cov.notes)}</div>`;
   }
 
-  // Recipe section per agent. Two shapes in scenarios.json:
-  //   - by_adapter.<agent>.prompt → headless driver (drive-<adapter>.sh)
-  //   - by_adapter.<agent>.script → interactive tmux driver (drive-<adapter>-interactive.sh)
-  if (recipe && recipe.by_adapter && recipe.by_adapter[agent]) {
-    const a = recipe.by_adapter[agent];
-    // Idle-only badge when the recipe is observation-only (no prompts sent).
-    const idleTag = recipe.idle_only
-      ? ` <span style="background: #e0eaff; color: #1f3d8a; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 600; margin-left: 6px;">idle observation</span>`
-      : "";
-    if (Array.isArray(a.script)) {
-      html += `<div style="font-size: 11px; color: #666; margin: 8px 0 4px;">
-        <b>Driver:</b> Interactive (tmux REPL) — <code>drive-${agent}-interactive.sh</code>${idleTag}
-      </div>`;
-      html += renderStepScript(a.script);
-    } else if (a.prompt) {
-      html += `<div style="font-size: 11px; color: #666; margin: 8px 0 4px;">
-        <b>Driver:</b> Headless (<code>--print</code>) — <code>drive-${agent}.sh</code>${idleTag}
-      </div>`;
-      html += `<pre style="background: #1e1e1e; color: #d4d4d4; padding: 8px; border-radius: 4px; font-size: 11px; white-space: pre-wrap; margin: 0;">${escapeHtml(a.prompt)}</pre>`;
-    } else {
-      html += `<div style="font-size: 12px; color: #888;">Recipe entry exists but has no prompt or script.</div>`;
-    }
-    const timeout = a.timeout_seconds;
-    const settings = a.settings || {};
-    const meta = [];
-    if (typeof timeout === "number") meta.push(`timeout: ${timeout}s`);
-    if (Object.keys(settings).length) meta.push(`settings: <code>${escapeHtml(JSON.stringify(settings))}</code>`);
-    if (meta.length) {
-      html += `<div style="font-size: 11px; color: #888; margin-top: 6px;">${meta.join(" · ")}</div>`;
-    }
-    // Preconditions / setup / verify — only present on recipes that
-    // have been authored by the per-cell workflow (see recipe/SKILL.md).
-    if (Array.isArray(a.preconditions) && a.preconditions.length) {
-      html += renderChecklistBlock("Preconditions", a.preconditions, "□");
-    }
-    if (Array.isArray(a.setup) && a.setup.length) {
-      html += renderChecklistBlock("Setup (run-cell.sh handles this)", a.setup, "•");
-    }
-    if (Array.isArray(a.verify) && a.verify.length) {
-      html += renderChecklistBlock("Verify after recording", a.verify, "□");
-    }
-  } else if (recipe) {
-    html += `<div style="font-size: 12px; color: #888; padding: 6px 0;">
-      No <code>by_adapter.${agent}</code> entry on the recipe — adapter doesn't
-      currently drive this scenario. Either the capability is missing, or the
-      recipe just hasn't been written yet.
-    </div>`;
-  } else {
-    html += `<div style="font-size: 12px; color: #888; padding: 6px 0;">
-      No recording recipe wired to this scenario (no <code>coverage_id: "${sc.id}"</code>
-      in scenarios.json yet).
-    </div>`;
-  }
+  html += _renderRecipeSectionHTML(sc, agent, recipe);
 
-  // Existing recording link if one is committed. Resolve the on-disk folder
-  // per-agent (variant-folder aware) so cells whose folder != coverage_id still
-  // link their recording; fall back to the recipe name.
-  const recFolder = recipe && ((recipe.folder_by_agent && recipe.folder_by_agent[agent]) || recipe.name);
-  const rec = scenariosList.find(r => r.subtree === "scenarios" && r.agent === agent && recFolder && r.id === recFolder);
+  // Existing recording link if one is committed.
+  const rec = _findAgentRecording(recipe, agent);
   if (rec) {
     html += `<div style="margin-top: 8px;">`;
     html += `<button class="open-rec" data-agent="${agent}" data-id="${rec.id}" style="background: #1f56a8; color: white; border: 0; padding: 4px 10px; border-radius: 3px; cursor: pointer; font-size: 11px;">↻ Open recording: ${agent}/${rec.id}</button>`;
@@ -1014,18 +1197,152 @@ function _driverBadge(value) {
 //   scenarioID — coverage_id for the scenario detail link
 //   cov   — one entry from coverage[<agent>] (assessment + pipeline + measurement)
 //   rec   — recording lookup entry from recIndex (or undefined)
-function renderPipelineStrip(agent, scenarioID, cov, rec) {
+// _appendPipelineTailSegments appends the four right-hand segments
+// (Recipe / Spec / Recordings / Validation) — or, when the cell is
+// blocked (agent_supports=no), four dim disabled placeholders so the
+// cell width stays consistent across rows.
+function _appendPipelineTailSegments(wrap, blocked, pipe, meas, jump) {
+  if (blocked) {
+    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true,
+      "Pipeline frozen — agent_supports=no"));
+    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
+    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
+    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
+    return;
+  }
+  const recipe = pipe.recipe || {};
+  const spec = pipe.spec || {};
+  const rcs = pipe.recordings || {};
+  // Recipe
+  wrap.appendChild(recipe.authored
+    ? _pipeBtn("✎", "#d6f0d4", "#1f5a1d", jump("recipe"), false,
+        `Recipe authored (${recipe.step_count} steps)`)
+    : _pipeBtn("·", "transparent", "#bbb", jump("recipe"), false,
+        "Recipe — not authored yet"));
+  // Spec
+  wrap.appendChild(spec.authored
+    ? _pipeBtn("§", "#d6f0d4", "#1f5a1d", jump("spec"), false,
+        `Spec authored (${spec.phase_count} phases)`)
+    : _pipeBtn("·", "transparent", "#bbb", jump("spec"), false,
+        "Spec — not authored yet"));
+  // Recordings count (latest counts as 1; archive_count is additional)
+  const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
+  wrap.appendChild(totalRecs > 0
+    ? _pipeBtn(String(totalRecs), "#d6f0d4", "#1f5a1d", jump("recordings"), false,
+        `${totalRecs} recording${pluralSuffix(totalRecs)}`)
+    : _pipeBtn("·", "transparent", "#bbb", jump("recordings"), false,
+        "No recordings yet"));
+  // Validation
+  const v = _validationGlyph(meas.status);
+  wrap.appendChild(v
+    ? _pipeBtn(v.label, v.bg, v.fg, jump("validation"), false,
+        `Validation: ${meas.status}`)
+    : _pipeBtn("·", "transparent", "#bbb", jump("validation"), false,
+        "Validation — no recording yet"));
+}
+
+// _DRIFT_STYLES / _DRIFT_TOOLTIP_NOTES key the same three drift kinds to
+// the pipeline strip's outline color and its tooltip note, so the two
+// stay in lockstep by construction instead of by re-deriving the kind
+// from a rendered CSS string (as the pre-refactor code did).
+const _DRIFT_STYLES = {
+  regression: {border: "1px solid #c0392b", background: "#fff5f5"},
+  flag_drop: {border: "1px solid #1c3f7a", background: "#f0f5ff"},
+  stale_verdict: {border: "1px solid #d68a2a", background: "#fffaf0"},
+};
+const _DRIFT_TOOLTIP_NOTES = {
+  regression: "⚠ regression: daemon=full/driver=ready but recording fails",
+  flag_drop: "↑ flag drop: marked daemon=bug / known_failing but now passes",
+  stale_verdict: "⚠ verdict may be stale: marked blocked/unobservable but recording passes",
+};
+
+// _computeDriftKind classifies drift between the assessed capability
+// verdict and the measured recording outcome:
+//   regression    = expected to observe cleanly (full+ready) but the recording fails
+//   flag_drop     = marked daemon=bug or known_failing yet the recording now passes
+//                   (the bug/known_failing verdict is stale — drop it)
+//   stale_verdict = marked blocked/unobservable yet a recording passes clean
+//                   (capability verdict looks stale)
+// Returns null when there is no drift to flag.
+function _computeDriftKind(daemon, driver, meas) {
+  const capable = (daemon === "full" && driver === "ready");
+  const verdictBlocks = (daemon === "incapable" || daemon === "bug" ||
+    String(driver).startsWith("gap:"));
+  if (meas.status === "fail" || (meas.status === "known_failing" && capable)) {
+    return "regression";
+  }
+  if (meas.status === "known_failing_now_passing" ||
+      (meas.status === "pass" && daemon === "bug")) {
+    return "flag_drop";
+  }
+  if (meas.status === "pass" && verdictBlocks) {
+    return "stale_verdict";
+  }
+  return null;
+}
+
+// _buildPipelineStageLines renders the Recipe/Spec/Recordings/Validation
+// tooltip lines shown when the cell isn't blocked.
+function _buildPipelineStageLines(pipe, meas) {
+  const recipe = pipe.recipe || {};
+  const spec = pipe.spec || {};
+  const rcs = pipe.recordings || {};
+  const recipeStatus = recipe.authored ? `authored (${recipe.step_count} steps)` : "not authored yet";
+  const specStatus = spec.authored ? `authored (${spec.phase_count} phases)` : "not authored yet";
+  const lines = [`Recipe: ${recipeStatus}`, `Spec:   ${specStatus}`];
+  const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
+  if (totalRecs > 0) {
+    const parts = [];
+    if (rcs.latest) parts.push("1 latest");
+    if (rcs.archive_count > 0) parts.push(`${rcs.archive_count} archived`);
+    lines.push(`Recordings: ${totalRecs} (${parts.join(" + ")})`);
+  } else {
+    lines.push(`Recordings: none yet`);
+  }
+  if (meas.status && meas.status !== "no_recording" && meas.status !== "no_expected") {
+    lines.push(`Validation: ${meas.status}${meas.summary ? " — " + meas.summary : ""}`);
+  }
+  return lines;
+}
+
+// _pipelineFields derives the individual assessment/pipeline/measurement
+// fields renderPipelineStrip and _buildPipelineTooltip both need from one
+// coverage record, so neither has to carry them as a long parallel-value
+// parameter list (javascript:S107).
+function _pipelineFields(cov) {
   const sup = cov.agent_supports || "unknown";
   const daemon = cov.daemon_capability || "unknown";
   const driver = cov.driver_capability || "ready";
   const display = cov.display_state || "unknown";
   const pipe = cov.pipeline || {};
   const meas = cov.measurement || {};
-
   // agent_supports=no freezes the whole pipeline — nothing downstream
-  // matters. The Supports segment shows the state; the Daemon + Driver pillars
-  // still render, and everything after them collapses to dim placeholders.
+  // matters. The Supports segment shows the state; the Daemon + Driver
+  // pillars still render, and everything after them collapses to dim
+  // placeholders.
   const blocked = (sup === "no");
+  return { sup, daemon, driver, display, pipe, meas, blocked };
+}
+
+// _buildPipelineTooltip composes the full per-stage tooltip text for a
+// pipeline strip.
+function _buildPipelineTooltip(agent, scenarioID, cov, driftKind) {
+  const { sup, daemon, driver, display, pipe, meas, blocked } = _pipelineFields(cov);
+  const lines = [`${agent} × ${scenarioID}`];
+  lines.push(`Assessment: supports=${sup}, daemon=${daemon}, driver=${driver} → ${_displayMeta(display).text}`);
+  if (cov.notes) lines.push(`  ${cov.notes}`);
+  if (blocked) {
+    lines.push(`(pipeline frozen — agent_supports=no)`);
+  } else {
+    lines.push(..._buildPipelineStageLines(pipe, meas));
+  }
+  if (driftKind) lines.push(_DRIFT_TOOLTIP_NOTES[driftKind]);
+  lines.push(`↻ click a segment to jump to its section`);
+  return lines.join("\n");
+}
+
+function renderPipelineStrip(agent, scenarioID, cov, rec) {
+  const { sup, daemon, driver, pipe, meas, blocked } = _pipelineFields(cov);
 
   // Outer container is a plain <div>; each segment is its own button.
   // This is the change from a single composite button to a true
@@ -1059,101 +1376,17 @@ function renderPipelineStrip(agent, scenarioID, cov, rec) {
     jump("observes"), false, `daemon: ${daemon} — can the daemon observe it`));
   wrap.appendChild(_pipeBtn(driverChip.label, driverChip.bg, driverChip.fg,
     jump("observes"), false, `driver: ${driver} — can the harness drive it`));
-  if (blocked) {
-    // Four disabled placeholders so the cell width stays consistent
-    // across rows when supports=no freezes the pipeline.
-    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true,
-      "Pipeline frozen — agent_supports=no"));
-    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
-    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
-    wrap.appendChild(_pipeBtn("·", "transparent", "#bbb", null, true, ""));
-  } else {
-    const recipe = pipe.recipe || {};
-    const spec = pipe.spec || {};
-    const rcs = pipe.recordings || {};
-    // Recipe
-    wrap.appendChild(recipe.authored
-      ? _pipeBtn("✎", "#d6f0d4", "#1f5a1d", jump("recipe"), false,
-          `Recipe authored (${recipe.step_count} steps)`)
-      : _pipeBtn("·", "transparent", "#bbb", jump("recipe"), false,
-          "Recipe — not authored yet"));
-    // Spec
-    wrap.appendChild(spec.authored
-      ? _pipeBtn("§", "#d6f0d4", "#1f5a1d", jump("spec"), false,
-          `Spec authored (${spec.phase_count} phases)`)
-      : _pipeBtn("·", "transparent", "#bbb", jump("spec"), false,
-          "Spec — not authored yet"));
-    // Recordings count (latest counts as 1; archive_count is additional)
-    const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
-    wrap.appendChild(totalRecs > 0
-      ? _pipeBtn(String(totalRecs), "#d6f0d4", "#1f5a1d", jump("recordings"), false,
-          `${totalRecs} recording${totalRecs === 1 ? "" : "s"}`)
-      : _pipeBtn("·", "transparent", "#bbb", jump("recordings"), false,
-          "No recordings yet"));
-    // Validation
-    const v = _validationGlyph(meas.status);
-    wrap.appendChild(v
-      ? _pipeBtn(v.label, v.bg, v.fg, jump("validation"), false,
-          `Validation: ${meas.status}`)
-      : _pipeBtn("·", "transparent", "#bbb", jump("validation"), false,
-          "Validation — no recording yet"));
+  _appendPipelineTailSegments(wrap, blocked, pipe, meas, jump);
+
+  // Drift outline — see _computeDriftKind for the three cases.
+  const driftKind = _computeDriftKind(daemon, driver, meas);
+  if (driftKind) {
+    const style = _DRIFT_STYLES[driftKind];
+    wrap.style.border = style.border;
+    wrap.style.background = style.background;
   }
 
-  // Drift outlines — the verdict (capability) vs the measured recording:
-  //   red   = expected to observe cleanly (full+ready) but the recording fails
-  //   blue  = marked daemon=bug or known_failing yet the recording now passes
-  //           (the bug/known_failing verdict is stale — drop it)
-  //   amber = marked blocked/unobservable yet a recording passes clean
-  //           (capability verdict looks stale)
-  const capable = (daemon === "full" && driver === "ready");
-  const verdictBlocks = (daemon === "incapable" || daemon === "bug" ||
-    String(driver).startsWith("gap:"));
-  if (meas.status === "fail" || (meas.status === "known_failing" && capable)) {
-    wrap.style.border = "1px solid #c0392b";
-    wrap.style.background = "#fff5f5";
-  } else if (meas.status === "known_failing_now_passing" ||
-             (meas.status === "pass" && daemon === "bug")) {
-    wrap.style.border = "1px solid #1c3f7a";
-    wrap.style.background = "#f0f5ff";
-  } else if (meas.status === "pass" && verdictBlocks) {
-    wrap.style.border = "1px solid #d68a2a";
-    wrap.style.background = "#fffaf0";
-  }
-
-  // Tooltip with the per-stage detail
-  const lines = [`${agent} × ${scenarioID}`];
-  lines.push(`Assessment: supports=${sup}, daemon=${daemon}, driver=${driver} → ${_displayMeta(display).text}`);
-  if (cov.notes) lines.push(`  ${cov.notes}`);
-  if (!blocked) {
-    const recipe = pipe.recipe || {};
-    const spec = pipe.spec || {};
-    const rcs = pipe.recordings || {};
-    lines.push(`Recipe: ${recipe.authored ? `authored (${recipe.step_count} steps)` : "not authored yet"}`);
-    lines.push(`Spec:   ${spec.authored ? `authored (${spec.phase_count} phases)` : "not authored yet"}`);
-    const totalRecs = (rcs.latest ? 1 : 0) + (rcs.archive_count || 0);
-    if (totalRecs > 0) {
-      const parts = [];
-      if (rcs.latest) parts.push("1 latest");
-      if (rcs.archive_count > 0) parts.push(`${rcs.archive_count} archived`);
-      lines.push(`Recordings: ${totalRecs} (${parts.join(" + ")})`);
-    } else {
-      lines.push(`Recordings: none yet`);
-    }
-    if (meas.status && meas.status !== "no_recording" && meas.status !== "no_expected") {
-      lines.push(`Validation: ${meas.status}${meas.summary ? " — " + meas.summary : ""}`);
-    }
-  } else {
-    lines.push(`(pipeline frozen — agent_supports=no)`);
-  }
-  if (wrap.style.border && wrap.style.border.includes("#c0392b")) {
-    lines.push(`⚠ regression: daemon=full/driver=ready but recording fails`);
-  } else if (wrap.style.border && wrap.style.border.includes("#1c3f7a")) {
-    lines.push(`↑ flag drop: marked daemon=bug / known_failing but now passes`);
-  } else if (wrap.style.border && wrap.style.border.includes("#d68a2a")) {
-    lines.push(`⚠ verdict may be stale: marked blocked/unobservable but recording passes`);
-  }
-  lines.push(`↻ click a segment to jump to its section`);
-  wrap.title = lines.join("\n");
+  wrap.title = _buildPipelineTooltip(agent, scenarioID, cov, driftKind);
 
   return wrap;
 }
@@ -1203,20 +1436,85 @@ function _validationGlyph(status) {
 }
 
 
+// _collectDeclaredAdapters gathers every adapter slug that declares at
+// least one by_adapter entry across all scenarios, sorted for a stable
+// column order.
+function _collectDeclaredAdapters(scenarios) {
+  const adapterSet = new Set();
+  for (const sc of scenarios) {
+    for (const a of Object.keys(sc.by_adapter || {})) adapterSet.add(a);
+  }
+  return [...adapterSet].sort((a, b) => a.localeCompare(b));
+}
+
+// _buildScenarioRecIndex indexes committed scenario recordings by
+// "<agent>/<id>" for O(1) lookup while painting the matrix.
+function _buildScenarioRecIndex(recordings) {
+  const recIndex = new Map();
+  for (const r of recordings) {
+    if (r.subtree === "scenarios") recIndex.set(`${r.agent}/${r.id}`, r);
+  }
+  return recIndex;
+}
+
+// _buildScenarioMatrixCell paints one (scenario × adapter) cell: dim "—"
+// when the adapter doesn't declare this scenario, an open-recording ✓
+// button when it does and a recording is committed, or an amber "○"
+// when declared but not yet recorded.
+function _buildScenarioMatrixCell(sc, adapter, recIndex) {
+  const cell = document.createElement("td");
+  cell.style.textAlign = "center";
+  const declares = sc.by_adapter?.[adapter];
+  if (!declares) {
+    cell.textContent = "—";
+    cell.style.color = "#ccc";
+    cell.title = `${adapter}: not declared`;
+    return cell;
+  }
+  const rec = recIndex.get(`${adapter}/${sc.name}`);
+  if (!rec) {
+    cell.textContent = "○";
+    cell.style.color = "#c08a00";
+    cell.title = `${adapter}: declared but no recording committed`;
+    return cell;
+  }
+  const btn = document.createElement("button");
+  btn.textContent = "✓";
+  btn.title = `Open ${adapter}/${sc.name}`;
+  btn.style.cssText = "background: transparent; border: 0; color: #2a8d4f; font-size: 16px; cursor: pointer; padding: 0;";
+  btn.addEventListener("click", () => {
+    navigate(`#/recording/${rec.agent}/${rec.subtree}/${rec.id}`);
+  });
+  cell.appendChild(btn);
+  return cell;
+}
+
+// _buildScenarioMatrixRow paints one scenario's row: name, requires, then
+// one cell per adapter column.
+function _buildScenarioMatrixRow(sc, adapters, recIndex) {
+  const row = document.createElement("tr");
+  const nameCell = document.createElement("td");
+  nameCell.style.fontWeight = "600";
+  nameCell.textContent = sc.name;
+  if (sc.description) nameCell.title = sc.description;
+  row.appendChild(nameCell);
+  const reqCell = document.createElement("td");
+  reqCell.style.color = "#888";
+  reqCell.style.fontSize = "11px";
+  reqCell.textContent = (sc.requires || []).join(", ");
+  row.appendChild(reqCell);
+  for (const adapter of adapters) {
+    row.appendChild(_buildScenarioMatrixCell(sc, adapter, recIndex));
+  }
+  return row;
+}
+
 // renderScenariosMatrix paints the older 8×5 by_adapter view from
 // scenarios.json (fallback when .claude/skills/ir:onboard-agent/agent-scenarios-coverage.json
 // isn't reachable).
 function renderScenariosMatrix(detail) {
-  const adapterSet = new Set();
-  for (const sc of catalog.scenarios) {
-    for (const a of Object.keys(sc.by_adapter || {})) adapterSet.add(a);
-  }
-  const adapters = [...adapterSet].sort();
-
-  const recIndex = new Map();
-  for (const r of scenariosList) {
-    if (r.subtree === "scenarios") recIndex.set(`${r.agent}/${r.id}`, r);
-  }
+  const adapters = _collectDeclaredAdapters(catalog.scenarios);
+  const recIndex = _buildScenarioRecIndex(scenariosList);
 
   const panel = document.createElement("div");
   panel.className = "panel";
@@ -1238,45 +1536,7 @@ function renderScenariosMatrix(detail) {
 
   const tbody = document.createElement("tbody");
   for (const sc of catalog.scenarios) {
-    const row = document.createElement("tr");
-    const nameCell = document.createElement("td");
-    nameCell.style.fontWeight = "600";
-    nameCell.textContent = sc.name;
-    if (sc.description) nameCell.title = sc.description;
-    row.appendChild(nameCell);
-    const reqCell = document.createElement("td");
-    reqCell.style.color = "#888";
-    reqCell.style.fontSize = "11px";
-    reqCell.textContent = (sc.requires || []).join(", ");
-    row.appendChild(reqCell);
-    for (const adapter of adapters) {
-      const cell = document.createElement("td");
-      cell.style.textAlign = "center";
-      const declares = sc.by_adapter && sc.by_adapter[adapter];
-      if (!declares) {
-        cell.textContent = "—";
-        cell.style.color = "#ccc";
-        cell.title = `${adapter}: not declared`;
-      } else {
-        const rec = recIndex.get(`${adapter}/${sc.name}`);
-        if (rec) {
-          const btn = document.createElement("button");
-          btn.textContent = "✓";
-          btn.title = `Open ${adapter}/${sc.name}`;
-          btn.style.cssText = "background: transparent; border: 0; color: #2a8d4f; font-size: 16px; cursor: pointer; padding: 0;";
-          btn.addEventListener("click", () => {
-            navigate(`#/recording/${rec.agent}/${rec.subtree}/${rec.id}`);
-          });
-          cell.appendChild(btn);
-        } else {
-          cell.textContent = "○";
-          cell.style.color = "#c08a00";
-          cell.title = `${adapter}: declared but no recording committed`;
-        }
-      }
-      row.appendChild(cell);
-    }
-    tbody.appendChild(row);
+    tbody.appendChild(_buildScenarioMatrixRow(sc, adapters, recIndex));
   }
   table.appendChild(tbody);
   panel.appendChild(table);
@@ -1318,13 +1578,23 @@ async function loadScenario(s, initialArchive, focus) {
   const detail = document.getElementById("detail");
   detail.innerHTML = `<p>Loading…</p>`;
 
-  const [data, archives, recipes, catalog] = await Promise.all([
-    fetch(`/api/scenarios/${s.agent}/${s.subtree}/${s.id}`).then(r => r.json()),
-    fetch(`/api/scenarios/${s.agent}/${s.subtree}/${s.id}/recordings`).then(r => r.ok ? r.json() : []).catch(() => []),
-    // Recipes for the new Recipe panel target on this page (anchor:
-    // recipe). Same payload the coverage page uses. Look up the
-    // by_adapter entry under the scenario name and agent slug.
-    fetch(`/api/recipes`).then(r => r.ok ? r.json() : null).catch(() => null),
+  // s.agent/s.subtree/s.id come from the URL hash (sidebarActivePath /
+  // route()). Validate each segment against the same slug/subtree
+  // contract the backend's /api/scenarios handler enforces, then encode —
+  // belt-and-suspenders so a hash crafted with `/`, `?`, or `#` can't
+  // retarget the request (SonarQube jssecurity:S7044 / S8476).
+  if (!RECORDING_SLUG_RE.test(s.agent) || !RECORDING_SLUG_RE.test(s.id) ||
+      (s.subtree !== "scenarios" && s.subtree !== "regressions")) {
+    detail.innerHTML = `<p>Invalid recording path.</p>`;
+    return;
+  }
+  const recordingPath = `${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}`;
+  // Recipe lookup uses recipesByCoverageId (populated once at init from
+  // /api/recipes — see comment above), so no per-recording recipes fetch
+  // is needed here.
+  const [data, archives, catalog] = await Promise.all([
+    fetch(`/api/scenarios/${recordingPath}`).then(r => r.json()),
+    fetch(`/api/scenarios/${recordingPath}/recordings`).then(r => r.ok ? r.json() : []).catch(() => []),
     // Coverage catalog: lets us render a stub Assessment panel from
     // the matrix verdict + notes when no assessment.json exists.
     // Without this fallback the ⚙ / ◉ pipeline-strip jumps would
@@ -1356,7 +1626,7 @@ async function loadScenario(s, initialArchive, focus) {
   let recipeEntry = null;
   const recipeRow = recipesByCoverageId.get(coverageId);
   if (recipeRow) {
-    recipeEntry = recipeRow.by_adapter && recipeRow.by_adapter[s.agent];
+    recipeEntry = recipeRow.by_adapter?.[s.agent];
   }
   // Look up the per-cell coverage entry for the Assessment-fallback
   // panel. Used when no assessment.json exists on disk — the panel
@@ -1368,7 +1638,7 @@ async function loadScenario(s, initialArchive, focus) {
   if (catalog && Array.isArray(catalog.scenarios)) {
     for (const sc of catalog.scenarios) {
       if (sc.id === coverageId) {
-        coverageEntry = sc.coverage && sc.coverage[s.agent];
+        coverageEntry = sc.coverage?.[s.agent];
         coverageFeature = sc.feature || "";
         break;
       }
@@ -1404,7 +1674,7 @@ async function loadScenario(s, initialArchive, focus) {
 function degradedBanner() {
   const b = document.createElement("div");
   b.className = "degraded-banner";
-  b.setAttribute("data-testid", "degraded-banner");
+  b.dataset.testid = "degraded-banner";
   b.style.cssText =
     "margin:8px 0;padding:8px 12px;border-left:3px solid #c90;" +
     "background:#332b00;color:#e8c84d;border-radius:4px;font-size:13px;";
@@ -1426,6 +1696,7 @@ function renderMeta(data) {
   try {
     meta = typeof data.meta === "string" ? JSON.parse(data.meta) : data.meta;
   } catch (e) {
+    console.debug('viewer: failed to parse recording meta', e);
     p.appendChild(text("(could not parse meta)"));
     return p;
   }
@@ -1492,20 +1763,18 @@ function renderMeta(data) {
 //   - prose body (markdown rendered as preformatted text — headings
 //     read fine via the literal `##` prefix)
 //   - sources list with URL anchors where applicable
-function renderAssessment(a) {
-  // anchor "supports" — the pipeline-strip pillar segments (⚙ ◉ ▷) all land
-  // here (the panel's chips render the three pillars individually).
-  const p = panel("Assessment", "supports");
-  // Also tag with the observes alias so [data-anchor="observes"]
-  // resolves to the same panel.
-  p.setAttribute("data-anchor-alias", "observes");
-  // Dated subtitle.
+// _renderAssessmentSubtitle builds the "assessed <date>" subtitle line.
+function _renderAssessmentSubtitle(a) {
   const sub = document.createElement("div");
   sub.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
   const when = a.assessed_at ? a.assessed_at.replace("T", " ").replace(/\.\d+Z?$/, "").replace(/Z$/, " UTC") : "date unknown";
   sub.textContent = `assessed ${when}`;
-  p.appendChild(sub);
-  // Verdict chips row.
+  return sub;
+}
+
+// _renderAssessmentVerdictRow builds the agent/daemon/driver verdict
+// chips row, plus an optional confidence pill when present.
+function _renderAssessmentVerdictRow(a) {
   const row = document.createElement("div");
   row.style.cssText = "display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px;";
   row.appendChild(_assessmentChip("Agent", a.agent_supports));
@@ -1517,69 +1786,97 @@ function renderAssessment(a) {
     conf.textContent = `confidence ${a.confidence.toFixed(2)}`;
     row.appendChild(conf);
   }
-  p.appendChild(row);
-  // Body — rendered Markdown (## / ### headings, - and 1. lists, **bold**,
-  // `code`). renderMarkdown escapes the prose first, so it cannot inject HTML.
-  if (a.body) {
-    const body = document.createElement("div");
-    body.className = "md-body";
-    body.innerHTML = renderMarkdown(a.body);
-    p.appendChild(body);
+  return row;
+}
+
+// _appendAssessmentBody appends the rendered-Markdown prose body, if any.
+// renderMarkdown escapes the prose first, so it cannot inject HTML.
+function _appendAssessmentBody(p, body) {
+  if (!body) return;
+  const el = document.createElement("div");
+  el.className = "md-body";
+  el.innerHTML = renderMarkdown(body);
+  p.appendChild(el);
+}
+
+// _appendCaveatsBlock appends the labelled caveats box — known
+// limitations / metric drifts the verdict doesn't capture but a reader
+// should know about. No-op when there are no caveats.
+function _appendCaveatsBlock(p, caveats) {
+  if (!Array.isArray(caveats) || caveats.length === 0) return;
+  const cavHead = document.createElement("div");
+  cavHead.style.cssText = "font-size: 11px; color: #666; margin-bottom: 4px;";
+  cavHead.textContent = "Caveats";
+  p.appendChild(cavHead);
+  const cavBox = document.createElement("ul");
+  cavBox.style.cssText = "margin: 0 0 10px 0; padding: 8px 10px 8px 28px; font-size: 12px; line-height: 1.5; color: #5a4500; background: #fff7e6; border: 1px solid #f5d886; border-radius: 4px;";
+  for (const c of caveats) {
+    const li = document.createElement("li");
+    li.textContent = c;
+    li.style.marginBottom = "4px";
+    cavBox.appendChild(li);
   }
-  // Caveats — known limitations / metric drifts the verdict doesn't
-  // capture but a reader should know about. Rendered as a labelled
-  // box above sources so they're visually prominent.
-  if (Array.isArray(a.caveats) && a.caveats.length > 0) {
-    const cavHead = document.createElement("div");
-    cavHead.style.cssText = "font-size: 11px; color: #666; margin-bottom: 4px;";
-    cavHead.textContent = "Caveats";
-    p.appendChild(cavHead);
-    const cavBox = document.createElement("ul");
-    cavBox.style.cssText = "margin: 0 0 10px 0; padding: 8px 10px 8px 28px; font-size: 12px; line-height: 1.5; color: #5a4500; background: #fff7e6; border: 1px solid #f5d886; border-radius: 4px;";
-    for (const c of a.caveats) {
-      const li = document.createElement("li");
-      li.textContent = c;
-      li.style.marginBottom = "4px";
-      cavBox.appendChild(li);
-    }
-    p.appendChild(cavBox);
+  p.appendChild(cavBox);
+}
+
+// _buildSourceListItem builds one <li> for the Sources list: a kind
+// label, a link (url sources) or code ref (everything else), and an
+// optional trailing note.
+function _buildSourceListItem(src) {
+  const li = document.createElement("li");
+  const kind = document.createElement("span");
+  kind.style.cssText = "color: #888; margin-right: 6px; font-family: monospace; font-size: 11px;";
+  kind.textContent = src.kind || "src";
+  li.appendChild(kind);
+  if (src.kind === "url" && src.ref) {
+    const link = document.createElement("a");
+    link.href = src.ref;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = src.ref;
+    li.appendChild(link);
+  } else if (src.ref) {
+    const code = document.createElement("code");
+    code.textContent = src.ref;
+    li.appendChild(code);
   }
-  // Sources list.
-  if (Array.isArray(a.sources) && a.sources.length > 0) {
-    const h = document.createElement("div");
-    h.style.cssText = "font-size: 11px; color: #666; margin-bottom: 4px;";
-    h.textContent = "Sources";
-    p.appendChild(h);
-    const ul = document.createElement("ul");
-    ul.style.cssText = "margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.5;";
-    for (const src of a.sources) {
-      const li = document.createElement("li");
-      const kind = document.createElement("span");
-      kind.style.cssText = "color: #888; margin-right: 6px; font-family: monospace; font-size: 11px;";
-      kind.textContent = src.kind || "src";
-      li.appendChild(kind);
-      if (src.kind === "url" && src.ref) {
-        const a = document.createElement("a");
-        a.href = src.ref;
-        a.target = "_blank";
-        a.rel = "noopener noreferrer";
-        a.textContent = src.ref;
-        li.appendChild(a);
-      } else if (src.ref) {
-        const code = document.createElement("code");
-        code.textContent = src.ref;
-        li.appendChild(code);
-      }
-      if (src.note) {
-        const note = document.createElement("span");
-        note.style.cssText = "color: #555; margin-left: 6px;";
-        note.textContent = `— ${src.note}`;
-        li.appendChild(note);
-      }
-      ul.appendChild(li);
-    }
-    p.appendChild(ul);
+  if (src.note) {
+    const note = document.createElement("span");
+    note.style.cssText = "color: #555; margin-left: 6px;";
+    note.textContent = `— ${src.note}`;
+    li.appendChild(note);
   }
+  return li;
+}
+
+// _appendSourcesBlock appends the Sources list. No-op when there are no
+// sources.
+function _appendSourcesBlock(p, sources) {
+  if (!Array.isArray(sources) || sources.length === 0) return;
+  const h = document.createElement("div");
+  h.style.cssText = "font-size: 11px; color: #666; margin-bottom: 4px;";
+  h.textContent = "Sources";
+  p.appendChild(h);
+  const ul = document.createElement("ul");
+  ul.style.cssText = "margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.5;";
+  for (const src of sources) {
+    ul.appendChild(_buildSourceListItem(src));
+  }
+  p.appendChild(ul);
+}
+
+function renderAssessment(a) {
+  // anchor "supports" — the pipeline-strip pillar segments (⚙ ◉ ▷) all land
+  // here (the panel's chips render the three pillars individually).
+  const p = panel("Assessment", "supports");
+  // Also tag with the observes alias so [data-anchor="observes"]
+  // resolves to the same panel.
+  p.dataset.anchorAlias = "observes";
+  p.appendChild(_renderAssessmentSubtitle(a));
+  p.appendChild(_renderAssessmentVerdictRow(a));
+  _appendAssessmentBody(p, a.body);
+  _appendCaveatsBlock(p, a.caveats);
+  _appendSourcesBlock(p, a.sources);
   return p;
 }
 
@@ -1593,7 +1890,7 @@ function renderAssessmentFallback(coverageEntry) {
   // anchor "supports" + alias "observes" — matches renderAssessment so
   // both pipeline-strip segments resolve here.
   const p = panel("Assessment", "supports");
-  p.setAttribute("data-anchor-alias", "observes");
+  p.dataset.anchorAlias = "observes";
   const subtitle = document.createElement("div");
   subtitle.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
   subtitle.textContent = "from matrix verdict — no point-in-time assessment.json on disk yet";
@@ -1666,23 +1963,21 @@ function _capabilityChip(prefix, value) {
 //   "spec"               — definitions only. Used when no recording is
 //                          selected so the panel reads as "here is the
 //                          spec" rather than "0/N passed against nothing".
-function renderExpected(data, mode) {
-  const specOnly = mode === "spec";
-  // anchor "spec" — pipeline-strip segment § lands here.
-  const p = panel("Spec expectations", "spec");
-  if (!data.expected || !Array.isArray(data.expected.phases) || data.expected.phases.length === 0) {
-    p.appendChild(text("No expected.jsonl for this scenario. Author one via /ir:onboard-agent spec <agent> <scenario>."));
-    return p;
-  }
-  const rep = data.expected;
-  // Anchor target for the pipeline-strip ✓ segment ("validation").
-  // The summary chip just below carries the pass/fail signal; we add
-  // a small heading so the scroll lands on a labelled anchor.
+// _buildExpectedValidationHeading builds the anchor heading for the
+// pipeline-strip ✓ segment ("validation"). The summary chip just below
+// carries the pass/fail signal; this small heading just gives the
+// scroll-into-view a labelled landing spot.
+function _buildExpectedValidationHeading() {
   const valHeading = document.createElement("h4");
   valHeading.dataset.anchor = "validation";
   valHeading.style.cssText = "font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #666; margin: 0 0 6px 0; font-weight: 600;";
   valHeading.textContent = "Validation";
-  p.appendChild(valHeading);
+  return valHeading;
+}
+
+// _buildExpectedSummary builds the pass/fail (or spec-only) summary chip
+// row shown above the phases table.
+function _buildExpectedSummary(rep, specOnly) {
   const summary = document.createElement("div");
   summary.style.cssText = "margin-bottom: 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;";
   if (specOnly) {
@@ -1691,25 +1986,28 @@ function renderExpected(data, mode) {
         spec only — pick a recording to validate
       </span>
       <span style="font-size: 11px; color: #888;">
-        source: <code>${escapeHtml(rep.meta && rep.meta.source || "")}</code>
+        source: <code>${escapeHtml(rep.meta?.source || "")}</code>
       </span>
     `;
-  } else {
-    const summaryColor = rep.pass ? "#d6f0d4" : "#f8c8c8";
-    const summaryFg = rep.pass ? "#1f5a1d" : "#8a0000";
-    summary.innerHTML = `
+    return summary;
+  }
+  const summaryColor = rep.pass ? "#d6f0d4" : "#f8c8c8";
+  const summaryFg = rep.pass ? "#1f5a1d" : "#8a0000";
+  summary.innerHTML = `
       <span style="background: ${summaryColor}; color: ${summaryFg}; padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 600;">
         ${escapeHtml(rep.summary || "")}
       </span>
       <span style="font-size: 11px; color: #888;">
-        source: <code>${escapeHtml(rep.meta && rep.meta.source || "")}</code>
+        source: <code>${escapeHtml(rep.meta?.source || "")}</code>
       </span>
     `;
-  }
-  p.appendChild(summary);
+  return summary;
+}
 
-  const tbl = document.createElement("table");
-  tbl.innerHTML = specOnly
+// _expectedTableHeaderHTML returns the <tr> header — the validate mode
+// adds "result" and "delta" columns not shown in spec-only mode.
+function _expectedTableHeaderHTML(specOnly) {
+  return specOnly
     ? `<tr>
         <th>phase</th>
         <th>target</th>
@@ -1726,40 +2024,54 @@ function renderExpected(data, mode) {
         <th>delta</th>
         <th>spec text</th>
       </tr>`;
-  // Definitions and phases are same-length, same-order arrays from
-  // the validator. Zip by index so the row shows full context.
-  const defs = Array.isArray(rep.definitions) ? rep.definitions : [];
-  for (let i = 0; i < rep.phases.length; i++) {
-    const ph = rep.phases[i];
-    const def = defs[i] || {};
-    const target = def.expected_state
-      ? `state=<span class="badge ${def.expected_state}">${def.expected_state}</span>`
-      : (def.kind ? `kind=<code>${escapeHtml(def.kind)}</code>` : "—");
-    const anchor = def.relative_to ? `<code>${escapeHtml(def.relative_to)}</code>` : "<code>start</code>";
-    let win = "";
-    if (def.max_delay_ms) win += `≤ ${def.max_delay_ms} ms`;
-    if (def.duration_at_least_ms) win += (win ? " · " : "") + `≥ ${def.duration_at_least_ms} ms`;
-    if (!win) win = "—";
-    const specText = def.text || "";
-    const tr = document.createElement("tr");
-    if (specOnly) {
-      tr.innerHTML = `
+}
+
+// _expectedTargetHTML renders one phase definition's "target" cell:
+// expected state badge, else expected event kind, else a dash.
+function _expectedTargetHTML(def) {
+  if (def.expected_state) {
+    return `state=<span class="badge ${def.expected_state}">${def.expected_state}</span>`;
+  }
+  return def.kind ? `kind=<code>${escapeHtml(def.kind)}</code>` : "—";
+}
+
+// _expectedWindowText renders one phase definition's timing-window cell
+// (max delay and/or minimum duration constraints, joined with " · ").
+function _expectedWindowText(def) {
+  let win = "";
+  if (def.max_delay_ms) win += `≤ ${def.max_delay_ms} ms`;
+  if (def.duration_at_least_ms) win += (win ? " · " : "") + `≥ ${def.duration_at_least_ms} ms`;
+  return win || "—";
+}
+
+// _buildExpectedRow builds one phase's <tr>. Definitions and phases are
+// same-length, same-order arrays from the validator, so the row can show
+// full context (target/anchor/window from the definition, pass/delta from
+// the phase result — the latter only in validate mode).
+function _buildExpectedRow(ph, def, specOnly) {
+  const target = _expectedTargetHTML(def);
+  const anchor = def.relative_to ? `<code>${escapeHtml(def.relative_to)}</code>` : "<code>start</code>";
+  const win = _expectedWindowText(def);
+  const specText = def.text || "";
+  const tr = document.createElement("tr");
+  if (specOnly) {
+    tr.innerHTML = `
         <td><code>${escapeHtml(ph.phase)}</code></td>
         <td style="font-size: 11px;">${target}</td>
         <td style="font-size: 11px;">${anchor}</td>
         <td style="font-size: 11px; color: #555;">${win}</td>
         <td title="${escapeHtml(specText)}" style="font-size: 11px; color: #555;">${escapeHtml(truncate(specText, 90))}</td>`;
-    } else {
-      const resultPill = ph.pass
-        ? `<span class="badge ready">✓ pass</span>`
-        : `<span class="badge fail">✗ fail</span>`;
-      // delta_ms may be 0 (phase matched exactly at its anchor) — treat
-      // anything numeric as renderable, only fall back to "—" when the
-      // phase never matched at all.
-      const delta = ph.matched_ts
-        ? `+${Number.isFinite(ph.delta_ms) ? ph.delta_ms : 0} ms`
-        : "—";
-      tr.innerHTML = `
+    return tr;
+  }
+  const resultPill = ph.pass
+    ? `<span class="badge ready">✓ pass</span>`
+    : `<span class="badge fail">✗ fail</span>`;
+  // delta_ms may be 0 (phase matched exactly at its anchor) — treat
+  // anything numeric as renderable, only fall back to "—" when the
+  // phase never matched at all.
+  const deltaMs = Number.isFinite(ph.delta_ms) ? ph.delta_ms : 0;
+  const delta = ph.matched_ts ? `+${deltaMs} ms` : "—";
+  tr.innerHTML = `
         <td><code>${escapeHtml(ph.phase)}</code></td>
         <td style="font-size: 11px;">${target}</td>
         <td style="font-size: 11px;">${anchor}</td>
@@ -1767,27 +2079,55 @@ function renderExpected(data, mode) {
         <td>${resultPill}</td>
         <td>${escapeHtml(delta)}</td>
         <td title="${escapeHtml(specText)}" style="font-size: 11px; color: #555;">${escapeHtml(truncate(specText, 90))}</td>`;
-    }
-    tbl.appendChild(tr);
+  return tr;
+}
+
+// _buildExpectedTable builds the full phases table (header + one row per
+// phase).
+function _buildExpectedTable(rep, specOnly) {
+  const tbl = document.createElement("table");
+  tbl.innerHTML = _expectedTableHeaderHTML(specOnly);
+  // Definitions and phases are same-length, same-order arrays from
+  // the validator. Zip by index so the row shows full context.
+  const defs = Array.isArray(rep.definitions) ? rep.definitions : [];
+  for (let i = 0; i < rep.phases.length; i++) {
+    tbl.appendChild(_buildExpectedRow(rep.phases[i], defs[i] || {}, specOnly));
   }
-  p.appendChild(tbl);
+  return tbl;
+}
+
+// _appendExpectedFailures appends the failure-detail block — surfaces the
+// reason strings prominently so the operator can scan failures without
+// hovering each row. No-op when nothing failed.
+function _appendExpectedFailures(p, rep) {
+  const failed = rep.phases.filter(ph => !ph.pass);
+  if (failed.length === 0) return;
+  const failBox = document.createElement("div");
+  failBox.style.cssText = "margin-top: 10px; padding: 8px 10px; background: #fff7f7; border-left: 3px solid #8a0000; font-size: 12px; color: #444;";
+  let html = "<b>Failures:</b><ul style=\"margin: 4px 0 0; padding-left: 20px;\">";
+  for (const ph of failed) {
+    html += `<li><code>${escapeHtml(ph.phase)}</code>: ${escapeHtml(ph.reason || "(no reason recorded)")}</li>`;
+  }
+  html += "</ul>";
+  failBox.innerHTML = html;
+  p.appendChild(failBox);
+}
+
+function renderExpected(data, mode) {
+  const specOnly = mode === "spec";
+  // anchor "spec" — pipeline-strip segment § lands here.
+  const p = panel("Spec expectations", "spec");
+  if (!data.expected || !Array.isArray(data.expected.phases) || data.expected.phases.length === 0) {
+    p.appendChild(text("No expected.jsonl for this scenario. Author one via /ir:onboard-agent spec <agent> <scenario>."));
+    return p;
+  }
+  const rep = data.expected;
+  p.appendChild(_buildExpectedValidationHeading());
+  p.appendChild(_buildExpectedSummary(rep, specOnly));
+  p.appendChild(_buildExpectedTable(rep, specOnly));
 
   if (specOnly) return p;
-
-  // Failure detail block — surface the reason strings prominently so
-  // the operator can scan failures without hovering each row.
-  const failed = rep.phases.filter(ph => !ph.pass);
-  if (failed.length > 0) {
-    const failBox = document.createElement("div");
-    failBox.style.cssText = "margin-top: 10px; padding: 8px 10px; background: #fff7f7; border-left: 3px solid #8a0000; font-size: 12px; color: #444;";
-    let html = "<b>Failures:</b><ul style=\"margin: 4px 0 0; padding-left: 20px;\">";
-    for (const ph of failed) {
-      html += `<li><code>${escapeHtml(ph.phase)}</code>: ${escapeHtml(ph.reason || "(no reason recorded)")}</li>`;
-    }
-    html += "</ul>";
-    failBox.innerHTML = html;
-    p.appendChild(failBox);
-  }
+  _appendExpectedFailures(p, rep);
   return p;
 }
 
@@ -1841,6 +2181,16 @@ export function renderManifestFields(m, passRateLabel, alwaysEllipsis) {
 //   other <name>   → an older recording: fetched via the recordings endpoint;
 //                    Playback retargets to its events via /api/replay/start's
 //                    recording field.
+// fmtLabel formats one recording-history <option>'s label: recording_started_at,
+// daemon version, fresh pass rate. Uses recording_started_at (not promoted_at)
+// so the timestamps describe WHEN the recording was captured.
+function fmtLabel(startedAt, daemonVer, passRate) {
+  const ts = startedAt || "(no timestamp)";
+  const ver = daemonVer ? ` · daemon ${daemonVer}` : "";
+  const pass = passRate ? ` · ${passRate}` : "";
+  return `${ts}${ver}${pass}`;
+}
+
 function renderRecordingHistory(s, latestData, archives, initialArchive, recipeEntry, coverageEntry) {
   const wrap = document.createElement("div");
 
@@ -1852,7 +2202,7 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
   const recCount = (archives || []).length;
   intro.innerHTML = `Select which recording to inspect — all live under <code>recordings/</code>, newest first. <b>expected.jsonl</b> is the constant benchmark across all of them; picking an older recording re-evaluates the current spec against its events (drift signal).` +
     (recCount > 0
-      ? ` <b>${recCount}</b> recording${recCount === 1 ? "" : "s"} available.`
+      ? ` <b>${recCount}</b> recording${pluralSuffix(recCount)} available.`
       : ` No recordings yet.`);
   selPanel.appendChild(intro);
 
@@ -1862,17 +2212,6 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
   noneOpt.value = "__none__";
   noneOpt.textContent = "— No recording (spec only) —";
   select.appendChild(noneOpt);
-
-  // Label: recording_started_at, daemon version, fresh pass rate. Uses
-  // recording_started_at (not promoted_at) so the timestamps describe WHEN
-  // the recording was captured.
-  function fmtLabel(startedAt, daemonVer, passRate) {
-    const ts = startedAt || "(no timestamp)";
-    const ver = daemonVer ? ` · daemon ${daemonVer}` : "";
-    const pass = passRate ? ` · ${passRate}` : "";
-    return `${ts}${ver}${pass}`;
-  }
-
 
   // Every recording lives under recordings/<name>/ — there is no separate
   // "Latest" entry. The list is newest-first by name; the newest (the one the
@@ -1952,8 +2291,11 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
     if (arch) {
       manifestBox.append(renderManifestFields(arch, "expected_pass_rate (at promote)", /*alwaysEllipsis=*/true));
     }
+    // s.agent/s.subtree/s.id come from the URL hash (see loadScenario) —
+    // encode each segment before it lands in a fetch path (SonarQube
+    // jssecurity:S7044 / S8476).
     const archDetail = await fetch(
-      `/api/scenarios/${s.agent}/${s.subtree}/${s.id}/recordings/${encodeURIComponent(value)}`
+      `/api/scenarios/${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}/recordings/${encodeURIComponent(value)}`
     ).then(r => r.json());
     const archData = {
       ...latestData,
@@ -1963,8 +2305,8 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
     };
     // Drift annotation: archive's frozen pass rate (manifest) vs
     // fresh eval (current spec re-run on archived events).
-    const frozenRate = (arch && arch.expected_pass_rate) || "";
-    const freshRate = (archDetail.expected && archDetail.expected.summary) || "";
+    const frozenRate = arch?.expected_pass_rate || "";
+    const freshRate = archDetail.expected?.summary || "";
     if (frozenRate && freshRate) {
       const driftNote = document.createElement("div");
       driftNote.style.cssText = "margin-top: 8px; padding: 6px 9px; font-size: 11px; border-radius: 3px;";
@@ -2031,68 +2373,100 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
   return wrap;
 }
 
+// _buildToolCallsIntro builds the explanatory paragraph above the chips
+// and table.
+function _buildToolCallsIntro(tools) {
+  const intro = document.createElement("div");
+  intro.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
+  intro.innerHTML = `<b>${tools.length}</b> tool call${tools.length === 1 ? "" : "s"} ` +
+    `extracted from <code>transcript.jsonl</code>. ` +
+    `Note: irrlicht's <code>events.jsonl</code> has no first-class <code>tool_use</code> Kind today; ` +
+    `this view is derived client-side from the transcript content. Promotion to a lifecycle Kind is future work.`;
+  return intro;
+}
+
+// _toolCallsStartMs anchors the +ms offsets to the first tool call's
+// timestamp, so the table reads in the same time base as the timeline
+// lanes. Returns null when there's nothing to anchor to.
+function _toolCallsStartMs(tools) {
+  if (tools.length > 0 && tools[0].ts) return Date.parse(tools[0].ts);
+  return null;
+}
+
+// _countToolsByName groups tool calls by name for the summary chips.
+function _countToolsByName(tools) {
+  const byName = {};
+  for (const t of tools) {
+    byName[t.name] = (byName[t.name] || 0) + 1;
+  }
+  return byName;
+}
+
+// _buildToolNameChip builds one summary chip. Special-cases the "Agent"
+// tool name (claudecode's Task tool) with a distinct color + tooltip
+// since spawning subagents is the headline case.
+function _buildToolNameChip(name, count) {
+  const chip = document.createElement("span");
+  const isAgent = name === "Agent";
+  chip.style.cssText = `padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; ` +
+    (isAgent
+      ? "background: #e0eaff; color: #1f3d8a;"
+      : "background: #eaeae0; color: #555;");
+  chip.textContent = `${name} · ${count}`;
+  if (isAgent) chip.title = "Task tool — spawns subagents. See coverage_id=foreground-subagent (3.1).";
+  return chip;
+}
+
+// _buildToolNameChips builds the summary chip row, one chip per distinct
+// tool name, sorted alphabetically.
+function _buildToolNameChips(byName) {
+  const chips = document.createElement("div");
+  chips.style.cssText = "display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap;";
+  for (const name of Object.keys(byName).sort((a, b) => a.localeCompare(b))) {
+    chips.appendChild(_buildToolNameChip(name, byName[name]));
+  }
+  return chips;
+}
+
+// _buildToolCallRow builds one `+ms · session · tool · id` row.
+function _buildToolCallRow(t, startMs) {
+  const offset = (startMs && t.ts) ? (Date.parse(t.ts) - startMs) : null;
+  const offsetCell = offset !== null ? `+${offset} ms` : "—";
+  const sidShort = (t.session_id || "").slice(0, 14);
+  const isAgent = t.name === "Agent";
+  const toolCell = isAgent
+    ? `<span style="background: #e0eaff; color: #1f3d8a; padding: 1px 6px; border-radius: 8px; font-weight: 600; font-size: 11px;">${escapeHtml(t.name)}</span>`
+    : `<code>${escapeHtml(t.name)}</code>`;
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+      <td>${escapeHtml(offsetCell)}</td>
+      <td><code style="font-size: 11px; color: #666;">${escapeHtml(sidShort)}</code></td>
+      <td>${toolCell}</td>
+      <td><code style="font-size: 11px; color: #888;">${escapeHtml((t.id || "").slice(0, 16))}</code></td>`;
+  return tr;
+}
+
+// _buildToolCallsTable builds the header + one row per tool call.
+function _buildToolCallsTable(tools, startMs) {
+  const tbl = document.createElement("table");
+  tbl.innerHTML = `<tr><th>+ms</th><th>session</th><th>tool</th><th>id</th></tr>`;
+  for (const t of tools) {
+    tbl.appendChild(_buildToolCallRow(t, startMs));
+  }
+  return tbl;
+}
+
 // renderToolCalls shows the tool_use blocks the server extracted
 // from transcript.jsonl. Today this is the only signal irrlicht has
 // for "agent invoked a tool" — events.jsonl has no first-class
 // tool_use Kind, so the viewer derives this client-side from the
 // transcript content. Each row is `+ms · session · ToolName · id`.
-// Special-cases the "Agent" tool name (claudecode's Task tool) with
-// a distinct icon since spawning subagents is the headline case.
 function renderToolCalls(data) {
   const p = panel("Tool calls");
-  const intro = document.createElement("div");
-  intro.style.cssText = "font-size: 11px; color: #666; margin-bottom: 8px;";
-  intro.innerHTML = `<b>${data.tools.length}</b> tool call${data.tools.length === 1 ? "" : "s"} ` +
-    `extracted from <code>transcript.jsonl</code>. ` +
-    `Note: irrlicht's <code>events.jsonl</code> has no first-class <code>tool_use</code> Kind today; ` +
-    `this view is derived client-side from the transcript content. Promotion to a lifecycle Kind is future work.`;
-  p.appendChild(intro);
-
-  // Recording start anchors the +ms offsets so the table reads in
-  // the same time base as the timeline lanes.
-  let startMs = null;
-  if (data.tools.length > 0 && data.tools[0].ts) {
-    startMs = Date.parse(data.tools[0].ts);
-  }
-  // Group by tool name for the summary chips.
-  const byName = {};
-  for (const t of data.tools) {
-    byName[t.name] = (byName[t.name] || 0) + 1;
-  }
-  const chips = document.createElement("div");
-  chips.style.cssText = "display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap;";
-  for (const name of Object.keys(byName).sort()) {
-    const chip = document.createElement("span");
-    const isAgent = name === "Agent";
-    chip.style.cssText = `padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; ` +
-      (isAgent
-        ? "background: #e0eaff; color: #1f3d8a;"
-        : "background: #eaeae0; color: #555;");
-    chip.textContent = `${name} · ${byName[name]}`;
-    if (isAgent) chip.title = "Task tool — spawns subagents. See coverage_id=foreground-subagent (3.1).";
-    chips.appendChild(chip);
-  }
-  p.appendChild(chips);
-
-  const tbl = document.createElement("table");
-  tbl.innerHTML = `<tr><th>+ms</th><th>session</th><th>tool</th><th>id</th></tr>`;
-  for (const t of data.tools) {
-    const offset = (startMs && t.ts) ? (Date.parse(t.ts) - startMs) : null;
-    const offsetCell = offset !== null ? `+${offset} ms` : "—";
-    const sidShort = (t.session_id || "").slice(0, 14);
-    const isAgent = t.name === "Agent";
-    const toolCell = isAgent
-      ? `<span style="background: #e0eaff; color: #1f3d8a; padding: 1px 6px; border-radius: 8px; font-weight: 600; font-size: 11px;">${escapeHtml(t.name)}</span>`
-      : `<code>${escapeHtml(t.name)}</code>`;
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${escapeHtml(offsetCell)}</td>
-      <td><code style="font-size: 11px; color: #666;">${escapeHtml(sidShort)}</code></td>
-      <td>${toolCell}</td>
-      <td><code style="font-size: 11px; color: #888;">${escapeHtml((t.id || "").slice(0, 16))}</code></td>`;
-    tbl.appendChild(tr);
-  }
-  p.appendChild(tbl);
+  p.appendChild(_buildToolCallsIntro(data.tools));
+  const startMs = _toolCallsStartMs(data.tools);
+  p.appendChild(_buildToolNameChips(_countToolsByName(data.tools)));
+  p.appendChild(_buildToolCallsTable(data.tools, startMs));
   return p;
 }
 
@@ -2308,6 +2682,7 @@ function renderPlayback(s, detailData, archiveName) {
   scrub.max = "100";
   scrub.value = "0";
   scrub.className = "timeline-scrubber";
+  scrub.setAttribute("aria-label", "Playback position");
   scrub.disabled = true;
   bandWrap.appendChild(scrub);
   scrubWrap.appendChild(bandWrap);
@@ -2325,7 +2700,7 @@ function renderPlayback(s, detailData, archiveName) {
   scrubWrap.addEventListener("mouseover", (e) => {
     const el = e.target.closest("[data-tip]");
     if (!el) return;
-    tip.textContent = el.getAttribute("data-tip") || "";
+    tip.textContent = el.dataset.tip || "";
     tip.style.display = "block";
     const wrapRect = scrubWrap.getBoundingClientRect();
     const elRect = el.getBoundingClientRect();
@@ -2347,7 +2722,7 @@ function renderPlayback(s, detailData, archiveName) {
     if (!el) return;
     // Only hide when leaving to a non-marker; mouseover on a sibling
     // tooltip-bearing element will re-show immediately anyway.
-    const next = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest("[data-tip]");
+    const next = e.relatedTarget?.closest?.("[data-tip]");
     if (next) return;
     tip.style.display = "none";
   });
@@ -2405,7 +2780,7 @@ function renderPlayback(s, detailData, archiveName) {
     paintStateBand(stateBand, events, totalMs);
     paintEventDots(eventLane, events, totalMs);
     paintTurns(turnLane, turns, totalMs);
-    paintExpectedLane(expectedLane, detailData && detailData.expected, totalMs);
+    paintExpectedLane(expectedLane, detailData?.expected, totalMs);
   }
 
   // Dashboard iframe (hidden until playback starts).
@@ -2434,7 +2809,7 @@ function renderPlayback(s, detailData, archiveName) {
       // Never pop a blocking modal — a scenario with no events.jsonl/usable
       // transcript (e.g. an un-recorded cell opened via a deep link) just has
       // nothing to play. Log non-blocking for debugging and bail quietly.
-      console.warn(`replay start failed: ${res.status} ${res.error}`);
+      console.warn("replay start failed:", res.status, sanitizeForLog(res.error));
       return;
     }
     const body = res.body;
@@ -2460,7 +2835,7 @@ function renderPlayback(s, detailData, archiveName) {
         (totalMs ? ` — total ${(totalMs/1000).toFixed(1)}s` : "") +
         (events.length ? ` — ${events.length} events` : "");
     } else {
-      console.warn(`replay start: rejected unsafe dashboard_url ${JSON.stringify(body.dashboard_url)}`);
+      console.warn(`replay start: rejected unsafe dashboard_url ${sanitizeForLog(body.dashboard_url)}`);
       iframe.src = "about:blank";
       iframeWrap.style.display = "none";
     }
@@ -2593,6 +2968,15 @@ function escapeHtml(s) {
 // subset is deliberately small (it's what the assess skill authors), so a few
 // regexes beat pulling a markdown library into a no-build SPA. Style lives in
 // the `.md-body` rules in index.html.
+//
+// The heading/list-item regexes below (jssecurity:S8786) each start with a
+// mandatory literal ("#", "-", or a digit run + ".") that a non-matching line
+// fails on immediately — the engine never backtracks into the trailing
+// `\s+`/`.*` pair because it never gets past the first character class. Each
+// is also run per-line (pre-split on "\n", no embedded newlines) against
+// markdown the assess skill itself authors, not arbitrary/attacker input.
+// Verified no exponential blowup on adversarial inputs (long runs of spaces,
+// no trailing match) before leaving these as-is.
 export function renderMarkdown(md) {
   const esc = escapeHtml(String(md || ""));
   // Inline pass — one alternation, left-to-right: a `code` span is matched
@@ -2606,26 +2990,32 @@ export function renderMarkdown(md) {
   let para = [];     // accumulated plain lines → one <p>
   const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; } };
   const flushList = () => {
-    if (list) { out.push(`<${list.tag}>${list.items.map(i => `<li>${inline(i)}</li>`).join("")}</${list.tag}>`); list = null; }
+    if (list) {
+      const itemsHtml = list.items.map(i => `<li>${inline(i)}</li>`).join("");
+      out.push(`<${list.tag}>${itemsHtml}</${list.tag}>`);
+      list = null;
+    }
   };
   for (const raw of esc.split("\n")) {
-    const line = raw.replace(/\s+$/, "");
-    let m;
+    const line = raw.trimEnd();
     if (line === "") { flushPara(); flushList(); continue; }
-    if ((m = line.match(/^(#{2,4})\s+(.*)$/))) {
+    let m = /^(#{2,4})\s+(.*)$/.exec(line); // NOSONAR jssecurity:S8786 — no backtracking risk, verified: mandatory "#" prefix fails immediately on any non-heading line before reaching \s+/.*
+    if (m) {
       flushPara(); flushList();
       out.push(`<h${m[1].length + 2}>${inline(m[2])}</h${m[1].length + 2}>`); // ## → h4, ### → h5, #### → h6
       continue;
     }
-    if ((m = line.match(/^\s*-\s+(.*)$/))) {
+    m = /^\s*-\s+(.*)$/.exec(line); // NOSONAR jssecurity:S8786 — no backtracking risk, verified: mandatory "-" prefix fails immediately on any non-list line before reaching \s+/.*
+    if (m) {
       flushPara();
-      if (!list || list.tag !== "ul") { flushList(); list = {tag: "ul", items: []}; }
+      if (list?.tag !== "ul") { flushList(); list = {tag: "ul", items: []}; }
       list.items.push(m[1]);
       continue;
     }
-    if ((m = line.match(/^\s*\d+\.\s+(.*)$/))) {
+    m = /^\s*\d+\.\s+(.*)$/.exec(line); // NOSONAR jssecurity:S8786 — no backtracking risk, verified: mandatory digit+"." prefix fails immediately on any non-list line before reaching \s+/.*
+    if (m) {
       flushPara();
-      if (!list || list.tag !== "ol") { flushList(); list = {tag: "ol", items: []}; }
+      if (list?.tag !== "ol") { flushList(); list = {tag: "ol", items: []}; }
       list.items.push(m[1]);
       continue;
     }

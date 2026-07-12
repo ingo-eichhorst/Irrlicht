@@ -31,6 +31,15 @@ type finding struct {
 	Msg  string `json:"msg"`
 }
 
+const (
+	// catalogRelPath is the repo-relative catalog path used in finding
+	// messages (the actual read goes through shard.File).
+	catalogRelPath = "replaydata/agents/scenarios.json"
+	// metadataJSONSuffix is appended to a cell's relative path to name its
+	// metadata.json file in finding messages.
+	metadataJSONSuffix = "/metadata.json"
+)
+
 // runValidate checks the whole replaydata tree for schema + referential
 // integrity: the catalog parses and every scenario is the minimal 5-field
 // shape with a well-formed unique id/name; every agent cell parses, links to a
@@ -87,7 +96,7 @@ func validateCatalog(repoRoot string, add func(path, msg string)) map[string]boo
 	path := shard.File(repoRoot)
 	b, err := os.ReadFile(path)
 	if err != nil {
-		add("replaydata/agents/scenarios.json", fmt.Sprintf("cannot read catalog: %v", err))
+		add(catalogRelPath, fmt.Sprintf("cannot read catalog: %v", err))
 		return names
 	}
 	var doc struct {
@@ -95,51 +104,59 @@ func validateCatalog(repoRoot string, add func(path, msg string)) map[string]boo
 		Scenarios []json.RawMessage `json:"scenarios"`
 	}
 	if err := json.Unmarshal(b, &doc); err != nil {
-		add("replaydata/agents/scenarios.json", fmt.Sprintf("catalog is not valid JSON: %v", err))
+		add(catalogRelPath, fmt.Sprintf("catalog is not valid JSON: %v", err))
 		return names
 	}
 	if len(doc.Scenarios) == 0 {
-		add("replaydata/agents/scenarios.json", "catalog has no scenarios")
+		add(catalogRelPath, "catalog has no scenarios")
 	}
 	seenID := map[string]bool{}
 	for _, raw := range doc.Scenarios {
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(raw, &fields) != nil {
-			add("replaydata/agents/scenarios.json", "a scenario entry is not a JSON object")
-			continue
-		}
-		var s struct{ ID, Name string }
-		_ = json.Unmarshal(raw, &s)
-		loc := "scenario " + s.Name
-		if s.Name == "" {
-			loc = "scenario id=" + s.ID
-		}
-		for k := range fields {
-			if !allowedScenarioKeys[k] {
-				add(loc, fmt.Sprintf("unexpected field %q (allowed: id, name, description, acceptance_criteria, process)", k))
-			}
-		}
-		if s.ID == "" {
-			add(loc, "missing id")
-		} else if !idRe.MatchString(s.ID) {
-			add(loc, fmt.Sprintf("id %q is not <section>.<index>", s.ID))
-		} else if seenID[s.ID] {
-			add(loc, fmt.Sprintf("duplicate id %q", s.ID))
-		}
-		seenID[s.ID] = true
-		if s.Name == "" {
-			add(loc, "missing name")
-		} else {
-			if !nameRe.MatchString(s.Name) {
-				add(loc, fmt.Sprintf("name %q is not a kebab slug", s.Name))
-			}
-			if names[s.Name] {
-				add(loc, fmt.Sprintf("duplicate name %q", s.Name))
-			}
-			names[s.Name] = true
-		}
+		validateScenarioEntry(raw, seenID, names, add)
 	}
 	return names
+}
+
+// validateScenarioEntry validates one catalog scenario entry: its field set
+// against allowedScenarioKeys, and its id/name well-formedness + uniqueness,
+// recording into seenID/names as it goes (mirroring validateCatalog's
+// original inline bookkeeping across the whole catalog).
+func validateScenarioEntry(raw json.RawMessage, seenID map[string]bool, names map[string]bool, add func(path, msg string)) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		add(catalogRelPath, "a scenario entry is not a JSON object")
+		return
+	}
+	var s struct{ ID, Name string }
+	_ = json.Unmarshal(raw, &s)
+	loc := "scenario " + s.Name
+	if s.Name == "" {
+		loc = "scenario id=" + s.ID
+	}
+	for k := range fields {
+		if !allowedScenarioKeys[k] {
+			add(loc, fmt.Sprintf("unexpected field %q (allowed: id, name, description, acceptance_criteria, process)", k))
+		}
+	}
+	if s.ID == "" {
+		add(loc, "missing id")
+	} else if !idRe.MatchString(s.ID) {
+		add(loc, fmt.Sprintf("id %q is not <section>.<index>", s.ID))
+	} else if seenID[s.ID] {
+		add(loc, fmt.Sprintf("duplicate id %q", s.ID))
+	}
+	seenID[s.ID] = true
+	if s.Name == "" {
+		add(loc, "missing name")
+	} else {
+		if !nameRe.MatchString(s.Name) {
+			add(loc, fmt.Sprintf("name %q is not a kebab slug", s.Name))
+		}
+		if names[s.Name] {
+			add(loc, fmt.Sprintf("duplicate name %q", s.Name))
+		}
+		names[s.Name] = true
+	}
 }
 
 // validateCells checks each agent's scenarios/ cells: metadata.json parses,
@@ -156,52 +173,93 @@ func validateCells(repoRoot string, names map[string]bool, add func(path, msg st
 			if !e.IsDir() {
 				continue
 			}
-			folder := e.Name()
-			rel := filepath.Join("replaydata/agents", agent, "scenarios", folder)
-			metaPath := filepath.Join(scenDir, folder, "metadata.json")
-			hasRecordings := dirHasChildren(filepath.Join(scenDir, folder, "recordings"))
-
-			mb, err := os.ReadFile(metaPath)
-			if err != nil {
-				if hasRecordings {
-					add(rel, "orphan recording folder: has recordings/ but no metadata.json")
-				}
-				continue
-			}
-			var cell shard.ShardAgent
-			if err := json.Unmarshal(mb, &cell); err != nil {
-				add(rel+"/metadata.json", fmt.Sprintf("not valid JSON: %v", err))
-				continue
-			}
-			if cell.ScenarioID == "" {
-				add(rel+"/metadata.json", "missing scenario_id (the cell→catalog foreign key)")
-			} else if !names[cell.ScenarioID] {
-				add(rel+"/metadata.json", fmt.Sprintf("scenario_id %q not in the catalog", cell.ScenarioID))
-			}
-			// A recipe the driver will run must carry the fields the driver reads
-			// positionally — a missing timeout_seconds once crashed a driver.
-			if msg := recipeTimeoutFinding(cell.Details.Recipe); msg != "" {
-				add(rel+"/metadata.json", msg)
-			}
-			// A cell is "recorded" iff NewestRecordingDir resolves one — the SAME
-			// definition matrix.cellRecorded uses, so the two never disagree.
-			// (hasRecordings/dirHasChildren above is only for orphan detection:
-			// content present but no metadata.json.)
-			cellDir := filepath.Join(scenDir, folder)
-			if recDir, ok := validate.NewestRecordingDir(cellDir); ok {
-				if !fileExists(filepath.Join(cellDir, "expected.jsonl")) {
-					add(rel, "recorded cell is missing expected.jsonl")
-				}
-				// The newest recording is authoritative (it gates validation and
-				// the viewer autoselects it); it must be complete. Older recordings
-				// are kept as drift signals. The on-disk tree is the single source
-				// of truth, so an incomplete newest recording is a hard error.
-				recRel := filepath.Join(rel, "recordings", filepath.Base(recDir))
-				for _, finding := range validate.RecordingComplete(recDir) {
-					add(recRel, "incomplete recording: "+finding)
-				}
-			}
+			validateCell(cellLoc{ScenDir: scenDir, Agent: agent, Folder: e.Name()}, names, add)
 		}
+	}
+}
+
+// cellLoc bundles the path-shaped fields identifying one agent's scenario
+// cell folder — validateCell/validateCellFK/validateCellRecording used to
+// thread scenDir/agent/folder/cellDir/rel individually (go:S107 excess args
+// plus a CodeScene "string heavy function arguments" flag); rel()/dir() give
+// the two derived paths every caller actually wants, computed once per call
+// from the three fields that identify the folder.
+type cellLoc struct {
+	ScenDir string
+	Agent   string
+	Folder  string
+}
+
+// rel is the finding-message path: replaydata/agents/<agent>/scenarios/<folder>.
+func (l cellLoc) rel() string {
+	return filepath.Join("replaydata/agents", l.Agent, "scenarios", l.Folder)
+}
+
+// dir is the on-disk cell folder: <scenDir>/<folder>.
+func (l cellLoc) dir() string {
+	return filepath.Join(l.ScenDir, l.Folder)
+}
+
+// validateCell checks one agent's scenario cell folder: metadata.json parses,
+// links to a real scenario (scenario_id FK), carries a well-formed recipe, and
+// (when recorded) is a complete recording. Orphan folders (recordings but no
+// metadata.json) are flagged.
+func validateCell(loc cellLoc, names map[string]bool, add func(path, msg string)) {
+	rel := loc.rel()
+	cellDir := loc.dir()
+	metaPath := filepath.Join(cellDir, "metadata.json")
+
+	mb, err := os.ReadFile(metaPath)
+	if err != nil {
+		if dirHasChildren(filepath.Join(cellDir, "recordings")) {
+			add(rel, "orphan recording folder: has recordings/ but no metadata.json")
+		}
+		return
+	}
+	var cell shard.ShardAgent
+	if err := json.Unmarshal(mb, &cell); err != nil {
+		add(rel+metadataJSONSuffix, fmt.Sprintf("not valid JSON: %v", err))
+		return
+	}
+	validateCellFK(cell.ScenarioID, loc, names, add)
+	// A recipe the driver will run must carry the fields the driver reads
+	// positionally — a missing timeout_seconds once crashed a driver.
+	if msg := recipeTimeoutFinding(cell.Details.Recipe); msg != "" {
+		add(rel+metadataJSONSuffix, msg)
+	}
+	validateCellRecording(loc, add)
+}
+
+// validateCellFK checks that scenarioID is set and resolves to a catalog
+// scenario — the cell→catalog foreign key.
+func validateCellFK(scenarioID string, loc cellLoc, names map[string]bool, add func(path, msg string)) {
+	rel := loc.rel()
+	if scenarioID == "" {
+		add(rel+metadataJSONSuffix, "missing scenario_id (the cell→catalog foreign key)")
+	} else if !names[scenarioID] {
+		add(rel+metadataJSONSuffix, fmt.Sprintf("scenario_id %q not in the catalog", scenarioID))
+	}
+}
+
+// validateCellRecording checks the cell's newest recording (if any) for
+// completeness. A cell is "recorded" iff NewestRecordingDir resolves one —
+// the SAME definition matrix.cellRecorded uses, so the two never disagree.
+// The newest recording is authoritative (it gates validation and the viewer
+// autoselects it); it must be complete. Older recordings are kept as drift
+// signals, so an incomplete newest recording is the hard error.
+func validateCellRecording(loc cellLoc, add func(path, msg string)) {
+	cellDir := loc.dir()
+	rel := loc.rel()
+	recDir, ok := validate.NewestRecordingDir(cellDir)
+	if !ok {
+		return
+	}
+	if !fileExists(filepath.Join(cellDir, "expected.jsonl")) {
+		add(rel, "recorded cell is missing expected.jsonl")
+	}
+	recRel := filepath.Join(rel, "recordings", filepath.Base(recDir))
+	for _, finding := range validate.RecordingComplete(recDir) {
+		add(recRel, "incomplete recording: "+finding)
 	}
 }
 

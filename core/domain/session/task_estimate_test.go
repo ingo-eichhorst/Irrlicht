@@ -79,7 +79,7 @@ func TestForecastTaskCompletion_BaseWithoutProgressFallsBack(t *testing.T) {
 
 func TestForecastTaskCompletion_NoEstimateYieldsNil(t *testing.T) {
 	// The only no-projection case left after #753: no estimate at all.
-	if eta := ForecastTaskCompletion(nil, nil, 240, time.Now()); eta != nil {
+	if ForecastTaskCompletion(nil, nil, 240, time.Now()) != nil {
 		t.Error("nil estimate should yield nil eta")
 	}
 }

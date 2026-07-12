@@ -40,7 +40,7 @@ final class GroupViewSnapshotTests: XCTestCase {
             id: id,
             state: .working,
             model: "claude-opus-4-7",
-            cwd: "/Users/test/projects/app",
+            cwd: "/Users/test/projects/app",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             transcriptPath: nil,
             gitBranch: "main",
             projectName: "app",
@@ -78,32 +78,32 @@ final class GroupViewSnapshotTests: XCTestCase {
         return groups
     }
 
-    func testFirstOfThree_UpChevronDisabled() {
+    func testFirstOfThreeUpChevronDisabled() {
         let groups = seedThreeGroups()
         let view = host(GroupView(group: groups[0]))
         assertSnapshot(of: view, as: .image)
     }
 
-    func testMiddleOfThree_BothChevronsEnabled() {
+    func testMiddleOfThreeBothChevronsEnabled() {
         let groups = seedThreeGroups()
         let view = host(GroupView(group: groups[1]))
         assertSnapshot(of: view, as: .image)
     }
 
-    func testLastOfThree_DownChevronDisabled() {
+    func testLastOfThreeDownChevronDisabled() {
         let groups = seedThreeGroups()
         let view = host(GroupView(group: groups[2]))
         assertSnapshot(of: view, as: .image)
     }
 
-    func testSingleGroup_NoChevrons() {
+    func testSingleGroupNoChevrons() {
         let solo = makeGroup(name: "solo")
         sessionManager.apiGroups = [solo]
         let view = host(GroupView(group: solo))
         assertSnapshot(of: view, as: .image)
     }
 
-    func testSubGroup_NoChevrons() {
+    func testSubGroupNoChevrons() {
         _ = seedThreeGroups()
         let view = host(GroupView(group: makeGroup(name: "nested"), depth: 1))
         assertSnapshot(of: view, as: .image)
@@ -119,7 +119,7 @@ final class GroupViewSnapshotTests: XCTestCase {
             id: "proc-0",
             state: .ready,
             model: "gemini-3-pro",
-            cwd: "/Users/test/projects/app",
+            cwd: "/Users/test/projects/app",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
             transcriptPath: nil,
             gitBranch: "main",
             projectName: "app",

@@ -6,7 +6,7 @@ final class PublishClientTests: XCTestCase {
 
     func testMakeRequestEncodesConfigAsPutJSON() throws {
         let req = try XCTUnwrap(PublishClient.makeRequest(
-            enabled: true, url: "ws://localhost:7839", token: "tok"))
+            enabled: true, url: "ws://localhost:7839", token: "tok"))  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
 
         XCTAssertEqual(req.httpMethod, "PUT")
         XCTAssertEqual(req.url?.path, PublishClient.path)
@@ -14,7 +14,7 @@ final class PublishClientTests: XCTestCase {
 
         let body = try XCTUnwrap(req.httpBody)
         let decoded = try JSONDecoder().decode(PublishClient.Config.self, from: body)
-        XCTAssertEqual(decoded, PublishClient.Config(enabled: true, url: "ws://localhost:7839", token: "tok"))
+        XCTAssertEqual(decoded, PublishClient.Config(enabled: true, url: "ws://localhost:7839", token: "tok"))  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
     }
 
     func testMakeRequestCarriesDisableAndEmptyToken() throws {

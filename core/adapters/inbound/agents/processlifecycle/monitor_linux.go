@@ -90,14 +90,7 @@ func (m *pidMonitor) Run(ctx context.Context) error {
 		}
 
 		// Snapshot the current fd set under lock, then poll without it.
-		m.mu.Lock()
-		fds := make([]unix.PollFd, 0, len(m.watched))
-		pids := make([]int, 0, len(m.watched))
-		for pid, w := range m.watched {
-			fds = append(fds, unix.PollFd{Fd: int32(w.fd), Events: unix.POLLIN})
-			pids = append(pids, pid)
-		}
-		m.mu.Unlock()
+		fds, pids := m.snapshotWatched()
 
 		if len(fds) == 0 {
 			// Nothing to watch yet; idle while still honouring ctx.
@@ -120,35 +113,60 @@ func (m *pidMonitor) Run(ctx context.Context) error {
 			continue
 		}
 
-		for i := range fds {
-			// POLLNVAL covers an fd a concurrent Unwatch closed between the
-			// snapshot and this poll; it counts toward poll's return, so
-			// include it here and let the membership/fd re-check below drop
-			// it rather than letting the loop spin re-polling a stale set.
-			if fds[i].Revents&(unix.POLLIN|unix.POLLHUP|unix.POLLERR|unix.POLLNVAL) == 0 {
-				continue
-			}
-			pid := pids[i]
+		m.handleReadyFDs(fds, pids)
+	}
+}
 
-			var (
-				sessionID string
-				fire      bool
-			)
-			m.mu.Lock()
-			// Re-check membership and fd identity in case a concurrent
-			// Unwatch/Watch swapped this PID since the snapshot.
-			if w, ok := m.watched[pid]; ok && int32(w.fd) == fds[i].Fd {
-				unix.Close(w.fd)
-				delete(m.watched, pid)
-				sessionID, fire = w.sessionID, true
-			}
-			m.mu.Unlock()
+// snapshotWatched copies the current watched pidfd set under lock into the
+// slices poll(2) expects, so the (potentially blocking) poll call itself runs
+// without holding the lock.
+func (m *pidMonitor) snapshotWatched() ([]unix.PollFd, []int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	fds := make([]unix.PollFd, 0, len(m.watched))
+	pids := make([]int, 0, len(m.watched))
+	for pid, w := range m.watched {
+		fds = append(fds, unix.PollFd{Fd: int32(w.fd), Events: unix.POLLIN})
+		pids = append(pids, pid)
+	}
+	return fds, pids
+}
 
-			if fire && m.handler != nil {
-				go m.handler(pid, sessionID)
-			}
+// handleReadyFDs processes one poll(2) result: for every fd with a
+// ready/hangup/error/invalid event, retires the matching watch (if it hasn't
+// already been swapped out by a concurrent Watch/Unwatch) and fires its exit
+// handler.
+func (m *pidMonitor) handleReadyFDs(fds []unix.PollFd, pids []int) {
+	for i := range fds {
+		// POLLNVAL covers an fd a concurrent Unwatch closed between the
+		// snapshot and this poll; it counts toward poll's return, so
+		// include it here and let the membership/fd re-check below drop
+		// it rather than letting the loop spin re-polling a stale set.
+		if fds[i].Revents&(unix.POLLIN|unix.POLLHUP|unix.POLLERR|unix.POLLNVAL) == 0 {
+			continue
+		}
+		pid := pids[i]
+
+		sessionID, fire := m.retireWatch(pid, fds[i].Fd)
+		if fire && m.handler != nil {
+			go m.handler(pid, sessionID)
 		}
 	}
+}
+
+// retireWatch removes pid's watch if it still matches fd — guarding against a
+// concurrent Unwatch/Watch having swapped this PID since the snapshot — closes
+// the fd, and reports whether the exit handler should fire.
+func (m *pidMonitor) retireWatch(pid int, fd int32) (sessionID string, fire bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, ok := m.watched[pid]
+	if !ok || int32(w.fd) != fd {
+		return "", false
+	}
+	unix.Close(w.fd)
+	delete(m.watched, pid)
+	return w.sessionID, true
 }
 
 // Close releases every open pidfd.

@@ -11,7 +11,7 @@ const HISTORY_COLORS = [
   '#5E5CE6', '#FFD60A', '#30D158', '#BF5AF2', '#64D2FF',
 ];
 const RANGE_LABELS = { day: 'Day', week: 'Week', month: 'Month', year: 'Year', 'this-month': 'This Month', custom: 'Custom' };
-export const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', co2: 'CO2', models: 'Models', providers: 'Providers', agents: 'Agents' };
+export const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', co2: 'CO2', models: 'Models', providers: 'Providers', agents: 'Agents', yield: 'Yield', dora: 'DORA' };
 // Drilldown order: clicking a contributor scopes to it and re-groups by the
 // next finer axis. A leaf (no entry) makes that contributor non-drillable.
 export const DRILL_NEXT = { project: 'branch', branch: 'session', provider: 'model', model: 'session' };
@@ -27,6 +27,11 @@ const historyState = {
   range: 'day', chart: 'cost', group: 'project', forecast: true, start: null, end: null, scope: null, data: null,
   filters: { provider: [], token_type: [], project: [] },
   known: { provider: [], project: [] },
+  // DORA (#951) is inherently repo-scoped — needs exactly one project,
+  // unlike cost/yield's implicit "all projects." Sourced from
+  // known.project (already populated from cost fetches grouped by
+  // project), so no separate project-discovery fetch is needed.
+  doraProject: null,
 };
 let historyFetchSeq = 0;
 let historyResizeRAF = 0;
@@ -51,6 +56,16 @@ export function histCO2(v) {
   if (v < 1000) return v.toFixed(1) + 'g';
   return (v / 1000).toFixed(2) + 'kg';
 }
+// DORA (#951) metric formatters — mirror the daemon's own format_hours
+// convention (hours below a day, days at or above) for Lead Time/MTTR.
+export function histDoraPerWeek(v) { return (Number(v) || 0).toFixed(1) + '/week'; }
+export function histDoraPercent(v) { return Math.round(Number(v) || 0) + '%'; }
+export function histDoraHours(v) {
+  v = Number(v) || 0;
+  if (v >= 24) return (v / 24).toFixed(1) + ' days';
+  return Math.round(v) + ' hours';
+}
+
 // The value formatter for the active chart — dollars for cost/models/providers,
 // token counts for tokens, integer agent counts for agents, grams for co2.
 function histValue(v) {
@@ -58,6 +73,77 @@ function histValue(v) {
   if (historyState.chart === 'agents') return histCount(v);
   if (historyState.chart === 'co2') return histCO2(v);
   return histDollar(v);
+}
+
+// CO2 equivalents (issue #952): everyday high-carbon activities used as red
+// dotted reference lines on the CO2 chart, so a raw gram total maps to
+// something tangible instead of an abstract number. Every figure is a
+// widely-cited public average — not measured against irrlicht's own
+// sessions — chosen to be recognizable across different countries rather
+// than US/UK-centric only. Full citations live in the "CO2 Methodology"
+// docs page linked from the chart. Kept ascending by grams.
+export const CO2_EQUIVALENTS = [
+  { id: 'search', grams: 0.2, label: 'a web search' },
+  { id: 'phone-charge', grams: 10, label: 'charging a smartphone' },
+  { id: 'stream-hour', grams: 36, label: '1 hour of video streaming' },
+  { id: 'kettle', grams: 60, label: 'boiling a kettle' },
+  { id: 'car-km', grams: 170, label: 'driving 1 km by car' },
+  { id: 'car-mile', grams: 393, label: 'driving 1 mile by car' },
+  { id: 'grid-kwh', grams: 460, label: '1 kWh of average grid electricity' },
+  { id: 'laundry', grams: 1500, label: 'a load of laundry' },
+  { id: 'gasoline-gallon', grams: 8900, label: 'burning 1 gallon of gasoline' },
+  { id: 'flight-short', grams: 43800, label: 'a short-haul flight (London → Paris)' },
+  { id: 'tree-year', grams: 60000, label: "a tree's CO2 absorption for a year" },
+  { id: 'car-commute-month', grams: 118000, label: 'a month of average car commuting' },
+  { id: 'flight-long', grams: 650000, label: 'a long-haul flight (London → New York)' },
+  { id: 'car-year', grams: 4290000, label: "an average car's emissions for a year" },
+  { id: 'person-year', grams: 4800000, label: "an average person's annual carbon footprint" },
+  { id: 'cars-25t', grams: 25000000, label: "roughly 6 average cars' annual emissions" },
+  { id: 'people-100t', grams: 100000000, label: "roughly 21 people's average annual carbon footprint" },
+];
+
+// co2EquivalentTargets returns the log-scale fractions of the axis maximum
+// pickCO2Equivalents aims each reference line at, based on how many
+// candidates are available to fill them — 3 spread bands when there's
+// enough range to fill them, fewer otherwise. Deliberately wide spread
+// (0.04/0.2/0.8, not evenly spaced) so the 3 lines read as low/mid/high
+// scale rather than clustering in the middle of the visible range.
+function co2EquivalentTargets(candidateCount) {
+  if (candidateCount >= 3) return [0.04, 0.2, 0.8];
+  if (candidateCount === 2) return [0.1, 0.7];
+  return [0.4];
+}
+
+// nearestUnpickedEquivalent returns whichever candidate not already in picks
+// sits closest (in log-space, so magnitudes compare fairly) to targetLog.
+function nearestUnpickedEquivalent(candidates, picks, targetLog) {
+  let best = null, bestDist = Infinity;
+  for (const eq of candidates) {
+    if (picks.includes(eq)) continue;
+    const dist = Math.abs(Math.log(eq.grams) - targetLog);
+    if (dist < bestDist) { bestDist = dist; best = eq; }
+  }
+  return best;
+}
+
+// pickCO2Equivalents chooses up to 3 reference lines that sit inside the
+// chart's y-axis range, spread across low/mid/high bands (rather than
+// picking the 3 closest to maxY, which would cluster them together) so a
+// viewer gets a sense of scale. Values within 2% of the axis ceiling are
+// excluded — a line drawn on top of the topmost gridline reads as clutter,
+// not a reference. Deterministic (no randomness), so the same data always
+// draws the same lines.
+export function pickCO2Equivalents(maxY) {
+  if (maxY <= 0) return [];
+  const ceiling = maxY * 0.98;
+  const candidates = CO2_EQUIVALENTS.filter(eq => eq.grams > 0 && eq.grams < ceiling);
+  if (!candidates.length) return [];
+  const picks = [];
+  for (const frac of co2EquivalentTargets(candidates.length)) {
+    const best = nearestUnpickedEquivalent(candidates, picks, Math.log(maxY * frac));
+    if (best) picks.push(best);
+  }
+  return picks.sort((a, b) => a.grams - b.grams);
 }
 function histAxisLabel(ts, bucketSeconds) {
   const d = new Date(ts * 1000);
@@ -105,12 +191,23 @@ export function historyQuery(state = historyState) {
     if (dim === state.group) continue;
     if (dim === 'token_type' && state.chart !== 'tokens') continue;
     const vals = filters[dim];
-    if (vals && vals.length) p.set(dim, vals.join(','));
+    if (vals?.length) p.set(dim, vals.join(','));
   }
+  // DORA is repo-scoped — exactly one project, not the multi-select project
+  // filter above (#951).
+  if (state.chart === 'dora' && state.doraProject) p.set('project', state.doraProject);
   return p.toString();
 }
 
 function fetchHistory() {
+  // DORA needs exactly one project — with none selected, there's nothing
+  // to fetch at all (a distinct empty state, not a load failure or a
+  // spinner; see renderDoraPanel).
+  if (historyState.chart === 'dora' && !historyState.doraProject) {
+    historyState.data = null;
+    renderHistory();
+    return Promise.resolve();
+  }
   const seq = ++historyFetchSeq;
   return fetch('/api/v1/history?' + historyQuery())
     .then(r => (r.ok ? r.json() : null))
@@ -125,29 +222,49 @@ function fetchHistory() {
         for (const c of (data.top_contributors || [])) {
           if (c.label && c.label !== 'unknown') set.add(c.label);
         }
-        historyState.known[data.group] = [...set].sort();
+        historyState.known[data.group] = [...set].sort((a, b) => a.localeCompare(b));
       }
       renderHistory();
     });
 }
 
+// syncHistoryCO2Info shows the "how is this calculated" methodology link
+// only while the CO2 chart is active — it's meaningless for cost/tokens/etc.
+function syncHistoryCO2Info() {
+  const el = document.getElementById('history-co2-info');
+  if (el) el.hidden = historyState.chart !== 'co2';
+}
+
 function renderHistory() {
   renderHistoryBreadcrumb();
   renderHistoryFilters();
+  syncDoraProjectRow();
+  syncHistoryCO2Info();
   const isYield = historyState.chart === 'yield';
+  const isDora = historyState.chart === 'dora';
   // Yield counts completed sessions; agents are reconstructed from opt-in
-  // recordings — each gets its own empty caption.
+  // recordings — each gets its own empty caption. DORA never paints the
+  // canvas at all (it's a period summary, not a time series) — its content
+  // lives entirely in the side panel (see renderDoraPanel).
   const emptyEl = document.getElementById('history-chart-empty');
-  if (emptyEl) emptyEl.textContent =
-    isYield ? 'no completed sessions in this range yet'
-      : historyState.chart === 'agents' ? 'no recordings in this range yet'
-        : 'no cost data in this range yet';
+  if (emptyEl) {
+    let emptyText = 'no cost data in this range yet';
+    if (isYield) emptyText = 'no completed sessions in this range yet';
+    else if (isDora) emptyText = historyState.doraProject ? 'DORA metrics — see panel' : 'select a project to see DORA metrics';
+    else if (historyState.chart === 'agents') emptyText = 'no recordings in this range yet';
+    emptyEl.textContent = emptyText;
+  }
   if (!historyState.data) {
     const wrap = document.getElementById('history-chart-wrap');
     if (wrap) wrap.classList.add('empty');
+    if (isDora) renderDoraPanel();
     return;
   }
-  if (isYield) {
+  if (isDora) {
+    const wrap = document.getElementById('history-chart-wrap');
+    if (wrap) wrap.classList.add('empty');
+    renderDoraPanel();
+  } else if (isYield) {
     paintYieldChart();
     renderYieldPanel();
   } else {
@@ -156,11 +273,9 @@ function renderHistory() {
   }
 }
 
-function paintHistoryChart() {
-  const canvas = document.getElementById('history-chart');
-  const wrap = document.getElementById('history-chart-wrap');
-  if (!canvas || !wrap) return;
-  const data = historyState.data;
+// setupHistoryCanvas sizes the canvas for the current DPR/layout, clears
+// it, and returns the 2D context plus the CSS-pixel plot dimensions.
+function setupHistoryCanvas(canvas, wrap) {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.offsetWidth || wrap.clientWidth || 600;
   const h = canvas.offsetHeight || 340;
@@ -169,21 +284,13 @@ function paintHistoryChart() {
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
 
-  const buckets = (data && data.bucket_starts) || [];
-  const B = buckets.length;
-  const hasData = !!(data && data.total > 0 && B > 0);
-  wrap.classList.toggle('empty', !hasData);
-  if (!hasData) return;
-
-  const cs = getComputedStyle(document.documentElement);
-  const muted = (cs.getPropertyValue('--muted') || '#888').trim();
-  const waiting = (cs.getPropertyValue('--waiting') || '#FF9500').trim();
-  const gridColor = 'rgba(128,140,170,0.18)';
-
-  // Per-project matrix aligned to buckets. Project order follows
-  // top_contributors (so side-panel dots match chart colors), then any
-  // extra projects from the series.
+// buildHistoryMatrix lays out one row per project — top_contributors order
+// first (so side-panel dots match chart colors), then any extra projects
+// seen only in the series — and fills a [project][bucket] value matrix.
+function buildHistoryMatrix(data, buckets, B) {
   const projects = [];
   const idx = new Map();
   for (const c of (data.top_contributors || [])) {
@@ -199,26 +306,24 @@ function paintHistoryChart() {
     const r = idx.get(pt.project), c = tsIdx.get(pt.ts);
     if (r != null && c != null) matrix[r][c] += pt.value;
   }
-  // Cumulative for the stacked cost/token area charts: each band becomes a
-  // running total climbing to its grand total at the right edge. Agents (a
-  // concurrency count, not a flow) stays a per-bucket rate.
-  const cumulative = historyState.chart !== 'agents';
-  if (cumulative) for (let r = 0; r < matrix.length; r++) matrix[r] = historyRunningSum(matrix[r]);
+  return { projects, matrix };
+}
 
+// historyForecastSeries resolves the forecast points in display space:
+// continuing the cumulative climb from the grand total, or the flat
+// per-bucket projected rate when incremental.
+function historyForecastSeries(data, cumulative, grandTotal) {
   const fc = (historyState.forecast && data.forecast && Array.isArray(data.forecast.series)) ? data.forecast.series : [];
-  const H = fc.length;
-  // Grand cumulative total = the stack's right-edge height; it anchors the
-  // forecast when cumulative.
-  let grandTotal = 0;
-  for (let r = 0; r < matrix.length; r++) grandTotal += matrix[r][B - 1] || 0;
-  // Forecast points in display space: continue the cumulative climb from the
-  // grand total, or stay at the per-bucket projected rate when incremental.
   const fcY = cumulative
     ? historyRunningSum(fc.map(p => p.value)).map(v => grandTotal + v)
     : fc.map(p => p.value);
+  return { H: fc.length, fcY };
+}
 
-  // Y scale = the tallest stacked column (sum across bands per bucket), also
-  // covering the forecast points.
+// historyMaxY finds the Y-axis scale: the tallest stacked column (summed
+// across bands per bucket), also covering the forecast points, with 12%
+// headroom.
+function historyMaxY(matrix, projects, B, fcY) {
   let maxY = 0;
   for (let c = 0; c < B; c++) {
     let s = 0;
@@ -227,16 +332,13 @@ function paintHistoryChart() {
   }
   for (const v of fcY) if (v > maxY) maxY = v;
   if (maxY <= 0) maxY = 1;
-  maxY *= 1.12;
+  return maxY * 1.12;
+}
 
-  const padL = 46, padR = 12, padT = 12, padB = 22;
-  const plotW = Math.max(1, w - padL - padR);
-  const plotH = Math.max(1, h - padT - padB);
-  const N = B + H;
-  const xAt = (i) => (N <= 1 ? padL : padL + plotW * (i / (N - 1)));
-  const yAt = (v) => padT + plotH * (1 - v / maxY);
-
-  // Y gridlines + dollar labels (drawn first, behind the areas).
+// drawHistoryGridlines draws the Y gridlines and their value labels,
+// underneath where the stacked areas will be drawn.
+function drawHistoryGridlines(geo, { w, padL, padR, muted, gridColor, maxY }) {
+  const { ctx, yAt } = geo;
   ctx.font = '10px ui-monospace, monospace';
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'right';
@@ -253,8 +355,10 @@ function paintHistoryChart() {
     ctx.fillStyle = muted;
     ctx.fillText(histValue(v), padL - 6, y);
   }
+}
 
-  // Stacked areas, bottom-up.
+// drawHistoryStackedAreas draws the bottom-up stacked project bands.
+function drawHistoryStackedAreas(ctx, projects, matrix, B, xAt, yAt) {
   const baseline = new Array(B).fill(0);
   for (let r = 0; r < projects.length; r++) {
     ctx.beginPath();
@@ -268,33 +372,216 @@ function paintHistoryChart() {
     ctx.fill();
     for (let c = 0; c < B; c++) baseline[c] += matrix[r][c];
   }
+}
 
-  // Forecast: a dashed line into the future. Cumulative charts continue the
-  // climb from the grand total to ≈forecast.projected; incremental charts
-  // hold a flat line at the projected per-bucket rate, anchored at the
-  // forecast's own first value so an empty trailing bucket (the in-progress
-  // current minute) doesn't draw a spurious dip-and-spike to the axis.
-  if (H > 0) {
-    ctx.save();
-    ctx.setLineDash([4, 3]);
-    ctx.strokeStyle = waiting;
-    ctx.lineWidth = 1.5;
+// drawHistoryForecastLine draws the dashed forecast continuation. Cumulative
+// charts continue the climb from the grand total to ≈forecast.projected;
+// incremental charts hold a flat line at the projected per-bucket rate,
+// anchored at the forecast's own first value so an empty trailing bucket
+// (the in-progress current minute) doesn't draw a spurious dip-and-spike.
+function drawHistoryForecastLine(geo, { B, H, cumulative, grandTotal, fcY, waiting }) {
+  if (H <= 0) return;
+  const { ctx, xAt, yAt } = geo;
+  ctx.save();
+  ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = waiting;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(xAt(B - 1), yAt(cumulative ? grandTotal : fcY[0]));
+  for (let k = 0; k < H; k++) ctx.lineTo(xAt(B + k), yAt(fcY[k]));
+  ctx.stroke();
+  ctx.restore();
+}
+
+// drawHistoryCO2Equivalents overlays red dotted reference lines at grams
+// equivalent to a relatable everyday activity (issue #952) — only called for
+// the CO2 chart, so every other chart type is unaffected. Labels are left-
+// aligned near where the line starts (not the far right, which used to
+// overlap the stacked-area content) and flip below the line instead of
+// above near the top edge so they don't clip off-canvas.
+function drawHistoryCO2Equivalents(geo, { w, padL, padR, padT, maxY, danger }) {
+  const { ctx, yAt } = geo;
+  const picks = pickCO2Equivalents(maxY);
+  if (!picks.length) return;
+  ctx.save();
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.strokeStyle = danger;
+  ctx.fillStyle = danger;
+  ctx.lineWidth = 1.5;
+  ctx.lineCap = 'round';
+  ctx.setLineDash([1, 4]);
+  ctx.textAlign = 'left';
+  for (const eq of picks) {
+    const y = yAt(eq.grams);
     ctx.beginPath();
-    ctx.moveTo(xAt(B - 1), yAt(cumulative ? grandTotal : fcY[0]));
-    for (let k = 0; k < H; k++) ctx.lineTo(xAt(B + k), yAt(fcY[k]));
+    ctx.moveTo(padL, y);
+    ctx.lineTo(w - padR, y);
     ctx.stroke();
-    ctx.restore();
+    const below = (y - padT) < 10;
+    ctx.textBaseline = below ? 'top' : 'bottom';
+    ctx.fillText('≈ ' + eq.label, padL + 4, below ? y + 3 : y - 3);
   }
+  ctx.restore();
+}
 
-  // X axis time labels.
+// drawHistoryXAxisLabels draws up to 6 evenly-spaced time labels.
+function drawHistoryXAxisLabels(geo, { buckets, B, bucketSeconds, muted, h, padB }) {
+  const { ctx, xAt } = geo;
   ctx.fillStyle = muted;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   const labelCount = Math.min(6, B);
   for (let i = 0; i < labelCount; i++) {
     const c = Math.round(i * (B - 1) / Math.max(1, labelCount - 1));
-    ctx.fillText(histAxisLabel(buckets[c], data.bucket_seconds), xAt(c), h - padB + 5);
+    ctx.fillText(histAxisLabel(buckets[c], bucketSeconds), xAt(c), h - padB + 5);
   }
+}
+
+function paintHistoryChart() {
+  const canvas = document.getElementById('history-chart');
+  const wrap = document.getElementById('history-chart-wrap');
+  if (!canvas || !wrap) return;
+  const data = historyState.data;
+  const { ctx, w, h } = setupHistoryCanvas(canvas, wrap);
+
+  const buckets = data?.bucket_starts || [];
+  const B = buckets.length;
+  const hasData = !!(data && data.total > 0 && B > 0);
+  wrap.classList.toggle('empty', !hasData);
+  if (!hasData) return;
+
+  const cs = getComputedStyle(document.documentElement);
+  const muted = (cs.getPropertyValue('--muted') || '#888').trim();
+  const waiting = (cs.getPropertyValue('--waiting') || '#FF9500').trim();
+  const danger = (cs.getPropertyValue('--pressure-high') || '#FF3B30').trim();
+  const gridColor = 'rgba(128,140,170,0.18)';
+
+  const { projects, matrix } = buildHistoryMatrix(data, buckets, B);
+  // Cumulative for the stacked cost/token area charts: each band becomes a
+  // running total climbing to its grand total at the right edge. Agents (a
+  // concurrency count, not a flow) stays a per-bucket rate.
+  const cumulative = historyState.chart !== 'agents';
+  if (cumulative) for (let r = 0; r < matrix.length; r++) matrix[r] = historyRunningSum(matrix[r]);
+
+  // Grand cumulative total = the stack's right-edge height; it anchors the
+  // forecast when cumulative.
+  let grandTotal = 0;
+  for (const row of matrix) grandTotal += row[B - 1] || 0;
+  const { H, fcY } = historyForecastSeries(data, cumulative, grandTotal);
+
+  // Y scale = the tallest stacked column (sum across bands per bucket), also
+  // covering the forecast points.
+  const maxY = historyMaxY(matrix, projects, B, fcY);
+
+  const padL = 46, padR = 12, padT = 12, padB = 22;
+  const plotW = Math.max(1, w - padL - padR);
+  const plotH = Math.max(1, h - padT - padB);
+  const N = B + H;
+  const xAt = (i) => (N <= 1 ? padL : padL + plotW * (i / (N - 1)));
+  const yAt = (v) => padT + plotH * (1 - v / maxY);
+
+  // Shared canvas geometry (context + coordinate mappers) every draw* helper
+  // below needs; the rest of each call is data specific to that helper
+  // (javascript:S107 — bundling this alone dropped each from 8-9 params to 2).
+  const geo = { ctx, xAt, yAt };
+
+  // Y gridlines + dollar labels (drawn first, behind the areas).
+  drawHistoryGridlines(geo, { w, padL, padR, muted, gridColor, maxY });
+
+  // Stacked areas, bottom-up.
+  drawHistoryStackedAreas(ctx, projects, matrix, B, xAt, yAt);
+
+  // Forecast: a dashed line into the future.
+  drawHistoryForecastLine(geo, { B, H, cumulative, grandTotal, fcY, waiting });
+
+  // CO2 equivalents: red dotted reference lines for relatable everyday
+  // activities (issue #952) — meaningless for any other chart.
+  if (historyState.chart === 'co2') drawHistoryCO2Equivalents(geo, { w, padL, padR, padT, maxY, danger });
+
+  // X axis time labels.
+  drawHistoryXAxisLabels(geo, { buckets, B, bucketSeconds: data.bucket_seconds, muted, h, padB });
+}
+
+// buildHistoryStatRow builds one contributor list-item: colored dot, label,
+// value — the shared shape behind every history-panel breakdown list.
+function buildHistoryStatRow(i, label, value) {
+  const li = document.createElement('li');
+  const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
+  const lab = document.createElement('span'); lab.className = 'label'; lab.textContent = label;
+  const val = document.createElement('span'); val.className = 'val'; val.textContent = value;
+  li.append(dot, lab, val);
+  return li;
+}
+
+// renderAgentsPanel fills the side panel for the agents chart: concurrency
+// summarizes as a peak headline + avg/current sub-line, and ranks the
+// projects that ran the most agents at once. No forecast or drilldown —
+// concurrency is reconstructed per project only.
+function renderAgentsPanel(data, totalEl, fcEl, listEl) {
+  const conc = data.concurrency || { peak: 0, average: 0, current: 0 };
+  if (totalEl) totalEl.textContent = histCount(conc.peak) + ' peak';
+  if (fcEl) fcEl.textContent = 'avg ' + (Number(conc.average) || 0).toFixed(1) + ' · now ' + histCount(conc.current);
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  const projects = data.top_contributors || [];
+  if (!projects.length) {
+    appendHistoryEmpty(listEl, 'no agents in this range');
+    return;
+  }
+  projects.forEach((c, i) => listEl.appendChild(buildHistoryStatRow(i, c.label, histCount(c.value))));
+}
+
+// renderTokensPanel fills the side panel for the tokens chart: an
+// input/output/cache breakdown, or — when grouping by token_type — the
+// stacked bands themselves, listed with friendly labels.
+function renderTokensPanel(data, listEl) {
+  if (historyState.group === 'token_type') {
+    const contribs = data.top_contributors || [];
+    if (!contribs.length) {
+      appendHistoryEmpty(listEl, 'no token usage in this range');
+      return;
+    }
+    contribs.forEach((c, i) =>
+      listEl.appendChild(buildHistoryStatRow(i, TOKEN_TYPE_LABEL[c.label] || c.label, histTokens(c.value))));
+    return;
+  }
+  const split = data.token_split;
+  if (!split || data.total <= 0) {
+    appendHistoryEmpty(listEl, 'no token usage in this range');
+    return;
+  }
+  [['Input', split.input], ['Output', split.output], ['Cache', split.cache]].forEach(([label, v], i) =>
+    listEl.appendChild(buildHistoryStatRow(i, label, histTokens(v))));
+}
+
+// wireDrillableRow makes a contributor row clickable/keyboard-activatable to
+// drill into it, scoping the view and re-grouping by the next finer axis.
+function wireDrillableRow(li, drillField, label) {
+  li.classList.add('drillable');
+  li.tabIndex = 0;
+  li.setAttribute('role', 'button');
+  li.title = 'Drill into ' + label;
+  const drill = () => drillInto(drillField, label);
+  li.addEventListener('click', drill);
+  li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drill(); } });
+}
+
+// renderContributorsPanel fills the default (cost/co2/models/providers)
+// contributor ranking, wiring drilldown when the grouped axis supports it.
+// The synthetic "unknown" bucket and leaf axes aren't drillable.
+function renderContributorsPanel(data, listEl) {
+  const contribs = data.top_contributors || [];
+  if (!contribs.length) {
+    appendHistoryEmpty(listEl, historyState.chart === 'co2' ? 'no CO2 estimate in this range' : 'no spend in this range');
+    return;
+  }
+  const drillField = data.group;
+  const drillable = !!DRILL_NEXT[drillField];
+  contribs.forEach((c, i) => {
+    const li = buildHistoryStatRow(i, c.label, histValue(c.value));
+    if (drillable && c.label !== 'unknown') wireDrillableRow(li, drillField, c.label);
+    listEl.appendChild(li);
+  });
 }
 
 function renderHistoryPanel() {
@@ -307,28 +594,8 @@ function renderHistoryPanel() {
   const chartLabel = CHART_LABELS[historyState.chart] || 'Total';
   if (titleEl) titleEl.textContent = chartLabel + ' · ' + (RANGE_LABELS[historyState.range] || historyState.range);
 
-  // Agents: the panel summarizes concurrency (peak headline, avg/current
-  // sub-line) and ranks the projects that ran the most agents at once. No
-  // forecast or drilldown — concurrency is reconstructed per project only.
   if (historyState.chart === 'agents') {
-    const conc = data.concurrency || { peak: 0, average: 0, current: 0 };
-    if (totalEl) totalEl.textContent = histCount(conc.peak) + ' peak';
-    if (fcEl) fcEl.textContent = 'avg ' + (Number(conc.average) || 0).toFixed(1) + ' · now ' + histCount(conc.current);
-    if (!listEl) return;
-    listEl.innerHTML = '';
-    const projects = data.top_contributors || [];
-    if (!projects.length) {
-      appendHistoryEmpty(listEl, 'no agents in this range');
-      return;
-    }
-    projects.forEach((c, i) => {
-      const li = document.createElement('li');
-      const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
-      const label = document.createElement('span'); label.className = 'label'; label.textContent = c.label;
-      const val = document.createElement('span'); val.className = 'val'; val.textContent = histCount(c.value);
-      li.append(dot, label, val);
-      listEl.appendChild(li);
-    });
+    renderAgentsPanel(data, totalEl, fcEl, listEl);
     return;
   }
 
@@ -342,69 +609,12 @@ function renderHistoryPanel() {
   if (!listEl) return;
   listEl.innerHTML = '';
 
-  // Tokens: the side panel is an input/output/cache breakdown, not a
-  // contributor ranking — except when grouping by token_type, where the
-  // stacked bands themselves are the breakdown (listed with friendly labels).
   if (historyState.chart === 'tokens') {
-    if (historyState.group === 'token_type') {
-      const contribs = data.top_contributors || [];
-      if (!contribs.length) {
-        appendHistoryEmpty(listEl, 'no token usage in this range');
-        return;
-      }
-      contribs.forEach((c, i) => {
-        const li = document.createElement('li');
-        const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
-        const lab = document.createElement('span'); lab.className = 'label'; lab.textContent = TOKEN_TYPE_LABEL[c.label] || c.label;
-        const val = document.createElement('span'); val.className = 'val'; val.textContent = histTokens(c.value);
-        li.append(dot, lab, val);
-        listEl.appendChild(li);
-      });
-      return;
-    }
-    const split = data.token_split;
-    if (!split || !(data.total > 0)) {
-      appendHistoryEmpty(listEl, 'no token usage in this range');
-      return;
-    }
-    [['Input', split.input], ['Output', split.output], ['Cache', split.cache]].forEach(([label, v], i) => {
-      const li = document.createElement('li');
-      const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
-      const lab = document.createElement('span'); lab.className = 'label'; lab.textContent = label;
-      const val = document.createElement('span'); val.className = 'val'; val.textContent = histTokens(v);
-      li.append(dot, lab, val);
-      listEl.appendChild(li);
-    });
+    renderTokensPanel(data, listEl);
     return;
   }
 
-  const contribs = data.top_contributors || [];
-  if (!contribs.length) {
-    appendHistoryEmpty(listEl, historyState.chart === 'co2' ? 'no CO2 estimate in this range' : 'no spend in this range');
-    return;
-  }
-  // Drilldown: click a contributor to scope into it (the effective stacking
-  // axis is data.group). The synthetic "unknown" bucket and leaf axes aren't
-  // drillable.
-  const drillField = data.group;
-  const drillable = !!DRILL_NEXT[drillField];
-  contribs.forEach((c, i) => {
-    const li = document.createElement('li');
-    const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = historyColorFor(i);
-    const label = document.createElement('span'); label.className = 'label'; label.textContent = c.label;
-    const val = document.createElement('span'); val.className = 'val'; val.textContent = histValue(c.value);
-    li.append(dot, label, val);
-    if (drillable && c.label !== 'unknown') {
-      li.classList.add('drillable');
-      li.tabIndex = 0;
-      li.setAttribute('role', 'button');
-      li.title = 'Drill into ' + c.label;
-      const drill = () => drillInto(drillField, c.label);
-      li.addEventListener('click', drill);
-      li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); drill(); } });
-    }
-    listEl.appendChild(li);
-  });
+  renderContributorsPanel(data, listEl);
 }
 
 function appendHistoryEmpty(listEl, text) {
@@ -419,6 +629,34 @@ function historyFilterOptions(dim) {
   return (historyState.known[dim] || []).map(v => [v, v]);
 }
 
+// buildHistoryFilterOption renders one filter dropdown's checkbox row.
+function buildHistoryFilterOption(dim, val, label, sel) {
+  const lab = document.createElement('label');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox'; cb.value = val; cb.checked = sel.has(val);
+  cb.addEventListener('change', () => toggleHistoryFilter(dim, val, cb.checked));
+  const span = document.createElement('span'); span.textContent = label;
+  lab.append(cb, span);
+  return lab;
+}
+
+// renderHistoryFilterDetail populates one dimension's <details> filter menu
+// and its summary text.
+function renderHistoryFilterDetail(det, dim, sel) {
+  const menu = det.querySelector('.menu');
+  if (menu) {
+    menu.innerHTML = '';
+    const opts = historyFilterOptions(dim);
+    for (const [val, label] of opts) {
+      menu.appendChild(buildHistoryFilterOption(dim, val, label, sel));
+    }
+    if (!opts.length) appendHistoryEmpty(menu, 'none seen yet');
+  }
+  const sum = det.querySelector('summary');
+  const dimLabel = dim === 'token_type' ? 'Token type' : dim[0].toUpperCase() + dim.slice(1);
+  if (sum) sum.textContent = dimLabel + ': ' + (sel.size ? sel.size + ' selected' : 'All');
+}
+
 // renderHistoryFilters repopulates the per-dimension filter dropdowns,
 // hiding the dimension currently being grouped on (never both axis and
 // filter) and the token_type filter outside the tokens metric.
@@ -431,24 +669,7 @@ function renderHistoryFilters() {
     det.hidden = hidden;
     if (hidden) { det.open = false; continue; }
     const sel = new Set(historyState.filters[dim] || []);
-    const menu = det.querySelector('.menu');
-    if (menu) {
-      menu.innerHTML = '';
-      const opts = historyFilterOptions(dim);
-      for (const [val, label] of opts) {
-        const lab = document.createElement('label');
-        const cb = document.createElement('input');
-        cb.type = 'checkbox'; cb.value = val; cb.checked = sel.has(val);
-        cb.addEventListener('change', () => toggleHistoryFilter(dim, val, cb.checked));
-        const span = document.createElement('span'); span.textContent = label;
-        lab.append(cb, span);
-        menu.appendChild(lab);
-      }
-      if (!opts.length) appendHistoryEmpty(menu, 'none seen yet');
-    }
-    const sum = det.querySelector('summary');
-    const dimLabel = dim === 'token_type' ? 'Token type' : dim[0].toUpperCase() + dim.slice(1);
-    if (sum) sum.textContent = dimLabel + ': ' + (sel.size ? sel.size + ' selected' : 'All');
+    renderHistoryFilterDetail(det, dim, sel);
   }
 }
 
@@ -507,6 +728,8 @@ function clearHistoryDrilldown() {
 function syncHistorySelectors() {
   const chartSeg = document.getElementById('history-chart-sel');
   if (chartSeg) for (const b of chartSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.chart === historyState.chart);
+  const metricsSeg = document.getElementById('history-metrics-sel');
+  if (metricsSeg) for (const b of metricsSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.chart === historyState.chart);
   const groupSeg = document.getElementById('history-group-sel');
   if (groupSeg) for (const b of groupSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.group === historyState.group);
 }
@@ -531,7 +754,7 @@ function paintYieldChart() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  const projects = (data && data.projects) || [];
+  const projects = data?.projects || [];
   // Only projects with attributable (productive+reverted) spend get a bar;
   // unknown-only projects contribute nothing to the ratio.
   const rows = projects.filter(p => (p.total_cost || 0) > 0);
@@ -620,6 +843,78 @@ function renderYieldPanel() {
   function red() { return (getComputedStyle(document.documentElement).getPropertyValue('--pressure-high') || '#FF3B30').trim(); }
 }
 
+// syncDoraProjectRow shows/hides the DORA project picker and refreshes its
+// option list from known.project — called on every render so a project
+// discovered after switching to DORA still shows up (#951).
+function syncDoraProjectRow() {
+  const row = document.getElementById('history-dora-row');
+  if (row) row.hidden = historyState.chart !== 'dora';
+  const sel = document.getElementById('history-dora-project');
+  if (!sel) return;
+  const known = historyState.known.project || [];
+  const current = sel.value;
+  sel.innerHTML = '<option value="">Select a project…</option>';
+  for (const p of known) {
+    const opt = document.createElement('option');
+    opt.value = p;
+    opt.textContent = p;
+    sel.appendChild(opt);
+  }
+  sel.value = known.includes(current) ? current : (historyState.doraProject || '');
+}
+
+// DORA metrics (#951): a per-project period summary, not a time series — no
+// canvas, no bucket series. All four metrics render as rows in the side
+// panel's contributor list, mirroring the panel shape yield/cost already use.
+function renderDoraPanel() {
+  const titleEl = document.getElementById('history-panel-title');
+  const totalEl = document.getElementById('history-total');
+  const fcEl = document.getElementById('history-forecast-line');
+  const listEl = document.getElementById('history-contrib');
+  const project = historyState.doraProject;
+  if (titleEl) titleEl.textContent = 'DORA' + (project ? ' · ' + project : '') + ' · ' + (RANGE_LABELS[historyState.range] || historyState.range);
+  if (totalEl) totalEl.textContent = '';
+  if (fcEl) fcEl.textContent = '';
+  if (!listEl) return;
+  listEl.innerHTML = '';
+
+  const data = historyState.data;
+  if (!project) {
+    appendHistoryEmpty(listEl, 'select a project above');
+    return;
+  }
+  if (!data) {
+    appendHistoryEmpty(listEl, 'loading…');
+    return;
+  }
+  if (!data.available) {
+    appendHistoryEmpty(listEl, data.message || 'not enough data to compute DORA metrics');
+    return;
+  }
+  const rows = [
+    ['Deployment Frequency', data.deployment_frequency, histDoraPerWeek],
+    ['Lead Time for Changes', data.lead_time, histDoraHours],
+    ['Change Failure Rate', data.change_failure_rate, histDoraPercent],
+    ['Mean Time to Restore', data.mttr, histDoraHours],
+  ];
+  for (const [label, metric, format] of rows) {
+    const li = document.createElement('li');
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = 'transparent';
+    const lbl = document.createElement('span');
+    lbl.className = 'label';
+    lbl.textContent = label;
+    const val = document.createElement('span');
+    val.className = 'val';
+    val.textContent = metric && metric.available ? format(metric.value) : (metric?.message || 'n/a');
+    li.appendChild(dot);
+    li.appendChild(lbl);
+    li.appendChild(val);
+    listEl.appendChild(li);
+  }
+}
+
 function historyDownload(filename, mime, text) {
   const blob = new Blob([text], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -633,7 +928,7 @@ function historyDownload(filename, mime, text) {
 }
 function historyCsvCell(s) {
   s = String(s);
-  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  return /[",\n]/.test(s) ? '"' + s.replaceAll('"', '""') + '"' : s;
 }
 function exportHistoryCSV() {
   const d = historyState.data;
@@ -647,6 +942,21 @@ function exportHistoryCSV() {
         (p.productive_cost || 0).toFixed(6), (p.reverted_cost || 0).toFixed(6),
         (p.unknown_cost || 0).toFixed(6), (p.total_cost || 0).toFixed(6),
         (p.yield || 0).toFixed(6), String(p.reverted_count || 0),
+      ].join(','));
+    }
+  } else if (historyState.chart === 'dora') {
+    lines = ['metric,value,unit,sample_size,available,message'];
+    const rows = [
+      ['deployment_frequency', d.deployment_frequency],
+      ['lead_time', d.lead_time],
+      ['change_failure_rate', d.change_failure_rate],
+      ['mttr', d.mttr],
+    ];
+    for (const [name, m] of rows) {
+      lines.push([
+        name, m ? String(m.value) : '', m ? historyCsvCell(m.unit) : '',
+        m ? String(m.sample_size) : '', m ? String(!!m.available) : '',
+        m?.message ? historyCsvCell(m.message) : '',
       ].join(','));
     }
   } else {
@@ -678,7 +988,7 @@ export function initHistoryTab() {
     for (const x of histRangeSeg.querySelectorAll('button')) x.classList.toggle('active', x === b);
     const r = b.dataset.range;
     const custom = document.getElementById('history-custom');
-    if (r === 'custom') { if (custom) custom.hidden = false; return; } // wait for Apply
+    if (r === 'custom') { if (custom) { custom.hidden = false; } return; } // wait for Apply
     if (custom) custom.hidden = true;
     historyState.range = r;
     historyState.start = null;
@@ -693,15 +1003,17 @@ export function initHistoryTab() {
     if (!sv || !ev) return;
     const start = Math.floor(new Date(sv + 'T00:00:00').getTime() / 1000);
     const end = Math.floor(new Date(ev + 'T00:00:00').getTime() / 1000) + 86400; // include the end day
-    if (!(end > start)) return;
+    if (end <= start) return;
     historyState.range = 'custom';
     historyState.start = start;
     historyState.end = end;
     fetchHistory();
   });
 
-  const histChartSeg = document.getElementById('history-chart-sel');
-  if (histChartSeg) histChartSeg.addEventListener('click', (e) => {
+  // Shared by both chart-button groups (#history-chart-sel and the
+  // #history-metrics-sel Yield/DORA group, #951) — same data-chart
+  // attribute, same effect either way.
+  const handleChartClick = (e) => {
     const b = e.target.closest('button[data-chart]');
     if (!b || b.disabled) return;
     const c = b.dataset.chart;
@@ -714,6 +1026,16 @@ export function initHistoryTab() {
     else if (c !== 'tokens' && historyState.group === 'token_type') historyState.group = 'project'; // token_type needs the tokens metric
     historyState.scope = null; // a new metric resets any drilldown
     syncHistorySelectors();
+    fetchHistory();
+  };
+  const histChartSeg = document.getElementById('history-chart-sel');
+  if (histChartSeg) histChartSeg.addEventListener('click', handleChartClick);
+  const histMetricsSeg = document.getElementById('history-metrics-sel');
+  if (histMetricsSeg) histMetricsSeg.addEventListener('click', handleChartClick);
+
+  const histDoraProjectSel = document.getElementById('history-dora-project');
+  if (histDoraProjectSel) histDoraProjectSel.addEventListener('change', () => {
+    historyState.doraProject = histDoraProjectSel.value || null;
     fetchHistory();
   });
 

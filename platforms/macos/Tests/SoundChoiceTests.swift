@@ -18,7 +18,7 @@ final class SoundChoiceTests: XCTestCase {
     }
 
     func testCustomRoundTrip() {
-        let original = SoundChoice.custom(installedFilename: "IrrlichtCustom-ready.caf", displayPath: "/Users/x/Music/alert.mp3")
+        let original = SoundChoice.custom(installedFilename: "IrrlichtCustom-ready.caf", displayPath: "/Users/x/Music/alert.mp3")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         let decoded = SoundChoice(rawValue: original.rawValue)
         XCTAssertEqual(decoded, original)
     }
@@ -26,7 +26,7 @@ final class SoundChoiceTests: XCTestCase {
     func testCustomWithPipeInPathRoundTrips() {
         // The grammar splits on the first `|`, so a display path that itself
         // contains `|` after the separator must survive intact.
-        let original = SoundChoice.custom(installedFilename: "IrrlichtCustom-waiting.caf", displayPath: "/tmp/weird|name.wav")
+        let original = SoundChoice.custom(installedFilename: "IrrlichtCustom-waiting.caf", displayPath: "/tmp/weird|name.wav")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         let decoded = SoundChoice(rawValue: original.rawValue)
         XCTAssertEqual(decoded, original)
     }
@@ -53,7 +53,7 @@ final class SoundChoiceTests: XCTestCase {
     }
 
     func testCustomNotificationSoundUsesInstalledFilename() {
-        let choice = SoundChoice.custom(installedFilename: "IrrlichtCustom-ready.caf", displayPath: "/x.mp3")
+        let choice = SoundChoice.custom(installedFilename: "IrrlichtCustom-ready.caf", displayPath: "/x.mp3")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         XCTAssertEqual(choice.notificationSoundName, "IrrlichtCustom-ready.caf")
     }
 }

@@ -26,7 +26,7 @@ Usage: update-cask.sh [--version X.Y.Z] [--dmg path] [--push]
 HELP
 }
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
     case "$1" in
         --version) VERSION="$2"; shift 2 ;;
         --dmg)     DMG_PATH="$2"; shift 2 ;;
@@ -36,7 +36,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ -z "$VERSION" ]; then
+if [[ -z "$VERSION" ]]; then
     VERSION=$(python3 -c "import json; print(json.load(open('$ROOT_DIR/version.json'))['version'])")
 fi
 
@@ -44,13 +44,13 @@ DMG_CANDIDATES=(
     "$ROOT_DIR/.build/Irrlicht-$VERSION.dmg"
     "/tmp/Irrlicht-$VERSION.dmg"
 )
-if [ -z "$DMG_PATH" ]; then
+if [[ -z "$DMG_PATH" ]]; then
     for candidate in "${DMG_CANDIDATES[@]}"; do
-        [ -f "$candidate" ] && { DMG_PATH="$candidate"; break; }
+        [[ -f "$candidate" ]] && { DMG_PATH="$candidate"; break; }
     done
 fi
 
-if [ -z "$DMG_PATH" ] || [ ! -f "$DMG_PATH" ]; then
+if [[ -z "$DMG_PATH" ]] || [[ ! -f "$DMG_PATH" ]]; then
     echo "DMG not found for version $VERSION (probed: ${DMG_CANDIDATES[*]}) — pass --dmg <path>" >&2
     exit 1
 fi
@@ -75,16 +75,16 @@ echo "updated $CASK_FILE"
 # Auto-discover a sibling clone before bailing — the silent no-op when
 # IRRLICHT_TAP_DIR was unset stranded the tap at v0.3.8 across four
 # releases. If the user has cloned the tap next to this repo, just use it.
-if [ -z "${IRRLICHT_TAP_DIR:-}" ]; then
+if [[ -z "${IRRLICHT_TAP_DIR:-}" ]]; then
     SIBLING="$(cd "$ROOT_DIR/.." && pwd)/homebrew-irrlicht"
-    if [ -d "$SIBLING/.git" ]; then
+    if [[ -d "$SIBLING/.git" ]]; then
         IRRLICHT_TAP_DIR="$SIBLING"
         echo "auto-discovered tap at $IRRLICHT_TAP_DIR"
     fi
 fi
 
-if [ -z "${IRRLICHT_TAP_DIR:-}" ]; then
-    if [ "$PUSH" -eq 1 ]; then
+if [[ -z "${IRRLICHT_TAP_DIR:-}" ]]; then
+    if [[ "$PUSH" -eq 1 ]]; then
         echo "ERROR: --push requires IRRLICHT_TAP_DIR (no sibling homebrew-irrlicht clone found)" >&2
         echo "       clone with: git clone https://github.com/ingo-eichhorst/homebrew-irrlicht.git \"$ROOT_DIR/../homebrew-irrlicht\"" >&2
         exit 1
@@ -94,7 +94,7 @@ if [ -z "${IRRLICHT_TAP_DIR:-}" ]; then
     exit 0
 fi
 
-if [ ! -d "$IRRLICHT_TAP_DIR/.git" ]; then
+if [[ ! -d "$IRRLICHT_TAP_DIR/.git" ]]; then
     echo "IRRLICHT_TAP_DIR is not a git repo: $IRRLICHT_TAP_DIR" >&2
     exit 1
 fi
@@ -114,7 +114,7 @@ fi
 
 git commit -m "irrlicht $VERSION"
 
-if [ "$PUSH" -eq 1 ]; then
+if [[ "$PUSH" -eq 1 ]]; then
     # Rebase on top of remote first to avoid non-fast-forward push failures
     # when another machine has already advanced the tap.
     git pull --rebase --autostash || {

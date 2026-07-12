@@ -68,11 +68,19 @@ func TestSessionDetector_Removed_PrunesMetricsLedger(t *testing.T) {
 		UpdatedAt:      time.Now().Unix(),
 	}
 
-	det := services.NewSessionDetector(
-		[]inbound.Watcher{tw}, pw, repo,
-		&mockLogger{}, &mockGit{}, mm, nil,
-		"test", 0, nil, nil, nil,
-	)
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          &mockLogger{},
+		Git:          &mockGit{},
+		Metrics:      mm,
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -658,12 +666,16 @@ func TestSessionDetector_HandlePermissionHook_PreToolUseTransitionsToWaiting(t *
 	done := make(chan error, 1)
 	go func() { done <- det.Run(ctx) }()
 
-	// Let Run() start so the event loop is reading debouncedEvents.
-	time.Sleep(20 * time.Millisecond)
-
+	// dispatchHookActivity enqueues onto a 64-buffered debouncedEvents
+	// channel, so this can safely fire before Run()'s event loop starts
+	// without dropping the event — no need to wait for the loop first.
 	det.HandlePermissionHook(sessID, transcript, claudecode.HookPreToolUse)
 
-	time.Sleep(50 * time.Millisecond)
+	// Poll instead of a fixed sleep: under scheduler contention the event
+	// loop can take longer than any fixed window to process the
+	// hook-triggered activity event (issue #965).
+	waitForSessionState(repo, sessID, session.StateWaiting, 2*time.Second)
+
 	cancel()
 	<-done
 

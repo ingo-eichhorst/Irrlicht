@@ -27,11 +27,7 @@ func TestSession_NoCancelledState_OnSIGKILL(t *testing.T) {
 	scanner := processlifecycle.NewScanner(fakeProcessName(), "test", 200*time.Millisecond).WithIdentity(testIdentity)
 	repo := newMemRepo()
 
-	detector := services.NewSessionDetector(
-		[]inbound.Watcher{scanner},
-		nil, repo, &nopLogger{}, &stubGit{}, &stubMetrics{}, nil,
-		"test", 0, nil, nil, nil,
-	)
+	detector := services.NewSessionDetector([]inbound.Watcher{scanner}, defaultSessionDetectorDeps(repo))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

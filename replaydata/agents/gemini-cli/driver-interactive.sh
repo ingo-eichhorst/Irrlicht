@@ -71,6 +71,9 @@ mkdir -p "$RUN_CWD"
 
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+# Shared exit-reason literal for a bad launch/dispatch error (S1192: defined
+# once here, referenced at every site below instead of repeating the string).
+NONZERO_2='nonzero(2)'
 
 # Active-session view — the step functions read/write these. They are a cache of
 # the active slot's state, kept in sync via save_active / load_slot. TRANSCRIPT
@@ -132,12 +135,13 @@ DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 require_api_key() {
   if [[ -z "${GEMINI_API_KEY:-}" ]]; then
     echo "[driver] GEMINI_API_KEY not set — export it (e.g. 'set -a; . .build/.env; set +a') before recording" >&2
-    EXIT_REASON="nonzero(2)"; exit 1
+    EXIT_REASON="$NONZERO_2"; exit 1
   fi
 }
 write_auth_settings() { # <cwd>
-  mkdir -p "$1/.gemini"
-  printf '{ "security": { "auth": { "selectedType": "gemini-api-key" } } }\n' > "$1/.gemini/settings.json"
+  local cwd="$1"
+  mkdir -p "$cwd/.gemini"
+  printf '{ "security": { "auth": { "selectedType": "gemini-api-key" } } }\n' > "$cwd/.gemini/settings.json"
 }
 
 # Has the active slot's cwd already had its trust prompt accepted this run?
@@ -180,7 +184,7 @@ boot_session() {
     ${extra_env[@]+"${extra_env[@]}"} \
     "$@" \
     >>"$slot_stdout" 2>>"$DRIVER_LOG.stderr" \
-    || { echo "[driver] failed to launch gemini under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+    || { echo "[driver] failed to launch gemini under tmux" >&2; EXIT_REASON="$NONZERO_2"; exit 1; }
   tmux pipe-pane -t "$sess" -o "cat >> '$slot_stdout'" 2>/dev/null || true
   # Capture the pane's root pid so teardown can SIGKILL the whole tree. gemini -y
   # spawns a `node --max-old-space-size` worker in its own process group that
@@ -287,7 +291,8 @@ turn_count() {
 }
 
 step_send() { # <text>
-  tmux send-keys -t "$SESSION" -l -- "$1"
+  local text="$1"
+  tmux send-keys -t "$SESSION" -l -- "$text"
   sleep 0.3   # let Gemini's Ink input render before Enter, so Enter isn't dropped
   tmux send-keys -t "$SESSION" Enter
   # A slash command (e.g. /rewind, /clear) is a LOCAL REPL action — it opens a
@@ -296,7 +301,7 @@ step_send() { # <text>
   # make the next real wait_turn over-wait by one and time out. A shell-escape
   # command typed while shell mode is active is the same — it runs in a local
   # shell with no LLM round-trip and emits no `gemini` turn. Regular prompts bump.
-  if [[ "$1" == /* ]]; then
+  if [[ "$text" == /* ]]; then
     echo "[driver] send[s$ACTIVE]: ${1:0:60} (slash command — no turn)" >&2
   elif [[ "$SHELL_MODE" == 1 ]]; then
     echo "[driver] send[s$ACTIVE]: ${1:0:60} (shell-escape command — no turn)" >&2
@@ -329,16 +334,18 @@ step_wait_turn() {
 # space-separated token becomes one tmux key event; no implicit Enter.
 #   {"type":"keys","keys":"Down"}   {"type":"keys","keys":"Down Down Enter"}
 step_keys() { # <keys>
+  local keys="$1"
   # shellcheck disable=SC2086 — intentional word-splitting of the key list
-  tmux send-keys -t "$SESSION" $1
-  echo "[driver] keys[s$ACTIVE]: $1" >&2
+  tmux send-keys -t "$SESSION" $keys
+  echo "[driver] keys[s$ACTIVE]: $keys" >&2
   # Gemini's `!` toggles shell mode ("esc to disable"). Track it so a following
   # `send` of the shell command is billed no turn (see step_send). The command
   # itself MUST go through `send` (literal `-l` typing), not a word-split `keys`
   # burst — Gemini's Ink shell input mangles burst keystrokes and drops the Enter.
-  case "$1" in
+  case "$keys" in
     "!")      SHELL_MODE=1 ;;
     "Escape") SHELL_MODE=0 ;;
+    *)        ;;
   esac
   sleep 0.3
 }
@@ -547,7 +554,7 @@ while read -r step; do
       echo "[driver] switch -> session slot $tgt (uuid=$UUID)" >&2
     else
       echo "[driver] switch: invalid session slot '$tgt' (have $N_SLOTS)" >&2
-      EXIT_REASON="nonzero(2)"; STEP_OK=false; continue
+      EXIT_REASON="$NONZERO_2"; STEP_OK=false; continue
     fi
   fi
 
@@ -563,7 +570,7 @@ while read -r step; do
     exit_clean)      step_exit_clean ;;
     start_session)   step_start_session "$(jq -r '.cwd // empty' <<<"$step")" ;;
     session)         : ;;   # pure focus switch — handled by the inline target block
-    *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; STEP_OK=false ;;
+    *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="$NONZERO_2"; STEP_OK=false ;;
   esac
   (( $(date +%s) >= DEADLINE )) && { EXIT_REASON="timeout"; break; }
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")

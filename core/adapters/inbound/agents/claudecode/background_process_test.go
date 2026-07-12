@@ -178,45 +178,54 @@ func writeBgTranscript(t *testing.T, lines []map[string]interface{}) string {
 	return path
 }
 
+// runBgTailer runs a fresh tailer to completion over lines and returns the
+// resulting metrics, failing the test on any TailAndProcess error.
+func runBgTailer(t *testing.T, lines []map[string]interface{}) *tailer.SessionMetrics {
+	t.Helper()
+	path := writeBgTranscript(t, lines)
+	m, err := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code").TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	return m
+}
+
+// assertBackgroundState checks the tailer's open-background-process
+// accounting: the count plus the exact set of live output paths (in order).
+func assertBackgroundState(t *testing.T, m *tailer.SessionMetrics, wantCount int, wantOutputs []string) {
+	t.Helper()
+	if m.BackgroundProcessCount != wantCount {
+		t.Fatalf("BackgroundProcessCount = %d, want %d", m.BackgroundProcessCount, wantCount)
+	}
+	if len(m.BackgroundProcessOutputs) != len(wantOutputs) {
+		t.Fatalf("BackgroundProcessOutputs = %v, want %v", m.BackgroundProcessOutputs, wantOutputs)
+	}
+	for i, want := range wantOutputs {
+		if m.BackgroundProcessOutputs[i] != want {
+			t.Errorf("BackgroundProcessOutputs[%d] = %q, want %q", i, m.BackgroundProcessOutputs[i], want)
+		}
+	}
+}
+
 func TestTailer_BackgroundProcessCount_SpawnAndTerminate(t *testing.T) {
 	spawnResult := "Command running in background with ID: bc1h56v8v. Output is being written to: /tmp/x/tasks/bc1h56v8v.output. You will be notified when it completes. To check interim output, use Read on that file path."
 
 	t.Run("alive while only spawned", func(t *testing.T) {
-		path := writeBgTranscript(t, []map[string]interface{}{
+		m := runBgTailer(t, []map[string]interface{}{
 			bashToolUse("toolu_1", "Bash", map[string]interface{}{"command": "sleep 100", "run_in_background": true}),
 			bgSpawnResult("toolu_1", "bc1h56v8v", spawnResult),
 		})
-		tl := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code")
-		m, err := tl.TailAndProcess()
-		if err != nil {
-			t.Fatalf("TailAndProcess: %v", err)
-		}
-		if m.BackgroundProcessCount != 1 {
-			t.Fatalf("BackgroundProcessCount = %d, want 1", m.BackgroundProcessCount)
-		}
-		if len(m.BackgroundProcessOutputs) != 1 || m.BackgroundProcessOutputs[0] != "/tmp/x/tasks/bc1h56v8v.output" {
-			t.Errorf("BackgroundProcessOutputs = %v", m.BackgroundProcessOutputs)
-		}
+		assertBackgroundState(t, m, 1, []string{"/tmp/x/tasks/bc1h56v8v.output"})
 	})
 
 	t.Run("cleared after observed termination", func(t *testing.T) {
-		path := writeBgTranscript(t, []map[string]interface{}{
+		m := runBgTailer(t, []map[string]interface{}{
 			bashToolUse("toolu_1", "Bash", map[string]interface{}{"command": "sleep 100", "run_in_background": true}),
 			bgSpawnResult("toolu_1", "bc1h56v8v", spawnResult),
 			bashToolUse("toolu_poll", "BashOutput", map[string]interface{}{"bash_id": "bc1h56v8v"}),
 			toolResult("toolu_poll", "<status>completed</status>\nfinal output"),
 		})
-		tl := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code")
-		m, err := tl.TailAndProcess()
-		if err != nil {
-			t.Fatalf("TailAndProcess: %v", err)
-		}
-		if m.BackgroundProcessCount != 0 {
-			t.Fatalf("BackgroundProcessCount = %d, want 0 after termination", m.BackgroundProcessCount)
-		}
-		if len(m.BackgroundProcessOutputs) != 0 {
-			t.Errorf("BackgroundProcessOutputs = %v, want empty", m.BackgroundProcessOutputs)
-		}
+		assertBackgroundState(t, m, 0, nil)
 	})
 
 	t.Run("open set survives a ledger round-trip (daemon restart)", func(t *testing.T) {
@@ -241,28 +250,16 @@ func TestTailer_BackgroundProcessCount_SpawnAndTerminate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("post-restart pass: %v", err)
 		}
-		if m.BackgroundProcessCount != 1 {
-			t.Errorf("BackgroundProcessCount after restart = %d, want 1", m.BackgroundProcessCount)
-		}
-		if len(m.BackgroundProcessOutputs) != 1 {
-			t.Errorf("BackgroundProcessOutputs after restart = %v, want one path", m.BackgroundProcessOutputs)
-		}
+		assertBackgroundState(t, m, 1, []string{"/tmp/x/tasks/bc1h56v8v.output"})
 	})
 
 	t.Run("cleared after KillShell", func(t *testing.T) {
-		path := writeBgTranscript(t, []map[string]interface{}{
+		m := runBgTailer(t, []map[string]interface{}{
 			bashToolUse("toolu_1", "Bash", map[string]interface{}{"command": "sleep 100", "run_in_background": true}),
 			bgSpawnResult("toolu_1", "bc1h56v8v", spawnResult),
 			bashToolUse("toolu_kill", "KillShell", map[string]interface{}{"shell_id": "bc1h56v8v"}),
 		})
-		tl := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code")
-		m, err := tl.TailAndProcess()
-		if err != nil {
-			t.Fatalf("TailAndProcess: %v", err)
-		}
-		if m.BackgroundProcessCount != 0 {
-			t.Fatalf("BackgroundProcessCount = %d, want 0 after KillShell", m.BackgroundProcessCount)
-		}
+		assertBackgroundState(t, m, 0, nil)
 	})
 }
 

@@ -20,32 +20,38 @@ final class LauncherHarnessTests: XCTestCase {
 
     // MARK: - Helpers
 
+    /// Bundles makeSession's optional launcher-identity fields, beyond the
+    /// core termProgram/cwd pair every session needs.
+    private struct LauncherOverrides {
+        var itermSessionID: String? = nil
+        var tty: String? = nil
+        var kittyListenOn: String? = nil
+        var kittyWindowID: String? = nil
+        var kittyPID: Int? = nil
+        var tmuxPane: String? = nil
+        var tmuxSocket: String? = nil
+    }
+
     /// Constructs a minimal SessionState whose launcher is wired to the given
     /// termProgram, cwd, and optional extra fields.
     private func makeSession(
         id: String = UUID().uuidString,
         termProgram: String,
         cwd: String,
-        itermSessionID: String? = nil,
-        tty: String? = nil,
-        kittyListenOn: String? = nil,
-        kittyWindowID: String? = nil,
-        kittyPID: Int? = nil,
-        tmuxPane: String? = nil,
-        tmuxSocket: String? = nil
-    ) -> SessionState {
+        launcher overrides: LauncherOverrides = LauncherOverrides()
+    ) throws -> SessionState {
         // Build the JSON we'd receive from the daemon so we rely on the actual
         // Codable path rather than synthesising via initializer.
         var launcherFields: [String: Any] = [
             "term_program": termProgram,
         ]
-        if let v = itermSessionID  { launcherFields["iterm_session_id"] = v }
-        if let v = tty             { launcherFields["tty"] = v }
-        if let v = kittyListenOn   { launcherFields["kitty_listen_on"] = v }
-        if let v = kittyWindowID   { launcherFields["kitty_window_id"] = v }
-        if let v = kittyPID        { launcherFields["kitty_pid"] = v }
-        if let v = tmuxPane        { launcherFields["tmux_pane"] = v }
-        if let v = tmuxSocket      { launcherFields["tmux_socket"] = v }
+        if let v = overrides.itermSessionID  { launcherFields["iterm_session_id"] = v }
+        if let v = overrides.tty             { launcherFields["tty"] = v }
+        if let v = overrides.kittyListenOn   { launcherFields["kitty_listen_on"] = v }
+        if let v = overrides.kittyWindowID   { launcherFields["kitty_window_id"] = v }
+        if let v = overrides.kittyPID        { launcherFields["kitty_pid"] = v }
+        if let v = overrides.tmuxPane        { launcherFields["tmux_pane"] = v }
+        if let v = overrides.tmuxSocket      { launcherFields["tmux_socket"] = v }
 
         let sessionDict: [String: Any] = [
             "session_id": id,
@@ -57,8 +63,8 @@ final class LauncherHarnessTests: XCTestCase {
             "updated_at": Int(Date().timeIntervalSince1970),
             "launcher": launcherFields,
         ]
-        let data = try! JSONSerialization.data(withJSONObject: sessionDict)
-        return try! JSONDecoder().decode(SessionState.self, from: data)
+        let data = try JSONSerialization.data(withJSONObject: sessionDict)
+        return try JSONDecoder().decode(SessionState.self, from: data)
     }
 
     /// Opens `bundleID` to a temp directory and waits up to `timeout` for the
@@ -95,7 +101,7 @@ final class LauncherHarnessTests: XCTestCase {
             throw XCTSkip("Ghostty not installed")
         }
         Thread.sleep(forTimeInterval: 1.0) // let the window appear
-        let session = makeSession(termProgram: "ghostty", cwd: cwd)
+        let session = try makeSession(termProgram: "ghostty", cwd: cwd)
         SessionLauncher.jump(session)
         Thread.sleep(forTimeInterval: 0.5)
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
@@ -108,7 +114,7 @@ final class LauncherHarnessTests: XCTestCase {
         // Must not crash or throw — just silently return.
         AXTitleMatchActivator.raiseMatchingWindow(
             bundleID: "com.nonexistent.app.harness",
-            cwd: "/Users/test/myproject"
+            cwd: "/Users/test/myproject"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         )
     }
 
@@ -128,7 +134,7 @@ final class LauncherHarnessTests: XCTestCase {
 
     func testProcessRunnerTimesOut() throws {
         try XCTSkipUnless(Self.harnessEnabled, "requires TEST_HARNESS=1")
-        let result = ProcessRunner.run("/bin/sleep", args: ["10"], timeout: 0.2)
+        let result = ProcessRunner.run("/bin/sleep", args: ["10"], timeout: 0.2)  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         XCTAssertEqual(result.status, -1, "Timed-out process should return status -1")
         XCTAssertEqual(result.stderr, "timeout")
     }
@@ -137,7 +143,7 @@ final class LauncherHarnessTests: XCTestCase {
         try XCTSkipUnless(Self.harnessEnabled, "requires TEST_HARNESS=1")
         // Session with no KITTY_LISTEN_ON — should fall back to app-level
         // activation without crashing, and return false when kitty isn't installed.
-        let session = makeSession(termProgram: "kitty", cwd: "/tmp/kitty-harness-test")
+        let session = try makeSession(termProgram: "kitty", cwd: "/tmp/kitty-harness-test")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         let activated = KittyActivator().activate(session)
         // We can only assert no crash; activated may be true or false depending
         // on whether kitty is installed on the developer's machine.
@@ -151,15 +157,17 @@ final class LauncherHarnessTests: XCTestCase {
     /// decode, every click silently degrades to the bundle fallback (which is
     /// what issue #326 was actually exhibiting before the fix).
     func testKittyLauncherDecodesKittyPID() throws {
-        let session = makeSession(
+        let session = try makeSession(
             termProgram: "kitty",
-            cwd: "/tmp/kitty-decode-test",
-            kittyListenOn: "unix:/tmp/kitty-12345",
-            kittyWindowID: "2",
-            kittyPID: 12345
+            cwd: "/tmp/kitty-decode-test",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+            launcher: LauncherOverrides(
+                kittyListenOn: "unix:/tmp/kitty-12345",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+                kittyWindowID: "2",
+                kittyPID: 12345
+            )
         )
         XCTAssertEqual(session.launcher?.kittyPID, 12345)
-        XCTAssertEqual(session.launcher?.kittyListenOn, "unix:/tmp/kitty-12345")
+        XCTAssertEqual(session.launcher?.kittyListenOn, "unix:/tmp/kitty-12345")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         XCTAssertEqual(session.launcher?.kittyWindowID, "2")
     }
 }

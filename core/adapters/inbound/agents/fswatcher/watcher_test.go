@@ -80,6 +80,21 @@ func TestExtractSessionID(t *testing.T) {
 	}
 }
 
+// assertNewSessionEvent checks the identity fields of the first event
+// TestWatch_EmitsNewSession expects to see for its newly-created transcript.
+func assertNewSessionEvent(t *testing.T, ev agent.Event) {
+	t.Helper()
+	if ev.Type != agent.EventNewSession {
+		t.Errorf("first event type = %q, want %q", ev.Type, agent.EventNewSession)
+	}
+	if ev.SessionID != "abc-123" {
+		t.Errorf("session ID = %q, want %q", ev.SessionID, "abc-123")
+	}
+	if ev.ProjectDir != "-Users-test-myproject" {
+		t.Errorf("project dir = %q, want %q", ev.ProjectDir, "-Users-test-myproject")
+	}
+}
+
 func TestWatch_EmitsNewSession(t *testing.T) {
 	root := setupFakeProjects(t)
 	w := NewWithRoot(root, testAdapter, 0)
@@ -121,15 +136,7 @@ func TestWatch_EmitsNewSession(t *testing.T) {
 		select {
 		case ev := <-ch:
 			if !gotNew {
-				if ev.Type != agent.EventNewSession {
-					t.Errorf("first event type = %q, want %q", ev.Type, agent.EventNewSession)
-				}
-				if ev.SessionID != "abc-123" {
-					t.Errorf("session ID = %q, want %q", ev.SessionID, "abc-123")
-				}
-				if ev.ProjectDir != "-Users-test-myproject" {
-					t.Errorf("project dir = %q, want %q", ev.ProjectDir, "-Users-test-myproject")
-				}
+				assertNewSessionEvent(t, ev)
 				gotNew = true
 			}
 			if ev.SessionID == "abc-123" && ev.Size != 0 {

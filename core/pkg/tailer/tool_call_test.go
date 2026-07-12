@@ -106,156 +106,242 @@ type testParser struct {
 
 func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 	ev := &ParsedEvent{Timestamp: ParseTimestamp(raw)}
+	eventType := detectTestEventType(raw)
 
-	eventType := "unknown"
-	if et, ok := raw["type"].(string); ok {
-		eventType = et
-	} else if _, ok := raw["user_input"]; ok {
-		eventType = "user_message"
-	} else if _, ok := raw["assistant_output"]; ok {
-		eventType = "assistant_message"
-	} else if _, ok := raw["tool_call"]; ok {
-		eventType = "tool_call"
-	}
-
-	// System events.
 	if eventType == "system" {
-		if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" || subtype == "stop_hook_summary" {
-			ev.EventType = "turn_done"
-			return ev
-		}
+		handleTestSystemEvent(raw, ev)
+		return ev
+	}
+	if eventType == "user" && isSkippableLocalUserEvent(raw) {
 		ev.Skip = true
 		return ev
 	}
-
-	// Local command filtering.
-	if eventType == "user" {
-		if isMeta, ok := raw["isMeta"].(bool); ok && isMeta {
-			ev.Skip = true
-			return ev
-		}
-		if msg, ok := raw["message"].(map[string]interface{}); ok {
-			if content, ok := msg["content"].(string); ok {
-				if len(content) > 0 && content[0] == '<' {
-					ev.Skip = true
-					return ev
-				}
-			}
-		}
-	}
-
-	// Permission mode.
 	if eventType == "permission-mode" {
-		if mode, ok := raw["permissionMode"].(string); ok {
-			ev.PermissionMode = mode
-		}
-		ev.Skip = true
+		handleTestPermissionModeEvent(raw, ev)
 		return ev
 	}
 
-	// Model/token extraction.
+	modelName := extractModelAndTokens(raw, ev)
+	p.applyRequestIDDedup(raw, ev, modelName)
+	p.applyCumulativeUsageDelta(raw, ev, modelName)
+	applyContextManagement(raw, ev)
+
+	if !isTestMessageEventType(eventType) {
+		ev.Skip = true
+		return ev
+	}
+	ev.EventType = eventType
+
+	scanMessageContentBlocks(raw, ev)
+	applyTopLevelToolEvent(eventType, raw, ev)
+	applyAssistantOrUserEventType(eventType, raw, ev)
+
+	return ev
+}
+
+// detectTestEventType classifies a raw transcript line the way the various
+// fixture shapes exercised by these tests spell it: an explicit "type"
+// field, or one of a few legacy shape-sniffed fallbacks.
+func detectTestEventType(raw map[string]interface{}) string {
+	if et, ok := raw["type"].(string); ok {
+		return et
+	}
+	if _, ok := raw["user_input"]; ok {
+		return "user_message"
+	}
+	if _, ok := raw["assistant_output"]; ok {
+		return "assistant_message"
+	}
+	if _, ok := raw["tool_call"]; ok {
+		return "tool_call"
+	}
+	return "unknown"
+}
+
+// handleTestSystemEvent fully resolves a "system" event: a turn-boundary
+// subtype becomes turn_done, anything else is skipped.
+func handleTestSystemEvent(raw map[string]interface{}, ev *ParsedEvent) {
+	if subtype, _ := raw["subtype"].(string); subtype == "turn_duration" || subtype == "stop_hook_summary" {
+		ev.EventType = "turn_done"
+		return
+	}
+	ev.Skip = true
+}
+
+// isSkippableLocalUserEvent reports whether a "user" event is local-command
+// noise (an isMeta caveat, or content opening with a "<...>" tag) that
+// shouldn't affect tailer state.
+func isSkippableLocalUserEvent(raw map[string]interface{}) bool {
+	if isMeta, ok := raw["isMeta"].(bool); ok && isMeta {
+		return true
+	}
+	msg, ok := raw["message"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	content, ok := msg["content"].(string)
+	if !ok {
+		return false
+	}
+	return len(content) > 0 && content[0] == '<'
+}
+
+// handleTestPermissionModeEvent extracts the permission mode and marks the
+// event skip — permission-mode lines never carry message content.
+func handleTestPermissionModeEvent(raw map[string]interface{}, ev *ParsedEvent) {
+	if mode, ok := raw["permissionMode"].(string); ok {
+		ev.PermissionMode = mode
+	}
+	ev.Skip = true
+}
+
+// extractModelAndTokens pulls the model name and per-turn token usage out of
+// raw["message"], recording tokens onto ev and returning the model name for
+// callers that need it (the contribution-building paths below).
+func extractModelAndTokens(raw map[string]interface{}, ev *ParsedEvent) string {
+	message, ok := raw["message"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
 	var modelName string
-	if message, ok := raw["message"].(map[string]interface{}); ok {
-		if model, ok := message["model"].(string); ok && model != "" {
-			modelName = model
-			ev.ModelName = model
-		}
-		if usage, ok := message["usage"].(map[string]interface{}); ok {
-			ev.Tokens = ExtractUsage(usage)
-		}
+	if model, ok := message["model"].(string); ok && model != "" {
+		modelName = model
+		ev.ModelName = model
 	}
+	if usage, ok := message["usage"].(map[string]interface{}); ok {
+		ev.Tokens = ExtractUsage(usage)
+	}
+	return modelName
+}
 
-	// Claude Code-style requestId dedup — emit Contribution when turn changes.
-	if reqID, ok := raw["requestId"].(string); ok && reqID != "" {
-		ev.RequestID = reqID // kept for context-util snapshot
-		if reqID != p.lastRequestID {
-			if p.lastRequestID != "" && p.pendingContrib != nil {
-				ev.Contribution = p.pendingContrib
-			}
-			p.lastRequestID = reqID
-			p.pendingContrib = nil
+// applyRequestIDDedup implements the Claude Code-style requestId dedup path:
+// emit the previous turn's pending Contribution when the turn changes, then
+// stage the current tokens as the new pending contribution.
+func (p *testParser) applyRequestIDDedup(raw map[string]interface{}, ev *ParsedEvent, modelName string) {
+	reqID, ok := raw["requestId"].(string)
+	if !ok || reqID == "" {
+		return
+	}
+	ev.RequestID = reqID // kept for context-util snapshot
+	if reqID != p.lastRequestID {
+		if p.lastRequestID != "" && p.pendingContrib != nil {
+			ev.Contribution = p.pendingContrib
 		}
-		if ev.Tokens != nil {
-			p.pendingContrib = &PerTurnContribution{
-				Model: modelName,
-				Usage: UsageBreakdown{
-					Input:     ev.Tokens.Input,
-					Output:    ev.Tokens.Output,
-					CacheRead: ev.Tokens.CacheRead,
-					// Treat single bucket as 5m cache writes.
-					CacheCreation5m: ev.Tokens.CacheCreation,
-				},
-			}
+		p.lastRequestID = reqID
+		p.pendingContrib = nil
+	}
+	if ev.Tokens != nil {
+		p.pendingContrib = &PerTurnContribution{
+			Model: modelName,
+			Usage: UsageBreakdown{
+				Input:     ev.Tokens.Input,
+				Output:    ev.Tokens.Output,
+				CacheRead: ev.Tokens.CacheRead,
+				// Treat single bucket as 5m cache writes.
+				CacheCreation5m: ev.Tokens.CacheCreation,
+			},
 		}
 	}
+}
 
-	// Codex-style cumulative_usage — emit delta as Contribution.
-	if cumUsage, ok := raw["cumulative_usage"].(map[string]interface{}); ok {
-		cum := ExtractUsage(cumUsage)
-		ev.CumulativeTokens = cum // keep for legacy compat during transition
-		if cum != nil {
-			cur := UsageBreakdown{
-				Input:     cum.Input,
-				Output:    cum.Output,
-				CacheRead: cum.CacheRead,
-			}
-			delta := UsageBreakdown{
-				Input:     max(0, cur.Input-p.cumCursor.Input),
-				Output:    max(0, cur.Output-p.cumCursor.Output),
-				CacheRead: max(0, cur.CacheRead-p.cumCursor.CacheRead),
-			}
-			if delta.Input > 0 || delta.Output > 0 || delta.CacheRead > 0 {
-				ev.Contribution = &PerTurnContribution{
-					Model: modelName,
-					Usage: delta,
-				}
-				p.cumCursor = cur
-			}
-		}
+// applyCumulativeUsageDelta implements the Codex-style cumulative_usage path:
+// emit the delta since the last cursor as a Contribution.
+func (p *testParser) applyCumulativeUsageDelta(raw map[string]interface{}, ev *ParsedEvent, modelName string) {
+	cumUsage, ok := raw["cumulative_usage"].(map[string]interface{})
+	if !ok {
+		return
 	}
-	if cm, ok := raw["context_management"].(map[string]interface{}); ok {
-		if cw, ok := cm["context_window"].(float64); ok && cw > 0 {
-			ev.ContextWindow = int64(cw)
-		}
+	cum := ExtractUsage(cumUsage)
+	ev.CumulativeTokens = cum // keep for legacy compat during transition
+	if cum == nil {
+		return
 	}
-	// Filter non-message events.
+	cur := UsageBreakdown{
+		Input:     cum.Input,
+		Output:    cum.Output,
+		CacheRead: cum.CacheRead,
+	}
+	delta := UsageBreakdown{
+		Input:     max(0, cur.Input-p.cumCursor.Input),
+		Output:    max(0, cur.Output-p.cumCursor.Output),
+		CacheRead: max(0, cur.CacheRead-p.cumCursor.CacheRead),
+	}
+	if delta.Input <= 0 && delta.Output <= 0 && delta.CacheRead <= 0 {
+		return
+	}
+	ev.Contribution = &PerTurnContribution{
+		Model: modelName,
+		Usage: delta,
+	}
+	p.cumCursor = cur
+}
+
+// applyContextManagement copies a reported context-window override onto ev.
+func applyContextManagement(raw map[string]interface{}, ev *ParsedEvent) {
+	cm, ok := raw["context_management"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	if cw, ok := cm["context_window"].(float64); ok && cw > 0 {
+		ev.ContextWindow = int64(cw)
+	}
+}
+
+// isTestMessageEventType reports whether eventType is one of the shapes this
+// test parser tracks as a message event (as opposed to something to skip).
+func isTestMessageEventType(eventType string) bool {
 	switch eventType {
 	case "user_message", "assistant_message", "tool_call", "tool_result",
 		"user_input", "assistant_output", "user", "assistant", "tool_use", "message":
-		// OK
+		return true
 	default:
-		ev.Skip = true
-		return ev
+		return false
 	}
+}
 
-	ev.EventType = eventType
+// scanMessageContentBlocks walks message.content[] for embedded tool_use /
+// tool_result blocks (the Claude Code content-array shape).
+func scanMessageContentBlocks(raw map[string]interface{}, ev *ParsedEvent) {
+	msg, ok := raw["message"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	contentArr, ok := msg["content"].([]interface{})
+	if !ok {
+		return
+	}
+	for _, item := range contentArr {
+		block, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		applyContentBlock(block, ev)
+	}
+}
 
-	// Scan message.content[] for tool blocks.
-	if msg, ok := raw["message"].(map[string]interface{}); ok {
-		if contentArr, ok := msg["content"].([]interface{}); ok {
-			for _, item := range contentArr {
-				if block, ok := item.(map[string]interface{}); ok {
-					switch block["type"] {
-					case "tool_use":
-						id, _ := block["id"].(string)
-						name, _ := block["name"].(string)
-						if name != "" {
-							ev.ToolUses = append(ev.ToolUses, ToolUse{ID: id, Name: name})
-						}
-					case "tool_result":
-						if toolUseID, ok := block["tool_use_id"].(string); ok && toolUseID != "" {
-							ev.ToolResultIDs = append(ev.ToolResultIDs, toolUseID)
-						}
-						if isErr, ok := block["is_error"].(bool); ok && isErr {
-							ev.IsError = true
-						}
-					}
-				}
-			}
+// applyContentBlock applies one message.content[] block's tool_use or
+// tool_result data onto ev.
+func applyContentBlock(block map[string]interface{}, ev *ParsedEvent) {
+	switch block["type"] {
+	case "tool_use":
+		id, _ := block["id"].(string)
+		name, _ := block["name"].(string)
+		if name != "" {
+			ev.ToolUses = append(ev.ToolUses, ToolUse{ID: id, Name: name})
+		}
+	case "tool_result":
+		if toolUseID, ok := block["tool_use_id"].(string); ok && toolUseID != "" {
+			ev.ToolResultIDs = append(ev.ToolResultIDs, toolUseID)
+		}
+		if isErr, ok := block["is_error"].(bool); ok && isErr {
+			ev.IsError = true
 		}
 	}
+}
 
-	// Top-level tool events (not embedded in message.content[]).
+// applyTopLevelToolEvent handles tool events that aren't embedded in
+// message.content[] — top-level tool_use/tool_call/tool_result shapes.
+func applyTopLevelToolEvent(eventType string, raw map[string]interface{}, ev *ParsedEvent) {
 	switch eventType {
 	case "tool_use":
 		id, _ := raw["id"].(string)
@@ -279,16 +365,18 @@ func (p *testParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
 			ev.ToolResultIDs = append(ev.ToolResultIDs, id)
 		}
 	}
+}
 
-	// Assistant text.
+// applyAssistantOrUserEventType extracts assistant text or marks the tool
+// name set for clearing, depending on which side of the conversation
+// eventType represents.
+func applyAssistantOrUserEventType(eventType string, raw map[string]interface{}, ev *ParsedEvent) {
 	switch eventType {
 	case "assistant", "assistant_message", "assistant_output":
 		ev.AssistantText = ExtractAssistantText(raw)
 	case "user", "user_message", "user_input":
 		ev.ClearToolNames = true
 	}
-
-	return ev
 }
 
 // PendingContribution exposes the in-progress turn to the tailer (implements pendingContributor).

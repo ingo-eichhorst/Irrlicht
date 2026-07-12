@@ -13,32 +13,35 @@ import (
 // close appearing after open. Bypasses tailer.ExtractAssistantText's
 // 200-rune tail truncation, which would drop the leading tag.
 func assistantContentContainsBlock(raw map[string]interface{}, open, close string) bool {
-	scan := func(arr []interface{}) bool {
-		for _, item := range arr {
-			block, ok := item.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			bt, _ := block["type"].(string)
-			if bt != "text" && bt != "output_text" {
-				continue
-			}
-			text, _ := block["text"].(string)
-			openIdx := strings.Index(text, open)
-			if openIdx < 0 {
-				continue
-			}
-			if strings.Contains(text[openIdx+len(open):], close) {
-				return true
-			}
-		}
-		return false
-	}
-	if arr, ok := raw["content"].([]interface{}); ok && scan(arr) {
+	if arr, ok := raw["content"].([]interface{}); ok && codexBlockHasOpenClose(arr, open, close) {
 		return true
 	}
 	if msg, ok := raw["message"].(map[string]interface{}); ok {
-		if arr, ok := msg["content"].([]interface{}); ok && scan(arr) {
+		if arr, ok := msg["content"].([]interface{}); ok && codexBlockHasOpenClose(arr, open, close) {
+			return true
+		}
+	}
+	return false
+}
+
+// codexBlockHasOpenClose reports whether any `text` / `output_text` content
+// block in arr contains open followed later (within the same block) by close.
+func codexBlockHasOpenClose(arr []interface{}, open, close string) bool {
+	for _, item := range arr {
+		block, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		bt, _ := block["type"].(string)
+		if bt != "text" && bt != "output_text" {
+			continue
+		}
+		text, _ := block["text"].(string)
+		openIdx := strings.Index(text, open)
+		if openIdx < 0 {
+			continue
+		}
+		if strings.Contains(text[openIdx+len(open):], close) {
 			return true
 		}
 	}
@@ -92,58 +95,73 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	var cumBreakdown *tailer.UsageBreakdown
 	ev.ModelName, ev.ContextWindow, ev.Tokens, cumBreakdown = extractCodexMetadata(raw)
 
-	// Rate-limit extraction from token_count events. Lives on
-	// event_msg.payload.rate_limits and is emitted on every API turn (clean
-	// cadence — no zero-delta noise like Claude Code's statusline). Other
-	// event types either don't carry the block or carry stale duplicates.
-	if eventType == "event_msg" {
-		if payload, ok := raw["payload"].(map[string]interface{}); ok {
-			if pt, _ := payload["type"].(string); pt == "token_count" {
-				ev.RateLimit = extractCodexRateLimits(payload, ev.Timestamp)
-			}
-		}
-	}
-
-	// Emit a Contribution when cumulative usage advances (monotonic delta).
-	if cumBreakdown != nil {
-		delta := tailer.UsageBreakdown{
-			Input:     max(0, cumBreakdown.Input-p.cursor.Input),
-			Output:    max(0, cumBreakdown.Output-p.cursor.Output),
-			CacheRead: max(0, cumBreakdown.CacheRead-p.cursor.CacheRead),
-		}
-		if delta.Input > 0 || delta.Output > 0 || delta.CacheRead > 0 {
-			ev.Contribution = &tailer.PerTurnContribution{
-				Model: ev.ModelName,
-				Usage: delta,
-			}
-			p.cursor = *cumBreakdown
-		}
-		ev.CumulativeTokens = ev.Tokens
-	}
+	applyCodexRateLimit(eventType, raw, ev)
+	p.applyCumulativeContribution(cumBreakdown, ev)
 
 	// Map event types to normalized forms.
+	applyCodexEventType(eventType, raw, ev)
+
+	return ev
+}
+
+// applyCodexRateLimit sets ev.RateLimit from a token_count event_msg's
+// payload.rate_limits. Lives on event_msg.payload.rate_limits and is emitted
+// on every API turn (clean cadence — no zero-delta noise like Claude Code's
+// statusline). Other event types either don't carry the block or carry stale
+// duplicates, so this is a no-op for them.
+func applyCodexRateLimit(eventType string, raw map[string]interface{}, ev *tailer.ParsedEvent) {
+	if eventType != "event_msg" {
+		return
+	}
+	payload, ok := raw["payload"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	if pt, _ := payload["type"].(string); pt == "token_count" {
+		ev.RateLimit = extractCodexRateLimits(payload, ev.Timestamp)
+	}
+}
+
+// applyCumulativeContribution emits a PerTurnContribution when cumulative
+// usage advances (monotonic delta relative to p.cursor), and advances the
+// cursor to the new cumulative total. No-op when cumBreakdown is nil (event
+// carried no total_token_usage) or the delta is zero.
+func (p *Parser) applyCumulativeContribution(cumBreakdown *tailer.UsageBreakdown, ev *tailer.ParsedEvent) {
+	if cumBreakdown == nil {
+		return
+	}
+	delta := tailer.UsageBreakdown{
+		Input:     max(0, cumBreakdown.Input-p.cursor.Input),
+		Output:    max(0, cumBreakdown.Output-p.cursor.Output),
+		CacheRead: max(0, cumBreakdown.CacheRead-p.cursor.CacheRead),
+	}
+	if delta.Input > 0 || delta.Output > 0 || delta.CacheRead > 0 {
+		ev.Contribution = &tailer.PerTurnContribution{
+			Model: ev.ModelName,
+			Usage: delta,
+		}
+		p.cursor = *cumBreakdown
+	}
+	ev.CumulativeTokens = ev.Tokens
+}
+
+// applyCodexEventType dispatches on the event's top-level "type" and mutates
+// ev accordingly, setting ev.Skip for anything that carries no observable
+// signal. Split out of ParseLine so each case's own nested lookups don't
+// compound that function's cognitive complexity.
+func applyCodexEventType(eventType string, raw map[string]interface{}, ev *tailer.ParsedEvent) {
 	switch eventType {
 	case "message":
 		if !parseCodexMessage(raw, ev) {
 			ev.Skip = true
-			return ev
 		}
 
 	case "response_item":
-		if payload, ok := raw["payload"].(map[string]interface{}); ok {
-			if !parseCodexResponseItem(payload, ev) {
-				ev.Skip = true
-				return ev
-			}
-		} else {
-			ev.Skip = true
-			return ev
-		}
+		applyCodexResponseItem(raw, ev)
 
 	case "function_call":
 		if !parseCodexFunctionCall(raw, ev) {
 			ev.Skip = true
-			return ev
 		}
 
 	case "function_call_output":
@@ -164,33 +182,57 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		// flickers working→ready→working every time the agent writes an
 		// intermediate assistant message before calling a tool (typical at
 		// the start of a turn).
-		if payload, ok := raw["payload"].(map[string]interface{}); ok {
-			if pt, _ := payload["type"].(string); pt == "task_complete" || pt == "turn_aborted" {
-				ev.EventType = "turn_done"
-				return ev
-			}
+		if codexEventMsgIsTurnDone(raw) {
+			ev.EventType = "turn_done"
+		} else {
+			ev.Skip = true
 		}
-		ev.Skip = true
-		return ev
 
 	case "session_meta", "turn_context":
 		// session_meta.payload.cli_version carries the Codex CLI version (e.g.
 		// "0.137.0"). Capture it before skipping — the tailer applies metadata
 		// from Skip=true events too.
-		if payload, ok := raw["payload"].(map[string]interface{}); ok {
-			if v, ok := payload["cli_version"].(string); ok {
-				ev.AgentVersion = v
-			}
+		if v, ok := codexAgentVersion(raw); ok {
+			ev.AgentVersion = v
 		}
 		ev.Skip = true
-		return ev
 
 	default:
 		ev.Skip = true
-		return ev
 	}
+}
 
-	return ev
+// applyCodexResponseItem handles the "response_item" case: unlike
+// function_call/message, its payload is nested one level down, so the lookup
+// is split out of applyCodexEventType's switch (go:S3776).
+func applyCodexResponseItem(raw map[string]interface{}, ev *tailer.ParsedEvent) {
+	payload, ok := raw["payload"].(map[string]interface{})
+	if !ok || !parseCodexResponseItem(payload, ev) {
+		ev.Skip = true
+	}
+}
+
+// codexEventMsgIsTurnDone reports whether an event_msg payload signals a turn
+// boundary (task_complete or turn_aborted) — see applyCodexEventType's
+// "event_msg" case for the full rationale.
+func codexEventMsgIsTurnDone(raw map[string]interface{}) bool {
+	payload, ok := raw["payload"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	pt, _ := payload["type"].(string)
+	return pt == "task_complete" || pt == "turn_aborted"
+}
+
+// codexAgentVersion extracts payload.cli_version from a session_meta /
+// turn_context event, if present.
+func codexAgentVersion(raw map[string]interface{}) (string, bool) {
+	payload, ok := raw["payload"].(map[string]interface{})
+	if !ok {
+		return "", false
+	}
+	v, ok := payload["cli_version"].(string)
+	return v, ok
 }
 
 // scanCodexTaskEstimate scans the FULL assistant text blocks for the
@@ -199,33 +241,45 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 // (top-level content[] and message.content[]) but over the untruncated text —
 // AssistantText keeps only the last 200 runes and would lose early markers.
 func scanCodexTaskEstimate(raw map[string]interface{}, ev *tailer.ParsedEvent) {
-	scan := func(arr []interface{}) {
-		for _, item := range arr {
-			block, ok := item.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			bt, _ := block["type"].(string)
-			if bt != "text" && bt != "output_text" {
-				continue
-			}
-			if text, ok := block["text"].(string); ok {
-				if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
-					ev.TaskEstimate = est
-				}
-				if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
-					ev.TaskSummary = s
-				}
-			}
-		}
-	}
 	if arr, ok := raw["content"].([]interface{}); ok {
-		scan(arr)
+		scanCodexTaskEstimateBlocks(arr, ev)
 	}
 	if msg, ok := raw["message"].(map[string]interface{}); ok {
 		if arr, ok := msg["content"].([]interface{}); ok {
-			scan(arr)
+			scanCodexTaskEstimateBlocks(arr, ev)
 		}
+	}
+}
+
+// scanCodexTaskEstimateBlocks scans one content array for task-estimate /
+// task-summary markers. Split out of scanCodexTaskEstimate (go:S3776) since
+// it walks both the top-level content[] and message.content[] paths.
+func scanCodexTaskEstimateBlocks(arr []interface{}, ev *tailer.ParsedEvent) {
+	for _, item := range arr {
+		block, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		bt, _ := block["type"].(string)
+		if bt != "text" && bt != "output_text" {
+			continue
+		}
+		text, ok := block["text"].(string)
+		if !ok {
+			continue
+		}
+		applyCodexTaskEstimateMarkers(text, ev)
+	}
+}
+
+// applyCodexTaskEstimateMarkers scans a single text block for the
+// task-estimate and task-summary markers and applies whichever are found.
+func applyCodexTaskEstimateMarkers(text string, ev *tailer.ParsedEvent) {
+	if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
+		ev.TaskEstimate = est
+	}
+	if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
+		ev.TaskSummary = s
 	}
 }
 
@@ -332,41 +386,15 @@ func extractCodexMetadata(raw map[string]interface{}) (string, int64, *tailer.To
 
 	// Payload-wrapped events (event_msg, response_item, etc.).
 	if payload, ok := raw["payload"].(map[string]interface{}); ok {
-		if model, ok := payload["model"].(string); ok && model != "" {
-			modelName = tailer.NormalizeModelName(model)
+		pModel, pContextWindow, pTokens, pCumBreakdown := extractCodexPayloadMetadata(payload)
+		if pModel != "" {
+			modelName = pModel
 		}
-		// Token info from payload.info.
-		// IMPORTANT: codex emits two usage blocks on every token_count event:
-		//   - total_token_usage: cumulative running total across all turns in
-		//     the session (sum of input+output for every turn). This grows
-		//     unbounded and quickly exceeds the model context window.
-		//   - last_token_usage: per-turn snapshot. last_token_usage.input_tokens
-		//     is the prompt size for the most recent turn = current context
-		//     window usage. This matches the per-turn semantics Claude Code's
-		//     parser already produces.
-		// We use last_token_usage for context utilization (stays in [0, 100%])
-		// and total_token_usage for cumulative cost calculation.
-		if info, ok := payload["info"].(map[string]interface{}); ok {
-			if usage, ok := info["last_token_usage"].(map[string]interface{}); ok {
-				tokens = tailer.ExtractUsage(usage)
-			}
-			if usage, ok := info["total_token_usage"].(map[string]interface{}); ok {
-				cumBreakdown = extractOpenAIUsageBreakdown(usage)
-			}
-			if cw, ok := info["model_context_window"].(float64); ok && cw > 0 {
-				contextWindow = int64(cw)
-			}
+		if pContextWindow > 0 {
+			contextWindow = pContextWindow
 		}
-		// model_context_window directly on payload (task_started).
-		if cw, ok := payload["model_context_window"].(float64); ok && cw > 0 {
-			contextWindow = int64(cw)
-		}
-		// Direct usage on payload.
-		if tokens == nil {
-			if usage, ok := payload["usage"].(map[string]interface{}); ok {
-				tokens = tailer.ExtractUsage(usage)
-			}
-		}
+		tokens = pTokens
+		cumBreakdown = pCumBreakdown
 	}
 
 	// Message-level usage (Codex responses API format).
@@ -375,6 +403,56 @@ func extractCodexMetadata(raw map[string]interface{}) (string, int64, *tailer.To
 	}
 
 	return modelName, contextWindow, tokens, cumBreakdown
+}
+
+// extractCodexPayloadMetadata extracts model/context-window/token info from a
+// payload-wrapped event's "payload" object (event_msg, response_item, etc.).
+// Split out of extractCodexMetadata (go:S3776) since the payload shape nests
+// several independent lookups.
+func extractCodexPayloadMetadata(payload map[string]interface{}) (modelName string, contextWindow int64, tokens *tailer.TokenSnapshot, cumBreakdown *tailer.UsageBreakdown) {
+	if model, ok := payload["model"].(string); ok && model != "" {
+		modelName = tailer.NormalizeModelName(model)
+	}
+	// Token info from payload.info.
+	// IMPORTANT: codex emits two usage blocks on every token_count event:
+	//   - total_token_usage: cumulative running total across all turns in
+	//     the session (sum of input+output for every turn). This grows
+	//     unbounded and quickly exceeds the model context window.
+	//   - last_token_usage: per-turn snapshot. last_token_usage.input_tokens
+	//     is the prompt size for the most recent turn = current context
+	//     window usage. This matches the per-turn semantics Claude Code's
+	//     parser already produces.
+	// We use last_token_usage for context utilization (stays in [0, 100%])
+	// and total_token_usage for cumulative cost calculation.
+	if info, ok := payload["info"].(map[string]interface{}); ok {
+		tokens, contextWindow, cumBreakdown = extractCodexInfoMetadata(info)
+	}
+	// model_context_window directly on payload (task_started).
+	if cw, ok := payload["model_context_window"].(float64); ok && cw > 0 {
+		contextWindow = int64(cw)
+	}
+	// Direct usage on payload.
+	if tokens == nil {
+		if usage, ok := payload["usage"].(map[string]interface{}); ok {
+			tokens = tailer.ExtractUsage(usage)
+		}
+	}
+	return modelName, contextWindow, tokens, cumBreakdown
+}
+
+// extractCodexInfoMetadata extracts token/context-window info from a
+// payload.info object. Split out of extractCodexPayloadMetadata (go:S3776).
+func extractCodexInfoMetadata(info map[string]interface{}) (tokens *tailer.TokenSnapshot, contextWindow int64, cumBreakdown *tailer.UsageBreakdown) {
+	if usage, ok := info["last_token_usage"].(map[string]interface{}); ok {
+		tokens = tailer.ExtractUsage(usage)
+	}
+	if usage, ok := info["total_token_usage"].(map[string]interface{}); ok {
+		cumBreakdown = extractOpenAIUsageBreakdown(usage)
+	}
+	if cw, ok := info["model_context_window"].(float64); ok && cw > 0 {
+		contextWindow = int64(cw)
+	}
+	return tokens, contextWindow, cumBreakdown
 }
 
 // GetParserLedger implements tailer.ParserStateProvider. Saves the cumulative
@@ -489,15 +567,7 @@ func extractOpenAIUsageBreakdown(usage map[string]interface{}) *tailer.UsageBrea
 	// OpenAI Responses API: cached tokens are nested inside input_tokens_details.
 	// Prefer that over flat cache_read_input_tokens (which OpenAI doesn't use).
 	if details, ok := usage["input_tokens_details"].(map[string]interface{}); ok {
-		if v, ok := details["cached_tokens"].(float64); ok && v > 0 {
-			bd.CacheRead = int64(v)
-			// Deduct from Input to avoid double-counting (cached tokens are
-			// already included in input_tokens by OpenAI).
-			bd.Input -= bd.CacheRead
-			if bd.Input < 0 {
-				bd.Input = 0
-			}
-		}
+		applyCodexCachedTokens(bd, details)
 	}
 	// Fallback for older Codex format.
 	if bd.CacheRead == 0 {
@@ -512,4 +582,20 @@ func extractOpenAIUsageBreakdown(usage map[string]interface{}) *tailer.UsageBrea
 		return nil
 	}
 	return bd
+}
+
+// applyCodexCachedTokens sets bd.CacheRead from details.cached_tokens and
+// deducts it from bd.Input to avoid double-counting (cached tokens are
+// already included in input_tokens by OpenAI). Split out of
+// extractOpenAIUsageBreakdown (go:S3776).
+func applyCodexCachedTokens(bd *tailer.UsageBreakdown, details map[string]interface{}) {
+	v, ok := details["cached_tokens"].(float64)
+	if !ok || v <= 0 {
+		return
+	}
+	bd.CacheRead = int64(v)
+	bd.Input -= bd.CacheRead
+	if bd.Input < 0 {
+		bd.Input = 0
+	}
 }

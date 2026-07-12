@@ -43,7 +43,7 @@ final class SessionManagerCoalescingTests: XCTestCase {
 
     /// A storm of pure-metric updates (state unchanged) must not render once per
     /// message — they coalesce into exactly one flush, and every update lands.
-    func testMetricStorm_coalescesIntoSingleFlush() {
+    func testMetricStormCoalescesIntoSingleFlush() {
         let ids = (0..<40).map { "s\($0)" }
         seedWorkingSessions(ids)
 
@@ -67,7 +67,7 @@ final class SessionManagerCoalescingTests: XCTestCase {
 
     /// A state transition (working → waiting) bypasses the window so the row
     /// updates immediately — transitions fire at human pace, not the metric rate.
-    func testStateChange_flushesImmediately() {
+    func testStateChangeFlushesImmediately() {
         seedWorkingSessions(["a", "b"])
 
         sut.handleWsMessage(updatedEnvelope(id: "a", seq: 1, cost: 1, state: "waiting"))

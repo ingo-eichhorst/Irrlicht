@@ -215,8 +215,8 @@ boot_session() {
   if cwd_already_trusted; then
     echo "[driver] trust: cwd already trusted this run — skipping prompt" >&2
   else
-    local WAITED=0
-    while [[ $WAITED -lt 30 ]]; do
+    local waited=0
+    while [[ $waited -lt 30 ]]; do
       if tmux capture-pane -t "$sess" -p -S -40 2>/dev/null | grep -q 'Do you trust'; then
         tmux send-keys -t "$sess" "1"
         sleep 0.3
@@ -225,28 +225,28 @@ boot_session() {
         break
       fi
       sleep 0.5
-      WAITED=$((WAITED + 1))
+      waited=$((waited + 1))
     done
     # Remember this cwd so a later resume/concurrent boot here skips the poll.
     TRUSTED_CWDS+=("$cwd")
   fi
 
-  local WAITED=0
-  while [[ $WAITED -lt 180 ]]; do
+  local waited=0
+  while [[ $waited -lt 180 ]]; do
     if [[ -f "$slot_stdout" ]] && grep -aq 'OpenAI Codex' "$slot_stdout" 2>/dev/null; then
       break
     fi
     sleep 0.5
-    WAITED=$((WAITED + 1))
+    waited=$((waited + 1))
   done
 
-  WAITED=0
-  while [[ $WAITED -lt 60 ]]; do
+  waited=0
+  while [[ $waited -lt 60 ]]; do
     if ! tmux capture-pane -t "$sess" -p -S -20 2>/dev/null | grep -q 'Booting MCP'; then
       break
     fi
     sleep 0.5
-    WAITED=$((WAITED + 1))
+    waited=$((waited + 1))
   done
   sleep 2  # extra grace for the input prompt to settle
 }

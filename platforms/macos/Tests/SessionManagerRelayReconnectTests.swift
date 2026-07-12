@@ -22,7 +22,7 @@ final class SessionManagerRelayReconnectTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func testRecordConfirmedRelayConnect_resetsBackoffAndFailureState() {
+    func testRecordConfirmedRelayConnectResetsBackoffAndFailureState() {
         sut.relayReconnectDelay = 16.0
         sut.consecutiveRelayConnectFailures = 2
         sut.relayConnectionStalled = true
@@ -35,7 +35,7 @@ final class SessionManagerRelayReconnectTests: XCTestCase {
         XCTAssertFalse(sut.relayConnectionStalled)
     }
 
-    func testRecordFailedRelayConnectAttempt_doesNotRecycleBeforeThreshold() {
+    func testRecordFailedRelayConnectAttemptDoesNotRecycleBeforeThreshold() {
         let originalSession = sut.relayURLSession
 
         for _ in 0..<(sut.relayConnectFailuresBeforeSessionRecycle - 1) {
@@ -46,7 +46,7 @@ final class SessionManagerRelayReconnectTests: XCTestCase {
         XCTAssertTrue(sut.relayURLSession === originalSession, "session must survive isolated blips")
     }
 
-    func testRecordFailedRelayConnectAttempt_recyclesSessionAtThreshold() {
+    func testRecordFailedRelayConnectAttemptRecyclesSessionAtThreshold() {
         let originalSession = sut.relayURLSession
 
         for _ in 0..<(sut.relayConnectFailuresBeforeSessionRecycle - 1) {
@@ -61,7 +61,7 @@ final class SessionManagerRelayReconnectTests: XCTestCase {
         XCTAssertEqual(sut.consecutiveRelayConnectFailures, 0, "the streak resets after recycling")
     }
 
-    func testResetRelayConnectBackoff_clearsStaleFailureState() {
+    func testResetRelayConnectBackoffClearsStaleFailureState() {
         sut.relayReconnectDelay = 8.0
         sut.consecutiveRelayConnectFailures = sut.relayConnectFailuresBeforeSessionRecycle
         sut.relayConnectionStalled = true
@@ -73,7 +73,7 @@ final class SessionManagerRelayReconnectTests: XCTestCase {
         XCTAssertFalse(sut.relayConnectionStalled)
     }
 
-    func testStopRelay_clearsStalledFlag() {
+    func testStopRelayClearsStalledFlag() {
         sut.relayConnectionStalled = true
 
         sut.stopRelay()

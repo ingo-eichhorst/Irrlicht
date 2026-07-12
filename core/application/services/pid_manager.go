@@ -130,31 +130,33 @@ type PIDManager struct {
 	recorderSeq *int64 // shared with SessionDetector for monotonic ordering
 }
 
+// PIDManagerDeps bundles NewPIDManager's dependencies. PW and Broadcaster may
+// be nil (optional). ProcessNames + LiveCWDs may both be nil — that disables
+// the DB-backed-orphan branch of the startup zombie sweep.
+type PIDManagerDeps struct {
+	PW               outbound.ProcessWatcher
+	Repo             outbound.SessionRepository
+	Log              outbound.Logger
+	Broadcaster      outbound.PushBroadcaster
+	ReadyTTL         time.Duration
+	PIDDiscovers     map[string]agent.PIDDiscoverFunc
+	ProcessNames     map[string]string
+	LiveCWDs         LiveCWDsFunc
+	OnSessionDeleted func(sessionID string)
+}
+
 // NewPIDManager creates a PIDManager with the given dependencies.
-// pw and broadcaster may be nil (optional). processNames + liveCWDs may
-// both be nil — that disables the DB-backed-orphan branch of the startup
-// zombie sweep.
-func NewPIDManager(
-	pw outbound.ProcessWatcher,
-	repo outbound.SessionRepository,
-	log outbound.Logger,
-	broadcaster outbound.PushBroadcaster,
-	readyTTL time.Duration,
-	pidDiscovers map[string]agent.PIDDiscoverFunc,
-	processNames map[string]string,
-	liveCWDs LiveCWDsFunc,
-	onSessionDeleted func(sessionID string),
-) *PIDManager {
+func NewPIDManager(deps PIDManagerDeps) *PIDManager {
 	return &PIDManager{
-		pw:               pw,
-		repo:             repo,
-		log:              log,
-		broadcaster:      broadcaster,
-		readyTTL:         readyTTL,
-		pidDiscovers:     pidDiscovers,
-		processNames:     processNames,
-		liveCWDs:         liveCWDs,
-		onSessionDeleted: onSessionDeleted,
+		pw:               deps.PW,
+		repo:             deps.Repo,
+		log:              deps.Log,
+		broadcaster:      deps.Broadcaster,
+		readyTTL:         deps.ReadyTTL,
+		pidDiscovers:     deps.PIDDiscovers,
+		processNames:     deps.ProcessNames,
+		liveCWDs:         deps.LiveCWDs,
+		onSessionDeleted: deps.OnSessionDeleted,
 		pendingPIDs:      make(map[string]int),
 	}
 }
@@ -546,7 +548,7 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 	// Register with ProcessWatcher for exit monitoring.
 	if pm.pw != nil {
 		if err := pm.pw.Watch(pid, sessionID); err != nil {
-			pm.log.LogError("session-detector", sessionID,
+			pm.log.LogError(logComponentSessionDetector, sessionID,
 				fmt.Sprintf("failed to watch pid %d: %v", pid, err))
 		}
 	}
@@ -565,7 +567,7 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 // and the session looks "leaked" in the recording (issue #169).
 func (pm *PIDManager) cleanupStalePIDHolders(stale []*session.SessionState, sessionID string, pid int) {
 	for _, old := range stale {
-		pm.log.LogInfo("session-detector", old.SessionID,
+		pm.log.LogInfo(logComponentSessionDetector, old.SessionID,
 			fmt.Sprintf("replaced by new session %s (same pid %d) — deleting", sessionID, pid))
 
 		pm.record(lifecycle.Event{
@@ -691,7 +693,7 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, cwd, transcriptPath, adapter str
 	if strings.HasPrefix(sessionID, "proc-") {
 		var pid int
 		if _, err := fmt.Sscanf(sessionID, "proc-%d", &pid); err == nil && pid > 0 {
-			pm.log.LogInfo("session-detector", sessionID,
+			pm.log.LogInfo(logComponentSessionDetector, sessionID,
 				fmt.Sprintf("encoded pid %d for %s pre-session", pid, adapter))
 			pm.HandlePIDAssigned(pid, sessionID)
 			return true
@@ -708,7 +710,7 @@ func (pm *PIDManager) TryDiscoverPID(sessionID, cwd, transcriptPath, adapter str
 	}
 
 	if pid, err := discoverFn(cwd, transcriptPath, pm.claimAwareDisambiguate(sessionID)); err == nil && pid > 0 {
-		pm.log.LogInfo("session-detector", sessionID,
+		pm.log.LogInfo(logComponentSessionDetector, sessionID,
 			fmt.Sprintf("discovered pid %d for %s session", pid, adapter))
 		pm.HandlePIDAssigned(pid, sessionID)
 		return true
@@ -894,12 +896,12 @@ func (pm *PIDManager) reapDeadOrInfraPID(snap livenessSnapshot) bool {
 	if snap.pid <= 0 {
 		return false
 	}
-	if err := syscall.Kill(snap.pid, 0); err == syscall.ESRCH {
+	if syscall.Kill(snap.pid, 0) == syscall.ESRCH {
 		pm.HandleProcessExit(snap.pid, snap.state.SessionID, "pid exited (ESRCH)")
 		return true
 	}
 	if pm.isBoundToInfra(snap) {
-		pm.log.LogInfo("session-detector", snap.state.SessionID,
+		pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
 			fmt.Sprintf("pid %d is %s background infra, not the session — reaping ghost",
 				snap.pid, snap.adapter))
 		pm.HandleProcessExit(snap.pid, snap.state.SessionID,
@@ -947,7 +949,7 @@ func (pm *PIDManager) sweepStaleSnapshot(snap livenessSnapshot) {
 		return
 	}
 	if snap.sessionState == session.StateReady || snap.pid == 0 {
-		pm.log.LogInfo("session-detector", snap.state.SessionID,
+		pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
 			fmt.Sprintf("%s session (pid=%d) idle for >%v, deleting",
 				snap.sessionState, snap.pid, pm.readyTTL))
 		pm.deleteWithChildren(snap.state,
@@ -1004,7 +1006,7 @@ func (pm *PIDManager) reapUnboundReadyGhost(snap livenessSnapshot) bool {
 	if !isStaleTranscript(snap.transcriptPath) {
 		return false
 	}
-	pm.log.LogInfo("session-detector", snap.state.SessionID,
+	pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
 		"ready session with no PID and stale transcript for >30s, deleting")
 	pm.deleteWithChildren(snap.state,
 		"ghost reaped: PID=0, ready, stale transcript >30s — pre-session never bound a process")
@@ -1071,38 +1073,54 @@ func (pm *PIDManager) seedAlivePIDs(states []*session.SessionState) map[int]*ses
 		switch {
 		case state.PID > 0:
 			if pm.handleAlivePIDState(state) {
-				if state.ParentSessionID == "" && !strings.HasPrefix(state.SessionID, "proc-") {
-					if prev, ok := newestByPID[state.PID]; !ok || state.FirstSeen > prev.FirstSeen {
-						newestByPID[state.PID] = state
-					}
-				}
+				pm.trackNewestByPID(state, newestByPID)
 			}
-		case state.PID == 0 && state.ParentSessionID == "" && (isStaleTranscript(state.TranscriptPath) || cwdMissing(state.CWD)):
+		case state.PID == 0 && isOrphanAtSeed(state):
 			// Orphan from exited process (PID discovery never succeeded).
 			// Child sessions (ParentSessionID set) are exempt — they run
 			// inside the parent process and never get their own PID.
 			// cwdMissing also catches zombies re-touched by `claude --resume`
 			// after the worktree was deleted (#321).
-			pm.log.LogInfo("session-detector-seed", state.SessionID, "deleting orphan session")
+			pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID, "deleting orphan session")
 			pm.deleteWithChildren(state, "orphan session at seed — PID discovery never succeeded")
 		}
 	}
 	return newestByPID
 }
 
+// trackNewestByPID records state as the newest non-subagent, non-proc-*
+// session for its PID, for later dedup via dedupeByPID. Subagents (identified
+// by ParentSessionID) and proc-* placeholders are exempt from tracking.
+func (pm *PIDManager) trackNewestByPID(state *session.SessionState, newestByPID map[int]*session.SessionState) {
+	if state.ParentSessionID != "" || strings.HasPrefix(state.SessionID, "proc-") {
+		return
+	}
+	if prev, ok := newestByPID[state.PID]; ok && prev.FirstSeen >= state.FirstSeen {
+		return
+	}
+	newestByPID[state.PID] = state
+}
+
+// isOrphanAtSeed reports whether state is an orphan from an exited process at
+// seed time: not a child session, and either its transcript is stale or its
+// CWD no longer exists.
+func isOrphanAtSeed(state *session.SessionState) bool {
+	return state.ParentSessionID == "" && (isStaleTranscript(state.TranscriptPath) || cwdMissing(state.CWD))
+}
+
 // handleAlivePIDState processes a state whose PID > 0: deletes it when the
 // process is dead, otherwise watches it and backfills launcher metadata.
 // Returns true when the state remains alive after processing.
 func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
-	if err := syscall.Kill(state.PID, 0); err == syscall.ESRCH {
-		pm.log.LogInfo("session-detector-seed", state.SessionID,
+	if syscall.Kill(state.PID, 0) == syscall.ESRCH {
+		pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
 			fmt.Sprintf("pid %d dead, deleting session", state.PID))
 		pm.deleteWithChildren(state, fmt.Sprintf("pid %d dead at seed (ESRCH)", state.PID))
 		return false
 	}
 	if pm.pw != nil {
 		if err := pm.pw.Watch(state.PID, state.SessionID); err != nil {
-			pm.log.LogError("session-detector-seed", state.SessionID,
+			pm.log.LogError(logComponentSessionDetectorSeed, state.SessionID,
 				fmt.Sprintf("failed to watch existing pid %d: %v", state.PID, err))
 		}
 	}
@@ -1131,47 +1149,77 @@ func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 	if state.Launcher == nil {
 		pm.captureLauncher(state, state.PID)
 		if state.Launcher != nil {
-			state.UpdatedAt = time.Now().Unix()
-			_ = pm.repo.Save(state)
+			pm.touchAndSave(state)
 		}
 		return
 	}
 	if pm.launcherEnv == nil {
 		return
 	}
-	missingTTY := state.Launcher.TTY == ""
-	isKitty := state.Launcher.TermProgram == "kitty"
-	missingKittyPID := isKitty && state.Launcher.KittyPID == 0
-	missingKittyListen := isKitty && state.Launcher.KittyListenOn == ""
-	missingKittyWindow := isKitty && state.Launcher.KittyWindowID == ""
-	if !missingTTY && !missingKittyPID && !missingKittyListen && !missingKittyWindow {
+	needs := launcherBackfillNeedsFor(state.Launcher)
+	if !needs.any() {
 		return
 	}
 	fresh := pm.launcherEnv(state.PID)
 	if fresh == nil {
 		return
 	}
+	if applyLauncherBackfill(state.Launcher, needs, fresh) {
+		pm.touchAndSave(state)
+	}
+}
+
+// touchAndSave bumps UpdatedAt and persists state, ignoring the save error
+// (mirrors the existing best-effort backfill-save call sites).
+func (pm *PIDManager) touchAndSave(state *session.SessionState) {
+	state.UpdatedAt = time.Now().Unix()
+	_ = pm.repo.Save(state)
+}
+
+// launcherBackfillNeeds tracks which Launcher fields are missing and should
+// be refreshed from a fresh env read.
+type launcherBackfillNeeds struct {
+	tty, kittyPID, kittyListen, kittyWindow bool
+}
+
+func (n launcherBackfillNeeds) any() bool {
+	return n.tty || n.kittyPID || n.kittyListen || n.kittyWindow
+}
+
+// launcherBackfillNeedsFor computes which fields of l are missing and
+// eligible for backfill. The three Kitty-specific fields only ever need
+// backfilling for a kitty launcher.
+func launcherBackfillNeedsFor(l *session.Launcher) launcherBackfillNeeds {
+	isKitty := l.TermProgram == "kitty"
+	return launcherBackfillNeeds{
+		tty:         l.TTY == "",
+		kittyPID:    isKitty && l.KittyPID == 0,
+		kittyListen: isKitty && l.KittyListenOn == "",
+		kittyWindow: isKitty && l.KittyWindowID == "",
+	}
+}
+
+// applyLauncherBackfill copies each field fresh has that l is missing per
+// needs. Returns true when any field was updated.
+func applyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fresh *session.Launcher) bool {
 	updated := false
-	if missingTTY && fresh.TTY != "" {
-		state.Launcher.TTY = fresh.TTY
+	if needs.tty && fresh.TTY != "" {
+		l.TTY = fresh.TTY
 		updated = true
 	}
-	if missingKittyPID && fresh.KittyPID != 0 {
-		state.Launcher.KittyPID = fresh.KittyPID
+	if needs.kittyPID && fresh.KittyPID != 0 {
+		l.KittyPID = fresh.KittyPID
 		updated = true
 	}
-	if missingKittyListen && fresh.KittyListenOn != "" {
-		state.Launcher.KittyListenOn = fresh.KittyListenOn
+	if needs.kittyListen && fresh.KittyListenOn != "" {
+		l.KittyListenOn = fresh.KittyListenOn
 		updated = true
 	}
-	if missingKittyWindow && fresh.KittyWindowID != "" {
-		state.Launcher.KittyWindowID = fresh.KittyWindowID
+	if needs.kittyWindow && fresh.KittyWindowID != "" {
+		l.KittyWindowID = fresh.KittyWindowID
 		updated = true
 	}
-	if updated {
-		state.UpdatedAt = time.Now().Unix()
-		_ = pm.repo.Save(state)
-	}
+	return updated
 }
 
 // dedupeByPID removes non-subagent sessions that share a PID with a newer
@@ -1186,7 +1234,7 @@ func (pm *PIDManager) dedupeByPID(states []*session.SessionState, newestByPID ma
 			if s, _ := pm.repo.Load(state.SessionID); s == nil {
 				continue
 			}
-			pm.removeSessionUntracked("session-detector-seed", state,
+			pm.removeSessionUntracked(logComponentSessionDetectorSeed, state,
 				fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", pid, newest.SessionID))
 		}
 	}
@@ -1255,7 +1303,7 @@ func (pm *PIDManager) sweepSupersededPreSessions(states []*session.SessionState)
 			continue
 		}
 		if candidate, _ := findSupersedingSession(proc, states); candidate != nil {
-			pm.removeSessionUntracked("session-detector-seed", proc,
+			pm.removeSessionUntracked(logComponentSessionDetectorSeed, proc,
 				fmt.Sprintf("pre-session superseded by %s — deleting", candidate.SessionID))
 		}
 	}
@@ -1313,7 +1361,7 @@ func (pm *PIDManager) sweepSupersededPreSessionsPeriodic() {
 		if s, _ := pm.repo.Load(v.state.SessionID); s == nil {
 			continue
 		}
-		pm.removeSessionUntracked("session-detector", v.state,
+		pm.removeSessionUntracked(logComponentSessionDetector, v.state,
 			fmt.Sprintf("pre-session superseded by %s (PID-bound to a sibling) — deleting", v.candidate))
 	}
 }

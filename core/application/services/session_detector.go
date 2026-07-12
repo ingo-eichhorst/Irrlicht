@@ -41,6 +41,18 @@ const activityDebounceWindow = 2 * time.Second
 // transcript on this interval catches the missed events.
 const staleWorkingRefreshInterval = 5 * time.Second
 
+// Logger component tags shared by SessionDetector's collaborators, split
+// across this file, session_detector_activity.go, session_detector_lifecycle.go,
+// session_detector_subagent.go, and pid_manager.go.
+const (
+	// logComponentSessionDetector tags every log line the detector's steady
+	// -state event handling emits.
+	logComponentSessionDetector = "session-detector"
+	// logComponentSessionDetectorSeed tags log lines emitted during the
+	// initial-scan seeding pass, distinct from steady-state handling.
+	logComponentSessionDetectorSeed = "session-detector-seed"
+)
+
 // compactHoldTimeout bounds the PreCompact force-working hold (#657). Normally
 // the hold clears when the manual compact_boundary lands, but an interrupted or
 // failed /compact may never write one — without a ceiling the session would be
@@ -222,28 +234,31 @@ type terminalUISignal struct {
 	ui        backchannel.UIKind
 }
 
+// SessionDetectorDeps bundles NewSessionDetector's dependencies beyond the
+// watcher list. PW and Broadcaster may be nil (optional).
+type SessionDetectorDeps struct {
+	PW           outbound.ProcessWatcher
+	Repo         outbound.SessionRepository
+	Log          outbound.Logger
+	Git          outbound.GitResolver
+	Metrics      outbound.MetricsCollector
+	Broadcaster  outbound.PushBroadcaster
+	Version      string
+	ReadyTTL     time.Duration
+	PIDDiscovers map[string]agent.PIDDiscoverFunc
+	ProcessNames map[string]string
+	LiveCWDs     LiveCWDsFunc
+}
+
 // NewSessionDetector creates a SessionDetector with all required
-// dependencies. pw and broadcaster may be nil (optional).
+// dependencies.
 //
 // Panics if any supplied watcher has a zero-value Identity. Every
 // downstream session created from that watcher's events would otherwise
 // have an empty Adapter field — a silent partial-failure mode (the
 // adapter-aware code paths fall back gracefully, but logs and the
 // /api/v1/agents endpoint surface "" instead of the real name).
-func NewSessionDetector(
-	watchers []inbound.Watcher,
-	pw outbound.ProcessWatcher,
-	repo outbound.SessionRepository,
-	log outbound.Logger,
-	git outbound.GitResolver,
-	metrics outbound.MetricsCollector,
-	broadcaster outbound.PushBroadcaster,
-	version string,
-	readyTTL time.Duration,
-	pidDiscovers map[string]agent.PIDDiscoverFunc,
-	processNames map[string]string,
-	liveCWDs LiveCWDsFunc,
-) *SessionDetector {
+func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *SessionDetector {
 	for i, w := range watchers {
 		if w.Identity() == (agent.Identity{}) {
 			panic(fmt.Sprintf("session_detector: watchers[%d] (%T) has no Identity — call .WithIdentity() before passing it to NewSessionDetector", i, w))
@@ -252,12 +267,12 @@ func NewSessionDetector(
 	det := &SessionDetector{
 		watchers:          watchers,
 		merged:            make(chan identifiedEvent, 16),
-		repo:              repo,
-		log:               log,
-		broadcaster:       broadcaster,
-		version:           version,
-		enricher:          newMetadataEnricher(git, metrics),
-		metrics:           metrics,
+		repo:              deps.Repo,
+		log:               deps.Log,
+		broadcaster:       deps.Broadcaster,
+		version:           deps.Version,
+		enricher:          newMetadataEnricher(deps.Git, deps.Metrics),
+		metrics:           deps.Metrics,
 		projectSessions:   make(map[string]string),
 		deletedSessions:   make(map[string]int64),
 		hostGateRejected:  make(map[string]struct{}),
@@ -273,10 +288,17 @@ func NewSessionDetector(
 		bgProbing:         make(map[string]bool),
 		uiSignals:         make(chan terminalUISignal, 64),
 	}
-	det.pidMgr = NewPIDManager(
-		pw, repo, log, broadcaster, readyTTL,
-		pidDiscovers, processNames, liveCWDs, det.removeFromProjectSessions,
-	)
+	det.pidMgr = NewPIDManager(PIDManagerDeps{
+		PW:               deps.PW,
+		Repo:             deps.Repo,
+		Log:              deps.Log,
+		Broadcaster:      deps.Broadcaster,
+		ReadyTTL:         deps.ReadyTTL,
+		PIDDiscovers:     deps.PIDDiscovers,
+		ProcessNames:     deps.ProcessNames,
+		LiveCWDs:         deps.LiveCWDs,
+		OnSessionDeleted: det.removeFromProjectSessions,
+	})
 	det.pidMgr.SetChildDeletedHandler(det.reevaluateParent)
 	return det
 }
@@ -505,7 +527,7 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 	// Periodic liveness sweep: detect dead PIDs that kqueue missed.
 	go d.pidMgr.SweepDeadPIDs(ctx)
 
-	d.log.LogInfo("session-detector", "", "started — listening for transcript events")
+	d.log.LogInfo(logComponentSessionDetector, "", "started — listening for transcript events")
 
 	// Periodic refresh catches missed fswatcher events. When the subscriber
 	// channel overflows during concurrent bursts (multiple sessions + subagent
@@ -554,6 +576,43 @@ func (d *SessionDetector) EnqueueTerminalUISignal(sessionID string, ui backchann
 	}
 }
 
+// terminalUITransition computes the state/reason/uiReason for a terminal UI
+// edge. ok is false when the edge is a no-op the caller should skip without
+// recording: the rising edge finding the session already waiting (e.g. the
+// claudecode hook beat us to it), the clearing edge finding a waiting state
+// we're not responsible for, or the clearing edge's re-classification
+// independently landing back on waiting.
+func terminalUITransition(state *session.SessionState, ui backchannel.UIKind) (newState, reason, uiReason string, ok bool) {
+	if ui == backchannel.UIKindTrustDialog {
+		// Rising edge. Already waiting means nothing to do — no double-count.
+		if state.State == session.StateWaiting {
+			return "", "", "", false
+		}
+		return session.StateWaiting, TerminalUIDetectedReason, TerminalUIDetectedReason, true
+	}
+
+	// Clearing edge. Only undo a waiting we are responsible for.
+	if state.State != session.StateWaiting {
+		return "", "", "", false
+	}
+	// Re-classify from a WORKING base, not from the current waiting state:
+	// ClassifyState is a no-op when called with currentState == waiting and
+	// nil/ambiguous metrics, which would strand the session in waiting forever
+	// once the dialog we forced is gone. From a working base it re-derives
+	// ready/working from the metrics, while a genuine transcript reason to
+	// keep waiting (an open user-blocking tool, a question cue) still routes
+	// back to waiting — in which case newState == waiting and the caller
+	// leaves it untouched.
+	newState, reason = ClassifyState(session.StateWorking, state.Metrics)
+	if newState == state.State {
+		return "", "", "", false // transcript independently keeps it waiting — leave it
+	}
+	if reason == "" {
+		reason = TerminalUIClearedReason
+	}
+	return newState, reason, TerminalUIClearedReason, true
+}
+
 // handleTerminalUISignal folds a rendered-terminal UI edge into the session
 // lifecycle. It runs on the event-loop goroutine, but the load-modify-save runs
 // under WithSessionStateLock — the same lock processActivity and the async
@@ -569,36 +628,9 @@ func (d *SessionDetector) handleTerminalUISignal(sig terminalUISignal) {
 			return // session gone since the signal was queued
 		}
 
-		var newState, reason, uiReason string
-		switch sig.ui {
-		case backchannel.UIKindTrustDialog:
-			// Rising edge. Already waiting (e.g. the claudecode hook beat us to
-			// it) means nothing to do — no double-count.
-			if state.State == session.StateWaiting {
-				return
-			}
-			newState, reason, uiReason = session.StateWaiting, TerminalUIDetectedReason, TerminalUIDetectedReason
-		default:
-			// Clearing edge. Only undo a waiting we are responsible for.
-			if state.State != session.StateWaiting {
-				return
-			}
-			// Re-classify from a WORKING base, not from the current waiting
-			// state: ClassifyState is a no-op when called with currentState ==
-			// waiting and nil/ambiguous metrics, which would strand the session
-			// in waiting forever once the dialog we forced is gone. From a
-			// working base it re-derives ready/working from the metrics, while a
-			// genuine transcript reason to keep waiting (an open user-blocking
-			// tool, a question cue) still routes back to waiting — in which case
-			// newState == waiting and we leave it untouched below.
-			newState, reason = ClassifyState(session.StateWorking, state.Metrics)
-			if newState == state.State {
-				return // transcript independently keeps it waiting — leave it
-			}
-			if reason == "" {
-				reason = TerminalUIClearedReason
-			}
-			uiReason = TerminalUIClearedReason
+		newState, reason, uiReason, ok := terminalUITransition(state, sig.ui)
+		if !ok {
+			return
 		}
 
 		// Record only once we are actually acting, so a no-op edge never inflates
@@ -622,7 +654,7 @@ func (d *SessionDetector) handleTerminalUISignal(sig terminalUISignal) {
 			state.WaitingStartTime = nil
 		}
 		if err := d.repo.Save(state); err != nil {
-			d.log.LogError("session-detector", sig.sessionID,
+			d.log.LogError(logComponentSessionDetector, sig.sessionID,
 				fmt.Sprintf("failed to save terminal-UI update: %v", err))
 			return
 		}

@@ -115,15 +115,18 @@ func resolveScenarioFolderForAgent(idx recipeIndex, agent, coverageID string) (s
 // agent-question-pending), where the client needs it to resolve the recording
 // link/panel (viewer.js) — without it, those cells' detail recording can't be
 // found (the #512 review finding this closes).
+// recipeRow is one /api/recipes entry: a coverage_id plus its per-adapter
+// recipe blocks and on-disk recording folders.
+type recipeRow struct {
+	Name          string                     `json:"name"`
+	CoverageID    string                     `json:"coverage_id"`
+	ByAdapter     map[string]json.RawMessage `json:"by_adapter"`
+	FolderByAgent map[string]string          `json:"folder_by_agent,omitempty"`
+}
+
 func (s *Server) handleRecipes(w http.ResponseWriter, r *http.Request) {
 	shards := shard.LoadAll(s.RepoRoot)
 
-	type recipeRow struct {
-		Name          string                     `json:"name"`
-		CoverageID    string                     `json:"coverage_id"`
-		ByAdapter     map[string]json.RawMessage `json:"by_adapter"`
-		FolderByAgent map[string]string          `json:"folder_by_agent,omitempty"`
-	}
 	// Scan each adapter's cells once, keyed by scenario_id.
 	adapterCells := map[string]map[string]*shard.ShardAgent{}
 	for _, a := range shard.Agents(s.RepoRoot) {
@@ -131,33 +134,7 @@ func (s *Server) handleRecipes(w http.ResponseWriter, r *http.Request) {
 	}
 	rows := make([]recipeRow, 0, len(shards))
 	for _, sh := range shards {
-		row := recipeRow{Name: sh.Name, CoverageID: sh.Name, ByAdapter: map[string]json.RawMessage{}, FolderByAgent: map[string]string{}}
-		// Cells for THIS scenario, per adapter.
-		cells := map[string]*shard.ShardAgent{}
-		for a, byCID := range adapterCells {
-			if c, ok := byCID[sh.Name]; ok {
-				cells[a] = c
-			}
-		}
-		// Sorted agent keys for deterministic output.
-		agentKeys := make([]string, 0, len(cells))
-		for a := range cells {
-			agentKeys = append(agentKeys, a)
-		}
-		sort.Strings(agentKeys)
-		for _, a := range agentKeys {
-			cell := cells[a]
-			if cell == nil {
-				continue
-			}
-			if rec := cell.Details.Recipe; len(rec) > 0 {
-				row.ByAdapter[a] = rec
-			}
-			// The recording folder for this agent is the cell's on-disk folder
-			// (variant-folder aware), the single source of truth.
-			row.FolderByAgent[a] = cell.Folder
-		}
-		rows = append(rows, row)
+		rows = append(rows, buildRecipeRow(sh, adapterCells))
 	}
 
 	doc := map[string]any{"scenarios": rows}
@@ -168,4 +145,37 @@ func (s *Server) handleRecipes(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Write(b)
+}
+
+// buildRecipeRow builds one /api/recipes row for a shard scenario: the
+// per-adapter recipe block (when authored) and on-disk recording folder
+// (variant-folder aware), keyed by agent in deterministic (sorted) order.
+func buildRecipeRow(sh shard.Shard, adapterCells map[string]map[string]*shard.ShardAgent) recipeRow {
+	row := recipeRow{Name: sh.Name, CoverageID: sh.Name, ByAdapter: map[string]json.RawMessage{}, FolderByAgent: map[string]string{}}
+	// Cells for THIS scenario, per adapter.
+	cells := map[string]*shard.ShardAgent{}
+	for a, byCID := range adapterCells {
+		if c, ok := byCID[sh.Name]; ok {
+			cells[a] = c
+		}
+	}
+	// Sorted agent keys for deterministic output.
+	agentKeys := make([]string, 0, len(cells))
+	for a := range cells {
+		agentKeys = append(agentKeys, a)
+	}
+	sort.Strings(agentKeys)
+	for _, a := range agentKeys {
+		cell := cells[a]
+		if cell == nil {
+			continue
+		}
+		if rec := cell.Details.Recipe; len(rec) > 0 {
+			row.ByAdapter[a] = rec
+		}
+		// The recording folder for this agent is the cell's on-disk folder
+		// (variant-folder aware), the single source of truth.
+		row.FolderByAgent[a] = cell.Folder
+	}
+	return row
 }

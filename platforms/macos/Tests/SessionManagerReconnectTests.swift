@@ -37,7 +37,7 @@ final class SessionManagerReconnectTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func testRecordConfirmedLocalConnect_resetsBackoffAndFailureState() {
+    func testRecordConfirmedLocalConnectResetsBackoffAndFailureState() {
         // Simulate having backed off after several failed attempts.
         sut.reconnectDelay = 16.0
         sut.consecutiveLocalConnectFailures = 2
@@ -58,7 +58,7 @@ final class SessionManagerReconnectTests: XCTestCase {
     /// single application message) or a received message. Both must land on
     /// the same idempotent call, so a second confirmation after the state is
     /// already `.connected` is a no-op rather than re-arming the counters.
-    func testRecordConfirmedLocalConnect_isIdempotent() {
+    func testRecordConfirmedLocalConnectIsIdempotent() {
         sut.recordConfirmedLocalConnect()
         XCTAssertEqual(sut.connectionState, .connected)
 
@@ -69,7 +69,7 @@ final class SessionManagerReconnectTests: XCTestCase {
                        "a second confirmation on an already-connected cycle must not touch state again")
     }
 
-    func testRecordFailedLocalConnectAttempt_doesNotRecycleBeforeThreshold() {
+    func testRecordFailedLocalConnectAttemptDoesNotRecycleBeforeThreshold() {
         let originalSession = sut.localURLSession
 
         for _ in 0..<(sut.localConnectFailuresBeforeSessionRecycle - 1) {
@@ -80,7 +80,7 @@ final class SessionManagerReconnectTests: XCTestCase {
         XCTAssertTrue(sut.localURLSession === originalSession, "session must survive isolated blips")
     }
 
-    func testRecordFailedLocalConnectAttempt_recyclesSessionAtThreshold() {
+    func testRecordFailedLocalConnectAttemptRecyclesSessionAtThreshold() {
         let originalSession = sut.localURLSession
 
         for _ in 0..<(sut.localConnectFailuresBeforeSessionRecycle - 1) {
@@ -95,7 +95,7 @@ final class SessionManagerReconnectTests: XCTestCase {
         XCTAssertEqual(sut.consecutiveLocalConnectFailures, 0, "the streak resets after recycling")
     }
 
-    func testResetLocalConnectBackoff_clearsStaleFailureState() {
+    func testResetLocalConnectBackoffClearsStaleFailureState() {
         // Exercises the reset helper directly rather than `startWebSocket()`
         // itself, which would also schedule a live `connect()` dial (#843).
         sut.reconnectDelay = 8.0
@@ -109,7 +109,7 @@ final class SessionManagerReconnectTests: XCTestCase {
         XCTAssertFalse(sut.localConnectionStalled)
     }
 
-    func testStopWebSocket_clearsStalledFlag() {
+    func testStopWebSocketClearsStalledFlag() {
         sut.localConnectionStalled = true
 
         sut.stopWebSocket()

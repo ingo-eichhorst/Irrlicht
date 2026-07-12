@@ -93,7 +93,7 @@ func TestForwarderHelloSnapshotAndPush(t *testing.T) {
 		return []*session.SessionState{{SessionID: "s1", State: "working"}},
 			[]AgentInfo{{Name: "claude-code", DisplayName: "Claude Code"}}
 	}
-	f := NewForwarder(tr.url, Identity{DaemonID: "d-123", DaemonLabel: "laptop"}, "", bc, snap, nil, nil, nil)
+	f := NewForwarder(tr.url, Identity{DaemonID: "d-123", DaemonLabel: "laptop"}, ForwarderDeps{Push: bc, Snapshot: snap})
 	go f.Run(t.Context())
 
 	var hello Hello
@@ -122,7 +122,7 @@ func TestForwarderHelloSnapshotAndPush(t *testing.T) {
 func TestForwarderFiltersFocusRequested(t *testing.T) {
 	tr := newTestRelay(t)
 	bc := newFakeBroadcaster()
-	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, "", bc, nil, nil, nil, nil)
+	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, ForwarderDeps{Push: bc})
 	go f.Run(t.Context())
 
 	tr.next(t) // hello
@@ -143,7 +143,7 @@ func TestForwarderFiltersFocusRequested(t *testing.T) {
 func TestForwarderReconnects(t *testing.T) {
 	tr := newTestRelay(t)
 	bc := newFakeBroadcaster()
-	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, "", bc, nil, nil, nil, nil)
+	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, ForwarderDeps{Push: bc})
 	f.minBackoff = 10 * time.Millisecond
 	f.maxBackoff = 20 * time.Millisecond
 	go f.Run(t.Context())
@@ -208,6 +208,32 @@ func TestNormalizeRelayURL(t *testing.T) {
 	}
 }
 
+func TestValidateDialURLAccepts(t *testing.T) {
+	for _, in := range []string{
+		"ws://localhost:7839/api/v1/sessions/stream",
+		"wss://relay.example/api/v1/sessions/stream",
+		normalizeRelayURL("relay.example:7839"),
+	} {
+		if err := validateDialURL(in); err != nil {
+			t.Errorf("validateDialURL(%q) = %v, want nil", in, err)
+		}
+	}
+}
+
+func TestValidateDialURLRejects(t *testing.T) {
+	for _, in := range []string{
+		"",
+		"not a url\x7f",
+		"http://relay.example/stream",  // normalizeRelayURL always rewrites to ws/wss; a bare http(s) here means something bypassed it
+		"ws:///api/v1/sessions/stream", // no host
+		"ws://user:pass@relay.example/api/v1/sessions/stream",
+	} {
+		if err := validateDialURL(in); err == nil {
+			t.Errorf("validateDialURL(%q) = nil, want a rejection error", in)
+		}
+	}
+}
+
 func TestShouldForward(t *testing.T) {
 	if shouldForward(outbound.PushMessage{Type: outbound.PushTypeFocusRequested}) {
 		t.Fatal("focus_requested must not be forwarded")
@@ -231,7 +257,7 @@ func TestForwarderSendsToken(t *testing.T) {
 	tr := newTestRelay(t)
 	bc := newFakeBroadcaster()
 	snap := func() ([]*session.SessionState, []AgentInfo) { return nil, nil }
-	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, "s3cr3t-token", bc, snap, nil, nil, nil)
+	f := NewForwarder(tr.url, Identity{DaemonID: "d1"}, ForwarderDeps{Token: "s3cr3t-token", Push: bc, Snapshot: snap})
 	go f.Run(t.Context())
 
 	var hello Hello
@@ -266,7 +292,7 @@ func TestForwarderStatusConnected(t *testing.T) {
 	tr := newTestRelay(t)
 	bc := newFakeBroadcaster()
 	snap := func() ([]*session.SessionState, []AgentInfo) { return nil, nil }
-	f := NewForwarder(tr.url, Identity{DaemonID: "d1", DaemonLabel: "lap"}, "", bc, snap, nil, nil, nil)
+	f := NewForwarder(tr.url, Identity{DaemonID: "d1", DaemonLabel: "lap"}, ForwarderDeps{Push: bc, Snapshot: snap})
 	go f.Run(t.Context())
 
 	tr.next(t) // hello
@@ -303,7 +329,7 @@ func TestForwarderStatusAuthFailed(t *testing.T) {
 	defer srv.Close()
 
 	bc := newFakeBroadcaster()
-	f := NewForwarder("ws"+strings.TrimPrefix(srv.URL, "http"), Identity{DaemonID: "d1"}, "bad-token", bc, nil, nil, nil, nil)
+	f := NewForwarder("ws"+strings.TrimPrefix(srv.URL, "http"), Identity{DaemonID: "d1"}, ForwarderDeps{Token: "bad-token", Push: bc})
 	f.minBackoff = 10 * time.Millisecond
 	f.maxBackoff = 20 * time.Millisecond
 	go f.Run(t.Context())

@@ -16,8 +16,21 @@ import (
 	"irrlicht/core/adapters/outbound/relay"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/dora"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
+)
+
+// errInternalErrorMsg is the generic 500 response body used across handlers
+// in this file where the underlying error is already logged and its details
+// aren't safe or useful to expose to the client.
+const errInternalErrorMsg = "internal error"
+
+// headerContentType and contentTypeJSON name the response header/value pair
+// set by every JSON-encoding handler in this file.
+const (
+	headerContentType = "Content-Type"
+	contentTypeJSON   = "application/json"
 )
 
 // costTimeframeSeconds maps the four supported time-frame keys to their
@@ -78,7 +91,7 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
 			return
 		}
 		// Cross-account rate-limit inheritance (issue #309): wrapper
@@ -96,7 +109,7 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 			attachGroupCosts(groups, byProject)
 			resp.ProviderCosts = providerCostsByProvider(byProvider)
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		json.NewEncoder(w).Encode(resp)
 	}
 }
@@ -161,31 +174,48 @@ func attachGroupCosts(groups []*session.AgentGroup, byTf map[string]map[string]f
 		if g == nil {
 			continue
 		}
-		costs := make(map[string]float64, len(costTimeframeSeconds))
+		var costs map[string]float64
 		if g.Type == "gastown" {
-			projects := collectProjectNames(g)
-			for tf := range costTimeframeSeconds {
-				var sum float64
-				for p := range projects {
-					if v, ok := byTf[tf][p]; ok {
-						sum += v
-					}
-				}
-				if sum > 0 {
-					costs[tf] = sum
-				}
-			}
+			costs = gastownGroupCosts(g, byTf)
 		} else {
-			for tf := range costTimeframeSeconds {
-				if v, ok := byTf[tf][g.Name]; ok {
-					costs[tf] = v
-				}
-			}
+			costs = regularGroupCosts(g, byTf)
 		}
 		if len(costs) > 0 {
 			g.Costs = costs
 		}
 	}
+}
+
+// gastownGroupCosts sums the distinct project costs across every session
+// beneath an orchestrator group (rigs span projects), counting a shared
+// project once — the per-timeframe half of attachGroupCosts' gastown branch.
+func gastownGroupCosts(g *session.AgentGroup, byTf map[string]map[string]float64) map[string]float64 {
+	costs := make(map[string]float64, len(costTimeframeSeconds))
+	projects := collectProjectNames(g)
+	for tf := range costTimeframeSeconds {
+		var sum float64
+		for p := range projects {
+			if v, ok := byTf[tf][p]; ok {
+				sum += v
+			}
+		}
+		if sum > 0 {
+			costs[tf] = sum
+		}
+	}
+	return costs
+}
+
+// regularGroupCosts returns a plain project group's own trailing-window
+// costs, keyed by the group's name.
+func regularGroupCosts(g *session.AgentGroup, byTf map[string]map[string]float64) map[string]float64 {
+	costs := make(map[string]float64, len(costTimeframeSeconds))
+	for tf := range costTimeframeSeconds {
+		if v, ok := byTf[tf][g.Name]; ok {
+			costs[tf] = v
+		}
+	}
+	return costs
 }
 
 // collectProjectNames returns the distinct, non-empty ProjectNames of every
@@ -354,170 +384,349 @@ type historySessionLister interface {
 	ListAll() ([]*session.SessionState, error)
 }
 
+// historyDoraResponse is the chart=dora payload (#951): DORA metrics for one
+// project's git repo over the selected window. Unlike the cost chart it's a
+// period summary, not a time series — computed fresh per request, no
+// persistence (see services.ComputeDoraMetrics).
+type historyDoraResponse struct {
+	Range               string     `json:"range"`
+	Chart               string     `json:"chart"`
+	Project             string     `json:"project"`
+	Start               int64      `json:"start"`
+	End                 int64      `json:"end"`
+	Available           bool       `json:"available"`
+	Message             string     `json:"message,omitempty"`
+	DeploymentFrequency doraMetric `json:"deployment_frequency"`
+	LeadTime            doraMetric `json:"lead_time"`
+	ChangeFailureRate   doraMetric `json:"change_failure_rate"`
+	MTTR                doraMetric `json:"mttr"`
+}
+
+// doraMetric mirrors dora.Metric for the wire as its own type, so a JSON tag
+// change here never has to touch the domain package.
+type doraMetric struct {
+	Value      float64 `json:"value"`
+	Unit       string  `json:"unit"`
+	SampleSize int     `json:"sample_size"`
+	Available  bool    `json:"available"`
+	Message    string  `json:"message,omitempty"`
+}
+
+func toDoraMetric(m dora.Metric) doraMetric {
+	return doraMetric{Value: m.Value, Unit: m.Unit, SampleSize: m.SampleSize, Available: m.Available, Message: m.Message}
+}
+
+// historyGitReader is the narrow git surface chart=dora needs, matching the
+// historySessionLister convention of small per-consumer interfaces.
+type historyGitReader interface {
+	GetGitRoot(dir string) string
+	ListReleaseTags(dir string) []dora.TagInfo
+	CommitsInRange(dir, fromRef, toRef string) []dora.CommitInfo
+	TagContaining(dir, hash string) string
+}
+
+// serveHistoryDoraChart serves chart=dora (#951): requires exactly one
+// ?project=, since DORA metrics are inherently repo-scoped — unlike
+// cost/yield's implicit "all projects." Any other resolution failure
+// (project not found, not a git repo, no release tags) is a well-formed 200
+// with Available:false, not an error, mirroring
+// serveHistoryAgentsChart's nil-reader / fetchHistoryCostSeries's
+// nil-tracker empty-but-valid payload convention.
+func serveHistoryDoraChart(w http.ResponseWriter, git historyGitReader, sessions historySessionLister, project, rangeKey string, start, end int64) {
+	if project == "" {
+		http.Error(w, "chart=dora requires ?project=<name>", http.StatusBadRequest)
+		return
+	}
+	if strings.Contains(project, ",") {
+		http.Error(w, "chart=dora requires exactly one project, not a comma-separated list", http.StatusBadRequest)
+		return
+	}
+
+	result, err := services.ComputeDoraMetrics(git, sessions, project, start, end)
+	if err != nil {
+		http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
+		return
+	}
+
+	writeHistoryJSON(w, historyDoraResponse{
+		Range:               rangeKey,
+		Chart:               "dora",
+		Project:             project,
+		Start:               start,
+		End:                 end,
+		Available:           result.Available,
+		Message:             result.Message,
+		DeploymentFrequency: toDoraMetric(result.DeploymentFrequency),
+		LeadTime:            toDoraMetric(result.LeadTime),
+		ChangeFailureRate:   toDoraMetric(result.ChangeFailureRate),
+		MTTR:                toDoraMetric(result.MTTR),
+	})
+}
+
+// historyChartKnown validates the requested ?chart= value. Charts implemented
+// in Phase 1-3 pass through; chart=state is scaffolded in the UI but not wired
+// yet (writes a 501); anything else is a client error (writes a 400). Returns
+// false once it has already written the response, in which case the caller
+// must return immediately.
+func historyChartKnown(w http.ResponseWriter, chart string) bool {
+	switch chart {
+	case "cost", "tokens", "co2", "models", "providers":
+		// implemented (Phase 2); co2 added for issue #829
+	case "yield":
+		// implemented (#373) — handled after range resolution below
+	case "dora":
+		// implemented (#951) — handled after range resolution below
+	case "agents":
+		// implemented (Phase 3) — handled after range resolution below
+	case "state":
+		// time-in-state is the issue's optional second half (#751); the
+		// reconstruction exists but no chart is wired yet.
+		writeHistoryNotImplemented(w, "chart="+chart, 3)
+		return false
+	default:
+		http.Error(w, "unknown chart: "+chart, http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// historyGroupKnown validates the requested ?group= axis, writing a 400 and
+// returning false for anything outside the supported set.
+func historyGroupKnown(w http.ResponseWriter, group string) bool {
+	switch group {
+	case "project", "branch", "provider", "model", "session":
+		// implemented (Phase 2)
+	case "token_type":
+		// implemented (faceted) — tokens metric only (validated below)
+	default:
+		http.Error(w, "unknown group: "+group, http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// historyMetricAndGroup derives the measured metric and the effective
+// stacking axis from chart and the requested group. chart picks the measured
+// metric for tokens/co2; models/providers/agents are presets that pin the
+// stacking axis to that dimension (one-click "cost by X"; agents is
+// reconstructed per project only), overriding whatever ?group= requested.
+func historyMetricAndGroup(chart, group string) (metric, effectiveGroup string) {
+	switch chart {
+	case "tokens":
+		return "tokens", group
+	case "co2":
+		return "co2", group
+	case "models":
+		return "cost", "model"
+	case "providers":
+		return "cost", "provider"
+	case "agents":
+		return "cost", "project"
+	default:
+		return "cost", group
+	}
+}
+
+// historyGroupMetricMismatch reports the one invalid chart/group combination:
+// token_type is inherently a token concept — it can't slice cost (we store no
+// per-token-type cost on disk).
+func historyGroupMetricMismatch(group, metric string) bool {
+	return group == "token_type" && metric != "tokens"
+}
+
+// historyScopeEcho renders a parsed ?scope= drilldown back into its
+// "field:value" wire form, or "" when there is no active scope.
+func historyScopeEcho(field, value string) string {
+	if field == "" {
+		return ""
+	}
+	return field + ":" + value
+}
+
+// writeHistoryJSON encodes v as a history endpoint's JSON response body.
+func writeHistoryJSON(w http.ResponseWriter, v any) {
+	w.Header().Set(headerContentType, contentTypeJSON)
+	json.NewEncoder(w).Encode(v)
+}
+
+// serveHistoryAgentsChart serves chart=agents: a concurrent-agents series
+// reconstructed from lifecycle recordings via ConcurrencyReader.AgentsSeries
+// (Phase 3, #751). A nil reader or an unresolved recordings dir yields an
+// empty-but-valid payload rather than an error.
+func serveHistoryAgentsChart(w http.ResponseWriter, concurrency outbound.ConcurrencyReader, rangeKey, scopeEcho string, query outbound.SeriesQuery) {
+	var cr *outbound.ConcurrencyResult
+	if concurrency != nil {
+		c, err := concurrency.AgentsSeries(query)
+		if err != nil {
+			http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
+			return
+		}
+		cr = c
+	}
+	if cr == nil {
+		// No reader (recordings dir unresolved): empty-but-valid payload.
+		cr = &outbound.ConcurrencyResult{Start: query.Start, End: query.End, BucketSeconds: query.BucketSeconds, BucketStarts: []int64{}, ByKey: map[string][]float64{}, PeakByKey: map[string]float64{}}
+	}
+	writeHistoryJSON(w, buildAgentsResponse(rangeKey, scopeEcho, cr))
+}
+
+// historyCrossFilters resolves the orthogonal ?project=/?provider=/?token_type=
+// cross-filters (comma-separated, multi-value). The active group dimension is
+// never filtered — drop whichever matches it — so a dimension is never both a
+// stacking axis and a filter. ok is false for an invalid ?token_type=, which
+// the caller turns into a 400.
+func historyCrossFilters(q url.Values, group string) (projects, providers, tokenTypes []string, ok bool) {
+	projects = parseCSVParam(q.Get("project"))
+	providers = parseCSVParam(q.Get("provider"))
+	tokenTypes, ok = parseTokenTypeFilter(q.Get("token_type"))
+	if !ok {
+		return nil, nil, nil, false
+	}
+	switch group {
+	case "project":
+		projects = nil
+	case "provider":
+		providers = nil
+	case "token_type":
+		tokenTypes = nil
+	}
+	return projects, providers, tokenTypes, true
+}
+
+// fetchHistoryCostSeries resolves the cost series for the cost/tokens/co2/
+// models/providers charts. A nil tracker (init failed) yields an
+// empty-but-valid payload so the dashboard renders cleanly instead of
+// erroring; ok is false only when a present tracker's query itself failed.
+func fetchHistoryCostSeries(tracker outbound.CostTracker, query outbound.SeriesQuery) (series *outbound.CostSeriesResult, ok bool) {
+	if tracker == nil {
+		return &outbound.CostSeriesResult{Start: query.Start, End: query.End, BucketSeconds: query.BucketSeconds, BucketStarts: []int64{}, ByKey: map[string][]float64{}, Totals: map[string]float64{}}, true
+	}
+	s, err := tracker.CostSeries(query)
+	if err != nil {
+		return nil, false
+	}
+	return s, true
+}
+
 // handleGetHistory serves GET /api/v1/history?range=&chart=&group=&start=&end=
 // &bucket=&forecast=&forecast_buckets=. Range is a trailing window
 // (day|week|month|year), a calendar shorthand (this-month), or an explicit
 // start&end (unix seconds). Bucket granularity is downsampled at read time.
-func handleGetHistory(tracker outbound.CostTracker, sessions historySessionLister, concurrency outbound.ConcurrencyReader) http.HandlerFunc {
+// historyQuery is the validated, defaulted request shape handleGetHistory's
+// callers (the yield/agents/cost-series branches) all build their response
+// from. Assembled by resolveHistoryQuery, which owns every early-exit
+// validation so handleGetHistory's own body stays a flat dispatch.
+type historyQuery struct {
+	chart       string
+	group       string
+	metric      string
+	scopeEcho   string
+	rangeKey    string
+	start, end  int64
+	seriesQuery outbound.SeriesQuery
+}
+
+// resolveHistoryQuery parses and validates handleGetHistory's query params,
+// writing the appropriate 400 response and returning ok=false on the first
+// invalid one.
+func resolveHistoryQuery(w http.ResponseWriter, q url.Values) (historyQuery, bool) {
+	chart := q.Get("chart")
+	if chart == "" {
+		chart = "cost"
+	}
+	if !historyChartKnown(w, chart) {
+		return historyQuery{}, false
+	}
+
+	group := q.Get("group")
+	if group == "" {
+		group = "project"
+	}
+	if !historyGroupKnown(w, group) {
+		return historyQuery{}, false
+	}
+
+	metric, group := historyMetricAndGroup(chart, group)
+	if historyGroupMetricMismatch(group, metric) {
+		http.Error(w, "group=token_type requires chart=tokens", http.StatusBadRequest)
+		return historyQuery{}, false
+	}
+
+	scopeField, scopeValue := parseHistoryScope(q.Get("scope"))
+	scopeEcho := historyScopeEcho(scopeField, scopeValue)
+
+	rangeKey, start, end, ok := resolveHistoryRange(q)
+	if !ok {
+		http.Error(w, "invalid range: use range=day|week|month|year|this-month or start&end (unix seconds)", http.StatusBadRequest)
+		return historyQuery{}, false
+	}
+
+	seriesQuery := outbound.SeriesQuery{
+		Start:         start,
+		End:           end,
+		BucketSeconds: historyBucketSeconds(q, end-start),
+		Group:         group,
+		ScopeField:    scopeField,
+		ScopeValue:    scopeValue,
+	}
+
+	return historyQuery{
+		chart:       chart,
+		group:       group,
+		metric:      metric,
+		scopeEcho:   scopeEcho,
+		rangeKey:    rangeKey,
+		start:       start,
+		end:         end,
+		seriesQuery: seriesQuery,
+	}, true
+}
+
+func handleGetHistory(tracker outbound.CostTracker, sessions historySessionLister, concurrency outbound.ConcurrencyReader, git historyGitReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 
-		chart := q.Get("chart")
-		if chart == "" {
-			chart = "cost"
-		}
-		switch chart {
-		case "cost", "tokens", "co2", "models", "providers":
-			// implemented (Phase 2); co2 added for issue #829
-		case "yield":
-			// implemented (#373) — handled after range resolution below
-		case "agents":
-			// implemented (Phase 3) — handled after range resolution below
-		case "state":
-			// time-in-state is the issue's optional second half (#751); the
-			// reconstruction exists but no chart is wired yet.
-			writeHistoryNotImplemented(w, "chart="+chart, 3)
-			return
-		default:
-			http.Error(w, "unknown chart: "+chart, http.StatusBadRequest)
-			return
-		}
-
-		group := q.Get("group")
-		if group == "" {
-			group = "project"
-		}
-		switch group {
-		case "project", "branch", "provider", "model", "session":
-			// implemented (Phase 2)
-		case "token_type":
-			// implemented (faceted) — tokens metric only (validated below)
-		default:
-			http.Error(w, "unknown group: "+group, http.StatusBadRequest)
-			return
-		}
-
-		// chart picks the measured metric; models/providers are presets that
-		// pin the stacking axis to that dimension (one-click "cost by X").
-		// agents is reconstructed per project only.
-		metric := "cost"
-		switch chart {
-		case "tokens":
-			metric = "tokens"
-		case "co2":
-			metric = "co2"
-		case "models":
-			group = "model"
-		case "providers":
-			group = "provider"
-		case "agents":
-			group = "project"
-		}
-
-		// token_type is inherently a token concept — it can't slice cost (we
-		// store no per-token-type cost on disk).
-		if group == "token_type" && metric != "tokens" {
-			http.Error(w, "group=token_type requires chart=tokens", http.StatusBadRequest)
-			return
-		}
-
-		scopeField, scopeValue := parseHistoryScope(q.Get("scope"))
-		scopeEcho := ""
-		if scopeField != "" {
-			scopeEcho = scopeField + ":" + scopeValue
-		}
-
-		rangeKey, start, end, ok := resolveHistoryRange(q)
+		hq, ok := resolveHistoryQuery(w, q)
 		if !ok {
-			http.Error(w, "invalid range: use range=day|week|month|year|this-month or start&end (unix seconds)", http.StatusBadRequest)
 			return
 		}
 
 		// Yield is a per-project aggregate over completed sessions, not a cost
 		// time series — handle it before the cost-tracker path (#373).
-		if chart == "yield" {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(buildYieldResponse(rangeKey, group, start, end, sessions))
+		if hq.chart == "yield" {
+			writeHistoryJSON(w, buildYieldResponse(hq.rangeKey, hq.group, hq.start, hq.end, sessions))
 			return
 		}
 
-		bucketSeconds := historyBucketSeconds(q, end-start)
-
-		if chart == "agents" {
-			var cr *outbound.ConcurrencyResult
-			if concurrency != nil {
-				c, err := concurrency.AgentsSeries(outbound.SeriesQuery{
-					Start:         start,
-					End:           end,
-					BucketSeconds: bucketSeconds,
-					Group:         group,
-					ScopeField:    scopeField,
-					ScopeValue:    scopeValue,
-				})
-				if err != nil {
-					http.Error(w, "internal error", http.StatusInternalServerError)
-					return
-				}
-				cr = c
-			}
-			if cr == nil {
-				// No reader (recordings dir unresolved): empty-but-valid payload.
-				cr = &outbound.ConcurrencyResult{Start: start, End: end, BucketSeconds: bucketSeconds, BucketStarts: []int64{}, ByKey: map[string][]float64{}, PeakByKey: map[string]float64{}}
-			}
-			resp := buildAgentsResponse(rangeKey, scopeEcho, cr)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+		// DORA metrics are a per-project period summary, not a cost time
+		// series — handle it before the cost-tracker path (#951).
+		if hq.chart == "dora" {
+			serveHistoryDoraChart(w, git, sessions, q.Get("project"), hq.rangeKey, hq.start, hq.end)
 			return
 		}
 
-		// Orthogonal cross-filters (comma-separated, multi-value). The active
-		// group dimension is never filtered — drop whichever matches it — so a
-		// dimension is never both a stacking axis and a filter.
-		projects := parseCSVParam(q.Get("project"))
-		providers := parseCSVParam(q.Get("provider"))
-		tokenTypes, okTT := parseTokenTypeFilter(q.Get("token_type"))
-		if !okTT {
+		if hq.chart == "agents" {
+			serveHistoryAgentsChart(w, concurrency, hq.rangeKey, hq.scopeEcho, hq.seriesQuery)
+			return
+		}
+
+		projects, providers, tokenTypes, ok := historyCrossFilters(q, hq.group)
+		if !ok {
 			http.Error(w, "invalid token_type: use input|output|cache_read|cache_creation", http.StatusBadRequest)
 			return
 		}
-		switch group {
-		case "project":
-			projects = nil
-		case "provider":
-			providers = nil
-		case "token_type":
-			tokenTypes = nil
+		hq.seriesQuery.Metric = hq.metric
+		hq.seriesQuery.Projects = projects
+		hq.seriesQuery.Providers = providers
+		hq.seriesQuery.TokenTypes = tokenTypes
+
+		series, ok := fetchHistoryCostSeries(tracker, hq.seriesQuery)
+		if !ok {
+			http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
+			return
 		}
 
-		var series *outbound.CostSeriesResult
-		if tracker != nil {
-			s, err := tracker.CostSeries(outbound.SeriesQuery{
-				Start:         start,
-				End:           end,
-				BucketSeconds: bucketSeconds,
-				Group:         group,
-				Metric:        metric,
-				ScopeField:    scopeField,
-				ScopeValue:    scopeValue,
-				Projects:      projects,
-				Providers:     providers,
-				TokenTypes:    tokenTypes,
-			})
-			if err != nil {
-				http.Error(w, "internal error", http.StatusInternalServerError)
-				return
-			}
-			series = s
-		}
-		if series == nil {
-			// No tracker (init failed): respond with an empty-but-valid payload
-			// so the dashboard renders cleanly instead of erroring.
-			series = &outbound.CostSeriesResult{Start: start, End: end, BucketSeconds: bucketSeconds, BucketStarts: []int64{}, ByKey: map[string][]float64{}, Totals: map[string]float64{}}
-		}
-
-		resp := buildHistoryResponse(rangeKey, chart, group, scopeEcho, series, q)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		writeHistoryJSON(w, buildHistoryResponse(hq.rangeKey, hq.chart, hq.group, hq.scopeEcho, series, q))
 	}
 }
 
@@ -579,7 +788,7 @@ func parseTokenTypeFilter(s string) ([]string, bool) {
 // writeHistoryNotImplemented emits a 501 with a phase hint for chart types and
 // groups scaffolded in the UI but not yet wired (Phase 2/3).
 func writeHistoryNotImplemented(w http.ResponseWriter, what string, phase int) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, contentTypeJSON)
 	w.WriteHeader(http.StatusNotImplemented)
 	json.NewEncoder(w).Encode(map[string]any{
 		"error": what + " is not implemented in Phase 1",
@@ -645,6 +854,61 @@ const (
 	historyUnknownMinShare = 0.10
 )
 
+// sortKeysByValueDesc orders a group-key → value map's keys deterministically:
+// value desc, then name — the ordering every history/agents chart uses for its
+// series and top-contributors list.
+func sortKeysByValueDesc(values map[string]float64) []string {
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if values[keys[i]] != values[keys[j]] {
+			return values[keys[i]] > values[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
+}
+
+// appendSparsePoints appends one [{ts,project,value}] point per non-zero
+// bucket, in key order, to dest — the sparse series shape both the cost and
+// agents charts render (zero buckets are omitted rather than drawn as gaps).
+func appendSparsePoints(dest []historyPoint, keys []string, byKey map[string][]float64, bucketStarts []int64) []historyPoint {
+	for _, k := range keys {
+		for i, v := range byKey[k] {
+			if i >= len(bucketStarts) {
+				break
+			}
+			if v != 0 {
+				dest = append(dest, historyPoint{TS: bucketStarts[i], Project: k, Value: v})
+			}
+		}
+	}
+	return dest
+}
+
+// topHistoryContributors takes the first limit keys (already ordered by
+// sortKeysByValueDesc) and renders them as the side panel's ranked list.
+func topHistoryContributors(keys []string, values map[string]float64, limit int) []historyContributor {
+	out := []historyContributor{}
+	for i, k := range keys {
+		if i >= limit {
+			break
+		}
+		out = append(out, historyContributor{Label: k, Value: values[k]})
+	}
+	return out
+}
+
+// historyShouldForecast reports whether buildHistoryResponse should attach a
+// linear forecast. Forecast projects USD spend; it isn't meaningful for token
+// counts, and compounding a linear projection on top of an already-modeled
+// CO2e estimate would overstate precision it doesn't have.
+func historyShouldForecast(chart string, q url.Values, total float64, bucketCount int) bool {
+	return chart != "tokens" && chart != "co2" && historyForecastEnabled(q) && total > 0 && bucketCount > 0
+}
+
 // buildHistoryResponse flattens the per-key series into the response envelope:
 // a sparse [{ts,project,value}] series (zero buckets omitted), per-key top
 // contributors, and an optional linear forecast over the grand per-bucket
@@ -666,44 +930,18 @@ func buildHistoryResponse(rangeKey, chart, group, scope string, s *outbound.Cost
 		Scope:           scope,
 	}
 
-	// Deterministic key order: total desc, then name.
-	keys := make([]string, 0, len(s.Totals))
-	for k := range s.Totals {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if s.Totals[keys[i]] != s.Totals[keys[j]] {
-			return s.Totals[keys[i]] > s.Totals[keys[j]]
-		}
-		return keys[i] < keys[j]
-	})
-
+	keys := sortKeysByValueDesc(s.Totals)
 	for _, k := range keys {
 		resp.Total += s.Totals[k]
-		for i, v := range s.ByKey[k] {
-			if i >= len(s.BucketStarts) {
-				break
-			}
-			if v != 0 {
-				resp.Series = append(resp.Series, historyPoint{TS: s.BucketStarts[i], Project: k, Value: v})
-			}
-		}
 	}
-	for i, k := range keys {
-		if i >= 5 {
-			break
-		}
-		resp.TopContributors = append(resp.TopContributors, historyContributor{Label: k, Value: s.Totals[k]})
-	}
+	resp.Series = appendSparsePoints(resp.Series, keys, s.ByKey, s.BucketStarts)
+	resp.TopContributors = topHistoryContributors(keys, s.Totals, 5)
 
 	if s.TokenSplit != nil {
 		resp.TokenSplit = &historyTokenSplit{Input: s.TokenSplit.Input, Output: s.TokenSplit.Output, Cache: s.TokenSplit.Cache}
 	}
 
-	// Forecast projects USD spend; it isn't meaningful for token counts, and
-	// compounding a linear projection on top of an already-modeled CO2e
-	// estimate would overstate precision it doesn't have.
-	if chart != "tokens" && chart != "co2" && historyForecastEnabled(q) && resp.Total > 0 && len(s.BucketStarts) > 0 {
+	if historyShouldForecast(chart, q, resp.Total, len(s.BucketStarts)) {
 		resp.Forecast = computeLinearForecast(s.BucketStarts, s.BucketSeconds, resp.Total, historyForecastBuckets(q, len(s.BucketStarts)))
 	}
 	return resp
@@ -732,34 +970,9 @@ func buildAgentsResponse(rangeKey, scope string, c *outbound.ConcurrencyResult) 
 		Scope:           scope,
 	}
 
-	// Deterministic key order: peak desc, then name.
-	keys := make([]string, 0, len(c.PeakByKey))
-	for k := range c.PeakByKey {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if c.PeakByKey[keys[i]] != c.PeakByKey[keys[j]] {
-			return c.PeakByKey[keys[i]] > c.PeakByKey[keys[j]]
-		}
-		return keys[i] < keys[j]
-	})
-
-	for _, k := range keys {
-		for i, v := range c.ByKey[k] {
-			if i >= len(c.BucketStarts) {
-				break
-			}
-			if v != 0 {
-				resp.Series = append(resp.Series, historyPoint{TS: c.BucketStarts[i], Project: k, Value: v})
-			}
-		}
-	}
-	for i, k := range keys {
-		if i >= 5 {
-			break
-		}
-		resp.TopContributors = append(resp.TopContributors, historyContributor{Label: k, Value: c.PeakByKey[k]})
-	}
+	keys := sortKeysByValueDesc(c.PeakByKey)
+	resp.Series = appendSparsePoints(resp.Series, keys, c.ByKey, c.BucketStarts)
+	resp.TopContributors = topHistoryContributors(keys, c.PeakByKey, 5)
 	return resp
 }
 
@@ -810,41 +1023,7 @@ func buildYieldResponse(rangeKey, group string, start, end int64, lister history
 		return resp
 	}
 
-	type agg struct {
-		productive, reverted, unknown float64
-		revertedCount                 int
-	}
-	byProject := make(map[string]*agg)
-	for _, st := range sessions {
-		if st == nil || st.YieldState == "" {
-			continue // not a completed, ready-captured session
-		}
-		if st.UpdatedAt < start || st.UpdatedAt >= end {
-			continue
-		}
-		cost := 0.0
-		if st.Metrics != nil {
-			cost = st.Metrics.EstimatedCostUSD
-		}
-		project := st.ProjectName
-		if project == "" {
-			project = "unknown"
-		}
-		a := byProject[project]
-		if a == nil {
-			a = &agg{}
-			byProject[project] = a
-		}
-		switch st.YieldState {
-		case session.YieldReverted:
-			a.reverted += cost
-			a.revertedCount++
-		case session.YieldProductive:
-			a.productive += cost
-		default: // YieldUnknown
-			a.unknown += cost
-		}
-	}
+	byProject := aggregateYieldBySession(sessions, start, end)
 
 	// Project order: total (productive+reverted) desc, then name.
 	names := make([]string, 0, len(byProject))
@@ -862,20 +1041,7 @@ func buildYieldResponse(rangeKey, group string, start, end int64, lister history
 
 	for _, p := range names {
 		a := byProject[p]
-		total := a.productive + a.reverted
-		y := 0.0
-		if total > 0 {
-			y = a.productive / total
-		}
-		resp.Projects = append(resp.Projects, historyYieldProject{
-			Project:        p,
-			ProductiveCost: a.productive,
-			RevertedCost:   a.reverted,
-			UnknownCost:    a.unknown,
-			TotalCost:      total,
-			Yield:          y,
-			RevertedCount:  a.revertedCount,
-		})
+		resp.Projects = append(resp.Projects, yieldProjectRow(p, a))
 		resp.ProductiveCost += a.productive
 		resp.RevertedCost += a.reverted
 		resp.UnknownCost += a.unknown
@@ -885,6 +1051,74 @@ func buildYieldResponse(rangeKey, group string, start, end int64, lister history
 		resp.Yield = resp.ProductiveCost / resp.TotalCost
 	}
 	return resp
+}
+
+// yieldAgg accumulates one project's productive/reverted/unknown spend while
+// aggregateYieldBySession walks completed sessions.
+type yieldAgg struct {
+	productive, reverted, unknown float64
+	revertedCount                 int
+}
+
+// aggregateYieldBySession folds completed (ready) sessions within [start,end)
+// into per-project productive/reverted/unknown spend, the core windowing and
+// bucketing step of buildYieldResponse. Sessions are windowed by UpdatedAt —
+// their completion time — so a revert detected later never moves a session
+// into a newer window. Only sessions that have gone ready (non-empty
+// YieldState) are counted; spend from sessions still in flight is excluded.
+func aggregateYieldBySession(sessions []*session.SessionState, start, end int64) map[string]*yieldAgg {
+	byProject := make(map[string]*yieldAgg)
+	for _, st := range sessions {
+		if st == nil || st.YieldState == "" {
+			continue // not a completed, ready-captured session
+		}
+		if st.UpdatedAt < start || st.UpdatedAt >= end {
+			continue
+		}
+		cost := 0.0
+		if st.Metrics != nil {
+			cost = st.Metrics.EstimatedCostUSD
+		}
+		project := st.ProjectName
+		if project == "" {
+			project = "unknown"
+		}
+		a := byProject[project]
+		if a == nil {
+			a = &yieldAgg{}
+			byProject[project] = a
+		}
+		switch st.YieldState {
+		case session.YieldReverted:
+			a.reverted += cost
+			a.revertedCount++
+		case session.YieldProductive:
+			a.productive += cost
+		default: // YieldUnknown
+			a.unknown += cost
+		}
+	}
+	return byProject
+}
+
+// yieldProjectRow builds one project's row of the chart=yield response —
+// unknown (non-git) spend is reported separately and kept out of the ratio's
+// denominator.
+func yieldProjectRow(project string, a *yieldAgg) historyYieldProject {
+	total := a.productive + a.reverted
+	y := 0.0
+	if total > 0 {
+		y = a.productive / total
+	}
+	return historyYieldProject{
+		Project:        project,
+		ProductiveCost: a.productive,
+		RevertedCost:   a.reverted,
+		UnknownCost:    a.unknown,
+		TotalCost:      total,
+		Yield:          y,
+		RevertedCount:  a.revertedCount,
+	}
 }
 
 // historyForecastEnabled defaults to on; ?forecast=false|0 disables it.
@@ -949,7 +1183,7 @@ func handleGetVersion(version string) http.HandlerFunc {
 	}
 	body, _ := json.Marshal(versionResp{Version: version})
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		w.Write(body)
 	}
 }
@@ -985,7 +1219,7 @@ func handleGetAgents(allAgents []agent.Agent) http.HandlerFunc {
 		})
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		json.NewEncoder(w).Encode(entries)
 	}
 }
@@ -1004,7 +1238,7 @@ type publishStatusResp struct {
 
 // writePublishStatus encodes the controller's current publish state as JSON.
 func writePublishStatus(w http.ResponseWriter, controller *relay.PublishController) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, contentTypeJSON)
 	enabled, s := controller.Status()
 	if !enabled {
 		json.NewEncoder(w).Encode(publishStatusResp{Enabled: false})
@@ -1075,7 +1309,7 @@ func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
 			return
 		}
 
@@ -1119,7 +1353,7 @@ func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
 			LastUpdated:  time.Now().UTC().Format(time.RFC3339),
 		}
 
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		enc.Encode(resp)
@@ -1138,7 +1372,7 @@ func handleDiagnosticsBundle(svc *services.DiagnosticsService) http.HandlerFunc 
 			http.Error(w, "failed to build diagnostics bundle", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "application/gzip")
+		w.Header().Set(headerContentType, "application/gzip")
 		w.Header().Set("Content-Disposition",
 			fmt.Sprintf(`attachment; filename="irrlicht-diag-%s.tar.gz"`, fileSafe(Version)))
 		w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))

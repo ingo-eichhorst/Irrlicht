@@ -2,19 +2,36 @@ package git
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
+	"irrlicht/core/domain/dora"
+	"irrlicht/core/pkg/pathutil"
 	"irrlicht/core/pkg/transcript"
 )
 
 // revertTrailer matches the "This reverts commit <sha>." trailer that
 // `git revert` writes into the body of a revert commit (#373).
 var revertTrailer = regexp.MustCompile(`(?m)^This reverts commit ([0-9a-f]{7,40})`)
+
+// releaseTagPattern matches release tags of the form v<major>.<minor>.<patch>
+// (this repo's version.json convention) — used by the DORA metrics methods
+// below to filter out non-release tags (#951).
+var releaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// gitPath is resolved once from a fixed set of trusted directories rather
+// than trusted PATH, per go:S4036.
+var gitPath = pathutil.MustResolve("git")
+
+// gitRevParseCmd is the git subcommand shared by GetBranch, GetHeadCommit,
+// and GetGitRoot to resolve refs, commits, and repo-relative paths.
+const gitRevParseCmd = "rev-parse"
 
 // Adapter implements ports/outbound.GitResolver using local git commands and
 // transcript file inspection.
@@ -29,7 +46,7 @@ func (a *Adapter) GetBranch(dir string) string {
 	if dir == "" {
 		return ""
 	}
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd := exec.Command(gitPath, gitRevParseCmd, "--abbrev-ref", "HEAD")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -51,7 +68,7 @@ func (a *Adapter) GetHeadCommit(dir string) string {
 	if dir == "" {
 		return ""
 	}
-	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd := exec.Command(gitPath, gitRevParseCmd, "HEAD")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -70,7 +87,7 @@ func (a *Adapter) RevertedCommits(dir string) []string {
 	if dir == "" {
 		return nil
 	}
-	cmd := exec.Command("git", "log", "--all", "--grep", "^This reverts commit ", "--pretty=format:%b")
+	cmd := exec.Command(gitPath, "log", "--all", "--grep", "^This reverts commit ", "--pretty=format:%b")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -87,6 +104,97 @@ func (a *Adapter) RevertedCommits(dir string) []string {
 	return shas
 }
 
+// ListReleaseTags returns every release tag in the repo containing dir,
+// oldest-first by creation date (#951). Returns nil if dir is not a git
+// repo or has no release tags. Errors are swallowed, matching this
+// adapter's other read methods.
+func (a *Adapter) ListReleaseTags(dir string) []dora.TagInfo {
+	if dir == "" {
+		return nil
+	}
+	cmd := exec.Command(gitPath, "for-each-ref", "--sort=creatordate", "--format=%(refname:short)%09%(creatordate:unix)", "refs/tags")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var tags []dora.TagInfo
+	for _, line := range strings.Split(string(out), "\n") {
+		name, epochStr, ok := strings.Cut(line, "\t")
+		if !ok || !releaseTagPattern.MatchString(name) {
+			continue
+		}
+		epoch, err := strconv.ParseInt(epochStr, 10, 64)
+		if err != nil {
+			continue
+		}
+		tags = append(tags, dora.TagInfo{Name: name, Epoch: epoch})
+	}
+	return tags
+}
+
+// CommitsInRange returns the commits reachable from toRef but not fromRef
+// (fromRef empty walks toRef's entire history — for the oldest release
+// tag, which has no predecessor) (#951). Returns nil if dir is not a git
+// repo, toRef is empty, or the range is empty.
+func (a *Adapter) CommitsInRange(dir, fromRef, toRef string) []dora.CommitInfo {
+	if dir == "" || toRef == "" {
+		return nil
+	}
+	rangeSpec := toRef
+	if fromRef != "" {
+		rangeSpec = fromRef + ".." + toRef
+	}
+	// \x01/\x02 are ASCII control bytes used as record/field separators —
+	// they won't collide with real commit message content, so a multi-line
+	// %B body can be parsed without spawning a process per commit.
+	cmd := exec.Command(gitPath, "log", "--pretty=format:%x01%H%x02%at%x02%B", rangeSpec)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var commits []dora.CommitInfo
+	for _, record := range bytes.Split(out, []byte{0x01}) {
+		if len(record) == 0 {
+			continue
+		}
+		parts := bytes.SplitN(record, []byte{0x02}, 3)
+		if len(parts) != 3 {
+			continue
+		}
+		epoch, err := strconv.ParseInt(string(parts[1]), 10, 64)
+		if err != nil {
+			continue
+		}
+		commits = append(commits, dora.CommitInfo{Hash: string(parts[0]), AuthorEpoch: epoch, Body: string(parts[2])})
+	}
+	return commits
+}
+
+// TagContaining returns the earliest release tag (by creation date) that
+// contains hash, or "" if none does — either the commit was never
+// released, or dir is not a git repo (#951). Used to resolve which release
+// shipped the original commit a revert commit targets.
+func (a *Adapter) TagContaining(dir, hash string) string {
+	if dir == "" || hash == "" {
+		return ""
+	}
+	cmd := exec.Command(gitPath, "tag", "--contains", hash, "--sort=creatordate")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if releaseTagPattern.MatchString(line) {
+			return line
+		}
+	}
+	return ""
+}
+
 // GetGitRoot returns the absolute path of the git repo root for the given
 // directory, or "" if the directory is not inside a git repository.
 // For worktrees it returns the main repo root (not the worktree path).
@@ -100,7 +208,7 @@ func (a *Adapter) GetGitRoot(dir string) string {
 	if dir == "" {
 		return ""
 	}
-	cmd := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir")
+	cmd := exec.Command(gitPath, gitRevParseCmd, "--path-format=absolute", "--git-common-dir")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {

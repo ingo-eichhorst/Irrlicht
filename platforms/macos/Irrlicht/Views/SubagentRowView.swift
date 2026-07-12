@@ -88,9 +88,10 @@ private struct LiveDurationText: View {
     let firstSeen: Date
 
     var body: some View {
+        let staticElapsedText = metrics.elapsedSeconds > 0 ? metrics.formattedElapsedTime : "—"
         Text(isActive
             ? metrics.formattedRealtimeElapsedTime(sessionFirstSeen: firstSeen)
-            : (metrics.elapsedSeconds > 0 ? metrics.formattedElapsedTime : "—"))
+            : staticElapsedText)
             .font(.caption2)
             .foregroundColor(.secondary.opacity(0.7))
     }

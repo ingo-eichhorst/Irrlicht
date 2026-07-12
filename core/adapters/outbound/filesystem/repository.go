@@ -41,7 +41,16 @@ func (r *SessionRepository) InstancesDir() string {
 
 // Load reads a session state from disk. Returns (nil, err) if the file does not exist.
 func (r *SessionRepository) Load(sessionID string) (*session.SessionState, error) {
-	data, err := os.ReadFile(r.statePath(sessionID))
+	path := r.statePath(sessionID)
+	// statePath already routes sessionID through sanitizeSessionID, so this is
+	// a no-op for any legitimate caller — but CodeQL's go/path-injection query
+	// doesn't credit a sanitizer applied inside a called function one hop back
+	// (see sanitizeSessionID's doc comment); checking the exact value reaching
+	// os.ReadFile, right here, is what it recognizes.
+	if strings.Contains(path, "..") {
+		return nil, fmt.Errorf("invalid session id %q", sessionID)
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -143,6 +152,26 @@ func (r *SessionRepository) PruneStale(maxAge time.Duration) (int, error) {
 	return pruned, nil
 }
 
+// statePath is the single choke point Load/Save/Delete funnel through for
+// the on-disk state file location. sessionID is the daemon's own generated
+// id in normal operation, but Load/Delete are reachable from the daemon's
+// loopback control API (POST /api/v1/sessions/{id}/input, .../interrupt)
+// with only an empty-string check on the path segment before it gets here —
+// sanitizeSessionID is the defense-in-depth backstop against a "../"-style
+// id escaping instancesDir.
 func (r *SessionRepository) statePath(sessionID string) string {
-	return filepath.Join(r.instancesDir, sessionID+".json")
+	return filepath.Join(r.instancesDir, sanitizeSessionID(sessionID)+".json")
+}
+
+// sanitizeSessionID reduces sessionID to a single safe path segment: "" if
+// it's empty, ".", "..", or contains a path separator after taking its
+// final element (filepath.Base("..") returns ".." unchanged, so that case
+// needs its own check). A caller that gets "" back simply misses on disk —
+// the same not-found outcome as any other unrecognized session id.
+func sanitizeSessionID(sessionID string) string {
+	sessionID = filepath.Base(sessionID)
+	if sessionID == "." || sessionID == ".." {
+		return ""
+	}
+	return sessionID
 }

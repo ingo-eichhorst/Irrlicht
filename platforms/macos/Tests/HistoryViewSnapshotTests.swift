@@ -3,6 +3,9 @@ import SwiftUI
 import SnapshotTesting
 @testable import Irrlicht
 
+// `onExportCSV: {}, onExportJSON: {}` below are intentional no-ops — these are
+// pure visual-rendering snapshots, not interaction tests, so export wiring is
+// irrelevant (SonarQube swift:S1186 flags each occurrence individually).
 @MainActor
 final class HistoryViewSnapshotTests: XCTestCase {
     private var originalTimeZone: TimeZone!
@@ -116,48 +119,48 @@ final class HistoryViewSnapshotTests: XCTestCase {
         )
     }
 
-    func testHistory_Populated() {
+    func testHistoryPopulated() {
         let view = HistoryContentView(
             data: populated(),
             range: .month,
-            onExportCSV: {},
-            onExportJSON: {}
+            onExportCSV: { /* unused in this snapshot */ },
+            onExportJSON: { /* unused in this snapshot */ }
         )
         assertSnapshot(of: host(view, height: 460), as: .image)
     }
 
-    func testHistory_Tokens() {
+    func testHistoryTokens() {
         let view = HistoryContentView(
             data: populatedTokens(),
             range: .month,
             chart: .tokens,
             group: .branch,
             scope: nil,
-            onExportCSV: {},
-            onExportJSON: {}
+            onExportCSV: { /* unused in this snapshot */ },
+            onExportJSON: { /* unused in this snapshot */ }
         )
         assertSnapshot(of: host(view, height: 460), as: .image)
     }
 
-    func testHistory_Drilldown() {
+    func testHistoryDrilldown() {
         let view = HistoryContentView(
             data: populated(),
             range: .month,
             chart: .cost,
             group: .branch,
             scope: HistoryScope(field: .project, value: "irrlicht"),
-            onExportCSV: {},
-            onExportJSON: {}
+            onExportCSV: { /* unused in this snapshot */ },
+            onExportJSON: { /* unused in this snapshot */ }
         )
         assertSnapshot(of: host(view, height: 500), as: .image)
     }
 
-    func testHistory_EmptyState() {
+    func testHistoryEmptyState() {
         let view = HistoryContentView(
             data: empty(),
             range: .day,
-            onExportCSV: {},
-            onExportJSON: {}
+            onExportCSV: { /* unused in this snapshot */ },
+            onExportJSON: { /* unused in this snapshot */ }
         )
         assertSnapshot(of: host(view, height: 320), as: .image)
     }
@@ -183,9 +186,51 @@ final class HistoryViewSnapshotTests: XCTestCase {
         )
     }
 
-    func testYield_Populated() {
+    func testYieldPopulated() {
         let view = HistoryYieldContentView(data: yieldFixture(), range: .month)
         assertSnapshot(of: host(view, height: 360), as: .image)
+    }
+
+    // MARK: DORA (#951)
+
+    private func doraFixture() -> HistoryDoraResponse {
+        HistoryDoraResponse(
+            range: "month",
+            project: "irrlicht",
+            start: 1_700_000_000,
+            end: 1_702_678_400,
+            available: true,
+            message: nil,
+            deploymentFrequency: DoraMetric(value: 2.55, unit: "per_week", sampleSize: 35, available: true, message: nil),
+            leadTime: DoraMetric(value: 22.8, unit: "hours", sampleSize: 935, available: true, message: nil),
+            changeFailureRate: DoraMetric(value: 42.9, unit: "percent", sampleSize: 35, available: true, message: "15 of 35 releases flagged"),
+            mttr: DoraMetric(value: 8.5, unit: "hours", sampleSize: 15, available: true, message: nil)
+        )
+    }
+
+    private func doraUnavailableFixture() -> HistoryDoraResponse {
+        HistoryDoraResponse(
+            range: "month",
+            project: "scratch",
+            start: 1_700_000_000,
+            end: 1_702_678_400,
+            available: false,
+            message: "no releases found for this project",
+            deploymentFrequency: DoraMetric(value: 0, unit: "per_week", sampleSize: 0, available: false, message: nil),
+            leadTime: DoraMetric(value: 0, unit: "hours", sampleSize: 0, available: false, message: nil),
+            changeFailureRate: DoraMetric(value: 0, unit: "percent", sampleSize: 0, available: false, message: nil),
+            mttr: DoraMetric(value: 0, unit: "hours", sampleSize: 0, available: false, message: nil)
+        )
+    }
+
+    func testDoraPopulated() {
+        let view = HistoryDoraContentView(data: doraFixture())
+        assertSnapshot(of: host(view, height: 260), as: .image)
+    }
+
+    func testDoraUnavailable() {
+        let view = HistoryDoraContentView(data: doraUnavailableFixture())
+        assertSnapshot(of: host(view, height: 200), as: .image)
     }
 
     // MARK: Quota projection
@@ -249,7 +294,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
 
     /// Single provider, both windows side-by-side — the common case (one Claude
     /// subscription): exercises the 5h cap trajectory + 7d on-pace footer.
-    func testQuotaForecast_SingleProvider() {
+    func testQuotaForecastSingleProvider() {
         let view = HistoryQuotaForecastView(providers: [anthropicProvider()])
         assertSnapshot(of: host(view, height: 320), as: .image)
     }
@@ -257,7 +302,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
     /// Two active providers stacked — Anthropic (5h hits cap, 7d on pace) +
     /// OpenAI (5h on pace). Exercises the per-provider grid, both brand icons,
     /// and both footer states.
-    func testQuotaForecast_MultiProvider() {
+    func testQuotaForecastMultiProvider() {
         let view = HistoryQuotaForecastView(providers: [anthropicProvider(), openaiProvider()])
         assertSnapshot(of: host(view, height: 460), as: .image)
     }

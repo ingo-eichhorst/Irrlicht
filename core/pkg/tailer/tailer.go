@@ -557,20 +557,11 @@ func (t *TranscriptTailer) scanNewLines(reader *bufio.Reader, startPos int64) tr
 
 	for {
 		raw, consumed, lineErr := readLineCapped(reader, maxTranscriptLineSize)
-		if errors.Is(lineErr, io.EOF) || errors.Is(lineErr, errPartialAtEOF) {
-			// EOF (clean) or partial trailing line — stop without advancing
-			// past the partial bytes; they'll be re-read next tick once more
-			// data is appended.
-			break
-		}
-		if errors.Is(lineErr, errLineTooLong) {
-			log.Printf("irrlicht/tailer: skipping oversized line at offset %d (%d bytes) in %s", res.endOffset, consumed, t.path)
-			res.endOffset += consumed
+		switch t.classifyLineReadError(lineErr, consumed, &res) {
+		case lineReadStop:
+			return res
+		case lineReadSkip:
 			continue
-		}
-		if lineErr != nil {
-			res.err = lineErr
-			break
 		}
 
 		res.endOffset += consumed
@@ -580,25 +571,70 @@ func (t *TranscriptTailer) scanNewLines(reader *bufio.Reader, startPos int64) tr
 		}
 
 		t.lastLineSeenAt = time.Now()
-
-		parsed := t.parseTranscriptLine(line, isRawLine, rawLineParser)
-		if parsed == nil || parsed.Skip {
-			if parsed != nil {
-				res.linesParsed++
-				if t.applySkippedEvent(parsed) {
-					res.substantive = true
-				}
-			}
-			continue
-		}
-		res.linesParsed++
-		res.substantive = true
-		if parsed.IsManualCompactBoundary {
-			res.sawManualCompact = true
-		}
-		t.processParsedEvent(parsed, &res.sawUserBlockingClosed)
+		t.scanParsedLine(line, isRawLine, rawLineParser, &res)
 	}
-	return res
+}
+
+// lineReadAction tells scanNewLines' loop what to do after readLineCapped
+// returns, as classified by classifyLineReadError.
+type lineReadAction int
+
+const (
+	// lineReadContinueProcessing means a full line was read (lineErr == nil);
+	// the caller proceeds to trim and process it.
+	lineReadContinueProcessing lineReadAction = iota
+	// lineReadSkip means the line was handled in full (an oversized line was
+	// discarded) and the loop should move on to the next one.
+	lineReadSkip
+	// lineReadStop means the scan is done: clean EOF, a partial trailing
+	// line, or a real read error.
+	lineReadStop
+)
+
+// classifyLineReadError interprets the error from readLineCapped and applies
+// its side effects (advancing endOffset past a skipped oversized line,
+// recording a real read error onto res), returning what the caller should do
+// next.
+func (t *TranscriptTailer) classifyLineReadError(lineErr error, consumed int64, res *transcriptScanResult) lineReadAction {
+	switch {
+	case errors.Is(lineErr, io.EOF) || errors.Is(lineErr, errPartialAtEOF):
+		// EOF (clean) or partial trailing line — stop without advancing past
+		// the partial bytes; they'll be re-read next tick once more data is
+		// appended.
+		return lineReadStop
+	case errors.Is(lineErr, errLineTooLong):
+		log.Printf("irrlicht/tailer: skipping oversized line at offset %d (%d bytes) in %s", res.endOffset, consumed, t.path)
+		res.endOffset += consumed
+		return lineReadSkip
+	case lineErr != nil:
+		res.err = lineErr
+		return lineReadStop
+	default:
+		return lineReadContinueProcessing
+	}
+}
+
+// scanParsedLine parses a single non-empty, already-offset-accounted
+// transcript line and routes it to either applySkippedEvent (Skip=true or
+// unparseable) or processParsedEvent (a real event), folding the outcome
+// into res.
+func (t *TranscriptTailer) scanParsedLine(line string, isRawLine bool, rawLineParser RawLineParser, res *transcriptScanResult) {
+	parsed := t.parseTranscriptLine(line, isRawLine, rawLineParser)
+	if parsed == nil || parsed.Skip {
+		if parsed != nil {
+			res.linesParsed++
+			if t.applySkippedEvent(parsed) {
+				res.substantive = true
+			}
+		}
+		return
+	}
+	res.linesParsed++
+	res.substantive = true
+	if parsed.IsManualCompactBoundary {
+		res.sawManualCompact = true
+	}
+	t.processParsedEvent(parsed, &res.sawUserBlockingClosed)
 }
 
 // parseTranscriptLine converts a single trimmed transcript line into a
@@ -822,64 +858,11 @@ func (t *TranscriptTailer) applyTaskDeltas(parsed *ParsedEvent) {
 	for _, d := range parsed.TaskDeltas {
 		switch d.Op {
 		case TaskOpCreate:
-			// The ID assigned here is provisional — the authoritative one
-			// arrives in the create's tool_result as an assign_id delta and
-			// replaces it. The counter only carries transcripts whose results
-			// don't include toolUseResult.task.id. See issue #615.
-			t.taskSeq++
-			provisional := strconv.Itoa(t.taskSeq)
-			t.tasks = append(t.tasks, Task{
-				ID:          provisional,
-				Subject:     d.Subject,
-				Description: d.Description,
-				ActiveForm:  d.ActiveForm,
-				Status:      TaskStatusPending,
-			})
-			if d.ToolUseID != "" {
-				t.pendingTaskCreates[d.ToolUseID] = provisional
-			}
-			t.metrics.AppliedTaskDeltas = append(t.metrics.AppliedTaskDeltas, AppliedTaskDelta{
-				Op: "create", ID: provisional, Subject: d.Subject, Status: TaskStatusPending,
-			})
+			t.applyTaskCreateDelta(d)
 		case TaskOpAssignID:
-			provisional, ok := t.pendingTaskCreates[d.ToolUseID]
-			if !ok || d.ID == "" {
-				break
-			}
-			delete(t.pendingTaskCreates, d.ToolUseID)
-			// Scan in reverse: when the provisional counter lags Claude's
-			// numbering by less than a parallel-create batch, an already
-			// assigned authoritative ID can collide with a later task's
-			// provisional one. The authoritative holder was necessarily
-			// created earlier (smaller provisional, earlier result), so the
-			// last match is always the still-provisional task.
-			for i := len(t.tasks) - 1; i >= 0; i-- {
-				if t.tasks[i].ID == provisional {
-					t.tasks[i].ID = d.ID
-					break
-				}
-			}
-			// Keep the provisional counter at least at Claude's numbering so
-			// a create whose result never lands (interrupt) still gets a
-			// non-colliding, aligned fallback ID.
-			if n, err := strconv.Atoi(d.ID); err == nil && n > t.taskSeq {
-				t.taskSeq = n
-			}
+			t.applyTaskAssignIDDelta(d)
 		case TaskOpUpdate:
-			for i := range t.tasks {
-				if t.tasks[i].ID == d.ID {
-					if d.Status != "" {
-						if d.Status == TaskStatusCompleted && t.tasks[i].Status != TaskStatusCompleted {
-							t.tasks[i].CompletedAt = eventUnix(parsed)
-						}
-						t.tasks[i].Status = d.Status
-						t.metrics.AppliedTaskDeltas = append(t.metrics.AppliedTaskDeltas, AppliedTaskDelta{
-							Op: "update", ID: t.tasks[i].ID, Subject: t.tasks[i].Subject, Status: d.Status,
-						})
-					}
-					break
-				}
-			}
+			t.applyTaskUpdateDelta(d, parsed)
 		}
 	}
 	// A create's pending entry resolves when its tool_result arrives — via
@@ -889,6 +872,79 @@ func (t *TranscriptTailer) applyTaskDeltas(parsed *ParsedEvent) {
 	// its ToolResultID arrive on the same parsed event.
 	for _, id := range parsed.ToolResultIDs {
 		delete(t.pendingTaskCreates, id)
+	}
+}
+
+// applyTaskCreateDelta handles a TaskOpCreate delta: assigns a provisional
+// ID (the authoritative one arrives in the create's tool_result as an
+// assign_id delta and replaces it — the counter only carries transcripts
+// whose results don't include toolUseResult.task.id, see issue #615),
+// appends the new task, and records the pending create + applied delta.
+func (t *TranscriptTailer) applyTaskCreateDelta(d TaskDelta) {
+	t.taskSeq++
+	provisional := strconv.Itoa(t.taskSeq)
+	t.tasks = append(t.tasks, Task{
+		ID:          provisional,
+		Subject:     d.Subject,
+		Description: d.Description,
+		ActiveForm:  d.ActiveForm,
+		Status:      TaskStatusPending,
+	})
+	if d.ToolUseID != "" {
+		t.pendingTaskCreates[d.ToolUseID] = provisional
+	}
+	t.metrics.AppliedTaskDeltas = append(t.metrics.AppliedTaskDeltas, AppliedTaskDelta{
+		Op: "create", ID: provisional, Subject: d.Subject, Status: TaskStatusPending,
+	})
+}
+
+// applyTaskAssignIDDelta handles a TaskOpAssignID delta: replaces the
+// still-provisional task's ID with Claude's authoritative one and keeps the
+// provisional counter aligned with it.
+func (t *TranscriptTailer) applyTaskAssignIDDelta(d TaskDelta) {
+	provisional, ok := t.pendingTaskCreates[d.ToolUseID]
+	if !ok || d.ID == "" {
+		return
+	}
+	delete(t.pendingTaskCreates, d.ToolUseID)
+	// Scan in reverse: when the provisional counter lags Claude's
+	// numbering by less than a parallel-create batch, an already
+	// assigned authoritative ID can collide with a later task's
+	// provisional one. The authoritative holder was necessarily
+	// created earlier (smaller provisional, earlier result), so the
+	// last match is always the still-provisional task.
+	for i := len(t.tasks) - 1; i >= 0; i-- {
+		if t.tasks[i].ID == provisional {
+			t.tasks[i].ID = d.ID
+			break
+		}
+	}
+	// Keep the provisional counter at least at Claude's numbering so
+	// a create whose result never lands (interrupt) still gets a
+	// non-colliding, aligned fallback ID.
+	if n, err := strconv.Atoi(d.ID); err == nil && n > t.taskSeq {
+		t.taskSeq = n
+	}
+}
+
+// applyTaskUpdateDelta handles a TaskOpUpdate delta: updates the matching
+// task's status (stamping CompletedAt on the first transition to completed)
+// and records the applied delta.
+func (t *TranscriptTailer) applyTaskUpdateDelta(d TaskDelta, parsed *ParsedEvent) {
+	for i := range t.tasks {
+		if t.tasks[i].ID != d.ID {
+			continue
+		}
+		if d.Status != "" {
+			if d.Status == TaskStatusCompleted && t.tasks[i].Status != TaskStatusCompleted {
+				t.tasks[i].CompletedAt = eventUnix(parsed)
+			}
+			t.tasks[i].Status = d.Status
+			t.metrics.AppliedTaskDeltas = append(t.metrics.AppliedTaskDeltas, AppliedTaskDelta{
+				Op: "update", ID: t.tasks[i].ID, Subject: t.tasks[i].Subject, Status: d.Status,
+			})
+		}
+		break
 	}
 }
 

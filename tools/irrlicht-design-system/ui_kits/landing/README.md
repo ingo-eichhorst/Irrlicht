@@ -4,7 +4,7 @@ Recreation of the `irrlicht.io` marketing page — the poetic, spacious face of 
 
 ## Components
 
-- `SiteHeader.jsx` — wordmark left, minimal nav right (docs / GitHub)
+- `SiteHeader.jsx` — wordmark left, minimal nav right (features / install / GitHub)
 - `Hero.jsx` — oversized serif wordmark with gradient fill, phonetic subtitle, tagline
 - `LightsSignature` (defined inside `Hero.jsx`) — the three glowing orbs (purple/orange/green) with captions
 - `InstallBlock.jsx` — terminal pill with `brew install` command and copy button

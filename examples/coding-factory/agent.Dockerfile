@@ -28,16 +28,16 @@ FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 # for `task_complete` with jq. curl: REQUIRED — the daemon's auto-installed hook
 # POSTs via `curl … || true`; without it the hook silently no-ops and tool-use
 # permission prompts never surface as `waiting` (#488).
+# OpenAI Codex CLI (the real agent this testbed observes).
+#
+# Non-root `agent` — both codex and irrlichd run as this user, sharing $HOME so
+# the daemon can read codex's transcripts under ~/.codex/sessions.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates git tini procps curl tmux jq \
-    && rm -rf /var/lib/apt/lists/*
-# OpenAI Codex CLI (the real agent this testbed observes).
-RUN npm install -g @openai/codex
-
-# Non-root `agent` — both codex and irrlichd run as this user, sharing $HOME so
-# the daemon can read codex's transcripts under ~/.codex/sessions.
-RUN useradd --create-home --shell /bin/bash agent
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g @openai/codex \
+    && useradd --create-home --shell /bin/bash agent
 COPY --from=build /out/irrlichd /usr/local/bin/irrlichd
 COPY examples/coding-factory/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY examples/coding-factory/drive.sh /usr/local/bin/drive.sh

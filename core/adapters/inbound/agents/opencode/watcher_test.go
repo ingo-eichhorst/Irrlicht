@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // registers the "sqlite" driver for database/sql
 
 	"irrlicht/core/domain/agent"
 )
@@ -111,13 +111,23 @@ func insertMessage(t *testing.T, db *sql.DB, id, sessionID, role, modelID string
 	}
 }
 
+// partRow bundles the column values for one row inserted by insertPart.
+type partRow struct {
+	id        string
+	sessionID string
+	messageID string
+	partType  string
+	data      string
+	ts        int64
+}
+
 // insertPart inserts a part row.
-func insertPart(t *testing.T, db *sql.DB, id, sessionID, messageID, partType, data string, ts int64) {
+func insertPart(t *testing.T, db *sql.DB, row partRow) {
 	t.Helper()
 	_, err := db.Exec(
 		`INSERT INTO part (id, session_id, message_id, type, data, time_created, time_updated)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, sessionID, messageID, partType, data, ts, ts,
+		row.id, row.sessionID, row.messageID, row.partType, row.data, row.ts, row.ts,
 	)
 	if err != nil {
 		t.Fatalf("insert part: %v", err)
@@ -149,7 +159,7 @@ func TestScanSessions_NewSession(t *testing.T) {
 	now := time.Now().UnixMilli()
 	insertSession(t, db, "ses_abc", "/home/user/project", now, "")
 	insertMessage(t, db, "msg_1", "ses_abc", "user", "claude-sonnet", now)
-	insertPart(t, db, "part_1", "ses_abc", "msg_1", "text", `{"text":"hello"}`, now)
+	insertPart(t, db, partRow{id: "part_1", sessionID: "ses_abc", messageID: "msg_1", partType: "text", data: `{"text":"hello"}`, ts: now})
 
 	w.scanSessions()
 
@@ -180,7 +190,7 @@ func TestScanSessions_Activity(t *testing.T) {
 	now := time.Now().UnixMilli()
 	insertSession(t, db, "ses_act", "/tmp", now, "")
 	insertMessage(t, db, "msg_a", "ses_act", "assistant", "gpt-4", now)
-	insertPart(t, db, "part_a", "ses_act", "msg_a", "text", `{"text":"first"}`, now)
+	insertPart(t, db, partRow{id: "part_a", sessionID: "ses_act", messageID: "msg_a", partType: "text", data: `{"text":"first"}`, ts: now})
 
 	// First scan: discover session.
 	w.scanSessions()
@@ -188,7 +198,7 @@ func TestScanSessions_Activity(t *testing.T) {
 
 	// Add a new part with later timestamp.
 	later := now + 1000
-	insertPart(t, db, "part_b", "ses_act", "msg_a", "text", `{"text":"second"}`, later)
+	insertPart(t, db, partRow{id: "part_b", sessionID: "ses_act", messageID: "msg_a", partType: "text", data: `{"text":"second"}`, ts: later})
 
 	w.scanSessions()
 
@@ -265,8 +275,8 @@ func TestScanSessions_CursorRace(t *testing.T) {
 	insertMessage(t, db, "msg_r2", "ses_race", "assistant", "gpt-4", now)
 
 	// Two parts with the SAME millisecond timestamp.
-	insertPart(t, db, "part_r1", "ses_race", "msg_r1", "text", `{"text":"a"}`, now)
-	insertPart(t, db, "part_r2", "ses_race", "msg_r2", "text", `{"text":"b"}`, now)
+	insertPart(t, db, partRow{id: "part_r1", sessionID: "ses_race", messageID: "msg_r1", partType: "text", data: `{"text":"a"}`, ts: now})
+	insertPart(t, db, partRow{id: "part_r2", sessionID: "ses_race", messageID: "msg_r2", partType: "text", data: `{"text":"b"}`, ts: now})
 
 	// First scan: discover both parts at once.
 	w.scanSessions()
@@ -286,7 +296,7 @@ func TestScanSessions_CursorRace(t *testing.T) {
 	}
 
 	// Add a third part with the SAME timestamp (same-ms race scenario).
-	insertPart(t, db, "part_r3", "ses_race", "msg_r1", "text", `{"text":"c"}`, now)
+	insertPart(t, db, partRow{id: "part_r3", sessionID: "ses_race", messageID: "msg_r1", partType: "text", data: `{"text":"c"}`, ts: now})
 
 	w.scanSessions()
 	events = collectEvents(ch, 500*time.Millisecond)
@@ -308,7 +318,7 @@ func TestScanSessions_NoDupOnSecondScan(t *testing.T) {
 	now := time.Now().UnixMilli()
 	insertSession(t, db, "ses_nodup", "/tmp", now, "")
 	insertMessage(t, db, "msg_nd", "ses_nodup", "user", "gpt-4", now)
-	insertPart(t, db, "part_nd", "ses_nodup", "msg_nd", "text", `{"text":"hi"}`, now)
+	insertPart(t, db, partRow{id: "part_nd", sessionID: "ses_nodup", messageID: "msg_nd", partType: "text", data: `{"text":"hi"}`, ts: now})
 
 	// Two scans without any new parts.
 	w.scanSessions()
@@ -484,7 +494,7 @@ func TestScanSessions_EmitsWhenProcessBecomesLive(t *testing.T) {
 	now := time.Now().UnixMilli()
 	insertSession(t, db, "ses_dormant", "/tmp/work", now, "")
 	insertMessage(t, db, "msg_d", "ses_dormant", "user", "gpt-4", now)
-	insertPart(t, db, "part_d1", "ses_dormant", "msg_d", "text", `{"text":"hello"}`, now)
+	insertPart(t, db, partRow{id: "part_d1", sessionID: "ses_dormant", messageID: "msg_d", partType: "text", data: `{"text":"hello"}`, ts: now})
 
 	// First scan: process not live → no emit.
 	w.scanSessions()
@@ -495,7 +505,7 @@ func TestScanSessions_EmitsWhenProcessBecomesLive(t *testing.T) {
 
 	// New activity arrives.
 	later := now + 1000
-	insertPart(t, db, "part_d2", "ses_dormant", "msg_d", "text", `{"text":"more"}`, later)
+	insertPart(t, db, partRow{id: "part_d2", sessionID: "ses_dormant", messageID: "msg_d", partType: "text", data: `{"text":"more"}`, ts: later})
 	if _, err := db.Exec(`UPDATE session SET time_updated = ? WHERE id = ?`, later, "ses_dormant"); err != nil {
 		t.Fatalf("bump time_updated: %v", err)
 	}
@@ -657,7 +667,7 @@ func TestScanSessions_ErrorMessageTerminal(t *testing.T) {
 	}
 	// A NON-terminal part (plain text), so the ONLY terminal signal is the
 	// message-level error — proving isErrorMessage is what flips Terminal.
-	insertPart(t, db, "part_err", "ses_err", "msg_err", "text", `{"text":"partial"}`, now)
+	insertPart(t, db, partRow{id: "part_err", sessionID: "ses_err", messageID: "msg_err", partType: "text", data: `{"text":"partial"}`, ts: now})
 
 	w.scanSessions()
 

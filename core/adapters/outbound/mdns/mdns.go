@@ -76,20 +76,28 @@ func localIPv4s() []string {
 		if err != nil {
 			continue
 		}
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-			if ip == nil || ip.IsLoopback() {
-				continue
-			}
-			if ip4 := ip.To4(); ip4 != nil {
-				out = append(out, ip4.String())
-			}
+		out = append(out, ipv4sFromAddrs(addrs)...)
+	}
+	return out
+}
+
+// ipv4sFromAddrs extracts non-loopback IPv4 address strings from one
+// interface's address list.
+func ipv4sFromAddrs(addrs []net.Addr) []string {
+	var out []string
+	for _, addr := range addrs {
+		var ip net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip == nil || ip.IsLoopback() {
+			continue
+		}
+		if ip4 := ip.To4(); ip4 != nil {
+			out = append(out, ip4.String())
 		}
 	}
 	return out

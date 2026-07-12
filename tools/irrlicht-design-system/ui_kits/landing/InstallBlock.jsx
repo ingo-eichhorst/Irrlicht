@@ -29,7 +29,7 @@ window.FeatureTrio = function FeatureTrio() {
   return (
     <section className="features" id="features">
       {features.map((f, i) => (
-        <div key={i} className="feature">
+        <div key={f.title || i} className="feature">
           <div className="feature-dot" style={{background: f.dot, boxShadow: `0 0 14px ${f.dot}`}}/>
           <h3 className="feature-title">{f.title}</h3>
           <p className="feature-body">{f.body}</p>

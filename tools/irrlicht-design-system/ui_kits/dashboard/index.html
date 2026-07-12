@@ -41,12 +41,14 @@ main{position:relative;z-index:1;padding:12px 20px;max-width:1200px;margin:0 aut
 .tab-btn:hover{color:var(--text)}
 .tab-btn.active{color:var(--text-bright);border-bottom-color:var(--working)}
 .session-list{display:flex;flex-direction:column}
-.group-hdr{display:flex;align-items:center;gap:6px;padding:6px 10px 4px;cursor:pointer;user-select:none}
-.group-hdr:hover{background:var(--surface-hover);border-radius:4px}
+.group-hdr{display:flex;align-items:center;gap:6px;padding:6px 10px 4px;user-select:none}
+.group-hdr button{background:none;border:none;padding:0;margin:0;font:inherit;color:inherit;cursor:pointer}
+.group-toggle{display:flex;align-items:center;gap:6px;flex:1;border-radius:4px}
+.group-toggle:hover{background:var(--surface-hover)}
 .group-chevron{font-size:8px;color:var(--muted);width:10px;text-align:center;transition:transform 0.15s}
 .group-chevron.collapsed{transform:rotate(-90deg)}
 .group-name{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--text-bright);letter-spacing:0.03em}
-.group-cost{font-family:var(--font-mono);font-size:9px;color:var(--muted);margin-left:4px;cursor:pointer}
+.group-cost{font-family:var(--font-mono);font-size:9px;color:var(--muted);margin-left:4px}
 .group-cost:hover{color:var(--text-bright)}
 .group-count{font-family:var(--font-mono);font-size:9px;color:var(--muted);margin-left:auto}
 .group-dot{width:6px;height:6px;border-radius:50%}

@@ -13,7 +13,15 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"irrlicht/core/pkg/pathutil"
 	"irrlicht/core/ports/outbound"
+)
+
+// lsofPath and pgrepPath are resolved once from a fixed set of trusted
+// directories rather than trusted PATH, per go:S4036.
+var (
+	lsofPath  = pathutil.MustResolve("lsof")
+	pgrepPath = pathutil.MustResolve("pgrep")
 )
 
 // darwinObserver implements outbound.ProcessObserver with the macOS userland:
@@ -75,7 +83,7 @@ func (darwinObserver) ArgvOf(pid int) ([]string, error) {
 func (darwinObserver) CWDOf(pid int) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
+	out, err := exec.CommandContext(ctx, lsofPath, "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
 	if err != nil {
 		return "", fmt.Errorf("lsof cwd pid %d: %w", pid, err)
 	}
@@ -104,7 +112,7 @@ func (darwinObserver) WriterOf(path string) (int, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "lsof", path).Output()
+	out, err := exec.CommandContext(ctx, lsofPath, path).Output()
 	if err != nil {
 		return 0, nil // file not open by any process
 	}
@@ -143,7 +151,7 @@ func (darwinObserver) EnvOf(pid int) (map[string]string, error) {
 func runPgrep(flag, pattern string) ([]int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "pgrep", flag, pattern).Output()
+	out, err := exec.CommandContext(ctx, pgrepPath, flag, pattern).Output()
 	if err != nil {
 		// pgrep exits 1 when there are no matches — not an error.
 		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {

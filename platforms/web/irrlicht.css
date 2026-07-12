@@ -422,6 +422,8 @@
       height: 16px;
       border-radius: 3px;
       overflow: hidden;
+      /* Base default; body.view-history flips this to block below. */
+      display: none;
     }
 
     /* --- Session list --- */
@@ -972,8 +974,8 @@
     /* Display modes — driven by the single header cycling button. Context is
        the default (show meta columns, hide history bar); 1s/10s/60s history
        modes swap that. body.view-history is the umbrella class for any
-       history granularity. */
-    .row-history { display: none; }
+       history granularity. .row-history's base "display: none" default lives
+       on its declaration in the Timeline heatmap section above. */
     body.view-history .row-ctx-bar { display: none !important; }
     body.view-history .row-ctx-pct { display: none !important; }
     body.view-history .row-cost    { display: none !important; }
@@ -998,10 +1000,21 @@
       flex: 0 0 auto;
     }
 
-    /* Settings modal */
+    /* Settings modal — a native <dialog> used purely for its semantics
+       (implicit dialog role); visibility/backdrop/centering are still our
+       own CSS + the .open class toggle (JS uses classList, not
+       showModal()/close()), so reset every UA default the <dialog> element
+       would otherwise bring (border, inset margin, fit-content sizing). */
     .settings-modal-backdrop {
       position: fixed;
       inset: 0;
+      margin: 0;
+      border: none;
+      width: auto;
+      height: auto;
+      max-width: none;
+      max-height: none;
+      color: inherit;
       background: rgba(0, 0, 0, 0.45);
       backdrop-filter: blur(2px);
       -webkit-backdrop-filter: blur(2px);
@@ -1218,7 +1231,7 @@
       border: 1px solid var(--border-subtle);
       border-radius: 4px;
       line-height: 1.5;
-      word-break: break-word;
+      overflow-wrap: break-word;
     }
     .settings-modal .settings-modal-close {
       background: none;
@@ -1299,6 +1312,7 @@
     .history-seg {
       display: inline-flex; border: 1px solid var(--border);
       border-radius: 5px; overflow: hidden;
+      margin: 0; padding: 0; min-width: 0;
     }
     .history-seg button {
       background: none; border: none; border-right: 1px solid var(--border);
@@ -1389,6 +1403,15 @@
       text-transform: uppercase; color: var(--muted);
     }
     .history-chart-wrap.empty .history-chart-empty { display: flex; }
+    .history-co2-info {
+      position: absolute; top: 8px; right: 8px;
+      font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.02em;
+      color: var(--muted); text-decoration: none;
+      padding: 3px 7px; border-radius: 5px;
+      border: 1px solid var(--border); background: var(--surface);
+    }
+    .history-co2-info:hover { color: var(--text-bright); border-color: var(--pressure-high); }
+    .history-co2-info[hidden] { display: none; }
 
     .history-panel {
       flex: 0 0 260px; display: flex; flex-direction: column;

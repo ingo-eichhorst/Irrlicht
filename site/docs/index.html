@@ -129,7 +129,7 @@
 <div class="docs-layout">
 
   <!-- ─── Sidebar ─── -->
-  <nav class="sidebar">
+  <nav class="sidebar" aria-label="Documentation sections">
     <a href="../index.html" class="sidebar-logo">
       <span class="dot"></span>
       <span>Irrlicht</span>
@@ -149,6 +149,7 @@
       <a href="light-system.html">The Light System</a>
       <a href="state-machine.html">State Machine</a>
       <a href="session-detection.html">Session Detection</a>
+      <a href="co2-methodology.html">CO2 Methodology</a>
     </div>
 
     <div class="sidebar-section">
@@ -199,7 +200,7 @@
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2v12m0 0l-4-4m4 4l4-4M4 18h12"/></svg>
           </div>
           <h3>Installation</h3>
-          <p>Install the menu bar app and the daemon via Homebrew. One tap, two formulae, zero config.</p>
+          <p>Install the menu bar app (with the daemon embedded) via Homebrew. One tap, one cask, zero config.</p>
         </a>
 
         <a href="quickstart.html" class="doc-card">
@@ -242,7 +243,15 @@
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h12v12H4z"/><path d="M4 8h12M8 4v12"/></svg>
           </div>
           <h3>Session Detection</h3>
-          <p>How Irrlicht discovers agent sessions through filesystem watching, JSONL parsing, and lock files.</p>
+          <p>How Irrlicht discovers agent sessions through filesystem watching, JSONL parsing, and process exit monitoring.</p>
+        </a>
+
+        <a href="co2-methodology.html" class="doc-card">
+          <div class="doc-card-icon orange">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 13a4 4 0 100-8 4 4 0 000 8z"/><path d="M6 15c-1.5-2-1.5-6 0-10M14 5c1.5 2 1.5 6 0 10"/></svg>
+          </div>
+          <h3>CO2 Methodology</h3>
+          <p>How the CO2e estimate is calculated, the everyday equivalents shown on the History tab, and the studies behind every coefficient.</p>
         </a>
 
         <!-- Usage -->
@@ -329,7 +338,7 @@
       </div>
 
       <!-- ─── Bottom Nav ─── -->
-      <nav class="docs-nav-bottom">
+      <nav class="docs-nav-bottom" aria-label="Previous and next page">
         <div></div>
         <a href="installation.html">
           <span class="label">Next</span>

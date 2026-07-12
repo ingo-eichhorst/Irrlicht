@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // registers the "sqlite" driver for database/sql
 )
 
 // Antigravity keeps token usage and the canonical model id in a per-conversation
@@ -182,43 +182,62 @@ func walkProto(buf []byte, fn func(field, wire int, data []byte, num uint64) boo
 			return
 		}
 		i += n
-		field, wire := int(tag>>3), int(tag&7)
-		switch wire {
-		case 0: // varint
-			v, n := readVarint(buf[i:])
-			if n == 0 {
-				return
-			}
-			i += n
-			if fn(field, wire, nil, v) {
-				return
-			}
-		case 2: // length-delimited
-			l, n := readVarint(buf[i:])
-			if n == 0 {
-				return
-			}
-			i += n
-			if i+int(l) > len(buf) {
-				return
-			}
-			if fn(field, wire, buf[i:i+int(l)], 0) {
-				return
-			}
-			i += int(l)
-		case 1: // 64-bit
-			if i+8 > len(buf) {
-				return
-			}
-			i += 8
-		case 5: // 32-bit
-			if i+4 > len(buf) {
-				return
-			}
-			i += 4
-		default:
+		tag2 := protoTag{field: int(tag >> 3), wire: int(tag & 7)}
+
+		next, stop, ok := consumeProtoField(buf, i, tag2, fn)
+		if !ok {
 			return
 		}
+		i = next
+		if stop {
+			return
+		}
+	}
+}
+
+// protoTag is one field's decoded (field number, wire type) pair, bundled so
+// consumeProtoField doesn't have to carry them as two separate parameters
+// (CodeScene: Excess Number of Function Arguments).
+type protoTag struct {
+	field int
+	wire  int
+}
+
+// consumeProtoField consumes the payload of one field per its wire type,
+// invoking fn for varint (0) and length-delimited (2) fields. It returns the
+// buffer offset just past the field, whether fn asked to stop the walk, and
+// whether the payload was well-formed — ok is false on truncated or
+// malformed input, which walkProto treats as "stop with no data".
+func consumeProtoField(buf []byte, i int, tag protoTag, fn func(field, wire int, data []byte, num uint64) bool) (next int, stop bool, ok bool) {
+	switch tag.wire {
+	case 0: // varint
+		v, n := readVarint(buf[i:])
+		if n == 0 {
+			return 0, false, false
+		}
+		return i + n, fn(tag.field, tag.wire, nil, v), true
+	case 2: // length-delimited
+		l, n := readVarint(buf[i:])
+		if n == 0 {
+			return 0, false, false
+		}
+		i += n
+		if i+int(l) > len(buf) {
+			return 0, false, false
+		}
+		return i + int(l), fn(tag.field, tag.wire, buf[i:i+int(l)], 0), true
+	case 1: // 64-bit
+		if i+8 > len(buf) {
+			return 0, false, false
+		}
+		return i + 8, false, true
+	case 5: // 32-bit
+		if i+4 > len(buf) {
+			return 0, false, false
+		}
+		return i + 4, false, true
+	default:
+		return 0, false, false
 	}
 }
 

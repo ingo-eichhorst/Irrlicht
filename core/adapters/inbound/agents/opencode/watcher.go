@@ -20,6 +20,11 @@ import (
 
 const defaultMinScanGap = 500 * time.Millisecond
 
+// sessionQueryParam is the query-string key appended to the WAL path so
+// MetricsProvider (opencode/metrics.go ComputeMetrics) can recover the
+// session ID via parseTranscriptPath.
+const sessionQueryParam = "?session="
+
 // Watcher monitors the OpenCode SQLite database for new and updated sessions.
 // It implements inbound.Watcher.
 //
@@ -229,18 +234,24 @@ func (w *Watcher) Unsubscribe(ch <-chan agent.Event) {
 	}
 }
 
+// sessionRow is a single row read from the `session` table by querySessions.
+type sessionRow struct {
+	id          string
+	directory   string
+	timeUpdated int64
+	parentID    string // empty string if NULL
+}
+
 // scanSessions queries the DB for session and part updates, emitting events
 // to all subscribers. Debounced: calls closer together than minScanGap are
 // dropped to prevent a feedback loop where our own read-only DB open triggers
 // fsnotify Write events on the shared-memory file (.db-shm).
 func (w *Watcher) scanSessions() {
-	w.scanMu.Lock()
-	if time.Since(w.lastScan) < w.minScanGap {
-		w.scanMu.Unlock()
+	if !w.shouldScan() {
 		return
 	}
-	w.scanMu.Unlock()
 	w.lastScan = time.Now()
+
 	db, err := sql.Open("sqlite", w.dbPath+"?mode=ro&_journal=WAL&_timeout=500")
 	if err != nil {
 		log.Printf("opencode: sql.Open: %v", err)
@@ -248,61 +259,11 @@ func (w *Watcher) scanSessions() {
 	}
 	defer db.Close()
 
-	// Query sessions updated within maxAge (or all if maxAge=0).
-	// We use time_updated to find both new sessions and recently active ones.
-	var rows *sql.Rows
-	var queryErr error
-	if w.maxAge > 0 {
-		cutoff := time.Now().Add(-w.maxAge).UnixMilli()
-		rows, queryErr = db.Query(`
-			SELECT id, directory, time_updated, parent_id
-			FROM session
-			WHERE time_archived IS NULL
-			  AND time_updated >= ?
-			ORDER BY time_updated DESC
-			LIMIT 200
-		`, cutoff)
-	} else {
-		rows, queryErr = db.Query(`
-			SELECT id, directory, time_updated, parent_id
-			FROM session
-			WHERE time_archived IS NULL
-			ORDER BY time_updated DESC
-			LIMIT 200
-		`)
-	}
-	if queryErr != nil {
-		log.Printf("opencode: db.Query(session): %v", queryErr)
+	sessions, err := w.querySessions(db)
+	if err != nil {
+		log.Printf("opencode: db.Query(session): %v", err)
 		return
 	}
-	defer rows.Close()
-
-	type sessionRow struct {
-		id          string
-		directory   string
-		timeUpdated int64
-		parentID    string // empty string if NULL
-	}
-	var sessions []sessionRow
-	for rows.Next() {
-		var s sessionRow
-		var parentID sql.NullString
-		if err := rows.Scan(&s.id, &s.directory, &s.timeUpdated, &parentID); err != nil {
-			log.Printf("opencode: rows.Scan(session): %v", err)
-			continue
-		}
-		if parentID.Valid {
-			s.parentID = parentID.String
-		}
-		if w.maxAge > 0 {
-			age := time.Since(time.UnixMilli(s.timeUpdated))
-			if age > w.maxAge {
-				continue
-			}
-		}
-		sessions = append(sessions, s)
-	}
-	rows.Close()
 
 	// Gate EventNewSession on a live opencode process owning the session's
 	// CWD — otherwise every non-archived row in the DB would be re-emitted
@@ -314,45 +275,124 @@ func (w *Watcher) scanSessions() {
 
 	scanWallClock := time.Now()
 	for _, s := range sessions {
-		cur, known := w.cursors[s.id]
-		if !known {
-			// Seed lastTS so a later live-transition's scanParts doesn't
-			// back-fill historical parts as fresh activity.
-			cur = &sessionCursor{
-				lastTS:  s.timeUpdated,
-				seenIDs: make(map[string]struct{}),
-			}
-			w.cursors[s.id] = cur
-		}
-		cur.lastObserved = scanWallClock
-
-		if !cur.emitted {
-			if _, alive := live[s.directory]; !alive {
-				cur.lastTS = s.timeUpdated
-				continue
-			}
-			// TranscriptPath encodes the session ID so MetricsProvider
-			// (opencode/metrics.go ComputeMetrics) can extract it via
-			// parseTranscriptPath. The WAL suffix routes isStaleTranscript()
-			// at the WAL (updated on every write), not the checkpoint-only
-			// main DB.
-			walPath := w.dbPath + "-wal" + "?session=" + s.id
-			w.broadcast(agent.Event{
-				Type:            agent.EventNewSession,
-				SessionID:       s.id,
-				ProjectDir:      filepath.Base(s.directory),
-				TranscriptPath:  walPath,
-				CWD:             s.directory,
-				ParentSessionID: s.parentID,
-			})
-			cur.emitted = true
-		}
-
+		cur := w.sessionCursorFor(s, scanWallClock)
+		w.maybeEmitNewSession(s, cur, live)
 		w.scanParts(db, s.id, s.directory, cur)
 	}
 
 	w.emitRemovedForArchivedSessions(db)
 	w.gcExpiredCursors()
+}
+
+// shouldScan reports whether enough time has passed since the last scan to
+// run another one, debouncing the fsnotify feedback loop described in
+// scanSessions' doc comment.
+func (w *Watcher) shouldScan() bool {
+	w.scanMu.Lock()
+	defer w.scanMu.Unlock()
+	return time.Since(w.lastScan) >= w.minScanGap
+}
+
+// querySessions queries sessions updated within maxAge (or all if maxAge=0)
+// and scans the matching rows. We use time_updated to find both new sessions
+// and recently active ones.
+func (w *Watcher) querySessions(db *sql.DB) ([]sessionRow, error) {
+	var rows *sql.Rows
+	var err error
+	if w.maxAge > 0 {
+		cutoff := time.Now().Add(-w.maxAge).UnixMilli()
+		rows, err = db.Query(`
+			SELECT id, directory, time_updated, parent_id
+			FROM session
+			WHERE time_archived IS NULL
+			  AND time_updated >= ?
+			ORDER BY time_updated DESC
+			LIMIT 200
+		`, cutoff)
+	} else {
+		rows, err = db.Query(`
+			SELECT id, directory, time_updated, parent_id
+			FROM session
+			WHERE time_archived IS NULL
+			ORDER BY time_updated DESC
+			LIMIT 200
+		`)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []sessionRow
+	for rows.Next() {
+		if s, ok := w.scanSessionRow(rows); ok {
+			sessions = append(sessions, s)
+		}
+	}
+	return sessions, nil
+}
+
+// scanSessionRow reads one session row. Applies the maxAge cutoff a second
+// time per-row (time_updated can have advanced since the query ran, and a
+// zero maxAge means "no limit" so the query itself has no cutoff to apply).
+// Returns ok=false on a scan error or a row that has aged out.
+func (w *Watcher) scanSessionRow(rows *sql.Rows) (sessionRow, bool) {
+	var s sessionRow
+	var parentID sql.NullString
+	if err := rows.Scan(&s.id, &s.directory, &s.timeUpdated, &parentID); err != nil {
+		log.Printf("opencode: rows.Scan(session): %v", err)
+		return sessionRow{}, false
+	}
+	if parentID.Valid {
+		s.parentID = parentID.String
+	}
+	if w.maxAge > 0 && time.Since(time.UnixMilli(s.timeUpdated)) > w.maxAge {
+		return sessionRow{}, false
+	}
+	return s, true
+}
+
+// sessionCursorFor returns the cursor tracking session s, creating and
+// seeding one on first sight so a later live-transition's scanParts doesn't
+// back-fill historical parts as fresh activity.
+func (w *Watcher) sessionCursorFor(s sessionRow, observedAt time.Time) *sessionCursor {
+	cur, known := w.cursors[s.id]
+	if !known {
+		cur = &sessionCursor{
+			lastTS:  s.timeUpdated,
+			seenIDs: make(map[string]struct{}),
+		}
+		w.cursors[s.id] = cur
+	}
+	cur.lastObserved = observedAt
+	return cur
+}
+
+// maybeEmitNewSession broadcasts EventNewSession the first time session s is
+// seen owned by a live opencode process.
+func (w *Watcher) maybeEmitNewSession(s sessionRow, cur *sessionCursor, live map[string]struct{}) {
+	if cur.emitted {
+		return
+	}
+	if _, alive := live[s.directory]; !alive {
+		cur.lastTS = s.timeUpdated
+		return
+	}
+	// TranscriptPath encodes the session ID so MetricsProvider
+	// (opencode/metrics.go ComputeMetrics) can extract it via
+	// parseTranscriptPath. The WAL suffix routes isStaleTranscript()
+	// at the WAL (updated on every write), not the checkpoint-only
+	// main DB.
+	walPath := w.dbPath + "-wal" + sessionQueryParam + s.id
+	w.broadcast(agent.Event{
+		Type:            agent.EventNewSession,
+		SessionID:       s.id,
+		ProjectDir:      filepath.Base(s.directory),
+		TranscriptPath:  walPath,
+		CWD:             s.directory,
+		ParentSessionID: s.parentID,
+	})
+	cur.emitted = true
 }
 
 // gcExpiredCursors drops cursor entries whose most recent observation
@@ -410,7 +450,7 @@ func (w *Watcher) emitRemovedForArchivedSessions(db *sql.DB) {
 		if !known {
 			continue
 		}
-		walPath := w.dbPath + "-wal" + "?session=" + id
+		walPath := w.dbPath + "-wal" + sessionQueryParam + id
 		w.broadcast(agent.Event{
 			Type:           agent.EventRemoved,
 			SessionID:      id,
@@ -492,63 +532,86 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, cur *sessio
 	}
 	defer rows.Close()
 
-	var maxSeen int64
-	hasActivity := false
-	hasTerminal := false
-	newSeenIDs := make(map[string]struct{})
-
+	acc := partScanAccumulator{seenIDs: make(map[string]struct{})}
 	for rows.Next() {
-		var partID, partData, msgData string
-		var timeUpdated int64
-		if err := rows.Scan(&partID, &partData, &timeUpdated, &msgData); err != nil {
-			continue
-		}
-		// Skip parts already seen at the current cursor timestamp.
-		if cur != nil && timeUpdated == lastTS {
-			if _, seen := cur.seenIDs[partID]; seen {
-				continue
-			}
-		}
-		// Track for dedup when the timestamp moves forward.
-		if timeUpdated > maxSeen {
-			maxSeen = timeUpdated
-			newSeenIDs = make(map[string]struct{})
-		}
-		if timeUpdated == maxSeen {
-			newSeenIDs[partID] = struct{}{}
-		}
-		hasActivity = true
-		// A turn ends via a step-finish part with a terminal reason, OR — for an
-		// aborted/errored turn — opencode records the failure on
-		// message.data.error and emits NO step-finish reason=error part, so the
-		// message-level error is the terminal signal for a failed turn. Note this
-		// is part-driven: a turn that errors before emitting ANY part won't be
-		// surfaced here (the part↔message join has no row to carry msgData) — that
-		// rarer zero-part case is the remaining half of #493. (#493)
-		if !hasTerminal && (isTerminalPart(partData) || isErrorMessage(msgData)) {
-			hasTerminal = true
-		}
+		acc.scanRow(rows, cur, lastTS)
 	}
+	acc.updateCursor(cur, lastTS)
 
-	if hasActivity && maxSeen > lastTS {
-		cur.lastTS = maxSeen
-		cur.seenIDs = newSeenIDs
-	} else if hasActivity && maxSeen == lastTS && maxSeen != 0 {
-		// Same timestamp — merge new IDs into the existing set.
-		for id := range newSeenIDs {
-			cur.seenIDs[id] = struct{}{}
-		}
-	}
-
-	if hasActivity {
+	if acc.hasActivity {
 		w.broadcast(agent.Event{
 			Type:           agent.EventActivity,
 			SessionID:      sessionID,
 			ProjectDir:     filepath.Base(directory),
-			TranscriptPath: w.dbPath + "-wal" + "?session=" + sessionID,
+			TranscriptPath: w.dbPath + "-wal" + sessionQueryParam + sessionID,
 			CWD:            directory,
-			Terminal:       hasTerminal,
+			Terminal:       acc.hasTerminal,
 		})
+	}
+}
+
+// partScanAccumulator folds one scanParts pass over the part/message-joined
+// rows into the final hasActivity/hasTerminal/maxSeen/seenIDs state, keeping
+// scanParts itself a flat pipeline of query → accumulate → update cursor →
+// emit.
+type partScanAccumulator struct {
+	maxSeen     int64
+	hasActivity bool
+	hasTerminal bool
+	seenIDs     map[string]struct{}
+}
+
+// scanRow reads one part/message-joined row and folds it into the
+// accumulator, skipping parts already seen at the current cursor timestamp
+// (same-ms race, tracked via cur.seenIDs) and tracking dedup IDs as the
+// timestamp moves forward.
+func (a *partScanAccumulator) scanRow(rows *sql.Rows, cur *sessionCursor, lastTS int64) {
+	var partID, partData, msgData string
+	var timeUpdated int64
+	if err := rows.Scan(&partID, &partData, &timeUpdated, &msgData); err != nil {
+		return
+	}
+	if cur != nil && timeUpdated == lastTS {
+		if _, seen := cur.seenIDs[partID]; seen {
+			return
+		}
+	}
+	if timeUpdated > a.maxSeen {
+		a.maxSeen = timeUpdated
+		a.seenIDs = make(map[string]struct{})
+	}
+	if timeUpdated == a.maxSeen {
+		a.seenIDs[partID] = struct{}{}
+	}
+	a.hasActivity = true
+	// A turn ends via a step-finish part with a terminal reason, OR — for an
+	// aborted/errored turn — opencode records the failure on
+	// message.data.error and emits NO step-finish reason=error part, so the
+	// message-level error is the terminal signal for a failed turn. Note this
+	// is part-driven: a turn that errors before emitting ANY part won't be
+	// surfaced here (the part↔message join has no row to carry msgData) — that
+	// rarer zero-part case is the remaining half of #493. (#493)
+	if a.hasTerminal || (!isTerminalPart(partData) && !isErrorMessage(msgData)) {
+		return
+	}
+	a.hasTerminal = true
+}
+
+// updateCursor advances cur to the accumulator's high-water mark: a full
+// replace when the timestamp moved forward, or a same-timestamp merge of
+// newly seen IDs when it didn't.
+func (a *partScanAccumulator) updateCursor(cur *sessionCursor, lastTS int64) {
+	switch {
+	case !a.hasActivity:
+		return
+	case a.maxSeen > lastTS:
+		cur.lastTS = a.maxSeen
+		cur.seenIDs = a.seenIDs
+	case a.maxSeen == lastTS && a.maxSeen != 0:
+		// Same timestamp — merge new IDs into the existing set.
+		for id := range a.seenIDs {
+			cur.seenIDs[id] = struct{}{}
+		}
 	}
 }
 
@@ -566,7 +629,7 @@ func (w *Watcher) broadcast(ev agent.Event) {
 
 // waitForDB blocks until the OpenCode database file exists or ctx is cancelled.
 func (w *Watcher) waitForDB(ctx context.Context) error {
-	if _, err := os.Stat(w.dbPath); err == nil {
+	if fileExists(w.dbPath) {
 		return nil
 	}
 
@@ -574,18 +637,7 @@ func (w *Watcher) waitForDB(ctx context.Context) error {
 	dbDir := filepath.Dir(w.dbPath)
 	if _, err := os.Stat(dbDir); err != nil {
 		// XDG data dir doesn't exist yet — poll with a ticker.
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-ticker.C:
-				if _, err := os.Stat(w.dbPath); err == nil {
-					return nil
-				}
-			}
-		}
+		return w.pollForDB(ctx)
 	}
 
 	watcher, err := fsnotify.NewWatcher()
@@ -597,10 +649,40 @@ func (w *Watcher) waitForDB(ctx context.Context) error {
 	if err := watcher.Add(dbDir); err != nil {
 		return err
 	}
-	if _, err := os.Stat(w.dbPath); err == nil {
+	if fileExists(w.dbPath) {
 		return nil
 	}
 
+	return w.watchForDBCreate(ctx, watcher)
+}
+
+// fileExists reports whether path currently exists.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// pollForDB ticks every 5s until w.dbPath exists or ctx is cancelled. Used
+// when the parent XDG data dir doesn't exist yet, so there's nothing for
+// fsnotify to watch.
+func (w *Watcher) pollForDB(ctx context.Context) error {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if fileExists(w.dbPath) {
+				return nil
+			}
+		}
+	}
+}
+
+// watchForDBCreate blocks on fsnotify events until w.dbPath is created or ctx
+// is cancelled.
+func (w *Watcher) watchForDBCreate(ctx context.Context, watcher *fsnotify.Watcher) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -609,10 +691,8 @@ func (w *Watcher) waitForDB(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			if ev.Op&fsnotify.Create != 0 {
-				if filepath.Base(ev.Name) == filepath.Base(w.dbPath) {
-					return nil
-				}
+			if isDBCreateEvent(ev, w.dbPath) {
+				return nil
 			}
 		case _, ok := <-watcher.Errors:
 			if !ok {
@@ -620,4 +700,9 @@ func (w *Watcher) waitForDB(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// isDBCreateEvent reports whether ev is a Create event for dbPath's basename.
+func isDBCreateEvent(ev fsnotify.Event, dbPath string) bool {
+	return ev.Op&fsnotify.Create != 0 && filepath.Base(ev.Name) == filepath.Base(dbPath)
 }

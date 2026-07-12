@@ -20,10 +20,11 @@ var (
 	ErrNotControllable = errors.New("session is not controllable")
 )
 
-// consentGate is the slice of *PermissionService that InputService needs: a
-// single hot-path consent check. Declared here (mirroring the focus handler's
-// focusTarget pattern) so the service does not import the permission handler.
-type consentGate interface {
+// consentGranter is the slice of *PermissionService that InputService needs:
+// a single hot-path consent check. Declared here (mirroring the focus
+// handler's focusRequester pattern) so the service does not import the
+// permission handler.
+type consentGranter interface {
 	Granted(agentName, key string) bool
 }
 
@@ -40,14 +41,14 @@ const ControlPermissionKey = "control"
 type InputService struct {
 	repo       outbound.SessionRepository
 	controller outbound.AgentController
-	consent    consentGate
+	consent    consentGranter
 	betaOn     func() bool
 	logger     outbound.Logger
 }
 
 // NewInputService constructs an InputService. betaOn reports whether the
 // backchannel master-toggle is currently enabled (default false).
-func NewInputService(repo outbound.SessionRepository, controller outbound.AgentController, consent consentGate, betaOn func() bool, logger outbound.Logger) *InputService {
+func NewInputService(repo outbound.SessionRepository, controller outbound.AgentController, consent consentGranter, betaOn func() bool, logger outbound.Logger) *InputService {
 	return &InputService{repo: repo, controller: controller, consent: consent, betaOn: betaOn, logger: logger}
 }
 
@@ -69,7 +70,7 @@ func (s *InputService) SendInput(sessionID string, data []byte) error {
 // SendCommand forwards an agent-agnostic preset command to the session, passing
 // the same gates as SendInput. The command's submit sequence is owned by the
 // controller per terminal backend (issue #754).
-func (s *InputService) SendCommand(sessionID string, command string) error {
+func (s *InputService) SendCommand(sessionID, command string) error {
 	state, err := s.resolve(sessionID)
 	if err != nil {
 		return err

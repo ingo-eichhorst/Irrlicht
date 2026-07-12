@@ -7,16 +7,24 @@ import (
 	"testing"
 )
 
-func TestIssueValidateRevoke(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "tokens.json")
-
-	id, plaintext, err := issueToken(path, "laptop", "")
+// mustIssueToken issues a token via issueToken, failing the test on error or
+// an unexpectedly empty id/plaintext.
+func mustIssueToken(t *testing.T, path, label, workspace string) (id, plaintext string) {
+	t.Helper()
+	id, plaintext, err := issueToken(path, label, workspace)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	if id == "" || plaintext == "" {
 		t.Fatalf("issue returned empty id/plaintext: %q %q", id, plaintext)
 	}
+	return id, plaintext
+}
+
+func TestIssueValidateRevoke(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.json")
+
+	id, plaintext := mustIssueToken(t, path, "laptop", "")
 
 	store, err := newAuthStore(path)
 	if err != nil {

@@ -12,6 +12,10 @@ import (
 // messages (thinking blocks, partial text) that should not trigger IsAgentDone().
 const eventTypeAssistantStreaming = "assistant_streaming"
 
+// xmlFieldTaskID is the <task-id> XML field name background-task markers
+// carry in prompt/tool-result text.
+const xmlFieldTaskID = "task-id"
+
 // backgroundSpawnRe matches the text Claude Code writes in a `Bash`
 // tool_result when the command was launched with `run_in_background: true`:
 //
@@ -145,11 +149,7 @@ func handleAttachmentEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 	// origin.kind task-notification in handleTaskNotification. A terminal one
 	// ends a tracked Bash background process by its <task-id>. See issue #445.
 	if kind == "queued_command" || cmdMode == "task-notification" {
-		if prompt, _ := att["prompt"].(string); prompt != "" {
-			if id := extractXMLField(prompt, "task-id"); id != "" && backgroundStatusTerminated(prompt) {
-				ev.TerminatedBackgroundTaskIDs = append(ev.TerminatedBackgroundTaskIDs, id)
-			}
-		}
+		recordTerminatedQueuedCommand(att, ev)
 		return
 	}
 	if kind != "task_reminder" {
@@ -162,6 +162,24 @@ func handleAttachmentEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 		// (Claude is telling us nothing is active).
 		return
 	}
+	snap := buildTaskSnapshot(contentArr)
+	ev.TaskSnapshot = &snap
+}
+
+// recordTerminatedQueuedCommand extracts a terminated background-task id from
+// a queued_command / task-notification attachment's prompt text, appending it
+// to ev when found. See issue #445.
+func recordTerminatedQueuedCommand(att map[string]interface{}, ev *tailer.ParsedEvent) {
+	if prompt, _ := att["prompt"].(string); prompt != "" {
+		if id := extractXMLField(prompt, xmlFieldTaskID); id != "" && backgroundStatusTerminated(prompt) {
+			ev.TerminatedBackgroundTaskIDs = append(ev.TerminatedBackgroundTaskIDs, id)
+		}
+	}
+}
+
+// buildTaskSnapshot converts a task_reminder attachment's content array into
+// TaskSnapshotEntry values, skipping malformed or id-less entries.
+func buildTaskSnapshot(contentArr []interface{}) []tailer.TaskSnapshotEntry {
 	snap := make([]tailer.TaskSnapshotEntry, 0, len(contentArr))
 	for _, item := range contentArr {
 		entry, ok := item.(map[string]interface{})
@@ -182,7 +200,7 @@ func handleAttachmentEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 			Status:     status,
 		})
 	}
-	ev.TaskSnapshot = &snap
+	return snap
 }
 
 // handleSystemEvent maps turn_duration / stop_hook_summary and the manual
@@ -267,7 +285,7 @@ func handleTaskNotification(raw map[string]interface{}, ev *tailer.ParsedEvent) 
 	if msg, ok := raw["message"].(map[string]interface{}); ok {
 		if content, ok := msg["content"].(string); ok {
 			ev.SubagentCompletions = append(ev.SubagentCompletions, tailer.SubagentCompletion{
-				AgentID:   extractXMLField(content, "task-id"),
+				AgentID:   extractXMLField(content, xmlFieldTaskID),
 				ToolUseID: extractXMLField(content, "tool-use-id"),
 				Status:    extractXMLField(content, "status"),
 			})
@@ -276,7 +294,7 @@ func handleTaskNotification(raw map[string]interface{}, ev *tailer.ParsedEvent) 
 			// completion path orchestrated/SDK claude uses instead of a
 			// BashOutput poll. Dropping a non-matching id (a subagent's) is a
 			// harmless no-op in the tailer. See issue #445.
-			if id := extractXMLField(content, "task-id"); id != "" && backgroundStatusTerminated(content) {
+			if id := extractXMLField(content, xmlFieldTaskID); id != "" && backgroundStatusTerminated(content) {
 				ev.TerminatedBackgroundTaskIDs = append(ev.TerminatedBackgroundTaskIDs, id)
 			}
 		}
@@ -405,54 +423,67 @@ func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) stri
 		}
 		switch block["type"] {
 		case "tool_use":
-			if q := collectToolUse(block, ev); q != "" {
+			if q := handleToolUseBlock(block, ev); q != "" {
 				askUserQuestion = q
-			}
-			// The task-summary marker rides in the Bash tool's `description`
-			// (a tool_use input field), not in assistant prose — issue #617's
-			// mandatory-carrier instruction, since pre-tool-call text blocks
-			// can vanish. Scan the input so the summary is parsed from the
-			// transcript and survives replay, mirroring the hook path's
-			// scanToolInput. Assistant events only (a user echoing a marker
-			// must not feed it). ETA stays prose/hook-only, so apply only the
-			// summary.
-			if isAssistantEventType(ev.EventType) {
-				if _, s, q := scanValueForMarkers(block["input"], ev.Timestamp); s != nil || q != nil {
-					if s != nil {
-						ev.TaskSummary = s
-					}
-					if q != nil {
-						ev.TaskQuestion = q
-					}
-				}
 			}
 		case "tool_result":
 			collectToolResult(block, ev, bgTaskID, createdTaskID)
 		case "text":
-			// Task-estimate markers live in the agent's own prose, so only
-			// assistant events qualify (a user pasting a marker must not feed
-			// the ETA). Scan the full block text — ev.AssistantText is
-			// tail-truncated to 200 runes and would lose early markers.
-			if !isAssistantEventType(ev.EventType) {
-				continue
+			handleTextBlock(block, ev)
+		}
+	}
+	return askUserQuestion
+}
+
+// handleToolUseBlock records a tool_use content block onto ev via
+// collectToolUse and, for assistant events, scans the tool input for
+// task-summary/question markers. The task-summary marker rides in the Bash
+// tool's `description` (a tool_use input field), not in assistant prose —
+// issue #617's mandatory-carrier instruction, since pre-tool-call text blocks
+// can vanish. Scan the input so the summary is parsed from the transcript and
+// survives replay, mirroring the hook path's scanToolInput. Assistant events
+// only (a user echoing a marker must not feed it). ETA stays prose/hook-only,
+// so apply only the summary. Returns the AskUserQuestion prompt text, if any.
+func handleToolUseBlock(block map[string]interface{}, ev *tailer.ParsedEvent) string {
+	askUserQuestion := collectToolUse(block, ev)
+	if isAssistantEventType(ev.EventType) {
+		if _, s, q := scanValueForMarkers(block["input"], ev.Timestamp); s != nil || q != nil {
+			if s != nil {
+				ev.TaskSummary = s
 			}
-			if text, ok := block["text"].(string); ok {
-				if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
-					ev.TaskEstimate = est
-				}
-				if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
-					ev.TaskSummary = s
-				}
-				// The question marker rides end-of-turn prose (the agent's final
-				// line when it asks the user something), which survives the
-				// text-drop, so the text-block scan is its primary path (#759).
-				if q := tailer.ScanTaskQuestion(text, ev.Timestamp); q != nil {
-					ev.TaskQuestion = q
-				}
+			if q != nil {
+				ev.TaskQuestion = q
 			}
 		}
 	}
 	return askUserQuestion
+}
+
+// handleTextBlock scans an assistant text content block for task-estimate,
+// task-summary, and task-question markers riding in prose. Only assistant
+// events qualify (a user pasting a marker must not feed the ETA). Scans the
+// full block text — ev.AssistantText is tail-truncated to 200 runes and would
+// lose early markers.
+func handleTextBlock(block map[string]interface{}, ev *tailer.ParsedEvent) {
+	if !isAssistantEventType(ev.EventType) {
+		return
+	}
+	text, ok := block["text"].(string)
+	if !ok {
+		return
+	}
+	if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
+		ev.TaskEstimate = est
+	}
+	if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
+		ev.TaskSummary = s
+	}
+	// The question marker rides end-of-turn prose (the agent's final line
+	// when it asks the user something), which survives the text-drop, so the
+	// text-block scan is its primary path (#759).
+	if q := tailer.ScanTaskQuestion(text, ev.Timestamp); q != nil {
+		ev.TaskQuestion = q
+	}
 }
 
 // collectToolUse records a tool_use block onto ev and extracts task/question
@@ -470,52 +501,81 @@ func collectToolUse(block map[string]interface{}, ev *tailer.ParsedEvent) string
 	}
 	switch name {
 	case "TaskCreate":
-		subject, _ := input["subject"].(string)
-		desc, _ := input["description"].(string)
-		activeForm, _ := input["activeForm"].(string)
-		ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
-			Op:          tailer.TaskOpCreate,
-			Subject:     subject,
-			Description: desc,
-			ActiveForm:  activeForm,
-			// The authoritative task ID only exists in the tool_result
-			// (`toolUseResult.task.id`); carry the tool_use id so the tailer
-			// can pair the later assign_id delta with this create. See #615.
-			ToolUseID: id,
-		})
+		recordTaskCreate(input, id, ev)
 	case "TaskUpdate":
-		taskID, _ := input["taskId"].(string)
-		status, _ := input["status"].(string)
-		ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
-			Op:     tailer.TaskOpUpdate,
-			ID:     taskID,
-			Status: status,
-		})
+		recordTaskUpdate(input, ev)
 	case "AskUserQuestion":
-		if qs, ok := input["questions"].([]interface{}); ok && len(qs) > 0 {
-			if q, ok := qs[0].(map[string]interface{}); ok {
-				if text, _ := q["question"].(string); text != "" {
-					return text
-				}
-			}
-		}
+		return firstAskUserQuestionText(input)
 	case "BashOutput":
-		// The agent is polling a background process by id; remember the
-		// pairing so a terminated status on the matching tool_result can be
-		// attributed to the right background process. See issue #445.
-		if bashID := backgroundID(input); bashID != "" && id != "" {
-			ev.BashOutputPolls = append(ev.BashOutputPolls, tailer.BashOutputPoll{
-				ToolUseID: id,
-				BashID:    bashID,
-			})
-		}
+		recordBashOutputPoll(input, id, ev)
 	case "KillShell":
-		// Explicit, single-event termination of a background process.
-		if bashID := backgroundID(input); bashID != "" {
-			ev.KilledShellIDs = append(ev.KilledShellIDs, bashID)
-		}
+		recordKillShell(input, ev)
 	}
 	return ""
+}
+
+// recordTaskCreate appends a TaskOpCreate delta for a TaskCreate tool_use.
+// The authoritative task ID only exists in the tool_result
+// (`toolUseResult.task.id`); toolUseID carries the tool_use id so the tailer
+// can pair the later assign_id delta with this create. See #615.
+func recordTaskCreate(input map[string]interface{}, toolUseID string, ev *tailer.ParsedEvent) {
+	subject, _ := input["subject"].(string)
+	desc, _ := input["description"].(string)
+	activeForm, _ := input["activeForm"].(string)
+	ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+		Op:          tailer.TaskOpCreate,
+		Subject:     subject,
+		Description: desc,
+		ActiveForm:  activeForm,
+		ToolUseID:   toolUseID,
+	})
+}
+
+// recordTaskUpdate appends a TaskOpUpdate delta for a TaskUpdate tool_use.
+func recordTaskUpdate(input map[string]interface{}, ev *tailer.ParsedEvent) {
+	taskID, _ := input["taskId"].(string)
+	status, _ := input["status"].(string)
+	ev.TaskDeltas = append(ev.TaskDeltas, tailer.TaskDelta{
+		Op:     tailer.TaskOpUpdate,
+		ID:     taskID,
+		Status: status,
+	})
+}
+
+// firstAskUserQuestionText returns an AskUserQuestion tool_use's first
+// question text, or "" if the input is malformed or has no questions.
+func firstAskUserQuestionText(input map[string]interface{}) string {
+	qs, ok := input["questions"].([]interface{})
+	if !ok || len(qs) == 0 {
+		return ""
+	}
+	q, ok := qs[0].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	text, _ := q["question"].(string)
+	return text
+}
+
+// recordBashOutputPoll remembers the pairing between a BashOutput tool_use
+// and the background process id it's polling, so a terminated status on the
+// matching tool_result can be attributed to the right background process.
+// See issue #445.
+func recordBashOutputPoll(input map[string]interface{}, toolUseID string, ev *tailer.ParsedEvent) {
+	if bashID := backgroundID(input); bashID != "" && toolUseID != "" {
+		ev.BashOutputPolls = append(ev.BashOutputPolls, tailer.BashOutputPoll{
+			ToolUseID: toolUseID,
+			BashID:    bashID,
+		})
+	}
+}
+
+// recordKillShell records the explicit, single-event termination of a
+// background process.
+func recordKillShell(input map[string]interface{}, ev *tailer.ParsedEvent) {
+	if bashID := backgroundID(input); bashID != "" {
+		ev.KilledShellIDs = append(ev.KilledShellIDs, bashID)
+	}
 }
 
 // backgroundID reads the background-process id from a BashOutput / KillShell
@@ -677,47 +737,69 @@ func applyAssistantText(raw map[string]interface{}, ev *tailer.ParsedEvent, even
 
 // extractClaudeCodeModel extracts model name and context window from a Claude Code event.
 func extractClaudeCodeModel(raw map[string]interface{}) (string, int64) {
-	var modelName string
-	var contextWindow int64
-
-	// Check direct fields.
-	if model, ok := raw["model"].(string); ok {
-		modelName = model
-	} else if request, ok := raw["request"].(map[string]interface{}); ok {
-		if model, ok := request["model"].(string); ok {
-			modelName = model
-		}
-	} else if metadata, ok := raw["metadata"].(map[string]interface{}); ok {
-		if model, ok := metadata["model"].(string); ok {
-			modelName = model
-		}
-	}
-
-	// message.model (assistant messages).
+	modelName := modelNameFromDirectFields(raw)
 	if modelName == "" {
-		if message, ok := raw["message"].(map[string]interface{}); ok {
-			if model, ok := message["model"].(string); ok {
-				modelName = model
-			}
-		}
+		modelName = modelNameFromMessage(raw)
 	}
 
 	// Extended context detection.
+	var contextWindow int64
 	if strings.Contains(modelName, "[1m]") {
 		contextWindow = 1000000
 	}
-
-	// context_management.context_window (most accurate source).
-	if cm, ok := raw["context_management"].(map[string]interface{}); ok {
-		if cw, ok := cm["context_window"].(float64); ok && cw > 0 {
-			contextWindow = int64(cw)
-		}
+	// context_management.context_window is the most accurate source, so it
+	// overrides the [1m] guess when present.
+	if cw := contextWindowFromMetadata(raw); cw > 0 {
+		contextWindow = cw
 	}
 
 	if modelName != "" {
 		modelName = tailer.NormalizeModelName(modelName)
 	}
 	return modelName, contextWindow
+}
+
+// modelNameFromDirectFields checks the top-level "model", "request.model",
+// and "metadata.model" fields Claude Code uses for non-assistant events.
+func modelNameFromDirectFields(raw map[string]interface{}) string {
+	if model, ok := raw["model"].(string); ok {
+		return model
+	}
+	if request, ok := raw["request"].(map[string]interface{}); ok {
+		if model, ok := request["model"].(string); ok {
+			return model
+		}
+	}
+	if metadata, ok := raw["metadata"].(map[string]interface{}); ok {
+		if model, ok := metadata["model"].(string); ok {
+			return model
+		}
+	}
+	return ""
+}
+
+// modelNameFromMessage checks message.model, the field assistant messages use.
+func modelNameFromMessage(raw map[string]interface{}) string {
+	message, ok := raw["message"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	model, _ := message["model"].(string)
+	return model
+}
+
+// contextWindowFromMetadata reads context_management.context_window, or 0
+// when absent or non-positive.
+func contextWindowFromMetadata(raw map[string]interface{}) int64 {
+	cm, ok := raw["context_management"].(map[string]interface{})
+	if !ok {
+		return 0
+	}
+	cw, ok := cm["context_window"].(float64)
+	if !ok || cw <= 0 {
+		return 0
+	}
+	return int64(cw)
 }
 
 // findUsageMap returns the first usage block found in a Claude Code event.

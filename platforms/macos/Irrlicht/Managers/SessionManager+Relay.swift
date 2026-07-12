@@ -169,10 +169,8 @@ extension SessionManager {
         // `relayURLSession` once failures pile up rather than waiting on an
         // app relaunch (#846). A 4401 (rejected token, handled below) isn't a
         // wedged connection, so it doesn't count toward the streak.
-        if !confirmed && task.closeCode.rawValue != 4401 {
-            if recordFailedRelayConnectAttempt() {
-                print("🔌 Relay unreachable after repeated attempts — recreating URLSession")
-            }
+        if !confirmed && task.closeCode.rawValue != 4401 && recordFailedRelayConnectAttempt() {
+            print("🔌 Relay unreachable after repeated attempts — recreating URLSession")
         }
 
         // The link is down, so we no longer know the remote state: drop the
@@ -207,11 +205,12 @@ extension SessionManager {
 
     /// Applied once a relay reconnect attempt's WebSocket is confirmed alive
     /// by an arrived frame. Mirrors `recordConfirmedLocalConnect()` for the
-    /// relay path (#846).
+    /// relay path (#846). Unlike the local path, `relayConnectionState` is
+    /// already set eagerly in `relayConnect()` right after `resume()` — this
+    /// only needs to reset the backoff/failure bookkeeping, which is exactly
+    /// `resetRelayConnectBackoff()`'s job, so it delegates there.
     func recordConfirmedRelayConnect() {
-        relayReconnectDelay = 1.0
-        consecutiveRelayConnectFailures = 0
-        relayConnectionStalled = false
+        resetRelayConnectBackoff()
     }
 
     /// Applied once a relay reconnect attempt's cycle closes without ever
@@ -241,7 +240,7 @@ extension SessionManager {
         else if s.hasPrefix("https://") { s = "wss://" + s.dropFirst("https://".count) }
         if !s.hasPrefix("ws://") && !s.hasPrefix("wss://") { s = "ws://" + s }
         while s.hasSuffix("/") { s.removeLast() }
-        if !s.hasSuffix("/api/v1/sessions/stream") { s += "/api/v1/sessions/stream" }
+        if !s.hasSuffix("/api/v1/sessions/stream") { s += "/api/v1/sessions/stream" }  // NOSONAR (swift:S1075) — fixed route on the daemon's own loopback API, not an external URI
         return URL(string: s)
     }
 

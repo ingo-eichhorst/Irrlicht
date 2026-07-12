@@ -37,26 +37,7 @@ func buildGhostTimelines(events []lifecycle.Event) []sessionTimeline {
 			g = &ghostAgg{}
 			agg[ev.SessionID] = g
 		}
-		switch ev.Kind {
-		case lifecycle.KindPIDDiscovered:
-			g.substantive = true
-		case lifecycle.KindStateTransition:
-			if ev.NewState == session.StateWorking || ev.NewState == session.StateWaiting {
-				g.substantive = true
-			}
-			if ev.Reason != "" {
-				g.finalReason = ev.Reason
-			}
-		case lifecycle.KindTranscriptRemoved, lifecycle.KindProcessExited, lifecycle.KindPreSessionRemoved:
-			// Keep the FIRST removal edge: a HandleProcessExit reap records
-			// KindProcessExited and then KindTranscriptRemoved for the same
-			// session, and the process-exit edge is the true (earlier) one.
-			if !g.removed {
-				g.removed = true
-				g.removedAt = ev.Timestamp
-				g.removalReason = ev.Reason
-			}
-		}
+		applyGhostEvent(ev, g)
 	}
 
 	for i := range base {
@@ -64,23 +45,56 @@ func buildGhostTimelines(events []lifecycle.Event) []sessionTimeline {
 		if g == nil || !g.removed {
 			continue
 		}
-		base[i].HadSubstantive = g.substantive
-		base[i].RemovalReason = g.removalReason
-		base[i].FinalReason = g.finalReason
-		if !g.removedAt.IsZero() {
-			at := g.removedAt
-			base[i].RemovedAt = &at
-			if !base[i].FirstSeen.IsZero() {
-				base[i].LifetimeMs = at.Sub(base[i].FirstSeen).Milliseconds()
-			}
-		}
-		// Children (subagents) are not ghosts in the antigravity PID=0 sense: a
-		// subagent reaped via "parent deleted" can lack both a PID and a
-		// working/waiting transition of its own, yet it did real work. Exclude
-		// them so the conservative predicate doesn't false-positive.
-		base[i].IsGhost = !g.substantive && base[i].ParentSessionID == ""
+		finalizeGhostTimeline(&base[i], g)
 	}
 	return base
+}
+
+// applyGhostEvent folds one lifecycle event into its session's ghost
+// aggregate: PID discovery and working/waiting transitions mark the session
+// substantive; the first removal edge (process exit, transcript removal, or
+// pre-session removal) is kept as the ghost's removal signal.
+func applyGhostEvent(ev lifecycle.Event, g *ghostAgg) {
+	switch ev.Kind {
+	case lifecycle.KindPIDDiscovered:
+		g.substantive = true
+	case lifecycle.KindStateTransition:
+		if ev.NewState == session.StateWorking || ev.NewState == session.StateWaiting {
+			g.substantive = true
+		}
+		if ev.Reason != "" {
+			g.finalReason = ev.Reason
+		}
+	case lifecycle.KindTranscriptRemoved, lifecycle.KindProcessExited, lifecycle.KindPreSessionRemoved:
+		// Keep the FIRST removal edge: a HandleProcessExit reap records
+		// KindProcessExited and then KindTranscriptRemoved for the same
+		// session, and the process-exit edge is the true (earlier) one.
+		if !g.removed {
+			g.removed = true
+			g.removedAt = ev.Timestamp
+			g.removalReason = ev.Reason
+		}
+	}
+}
+
+// finalizeGhostTimeline overlays a removed session's ghost aggregate onto its
+// timeline row: substantive/removal reasons, removed-at + lifetime, and the
+// final IsGhost verdict. Children (subagents) are not ghosts in the
+// antigravity PID=0 sense: a subagent reaped via "parent deleted" can lack
+// both a PID and a working/waiting transition of its own, yet it did real
+// work, so the conservative predicate doesn't false-positive on them.
+func finalizeGhostTimeline(t *sessionTimeline, g *ghostAgg) {
+	t.HadSubstantive = g.substantive
+	t.RemovalReason = g.removalReason
+	t.FinalReason = g.finalReason
+	if !g.removedAt.IsZero() {
+		at := g.removedAt
+		t.RemovedAt = &at
+		if !t.FirstSeen.IsZero() {
+			t.LifetimeMs = at.Sub(t.FirstSeen).Milliseconds()
+		}
+	}
+	t.IsGhost = !g.substantive && t.ParentSessionID == ""
 }
 
 // lastTransitionInputs maps each session to the classifier-input snapshot from
@@ -137,14 +151,7 @@ func formatClassifierInputs(in *lifecycle.ClassifierInputs) string {
 // path — it exists for an agent reconstructing why a transient session (e.g. an
 // antigravity PID=0 ghost) appeared and was reaped.
 func renderGhostTimeline(sidecarPath string, timelines []sessionTimeline, inputs map[string]*lifecycle.ClassifierInputs) string {
-	var ghosts, others []sessionTimeline
-	for _, t := range timelines {
-		if t.IsGhost {
-			ghosts = append(ghosts, t)
-		} else {
-			others = append(others, t)
-		}
-	}
+	ghosts, others := partitionGhosts(timelines)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "ghost timeline — %s\n", sidecarPath)
@@ -155,21 +162,7 @@ func renderGhostTimeline(sidecarPath string, timelines []sessionTimeline, inputs
 	} else {
 		b.WriteString("GHOSTS\n")
 		for _, t := range ghosts {
-			adapter := t.Adapter
-			if adapter == "" {
-				adapter = "?"
-			}
-			fmt.Fprintf(&b, "  %s  [%s]  GHOST\n", t.SessionID, adapter)
-			fmt.Fprintf(&b, "    minted    %s\n", fmtTime(t.FirstSeen))
-			fmt.Fprintf(&b, "    lifetime  %s\n", fmtLifetime(t.LifetimeMs))
-			final := t.FinalState
-			if final == "" {
-				final = "(no transition)"
-			}
-			fmt.Fprintf(&b, "    final     %s%s\n", final, fmtReason(t.FinalReason))
-			fmt.Fprintf(&b, "    inputs    %s\n", formatClassifierInputs(inputs[t.SessionID]))
-			fmt.Fprintf(&b, "    reaped    %s%s\n", fmtTimePtr(t.RemovedAt), fmtReason(t.RemovalReason))
-			b.WriteString("    substantive activity: none\n")
+			renderGhostEntry(&b, t, inputs[t.SessionID])
 		}
 		b.WriteString("\n")
 	}
@@ -179,18 +172,57 @@ func renderGhostTimeline(sidecarPath string, timelines []sessionTimeline, inputs
 		b.WriteString("  (none)\n")
 	}
 	for _, t := range others {
-		adapter := t.Adapter
-		if adapter == "" {
-			adapter = "?"
-		}
-		final := t.FinalState
-		if final == "" {
-			final = "-"
-		}
-		fmt.Fprintf(&b, "  %s  [%s]  %s  pid=%d  events=%d  duration=%s\n",
-			t.SessionID, adapter, final, t.PID, t.EventCount, fmtLifetime(t.DurationMs))
+		renderOtherEntry(&b, t)
 	}
 	return b.String()
+}
+
+// partitionGhosts splits timelines into ghost and non-ghost sessions,
+// preserving each group's relative order.
+func partitionGhosts(timelines []sessionTimeline) (ghosts, others []sessionTimeline) {
+	for _, t := range timelines {
+		if t.IsGhost {
+			ghosts = append(ghosts, t)
+		} else {
+			others = append(others, t)
+		}
+	}
+	return ghosts, others
+}
+
+// renderGhostEntry writes one ghost session's full lifecycle detail block:
+// minted time, lifetime, final state/reason, the classifier inputs at its
+// final transition, and reap time/reason.
+func renderGhostEntry(b *strings.Builder, t sessionTimeline, inputs *lifecycle.ClassifierInputs) {
+	adapter := t.Adapter
+	if adapter == "" {
+		adapter = "?"
+	}
+	fmt.Fprintf(b, "  %s  [%s]  GHOST\n", t.SessionID, adapter)
+	fmt.Fprintf(b, "    minted    %s\n", fmtTime(t.FirstSeen))
+	fmt.Fprintf(b, "    lifetime  %s\n", fmtLifetime(t.LifetimeMs))
+	final := t.FinalState
+	if final == "" {
+		final = "(no transition)"
+	}
+	fmt.Fprintf(b, "    final     %s%s\n", final, fmtReason(t.FinalReason))
+	fmt.Fprintf(b, "    inputs    %s\n", formatClassifierInputs(inputs))
+	fmt.Fprintf(b, "    reaped    %s%s\n", fmtTimePtr(t.RemovedAt), fmtReason(t.RemovalReason))
+	b.WriteString("    substantive activity: none\n")
+}
+
+// renderOtherEntry writes one non-ghost session's one-line summary.
+func renderOtherEntry(b *strings.Builder, t sessionTimeline) {
+	adapter := t.Adapter
+	if adapter == "" {
+		adapter = "?"
+	}
+	final := t.FinalState
+	if final == "" {
+		final = "-"
+	}
+	fmt.Fprintf(b, "  %s  [%s]  %s  pid=%d  events=%d  duration=%s\n",
+		t.SessionID, adapter, final, t.PID, t.EventCount, fmtLifetime(t.DurationMs))
 }
 
 func fmtTime(t time.Time) string {

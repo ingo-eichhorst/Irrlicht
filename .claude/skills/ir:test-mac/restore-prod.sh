@@ -60,7 +60,7 @@ if lsof -iTCP:"$PORT" -sTCP:LISTEN -P -n >/dev/null 2>&1; then
 fi
 echo "Port $PORT free."
 
-if [ -d "$PROD_BACKUP" ]; then
+if [[ -d "$PROD_BACKUP" ]]; then
   echo "Restoring the untouched production bundle from $PROD_BACKUP ..."
   # Copy to a staging path first and swap in with mv, so a failed/interrupted
   # copy never leaves $PROD_APP deleted with nothing in its place.
@@ -68,7 +68,7 @@ if [ -d "$PROD_BACKUP" ]; then
   cp -R "$PROD_BACKUP" "$PROD_APP.restoring"
   rm -rf "$PROD_APP"
   mv "$PROD_APP.restoring" "$PROD_APP"
-elif [ ! -d "$PROD_APP" ]; then
+elif [[ ! -d "$PROD_APP" ]]; then
   echo "ERROR: $PROD_APP is not installed and no backup exists at $PROD_BACKUP." >&2
   echo "       Run the DMG/PKG installer first, then re-run this script." >&2
   exit 1

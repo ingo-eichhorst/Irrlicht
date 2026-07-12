@@ -102,6 +102,46 @@ struct HistoryYieldProject: Codable, Identifiable {
     }
 }
 
+// Codable mirror of the daemon's `chart=dora` response (#951): DORA metrics
+// for one project's git repo over the selected window — a period summary,
+// not a time series, computed on request with no persistence.
+struct HistoryDoraResponse: Codable {
+    let range: String
+    let project: String
+    let start: Int64
+    let end: Int64
+    let available: Bool
+    let message: String?
+    let deploymentFrequency: DoraMetric
+    let leadTime: DoraMetric
+    let changeFailureRate: DoraMetric
+    let mttr: DoraMetric
+
+    enum CodingKeys: String, CodingKey {
+        case range, project, start, end, available, message
+        case deploymentFrequency = "deployment_frequency"
+        case leadTime = "lead_time"
+        case changeFailureRate = "change_failure_rate"
+        case mttr
+    }
+}
+
+/// One computed DORA statistic. `available` is false when there wasn't
+/// enough data to compute `value` — `message` explains why, and `value`/
+/// `unit` should not be rendered in that case.
+struct DoraMetric: Codable {
+    let value: Double
+    let unit: String
+    let sampleSize: Int
+    let available: Bool
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case value, unit, available, message
+        case sampleSize = "sample_size"
+    }
+}
+
 /// The History range selector — the cost calendar spans shown in the dropdown.
 /// The subscription rate-limit windows (5h / 7d) are no longer a range; quota is
 /// surfaced as a live per-provider forecast strip instead (see HistoryView).
@@ -123,10 +163,7 @@ enum HistoryRange: String, CaseIterable, Identifiable {
 
     /// Query items for `GET /api/v1/history`, mirroring the web `historyQuery()`:
     /// presets send `range`; `.custom` sends explicit `start`/`end` unix seconds.
-    /// `filters` carries the orthogonal cross-filters keyed by dimension; the
-    /// dimension being grouped on is dropped (never both axis and filter), and
-    /// token_type is omitted outside the tokens metric.
-    func queryItems(chart: HistoryChart, group: HistoryGroup, scope: HistoryScope?, filters: [HistoryGroup: [String]], forecast: Bool, customStart: Int64?, customEnd: Int64?) -> [URLQueryItem] {
+    func queryItems(chart: HistoryChart, group: HistoryGroup, scope: HistoryScope?, forecast: Bool, customStart: Int64?, customEnd: Int64?) -> [URLQueryItem] {
         var items = [
             URLQueryItem(name: "chart", value: chart.rawValue),
             URLQueryItem(name: "group", value: group.rawValue),
@@ -134,13 +171,6 @@ enum HistoryRange: String, CaseIterable, Identifiable {
         ]
         if let scope {
             items.append(URLQueryItem(name: "scope", value: scope.query))
-        }
-        for dim in [HistoryGroup.provider, .tokenType, .project] {
-            if dim == group { continue }
-            if dim == .tokenType && chart != .tokens { continue }
-            if let vals = filters[dim], !vals.isEmpty {
-                items.append(URLQueryItem(name: dim.rawValue, value: vals.sorted().joined(separator: ",")))
-            }
         }
         if self == .custom, let customStart, let customEnd {
             items.append(URLQueryItem(name: "start", value: String(customStart)))
@@ -152,8 +182,9 @@ enum HistoryRange: String, CaseIterable, Identifiable {
     }
 }
 
-/// Token kind for the `token_type` group axis and the token_type cross-filter
-/// (#750). Raw values match the daemon's `outbound.TokenTypeKeys`.
+/// Token kind for the `token_type` group axis and its band labels in the
+/// content-view legend (#750). Raw values match the daemon's
+/// `outbound.TokenTypeKeys`.
 enum HistoryTokenType: String, CaseIterable, Identifiable {
     case input, output
     case cacheRead = "cache_read"
@@ -177,6 +208,7 @@ enum HistoryTokenType: String, CaseIterable, Identifiable {
 enum HistoryChart: String, CaseIterable, Identifiable {
     case cost, tokens, co2, models, providers
     case yieldRatio = "yield" // #373 — per-project productive vs reverted spend
+    case dora // #951 — per-project DORA metrics (deploy frequency, lead time, CFR, MTTR)
 
     var id: String { rawValue }
 
@@ -188,6 +220,7 @@ enum HistoryChart: String, CaseIterable, Identifiable {
         case .models: return "Models"
         case .providers: return "Providers"
         case .yieldRatio: return "Yield"
+        case .dora: return "DORA"
         }
     }
 

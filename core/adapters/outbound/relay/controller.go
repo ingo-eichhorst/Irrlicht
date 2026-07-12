@@ -20,6 +20,11 @@ import (
 // forwarder's context and starts a fresh one — the forwarder is already
 // ctx-cancelable, so this reuses its existing shutdown path.
 type PublishController struct {
+	// parentCtx is intentionally stored rather than threaded through as a
+	// method parameter (godre:S8242): it is the daemon-lifetime context
+	// captured once at construction, and every forwarder Apply starts must be
+	// bounded by that lifetime — never by the short-lived HTTP request
+	// context of whichever PUT call happens to trigger the (re)configure.
 	parentCtx      context.Context
 	identity       Identity
 	push           outbound.PushBroadcaster
@@ -88,7 +93,14 @@ func (c *PublishController) Apply(enabled bool, url, token string) {
 	if c.cancel != nil {
 		c.cancel()
 	}
-	fwd := NewForwarder(url, c.identity, token, c.push, c.snapshot, c.control, c.controlEnabled, c.logger)
+	fwd := NewForwarder(url, c.identity, ForwarderDeps{
+		Token:          token,
+		Push:           c.push,
+		Snapshot:       c.snapshot,
+		Control:        c.control,
+		ControlEnabled: c.controlEnabled,
+		Logger:         c.logger,
+	})
 	ctx, cancel := context.WithCancel(c.parentCtx)
 	c.fwd = fwd
 	c.cancel = cancel

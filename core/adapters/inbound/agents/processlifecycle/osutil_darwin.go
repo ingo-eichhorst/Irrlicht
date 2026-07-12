@@ -14,6 +14,15 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"irrlicht/core/pkg/pathutil"
+)
+
+// psPath and plutilPath are resolved once from a fixed set of trusted
+// directories rather than trusted PATH, per go:S4036.
+var (
+	psPath     = pathutil.MustResolve("ps")
+	plutilPath = pathutil.MustResolve("plutil")
 )
 
 // processTTY returns the controlling TTY of pid in the form "/dev/ttysNNN",
@@ -28,7 +37,7 @@ func processTTY(pid int) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-o", "tty=", "-p", strconv.Itoa(pid)).Output()
+	out, err := exec.CommandContext(ctx, psPath, "-o", "tty=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return ""
 	}
@@ -102,7 +111,7 @@ func bundleIDForAppPath(appPath string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	plist := appPath + "/Contents/Info.plist"
-	out, err := exec.CommandContext(ctx, "plutil", "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist).Output()
+	out, err := exec.CommandContext(ctx, plutilPath, "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist).Output()
 	if err != nil {
 		return ""
 	}
@@ -279,37 +288,56 @@ func kittyWindowIDForPID(socket string, sessionPID int) string {
 	return parseKittenLsForPID(out, sessionPID)
 }
 
+// kittyLsWindow is one entry of a `kitten @ ls` response's tabs[].windows[].
+type kittyLsWindow struct {
+	ID                  int `json:"id"`
+	PID                 int `json:"pid"`
+	ForegroundProcesses []struct {
+		PID int `json:"pid"`
+	} `json:"foreground_processes"`
+}
+
+// kittyLsTab is one entry of a `kitten @ ls` response's os_windows[].tabs[].
+type kittyLsTab struct {
+	Windows []kittyLsWindow `json:"windows"`
+}
+
+// kittyLsOSWindow is one top-level entry of a `kitten @ ls` JSON response.
+type kittyLsOSWindow struct {
+	Tabs []kittyLsTab `json:"tabs"`
+}
+
 // parseKittenLsForPID parses a `kitten @ ls` JSON response and returns the
 // id (as a decimal string) of the kitty-window whose `pid` or
 // `foreground_processes[].pid` matches sessionPID, or "" if no match.
 // Exposed as a separate function so the JSON-handling can be unit-tested
 // without spawning a real kitty.
 func parseKittenLsForPID(out []byte, sessionPID int) string {
-	var osWindows []struct {
-		Tabs []struct {
-			Windows []struct {
-				ID                  int `json:"id"`
-				PID                 int `json:"pid"`
-				ForegroundProcesses []struct {
-					PID int `json:"pid"`
-				} `json:"foreground_processes"`
-			} `json:"windows"`
-		} `json:"tabs"`
-	}
+	var osWindows []kittyLsOSWindow
 	if err := json.Unmarshal(out, &osWindows); err != nil {
 		return ""
 	}
 	for _, w := range osWindows {
 		for _, t := range w.Tabs {
-			for _, kw := range t.Windows {
-				if kw.PID == sessionPID {
-					return strconv.Itoa(kw.ID)
-				}
-				for _, fg := range kw.ForegroundProcesses {
-					if fg.PID == sessionPID {
-						return strconv.Itoa(kw.ID)
-					}
-				}
+			if id := findKittyWindowIDForPID(t.Windows, sessionPID); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
+// findKittyWindowIDForPID scans one tab's windows for one whose own pid or
+// any foreground_processes[].pid matches sessionPID, returning its window id
+// (decimal string), or "" if none match.
+func findKittyWindowIDForPID(windows []kittyLsWindow, sessionPID int) string {
+	for _, kw := range windows {
+		if kw.PID == sessionPID {
+			return strconv.Itoa(kw.ID)
+		}
+		for _, fg := range kw.ForegroundProcesses {
+			if fg.PID == sessionPID {
+				return strconv.Itoa(kw.ID)
 			}
 		}
 	}
@@ -324,7 +352,7 @@ func parseKittenLsForPID(out []byte, sessionPID int) string {
 func readProcInfo(pid int) (ppid int, cmd string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-o", "ppid=,comm=", "-p", strconv.Itoa(pid)).Output()
+	out, err := exec.CommandContext(ctx, psPath, "-o", "ppid=,comm=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return 0, "", fmt.Errorf("ps pid %d: %w", pid, err)
 	}

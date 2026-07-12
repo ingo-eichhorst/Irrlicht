@@ -24,7 +24,7 @@
   "url": "https://irrlicht.io",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS 13 Ventura or later",
-  "softwareVersion": "0.5.5",
+  "softwareVersion": "0.5.6",
   "downloadUrl": "https://github.com/ingo-eichhorst/Irrlicht/releases/latest",
   "installUrl": "https://github.com/ingo-eichhorst/Irrlicht/releases/latest",
   "license": "https://opensource.org/licenses/MIT",
@@ -236,7 +236,7 @@ nav {
 }
 
 .nav-links .btn-nav:hover {
-  background: rgba(139,92,246,0.1);
+  background: rgba(49,32,86,0.1);
   border-color: rgba(139,92,246,0.5);
   color: #b794f6;
 }
@@ -504,7 +504,7 @@ section {
 }
 
 .install-cmd .copy-btn.copied {
-  background: rgba(52, 199, 89, 0.2);
+  background: rgba(16, 60, 27, 0.2);
   border-color: rgba(52, 199, 89, 0.5);
   color: #34C759;
 }
@@ -884,7 +884,7 @@ section {
 }
 
 .tag-beta {
-  background: rgba(139,92,246,0.12);
+  background: rgba(49,32,86,0.12);
   color: #b794f6;
   border: 1px solid rgba(139,92,246,0.25);
 }
@@ -1861,7 +1861,7 @@ footer {
         <p class="subtitle">Manual download &mdash; drag &amp; drop</p>
         <div class="code-block">
           <span class="comment"># From GitHub Releases</span><br>
-          <span class="prompt">$ </span><span class="cmd">open Irrlicht-0.5.5.dmg</span>
+          <span class="prompt">$ </span><span class="cmd">open Irrlicht-0.5.6.dmg</span>
         </div>
         <p class="install-note">Drag <code>Irrlicht.app</code> to <code>/Applications</code> and launch. You'll need to approve the app in System Settings &rarr; Privacy &amp; Security on first launch.</p>
       </div>
@@ -1922,7 +1922,7 @@ footer {
 <footer>
   <p class="footer-myth">In Goethe's <em>Faust</em>, an Irrlicht guides the way through the night.</p>
   <div class="footer-inner">
-    <div class="footer-left">MIT License &middot; Irrlicht v0.5.5 &middot; Follow the right light.</div>
+    <div class="footer-left">MIT License &middot; Irrlicht v0.5.6 &middot; Follow the right light.</div>
     <div class="footer-right">
       <a href="landscape/">Agent Landscape</a>
       <a href="docs/">Docs</a>
@@ -2063,26 +2063,29 @@ function copyInstallCmd(btn) {
 <!-- ─── Scroll reveal ─── -->
 <script>
 (function() {
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        entry.target.classList.add('visible');
-        // Stagger children
-        const children = entry.target.querySelectorAll('.feature-card, .light-card, .pipeline-step, .install-card');
-        children.forEach((child, i) => {
-          child.style.transitionDelay = `${i * 0.08}s`;
-          child.style.opacity = '0';
-          child.style.transform = 'translateY(20px)';
-          child.style.transition = 'opacity 0.6s cubic-bezier(0.16,1,0.3,1), transform 0.6s cubic-bezier(0.16,1,0.3,1)';
-          requestAnimationFrame(() => {
-            setTimeout(() => {
-              child.style.opacity = '1';
-              child.style.transform = 'translateY(0)';
-            }, i * 80);
-          });
-        });
-      }
+  function revealChild(child, i) {
+    child.style.transitionDelay = `${i * 0.08}s`;
+    child.style.opacity = '0';
+    child.style.transform = 'translateY(20px)';
+    child.style.transition = 'opacity 0.6s cubic-bezier(0.16,1,0.3,1), transform 0.6s cubic-bezier(0.16,1,0.3,1)';
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        child.style.opacity = '1';
+        child.style.transform = 'translateY(0)';
+      }, i * 80);
     });
+  }
+
+  function revealEntry(entry) {
+    if (!entry.isIntersecting) return;
+    entry.target.classList.add('visible');
+    // Stagger children
+    const children = entry.target.querySelectorAll('.feature-card, .light-card, .pipeline-step, .install-card');
+    children.forEach(revealChild);
+  }
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(revealEntry);
   }, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
 
   document.querySelectorAll('.reveal').forEach(el => observer.observe(el));

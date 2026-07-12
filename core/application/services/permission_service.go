@@ -35,9 +35,9 @@ var ErrUnknownPermission = errors.New("unknown agent or permission")
 // scanner's tracked-PID map) and are rebuilt rather than restarted.
 type WatcherFactory func() []inbound.Watcher
 
-// watcherRegistrar is the slice of *SessionDetector the service needs:
+// watcherRegisterer is the slice of *SessionDetector the service needs:
 // registering a watcher's event stream with the running detector.
-type watcherRegistrar interface {
+type watcherRegisterer interface {
 	AddWatcher(ctx context.Context, w inbound.Watcher)
 }
 
@@ -88,7 +88,7 @@ type PermissionService struct {
 	push      outbound.PushBroadcaster
 	log       outbound.Logger
 	mode      string
-	registrar watcherRegistrar
+	registrar watcherRegisterer
 	factories map[string]WatcherFactory
 	hasLive   HasLiveProcessFunc
 
@@ -114,7 +114,12 @@ type PermissionService struct {
 	set      permission.Set
 	detected map[string]bool
 	watching map[string]context.CancelFunc // agent name → cancel for its running watchers
-	parent   context.Context               // daemon-lifetime ctx, set by Start
+	// parent is intentionally stored rather than threaded through as a method
+	// parameter (godre:S8242): it is the daemon-lifetime ctx set once by
+	// Start, and every watcher startWatching starts later — triggered by an
+	// Answer() call arriving on its own short-lived HTTP request — must be
+	// bounded by the daemon's lifetime, not by that unrelated request's.
+	parent context.Context
 }
 
 // pendingEffect is one consent effect collected under mu and executed
@@ -131,33 +136,37 @@ func (s *PermissionService) SetDetectionPollIntervalForTest(d time.Duration) {
 	s.detectInterval = d
 }
 
+// PermissionServiceDeps bundles NewPermissionService's dependencies.
+// Factories may be nil (demo mode: no watchers ever start); HasLive may be
+// nil (no detection poller — nothing is ever "detected").
+type PermissionServiceDeps struct {
+	Agents    []agent.Agent
+	Store     outbound.PermissionStore
+	Push      outbound.PushBroadcaster
+	Log       outbound.Logger
+	Mode      string
+	Registrar watcherRegisterer
+	Factories map[string]WatcherFactory
+	HasLive   HasLiveProcessFunc
+}
+
 // NewPermissionService loads the persisted consent state and returns the
-// service. factories may be nil (demo mode: no watchers ever start);
-// hasLive may be nil (no detection poller — nothing is ever "detected").
-func NewPermissionService(
-	agents []agent.Agent,
-	store outbound.PermissionStore,
-	push outbound.PushBroadcaster,
-	log outbound.Logger,
-	mode string,
-	registrar watcherRegistrar,
-	factories map[string]WatcherFactory,
-	hasLive HasLiveProcessFunc,
-) *PermissionService {
-	set, err := store.Load()
+// service.
+func NewPermissionService(deps PermissionServiceDeps) *PermissionService {
+	set, err := deps.Store.Load()
 	if err != nil {
-		log.LogError("permissions", "", fmt.Sprintf("failed to load permission state (treating all as pending): %v", err))
+		deps.Log.LogError("permissions", "", fmt.Sprintf("failed to load permission state (treating all as pending): %v", err))
 		set = permission.Set{}
 	}
 	return &PermissionService{
-		agents:         agents,
-		store:          store,
-		push:           push,
-		log:            log,
-		mode:           mode,
-		registrar:      registrar,
-		factories:      factories,
-		hasLive:        hasLive,
+		agents:         deps.Agents,
+		store:          deps.Store,
+		push:           deps.Push,
+		log:            deps.Log,
+		mode:           deps.Mode,
+		registrar:      deps.Registrar,
+		factories:      deps.Factories,
+		hasLive:        deps.HasLive,
 		detectInterval: detectionPollInterval,
 		probes:         make(map[string]func() bool),
 		set:            set,

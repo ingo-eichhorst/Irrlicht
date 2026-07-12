@@ -110,13 +110,16 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if antigravity is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
-DRIVE_ELICITS="send slash wait_turn keys sleep exit_clean restart resume sigkill start_session session"
+DRIVE_ELICITS="send slash wait_turn keys sleep interrupt exit_clean restart resume sigkill start_session session"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
 RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"   # canonicalize (resolve symlinks) for the daemon's cwd match
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+# Shared exit-reason literal for a bad launch/dispatch error (S1192: defined
+# once here, referenced at every site below instead of repeating the string).
+NONZERO_2='nonzero(2)'
 
 # View vars owned by the driver (the slot lib reads/writes these). SESSION is the
 # active tmux session; TRANSCRIPT/UUID are the resolved transcript path + conv-id;
@@ -136,8 +139,26 @@ ANTIGRAVITY_TRANSCRIPT_REL=".system_generated/logs/transcript.jsonl"
 
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
 
-not_implemented() { # <step-type>
-  echo "[driver] STUB: step type '$1' not yet ported for antigravity — see scripts/templates/drive-interactive.sh.tmpl and drive-claudecode-interactive.sh" >&2
+# not_implemented reports a stubbed arm. The optional <reason> distinguishes
+# two different situations sharing the same mechanics (log + fail(3)):
+#   - omitted: a genuine porting gap — the seam just hasn't been ported yet.
+#     Every standard arm is currently ported except reset_session below, so
+#     this default fires only if a FUTURE standard step type is scaffolded
+#     but not yet wired up.
+#   - given: NOT a porting gap — agy has no underlying command to drive at
+#     all for this step type (currently only reset_session, see the dispatch
+#     arm below). Live-verified by scrolling the full slash-command picker
+#     under tmux (38 commands enumerated; typing /clear returns "No
+#     matches"; `agy --help` has no reset flag either — see the
+#     session-reset scenario assessment). Re-checked against agy 1.0.13
+#     (newer than the assessed prerequisite): the binary's embedded
+#     command-help strings are unchanged from the assessed build, with no
+#     new evidence of a registered /clear/new/reset command — consistent
+#     with, not contradicting, the prior live finding. There is nothing for
+#     `record` to port until a future agy release adds one.
+not_implemented() { # <step-type> [reason]
+  local step_type="$1" reason="${2:-not yet ported for antigravity — see scripts/templates/drive-interactive.sh.tmpl and drive-claudecode-interactive.sh}"
+  echo "[driver] STUB: step type '$step_type' $reason" >&2
   EXIT_REASON="nonzero(3)"
   return 3
 }
@@ -164,7 +185,7 @@ launch_repl() {
   # itself (trust prompt + input-ready wait) is identical across launch/restart/
   # resume, so they all share this body.
   local extra_args=("$@")
-  command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+  command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="$NONZERO_2"; exit 1; }
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
@@ -173,7 +194,7 @@ launch_repl() {
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "agy" \
     ${extra_args[@]+"${extra_args[@]}"} \
     >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
-    || { echo "[driver] failed to launch agy under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+    || { echo "[driver] failed to launch agy under tmux" >&2; EXIT_REASON="$NONZERO_2"; exit 1; }
   # agy mints the conversation dir + transcript only AFTER the first prompt lands,
   # so there's nothing to resolve at boot — resolve_transcript runs on the first
   # wait_turn (SEAM 3, marker-gated by alloc_slot's MARKER).
@@ -320,12 +341,13 @@ wait_turn() {
 # distinctive substring of the text is the cheap, reliable echo probe; re-type
 # once if it's missing.
 send_text() { # <text>
+  local text="$1"
   local probe; probe="${1:0:20}"
-  tmux send-keys -t "$SESSION" -l -- "$1"
+  tmux send-keys -t "$SESSION" -l -- "$text"
   sleep 0.5   # let agy's input render
   if ! tmux capture-pane -t "$SESSION" -p -S -10 2>/dev/null | grep -qF -- "$probe"; then
     echo "[driver] send_text: input not echoed, re-typing once" >&2
-    tmux send-keys -t "$SESSION" -l -- "$1"
+    tmux send-keys -t "$SESSION" -l -- "$text"
     sleep 0.5
   fi
   tmux send-keys -t "$SESSION" Enter
@@ -343,6 +365,27 @@ step_keys() { # <keys>
   tmux send-keys -t "$SESSION" $keys
   echo "[driver] keys[s$ACTIVE]: $keys" >&2
   sleep 0.3
+}
+
+# --- AGENT-SPECIFIC SEAM: interrupt — cancel the in-flight turn (Escape) -----
+# agy's TUI binds Escape to cancel the in-flight turn (footer reads
+# "esc to cancel" while generating). Live-verified (#934): sending Escape
+# mid-turn shows "Interrupted · What should Antigravity CLI do instead?" and
+# ends the generation. The cancelled turn DOES land a terminal marker: a
+# MODEL/PLANNER_RESPONSE with status "DONE" and no tool_calls — same shape as
+# a normal completed turn, just with content omitted rather than the model's
+# text (this matches parser.go's own comment: a no-tool-calls PLANNER_RESPONSE
+# is "often empty content" and still settles the session). So turn_count sees
+# it exactly like any other completed turn. No EXPECTED_TURNS bookkeeping is
+# needed here regardless: unlike claudecode/codex/pi (which bump
+# EXPECTED_TURNS at send time and so must decrement it on interrupt), this
+# driver bumps EXPECTED_TURNS inside wait_turn() itself (SEAM 2) — an
+# interrupt that is never followed by its own wait_turn call never touches
+# the counter.
+step_interrupt() {
+  tmux send-keys -t "$SESSION" Escape
+  echo "[driver] interrupt[s$ACTIVE]: sent Escape" >&2
+  sleep 1
 }
 
 # --- AGENT-SPECIFIC SEAM: find the agy PID the daemon binds ------------------
@@ -485,23 +528,23 @@ while IFS= read -r step; do
       echo "[driver] switch -> session slot $tgt (conv-id=$UUID)" >&2
     else
       echo "[driver] switch: invalid session slot '$tgt' (have $N_SLOTS)" >&2
-      EXIT_REASON="nonzero(2)"; break
+      EXIT_REASON="$NONZERO_2"; break
     fi
   fi
   case "$type" in
     send|slash)      send_text "$(jq -r '.text' <<<"$step")" ;;
     wait_turn)       wait_turn || break ;;
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
-    interrupt)       not_implemented interrupt || break ;;       # TODO(antigravity): Escape/Ctrl-C the in-flight turn
+    interrupt)       step_interrupt ;;
     keys)            step_keys "$(jq -r '.keys' <<<"$step")" ;;
-    reset_session)   not_implemented reset_session || break ;;   # TODO(antigravity): in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)
+    reset_session)   not_implemented reset_session "has no agy command to drive -- agy has no /clear, /new, or /reset (live-verified; see not_implemented above)" || break ;;
     restart)         step_restart ;;
     resume)          step_resume ;;
     sigkill)         step_sigkill ;;
     exit_clean)      step_exit_clean ;;
     start_session)   step_start_session "$(jq -r '.cwd // empty' <<<"$step")" ;;
     session)         : ;;   # pure focus switch — already handled by the inline target block
-    *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; break ;;
+    *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="$NONZERO_2"; break ;;
   esac
   (( $(remaining_seconds) <= 0 )) && { EXIT_REASON="timeout"; break; }
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")

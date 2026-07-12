@@ -21,7 +21,7 @@ window.SessionRow = function SessionRow({ agent, num, isChild }) {
   const pCls = pressureClass(m.pressure_level);
   const subCount = (agent.children || []).filter(c => c.state === 'working' || c.state === 'waiting').length;
   const toolLbl = { Edit:'Edit', Read:'Read', Bash:'Bash', AskUserQuestion:'Ask User', ExitPlanMode:'Plan Mode', Grep:'Grep', Write:'Write' };
-  const tool = m.has_open_tool_call && m.last_open_tool_names && m.last_open_tool_names[0];
+  const tool = m.has_open_tool_call && m.last_open_tool_names?.[0];
   const toolIsUser = tool === 'AskUserQuestion' || tool === 'ExitPlanMode';
 
   return (

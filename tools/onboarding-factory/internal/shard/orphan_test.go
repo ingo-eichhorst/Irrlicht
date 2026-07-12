@@ -31,36 +31,8 @@ func TestNoOrphanRecordingFolders(t *testing.T) {
 		t.Fatalf("no scenarios in %s", catalogFile)
 	}
 
-	// legit[adapter] = the set of recording folders that are LIVE cells — every
-	// folder holding a metadata.json. A recorded folder without a metadata.json
-	// is an orphan (no cell descriptor to --re-record from).
-	legit := map[string]map[string]bool{}
 	agentsRoot := filepath.Join(repoRoot, "replaydata", "agents")
-	if adapters, err := os.ReadDir(agentsRoot); err == nil {
-		for _, ad := range adapters {
-			if !ad.IsDir() {
-				continue
-			}
-			agent := ad.Name()
-			scDir := filepath.Join(agentsRoot, agent, "scenarios")
-			folders, err := os.ReadDir(scDir)
-			if err != nil {
-				continue
-			}
-			for _, fe := range folders {
-				if !fe.IsDir() {
-					continue
-				}
-				folder := fe.Name()
-				if _, err := os.Stat(filepath.Join(scDir, folder, "metadata.json")); err == nil {
-					if legit[agent] == nil {
-						legit[agent] = map[string]bool{}
-					}
-					legit[agent][folder] = true
-				}
-			}
-		}
-	}
+	legit := legitCellsByAgent(agentsRoot)
 
 	adapters, err := os.ReadDir(agentsRoot)
 	if err != nil {
@@ -71,24 +43,74 @@ func TestNoOrphanRecordingFolders(t *testing.T) {
 			continue
 		}
 		agent := ad.Name()
-		scDir := filepath.Join(agentsRoot, agent, "scenarios")
-		folders, err := os.ReadDir(scDir)
-		if err != nil {
-			continue // adapter has no scenarios/ tree (e.g. only regressions/)
+		reportOrphanRecordings(t, agentsRoot, agent, legit[agent])
+	}
+}
+
+// scenarioFolders lists the scenario subdirectory names under
+// agentsRoot/agent/scenarios/, or nil if that tree doesn't exist (e.g. an
+// adapter with only a regressions/ tree).
+func scenarioFolders(agentsRoot, agent string) []string {
+	entries, err := os.ReadDir(filepath.Join(agentsRoot, agent, "scenarios"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, fe := range entries {
+		if fe.IsDir() {
+			out = append(out, fe.Name())
 		}
-		for _, fe := range folders {
-			if !fe.IsDir() {
-				continue
+	}
+	return out
+}
+
+// markLegit records that agent/folder carries a cell descriptor, creating
+// the agent's inner set on first use.
+func markLegit(legit map[string]map[string]bool, agent, folder string) {
+	if legit[agent] == nil {
+		legit[agent] = map[string]bool{}
+	}
+	legit[agent][folder] = true
+}
+
+// legitCellsByAgent returns, for every adapter under agentsRoot, the set of
+// scenario folder names that are LIVE cells — every folder holding a
+// metadata.json. A recorded folder without a metadata.json is an orphan (no
+// cell descriptor to --re-record from). A missing/unreadable agentsRoot
+// yields an empty map rather than an error, matching the caller's original
+// silent-best-effort behavior for this lookup.
+func legitCellsByAgent(agentsRoot string) map[string]map[string]bool {
+	legit := map[string]map[string]bool{}
+	adapters, err := os.ReadDir(agentsRoot)
+	if err != nil {
+		return legit
+	}
+	for _, ad := range adapters {
+		if !ad.IsDir() {
+			continue
+		}
+		agent := ad.Name()
+		for _, folder := range scenarioFolders(agentsRoot, agent) {
+			if _, err := os.Stat(filepath.Join(agentsRoot, agent, "scenarios", folder, "metadata.json")); err == nil {
+				markLegit(legit, agent, folder)
 			}
-			folder := fe.Name()
-			// Only RECORDED folders are load-bearing; a bare/partial dir isn't
-			// an orphan recording.
-			if _, err := os.Stat(filepath.Join(scDir, folder, "events.jsonl")); err != nil {
-				continue
-			}
-			if !legit[agent][folder] {
-				t.Errorf("orphan recording folder replaydata/agents/%s/scenarios/%s — holds no metadata.json. Add a cell descriptor, or git mv it to regression/.", agent, folder)
-			}
+		}
+	}
+	return legit
+}
+
+// reportOrphanRecordings errors on every RECORDED scenario folder (holding
+// events.jsonl) under agentsRoot/agent/scenarios/ that isn't in legit — i.e.
+// has no metadata.json cell descriptor. A bare/partial (unrecorded) folder
+// isn't an orphan recording, so it's silently skipped.
+func reportOrphanRecordings(t *testing.T, agentsRoot, agent string, legit map[string]bool) {
+	t.Helper()
+	for _, folder := range scenarioFolders(agentsRoot, agent) {
+		if _, err := os.Stat(filepath.Join(agentsRoot, agent, "scenarios", folder, "events.jsonl")); err != nil {
+			continue
+		}
+		if !legit[folder] {
+			t.Errorf("orphan recording folder replaydata/agents/%s/scenarios/%s — holds no metadata.json. Add a cell descriptor, or git mv it to regression/.", agent, folder)
 		}
 	}
 }

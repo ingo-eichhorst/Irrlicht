@@ -89,22 +89,22 @@ func buildDiagnostics(fsRepo *filesystem.SessionRepository, allAgents []agent.Ag
 	home, _ := os.UserHomeDir()
 	ledgerDir, _ := metrics.LedgerDir()
 	logsDir, _ := logging.LogDir()
-	return services.NewDiagnosticsService(
-		fsRepo,
-		processlifecycle.Observer(),
-		processlifecycle.IsAlive,
-		allAgents,
-		claudecode.AdapterName,
-		cfg,
-		Version,
-		services.DiagnosticsPaths{
+	return services.NewDiagnosticsService(services.DiagnosticsServiceDeps{
+		Repo:           fsRepo,
+		Obs:            processlifecycle.Observer(),
+		IsAlive:        processlifecycle.IsAlive,
+		Agents:         allAgents,
+		DefaultAdapter: claudecode.AdapterName,
+		Cfg:            cfg,
+		Version:        Version,
+		Paths: services.DiagnosticsPaths{
 			Home:            home,
 			InstancesDir:    fsRepo.InstancesDir(),
 			LedgerDir:       ledgerDir,
 			LogsDir:         logsDir,
 			PermissionsFile: filepath.Join(dataDir(home), "permissions.json"),
 		},
-	)
+	})
 }
 
 // runDiagnose writes a diagnostics bundle to the current directory and exits.
@@ -161,42 +161,83 @@ func resolveUIDir() string {
 // into a parent repo's platforms/web/ — that bug would silently serve the
 // wrong dashboard during dev.
 func resolveUIDirFor(env, exe, home string) string {
-	hasIndex := func(dir string) bool {
-		if dir == "" {
-			return false
-		}
-		_, err := os.Stat(filepath.Join(dir, "index.html"))
-		return err == nil
-	}
-
-	if hasIndex(env) {
+	if hasIndexHTML(env) {
 		return env
 	}
-	if exe != "" {
-		if cand := filepath.Join(filepath.Dir(exe), "..", "Resources", "web"); hasIndex(cand) {
-			return cand
-		}
+	if cand := uiDirFromExeResources(exe); cand != "" {
+		return cand
 	}
-	if home != "" {
-		if cand := filepath.Join(dataDir(home), "web"); hasIndex(cand) {
-			return cand
-		}
+	if cand := uiDirFromHome(home); cand != "" {
+		return cand
 	}
-	if exe != "" {
-		dir := filepath.Dir(exe)
-		for range 8 {
-			if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-				if cand := filepath.Join(dir, "platforms", "web"); hasIndex(cand) {
-					return cand
-				}
-				return "" // repo root found, no UI inside — don't escape
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
-		}
+	return uiDirFromRepoRoot(exe)
+}
+
+// hasIndexHTML reports whether dir contains index.html — i.e. the dashboard is
+// installed there. Empty dir is always a miss.
+func hasIndexHTML(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(dir, "index.html"))
+	return err == nil
+}
+
+// uiDirFromExeResources checks <exe>/../Resources/web, the production .app
+// bundle layout. Returns "" when exe is unknown or the candidate has no UI.
+func uiDirFromExeResources(exe string) string {
+	if exe == "" {
+		return ""
+	}
+	if cand := filepath.Join(filepath.Dir(exe), "..", "Resources", "web"); hasIndexHTML(cand) {
+		return cand
 	}
 	return ""
+}
+
+// uiDirFromHome checks <home>/.local/share/irrlicht/web, the daemon-only curl
+// install layout. Returns "" when home is unknown or the candidate has no UI.
+func uiDirFromHome(home string) string {
+	if home == "" {
+		return ""
+	}
+	if cand := filepath.Join(dataDir(home), "web"); hasIndexHTML(cand) {
+		return cand
+	}
+	return ""
+}
+
+// uiDirFromRepoRoot walks up from <exe> to the enclosing repo root (a
+// directory containing .git) and checks for platforms/web/index.html (dev
+// checkout). Returns "" on miss.
+//
+// The walk-up is bounded by .git so it can't escape a git worktree into a
+// parent repo's platforms/web/ — that bug would silently serve the wrong
+// dashboard during dev.
+func uiDirFromRepoRoot(exe string) string {
+	if exe == "" {
+		return ""
+	}
+	dir := filepath.Dir(exe)
+	for range 8 {
+		if isGitRepoRoot(dir) {
+			if cand := filepath.Join(dir, "platforms", "web"); hasIndexHTML(cand) {
+				return cand
+			}
+			return "" // repo root found, no UI inside — don't escape
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
+
+// isGitRepoRoot reports whether dir contains a .git entry, marking it as the
+// top of a git checkout or worktree.
+func isGitRepoRoot(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
 }

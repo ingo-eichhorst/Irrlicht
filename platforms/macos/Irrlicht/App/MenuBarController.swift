@@ -39,6 +39,14 @@ final class MenuBarController: NSObject {
     private var escapeMonitor: Any?
     private var resignObserver: NSObjectProtocol?
 
+    // Last-seen values for the menu-bar quota settings (issue #909), so the
+    // broad UserDefaults.didChangeNotification (fires for *any* default,
+    // mirroring the pattern SessionManager.init uses for sourcesSettingsChanged)
+    // only triggers a rebuild when one of these three actually changed.
+    private var lastMenuBarStyle = UserDefaults.standard.string(forKey: MenuBarStyle.storageKey) ?? ""
+    private var lastMenuBarQuotaProvider = UserDefaults.standard.string(forKey: MenuBarQuotaProvider.storageKey) ?? ""
+    private var lastMenuBarQuotaVisual = UserDefaults.standard.string(forKey: QuotaVisualStyle.storageKey) ?? ""
+
     private static let escapeKeyCode: UInt16 = 53
 
     init(
@@ -124,9 +132,48 @@ final class MenuBarController: NSObject {
         let gasTownSignal = gasTownProvider.objectWillChange
             .map { _ in () }
             .eraseToAnyPublisher()
+        // Settings picker changes (issue #909: menu bar style/provider/shape)
+        // must repaint the icon immediately, not wait for the next unrelated
+        // session event. didChangeNotification fires for *any* UserDefaults
+        // write, so diff against the last-seen values before treating it as
+        // a real change — same shape as SessionManager.init's
+        // sourcesSettingsChanged observer.
+        let defaultsSignal = NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            // Unlike NotificationCenter.addObserver(forName:object:queue: .main)
+            // (what SessionManager's sourcesSettingsChanged observer actually
+            // uses), a plain Combine publisher delivers on whatever thread
+            // posted the notification. Hop to main before the compactMap
+            // below mutates lastMenuBarStyle/etc — those are plain, non-atomic
+            // properties read/written elsewhere on the main thread.
+            .receive(on: RunLoop.main)
+            .compactMap { [weak self] _ -> Void? in
+                guard let self else { return nil }
+                let style = UserDefaults.standard.string(forKey: MenuBarStyle.storageKey) ?? ""
+                let provider = UserDefaults.standard.string(forKey: MenuBarQuotaProvider.storageKey) ?? ""
+                let visual = UserDefaults.standard.string(forKey: QuotaVisualStyle.storageKey) ?? ""
+                guard style != self.lastMenuBarStyle
+                    || provider != self.lastMenuBarQuotaProvider
+                    || visual != self.lastMenuBarQuotaVisual
+                else { return nil }
+                self.lastMenuBarStyle = style
+                self.lastMenuBarQuotaProvider = provider
+                self.lastMenuBarQuotaVisual = visual
+                return ()
+            }
+            .eraseToAnyPublisher()
+        // The quota icon's pace marker and reset-window cutoff are
+        // wall-clock-dependent — they need to move even when no session
+        // event fires (e.g. everything sits `ready` for an hour). 30s
+        // matches SessionManager's existing projectCostsRefreshInterval.
+        let tickSignal = Timer.publish(every: 30, on: .main, in: .common)
+            .autoconnect()
+            .map { _ in () }
+            .eraseToAnyPublisher()
 
         imageSubscription = sessionSignal
             .merge(with: gasTownSignal)
+            .merge(with: defaultsSignal)
+            .merge(with: tickSignal)
             .debounce(for: .milliseconds(50), scheduler: RunLoop.main)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated {

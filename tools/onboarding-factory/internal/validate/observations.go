@@ -145,57 +145,66 @@ func ValidateObservations(scenarioDir string) (*ObservationReport, error) {
 		return rep, nil
 	}
 
-	// Hard assertions from the spec.
-	if spec := loadObservationSpec(scenarioDir); spec != nil {
-		if spec.Model != "" {
-			ok := cur.ModelName == spec.Model
-			rep.Asserts = append(rep.Asserts, ObsAssert{"model", spec.Model, cur.ModelName, ok})
-			rep.Pass = rep.Pass && ok
-		}
-		if spec.CostNonzero {
-			ok := cur.EstimatedCostUSD > 0
-			rep.Asserts = append(rep.Asserts, ObsAssert{"cost_usd", ">0", fmt.Sprintf("%g", cur.EstimatedCostUSD), ok})
-			rep.Pass = rep.Pass && ok
-		}
-		if spec.TokensNonzero {
-			ok := cur.totalTokens() > 0
-			rep.Asserts = append(rep.Asserts, ObsAssert{"tokens", ">0", fmt.Sprintf("%d", cur.totalTokens()), ok})
-			rep.Pass = rep.Pass && ok
-		}
-		if spec.TotalTokensNonzero {
-			ok := cur.TotalTokens > 0
-			rep.Asserts = append(rep.Asserts, ObsAssert{"total_tokens", ">0", fmt.Sprintf("%d", cur.TotalTokens), ok})
-			rep.Pass = rep.Pass && ok
-		}
-		if spec.ContextWindowNonzero {
-			ok := cur.ContextWindow > 0
-			rep.Asserts = append(rep.Asserts, ObsAssert{"context_window", ">0", fmt.Sprintf("%d", cur.ContextWindow), ok})
-			rep.Pass = rep.Pass && ok
-		}
-		if spec.ContextUtilizationNonzero {
-			ok := cur.ContextUtilization > 0
-			rep.Asserts = append(rep.Asserts, ObsAssert{"context_utilization", ">0", fmt.Sprintf("%g", cur.ContextUtilization), ok})
-			rep.Pass = rep.Pass && ok
-		}
-	}
+	spec := loadObservationSpec(scenarioDir)
+	applyHardAssertions(rep, spec, cur)
 
 	// Soft-diff the full vector vs the prior recording.
 	tol := defaultTolerancePct
-	if spec := loadObservationSpec(scenarioDir); spec != nil && spec.TolerancePct > 0 {
+	if spec != nil && spec.TolerancePct > 0 {
 		tol = spec.TolerancePct
 	}
 	if len(dirs) > 1 {
 		if prior, ok := readGoldenSummary(dirs[1]); ok {
-			if cur.ModelName != prior.ModelName {
-				rep.Drifts = append(rep.Drifts, ObsDrift{Field: "model", Prior: prior.ModelName, Current: cur.ModelName})
-			}
-			addNumDrift(rep, "cost_usd", prior.EstimatedCostUSD, cur.EstimatedCostUSD, tol)
-			addNumDrift(rep, "input_tokens", float64(prior.CumInputTokens), float64(cur.CumInputTokens), tol)
-			addNumDrift(rep, "output_tokens", float64(prior.CumOutputTokens), float64(cur.CumOutputTokens), tol)
-			addNumDrift(rep, "cache_read_tokens", float64(prior.CumCacheReadTokens), float64(cur.CumCacheReadTokens), tol)
+			applySoftDiff(rep, prior, cur, tol)
 		}
 	}
 	return rep, nil
+}
+
+// applyHardAssertions checks the spec's observations block (exact model /
+// nonzero cost+tokens) against cur, appending an ObsAssert per configured
+// field and folding failures into rep.Pass. No-op when spec is nil.
+func applyHardAssertions(rep *ObservationReport, spec *ObservationSpec, cur replaySummary) {
+	if spec == nil {
+		return
+	}
+	if spec.Model != "" {
+		assertMetric(rep, "model", spec.Model, cur.ModelName, cur.ModelName == spec.Model)
+	}
+	if spec.CostNonzero {
+		assertMetric(rep, "cost_usd", ">0", fmt.Sprintf("%g", cur.EstimatedCostUSD), cur.EstimatedCostUSD > 0)
+	}
+	if spec.TokensNonzero {
+		assertMetric(rep, "tokens", ">0", fmt.Sprintf("%d", cur.totalTokens()), cur.totalTokens() > 0)
+	}
+	if spec.TotalTokensNonzero {
+		assertMetric(rep, "total_tokens", ">0", fmt.Sprintf("%d", cur.TotalTokens), cur.TotalTokens > 0)
+	}
+	if spec.ContextWindowNonzero {
+		assertMetric(rep, "context_window", ">0", fmt.Sprintf("%d", cur.ContextWindow), cur.ContextWindow > 0)
+	}
+	if spec.ContextUtilizationNonzero {
+		assertMetric(rep, "context_utilization", ">0", fmt.Sprintf("%g", cur.ContextUtilization), cur.ContextUtilization > 0)
+	}
+}
+
+// assertMetric appends one ObsAssert and folds its result into rep.Pass.
+func assertMetric(rep *ObservationReport, field, expected, actual string, ok bool) {
+	rep.Asserts = append(rep.Asserts, ObsAssert{field, expected, actual, ok})
+	rep.Pass = rep.Pass && ok
+}
+
+// applySoftDiff records the model-changed and per-metric numeric drifts
+// between prior and cur into rep.Drifts. Drifts are reported but never fail
+// the run — live jitter is expected.
+func applySoftDiff(rep *ObservationReport, prior, cur replaySummary, tol float64) {
+	if cur.ModelName != prior.ModelName {
+		rep.Drifts = append(rep.Drifts, ObsDrift{Field: "model", Prior: prior.ModelName, Current: cur.ModelName})
+	}
+	addNumDrift(rep, "cost_usd", prior.EstimatedCostUSD, cur.EstimatedCostUSD, tol)
+	addNumDrift(rep, "input_tokens", float64(prior.CumInputTokens), float64(cur.CumInputTokens), tol)
+	addNumDrift(rep, "output_tokens", float64(prior.CumOutputTokens), float64(cur.CumOutputTokens), tol)
+	addNumDrift(rep, "cache_read_tokens", float64(prior.CumCacheReadTokens), float64(cur.CumCacheReadTokens), tol)
 }
 
 // addNumDrift records a drift when current deviates from prior by > tolPct. A

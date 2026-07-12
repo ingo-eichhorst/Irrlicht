@@ -33,9 +33,9 @@ cat > "$RECORDING" <<'JSON'
 JSON
 
 fails=0
-pass() { echo "  PASS: $1"; }
-fail() { echo "  FAIL: $1 — expected [$2] got [$3]"; fails=$((fails + 1)); }
-assert_eq() { [[ "$2" == "$3" ]] && pass "$1" || fail "$1" "$2" "$3"; }
+pass() { local label="$1"; echo "  PASS: $label"; return 0; }
+fail() { local label="$1" expected="$2" got="$3"; echo "  FAIL: $label — expected [$expected] got [$got]"; fails=$((fails + 1)); return 0; }
+assert_eq() { local label="$1" expected="$2" actual="$3"; [[ "$expected" == "$actual" ]] && pass "$label" || fail "$label" "$expected" "$actual"; return 0; }
 
 echo "== daemon_sid_for_transcript: adapter-pinned lookup + fallback =="
 assert_eq "path+adapter match → daemon stem" \

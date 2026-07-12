@@ -30,10 +30,7 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 	// depend on HasOpenToolCall (avoids race where hook fires before fswatcher
 	// processes the tool_use JSONL event).
 	if metrics.PermissionPending {
-		if currentState != session.StateWaiting {
-			return session.StateWaiting, "permission prompt open → waiting"
-		}
-		return currentState, ""
+		return transitionTo(currentState, session.StateWaiting, "permission prompt open → waiting")
 	}
 
 	// 0b. Manual /compact in progress (PreCompact hook) → working, regardless
@@ -43,18 +40,12 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 	// The detector clears it the pass the manual compact_boundary lands, which
 	// then routes to ready via rule 2 (#656).
 	if metrics.CompactInProgress {
-		if currentState != session.StateWorking {
-			return session.StateWorking, "manual /compact in progress → working"
-		}
-		return currentState, ""
+		return transitionTo(currentState, session.StateWorking, "manual /compact in progress → working")
 	}
 
 	// 1. User-blocking tool open → waiting.
 	if metrics.NeedsUserAttention() {
-		if currentState != session.StateWaiting {
-			return session.StateWaiting, "user-blocking tool open → waiting"
-		}
-		return currentState, ""
+		return transitionTo(currentState, session.StateWaiting, "user-blocking tool open → waiting")
 	}
 
 	// 1b. A permission-gated file-edit tool has been open and idle long enough
@@ -64,27 +55,12 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 	// OpenToolStalled only after the open tool has lingered with no transcript
 	// progress, so this never fires on a tool that is actively executing.
 	if metrics.OpenToolStalled {
-		if currentState != session.StateWaiting {
-			return session.StateWaiting, "stalled edit tool → likely permission prompt → waiting"
-		}
-		return currentState, ""
+		return transitionTo(currentState, session.StateWaiting, "stalled edit tool → likely permission prompt → waiting")
 	}
 
 	// 2. Agent finished turn — check if waiting for user input first.
 	if metrics.IsAgentDone() {
-		// 2a. Turn ended with a question or imperative cue (e.g. "let me
-		// know if it's right") → waiting. See issue #381.
-		if metrics.IsWaitingForUserInput() {
-			if currentState != session.StateWaiting {
-				return session.StateWaiting, "turn ended with question or cue → waiting"
-			}
-			return currentState, ""
-		}
-		// 2b. Normal turn completion → ready.
-		if currentState == session.StateWorking || currentState == session.StateWaiting {
-			return session.StateReady, "agent finished turn → ready"
-		}
-		return currentState, ""
+		return classifyAgentDone(currentState, metrics)
 	}
 
 	// 3. User interruption: ESC or tool-permission denial while
@@ -96,9 +72,7 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 	// the prompt — the agent's turn is over. If the agent does continue
 	// (writes a new assistant message), the next activity will transition
 	// back to working.
-	if (currentState == session.StateWorking || currentState == session.StateWaiting) &&
-		!metrics.HasOpenToolCall && metrics.LastEventType == "user" &&
-		(metrics.LastWasUserInterrupt || metrics.LastWasToolDenial) {
+	if isUserInterruptReady(currentState, metrics) {
 		reason := "user ESC interrupt"
 		if metrics.LastWasToolDenial {
 			reason = "tool permission denied"
@@ -108,12 +82,43 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 	}
 
 	// 4. Default: transcript activity → working.
-	if currentState != session.StateWorking {
-		return session.StateWorking,
-			fmt.Sprintf("transcript activity (%s → working)", currentState)
-	}
+	return transitionTo(currentState, session.StateWorking,
+		fmt.Sprintf("transcript activity (%s → working)", currentState))
+}
 
+// transitionTo returns (target, reason) when currentState differs from
+// target, or (currentState, "") as a no-op when it's already there — the
+// repeated "transition or no-op" shape used by every ClassifyState rule.
+func transitionTo(currentState, target, reason string) (string, string) {
+	if currentState != target {
+		return target, reason
+	}
 	return currentState, ""
+}
+
+// classifyAgentDone handles rule 2 of ClassifyState: the agent has finished
+// its turn. It routes to waiting first when the turn ended with a question
+// or imperative cue (issue #381), otherwise to ready.
+func classifyAgentDone(currentState string, metrics *session.SessionMetrics) (string, string) {
+	if metrics.IsWaitingForUserInput() {
+		return transitionTo(currentState, session.StateWaiting, "turn ended with question or cue → waiting")
+	}
+	if currentState == session.StateWorking || currentState == session.StateWaiting {
+		return session.StateReady, "agent finished turn → ready"
+	}
+	return currentState, ""
+}
+
+// isUserInterruptReady reports whether rule 3 of ClassifyState applies: the
+// session was working/waiting with no open tool call, the last transcript
+// event was from the user, and that event was an ESC interrupt or
+// tool-permission denial — meaning the agent's turn is effectively over.
+func isUserInterruptReady(currentState string, metrics *session.SessionMetrics) bool {
+	if currentState != session.StateWorking && currentState != session.StateWaiting {
+		return false
+	}
+	return !metrics.HasOpenToolCall && metrics.LastEventType == "user" &&
+		(metrics.LastWasUserInterrupt || metrics.LastWasToolDenial)
 }
 
 // SyntheticWaitingReason is the reason string used for the working→waiting

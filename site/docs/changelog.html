@@ -32,7 +32,7 @@
 <div class="docs-layout">
 
   <!-- Sidebar -->
-  <nav class="sidebar">
+  <nav class="sidebar" aria-label="Documentation sections">
     <a href="../index.html" class="sidebar-logo">
       <span class="dot"></span>
       <span>Irrlicht</span>
@@ -52,6 +52,7 @@
       <a href="light-system.html">The Light System</a>
       <a href="state-machine.html">State Machine</a>
       <a href="session-detection.html">Session Detection</a>
+      <a href="co2-methodology.html">CO2 Methodology</a>
     </div>
 
     <div class="sidebar-section">
@@ -87,6 +88,86 @@
 
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
+
+      <h2>v0.5.6 <small>(2026-07-09)</small></h2>
+
+      <h3>Subscription quota lands in the menu bar icon; a full security &amp; code-health sweep closes every open CodeQL/SonarQube finding.</h3>
+
+      <h3>Highlights</h3>
+
+      <h4>Subscription quota in the menu bar status icon</h4>
+
+      <figure style="margin: 0.5rem 0 1rem; max-width: 360px;">
+        <picture>
+          <source srcset="../assets/releases/v0.5.6/quota-menu-bar-icon.webp" type="image/webp">
+          <img src="../assets/releases/v0.5.6/quota-menu-bar-icon.png" alt="Settings panel showing the new menu bar icon style picker (Lights / Usage / Combined), a quota provider picker, and a quota shape picker (Bars / Circle)" style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
+        </picture>
+      </figure>
+
+      <p>The menu bar status icon can now render your 5-hour/weekly subscription-quota windows directly &mdash; as stacked bars or a compact ring &mdash; instead of only inside the popover. Pick Lights (today&rsquo;s dots, unchanged default), Usage (quota only), or Combined (both side by side), and choose which provider&rsquo;s quota to show if you have more than one subscription.</p>
+
+      <p><strong>Why it matters:</strong> a glance at the menu bar now tells you how close you are to a quota reset, without opening the popover first. (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/917" target="_blank" rel="noopener">#917</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/909" target="_blank" rel="noopener">#909</a>)</p>
+
+      <h3>Added</h3>
+      <ul>
+        <li><strong><code>/ir:release</code> gained an automated security-scan gate</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/890" target="_blank" rel="noopener">#890</a>) &mdash; Dependabot, CodeQL, <code>govulncheck</code>, <code>gosec</code>, and <code>npm audit</code> all run before every release build, closing a gap where CodeQL&rsquo;s default setup had silently lapsed with zero local scanning to catch it.</li>
+        <li><strong>Model alias map synced with codeburn</strong> &mdash; added Xiaomi MiMo and Kwaipilot KAT-Coder aliases (currently price at $0 pending a LiteLLM entry for either model).</li>
+      </ul>
+
+      <h3>Fixed</h3>
+      <ul>
+        <li><strong>Sessions with a still-active background child no longer flip to ready mid-turn</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/889" target="_blank" rel="noopener">#889</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/893" target="_blank" rel="noopener">#893</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/897" target="_blank" rel="noopener">#897</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/899" target="_blank" rel="noopener">#899</a>) &mdash; covers both a parent whose turn ends on a waiting cue and a parent that already looked idle when a new Workflow-tool subagent appears.</li>
+        <li><strong>A session&rsquo;s transcript moving into or out of a git worktree is no longer mistaken for the session ending</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/877" target="_blank" rel="noopener">#877</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/878" target="_blank" rel="noopener">#878</a>).</li>
+        <li><strong>Long-running background-research subagents no longer falsely time out and get reaped</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/881" target="_blank" rel="noopener">#881</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/882" target="_blank" rel="noopener">#882</a>) &mdash; the inter-write quiet window is raised to 90s to cover slow Web Search/Fetch-heavy gaps.</li>
+        <li><strong>The CO2 estimate next to cost no longer wraps to a second line for kilogram-scale sessions</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/920" target="_blank" rel="noopener">#920</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/922" target="_blank" rel="noopener">#922</a>).</li>
+        <li><strong><code>install.sh</code> no longer kills unrelated <code>irrlichd</code> daemons on the machine when restarting its own</strong>, and the release smoke test&rsquo;s daemon-liveness check no longer flakes (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/871" target="_blank" rel="noopener">#871</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/876" target="_blank" rel="noopener">#876</a>).</li>
+        <li><strong>The README&rsquo;s CodeScene badge was reading the hotspots-only score instead of the overall project score</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/918" target="_blank" rel="noopener">#918</a>).</li>
+      </ul>
+
+      <h3>Security</h3>
+      <ul>
+        <li><strong>Closed every open CodeQL code-scanning alert and the remaining SonarQube security/reliability findings</strong> from the project-wide #901 sweep (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/894" target="_blank" rel="noopener">#894</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/896" target="_blank" rel="noopener">#896</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/907" target="_blank" rel="noopener">#907</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/908" target="_blank" rel="noopener">#908</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/910" target="_blank" rel="noopener">#910</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/912" target="_blank" rel="noopener">#912</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/913" target="_blank" rel="noopener">#913</a>) &mdash; path-injection guards across the daemon&rsquo;s HTTP-facing file handlers, an SSRF check on the relay&rsquo;s outbound WebSocket URL, prototype-pollution hardening in the dashboard, and path-traversal / <code>innerHTML</code>-injection hardening in the onboarding-factory viewer.</li>
+      </ul>
+
+      <h3>Changed / Docs / Distribution</h3>
+      <ul>
+        <li><strong>README star-history chart is now self-hosted</strong> instead of depending on star-history.com&rsquo;s shared, rate-limited API token (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/903" target="_blank" rel="noopener">#903</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/904" target="_blank" rel="noopener">#904</a>); the SonarCloud quality-gate badge was replaced with the steadier security/reliability/maintainability rating badges (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/902" target="_blank" rel="noopener">#902</a>).</li>
+        <li><strong><code>/ir:codescene-report</code> replaced by <code>/ir:sonarqube-report</code></strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/884" target="_blank" rel="noopener">#884</a>) &mdash; concrete file:line findings with fix guidance instead of an aggregate hotspot score.</li>
+        <li><strong><code>/ir:doc-review</code> now fixes findings directly</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/875" target="_blank" rel="noopener">#875</a>) &mdash; instead of filing a GitHub issue for most of them; filing is the fallback only when a fix is genuinely ambiguous.</li>
+      </ul>
+
+      <h3>Technical appendix</h3>
+      <ul>
+        <li><strong>Quota menu bar icon (#917, closes #909)</strong> &mdash; new <code>@AppStorage</code>-backed <code>MenuBarStyle</code>/<code>QuotaVisualStyle</code>/<code>MenuBarQuotaProvider</code> settings (default <code>.lights</code> preserves today&rsquo;s icon); <code>QuotaMenuBarRenderer</code> renders stacked 5h/7d bars or a compact ring, sharing <code>SessionListView</code>&rsquo;s pace-percent and color-ramp logic so the icon can&rsquo;t disagree with the popover. A same-PR follow-up fixed real defects an independent second review caught: settings changes not triggering a repaint, a stale-snapshot mismatch with the popover, an absolute-only color ramp that could diverge from the popover&rsquo;s pace-aware one, and hardcoded colors unreadable in light menu-bar appearance.</li>
+        <li><strong>CO2 unit line-wrap fix (#922, fixes #920)</strong> &mdash; <code>formattedCO2</code> used two decimal digits for the kg branch while g/mg branches use 0-1, producing strings like &ldquo;16.15kg&rdquo; that overflow the fixed-width cost/CO2 column; matched the g branch&rsquo;s precision and added <code>lineLimit(1)</code> as defense-in-depth.</li>
+        <li><strong>CodeScene badge score source (#918)</strong> &mdash; the refresh workflow read <code>current_score</code> (hotspots-only) instead of <code>code_health_weighted_average_current</code> (the actual project score).</li>
+        <li><strong>Cognitive-complexity sweep, part of #901 (#916)</strong> &mdash; refactored all 119 open <code>go:S3776</code>/<code>javascript:S3776</code> findings down to Sonar&rsquo;s threshold across 74 files via pure structural extraction, zero intended behavior change.</li>
+        <li><strong>Flaky relay control test fixed (#915)</strong> &mdash; <code>TestRelayRoutesControlToDaemon</code> now reads the client&rsquo;s initial snapshot frame (which can only arrive post-registration) before dialing, establishing a real happens-before instead of relying on timing.</li>
+        <li><strong><code>swift:S1075</code> false-positive suppression (#914, part of #901)</strong> &mdash; all 70 flagged lines are local filesystem/binary paths, fixed loopback-API routes, SwiftUI preview literals, or opaque test fixtures.</li>
+        <li><strong>Remaining CodeQL alerts closed (#913)</strong> &mdash; a post-#910 scan found 4 more alerts, 3 new dataflow paths to already-guarded sinks through a different taint source, each closed with a direct taint-visible guard; the 4th (relay-URL request forgery) is left as documented, accepted risk since a user-configurable relay endpoint is incompatible with CodeQL&rsquo;s fixed-allowlist sanitizer guidance.</li>
+        <li><strong>All open CodeQL alerts resolved, part of #901 (#910, closes #907)</strong> &mdash; 37 alerts: 1 critical SSRF (relay WebSocket URL validation before <code>DialContext</code>), 35 high path-injection, 1 medium prototype pollution (<code>irrlicht.js</code> agent registry now <code>Object.create(null)</code>).</li>
+        <li><strong>Remaining SonarQube security/reliability findings, part of #901 (#912)</strong> &mdash; an empty <code>go.sum</code> for a zero-dependency module, <code>NOSONAR</code> annotations on two already-documented intentional trade-offs, and a Dockerfile <code>CMD</code> rewritten to exec form.</li>
+        <li><strong><code>swift:S100</code> naming-convention sweep (#911, part of #901)</strong> &mdash; mechanical rename of 98 underscore-named XCTest functions to camelCase across 12 test files, with matching snapshot reference images renamed alongside.</li>
+        <li><strong>SonarQube findings phase 1, part of #901 (#908)</strong> &mdash; sanitized <code>dashboard_url</code> before logging, tightened a Keychain item to <code>ThisDeviceOnly</code>, <code>charCodeAt</code>&rarr;<code>codePointAt</code> on <code>atob()</code> output, safer float parsing. 17 additional findings confirmed false-positive/wontfix by direct code inspection.</li>
+        <li><strong>README badge swaps (#902, #904, fixes #903)</strong> &mdash; self-hosted star-history SVG decouples the README from star-history.com&rsquo;s shared, rate-limited token pool; SonarCloud&rsquo;s quality-gate badge replaced with the security/reliability/maintainability rating badges.</li>
+        <li><strong>Turn-done waiting hold, part of #901 sweep (#899, fixes #897)</strong> &mdash; a parent whose turn ends on a waiting cue collapsed straight to <code>waiting</code> even with a genuinely-running background Agent-tool child, because that branch never checked <code>hasActiveChildren</code> the way the ready-transition branch already did.</li>
+        <li><strong><code>javascript:S6819</code> accessibility fix, part of #901 (#900, closes #898)</strong> &mdash; replaced a nested <code>role="button"</code> div/span pair in the design-system&rsquo;s <code>GroupHeader.jsx</code> reference copy with two real sibling <code>&lt;button&gt;</code> elements.</li>
+        <li><strong>SonarQube VULNERABILITY/BUG/CODE_SMELL cleanup, part of #901 (#896, fixes #895)</strong> &mdash; ~700 findings addressed across shell/JS/Go/Swift/CSS: absolute-path resolution for 16 shelled-out binaries, non-root Docker users, ARIA labels and contrast fixes, locale-safe sort comparators. One real bug fixed as a byproduct: <code>state_machine.go</code>&rsquo;s <code>TotalDurationMs()</code> was missing its lock entirely.</li>
+        <li><strong>Ready-parent hold for new Workflow-tool children (#893, fixes #889)</strong> &mdash; <code>holdParentWorkingForNewChild</code> forces the parent back to <code>working</code> the instant a new child is discovered, surviving the periodic stale-session refresh instead of being silently undone.</li>
+        <li><strong>Onboarding-factory archive-name and innerHTML hardening (#894, fixes #892)</strong> &mdash; a <code>SafeArchiveName</code> type is now the only path to <code>archiveFilePath</code>; <code>manifestBox</code>/<code>driftNote</code> innerHTML templates replaced with DOM construction.</li>
+        <li><strong><code>ir:release</code> security-scan gate (#890, fixes #885)</strong> &mdash; <code>tools/security-scan.sh</code> checks open Dependabot/CodeQL alerts, <code>govulncheck</code>, <code>gosec</code>, and <code>npm audit</code>; wired into <code>/ir:release</code> Step 5.5 and <code>tools/preflight.sh --only security</code>. Re-enabled CodeQL default setup for Go and JavaScript/TypeScript.</li>
+        <li><strong><code>dashboard_url</code> iframe validation (#888, closes #886)</strong> &mdash; <code>resolveDashboardIframeUrl</code> rejects anything but a same-origin http(s) URL instead of assigning server-provided input directly to <code>iframe.src</code>.</li>
+        <li><strong><code>/ir:sonarqube-report</code> replaces <code>/ir:codescene-report</code> (#884)</strong> &mdash; SonarQube Cloud&rsquo;s issues API returns concrete file:line findings with rule keys and fix guidance, unlike CodeScene&rsquo;s aggregate-only hotspot scores.</li>
+        <li><strong><code>SubagentQuietWindow</code> raised to 90s (#882, fixes #881)</strong> &mdash; 30s falsely tripped on a genuine 61-second inter-write gap from a WebSearch/WebFetch-heavy background subagent, causing the parent to surface <code>ready</code> for 67 seconds while real work continued.</li>
+        <li><strong>Worktree-relocation transcript tracking (#877, #878)</strong> &mdash; <code>onRemoved</code> now detects a transcript relocated into a sibling project-dir slug (e.g. entering/closing a git worktree) and re-points tracking at the surviving file instead of demoting the session to ready.</li>
+        <li><strong><code>viewer.js</code> decomposition (#873, #880)</strong> &mdash; extracted <code>renderPlayback</code>&rsquo;s (660 lines, CodeScene&rsquo;s worst score in the repo) timeline geometry, DOM painting, and replay-transport concerns into three sibling modules; DOM output byte-identical, locked by 41 new characterization tests.</li>
+        <li><strong><code>irrlicht.js</code> row-rendering decomposition (#872, #879)</strong> &mdash; split the ~270-line, ~37-branch <code>updateSessionRow</code> into per-column <code>renderRow*</code> helpers; pure mechanical extraction, DOM output unchanged.</li>
+        <li><strong>Release-tooling fixes found while shipping v0.5.5 (#876, fixes #871)</strong> &mdash; <code>install.sh</code>&rsquo;s daemon kill is now scoped to whatever is bound to port 7837; the smoke test&rsquo;s daemon-liveness check gained a retry loop; <code>seed-demo-sessions</code> now auto-creates its scenarios&rsquo; referenced cwd paths.</li>
+        <li><strong>Agent landscape refresh (#874)</strong> &mdash; refreshed GitHub stars/metadata for tracked agents; marked Gemini CLI, Antigravity, and Kiro as irrlicht-supported; archived Void and Roo Code.</li>
+        <li><strong><code>ir:doc-review</code> fixes-by-default (#875)</strong> &mdash; every determinable finding is now fixed in place, with filing/closing a GitHub issue as the fallback only for genuinely ambiguous findings.</li>
+        <li><strong>Model alias sync</strong> &mdash; added <code>mimo-v2-flash</code> &rarr; <code>xiaomi/mimo-v2-flash</code> and <code>kat-coder-pro-v1</code> &rarr; <code>kwaipilot/kat-coder-pro</code> from codeburn&rsquo;s <code>BUILTIN_ALIASES</code>; neither canonical is in LiteLLM&rsquo;s pricing table yet.</li>
+        <li><strong><code>tools/security-scan.sh</code>&rsquo;s Dependabot/CodeQL gate was silently non-functional</strong> &mdash; missing an explicit <code>--method GET</code>, <code>gh api</code> defaulted every alert query to POST (since <code>-f</code> params force POST) and 404&rsquo;d, misreported as an auth/scope failure. Running it for real surfaced CodeQL alert #54 (<code>go/request-forgery</code>, relay URL), already documented as accepted risk in #913 but never dismissed &mdash; dismissed now.</li>
+      </ul>
 
       <h2>v0.5.5 <small>(2026-07-04)</small></h2>
 
@@ -1513,7 +1594,7 @@
       </ul>
 
       <!-- Bottom nav -->
-      <nav class="docs-nav-bottom">
+      <nav class="docs-nav-bottom" aria-label="Previous and next page">
         <a href="code-of-conduct.html">
           <span class="label">Previous</span>
           Code of Conduct

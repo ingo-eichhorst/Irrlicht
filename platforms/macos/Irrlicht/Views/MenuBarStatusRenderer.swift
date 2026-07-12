@@ -15,7 +15,12 @@ struct MenuBarStatusRenderer {
 
     private static let radius: CGFloat = 5
     private static let overlap: CGFloat = 4
-    private static let groupGap: CGFloat = 6
+    /// Gap between adjacent project dot-groups. Non-private so
+    /// MenuBarImageBuilder can reuse the exact same value for the gap
+    /// between the dots and the quota bars in Combined style — otherwise
+    /// that seam would visually read as a bigger gap than the ones between
+    /// dot-groups themselves.
+    static let groupGap: CGFloat = 6
     private static let height: CGFloat = 18
     private static let fontSize: CGFloat = 10
     private static let maxVisibleGroups = 5

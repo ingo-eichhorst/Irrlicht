@@ -1,20 +1,16 @@
 import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
 import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collapseAllSummaries, expandAllSummaries } from './collapsedSummaries.js';
+import { initHistoryTab } from './historyTab.js';
+import { initPermissionsWizard, refreshPermissions } from './permissionsWizard.js';
 import {
-  initHistoryTab, historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,
-} from './historyTab.js';
-import {
-  initPermissionsWizard, refreshPermissions, pendingWizardAgents, stillPendingForAgents, buildPermissionAnswers,
-} from './permissionsWizard.js';
-import {
-  showQuotaForecast, setShowQuotaForecast, renderHeaderTitle, refreshProviderSettings, formatUsageCost,
+  showQuotaForecast, setShowQuotaForecast, renderHeaderTitle, refreshProviderSettings,
 } from './quotaChips.js';
 import {
   compoundSessionId, displaySessionId, sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote, daemonSessionIds,
 } from './sessionIdentity.js';
 import { relayFrameKind, seqGap, aggregateConnState, relayWsUrl } from './connectionProtocol.js';
 import {
-  stateIcon, shortModel, formatCost, costCellDisplay, fmtDuration, formatElapsed, fmtEtaDuration, fmtEtaText,
+  stateIcon, shortModel, formatCost, costCellDisplay, fmtDuration, formatElapsed,
   taskEtaPresentation, shortID, pressureClass, pressureColor, formatTokens, esc, activeSubagentCount,
   cacheBloatBadgeText,
 } from './formatters.js';
@@ -29,8 +25,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // (e.g. "claude-code"). Populated once on initial load; the daemon's
     // registry is essentially static (changes require a daemon restart).
     // Exported (live binding) so quotaChips.js can resolve provider/adapter
-    // icon branding without owning session state itself.
-    export let agentRegistry = {};
+    // icon branding without owning session state itself. Object.create(null)
+    // rather than {}: it's keyed by e.name straight out of the /api/v1/agents
+    // response body (see the fetch below), so a "__proto__"-named agent entry
+    // can't repoint this object's prototype — same idiom as lastTickGen/
+    // historyByGranularity below, which key off session-derived strings too.
+    export const agentRegistry = Object.create(null);
     let sessionIndex = new Map();
 
     // --- Theme ---
@@ -45,12 +45,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function resolvedTheme() {
       const t = storedTheme();
       if (t) return t;
-      return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+      return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
     }
     function applyStoredTheme() {
       const t = storedTheme();
-      if (t) document.documentElement.setAttribute('data-theme', t);
-      else document.documentElement.removeAttribute('data-theme');
+      if (t) document.documentElement.dataset.theme = t;
+      else delete document.documentElement.dataset.theme;
       updateThemeToggleGlyph();
     }
     function updateThemeToggleGlyph() {
@@ -76,8 +76,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const onChange = () => {
         if (!storedTheme()) { updateThemeToggleGlyph(); render(); }
       };
-      if (mq.addEventListener) mq.addEventListener('change', onChange);
-      else if (mq.addListener) mq.addListener(onChange);
+      mq.addEventListener('change', onChange);
     }
 
     // --- Display mode (Context / 1 Min / 10 Min / 60 Min) ---
@@ -91,7 +90,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       { key: '60min',   label: '60 Min',  isHistory: true,  granularity: 60 },
     ];
     let currentDisplayMode = localStorage.getItem('irrlicht_displayMode') || 'context';
-    if (!DISPLAY_MODES.find(m => m.key === currentDisplayMode)) currentDisplayMode = 'context';
+    if (!DISPLAY_MODES.some(m => m.key === currentDisplayMode)) currentDisplayMode = 'context';
     function currentMode() {
       return DISPLAY_MODES.find(m => m.key === currentDisplayMode) || DISPLAY_MODES[0];
     }
@@ -142,16 +141,19 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function loadSettings() {
       try {
         const raw = localStorage.getItem(SETTINGS_KEY);
-        if (!raw) return Object.assign({}, SETTINGS_DEFAULTS);
+        if (!raw) return { ...SETTINGS_DEFAULTS };
         const parsed = JSON.parse(raw);
-        return Object.assign({}, SETTINGS_DEFAULTS, (parsed && typeof parsed === 'object') ? parsed : {});
+        return { ...SETTINGS_DEFAULTS, ...((parsed && typeof parsed === 'object') ? parsed : {}) };
       } catch (e) {
-        return Object.assign({}, SETTINGS_DEFAULTS);
+        console.debug('irrlicht: failed to load settings, using defaults', e);
+        return { ...SETTINGS_DEFAULTS };
       }
     }
     let settings = loadSettings();
     function persistSettings() {
-      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
+      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {
+        console.debug('irrlicht: failed to persist settings', e);
+      }
     }
     function applySettings() {
       document.body.classList.toggle('no-cost', !settings.showCostDisplay);
@@ -170,21 +172,23 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       if (typeof Notification === 'undefined') return;
       if (Notification.permission !== 'granted') return;
       if (document.visibilityState === 'visible') return;
-      try { new Notification(title, { body: body || '', tag: 'irrlicht-' + toggleKey, silent: false }); } catch (e) {}
+      try { new Notification(title, { body: body || '', tag: 'irrlicht-' + toggleKey, silent: false }); } catch (e) {
+        console.debug('irrlicht: failed to show notification', e);
+      }
     }
     function rowLabel(s) {
       // Best-effort "project · branch" label that matches what the row shows.
-      const proj = s && s.project_name ? s.project_name : '';
-      const branch = s && s.git_branch ? s.git_branch : '';
+      const proj = s?.project_name || '';
+      const branch = s?.git_branch || '';
       if (proj && branch) return proj + ' · ' + branch;
-      return proj || branch || (s && s.session_id ? displaySessionId(s.session_id).slice(0, 8) : 'session');
+      return proj || branch || (s?.session_id ? displaySessionId(s.session_id).slice(0, 8) : 'session');
     }
     function maybeNotifyOnUpdate(prev, next) {
       if (!next) return;
       const prevState    = prev ? prev.state : '';
-      const prevPressure = (prev && prev.metrics) ? prev.metrics.pressure_level : '';
+      const prevPressure = prev?.metrics?.pressure_level || '';
       const nextState    = next.state || '';
-      const nextPressure = (next.metrics && next.metrics.pressure_level) || '';
+      const nextPressure = next.metrics?.pressure_level || '';
       const sid          = next.session_id;
       const label        = rowLabel(next);
 
@@ -217,13 +221,13 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       { key: 'year',  suffix: '/yr' },
     ];
     let currentTimeframe = localStorage.getItem('irrlicht_costTimeframe') || 'day';
-    if (!COST_TIMEFRAMES.find(t => t.key === currentTimeframe)) currentTimeframe = 'day';
+    if (!COST_TIMEFRAMES.some(t => t.key === currentTimeframe)) currentTimeframe = 'day';
 
     // Usage chips share one timeframe, cycled by clicking any of them and
     // persisted independently of the project-cost timeframe above — mirrors
     // macOS's separate usageCostTimeframe (#386).
     export let currentUsageTimeframe = localStorage.getItem('irrlicht_usageCostTimeframe') || 'day';
-    if (!COST_TIMEFRAMES.find(t => t.key === currentUsageTimeframe)) currentUsageTimeframe = 'day';
+    if (!COST_TIMEFRAMES.some(t => t.key === currentUsageTimeframe)) currentUsageTimeframe = 'day';
 
     // costDisplayMode selects what the per-session row's cost slot shows —
     // 'cost' ($) or 'co2' (estimated CO2e), issue #829. Click-to-cycle rather
@@ -251,6 +255,19 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // a tick that's already reflected in our snapshot (closing the connect-time race).
     const lastTickGen = Object.create(null);
 
+    // isDangerousKey guards every historyByGranularity[gran][sessionID] /
+    // lastTickGen[sessionID] access below. Those dicts are already
+    // Object.create(null) (no prototype to hijack via a "__proto__" key),
+    // but CodeQL's prototype-pollution query doesn't credit that — it
+    // flags the later `arr[...] = value` write on the value pulled out by
+    // a server-controlled key, several lines downstream of where the dict
+    // itself was hardened. Rejecting the dangerous keys at the point of
+    // lookup makes the safety explicit right where CodeQL's dataflow
+    // expects to see it, on top of the null-prototype backstop.
+    function isDangerousKey(key) {
+      return key === '__proto__' || key === 'constructor' || key === 'prototype';
+    }
+
     const HISTORY_PRIORITY_TO_STATE = ['ready', 'working', 'waiting', ''];
     function historyPriorityForState(s) {
       switch (s) {
@@ -263,11 +280,11 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function decodeHistoryBuckets(b64) {
       // Daemon ships 60 buckets × 2 bits MSB-first = 15 bytes = 20 base64 chars.
       let raw;
-      try { raw = atob(b64); } catch (e) { return null; }
+      try { raw = atob(b64); } catch (e) { console.debug('irrlicht: failed to decode history buckets', e); return null; }
       if (raw.length !== 15) return null;
       const out = new Array(60);
       for (let i = 0; i < 15; i++) {
-        const byte = raw.charCodeAt(i);
+        const byte = raw.codePointAt(i);
         out[i * 4 + 0] = HISTORY_PRIORITY_TO_STATE[(byte >> 6) & 0x3];
         out[i * 4 + 1] = HISTORY_PRIORITY_TO_STATE[(byte >> 4) & 0x3];
         out[i * 4 + 2] = HISTORY_PRIORITY_TO_STATE[(byte >> 2) & 0x3];
@@ -296,8 +313,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     }
 
     function applyHistorySnapshot(sessionID, history, generations) {
+      if (isDangerousKey(sessionID)) return;
       for (const granKey of Object.keys(history)) {
-        const gran = parseInt(granKey, 10);
+        const gran = Number.parseInt(granKey, 10);
         if (![1, 10, 60].includes(gran)) continue;
         const buckets = decodeHistoryBuckets(history[granKey]);
         if (!buckets) continue;
@@ -308,7 +326,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       if (generations) {
         const perGran = lastTickGen[sessionID] || Object.create(null);
         for (const granKey of Object.keys(generations)) {
-          const gran = parseInt(granKey, 10);
+          const gran = Number.parseInt(granKey, 10);
           if (gran === 1 || gran === 10 || gran === 60) perGran[gran] = generations[granKey];
         }
         lastTickGen[sessionID] = perGran;
@@ -320,31 +338,44 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       rebuildTimelineHistory();
     }
 
+    // applyOneTickBucket folds one session's bucket update into dict,
+    // returning whether it actually changed anything. Extracted from
+    // applyHistoryTick so that function's own loop/dedup branching doesn't
+    // compound with this per-session bucket-shifting logic (CodeScene
+    // flagged applyHistoryTick as a declining hotspot once the
+    // isDangerousKey guard added a branch on top of an already-complex
+    // method).
+    function applyOneTickBucket(dict, sid, granularitySec, buckets, bucketGenerations) {
+      if (isDangerousKey(sid)) return false;
+      // Skip if this tick has already been folded into our snapshot.
+      if (bucketGenerations?.[sid] !== undefined) {
+        const gen = bucketGenerations[sid];
+        const last = lastTickGen[sid]?.[granularitySec] || 0;
+        if (last && gen <= last) return false;
+        if (!lastTickGen[sid]) lastTickGen[sid] = Object.create(null);
+        lastTickGen[sid][granularitySec] = gen;
+      }
+      let arr = dict[sid];
+      if (!arr) arr = new Array(60).fill('');
+      arr.shift();
+      arr.push(HISTORY_PRIORITY_TO_STATE[buckets[sid] & 0x3]);
+      while (arr.length < 60) arr.unshift('');
+      dict[sid] = arr;
+      return true;
+    }
+
     function applyHistoryTick(granularitySec, buckets, bucketGenerations) {
       if (![1, 10, 60].includes(granularitySec)) return;
       const dict = historyByGranularity[granularitySec];
       let changed = false;
       for (const sid of Object.keys(buckets)) {
-        // Skip if this tick has already been folded into our snapshot.
-        if (bucketGenerations && bucketGenerations[sid] !== undefined) {
-          const gen = bucketGenerations[sid];
-          const last = (lastTickGen[sid] && lastTickGen[sid][granularitySec]) || 0;
-          if (last && gen <= last) continue;
-          if (!lastTickGen[sid]) lastTickGen[sid] = Object.create(null);
-          lastTickGen[sid][granularitySec] = gen;
-        }
-        let arr = dict[sid];
-        if (!arr) arr = new Array(60).fill('');
-        arr.shift();
-        arr.push(HISTORY_PRIORITY_TO_STATE[buckets[sid] & 0x3]);
-        while (arr.length < 60) arr.unshift('');
-        dict[sid] = arr;
-        changed = true;
+        if (applyOneTickBucket(dict, sid, granularitySec, buckets, bucketGenerations)) changed = true;
       }
       if (changed && granularitySec === currentGranularity) rebuildTimelineHistory();
     }
 
     function applyHistoryUpgrade(sessionID, priority) {
+      if (isDangerousKey(sessionID)) return;
       const newState = HISTORY_PRIORITY_TO_STATE[priority & 0x3];
       const newPrio = historyPriorityForState(newState);
       let changedActive = false;
@@ -380,7 +411,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
             sessionIndex.set(a.session_id, {group: g, agent: a, parent: null});
             indexChildren(g, a);
           }
-          if (g.groups && g.groups.length) walk(g.groups, true);
+          if (g.groups?.length) walk(g.groups, true);
         }
       })(dashboardGroups, false);
     }
@@ -393,79 +424,108 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     }
 
     function applySessionUpdate(s) {
-      var entry = sessionIndex.get(s.session_id);
+      const entry = sessionIndex.get(s.session_id);
       if (entry) {
-        var a = entry.agent;
-        // Capture previous state + pressure before merging so we can fire
-        // notifications on the transition (web parity for the menu-bar app's
-        // ready/waiting/pressure alerts).
-        var prevSnap = { state: a.state, metrics: a.metrics ? { pressure_level: a.metrics.pressure_level } : null };
-        var role = a.role, wn = a.worker_name, wid = a.worker_id, ch = a.children;
-        Object.assign(a, s);
-        if (role && !a.role) a.role = role;
-        if (wn && !a.worker_name) a.worker_name = wn;
-        if (wid && !a.worker_id) a.worker_id = wid;
-        a.children = ch;
-        // Migrate the agent if its project_name now points at a different
-        // group than where it currently lives. Without this, sessions whose
-        // first WS push arrived before metadata enrichment landed (empty
-        // project_name → "unknown" bucket) stay stranded there forever even
-        // after later updates carry the correct name. Children inherit their
-        // parent's group, so only migrate top-level entries. Rig sessions
-        // (nested under a Gas Town sub-group) are exempt — their group is
-        // structural, not project-derived, so a project_name mismatch must
-        // not tear them out of their rig.
-        if (!entry.parent && !entry.group._nested) {
-          var desired = a.project_name || 'unknown';
-          if (entry.group.name !== desired) {
-            var oldGroup = entry.group;
-            var ai = oldGroup.agents.findIndex(x => x.session_id === s.session_id);
-            if (ai >= 0) oldGroup.agents.splice(ai, 1);
-            var target = dashboardGroups.find(g => g.name === desired);
-            if (!target) {
-              target = {name: desired, agents: []};
-              dashboardGroups.push(target);
-            }
-            target.agents.push(a);
-            entry.group = target;
-            // Children's sessionIndex entries still point at the old group;
-            // refresh them so any future site that reads child.entry.group
-            // (e.g. a parent-deletion cleanup that drills into children)
-            // doesn't follow a reference to a group we just spliced out.
-            indexChildren(target, a);
-            if (oldGroup.agents.length === 0) {
-              var gi = dashboardGroups.indexOf(oldGroup);
-              if (gi >= 0) dashboardGroups.splice(gi, 1);
-            }
-          }
-        }
-        maybeNotifyOnUpdate(prevSnap, a);
+        updateExistingSession(entry, s);
         return;
       }
+      insertNewSession(s);
+    }
+
+    function updateExistingSession(entry, s) {
+      const a = entry.agent;
+      // Capture previous state + pressure before merging so we can fire
+      // notifications on the transition (web parity for the menu-bar app's
+      // ready/waiting/pressure alerts).
+      const prevSnap = { state: a.state, metrics: a.metrics ? { pressure_level: a.metrics.pressure_level } : null };
+      const role = a.role, wn = a.worker_name, wid = a.worker_id, ch = a.children;
+      Object.assign(a, s);
+      if (role && !a.role) a.role = role;
+      if (wn && !a.worker_name) a.worker_name = wn;
+      if (wid && !a.worker_id) a.worker_id = wid;
+      a.children = ch;
+      migrateSessionGroupIfNeeded(entry, a);
+      maybeNotifyOnUpdate(prevSnap, a);
+    }
+
+    // Migrate the agent if its project_name now points at a different
+    // group than where it currently lives. Without this, sessions whose
+    // first WS push arrived before metadata enrichment landed (empty
+    // project_name → "unknown" bucket) stay stranded there forever even
+    // after later updates carry the correct name. Children inherit their
+    // parent's group, so only migrate top-level entries. Rig sessions
+    // (nested under a Gas Town sub-group) are exempt — their group is
+    // structural, not project-derived, so a project_name mismatch must
+    // not tear them out of their rig.
+    // findOrCreateGroup returns the dashboard group with the given name,
+    // creating and registering an empty one if none exists yet. Extracted
+    // from migrateSessionGroupIfNeeded (issue #901 cognitive-complexity
+    // cleanup) and shared with insertNewSession, which needed the same
+    // lookup-or-create logic.
+    function findOrCreateGroup(name) {
+      let group = dashboardGroups.find(g => g.name === name);
+      if (!group) {
+        group = {name: name, agents: []};
+        dashboardGroups.push(group);
+      }
+      return group;
+    }
+
+    // removeAgentFromGroup splices an agent out of a group's flat agent
+    // list and drops the group entirely once it's left empty. Extracted
+    // from migrateSessionGroupIfNeeded (issue #901 cognitive-complexity
+    // cleanup).
+    function removeAgentFromGroup(group, sessionId) {
+      const ai = group.agents.findIndex(x => x.session_id === sessionId);
+      if (ai >= 0) group.agents.splice(ai, 1);
+      if (group.agents.length === 0) {
+        const gi = dashboardGroups.indexOf(group);
+        if (gi >= 0) dashboardGroups.splice(gi, 1);
+      }
+    }
+
+    function migrateSessionGroupIfNeeded(entry, a) {
+      if (entry.parent || entry.group._nested) return;
+      const desired = a.project_name || 'unknown';
+      if (entry.group.name === desired) return;
+      const oldGroup = entry.group;
+      removeAgentFromGroup(oldGroup, a.session_id);
+      const target = findOrCreateGroup(desired);
+      target.agents.push(a);
+      entry.group = target;
+      // Children's sessionIndex entries still point at the old group;
+      // refresh them so any future site that reads child.entry.group
+      // (e.g. a parent-deletion cleanup that drills into children)
+      // doesn't follow a reference to a group we just spliced out.
+      indexChildren(target, a);
+    }
+
+    function insertNewSession(s) {
       // First sight of this session — treat any non-trivial state as a
       // transition for notification purposes.
       maybeNotifyOnUpdate(null, s);
-      var groupName = s.project_name || 'unknown';
-      var group = dashboardGroups.find(g => g.name === groupName);
-      if (!group) {
-        group = {name: groupName, agents: []};
-        dashboardGroups.push(group);
-      }
-      if (s.parent_session_id) {
-        var parentEntry = sessionIndex.get(s.parent_session_id);
-        if (parentEntry) {
-          if (!parentEntry.agent.children) parentEntry.agent.children = [];
-          parentEntry.agent.children.push(s);
-          sessionIndex.set(s.session_id, {group: parentEntry.group, agent: s, parent: parentEntry.agent});
-          return;
-        }
-      }
+      const groupName = s.project_name || 'unknown';
+      const group = findOrCreateGroup(groupName);
+      if (attachToParentIfPresent(s)) return;
       group.agents.push(s);
       sessionIndex.set(s.session_id, {group: group, agent: s, parent: null});
     }
 
+    // attachToParentIfPresent links a newly-seen subagent session under its
+    // already-indexed parent (as a child), if the parent is known. Returns
+    // whether it did so, so the caller can skip the flat group.agents insert.
+    function attachToParentIfPresent(s) {
+      if (!s.parent_session_id) return false;
+      const parentEntry = sessionIndex.get(s.parent_session_id);
+      if (!parentEntry) return false;
+      if (!parentEntry.agent.children) parentEntry.agent.children = [];
+      parentEntry.agent.children.push(s);
+      sessionIndex.set(s.session_id, {group: parentEntry.group, agent: s, parent: parentEntry.agent});
+      return true;
+    }
+
     function applySessionDelete(sessionId) {
-      var entry = sessionIndex.get(sessionId);
+      const entry = sessionIndex.get(sessionId);
       delete lastTickGen[sessionId];
       delete historyByGranularity[1][sessionId];
       delete historyByGranularity[10][sessionId];
@@ -476,14 +536,14 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       if (!entry) return;
       sessionIndex.delete(sessionId);
       if (entry.parent) {
-        var ci = entry.parent.children.findIndex(c => c.session_id === sessionId);
+        const ci = entry.parent.children.findIndex(c => c.session_id === sessionId);
         if (ci >= 0) entry.parent.children.splice(ci, 1);
       } else {
-        var ai = entry.group.agents.findIndex(a => a.session_id === sessionId);
+        const ai = entry.group.agents.findIndex(a => a.session_id === sessionId);
         if (ai >= 0) entry.group.agents.splice(ai, 1);
       }
       if (entry.group.agents.length === 0) {
-        var gi = dashboardGroups.indexOf(entry.group);
+        const gi = dashboardGroups.indexOf(entry.group);
         if (gi >= 0) dashboardGroups.splice(gi, 1);
       }
     }
@@ -572,7 +632,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // quotaChips.js.
     export function usageSpendForChip(chip) {
       const byTf = dashboardProviderCosts[chip.key];
-      const v = byTf && byTf[currentUsageTimeframe];
+      const v = byTf?.[currentUsageTimeframe];
       return typeof v === 'number' ? v : 0;
     }
 
@@ -978,6 +1038,73 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       }
     }
 
+    // pressureAlertItem builds the pressure-alert sub-row for an active
+    // agent in an alert-worthy pressure state, or null otherwise. Extracted
+    // from emitAgentRowItems (issue #901 cognitive-complexity cleanup).
+    function pressureAlertItem(a) {
+      const isActive = a.state === 'working' || a.state === 'waiting';
+      const pressure = a.metrics ? a.metrics.pressure_level : '';
+      if (!isActive || !isAlertPressure(pressure)) return null;
+      return {type: 'alert', key: 'al:' + a.session_id, pressure: pressure};
+    }
+
+    // cacheBloatItem builds the cache-creation regression badge sub-row
+    // (#813) — separate row beneath the parent; the version-attribution
+    // string can be a full sentence, too wide for this fixed-width icon row
+    // (mirrors macOS's cacheBloatBlock) — or null when there's no bloat to
+    // report. Extracted from emitAgentRowItems (issue #901
+    // cognitive-complexity cleanup).
+    function cacheBloatItem(a) {
+      if (!a.metrics?.cache_bloat) return null;
+      return {type: 'cachebloat', key: 'cb:' + a.session_id, agent: a};
+    }
+
+    // taskSummaryItem builds the task-summary + waiting-question
+    // collapsible sub-row (issue #738) — shown when there's a summary (any
+    // state) or a pending question (waiting) — or null otherwise. Extracted
+    // from emitAgentRowItems (issue #901 cognitive-complexity cleanup).
+    function taskSummaryItem(a) {
+      if (!hasTaskSummaryOrQuestion(a)) return null;
+      return {type: 'summary', key: 's:' + a.session_id, agent: a, isChild: false};
+    }
+
+    // taskProgressItem builds the task-progress-dots sub-row — separate
+    // from the parent row so the dots don't push the meta columns off the
+    // session row, matching the overlay's TaskListView placement
+    // (SessionListView.swift:629-632) — or null when there are no open
+    // tasks. Extracted from emitAgentRowItems (issue #901
+    // cognitive-complexity cleanup).
+    function taskProgressItem(a) {
+      const tasks = a.metrics?.tasks || [];
+      const tasksOpen = tasks.length > 0 && !tasks.every(t => t.status === 'completed');
+      if (!tasksOpen) return null;
+      return {type: 'tasks', key: 'tk:' + a.session_id, agent: a, isChild: false};
+    }
+
+    // emitAgentRowItems pushes an agent's own row plus its collapsible
+    // sub-rows (pressure alert, cache-bloat badge, task summary, task
+    // progress) onto the flat render-item list. Extracted from emitGroup's
+    // per-agent loop body (issue #901 cognitive-complexity cleanup).
+    function emitAgentRowItems(items, a, agentNum, depth) {
+      items.push({type: 'agent', key: 'a:' + a.session_id, agent: a, num: agentNum, isChild: false, depth: depth});
+      const alert = pressureAlertItem(a);
+      if (alert) items.push(alert);
+      const cacheBloat = cacheBloatItem(a);
+      if (cacheBloat) items.push(cacheBloat);
+      const summary = taskSummaryItem(a);
+      if (summary) items.push(summary);
+      const taskProgress = taskProgressItem(a);
+      if (taskProgress) items.push(taskProgress);
+    }
+
+    function isAlertPressure(pressure) {
+      return pressure === 'high' || pressure === 'warning' || pressure === 'critical';
+    }
+
+    function hasTaskSummaryOrQuestion(a) {
+      return !!(a.metrics && (a.metrics.task_summary || (a.state === 'waiting' && a.metrics.last_assistant_text)));
+    }
+
     // --- Render ---
     function render() {
       const list = document.getElementById('session-list');
@@ -1000,7 +1127,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         // Show headers when there's more than one top-level group, or when any
         // group nests sub-groups (Gas Town rigs) that need their own headers.
         const showHeaders = dashboardGroups.length > 1 ||
-          dashboardGroups.some(g => g.groups && g.groups.length);
+          dashboardGroups.some(g => g.groups?.length);
         let agentNum = 0;
 
         // Local-wins (#538): a relay session whose bare id is also delivered by
@@ -1023,34 +1150,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
           for (const a of (g.agents || [])) {
             if (isShadowedRemote(a, localIds)) continue;
             agentNum++;
-            items.push({type: 'agent', key: 'a:' + a.session_id, agent: a, num: agentNum, isChild: false, depth: depth});
-            // Pressure alert
-            const isActive = a.state === 'working' || a.state === 'waiting';
-            const pressure = a.metrics ? a.metrics.pressure_level : '';
-            if (isActive && (pressure === 'high' || pressure === 'warning' || pressure === 'critical')) {
-              items.push({type: 'alert', key: 'al:' + a.session_id, pressure: pressure});
-            }
-            // Cache-creation regression badge (#813) — separate row beneath
-            // the parent; the version-attribution string can be a full
-            // sentence, too wide for this fixed-width icon row (mirrors
-            // macOS's cacheBloatBlock).
-            if (a.metrics && a.metrics.cache_bloat) {
-              items.push({type: 'cachebloat', key: 'cb:' + a.session_id, agent: a});
-            }
-            // Task summary + waiting question — collapsible block beneath the
-            // parent (issue #738). Renders when there's a summary (any state)
-            // or a pending question (waiting).
-            if (a.metrics && (a.metrics.task_summary || (a.state === 'waiting' && a.metrics.last_assistant_text))) {
-              items.push({type: 'summary', key: 's:' + a.session_id, agent: a, isChild: false});
-            }
-            // Task progress dots — separate row beneath the parent so they
-            // don't push the meta columns off the session row. Matches the
-            // overlay's TaskListView placement (SessionListView.swift:629-632).
-            const tasks = (a.metrics && a.metrics.tasks) || [];
-            const tasksOpen = tasks.length > 0 && !tasks.every(t => t.status === 'completed');
-            if (tasksOpen) {
-              items.push({type: 'tasks', key: 'tk:' + a.session_id, agent: a, isChild: false});
-            }
+            emitAgentRowItems(items, a, agentNum, depth);
           }
           for (const sub of (g.groups || [])) emitGroup(sub, key, depth + 1);
         }
@@ -1100,7 +1200,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         for (const g of groups) {
           for (const a of (g.agents || [])) topLevel.push(a);
           collectAll(g.agents || []);
-          if (g.groups && g.groups.length) walk(g.groups);
+          if (g.groups?.length) walk(g.groups);
         }
       })(dashboardGroups);
       updateSummary(all, topLevel);
@@ -1157,7 +1257,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
     function updateCacheBloatRow(el, agent) {
       const metrics = agent.metrics || {};
-      const badgeText = cacheBloatBadgeText(metrics.cache_bloat_tooltip);
+      const badgeText = cacheBloatBadgeText(metrics.cache_bloat_tooltip, metrics.cache_bloat_percent);
       if (el.dataset.badge !== badgeText) {
         el.dataset.badge = badgeText;
         el.innerHTML = '<span class="row-cache-bloat">' + esc(badgeText) + '</span>';
@@ -1195,7 +1295,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       return TASK_STATUSES.has(s) ? s : 'pending';
     }
     function updateTaskListRow(el, agent) {
-      const tasks = (agent.metrics && agent.metrics.tasks) || [];
+      const tasks = agent.metrics?.tasks || [];
       if (tasks.length === 0) { el.style.display = 'none'; return; }
       el.style.display = '';
       const done = tasks.filter(t => t.status === 'completed').length;
@@ -1230,10 +1330,10 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       return el;
     }
     function updateSummaryRow(el, agent) {
-      const summary = (agent.metrics && agent.metrics.task_summary) || '';
+      const summary = agent.metrics?.task_summary || '';
       // Prefer the terse one-line headline (issue #759); fall back to the full
       // last-assistant text for older daemons. The full text is kept for hover.
-      const questionFull = (agent.state === 'waiting' && agent.metrics && agent.metrics.last_assistant_text) || '';
+      const questionFull = (agent.state === 'waiting' && agent.metrics?.last_assistant_text) || '';
       const question = (agent.state === 'waiting' && agent.metrics && (agent.metrics.question_headline || agent.metrics.last_assistant_text)) || '';
       if (!summary && !question) { el.style.display = 'none'; return; }
       el.style.display = '';
@@ -1270,11 +1370,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const host = document.getElementById('app-state-icons');
       if (!host) return;
       const list = topLevel || [];
-      const sig = list.length === 0
-        ? 'empty'
-        : list.length <= 3
-          ? 'icons:' + list.map(s => s.state || 'ready').join(',')
-          : 'count:' + list.length;
+      let sig = 'count:' + list.length;
+      if (list.length === 0) sig = 'empty';
+      else if (list.length <= 3) sig = 'icons:' + list.map(s => s.state || 'ready').join(',');
       if (host.dataset.sig === sig) return;
       host.dataset.sig = sig;
       if (list.length === 0) {
@@ -1295,41 +1393,45 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // --- Elapsed time tick (1s) ---
     function tickElapsed() {
       const now = Date.now() / 1000;
-      for (const el of document.querySelectorAll('.row-elapsed')) {
-        if (el.dataset.active === '1') {
-          const fs = parseFloat(el.dataset.firstSeen);
-          if (fs) el.textContent = fmtDuration(Math.max(0, Math.floor(now - fs)));
-        }
-      }
+      for (const el of document.querySelectorAll('.row-elapsed')) tickRowElapsed(el, now);
       // Task-ETA chips burn down between polls. Only rows whose chip is
       // visible carry dataset.eta (updateSessionRow clears it otherwise),
       // and visibility/suppression decisions stay with updateSessionRow —
       // the tick only refreshes the countdown and staleness.
-      for (const el of document.querySelectorAll('.row-eta')) {
-        const eta = parseFloat(el.dataset.eta);
-        if (!eta) continue;
-        const info = taskEtaPresentation({
-          task_completion_eta: eta,
-          task_estimate: {
-            total_rounds: parseInt(el.dataset.total, 10) || 0,
-            completed_rounds: parseInt(el.dataset.completed, 10) || 0,
-            updated_at: parseFloat(el.dataset.updatedAt) || 0,
-          },
-        }, 'working', now);
-        if (info) {
-          el.textContent = info.text;
-          el.title = info.title;
-          el.classList.toggle('stale', info.stale);
-        }
-      }
+      for (const el of document.querySelectorAll('.row-eta')) tickRowEta(el, now);
       // Debug-mode "created" chip — only iterate when the toggle is on so
       // we don't waste DOM reads when the chip is hidden.
       if (settings.debugMode) {
-        for (const el of document.querySelectorAll('.row-created')) {
-          const fs = parseFloat(el.dataset.firstSeen);
-          if (fs) el.textContent = 'created ' + fmtDuration(Math.max(0, Math.floor(now - fs))) + ' ago';
-        }
+        for (const el of document.querySelectorAll('.row-created')) tickRowCreated(el, now);
       }
+    }
+
+    function tickRowElapsed(el, now) {
+      if (el.dataset.active !== '1') return;
+      const fs = Number.parseFloat(el.dataset.firstSeen);
+      if (fs) el.textContent = fmtDuration(Math.max(0, Math.floor(now - fs)));
+    }
+
+    function tickRowEta(el, now) {
+      const eta = Number.parseFloat(el.dataset.eta);
+      if (!eta) return;
+      const info = taskEtaPresentation({
+        task_completion_eta: eta,
+        task_estimate: {
+          total_rounds: Number.parseInt(el.dataset.total, 10) || 0,
+          completed_rounds: Number.parseInt(el.dataset.completed, 10) || 0,
+          updated_at: Number.parseFloat(el.dataset.updatedAt) || 0,
+        },
+      }, 'working', now);
+      if (!info) return;
+      el.textContent = info.text;
+      el.title = info.title;
+      el.classList.toggle('stale', info.stale);
+    }
+
+    function tickRowCreated(el, now) {
+      const fs = Number.parseFloat(el.dataset.firstSeen);
+      if (fs) el.textContent = 'created ' + fmtDuration(Math.max(0, Math.floor(now - fs))) + ' ago';
     }
     setInterval(tickElapsed, 1000);
 
@@ -1364,7 +1466,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const ctx = canvas.getContext('2d');
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
-      if (!rec || !rec.states.length) return;
+      if (!rec?.states.length) return;
       // Right-anchor: newest bucket lands at the right edge, oldest fills
       // backwards leftward. Empty leading buckets (no data yet) are
       // represented by an unpainted left section. Mirrors macOS
@@ -1398,26 +1500,39 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       fetch('/api/v1/agents').then(r => r.ok ? r.json() : null).catch(() => null),
       fetch('/api/v1/sessions').then(r => r.ok ? r.json() : null).catch(() => null),
     ]).then(([entries, resp]) => {
-      if (Array.isArray(entries)) {
-        for (const e of entries) {
-          if (e && e.name) agentRegistry[e.name] = e;
-        }
-      }
-      if (resp) {
-        dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
-        // A group with no direct agents (e.g. a gastown orchestrator group
-        // whose agents all live in rig sub-groups) omits `agents` entirely
-        // (json omitempty). Normalize once at ingest so every consumer —
-        // rebuildIndex, render, group headers — can iterate unconditionally.
-        for (const g of dashboardGroups) {
-          if (g && !g.agents) g.agents = [];
-        }
-        dashboardProviderCosts = (resp && !Array.isArray(resp) && resp.provider_costs) || {};
-        rebuildIndex();
-      }
+      ingestAgentRegistry(entries);
+      ingestInitialSessions(resp);
       render();
       repaintHistory();
     });
+
+    function ingestAgentRegistry(entries) {
+      if (!Array.isArray(entries)) return;
+      for (const e of entries) {
+        if (e?.name) agentRegistry[e.name] = e;
+      }
+    }
+
+    // normalizeGroupAgents ensures every group has an `agents` array. A
+    // group with no direct agents (e.g. a gastown orchestrator group whose
+    // agents all live in rig sub-groups) omits `agents` entirely (json
+    // omitempty) — normalize once at ingest so every consumer —
+    // rebuildIndex, render, group headers — can iterate unconditionally.
+    // Extracted from ingestInitialSessions (issue #901
+    // cognitive-complexity cleanup).
+    function normalizeGroupAgents(groups) {
+      for (const g of groups) {
+        if (g && !g.agents) g.agents = [];
+      }
+    }
+
+    function ingestInitialSessions(resp) {
+      if (!resp) return;
+      dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
+      normalizeGroupAgents(dashboardGroups);
+      dashboardProviderCosts = (resp && !Array.isArray(resp) && resp.provider_costs) || {};
+      rebuildIndex();
+    }
     // structureSignature captures the daemon-computed shape of the group tree:
     // group nesting (Gas Town rig sub-groups) + each session's role/icon/worker
     // id. WS session deltas carry NONE of this (just the flat session), and the
@@ -1474,8 +1589,8 @@ import { reconcile, paintRowNum } from './domReconcile.js';
             const key = parentKey ? parentKey + '/' + g.name : (g.name || '');
             byPath.set(key, g);
             for (const a of (g.agents || [])) {
-              if (a && a.session_id) freshAgents.set(a.session_id, a);
-              if (a && a.children) (function ix(arr){ for (const c of arr||[]){ if (c.session_id) freshAgents.set(c.session_id, c); if (c.children) ix(c.children);} })(a.children);
+              if (a?.session_id) freshAgents.set(a.session_id, a);
+              if (a?.children) (function ix(arr){ for (const c of arr||[]){ if (c.session_id) { freshAgents.set(c.session_id, c); } if (c.children) { ix(c.children); } } })(a.children);
             }
             if (g.groups) walkFresh(g.groups, key);
           }
@@ -1485,14 +1600,14 @@ import { reconcile, paintRowNum } from './domReconcile.js';
           for (const g of groups) {
             const key = parentKey ? parentKey + '/' + g.name : (g.name || '');
             const f = byPath.get(key);
-            if (f && f.costs && JSON.stringify(g.costs) !== JSON.stringify(f.costs)) {
+            if (f?.costs && JSON.stringify(g.costs) !== JSON.stringify(f.costs)) {
               g.costs = f.costs;
               changed = true;
             }
             (function mergeRateLimit(arr) {
               for (const a of arr || []) {
                 const fa = freshAgents.get(a.session_id);
-                if (fa && fa.metrics) {
+                if (fa?.metrics) {
                   if (!a.metrics) a.metrics = {};
                   const newRL = fa.metrics.rate_limit || null;
                   const newETA = fa.metrics.rate_limit_forecast_eta || null;
@@ -1528,7 +1643,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // setInterval) so each tick re-reads the cadence and never overlaps a fetch.
     function scheduleRehydratePoll() {
       const hasOrchestrator = dashboardGroups.some(g =>
-        g && (g.type === 'gastown' || (g.groups && g.groups.length)));
+        g && (g.type === 'gastown' || g.groups?.length));
       setTimeout(() => {
         rehydratePoll().finally(scheduleRehydratePoll);
       }, hasOrchestrator ? 2500 : 30000);
@@ -1575,8 +1690,8 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function daemonLabelFor(daemonId) {
       if (!daemonId) return '';
       for (const src of sources.values()) {
-        const d = src.daemons && src.daemons.get(daemonId);
-        if (d && d.label) return d.label;
+        const d = src.daemons?.get(daemonId);
+        if (d?.label) return d.label;
       }
       return daemonId;
     }
@@ -1600,7 +1715,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function rebuildSources() {
       const desired = desiredSources();
       const desiredById = new Map(desired.map(s => [s.id, s]));
-      for (const [id, src] of [...sources]) {
+      for (const [id, src] of sources) {
         const want = desiredById.get(id);
         // Drop a source that's no longer desired, OR a relay source whose token
         // changed / is parked in 'unauthorized'. The source id is keyed by URL
@@ -1610,13 +1725,13 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         const stale = want && src.kind === 'relay' && (src.token !== want.token || src.state === 'unauthorized');
         if (!want || stale) {
           src.closing = true;
-          try { if (src.ws) src.ws.close(); } catch (e) {}
+          try { if (src.ws) src.ws.close(); } catch (e) { console.debug('irrlicht: failed to close stale source socket', e); }
           sources.delete(id);
         }
       }
       for (const d of desired) {
         if (!sources.has(d.id)) {
-          const src = Object.assign({ state: 'connecting', ws: null, reconnectDelay: 1000, closing: false, daemons: new Map(), seqCursors: new Map() }, d);
+          const src = { state: 'connecting', ws: null, reconnectDelay: 1000, closing: false, daemons: new Map(), seqCursors: new Map(), ...d };
           sources.set(d.id, src);
           connectSource(src);
         }
@@ -1628,7 +1743,11 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       src.state = src.ws ? 'reconnecting' : 'connecting';
       updateWsStatus();
       let ws;
-      try { ws = new WebSocket(src.wsUrl); } catch (e) { scheduleReconnect(src); return; }
+      try { ws = new WebSocket(src.wsUrl); } catch (e) {
+        console.debug('irrlicht: failed to open source socket', e);
+        scheduleReconnect(src);
+        return;
+      }
       src.ws = ws;
       ws.onopen = function() {
         src.state = 'connected';
@@ -1637,12 +1756,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         // relay's bearer token rides in this first frame (relay sources only).
         const hello = { type: 'hello', protocol_version: 1, role: 'client' };
         if (src.kind === 'relay' && settings.relayToken) hello.token = settings.relayToken;
-        try { ws.send(JSON.stringify(hello)); } catch (e) {}
+        try { ws.send(JSON.stringify(hello)); } catch (e) { console.debug('irrlicht: failed to send hello frame', e); }
         updateWsStatus();
       };
       ws.onmessage = function(evt) {
         let msg;
-        try { msg = JSON.parse(evt.data); } catch (e) { return; }
+        try { msg = JSON.parse(evt.data); } catch (e) { console.debug('irrlicht: failed to parse source frame', e); return; }
         handleSourceFrame(src, msg);
       };
       ws.onerror = function() {};
@@ -1652,7 +1771,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         src.seqCursors.clear();
         // 4401 = auth failed/revoked: retrying with the same token just loops, so
         // stop reconnecting (until settings change) instead of a tight loop.
-        if (ev && ev.code === 4401) { src.state = 'unauthorized'; updateWsStatus(); return; }
+        if (ev?.code === 4401) { src.state = 'unauthorized'; updateWsStatus(); return; }
         src.state = 'disconnected';
         updateWsStatus();
         scheduleReconnect(src);
@@ -1703,7 +1822,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         case 'snapshot':
           src.daemons.clear();
           for (const d of (msg.daemons || [])) {
-            if (d && d.daemon_id) src.daemons.set(d.daemon_id, { label: d.daemon_label || d.daemon_id, status: d.status || 'connected' });
+            if (d?.daemon_id) src.daemons.set(d.daemon_id, { label: d.daemon_label || d.daemon_id, status: d.status || 'connected' });
           }
           updateWsStatus();
           return;
@@ -1788,7 +1907,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         return;
       }
       if (!msg.session) return;
-      var s = msg.session;
+      const s = msg.session;
       if (msg.type === 'session_deleted') {
         applySessionDelete(s.session_id);
       } else {
@@ -1969,6 +2088,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
               return;
             }
           } catch (err) {
+            console.debug('irrlicht: notification permission request failed', err);
             this.checked = false;
             refreshPermNote();
             return;
@@ -1988,16 +2108,20 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // Mirrors the macOS @AppStorage("advancedSettingsExpanded") behavior.
     const advancedDetails = document.getElementById('settings-advanced');
     if (advancedDetails) {
-      try { advancedDetails.open = localStorage.getItem('irrlicht_advancedSettingsExpanded') === 'true'; } catch (e) {}
+      try { advancedDetails.open = localStorage.getItem('irrlicht_advancedSettingsExpanded') === 'true'; } catch (e) {
+        console.debug('irrlicht: failed to load advanced settings expanded state', e);
+      }
       advancedDetails.addEventListener('toggle', () => {
-        try { localStorage.setItem('irrlicht_advancedSettingsExpanded', advancedDetails.open ? 'true' : 'false'); } catch (e) {}
+        try { localStorage.setItem('irrlicht_advancedSettingsExpanded', advancedDetails.open ? 'true' : 'false'); } catch (e) {
+          console.debug('irrlicht: failed to persist advanced settings expanded state', e);
+        }
       });
     }
 
     // --- Daemon version (Irrlicht v$VERSION in the header) ---
     fetch('/api/v1/version').then(r => r.ok ? r.json() : null).catch(() => null).then(v => {
       const el = document.getElementById('app-version');
-      if (el && v && v.version) el.textContent = 'v' + v.version;
+      if (el && v?.version) el.textContent = 'v' + v.version;
     });
 
     // Permission wizard (issue #570) — its state, wizard rendering, and POST
@@ -2013,13 +2137,18 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
-  formatCost, costCellDisplay, formatUsageCost, pressureClass, historyPriorityForState,
+  formatCost, costCellDisplay, pressureClass, historyPriorityForState,
   taskEtaPresentation,
   lastNotifiedPressure,
   relayFrameKind, aggregateConnState, relayWsUrl, seqGap,
   compoundSessionId, displaySessionId,
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
   daemonSessionIds, structureSignature,
-  pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents,
-  historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,
 };
+export { formatUsageCost } from './quotaChips.js';
+export { pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents } from './permissionsWizard.js';
+export {
+  historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,
+  histDoraPerWeek, histDoraPercent, histDoraHours,
+  CO2_EQUIVALENTS, pickCO2Equivalents,
+} from './historyTab.js';

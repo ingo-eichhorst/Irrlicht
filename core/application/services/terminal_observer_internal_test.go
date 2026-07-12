@@ -67,7 +67,7 @@ func (r *uiReader) CaptureScreen(id string) ([]byte, error) {
 	return []byte(r.screen[id]), nil
 }
 
-// uiConsent is a consentGate that grants a fixed set of adapters.
+// uiConsent is a consentGranter that grants a fixed set of adapters.
 type uiConsent struct{ granted map[string]bool }
 
 func (c uiConsent) Granted(adapter, _ string) bool { return c.granted[adapter] }
@@ -157,7 +157,19 @@ func TestObserverGates(t *testing.T) {
 // recorder. git/metrics/pw/broadcaster are nil — the handler never touches them.
 func newFusionDetector(repo outbound.SessionRepository) (*SessionDetector, *captureRecorder) {
 	rec := &captureRecorder{}
-	d := NewSessionDetector(nil, nil, repo, bcNopLog{}, nil, nil, nil, "", 0, nil, nil, nil)
+	d := NewSessionDetector(nil, SessionDetectorDeps{
+		PW:           nil,
+		Repo:         repo,
+		Log:          bcNopLog{},
+		Git:          nil,
+		Metrics:      nil,
+		Broadcaster:  nil,
+		Version:      "",
+		ReadyTTL:     0,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 	d.SetRecorder(rec)
 	return d, rec
 }

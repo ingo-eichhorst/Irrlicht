@@ -37,28 +37,31 @@ agents_dir() {
 # scenario_global <coverage_id> → the scenario's global object from the catalog
 # (compact JSON), or empty when absent.
 scenario_global() {
+  local coverage_id="$1"
   local f; f="$(scenarios_file)"
   [[ -f "$f" ]] || return 0
-  jq -c --arg n "$1" '.scenarios[] | select(.name==$n)' "$f" 2>/dev/null
+  jq -c --arg n "$coverage_id" '.scenarios[] | select(.name==$n)' "$f" 2>/dev/null
 }
 
 # scenario_id_dashed <coverage_id> → the scenario's dashed id (e.g. 5.4 → 5-4),
 # or empty. Used to compute the standard folder name for a not-yet-recorded cell.
 scenario_id_dashed() {
+  local coverage_id="$1"
   local f; f="$(scenarios_file)"
   [[ -f "$f" ]] || return 0
-  jq -r --arg n "$1" '.scenarios[] | select(.name==$n) | .id | gsub("\\.";"-")' "$f" 2>/dev/null
+  jq -r --arg n "$coverage_id" '.scenarios[] | select(.name==$n) | .id | gsub("\\.";"-")' "$f" 2>/dev/null
 }
 
 # agent_cell_file <coverage_id> <adapter> → path to the cell's metadata.json,
 # located by scanning the adapter's scenarios/ for a metadata.json whose
 # scenario_id == <coverage_id>. Empty when no cell exists.
 agent_cell_file() {
+  local coverage_id="$1"
   local ad f sid; ad="$(agents_dir)/$2/scenarios"
   for f in "$ad"/*/metadata.json; do
     [[ -f "$f" ]] || continue
     sid="$(jq -r '.scenario_id // empty' "$f" 2>/dev/null)"
-    [[ "$sid" == "$1" ]] && { echo "$f"; return; }
+    [[ "$sid" == "$coverage_id" ]] && { echo "$f"; return; }
   done
 }
 
@@ -67,18 +70,24 @@ agent_cell_file() {
 #     order preserved — byte-identical to the Go recipeHashOf input. Empty when
 #     absent. This is the authoritative recipe-hash input.
 shard_recipe() {
-  local f; f="$(agent_cell_file "$1" "$2")"
+  local coverage_id="$1" adapter="$2"
+  local f; f="$(agent_cell_file "$coverage_id" "$adapter")"
   [[ -n "$f" && -f "$f" ]] || return 0
   jq -c '.details.recipe // empty' "$f" 2>/dev/null
 }
 
 # shard_has_recipe <coverage_id> <adapter> → exit 0 iff a recipe block exists.
-shard_has_recipe() { [[ -n "$(shard_recipe "$1" "$2")" ]]; }
+shard_has_recipe() {
+  local coverage_id="$1" adapter="$2"
+  [[ -n "$(shard_recipe "$coverage_id" "$adapter")" ]]
+  return $?
+}
 
 # shard_has_assessment <coverage_id> <adapter> → exit 0 iff the cell carries an
 # assessment block (.details.assessment in metadata.json).
 shard_has_assessment() {
-  local f; f="$(agent_cell_file "$1" "$2")"
+  local coverage_id="$1" adapter="$2"
+  local f; f="$(agent_cell_file "$coverage_id" "$adapter")"
   [[ -n "$f" && -f "$f" ]] || return 1
   [[ "$(jq -r '.details.assessment | if . == null then "n" else "y" end' "$f" 2>/dev/null)" == "y" ]]
 }
@@ -88,7 +97,8 @@ shard_has_assessment() {
 #     (from the catalog) plus the recipe's per-adapter fields (from metadata.json),
 #     flattened (the legacy CELL_JSON shape). Empty when the cell is absent.
 shard_cell() {
-  local g cf; g="$(scenario_global "$1")"; cf="$(agent_cell_file "$1" "$2")"
+  local coverage_id="$1" adapter="$2"
+  local g cf; g="$(scenario_global "$coverage_id")"; cf="$(agent_cell_file "$coverage_id" "$adapter")"
   [[ -n "$g" && -n "$cf" && -f "$cf" ]] || return 0
   jq -cn --argjson scen "$g" --slurpfile c "$cf" '
     ($c[0].details.recipe // {}) as $r |
@@ -104,12 +114,13 @@ shard_cell() {
 #     metadata.json, or — for a not-yet-recorded cell — the computed standard
 #     folder <id-dashed>_<coverage_id>. The bash twin of Go's FolderForScenario.
 shard_folder() {
-  local f; f="$(agent_cell_file "$1" "$2")"
+  local coverage_id="$1" adapter="$2"
+  local f; f="$(agent_cell_file "$coverage_id" "$adapter")"
   if [[ -n "$f" && -f "$f" ]]; then
     basename "$(dirname "$f")"; return
   fi
-  local idd; idd="$(scenario_id_dashed "$1")"
-  if [[ -n "$idd" ]]; then echo "${idd}_$1"; else echo "$1"; fi
+  local idd; idd="$(scenario_id_dashed "$coverage_id")"
+  if [[ -n "$idd" ]]; then echo "${idd}_$coverage_id"; else echo "$coverage_id"; fi
 }
 
 # shard_recipe_dir_names <adapter>
@@ -121,30 +132,34 @@ shard_recipe_dir_names() {
   for f in "$ad"/*/metadata.json; do
     [[ -f "$f" ]] && basename "$(dirname "$f")"
   done | sort -u
+  return 0
 }
 
 # shard_coverage_for_dir <dir-name> <adapter>
 #   → the coverage_id that owns a recording dir: the scenario_id of the
 #     metadata.json at scenarios/<dir-name>/, else <dir-name> itself.
 shard_coverage_for_dir() {
-  local f; f="$(agents_dir)/$2/scenarios/$1/metadata.json"
+  local dir_name="$1"
+  local f; f="$(agents_dir)/$2/scenarios/$dir_name/metadata.json"
   if [[ -f "$f" ]]; then
     local sid; sid="$(jq -r '.scenario_id // empty' "$f" 2>/dev/null)"
     [[ -n "$sid" ]] && { echo "$sid"; return; }
   fi
-  echo "$1"
+  echo "$dir_name"
 }
 
 # meta_transcript_ext <adapter> → transcript file extension (default "jsonl").
 meta_transcript_ext() {
+  local adapter="$1"
   local f; f="$(scenarios_file)"
   [[ -f "$f" ]] || { echo jsonl; return; }
-  jq -r --arg a "$1" '.meta.transcript_extensions[$a] // "jsonl"' "$f" 2>/dev/null
+  jq -r --arg a "$adapter" '.meta.transcript_extensions[$a] // "jsonl"' "$f" 2>/dev/null
 }
 
 # meta_min_version <adapter> → pinned minimum CLI version, or empty.
 meta_min_version() {
+  local adapter="$1"
   local f; f="$(scenarios_file)"
   [[ -f "$f" ]] || return 0
-  jq -r --arg a "$1" '.meta.min_versions[$a] // empty' "$f" 2>/dev/null
+  jq -r --arg a "$adapter" '.meta.min_versions[$a] // empty' "$f" 2>/dev/null
 }

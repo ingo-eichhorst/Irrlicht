@@ -23,7 +23,9 @@ type JSONLineParser struct {
 	NewParser func() LineParser
 }
 
-func (JSONLineParser) isFileParser() {}
+func (JSONLineParser) isFileParser() {
+	// sealing marker — deliberately empty
+}
 
 // RawLineParser is used by adapters whose source format is not JSONL
 // (aider's .aider.chat.history.md is markdown). NewParser returns a
@@ -43,7 +45,9 @@ type RawLineParser struct {
 	NewParser func() RawParser
 }
 
-func (RawLineParser) isFileParser() {}
+func (RawLineParser) isFileParser() {
+	// sealing marker — deliberately empty
+}
 
 // LineParser parses a single JSONL line into a normalized ParsedEvent.
 // Adapter packages provide stateful implementations (Claude Code tracks

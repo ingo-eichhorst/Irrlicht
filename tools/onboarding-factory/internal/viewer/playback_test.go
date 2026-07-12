@@ -208,3 +208,25 @@ func TestPlayback_rejectsTraversalInAgent(t *testing.T) {
 		t.Errorf("traversal not blocked: status=%d body=%s", rr.Code, rr.Body)
 	}
 }
+
+// TestPlayback_rejectsDotDotRecording covers a gap archiveNameRE alone
+// leaves open: its charset includes "." and has no length/sequence
+// restriction, so it matches the literal value ".." — which, joined onto
+// <scenarioDir>/recordings/, resolves back up to scenarioDir itself.
+// StartViewerInternal now rejects "." and ".." explicitly after reducing
+// recording to a single path segment via filepath.Base.
+func TestPlayback_rejectsDotDotRecording(t *testing.T) {
+	root := fixtureRoot(t)
+	s := &Server{RepoRoot: root}
+	h := s.Handler()
+
+	body, _ := json.Marshal(map[string]any{
+		"agent": "claudecode", "subtree": "scenarios", "scenario": "test",
+		"recording": "..", "mode": "viewer-internal", "speed": 1.0,
+	})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("POST", "/api/replay/start", bytes.NewReader(body)))
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("\"..\" recording not blocked: status=%d body=%s", rr.Code, rr.Body)
+	}
+}

@@ -113,6 +113,7 @@ case "$ADAPTER" in
   gemini-cli)  CLI_BIN="gemini";   VER_FIELD=1 ;;
   antigravity) CLI_BIN="agy";      VER_FIELD=1 ;;
   mistral-vibe) CLI_BIN="vibe";    VER_FIELD=2 ;;
+  *) fail "unknown adapter: $ADAPTER" ;;
 esac
 
 command -v "$CLI_BIN" >/dev/null 2>&1 || fail "$CLI_BIN CLI not on PATH"
@@ -141,6 +142,7 @@ for bin in irrlichd replay; do
   case "$bin" in
     irrlichd) src="./core/cmd/irrlichd" ;;
     replay)   src="./tools/onboarding-factory/cmd/replay" ;;
+    *) fail "unknown build target: $bin" ;;
   esac
   if ! (cd "$REPO_ROOT" && go build -ldflags "-X main.Version=$VERSION_STR" -o "$BIN_DIR/$bin" "$src") >/dev/null 2>&1; then
     fail "failed to build $bin from $src"

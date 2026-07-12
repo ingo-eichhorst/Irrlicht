@@ -22,6 +22,12 @@ enum SoundChoice: Hashable {
     case speak(SpokenVoice)
     case custom(installedFilename: String, displayPath: String)
 
+    // `default` (needing backticks) is the idiomatic Apple-platform name for
+    // "the standard instance of this type" (see FileManager.default,
+    // URLSessionConfiguration.default) — kept as-is rather than renamed per
+    // SonarQube swift:S2961; renaming would also mean touching every
+    // `.default` call site and the persisted "speak:default" raw-value
+    // grammar documented above for no readability gain.
     static let `default`: SoundChoice = .ping
 
     static let builtIns: [SoundChoice] = [.ping, .chime, .funk, .whoosh, .sosumi]

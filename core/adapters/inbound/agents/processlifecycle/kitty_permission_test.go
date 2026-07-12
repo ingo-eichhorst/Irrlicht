@@ -108,7 +108,7 @@ func TestEnsureKittyConfigPatchedUpgradesStaleBlock(t *testing.T) {
 		t.Fatal("expected modified=true for stale block")
 	}
 	got := readFile(t, path)
-	if want := "font_size 12\n\n" + kittyManagedBlock; got != want {
+	if got != "font_size 12\n\n"+kittyManagedBlock {
 		t.Errorf("content = %q, want canonical block after user lines", got)
 	}
 	if strings.Count(got, kittyBlockStart) != 1 {
@@ -242,7 +242,7 @@ func TestEnsureKittyConfigPatchedCollapsesDuplicateBlocks(t *testing.T) {
 		t.Fatal("expected modified=true for duplicate blocks")
 	}
 	got := readFile(t, path)
-	if want := "font_size 12\n\n" + kittyManagedBlock; got != want {
+	if got != "font_size 12\n\n"+kittyManagedBlock {
 		t.Errorf("content = %q, want single canonical block", got)
 	}
 }

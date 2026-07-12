@@ -13,9 +13,26 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
+	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
 )
+
+// defaultSessionDetectorDeps returns the SessionDetectorDeps every e2e test in
+// this package builds identically (nopLogger/stubGit/stubMetrics, no
+// broadcaster, "test" version, zero ReadyTTL, no PID/process-name maps) —
+// callers overwrite only the field(s) their scenario needs.
+func defaultSessionDetectorDeps(repo outbound.SessionRepository) services.SessionDetectorDeps {
+	return services.SessionDetectorDeps{
+		Repo:     repo,
+		Log:      &nopLogger{},
+		Git:      &stubGit{},
+		Metrics:  &stubMetrics{},
+		Version:  "test",
+		ReadyTTL: 0,
+	}
+}
 
 // realTempDir returns a temp dir with macOS /var → /private/var symlinks resolved,
 // so paths match what lsof reports for process CWDs.
@@ -115,6 +132,16 @@ func newMemRepo() *memRepo {
 	return &memRepo{states: make(map[string]*session.SessionState)}
 }
 
+// Load returns an independent deep copy of the stored state, matching the
+// real filesystem.SessionRepository (a fresh disk read every call). Before
+// this fix, Load handed back the same pointer stored in r.states, so a
+// concurrent, unlocked read (e.g. a background PID-discovery goroutine, or
+// this package's own assertions) raced the real SessionDetector/PIDManager
+// mutating that struct in place under PIDManager.WithSessionStateLock — a
+// lock this map's r.mu knows nothing about. Same bug as
+// core/application/services' mockRepo (issue #942/#956/#973); #975 tracks
+// this instance specifically because concurrent_test.go and crash_test.go
+// run the real detector in a goroutine against this repo.
 func (r *memRepo) Load(id string) (*session.SessionState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -122,13 +149,16 @@ func (r *memRepo) Load(id string) (*session.SessionState, error) {
 	if !ok {
 		return nil, errors.New("not found")
 	}
-	return s, nil
+	return deepCopySessionState(s), nil
 }
 
+// Save stores an independent copy of s, not the caller's pointer — see
+// Load's doc comment.
 func (r *memRepo) Save(s *session.SessionState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.states[s.SessionID] = s
+	cp := deepCopySessionState(s)
+	r.states[cp.SessionID] = cp
 	return nil
 }
 
@@ -139,14 +169,50 @@ func (r *memRepo) Delete(id string) error {
 	return nil
 }
 
+// ListAll returns independent deep copies for the same reason Load does.
 func (r *memRepo) ListAll() ([]*session.SessionState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make([]*session.SessionState, 0, len(r.states))
 	for _, s := range r.states {
-		out = append(out, s)
+		out = append(out, deepCopySessionState(s))
 	}
 	return out, nil
+}
+
+// deepCopySessionState returns an independent copy of s, one level deep: the
+// top-level struct plus a fresh copy of every pointer-typed field (Metrics,
+// Launcher, Background, Subagents, WaitingStartTime) so none of them is still
+// reachable from two goroutines at once. Deliberately not a JSON round-trip
+// (unlike cached_repository.go's deepCopySessions): several SessionMetrics
+// fields are json:"-" by design (NoSubstantiveActivity, PermissionPending,
+// ...) — per-pass, in-memory-only signals a live tailer/hook-receiver
+// computes and the same processActivityLocked call reads back moments
+// later — and a JSON copy would silently drop them. Mirrors
+// core/application/services/testhelpers_test.go's identically-named helper.
+func deepCopySessionState(s *session.SessionState) *session.SessionState {
+	cp := *s
+	if s.Launcher != nil {
+		l := *s.Launcher
+		cp.Launcher = &l
+	}
+	if s.Background != nil {
+		b := *s.Background
+		cp.Background = &b
+	}
+	if s.Subagents != nil {
+		sub := *s.Subagents
+		cp.Subagents = &sub
+	}
+	if s.WaitingStartTime != nil {
+		w := *s.WaitingStartTime
+		cp.WaitingStartTime = &w
+	}
+	if s.Metrics != nil {
+		m := *s.Metrics
+		cp.Metrics = &m
+	}
+	return &cp
 }
 
 type nopLogger struct{}
