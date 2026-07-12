@@ -980,9 +980,35 @@ describe('CO2 equivalents (issue #952)', () => {
     expect(CO2_EQUIVALENTS[CO2_EQUIVALENTS.length - 1].grams).toBeGreaterThanOrEqual(100_000_000)
   })
 
-  test('a 50kg axis picks ~1.5kg/~8.9kg/~43.8kg, matching the reported real-world example', () => {
+  test('a 50kg axis picks well-spread equivalents, not clustered ones', () => {
     const picks = pickCO2Equivalents(50_000)
-    expect(picks.map(e => e.id)).toEqual(['laundry', 'gasoline-gallon', 'flight-short'])
-    expect(picks.map(e => e.grams)).toEqual([1500, 8900, 43800])
+    expect(picks.map(e => e.id)).toEqual(['petrol-liter', 'running-shoes', 'flight-short'])
+    expect(picks.map(e => e.grams)).toEqual([2350, 9500, 43800])
+  })
+
+  test('a ~10kg axis (issue #980) no longer clusters two picks together', () => {
+    // Regression test for the reported bug: at this axis scale the original
+    // sparse table picked grid-kwh (460g) and laundry (1500g) together, only
+    // ~9% of the axis height apart — enough for their labels to overlap.
+    const picks = pickCO2Equivalents(11_000)
+    expect(picks.map(e => e.id)).toEqual(['grid-kwh', 'petrol-liter', 'running-shoes'])
+    for (let i = 1; i < picks.length; i++) {
+      const fractionalGap = (picks[i].grams - picks[i - 1].grams) / 11_000
+      expect(fractionalGap).toBeGreaterThan(0.15)
+    }
+  })
+
+  test('no two adjacent picks land within 5% of the axis height of each other, across the full range', () => {
+    // Sweeps maxY across ~9 orders of magnitude (log-spaced) so a future edit
+    // that reintroduces a sparse region gets caught here instead of shipping
+    // as another overlapping-label bug.
+    for (let exp = 0; exp <= 8.2; exp += 0.05) {
+      const maxY = Math.pow(10, exp)
+      const picks = pickCO2Equivalents(maxY)
+      for (let i = 1; i < picks.length; i++) {
+        const fractionalGap = (picks[i].grams - picks[i - 1].grams) / maxY
+        expect(fractionalGap).toBeGreaterThan(0.04)
+      }
+    }
   })
 })

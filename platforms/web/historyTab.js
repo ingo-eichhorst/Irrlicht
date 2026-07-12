@@ -88,16 +88,23 @@ export const CO2_EQUIVALENTS = [
   { id: 'stream-hour', grams: 36, label: '1 hour of video streaming' },
   { id: 'kettle', grams: 60, label: 'boiling a kettle' },
   { id: 'car-km', grams: 170, label: 'driving 1 km by car' },
-  { id: 'car-mile', grams: 393, label: 'driving 1 mile by car' },
   { id: 'grid-kwh', grams: 460, label: '1 kWh of average grid electricity' },
+  { id: 'shower', grams: 1000, label: 'a hot shower' },
   { id: 'laundry', grams: 1500, label: 'a load of laundry' },
-  { id: 'gasoline-gallon', grams: 8900, label: 'burning 1 gallon of gasoline' },
+  { id: 'petrol-liter', grams: 2350, label: 'burning 1 liter of petrol' },
+  { id: 'bike-frame', grams: 5500, label: 'manufacturing a bicycle frame' },
+  { id: 'running-shoes', grams: 9500, label: 'manufacturing a pair of running shoes' },
+  { id: 'jeans', grams: 33400, label: 'a pair of jeans, cradle to grave' },
   { id: 'flight-short', grams: 43800, label: 'a short-haul flight (London → Paris)' },
   { id: 'tree-year', grams: 60000, label: "a tree's CO2 absorption for a year" },
   { id: 'car-commute-month', grams: 118000, label: 'a month of average car commuting' },
+  { id: 'laptop', grams: 185000, label: 'a laptop, cradle to grave' },
   { id: 'flight-long', grams: 650000, label: 'a long-haul flight (London → New York)' },
+  { id: 'flight-long-return', grams: 1300000, label: 'a round-trip long-haul flight (there and back)' },
   { id: 'car-year', grams: 4290000, label: "an average car's emissions for a year" },
   { id: 'person-year', grams: 4800000, label: "an average person's annual carbon footprint" },
+  { id: 'cars-9t', grams: 8580000, label: "roughly 2 average cars' annual emissions" },
+  { id: 'cars-13t', grams: 12870000, label: "roughly 3 average cars' annual emissions" },
   { id: 'cars-25t', grams: 25000000, label: "roughly 6 average cars' annual emissions" },
   { id: 'people-100t', grams: 100000000, label: "roughly 21 people's average annual carbon footprint" },
 ];
@@ -393,6 +400,19 @@ function drawHistoryForecastLine(geo, { B, H, cumulative, grandTotal, fcY, waiti
   ctx.restore();
 }
 
+// MIN_LABEL_GAP_PX is the smallest vertical gap enforced between two
+// CO2-equivalent labels (issue #980) — a backstop on top of a densified
+// CO2_EQUIVALENTS table (which does the real work of keeping picks spread
+// out): even if two picks' reference lines still land close together for
+// some axis range, their text is pushed apart by at least this much so it
+// never visually overlaps.
+const MIN_LABEL_GAP_PX = 12;
+// TEXT_HEIGHT_PX approximates the rendered height of a label's text — used
+// to convert a baseline anchor (which sits on the label's top edge when
+// flipped below the line, or its bottom edge otherwise) into the actual
+// top/bottom extent being compared for overlap.
+const TEXT_HEIGHT_PX = 10;
+
 // drawHistoryCO2Equivalents overlays red dotted reference lines at grams
 // equivalent to a relatable everyday activity (issue #952) — only called for
 // the CO2 chart, so every other chart type is unaffected. Labels are left-
@@ -411,15 +431,31 @@ function drawHistoryCO2Equivalents(geo, { w, padL, padR, padT, maxY, danger }) {
   ctx.lineCap = 'round';
   ctx.setLineDash([1, 4]);
   ctx.textAlign = 'left';
-  for (const eq of picks) {
-    const y = yAt(eq.grams);
+  // Lines are drawn at their true data position regardless of crowding —
+  // only the label text's anchor is nudged, and only ever downward, so
+  // labels stay in top-to-bottom grams order. Tracked by the text's bottom
+  // edge (not the raw baseline anchor), since a below-flipped label's
+  // anchor is its top edge while a normal label's anchor is its bottom —
+  // comparing anchors directly would understate the gap between a flipped
+  // label and the one below it.
+  let prevBottom = null;
+  for (const eq of [...picks].reverse()) {
+    const lineY = yAt(eq.grams);
     ctx.beginPath();
-    ctx.moveTo(padL, y);
-    ctx.lineTo(w - padR, y);
+    ctx.moveTo(padL, lineY);
+    ctx.lineTo(w - padR, lineY);
     ctx.stroke();
-    const below = (y - padT) < 10;
+    const below = (lineY - padT) < 10;
+    let labelY = below ? lineY + 3 : lineY - 3;
+    let top = below ? labelY : labelY - TEXT_HEIGHT_PX;
+    if (prevBottom !== null && top - prevBottom < MIN_LABEL_GAP_PX) {
+      const shift = MIN_LABEL_GAP_PX - (top - prevBottom);
+      labelY += shift;
+      top += shift;
+    }
     ctx.textBaseline = below ? 'top' : 'bottom';
-    ctx.fillText('≈ ' + eq.label, padL + 4, below ? y + 3 : y - 3);
+    ctx.fillText('≈ ' + eq.label, padL + 4, labelY);
+    prevBottom = below ? labelY + TEXT_HEIGHT_PX : labelY;
   }
   ctx.restore();
 }

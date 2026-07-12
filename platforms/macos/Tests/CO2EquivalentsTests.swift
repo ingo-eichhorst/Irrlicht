@@ -50,13 +50,40 @@ final class CO2EquivalentsTests: XCTestCase {
         XCTAssertLessThanOrEqual(CO2Equivalents.pick(maxY: 5_000_000).count, 3)
     }
 
-    // Matches the real-world example reported against the web implementation:
-    // a 50kg axis should pick roughly 1.5kg/8.9kg/43.8kg, not values clustered
-    // together or a mismatched jump to a much larger candidate.
-    func test50kgAxisPicksMatchTheReportedRealWorldExample() {
+    // A 50kg axis should pick well-spread equivalents, not clustered ones.
+    func test50kgAxisPicksAreWellSpread() {
         let picks = CO2Equivalents.pick(maxY: 50_000)
-        XCTAssertEqual(picks.map(\.id), ["laundry", "gasoline-gallon", "flight-short"])
-        XCTAssertEqual(picks.map(\.grams), [1_500, 8_900, 43_800])
+        XCTAssertEqual(picks.map(\.id), ["petrol-liter", "running-shoes", "flight-short"])
+        XCTAssertEqual(picks.map(\.grams), [2_350, 9_500, 43_800])
+    }
+
+    // Regression test for issue #980: at this axis scale the original sparse
+    // table picked grid-kwh (460g) and laundry (1500g) together, only ~9% of
+    // the axis height apart — enough for their labels to overlap.
+    func test10kgAxisNoLongerClustersTwoPicksTogether() {
+        let picks = CO2Equivalents.pick(maxY: 11_000)
+        XCTAssertEqual(picks.map(\.id), ["grid-kwh", "petrol-liter", "running-shoes"])
+        for i in 1..<picks.count {
+            let fractionalGap = (picks[i].grams - picks[i - 1].grams) / 11_000
+            XCTAssertGreaterThan(fractionalGap, 0.15)
+        }
+    }
+
+    // Sweeps maxY across ~9 orders of magnitude (log-spaced) so a future edit
+    // that reintroduces a sparse region gets caught here instead of shipping
+    // as another overlapping-label bug — mirrors the same sweep in
+    // platforms/web/irrlicht.test.js.
+    func testNoTwoAdjacentPicksClusterAcrossTheFullRange() {
+        var exp = 0.0
+        while exp <= 8.2 {
+            let maxY = pow(10.0, exp)
+            let picks = CO2Equivalents.pick(maxY: maxY)
+            for i in 1..<picks.count {
+                let fractionalGap = (picks[i].grams - picks[i - 1].grams) / maxY
+                XCTAssertGreaterThan(fractionalGap, 0.04, "maxY=\(maxY) picks=\(picks.map(\.id))")
+            }
+            exp += 0.05
+        }
     }
 
     // Lockstep guard: if `co2EquivalentTargets` is re-tuned in

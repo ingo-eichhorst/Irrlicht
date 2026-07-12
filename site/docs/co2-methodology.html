@@ -202,16 +202,16 @@
             <td>UK Government (DESNZ), <em>GHG Conversion Factors for Company Reporting 2025</em> &mdash; average petrol/diesel car, tank-to-wheel. <a href="https://www.gov.uk/government/publications/greenhouse-gas-reporting-conversion-factors-2025" target="_blank" rel="noopener">Conversion factors</a></td>
           </tr>
           <tr>
-            <td>Driving 1 mile by car</td>
-            <td>393 g</td>
-            <td>Primary source</td>
-            <td>US EPA, <em>Greenhouse Gas Equivalencies Calculator</em> &mdash; 2022 average fleet fuel economy (22.8 mpg). <a href="https://www.epa.gov/energy/greenhouse-gas-equivalencies-calculator-calculations-and-references" target="_blank" rel="noopener">Methodology &amp; references</a></td>
-          </tr>
-          <tr>
             <td>1 kWh of average grid electricity</td>
             <td>460 g</td>
             <td>Primary source</td>
             <td>The same 460 gCO2/kWh global-average grid intensity used in the fallback CO2e formula above. Ember, <em>Global Electricity Review 2025</em>. <a href="https://ember-energy.org/latest-insights/global-electricity-review-2025/" target="_blank" rel="noopener">Report</a></td>
+          </tr>
+          <tr>
+            <td>A hot shower</td>
+            <td>~1 kg</td>
+            <td>Order-of-magnitude estimate</td>
+            <td>No authoritative single source. Heating ~50&ndash;80 L of water by ~25&deg;C for an 8&ndash;10 minute shower takes roughly 1.5&ndash;2.3 kWh; at the ~460 gCO2/kWh global-average grid intensity (Ember 2025) that works out to roughly 0.6&ndash;1.1 kg depending on shower length and water-heater type.</td>
           </tr>
           <tr>
             <td>A load of laundry</td>
@@ -220,10 +220,28 @@
             <td>No authoritative single source. Widely cited figures range from ~0.6 kg (cold wash, line-dried) to ~3.3 kg (hot wash, tumble-dried); 1.5 kg represents a mixed-practice midpoint.</td>
           </tr>
           <tr>
-            <td>Burning 1 gallon of gasoline</td>
-            <td>~8.9 kg</td>
+            <td>Burning 1 liter of petrol</td>
+            <td>~2.35 kg</td>
             <td>Primary source</td>
-            <td>US EPA, <em>Greenhouse Gas Equivalencies Calculator</em>: "8,887 grams of CO2 emissions per gallon of gasoline consumed." <a href="https://www.epa.gov/energy/greenhouse-gas-equivalencies-calculator-calculations-and-references" target="_blank" rel="noopener">Methodology &amp; references</a></td>
+            <td>US EPA, <em>Greenhouse Gas Equivalencies Calculator</em>: "8,887 grams of CO2 emissions per gallon of gasoline consumed," converted to metric (8,887 g &divide; 3.785 L/gallon &asymp; 2,348 g/liter). <a href="https://www.epa.gov/energy/greenhouse-gas-equivalencies-calculator-calculations-and-references" target="_blank" rel="noopener">Methodology &amp; references</a></td>
+          </tr>
+          <tr>
+            <td>Manufacturing a bicycle frame</td>
+            <td>~5.5 kg</td>
+            <td>Order-of-magnitude estimate</td>
+            <td>No single authoritative figure &mdash; steel-frame lifecycle assessments put a single frame anywhere from ~5.5 kg to ~15 kg CO2e depending on study boundaries and alloy; 5.5 kg represents the lower, frame-only end of that range.</td>
+          </tr>
+          <tr>
+            <td>Manufacturing a pair of running shoes</td>
+            <td>~9.5 kg</td>
+            <td>Primary source</td>
+            <td>MIT Materials Systems Laboratory (Kirchain &amp; Olivetti, 2013): manufacturing-phase emissions of 9.5 &plusmn; 2.7 kg CO2e per pair, roughly 68% of the shoe's ~14 kg total lifecycle footprint. <a href="https://news.mit.edu/2013/footwear-carbon-footprint-0522" target="_blank" rel="noopener">MIT News</a></td>
+          </tr>
+          <tr>
+            <td>A pair of jeans, cradle to grave</td>
+            <td>~33.4 kg</td>
+            <td>Primary source, contested</td>
+            <td>Levi Strauss &amp; Co.'s own lifecycle assessment of a pair of 501 jeans: ~33.4 kg CO2e across the full cradle-to-grave lifecycle (fiber, manufacturing, and years of consumer washing/drying), of which ~16.2 kg is manufacturing alone. <a href="https://www.clustercollaboration.eu/content/life-cycle-assessment-levis-jeans-case" target="_blank" rel="noopener">Case summary</a>. Other independent studies report figures as low as ~12.6 kg for a narrower system boundary &mdash; treat this as a wide-range estimate, not a fixed constant.</td>
           </tr>
           <tr>
             <td>A short-haul flight (London &rarr; Paris)</td>
@@ -241,13 +259,25 @@
             <td>A month of average car commuting</td>
             <td>~118 kg</td>
             <td>Derived estimate</td>
-            <td>Derived, not a separate primary figure: ~15 miles/day round trip &times; 393 g/mile (the EPA per-mile figure above) &times; 20 workdays &asymp; 118 kg.</td>
+            <td>Derived, not a separate primary figure: ~15 miles/day round trip &times; 393 g/mile (US EPA's 2022 average fleet fuel economy, 22.8 mpg) &times; 20 workdays &asymp; 118 kg. <a href="https://www.epa.gov/energy/greenhouse-gas-equivalencies-calculator-calculations-and-references" target="_blank" rel="noopener">Methodology &amp; references</a></td>
+          </tr>
+          <tr>
+            <td>A laptop, cradle to grave</td>
+            <td>~185 kg</td>
+            <td>Primary source</td>
+            <td>Apple's own <em>13-inch MacBook Pro Product Environmental Report</em> (Nov 2020): 185 kg CO2e across the device's full lifecycle, ~73% from production. Other Apple laptop models range roughly 150&ndash;325 kg CO2e depending on size and generation. <a href="https://www.apple.com/environment/pdf/products/notebooks/13-inch_MacBookPro_PER_Nov2020.pdf" target="_blank" rel="noopener">Product Environmental Report</a></td>
           </tr>
           <tr>
             <td>A long-haul flight (London &rarr; New York)</td>
             <td>~650 kg</td>
             <td>Primary source</td>
             <td>DEFRA/DESNZ 2025 long-haul, economy, radiative-forcing-inclusive factor (117.04 gCO2e/passenger-km) &times; ~5,555 km. Other calculators put this route anywhere from ~590 kg to ~1 tonne depending on load-factor and lifecycle assumptions. <a href="https://www.gov.uk/government/publications/greenhouse-gas-reporting-conversion-factors-2025" target="_blank" rel="noopener">Conversion factors</a></td>
+          </tr>
+          <tr>
+            <td>A round-trip long-haul flight (there and back)</td>
+            <td>~1.3 t</td>
+            <td>Derived estimate</td>
+            <td>Simply 2 &times; the long-haul figure above (650 kg &times; 2 &asymp; 1.3 t) &mdash; not a separate source, included so the ladder doesn't jump straight from a single long-haul flight to multi-tonne car/person figures.</td>
           </tr>
           <tr>
             <td>An average car's emissions for a year</td>
@@ -260,6 +290,18 @@
             <td>~4.8 t</td>
             <td>Primary source, high variance</td>
             <td>Global average, not a single-country figure &mdash; deliberately chosen to stay relatable worldwide. Our World in Data: "4.8 tonnes per person." <a href="https://ourworldindata.org/per-capita-co2" target="_blank" rel="noopener">Per-capita CO2 emissions</a>. National averages vary hugely (some countries well under 1 t/year, others well over 10 t/year).</td>
+          </tr>
+          <tr>
+            <td>Roughly 2 average cars' annual emissions</td>
+            <td>~8.58 t</td>
+            <td>Derived estimate</td>
+            <td>A simple multiple of the average-car-per-year figure above (2 &times; 4.29 t = 8.58 t), not a separate source &mdash; included to keep the ladder dense between a person's and several cars' annual footprint.</td>
+          </tr>
+          <tr>
+            <td>Roughly 3 average cars' annual emissions</td>
+            <td>~12.87 t</td>
+            <td>Derived estimate</td>
+            <td>A simple multiple of the average-car-per-year figure above (3 &times; 4.29 t &asymp; 12.87 t), not a separate source.</td>
           </tr>
           <tr>
             <td>Roughly 6 average cars' annual emissions</td>
@@ -286,7 +328,8 @@
       <ul>
         <li>Every figure above is a widely-cited public average, not a measurement of irrlicht's own AI provider traffic or your own local habits.</li>
         <li>Flight, tree, and car figures assume specific routes, load factors, or growth conditions spelled out in the table &mdash; a real trip or a real tree will vary.</li>
-        <li>The smartphone, kettle, and laundry figures have no single authoritative source; they're physics-based ballpark ranges, not government statistics.</li>
+        <li>The smartphone, kettle, shower, laundry, and bicycle-frame figures have no single authoritative source; they're physics-based ballpark ranges, not government statistics.</li>
+        <li>The jeans figure varies significantly across LCA studies (~12.6&ndash;33.4 kg) depending on system boundary; we use Levi's own full cradle-to-grave number rather than a narrower manufacturing-only figure.</li>
         <li>Grid carbon intensity varies enormously by country and even by time of day &mdash; anywhere from near-zero (hydro/nuclear-heavy grids) to well over 700 gCO2/kWh (coal-heavy grids), against the ~460 g global average used in the fallback formula.</li>
       </ul>
 
