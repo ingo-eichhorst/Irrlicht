@@ -309,6 +309,13 @@ func (a *Adapter) GetCWDFromTranscript(transcriptPath string) string {
 		// keyed by conversationId (no-op for non-antigravity paths).
 		lastCWD = transcript.ExtractCWDFromAntigravityHistory(transcriptPath)
 	}
+	if lastCWD == "" {
+		// mistral-vibe never writes cwd into messages.jsonl, and its meta.json
+		// sidecar doesn't follow the generic same-basename convention above
+		// (fixed filename, cwd nested under environment.working_directory) —
+		// see issue #906 (presession promotion can't CWD-match without this).
+		lastCWD = transcript.ExtractCWDFromVibeMetaJSON(transcriptPath)
+	}
 	return lastCWD
 }
 
