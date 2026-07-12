@@ -319,6 +319,29 @@ type historyConcurrency struct {
 	Current float64 `json:"current"`
 }
 
+// historyStateResponse is the chart=state payload (#981, the Activity
+// Matrix): a per-project, per-state agent-count grid, unlike every other
+// chart's single-value-per-point series. Projects is row order (busiest
+// first, by total activity across every state and bucket); ByState mirrors
+// outbound.StateSeriesResult.ByState directly (state -> project -> per-bucket
+// counts, each slice aligned to BucketStarts) — the matrix is dense, not the
+// sparse [{ts,project,value}] shape the canvas time-series charts use, since
+// every cell needs a value to render a grid. Concurrency reuses the agents
+// side panel's peak/average/current shape (working+waiting combined).
+type historyStateResponse struct {
+	Range         string                          `json:"range"`
+	Chart         string                          `json:"chart"`
+	Group         string                          `json:"group"`
+	Start         int64                           `json:"start"`
+	End           int64                           `json:"end"`
+	BucketSeconds int64                           `json:"bucket_seconds"`
+	BucketStarts  []int64                         `json:"bucket_starts"`
+	Projects      []string                        `json:"projects"`
+	ByState       map[string]map[string][]float64 `json:"by_state"`
+	Concurrency   *historyConcurrency             `json:"concurrency,omitempty"`
+	Scope         string                          `json:"scope,omitempty"`
+}
+
 type historyForecastPoint struct {
 	TS    int64   `json:"ts"`
 	Value float64 `json:"value"`
@@ -464,10 +487,9 @@ func serveHistoryDoraChart(w http.ResponseWriter, git historyGitReader, sessions
 }
 
 // historyChartKnown validates the requested ?chart= value. Charts implemented
-// in Phase 1-3 pass through; chart=state is scaffolded in the UI but not wired
-// yet (writes a 501); anything else is a client error (writes a 400). Returns
-// false once it has already written the response, in which case the caller
-// must return immediately.
+// in Phase 1-3 pass through; anything else is a client error (writes a 400).
+// Returns false once it has already written the response, in which case the
+// caller must return immediately.
 func historyChartKnown(w http.ResponseWriter, chart string) bool {
 	switch chart {
 	case "cost", "tokens", "co2", "models", "providers":
@@ -479,10 +501,8 @@ func historyChartKnown(w http.ResponseWriter, chart string) bool {
 	case "agents":
 		// implemented (Phase 3) — handled after range resolution below
 	case "state":
-		// time-in-state is the issue's optional second half (#751); the
-		// reconstruction exists but no chart is wired yet.
-		writeHistoryNotImplemented(w, "chart="+chart, 3)
-		return false
+		// implemented (#981, the "Activity Matrix" — time-in-state, the
+		// optional second half of #751) — handled after range resolution below
 	default:
 		http.Error(w, "unknown chart: "+chart, http.StatusBadRequest)
 		return false
@@ -521,6 +541,11 @@ func historyMetricAndGroup(chart, group string) (metric, effectiveGroup string) 
 	case "providers":
 		return "cost", "provider"
 	case "agents":
+		return "cost", "project"
+	case "state":
+		// Same project-only limitation as agents: recordings carry no
+		// branch/provider/model axis. Metric is unused for chart=state (it
+		// never touches CostTracker), "cost" is just a harmless placeholder.
 		return "cost", "project"
 	default:
 		return "cost", group
@@ -568,6 +593,34 @@ func serveHistoryAgentsChart(w http.ResponseWriter, concurrency outbound.Concurr
 		cr = &outbound.ConcurrencyResult{Start: query.Start, End: query.End, BucketSeconds: query.BucketSeconds, BucketStarts: []int64{}, ByKey: map[string][]float64{}, PeakByKey: map[string]float64{}}
 	}
 	writeHistoryJSON(w, buildAgentsResponse(rangeKey, scopeEcho, cr))
+}
+
+// serveHistoryStateChart serves chart=state (#981): a per-project,
+// per-state (working/waiting/ready) series reconstructed from lifecycle
+// recordings via ConcurrencyReader.StateSeries — AgentsSeries' per-state
+// counterpart. A nil reader or an unresolved recordings dir yields an
+// empty-but-valid payload rather than an error, mirroring
+// serveHistoryAgentsChart.
+func serveHistoryStateChart(w http.ResponseWriter, concurrency outbound.ConcurrencyReader, rangeKey, scopeEcho string, query outbound.SeriesQuery) {
+	var sr *outbound.StateSeriesResult
+	if concurrency != nil {
+		s, err := concurrency.StateSeries(query)
+		if err != nil {
+			http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
+			return
+		}
+		sr = s
+	}
+	if sr == nil {
+		sr = &outbound.StateSeriesResult{
+			Start: query.Start, End: query.End, BucketSeconds: query.BucketSeconds,
+			BucketStarts: []int64{},
+			ByState: map[string]map[string][]float64{
+				session.StateWorking: {}, session.StateWaiting: {}, session.StateReady: {},
+			},
+		}
+	}
+	writeHistoryJSON(w, buildStateResponse(rangeKey, scopeEcho, sr))
 }
 
 // historyCrossFilters resolves the orthogonal ?project=/?provider=/?token_type=
@@ -655,16 +708,36 @@ func resolveHistoryQuery(w http.ResponseWriter, q url.Values) (historyQuery, boo
 	scopeField, scopeValue := parseHistoryScope(q.Get("scope"))
 	scopeEcho := historyScopeEcho(scopeField, scopeValue)
 
-	rangeKey, start, end, ok := resolveHistoryRange(q)
-	if !ok {
-		http.Error(w, "invalid range: use range=day|week|month|year|this-month or start&end (unix seconds)", http.StatusBadRequest)
-		return historyQuery{}, false
+	// chart=state (#981) resolves its window from a named ?granularity=
+	// zoom-level instead of the usual ?range=/?bucket= pair — the granularity
+	// picks both the bucket width and the trailing window at once.
+	var rangeKey string
+	var start, end, bucketSeconds int64
+	if chart == "state" {
+		granularity := q.Get("granularity")
+		if granularity == "" {
+			granularity = "24h"
+		}
+		bs, s, e, gok := resolveHistoryGranularity(granularity)
+		if !gok {
+			http.Error(w, "invalid granularity: use 1m|10m|60m|8h|24h|7d|1mo|6mo|1y", http.StatusBadRequest)
+			return historyQuery{}, false
+		}
+		rangeKey, start, end, bucketSeconds = granularity, s, e, bs
+	} else {
+		rk, s, e, ok := resolveHistoryRange(q)
+		if !ok {
+			http.Error(w, "invalid range: use range=day|week|month|year|this-month or start&end (unix seconds)", http.StatusBadRequest)
+			return historyQuery{}, false
+		}
+		rangeKey, start, end = rk, s, e
+		bucketSeconds = historyBucketSeconds(q, end-start)
 	}
 
 	seriesQuery := outbound.SeriesQuery{
 		Start:         start,
 		End:           end,
-		BucketSeconds: historyBucketSeconds(q, end-start),
+		BucketSeconds: bucketSeconds,
 		Group:         group,
 		ScopeField:    scopeField,
 		ScopeValue:    scopeValue,
@@ -707,6 +780,11 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 
 		if hq.chart == "agents" {
 			serveHistoryAgentsChart(w, concurrency, hq.rangeKey, hq.scopeEcho, hq.seriesQuery)
+			return
+		}
+
+		if hq.chart == "state" {
+			serveHistoryStateChart(w, concurrency, hq.rangeKey, hq.scopeEcho, hq.seriesQuery)
 			return
 		}
 
@@ -785,17 +863,6 @@ func parseTokenTypeFilter(s string) ([]string, bool) {
 	return raw, true
 }
 
-// writeHistoryNotImplemented emits a 501 with a phase hint for chart types and
-// groups scaffolded in the UI but not yet wired (Phase 2/3).
-func writeHistoryNotImplemented(w http.ResponseWriter, what string, phase int) {
-	w.Header().Set(headerContentType, contentTypeJSON)
-	w.WriteHeader(http.StatusNotImplemented)
-	json.NewEncoder(w).Encode(map[string]any{
-		"error": what + " is not implemented in Phase 1",
-		"phase": phase,
-	})
-}
-
 // resolveHistoryRange resolves the requested window to [start, end) unix
 // seconds. Precedence: explicit start&end → calendar shorthand / trailing
 // window via range. Missing range defaults to "day". Returns ok=false on a
@@ -842,6 +909,51 @@ func historyBucketSeconds(q url.Values, span int64) int64 {
 	default:
 		return 86400
 	}
+}
+
+// historyGranularitySpec pairs a named granularity's bucket width with the
+// number of buckets its default window shows — the "zoom level" for
+// chart=state's activity matrix (#981): picking a granularity changes both
+// the bucket width and the visible span at once (e.g. "1 min" buckets show
+// the last 45 minutes, "1 year" buckets show the last 8 years).
+type historyGranularitySpec struct {
+	bucketSeconds int64
+	buckets       int64
+}
+
+// historyGranularitySpecs is chart=state's only bucket-width source — unlike
+// every other chart (downsampled by span via historyBucketSeconds), the
+// activity matrix always resolves both bucket width and window from a single
+// named step. The month/6-month/year entries use an averaged bucket width
+// (30/182/365 days) rather than true calendar boundaries: the shared series
+// pipeline assumes a uniform bucket stride (BucketStarts is a fixed-step
+// loop — see StateSeries/AgentsSeries/CostSeries), and switching that to
+// variable-width calendar buckets would be a cross-cutting change touching
+// every chart, not just this one. Tracked as a known approximation — see the
+// feature issue's open questions.
+var historyGranularitySpecs = map[string]historyGranularitySpec{
+	"1m":  {60, 45},
+	"10m": {600, 48},
+	"60m": {3600, 24},
+	"8h":  {8 * 3600, 21},
+	"24h": {86400, 30},
+	"7d":  {7 * 86400, 20},
+	"1mo": {30 * 86400, 18},
+	"6mo": {182 * 86400, 10},
+	"1y":  {365 * 86400, 8},
+}
+
+// resolveHistoryGranularity resolves a chart=state ?granularity= value into a
+// bucket width and a trailing [start, now] window — the default window for
+// that granularity's zoom level. ok is false for an unrecognized granularity.
+func resolveHistoryGranularity(granularity string) (bucketSeconds, start, end int64, ok bool) {
+	spec, known := historyGranularitySpecs[granularity]
+	if !known {
+		return 0, 0, 0, false
+	}
+	end = time.Now().Unix()
+	start = end - spec.bucketSeconds*spec.buckets
+	return spec.bucketSeconds, start, end, true
 }
 
 // historyUnknownLabel / historyUnknownMinShare govern the "unknown" group
@@ -974,6 +1086,35 @@ func buildAgentsResponse(rangeKey, scope string, c *outbound.ConcurrencyResult) 
 	resp.Series = appendSparsePoints(resp.Series, keys, c.ByKey, c.BucketStarts)
 	resp.TopContributors = topHistoryContributors(keys, c.PeakByKey, 5)
 	return resp
+}
+
+// buildStateResponse flattens a per-state concurrency reconstruction into the
+// activity-matrix envelope (#981). Project row order is busiest-first, by
+// each project's total count summed across every state and bucket — the same
+// "rank by what the reader cares about" convention sortKeysByValueDesc gives
+// every other chart's top-contributors list.
+func buildStateResponse(rangeKey, scope string, s *outbound.StateSeriesResult) historyStateResponse {
+	totals := map[string]float64{}
+	for _, byProject := range s.ByState {
+		for project, vals := range byProject {
+			for _, v := range vals {
+				totals[project] += v
+			}
+		}
+	}
+	return historyStateResponse{
+		Range:         rangeKey,
+		Chart:         "state",
+		Group:         "project",
+		Start:         s.Start,
+		End:           s.End,
+		BucketSeconds: s.BucketSeconds,
+		BucketStarts:  s.BucketStarts,
+		Projects:      sortKeysByValueDesc(totals),
+		ByState:       s.ByState,
+		Concurrency:   &historyConcurrency{Peak: s.Peak, Average: s.Average, Current: s.Current},
+		Scope:         scope,
+	}
 }
 
 // resolveUnknownBucket relabels or drops the "" key that CostSeries emits for

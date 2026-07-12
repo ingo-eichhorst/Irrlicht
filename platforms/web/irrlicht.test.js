@@ -38,6 +38,10 @@ import {
   historyRunningSum,
   CO2_EQUIVALENTS,
   pickCO2Equivalents,
+  stateCellCounts,
+  stateCellTotal,
+  stateMatrixMaxTotal,
+  stateBucketLabel,
 } from './irrlicht.js'
 
 describe('resolvedTheme', () => {
@@ -880,6 +884,60 @@ describe('agents chart (#751 Phase 3)', () => {
     expect(histCount(2)).toBe('2')
     expect(histCount(2.6)).toBe('3')
     expect(histCount(undefined)).toBe('0')
+  })
+})
+
+describe('activity matrix (chart=state, #981)', () => {
+  test('chart=state serializes with project grouping and a granularity param, not range', () => {
+    const q = new URLSearchParams(historyQuery({ chart: 'state', group: 'project', granularity: '8h', forecast: true, scope: null, filters: {} }))
+    expect(q.get('chart')).toBe('state')
+    expect(q.get('group')).toBe('project')
+    expect(q.get('granularity')).toBe('8h')
+    expect(q.get('range')).toBeNull()
+  })
+
+  test('CHART_LABELS includes Activity', () => {
+    expect(CHART_LABELS.state).toBe('Activity')
+  })
+
+  const sampleData = {
+    projects: ['projA', 'projB'],
+    bucket_starts: [1000, 2000, 3000],
+    by_state: {
+      working: { projA: [1, 2, 0] },
+      waiting: { projA: [0, 1, 1], projB: [3, 0, 0] },
+      ready: { projA: [0, 0, 1] },
+    },
+  }
+
+  test('stateCellCounts defaults missing states/projects to 0', () => {
+    expect(stateCellCounts(sampleData, 'projA', 1)).toEqual({ working: 2, waiting: 1, ready: 0 })
+    expect(stateCellCounts(sampleData, 'projB', 0)).toEqual({ working: 0, waiting: 3, ready: 0 })
+    expect(stateCellCounts(sampleData, 'unknownProject', 0)).toEqual({ working: 0, waiting: 0, ready: 0 })
+  })
+
+  test('stateCellTotal sums working+waiting+ready for one cell', () => {
+    expect(stateCellTotal(sampleData, 'projA', 1)).toBe(3)
+    expect(stateCellTotal(sampleData, 'projA', 2)).toBe(2)
+  })
+
+  test('stateMatrixMaxTotal finds the busiest cell across the whole grid', () => {
+    // projA totals: 1, 3, 2 — projB totals: 3, 0, 0. Busiest is 3.
+    expect(stateMatrixMaxTotal(sampleData)).toBe(3)
+  })
+
+  test('stateMatrixMaxTotal is 0 for an empty grid', () => {
+    expect(stateMatrixMaxTotal({ projects: [], bucket_starts: [], by_state: {} })).toBe(0)
+    expect(stateMatrixMaxTotal(null)).toBe(0)
+  })
+
+  test('stateBucketLabel coarsens format as granularity widens', () => {
+    const ts = Math.floor(new Date('2026-03-15T14:30:00Z').getTime() / 1000)
+    expect(stateBucketLabel(ts, '1y')).toBe('2026')
+    expect(stateBucketLabel(ts, '1mo')).toMatch(/Mar.*26/)
+    expect(stateBucketLabel(ts, '24h')).toMatch(/Mar/)
+    // Fine granularities (minutes/hours) render a time-of-day, not a date.
+    expect(stateBucketLabel(ts, '60m')).not.toMatch(/Mar|2026/)
   })
 })
 

@@ -2151,4 +2151,5 @@ export {
   historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,
   histDoraPerWeek, histDoraPercent, histDoraHours,
   CO2_EQUIVALENTS, pickCO2Equivalents,
+  stateCellCounts, stateCellTotal, stateMatrixMaxTotal, stateBucketLabel,
 } from './historyTab.js';

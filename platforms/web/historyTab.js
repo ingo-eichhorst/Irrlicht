@@ -11,7 +11,14 @@ const HISTORY_COLORS = [
   '#5E5CE6', '#FFD60A', '#30D158', '#BF5AF2', '#64D2FF',
 ];
 const RANGE_LABELS = { day: 'Day', week: 'Week', month: 'Month', year: 'Year', 'this-month': 'This Month', custom: 'Custom' };
-export const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', co2: 'CO2', models: 'Models', providers: 'Providers', agents: 'Agents', yield: 'Yield', dora: 'DORA' };
+export const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', co2: 'CO2', models: 'Models', providers: 'Providers', agents: 'Agents', state: 'Activity', yield: 'Yield', dora: 'DORA' };
+// Granularity steps for chart=state's activity matrix (issue #981) — each
+// picks both the server's bucket width and the matrix's visible column
+// count at once (see historyGranularitySpecs on the daemon side).
+const GRANULARITY_LABELS = { '1m': '1 min', '10m': '10 min', '60m': '60 min', '8h': '8 hr', '24h': '24 hr', '7d': '7 day', '1mo': '1 mo', '6mo': '6 mo', '1y': '1 yr' };
+// Fixed stack order for the activity matrix's per-cell mini bar, bottom to
+// top — mirrors the canonical state order in core/domain/session/session.go.
+const STATE_STACK_ORDER = ['working', 'waiting', 'ready'];
 // Drilldown order: clicking a contributor scopes to it and re-groups by the
 // next finer axis. A leaf (no entry) makes that contributor non-drillable.
 export const DRILL_NEXT = { project: 'branch', branch: 'session', provider: 'model', model: 'session' };
@@ -25,6 +32,9 @@ const TOKEN_TYPE_LABEL = { input: 'Input', output: 'Output', cache_read: 'Cache 
 // provider/project option lists seen across responses (token_type is fixed).
 const historyState = {
   range: 'day', chart: 'cost', group: 'project', forecast: true, start: null, end: null, scope: null, data: null,
+  // granularity is chart=state's own zoom-level axis (#981) — independent of
+  // range, which every other chart uses instead.
+  granularity: '24h',
   filters: { provider: [], token_type: [], project: [] },
   known: { provider: [], project: [] },
   // DORA (#951) is inherently repo-scoped — needs exactly one project,
@@ -178,7 +188,11 @@ export function historyQuery(state = historyState) {
   p.set('group', state.group);
   p.set('forecast', state.forecast ? 'true' : 'false');
   if (state.scope) p.set('scope', state.scope.field + ':' + state.scope.value);
-  if (state.range === 'custom' && state.start != null && state.end != null) {
+  if (state.chart === 'state') {
+    // The activity matrix resolves its window from a granularity zoom-level
+    // instead of range/start/end — see historyGranularitySpecs on the daemon.
+    p.set('granularity', state.granularity);
+  } else if (state.range === 'custom' && state.start != null && state.end != null) {
     p.set('start', String(state.start));
     p.set('end', String(state.end));
   } else {
@@ -239,19 +253,25 @@ function renderHistory() {
   renderHistoryBreadcrumb();
   renderHistoryFilters();
   syncDoraProjectRow();
+  syncGranularityRow();
+  syncHistoryRangeRow();
   syncHistoryCO2Info();
   const isYield = historyState.chart === 'yield';
   const isDora = historyState.chart === 'dora';
-  // Yield counts completed sessions; agents are reconstructed from opt-in
-  // recordings — each gets its own empty caption. DORA never paints the
-  // canvas at all (it's a period summary, not a time series) — its content
-  // lives entirely in the side panel (see renderDoraPanel).
+  const isState = historyState.chart === 'state';
+  // The activity matrix is a grid, not a time-series line — it replaces the
+  // shared canvas with its own scrollable DOM grid (see history-matrix-scroll).
+  syncHistoryMatrixVisibility(isState);
+  // Yield counts completed sessions; agents/state are reconstructed from
+  // opt-in recordings — each gets its own empty caption. DORA never paints
+  // the canvas at all (it's a period summary, not a time series) — its
+  // content lives entirely in the side panel (see renderDoraPanel).
   const emptyEl = document.getElementById('history-chart-empty');
   if (emptyEl) {
     let emptyText = 'no cost data in this range yet';
     if (isYield) emptyText = 'no completed sessions in this range yet';
     else if (isDora) emptyText = historyState.doraProject ? 'DORA metrics — see panel' : 'select a project to see DORA metrics';
-    else if (historyState.chart === 'agents') emptyText = 'no recordings in this range yet';
+    else if (historyState.chart === 'agents' || isState) emptyText = 'no recordings in this range yet';
     emptyEl.textContent = emptyText;
   }
   if (!historyState.data) {
@@ -267,10 +287,38 @@ function renderHistory() {
   } else if (isYield) {
     paintYieldChart();
     renderYieldPanel();
+  } else if (isState) {
+    renderStateMatrix();
+    renderStatePanel();
   } else {
     paintHistoryChart();
     renderHistoryPanel();
   }
+}
+
+// syncHistoryMatrixVisibility toggles between the shared canvas (every
+// time-series chart) and the activity matrix's own DOM grid (chart=state
+// only) — the matrix doesn't fit the canvas's continuous-time painter.
+function syncHistoryMatrixVisibility(isState) {
+  const canvas = document.getElementById('history-chart');
+  const matrixScroll = document.getElementById('history-matrix-scroll');
+  if (canvas) canvas.hidden = isState;
+  if (matrixScroll) matrixScroll.hidden = !isState;
+}
+
+// syncHistoryRangeRow hides the Day/Week/Month/… range selector for
+// chart=state: the activity matrix resolves its window from ?granularity=
+// instead, so the range buttons would be visible but silently inert.
+function syncHistoryRangeRow() {
+  const row = document.getElementById('history-range-row');
+  if (row) row.hidden = historyState.chart === 'state';
+}
+
+// syncGranularityRow shows the granularity zoom-level control only while
+// chart=state is active, mirroring syncDoraProjectRow's per-chart row toggle.
+function syncGranularityRow() {
+  const row = document.getElementById('history-granularity-row');
+  if (row) row.hidden = historyState.chart !== 'state';
 }
 
 // setupHistoryCanvas sizes the canvas for the current DPR/layout, clears
@@ -500,6 +548,230 @@ function paintHistoryChart() {
 
   // X axis time labels.
   drawHistoryXAxisLabels(geo, { buckets, B, bucketSeconds: data.bucket_seconds, muted, h, padB });
+}
+
+// --- Activity matrix (chart=state, issue #981) ---
+// A grid — projects as rows, time buckets as columns — replacing the shared
+// canvas's single continuous-time painter with its own scrollable DOM grid,
+// since a matrix doesn't fit that shape (see renderStateMatrix). "No data
+// recorded" vs. "zero activity" isn't distinguished per cell: the daemon has
+// no persisted record of when --record was toggled per project, only the
+// recordings it did capture, so that distinction isn't reliably derivable
+// today — a zero-activity cell and a before-recording-started cell render
+// identically (flat, no bar). Every cell's exact values stay reachable via
+// the panel's peak/average/current summary, the per-cell tooltip/aria-label,
+// and the existing CSV/JSON export buttons (chart-agnostic already).
+
+const STATE_CELL_INNER_H = 26; // px — must match the bar's available height in irrlicht.css (.hsm-cell's grid row height minus .hsm-bar's bottom margin)
+
+// stateCellCounts returns one (project, bucket-index) cell's
+// {working, waiting, ready} counts, defaulting missing entries to 0.
+export function stateCellCounts(data, project, i) {
+  const by = data?.by_state || {};
+  const out = {};
+  for (const state of STATE_STACK_ORDER) out[state] = (by[state]?.[project]?.[i]) || 0;
+  return out;
+}
+
+// stateCellTotal sums one cell's working+waiting+ready counts.
+export function stateCellTotal(data, project, i) {
+  const counts = stateCellCounts(data, project, i);
+  return counts.working + counts.waiting + counts.ready;
+}
+
+// stateMatrixMaxTotal finds the busiest single cell across the whole visible
+// grid. The matrix's bar-height scale is global (comparable busyness across
+// projects), not normalized per row.
+export function stateMatrixMaxTotal(data) {
+  const projects = data?.projects || [];
+  const buckets = data?.bucket_starts || [];
+  let max = 0;
+  for (const project of projects) {
+    for (let i = 0; i < buckets.length; i++) {
+      const t = stateCellTotal(data, project, i);
+      if (t > max) max = t;
+    }
+  }
+  return max;
+}
+
+// stateBucketLabel formats one column header, coarsening the format as the
+// granularity widens — a "60m" column needs a time-of-day, a "1y" column
+// just needs the year.
+export function stateBucketLabel(ts, granularity) {
+  const d = new Date(ts * 1000);
+  if (granularity === '1y') return String(d.getFullYear());
+  if (granularity === '1mo' || granularity === '6mo') return d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+  if (granularity === '7d' || granularity === '24h' || granularity === '8h') return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+function buildStateCornerCell() {
+  const el = document.createElement('div');
+  el.className = 'hsm-corner';
+  return el;
+}
+
+function buildStateColLabel(text) {
+  const el = document.createElement('div');
+  el.className = 'hsm-col-label';
+  el.textContent = text;
+  return el;
+}
+
+function buildStateRowLabel(project) {
+  const el = document.createElement('div');
+  el.className = 'hsm-row-label';
+  el.textContent = project;
+  el.title = project;
+  return el;
+}
+
+// buildStateCell renders one grid cell: a bottom-anchored stacked mini bar
+// (working/waiting/ready, fixed stack order — see STATE_STACK_ORDER) sized
+// against maxTotal, with a hover/focus tooltip and an aria-label carrying the
+// exact counts for anyone not using the tooltip.
+function buildStateCell(project, ts, counts, maxTotal) {
+  const cell = document.createElement('div');
+  cell.className = 'hsm-cell';
+  cell.tabIndex = 0;
+  cell.setAttribute('role', 'img');
+  cell.setAttribute('aria-label', project + ', ' + new Date(ts * 1000).toLocaleString() + ': ' +
+    counts.working + ' working, ' + counts.waiting + ' waiting, ' + counts.ready + ' ready');
+
+  const bar = document.createElement('div');
+  bar.className = 'hsm-bar';
+  const total = counts.working + counts.waiting + counts.ready;
+  if (total > 0) {
+    bar.style.height = Math.max(3, Math.round((total / maxTotal) * STATE_CELL_INNER_H)) + 'px';
+    let lastNonZero = null;
+    for (const state of STATE_STACK_ORDER) if (counts[state] > 0) lastNonZero = state;
+    for (const state of STATE_STACK_ORDER) {
+      if (counts[state] <= 0) continue;
+      const seg = document.createElement('div');
+      seg.className = 'hsm-seg hsm-seg-' + state + (state === lastNonZero ? ' hsm-seg-cap' : '');
+      seg.style.flexGrow = String(counts[state]);
+      bar.appendChild(seg);
+    }
+  }
+  cell.appendChild(bar);
+
+  cell.addEventListener('pointerenter', () => showStateTooltip(cell, project, ts, counts));
+  cell.addEventListener('focus', () => showStateTooltip(cell, project, ts, counts));
+  cell.addEventListener('pointerleave', hideStateTooltip);
+  cell.addEventListener('blur', hideStateTooltip);
+  return cell;
+}
+
+// renderStateMatrix (re)builds the whole grid on every render — matrix sizes
+// here (a handful of projects × tens of buckets) are small enough that a
+// diffing update isn't worth the complexity every other History chart avoids
+// too (paintHistoryChart also redraws from scratch each time).
+function renderStateMatrix() {
+  const data = historyState.data;
+  const mount = document.getElementById('history-matrix');
+  const scroll = document.getElementById('history-matrix-scroll');
+  const wrap = document.getElementById('history-chart-wrap');
+  if (!mount) return;
+  const projects = data?.projects || [];
+  const buckets = data?.bucket_starts || [];
+  const hasData = projects.length > 0 && buckets.length > 0;
+  if (wrap) wrap.classList.toggle('empty', !hasData);
+  if (scroll) scroll.hidden = !hasData;
+  mount.innerHTML = '';
+  if (!hasData) return;
+
+  mount.style.gridTemplateColumns = 'var(--hsm-row-label-w) repeat(' + buckets.length + ', var(--hsm-cell-w))';
+
+  const maxTotal = stateMatrixMaxTotal(data) || 1;
+  mount.appendChild(buildStateCornerCell());
+  for (const ts of buckets) mount.appendChild(buildStateColLabel(stateBucketLabel(ts, historyState.granularity)));
+  for (const project of projects) {
+    mount.appendChild(buildStateRowLabel(project));
+    buckets.forEach((ts, i) => mount.appendChild(buildStateCell(project, ts, stateCellCounts(data, project, i), maxTotal)));
+  }
+}
+
+// renderStatePanel fills the side panel for the activity matrix: the same
+// peak/avg/current summary shape the agents chart uses (working+waiting
+// combined), plus a legend for the three-color stacked bar — the matrix has
+// no separate contributor list since its rows already are the projects.
+function renderStatePanel() {
+  const data = historyState.data;
+  const titleEl = document.getElementById('history-panel-title');
+  const totalEl = document.getElementById('history-total');
+  const fcEl = document.getElementById('history-forecast-line');
+  const listEl = document.getElementById('history-contrib');
+  if (titleEl) titleEl.textContent = 'Activity · ' + (GRANULARITY_LABELS[historyState.granularity] || historyState.granularity);
+  const conc = data?.concurrency || { peak: 0, average: 0, current: 0 };
+  if (totalEl) totalEl.textContent = histCount(conc.peak) + ' peak';
+  if (fcEl) fcEl.textContent = 'avg ' + (Number(conc.average) || 0).toFixed(1) + ' · now ' + histCount(conc.current);
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  if (!(data?.projects || []).length) {
+    appendHistoryEmpty(listEl, 'no agents in this range');
+    return;
+  }
+  for (const [state, label] of [['working', 'Working'], ['waiting', 'Waiting'], ['ready', 'Ready']]) {
+    const li = document.createElement('li');
+    const dot = document.createElement('span'); dot.className = 'dot hsm-seg-' + state;
+    const lab = document.createElement('span'); lab.className = 'label'; lab.textContent = label;
+    li.append(dot, lab);
+    listEl.appendChild(li);
+  }
+}
+
+function stateTooltipEl() {
+  let el = document.getElementById('history-matrix-tooltip');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'history-matrix-tooltip';
+    el.className = 'hsm-tooltip';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+// showStateTooltip shows the same detail on keyboard focus as on hover
+// (per the interaction spec every hoverable chart mark should follow),
+// anchored to the cell's own rect rather than pointer coordinates so focus
+// (which carries no pointer position) positions identically to hover.
+function showStateTooltip(cell, project, ts, counts) {
+  const el = stateTooltipEl();
+  el.innerHTML = '';
+  const title = document.createElement('div'); title.className = 'hsm-tooltip-title'; title.textContent = project;
+  const range = document.createElement('div'); range.className = 'hsm-tooltip-range'; range.textContent = new Date(ts * 1000).toLocaleString();
+  el.append(title, range);
+  for (const [state, label] of [['working', 'Working'], ['waiting', 'Waiting'], ['ready', 'Ready']]) {
+    const row = document.createElement('div'); row.className = 'hsm-tooltip-row';
+    const key = document.createElement('span'); key.className = 'hsm-tooltip-key';
+    const dot = document.createElement('i'); dot.className = 'hsm-tooltip-dot hsm-seg-' + state;
+    key.appendChild(dot);
+    key.appendChild(document.createTextNode(label));
+    const val = document.createElement('span'); val.className = 'hsm-tooltip-val'; val.textContent = String(counts[state]);
+    row.append(key, val);
+    el.appendChild(row);
+  }
+  el.classList.add('show');
+  positionStateTooltip(cell);
+}
+
+function positionStateTooltip(cell) {
+  const el = document.getElementById('history-matrix-tooltip');
+  if (!el || !el.classList.contains('show') || !cell) return;
+  const rect = cell.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  const pad = 6;
+  let x = rect.right + pad, y = rect.top;
+  if (x + r.width > window.innerWidth - 10) x = rect.left - r.width - pad;
+  if (y + r.height > window.innerHeight - 10) y = window.innerHeight - r.height - 10;
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+}
+
+function hideStateTooltip() {
+  const el = document.getElementById('history-matrix-tooltip');
+  if (el) el.classList.remove('show');
 }
 
 // buildHistoryStatRow builds one contributor list-item: colored dot, label,
@@ -944,6 +1216,17 @@ function exportHistoryCSV() {
         (p.yield || 0).toFixed(6), String(p.reverted_count || 0),
       ].join(','));
     }
+  } else if (historyState.chart === 'state') {
+    lines = ['bucket_start,project,working,waiting,ready'];
+    const by = d.by_state || {};
+    for (const project of (d.projects || [])) {
+      (d.bucket_starts || []).forEach((ts, i) => {
+        const w = by.working?.[project]?.[i] || 0;
+        const wt = by.waiting?.[project]?.[i] || 0;
+        const r = by.ready?.[project]?.[i] || 0;
+        lines.push([new Date(ts * 1000).toISOString(), historyCsvCell(project), w, wt, r].join(','));
+      });
+    }
   } else if (historyState.chart === 'dora') {
     lines = ['metric,value,unit,sample_size,available,message'];
     const rows = [
@@ -1022,7 +1305,7 @@ export function initHistoryTab() {
     // reconstructed per project only.
     if (c === 'models') historyState.group = 'model';
     else if (c === 'providers') historyState.group = 'provider';
-    else if (c === 'agents') historyState.group = 'project';
+    else if (c === 'agents' || c === 'state') historyState.group = 'project'; // recordings carry no other axis
     else if (c !== 'tokens' && historyState.group === 'token_type') historyState.group = 'project'; // token_type needs the tokens metric
     historyState.scope = null; // a new metric resets any drilldown
     syncHistorySelectors();
@@ -1039,6 +1322,15 @@ export function initHistoryTab() {
     fetchHistory();
   });
 
+  const histGranularitySeg = document.getElementById('history-granularity-sel');
+  if (histGranularitySeg) histGranularitySeg.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-granularity]');
+    if (!b) return;
+    for (const x of histGranularitySeg.querySelectorAll('button')) x.classList.toggle('active', x === b);
+    historyState.granularity = b.dataset.granularity;
+    fetchHistory();
+  });
+
   const histGroupSeg = document.getElementById('history-group-sel');
   if (histGroupSeg) histGroupSeg.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-group]');
@@ -1046,10 +1338,10 @@ export function initHistoryTab() {
     historyState.group = b.dataset.group;
     if (historyState.group === 'token_type') {
       historyState.chart = 'tokens'; // token bands require the tokens metric
-    } else if (historyState.chart === 'models' || historyState.chart === 'providers' || historyState.chart === 'agents') {
+    } else if (historyState.chart === 'models' || historyState.chart === 'providers' || historyState.chart === 'agents' || historyState.chart === 'state') {
       // Choosing a group explicitly leaves the metric-preset charts (and
-      // agents, which is project-only) so the chosen axis sticks on a cost
-      // breakdown.
+      // agents/state, which are project-only) so the chosen axis sticks on a
+      // cost breakdown.
       historyState.chart = 'cost';
     }
     // A dimension is never both the stacking axis and a filter.
