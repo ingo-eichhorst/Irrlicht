@@ -128,9 +128,13 @@ func bootSmokeDaemon(t *testing.T, bin string, extraEnv ...string) *smokeDaemon 
 	})
 	dumpLogsOnFail(t, d.homeDir)
 
-	// The daemon writes its resolved address here once listening.
+	// The daemon writes its resolved address here once listening. 15s (not
+	// 5s) gives waitForAddr's poll enough headroom on a heavily loaded
+	// machine — this is already poll-based (20ms interval), so widening the
+	// ceiling doesn't slow down the common case, only how long a genuinely
+	// contended run gets before failing (issue #967).
 	d.addrPath = filepath.Join(d.stateDir, "irrlichd.addr")
-	d.addr = waitForAddr(t, d.addrPath, 5*time.Second)
+	d.addr = waitForAddr(t, d.addrPath, 15*time.Second)
 	return d
 }
 
