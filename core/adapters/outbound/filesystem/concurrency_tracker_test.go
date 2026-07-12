@@ -301,3 +301,236 @@ func TestAgentsSeries_ScopeProject(t *testing.T) {
 		t.Errorf("peakByKey[projA]: want 1, got %v", res.PeakByKey["projA"])
 	}
 }
+
+// TestStateSeries_ActiveAtEndIsNotReady: a session still working at the
+// window end (no ready transition recorded) must not count toward the ready
+// histogram — the "last known alive" bound that closes its working interval
+// is a synthetic sentinel, not a real transition. Regression: an earlier
+// version leaked that sentinel into readyAt, so every still-active session
+// spuriously showed a ready count in whatever bucket contained "now".
+func TestStateSeries_ActiveAtEndIsNotReady(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, dir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", "/home/me/projX"),
+		transition(2, 100, "s1", session.StateWorking),
+		activity(3, 280, "s1", "/home/me/projX"), // last event; still working, no exit
+	})
+	tr := NewConcurrencyTrackerWithDir(dir)
+
+	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("StateSeries: %v", err)
+	}
+	if got := res.ByState[session.StateReady]["projX"]; got != nil {
+		t.Errorf("ready[projX]: want no ready series (session never went ready), got %v", got)
+	}
+	if peak := maxOf(res.ByState[session.StateWorking]["projX"]); peak != 1 {
+		t.Errorf("working[projX] peak: want 1, got %v", peak)
+	}
+}
+
+// TestStateSeries_WorkingThenWaiting: a session works [100,150) then idles
+// waiting [150,220) before going ready — the per-state split AgentsSeries
+// can't make. Working and waiting must land in their own buckets, and ready
+// must count once in the bucket containing the ready transition (220).
+func TestStateSeries_WorkingThenWaiting(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, dir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", "/home/me/projX"),
+		transition(2, 100, "s1", session.StateWorking),
+		transition(3, 150, "s1", session.StateWaiting),
+		transition(4, 220, "s1", session.StateReady),
+	})
+	tr := NewConcurrencyTrackerWithDir(dir)
+
+	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("StateSeries: %v", err)
+	}
+	// Buckets: 0=[0,60) 1=[60,120) 2=[120,180) 3=[180,240) 4=[240,300).
+	// Working [100,150) covers buckets 1,2. Waiting [150,220) covers buckets 2,3.
+	wantWorking := []float64{0, 1, 1, 0, 0}
+	wantWaiting := []float64{0, 0, 1, 1, 0}
+	if got := res.ByState[session.StateWorking]["projX"]; !floatsEq(got, wantWorking) {
+		t.Errorf("working[projX]: want %v, got %v", wantWorking, got)
+	}
+	if got := res.ByState[session.StateWaiting]["projX"]; !floatsEq(got, wantWaiting) {
+		t.Errorf("waiting[projX]: want %v, got %v", wantWaiting, got)
+	}
+	// Ready transition at ts=220 falls in bucket 3 ([180,240)).
+	wantReady := []float64{0, 0, 0, 1, 0}
+	if got := res.ByState[session.StateReady]["projX"]; !floatsEq(got, wantReady) {
+		t.Errorf("ready[projX]: want %v, got %v", wantReady, got)
+	}
+}
+
+// TestStateSeries_ReadyIsTransitionCount: two sessions going ready in the same
+// bucket both count, distinguishing the ready histogram from a concurrency
+// count (which would never exceed however many sessions exist at once, but
+// specifically confirms multiple transitions accumulate rather than the last
+// one winning).
+func TestStateSeries_ReadyIsTransitionCount(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, dir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", "/home/me/projX"),
+		transition(2, 100, "s1", session.StateWorking),
+		transition(3, 130, "s1", session.StateReady),
+		transcriptNew(4, 90, "s2", "/home/me/projX"),
+		transition(5, 95, "s2", session.StateWorking),
+		transition(6, 140, "s2", session.StateReady),
+	})
+	tr := NewConcurrencyTrackerWithDir(dir)
+
+	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 180, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("StateSeries: %v", err)
+	}
+	// Both ready transitions (130, 140) land in bucket 2 ([120,180)).
+	want := []float64{0, 0, 2}
+	if got := res.ByState[session.StateReady]["projX"]; !floatsEq(got, want) {
+		t.Errorf("ready[projX]: want %v, got %v", want, got)
+	}
+}
+
+// TestStateSeries_TwoProjectsIsolated: each project's per-state series stays
+// keyed to its own project — no cross-contamination.
+func TestStateSeries_TwoProjectsIsolated(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, dir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", "/home/me/projA"),
+		transition(2, 100, "s1", session.StateWorking),
+		transition(3, 250, "s1", session.StateReady),
+		transcriptNew(4, 90, "s2", "/home/me/projB"),
+		transition(5, 100, "s2", session.StateWaiting),
+		transition(6, 250, "s2", session.StateReady),
+	})
+	tr := NewConcurrencyTrackerWithDir(dir)
+
+	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 360, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("StateSeries: %v", err)
+	}
+	if v := res.ByState[session.StateWorking]["projB"]; v != nil {
+		t.Errorf("projB should have no working series, got %v", v)
+	}
+	if v := res.ByState[session.StateWaiting]["projA"]; v != nil {
+		t.Errorf("projA should have no waiting series, got %v", v)
+	}
+	if peak := maxOf(res.ByState[session.StateWorking]["projA"]); peak != 1 {
+		t.Errorf("projA working peak: want 1, got %v", peak)
+	}
+	if peak := maxOf(res.ByState[session.StateWaiting]["projB"]); peak != 1 {
+		t.Errorf("projB waiting peak: want 1, got %v", peak)
+	}
+}
+
+// TestStateSeries_ScopeProject: a project scope filters to that project's
+// sessions only, matching AgentsSeries' scoping convention.
+func TestStateSeries_ScopeProject(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, dir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", "/home/me/projA"),
+		transition(2, 100, "s1", session.StateWorking),
+		transition(3, 250, "s1", session.StateReady),
+		transcriptNew(4, 90, "s2", "/home/me/projB"),
+		transition(5, 100, "s2", session.StateWorking),
+		transition(6, 250, "s2", session.StateReady),
+	})
+	tr := NewConcurrencyTrackerWithDir(dir)
+
+	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 360, BucketSeconds: 60, ScopeField: "project", ScopeValue: "projA"})
+	if err != nil {
+		t.Fatalf("StateSeries: %v", err)
+	}
+	if _, ok := res.ByState[session.StateWorking]["projB"]; ok {
+		t.Errorf("projB should be filtered out, got %v", res.ByState[session.StateWorking])
+	}
+	if peak := maxOf(res.ByState[session.StateWorking]["projA"]); peak != 1 {
+		t.Errorf("projA working peak: want 1, got %v", peak)
+	}
+}
+
+// TestStateSeries_Empty: a missing recordings dir yields a valid empty
+// result, not an error — same convention as AgentsSeries.
+func TestStateSeries_Empty(t *testing.T) {
+	tr := NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"))
+	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("StateSeries: %v", err)
+	}
+	if res.Peak != 0 || res.Average != 0 || res.Current != 0 {
+		t.Errorf("want zero summary, got peak=%v avg=%v current=%v", res.Peak, res.Average, res.Current)
+	}
+	for _, state := range []string{session.StateWorking, session.StateWaiting, session.StateReady} {
+		if len(res.ByState[state]) != 0 {
+			t.Errorf("by_state[%s] should be empty, got %v", state, res.ByState[state])
+		}
+	}
+	if res.BucketStarts == nil {
+		t.Error("bucket_starts should be a non-nil slice")
+	}
+}
+
+// TestStateSeries_SummaryMatchesAgentsSeries: StateSeries' Peak/Average/Current
+// summary (computed over its own per-state interval reconstruction) must
+// agree exactly with AgentsSeries' merged-state summary for the same query —
+// both are built from the same underlying transitions, just split
+// differently, and sweepIntervals treats abutting per-state sub-intervals as
+// continuous (see stateReconstruction / activeIntervals), so they must not
+// diverge.
+func TestStateSeries_SummaryMatchesAgentsSeries(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, dir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", "/home/me/projA"),
+		transition(2, 100, "s1", session.StateWorking),
+		transition(3, 150, "s1", session.StateWaiting), // mid-session state flip
+		transition(4, 250, "s1", session.StateReady),
+		transcriptNew(5, 140, "s2", "/home/me/projA"),
+		transition(6, 145, "s2", session.StateWorking),
+		activity(7, 280, "s2", "/home/me/projA"), // still active at window end
+	})
+	tr := NewConcurrencyTrackerWithDir(dir)
+	q := outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60}
+
+	agents, err := tr.AgentsSeries(q)
+	if err != nil {
+		t.Fatalf("AgentsSeries: %v", err)
+	}
+	states, err := tr.StateSeries(q)
+	if err != nil {
+		t.Fatalf("StateSeries: %v", err)
+	}
+	if !approxEq(agents.Peak, states.Peak) {
+		t.Errorf("peak mismatch: agents=%v states=%v", agents.Peak, states.Peak)
+	}
+	if !approxEq(agents.Average, states.Average) {
+		t.Errorf("average mismatch: agents=%v states=%v", agents.Average, states.Average)
+	}
+	if agents.Current != states.Current {
+		t.Errorf("current mismatch: agents=%v states=%v", agents.Current, states.Current)
+	}
+}
+
+// floatsEq compares two float64 slices for exact equality (the values under
+// test here are all small integer counts, so no tolerance is needed).
+func floatsEq(got, want []float64) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func maxOf(vs []float64) float64 {
+	m := 0.0
+	for _, v := range vs {
+		if v > m {
+			m = v
+		}
+	}
+	return m
+}
