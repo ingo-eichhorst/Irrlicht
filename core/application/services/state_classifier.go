@@ -209,3 +209,53 @@ func ShouldSynthesizeCollapsedTurnBoundary(currentState string, metrics *session
 	}
 	return metrics.SawMidPassTurnBoundary
 }
+
+// SyntheticCatchUpTurnStartReason is the reason string for the synthetic
+// ready→working transition emitted when a brand-new session's very first
+// observation already shows a completed turn — discovery was delayed long
+// enough that the turn finished before the daemon ever looked (issue #996).
+// Paired with SyntheticCatchUpTurnDoneReason; see ShouldSynthesizeCatchUpTurn
+// for when this fires.
+const SyntheticCatchUpTurnStartReason = "new session created (turn already in progress at first discovery)"
+
+// SyntheticCatchUpTurnDoneReason is the reason string for the working→ready
+// half of the same synthetic pair (see SyntheticCatchUpTurnStartReason).
+const SyntheticCatchUpTurnDoneReason = "turn already complete at first discovery → synthetic catch-up"
+
+// ShouldSynthesizeCatchUpTurn reports whether a brand-new session's initial
+// lifecycle record should be a synthetic ready→working→ready pair instead of
+// a single flat "new session created" transition (issue #996).
+//
+// A session's discovery is normally near-instant, so the daemon observes
+// every turn's own working→ready cycle as it happens. But when discovery is
+// delayed — e.g. a cold-started daemon has to scan a large backlog of older
+// session directories before it notices a brand-new one — an entire first
+// turn can complete before the daemon ever looks at the transcript. Without
+// this synthesis, that turn is silently swallowed: the session is created
+// directly in its final classified state (typically ready) with no record
+// that a turn ever happened, and the *next* turn is misread downstream as
+// the first one.
+//
+// Fires only when BOTH hold:
+//  1. metrics.IsAgentDone() — the transcript already shows a completed turn
+//     as of this first observation.
+//  2. supersedingLivePreSession — this real session is superseding a
+//     pre-session (proc-<pid>) the daemon was already live-tracking for the
+//     same project/cwd.
+//
+// The second condition is deliberate and load-bearing, not incidental: it is
+// what stops this from also firing every time a daemon (especially a fresh,
+// state-less one — e.g. an isolated recording daemon) cold-starts and
+// rediscovers a large backlog of old, already-finished sessions nobody is
+// live-tracking. Without it, every one of those would get a spurious
+// synthetic bounce, flooding the lifecycle stream — the same class of
+// backlog that produced this issue's own multi-second discovery delay in
+// the first place. A superseded pre-session proves the daemon witnessed
+// this exact process live from near-birth, so the missing turn is a genuine
+// observability gap rather than a stale historical session.
+func ShouldSynthesizeCatchUpTurn(supersedingLivePreSession bool, metrics *session.SessionMetrics) bool {
+	if !supersedingLivePreSession || metrics == nil {
+		return false
+	}
+	return metrics.IsAgentDone()
+}

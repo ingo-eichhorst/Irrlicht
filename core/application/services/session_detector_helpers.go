@@ -60,7 +60,15 @@ func (d *SessionDetector) broadcast(msgType string, state *session.SessionState)
 	d.broadcaster.Broadcast(outbound.PushMessage{Type: outbound.PushTypeUpdated, Session: parent})
 }
 
-func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adapter string) {
+// cleanupPreSessionsForProject retires any pre-session(s) (proc-<pid>) for
+// the same project/cwd now that a real transcript-backed session has
+// arrived. Returns whether at least one pre-session was actually retired —
+// callers use this as the "this daemon was already live-tracking the
+// underlying process before the transcript existed" signal that
+// ShouldSynthesizeCatchUpTurn (issue #996) needs to distinguish a genuine
+// live-launch race from an ordinary cold-start rediscovery of an old,
+// already-finished session.
+func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adapter string) bool {
 	// Collect candidates under the lock; defer I/O (repo.Load) to outside.
 	d.mu.Lock()
 	var ids []string
@@ -104,4 +112,5 @@ func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adap
 		d.log.LogInfo(logComponentSessionDetector, sid,
 			fmt.Sprintf("removed pre-session — real session arrived in %s", projectDir))
 	}
+	return len(ids) > 0
 }
