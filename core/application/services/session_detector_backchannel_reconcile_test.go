@@ -2,6 +2,7 @@ package services
 
 import (
 	"testing"
+	"time"
 
 	"irrlicht/core/domain/backchannel"
 	"irrlicht/core/domain/session"
@@ -111,5 +112,86 @@ func TestBackchannelReconciliation_PreSessionToRealSession_Issue997(t *testing.T
 	// stale/looser string.
 	if backchannel.DetectUI(`Permission for the bash tool (touch *)`) != backchannel.UIKindTrustDialog {
 		t.Fatal("test fixture screen text no longer matches DetectUI's trust-dialog markers")
+	}
+}
+
+// TestBackchannelReconciliation_PreSessionToRealSession_Issue1002 is the
+// end-to-end regression for issue #1002, the follow-up #997 deliberately
+// scoped out: BackchannelEngine keeps its own per-session edge-crossing
+// baselines (prevState/prevUtil/prevTokens/lastFired), separate from
+// TerminalObserver's dialog-edge cache, and they had the identical gap —
+// dropped instead of carried forward across presession reconciliation.
+//
+//  1. A presession (proc-<PID>) accumulates a below-threshold context
+//     baseline (mirrors evaluate() being fed each push update the way
+//     BackchannelEngine.Run() would).
+//  2. The real session is born and PID discovery reconciles it onto the same
+//     PID (cleanupStalePIDHolders — the same call site #997/#1002 both fix),
+//     retiring (deleting) the presession.
+//  3. The real session's first observation crosses the rule's threshold.
+//
+// Before #1002's fix, step 2's forget(presessionID) discarded the baseline
+// outright, so step 3 hit evaluate's "!seen" branch and silently established
+// a fresh baseline instead of firing on the crossing that already happened
+// relative to the presession's observed history. This test wires
+// BackchannelEngine into the exact SetSessionSupersededHandler closure
+// core/cmd/irrlichd/startup.go's setupBackchannel uses (all three re-key
+// calls fanned out from one registration) and asserts the crossing fires on
+// the reconciled real session instead of being silently swallowed.
+func TestBackchannelReconciliation_PreSessionToRealSession_Issue1002(t *testing.T) {
+	const presessionID = "proc-59048"
+	const realSessionID = "session_20260713_120000_deadbeef"
+	const pid = 59048
+	const adapter = "mistral-vibe"
+
+	repo := newUIRepo(&session.SessionState{
+		SessionID: presessionID, Adapter: adapter, State: session.StateReady, PID: pid,
+	})
+	d, _ := newFusionDetector(repo)
+
+	on := true
+	clk := time.Unix(1000, 0)
+	rule := backchannel.Rule{ID: "ctx", Enabled: true,
+		Trigger:         backchannel.Trigger{Event: backchannel.EventContextPressure, Threshold: 80},
+		Actions:         []backchannel.Action{{Kind: backchannel.ActionInput, Data: "/compact\r"}},
+		CooldownSeconds: 1}
+	e := newEngine([]backchannel.Rule{rule}, &on, &clk)
+
+	// Wire the reconciliation callback exactly as setupBackchannel does in
+	// startup.go: a single registration fans out to all three re-key calls
+	// (this test only exercises the BackchannelEngine third of it).
+	d.SetSessionSupersededHandler(func(oldID, newID string) {
+		d.ReconcilePreSessionBackchannel(oldID, newID)
+		e.RekeySession(oldID, newID)
+	})
+
+	// Step 1: the presession accumulates a below-threshold baseline — the
+	// crossing hasn't happened yet, so nothing fires here.
+	e.evaluate(&session.SessionState{SessionID: presessionID, Adapter: adapter, State: session.StateWorking,
+		Metrics: &session.SessionMetrics{ContextUtilization: 50}}) // baseline
+	if got := e.evaluate(&session.SessionState{SessionID: presessionID, Adapter: adapter, State: session.StateWorking,
+		Metrics: &session.SessionMetrics{ContextUtilization: 70}}); got != nil {
+		t.Fatalf("still below threshold must not fire, got %d", len(got))
+	}
+
+	// Step 2: the real session is born and PID discovery reconciles it onto
+	// the same PID — the exact path that fired in the #997 recording
+	// (cleanupStalePIDHolders) — and must carry BackchannelEngine's baseline
+	// forward before deleting the presession.
+	if err := d.repo.Save(&session.SessionState{
+		SessionID: realSessionID, Adapter: adapter, State: session.StateReady,
+	}); err != nil {
+		t.Fatalf("seed real session: %v", err)
+	}
+	d.pidMgr.HandlePIDAssigned(pid, realSessionID)
+
+	if _, err := d.repo.Load(presessionID); err == nil {
+		t.Fatal("presession should have been deleted by reconciliation")
+	}
+
+	// Step 3: the real session's first observation crosses the threshold.
+	if got := e.evaluate(&session.SessionState{SessionID: realSessionID, Adapter: adapter, State: session.StateWorking,
+		Metrics: &session.SessionMetrics{ContextUtilization: 85}}); len(got) != 1 {
+		t.Fatalf("carried-forward baseline should let the crossing fire on the reconciled session (issue #1002), got %d", len(got))
 	}
 }
