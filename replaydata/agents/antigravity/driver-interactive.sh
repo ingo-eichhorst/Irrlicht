@@ -95,6 +95,8 @@ DRIVE_MARKER_PREFIX="$STAGING/.antigravity-marker"
 source "$_DRIVE_LIB/slots.sh"
 # shellcheck source=/dev/null
 source "$_DRIVE_LIB/contracts.sh"
+# shellcheck source=/dev/null
+source "$_DRIVE_LIB/dialogs.sh"
 
 # Slot state the lib reads/writes (the driver owns these globals). A run starts
 # with zero slots; launch_repl allocs slot 1, and restart/start_session alloc
@@ -208,8 +210,7 @@ launch_repl() {
   # send isn't swallowed, then settle briefly so Ink finishes mounting the prompt.
   local waited=0
   while (( waited < 40 )); do
-    if tmux capture-pane -t "$SESSION" -p -S -50 2>/dev/null | grep -qiE 'trust the contents|trust this folder'; then
-      tmux send-keys -t "$SESSION" Enter
+    if dismiss_dialog_if_visible "$SESSION" 'trust the contents|trust this folder'; then
       echo "[driver] accepted agy trust-folder prompt" >&2
       break
     fi
@@ -309,7 +310,10 @@ turn_count() {
 # Option 1 "Yes" is pre-highlighted, so a bare Enter grants it. A multi-tool turn
 # fires the dialog once PER tool call, so accept it every time it is on screen
 # (Enter on an empty input box mid-generation is a harmless no-op). This mirrors
-# the claudecode driver's in-turn "Run a dynamic workflow?" auto-accept.
+# the claudecode driver's in-turn "Run a dynamic workflow?" auto-accept, and
+# shares its poll+dismiss mechanics with mistral-vibe's identical mid-turn
+# dialog wait via the shared _lib/drive/dialogs.sh helper (#1009) — only the
+# marker regex below stays adapter-local.
 wait_turn() {
   resolve_transcript || {
     echo "[driver] wait_turn[s$ACTIVE]: agy never created a transcript under $ANTIGRAVITY_BRAIN_ROOT" >&2
@@ -322,9 +326,7 @@ wait_turn() {
       echo "[driver] wait_turn[s$ACTIVE]: count=$now (expected ≥ $EXPECTED_TURNS)" >&2
       return 0
     fi
-    if tmux capture-pane -t "$SESSION" -p -S -50 2>/dev/null \
-         | grep -qiE 'Requesting permission for|Do you want to proceed'; then
-      tmux send-keys -t "$SESSION" Enter
+    if dismiss_dialog_if_visible "$SESSION" 'Requesting permission for|Do you want to proceed'; then
       echo "[driver] wait_turn[s$ACTIVE]: granted agy run_command permission dialog" >&2
     fi
     sleep 1

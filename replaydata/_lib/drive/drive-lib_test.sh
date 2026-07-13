@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # drive-lib_test.sh — unit tests for the shared interactive-driver helpers
-# extracted in #508 #3 (lib/drive/slots.sh + contracts.sh). Plain bash, no
-# framework. The interactive drivers themselves can't run in CI (they need a
-# live agent CLI + tmux + daemon), so these pure helpers — slot bookkeeping and
-# staging-contract emission, which touch only bash arrays + the filesystem — are
-# the automated net for the extraction. Run directly or via scripts/smoke-test.sh.
+# extracted in #508 #3 (lib/drive/slots.sh + contracts.sh) and #1009
+# (lib/drive/dialogs.sh). Plain bash, no framework. The interactive drivers
+# themselves can't run in CI (they need a live agent CLI + tmux + daemon), so
+# these pure helpers — slot bookkeeping, staging-contract emission, and the
+# mid-turn dialog-dismiss poll, which touch only bash arrays + the filesystem
+# (dialogs.sh's tmux calls are faked below) — are the automated net for the
+# extraction. Run directly or via scripts/smoke-test.sh.
 
 set -uo pipefail   # NOT -e: assertions capture non-zero return codes
 
@@ -13,6 +15,8 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$DIR/slots.sh"
 # shellcheck source=contracts.sh
 source "$DIR/contracts.sh"
+# shellcheck source=dialogs.sh
+source "$DIR/dialogs.sh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -74,6 +78,47 @@ echo "== drive_exit: EXIT_REASON → exit code =="
 ( EXIT_REASON="timeout";       drive_exit ); assert_eq "timeout → 124"    124 "$?"
 ( EXIT_REASON="nonzero(2)";    drive_exit ); assert_eq "nonzero(2) → 2"   2   "$?"
 ( EXIT_REASON="weird";         drive_exit ); assert_eq "unknown → 1"      1   "$?"
+
+echo "== dismiss_dialog_if_visible: poll+dismiss mechanics only (tmux faked) =="
+# A fake `tmux` shell function shadows the real binary for the rest of this
+# script (bash resolves a function before PATH), so the mechanics can be
+# checked without a live tmux/agent: capture-pane replays $FAKE_PANE, and
+# send-keys records its args in a plain variable (one call per test case,
+# same shell — no file/mktemp needed) so a test can assert Enter reached the
+# right session.
+FAKE_PANE=""
+SENDKEYS_LOG=""
+tmux() {
+  case "$1" in
+    capture-pane) printf '%s\n' "$FAKE_PANE" ;;
+    send-keys)    shift; SENDKEYS_LOG="$*" ;;
+  esac
+}
+
+FAKE_PANE=$'some noise\nPermission for the bash tool\nmore noise'
+SENDKEYS_LOG=""
+dismiss_dialog_if_visible "vibe-sess" 'Permission for the|Allow for remainder of this session'
+assert_eq "vibe marker present -> returns 0" 0 "$?"
+assert_eq "sends Enter to the right session"  "-t vibe-sess Enter" "$SENDKEYS_LOG"
+
+FAKE_PANE="nothing dialog-shaped here"
+SENDKEYS_LOG=""
+dismiss_dialog_if_visible "vibe-sess" 'Permission for the|Allow for remainder of this session'
+assert_eq "marker absent -> returns 1" 1 "$?"
+assert_eq "no Enter sent when marker absent" "" "$SENDKEYS_LOG"
+
+FAKE_PANE="Requesting permission for run_command: rm -rf /tmp/x"
+SENDKEYS_LOG=""
+dismiss_dialog_if_visible "agy-sess" 'Requesting permission for|Do you want to proceed'
+assert_eq "antigravity's own marker regex matches its own dialog" 0 "$?"
+assert_eq "antigravity dismiss targets its own session" "-t agy-sess Enter" "$SENDKEYS_LOG"
+
+FAKE_PANE="Permission for the bash tool"
+SENDKEYS_LOG=""
+dismiss_dialog_if_visible "agy-sess" 'Requesting permission for|Do you want to proceed'
+assert_eq "adapters' marker regexes stay independent (vibe text doesn't trip agy's)" 1 "$?"
+
+unset -f tmux
 
 echo ""
 if [[ "$fails" -eq 0 ]]; then
