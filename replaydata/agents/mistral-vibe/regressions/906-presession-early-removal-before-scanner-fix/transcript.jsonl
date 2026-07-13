@@ -1,0 +1,2 @@
+{"role": "user", "content": "Reply with exactly the word: fresh", "injected": false, "message_id": "3b51e32e-f1a5-48e2-ad17-9ec650daf143"}
+{"role": "assistant", "content": "fresh", "injected": false, "reasoning_content": "The user is asking me to reply with exactly the word \"fresh\". This is a simple, direct instruction that doesn't require any tools or complex reasoning. I should just output the word \"fresh\" and nothing else.", "reasoning_message_id": "94f10bd9-c400-4cb2-87d5-9b13601c18d6", "message_id": "e35e2c81-8c37-44ff-bb65-cad95489ea4c"}
