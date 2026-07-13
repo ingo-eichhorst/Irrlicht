@@ -123,8 +123,15 @@ struct SessionRowView: View {
         )
     }
 
+    /// Live off the header's global mode and this row's current state
+    /// (issue #985) — never snapshotted, so a session that transitions into
+    /// `.waiting` while the mode is `.waiting` pops open automatically, and
+    /// one that gets answered and moves on collapses again.
     private var summaryCollapsed: Bool {
-        sessionManager.summariesCollapsed
+        switch sessionManager.summaryDisplayMode {
+        case .collapsed: return true
+        case .waiting: return session.state != .waiting
+        }
     }
 
     /// Session detail block. While waiting, shows the agent's pending question
@@ -132,8 +139,8 @@ struct SessionRowView: View {
     /// so there's no separate label. When the beta "User-Intent Display" setting
     /// is on, also shows the task summary — the agent's irrlicht-summary marker,
     /// else its first user prompt (issue #738) — as a purple "what the user
-    /// asked for" block. Collapse is driven globally by the header collapse-all
-    /// control; there is no per-row toggle.
+    /// asked for" block. Collapse is driven globally by the header's
+    /// collapsed/waiting-only mode; there is no per-row toggle.
     @ViewBuilder
     private var summaryBlock: some View {
         // Block text is the terse one-line headline (issue #759); the tooltip

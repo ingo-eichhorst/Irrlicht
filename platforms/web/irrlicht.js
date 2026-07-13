@@ -1,5 +1,5 @@
 import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
-import { isSummaryCollapsed, toggleSummaryCollapsed, anySummaryCollapsed, collapseAllSummaries, expandAllSummaries } from './collapsedSummaries.js';
+import { isSummaryCollapsed, toggleSummaryCollapsed, getSummaryMode, toggleSummaryMode } from './collapsedSummaries.js';
 import { initHistoryTab } from './historyTab.js';
 import { initPermissionsWizard, refreshPermissions } from './permissionsWizard.js';
 import {
@@ -1208,27 +1208,15 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       refreshSummaryCollapseAllBtn();
     }
 
-    // Collect every session id across all groups/sub-groups — backs the
-    // header's collapse-all (issue #738).
-    function allSessionIds() {
-      const ids = [];
-      (function walk(groups) {
-        for (const g of (groups || [])) {
-          for (const a of (g.agents || [])) ids.push(a.session_id);
-          walk(g.groups);
-        }
-      })(dashboardGroups);
-      return ids;
-    }
-
-    // Keep the header collapse-all button's glyph/label in sync with whether
-    // any summary is currently collapsed.
+    // Keep the header summary-mode button's glyph/label in sync with the
+    // current mode (issue #985: strictly 2-state — collapsed or waiting-only,
+    // no third "expand all" state).
     function refreshSummaryCollapseAllBtn() {
       const btn = document.getElementById('summary-collapse-all');
       if (!btn) return;
-      const collapsedNow = anySummaryCollapsed();
-      btn.textContent = collapsedNow ? '⊞' : '⊟';
-      btn.title = collapsedNow ? 'Expand all task summaries' : 'Collapse all task summaries';
+      const waitingMode = getSummaryMode() === 'waiting';
+      btn.textContent = waitingMode ? '⊟' : '⏸';
+      btn.title = waitingMode ? 'Collapse all task summaries' : 'Show summaries for sessions waiting on you';
       btn.setAttribute('aria-label', btn.title);
     }
 
@@ -1315,9 +1303,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
     // Task summary + waiting question — a single collapsible block beneath the
     // parent row (issue #738). The summary ("what is this session about") shows
-    // in any state; the question shows only while waiting. A chevron collapses
-    // this one entry; the header offers a collapse-all. Mirrors the macOS
-    // SessionRowView.summaryBlock.
+    // in any state; the question shows only while waiting. A chevron manually
+    // overrides this one row regardless of the header's global collapsed/
+    // waiting-only mode (issue #985). Mirrors the macOS SessionRowView.summaryBlock.
     function createSummaryRow(agent, isChild) {
       const el = makeRow('row-summary-row',
         '<div class="summary-head"><span class="summary-chevron"></span>' +
@@ -1338,7 +1326,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       if (!summary && !question) { el.style.display = 'none'; return; }
       el.style.display = '';
       el._sessionId = agent.session_id;
-      const collapsed = isSummaryCollapsed(agent.session_id);
+      const collapsed = isSummaryCollapsed(agent.session_id, agent.state);
       el.classList.toggle('collapsed', collapsed);
       el.querySelector('.summary-chevron').textContent = collapsed ? '▸' : '▾';
       const titleEl = el.querySelector('.summary-title');
@@ -1988,8 +1976,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
     document.getElementById('view-mode-cycle').addEventListener('click', cycleDisplayMode);
     document.getElementById('summary-collapse-all').addEventListener('click', () => {
-      if (anySummaryCollapsed()) expandAllSummaries();
-      else collapseAllSummaries(allSessionIds());
+      toggleSummaryMode();
       render();
     });
     // Initial paint of the header button state (also sets body.view-history

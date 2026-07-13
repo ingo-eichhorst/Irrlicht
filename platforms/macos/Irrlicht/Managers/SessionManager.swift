@@ -86,13 +86,20 @@ class SessionManager: ObservableObject {
     /// groups, and (b) collapse state survives apiGroups re-assignments.
     @Published var collapsedGroupNames: Set<String> = []
 
-    /// Global collapse state for every session's task-summary/question block
-    /// (issue #738). A single bool — not a per-id set — so sessions that appear
-    /// after a "collapse all" still honor it (a snapshot set would leave new
-    /// rows expanded). Default expanded. Persisted in UserDefaults (#799) so
-    /// the choice survives app restarts.
-    @Published var summariesCollapsed: Bool = UserDefaults.standard.bool(forKey: "summariesCollapsed") {
-        didSet { UserDefaults.standard.set(summariesCollapsed, forKey: "summariesCollapsed") }
+    /// Global display mode for every session's task-summary/question block
+    /// (issue #985): strictly 2 states, no per-id set — so sessions that
+    /// appear or change state later still honor it live (a snapshot set
+    /// would leave new/transitioning rows stuck). `collapsed` hides every
+    /// row's block; `waiting` shows it only for sessions currently
+    /// `state == .waiting`, so sessions blocked on the user don't get buried
+    /// among working/ready rows — replaces the old "expand all" (every
+    /// summary shown at once), which was mostly noise. There is no per-row
+    /// toggle on macOS (see SessionRowView.summaryBlock). Persisted in
+    /// UserDefaults (#799) so the choice survives app restarts.
+    @Published var summaryDisplayMode: SummaryDisplayMode = SummaryDisplayMode(
+        rawValue: UserDefaults.standard.string(forKey: "summaryDisplayMode") ?? ""
+    ) ?? .waiting {
+        didSet { UserDefaults.standard.set(summaryDisplayMode.rawValue, forKey: "summaryDisplayMode") }
     }
 
     /// Set of session IDs present in apiGroups (for fast membership check).
