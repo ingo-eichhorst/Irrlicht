@@ -239,7 +239,7 @@ const SyntheticCatchUpTurnDoneReason = "turn already complete at first discovery
 // cleanupPreSessionsForProject's doc comment); for a child/subagent session,
 // which never gets a pre-session of its own, it's true when the parent
 // session's own OS process is still alive right now (see
-// SessionDetector.parentProcessLive).
+// PIDManager.parentProcessLive).
 func ShouldSynthesizeCatchUpTurn(hasLiveOrigin bool, metrics *session.SessionMetrics) bool {
 	return hasLiveOrigin && metrics.IsAgentDone()
 }

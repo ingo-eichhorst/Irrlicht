@@ -316,7 +316,7 @@ func (d *SessionDetector) finalizeNewSession(id agent.Identity, ev agent.Event, 
 	// of old history (issue #999).
 	liveSignal := supersedingLivePreSession
 	if state.ParentSessionID != "" {
-		liveSignal = d.parentProcessLive(state.ParentSessionID)
+		liveSignal = d.pidMgr.parentProcessLive(state.ParentSessionID)
 	}
 	if ShouldSynthesizeCatchUpTurn(liveSignal, state.Metrics) {
 		d.recordCatchUpTurn(ev.SessionID, state)
@@ -336,33 +336,6 @@ func (d *SessionDetector) finalizeNewSession(id agent.Identity, ev agent.Event, 
 	}
 
 	return true
-}
-
-// parentProcessLive is the child-side analog of a superseded live pre-session
-// (see finalizeNewSession's liveSignal computation): proof that a subagent's
-// parent OS process is still running right now, as opposed to the daemon
-// cold-rediscovering an already-finished historical subagent after a restart
-// (issue #999). Returns false — and thus no synthesis — when the parent
-// session is unknown or was never PID-bound (state.PID <= 0), so a genuinely
-// live but very-recently-spawned parent (PID discovery still in flight) is
-// treated the same as a dead one: a narrow, deliberately accepted
-// false-negative window traded for guaranteed safety against a backlog flood.
-//
-// Runs under d.pidMgr.WithSessionStateLock, matching
-// holdParentWorkingForNewChild's existing parent-load pattern: the parent may
-// have its own PID-discovery goroutine in flight, and reading its fields
-// without the lock would race that goroutine's assignPIDLocked write to the
-// same shared *SessionState (issue #606).
-func (d *SessionDetector) parentProcessLive(parentID string) bool {
-	live := false
-	d.pidMgr.WithSessionStateLock(func() {
-		parent, err := d.repo.Load(parentID)
-		if err != nil || parent == nil || parent.PID <= 0 {
-			return
-		}
-		live = d.pidMgr.IsPIDAlive(parent.PID)
-	})
-	return live
 }
 
 // recordCatchUpTurn emits the synthetic ready->working->ready pair
