@@ -1,0 +1,66 @@
+{
+  "scenario_id": "workflow-fanout",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+f064b23.dirty",
+    "confidence": 0.82,
+    "notes": "agent_supports=no: mistral-vibe has synchronous Task subagents but no workflow/multi-agent-orchestration feature (no orchestration tool, no per-run directory, no replay journal). Frozen."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "workflow-fanout",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n→ route: **frozen** (mistral-vibe ships subagents, but NO workflow / multi-agent-orchestration feature — so the scenario's distinguishing observables cannot occur).\n\n## The scenario's user-observable signal (3.5)\n\n`workflow-fanout` is NOT plain subagent dispatch. It asserts a dedicated **workflow / multi-agent-orchestration feature** (opt-in wording, e.g. \"use a workflow to ...\") that fans out ≈3 PARALLEL children whose transcripts land ONE LEVEL DEEPER than a plain Task subagent — under a per-run directory beneath the parent's subagents folder (claude-code's `<parent>/subagents/workflows/<run-id>/`) — ALONGSIDE per-run bookkeeping files (a replay `journal.jsonl`) the run writes for itself. The load-bearing observables that make 3.5 distinct from foreground-subagent (3.1) are: (a) a workflow/orchestrator feature that produces N concurrent children, (b) a per-run directory one level deeper than ordinary subagents, and (c) a per-run journal/bookkeeping file that MUST NOT masquerade as a phantom session (no `journal` session, no `unknown`-project session). The scenario states this outright: \"Only agents whose CLI has a workflow/multi-agent feature can elicit this (currently claude-code's Workflow tool); per the matrix convention the row stays agent-agnostic and assess marks cells for agents without the feature as agent_supports=no.\"\n\n## agent_supports: no (vibe HAS subagents, but NO workflow/orchestration feature — no per-run dir, no journal)\n\nmistral-vibe 2.19.0 ships a first-class Task subagent primitive (`core/tools/builtins/task.py`), but it is a single, synchronous specialist delegation — there is no workflow/orchestration tool, no per-run directory, and no replay-journal bookkeeping file. Anchored to the source:\n\n1. **No workflow / orchestration tool exists.** The full builtin tool set is `ask_user_question, bash, edit, exit_plan_mode, grep, read_file, skill, task, todo, web_fetch, web_search, write_file` (`core/tools/builtins/`). There is no Workflow / orchestrator / fan-out builtin. A package-wide scan for `workflow|orchestrat|fan-?out|parallel.*agent` surfaces only unrelated hits — the `teleport` remote-execution feature's `TeleportStartingWorkflowEvent`, config-layer `ConfigOrchestrator`, hook-`orchestration` prose, and MCP `discover ... in parallel` — none is a multi-agent fan-out construct. The only agent-spawning tool is `task`, and it has no opt-in \"workflow\" mode.\n\n2. **No per-run directory; no journal/replay bookkeeping file.** When `Task.run()` spawns a subagent it writes its transcript FLAT under the parent session, not one level deeper in a per-run workflow dir: `SessionLoggingConfig(save_dir=str(ctx.session_dir / \"agents\"), session_prefix=args.agent, ...)` (task.py). There is no `subagents/workflows/<run-id>/` per-run directory and no `journal.jsonl` replay-bookkeeping file. The scenario's central anti-phantom assertion (\"no session named `journal`, no `unknown`-project session from the run's journal\") therefore has no analogue — vibe writes no such bookkeeping file to mis-detect.\n\n3. **`task` is a single awaited delegation, recursion-guarded.** `TaskArgs` exposes only `task: str` and `agent: str` (default `explore`) — no orchestration/plan parameter. `Task.run()` drives exactly ONE child loop to completion inside the parent's tool call (`async with aclosing(subagent_loop.act(task_text)) as events: async for event in events: ...` then `yield TaskResult(...)`), and a subagent whose `agent_type != AgentType.SUBAGENT` is rejected \"to prevent recursive spawning\" — so there is no nested orchestration layer to launch a fan-out.\n\nBecause the workflow/orchestration feature (and its per-run dir + journal) is absent, the scenario's distinguishing observables cannot occur → `agent_supports = no`, and the daemon-observation question is moot: `daemon_capability = n/a`. This is consistent with the sibling agents on this row: gemini-cli is `agent=no` for the same reason (has subagents, lacks the workflow feature), and vibe's own background-subagent (3-2) is `agent=no` (no detached variant) while foreground-subagent (3-1) is `agent=yes` (the synchronous primitive vibe DOES have).\n\n## What would flip the verdict\n\nUpstream mistral-vibe would need to ship a workflow / multi-agent-orchestration tool that fans out N parallel children under a per-run directory with a per-run journal/bookkeeping file (the claude-code Workflow analogue). Only then would `agent_supports` move off `no`. Observing it would ADDITIONALLY require the vibe adapter (`core/adapters/inbound/agents/vibe/`) to derive `ParentSessionID` and drop the per-run journal file — work that would be assessed for the foreground-subagent row (3-1) first, where vibe's parent-link is already tracked as `daemon=bug`.",
+      "caveats": [
+        "Nuance on 'parallel': at the tool-dispatch layer vibe DOES run multiple tool calls from a single assistant turn concurrently (agent_loop.py `_run_tools_concurrently` — one `asyncio.create_task` per call + `asyncio.gather`), so if the model emitted several Task calls in one turn they would run concurrently. But that is ordinary tool-dispatch concurrency available to ANY tool, NOT the workflow/multi-agent-orchestration FEATURE this scenario asserts: there is still no orchestration tool with opt-in wording, no per-run `subagents/workflows/<run-id>/` directory one level deeper, and no per-run journal/replay bookkeeping file. agent=no is anchored to the absence of the workflow feature and its per-run dir + journal, not to a claim that vibe can never run two coroutines at once.",
+        "Even vibe's ordinary Task subagents are not parent-linked by the daemon today (parser.go emits no ParentSessionID; the parent↔child link is tracked as daemon=bug in the foreground-subagent 3-1 cell). That is the 3-1 subagent-linking gap, out of scope here because this row is frozen on the agent pillar (daemon=n/a).",
+        "confidence 0.82 (not higher): the absence of a workflow/orchestration tool is well-anchored in the builtin tool inventory + the package-wide scan + task.py, but vibe is actively developed (2.19.0), so a future release could add a fan-out construct."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/tools/builtins/task.py",
+          "note": "vibe 2.19.0 Task tool: TaskArgs exposes only task+agent (no orchestration param); Task.run() spawns ONE subagent AgentLoop, writes its log FLAT at SessionLoggingConfig(save_dir=ctx.session_dir/'agents', session_prefix=args.agent) — no per-run workflows/<run-id>/ dir, no journal.jsonl — awaits it to completion, then yields TaskResult; non-SUBAGENT agents rejected 'to prevent recursive spawning'"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/tools/builtins/",
+          "note": "Full builtin tool set (ask_user_question, bash, edit, exit_plan_mode, grep, read_file, skill, task, todo, web_fetch, web_search, write_file) — no Workflow/orchestrator/fan-out builtin. Package-wide scan for workflow|orchestrat|fan-out|parallel-agent finds only teleport's TeleportStartingWorkflowEvent, ConfigOrchestrator, hook-orchestration prose, MCP parallel-discovery — no multi-agent fan-out construct"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/agent_loop.py",
+          "note": "Concurrency nuance: _run_tools_concurrently (asyncio.create_task per tool call + asyncio.gather) runs multiple tool calls from ONE turn concurrently — ordinary tool-dispatch concurrency, not a workflow-orchestration feature; produces no per-run dir and no journal file"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/agent.go",
+          "note": "Source is FilesUnderRoot tailing ~/.vibe/logs/session/<session-id>/messages.jsonl; parser.go emits no ParentSessionID — the daemon has no transcript-side workflow/parent-link signal for vibe (moot here: agent=no → daemon=n/a)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/3-5_workflow-fanout/metadata.json",
+          "note": "Consistency anchor: gemini-cli is agent=no on this row for the SAME reason (ships subagents but no workflow fan-out feature / per-run dir / journal). vibe matches."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/3-2_background-subagent/metadata.json",
+          "note": "Sibling consistency: vibe background-subagent (3-2) is agent=no (no detached variant); foreground-subagent (3-1) is agent=yes (the synchronous primitive vibe has). workflow-fanout is agent=no on the missing workflow-orchestration feature."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "agent_supports=no — mistral-vibe 2.19.0 has synchronous Task subagents but no workflow/multi-agent-orchestration feature (no orchestration tool, no per-run subagents/workflows/<run-id>/ directory, no replay journal). No recipe; this cell is frozen."
+    }
+  }
+}

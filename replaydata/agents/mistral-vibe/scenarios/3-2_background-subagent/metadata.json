@@ -1,0 +1,73 @@
+{
+  "scenario_id": "background-subagent",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+12d0e9a.dirty",
+    "confidence": 0.83,
+    "notes": "agent_supports: no — mistral-vibe 2.19.0 has subagents (Task tool → AgentLoop(is_subagent=True)) but they run SYNCHRONOUSLY in-process: task.run() awaits `subagent_loop.act(...)` and only yields TaskResult once the child completes, blocking the parent's tool call. TaskArgs exposes only {task, agent} — no run_in_background/detached/fire-and-forget param anywhere in the vibe bundle. So the parent can never reach end_turn while a child is alive; the scenario's distinguishing observable (parent end_turn BEFORE child drain, session held working by hasActiveChildren) cannot be elicited — it collapses to foreground-subagent."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-subagent",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.83,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n→ route: **frozen** (mistral-vibe has subagents, but no fire-and-forget BACKGROUND variant — so the scenario's distinguishing observable cannot occur)\n\n## The scenario's user-observable signal (3.2, the unified rule)\n\n`background-subagent` is the FIRE-AND-FORGET variant of subagent dispatch: the parent dispatches a detached child, FINISHES ITS OWN REPLY (parent assistant turn reaches `end_turn`) WITHOUT waiting, yet the SESSION stays `working` while the detached child is alive (held by `reevaluateParent` / `hasActiveChildren`); `SubagentCount(parent)` INCLUDES the live child; the session goes `working → ready` ONLY after the last background child drains. The ONLY thing that distinguishes 3.2 from `foreground-subagent` (3.1) is the TIMING: here the parent `end_turn` lands BEFORE the child drain. That timing IS the scenario — remove it and you have 3.1, not 3.2.\n\n## agent_supports: no (vibe HAS subagents, but they are SYNCHRONOUS/BLOCKING — no background/detached dispatch)\n\nmistral-vibe 2.19.0 DOES ship subagents. The `task` builtin is advertised in the system prompt (`system_prompt.py`: \"The following subagents can be spawned via the Task tool\") and spawns a real child agent loop. But the dispatch is strictly synchronous, in-process, and awaited by the parent's tool call — the bundle is unambiguous:\n\n- `core/tools/builtins/task.py` `Task.run()` builds `subagent_loop = AgentLoop(config=..., agent_name=args.agent, is_subagent=True, ...)`, sets `subagent_loop.parent_session_id = ctx.session_id`, then drives it with `async with aclosing(subagent_loop.act(task_text)) as events: async for event in events: ...` and only AFTER that loop drains does it `yield TaskResult(response, turns_used, completed)`. The parent's Task tool call BLOCKS on the full child run — the exact FOREGROUND request/response shape.\n- `TaskArgs` (task.py:36) exposes only two fields — `task: str` and `agent: str` (default \"explore\"). There is NO `run_in_background` / `background` / `detached` / `fire_and_forget` parameter. A repo-wide grep of the vibe package for `run_in_background|fire.?and.?forget|detached|background.?task` returns ZERO subagent-dispatch hits — the only `fire-and-forget` string is `telemetry/send.py` (unrelated telemetry sends); the only `detached` strings are git worktree HEAD checks.\n- The subagent is recursion-guarded (`agent_type != AgentType.SUBAGENT` raises), reinforcing that `task` is a single awaited delegation, not a launcher for detached background workers.\n\nSo vibe cannot perform the fire-and-forget behavior 3.2 asserts: the parent CANNOT reach `end_turn` while a child is still alive, because the child is awaited inside the parent's tool call. The parent `end_turn` always lands AFTER the child drains — which is `foreground-subagent` (3.1), not background-subagent. This is an honest `agent=no` for THIS scenario (the BACKGROUND variant specifically), not a daemon or driver limit. Consistent with the foreground-subagent sibling: the SAME underlying capability (vibe subagents are in-process synchronous) is a plausible-yes for 3.1 and a hard-no for 3.2.\n\n## Why this differs from the codex/kiro 3.2 cells (agent=yes, daemon=incapable)\n\ncodex (`spawn_agent`/`wait_agent`) and kiro DO ship a genuine fire-and-forget default (codex `wait_agent` is the discouraged blocking exception) — the agent genuinely performs the background behavior, but the parent→child edge never reaches the watched Source (codex: `state_5.sqlite thread_spawn_edges`, never the rollout JSONL) → `daemon=incapable`. vibe's block is one level earlier: the AGENT has no background variant at all, so we never reach the daemon question. Hence `agent=no` → `daemon=n/a`, matching the gemini-cli 3.2 cell (also synchronous-only subagents).\n\n## daemon / driver: n/a under the agent=no freeze (recorded for completeness)\n\nNot the blocker, but if vibe ever added a background variant, the daemon question would still be non-trivial: vibe writes the child's transcript NESTED under the parent, not as a sibling top-level session. `task.py` sets `SessionLoggingConfig(save_dir=str(ctx.session_dir / \"agents\"), session_prefix=args.agent)`, so a child log would land at `~/.vibe/logs/session/<parent-id>/agents/<agent>_.../messages.jsonl`. The adapter's Source is `FilesUnderRoot{Dir: ~/.vibe/logs/session}` with `sessionIDFromPath` = the immediate parent dir of a `messages.jsonl`; a nested `agents/<child>/messages.jsonl` would either be minted as an UNLINKED standalone session or skipped, and the vibe parser (`parser.go`) has ZERO parent-linking logic (no `ParentSessionID`, no child discovery) even though the child loop carries `parent_session_id` in-memory. Both pillars are moot here under the agent=no freeze; they are the open questions for the 3.1 (foreground) cell, not 3.2.\n\n## Routing\n\nagent=no → daemon=n/a, driver=n/a → **frozen** (the agent lacks the feature). No recording; no spec phases beyond the meta. Re-assess if mistral-vibe adds a fire-and-forget/run_in_background subagent dispatch — at which point the re-assessment hinges on the daemon pillar (teach the vibe parser to project the nested `agents/<child>/` transcript as a `ParentSessionID`-linked child), not on the agent.",
+      "caveats": [
+        "agent=no is anchored to mistral-vibe 2.19.0 source: `core/tools/builtins/task.py` `Task.run()` awaits `subagent_loop.act(...)` to completion inside the parent's tool call before yielding `TaskResult`, and `TaskArgs` exposes only {task, agent} with no run_in_background/detached/background parameter (repo-wide grep: 0 subagent-dispatch hits). confidence 0.83: the synchronous, in-process, awaited model is explicit in the (readable, non-minified) Python source; held below 0.9 because it is a source read, not a live spawn, and vibe's subagent surface is young (single built-in `explore` subagent, ASK permission).",
+        "mistral-vibe 2.19.0 DOES have (foreground) subagents via the Task tool — this `no` is scoped to the BACKGROUND/fire-and-forget variant 3.2 asserts. The foreground-subagent cell (3.1) is a separate, open assessment (agent=yes there); it would hinge on the daemon/driver pillars, since the vibe parser does not yet link children and the child transcript is nested under the parent.",
+        "If vibe adds a background variant it would NOT automatically be `daemon=full`: the child transcript lands NESTED at `~/.vibe/logs/session/<parent-id>/agents/<agent>_.../messages.jsonl` (task.py SessionLoggingConfig save_dir=ctx.session_dir/agents), and `sessionIDFromPath` mints the ID from the immediate parent dir of a `messages.jsonl` — so the nested child would be an unlinked standalone session (or skipped), and the parser has no ParentSessionID logic. That is the daemon question for the 3.1 cell.",
+        "The only `fire-and-forget` string in the vibe package is telemetry (`core/telemetry/send.py` — swallowed background telemetry sends), and the only `detached` strings are git-worktree HEAD checks — both ruled out explicitly so a future audit does not re-litigate them as a missed subagent background mode."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/tools/builtins/task.py",
+          "note": "mistral-vibe 2.19.0 Task builtin. Task.run() constructs subagent_loop = AgentLoop(is_subagent=True), sets subagent_loop.parent_session_id = ctx.session_id, then `async with aclosing(subagent_loop.act(task_text)) as events: async for event in events: ...` and only AFTER draining yields TaskResult(response, turns_used, completed) — the parent tool call BLOCKS on the full child run (foreground request/response). TaskArgs (line 36) has ONLY {task, agent} — no run_in_background/background/detached/fire_and_forget param. SessionLoggingConfig save_dir = str(ctx.session_dir / 'agents'), session_prefix=args.agent → child transcript is nested UNDER the parent session dir, not a sibling ~/.vibe/logs/session/<child-id>/."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/system_prompt.py",
+          "note": "system prompt advertises subagents: _get_available_subagents_section() → 'The following subagents can be spawned via the Task tool'. Confirms vibe HAS (foreground) subagents; scopes the agent=no to the BACKGROUND variant only."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/agent_loop.py",
+          "note": "AgentLoop carries parent_session_id in-memory (self.parent_session_id, set by Task.run) and is_subagent gates init_scratchpad(...) if not is_subagent. The parent link exists only in-process — never emitted to disk in a form the watched Source reads (child log is nested under the parent's session dir). Confirms the child runs as an awaited in-process loop, not a detached OS process."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "The mistral-vibe adapter parser has NO parent-linking logic — no ParentSessionID assignment, no subagent/child discovery. Emits per-message user/assistant/tool + model/token/turn events from a single messages.jsonl. Moot under the agent=no freeze; it is the load-bearing daemon question IF vibe ever adds a background variant."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/adapter.go",
+          "note": "Source: FilesUnderRoot{Dir: ~/.vibe/logs/session} with sessionIDFromPath = the immediate parent dir of a file named messages.jsonl (constant transcriptFilename; sibling meta.json and nested files skipped). A child transcript at ~/.vibe/logs/session/<parent-id>/agents/<child>/messages.jsonl would be minted as an UNLINKED standalone session (or skipped) — so even a future background variant would need a parser that projects the nested path as ParentSessionID (a daemon task)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/3-2_background-subagent/metadata.json",
+          "note": "Template/parallel cell: gemini-cli 0.46.0 also has subagents but only SYNCHRONOUS awaited ones (no fire-and-forget) → same verdict agent=no/daemon=n/a/driver=n/a → frozen. vibe matches this shape (in-process awaited Task tool). Contrast codex 3.2 (agent=yes, daemon=incapable): codex has a genuine background spawn but the edge lives only in state_5.sqlite."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "frozen_reason": "agent_supports=no: mistral-vibe 2.19.0 subagents (Task tool → AgentLoop(is_subagent=True)) run SYNCHRONOUSLY in-process — Task.run() awaits subagent_loop.act(...) to completion before yielding TaskResult, blocking the parent's tool call, and TaskArgs exposes only {task, agent} with no run_in_background/detached/background param (repo-wide grep: 0 subagent-dispatch hits). So the parent cannot reach end_turn while a child is still alive — the scenario's distinguishing observable (parent end_turn BEFORE child drain, session held working by hasActiveChildren) cannot be elicited; that timing collapses to foreground-subagent (3.1). Unblock: re-assess if vibe adds a fire-and-forget/run_in_background subagent dispatch — at which point the re-assessment becomes a daemon/parser question (the child transcript is nested at ~/.vibe/logs/session/<parent-id>/agents/<child>/messages.jsonl, so teach the vibe parser to project it as a ParentSessionID-linked child), not an agent one.",
+      "preconditions": [],
+      "setup": [],
+      "script": [],
+      "verify": [],
+      "settings": {},
+      "timeout_seconds": 0
+    }
+  }
+}

@@ -126,10 +126,50 @@ func deriveParentSession(transcriptPath string) string {
 	if id := deriveGeminiParentSessionID(transcriptPath); id != "" {
 		return id
 	}
+	if id := deriveVibeParentSessionID(transcriptPath); id != "" {
+		return id
+	}
 	if id := transcript.AntigravityParentConvID(transcriptPath); id != "" {
 		return id
 	}
 	return deriveParentSessionFromTranscript(transcriptPath)
+}
+
+// deriveVibeParentSessionID extracts a parent session ID from a Mistral Vibe
+// subagent transcript path. Vibe's task tool writes a subagent's session under
+// the PARENT session directory's agents/ subfolder:
+//
+//	~/.vibe/logs/session/<parent-session-dir>/agents/<child-session-dir>/messages.jsonl
+//
+// (task.py sets the subagent's save_dir to `<parent_session_dir>/agents`, and
+// SessionLogger then mints a `session_<ts>_<shortid>` folder under it.) The vibe
+// adapter registers a session under its directory name (SessionIDFromPath), so
+// the parent's registered SessionID IS <parent-session-dir> — read straight off
+// the path. Deriving from the child's meta.json parent_session_id would be
+// WRONG: that field is the parent's internal UUID, not its directory name, so it
+// would never match the registered parent. Returns "" for a top-level vibe
+// session (whose grandparent dir is `session`, not `agents`) or any non-vibe
+// path.
+func deriveVibeParentSessionID(transcriptPath string) string {
+	if filepath.Base(transcriptPath) != "messages.jsonl" {
+		return ""
+	}
+	childDir := filepath.Dir(transcriptPath) // .../<parent>/agents/<child>
+	agentsDir := filepath.Dir(childDir)      // .../<parent>/agents
+	if filepath.Base(agentsDir) != "agents" {
+		return ""
+	}
+	parent := filepath.Base(filepath.Dir(agentsDir)) // <parent>
+	if isEmptyOrRootDirName(parent) {
+		return ""
+	}
+	return parent
+}
+
+// isEmptyOrRootDirName reports whether filepath.Base/Dir bottomed out at the
+// filesystem root instead of yielding a real directory name.
+func isEmptyOrRootDirName(name string) bool {
+	return name == "" || name == "." || name == string(filepath.Separator)
 }
 
 // deriveGeminiParentSessionID extracts the parent's registered session ID from a

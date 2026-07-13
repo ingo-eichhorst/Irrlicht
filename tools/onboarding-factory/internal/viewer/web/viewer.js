@@ -277,32 +277,6 @@ function renderSidebarGroups(sidebar, scenarios, codeById) {
   }
 }
 
-{
-  const scenarios = await loadInitData();
-  // Re-render the overview when a window resize changes how many agent
-  // columns fit (debounced; no-op on detail pages and when the fit count
-  // is unchanged). Registered once for both init paths below.
-  registerOverviewResizeListener();
-
-  const codeById = buildCodeById();
-  const sidebar = document.getElementById("scenarios");
-  sidebar.innerHTML = "";
-
-  // Overview button — always present. Click sets the hash; the router
-  // hashchange handler does the actual view swap.
-  sidebar.appendChild(buildOverviewButton());
-
-  if (!scenarios || scenarios.length === 0) {
-    renderEmptySidebarNote(sidebar);
-  } else {
-    renderSidebarGroups(sidebar, scenarios, codeById);
-  }
-  // Wire the router and dispatch the initial route. Deep links land
-  // directly on the requested view; bare `/` falls through to overview.
-  window.addEventListener("hashchange", route);
-  route();
-}
-
 // parseCatalogCode splits a catalog code ("5.4") into [section, index]
 // for numeric sort. Missing/blank codes sort to the end.
 function parseCatalogCode(code) {
@@ -3024,4 +2998,46 @@ export function renderMarkdown(md) {
   }
   flushPara(); flushList();
   return out.join("\n");
+}
+
+// Bootstrap — deliberately the LAST top-level statement in the module.
+// Every helper it calls transitively (route() -> loadOverview() ->
+// renderCoverageMatrix() -> ... -> renderPipelineStrip()) is a hoisted
+// function declaration, so calling it early would normally be safe, but
+// some of those functions close over top-level `const`s declared elsewhere
+// in this file (e.g. _DRIFT_STYLES). A `const` binding is only initialized
+// when its declaration statement actually runs, in file order — so with
+// this block positioned EARLY (as it originally was, right after
+// renderSidebarGroups), the very first render (triggered by route() below,
+// still inside this block's `await`-suspended top-level execution) could
+// reach a not-yet-initialized const and throw "Cannot access '...' before
+// initialization" the moment any visible coverage cell had non-null drift
+// — reproducibly on a wide window (more agent columns visible) even though
+// a narrower initial width happened not to trigger it. Keeping this the
+// final statement guarantees every const/function above has already run
+// by the time anything here executes.
+{
+  const scenarios = await loadInitData();
+  // Re-render the overview when a window resize changes how many agent
+  // columns fit (debounced; no-op on detail pages and when the fit count
+  // is unchanged). Registered once for both init paths below.
+  registerOverviewResizeListener();
+
+  const codeById = buildCodeById();
+  const sidebar = document.getElementById("scenarios");
+  sidebar.innerHTML = "";
+
+  // Overview button — always present. Click sets the hash; the router
+  // hashchange handler does the actual view swap.
+  sidebar.appendChild(buildOverviewButton());
+
+  if (!scenarios || scenarios.length === 0) {
+    renderEmptySidebarNote(sidebar);
+  } else {
+    renderSidebarGroups(sidebar, scenarios, codeById);
+  }
+  // Wire the router and dispatch the initial route. Deep links land
+  // directly on the requested view; bare `/` falls through to overview.
+  window.addEventListener("hashchange", route);
+  route();
 }

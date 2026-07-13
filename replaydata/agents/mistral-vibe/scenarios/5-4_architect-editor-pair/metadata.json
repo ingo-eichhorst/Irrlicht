@@ -1,0 +1,77 @@
+{
+  "scenario_id": "architect-editor-pair",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+f064b23.dirty",
+    "confidence": 0.82,
+    "notes": "agent=yes daemon=incapable driver=ready — vibe has a real plan mode (exit_plan_mode approval gate → accept-edits/implement) but the arc's defining working→waiting episode is never flushed to messages.jsonl during the approval pause (route frozen)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "architect-editor-pair",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\nRoute: frozen. This cell is instantiation (b) of architect-editor-pair — Mistral Vibe's plan→implement MODE pair (one model) captured across the approval gate, the FULL lifecycle arc `ready → working → waiting → working → ready` (NOT the Aider two-models-in-one-turn shape). Its load-bearing, defining observable is the mid-arc `working → waiting` episode driven by the plan-approval pause, plus the post-approval `waiting → working → ready` continuation into a real edit. Vibe genuinely raises that approval prompt, but the `→ waiting` transition produces ZERO trace in the only transport the daemon tails — messages.jsonl — so no recording could verify the arc. This is the SAME architectural blocker vibe's `user-blocking-plan-mode-approval` (2.18) cell established; this cell is its full-arc superset, and the very signal 2.18 proved vibe cannot surface is the one this arc hinges on.\n\n## Two instantiations, and which one this is\n\nThe architect/editor essence is: a planning/architect contribution produces a plan, then an editing/editor contribution applies the edits. Two instantiations: (a) two MODELS in one turn (Aider `--architect`), and (b) a plan→implement MODE pair across the approval gate (Claude Code plan mode; the broadened meaning the canonical claudecode cell instantiates). The 5.4 description pins this cell to instantiation (b), one model throughout.\n\nVibe cannot produce instantiation (a): it uses ONE model per turn. `active_model` is a single alias and `get_active_model()` resolves exactly one `ModelConfig` from the `models` catalog (`config/vibe_schema.py:88,92,306-312`); the `models` list is a selectable pool (mistral-medium-3.5 / devstral-small / local aliases), not an architect+editor dual-model orchestration. A keyword sweep of the whole `vibe/` tree for `architect` / `editor_model` / `architect_model` / `two_model` / `multi_model` returned no orchestration hits — vibe has no within-turn two-model split, and the sidecar (parser.go's meta.json read) carries a single `active_model`. Instantiation (a) is therefore not producible — but it is not this cell.\n\n## Why agent_supports is yes (instantiation b)\n\nMistral Vibe 2.19.0 ships a genuine plan mode with a plan→implement mode pair:\n- A builtin `PLAN` agent profile (`BuiltinAgentName.PLAN = \"plan\"`, `core/agents/models.py:41,117`) and an `ACCEPT_EDITS = \"accept-edits\"` profile (`models.py:42,132`) — the architect (plan) and editor (implement) modes of the pair.\n- A builtin `exit_plan_mode` tool (`core/tools/builtins/exit_plan_mode.py`) that blocks on the user's approval and, on approval, switches from plan mode to accept-edits mode — the mid-arc gate that continues PAST approval into the implement phase.\n- Plan-mode middleware injects a read-only-enforcing system prompt and instructs the model to \"call the exit_plan_mode tool to request user approval and switch to implementation mode\" (`core/middleware.py:151-182`).\n\nSo the agent deterministically performs the plan-propose → approve → implement mode-pair behavior the scenario names, continuing past the gate into a real edit → agent=yes.\n\n## Why daemon_capability is incapable\n\nThe vibe adapter is a transcript-only Source — `agent.FilesUnderRoot{Dir: ~/.vibe/logs/session/}` tailing each session's `messages.jsonl` (agent.go), with a read-only `transcripts` observe permission and NO hook/permission transport. The defining `working → waiting` episode of this arc cannot form on disk:\n\n1. Vibe flushes messages.jsonl per-TURN, not per-message. In the turn loop `act()`, `_save_messages()` (`agent_loop.py:1076`, → `session_logger.save_interaction` at `agent_loop.py:741-742`) runs only AFTER `_perform_llm_turn()` fully completes — and `_perform_llm_turn` is what executes the tool calls, inside which `exit_plan_mode.run()` blocks on the user's approval. The only other turn-adjacent save is in `inject_user_context` (`agent_loop.py:777`), not during tool execution. So the assistant `exit_plan_mode` tool_call and its `role:tool` result are BOTH written to disk together, only AFTER the user has already resolved the approval. During the entire approval-pause window messages.jsonl gains nothing — the open-tool state exists only in the in-memory message list. The `→ waiting` transition that defines this scenario is never persisted to the transport the daemon tails.\n\n2. Even if it were persisted, the daemon's two paths to `waiting` do not fire: rule 0 `PermissionPending → waiting` is Claude-Code-permission-hook-only (vibe fires no hook), and rule 1 `NeedsUserAttention` requires an OPEN tool whose name is in `isUserBlockingToolName` = `AskUserQuestion` / `ExitPlanMode` (CamelCase) / `question` (`core/pkg/tailer/tailer_config.go:34-37`; `state_classifier.go`). Vibe's tool is `exit_plan_mode` (snake_case, passed through by parser.go's parseToolCalls) and is absent from that set. This is a secondary gap; the load-bearing blocker is the per-turn flush cadence.\n\nWithout the gating `waiting` transition the post-approval `waiting → working → ready` continuation is unreachable, so the full `ready → working → waiting → working → ready` arc could never form on disk → daemon=incapable (not bug: there is no on-disk trace to mis-handle).\n\n## Why driver_capability is ready\n\nThe driver is not the blocker (moot under a frozen route). Plan-mode entry is available as the `--agent plan` launch flag, so engaging plan mode is a setup precondition rather than a missing runtime step primitive; the elicitation itself (send a prompt, let the model call exit_plan_mode, approve, continue) is within the freshly-scaffolded send/slash/sleep set. The blocker is correctly isolated to architecture (no transport trace), not tooling → route frozen, not driver-gap. (A runtime toggle via Shift+Tab would need a `keys` step the scaffolded driver lacks, but that path is not required since `--agent plan` sets the mode at launch.)\n\n## What would change this\n\nEither (a) vibe begins flushing messages.jsonl mid-turn — writing the assistant `exit_plan_mode` tool_call to disk BEFORE the approval block resolves, leaving an observable open-tool window — AND `exit_plan_mode` is added to the daemon's user-blocking tool set; or (b) a vibe permission-hook transport analogous to Claude Code's feeds `PermissionPending` directly. Neither exists in 2.19.0. At that point the plan→approve→implement mode-pair recipe (`--agent plan` launch, send the plan task, approve the gate, wait for the implement turn + a real edit) would mirror the claudecode reference.",
+      "caveats": [
+        "Provisional on the EMISSION axis: the verdict that vibe never writes the open exit_plan_mode tool_call to messages.jsonl during the approval pause rests on the 2.19.0 source call-graph (act()'s only turn-loop flush is _save_messages at agent_loop.py:1076, after the blocking _perform_llm_turn/tool execution completes; the earlier save at agent_loop.py:777 is in inject_user_context, not the turn loop). A live recording driving genuine plan mode is the only thing that could promote this from provisional to settled — hence confidence 0.82, matching the vibe 2.18 and gemini-cli 5.4 siblings.",
+        "The tool-name mismatch (vibe emits snake_case exit_plan_mode, absent from the daemon's CamelCase isUserBlockingToolName set) is a secondary gap: even if fixed, the per-turn flush cadence means no open-tool window is ever on disk to classify. The emission-timing limit is the load-bearing reason.",
+        "Instantiation (a) two-models-in-one-turn is separately impossible for vibe (single active_model; get_active_model returns one ModelConfig; no architect/editor orchestration in source), but the 5.4 description pins this cell to instantiation (b) — the one-model plan→implement mode pair — so the verdict turns on the mode-pair arc, not the two-model shape."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/2-18_user-blocking-plan-mode-approval/metadata.json",
+          "note": "Sibling 2.18 cell: agent=yes daemon=incapable (conf 0.82) — vibe's exit_plan_mode approval gate → waiting is never flushed to messages.jsonl (per-turn flush at agent_loop.py:1076). This 5.4 cell is 2.18's full-arc superset and inherits the identical blocker on the gating working→waiting transition."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/agent_loop.py",
+          "note": "vibe 2.19.0 flush cadence: act()'s turn loop calls _save_messages() only at line 1076 AFTER _perform_llm_turn() (which runs the blocking exit_plan_mode approval) completes; _save_messages→session_logger.save_interaction at 741-742; the only other save (777) is in inject_user_context, not during tool execution. So the open exit_plan_mode tool_call is never on disk during the approval pause → the working→waiting episode leaves zero trace."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/agents/models.py",
+          "note": "BuiltinAgentName.PLAN=\"plan\" (line 41) and ACCEPT_EDITS=\"accept-edits\" (line 42), with PLAN AgentProfile at line 117 — the architect (plan) and editor (implement/accept-edits) modes of the pair. Confirms agent=yes for instantiation (b)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/tools/builtins/exit_plan_mode.py",
+          "note": "Builtin exit_plan_mode tool that requests user approval and switches plan→accept-edits (implement) mode; middleware.py:151-182 instructs the model to call it 'to request user approval and switch to implementation mode'. The mid-arc gate the scenario continues PAST — but its approval pause is never persisted."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/config/vibe_schema.py",
+          "note": "Single-model per turn: active_model is one alias (line 88); models is a selectable catalog (line 92); get_active_model() returns exactly one ModelConfig (306-312). No architect/editor dual-model orchestration (0 hits sweeping vibe/ for architect|editor_model|two_model|multi_model) — instantiation (a) two-models-in-one-turn is not producible; this cell is instantiation (b)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "vibe parser maps only user_message / assistant_message(working) / turn_done(ready) / tool_result; no waiting-state path. exit_plan_mode is passed through snake_case via parseToolCalls (nested function.name). No parser path derives a pending/awaiting/held-open signal → grounds daemon=incapable."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_config.go",
+          "note": "isUserBlockingToolName = AskUserQuestion / ExitPlanMode (CamelCase) / question (lines 34-37); vibe's snake_case exit_plan_mode is absent, so even an open call could not drive NeedsUserAttention rule 1. Secondary to the flush-cadence blocker."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/5-4_architect-editor-pair/metadata.json",
+          "note": "Cross-agent sibling: gemini-cli 5.4 is agent=yes daemon=incapable frozen (conf 0.82) for the identical reason — the plan-approval waiting episode is never persisted to the tailed JSONL. vibe's transport architecture matches; same verdict and framing."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Route frozen (daemon=incapable). No recording is possible: the mid-arc working→waiting transition driven by the exit_plan_mode approval pause is never written to messages.jsonl (vibe flushes per-turn at agent_loop.py:1076, only after the blocking tool execution completes), so the full ready→working→waiting→working→ready arc could not form on disk and no recipe could elicit a verifiable observation. Would become recordable only if vibe flushes the open tool_call mid-turn AND exit_plan_mode is added to the daemon's user-blocking tool set (or vibe grows a permission-hook transport feeding PermissionPending) — at which point the plan→approve→implement mode-pair recipe (--agent plan launch, send the plan task, approve the gate, wait for the implement turn + real edit) would mirror the claudecode reference.",
+      "script": []
+    }
+  }
+}

@@ -1,0 +1,110 @@
+{
+  "scenario_id": "model-switch-midsession",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+f064b23.dirty",
+    "confidence": 0.8,
+    "notes": "agent=yes daemon=full driver=gap:keys — a mid-session /model switch persists to config.active_model and vibe rewrites meta.json.config on the next turn, so the sidecar re-read flips ModelName A->B (latest-wins); the /model picker is an arrow-key ModelPickerApp (not an inline slash), so the recipe needs keys, which the scaffolded driver stubs (route driver-gap)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-switch-midsession",
+      "agent": "mistral-vibe",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\n**agent=yes** — Vibe's interactive TUI exposes `/model` (`cli/commands.py`: `Command(aliases={\"/model\"}, handler=\"_show_model\")`). `_show_model` opens an arrow-key `ModelPickerApp` over `config.models` (per meta.json the account has three: `mistral-medium-3.5`, `devstral-small`, `local`). Selecting an entry fires `on_model_picker_app_model_selected` → `VibeConfig.save_updates({\"active_model\": alias})` then `_reload_config()` — an in-place switch in the SAME session (no new session dir). So a genuine mid-session model change is supported.\n\n**daemon=full** — The switch persists AND surfaces to the tailed transcript. Chain: `save_updates` writes `active_model` to the config layer → `_reload_config` does `base_config = VibeConfig.load()` (reads back the new model) → `agent_loop.reload_with_initial_messages(base_config=…)` sets `self._base_config` → the next turn's `SessionLogger.save_interaction(..., self._base_config, ...)` dumps `\"config\": base_config.model_dump()` into `meta.json` (session_logger.py:338), so `meta.json.config.active_model` = model B before turn 2's `turn_done`. The daemon's `readSidecar` (sidecar.go) re-decodes meta.json whenever mtime+size change and reads `config.active_model`; `parser.applySidecar` stamps `ev.ModelName = NormalizeModelName(st.model)` on EVERY event. MergeMetrics' latest-non-unknown-wins promotes `SessionMetrics.ModelName` to model B by t2_end. State topology holds: `/model` and the picker keystrokes are handled by the TUI command dispatcher and are NOT persisted to messages.jsonl (only LLM conversation messages are), so no user_message/turn events fire during the switch window — no working/waiting flicker (achieved structurally, not via a claudecode-style isLocalCommandContent filter). Tokens: sidecar `stats.context_tokens` → `turn_done` `TokenSnapshot.Total` (tokens_nonzero true, a context-window snapshot not a cumulative accumulator). Cost is never emitted (parser reads no cost field; mistral-vibe absent from core/pkg/capacity) → cost_nonzero false.\n\n**driver=gap:keys** — Model A (`mistral-medium-3.5`, the confirmed live launch default) is deterministic with no settings. The switch is an arrow-key picker: `slash /model` (elicited) opens it, then `keys Down` + `keys Enter` select+confirm. `keys` is a `not_implemented` stub in the scaffolded driver (`# TODO(mistral-vibe): tmux send-keys raw sequence`) → grammar gap. Additionally `wait_turn` (needed between turns) dispatches but is absent from `DRIVE_ELICITS=\"send slash sleep\"`, so the semantic lint also flags it. record ports SEAM 1 (keys/tmux send-keys) and adds `keys`+`wait_turn` to DRIVE_ELICITS before driving. NOTE — this contradicts the scaffold hint that `/model <id>` is an inline `slash` step: `_show_model(**kwargs)` ignores any argument and always opens the picker, so it is a `keys` gap, not an inline slash.\n\n## Observations\nmodel LEFT PROVISIONAL — final ModelName is model B, which depends on the picker's selection at record time; expected `devstral-small` (Down once from `mistral-medium-3.5`) but list order / highlight-start is unconfirmed, so record fills observations.model = model B from the recording. tokens_nonzero=true, cost_nonzero=false, agent=mistral-vibe.",
+      "caveats": [
+        "driver has TWO gaps: keys (genuinely not_implemented — the picker's tmux send-keys seam) and wait_turn (dispatches but omitted from DRIVE_ELICITS, so the semantic lint flags it). record ports both before driving.",
+        "observations.model left provisional: final ModelName = model B is picker-selection-dependent (expected devstral-small on one Down, but list order unconfirmed) — record confirms and pins it.",
+        "PROVISIONAL on emission: whether a transient proc-<PID> presession row precedes the session_<...> birth is not source-confirmable — record settles it (spec anchors birth to start UNPINNED to be safe).",
+        "cost_nonzero=false: no cost field in the sidecar/transcript and mistral-vibe is absent from core/pkg/capacity."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/sidecar.go",
+          "note": "readSidecar re-decodes meta.json on mtime+size change and reads config.active_model — so a rewritten active_model surfaces on the next event"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "applySidecar stamps ev.ModelName = NormalizeModelName(st.model) on EVERY event; turn_done carries TokenSnapshot.Total from context_tokens"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/cli/textual_ui/app.py",
+          "note": "on_model_picker_app_model_selected → VibeConfig.save_updates({'active_model': alias}) + _reload_config(); _show_model opens ModelPickerApp (arrow-key picker, ignores inline args)"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/session/session_logger.py",
+          "note": "save_interaction dumps 'config': base_config.model_dump() into meta.json each turn — so config.active_model reflects the reloaded (switched) model before turn 2's turn_done"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "keys is not_implemented (TODO tmux send-keys); DRIVE_ELICITS='send slash sleep' excludes wait_turn — record ports keys + declares wait_turn"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/5-2_model-identification/expected.jsonl",
+          "note": "sibling: model A mistral-medium-3.5 confirmed from live config.active_model; single-birth anchoring + tokens_nonzero/cost_nonzero pattern"
+        }
+      ]
+    },
+    "recipe": {
+      "timeout_seconds": 240,
+      "settings": {},
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "slash",
+          "text": "/model"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "keys",
+          "keys": "Down"
+        },
+        {
+          "type": "sleep",
+          "seconds": 1
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ]
+    }
+  }
+}

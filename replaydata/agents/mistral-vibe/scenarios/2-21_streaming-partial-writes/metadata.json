@@ -1,0 +1,115 @@
+{
+  "scenario_id": "streaming-partial-writes",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+12d0e9a",
+    "confidence": 0.55,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:wait_turn"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "streaming-partial-writes",
+      "agent": "mistral-vibe",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.55,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:wait_turn\n\n## Primitive\n\nThe scenario pins the no-flicker streaming invariant: `ready → working → ready` with state held solidly at `working` across every partial flush of the assistant reply — no premature flip to `ready` before the turn-end signal. Its acceptance_criteria constrains the turn to prose only (`Tool calls: ≤ 0`), so the relevant unit is a single multi-sentence assistant answer, not a tool-loop.\n\n## agent_supports: yes\n\nVibe is Mistral's open-source CLI coding agent (v2.19.0 live) and produces prose assistant replies every turn. A live transcript (`~/.vibe/logs/session/session_20260706_101952_48e134e3/messages.jsonl`, 336 complete lines) shows the full user → assistant/tool → terminal-assistant arc; a prose-only prompt yields a single terminal `role:\"assistant\"` message with non-empty `content` and no `tool_calls`. Streaming to the TUI is a render concern; the agent genuinely performs the streamed multi-sentence reply.\n\n## daemon_capability: full\n\nThe daemon correctly handles Vibe's transport for this scenario — no torn-line bug and no premature-ready hazard, so the no-flicker invariant holds by construction:\n\n1. **Emission is append-on-complete, never partial JSON.** `SessionLogger.persist_messages` (site-packages/vibe/core/session/session_logger.py:240-257) opens `messages.jsonl` in append mode (`\"a\"`) and writes each message as exactly one `json.dumps(message) + \"\\n\"`, flushing and `os.fsync`-ing per message. `save_interaction` (session_logger.py:259-350, invoked from agent_loop.py:742/1882/1920/1948/2009/2022/2052) computes `new_messages = non_system_messages[old_total_messages:]` and appends only the not-yet-written COMPLETE messages. Vibe never rewrites the last line or streams partial JSON — incremental tokens are TUI-render only and never reach the file. Verified against a real transcript: all 336 lines parse as complete JSON, one message per line.\n\n2. **The daemon never parses a torn line even if one momentarily existed.** The shared tailer stops at a partial trailing line without advancing past the partial bytes (core/pkg/tailer/tailer.go:550-562), and `agent.JSONLineParser` only feeds newline-terminated lines to the parser — so a mid-write flush is held until the newline lands (covered by core/pkg/tailer/large_line_test.go).\n\n3. **The parser sustains working across in-turn flushes and settles only on the terminal message.** `Parser.ParseLine` (core/adapters/inbound/agents/vibe/parser.go:57-75) maps a `role:\"assistant\"` message WITH `tool_calls[]` to `assistant_message` (mid-turn, keeps the session working) and a text-only assistant message with NO tool_calls to `turn_done` (working→ready). There is NO `assistant_streaming` / non-terminal-stop_reason family, so no per-flush event can prematurely flip the session to `ready` — the exact Bug-D flicker family the scenario locks down cannot arise on this transport.\n\n**Why full and not incapable/frozen** (contrast kiro-cli, judged `incapable` on the same atomic-append shape): the daemon does not mis-handle anything and the invariant is met — the residual is that the prose-only case emits the whole reply as ONE atomic assistant line, so the streaming_window is a single-flush working span rather than many discrete flushes. That thinness is a recording-substance caveat, not a daemon defect, so this stays `full` per the caveats-over-downgrades rule. Confidence is LOW because emission (does the live working span sustain and settle cleanly for a prose turn?) is a property `record` must confirm live — reading the parser cannot settle it.\n\n## driver_capability: gap:wait_turn\n\nThe interactive driver (`replaydata/agents/mistral-vibe/driver-interactive.sh`) is freshly scaffolded: `DRIVE_ELICITS=\"send slash sleep\"` and `wait_turn()` is a `not_implemented` stub (SEAM 2 not ported; SEAM 3 transcript-path resolution is also a TODO). The recipe needs `wait_turn` to span the streamed turn and observe the `working→ready` settle (every sibling streaming cell — aider, kiro, gemini — uses it; a blind fixed sleep can't confirm the turn spanned its flushes and settled). `wait_turn` is not in `DRIVE_ELICITS`, so `recipe_semantic_gaps` reports `not-elicited:wait_turn` → `driver=gap:wait_turn`. This is tooling work, not an observability limit: `record` ports Vibe's turn-done poll (poll `messages.jsonl` for a new terminal text-only assistant line) plus SEAM 3 before driving. The cell keeps its real recipe + spec.\n\n## Observations\n\nmodel is CONFIRMED from the live surface: the sidecar `meta.json` `config.active_model` the parser actually reads (core/adapters/inbound/agents/vibe/sidecar.go:59-61) is `mistral-medium-3.5`, and `NormalizeModelName` (core/pkg/tailer/parser.go:532) passes it through unchanged (no date suffix, no claude/gemini/gpt match). tokens_nonzero: the parser emits `Tokens.Total = context_tokens` on `turn_done` (parser.go:112-114, sidecar.go:62-64); the live sidecar shows `context_tokens: 136662`. cost is NOT emitted: `meta.json` carries `stats.session_cost` (16.7 in the live sample) but `sidecar.go` decodes ONLY working_directory / active_model / context_tokens — cost never reaches an event — so `cost_nonzero: false`.",
+      "caveats": [
+        "EMISSION PROVISIONAL (why confidence is low): a daemon=full derived from reading the parser is provisional for the streaming property. With Tool calls ≤ 0, Vibe records the whole reply as ONE atomic complete assistant line (streaming is TUI-only) — like kiro-cli — so the streaming_window is a single-flush working span, not many discrete flushes. record must confirm live that the working span sustains and settles cleanly with no premature ready; only a recording promotes this from provisional to settled.",
+        "DRIVER: wait_turn is a not_implemented stub (DRIVE_ELICITS=\"send slash sleep\") and launch_repl SEAM 3 (resolve the live session_id + transcript path onto the active slot) is also a TODO; record ports Vibe's turn-done poll (SEAM 2) and the transcript-path resolution (SEAM 3) from a reference driver before it can drive this cell.",
+        "cost is unobservable for Vibe: the sidecar carries stats.session_cost but the adapter's sidecar decoder reads only cwd/active_model/context_tokens, so no cost event is ever emitted (cost_nonzero:false is by design, not a bug).",
+        "PRESESSION adapter: the live REPL surfaces a transient proc-<PID> pre-session (process scanner) born ready until the session_<ts>_<id>/messages.jsonl directory materializes and mints the real session (a DIFFERENT session_id = the dir name). The spec anchors session_birth to that pre-session and binds the turn arc to the first working (the real session); model/tokens are provisional until record fills them from the recording.",
+        "LIVE-DRIVE FINDING (record): vibe writes each turn to messages.jsonl ATOMICALLY — the user and assistant lines are appended together as complete fsync-d lines at turn END, nothing during generation. A 495-char four-sentence reply still produced a 0ms working->ready transition, so the daemon observes NO streaming window: the spec streaming_window phase (expects working HELD during streaming) is structurally unsatisfiable for vibe. This IS the clean, no-torn-line-flicker behavior the scenario checks for — but it means streaming observability is effectively incapable/atomic for this agent, not full. 4/7 phases (streaming_window onward unmet). VALIDATION DRIFT; expected.jsonl left intact for maintainer review (candidate: model vibe as atomic — no held streaming_window)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/session/session_logger.py",
+          "note": "persist_messages (240-257): append mode, one json.dumps(msg)+\"\\n\" per message, flush+fsync each — no partial JSON, no last-line rewrite; save_interaction (259-350) appends only not-yet-written COMPLETE messages (new_messages slice)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "ParseLine 57-75: assistant WITH tool_calls → assistant_message (working); text-only assistant → turn_done (working→ready); NO assistant_streaming/non-terminal-stop_reason family, so no per-flush premature ready. applySidecar 98-115 emits model on every event + Tokens=context_tokens on turn_done"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/sidecar.go",
+          "note": "readSidecar 55-74 decodes ONLY environment.working_directory, config.active_model, stats.context_tokens — cost is never read, so cost is unobservable"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "550-562: tailer stops at a partial trailing line without advancing past the partial bytes; JSONLineParser only feeds newline-terminated lines — a mid-write flush is held until newline (large_line_test.go)"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.vibe/logs/session/session_20260706_101952_48e134e3/messages.jsonl",
+          "note": "live transcript, 336 lines — every line parses as complete JSON, one message per line; confirms append-on-complete emission"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.vibe/logs/session/session_20260706_101952_48e134e3/meta.json",
+          "note": "live sidecar: config.active_model=mistral-medium-3.5 (the model the parser emits), stats.context_tokens=136662 (tokens_nonzero), stats.session_cost=16.74 (present but never decoded → cost unobservable)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep\"; wait_turn() is not_implemented (SEAM 2) and launch_repl SEAM 3 transcript-path resolution is a TODO → recipe's wait_turn is a driver gap"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/2-21_streaming-partial-writes/expected.jsonl",
+          "note": "closest transport sibling (atomic-append JSONL + sidecar, presession); its streaming_window/no-flicker phase shape is the template for this spec (kiro judged incapable/frozen; vibe judged full per the daemon-handles-it-correctly framing)"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "mistral-vibe CLI (v2.19.0) on PATH and authenticated against a Mistral model out-of-band (the live default is mistral-medium-3.5 per meta.json config.active_model). An unauthenticated REPL cannot produce the streamed reply.",
+        "tmux available — the interactive driver runs vibe in a tmux REPL so the streamed turn is observed across its working span while the process stays alive.",
+        "irrlichd is recording (run-cell.sh isolated, or --attach against a daemon started with --record) and the transcripts permission is granted.",
+        "DRIVER GAP (blocks recording until ported): the scaffolded driver-interactive.sh stubs wait_turn (not_implemented; DRIVE_ELICITS=\"send slash sleep\") and its launch_repl SEAM 3 does not yet resolve the live session_id + transcript path. record MUST port Vibe's turn-done poll (poll messages.jsonl for a new terminal text-only assistant line — role:assistant, non-empty content, no tool_calls) and the SEAM 3 transcript-path resolution before this recipe can drive.",
+        "EMISSION CARVE-OUT (the no-flicker IDEAL this cell targets): with Tool calls ≤ 0 Vibe writes the whole reply as ONE atomic complete assistant line (persist_messages fsyncs complete lines; streaming is TUI-only), so the streaming_window is a single-flush working span. The no-flicker invariant holds by construction (no assistant_streaming family, no torn-line — tailer holds partial trailing bytes); the recording validates that the working span sustains and settles cleanly with no premature ready before turn-end."
+      ],
+      "setup": [
+        "The interactive driver launches `mistral-vibe` inside a tmux REPL under a fresh per-run cwd, then waits for the transcript directory (~/.vibe/logs/session/session_<ts>_<id>/messages.jsonl) to materialize (SEAM 3).",
+        "PRESESSION: at REPL launch the daemon's process scanner mints a transient proc-<PID> pre-session born ready (matcher: (^|/)vibe( |$)|mistral-vibe/bin/python) until messages.jsonl appears and the real session (keyed by the session_<ts>_<id> directory name) is born. The turn arc binds the real session (the first to enter working); the pre-session never enters working.",
+        "The send prompts for a prose-only multi-sentence reply and explicitly forbids tools (Tool calls ≤ 0), so Vibe answers in one terminal text-only assistant message → a single working→ready arc with no waiting.",
+        "wait_turn blocks until that terminal text-only assistant line appears (the turn-done poll record ports). The trailing sleep (≥10s) lets the working→ready settle fire behind the daemon's SessionDetector poll AND be observed before teardown.",
+        "After the trailing sleep the driver kills the tmux session once — vibe exits and the daemon emits a single process_exited for the session."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "In four sentences of plain prose, explain what a binary search tree is and how lookup works. Do not use any tools, do not read or write any files — just answer directly in prose."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 15
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession (proc-<PID>) event in ready within ~2s of REPL launch",
+        "events.jsonl contains a pid_discovered event bound to the live vibe session",
+        "events.jsonl shows exactly one ready→working transition for the session when the prompt lands (the streaming window opens here)",
+        "across the streaming window the session holds working with NO state_transition to ready before the terminal message, and NO state_transition to waiting (the no-flicker invariant)",
+        "events.jsonl shows exactly one working→ready transition at the terminal text-only assistant message (turn_done)",
+        "the session's final live state is ready before teardown",
+        "events.jsonl contains exactly one process_exited on the session at REPL teardown",
+        "observations: model resolves to mistral-medium-3.5 (sidecar config.active_model), tokens_nonzero (context_tokens on turn_done), cost is zero (never emitted by the adapter)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

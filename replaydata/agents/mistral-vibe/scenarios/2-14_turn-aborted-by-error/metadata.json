@@ -1,0 +1,61 @@
+{
+  "scenario_id": "turn-aborted-by-error",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+91ca4fe.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n=> frozen at the recipe stage as applicable: false — vibe writes NO error epilogue to messages.jsonl on a mid-turn provider error (Bucket B), so the transcript ends at the user prompt, no turn_done fires, and the daemon has no working-state idle sweep to settle it; the post-abort working->ready settle is architecturally unobservable, and there is no deterministic error-injection primitive for vibe."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-aborted-by-error",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n=> applicable: n/a — frozen at the recipe stage as applicable: false. Two independent blockers, the same dual-blocker shape as the codex/antigravity/kiro-cli siblings for this scenario: (1) vibe writes NO terminal/error message to messages.jsonl on a mid-turn provider error, so even a hand-induced error leaves the session stuck in `working` (Bucket B — unobservable), and (2) there is no recipe primitive that can DETERMINISTICALLY induce a mid-turn provider error against vibe.\n\n## Scenario\n\nturn-aborted-by-error asserts the user-observable arc `ready -> working -> ready`: the model call fails mid-turn (network error, provider 5xx, timeout) with NO normal turn-end signal, the agent gives up, and the daemon settles the still-`working` session back to `ready` within one sweep interval. It is explicitly NOT a user-driven cancel (that is `user-esc-interrupt`).\n\n## agent_supports: yes\n\nvibe 2.19.0 routes every model call through a streaming backend (`AgentLoop._chat_streaming`, site-packages/vibe/core/agent_loop.py). A provider failure surfaces as an exception the loop re-raises as `RateLimitError` / `ContextTooLongError` / `ResponseTooLongError` / a wrapped `RuntimeError(\"API error from <provider> ...\")` (agent_loop.py:1767-1789). So vibe HAS the underlying behavior: a turn can abort on a provider/model error rather than complete normally.\n\n## Why this cell cannot be recorded (two independent blockers)\n\n### Blocker 1 (the daemon-incapable core) — vibe persists NO error epilogue; the aborted turn is invisible\n\nThis is the load-bearing finding and the reason vibe differs from the aider/claudecode Bucket-A cells. In `_chat_streaming` the assistant message is appended to the conversation ONLY after the stream completes successfully: `self.messages.append(chunk_agg.message)` at agent_loop.py:1765, INSIDE the `try` and AFTER the async-for over the backend stream drains. If the backend call raises mid-stream (network drop, 5xx, timeout), control jumps to the `except Exception as e` block (agent_loop.py:1767) which only re-raises a wrapped error — it appends NOTHING to `self.messages`. A repo-wide grep of `vibe/core` for any place that appends a `Role.assistant` (or error) message to the conversation on an error path returns EMPTY. The turn's `finally: await self._save_messages()` in `_conversation_loop` (agent_loop.py:1099) still runs and persists the transcript, but the LAST message it writes for the aborted turn is the USER prompt (appended at agent_loop.py:1034 before the turn) — there is no terminal assistant message.\n\nThe vibe adapter parser (core/adapters/inbound/agents/vibe/parser.go) emits `turn_done` ONLY for an assistant message with NO tool_calls (parser.go:72-74); a user message maps to `user_message`, which OPENS/keeps the turn `working` (parser.go:50-51). The parser has no error kind and never sets IsError (vibe tool results carry no status field, and API/turn errors are not persisted at all). So with no terminal assistant line on disk, the daemon sees `... -> user_message` and nothing after: `IsAgentDone()` never fires, and the session sits in `working`.\n\nNothing rescues it. There is no working-state idle sweep in the daemon: the PID-liveness sweep in core/application/services/pid_manager.go reaps a session only when `snap.sessionState == session.StateReady || snap.pid == 0` (pid_manager.go:949) — a `working` session with a live REPL PID is never settled to `ready`. PR #106 removed the only inactivity timer (the 15s stale-tool timeout) that used to mitigate this, and nothing replaced it. So an error-aborted vibe turn sticks in `working` until the process exits — the spec's `working -> ready` settle is architecturally unobservable today.\n\nNote the contrast with the TOOL-failure path (why stats.tool_calls_failed=18 in the sample transcript is NOT this scenario): a failed TOOL appends a `tool`-role result message (agent_loop.py:1244) and the loop feeds the error back to the model, which produces a normal terminal assistant message -> `turn_done` -> the turn completes cleanly. A failed tool does not abort the turn; only a failed MODEL/API call does, and that is the invisible Bucket-B case above.\n\n### Blocker 2 — no deterministic error-injection primitive for vibe\n\nEven setting Blocker 1 aside, there is no way to elicit a mid-turn provider error against vibe deterministically enough to be a committed, re-recordable fixture:\n\n- The mock tooling (tools/onboarding-factory/recording/mock-anthropic-5xx, mock-anthropic-429) is Anthropic-API-specific; only the claudecode adapter can be aimed at it via `ANTHROPIC_BASE_URL`. vibe talks to a Mistral/OpenAI-shaped backend, so the Anthropic mock does not transfer.\n- The scaffolded interactive driver (replaydata/agents/mistral-vibe/driver-interactive.sh) elicits only `send slash sleep` (DRIVE_ELICITS), with `wait_turn` and every other arm stubbed and NO base-URL override or error-injection step. It cannot aim vibe at a failing provider.\n- A real network/5xx error is inherently non-deterministic and can't be a committed fixture.\n- The aider Bucket-A trick (a bogus/unsupported model id that makes the provider reject the call) does NOT transfer: even if vibe rejects a bogus model deterministically, Blocker 1 means the abort writes no epilogue and the session still sticks in `working` — the trigger buys nothing observable.\n\n## Conclusion\n\nBlocker 1 makes the end state unobservable; Blocker 2 makes the trigger non-deterministic. Either alone forces applicable: false. No recipe, no spec, no recording — frozen. This mirrors codex/turn-aborted-by-error (also daemon=incapable, frozen) and the vibe adapter's own gap list (no IsError-for-vibe).\n\n## What would unblock it\n\n1. A daemon change: give vibe a terminal signal on abort. Either vibe must persist an error epilogue to messages.jsonl (an upstream vibe change) that the parser could map to `turn_done`, OR the daemon must grow a working-state idle sweep (the general fix that would also unblock codex/antigravity/kiro-cli — reversing the PR #106 removal with a non-flickering timer).\n2. A driver change: a vibe error-injection path (a Mistral/OpenAI-side mock plus a base-URL override wired into driver-interactive.sh) so a 5xx can be injected deterministically.\n\nWith both in place, re-assess to yes/yes/ready and proceed to recipe + record.",
+      "caveats": [
+        "Load-bearing, emission-side finding confirmed from vibe source (not from a recording): on a mid-turn provider error vibe re-raises without appending any assistant/error message (agent_loop.py:1765 vs the except block at 1767; empty grep for a Role.assistant append on any error path in vibe/core). The transcript ends at the user prompt, so no turn_done is ever written. A live recording would settle this from provisional to empirical, but no recording is possible today (Blocker 2).",
+        "Same daemon gap as codex/kiro-cli/antigravity turn-aborted-by-error: there is no working-state idle sweep (pid_manager.go:949 reaps only StateReady or PID=0), so a working session with a live PID is never settled to ready. PR #106 removed the only inactivity timer that used to mitigate this.",
+        "The failed-tool path (stats.tool_calls_failed=18 in the sample transcript) is NOT this scenario: a failed tool writes a tool-role result and the turn completes normally via a terminal assistant turn_done. Only a failed MODEL/API call aborts the turn, and that writes no epilogue."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "turn_done is emitted ONLY for an assistant message with no tool_calls (lines 72-74); a user message maps to user_message and keeps the turn working (lines 50-51). No error kind, never sets IsError — so a transcript ending at a user prompt after an aborted turn produces no turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/agent_loop.py",
+          "note": "_chat_streaming appends the assistant message to self.messages ONLY after the stream drains successfully (line 1765); the except Exception block (1767-1789) re-raises a wrapped error and appends nothing. _conversation_loop's finally save (line 1099) persists up to the user prompt only (appended at line 1034). No place in vibe/core appends a Role.assistant/error message on any error path (grep empty) — vibe writes no error epilogue (Bucket B)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "The liveness sweep reaps a session only when snap.sessionState == StateReady || snap.pid == 0 (line 949); a working session with a live PID is never settled to ready. No working-state idle sweep exists post-PR #106."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "Scaffolded driver: DRIVE_ELICITS=\"send slash sleep\", wait_turn and all other arms stubbed; no base-URL override or error-injection step. Cannot aim vibe at a failing provider (Blocker 2)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-14_turn-aborted-by-error/metadata.json",
+          "note": "Sibling cell, same dual-blocker frozen shape (daemon=incapable, applicable:false): parser skips the abort marker + no working-state idle sweep + no deterministic error-injection path. Template for this frozen cell."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "No recordable path for vibe turn-aborted-by-error. Blocker 1 (daemon-incapable core): on a mid-turn provider error vibe's _chat_streaming re-raises without appending any assistant/error message (agent_loop.py:1765 vs the except at 1767; empty grep across vibe/core for a Role.assistant append on an error path), so messages.jsonl ends at the user prompt (Bucket B). The vibe parser emits turn_done only for an assistant message with no tool_calls (parser.go:72-74), so no turn_done fires and IsAgentDone() never runs; the daemon has no working-state idle sweep (pid_manager.go:949 reaps only StateReady/PID=0, PR #106 removed the stale-tool timer), so the session sticks in working until process_exited — the spec's working->ready settle is unobservable. Blocker 2: no deterministic error-injection primitive — the mock-anthropic-5xx/429 tooling is Anthropic-only and vibe uses a Mistral/OpenAI backend; the scaffolded driver elicits only send/slash/sleep with no base-URL override; a real 5xx/network error is non-deterministic; and the aider bogus-model trick buys nothing because Blocker 1 makes any abort invisible. Mirrors codex/turn-aborted-by-error. Unblocks when both (a) vibe/the parser gains a terminal abort signal (vibe persists an error epilogue, OR the daemon grows a non-flickering working-state idle sweep) and (b) a vibe error-injection driver path exists. See assessment.body."
+    }
+  }
+}

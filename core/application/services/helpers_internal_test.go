@@ -32,6 +32,52 @@ func TestDeriveParentSessionID(t *testing.T) {
 	}
 }
 
+// Mistral Vibe subagents: the task tool writes a child session under the
+// parent's dir at <parent>/agents/<child>/messages.jsonl, and the vibe adapter
+// registers a session under its directory name — so the parent's registered id
+// IS the <parent> directory, read straight off the path.
+func TestDeriveVibeParentSessionID(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			"vibe subagent",
+			"/Users/x/.vibe/logs/session/session_20260706_101952_48e134e3/agents/session_20260706_120000_ab12cd34/messages.jsonl",
+			"session_20260706_101952_48e134e3",
+		},
+		{
+			"top-level vibe session (grandparent is `session`, not `agents`)",
+			"/Users/x/.vibe/logs/session/session_20260706_101952_48e134e3/messages.jsonl",
+			"",
+		},
+		{"non-messages filename under agents", "/x/session/parent/agents/child/meta.json", ""},
+		{"empty path", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertDeriveVibeParentSessionID(t, tc.path, tc.want)
+		})
+	}
+}
+
+// assertDeriveVibeParentSessionID checks both the vibe-specific rule and,
+// for the cases where it resolves a link, that the unified entry point
+// (deriveParentSession) agrees.
+func assertDeriveVibeParentSessionID(t *testing.T, path, want string) {
+	t.Helper()
+	if got := deriveVibeParentSessionID(path); got != want {
+		t.Errorf("deriveVibeParentSessionID(%q) = %q, want %q", path, got, want)
+	}
+	if want == "" {
+		return
+	}
+	if got := deriveParentSession(path); got != want {
+		t.Errorf("deriveParentSession(%q) = %q, want %q", path, got, want)
+	}
+}
+
 // Gemini CLI subagents (issue #663). Real on-disk layout, established from a
 // live ~/.gemini/tmp/<project>/chats/ recording of the #663 fixture session:
 //

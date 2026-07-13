@@ -1,0 +1,95 @@
+{
+  "scenario_id": "backchannel-control",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+5e22e47.dirty",
+    "confidence": 0.85,
+    "notes": "Vibe adapter now declares Control{SupportsInput:true,Interrupt:InterruptCtrlC,Presets:{compact:/compact}} + ControlPermission() (agent.go, fix 5e22e47) -> daemon offers backchannel input/interrupt/compact into the vibe REPL via its terminal backend; live drive confirmed at record time."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "backchannel-control",
+      "agent": "mistral-vibe",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict: agent=yes, daemon=full, driver=ready\n\n**agent=yes.** Mistral Vibe (v2.19.0) is an interactive Textual TUI/REPL: `VibeApp(App)` in `vibe/cli/textual_ui/app.py` reads typed input through a `Prompt` widget, dispatches `SlashCommand`/`UserCommandMessage`, and buffers turns via `MessageQueue` (message_queue.py) with a `terminal_input_filter.py`. It is therefore drivable by injected keystrokes delivered into its controlling terminal (tmux/kitty/iTerm2/Terminal.app), exactly the backchannel-control mechanism, plus slash presets like /compact.\n\n**daemon=full (was bug).** The prior verdict was `daemon=bug` because `core/adapters/inbound/agents/vibe/agent.go` declared NO `Control` (zero value -> SupportsInput=false), so the daemon derived vibe sessions as non-controllable and offered no backchannel input/interrupt/preset. Commit 5e22e47 FIXES this: the adapter now declares `Control{SupportsInput:true, Interrupt:agent.InterruptCtrlC, Presets:{backchannel.PresetCompact: \"/compact\"}}` and adds `agent.ControlPermission()` to `Permissions` (agent.go:40-48). The behavioral test `TestAgent_Control_Backchannel` (adapter_test.go:50) asserts all three axes plus the presence of the shared control consent gate. With Control declared, the shared control seam applies unchanged: InputService gate (backchannel toggle -> control consent -> controllable), Controller tmux/kitty injectors keyed off the Launcher, `/compact` preset, and Ctrl-C interrupt. The new `modify`-kind ControlPermission is the consent boundary (contracttesting.AssertPermissionGated, core/internal/contracttesting/permission_gate.go). No spec-required observable is mis-handled -> `daemon=full`.\n\n**driver=ready.** `replaydata/agents/mistral-vibe/driver-interactive.sh` implements every step the recipe needs — `send`, `slash`, `interrupt`, `sleep`, `wait_turn` are all present. No `gap:*`.\n\nRoute: record — driver ready and daemon full; the recording drives a real backchannel input (ready -> working on injected text), an interrupt (settles back to ready), and the /compact preset. Live backchannel drive is confirmed at record time.",
+      "caveats": [
+        "Emission settled at record: that injected keystrokes actually drive vibe's Textual TUI to a new turn (and Ctrl-C interrupts it) is confirmed by the live drive that record performs; confidence 0.85 pending that recording promoting provisional -> settled.",
+        "Vibe default model not pinned in the spec observations (not confirmed from the live surface); record fills it from the recording."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/agent.go",
+          "note": "fix 5e22e47: adapter now declares Control{SupportsInput:true, Interrupt:InterruptCtrlC, Presets:{compact:/compact}} (lines 40-46) + agent.ControlPermission() (line 48) -> daemon offers backchannel control"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/adapter_test.go",
+          "note": "TestAgent_Control_Backchannel (line 50) asserts SupportsInput, Interrupt==InterruptCtrlC, Presets[compact]==/compact, and ControlPermission() present"
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/agent/declaration.go",
+          "note": "Control{SupportsInput,Interrupt,Presets} axis, InterruptCtrlC, and ControlPermission() helper (KindModify)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/internal/contracttesting/permission_gate.go",
+          "note": "AssertPermissionGated — verify contract for the modify-kind ControlPermission the Control declaration adds"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/cli/textual_ui/app.py",
+          "note": "VibeApp(App) Textual TUI/REPL: Prompt widget, SlashCommand/UserCommandMessage dispatch -> reads typed terminal input (agent=yes)"
+        }
+      ]
+    },
+    "recipe": {
+      "timeout_seconds": 120,
+      "settings": {},
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a haiku about a lighthouse, then wait for my next message."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "slash",
+          "text": "/compact"
+        },
+        {
+          "type": "sleep",
+          "seconds": 28
+        },
+        {
+          "type": "send",
+          "text": "Now write a second haiku about the sea."
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "interrupt"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ]
+    }
+  }
+}

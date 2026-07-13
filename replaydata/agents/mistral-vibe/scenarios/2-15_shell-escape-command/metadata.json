@@ -1,0 +1,109 @@
+{
+  "scenario_id": "shell-escape-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+5e22e47",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes; daemon_capability: full (parser now skips injected:true `!`-shell escape lines — fix 5e0b4f5c — so the session no longer sticks in working); driver_capability: gap:wait_turn"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "shell-escape-command",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:wait_turn\nroute: driver-gap (record ports wait_turn, then drives — no longer known_failing)\n\nRE-ASSESSMENT after fix 5e0b4f5c. The prior verdict was daemon=bug (the injected `!`-shell escape result opened a turn that never closed → the session stuck in working). That defect is now FIXED in the parser; the daemon pillar is FULL.\n\n## agent — yes\n\nMistral Vibe's TUI has a `!`-shell escape. Typing `!echo hello` at the REPL prompt runs the command LOCALLY as a subprocess (`asyncio.create_subprocess_shell`, cli/textual_ui/app.py:1531), with NO LLM round-trip / no `act()` turn. On completion the TUI calls `agent_loop.inject_user_context(...)` (app.py:1574-1580) which appends an `injected=True` user `LLMMessage` and immediately `_save_messages()` (core/agent_loop.py:751-777), so the result lands in `messages.jsonl` right away as a single line. The exact on-disk shape is confirmed in three live transcripts (`grep -l '\"injected\": true' ~/.vibe/logs/session/*/messages.jsonl`): `{\"role\":\"user\",\"content\":\"Manual `!` command result from the user. Use this as context only.…\",\"injected\":true,…}`. The literal template is in cli/textual_ui/app.py:1645-1665 (`_format_manual_command_context`).\n\n## daemon — full (was bug; fixed by 5e0b4f5c)\n\nThe vibe parser now SPECIAL-CASES `injected:true` user lines and SKIPS them (parser.go:59-71: `if injected, _ := raw[\"injected\"].(bool); injected { ev.Skip = true; return ev }`). A skipped event is not transcript activity, so state_classifier rule 4 never fires ready→working for a bare `!cmd`: the session STAYS in ready throughout the shell-escape window. This is the exact behavior the scenario asserts — process step 5 'State returns to ready' and the failure-mode bullet 'State does not stick in working after the shell command exits' — and it mirrors the claudecode sibling, which SKIPS the `<bash-input>`/`<bash-stdout>` wrappers for the same reason (claudecode/parser.go:216-225). The injected line is explicitly labelled 'Use this as context only' — deferred context for the NEXT real turn — and the parser now honors that. The real prompt that follows (injected:false) drives the ordinary ready→working→ready arc, proving the session is still alive. Spec-required observable now handled correctly → daemon=full.\n\n## driver — gap:wait_turn\n\nThe `!echo hello` shell escape is a plain `send` (send_text does `tmux send-keys -l` + Enter; the leading `!` is intercepted by the REPL — no `keys` primitive needed). But the recipe's prove-alive turn ('Reply with exactly the word: alive') needs `wait_turn` to reliably observe the ready→working→ready arc, and the scaffolded driver STILL STUBS wait_turn: DRIVE_ELICITS=\"send slash sleep\" (driver-interactive.sh:113) omits it, and SEAM 2 (lines 168-170) calls `not_implemented wait_turn`. This is the same baseline column gap every other mistral-vibe cell carries; `record` ports SEAMs 1/2/3 before driving.\n\n## route\n\nagent=yes + daemon=full + driver=gap:wait_turn → routing row 'yes | full/bug | gap:* → driver-gap': `record` ports wait_turn, then drives, then records a NORMAL (passing) recording — the known_failing / issue-filing framing is retired.",
+      "caveats": [
+        "PROVISIONAL on emission ORDERING: the parser+source read proves the injected `!` line is written immediately and (now) skipped, but whether a transient proc-<PID> presession row precedes the session_<ts>_<hash> birth is emission-dependent — session_birth is anchored to start UNPINNED so either satisfies it; record settles it.",
+        "daemon=full is verified from the fixed parser code (5e0b4f5c, parser.go:59-71) and parser_test.go's injected-skip test, but the live end-to-end no-stick behavior is confirmed by record, not by this doc read.",
+        "cost is not asserted: the vibe adapter never reads stats.session_cost and mistral-medium-3.5 is absent from core/pkg/capacity, so per-turn cost is not emitted (cost_nonzero=false)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "Lines 59-71: role \"user\" with `injected:true` → ev.Skip=true and early return (the fix). The doc-comment (lines 12-15, 59-67) now states injected `!`-shell escape results are context for the NEXT real turn and are SKIPPED so the session does not stick in working."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser_test.go",
+          "note": "The injected-user test now asserts an injected `!` result is SKIPPED (not emitted as user_message) — pinning the fixed behavior."
+        },
+        {
+          "kind": "url",
+          "ref": "commit 5e0b4f5c",
+          "note": "fix(vibe): skip injected `!`-shell escape lines (was sticking session in working) — the commit that flips this cell's daemon pillar from bug to full."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/cli/textual_ui/app.py",
+          "note": "Lines 1531 (local `asyncio.create_subprocess_shell`), 1574-1580 (`inject_user_context` on completion), 1645-1665 (`_format_manual_command_context` — the exact 'Manual `!` command result from the user. Use this as context only.' template). vibe 2.19.0."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/agent_loop.py",
+          "note": "Lines 751-777 (`inject_user_context`): appends an injected=True user LLMMessage and immediately `_save_messages()` to disk — NO act()/LLM turn is triggered, so a bare `!cmd` writes exactly one injected line (which the parser now skips)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+          "note": "Lines 216-225 (isLocalCommandContent): claudecode SKIPS `<bash-input>`/`<bash-stdout>` shell-escape wrappers so state stays ready — the same pattern the vibe parser now applies to its injected:true `!`-command results."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "Line 113 DRIVE_ELICITS=\"send slash sleep\" (omits wait_turn) and lines 168-170 SEAM 2 wait_turn() → not_implemented — the driver still stubs wait_turn, so driver=gap:wait_turn. record ports it before driving."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "vibe CLI (2.19.0) on PATH and authenticated",
+        "irrlichd is recording (isolated mode or --attach against a --record daemon)",
+        "vibe launched in interactive TUI mode so the `!` shell-escape is available",
+        "driver's wait_turn SEAM ported from a reference driver before recording (baseline column gap)"
+      ],
+      "setup": [
+        "Driver launches vibe in a fresh cwd under <staging>/cwd/; session id derives from the session_<ts>_<hash> directory"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "!echo hello"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session entering ready after launch",
+        "during the ~6s window after `!echo hello`, NO state_transition to working (the parser skips the injected `!` result; state stays ready) and no transition to waiting",
+        "after the normal user prompt, events.jsonl shows ready→working→ready for the session (proves the session is still alive)",
+        "final session state is ready",
+        "messages.jsonl contains the injected `!`-command result line plus the real user prompt and at least one assistant line for the final turn"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

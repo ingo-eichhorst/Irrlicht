@@ -1,0 +1,114 @@
+{
+  "scenario_id": "session-resume",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+e943e261",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: gap:resume"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-resume",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:resume\n\n## Reasoning\n\n**agent (yes).** `vibe --help` lists `-c | --resume [SESSION_ID]`: `--resume <id>` reopens a saved session, `-c`/`--continue` reopens the latest in the cwd, and the REPL exposes the same as `/resume` / `/continue` (cli/commands.py:119). The load-bearing fact for irrlicht is HOW resume rehydrates: `load_session` resolves the id via `SessionLoader.find_session_by_id` to the EXISTING session directory, and `_resume_previous_session` calls `session_logger.resume_existing_session(session_id, session_path)` which sets `self.session_dir = session_dir` on the ORIGINAL folder and appends to its `messages.jsonl` (cli/cli.py:190/208-218, core/session/session_logger.py:407-416). Resume therefore does NOT mint a new session directory. (`meta.json` carries a `parent_session_id`, but it is only populated by `reset_session(..., parent_session_id=...)` — the /new-session fork path that DOES allocate a fresh dir; it is `null` in all six live transcripts and is irrelevant to resume.)\n\n**daemon (full).** The adapter's Source is `FilesUnderRoot{Dir: ~/.vibe/logs/session, SessionIDFromPath: sessionIDFromPath}` and `sessionIDFromPath` keys the daemon session off the `session_<ts>_<shortid>` DIRECTORY basename, not the JSONL contents (agent.go:31-37, adapter.go:56-65). Because vibe resume reuses the same directory, the daemon sees the SAME session_id row reappear across both PID lifetimes — exactly the claudecode/antigravity/kiro-cli shape, not a new row. The parser drives the arc from the appended lines: user -> user_message (working), assistant+tool_calls -> assistant_message (working), text-only assistant -> turn_done (ready) (parser.go:49-90). PID binding is via CommandPattern + cwd (pid.go), so a clean exit yields process_exited and the resumed PID rebinds to the same dir. Sidecar (meta.json) supplies model + context_tokens on each turn_done (parser.go:98-115, sidecar.go). This verdict is PROVISIONAL — derived from parser reading, no recording — and vibe writes `messages.jsonl` lazily (only after the first interaction is saved, session_logger.save_interaction), so the process-detected proc-<PID> presession, not the transcript, satisfies the initial `ready`; a live drive settles the emission timing.\n\n**driver (gap:resume).** `replaydata/agents/mistral-vibe/driver-interactive.sh` is a fresh scaffold: the `resume` arm is `not_implemented resume` (line 191), and the recipe also needs `exit_clean` (line 193) and `wait_turn` (line 169), both still `not_implemented`, plus SEAM 3 (resolving the live session_id + transcript path, lines 158-160) is a TODO. The session-resume-defining primitive is `resume` (relaunch `vibe --resume <id>` in the same cwd), so the pillar is gap:resume; `record` ports resume + exit_clean + wait_turn + SEAM 3 from the reference driver before it can drive this cell.",
+      "caveats": [
+        "daemon=full is provisional (parser + source read, no recording). Two emission properties a live drive must settle: (1) vibe writes messages.jsonl lazily via save_interaction, so the working->ready arc rides on batched appends after each turn — the initial ready is satisfied by the process-detected proc-<PID> presession, and v1_session_birth anchors UNPINNED to start so that transient row cannot steal the birth; (2) process_exited on clean exit depends on DiscoverPID (CommandPattern + cwd) having bound the PID.",
+        "The driver gap is broader than resume alone: wait_turn, exit_clean, and the SEAM-3 session_id/transcript resolution are all still not_implemented. record must port the whole interactive SEAM set, not just the resume arm, before this cell records.",
+        "model is pinned to mistral-medium-3.5 from the live surface (config.toml active_model default + all six real ~/.vibe transcripts' meta.json), and NormalizeModelName leaves it unchanged; if the recording runs under a different active_model, record corrects it.",
+        "cost is asserted non-zero=false: the daemon does not compute per-turn cost for vibe. tokens are asserted non-zero: the sidecar's stats.context_tokens lands on turn_done."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/adapter.go",
+          "note": "sessionIDFromPath keys the daemon session off the session_<ts>_<shortid> directory basename (messages.jsonl only) — so a reopened dir is the SAME session_id."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/agent.go",
+          "note": "Source=FilesUnderRoot{~/.vibe/logs/session}; Process.Match=CommandPattern, PIDForSession=DiscoverPID (cwd-bound) — same-dir resume reappears as one session across two PIDs."
+        },
+        {
+          "kind": "file",
+          "ref": ".local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/session/session_logger.py",
+          "note": "resume_existing_session (line 407) sets session_dir to the EXISTING folder and appends to its messages.jsonl; reset_session (393) is the only path that sets parent_session_id and allocates a new dir."
+        },
+        {
+          "kind": "file",
+          "ref": ".local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/cli/cli.py",
+          "note": "load_session -> find_session_by_id resolves --resume <id> to the existing session dir; _resume_previous_session (208-218) wires it into resume_existing_session. `vibe --help` shows `-c | --resume [SESSION_ID]`."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "resume (191), exit_clean (193), wait_turn (169) are not_implemented stubs; SEAM 3 session_id/transcript resolution (158-160) is a TODO — the recipe's resume step cannot run until record ports them."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "vibe CLI on PATH (2.19.0) and authenticated (Mistral API key via `vibe --setup`); session_logging enabled in ~/.vibe/config.toml",
+        "irrlichd recording (dev daemon with --record, isolated IRRLICHT_ONBOARD_HOME + alt port)",
+        "DRIVER GAP: resume, exit_clean, wait_turn are not_implemented in driver-interactive.sh and SEAM 3 (live session_id + transcript-path resolution) is a TODO — record ports them first",
+        "no other vibe session runs in the recipe's cwd"
+      ],
+      "setup": [
+        "Driver launches `vibe --trust` under tmux in a fresh cwd; vibe materializes the session_<ts>_<shortid> directory (messages.jsonl + meta.json) only after the first turn is saved.",
+        "The resume step relaunches `vibe --resume <SESSION_ID> --trust` in the SAME cwd; SEAM 3 captures the short session id from the first lifetime, and vibe reopens the SAME directory and appends to its messages.jsonl."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "resume"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: again"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the FIRST launch's session (proc presession then the session_<ts>_<shortid> row) entering ready, then working/ready for turn 1",
+        "events.jsonl contains a process_exited for the session after turn 1 (clean exit)",
+        "the SAME session_id (same session_<ts>_<shortid> directory) re-appears after the resume launch — NOT a new session row",
+        "second-lifetime working transition fires on the SAME session_id, then back to ready",
+        "final session state is ready; tool calls == 0"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "scenario_id": "cloud-background-agent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+e943e261",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (Teleport to Vibe Code Web)\ndaemon_capability: incapable; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "cloud-background-agent",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n\n## Reasoning\n\nMistral Vibe ships a first-party cloud / background-agent feature: **Teleport to Vibe Code Web**. A user hands a running session off to Mistral-hosted infrastructure and it continues there:\n\n- User surface: the `/teleport` slash command (alias `/teleport`, description \"Teleport session to Vibe Code Web\"), the hidden `--teleport` CLI flag, and the `&`-prefixed TUI input all trigger it (vibe/cli/commands.py:108, vibe/cli/entrypoint.py:152, vibe/cli/textual_ui/widgets/chat_input/input_kinds.py:49).\n- Mechanism: `TeleportService` pushes the current git branch to the GitHub remote, then `NuageClient.start()` POSTs the repo context + conversation to `{base}/api/v1/code/sessions` (\"nuage\" = French for cloud). The response carries `sessionId` / `webSessionId` / `projectId` / `status` / `url`, and the TUI shows \"Teleported to Vibe Code Web: <url>\" (vibe/core/teleport/nuage.py, vibe/cli/textual_ui/widgets/teleport_message.py:23). From that point the agent run executes on Mistral's servers as a web session, not on the local machine.\n\nThis maps exactly onto scenario 1.7's cloud/remote background agent (a session running on the vendor's servers with no bound local PID), so `agent_supports: yes`.\n\nFor irrlicht, the teleported session is architecturally unobservable — `daemon_capability: incapable`:\n\n- The Vibe Code Web session runs remotely. It writes NO local `messages.jsonl` under `~/.vibe/logs/session/<id>/` (its transcript lives in Mistral's `code/sessions` store) and spawns NO local `vibe` process.\n- The mistral-vibe adapter (core/adapters/inbound/agents/vibe/agent.go) is `Source: FilesUnderRoot{~/.vibe/logs/session, messages.jsonl}` + `Process: CommandPattern` with `DiscoverPID` binding a session to a LOCAL vibe process by cwd. The daemon only tails local files and matches local processes. With no local transcript and no local PID, there is nothing for either sensor to attach to — the remote session never appears in the dashboard, and its `ready -> working -> ready` progress and completion are invisible.\n- The local session that INITIATED the teleport does have a pre-teleport transcript the daemon already sees, but that is the local session, not the cloud background agent the scenario asserts; the remote continuation (the actual cloud run) is the blind spot.\n\nThis is a transport/architecture limit (no local trace exists), not a parser bug and not a driver gap, so it matches the frozen `agent=yes / daemon=incapable / driver=ready` disposition already held by the claudecode and codex cloud-background-agent cells.\n\n## What would flip daemon_capability to full/partial\n\nA new remote-API Source variant (the current Source sum is FilesUnderRoot / FilesUnderCWD / ProcessOwnedStore — all local) plus a Mistral-exposed read surface for Vibe Code Web sessions: e.g. GET `/api/v1/code/sessions/{id}` for state/usage and an events/SSE stream for transitions, behind a read-scoped token. None is documented today; the `/api/v1/code/sessions` endpoint used by teleport is create-only from the CLI's perspective.",
+      "caveats": [
+        "agent=yes is confirmed from the shipped 2.19.0 CLI source (slash command + NuageClient POST). Whether a teleported session writes ANY residual local sidecar was not exercised live; if a future vibe version mirrors remote state into ~/.vibe/logs/session it could become partially observable — re-assess then.",
+        "The cloud endpoint base URL is injected as vibe_code_sessions_base_url (Le Chat / self-hosted deployments can repoint it); the create path /api/v1/code/sessions is stable across deployments."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/cli/commands.py",
+          "note": "L108-111: 'teleport' command, alias /teleport, description 'Teleport session to Vibe Code Web'"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/teleport/nuage.py",
+          "note": "NuageClient.start() POSTs to {base}/api/v1/code/sessions; NuageResponse returns sessionId/webSessionId/projectId/url — the cloud (nuage) session"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/cli/textual_ui/widgets/teleport_message.py",
+          "note": "L23: 'Teleported to Vibe Code Web: <url>' — session continues as a web session on Mistral infra"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/agent.go",
+          "note": "Source: FilesUnderRoot{~/.vibe/logs/session} + Process: CommandPattern/DiscoverPID — local files + local PID only; no remote-API Source"
+        },
+        {
+          "kind": "file",
+          "ref": "AGENTS.md",
+          "note": "Adapter model: Source is a sealed sum (FilesUnderRoot / FilesUnderCWD / ProcessOwnedStore) — no remote-API variant; a cloud session has no local transcript and no local PID"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "daemon_capability=incapable — a teleported Vibe Code Web session runs on Mistral servers with no local messages.jsonl and no local PID, so the FilesUnderRoot + local-process adapter cannot observe it. Frozen/unobservable; no driver recipe."
+    }
+  }
+}

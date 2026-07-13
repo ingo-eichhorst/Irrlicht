@@ -1,0 +1,4 @@
+{"role": "user", "content": "Reply with exactly the word: ok", "injected": false, "message_id": "96feac0d-4b0c-489e-9cbc-37340af1ef94"}
+{"role": "assistant", "content": "ok", "injected": false, "reasoning_content": "The user wants me to reply with exactly the word \"ok\". This is a simple, direct instruction. I should output exactly that and nothing else.", "reasoning_message_id": "5422c1ef-1a3d-4532-bef8-cc1c222d7e35", "message_id": "662b7b99-a183-4fb6-b2b3-4fe90836aeb3"}
+{"role": "user", "content": "Reply with exactly the word: ok", "injected": false, "message_id": "06b233d2-f6fd-4d40-9b60-6e47b86ae91f"}
+{"role": "assistant", "content": "ok", "injected": false, "message_id": "0b7b3da0-6a72-48cb-b538-8e063b5ba35a"}

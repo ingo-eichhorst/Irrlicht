@@ -1,0 +1,68 @@
+{
+  "scenario_id": "autonomous-loop-iteration-limit",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+e943e26.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: no\nvibe has no self-terminating autonomous loop with a max-iteration cap; /loop is a fixed-interval recurring scheduler that re-fires forever until manually cancelled."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop-iteration-limit",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: ready (moot — no recording)\nroute: frozen — the agent lacks the feature this scenario depends on.\n\n## Scenario signal\n\nautonomous-loop-iteration-limit is the failure-mode pair of autonomous-loop. It asserts a *self-terminating* autonomous loop: the agent self-prompts toward a goal, reaches a **configured max-iteration count**, emits a terminal turn signal, stops re-prompting, and the session settles working → ready and STAYS ready (no further self-prompt re-drives). The whole scenario presupposes an autonomous goal loop that ends *on its own* at a cap. It is a strict dependent of the sibling autonomous-loop cell: if the loop primitive with a cap does not exist, neither the loop nor its cap-termination can be observed.\n\n## agent = no\n\nA full scan of the live vibe CLI (v2.19.0) source tree (…/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe) finds no autonomous goal-seeking self-prompt loop and no max-iteration cap:\n\n- **No `/goal`-style primitive.** The complete slash-command registry (cli/commands.py) is: help, config, model, thinking, reload, clear, copy, log, debug, compact, exit, status, teleport, resume/continue, rename, mcp, voice, leanstall, rewind, **loop**, data-retention, theme. There is no /goal, no autonomous-mode command.\n- **`/loop` is a cron-style recurring scheduler, not a bounded autonomous loop.** Its description is literally \"Schedule a recurring prompt. Use `/loop <interval> <prompt>`, `/loop list`, or `/loop cancel <id|all>`\" (cli/commands.py:159-166). The implementation (core/loop.py `LoopManager`) re-fires a fixed prompt at a fixed interval: `pop_due` re-schedules `next_fire_at = ts + interval_seconds` on every fire, forever, with a `MIN_INTERVAL_SECONDS = 30` floor. There is **no termination condition** — a scheduled loop runs until the user issues `/loop cancel`. The `ScheduledLoop` model (core/types.py) carries only `id, interval_seconds, prompt, next_fire_at, created_at`: no `max_iterations`, no fire-count, no remaining-count, no end-at field.\n- **`MAX_LOOPS_PER_SESSION = 50` is a *registration* cap, not an iteration cap.** It guards `len(self._loops) >= 50` when *adding a new distinct scheduled loop* (core/loop.py:208) and returns an error on the 51st registration. It never stops a *running* loop, never counts a single loop's fires, and produces no working → ready cap-termination arc.\n- **Keyword scan is empty.** grep across the vibe source for `max_iterations|max_iter|autonomous|self.prompt|goal_status|iteration.limit|until.*complete` surfaces only unrelated hits (subagent docstrings saying a subagent \"runs autonomously\", and the ordinary per-turn `agent_loop.py`). No self-prompting goal loop, no cap constant.\n\nBecause the loop primitive vibe exposes has no self-terminating iteration cap, the specific observable this scenario tests — a loop that reaches a configured limit, emits a terminal turn, and settles to ready without re-prompting — cannot be produced by the agent. This mirrors the sibling autonomous-loop verdict for vibe (the autonomous goal loop the scenario family assumes does not exist); a cron-recurring `/loop` is a different primitive (it re-drives indefinitely; there is no cap to hit).\n\n## daemon = n/a, driver = ready (moot)\n\nWith agent=no the route is frozen: no recording is produced, so the daemon pillar is n/a. For completeness the vibe adapter (commit e943e261: FilesUnderRoot on ~/.vibe/logs/session/<id>/messages.jsonl + meta.json sidecar; parser emits user_message/assistant_message/turn_done/tool_result; no per-turn cost, no context-WINDOW resolution, backfilled timestamps, no Control/subagent-linking) can observe the generic working → ready settle, but there is no cap-termination event for it to observe here. The interactive driver would need only send/slash/sleep for a hypothetical loop recipe (all real arms), so driver is ready — but this is moot under the frozen route.\n\n## What would unblock\n\nA vibe release that adds a self-terminating autonomous goal loop with a configurable iteration cap (equivalent to claudecode's `/goal` + max_iterations). Re-assess then, keeping consistency with the autonomous-loop sibling.",
+      "caveats": [
+        "vibe DOES ship a `/loop` command, but it is a fixed-interval recurring scheduler (cron-style), not a self-terminating autonomous goal loop. It never stops on its own and has no per-loop iteration cap, so it cannot exercise this scenario's cap-termination-to-ready arc.",
+        "MAX_LOOPS_PER_SESSION=50 caps the number of concurrently registered scheduled loops, not the number of times any single loop fires — it is not the max-iteration cap this scenario asserts.",
+        "Verdict kept consistent with the (not-yet-authored) autonomous-loop sibling for vibe: the autonomous goal-loop primitive the scenario family presupposes is absent from v2.19.0."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/cli/commands.py",
+          "note": "Full slash-command registry (lines 30-177). Contains a `loop` command (line 159) described as 'Schedule a recurring prompt … /loop <interval> <prompt>, /loop list, /loop cancel'. No /goal, no autonomous-mode command anywhere in the registry."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/loop.py",
+          "note": "LoopManager: `pop_due` re-schedules next_fire_at = ts + interval_seconds every fire (runs forever until /loop cancel); MIN_INTERVAL_SECONDS=30; MAX_LOOPS_PER_SESSION=50 is a registration cap checked in _add (line 208), not a per-loop iteration/termination cap. No termination-on-count logic exists."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/types.py",
+          "note": "class ScheduledLoop fields: id, interval_seconds, prompt, next_fire_at, created_at — no max_iterations / fire_count / remaining / end-at field. A scheduled loop carries no iteration budget."
+        },
+        {
+          "kind": "file",
+          "ref": "vibe source keyword scan (grep -rniE 'max_iterations|max_iter|autonomous|self.prompt|goal_status|iteration.limit|until.*complete' over site-packages/vibe)",
+          "note": "Empty of any autonomous goal-loop or iteration-cap mechanism: only unrelated hits (subagent docstrings 'runs autonomously', ordinary per-turn agent_loop.py). Confirms the feature did not ship in v2.19.0."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-8_autonomous-loop-iteration-limit/metadata.json",
+          "note": "Reference cell. claudecode qualifies agent=yes because its binary strings show /goal + max_iterations/MaxIterations/goal_status. vibe's binary and source show no equivalent — the point of divergence for the agent verdict."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "preconditions": [
+        "N/A — vibe v2.19.0 has no self-terminating autonomous loop with a max-iteration cap. Route is frozen; no recording is driven."
+      ],
+      "setup": [],
+      "script": [],
+      "verify": [
+        "Not recordable: the agent cannot self-terminate an autonomous loop at a configured iteration limit, so the working → ready cap-termination arc cannot be elicited."
+      ]
+    }
+  }
+}

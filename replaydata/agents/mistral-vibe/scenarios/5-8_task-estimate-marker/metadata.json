@@ -1,0 +1,145 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+6a16e49",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes (vibe injects user- and project-level AGENTS.md into the system prompt, so the fenced task-eta marker rule can be seeded; emission is model-discretion) / daemon_capability: full (vibe parser scans the FULL assistant content for irrlicht-eta / irrlicht-summary and sets TaskEstimate/TaskSummary; shared metrics pipeline forecasts + suppresses at ready) / driver_capability: gap:wait_turn (scaffolded driver stubs wait_turn; DRIVE_ELICITS='send slash sleep')."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Reasoning\n\n### agent_supports: yes\n\nThe task-eta marker is not a built-in CLI feature; it is the model following a persistent instruction-file rule (the global CLAUDE.md/AGENTS.md convention), so the bar is \"does vibe load a user-supplied instruction file and can the model then emit the `<!-- {\\\"marker\\\":\\\"irrlicht-eta\\\",...} -->` HTML-comment in its assistant prose,\" not a `vibe --help` flag. Vibe honors instruction files: `get_universal_system_prompt` (vibe/core/system_prompt.py:342-388) — gated on `config.include_project_context` (default true, meta.json.config carries `include_project_context` + `system_prompt_id=\"cli\"` + `project_context`) — loads BOTH a user-level `$VIBE_HOME/AGENTS.md` (`mgr.load_user_doc()`, emitted as \"## User instructions\") and every project-level `AGENTS.md` under the working roots (`mgr.load_project_docs()`, emitted as \"## Project instructions (checked into the codebase)\") and appends them verbatim (only `.strip()` of surrounding whitespace — NO HTML-comment stripping, unlike Claude Code). So a user can seed the task-progress-marker rule in an AGENTS.md and vibe will feed it to the model. Emission is soft (model discretion, same class as claudecode): whether mistral-medium-3.5 actually walks a multi-phase task emitting a fresh marker each turn is what a live `record` run settles — hence confidence 0.75 and the recipe pins a ≥5-phase task with an explicit per-turn emit instruction.\n\n### daemon_capability: full\n\nEvery user-observable signal the scenario asserts has a producing path that handles it correctly today. GROUND TRUTH from the adapter source: the vibe parser (core/adapters/inbound/agents/vibe/parser.go:57-66) — in the `assistant` branch, when `content` is non-empty — calls `tailer.ScanTaskEstimate(content, ev.Timestamp)` and `tailer.ScanTaskSummary(content, ev.Timestamp)` on the FULL assistant content (not the truncated AssistantText from `TruncateAssistantText`), setting `ev.TaskEstimate` / `ev.TaskSummary` on a hit. Only `assistant`-role messages hit this branch (a user-pasted marker cannot feed the ETA). From there the estimate rides the SHARED, adapter-agnostic pipeline the claudecode cell documents: `tailer.TaskEstimate` → `SessionMetrics.TaskEstimate {total_rounds, completed_rounds, updated_at}`, `ForecastTaskCompletion` projects `task_completion_eta` at the measured rate (elapsed/completed, nil until ≥1 round, burns down), the last-seen marker is carried across empty passes (tailer_metrics.go / MergeMetrics) so the chip doesn't flicker, and the working-only presentation gate (web `taskEtaPresentation` / macOS SessionListView) suppresses the chip at ready. Because the vibe parser writes the SAME `ev.TaskEstimate`/`ev.TaskSummary` fields claudecode does, the entire forecast/suppression path applies unchanged — daemon=full by construction. Vibe's transcript stores assistant `content` verbatim in messages.jsonl, so a marker the model emits survives to the tailed Source.\n\n### driver_capability: gap:wait_turn\n\nThe recipe elicits the multi-turn ready→working→ready arc with `send` / `wait_turn` / `sleep`. The mistral-vibe interactive driver (replaydata/agents/mistral-vibe/driver-interactive.sh) is freshly SCAFFOLDED from the RC2 template: every standard step arm is PRESENT but `wait_turn` is `not_implemented` (SEAM 2, TODO), and the semantic-lint contract `DRIVE_ELICITS=\"send slash sleep\"` lists only the genuinely-ported primitives. `wait_turn` is absent from `DRIVE_ELICITS`, so recipe-lint flags this recipe as a semantic_gap before recording → `driver=gap:wait_turn`. This is TOOLING work, not an observability limit: `record` ports SEAM 2 (poll the vibe transcript/meta.json for turn-done) from a reference driver, adds `wait_turn` to `DRIVE_ELICITS`, then drives. `send` and `sleep` are already real (`send_text` writes via tmux; `sleep` is native).\n\n## Provisional emission caveat\n\nThe daemon parse path is code-certain (parser.go:57-66 wires the scan). The provisional elements are purely: (1) emission is model-discretion — a live run must confirm mistral-medium-3.5 emits ≥2 markers with climbing `completed_rounds` and that the fields drop at ready; (2) the exact recorded model id — pinned to `mistral-medium-3.5`, the DEFAULT active model (_settings.py:174) confirmed on every existing recorded vibe cell. Both settle at `record`, after the wait_turn seam is ported.",
+      "caveats": [
+        "Emission is model discretion (soft): the marker rule in AGENTS.md + a multi-step (≥5-phase) task is required. Whether mistral-medium-3.5 emits reliably is unconfirmed until a live record run — confidence 0.75 reflects this, not the parse path (which is code-certain).",
+        "Recording prereq: the task-eta emission rule must be present where vibe loads it for the run cwd — either $VIBE_HOME/AGENTS.md (user-level) or an AGENTS.md seeded into IRRLICHT_ONBOARD_CWD (project-level). Vibe injects both verbatim; there is NO driver step to seed it, so it is an out-of-band ENVIRONMENT prereq, not a driver step-type gap.",
+        "Unlike Claude Code, vibe does NOT strip HTML comments from instruction files (system_prompt.py appends AGENTS.md content after only a whitespace .strip()), so the marker example need not be fenced to survive injection. Fencing is still recommended for parser-friendliness but is not the hard blocker it is for claudecode.",
+        "driver=gap:wait_turn: the scaffolded mistral-vibe driver stubs wait_turn (not_implemented, DRIVE_ELICITS='send slash sleep'). record must port SEAM 2 (turn-done poll over the vibe transcript/meta.json) and add wait_turn to DRIVE_ELICITS before driving.",
+        "observations.model pinned to mistral-medium-3.5 — the DEFAULT active model (_settings.py:174) and the id on every existing recorded vibe cell; record corrects on drift."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "Lines 57-66: assistant branch scans the FULL content via tailer.ScanTaskEstimate + tailer.ScanTaskSummary and sets ev.TaskEstimate / ev.TaskSummary; only assistant-role messages qualify. This is the daemon=full-by-construction anchor."
+        },
+        {
+          "kind": "file",
+          "ref": "vibe/core/system_prompt.py",
+          "note": "get_universal_system_prompt lines 342-388: gated on config.include_project_context (default true), loads user-level $VIBE_HOME/AGENTS.md (load_user_doc → '## User instructions') and project-level AGENTS.md (load_project_docs → '## Project instructions'), appended verbatim after a whitespace .strip() — no HTML-comment stripping. Confirms a user can seed the marker rule → agent=yes."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/sidecar.go",
+          "note": "meta.json sidecar carries config.active_model + environment.working_directory + stats.context_tokens; model flows onto every event. Confirms the model surfaces on the recording (verify's observations.model)."
+        },
+        {
+          "kind": "file",
+          "ref": "vibe/core/config/_settings.py",
+          "note": "Line 174: DEFAULT_ACTIVE_MODEL_CONFIG alias='mistral-medium-3.5'; line 241 active_model defaults to it. Live-confirmed default model → observations.model=mistral-medium-3.5 (also the id on every recorded vibe cell)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "Freshly SCAFFOLDED (RC2 template): wait_turn is not_implemented (SEAM 2 TODO); DRIVE_ELICITS='send slash sleep' lists only ported primitives, so recipe-lint flags the wait_turn-needing recipe as a semantic_gap → driver=gap:wait_turn. send_text + sleep are real."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/5-8_task-estimate-marker/metadata.json",
+          "note": "Reference cell for this scenario: documents the shared parser→SessionMetrics.TaskEstimate→ForecastTaskCompletion→working-only presentation pipeline that vibe's ev.TaskEstimate feeds into unchanged."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "vibe CLI on PATH and authenticated; v2.19.0 validated; default model = mistral-medium-3.5",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a daemon started with --record)",
+        "PREREQ (human): the task-eta emission rule must be present where vibe loads it for the run cwd — EITHER $VIBE_HOME/AGENTS.md (user-level) OR a project AGENTS.md seeded into IRRLICHT_ONBOARD_CWD, containing the marker example `<!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":N,\"completed_rounds\":M} -->` and an instruction to emit + advance it each turn. Vibe injects AGENTS.md verbatim (no HTML-comment stripping), so fencing is optional.",
+        "DRIVER-GAP PREREQ: record must port the wait_turn seam (SEAM 2: poll the vibe transcript/meta.json for turn-done) and add wait_turn to DRIVE_ELICITS in replaydata/agents/mistral-vibe/driver-interactive.sh before driving."
+      ],
+      "setup": [
+        "Driver launches vibe in a fresh per-run cwd under <staging>/cwd/ (or IRRLICHT_ONBOARD_CWD) with the AGENTS.md task-eta rule reachable",
+        "Default model (mistral-medium-3.5); no model pin needed",
+        "The first send asks for a ≥5-phase task and instructs the agent to emit the marker each turn, starting at completed_rounds=0 and advancing as each phase completes"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do a 5-phase writing task and report progress each turn using the task-progress marker. Plan exactly 5 phases (total_rounds:5). On THIS turn emit the marker at 0/5, then start phase 1: write a one-paragraph outline. End your turn after phase 1 with the marker updated to 1/5."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Continue: do phase 2 (draft the introduction), update the marker to 2/5, and stop. Do not ask a question or offer to continue — end your turn immediately after the marker."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Continue: do phase 3 (draft the body), update the marker to 3/5, and stop. Do not ask a question or offer to continue — end your turn immediately after the marker."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Continue: do phase 4 (draft the conclusion), update the marker to 4/5, and stop. Do not ask a question or offer to continue — end your turn immediately after the marker."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Finish: do phase 5 (final polish), update the marker to 5/5, and reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 30
+        }
+      ],
+      "verify": [
+        "messages.jsonl assistant content carries the irrlicht-eta marker on ≥2 turns with completed_rounds climbing (e.g. 1/5 → … → 5/5); SessionMetrics.TaskEstimate.total_rounds=5 and completed_rounds matches the latest emitted marker",
+        "TaskEstimate.updated_at advances each time a fresher marker is observed (not pinned to a stale snapshot)",
+        "completed_rounds is non-decreasing across turns and reaches total_rounds (5) by the final working turn",
+        "TaskCompletionEta is present once ≥1 round is reported, and the projection after a later marker ≤ the projection after an earlier one (burns down)",
+        "While working the session metrics carry task_estimate + task_completion_eta; the client (web/macOS) shows the ETA chip only while working and hides it at ready (suppressed-by-state)",
+        "State topology ready → working → ready across the turns; final state ready (the ≥12s trailing sleep captures the post-turn settle)"
+      ],
+      "settings": {},
+      "timeout_seconds": 480
+    }
+  }
+}

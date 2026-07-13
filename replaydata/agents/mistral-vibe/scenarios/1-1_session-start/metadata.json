@@ -1,0 +1,93 @@
+{
+  "scenario_id": "session-start",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+e943e26.dirty",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-start",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Scenario signal\n\nsession-start asserts exactly two user-observable bullets: (1) the session appears in `ready` within 1s of agent launch, and (2) its PID is bound within 1s. No tool calls, final state `ready`. Both are timing assertions anchored to *launch*, not to a turn — they are satisfied by the daemon's pre-session (`proc-<PID>`) row, before any transcript turn completes.\n\n## agent = yes\n\nMistral Vibe (live CLI v2.19.0 at ~/.local/bin/vibe, source under .../uv/tools/mistral-vibe/) launches into an interactive REPL, appends its first line to `~/.vibe/logs/session/session_<ts>_<hash>/messages.jsonl`, and writes a sibling `meta.json` sidecar — then sits idle awaiting input. Six real transcripts on disk confirm the exact envelope the adapter parses (user/assistant-with-tool_calls/tool roles) and the sidecar keys `environment.working_directory`, `config.active_model` (= `mistral-medium-3.5` in every sample), `stats.context_tokens`. Launch + first-line + idle is the whole of session-start, so the agent trivially supports it.\n\n## daemon = full\n\nThe vibe adapter (built this session, commit e943e261) registers `Process.Match: agent.CommandPattern{Regex: processCmdRegex}` with `PIDForSession: DiscoverPID`. CommandPattern is a first-class matcher kind (handled in `diagnostics_service.go:325`), and the processlifecycle scanner mints a `proc-<PID>` pre-session row in `ready` for any matched process — the same mechanism that satisfies claudecode's session-start via its `ExactName` matcher (see `session_detector_activity.go:205`, `pid_manager.go:684-693`). Vibe's process is a Python console-script, so an `ExactName` on \"vibe\" would never fire; the CommandPattern anchors on the uv tool-venv interpreter path / a `/vibe ` token. `DiscoverPID` binds the PID by cwd (from the sidecar) + cmdline match, at the same scan tick that mints the pre-session row. Bullet (1) ready-within-1s and bullet (2) PID-within-1s are therefore both covered by the pre-session row, independent of when `messages.jsonl` materializes — exactly the claudecode session-start shape. None of the daemon's known vibe gaps (no per-turn cost; no context-WINDOW resolution because mistral models are absent from core/pkg/capacity; per-event timestamps backfilled to scan time; no Control/backchannel; no subagent linking) touch either session-start bullet — they are caveats/follow-ups, not spec-required observables here.\n\n## driver = gap:wait_turn\n\nThe interactive driver `replaydata/agents/mistral-vibe/driver-interactive.sh` is freshly scaffolded. Only `send`/`slash`/`sleep` step arms are real. The recipe (mirroring claudecode's session-start: send a nudge → wait_turn → sleep) needs `wait_turn`, but the driver's SEAM-2 `wait_turn()` (line 169) dispatches to `not_implemented` (exits 3). Two further unported seams block recording of ANY vibe cell today and must be ported alongside: SEAM 3 — `launch_repl` (line 158) never resolves/stores the transcript path into `SES_TRANSCRIPT[$ACTIVE]`, so `emit_session_contract` (line 210) records no session for `record` to verify; and SEAM 1 — the launch command (line 155) execs `\"mistral-vibe\"`, which is NOT on PATH (only `vibe` is), so the REPL never starts. `record` ports SEAM 1 (fix the binary to `vibe`), SEAM 2 (`wait_turn` turn-done poll on messages.jsonl), and SEAM 3 (transcript-path capture) before it can drive this cell. This is tooling work, not an observability limit — the cell keeps its recipe + spec.",
+      "caveats": [
+        "Provisional on live drive: daemon=full is derived from reading the adapter + shared scanner; the pre-session row minting for a CommandPattern matcher is the same code path as claudecode's ExactName, but a vibe recording has not yet confirmed the timing budget end-to-end. record promotes this from provisional to settled.",
+        "The model name mistral-medium-3.5 displays, but its context WINDOW is unresolved — mistral models are absent from core/pkg/capacity, so the utilization bar is a follow-up. Does not affect session-start (no context bar asserted).",
+        "The daemon does not emit per-turn cost for vibe (the sidecar retains only last-turn tokens, not backfillable), so the spec asserts tokens_nonzero + model but NOT cost.",
+        "messages.jsonl carries no per-event timestamp; backfill uses scan time. Irrelevant to session-start's launch-anchored bullets."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/agent.go",
+          "note": "Process.Match = CommandPattern{Regex: processCmdRegex}, PIDForSession = DiscoverPID, Source = FilesUnderRoot on ~/.vibe/logs/session with SessionIDFromPath = the session_<...> dir; no Control declared (read-only)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/pid.go",
+          "note": "DiscoverPID binds the PID by cwd (sidecar fallback) + cmdline match via processlifecycle.DiscoverPIDByCWDAndCmdLine — feeds the pid_discovered event."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "Lines 684-693: proc-<pid> pre-sessions are minted by processlifecycle/scanner.go and encode their PID in the session id — the ready-within-1s + PID-within-1s mechanism, matcher-kind agnostic."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "Line 169: wait_turn() -> not_implemented (stub). Line 158: SEAM 3 transcript-path capture unported (: no-op). Line 155: launch execs \"mistral-vibe\", not on PATH (only vibe is)."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.vibe/logs/session/session_20260706_101952_48e134e3/meta.json",
+          "note": "Live sidecar: config.active_model=mistral-medium-3.5, environment.working_directory set, stats.context_tokens=136662, session_cost present, parent_session_id=null (vibe subagents are in-process, not file-based)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "vibe CLI on PATH (~/.local/bin/vibe, v2.19.0) and authenticated (Mistral API key)",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a --record daemon)",
+        "driver seams ported by record: SEAM 1 launch binary vibe (not mistral-vibe), SEAM 2 wait_turn poll, SEAM 3 transcript-path capture"
+      ],
+      "setup": [
+        "Create a fresh empty cwd under <staging>/cwd/ so the session's working_directory is unique",
+        "Vibe mints its own session_<ts>_<hash> id on launch; the daemon session_id is that directory name"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created event for proc-<PID> within 1000 ms of the tmux new-session timestamp",
+        "events.jsonl contains a state_transition to ready for proc-<PID> within 100 ms of presession_created",
+        "events.jsonl contains a pid_discovered event within 1000 ms",
+        "events.jsonl contains a transcript_new event for the session_<ts>_<hash> session once messages.jsonl materializes",
+        "final session state is ready",
+        "meta.json sidecar supplies model mistral-medium-3.5 and a non-zero context_tokens on turn_done"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

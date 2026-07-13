@@ -1,0 +1,90 @@
+{
+  "scenario_id": "turn-end-terminal-text",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+91ca4fe.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-end-terminal-text",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:wait_turn\n\n## Reasoning\n\nThe smallest tool-less round-trip: user prompts, the assistant replies with a final text message and no tool call, and the state arc is `ready → working → ready`. This is exactly the shape Vibe's transcript records and the adapter parses.\n\n**Agent (yes).** Mistral Vibe v2.19.0 appends one JSON object per line to `~/.vibe/logs/session/<id>/messages.jsonl`. A completed tool-less turn ends with a `role:\"assistant\"` line carrying a non-empty `content` string and NO `tool_calls[]`. This is confirmed in live transcripts on this machine — the final assistant line of finished sessions carries real answer text (e.g. `\"Yes, you can modify \\`mvnw\\`...\"`, `\"✅ **Handover document created!**...\"`). The terminal assistant text is therefore present and captured.\n\n**Daemon (full).** `vibe/parser.go` maps a `role:\"assistant\"` line to `turn_done` whenever `parseToolCalls` finds no tool calls (parser.go:67-75), setting `ev.AssistantText = TruncateAssistantText(content)` from the message body (parser.go:58-59). The preceding `role:\"user\"` line maps to `user_message` (parser.go:50-55). So the classifier gets `user_message` (ready → working) then `turn_done` (working → ready) — the full arc, with the terminal assistant text lit for the waiting/ready display. Model and context-token count come from the sibling `meta.json` sidecar (`config.active_model`, `stats.context_tokens`), applied on every event / on `turn_done` respectively (parser.go:98-115) — so `model` and a non-zero token snapshot are present. The daemon does NOT read `stats.session_cost` (the sidecar carries it, the adapter ignores it), and the JSONL has no per-line timestamps (ParseTimestamp falls back to now/scan-time). Neither is a signal this scenario asserts, so they are caveats, not a downgrade — the `ready → working → ready` arc is fully observable.\n\n**Driver (gap:wait_turn).** The recipe is a `send` / `wait_turn` / `sleep` script. `mistral-vibe`'s freshly-scaffolded interactive driver declares `DRIVE_ELICITS=\"send slash sleep\"` and its `wait_turn()` arm is `not_implemented wait_turn` (driver-interactive.sh:168-169) — SEAM 2 (the turn-done poll) is stubbed, and SEAM 3 (resolving the live session_id + transcript path onto the active slot after launch, driver-interactive.sh:158) is likewise a TODO. Without a real `wait_turn` the driver cannot detect that the terminal-text turn completed, so the settle phase can't be timed. This is tooling work, not an observability limit: `record` ports the `wait_turn` poll (and the SEAM-3 transcript-path resolution) from a reference driver before it drives — the cell keeps its recipe + spec and records the moment the seam lands.",
+      "caveats": [
+        "Daemon does not surface cost for Vibe: the meta.json sidecar carries stats.session_cost but the adapter reads only working_directory, active_model, and context_tokens (sidecar.go:55-74). cost_nonzero is asserted false; this is out of scope for turn-end-terminal-text.",
+        "Vibe's messages.jsonl carries no per-line timestamps; the parser falls back to tailer.ParseTimestamp (time.Now on live tail, scan-time on backfill). Fine for this scenario's ordering, but timeline precision is coarser than transcript-timestamped agents.",
+        "model is pinned to mistral-medium-3.5, confirmed from config.active_model across all six live sidecars on this machine (Vibe's current default). It is a user-config default, so a recording env with a different configured model would differ — record confirms it from the recording.",
+        "tokens_nonzero:true is asserted from the code path (context_tokens → Tokens.Total on turn_done) and is provisional on emission: the sidecar must be present and populated at the moment the daemon tails turn_done. record promotes this from provisional to settled.",
+        "Overlaps intentionally with basic-turn; this cell pins the terminal-text end signal specifically. Keep the recipe a deliberately tool-less prompt so no tool_use appears in the window."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "Lines 57-75: a role:assistant line with no tool_calls maps to turn_done with AssistantText=TruncateAssistantText(content); with tool_calls it stays assistant_message (working). Lines 98-115: applySidecar lights model on every event and Tokens.Total from context_tokens on turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/sidecar.go",
+          "note": "Lines 55-74: sidecar decodes environment.working_directory, config.active_model, stats.context_tokens only — session_cost is present in meta.json but never read, so the daemon surfaces no cost for Vibe."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "Line 113 DRIVE_ELICITS=\"send slash sleep\" (no wait_turn); lines 168-169 wait_turn()=not_implemented wait_turn (SEAM 2 stub); line 158 TODO SEAM 3 resolve live session_id + transcript path. The recipe's wait_turn step is unsupported → driver=gap:wait_turn."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.vibe/logs/session/*/messages.jsonl + meta.json",
+          "note": "Live transcripts (session_20260706_101952_48e134e3 and 5 others): final assistant line carries non-empty content and no tool_calls; every sidecar config.active_model=mistral-medium-3.5, stats.context_tokens>0. Vibe CLI v2.19.0 at ~/.local/bin/vibe."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "vibe CLI on PATH (~/.local/bin/vibe, v2.19.0) and authenticated (Mistral API key / login)",
+        "tmux available (the interactive driver launches the REPL under tmux)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "the transcripts permission is granted so the daemon tails ~/.vibe/logs/session"
+      ],
+      "setup": [
+        "Provide an empty per-run cwd under <staging>/cwd/ for the Vibe session",
+        "Port the driver's wait_turn seam (poll messages.jsonl for a new terminal role:assistant line with no tool_calls) and the SEAM-3 transcript-path resolution before recording"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly: hello world"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl mints exactly one session for the ~/.vibe/logs/session/<id> directory within 1000 ms",
+        "events.jsonl contains exactly one state_transition to working and exactly one to ready for that session",
+        "events.jsonl contains NO tool_use events for the session",
+        "the final messages.jsonl line is a role:assistant message with non-empty content and no tool_calls",
+        "final session state is ready",
+        "messages.jsonl contains exactly 1 user line and 1 assistant line for the turn"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

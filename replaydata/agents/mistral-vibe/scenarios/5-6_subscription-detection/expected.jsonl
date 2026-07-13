@@ -1,0 +1,1 @@
+{"frozen":true,"notes":"Frozen (agent_supports=no): Mistral Vibe is PAYG per-token (meta.json.stats pricing) and surfaces no rate-limit/plan signal into any session artifact the daemon tails; the vibe adapter emits no auth-mode/rate-limit event. Assessment-only cell — no lifecycle phases or recording.","scenario_id":"subscription-detection","schema_version":1}

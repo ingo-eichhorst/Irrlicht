@@ -1,0 +1,6 @@
+{"role": "user", "content": "Use the bash tool to run exactly this command and nothing else: sleep 8 — then reply with just the word done", "injected": false, "message_id": "e60e2975-41a3-49e3-abb9-dad05f779c6c"}
+{"role": "assistant", "injected": false, "tool_calls": [{"id": "ZEnYiRYZP", "index": 0, "function": {"name": "bash", "arguments": "{\"command\": \"sleep 8\"}"}, "type": "function"}], "message_id": "9cbe331e-abac-4daf-8409-484bfa4d16f1"}
+{"role": "tool", "content": "command: sleep 8\nstdout: \nstderr: \nreturncode: 0", "injected": false, "name": "bash", "tool_call_id": "ZEnYiRYZP"}
+{"role": "assistant", "content": "done", "injected": false, "message_id": "de38ed48-34d4-488e-9bea-36a66f8dbf43"}
+{"role": "user", "content": "also, once you have finished, tell me what 6 times 7 is", "injected": false, "message_id": "18227a18-16fb-4363-822a-d5a60b4eb995"}
+{"role": "assistant", "content": "42", "injected": false, "message_id": "6cbdb5d4-5d9f-4829-baf8-74dfab91e30a"}

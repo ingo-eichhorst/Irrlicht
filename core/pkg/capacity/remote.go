@@ -112,9 +112,7 @@ func parseLiteLLMData(data []byte) (*capacityConfig, error) {
 	}
 
 	for key, rawEntry := range raw {
-		// Skip provider-prefixed entries (e.g. "bedrock/anthropic.claude...")
-		// and the sample_spec entry. Only keep canonical model IDs.
-		if strings.Contains(key, "/") || key == "sample_spec" {
+		if shouldSkipLiteLLMKey(key) {
 			continue
 		}
 
@@ -127,6 +125,26 @@ func parseLiteLLMData(data []byte) (*capacityConfig, error) {
 	}
 
 	return config, nil
+}
+
+// shouldSkipLiteLLMKey reports whether a LiteLLM JSON key should be excluded
+// from the capacity table: provider-prefixed entries (e.g.
+// "bedrock/anthropic.claude...") and the sample_spec entry. Only canonical
+// model IDs are kept.
+//
+// "mistral/" is an exception: unlike Anthropic/OpenAI, Mistral's own direct
+// API has no bare (unprefixed) canonical key in LiteLLM at all — only
+// "mistral/<model>" (its Bedrock/Azure-hosted variants use their own distinct
+// prefixes, e.g. "mistral.mistral-large-2402-v1:0" with a dot not a slash, so
+// they're unaffected here). Skipping it silently dropped every Mistral
+// model's pricing from the capacity table. See modelAliases for the
+// "mistral-medium-3.5" -> "mistral/mistral-medium-3-5" bridge vibe's reported
+// model name needs.
+func shouldSkipLiteLLMKey(key string) bool {
+	if key == "sample_spec" {
+		return true
+	}
+	return strings.Contains(key, "/") && !strings.HasPrefix(key, "mistral/")
 }
 
 // parseLiteLLMEntry converts a single LiteLLM JSON entry into a ModelCapacity.

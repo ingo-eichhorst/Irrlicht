@@ -44,6 +44,36 @@ func TestModelAliases_ResolveToCanonical(t *testing.T) {
 	}
 }
 
+// TestMistralVibeAlias_ResolvesToRealCostEstimate is the end-to-end
+// regression test for mistral-vibe sessions pricing at $0: vibe reports its
+// sidecar's dot-versioned model name verbatim ("mistral-medium-3.5"), which
+// never matched LiteLLM's hyphen-versioned, "mistral/"-prefixed canonical key
+// on its own. Combines the modelAliases bridge with real Mistral pricing
+// (parsed the same way parseLiteLLMData would keep it — see the "mistral/"
+// exception there) to prove a full vibe session's tokens now cost > $0.
+func TestMistralVibeAlias_ResolvesToRealCostEstimate(t *testing.T) {
+	cm := NewForTest(map[string]ModelCapacity{
+		"mistral/mistral-medium-3-5": {
+			ContextWindow: 262144,
+			MaxOutput:     262144,
+			Pricing: &ModelPricing{
+				InputPerMTok:  1.5,
+				OutputPerMTok: 7.5,
+			},
+		},
+	})
+
+	// cum_input_tokens / cum_output_tokens observed on a live vibe session.
+	cost := cm.EstimateCostUSD("mistral-medium-3.5", 43845, 1570, 0, 0)
+	want := (43845.0*1.5 + 1570.0*7.5) / 1_000_000
+	if cost != want {
+		t.Errorf("EstimateCostUSD(mistral-medium-3.5, ...) = %v, want %v", cost, want)
+	}
+	if cost <= 0 {
+		t.Fatal("mistral-medium-3.5 still prices at $0 — alias or mistral/ parsing regressed")
+	}
+}
+
 func TestModelAliases_UnknownReturnsUnchanged(t *testing.T) {
 	cm := NewForTest(map[string]ModelCapacity{
 		"claude-opus-4-6": {ContextWindow: 200000},

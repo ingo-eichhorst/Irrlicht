@@ -1,0 +1,67 @@
+{
+  "scenario_id": "user-esc-interrupt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:interrupt",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+12d0e9a.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: incapable; driver_capability: gap:interrupt\n=> frozen (applicable: false). On ESC vibe cancels the running agent task and writes NO terminal line to messages.jsonl — no turn_done, no interrupt marker — so the transcript ends at the user prompt (working); the vibe parser has no IsUserInterrupt and the daemon has no working-state idle sweep, so the post-interrupt working->ready settle is architecturally unobservable. Same root cause as vibe 2.14 turn-aborted-by-error. Secondary: the scaffolded driver stubs `interrupt` (DRIVE_ELICITS=send/slash/sleep)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-esc-interrupt",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-07-07T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:interrupt",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: gap:interrupt\n=> frozen at the recipe stage (applicable: false). Same emission-side root cause as the vibe/turn-aborted-by-error sibling (2.14): on a user ESC vibe writes NO terminal line to messages.jsonl, so the still-`working` session can never settle, and the daemon has no idle sweep to rescue it. This is Bucket B (unobservable), not a parser bug.\n\n## Scenario\n\nuser-esc-interrupt asserts the arc `ready -> working -> ready`: the user sends a long prompt (ready->working), presses ESC before the turn-done marker, and the session must return to `ready` (state must NOT stick in `working`), then a follow-up prompt drives a clean `ready -> working -> ready`. The claudecode design of this scenario validates parser.recordUserInterruptFlags / the sticky LastWasUserInterrupt flag / classifier rule 3 — all keyed on the literal `[Request interrupted by user]` marker, which is claudecode-specific.\n\n## agent_supports: yes\n\nvibe's TUI binds ESC to interrupt the in-flight turn. `cli/textual_ui/app.py:422` — `Binding(\"escape\", \"interrupt\", \"Interrupt\", priority=True)` — routes ESC to `_interrupt_agent_loop` (app.py:2116). That handler cancels the running `_agent_task` (the `AgentLoop.act()` generator) via `task.cancel()` (app.py:2133) and mounts an `InterruptMessage()` UI widget (app.py:2148). So vibe genuinely supports mid-turn user cancellation.\n\n## Why this cell cannot be recorded — daemon=incapable\n\n### vibe persists NO terminal line on ESC; the interrupt is invisible on disk\n\n`_interrupt_agent_loop` is pure UI/task teardown: it cancels `_agent_task` and mounts a UI-only `InterruptMessage()` widget — it does NOT append or persist any message to messages.jsonl. The cancel raises `asyncio.CancelledError` inside `act()`. During a normal streaming turn the assistant message is appended to the conversation ONLY after the backend stream drains successfully: `self.messages.append(chunk_agg.message)` at agent_loop.py:1765, INSIDE the try and AFTER the `async for chunk in ... stream`. A cancel mid-stream jumps past 1765 (into the `except`/unwind), so no assistant message is ever appended for that turn. `act()`'s `finally: await self._save_messages()` (agent_loop.py:1097) still runs, but the LAST message it can persist is the USER prompt appended at agent_loop.py:1034 before the turn. There is no `[Request interrupted by user]`-style marker (that is a claudecode invention) and no turn_done.\n\nThe ESC-during-tool path is no better: even where a cancelled tool yields a ToolResultEvent (get_user_cancellation_message(TOOL_INTERRUPTED), _finalize_cancelled_tool, agent_loop.py:1372-1388), that persists at most a `tool`-role result line — which the vibe parser maps to `tool_result`, NOT turn_done — and the loop is torn down by task.cancel() before any terminal assistant turn_done is written.\n\nThe vibe adapter parser (core/adapters/inbound/agents/vibe/parser.go) emits `turn_done` ONLY for an assistant message with no tool_calls (parser.go:72-74); a `user` message maps to `user_message`, which OPENS/keeps the turn `working` (parser.go:50-51). Unlike claudecode's parser there is no IsUserInterrupt path — the vibe parser never inspects content for an interrupt marker and never sets ev.IsUserInterrupt, so classifier rule 3 (the very rule this scenario exists to validate) can never fire for vibe. With the transcript ending at the user prompt, the daemon sees `... -> user_message` and nothing after: IsAgentDone() never fires and the session sits in `working`.\n\nNothing rescues it. There is no working-state idle sweep: the PID-liveness sweep in core/application/services/pid_manager.go reaps a session only when `snap.sessionState == session.StateReady || snap.pid == 0` (pid_manager.go:~949) — a `working` session with a live REPL PID is never settled to `ready`. PR #106 removed the only inactivity timer and nothing replaced it. So a vibe ESC-interrupted turn sticks in `working` until the process exits — the spec's post-interrupt `working -> ready` settle is architecturally unobservable today.\n\n### bug vs incapable\n\nThis is `incapable`, not `bug`: there is no trace/marker on disk that the parser mis-handles (that would be a bug). vibe simply emits NO terminal signal for a user ESC (an emission-side, Bucket-B gap), and the 3-state model plus the missing idle sweep cannot settle the session. The right owner is architecture (the daemon needs a terminal signal on cancel, OR an idle sweep), not a parser fix.\n\n## driver_capability: gap:interrupt\n\nThe scenario needs an `interrupt` step (send ESC to the REPL). The scaffolded interactive driver stubs it: replaydata/agents/mistral-vibe/driver-interactive.sh declares `DRIVE_ELICITS=\"send slash sleep\"` and the `interrupt` arm is `not_implemented interrupt` (line 187). Porting it is straightforward (tmux `send-keys Escape` against the pane, mirroring the reference drivers), but until ported it is a real driver gap. This gap is moot for now — daemon=incapable freezes the cell regardless — but it is the driver work that would be needed alongside a daemon fix.\n\n## Conclusion\n\ndaemon=incapable makes the end state unobservable → frozen, applicable: false. Mirrors mistral-vibe/turn-aborted-by-error (2.14) and the codex/antigravity user-esc-interrupt siblings (also daemon=incapable, frozen). No recipe, no spec phases, no recording.\n\n## What would unblock it\n\n1. A terminal signal on cancel: either vibe persists a cancellation epilogue to messages.jsonl (an upstream vibe change) that the parser could map to turn_done AND/OR the vibe parser grows an IsUserInterrupt path (but there is nothing on disk for it to key off today), OR the daemon grows a non-flickering working-state idle sweep (the general fix that also unblocks codex/antigravity/kiro-cli — reversing PR #106's removal).\n2. Port the driver `interrupt` step (tmux Escape) so the ESC can be driven deterministically.\n\nWith both in place, re-assess and proceed to recipe + record.",
+      "caveats": [
+        "Load-bearing, emission-side finding confirmed from vibe source (not from a recording): ESC cancels the agent task (app.py:2133) and mounts a UI-only InterruptMessage (app.py:2148) but persists nothing; the streaming assistant message is appended only after the stream drains (agent_loop.py:1765), so a mid-stream cancel writes no assistant/turn_done line and no interrupt marker — the transcript ends at the user prompt (agent_loop.py:1034). A live recording would promote this from provisional to empirical, but the driver interrupt gap (below) blocks recording today anyway.",
+        "Same daemon gap as vibe 2.14 and codex/kiro-cli/antigravity: no working-state idle sweep (pid_manager.go reaps only StateReady or PID=0), so a working session with a live PID is never settled to ready. PR #106 removed the only inactivity timer that used to mitigate this.",
+        "The vibe parser has no IsUserInterrupt path — unlike claudecode's recordUserInterruptFlags — so classifier rule 3 (LastWasUserInterrupt) can never fire for vibe even if a marker existed. This is a per-agent gap noted on the vibe adapter (no IsUserInterrupt-for-vibe), not a general daemon regression.",
+        "Driver gap:interrupt is secondary here: the interrupt step (tmux Escape) is a straightforward port from the reference drivers, but the cell freezes on daemon=incapable regardless, so porting it alone would not make the cell recordable."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/cli/textual_ui/app.py",
+          "note": "ESC binding -> interrupt action (line 422); _interrupt_agent_loop (2116) cancels _agent_task via task.cancel() (2133) and mounts a UI-only InterruptMessage() (2148) — it persists NOTHING to messages.jsonl. No cancellation epilogue is written on user ESC."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/merlin/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/agent_loop.py",
+          "note": "_chat_streaming appends the assistant message to self.messages ONLY after the stream drains (line 1765); a cancel mid-stream unwinds before that, appending nothing. act()'s finally save (line 1097) persists at most the user prompt (appended line 1034). No turn_done and no interrupt marker on ESC."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "turn_done emitted ONLY for an assistant message with no tool_calls (lines 72-74); a user message maps to user_message and keeps the turn working (lines 50-51). No IsUserInterrupt path (unlike claudecode's recordUserInterruptFlags) — the parser never inspects content for an interrupt marker. So a transcript ending at the user prompt after ESC produces no terminal signal and rule 3 can never fire."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "The liveness sweep reaps a session only when snap.sessionState == StateReady || snap.pid == 0 (~line 949); a working session with a live PID is never settled to ready. No working-state idle sweep exists post-PR #106 — the working session cannot self-settle after ESC."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "Scaffolded driver: DRIVE_ELICITS=\"send slash sleep\"; the interrupt arm is `not_implemented interrupt` (line 187). No ESC/Escape primitive — driver=gap:interrupt (secondary; moot while daemon=incapable freezes the cell)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/2-14_turn-aborted-by-error/metadata.json",
+          "note": "Sibling cell, same emission-side Bucket-B root cause and daemon=incapable/frozen shape: vibe writes no terminal line, the parser emits no turn_done, and no working-state idle sweep settles the working session. Template for this frozen cell (user ESC is the user-driven analogue of the provider-error abort)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "No recordable path for vibe user-esc-interrupt. daemon=incapable: on ESC vibe cancels the agent task and mounts a UI-only InterruptMessage (app.py:2133,2148) but persists NO terminal line to messages.jsonl — the streaming assistant message is appended only after the stream drains (agent_loop.py:1765), so a mid-stream cancel writes nothing, and act()'s finally save persists at most the user prompt (agent_loop.py:1034,1097). The vibe parser emits turn_done only for an assistant message with no tool_calls (parser.go:72-74) and has no IsUserInterrupt path, so no terminal signal fires; the daemon has no working-state idle sweep (pid_manager.go reaps only StateReady/PID=0, PR #106 removed the stale-tool timer), so the session sticks in working — the spec's post-interrupt working->ready settle is unobservable. Secondary driver=gap:interrupt: the scaffolded driver stubs the interrupt arm (DRIVE_ELICITS=send/slash/sleep). Mirrors mistral-vibe/turn-aborted-by-error and the codex/antigravity user-esc-interrupt siblings. Unblocks when (a) vibe/the parser gains a terminal cancel signal OR the daemon grows a non-flickering working-state idle sweep, and (b) the driver interrupt (tmux Escape) step is ported. See assessment.body."
+    }
+  }
+}

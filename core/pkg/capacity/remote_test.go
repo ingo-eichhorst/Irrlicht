@@ -92,6 +92,74 @@ func TestParseLiteLLMData_SkipsProviderPrefixed(t *testing.T) {
 	}
 }
 
+// TestParseLiteLLMData_KeepsMistralPrefixed is the regression test for the
+// "mistral/" exception: Mistral's own direct API has no bare canonical key in
+// LiteLLM (only "mistral/<model>"), unlike Anthropic/OpenAI where a
+// provider-prefixed entry is always a re-hosted variant of an existing bare
+// key. Skipping it unconditionally silently dropped every Mistral model's
+// pricing (issue: mistral-vibe sessions always priced at $0).
+func TestParseLiteLLMData_KeepsMistralPrefixed(t *testing.T) {
+	data := []byte(`{
+		"mistral/mistral-medium-3-5": {
+			"max_input_tokens": 262144,
+			"max_output_tokens": 262144,
+			"input_cost_per_token": 0.0000015,
+			"output_cost_per_token": 0.0000075,
+			"litellm_provider": "mistral",
+			"mode": "chat"
+		},
+		"mistral.mistral-large-2402-v1:0": {
+			"max_input_tokens": 32000,
+			"max_output_tokens": 8191,
+			"litellm_provider": "bedrock",
+			"mode": "chat"
+		},
+		"bedrock/anthropic.claude-sonnet-4-6": {
+			"max_input_tokens": 200000,
+			"max_output_tokens": 64000,
+			"litellm_provider": "bedrock",
+			"mode": "chat"
+		}
+	}`)
+
+	config, err := parseLiteLLMData(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mc, ok := config.Models["mistral/mistral-medium-3-5"]
+	if !ok {
+		t.Fatal("missing mistral/mistral-medium-3-5 — the mistral/ exception should keep it")
+	}
+	assertMistralPricing(t, mc.Pricing, 1.5, 7.5)
+
+	// The Bedrock-hosted Mistral entry uses a DOT not a slash ("mistral.xxx"),
+	// so it was never affected by the skip rule either way — kept as before.
+	if _, ok := config.Models["mistral.mistral-large-2402-v1:0"]; !ok {
+		t.Error("missing mistral.mistral-large-2402-v1:0 (dot-notation Bedrock key, unrelated to the slash exception)")
+	}
+
+	// Other provider-prefixed re-hostings must still be skipped.
+	if _, ok := config.Models["bedrock/anthropic.claude-sonnet-4-6"]; ok {
+		t.Error("bedrock/anthropic.claude-sonnet-4-6 should still be skipped — the exception is scoped to mistral/ only")
+	}
+}
+
+// assertMistralPricing checks the input/output per-million-token rates as
+// two independent comparisons instead of one compound conditional.
+func assertMistralPricing(t *testing.T, pricing *ModelPricing, wantIn, wantOut float64) {
+	t.Helper()
+	if pricing == nil {
+		t.Fatal("pricing is nil")
+	}
+	if pricing.InputPerMTok != wantIn {
+		t.Errorf("InputPerMTok = %v, want %v", pricing.InputPerMTok, wantIn)
+	}
+	if pricing.OutputPerMTok != wantOut {
+		t.Errorf("OutputPerMTok = %v, want %v", pricing.OutputPerMTok, wantOut)
+	}
+}
+
 func TestParseLiteLLMData_SkipsNoContextWindow(t *testing.T) {
 	data := []byte(`{
 		"model-with-tokens": {

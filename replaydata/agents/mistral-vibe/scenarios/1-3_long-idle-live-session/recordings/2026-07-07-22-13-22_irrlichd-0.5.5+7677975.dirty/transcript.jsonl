@@ -1,0 +1,4 @@
+{"role": "user", "content": "Reply with exactly the word: ok", "injected": false, "message_id": "c69500c9-0485-48d1-8f6e-64ff9be74f70"}
+{"role": "assistant", "content": "ok", "injected": false, "message_id": "eab4b99f-7cf8-45d4-9719-272e35cec9b3"}
+{"role": "user", "content": "Reply with exactly the word: alive", "injected": false, "message_id": "f5c5ce52-ee84-451f-a231-5e23eb3e365c"}
+{"role": "assistant", "content": "alive", "injected": false, "message_id": "0132a8e1-f1e9-42d0-a1cd-8c9d04927d46"}

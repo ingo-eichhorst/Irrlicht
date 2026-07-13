@@ -1,0 +1,125 @@
+{
+  "scenario_id": "token-accounting",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+5e22e47",
+    "confidence": 0.8,
+    "notes": "RE-ASSESSED after c37c6830: tokens now accumulate end-to-end (daemon=full); cost still a caveat (unlock 1.8); driver=gap:wait_turn still stubbed."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-accounting",
+      "agent": "mistral-vibe",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full (cost + cache are caveats, not a daemon bug)\ndriver_capability: gap:wait_turn\n\n## Reasoning (RE-ASSESSMENT after commit c37c6830)\n\n### agent_supports: yes\n\nVibe keeps rich token accounting in the per-session `meta.json` sidecar, rewritten after every turn. `stats` carries `session_prompt_tokens`, `session_completion_tokens`, `session_total_llm_tokens`, `last_turn_prompt_tokens`, `last_turn_completion_tokens`, `context_tokens`, `session_cost`, and prices (confirmed live: session_total_llm_tokens=11000869, session_cost=16.7378535, input/output_price 1.5/7.5). The agent performs the per-turn + cumulative token accounting the scenario is about.\n\n### daemon_capability: full (was `bug`; fixed by c37c6830)\n\nThe prior verdict was `daemon=bug`: the vibe parser emitted only a context-window snapshot (`ev.Tokens = &TokenSnapshot{Total: st.contextTokens}`), never a `PerTurnContribution`, so no cumulative `SessionMetrics.TotalTokens` accumulation reached `events.jsonl`. **Commit c37c6830 (`feat(vibe): emit per-turn token usage for session accounting`) closed that gap:**\n\n- `sidecar.go` now decodes `stats.session_prompt_tokens` / `stats.session_completion_tokens` into `sessionPromptTokens` / `sessionCompletionTokens` (the monotonic session-cumulative counts).\n- `parser.go`'s new `emitContribution` attaches, on every `turn_done`, `ev.Contribution = &PerTurnContribution{Model, Usage: UsageBreakdown{Input: dPrompt, Output: dCompletion}}` — the DELTA of the session-cumulative prompt/completion counts since the last emit (dedup across re-reads of a static sidecar; clamps negative deltas to 0). The delta is the backfill-safe unit: live-tail sees each turn's real delta; a backfill emits the whole session cumulative once on the first `turn_done`. Either way the session TOTAL is correct.\n- `metrics_test.go`'s `TestTokenAccounting_EndToEnd` drives a synthetic transcript + `meta.json` sidecar through the PRODUCTION `TranscriptTailer` and asserts `m.CumInputTokens == 8500`, `m.CumOutputTokens == 320` accumulate — the end-to-end path the scenario's monotonic accumulator requires.\n\nSo the scenario's spec-required token observable — `TotalTokens > 0` after turn 1, non-decreasing across turns — is now surfaced. tokens_nonzero=true. Per the caveats-over-downgrades rule the daemon is `full`: the two remaining narrow gaps are neither a spec-required observable the daemon MIS-handles (a `bug`) nor an architectural inability to observe an existing trace (`incapable`):\n\n### Caveat 1 — cost (documented follow-up, NOT a bug)\n\nCost is still not emitted (`cost_nonzero=false`). The fix deliberately does NOT set `ProviderCostUSD` (that would short-circuit token accumulation); cost is meant to compute from the capacity price map keyed on Model. But `mistral-medium-3.5` carries no token price in `core/pkg/capacity` (only a CO2 factor `\"mistral\": 0.00285` exists — no USD-per-token entry), so the fallback yields 0. This is the documented follow-up (unlock 1.8: land mistral pricing in `core/pkg/capacity`). The scenario's `acceptance_criteria` assert token COUNTS only — cost is not among them — so this is a caveat on the observation vector, not a daemon mis-handling of a spec-required observable.\n\n### Caveat 2 — cache bucket (agent-side unavailable)\n\nThe scenario also asserts a fully-cached turn (`CacheReadTokens > 0`, fresh input = 0). Vibe's `meta.json` stats expose NO cache_read / cache-hit field — only prompt/completion/context/total counts. So the cache-bucket distinction is unobservable regardless of any parser change; it is an agent-side gap, not a daemon bug (the daemon emits everything the sidecar carries).\n\n### driver_capability: gap:wait_turn (unchanged)\n\nThe recipe is a multi-turn interactive REPL sequence (send -> wait_turn -> sleep, x3) — the process must outlive the observation window across all three turns. The vibe interactive driver still declares `DRIVE_ELICITS=\"send slash sleep\"` and STUBS `wait_turn` (`wait_turn() { not_implemented wait_turn }` — TODO to replace with the real turn-done poll). So it cannot pace turn boundaries yet. Consistent with the sibling vibe interactive cells. `record` ports the wait_turn seam from a reference driver before driving.\n\n## Route\n\nagent=yes + daemon=full + driver=gap:wait_turn -> **driver-gap**: `record` ports the missing wait_turn step, then drives. The spec is NO LONGER `known_failing` (the token accumulation it asserts is now met); cost stays a caveat with `cost_nonzero=false` in the observation vector.",
+      "caveats": [
+        "Cost is still not emitted (cost_nonzero=false): ProviderCostUSD is deliberately unset (it would short-circuit token accumulation), and mistral-medium-3.5 has no USD-per-token entry in core/pkg/capacity (only a CO2 factor). Cost will compute once mistral pricing lands (follow-up unlock 1.8). Cost is not in the scenario's acceptance_criteria, so this is a caveat, not a daemon bug.",
+        "Cache-bucket sub-assertion (CacheReadTokens > 0; fresh input = 0 for a fully-cached turn) is agent-side unavailable: Vibe's meta.json stats expose no cache_read/cache-hit field, so the cache distinction is unobservable regardless of a parser fix.",
+        "PROVISIONAL on live emission: the daemon=full verdict rests on reading the fixed parser + a SYNTHETIC end-to-end test (TestTokenAccounting_EndToEnd). Whether three REAL back-to-back turns each yield a positive per-turn delta on live-tail (vs one whole-cumulative emit on backfill) is settled only by record's live recording. Live meta.json evidence already confirms session_prompt/completion_tokens exist and grow monotonically.",
+        "context_tokens is a context-window snapshot (can shrink on compaction), NOT the accumulator; the non-decreasing invariant is now carried by the session-cumulative delta contributions, not by context_tokens.",
+        "PROVISIONAL on birth shape: whether a proc-<PID> presession row precedes the session_<...> birth is not confirmable from source; record settles it (single-birth adapter, modeled birth-at-start unpinned).",
+        "daemon_version recorded without the .dirty suffix (replaydata write leaves the tree dirty at authoring time)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "emitContribution (added by c37c6830): on every turn_done attaches ev.Contribution = &PerTurnContribution{Model, Usage: UsageBreakdown{Input: dPrompt, Output: dCompletion}} — the DELTA of session-cumulative prompt/completion tokens since the last emit (dedup + negative-clamp). ProviderCostUSD deliberately unset."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/sidecar.go",
+          "note": "sidecarState + readSidecar now decode stats.session_prompt_tokens / stats.session_completion_tokens into sessionPromptTokens / sessionCompletionTokens (monotonic cumulative), the delta source the parser emits."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/metrics_test.go",
+          "note": "TestTokenAccounting_EndToEnd drives a synthetic transcript + meta.json sidecar through the production TranscriptTailer and asserts CumInputTokens==8500, CumOutputTokens==320 — cumulative token accounting works end-to-end. Cost stays 0 until mistral is priced in capacity (comment cites unlock 1.8)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/co2.go",
+          "note": "capacity carries only a CO2 factor for mistral (\"mistral\": {gCO2PerToken: 0.00285}); no USD-per-token price entry for mistral-medium-3.5, so the cost fallback yields 0 -> cost_nonzero=false."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep\"; wait_turn() { not_implemented wait_turn } (TODO to replace with the real turn-done poll) -> driver=gap:wait_turn for the multi-turn recipe. record ports the seam before driving."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/5-1_token-accounting/metadata.json",
+          "note": "Template for the 3-turn token-accumulation recipe/spec (send/wait_turn/sleep x3) and the daemon=full reference this cell now matches for tokens."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "mistral-vibe (vibe) v2.19.0 on PATH and authenticated (Mistral API auth persisted on this machine)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other vibe session shares the same cwd (PID is bound by cwd)",
+        "driver's wait_turn seam ported from a reference driver (currently stubbed — driver=gap:wait_turn)"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/ (the driver launches vibe there); the session_<...> transcript dir is minted under ~/.vibe/logs/session/",
+        "No special model or context flags — default model (mistral-medium-3.5) is fine; the assertion is about token accumulation across turns, not which model produced the tokens"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl mints the session_<...> session in ready shortly after launch (single-birth; id from the transcript directory)",
+        "events.jsonl contains a pid_discovered event binding the vibe PID to the session (matched by cwd)",
+        "events.jsonl shows three ready->working->ready cycles on the same session (one per turn)",
+        "each turn_done carries a PerTurnContribution with Usage.Input/Output > 0 (the session-cumulative delta), and cumulative SessionMetrics token totals are non-decreasing turn-over-turn (fixed by c37c6830)",
+        "CAVEAT (cost, unlock 1.8): no cost is emitted — mistral-medium-3.5 has no price in core/pkg/capacity and ProviderCostUSD is unset; cost_nonzero=false",
+        "CAVEAT (cache): no cache-bucket distinction — vibe's sidecar exposes no cache_read field (agent-side unavailable)",
+        "no state_transition to waiting occurs",
+        "final session state is ready",
+        "observation vector: model=mistral-medium-3.5, tokens_nonzero=true, cost_nonzero=false"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

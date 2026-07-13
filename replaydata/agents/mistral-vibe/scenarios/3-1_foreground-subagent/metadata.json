@@ -1,0 +1,103 @@
+{
+  "scenario_id": "foreground-subagent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.0",
+    "daemon_version": "0.5.5+5e22e47.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (Task tool spawns a synchronous explore subagent); daemon_capability: full (child written under <parent>/agents/<child>/messages.jsonl; deriveVibeParentSessionID reads the parent off the path and the existing subagent machinery links child→parent); driver_capability: gap:wait_turn"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "foreground-subagent",
+      "agent": "mistral-vibe",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:wait_turn\n→ route: **driver-gap** (yes + full + gap:* → driver-gap: record ports the wait_turn seam, then drives). The parent↔child link is no longer known_failing — commit 3d89d5e9 fixed the dropped link.\n\n## RE-ASSESSMENT — what changed\n\nThis cell was previously `daemon=bug` (a real vibe Task-tool child was minted as its own session but UNLINKED to its parent — parser.go set no ParentSessionID, sidecar.go read the child meta.json but ignored its parent_session_id, and deriveParentSession had no vibe rule). Commit **3d89d5e9** (`feat(vibe): link Task-tool subagents to their parent session`) closes the gap. Verified in the current tree.\n\n## The scenario's user-observable signal (3.1)\n\nforeground-subagent is the SYNCHRONOUS variant of subagent dispatch: the parent spawns one child, the child appears with ParentSessionID = parent.session_id, SubagentCount(parent)=1 while the child is alive, the parent STAYS working until the child ends, then the parent goes working→ready. The distinguishing observables are the child session, its ParentSessionID linkage, the parent_linked event, and the parent staying working across the child's lifetime.\n\n## agent_supports = yes (unchanged)\n\nmistral-vibe 2.19.0 ships a first-class, SYNCHRONOUS subagent primitive — exactly what 3.1 asserts (counterpart to 3-2_background-subagent, which is agent=no because vibe has NO fire-and-forget/detached variant; the ONLY difference is whether the parent finishes before the child drains, and vibe always awaits the child):\n\n- `core/tools/builtins/task.py` `Task.run()` builds `subagent_loop = AgentLoop(config=..., agent_name=args.agent, is_subagent=True, ...)`, sets `subagent_loop.parent_session_id = ctx.session_id`, then drives it with `async with aclosing(subagent_loop.act(task_text)) as events: async for event in events: ...` and only AFTER the child loop drains does it `yield TaskResult(...)`. The parent's Task tool-call blocks on the child — a synchronous, in-process foreground subagent.\n- The default subagent is `explore` (`TaskArgs.agent` defaults to `\"explore\"`; `core/agents/models.py` EXPLORE is `agent_type=AgentType.SUBAGENT`). The Task tool's `allowlist=[BuiltinAgentName.EXPLORE]` resolves to `ToolPermission.ALWAYS`, so a `task(agent=explore)` call auto-executes with NO permission prompt. The tool refuses any non-SUBAGENT agent (\"security constraint to prevent recursive spawning\").\n- The `task` tool is advertised to the model in the system prompt (`core/system_prompt.py`: \"The following subagents can be spawned via the Task tool\").\n\n## daemon_capability = full (the fix landed)\n\nThe child subagent leaves a local trace under the watched root, is minted as its own session, and — post-fix — links to its parent off the path:\n\n1. **Child writes a real session dir UNDER the watched FilesUnderRoot root.** `task.py` sets the child's `SessionLoggingConfig(save_dir=str(ctx.session_dir / \"agents\"), session_prefix=args.agent)`. `core/session/session_logger.py` composes the child dir as `save_dir/<prefix>_<timestamp>_<shortid>` and persists BOTH `messages.jsonl` and `meta.json`. For a top-level parent whose session_dir is `~/.vibe/logs/session/<parent-id>/`, the child lands at `~/.vibe/logs/session/<parent-id>/agents/<explore_...>/messages.jsonl` — inside the adapter's `Source = FilesUnderRoot{~/.vibe/logs/session}`. `vibe/adapter.go sessionIDFromPath` returns `filepath.Base(filepath.Dir(path))`, so the CHILD is registered under `<child-session-dir>` and the PARENT under `<parent-session-dir>` — the parent's registered SessionID IS its directory name.\n2. **deriveVibeParentSessionID binds child→parent off the path.** Commit 3d89d5e9 adds `deriveVibeParentSessionID` (`core/application/services/helpers.go`) to the `deriveParentSession` chain (after gemini, before antigravity). Given `.../<parent>/agents/<child>/messages.jsonl` it returns `filepath.Base(filepath.Dir(agentsDir))` = `<parent-session-dir>` — EXACTLY the id `sessionIDFromPath` registers the parent under, so the link resolves to the registered parent. It deliberately does NOT use the child meta.json's `parent_session_id` (that field is the parent's internal UUID, not its directory name, and would never match). It returns \"\" for a top-level vibe session (grandparent dir is `session`, not `agents`) or any non-vibe path — no false parent. Unit-tested (helpers_internal_test.go: derivation + the unified deriveParentSession entry + the top-level no-false-parent case).\n3. **Once linked, the existing subagent machinery does the rest.** With ParentSessionID surfaced, the shared subagent detector emits `parent_linked`, holds the parent `working` while the child runs, tracks SubagentCount, and reaps orphans on parent exit — the same path claudecode/gemini/antigravity ride. No vibe-specific reaping code is needed.\n\nConsequence: a vibe parent + spawned child now surface as a linked pair — child.ParentSessionID = parent.session_id, SubagentCount(parent)=1 while alive, parent_linked fires, parent stays working across the child's lifetime. This is `full`.\n\n## driver_capability = gap:wait_turn (unchanged)\n\nThe recipe (one Task-tool prompt, then block for the parent turn, then settle) needs send/wait_turn/sleep. `replaydata/agents/mistral-vibe/driver-interactive.sh` still declares `DRIVE_ELICITS=\"send slash sleep\"` and stubs `wait_turn()` as `not_implemented` — so wait_turn is grammatically present in the case dispatch but NOT elicited (recipe_semantic_gaps → not-elicited:wait_turn). This is the standard vibe driver gap: nearly every recorded-shape vibe cell carries driver=gap:wait_turn; record ports the wait_turn seam from a reference driver before driving. send + sleep are elicited; no other primitive is needed.",
+      "caveats": [
+        "daemon=full is derived from reading the post-fix code path (deriveVibeParentSessionID + sessionIDFromPath) plus the commit's unit tests and its synthetic <parent>/agents/<child>/ fixture check — NOT from a live end-to-end recording. No captured evidence of a real vibe subagent run exists (none of the 6 live ~/.vibe/logs/session sessions used the Task tool). The provisional-emission axis: it assumes the FilesUnderRoot watcher recurses into the nested agents/<child>/ dir and mints the child at that depth (true for codex's deep layout, expected here). record is the driver-gap run that promotes this from provisional to settled.",
+        "cost is not asserted: vibe's meta.json stats carries session_cost, but sidecar.go never reads it and mistral-vibe is absent from core/pkg/capacity, so the daemon emits no cost. observations assert model + tokens + agent only (matching the 2-1/2-3 vibe siblings).",
+        "RECORDING (2026-07-07-22-34-23_irrlichd-0.5.5+9e81511.dirty, 8/8 after anchor correction): the child explore subagent was minted (explore_...) AND parent_linked fired — the 3d89d5e9 child->parent link works live. vibe flushes the parent turn + full child lifecycle atomically at turn-end, so child transcript_new is discovered near-simultaneously with (22ms before) parent_turn_start; child_session_birth is anchored to presession_birth to reflect the atomic-flush window (the sub-second ordering is not observable). Parent stayed working across the child lifetime (intermediate_working held). daemon=full confirmed."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go",
+          "note": "deriveParentSession now calls deriveVibeParentSessionID (added by commit 3d89d5e9, after gemini/before antigravity). deriveVibeParentSessionID returns filepath.Base(filepath.Dir(agentsDir)) for a .../<parent>/agents/<child>/messages.jsonl path = the parent's directory name; \"\" for a top-level session (grandparent 'session' not 'agents') — the child↔parent link the cell previously missed"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/adapter.go",
+          "note": "Source = FilesUnderRoot{~/.vibe/logs/session}; sessionIDFromPath returns filepath.Base(filepath.Dir(path)) — registers the parent under <parent-session-dir> (== the id deriveVibeParentSessionID yields) and the child under <child-session-dir>; mints the nested child as its own session"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers_internal_test.go",
+          "note": "unit tests for commit 3d89d5e9: deriveVibeParentSessionID (path derivation), the deriveParentSession unified entry, and the top-level no-false-parent case"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/tools/builtins/task.py",
+          "note": "Task.run() spawns AgentLoop(is_subagent=True), sets subagent_loop.parent_session_id = ctx.session_id, and awaits the child (async for event in events) before yielding TaskResult — SYNCHRONOUS foreground subagent. Child SessionLoggingConfig save_dir = ctx.session_dir/'agents', session_prefix = args.agent (default 'explore', allowlist ALWAYS = no prompt)"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/session/session_logger.py",
+          "note": "child session_dir = save_dir/<prefix>_<timestamp>_<shortid>; persists messages.jsonl (MESSAGES_FILENAME) + meta.json (METADATA_FILENAME); begin_new_session sets session_metadata.parent_session_id = parent_session_id (the parent's internal UUID — deliberately NOT used by the daemon; the path is)"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/uv/tools/mistral-vibe/lib/python3.13/site-packages/vibe/core/agents/models.py",
+          "note": "EXPLORE = AgentProfile(agent_type=AgentType.SUBAGENT); Task tool refuses non-SUBAGENT agents ('security constraint to prevent recursive spawning'). 3-2_background-subagent is agent=no because vibe has ONLY this synchronous variant"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
+          "note": "DRIVE_ELICITS='send slash sleep'; wait_turn() is a not_implemented stub — grammatically present in the case dispatch but NOT elicited (semantic gap → driver=gap:wait_turn). record ports the wait_turn seam from a reference driver before driving"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "vibe CLI 2.19.0 on PATH and authenticated; the Task tool is exposed by default and agent=explore auto-executes (allowlist ALWAYS)",
+        "irrlichd is recording (dev daemon with --record, isolated IRRLICHT_HOME) built at 0.5.5+5e22e47.dirty or later (must include commit 3d89d5e9's deriveVibeParentSessionID)",
+        "DRIVER GAP: driver-interactive.sh stubs wait_turn (DRIVE_ELICITS='send slash sleep'); record ports the wait_turn seam before driving"
+      ],
+      "setup": [
+        "Driver generates a fresh cwd under <staging>/cwd/",
+        "A README.md with a single H1 heading is seeded into the cwd so the subagent has a deterministic file to read",
+        "RESHAPE (record): the staging cwd is a fresh empty dir, so the seeded-README task cannot run. Task changed to a self-contained explore-subagent prompt (no file dependency); bypass_tool_permissions=true so the Task tool + child auto-execute. Daemon observables (child session under <parent>/agents/, parent_linked, parent stays working) are independent of the child task content."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use your Task tool to launch a subagent (agent: explore) that writes a short three-sentence summary of what version control is and why it is useful. Wait for the subagent to finish, then reply with just the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "the parent session enters ready, then ready→working on the user prompt",
+        "a child session materializes under <parent>/agents/<child>/messages.jsonl and is minted as a session",
+        "events.jsonl contains >= 1 parent_linked binding the child to the parent session_id (SubagentCount(parent)=1 while alive)",
+        "the parent stays working until the child ends, then a single working→ready",
+        "final parent state is ready"
+      ],
+      "settings": {
+        "bypass_tool_permissions": true
+      },
+      "timeout_seconds": 240
+    }
+  }
+}
