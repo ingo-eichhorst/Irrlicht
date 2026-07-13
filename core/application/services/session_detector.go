@@ -225,15 +225,6 @@ type SessionDetector struct {
 	// and never races processActivity. Non-blocking sender; a dropped signal is
 	// re-sent on the observer's next poll (issue #732).
 	uiSignals chan terminalUISignal
-
-	// onSessionSuperseded is called whenever a presession is retired in favor
-	// of a reconciled real session, from cleanupPreSessionsForProject's own
-	// project/CWD match — the one reconciliation path that deletes its row
-	// directly rather than through PIDManager. Installed via
-	// SetSessionSupersededHandler, which also forwards to pidMgr's own hook so
-	// external code has a single registration point covering every
-	// reconciliation path (issue #997).
-	onSessionSuperseded func(oldID, newID string)
 }
 
 // terminalUISignal is an edge in a session's rendered-terminal UI state,
@@ -323,9 +314,10 @@ func (d *SessionDetector) SetDeletedCooldown(dur time.Duration) {
 // the PIDManager-owned paths (same-PID match at PID-assignment time, and the
 // seed-time/periodic pre-session sweeps) and cleanupPreSessionsForProject's
 // own project/CWD match, which deletes its row directly rather than through
-// PIDManager. A single call here covers every path (issue #997).
+// PIDManager. A single call here covers every path (issue #997). Stored only
+// on pidMgr — cleanupPreSessionsForProject reads it back from there (same
+// package) rather than keeping a second copy on SessionDetector.
 func (d *SessionDetector) SetSessionSupersededHandler(fn func(oldID, newID string)) {
-	d.onSessionSuperseded = fn
 	d.pidMgr.SetSessionSupersededHandler(fn)
 }
 

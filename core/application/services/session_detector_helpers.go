@@ -103,9 +103,10 @@ func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adap
 	for _, sid := range ids {
 		state, _ := d.repo.Load(sid)
 		// Fire before the delete so a re-key handler's own Load(sid) is
-		// guaranteed to still succeed (issue #997).
-		if d.onSessionSuperseded != nil {
-			d.onSessionSuperseded(sid, newSessionID)
+		// guaranteed to still succeed (issue #997). Read directly off pidMgr
+		// (same package) rather than keeping a second copy of the handler here.
+		if d.pidMgr.onSessionSuperseded != nil {
+			d.pidMgr.onSessionSuperseded(sid, newSessionID)
 		}
 		_ = d.repo.Delete(sid)
 		adapterName := adapter
