@@ -206,10 +206,9 @@ func (w *Watcher) Watch(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case ev, ok := <-watcher.Events:
-			if !ok {
+			if !w.dispatchEvent(watcher, ev, ok) {
 				return nil
 			}
-			w.handleEvent(watcher, ev)
 		case _, ok := <-watcher.Errors:
 			if !ok {
 				return nil
@@ -217,6 +216,19 @@ func (w *Watcher) Watch(ctx context.Context) error {
 			// Transient errors — continue watching.
 		}
 	}
+}
+
+// dispatchEvent handles a single value received from watcher.Events: ok
+// false means the channel is closed (report that to the caller so it can
+// stop), otherwise the event is passed to handleEvent. Shared by Watch's
+// main loop and drainPendingEvents so the two dispatch paths can't drift
+// apart.
+func (w *Watcher) dispatchEvent(watcher *fsnotify.Watcher, ev fsnotify.Event, ok bool) bool {
+	if !ok {
+		return false
+	}
+	w.handleEvent(watcher, ev)
+	return true
 }
 
 // Subscribe returns a channel that receives transcript events. The channel is
@@ -472,10 +484,9 @@ func (w *Watcher) drainPendingEvents(watcher *fsnotify.Watcher) {
 	for {
 		select {
 		case ev, ok := <-watcher.Events:
-			if !ok {
+			if !w.dispatchEvent(watcher, ev, ok) {
 				return
 			}
-			w.handleEvent(watcher, ev)
 		case _, ok := <-watcher.Errors:
 			if !ok {
 				return
