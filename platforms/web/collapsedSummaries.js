@@ -1,5 +1,6 @@
-// collapsedSummaries.js — drives visibility of each session's task-summary/
-// question block (issue #738). Two independent, persisted concerns:
+// collapsedSummaries.js — drives visibility of each session's pending-
+// question block (issue #738, narrowed by #979). Two independent, persisted
+// concerns:
 //
 //   - mode ('collapsed' | 'waiting'): the header button's global setting
 //     (issue #985). 'collapsed' hides every row's question; 'waiting' shows

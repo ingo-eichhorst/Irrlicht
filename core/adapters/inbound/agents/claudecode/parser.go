@@ -212,6 +212,9 @@ func buildTaskSnapshot(contentArr []interface{}) []tailer.TaskSnapshotEntry {
 // promoted to turn_done: they describe what happened, they aren't a turn
 // completion themselves. The tailer's per-pass NoSubstantiveActivity flag
 // then lets the detector ignore the resulting mtime touch (issue #329).
+// away_summary's content is still worth reading, though (issue #979) — it's
+// extracted onto ev.AwaySummary as a passive upgrade for the surfaced waiting
+// headline, even though the event itself keeps skipping the turn-done path.
 //
 // A manual /compact is the exception: its compact_boundary replaces the
 // context and definitively ends the prior turn — even one stranded mid
@@ -232,6 +235,13 @@ func handleSystemEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 				ev.EventType = "turn_done"
 				ev.IsManualCompactBoundary = true
 				return
+			}
+		}
+	}
+	if subtype == "away_summary" {
+		if content, ok := raw["content"].(string); ok {
+			if text := strings.TrimSpace(content); text != "" {
+				ev.AwaySummary = &tailer.AwaySummary{Text: text, ObservedAt: ev.Timestamp.Unix()}
 			}
 		}
 	}

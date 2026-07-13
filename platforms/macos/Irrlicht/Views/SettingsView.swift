@@ -31,9 +31,6 @@ struct SettingsView: View {
     // Backchannel master toggle (issue #724): gates input injection + the
     // event→action rule editor. Default OFF; daemon is the source of truth.
     @AppStorage("backchannelActivation") private var backchannelActivation: Bool = false
-    // User-intent display (beta): surface each session's task summary as a
-    // purple block in the sidebar. Pure UI preference — no daemon. Default OFF.
-    @AppStorage("userIntentDisplay") private var userIntentDisplay: Bool = false
     // Advanced Settings disclosure state (#694) — collapsed by default; the
     // power-user / still-maturing controls (debug, task-eta, sources, CLI tool)
     // live under it.
@@ -415,18 +412,6 @@ struct SettingsView: View {
                                     }
                                 }
                             }
-
-                            // User-intent display (beta): show each session's task
-                            // summary — the agent's irrlicht-summary marker, else its
-                            // first user prompt (#738) — as a purple block in the
-                            // sidebar, mirroring the orange "waiting" question. Pure UI
-                            // preference; no daemon involvement.
-                            LeadingToggle(
-                                isOn: $userIntentDisplay,
-                                label: "User-Intent Display",
-                                info: "Show each session's task summary — the agent's one-line summary, or its first user prompt — as a purple block beneath the session, mirroring the orange \"waiting\" question block.",
-                                beta: true
-                            )
 
                             // Backchannel (issue #724): control discovered agents via
                             // their terminal backend. Default OFF; the daemon is the

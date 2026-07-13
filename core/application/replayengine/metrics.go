@@ -132,7 +132,15 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 	// this no longer overwrites LastAssistantText with the question snippet, so
 	// the waiting-state classifier and tooltips see the complete text.
 	result.IntentHeadline = mc.compact(result.TaskSummary, outbound.CompactIntent)
+
+	// Question source priority (issue #979): the agent's own marker always
+	// wins; Claude Code's away_summary recap is a passive, higher-quality
+	// upgrade over the raw last-assistant text for adapters/turns where the
+	// agent never emitted a marker, but still loses to a marker that did fire.
 	questionSource := result.LastAssistantText
+	if m.AwaySummary != nil && m.AwaySummary.Text != "" {
+		questionSource = m.AwaySummary.Text
+	}
 	if m.TaskQuestion != nil && m.TaskQuestion.Text != "" {
 		questionSource = m.TaskQuestion.Text
 	}

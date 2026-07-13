@@ -290,3 +290,87 @@ func TestTailer_ManualCompact_Issue656Regression(t *testing.T) {
 		t.Errorf("pass 2 IsAgentDone = false, want true — session must release working→ready after manual /compact (#656)")
 	}
 }
+
+// --- away_summary content extraction (issue #979) ---
+
+// TestTailer_AwaySummary_ExtractedAsPassiveUpgrade pins that the recap's
+// content is read onto SessionMetrics.AwaySummary even though the event
+// itself still stays skipped (NoSubstantiveActivity unchanged, #329).
+func TestTailer_AwaySummary_ExtractedAsPassiveUpgrade(t *testing.T) {
+	path := writeBgTranscript(t, []map[string]interface{}{
+		{"type": "user", "timestamp": compactionTS(0), "message": map[string]interface{}{
+			"role": "user", "content": "do the thing",
+		}},
+		{"type": "assistant", "timestamp": compactionTS(1), "message": map[string]interface{}{
+			"role": "assistant", "stop_reason": "end_turn",
+			"content": []interface{}{map[string]interface{}{"type": "text", "text": "done."}},
+		}},
+		{"type": "system", "subtype": "turn_duration", "timestamp": compactionTS(2)},
+	})
+
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code")
+	if _, err := tl.TailAndProcess(); err != nil {
+		t.Fatalf("pass 1: %v", err)
+	}
+
+	appendTranscriptLine(t, path, map[string]interface{}{
+		"type": "system", "subtype": "away_summary", "timestamp": compactionTS(180),
+		"content": "Goal was X. Done: Y. Next: decide whether to merge now or wait for review.",
+	})
+
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatalf("pass 2: %v", err)
+	}
+	if !m.NoSubstantiveActivity {
+		t.Errorf("pass 2 NoSubstantiveActivity = false, want true (away_summary must stay skipped)")
+	}
+	if m.AwaySummary == nil {
+		t.Fatalf("pass 2 AwaySummary = nil, want the recap content extracted")
+	}
+	want := "Goal was X. Done: Y. Next: decide whether to merge now or wait for review."
+	if m.AwaySummary.Text != want {
+		t.Errorf("pass 2 AwaySummary.Text = %q, want %q", m.AwaySummary.Text, want)
+	}
+}
+
+// TestTailer_AwaySummary_ClearedOnNewUserMessage pins that a real new user
+// message resets AwaySummary, mirroring TaskQuestion's answered-question
+// reset — a stale recap must not leak into the next turn.
+func TestTailer_AwaySummary_ClearedOnNewUserMessage(t *testing.T) {
+	path := writeBgTranscript(t, []map[string]interface{}{
+		{"type": "user", "timestamp": compactionTS(0), "message": map[string]interface{}{
+			"role": "user", "content": "do the thing",
+		}},
+		{"type": "assistant", "timestamp": compactionTS(1), "message": map[string]interface{}{
+			"role": "assistant", "stop_reason": "end_turn",
+			"content": []interface{}{map[string]interface{}{"type": "text", "text": "done."}},
+		}},
+		{"type": "system", "subtype": "turn_duration", "timestamp": compactionTS(2)},
+		{"type": "system", "subtype": "away_summary", "timestamp": compactionTS(180),
+			"content": "Goal was X. Done: Y. Next: Z."},
+	})
+
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatalf("pass 1: %v", err)
+	}
+	if m.AwaySummary == nil {
+		t.Fatalf("pass 1 AwaySummary = nil, want the recap content extracted")
+	}
+
+	appendTranscriptLine(t, path, map[string]interface{}{
+		"type": "user", "timestamp": compactionTS(181), "message": map[string]interface{}{
+			"role": "user", "content": "let's merge it",
+		},
+	})
+
+	m, err = tl.TailAndProcess()
+	if err != nil {
+		t.Fatalf("pass 2: %v", err)
+	}
+	if m.AwaySummary != nil {
+		t.Errorf("pass 2 AwaySummary = %+v, want nil (cleared by the new user message)", m.AwaySummary)
+	}
+}

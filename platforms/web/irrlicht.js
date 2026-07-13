@@ -1059,10 +1059,10 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       return {type: 'cachebloat', key: 'cb:' + a.session_id, agent: a};
     }
 
-    // taskSummaryItem builds the task-summary + waiting-question
-    // collapsible sub-row (issue #738) — shown when there's a summary (any
-    // state) or a pending question (waiting) — or null otherwise. Extracted
-    // from emitAgentRowItems (issue #901 cognitive-complexity cleanup).
+    // taskSummaryItem builds the pending-question collapsible sub-row (issue
+    // #738, narrowed by #979) — shown only for a waiting session with
+    // content to report, or null otherwise. Extracted from emitAgentRowItems
+    // (issue #901 cognitive-complexity cleanup).
     function taskSummaryItem(a) {
       if (!hasTaskSummaryOrQuestion(a)) return null;
       return {type: 'summary', key: 's:' + a.session_id, agent: a, isChild: false};
@@ -1102,7 +1102,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     }
 
     function hasTaskSummaryOrQuestion(a) {
-      return !!(a.metrics && (a.metrics.task_summary || (a.state === 'waiting' && a.metrics.last_assistant_text)));
+      // Question content only exists while waiting (issue #979) — a
+      // finished session shows nothing here, by design (silence-by-default).
+      return a.state === 'waiting' && !!(a.metrics && a.metrics.last_assistant_text);
     }
 
     // --- Render ---
@@ -1216,7 +1218,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       if (!btn) return;
       const waitingMode = getSummaryMode() === 'waiting';
       btn.textContent = waitingMode ? '⊟' : '⏸';
-      btn.title = waitingMode ? 'Collapse all task summaries' : 'Show summaries for sessions waiting on you';
+      btn.title = waitingMode ? 'Collapse all pending questions' : 'Show questions for sessions waiting on you';
       btn.setAttribute('aria-label', btn.title);
     }
 
@@ -1301,11 +1303,15 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       el.querySelector('.row-tasks-counter').textContent = done + ' / ' + tasks.length;
     }
 
-    // Task summary + waiting question — a single collapsible block beneath the
-    // parent row (issue #738). The summary ("what is this session about") shows
-    // in any state; the question shows only while waiting. A chevron manually
-    // overrides this one row regardless of the header's global collapsed/
-    // waiting-only mode (issue #985). Mirrors the macOS SessionRowView.summaryBlock.
+    // Pending-question collapsible block beneath the parent row (issue #738,
+    // narrowed by #979): shown only while waiting — a finished session has
+    // nothing left to report, by design (silence-by-default). The former
+    // separate "task summary" line is gone (#979: collection only ever
+    // produces one waiting-scoped artifact, so a second differently-colored
+    // element was never a real content distinction) — the head row is now
+    // just a "Waiting for input" teaser, click (or the header's global mode)
+    // to reveal the actual question below. Mirrors macOS's single question
+    // pill in SessionRowView.summaryBlock.
     function createSummaryRow(agent, isChild) {
       const el = makeRow('row-summary-row',
         '<div class="summary-head"><span class="summary-chevron"></span>' +
@@ -1318,27 +1324,26 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       return el;
     }
     function updateSummaryRow(el, agent) {
-      const summary = agent.metrics?.task_summary || '';
       // Prefer the terse one-line headline (issue #759); fall back to the full
       // last-assistant text for older daemons. The full text is kept for hover.
+      // Only ever populated while waiting (#979) — never used to backfill a
+      // ready-state summary.
       const questionFull = (agent.state === 'waiting' && agent.metrics?.last_assistant_text) || '';
       const question = (agent.state === 'waiting' && agent.metrics && (agent.metrics.question_headline || agent.metrics.last_assistant_text)) || '';
-      if (!summary && !question) { el.style.display = 'none'; return; }
+      if (!question) { el.style.display = 'none'; return; }
       el.style.display = '';
       el._sessionId = agent.session_id;
       const collapsed = isSummaryCollapsed(agent.session_id, agent.state);
       el.classList.toggle('collapsed', collapsed);
       el.querySelector('.summary-chevron').textContent = collapsed ? '▸' : '▾';
       const titleEl = el.querySelector('.summary-title');
-      const title = summary || 'Waiting for input';
+      const title = 'Waiting for input';
       if (titleEl.dataset.full !== title) {
         titleEl.textContent = title;
-        titleEl.title = summary || '';
         titleEl.dataset.full = title;
       }
-      titleEl.classList.toggle('no-summary', !summary);
       const qEl = el.querySelector('.summary-question');
-      if (!collapsed && question) {
+      if (!collapsed) {
         qEl.style.display = '';
         if (qEl.dataset.full !== question) {
           qEl.textContent = question;

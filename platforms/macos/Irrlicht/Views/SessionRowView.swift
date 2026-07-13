@@ -3,26 +3,30 @@ import SwiftUI
 
 // MARK: - Session Row View
 
-/// Shared shape for the row's single-line notice pills (user-intent, pending
-/// question, cache-bloat badge): tinted text on a dim background, full-width,
+/// Shared shape for the row's single-line notice pills (pending question,
+/// cache-bloat badge): tinted text on a dim background, full-width,
 /// truncating rather than wrapping.
 ///
 /// `color` and `wash` are separate (issue #984): `wash` (defaulting to
 /// `color`) tints the 12%-alpha background, kept at the plain brand hue so
 /// dots/glows elsewhere stay visually consistent; `color` draws the text and
 /// can be a different, per-appearance-tuned value where the brand hue itself
-/// doesn't clear WCAG AA against that wash (see `IrrColors.intentPillText`/
-/// `waitingPillText`).
+/// doesn't clear WCAG AA against that wash (see `IrrColors.waitingPillText`).
+///
+/// `lineLimit` defaults to 1 (the cache-bloat badge); the question pill
+/// requests more (issue #979) since the daemon no longer pre-truncates it to
+/// a single-line-sized cut.
 private struct PillText: ViewModifier {
     let color: Color
     let wash: Color
     var font: Font = .system(size: 10)
+    var lineLimit: Int = 1
 
     func body(content: Content) -> some View {
         content
             .font(font)
             .foregroundColor(color)
-            .lineLimit(1)
+            .lineLimit(lineLimit)
             .truncationMode(.tail)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 5)
@@ -33,8 +37,8 @@ private struct PillText: ViewModifier {
 }
 
 extension View {
-    fileprivate func pill(color: Color, wash: Color? = nil, font: Font = .system(size: 10)) -> some View {
-        modifier(PillText(color: color, wash: wash ?? color, font: font))
+    fileprivate func pill(color: Color, wash: Color? = nil, font: Font = .system(size: 10), lineLimit: Int = 1) -> some View {
+        modifier(PillText(color: color, wash: wash ?? color, font: font, lineLimit: lineLimit))
     }
 }
 
@@ -75,7 +79,6 @@ struct SessionRowView: View {
     // localStorage-backed costDisplayMode.
     @AppStorage("costDisplayMode") private var costDisplayModeRaw: String = "cost"
     @AppStorage("displayMode") private var displayModeRaw: String = DisplayMode.context.rawValue
-    @AppStorage("userIntentDisplay") private var userIntentDisplay: Bool = false
     @AppStorage(ContextPressureThreshold.valueKey) private var contextThresholdValue: Double = ContextPressureThreshold.defaultValue
     @AppStorage(ContextPressureThreshold.unitKey) private var contextThresholdUnitRaw: String = ContextPressureThreshold.defaultUnit.rawValue
     @EnvironmentObject var sessionManager: SessionManager
@@ -136,43 +139,31 @@ struct SessionRowView: View {
 
     /// Session detail block. While waiting, shows the agent's pending question
     /// (orange) — the waiting state is already clear from the row's state icon,
-    /// so there's no separate label. When the beta "User-Intent Display" setting
-    /// is on, also shows the task summary — the agent's irrlicht-summary marker,
-    /// else its first user prompt (issue #738) — as a purple "what the user
-    /// asked for" block. Collapse is driven globally by the header's
-    /// collapsed/waiting-only mode; there is no per-row toggle.
+    /// so there's no separate label. It is the only textual pill on the row
+    /// (issue #979: the separate purple "user intent" pill was removed — since
+    /// it's only ever collected on the same waiting-turn edge as the question,
+    /// splitting them into two pills was never a real content distinction). A
+    /// `ready` session therefore shows no textual pill, by design. Collapse is
+    /// driven globally by the header's collapsed/waiting-only mode; there is no
+    /// per-row toggle.
     @ViewBuilder
     private var summaryBlock: some View {
-        // Block text is the terse one-line headline (issue #759); the tooltip
-        // keeps the full text. Fall back to the full field when the daemon hasn't
-        // supplied a headline (older daemon, or pre-headline state).
-        let summaryFull = session.metrics?.taskSummary
-        let summaryLine = session.metrics?.intentHeadline ?? summaryFull
+        // Block text is the terse headline (issue #759); the tooltip keeps the
+        // full text. Fall back to the full field when the daemon hasn't
+        // supplied a headline (older daemon, or pre-headline state). The
+        // daemon no longer pre-truncates this to a single-line-sized cut
+        // (issue #979), so the pill itself gets more than one line to show it.
         let questionFull = session.state == .waiting ? session.metrics?.lastAssistantText : nil
         let questionLine = session.state == .waiting
             ? (session.metrics?.questionHeadline ?? questionFull)
             : nil
-        let collapsed = summaryCollapsed
-        let showIntent = userIntentDisplay && (summaryLine?.isEmpty == false) && !collapsed
-        let showQuestion = (questionLine?.isEmpty == false) && !collapsed
-        if showIntent || showQuestion {
-            VStack(alignment: .leading, spacing: 2) {
-                // User intent (beta): what the user asked for.
-                if showIntent, let s = summaryLine {
-                    Text(s)
-                        .pill(color: IrrColors.intentPillText, wash: IrrColors.intent)
-                        .tooltip(summaryFull ?? s)
-                }
-
-                // Pending question: what the agent is asking.
-                if showQuestion, let q = questionLine {
-                    Text(q)
-                        .pill(color: IrrColors.waitingPillText, wash: IrrColors.waiting)
-                        // Surface the full prompt on hover.
-                        .tooltip(questionFull ?? q)
-                }
-            }
-            .padding(.top, 2)
+        let showQuestion = (questionLine?.isEmpty == false) && !summaryCollapsed
+        if showQuestion, let q = questionLine {
+            Text(q)
+                .pill(color: IrrColors.waitingPillText, wash: IrrColors.waiting, lineLimit: 3)
+                // Surface the full prompt on hover.
+                .tooltip(questionFull ?? q)
+                .padding(.top, 2)
         }
     }
 
