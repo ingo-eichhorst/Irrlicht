@@ -2,6 +2,7 @@ package fswatcher
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -563,5 +564,156 @@ func TestHandleEvent_MaxAge_Zero_DisablesFilter(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out — event should have been emitted with maxAge=0")
+	}
+}
+
+// TestAddExistingDirs_NewestFirst is a regression test for issue #998: the
+// historical backlog scan visits root's direct children newest-mtime-first
+// instead of filepath.WalkDir's lexical order, so a directory that already
+// existed when the scan began — but whose name would sort last lexically
+// (as a timestamp-prefixed session directory does) — is still processed
+// near the front instead of dead last. Directory names are deliberately
+// chosen so lexical order ("dir-mid" < "dir-new" < "dir-old") disagrees
+// with mtime order, so a regression to lexical ordering would fail this
+// test.
+func TestAddExistingDirs_NewestFirst(t *testing.T) {
+	root := setupFakeProjects(t)
+
+	mkSessionDir := func(name string, age time.Duration) {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "sess.jsonl"), []byte(`{}`+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		// Set the directory's own mtime last — writing the file above
+		// already bumped it once, so this Chtimes call must come after.
+		mtime := time.Now().Add(-age)
+		if err := os.Chtimes(dir, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mkSessionDir("dir-old", 3*time.Hour)
+	mkSessionDir("dir-mid", 2*time.Hour)
+	mkSessionDir("dir-new", 1*time.Hour)
+
+	w := NewWithRoot(root, testAdapter, 0)
+	ch := w.Subscribe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	watchErr := make(chan error, 1)
+	go func() { watchErr <- w.Watch(ctx) }()
+
+	// setupFakeProjects' own project dir has no transcript in it, so the
+	// only startup events come from our three session dirs.
+	var order []string
+	deadline := time.After(2 * time.Second)
+	for len(order) < 3 {
+		select {
+		case ev := <-ch:
+			if ev.Type == agent.EventNewSession {
+				order = append(order, ev.ProjectDir)
+			}
+		case <-deadline:
+			t.Fatalf("timed out: got %d of 3 startup events (%v)", len(order), order)
+		}
+	}
+
+	want := []string{"dir-new", "dir-mid", "dir-old"}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Errorf("startup event order[%d] = %q, want %q (full order: %v)", i, order[i], want[i], order)
+		}
+	}
+
+	cancel()
+	if err := <-watchErr; err != nil && err != context.Canceled {
+		t.Errorf("Watch returned unexpected error: %v", err)
+	}
+}
+
+// TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan is a regression test
+// for issue #998's core defect: a brand-new top-level directory created
+// while the historical backlog scan is still in progress must be discovered
+// promptly, not only once the entire backlog finishes. It builds a backlog
+// large enough (15,000 pre-existing transcript files, calibrated against
+// this package's real addExistingDirs — see the issue for the derivation)
+// that a full sequential scan measurably takes several hundred milliseconds
+// on typical hardware, to make a regression to the old "scan everything,
+// then arm the root watch and start draining events" order fail: under that
+// order the new directory's event cannot be delivered until the whole
+// backlog scan completes and Watch's main select loop starts running. The
+// deadline below is deliberately generous relative to that measured scan
+// cost (favoring determinism over a tight bound, to avoid CI flakiness)
+// while still being short enough that only prompt, backlog-size-independent
+// delivery can satisfy it.
+func TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan(t *testing.T) {
+	root := setupFakeProjects(t)
+
+	const backlogDirs = 300
+	const filesPerDir = 50
+	old := time.Now().Add(-48 * time.Hour)
+	for i := 0; i < backlogDirs; i++ {
+		dir := filepath.Join(root, fmt.Sprintf("backlog-%03d", i))
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		for j := 0; j < filesPerDir; j++ {
+			p := filepath.Join(dir, fmt.Sprintf("sess-%02d.jsonl", j))
+			if err := os.WriteFile(p, []byte(`{}`+"\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Chtimes(dir, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	w := NewWithRoot(root, testAdapter, 0)
+	ch := w.Subscribe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	watchErr := make(chan error, 1)
+	go func() { watchErr <- w.Watch(ctx) }()
+
+	// Deliberately NOT synchronized on Ready(): this test's whole point is
+	// to catch a regression to Ready() (or the reactive-catch mechanism
+	// behind it) firing only after the backlog scan completes, so waiting
+	// on Ready() here would make such a regression invisible — by the time
+	// a late Ready() fires, the slow part would already be over. A short
+	// fixed sleep instead lets the watcher's goroutine start without
+	// assuming anything about when (or whether) it signals readiness.
+	time.Sleep(50 * time.Millisecond)
+
+	// Create a brand-new top-level directory right away, while the backlog
+	// scan above is very likely still in progress.
+	newDir := filepath.Join(root, "brand-new-session")
+	if err := os.MkdirAll(newDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	newFile := filepath.Join(newDir, "fresh.jsonl")
+	if err := os.WriteFile(newFile, []byte(`{"type":"start"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(400 * time.Millisecond)
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == agent.EventNewSession && ev.ProjectDir == "brand-new-session" {
+				cancel()
+				if err := <-watchErr; err != nil && err != context.Canceled {
+					t.Errorf("Watch returned unexpected error: %v", err)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the new top-level directory to be discovered — discovery appears to be waiting on the full backlog scan")
+		}
 	}
 }

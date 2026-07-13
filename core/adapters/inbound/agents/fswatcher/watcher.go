@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -43,11 +44,21 @@ type Watcher struct {
 }
 
 // Ready returns a channel that is closed once Watch has attached the
-// underlying fsnotify watch to the root (and any pre-existing subdirs).
-// After it is readable, file mutations under the tree are guaranteed to be
-// observed — tests and wiring can wait on it instead of sleeping a guessed
-// interval to dodge the attach race. The channel never sends; it is only
-// closed. Safe to call before, during, or after Watch.
+// underlying fsnotify watch to the root (and every pre-existing subdir, with
+// every pre-existing transcript file already emitted). After it is readable,
+// file mutations under the tree are guaranteed to be observed — tests and
+// wiring can wait on it instead of sleeping a guessed interval to dodge the
+// attach race. The channel never sends; it is only closed. Safe to call
+// before, during, or after Watch.
+//
+// This is unchanged from before issue #998's fix: the root directory itself
+// is actually watched earlier still — see Watch — specifically so a
+// brand-new top-level directory created while the (potentially slow, large)
+// historical backlog scan is still running is never silently missed,
+// independent of how big that backlog is. Ready() deliberately continues to
+// wait for the full scan too (rather than firing at that earlier point), so
+// every existing caller's guarantee — including writing into a pre-existing
+// subdirectory right after Ready() fires — is preserved exactly as before.
 func (w *Watcher) Ready() <-chan struct{} { return w.readyChan() }
 
 // readyChan lazily creates the ready channel so the literal constructors
@@ -158,18 +169,36 @@ func (w *Watcher) Watch(ctx context.Context) error {
 	}
 	defer watcher.Close()
 
-	// Recursively add existing subdirectories.
-	if err := w.addExistingDirs(watcher); err != nil {
-		return err
-	}
-
-	// Also watch the root itself to catch new directories.
+	// Watch the root itself first — before scanning any pre-existing
+	// subdirectories below — so the kernel starts queuing Create events for
+	// brand-new top-level directories immediately, rather than only once the
+	// historical scan finishes. Arming the root is O(1), unlike the scan
+	// below, so this alone bounds how long a brand-new top-level directory
+	// can go unnoticed independent of backlog size (issue #998). This does
+	// NOT move signalReady() earlier — see Ready()'s doc comment for why
+	// that guarantee is deliberately left where it was.
 	if err := watcher.Add(w.root); err != nil {
 		return err
 	}
 
-	// The watch is now live for the root and all pre-existing subdirs;
-	// unblock anyone waiting on Ready() before mutating files.
+	// Recursively add watches for pre-existing subdirectories and emit
+	// EventNewSession for transcript files that were already on disk.
+	// Newest-first (see addExistingDirs) so a directory that already existed
+	// when this scan started, but sorts last lexically (e.g. a
+	// timestamp-prefixed session dir), is still processed near the front
+	// rather than dead last. Any Create event queued by the kernel for a
+	// directory made after the scan started — caught by the root watch
+	// armed above — is drained between each directory instead of waiting
+	// for the whole backlog to finish (see drainPendingEvents), so a
+	// brand-new top-level directory's discovery latency doesn't scale with
+	// backlog size (issue #998).
+	if err := w.addExistingDirs(ctx, watcher); err != nil {
+		return err
+	}
+
+	// The watch is now live for the root and every pre-existing subdir, and
+	// every pre-existing transcript file has been emitted; unblock anyone
+	// waiting on Ready() before mutating files.
 	w.signalReady()
 
 	for {
@@ -177,10 +206,9 @@ func (w *Watcher) Watch(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case ev, ok := <-watcher.Events:
-			if !ok {
+			if !w.dispatchEvent(watcher, ev, ok) {
 				return nil
 			}
-			w.handleEvent(watcher, ev)
 		case _, ok := <-watcher.Errors:
 			if !ok {
 				return nil
@@ -188,6 +216,19 @@ func (w *Watcher) Watch(ctx context.Context) error {
 			// Transient errors — continue watching.
 		}
 	}
+}
+
+// dispatchEvent handles a single value received from watcher.Events: ok
+// false means the channel is closed (report that to the caller so it can
+// stop), otherwise the event is passed to handleEvent. Shared by Watch's
+// main loop and drainPendingEvents so the two dispatch paths can't drift
+// apart.
+func (w *Watcher) dispatchEvent(watcher *fsnotify.Watcher, ev fsnotify.Event, ok bool) bool {
+	if !ok {
+		return false
+	}
+	w.handleEvent(watcher, ev)
+	return true
 }
 
 // Subscribe returns a channel that receives transcript events. The channel is
@@ -379,23 +420,112 @@ func (w *Watcher) waitForDir(ctx context.Context, watchDir, targetDir string) er
 	}
 }
 
-// addExistingDirs recursively adds fsnotify watches for all subdirectories
-// under root and emits EventNewSession for any transcript files that already
-// exist. Without the emit step, transcript files that were written before the
-// daemon started and receive no further writes would stay invisible until the
-// next write event — e.g. an idle Codex session that the user hasn't typed
-// into since before a daemon restart.
-func (w *Watcher) addExistingDirs(watcher *fsnotify.Watcher) error {
-	return filepath.WalkDir(w.root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable dirs
+// addExistingDirs adds fsnotify watches for all subdirectories under root and
+// emits EventNewSession for any transcript files that already exist. Without
+// the emit step, transcript files that were written before the daemon
+// started and receive no further writes would stay invisible until the next
+// write event — e.g. an idle Codex session that the user hasn't typed into
+// since before a daemon restart.
+//
+// Root's direct children are visited newest-mtime-first rather than in
+// filepath.WalkDir's lexical order: several adapters (e.g. mistral-vibe) name
+// session directories with a sortable timestamp prefix, so a brand-new
+// directory always sorts last lexically — on a machine with a large backlog
+// of old sessions that pushed discovery of a directory that already existed
+// when this scan began out by however long the rest of the backlog took to
+// scan (issue #998). Newest-first bounds that cost independent of backlog
+// size.
+//
+// Between each directory, drainPendingEvents processes any fsnotify events
+// already queued for the live root watch Watch armed before calling this
+// method. kqueue's Events channel is unbuffered (fsnotify's default buffer
+// size on this platform is 0), so without this step a directory created
+// elsewhere while this scan is still running would simply block undelivered
+// until the scan's for-loop below finishes and Watch's own select loop
+// regains control — i.e. still bounded by total backlog size, the exact
+// defect this method exists to fix. Draining between directories instead
+// bounds that wait to roughly one directory's worth of scan work.
+//
+// ctx is checked between directories (not mid-directory) so a cancelled
+// Watch exits promptly without waiting out a large remaining backlog, while
+// keeping the loop body simple.
+func (w *Watcher) addExistingDirs(ctx context.Context, watcher *fsnotify.Watcher) error {
+	entries, err := os.ReadDir(w.root)
+	if err != nil {
+		return nil // root existence already confirmed by waitForRoot; treat as empty
+	}
+	for _, dir := range newestFirst(w.root, entries) {
+		if ctx.Err() != nil {
+			return nil // Watch's own select loop will observe ctx.Done() and return
 		}
-		if d.IsDir() && path != w.root {
-			_ = watcher.Add(path)
-			w.emitExistingFiles(path)
+		_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil // skip unreadable dirs
+			}
+			if d.IsDir() {
+				_ = watcher.Add(path)
+				w.emitExistingFiles(path)
+			}
+			return nil
+		})
+		w.drainPendingEvents(watcher)
+	}
+	return nil
+}
+
+// drainPendingEvents processes any fsnotify events already queued on
+// watcher's Events/Errors channels, without blocking if neither has one
+// ready. Called between each directory of the historical backlog scan in
+// addExistingDirs so a directory created elsewhere while that scan is still
+// running — most importantly a brand-new top-level directory, since the
+// root watch is armed before the scan starts — is handled promptly instead
+// of waiting for the entire remaining backlog to finish (issue #998).
+func (w *Watcher) drainPendingEvents(watcher *fsnotify.Watcher) {
+	for {
+		select {
+		case ev, ok := <-watcher.Events:
+			if !w.dispatchEvent(watcher, ev, ok) {
+				return
+			}
+		case _, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			// Transient errors — the main loop handles them the same way
+			// once this scan finishes; nothing more to do here.
+		default:
+			return
 		}
-		return nil
-	})
+	}
+}
+
+// newestFirst returns the absolute paths of root's directory entries, sorted
+// by modification time descending (newest first). Non-directory entries
+// (loose files directly under root — no adapter's layout uses these) are
+// skipped; an entry whose mtime can't be read sorts as if it were the oldest
+// rather than aborting the scan.
+func newestFirst(root string, entries []os.DirEntry) []string {
+	type dirMtime struct {
+		path  string
+		mtime time.Time
+	}
+	dirs := make([]dirMtime, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		var mtime time.Time
+		if info, err := e.Info(); err == nil {
+			mtime = info.ModTime()
+		}
+		dirs = append(dirs, dirMtime{path: filepath.Join(root, e.Name()), mtime: mtime})
+	}
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].mtime.After(dirs[j].mtime) })
+	paths := make([]string, len(dirs))
+	for i, d := range dirs {
+		paths[i] = d.path
+	}
+	return paths
 }
 
 // addSubtree recursively adds fsnotify watches for dir and every
