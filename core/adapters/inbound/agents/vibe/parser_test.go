@@ -57,8 +57,14 @@ func TestParser_InjectedUser_Skipped(t *testing.T) {
 func TestParser_NonInjectedUser_UserMessage(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(line(t, `{"role":"user","content":"fix the bug","injected":false,"message_id":"abc"}`))
-	if ev == nil || ev.Skip || ev.EventType != "user_message" {
-		t.Fatalf("non-injected user: EventType = %q, want user_message", eventTypeOf(ev))
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.Skip {
+		t.Fatal("non-injected user message should not be skipped")
+	}
+	if ev.EventType != "user_message" {
+		t.Errorf("EventType = %q, want user_message", ev.EventType)
 	}
 }
 
@@ -67,15 +73,19 @@ func TestParser_NonInjectedUser_UserMessage(t *testing.T) {
 func TestParser_AssistantWithToolCalls_MidTurn(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(line(t, `{"role":"assistant","injected":false,"tool_calls":[{"id":"ezv2C47us","index":0,"function":{"name":"bash","arguments":"{\"command\":\"ls\"}"},"type":"function"}],"message_id":"054580ff"}`))
-	if ev == nil || ev.Skip {
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.Skip {
 		t.Fatal("expected non-skipped event")
 	}
 	if ev.EventType != "assistant_message" {
 		t.Errorf("EventType = %q, want assistant_message", ev.EventType)
 	}
-	if len(ev.ToolUses) != 1 || ev.ToolUses[0].Name != "bash" || ev.ToolUses[0].ID != "ezv2C47us" {
-		t.Errorf("ToolUses = %+v, want one bash/ezv2C47us", ev.ToolUses)
+	if len(ev.ToolUses) != 1 {
+		t.Fatalf("ToolUses = %+v, want exactly one", ev.ToolUses)
 	}
+	assertToolUse(t, ev.ToolUses[0], "bash", "ezv2C47us")
 }
 
 // A flat `name` (no nested function object) is tolerated as a fallback for a
@@ -83,11 +93,29 @@ func TestParser_AssistantWithToolCalls_MidTurn(t *testing.T) {
 func TestParser_AssistantFlatToolName_Fallback(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(line(t, `{"role":"assistant","tool_calls":[{"id":"x1","name":"grep"}],"message_id":"m"}`))
-	if ev == nil || len(ev.ToolUses) != 1 || ev.ToolUses[0].Name != "grep" {
-		t.Fatalf("flat tool name: ToolUses = %+v, want one grep", toolUsesOf(ev))
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if len(ev.ToolUses) != 1 {
+		t.Fatalf("flat tool name: ToolUses = %+v, want exactly one", ev.ToolUses)
+	}
+	if ev.ToolUses[0].Name != "grep" {
+		t.Errorf("ToolUses[0].Name = %q, want grep", ev.ToolUses[0].Name)
 	}
 	if ev.EventType != "assistant_message" {
 		t.Errorf("EventType = %q, want assistant_message", ev.EventType)
+	}
+}
+
+// assertToolUse checks a single ToolUse's name and id as independent
+// comparisons instead of one compound conditional.
+func assertToolUse(t *testing.T, got tailer.ToolUse, wantName, wantID string) {
+	t.Helper()
+	if got.Name != wantName {
+		t.Errorf("ToolUses[0].Name = %q, want %q", got.Name, wantName)
+	}
+	if got.ID != wantID {
+		t.Errorf("ToolUses[0].ID = %q, want %q", got.ID, wantID)
 	}
 }
 
@@ -229,8 +257,11 @@ func assertSidecarMidTurn(t *testing.T, mid *tailer.ParsedEvent) {
 	if mid.ModelName == "" {
 		t.Errorf("mid ModelName empty, want the sidecar model")
 	}
-	if mid.Tokens != nil || mid.Contribution != nil {
-		t.Errorf("mid should carry no tokens/contribution off turn_done, got %+v / %+v", mid.Tokens, mid.Contribution)
+	if mid.Tokens != nil {
+		t.Errorf("mid should carry no tokens off turn_done, got %+v", mid.Tokens)
+	}
+	if mid.Contribution != nil {
+		t.Errorf("mid should carry no contribution off turn_done, got %+v", mid.Contribution)
 	}
 }
 
@@ -239,19 +270,35 @@ func assertSidecarFirstTurnDone(t *testing.T, done *tailer.ParsedEvent) {
 	if done.EventType != "turn_done" {
 		t.Fatalf("EventType = %q, want turn_done", done.EventType)
 	}
-	if done.Tokens == nil || done.Tokens.Total != 136662 {
-		t.Errorf("done Tokens = %+v, want Total 136662", done.Tokens)
-	}
 	if done.CWD != "/Users/x/proj" {
 		t.Errorf("done CWD = %q", done.CWD)
 	}
-	if done.Contribution == nil {
+	assertSidecarTokens(t, done.Tokens)
+	assertSidecarContribution(t, done.Contribution)
+}
+
+func assertSidecarTokens(t *testing.T, tokens *tailer.TokenSnapshot) {
+	t.Helper()
+	if tokens == nil {
+		t.Fatal("done Tokens is nil, want Total 136662")
+	}
+	if tokens.Total != 136662 {
+		t.Errorf("done Tokens.Total = %d, want 136662", tokens.Total)
+	}
+}
+
+func assertSidecarContribution(t *testing.T, contribution *tailer.PerTurnContribution) {
+	t.Helper()
+	if contribution == nil {
 		t.Fatal("done should carry a usage Contribution")
 	}
-	if done.Contribution.Usage.Input != 10000 || done.Contribution.Usage.Output != 400 {
-		t.Errorf("Contribution usage = %+v, want Input 10000 Output 400", done.Contribution.Usage)
+	if contribution.Usage.Input != 10000 {
+		t.Errorf("Contribution usage Input = %d, want 10000", contribution.Usage.Input)
 	}
-	if done.Contribution.Model == "" {
+	if contribution.Usage.Output != 400 {
+		t.Errorf("Contribution usage Output = %d, want 400", contribution.Usage.Output)
+	}
+	if contribution.Model == "" {
 		t.Errorf("Contribution.Model empty, want the model so cost buckets correctly")
 	}
 }
@@ -260,21 +307,13 @@ func assertSidecarFirstTurnDone(t *testing.T, done *tailer.ParsedEvent) {
 func TestParser_NoPath_NoEnrichment(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(line(t, `{"role":"assistant","content":"done","message_id":"m"}`))
-	if ev.CWD != "" || ev.ModelName != "" || ev.Tokens != nil {
-		t.Errorf("expected no enrichment without a path, got CWD=%q model=%q tokens=%+v", ev.CWD, ev.ModelName, ev.Tokens)
+	if ev.CWD != "" {
+		t.Errorf("CWD = %q, want empty without a path", ev.CWD)
 	}
-}
-
-func eventTypeOf(ev *tailer.ParsedEvent) string {
-	if ev == nil {
-		return "<nil>"
+	if ev.ModelName != "" {
+		t.Errorf("ModelName = %q, want empty without a path", ev.ModelName)
 	}
-	return ev.EventType
-}
-
-func toolUsesOf(ev *tailer.ParsedEvent) []tailer.ToolUse {
-	if ev == nil {
-		return nil
+	if ev.Tokens != nil {
+		t.Errorf("Tokens = %+v, want nil without a path", ev.Tokens)
 	}
-	return ev.ToolUses
 }

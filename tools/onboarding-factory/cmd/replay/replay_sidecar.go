@@ -340,6 +340,17 @@ func (r *sidecarReplayer) anyChildActive() bool {
 	return false
 }
 
+// transitionCtx bundles the where/why of a classification pass — which
+// timeline event triggered it (eventIdx, -1 for a synthetic hook/orphan
+// re-classification), the virtual time to stamp any emitted transition
+// with, and the cause tag recorded on the report. Passed as one value
+// instead of three separate parameters through runClassifier's call chain.
+type transitionCtx struct {
+	eventIdx int
+	virtTime time.Time
+	cause    transitionCause
+}
+
 // runClassifier mirrors SessionDetector.processActivity's force/classify/
 // parent-hold/synth-waiting pipeline. Extracted so hook and orphan events
 // can re-run classification against the last-known metrics.
@@ -350,18 +361,18 @@ func (r *sidecarReplayer) anyChildActive() bool {
 // re-classification that legitimately precedes the flush (applyHookEvent).
 // A zero-growth fswatcher pass — mistral-vibe's content-less slash-command
 // touch — must not force ready back to working on stale LastEventType.
-func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, virtTime time.Time, eventIdx int, cause transitionCause, grew bool) {
+func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, ctx transitionCtx, grew bool) {
 	if domainMetrics.NoSubstantiveActivity {
 		return
 	}
 	if shouldForceReadyToWorking(r.state, domainMetrics, grew) {
-		r.emit(transitionFromMetrics(eventIdx, virtTime, cause,
+		r.emit(transitionFromMetrics(ctx.eventIdx, ctx.virtTime, ctx.cause,
 			r.state, session.StateWorking, services.ForceReadyToWorkingReason, domainMetrics))
 		r.state = session.StateWorking
 	}
 
 	newState, reason := services.ClassifyState(r.state, domainMetrics)
-	r.applyParentHoldAndSynthesizedWaiting(newState, reason, domainMetrics, eventIdx, virtTime, cause)
+	r.applyParentHoldAndSynthesizedWaiting(newState, reason, domainMetrics, ctx)
 }
 
 // shouldForceReadyToWorking mirrors SessionDetector's force-r→w guard (issue
@@ -374,7 +385,7 @@ func shouldForceReadyToWorking(state string, domainMetrics *session.SessionMetri
 // applyParentHoldAndSynthesizedWaiting applies the parent-child hold and
 // synthesized-waiting adjustments to newState/reason, then commits whichever
 // state change (if any) results.
-func (r *sidecarReplayer) applyParentHoldAndSynthesizedWaiting(newState, reason string, domainMetrics *session.SessionMetrics, eventIdx int, virtTime time.Time, cause transitionCause) {
+func (r *sidecarReplayer) applyParentHoldAndSynthesizedWaiting(newState, reason string, domainMetrics *session.SessionMetrics, ctx transitionCtx) {
 	// Parent-child hold: if any child is still working/waiting, keep the
 	// parent in its current state rather than letting it transition to
 	// ready. Matches SessionDetector's behaviour when children are live.
@@ -386,13 +397,13 @@ func (r *sidecarReplayer) applyParentHoldAndSynthesizedWaiting(newState, reason 
 	}
 
 	if !parentHeldWorking && services.ShouldSynthesizeCollapsedWaiting(r.state, newState, domainMetrics) {
-		r.emit(transitionFromMetrics(eventIdx, virtTime, cause,
+		r.emit(transitionFromMetrics(ctx.eventIdx, ctx.virtTime, ctx.cause,
 			r.state, session.StateWaiting, services.SyntheticWaitingReason, domainMetrics))
 		r.state = session.StateWaiting
 		newState, reason = services.ClassifyState(r.state, domainMetrics)
 	}
 	if newState != r.state {
-		r.emit(transitionFromMetrics(eventIdx, virtTime, cause,
+		r.emit(transitionFromMetrics(ctx.eventIdx, ctx.virtTime, ctx.cause,
 			r.state, newState, reason, domainMetrics))
 		r.state = newState
 	}
@@ -401,7 +412,7 @@ func (r *sidecarReplayer) applyParentHoldAndSynthesizedWaiting(newState, reason 
 // classifyAt writes transcript bytes up to fileSize, runs the tailer +
 // classifier, and mirrors SessionDetector.processActivity's force-r→w +
 // ClassifyState pattern. Any emitted transition is added to the report.
-func (r *sidecarReplayer) classifyAt(fileSize int64, virtTime time.Time, eventIdx int, cause transitionCause) error {
+func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 	target := min(fileSize, int64(len(r.srcBytes)))
 	grew := target > r.lastSize
 	if grew {
@@ -418,7 +429,7 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, virtTime time.Time, eventId
 	r.lastMetrics = metrics
 	domainMetrics := replayengine.TailerToDomain(metrics)
 	r.overlayPermissionPending(domainMetrics)
-	r.runClassifier(domainMetrics, virtTime, eventIdx, cause, grew)
+	r.runClassifier(domainMetrics, ctx, grew)
 	return nil
 }
 
@@ -440,7 +451,7 @@ func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 	}
 	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
 	r.overlayPermissionPending(domainMetrics)
-	r.runClassifier(domainMetrics, hookEv.Timestamp, -1, causeHook, true)
+	r.runClassifier(domainMetrics, transitionCtx{eventIdx: -1, virtTime: hookEv.Timestamp, cause: causeHook}, true)
 }
 
 // Timeline kinds for the merged event stream in runDebouncedTimeline.
@@ -564,7 +575,7 @@ func (r *sidecarReplayer) flushDebounceIfExpired(atTs time.Time, d *debounceStat
 		return nil
 	}
 	if d.coalesced {
-		if err := r.classifyAt(d.pendingSize, d.deadline, d.pendingIdx, causeDebounceCoalesce); err != nil {
+		if err := r.classifyAt(d.pendingSize, transitionCtx{eventIdx: d.pendingIdx, virtTime: d.deadline, cause: causeDebounceCoalesce}); err != nil {
 			return err
 		}
 	}
@@ -643,7 +654,7 @@ func (r *sidecarReplayer) applyChildOrphan(orphan orphanTrigger, d *debounceStat
 	r.overlayPermissionPending(domainMetrics)
 	// grew=false: r.state != StateReady is already guaranteed by the check
 	// above, so the force-bounce branch never evaluates this value here.
-	r.runClassifier(domainMetrics, orphan.at, -1, causeEvent, false)
+	r.runClassifier(domainMetrics, transitionCtx{eventIdx: -1, virtTime: orphan.at, cause: causeEvent}, false)
 	return nil
 }
 
@@ -653,7 +664,7 @@ func (r *sidecarReplayer) applyChildOrphan(orphan orphanTrigger, d *debounceStat
 func (r *sidecarReplayer) advanceFSEvent(fsev lifecycle.Event, i int, d *debounceState) error {
 	if d.pending && !fsev.Timestamp.Before(d.deadline) {
 		if d.coalesced {
-			if err := r.classifyAt(d.pendingSize, d.deadline, d.pendingIdx, causeDebounceCoalesce); err != nil {
+			if err := r.classifyAt(d.pendingSize, transitionCtx{eventIdx: d.pendingIdx, virtTime: d.deadline, cause: causeDebounceCoalesce}); err != nil {
 				return fmt.Errorf("flush timer at fsev %d: %w", i, err)
 			}
 		}
@@ -661,7 +672,7 @@ func (r *sidecarReplayer) advanceFSEvent(fsev lifecycle.Event, i int, d *debounc
 		d.coalesced = false
 	}
 	if !d.pending {
-		if err := r.classifyAt(fsev.FileSize, fsev.Timestamp, i, causeEvent); err != nil {
+		if err := r.classifyAt(fsev.FileSize, transitionCtx{eventIdx: i, virtTime: fsev.Timestamp, cause: causeEvent}); err != nil {
 			return fmt.Errorf("classify fsev %d: %w", i, err)
 		}
 		d.pending = true
@@ -685,7 +696,7 @@ func (r *sidecarReplayer) flushPendingDebounce(fswatches []lifecycle.Event, d de
 	}
 	lastFs := fswatches[len(fswatches)-1]
 	fireTime := lastFs.Timestamp.Add(d.debounceDelay)
-	if err := r.classifyAt(d.pendingSize, fireTime, d.pendingIdx, causeDebounceCoalesce); err != nil {
+	if err := r.classifyAt(d.pendingSize, transitionCtx{eventIdx: d.pendingIdx, virtTime: fireTime, cause: causeDebounceCoalesce}); err != nil {
 		return fmt.Errorf("final flush: %w", err)
 	}
 	return nil

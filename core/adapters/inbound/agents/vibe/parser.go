@@ -204,48 +204,80 @@ func (p *Parser) emitContribution(st *sidecarState, ev *tailer.ParsedEvent) {
 func (p *Parser) appendTodoDeltas(raw map[string]any, ev *tailer.ParsedEvent) {
 	tcs, _ := raw["tool_calls"].([]any)
 	for _, t := range tcs {
-		tc, ok := t.(map[string]any)
+		todos, ok := decodeTodoWriteCall(t)
 		if !ok {
 			continue
-		}
-		fn, ok := tc["function"].(map[string]any)
-		if !ok {
-			continue
-		}
-		if name, _ := fn["name"].(string); name != "todo" {
-			continue
-		}
-
-		// arguments is a JSON string in practice; tolerate a decoded object too.
-		var argsBytes []byte
-		switch a := fn["arguments"].(type) {
-		case string:
-			argsBytes = []byte(a)
-		case map[string]any:
-			argsBytes, _ = json.Marshal(a)
-		default:
-			continue
-		}
-		var args struct {
-			Action string `json:"action"`
-			Todos  []struct {
-				Content string `json:"content"`
-				Status  string `json:"status"`
-			} `json:"todos"`
-		}
-		if json.Unmarshal(argsBytes, &args) != nil || args.Action != "write" {
-			continue
-		}
-
-		todos := make([]tailer.Todo, 0, len(args.Todos))
-		for _, td := range args.Todos {
-			if td.Content == "" || td.Status == "cancelled" {
-				continue
-			}
-			todos = append(todos, tailer.Todo{Key: td.Content, Status: td.Status})
 		}
 		p.todos.Reconcile(todos, ev)
 	}
+}
+
+// rawTodoEntry is one entry in vibe's todo tool's `todos` argument array.
+type rawTodoEntry struct {
+	Content string `json:"content"`
+	Status  string `json:"status"`
+}
+
+// todoWriteArgs is the decoded arguments of a vibe `todo` tool call.
+type todoWriteArgs struct {
+	Action string         `json:"action"`
+	Todos  []rawTodoEntry `json:"todos"`
+}
+
+// decodeTodoWriteCall decodes one tool_calls[] entry as a vibe `todo` write
+// action. ok is false for any entry that isn't a valid todo-write call:
+// wrong shape, wrong tool name, unparsable arguments, or a non-write action
+// (e.g. a read/list, which carries no state change).
+func decodeTodoWriteCall(t any) (todos []tailer.Todo, ok bool) {
+	tc, isMap := t.(map[string]any)
+	if !isMap {
+		return nil, false
+	}
+	fn, isMap := tc["function"].(map[string]any)
+	if !isMap {
+		return nil, false
+	}
+	if name, _ := fn["name"].(string); name != "todo" {
+		return nil, false
+	}
+	args, ok := decodeTodoWriteArgs(fn["arguments"])
+	if !ok {
+		return nil, false
+	}
+	return activeTodos(args.Todos), true
+}
+
+// decodeTodoWriteArgs parses a tool call's `arguments` field, which is a
+// JSON string in practice (a decoded object is tolerated too). ok is false
+// for unparsable JSON or any action other than "write".
+func decodeTodoWriteArgs(arguments any) (todoWriteArgs, bool) {
+	var argsBytes []byte
+	switch a := arguments.(type) {
+	case string:
+		argsBytes = []byte(a)
+	case map[string]any:
+		argsBytes, _ = json.Marshal(a)
+	default:
+		return todoWriteArgs{}, false
+	}
+	var args todoWriteArgs
+	if json.Unmarshal(argsBytes, &args) != nil || args.Action != "write" {
+		return todoWriteArgs{}, false
+	}
+	return args, true
+}
+
+// activeTodos converts raw todo entries to tailer.Todo, dropping cancelled
+// entries — mirroring vibe's own UI which excludes them from the plan.
+func activeTodos(entries []rawTodoEntry) []tailer.Todo {
+	todos := make([]tailer.Todo, 0, len(entries))
+	for _, td := range entries {
+		if td.Content == "" || td.Status == "cancelled" {
+			continue
+		}
+		todos = append(todos, tailer.Todo{Key: td.Content, Status: td.Status})
+	}
+	return todos
 }
 
 // parseToolCalls extracts the tool invocations from an assistant message.
