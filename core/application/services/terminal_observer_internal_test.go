@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"irrlicht/core/domain/backchannel"
 	"irrlicht/core/domain/lifecycle"
@@ -150,6 +151,54 @@ func TestObserverGates(t *testing.T) {
 	})
 }
 
+// --- RekeySession (presession→real-session reconciliation, issue #997) ---
+
+func TestRekeySession_CarriesEdgeStateForward(t *testing.T) {
+	reader := &uiReader{
+		readable: map[string]bool{"old": true, "new": true},
+		screen:   map[string]string{"old": "Do you want to proceed?"},
+	}
+	sink := &recordingSink{}
+	consent := uiConsent{map[string]bool{"claude-code": true}}
+	o := NewTerminalObserver(newUIRepo(), reader, consent, func() bool { return true }, sink, bcNopLog{})
+
+	// Presession sees the dialog rise.
+	o.observe("old", "claude-code")
+	if len(sink.got) != 1 || sink.got[0].ui != backchannel.UIKindTrustDialog {
+		t.Fatalf("presession rising edge: want 1 trust_dialog signal, got %v", sink.got)
+	}
+
+	// Reconciliation retires "old" in favor of "new".
+	o.RekeySession("old", "new")
+
+	// A poll of "new" showing the SAME still-open dialog must not re-fire as
+	// a fresh rising edge — the carried-forward state already reflects
+	// trust_dialog.
+	reader.screen["new"] = "Do you want to proceed?"
+	o.observe("new", "claude-code")
+	if len(sink.got) != 1 {
+		t.Fatalf("carried-forward dialog re-fired as a fresh rising edge: got %v", sink.got)
+	}
+
+	// When the dialog clears, the falling edge fires against "new" — the
+	// live id — not the retired "old".
+	reader.screen["new"] = "back to work"
+	o.observe("new", "claude-code")
+	if len(sink.got) != 2 || sink.got[1].sessionID != "new" || sink.got[1].ui != backchannel.UIKindNone {
+		t.Fatalf("clearing edge: want a UIKindNone signal for 'new', got %v", sink.got)
+	}
+}
+
+func TestRekeySession_NoOpWhenSourceUntracked(t *testing.T) {
+	o := NewTerminalObserver(newUIRepo(), &uiReader{}, uiConsent{}, func() bool { return true }, &recordingSink{}, bcNopLog{})
+
+	o.RekeySession("missing", "new") // must not panic or create a spurious entry
+
+	if _, ok := o.lastUI["new"]; ok {
+		t.Fatal("RekeySession should not create an entry when the source id was never tracked")
+	}
+}
+
 // --- fusion (handleTerminalUISignal applies state on the single writer) ---
 
 // newFusionDetector builds a real SessionDetector (so handleTerminalUISignal's
@@ -253,6 +302,71 @@ func TestHandleTerminalUISignal_ClearingWhileWorkingNoOp(t *testing.T) {
 	}
 	if len(rec.events) != 0 {
 		t.Fatalf("clearing while working: want no events, got %v", rec.events)
+	}
+}
+
+// --- ReconcilePreSessionBackchannel (presession→real-session reconciliation,
+// issue #997) ---
+
+func TestReconcilePreSessionBackchannel_CarriesWaitingForward(t *testing.T) {
+	now := time.Now().Unix()
+	old := &session.SessionState{
+		SessionID: "proc-42", Adapter: "mistral-vibe", State: session.StateWaiting,
+		WaitingStartTime: &now,
+	}
+	newSt := &session.SessionState{
+		SessionID: "session_new", Adapter: "mistral-vibe", State: session.StateReady,
+	}
+	d, rec := newFusionDetector(newUIRepo(old, newSt))
+
+	d.ReconcilePreSessionBackchannel(old.SessionID, newSt.SessionID)
+
+	if newSt.State != session.StateWaiting {
+		t.Fatalf("reconciled session state = %q, want waiting", newSt.State)
+	}
+	if newSt.WaitingStartTime == nil || *newSt.WaitingStartTime != now {
+		t.Fatalf("WaitingStartTime not carried forward: got %v, want %d", newSt.WaitingStartTime, now)
+	}
+	if !rec.hasTransitionTo(session.StateWaiting) {
+		t.Error("expected a state_transition to waiting on the reconciled session")
+	}
+}
+
+func TestReconcilePreSessionBackchannel_NoOpWhenPresessionNeverWaited(t *testing.T) {
+	old := &session.SessionState{SessionID: "proc-42", Adapter: "mistral-vibe", State: session.StateReady}
+	newSt := &session.SessionState{SessionID: "session_new", Adapter: "mistral-vibe", State: session.StateReady}
+	d, rec := newFusionDetector(newUIRepo(old, newSt))
+
+	d.ReconcilePreSessionBackchannel(old.SessionID, newSt.SessionID)
+
+	if newSt.State != session.StateReady {
+		t.Fatalf("untouched session state = %q, want ready", newSt.State)
+	}
+	if len(rec.events) != 0 {
+		t.Fatalf("want no events when the presession never waited, got %v", rec.events)
+	}
+}
+
+func TestReconcilePreSessionBackchannel_NoOpWhenNewAlreadyWaiting(t *testing.T) {
+	oldStart := time.Now().Add(-time.Minute).Unix()
+	old := &session.SessionState{
+		SessionID: "proc-42", Adapter: "mistral-vibe", State: session.StateWaiting,
+		WaitingStartTime: &oldStart,
+	}
+	newStart := time.Now().Unix()
+	newSt := &session.SessionState{
+		SessionID: "session_new", Adapter: "mistral-vibe", State: session.StateWaiting,
+		WaitingStartTime: &newStart,
+	}
+	d, rec := newFusionDetector(newUIRepo(old, newSt))
+
+	d.ReconcilePreSessionBackchannel(old.SessionID, newSt.SessionID)
+
+	if newSt.WaitingStartTime == nil || *newSt.WaitingStartTime != newStart {
+		t.Fatalf("already-waiting session's own WaitingStartTime should not be overwritten: got %v, want %d", newSt.WaitingStartTime, newStart)
+	}
+	if len(rec.events) != 0 {
+		t.Fatalf("want no events when the reconciled session is already waiting, got %v", rec.events)
 	}
 }
 

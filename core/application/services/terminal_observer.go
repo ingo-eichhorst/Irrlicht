@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"irrlicht/core/domain/backchannel"
@@ -43,8 +44,13 @@ type TerminalObserver struct {
 
 	// lastUI tracks the last UI kind seen per session so only edges
 	// (appear/clear) reach the event loop — one lifecycle record per dialog
-	// appearance, not one per poll. Owned by the ticker goroutine; no lock.
-	lastUI map[string]backchannel.UIKind
+	// appearance, not one per poll. Normally only the ticker goroutine
+	// (tick/observe) touches it, but RekeySession is also called from a
+	// presession-reconciliation call site (a PID-discovery or sweep
+	// goroutine, never the ticker) when a presession is superseded — issue
+	// #997 — so all access goes through lastUIMu.
+	lastUIMu sync.Mutex
+	lastUI   map[string]backchannel.UIKind
 }
 
 // NewTerminalObserver constructs a TerminalObserver. betaOn reports whether the
@@ -80,9 +86,11 @@ func (o *TerminalObserver) tick() {
 	if !o.betaOn() {
 		// Backchannel off: forget edge state so a re-enable detects cleanly
 		// instead of suppressing a dialog that was already on screen.
+		o.lastUIMu.Lock()
 		if len(o.lastUI) > 0 {
 			o.lastUI = make(map[string]backchannel.UIKind)
 		}
+		o.lastUIMu.Unlock()
 		return
 	}
 	states, err := o.repo.ListAll()
@@ -96,11 +104,13 @@ func (o *TerminalObserver) tick() {
 		o.observe(st.SessionID, st.Adapter)
 	}
 	// Drop edge state for sessions that have gone away.
+	o.lastUIMu.Lock()
 	for id := range o.lastUI {
 		if !seen[id] {
 			delete(o.lastUI, id)
 		}
 	}
+	o.lastUIMu.Unlock()
 }
 
 // observe captures one session and forwards a signal only when its UI state
@@ -121,9 +131,34 @@ func (o *TerminalObserver) observe(sessionID, adapter string) {
 		return
 	}
 	ui := backchannel.DetectUI(string(screen))
-	if ui == o.lastUI[sessionID] {
-		return // no edge
+
+	o.lastUIMu.Lock()
+	noEdge := ui == o.lastUI[sessionID]
+	if !noEdge {
+		o.lastUI[sessionID] = ui
 	}
-	o.lastUI[sessionID] = ui
+	o.lastUIMu.Unlock()
+	if noEdge {
+		return
+	}
 	o.sink.EnqueueTerminalUISignal(sessionID, ui)
+}
+
+// RekeySession moves oldID's lastUI entry (if any) onto newID, so a dialog
+// TerminalObserver already saw open on a presession isn't mistaken for a
+// fresh rising edge once the presession is superseded and its own id
+// retired — and so a later clearing poll compares against the carried-
+// forward kind and produces the falling edge against newID instead of a row
+// that no longer exists (issue #997). Called from a presession-reconciliation
+// call site, never the polling ticker, hence the lock shared with
+// tick()/observe(). A no-op when oldID has no tracked edge state.
+func (o *TerminalObserver) RekeySession(oldID, newID string) {
+	o.lastUIMu.Lock()
+	defer o.lastUIMu.Unlock()
+	ui, ok := o.lastUI[oldID]
+	if !ok {
+		return
+	}
+	delete(o.lastUI, oldID)
+	o.lastUI[newID] = ui
 }

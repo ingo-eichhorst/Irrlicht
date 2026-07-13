@@ -191,6 +191,52 @@ func (d *SessionDetector) HandlePIDAssigned(pid int, sessionID string) {
 	d.pidMgr.HandlePIDAssigned(pid, sessionID)
 }
 
+// ReconcilePreSessionBackchannel carries a still-open trust-dialog Waiting
+// state from a presession onto the real session that superseded it (issue
+// #997). Every reconciliation path retires the presession by deleting its row
+// outright; if TerminalObserver had already forced it into Waiting via a
+// terminal read-back edge (handleTerminalUISignal persists that directly onto
+// the presession's own row), that fact is lost the moment the row disappears
+// unless it's copied forward first. Registered as (half of) the callback
+// SetSessionSupersededHandler installs — the other half re-keys
+// TerminalObserver's own edge-detection cache, wired alongside this one at
+// startup since SessionDetector has no reference to TerminalObserver.
+//
+// Runs under WithSessionStateLock, the same lock handleTerminalUISignal's own
+// load-modify-save takes, so this can't race a concurrent terminal-UI signal
+// for either id. A no-op when the presession was never forced into Waiting,
+// or when the new session already is (e.g. its own terminal-observer poll
+// already caught up).
+func (d *SessionDetector) ReconcilePreSessionBackchannel(oldID, newID string) {
+	d.pidMgr.WithSessionStateLock(func() {
+		old, err := d.repo.Load(oldID)
+		if err != nil || old == nil || old.State != session.StateWaiting {
+			return // nothing to carry forward
+		}
+		newState, err := d.repo.Load(newID)
+		if err != nil || newState == nil || newState.State == session.StateWaiting {
+			return // already waiting, or gone
+		}
+
+		prevState := newState.State
+		newState.State = session.StateWaiting
+		newState.WaitingStartTime = old.WaitingStartTime
+		newState.UpdatedAt = time.Now().Unix()
+		if err := d.repo.Save(newState); err != nil {
+			d.log.LogError(logComponentSessionDetector, newID,
+				fmt.Sprintf("failed to carry forward waiting state from presession %s: %v", oldID, err))
+			return
+		}
+
+		d.record(lifecycle.Event{
+			Kind: lifecycle.KindStateTransition, SessionID: newID,
+			PrevState: prevState, NewState: session.StateWaiting,
+			Reason: fmt.Sprintf("carried forward from superseded presession %s", oldID),
+		})
+		d.broadcast(outbound.PushTypeUpdated, newState)
+	})
+}
+
 // HandlePermissionHook processes a Claude Code PermissionRequest, PreToolUse,
 // PostToolUse, or PostToolUseFailure hook event. It updates the in-memory
 // permission-pending flag and injects a synthetic activity event to trigger

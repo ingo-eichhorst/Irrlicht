@@ -1230,3 +1230,177 @@ func TestCheckPIDLiveness_PIDMatchPreSession_SweptImmediately(t *testing.T) {
 		t.Fatal("real session must survive")
 	}
 }
+
+// --- onSessionSuperseded (presession→real-session re-key hook, issue #997) ---
+
+// supersededPair records one onSessionSuperseded invocation for assertions.
+type supersededPair struct{ oldID, newID string }
+
+// newPIDManagerForTestWithSupersededSpy builds a PIDManager whose
+// onSessionSuperseded callback records every (oldID, newID) pair — the
+// presession re-key seam issue #997 introduced alongside the existing
+// onSessionDeleted funnel (see newPIDManagerForTestWithDeleteSpy).
+func newPIDManagerForTestWithSupersededSpy(repo *mockRepo, superseded *[]supersededPair) *services.PIDManager {
+	pm := services.NewPIDManager(services.PIDManagerDeps{
+		Repo:             repo,
+		Log:              &mockLogger{},
+		ReadyTTL:         10 * time.Minute,
+		OnSessionDeleted: func(string) {},
+	})
+	pm.SetSessionSupersededHandler(func(oldID, newID string) {
+		*superseded = append(*superseded, supersededPair{oldID: oldID, newID: newID})
+	})
+	return pm
+}
+
+// TestHandlePIDAssigned_FiresSupersededHook: cleanupStalePIDHolders (the
+// same-PID reconciliation path — the one that actually fired in the #997
+// mistral-vibe recording) must fire the re-key hook with (old, new) before
+// deleting the old row, so a subsystem carrying its own per-session state
+// (e.g. TerminalObserver's dialog cache) can move it onto the new id first.
+func TestHandlePIDAssigned_FiresSupersededHook(t *testing.T) {
+	repo := newMockRepo()
+	now := time.Now().Unix()
+	repo.states["old"] = &session.SessionState{
+		SessionID:      "old",
+		State:          session.StateReady,
+		PID:            42,
+		TranscriptPath: "/tmp/old.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	}
+	repo.states["new"] = &session.SessionState{
+		SessionID:      "new",
+		State:          session.StateReady,
+		TranscriptPath: "/tmp/new.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	}
+
+	var superseded []supersededPair
+	newPIDManagerForTestWithSupersededSpy(repo, &superseded).HandlePIDAssigned(42, "new")
+
+	if len(superseded) != 1 || superseded[0] != (supersededPair{oldID: "old", newID: "new"}) {
+		t.Fatalf("onSessionSuperseded pairs = %v, want [{old new}]", superseded)
+	}
+	if repo.states["old"] != nil {
+		t.Fatal("old session should still be deleted after the hook fires")
+	}
+}
+
+// TestSeedPIDs_FiresSupersededHookForPreSessionSweep: the seed-time
+// reconciliation sweep (sweepSupersededPreSessions) is a second, independent
+// path that retires presessions — it must fire the same hook.
+func TestSeedPIDs_FiresSupersededHookForPreSessionSweep(t *testing.T) {
+	pid := os.Getpid() // alive, so seedAlivePIDs' liveness check doesn't reap it first
+	repo := newMockRepo()
+	now := time.Now().Unix()
+	repo.states["real"] = &session.SessionState{
+		SessionID:      "real",
+		Adapter:        "claude-code",
+		State:          session.StateReady,
+		PID:            pid,
+		TranscriptPath: "/tmp/real.jsonl",
+		UpdatedAt:      now,
+	}
+	repo.states["proc-live"] = &session.SessionState{
+		SessionID: "proc-live",
+		Adapter:   "claude-code",
+		State:     session.StateReady,
+		PID:       pid,
+		UpdatedAt: now,
+	}
+	states := []*session.SessionState{repo.states["real"], repo.states["proc-live"]}
+
+	var superseded []supersededPair
+	newPIDManagerForTestWithSupersededSpy(repo, &superseded).SeedPIDs(states)
+
+	if len(superseded) != 1 || superseded[0] != (supersededPair{oldID: "proc-live", newID: "real"}) {
+		t.Fatalf("onSessionSuperseded pairs = %v, want [{proc-live real}]", superseded)
+	}
+	if repo.states["proc-live"] != nil {
+		t.Fatal("pre-session should be swept by the seed-time reconciliation sweep")
+	}
+}
+
+// TestSeedPIDs_DedupDoesNotFireSupersededHook: dedupeByPID retires a genuine
+// duplicate real session (e.g. an orphan left by /clear), not a presession
+// reconciliation — there is no single "superseded by" identity to re-key
+// state onto, so the hook must stay silent for this path (issue #997 scoped
+// the hook to presession→real-session reconciliation specifically).
+func TestSeedPIDs_DedupDoesNotFireSupersededHook(t *testing.T) {
+	pid := os.Getpid()
+	repo := newMockRepo()
+	now := time.Now().Unix()
+	repo.states["dup-old"] = &session.SessionState{
+		SessionID:      "dup-old",
+		Adapter:        "claude-code",
+		State:          session.StateReady,
+		PID:            pid,
+		TranscriptPath: "/tmp/dup-old.jsonl",
+		FirstSeen:      now - 100,
+		UpdatedAt:      now,
+	}
+	repo.states["dup-new"] = &session.SessionState{
+		SessionID:      "dup-new",
+		Adapter:        "claude-code",
+		State:          session.StateReady,
+		PID:            pid,
+		TranscriptPath: "/tmp/dup-new.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	}
+	states := []*session.SessionState{repo.states["dup-old"], repo.states["dup-new"]}
+
+	var superseded []supersededPair
+	newPIDManagerForTestWithSupersededSpy(repo, &superseded).SeedPIDs(states)
+
+	if repo.states["dup-old"] != nil {
+		t.Fatal("older duplicate should still be deleted by dedupeByPID")
+	}
+	if len(superseded) != 0 {
+		t.Fatalf("dedup is not a presession reconciliation — onSessionSuperseded should not fire, got %v", superseded)
+	}
+}
+
+// TestCheckPIDLiveness_FiresSupersededHookForPreSessionSweep: the periodic
+// pre-session sweep (sweepSupersededPreSessionsPeriodic) is a third,
+// independent reconciliation path — mirrors
+// TestCheckPIDLiveness_PIDMatchPreSession_SweptImmediately with the spy
+// wired in.
+func TestCheckPIDLiveness_FiresSupersededHookForPreSessionSweep(t *testing.T) {
+	tmp := t.TempDir()
+	transcript := filepath.Join(tmp, "real.jsonl")
+	writeTranscript(t, transcript, time.Now())
+
+	pid := os.Getpid()
+	repo := newMockRepo()
+	repo.states["real"] = &session.SessionState{
+		SessionID:      "real",
+		Adapter:        "claude-code",
+		State:          session.StateReady,
+		PID:            pid,
+		CWD:            tmp,
+		TranscriptPath: transcript,
+		UpdatedAt:      time.Now().Unix(),
+	}
+	repo.states["proc-same"] = &session.SessionState{
+		SessionID: "proc-same",
+		Adapter:   "claude-code",
+		State:     session.StateReady,
+		PID:       pid,
+		CWD:       tmp,
+		FirstSeen: time.Now().Unix(),
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	var superseded []supersededPair
+	newPIDManagerForTestWithSupersededSpy(repo, &superseded).CheckPIDLiveness()
+
+	if len(superseded) != 1 || superseded[0] != (supersededPair{oldID: "proc-same", newID: "real"}) {
+		t.Fatalf("onSessionSuperseded pairs = %v, want [{proc-same real}]", superseded)
+	}
+	if repo.states["proc-same"] != nil {
+		t.Fatal("PID-matched pre-session should be swept immediately (no grace)")
+	}
+}

@@ -309,6 +309,18 @@ func (d *SessionDetector) SetDeletedCooldown(dur time.Duration) {
 	d.deletedCooldown = dur
 }
 
+// SetSessionSupersededHandler registers fn to run whenever any presession
+// reconciliation path retires a presession in favor of a real session — both
+// the PIDManager-owned paths (same-PID match at PID-assignment time, and the
+// seed-time/periodic pre-session sweeps) and cleanupPreSessionsForProject's
+// own project/CWD match, which deletes its row directly rather than through
+// PIDManager. A single call here covers every path (issue #997). Stored only
+// on pidMgr — cleanupPreSessionsForProject reads it back from there (same
+// package) rather than keeping a second copy on SessionDetector.
+func (d *SessionDetector) SetSessionSupersededHandler(fn func(oldID, newID string)) {
+	d.pidMgr.SetSessionSupersededHandler(fn)
+}
+
 // SetBackgroundProbeForTest overrides the background-process liveness probe so
 // tests can simulate live / dead background processes without real lsof. See
 // issue #445.

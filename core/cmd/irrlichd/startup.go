@@ -876,6 +876,20 @@ func setupBackchannel(mux *http.ServeMux, deps setupBackchannelDeps) (*services.
 	terminalReader := control.NewReader(deps.CachedRepo, logger)
 	terminalObserver := services.NewTerminalObserver(deps.CachedRepo, terminalReader, deps.PermService, backchannelStore.Enabled, deps.Detector, logger)
 
+	// Re-key the presession's backchannel bookkeeping onto the reconciled
+	// real session whenever any reconciliation path retires a presession
+	// (issue #997): SessionDetector carries forward any Waiting state a live
+	// terminal-observer signal already persisted onto the presession's own
+	// row, and TerminalObserver re-keys its own edge-detection cache so the
+	// next poll compares against the right session id. Bind the one
+	// long-lived reference this closure needs (detector) instead of closing
+	// over the whole setupBackchannelDeps struct.
+	detector := deps.Detector
+	detector.SetSessionSupersededHandler(func(oldID, newID string) {
+		detector.ReconcilePreSessionBackchannel(oldID, newID)
+		terminalObserver.RekeySession(oldID, newID)
+	})
+
 	return backchannelEngine, terminalObserver
 }
 
