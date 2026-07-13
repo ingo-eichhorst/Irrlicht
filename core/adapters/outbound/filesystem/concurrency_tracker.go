@@ -388,6 +388,16 @@ type stateInterval struct {
 // a synthetic sentinel, not a real transition — it must be read for
 // interval-closing but excluded from readyAt, or every session still active
 // "now" would spuriously count as having gone ready this instant.
+//
+// When lastEventTS == last.ts — the transition is itself the session's last
+// recorded event, with no later heartbeat to push the bound forward — the
+// synthetic bound is nudged one second past it instead of landing exactly on
+// it. Without the nudge the closing interval is zero-width and the loop below
+// (which requires next.ts > cur.ts) drops it entirely: a session whose only
+// event is a single still-active transition would vanish from both
+// AgentsSeries and StateSeries despite clearly having been active at that
+// instant (issue #983). A one-second floor is the same granularity every
+// timestamp here already uses (ev.Timestamp.Unix()).
 func (tl *sessionTimeline) stateReconstruction() (ivs []stateInterval, readyAt []int64) {
 	if len(tl.transitions) == 0 {
 		return nil, nil
@@ -402,7 +412,7 @@ func (tl *sessionTimeline) stateReconstruction() (ivs []stateInterval, readyAt [
 	}
 
 	if last := tr[len(tr)-1]; concurrencyActive(last.state) {
-		tr = append(tr, stateChange{tl.lastEventTS, session.StateReady})
+		tr = append(tr, stateChange{max(tl.lastEventTS, last.ts+1), session.StateReady})
 	}
 	for i := 0; i < len(tr)-1; i++ {
 		cur, next := tr[i], tr[i+1]

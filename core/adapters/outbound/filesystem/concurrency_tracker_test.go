@@ -273,6 +273,33 @@ func TestAgentsSeries_Empty(t *testing.T) {
 	}
 }
 
+// TestAgentsSeries_SoleTransitionStillCounts: a session whose only transition
+// is its (still-active) working transition — with no later heartbeat, so
+// lastEventTS lands exactly on that transition's own timestamp — must still
+// contribute an interval instead of vanishing. Regression for #983: the
+// synthetic "last known alive" bound used to collapse to a zero-width
+// interval in exactly this case, and the loop building intervals silently
+// dropped it.
+func TestAgentsSeries_SoleTransitionStillCounts(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, dir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", "/home/me/projY"),
+		transition(2, 100, "s1", session.StateWorking), // last event; no later activity
+	})
+	tr := NewConcurrencyTrackerWithDir(dir)
+
+	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("AgentsSeries: %v", err)
+	}
+	if res.Peak != 1 {
+		t.Errorf("peak: want 1, got %v", res.Peak)
+	}
+	if res.PeakByKey["projY"] != 1 {
+		t.Errorf("peakByKey[projY]: want 1, got %v", res.PeakByKey["projY"])
+	}
+}
+
 // TestAgentsSeries_ScopeProject: a project scope filters to that project's
 // sessions only.
 func TestAgentsSeries_ScopeProject(t *testing.T) {
@@ -468,6 +495,30 @@ func TestStateSeries_Empty(t *testing.T) {
 	}
 	if res.BucketStarts == nil {
 		t.Error("bucket_starts should be a non-nil slice")
+	}
+}
+
+// TestStateSeries_SoleTransitionStillCounts: StateSeries' counterpart of
+// TestAgentsSeries_SoleTransitionStillCounts — a session with exactly one
+// recorded transition and no later event must still show up in the working
+// series instead of vanishing entirely (#983).
+func TestStateSeries_SoleTransitionStillCounts(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, dir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", "/home/me/projY"),
+		transition(2, 100, "s1", session.StateWorking), // last event; no later activity
+	})
+	tr := NewConcurrencyTrackerWithDir(dir)
+
+	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("StateSeries: %v", err)
+	}
+	if peak := maxOf(res.ByState[session.StateWorking]["projY"]); peak != 1 {
+		t.Errorf("working[projY] peak: want 1, got %v", peak)
+	}
+	if res.Peak != 1 {
+		t.Errorf("peak: want 1, got %v", res.Peak)
 	}
 }
 
