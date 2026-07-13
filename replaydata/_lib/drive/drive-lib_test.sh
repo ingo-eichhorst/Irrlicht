@@ -83,38 +83,38 @@ echo "== dismiss_dialog_if_visible: poll+dismiss mechanics only (tmux faked) =="
 # A fake `tmux` shell function shadows the real binary for the rest of this
 # script (bash resolves a function before PATH), so the mechanics can be
 # checked without a live tmux/agent: capture-pane replays $FAKE_PANE, and
-# send-keys records its args so a test can assert Enter reached the right
-# session.
+# send-keys records its args in a plain variable (one call per test case,
+# same shell — no file/mktemp needed) so a test can assert Enter reached the
+# right session.
 FAKE_PANE=""
-SENDKEYS_LOG="$TMP/sendkeys.log"
+SENDKEYS_LOG=""
 tmux() {
   case "$1" in
     capture-pane) printf '%s\n' "$FAKE_PANE" ;;
-    send-keys)    shift; echo "$*" >> "$SENDKEYS_LOG" ;;
-    *)            : ;;
+    send-keys)    shift; SENDKEYS_LOG="$*" ;;
   esac
 }
 
 FAKE_PANE=$'some noise\nPermission for the bash tool\nmore noise'
-: > "$SENDKEYS_LOG"
+SENDKEYS_LOG=""
 dismiss_dialog_if_visible "vibe-sess" 'Permission for the|Allow for remainder of this session'
 assert_eq "vibe marker present -> returns 0" 0 "$?"
-assert_eq "sends Enter to the right session"  "-t vibe-sess Enter" "$(cat "$SENDKEYS_LOG")"
+assert_eq "sends Enter to the right session"  "-t vibe-sess Enter" "$SENDKEYS_LOG"
 
 FAKE_PANE="nothing dialog-shaped here"
-: > "$SENDKEYS_LOG"
+SENDKEYS_LOG=""
 dismiss_dialog_if_visible "vibe-sess" 'Permission for the|Allow for remainder of this session'
 assert_eq "marker absent -> returns 1" 1 "$?"
-assert_eq "no Enter sent when marker absent" "" "$(cat "$SENDKEYS_LOG")"
+assert_eq "no Enter sent when marker absent" "" "$SENDKEYS_LOG"
 
 FAKE_PANE="Requesting permission for run_command: rm -rf /tmp/x"
-: > "$SENDKEYS_LOG"
+SENDKEYS_LOG=""
 dismiss_dialog_if_visible "agy-sess" 'Requesting permission for|Do you want to proceed'
 assert_eq "antigravity's own marker regex matches its own dialog" 0 "$?"
-assert_eq "antigravity dismiss targets its own session" "-t agy-sess Enter" "$(cat "$SENDKEYS_LOG")"
+assert_eq "antigravity dismiss targets its own session" "-t agy-sess Enter" "$SENDKEYS_LOG"
 
 FAKE_PANE="Permission for the bash tool"
-: > "$SENDKEYS_LOG"
+SENDKEYS_LOG=""
 dismiss_dialog_if_visible "agy-sess" 'Requesting permission for|Do you want to proceed'
 assert_eq "adapters' marker regexes stay independent (vibe text doesn't trip agy's)" 1 "$?"
 

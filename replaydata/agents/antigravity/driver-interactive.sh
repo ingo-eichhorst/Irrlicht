@@ -210,8 +210,7 @@ launch_repl() {
   # send isn't swallowed, then settle briefly so Ink finishes mounting the prompt.
   local waited=0
   while (( waited < 40 )); do
-    if tmux capture-pane -t "$SESSION" -p -S -50 2>/dev/null | grep -qiE 'trust the contents|trust this folder'; then
-      tmux send-keys -t "$SESSION" Enter
+    if dismiss_dialog_if_visible "$SESSION" 'trust the contents|trust this folder'; then
       echo "[driver] accepted agy trust-folder prompt" >&2
       break
     fi
