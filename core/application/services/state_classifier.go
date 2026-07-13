@@ -209,3 +209,33 @@ func ShouldSynthesizeCollapsedTurnBoundary(currentState string, metrics *session
 	}
 	return metrics.SawMidPassTurnBoundary
 }
+
+// SyntheticCatchUpTurnStartReason is the reason string for the synthetic
+// ready→working transition emitted when a brand-new session's very first
+// observation already shows a completed turn — discovery was delayed long
+// enough that the turn finished before the daemon ever looked (issue #996).
+// Paired with SyntheticCatchUpTurnDoneReason; see ShouldSynthesizeCatchUpTurn
+// for when this fires.
+const SyntheticCatchUpTurnStartReason = "new session created (turn already in progress at first discovery)"
+
+// SyntheticCatchUpTurnDoneReason is the reason string for the working→ready
+// half of the same synthetic pair (see SyntheticCatchUpTurnStartReason).
+const SyntheticCatchUpTurnDoneReason = "turn already complete at first discovery → synthetic catch-up"
+
+// ShouldSynthesizeCatchUpTurn reports whether a brand-new session's initial
+// lifecycle record should be a synthetic ready→working→ready pair instead of
+// a single flat "new session created" transition — for when discovery was
+// delayed long enough that the first turn already completed (metrics.IsAgentDone())
+// before the daemon ever looked, which would otherwise silently swallow it
+// and mislead downstream turn-boundary consumers about which turn was first
+// (issue #996).
+//
+// supersedingLivePreSession is the load-bearing half of the gate: it's only
+// true when this session is superseding a pre-session (proc-<pid>) the
+// daemon was already live-tracking for the same project/cwd — proof this is
+// a genuine live-launch race, not an ordinary cold-start rediscovery of a
+// large backlog of old, already-finished sessions (which must never get a
+// spurious bounce; see cleanupPreSessionsForProject's doc comment).
+func ShouldSynthesizeCatchUpTurn(supersedingLivePreSession bool, metrics *session.SessionMetrics) bool {
+	return supersedingLivePreSession && metrics.IsAgentDone()
+}

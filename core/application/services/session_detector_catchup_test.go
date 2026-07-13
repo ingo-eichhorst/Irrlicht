@@ -1,0 +1,203 @@
+package services_test
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"irrlicht/core/application/services"
+	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/lifecycle"
+	"irrlicht/core/domain/session"
+)
+
+// transitionsFor returns the KindStateTransition events recorded for
+// sessionID, in emission order.
+func transitionsFor(rec *mockRecorder, sessionID string) []lifecycle.Event {
+	var out []lifecycle.Event
+	for _, ev := range rec.snapshot() {
+		if ev.Kind == lifecycle.KindStateTransition && ev.SessionID == sessionID {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// TestSessionDetector_CatchUpTurn_SynthesizesWhenSupersedingLivePreSession is
+// the regression test for issue #996: a mistral-vibe-shaped race where the
+// daemon binds a pre-session (proc-<pid>) to the running process almost
+// instantly, but the real transcript is discovered late enough that its
+// first turn has already fully completed. Because this real session is
+// superseding a pre-session the daemon was already live-tracking, the
+// missing working→ready cycle for that turn must be synthesized rather than
+// silently swallowed.
+func TestSessionDetector_CatchUpTurn_SynthesizesWhenSupersedingLivePreSession(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	rec := &mockRecorder{}
+
+	// Simulates a transcript whose full content is already parsed as a
+	// completed turn by the time the daemon first looks — mirrors
+	// mistral-vibe's 534-byte messages.jsonl in the recorded fixture.
+	metrics := &funcMetrics{fn: func(path, adapter string) (*session.SessionMetrics, error) {
+		if path == "" {
+			return nil, nil
+		}
+		return &session.SessionMetrics{LastEventType: "turn_done"}, nil
+	}}
+
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	det.SetRecorder(rec)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	// Pre-session: the process scanner spots the running agent before any
+	// transcript exists (mirrors processlifecycle.Scanner minting proc-<pid>).
+	tw.ch <- agent.Event{
+		Type:       agent.EventNewSession,
+		SessionID:  "proc-996",
+		ProjectDir: "vibe-project",
+	}
+	waitForCondition(func() bool { s, _ := repo.Load("proc-996"); return s != nil }, time.Second)
+
+	// The real transcript appears late, already showing a completed turn.
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "session_real_1",
+		ProjectDir:     "vibe-project",
+		TranscriptPath: "/home/.vibe/logs/session/session_real_1/messages.jsonl",
+	}
+	waitForCondition(func() bool { s, _ := repo.Load("session_real_1"); return s != nil }, time.Second)
+	// cleanupPreSessionsForProject runs synchronously within the same
+	// finalizeNewSession call — wait for its actual effect (the pre-session
+	// gone) rather than a fixed sleep.
+	waitForCondition(func() bool { s, _ := repo.Load("proc-996"); return s == nil }, time.Second)
+	cancel()
+	<-done
+
+	transitions := transitionsFor(rec, "session_real_1")
+	if len(transitions) != 2 {
+		t.Fatalf("expected 2 synthesized state transitions for session_real_1, got %d: %+v", len(transitions), transitions)
+	}
+	if transitions[0].NewState != session.StateWorking || transitions[0].Reason != services.SyntheticCatchUpTurnStartReason {
+		t.Errorf("first transition = %+v, want new_state=working reason=%q", transitions[0], services.SyntheticCatchUpTurnStartReason)
+	}
+	if transitions[1].PrevState != session.StateWorking || transitions[1].NewState != session.StateReady ||
+		transitions[1].Reason != services.SyntheticCatchUpTurnDoneReason {
+		t.Errorf("second transition = %+v, want working->ready reason=%q", transitions[1], services.SyntheticCatchUpTurnDoneReason)
+	}
+
+	state, err := repo.Load("session_real_1")
+	if err != nil || state == nil {
+		t.Fatalf("session_real_1 not created: %v", err)
+	}
+	if state.State != session.StateReady {
+		t.Errorf("persisted state: got %q, want ready (synthesis only changes recorded history, not the settled state)", state.State)
+	}
+}
+
+// TestSessionDetector_CatchUpTurn_NoSynthesisWithoutLivePreSession is the
+// critical regression guard for issue #996's design decision: a cold-started
+// daemon rediscovering an already-finished, historical session (no live
+// pre-session was ever tracked for it — nobody is watching this process)
+// must NOT get a synthetic bounce. Firing unconditionally on
+// metrics.IsAgentDone() alone would flood the lifecycle stream every time a
+// daemon with a large backlog starts up, which is exactly the scenario that
+// exposed this issue's own multi-second discovery delay.
+func TestSessionDetector_CatchUpTurn_NoSynthesisWithoutLivePreSession(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	rec := &mockRecorder{}
+
+	metrics := &funcMetrics{fn: func(path, adapter string) (*session.SessionMetrics, error) {
+		if path == "" {
+			return nil, nil
+		}
+		return &session.SessionMetrics{LastEventType: "turn_done"}, nil
+	}}
+
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	det.SetRecorder(rec)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	// No pre-session event at all — this transcript is discovered cold,
+	// with no evidence the daemon was ever live-tracking its process.
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "session_old_1",
+		ProjectDir:     "old-project",
+		TranscriptPath: "/home/.vibe/logs/session/session_old_1/messages.jsonl",
+	}
+	waitForCondition(func() bool { s, _ := repo.Load("session_old_1"); return s != nil }, time.Second)
+	time.Sleep(30 * time.Millisecond) // let any (undesired) second transition land before asserting
+	cancel()
+	<-done
+
+	transitions := transitionsFor(rec, "session_old_1")
+	if len(transitions) != 1 {
+		t.Fatalf("expected 1 (unchanged) state transition for session_old_1, got %d: %+v", len(transitions), transitions)
+	}
+	if transitions[0].NewState != session.StateReady || transitions[0].Reason != "new session created" {
+		t.Errorf("transition = %+v, want the ordinary flat new_state=ready reason=\"new session created\"", transitions[0])
+	}
+}
+
+// TestSessionDetector_CatchUpTurn_NoSynthesisWhenTurnNotYetDone is the
+// other regression guard: the ordinary, non-buggy fast-discovery path (a
+// pre-session superseded by a real session whose transcript does NOT yet
+// show a completed turn) must also stay unchanged — synthesis only applies
+// when a turn was actually swallowed.
+func TestSessionDetector_CatchUpTurn_NoSynthesisWhenTurnNotYetDone(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	rec := &mockRecorder{}
+
+	metrics := &funcMetrics{fn: func(path, adapter string) (*session.SessionMetrics, error) {
+		if path == "" {
+			return nil, nil
+		}
+		// Turn is still in flight — no turn_done yet.
+		return &session.SessionMetrics{LastEventType: "user"}, nil
+	}}
+
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	det.SetRecorder(rec)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:       agent.EventNewSession,
+		SessionID:  "proc-997",
+		ProjectDir: "cc-project",
+	}
+	waitForCondition(func() bool { s, _ := repo.Load("proc-997"); return s != nil }, time.Second)
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "session_real_2",
+		ProjectDir:     "cc-project",
+		TranscriptPath: "/home/.claude/projects/cc-project/session_real_2.jsonl",
+	}
+	waitForCondition(func() bool { s, _ := repo.Load("session_real_2"); return s != nil }, time.Second)
+	waitForCondition(func() bool { s, _ := repo.Load("proc-997"); return s == nil }, time.Second)
+	cancel()
+	<-done
+
+	transitions := transitionsFor(rec, "session_real_2")
+	if len(transitions) != 1 {
+		t.Fatalf("expected 1 (unchanged) state transition for session_real_2, got %d: %+v", len(transitions), transitions)
+	}
+	if transitions[0].NewState != session.StateReady || transitions[0].Reason != "new session created" {
+		t.Errorf("transition = %+v, want the ordinary flat new_state=ready reason=\"new session created\"", transitions[0])
+	}
+}

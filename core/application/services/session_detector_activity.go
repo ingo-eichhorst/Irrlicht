@@ -293,8 +293,30 @@ func (d *SessionDetector) finalizeNewSession(id agent.Identity, ev agent.Event, 
 		d.record(lifecycle.Event{Kind: lifecycle.KindPreSessionCreated, SessionID: ev.SessionID, Adapter: id.Name, ProjectDir: ev.ProjectDir, CWD: ev.CWD})
 	}
 
-	// Record initial state transition.
-	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, NewState: state.State, Reason: "new session created"})
+	// When a real transcript session arrives, remove any pre-sessions for the
+	// same project. Match by projectDir first (Claude Code layout), then
+	// fall back to CWD (Codex/Pi have different transcript layouts). Moved
+	// ahead of the transition record below so ShouldSynthesizeCatchUpTurn
+	// (issue #996) can see its return value.
+	supersedingLivePreSession := false
+	if ev.TranscriptPath != "" {
+		supersedingLivePreSession = d.cleanupPreSessionsForProject(ev.ProjectDir, state.CWD, id.Name)
+	}
+
+	// Record initial state transition(s): the ordinary flat "new session
+	// created" record, or — if catching up on a swallowed first turn
+	// (issue #996) — a synthetic ready->working->ready pair instead, mirroring
+	// synthesizeCollapsedTurnBoundaryIfNeeded's pattern (issue #988) for a
+	// different collapsed-boundary shape. Scoped to top-level sessions:
+	// pre-sessions are only ever minted for a top-level OS process, so a
+	// child/subagent session can't be the one superseding one — children
+	// keep today's behavior (correct final state, no synthesized transition)
+	// as a separate, deliberately unfixed gap (issue #999).
+	if state.ParentSessionID == "" && ShouldSynthesizeCatchUpTurn(supersedingLivePreSession, state.Metrics) {
+		d.recordCatchUpTurn(ev.SessionID, state)
+	} else {
+		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, NewState: state.State, Reason: "new session created"})
+	}
 
 	d.broadcast(outbound.PushTypeCreated, state)
 
@@ -307,13 +329,32 @@ func (d *SessionDetector) finalizeNewSession(id agent.Identity, ev agent.Event, 
 		d.holdParentWorkingForNewChild(state.ParentSessionID)
 	}
 
-	// When a real transcript session arrives, remove any pre-sessions for the
-	// same project. Match by projectDir first (Claude Code layout), then
-	// fall back to CWD (Codex/Pi have different transcript layouts).
-	if ev.TranscriptPath != "" {
-		d.cleanupPreSessionsForProject(ev.ProjectDir, state.CWD, id.Name)
-	}
 	return true
+}
+
+// recordCatchUpTurn emits the synthetic ready->working->ready pair
+// representing a turn that had already completed by the time this session
+// was first discovered (issue #996) — see ShouldSynthesizeCatchUpTurn.
+// state.State is left as already classified (Ready); only the recorded
+// lifecycle history changes.
+func (d *SessionDetector) recordCatchUpTurn(sessionID string, state *session.SessionState) {
+	d.log.LogInfo(logComponentSessionDetector, sessionID, SyntheticCatchUpTurnDoneReason)
+	inputs := classifierInputs(state.Metrics)
+	d.record(lifecycle.Event{
+		Kind:      lifecycle.KindStateTransition,
+		SessionID: sessionID,
+		NewState:  session.StateWorking,
+		Reason:    SyntheticCatchUpTurnStartReason,
+		Inputs:    inputs,
+	})
+	d.record(lifecycle.Event{
+		Kind:      lifecycle.KindStateTransition,
+		SessionID: sessionID,
+		PrevState: session.StateWorking,
+		NewState:  session.StateReady,
+		Reason:    SyntheticCatchUpTurnDoneReason,
+		Inputs:    inputs,
+	})
 }
 
 // backfillExistingSession fills in TranscriptPath/Adapter on an
