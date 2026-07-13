@@ -145,6 +145,17 @@ extension View {
     }
 }
 
+/// Header collapse mode for every session's task-summary/question block
+/// (issue #985): strictly 2 states — `collapsed` hides every row's block;
+/// `waiting` shows it only for sessions currently `state == .waiting`, so
+/// ones blocked on the user don't get buried among working/ready rows.
+/// Replaces a former "expand all" state — every summary shown at once was
+/// mostly noise nobody reliably reads.
+enum SummaryDisplayMode: String {
+    case collapsed
+    case waiting
+}
+
 enum DisplayMode: String, CaseIterable {
     case context   = "Context"
     case history1s  = "1 Min"
@@ -482,21 +493,23 @@ struct SessionListView: View {
         }
     }
 
-    /// Header control that toggles the global collapse state for every
-    /// session's task-summary block at once (issue #738).
+    /// Header control that flips the global display mode for every
+    /// session's task-summary block at once (issue #985): collapsed, or
+    /// waiting-only (show it only for sessions currently blocked on the
+    /// user). No third "expand all" state.
     private var summaryCollapseAllButton: some View {
-        let collapsed = sessionManager.summariesCollapsed
+        let waiting = sessionManager.summaryDisplayMode == .waiting
         return Button {
-            sessionManager.summariesCollapsed.toggle()
+            sessionManager.summaryDisplayMode = waiting ? .collapsed : .waiting
         } label: {
-            Image(systemName: collapsed ? "rectangle.expand.vertical" : "rectangle.compress.vertical")
+            Image(systemName: waiting ? "rectangle.compress.vertical" : "hourglass")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
                 .frame(width: 16)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .tooltip(collapsed ? "Expand all task summaries" : "Collapse all task summaries")
+        .tooltip(waiting ? "Collapse all task summaries" : "Show summaries for sessions waiting on you")
         .accessibilityIdentifier("summary-collapse-all")
     }
 

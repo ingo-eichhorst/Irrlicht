@@ -12,7 +12,7 @@ final class SessionRowSnapshotTests: XCTestCase {
     private var originalThresholdValue: Any?
     private var originalThresholdUnit: Any?
     private var originalUserIntent: Any?
-    private var originalSummariesCollapsed: Any?
+    private var originalSummaryDisplayMode: Any?
     private var savedAgentRegistry: [String: AgentBranding] = [:]
 
     override func setUp() async throws {
@@ -85,7 +85,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         originalThresholdValue = defaults.object(forKey: ContextPressureThreshold.valueKey)
         originalThresholdUnit = defaults.object(forKey: ContextPressureThreshold.unitKey)
         originalUserIntent = defaults.object(forKey: "userIntentDisplay")
-        originalSummariesCollapsed = defaults.object(forKey: "summariesCollapsed")
+        originalSummaryDisplayMode = defaults.object(forKey: "summaryDisplayMode")
         defaults.set("context", forKey: "displayMode")
         defaults.set(false, forKey: "debugMode")
         defaults.set(false, forKey: "showCostDisplay")
@@ -94,9 +94,10 @@ final class SessionRowSnapshotTests: XCTestCase {
         // of the developer's Settings (issue #689 made it configurable).
         defaults.set(80, forKey: ContextPressureThreshold.valueKey)
         defaults.set(ContextPressureThreshold.Unit.percent.rawValue, forKey: ContextPressureThreshold.unitKey)
-        // summariesCollapsed now persists (#799) — pin it so SessionManager's
-        // init value doesn't depend on the developer's real toggle state.
-        defaults.set(false, forKey: "summariesCollapsed")
+        // summaryDisplayMode persists (#799, mode added #985) — pin it so
+        // SessionManager's init value doesn't depend on the developer's real
+        // toggle state. "waiting" matches the pre-#985 default (not collapsed).
+        defaults.set(SummaryDisplayMode.waiting.rawValue, forKey: "summaryDisplayMode")
         sessionManager = SessionManager()
     }
 
@@ -107,7 +108,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         restore(key: ContextPressureThreshold.valueKey, value: originalThresholdValue)
         restore(key: ContextPressureThreshold.unitKey, value: originalThresholdUnit)
         restore(key: "userIntentDisplay", value: originalUserIntent)
-        restore(key: "summariesCollapsed", value: originalSummariesCollapsed)
+        restore(key: "summaryDisplayMode", value: originalSummaryDisplayMode)
         AgentRegistry.byName = savedAgentRegistry
         try await super.tearDown()
     }
@@ -312,18 +313,34 @@ final class SessionRowSnapshotTests: XCTestCase {
     }
 
     func testCollapsedHidesSummaryBlocks() {
-        // Global collapse on: a waiting session with BOTH an intent summary and
-        // a pending question shows neither block — collapse applies to every
+        // Global mode = collapsed: a waiting session with BOTH an intent summary
+        // and a pending question shows neither block — collapse applies to every
         // row, including new entries (issue #763). User-intent display is on to
         // prove the purple block is hidden by collapse, not by the beta gate.
         UserDefaults.standard.set(true, forKey: "userIntentDisplay")
-        sessionManager.summariesCollapsed = true
+        sessionManager.summaryDisplayMode = .collapsed
         let session = makeSession(
             state: .waiting,
             metrics: makeMetrics(
                 lastText: "Should I run the migration?",
                 summary: "Add OAuth login to the web dashboard"
             )
+        )
+        let view = host(session, height: 48)
+        assertSnapshot(of: view, as: .image)
+    }
+
+    /// Issue #985 — waiting mode gates the whole block (including the purple
+    /// intent pill, not just the already state-gated question) by session
+    /// state: a working session's summary stays hidden even with user-intent
+    /// display on, so sessions blocked on the user aren't buried among
+    /// working/ready rows.
+    func testWaitingModeHidesNonWaitingSummary() {
+        UserDefaults.standard.set(true, forKey: "userIntentDisplay")
+        sessionManager.summaryDisplayMode = .waiting
+        let session = makeSession(
+            state: .working,
+            metrics: makeMetrics(summary: "Add OAuth login to the web dashboard")
         )
         let view = host(session, height: 48)
         assertSnapshot(of: view, as: .image)
