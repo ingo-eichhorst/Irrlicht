@@ -32,8 +32,14 @@ jobs:
           cache: false
 
       - name: Generate star history chart
+        # The default GITHUB_TOKEN is a GitHub App installation token, which
+        # GitHub blocks from reading the starred_at-enriched stargazers
+        # listing (403 "You do not have permission to view the stargazers
+        # of this repository") no matter what `permissions:` this workflow
+        # declares — there's no fine-grained permission that grants it. A
+        # PAT with public-repo read access is required instead. See #1012.
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.STARHISTORY_TOKEN }}
         run: |
           mkdir -p assets
           go run ./tools/starhistory -repo ingo-eichhorst/Irrlicht -out assets/star-history.svg
