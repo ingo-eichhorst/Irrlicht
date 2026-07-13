@@ -86,16 +86,11 @@
           "text": "Run the shell command: touch onboarding-backchannel-observe.txt"
         },
         {
-          "type": "sleep",
-          "seconds": 15
-        },
-        {
-          "type": "keys",
-          "keys": "Enter"
+          "type": "wait_turn"
         },
         {
           "type": "sleep",
-          "seconds": 8
+          "seconds": 4
         }
       ],
       "verify": [
