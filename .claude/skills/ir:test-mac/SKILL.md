@@ -233,6 +233,14 @@ independent axes:
          # sees the same result in replace mode as in separate mode instead of
          # a stale production copy.
          cp "$REPO_ROOT/platforms/macos/Irrlicht/Resources/AppIcon.icns" "$APP_TARGET/Contents/Resources/AppIcon.icns"
+         # Stamp the version string too — otherwise Info.plist still carries
+         # whatever release version was last installed (e.g. "0.5.7"), so
+         # Settings/About would show a stale release version on a dev build
+         # even though the binary itself is freshly compiled from source.
+         # Matches separate mode's hardcoded "dev" (see its Info.plist template
+         # below) so both modes read the same in the UI.
+         /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString dev" "$APP_TARGET/Contents/Info.plist"
+         /usr/libexec/PlistBuddy -c "Set :CFBundleVersion dev" "$APP_TARGET/Contents/Info.plist"
          # The SwiftPM debug binary links Sparkle as @rpath/Sparkle.framework but only
          # carries an @loader_path rpath (= Contents/MacOS) — it lacks the bundle-layout
          # rpath a release .app build adds. Without this, dyld can't find the embedded
