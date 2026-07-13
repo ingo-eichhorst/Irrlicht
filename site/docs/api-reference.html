@@ -224,18 +224,23 @@
         <tbody>
           <tr>
             <td><code>chart</code></td>
-            <td><code>cost</code> (default), <code>tokens</code>, <code>models</code>, <code>providers</code>, <code>agents</code>, <code>yield</code></td>
-            <td>Which series to build. <code>models</code> / <code>providers</code> are presets that pin the stacking axis; <code>agents</code> returns the concurrent-agents timeline; <code>yield</code> returns the per-project productive-vs-reverted aggregate</td>
+            <td><code>cost</code> (default), <code>tokens</code>, <code>co2</code>, <code>models</code>, <code>providers</code>, <code>agents</code>, <code>state</code>, <code>yield</code>, <code>dora</code></td>
+            <td>Which series to build. <code>models</code> / <code>providers</code> are presets that pin the stacking axis; <code>co2</code> sums the estimated CO2e footprint like <code>cost</code> sums spend; <code>agents</code> returns the concurrent-agents timeline; <code>state</code> returns the per-project, per-state (working/waiting/ready) activity matrix; <code>yield</code> returns the per-project productive-vs-reverted aggregate; <code>dora</code> returns one project's DORA metrics (requires <code>project</code>)</td>
           </tr>
           <tr>
             <td><code>group</code></td>
             <td><code>project</code> (default), <code>branch</code>, <code>provider</code>, <code>model</code>, <code>session</code>, <code>token_type</code></td>
-            <td>Stacking dimension. <code>token_type</code> requires <code>chart=tokens</code></td>
+            <td>Stacking dimension. <code>token_type</code> requires <code>chart=tokens</code>; <code>agents</code>/<code>state</code> are always grouped by project (recordings carry no other axis)</td>
           </tr>
           <tr>
             <td><code>range</code></td>
             <td><code>day</code>, <code>week</code>, <code>month</code>, <code>year</code>, <code>this-month</code></td>
-            <td>Time window. Alternatively pass <code>start</code> &amp; <code>end</code> (unix seconds)</td>
+            <td>Time window. Alternatively pass <code>start</code> &amp; <code>end</code> (unix seconds). Not used by <code>chart=state</code>, which resolves its window from <code>granularity</code> instead</td>
+          </tr>
+          <tr>
+            <td><code>granularity</code></td>
+            <td><code>1m</code>, <code>10m</code>, <code>60m</code>, <code>8h</code>, <code>24h</code> (default), <code>7d</code>, <code>1mo</code>, <code>6mo</code>, <code>1y</code></td>
+            <td><code>chart=state</code> only. Picks both the bucket width and the trailing window at once (e.g. <code>1m</code> shows the last 45 minutes, <code>1y</code> shows the last 8 years)</td>
           </tr>
           <tr>
             <td><code>scope</code></td>
@@ -245,15 +250,18 @@
           <tr>
             <td><code>project</code>, <code>provider</code>, <code>token_type</code></td>
             <td>comma-separated</td>
-            <td>Orthogonal cross-filters (the active <code>group</code> dimension is never filtered). <code>token_type</code> values: <code>input</code> / <code>output</code> / <code>cache_read</code> / <code>cache_creation</code></td>
+            <td>Orthogonal cross-filters (the active <code>group</code> dimension is never filtered). <code>token_type</code> values: <code>input</code> / <code>output</code> / <code>cache_read</code> / <code>cache_creation</code>. For <code>chart=dora</code>, <code>project</code> instead names the single required repo (not a cross-filter)</td>
           </tr>
         </tbody>
       </table>
 
-      <p>The <code>cost</code> / <code>tokens</code> / <code>models</code> / <code>providers</code> charts return a time-series payload (<code>range</code>, <code>chart</code>, <code>group</code>, <code>start</code>, <code>end</code>, <code>bucket_seconds</code>, <code>bucket_starts</code>, <code>total</code>, <code>series</code>, <code>top_contributors</code>, with optional <code>forecast</code>, <code>token_split</code>, and <code>scope</code>). <code>chart=agents</code> swaps in a <code>concurrency</code> block; <code>chart=yield</code> returns a per-project shape (<code>productive_cost</code>, <code>reverted_cost</code>, <code>unknown_cost</code>, <code>total_cost</code>, <code>yield</code>, <code>projects</code>). Returns <code>400</code> for an unknown <code>chart</code> / <code>group</code> / <code>token_type</code> or an invalid range.</p>
+      <p>The <code>cost</code> / <code>tokens</code> / <code>co2</code> / <code>models</code> / <code>providers</code> / <code>agents</code> charts return a time-series payload (<code>range</code>, <code>chart</code>, <code>group</code>, <code>start</code>, <code>end</code>, <code>bucket_seconds</code>, <code>bucket_starts</code>, <code>total</code>, <code>series</code>, <code>top_contributors</code>, with optional <code>forecast</code>, <code>token_split</code>, and <code>scope</code>). <code>chart=agents</code> swaps in a <code>concurrency</code> block. <code>chart=state</code> is shaped differently &mdash; a dense grid rather than a sparse series &mdash; returning <code>projects</code> (row order, busiest first) and <code>by_state</code> (<code>working</code>/<code>waiting</code>/<code>ready</code>, each a <code>project &rarr; per-bucket array</code> map aligned to <code>bucket_starts</code>), plus the same <code>concurrency</code> block as <code>agents</code> (working+waiting combined). <code>chart=yield</code> returns a per-project shape (<code>productive_cost</code>, <code>reverted_cost</code>, <code>unknown_cost</code>, <code>total_cost</code>, <code>yield</code>, <code>projects</code>). <code>chart=dora</code> returns one project's four metrics (<code>deployment_frequency</code>, <code>lead_time</code>, <code>change_failure_rate</code>, <code>mttr</code>), each with <code>value</code>/<code>unit</code>/<code>sample_size</code>/<code>available</code>. Returns <code>400</code> for an unknown <code>chart</code> / <code>group</code> / <code>token_type</code> / <code>granularity</code> or an invalid range.</p>
 
       <pre><code># Weekly cost by project
-curl "http://127.0.0.1:7837/api/v1/history?chart=cost&group=project&range=week" | jq</code></pre>
+curl "http://127.0.0.1:7837/api/v1/history?chart=cost&group=project&range=week" | jq
+
+# Activity Matrix: working/waiting/ready per project, last 24 hourly buckets
+curl "http://127.0.0.1:7837/api/v1/history?chart=state&granularity=24h" | jq</code></pre>
 
       <h3>GET /api/v1/permissions</h3>
       <p>Returns the consent-first permission snapshot: the permission mode (<code>ask</code> or <code>grant-all</code>), and for every agent its detection status plus each declared permission with its state (<code>pending</code> / <code>granted</code> / <code>denied</code>), title, what it touches, and the feature it unlocks. The macOS app and web dashboard drive the permission wizard from this endpoint.</p>
