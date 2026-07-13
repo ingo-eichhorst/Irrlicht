@@ -307,12 +307,18 @@ func (d *SessionDetector) finalizeNewSession(id agent.Identity, ev agent.Event, 
 	// created" record, or — if catching up on a swallowed first turn
 	// (issue #996) — a synthetic ready->working->ready pair instead, mirroring
 	// synthesizeCollapsedTurnBoundaryIfNeeded's pattern (issue #988) for a
-	// different collapsed-boundary shape. Scoped to top-level sessions:
-	// pre-sessions are only ever minted for a top-level OS process, so a
-	// child/subagent session can't be the one superseding one — children
-	// keep today's behavior (correct final state, no synthesized transition)
-	// as a separate, deliberately unfixed gap (issue #999).
-	if state.ParentSessionID == "" && ShouldSynthesizeCatchUpTurn(supersedingLivePreSession, state.Metrics) {
+	// different collapsed-boundary shape. The liveness proof fed into
+	// ShouldSynthesizeCatchUpTurn differs by branch: top-level sessions use
+	// supersedingLivePreSession (a pre-session is only ever minted for a
+	// top-level OS process); child/subagent sessions have no pre-session of
+	// their own, so they use parentProcessLive instead — proof their parent's
+	// OS process is still running right now, not a cold-restart rediscovery
+	// of old history (issue #999).
+	liveSignal := supersedingLivePreSession
+	if state.ParentSessionID != "" {
+		liveSignal = d.parentProcessLive(state.ParentSessionID)
+	}
+	if ShouldSynthesizeCatchUpTurn(liveSignal, state.Metrics) {
 		d.recordCatchUpTurn(ev.SessionID, state)
 	} else {
 		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, NewState: state.State, Reason: "new session created"})
@@ -330,6 +336,33 @@ func (d *SessionDetector) finalizeNewSession(id agent.Identity, ev agent.Event, 
 	}
 
 	return true
+}
+
+// parentProcessLive is the child-side analog of a superseded live pre-session
+// (see finalizeNewSession's liveSignal computation): proof that a subagent's
+// parent OS process is still running right now, as opposed to the daemon
+// cold-rediscovering an already-finished historical subagent after a restart
+// (issue #999). Returns false — and thus no synthesis — when the parent
+// session is unknown or was never PID-bound (state.PID <= 0), so a genuinely
+// live but very-recently-spawned parent (PID discovery still in flight) is
+// treated the same as a dead one: a narrow, deliberately accepted
+// false-negative window traded for guaranteed safety against a backlog flood.
+//
+// Runs under d.pidMgr.WithSessionStateLock, matching
+// holdParentWorkingForNewChild's existing parent-load pattern: the parent may
+// have its own PID-discovery goroutine in flight, and reading its fields
+// without the lock would race that goroutine's assignPIDLocked write to the
+// same shared *SessionState (issue #606).
+func (d *SessionDetector) parentProcessLive(parentID string) bool {
+	live := false
+	d.pidMgr.WithSessionStateLock(func() {
+		parent, err := d.repo.Load(parentID)
+		if err != nil || parent == nil || parent.PID <= 0 {
+			return
+		}
+		live = d.pidMgr.IsPIDAlive(parent.PID)
+	})
+	return live
 }
 
 // recordCatchUpTurn emits the synthetic ready->working->ready pair

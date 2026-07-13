@@ -910,6 +910,18 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 	return foundDead
 }
 
+// IsPIDAlive reports whether pid still refers to a live OS process, using the
+// same syscall.Kill(pid, 0) probe reapDeadOrInfraPID already uses for
+// dead-PID reaping. Exposed as a standalone predicate so callers outside the
+// periodic sweep (e.g. SessionDetector.parentProcessLive, issue #999) can
+// reuse the exact same liveness semantics instead of re-deriving them. Note:
+// like reapDeadOrInfraPID's own check, this can't distinguish a still-alive
+// original process from an unrelated process that later reused the same PID
+// — an existing, accepted risk, not one this helper introduces.
+func (pm *PIDManager) IsPIDAlive(pid int) bool {
+	return syscall.Kill(pid, 0) != syscall.ESRCH
+}
+
 // reapDeadOrInfraPID handles the two ways a bound PID can prove the session is
 // gone: the process has actually exited (ESRCH), or — for the case ESRCH can
 // never catch — the PID is alive but is the adapter's background infra (e.g.

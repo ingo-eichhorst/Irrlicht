@@ -228,14 +228,18 @@ const SyntheticCatchUpTurnDoneReason = "turn already complete at first discovery
 // delayed long enough that the first turn already completed (metrics.IsAgentDone())
 // before the daemon ever looked, which would otherwise silently swallow it
 // and mislead downstream turn-boundary consumers about which turn was first
-// (issue #996).
+// (issue #996, extended to child/subagent sessions by issue #999).
 //
-// supersedingLivePreSession is the load-bearing half of the gate: it's only
-// true when this session is superseding a pre-session (proc-<pid>) the
-// daemon was already live-tracking for the same project/cwd — proof this is
-// a genuine live-launch race, not an ordinary cold-start rediscovery of a
-// large backlog of old, already-finished sessions (which must never get a
-// spurious bounce; see cleanupPreSessionsForProject's doc comment).
-func ShouldSynthesizeCatchUpTurn(supersedingLivePreSession bool, metrics *session.SessionMetrics) bool {
-	return supersedingLivePreSession && metrics.IsAgentDone()
+// hasLiveOrigin is the load-bearing half of the gate — proof of a genuinely
+// live precursor, not an ordinary cold-start rediscovery of a large backlog
+// of old, already-finished sessions (which must never get a spurious
+// bounce). Its meaning depends on the caller: for a top-level session it's
+// true only when this session is superseding a pre-session (proc-<pid>) the
+// daemon was already live-tracking for the same project/cwd (see
+// cleanupPreSessionsForProject's doc comment); for a child/subagent session,
+// which never gets a pre-session of its own, it's true when the parent
+// session's own OS process is still alive right now (see
+// SessionDetector.parentProcessLive).
+func ShouldSynthesizeCatchUpTurn(hasLiveOrigin bool, metrics *session.SessionMetrics) bool {
+	return hasLiveOrigin && metrics.IsAgentDone()
 }
