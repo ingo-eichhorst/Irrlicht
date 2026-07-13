@@ -2,9 +2,9 @@
 
 ## Short Cuts
 
-- Worktree-driven issue execution ("wt+plan", "wt+exec", "wt+full", "wt+close")
-  is handled entirely by the `ir:exec` skill — see its "Modes" section
-  (`.claude/skills/ir:exec/SKILL.md`) for what each shortcut does.
+- Issue execution is handled entirely by the `ir:exec` skill:
+  `/ir:exec [mode] <N>` (mode defaults to `auto`) — see its "Modes" section
+  (`.claude/skills/ir:exec/SKILL.md`) for what each mode does.
 - NEVER RUN: the Workflow tool (multi-agent orchestration) if not explicitly requested (too expensive)
 
 Worktrees share the parent repo's `.git` dir, so **`git stash` is not
