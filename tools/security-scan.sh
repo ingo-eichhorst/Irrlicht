@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # security-scan.sh — vulnerability scan + SAST gate, shared by
-# tools/preflight.sh's `security` group and .claude/skills/ir:release/skill.md's
+# tools/preflight.sh's `security` group and .claude/skills/ir:release/SKILL.md's
 # pre-build gate (Step 5.5), so both surfaces run identical checks.
 #
 # Full mode (default, used by /ir:release):

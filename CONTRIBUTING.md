@@ -18,6 +18,25 @@ This file is the short version that GitHub surfaces directly on the repo.
 First time? Look for issues labeled
 [`good first issue`](https://github.com/ingo-eichhorst/Irrlicht/labels/good%20first%20issue).
 
+## Learn by directing an agent
+
+Irrlicht doubles as a hands-on learning platform — the skill on offer is
+*directing a coding agent to build software*, not learning to use the
+Irrlicht app itself. This repo's own contribution loop is the practice ground:
+
+- **The loop itself is the lesson.** `/ir:exec #<issue>` — investigate → plan
+  → approve → implement → review — is the practice rep, whether you're a
+  maintainer or a first-time contributor. Issues labeled
+  [`good first issue`](https://github.com/ingo-eichhorst/Irrlicht/labels/good%20first%20issue)
+  or [`ready-for-agent`](https://github.com/ingo-eichhorst/Irrlicht/labels/ready-for-agent)
+  are low-stakes starting reps.
+- **See it work first.** [`examples/`](examples/) has runnable,
+  no-toolchain-needed demos of multiple agents operating on real sessions:
+  `relay/`, `roundtrip/`, and `coding-factory/`.
+- **You don't need to read a diff to contribute.** Describing a problem
+  clearly in an issue or Discussion is a complete contribution — `/ir:triage`
+  turns it into something an agent can pick up.
+
 ## Development setup
 
 Prerequisites: macOS 13+, Go 1.25+, Swift 5.9+, Xcode Command Line Tools.

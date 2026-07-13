@@ -2,10 +2,9 @@
 
 ## Short Cuts
 
-- "wt+plan" = create a worktree for the following issue. move into the worktree and plan execution
-- "wt+exec" = create a worktree for the following issue. move into the worktree, plan and directly execute
-- "wt+full" = create a worktree for the following issue. move into the worktree, plan, directly execute and start the code-review skill on low, then fix all issues and open a PR.
-- "wt+close" = make sure all contents of the worktree are pushed to a pr. Then merge to main and close the worktree, move back to main and delete the worktree
+- Worktree-driven issue execution ("wt+plan", "wt+exec", "wt+full", "wt+close")
+  is handled entirely by the `ir:exec` skill — see its "Modes" section
+  (`.claude/skills/ir:exec/SKILL.md`) for what each shortcut does.
 - NEVER RUN: the Workflow tool (multi-agent orchestration) if not explicitly requested (too expensive)
 
 Worktrees share the parent repo's `.git` dir, so **`git stash` is not
@@ -131,3 +130,7 @@ Linux-only bugs unless you pass `--linux`.
 ## Task Management
 - Use github issues to track tickets
 - Break down larger tasks into tasks using a task tool (e.g. todowrite in opencode or TaskCreate in claude code)
+- An agent picking up an issue should self-assign before starting work
+  (`gh issue edit <N> --add-assignee @me`), so others can see it's actively
+  being worked — `ir:exec` does this automatically at the start of its
+  implement phase
