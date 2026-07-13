@@ -450,15 +450,24 @@ func (s *Scanner) checkTranscriptFile(proc *trackedProc) (agent.Event, bool) {
 }
 
 // handleExitedPIDs removes tracked pre-sessions whose PID is no longer live
-// and broadcasts their removal.
+// and broadcasts their removal. A PID missing from this poll's matched set is
+// confirmed dead via IsAlive before it's reaped (issue #906): findMatchingPIDs
+// is a single pgrep/process-name snapshot that can transiently miss a
+// genuinely live process (e.g. a brief cmdline mismatch during interpreter
+// startup), and treating that snapshot alone as proof of exit tore down the
+// pre-session — and its transcript_removed record — long before the real
+// session ever appeared, with no promotion/supersession path ever getting a
+// chance to run. A false "not matched" now just leaves the PID tracked for
+// the next poll to re-confirm.
 func (s *Scanner) handleExitedPIDs(live map[int]bool) {
 	s.mu.Lock()
 	var exited []trackedProc
 	for pid, proc := range s.tracked {
-		if !live[pid] {
-			exited = append(exited, proc)
-			delete(s.tracked, pid)
+		if live[pid] || IsAlive(pid) {
+			continue
 		}
+		exited = append(exited, proc)
+		delete(s.tracked, pid)
 	}
 	s.mu.Unlock()
 
