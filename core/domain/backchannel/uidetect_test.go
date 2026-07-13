@@ -25,6 +25,16 @@ func TestDetectUI(t *testing.T) {
 			UIKindTrustDialog,
 		},
 		{
+			"vibe permission dialog title",
+			"┌─ Permission for the bash tool (execute) ─┐\n│ Allow once                                │",
+			UIKindTrustDialog,
+		},
+		{
+			"vibe permission dialog remainder option",
+			"│ Allow for remainder of this session       │\n│ Always allow                              │",
+			UIKindTrustDialog,
+		},
+		{
 			"ordinary output is not a dialog",
 			"Running tests...\n ok  irrlicht/core/...  0.42s\n>",
 			UIKindNone,

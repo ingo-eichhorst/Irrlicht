@@ -229,6 +229,84 @@ func TestSessionDetector_Activity_SamePassUserBlocking_RespectsParentHold(t *tes
 	}
 }
 
+// TestSessionDetector_Activity_SamePassTurnBoundary_EmitsSyntheticSettleAndReopen
+// is the regression test for issue #988: when the tailer sees a turn_done
+// followed by a fresh user/assistant exchange and another turn_done in a
+// single pass (a queued follow-up drained synchronously with no observable
+// ready gap — e.g. mistral-vibe's in-memory message queue), the daemon must
+// emit the synthetic working→ready→working pair so observers see the
+// collapsed turn boundary instead of one merged working→ready span.
+func TestSessionDetector_Activity_SamePassTurnBoundary_EmitsSyntheticSettleAndReopen(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	rec := &mockRecorder{}
+	det := newDetector(tw, pw, repo)
+	det.SetRecorder(rec)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	// Let seedFromDisk complete before injecting the session.
+	time.Sleep(20 * time.Millisecond)
+
+	// Metrics as if the tailer just processed: turn_done, then a queued
+	// follow-up's user+assistant exchange, then turn_done again — all in
+	// one pass. LastEventType is the queued turn's own turn_done, so the
+	// classifier's real verdict (computed against the pre-synthesis
+	// "working" state) is ready — same as an ordinary single turn.
+	repo.Save(&session.SessionState{
+		SessionID:      "queued1",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/queued1.jsonl",
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+		EventCount:     1,
+		Metrics: &session.SessionMetrics{
+			LastEventType:          "turn_done",
+			SawMidPassTurnBoundary: true,
+		},
+	})
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "queued1",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/queued1.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	state, _ := repo.Load("queued1")
+	if state.State != session.StateReady {
+		t.Errorf("final state: got %q, want ready (queued turn's own turn_done)", state.State)
+	}
+
+	var prevs, news []string
+	for _, ev := range rec.snapshot() {
+		if ev.Kind == lifecycle.KindStateTransition {
+			prevs = append(prevs, ev.PrevState)
+			news = append(news, ev.NewState)
+		}
+	}
+	wantPrevs := []string{session.StateWorking, session.StateReady, session.StateWorking}
+	wantNews := []string{session.StateReady, session.StateWorking, session.StateReady}
+	if len(prevs) != len(wantPrevs) {
+		t.Fatalf("state transitions: got %d (%v→%v), want %d (%v→%v)",
+			len(prevs), prevs, news, len(wantPrevs), wantPrevs, wantNews)
+	}
+	for i := range prevs {
+		if prevs[i] != wantPrevs[i] || news[i] != wantNews[i] {
+			t.Errorf("transition %d: got %s→%s, want %s→%s",
+				i, prevs[i], news[i], wantPrevs[i], wantNews[i])
+		}
+	}
+}
+
 func TestSessionDetector_Activity_TransitionsToReady_WhenAgentDone(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()

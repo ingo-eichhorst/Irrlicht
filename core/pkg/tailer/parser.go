@@ -389,6 +389,24 @@ type idleFlusher interface {
 	IdleFlush(idleFor time.Duration) *ParsedEvent
 }
 
+// queuedTurnSplitter is an optional interface a parser implements when its
+// adapter's queued-follow-up model genuinely starts a NEW, distinct turn
+// once drained — not a mid-turn continuation/steering input folded into the
+// turn already in progress. Mistral Vibe's in-memory message queue drains a
+// follow-up prompt synchronously the instant the prior turn clears, with no
+// observable ready gap (issue #988); without this signal the tailer would
+// fold both turns into one working→ready span.
+//
+// Deliberately opt-in and adapter-specific: other adapters queue follow-ups
+// differently and must NOT implement this. Pi's steering input, for
+// example, is intentionally the SAME turn — its
+// 2-10_mid-turn-message-queued fixture asserts a single contiguous working
+// span with no intervening ready, and implementing this interface there
+// would incorrectly split it.
+type queuedTurnSplitter interface {
+	SplitsQueuedFollowUpTurns() bool
+}
+
 // ParserLedger holds the durable state a stateful parser checkpoints across
 // daemon restarts. Fields are parser-specific; unused ones stay zero.
 type ParserLedger struct {

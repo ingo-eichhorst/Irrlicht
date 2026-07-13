@@ -163,3 +163,49 @@ func ShouldSynthesizeCollapsedWaiting(currentState, newState string, metrics *se
 	}
 	return metrics.SawUserBlockingToolClosedThisPass
 }
+
+// SyntheticTurnSettleReason is the reason string for the synthetic
+// working→ready transition emitted when a tailer pass collapses a
+// genuinely distinct queued turn boundary (issue #988): a turn completed
+// and a follow-up turn began in the same pass, with no observable ready
+// gap between them (e.g. mistral-vibe's in-memory message queue, which
+// drains a follow-up prompt the instant the prior turn clears).
+const SyntheticTurnSettleReason = "turn completed, queued follow-up began in the same pass → synthetic settle"
+
+// SyntheticQueuedTurnStartReason is the reason string for the synthetic
+// ready→working transition immediately following SyntheticTurnSettleReason,
+// representing the queued follow-up turn's own start.
+const SyntheticQueuedTurnStartReason = "queued follow-up turn began → synthetic re-open"
+
+// ShouldSynthesizeCollapsedTurnBoundary reports whether the caller should
+// emit a synthetic working→ready→working pair before applying the
+// classifier's result. This recovers the turn boundary that the tailer's
+// batch scan collapsed when a queued follow-up turn began (and possibly
+// completed) in the same pass as the prior turn's own turn_done — the
+// batch-scan analog of ShouldSynthesizeCollapsedWaiting (issue #150), but
+// for a turn_done boundary instead of a user-blocking tool.
+//
+// Fires only when the session was already working (a settle→re-open pair
+// only makes sense mid-turn) and no overlay signal says the session is
+// actually blocked on something else this pass (a real pending permission
+// prompt or an in-progress manual compaction) — those forced states are
+// not consistent with "a turn genuinely completed and restarted".
+//
+// Callers (SessionDetector.classifyAndTransition and the replay engine)
+// should, on true: emit working→ready with SyntheticTurnSettleReason, then
+// ready→working with SyntheticQueuedTurnStartReason, and set the effective
+// current state to working so the classifier's already-computed verdict
+// (typically ready, since LastEventType is the queued turn's own
+// turn_done) applies as the real final transition.
+func ShouldSynthesizeCollapsedTurnBoundary(currentState string, metrics *session.SessionMetrics) bool {
+	if currentState != session.StateWorking {
+		return false
+	}
+	if metrics == nil {
+		return false
+	}
+	if metrics.PermissionPending || metrics.CompactInProgress {
+		return false
+	}
+	return metrics.SawMidPassTurnBoundary
+}

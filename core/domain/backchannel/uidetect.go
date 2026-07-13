@@ -27,6 +27,9 @@ var trustDialogMarkers = []string{
 	"Do you want to proceed?",
 	"Do you trust the files in this folder?",
 	"Do you want to allow this tool",
+	// mistral-vibe's approval_app.py TUI dialog (title prefix + option label).
+	"Permission for the",
+	"Allow for remainder of this session",
 }
 
 // DetectUI inspects a rendered terminal screen and returns the UI state it

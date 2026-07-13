@@ -11,7 +11,8 @@
 // The engine performs no wall-clock sleeps and is deterministic: it mirrors
 // the daemon's debounce + force-ready→working + ClassifyState +
 // ShouldSynthesizeCollapsedWaiting pipeline against a scratch copy of the
-// transcript.
+// transcript. It deliberately does NOT mirror
+// ShouldSynthesizeCollapsedTurnBoundary (issue #988) — see classifyBatch.
 package replayengine
 
 import (
@@ -305,6 +306,17 @@ func (r *replayer) classifyBatch(eventIdx int, virtTime time.Time, cause Cause, 
 		r.emit(eventIdx, virtTime, cause, r.state, session.StateWorking, services.ForceReadyToWorkingReason, m)
 		r.state = session.StateWorking
 	}
+	// Deliberately NOT mirroring ShouldSynthesizeCollapsedTurnBoundary here
+	// (issue #988): its trigger, SawMidPassTurnBoundary, depends on how many
+	// real turns land in one TailAndProcess batch, and the live daemon's
+	// batching is governed by REAL wall-clock debounce (2s) while this
+	// engine's batchByDebounce approximates it from the TRANSCRIPT's own
+	// per-line timestamps. Parsers whose format carries no such timestamps
+	// (e.g. vibe's messages.jsonl) fall back to one mega-batch per replay,
+	// which would spuriously flag nearly every multi-turn transcript instead
+	// of just the genuine same-pass collapse the live daemon observes. Only
+	// the live path (SessionDetector.classifyAndTransition) has real timing
+	// to gate this on.
 	newState, reason := services.ClassifyState(r.state, m)
 	if services.ShouldSynthesizeCollapsedWaiting(r.state, newState, m) {
 		r.emit(eventIdx, virtTime, cause, r.state, session.StateWaiting, services.SyntheticWaitingReason, m)

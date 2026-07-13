@@ -6,8 +6,8 @@
     "driver_capability": "ready",
     "agent_cli_version": "2.19.0",
     "daemon_version": "0.5.5+e943e26",
-    "confidence": 0.72,
-    "notes": "agent=yes; daemon=bug (session SURVIVES idle past TTL — core claim holds — but a vibe-specific spurious working flicker fires ~2s after each turn_done, breaking the strict no-working-during-idle invariant; see issue #988); driver=ready (wait_turn/sleep ported and drove clean)"
+    "confidence": 0.85,
+    "notes": "agent=yes; daemon=bug (RE-CONFIRMED 2026-07-13 against irrlichd 0.5.7+2c97cfa, issue #988 worktree, which carries #905's force-bounce fix — the ORIGINALLY diagnosed spurious flicker mechanism is gone, but a DISTINCT session-discovery-latency mechanism now causes 3/6 phases to fail: the daemon didn't discover the real session transcript until turn 1 had already completed, so first_turn_start/end are misattributed to turn 2 and idle_window's transcript_removed invariant fails when the recipe tears down ~5s later — see issue #988); driver=ready (wait_turn/sleep ported and drove clean)"
   },
   "details": {
     "assessment": {
@@ -18,41 +18,42 @@
       "agent_supports": "yes",
       "daemon_capability": "bug",
       "driver_capability": "ready",
-      "confidence": 0.72,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full (provisional on PID bind)\ndriver_capability: gap:wait_turn\n\n## Reasoning\n\nThe scenario asserts three user-observable signals: (1) the session does NOT disappear past `readyTTL`, (2) state remains `ready` during the idle window, and (3) the next user prompt resumes `ready → working` normally, with tool calls ≤ 0.\n\n### agent = yes\nMistral Vibe (v2.19.0, `/Users/merlin/.local/bin/vibe`) is a long-lived interactive Python console-script REPL. Once launched it sits in its prompt loop until the user sends the next prompt or exits — it does not self-terminate at turn completion. Real transcripts under `~/.vibe/logs/session/` show multi-turn sessions whose terminal message is a text-only assistant reply. Long-idle-live is baseline REPL persistence, no special feature required.\n\n### daemon = full (provisional)\nThe persistence mechanism is daemon-side and adapter-agnostic. `PIDManager.sweepStaleSnapshot` (core/application/services/pid_manager.go:942-948) first tests `isStaleUpdatedAt(updatedAt, readyTTL)` — during idle the JSONL stops appending, so `UpdatedAt` freezes and eventually crosses the TTL — then, before deleting, returns early when `snap.pid > 0 && syscall.Kill(pid,0) == nil`. So an idle-past-TTL session backed by a live PID is NOT swept. The vibe adapter wires exactly what this path needs: `Process.Match = CommandPattern{processCmdRegex}` + `PIDForSession = DiscoverPID`, which binds the running Python `vibe` process by cwd+command-line (pid.go / DiscoverPIDByCWDAndCmdLine), the cwd sourced from the meta.json sidecar. The turn arc is produced by parser.go: `role:user` → user_message (ready → working); a text-only `role:assistant` (no tool_calls) → turn_done (working → ready). Simple echo prompts drive zero tool calls, satisfying `tool calls ≤ 0`.\n\nWhy provisional (confidence 0.72, not 0.9): liveness hinges entirely on `DiscoverPID` actually binding `pid > 0`. Vibe is a console-script whose OS process name is the interpreter, so the match is by cmdline+cwd, not process name — a shape only a live drive can confirm fires. If the bind fails, `snap.pid == 0` and `reapUnboundReadyGhost` (pid_manager.go:938) sweeps the ready session once its transcript goes stale — the exact disappearance the scenario must exclude. Reading the parser proves emission of the state arc but not that PID discovery succeeds; `record` promotes this from provisional to settled.\n\n### driver = gap:wait_turn\nThe recipe templates claudecode's: send → wait_turn → sleep 20 → send → wait_turn → sleep 5. The freshly-scaffolded driver `replaydata/agents/mistral-vibe/driver-interactive.sh` has its turn-done seam (SEAM 2) still stubbed — `wait_turn() { not_implemented wait_turn }` (lines 168-170) — and its `DRIVE_ELICITS` constant is `\"send slash sleep\"`, which omits `wait_turn`. `recipe-lint`'s semantic check (`recipe_semantic_gaps`) reads `DRIVE_ELICITS` and would flag `not-elicited:wait_turn` before recording. This contradicts the dispatch note's claim that `wait_turn` is real; verified against source, it is not. This is a tooling gap, not an observability limit: the cell keeps its real recipe + spec and `record` ports the turn-done poll (from drive-claudecode/codex-interactive.sh) before driving.\n\n### observations\nmodel = `mistral-medium-3.5` (confirmed from a live `~/.vibe/logs/session/*/meta.json` `config.active_model` on this machine; `NormalizeModelName` leaves it unchanged; mistral models are absent from core/pkg/capacity so the context-WINDOW is unresolved, but the model NAME is emitted every event via the sidecar). tokens_nonzero = true: turn_done emits `Tokens.Total` from `stats.context_tokens` (parser.go:112). cost_nonzero = false: the daemon does NOT emit per-turn cost — sidecar.go decodes only working_directory/active_model/context_tokens and never reads `session_cost`, and the parser never sets `Cost`.",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full (provisional on PID bind)\ndriver_capability: gap:wait_turn\n\n## Reasoning\n\nThe scenario asserts three user-observable signals: (1) the session does NOT disappear past `readyTTL`, (2) state remains `ready` during the idle window, and (3) the next user prompt resumes `ready \u2192 working` normally, with tool calls \u2264 0.\n\n### agent = yes\nMistral Vibe (v2.19.0, `/Users/merlin/.local/bin/vibe`) is a long-lived interactive Python console-script REPL. Once launched it sits in its prompt loop until the user sends the next prompt or exits \u2014 it does not self-terminate at turn completion. Real transcripts under `~/.vibe/logs/session/` show multi-turn sessions whose terminal message is a text-only assistant reply. Long-idle-live is baseline REPL persistence, no special feature required.\n\n### daemon = full (provisional)\nThe persistence mechanism is daemon-side and adapter-agnostic. `PIDManager.sweepStaleSnapshot` (core/application/services/pid_manager.go:942-948) first tests `isStaleUpdatedAt(updatedAt, readyTTL)` \u2014 during idle the JSONL stops appending, so `UpdatedAt` freezes and eventually crosses the TTL \u2014 then, before deleting, returns early when `snap.pid > 0 && syscall.Kill(pid,0) == nil`. So an idle-past-TTL session backed by a live PID is NOT swept. The vibe adapter wires exactly what this path needs: `Process.Match = CommandPattern{processCmdRegex}` + `PIDForSession = DiscoverPID`, which binds the running Python `vibe` process by cwd+command-line (pid.go / DiscoverPIDByCWDAndCmdLine), the cwd sourced from the meta.json sidecar. The turn arc is produced by parser.go: `role:user` \u2192 user_message (ready \u2192 working); a text-only `role:assistant` (no tool_calls) \u2192 turn_done (working \u2192 ready). Simple echo prompts drive zero tool calls, satisfying `tool calls \u2264 0`.\n\nWhy provisional (confidence 0.72, not 0.9): liveness hinges entirely on `DiscoverPID` actually binding `pid > 0`. Vibe is a console-script whose OS process name is the interpreter, so the match is by cmdline+cwd, not process name \u2014 a shape only a live drive can confirm fires. If the bind fails, `snap.pid == 0` and `reapUnboundReadyGhost` (pid_manager.go:938) sweeps the ready session once its transcript goes stale \u2014 the exact disappearance the scenario must exclude. Reading the parser proves emission of the state arc but not that PID discovery succeeds; `record` promotes this from provisional to settled.\n\n### driver = gap:wait_turn\nThe recipe templates claudecode's: send \u2192 wait_turn \u2192 sleep 20 \u2192 send \u2192 wait_turn \u2192 sleep 5. The freshly-scaffolded driver `replaydata/agents/mistral-vibe/driver-interactive.sh` has its turn-done seam (SEAM 2) still stubbed \u2014 `wait_turn() { not_implemented wait_turn }` (lines 168-170) \u2014 and its `DRIVE_ELICITS` constant is `\"send slash sleep\"`, which omits `wait_turn`. `recipe-lint`'s semantic check (`recipe_semantic_gaps`) reads `DRIVE_ELICITS` and would flag `not-elicited:wait_turn` before recording. This contradicts the dispatch note's claim that `wait_turn` is real; verified against source, it is not. This is a tooling gap, not an observability limit: the cell keeps its real recipe + spec and `record` ports the turn-done poll (from drive-claudecode/codex-interactive.sh) before driving.\n\n### observations\nmodel = `mistral-medium-3.5` (confirmed from a live `~/.vibe/logs/session/*/meta.json` `config.active_model` on this machine; `NormalizeModelName` leaves it unchanged; mistral models are absent from core/pkg/capacity so the context-WINDOW is unresolved, but the model NAME is emitted every event via the sidecar). tokens_nonzero = true: turn_done emits `Tokens.Total` from `stats.context_tokens` (parser.go:112). cost_nonzero = false: the daemon does NOT emit per-turn cost \u2014 sidecar.go decodes only working_directory/active_model/context_tokens and never reads `session_cost`, and the parser never sets `Cost`.",
       "caveats": [
-        "daemon=full is provisional on PID binding: DiscoverPID must bind pid>0 for the Python vibe console-script via cwd+cmdline. If it fails, reapUnboundReadyGhost (pid_manager.go:938) sweeps the idle ready session — the exact failure the scenario excludes. record confirms the bind fires.",
+        "daemon=full is provisional on PID binding: DiscoverPID must bind pid>0 for the Python vibe console-script via cwd+cmdline. If it fails, reapUnboundReadyGhost (pid_manager.go:938) sweeps the idle ready session \u2014 the exact failure the scenario excludes. record confirms the bind fires.",
         "model 'mistral-medium-3.5' is the confirmed local default from a live meta.json; if the recording's active_model differs, record should correct the observation.",
         "tokens_nonzero=true assumes vibe writes a non-zero stats.context_tokens to meta.json by the first turn_done; provisional until record confirms the sidecar is populated early.",
         "Recording exercises a ~15-20s idle window; production sessions idle for hours. duration_at_least_ms is a floor, so longer real idles still pass.",
         "context-WINDOW (max) is not resolved for mistral models (absent from core/pkg/capacity); only the raw context-token count is emitted. The scenario asserts neither, so daemon stays full.",
-        "RECORDING FINDING (2026-07-07-22-13-22): the vibe session is NOT reaped during the 20s idle (turn 2 resumes at +22s, past the 15s TTL) — survival holds. BUT a spurious force ready→working→ready flicker fires ~2s after EACH turn_done (events 22:13:28.530 and 22:13:50.589) with NO transcript_activity of its own, following a debounce_coalesced. Sibling claudecode/codex long-idle recordings hold ready cleanly with NO such flicker, so this is vibe-specific — the multi-file per-turn write (messages.jsonl + meta.json sidecar) trips the debounce/force-first-activity classifier. This breaks the idle_window \"no state_transition to working\" invariant → daemon=bug, known_failing, see issue #988."
+        "RECORDING FINDING (2026-07-07-22-13-22): the vibe session is NOT reaped during the 20s idle (turn 2 resumes at +22s, past the 15s TTL) \u2014 survival holds. BUT a spurious force ready\u2192working\u2192ready flicker fires ~2s after EACH turn_done (events 22:13:28.530 and 22:13:50.589) with NO transcript_activity of its own, following a debounce_coalesced. Sibling claudecode/codex long-idle recordings hold ready cleanly with NO such flicker, so this is vibe-specific \u2014 the multi-file per-turn write (messages.jsonl + meta.json sidecar) trips the debounce/force-first-activity classifier. This breaks the idle_window \"no state_transition to working\" invariant \u2192 daemon=bug, known_failing, see issue #988.",
+        "RE-RECORDING FINDING (2026-07-13, irrlichd 0.5.7+2c97cfa, issue #988 worktree carrying #905's force-bounce fix): the ORIGINALLY diagnosed spurious post-turn_done flicker is GONE (no phantom bounce follows any real turn_done in this recording). known_failing PERSISTS for a DISTINCT mechanism instead: the daemon didn't discover the real session_<ts>_<hash> transcript (transcript_new) until +17.3s after the presession bound ready \u2014 by which point vibe's first turn had already fully completed and flushed to messages.jsonl (the 534-byte discovered size exactly matches turn 1's content). No working transition is ever emitted for that already-complete turn 1 on first discovery, so the matcher's only observed working->ready cycle is turn 2's \u2014 misattributed as first_turn_start/end (which pass), then idle_window fails its 'no transcript_removed for primary session' invariant when the recipe's teardown exits the process ~5s later, well short of the 15s window. 3/6 phases pass. Plausibly this dev machine's large pre-existing session backlog (the coexist daemon must enumerate every agent's real transcript dirs under $HOME on cold start before noticing the ONE new vibe session) rather than a vibe-specific defect; a --attach recording against an already-warm daemon (this skill's normal flow) would likely avoid this discovery lag, but doing so here would have required rebuilding+replacing the user's live production daemon. Left known_failing; daemon_capability stays bug pending investigation of the discovery-latency mechanism specifically (as opposed to the force-bounce mechanism, which record now confirms fixed)."
       ],
       "sources": [
         {
           "kind": "file",
           "ref": "core/application/services/pid_manager.go",
-          "note": "sweepStaleSnapshot (942-948): idle-past-readyTTL session is NOT deleted while snap.pid>0 && Kill(pid,0)==nil — the adapter-agnostic PID-liveness skip. reapUnboundReadyGhost (938) is the pid==0 failure path."
+          "note": "sweepStaleSnapshot (942-948): idle-past-readyTTL session is NOT deleted while snap.pid>0 && Kill(pid,0)==nil \u2014 the adapter-agnostic PID-liveness skip. reapUnboundReadyGhost (938) is the pid==0 failure path."
         },
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/vibe/agent.go",
-          "note": "Process.Match = CommandPattern{processCmdRegex} + PIDForSession = DiscoverPID — the adapter wires the PID binding the liveness skip depends on."
+          "note": "Process.Match = CommandPattern{processCmdRegex} + PIDForSession = DiscoverPID \u2014 the adapter wires the PID binding the liveness skip depends on."
         },
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/vibe/parser.go",
-          "note": "user→user_message (working); text-only assistant (no tool_calls)→turn_done (ready). applySidecar emits ModelName every event and Tokens.Total from context_tokens on turn_done; never sets Cost."
+          "note": "user\u2192user_message (working); text-only assistant (no tool_calls)\u2192turn_done (ready). applySidecar emits ModelName every event and Tokens.Total from context_tokens on turn_done; never sets Cost."
         },
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/vibe/sidecar.go",
-          "note": "Decodes only environment.working_directory, config.active_model, stats.context_tokens — session_cost is NOT read, so per-turn cost is never emitted (cost_nonzero:false)."
+          "note": "Decodes only environment.working_directory, config.active_model, stats.context_tokens \u2014 session_cost is NOT read, so per-turn cost is never emitted (cost_nonzero:false)."
         },
         {
           "kind": "file",
           "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh",
-          "note": "SEAM 2 wait_turn() { not_implemented wait_turn } (168-170) and DRIVE_ELICITS=\"send slash sleep\" — wait_turn is stubbed and not elicited, so recipe-lint flags not-elicited:wait_turn (driver=gap:wait_turn)."
+          "note": "SEAM 2 wait_turn() { not_implemented wait_turn } (168-170) and DRIVE_ELICITS=\"send slash sleep\" \u2014 wait_turn is stubbed and not elicited, so recipe-lint flags not-elicited:wait_turn (driver=gap:wait_turn)."
         },
         {
           "kind": "file",
@@ -62,7 +63,7 @@
         {
           "kind": "file",
           "ref": "replaydata/agents/claudecode/scenarios/1-3_long-idle-live-session/metadata.json",
-          "note": "Sibling template for this scenario: same 6-step recipe (send/wait_turn/sleep×2) and same PID-liveness rationale."
+          "note": "Sibling template for this scenario: same 6-step recipe (send/wait_turn/sleep\u00d72) and same PID-liveness rationale."
         }
       ]
     },
@@ -72,11 +73,11 @@
         "vibe CLI on PATH (2.19.0) and authenticated (MISTRAL_API_KEY or vibe config)",
         "irrlichd running with IRRLICHT_READY_SESSION_TTL=15s in its environment (the daemon's default 30 min would force a 32+ min recording)",
         "irrlichd in --record mode with the transcripts permission granted",
-        "record must PORT the wait_turn turn-done poll into driver-interactive.sh (SEAM 2) before driving — it is currently stubbed"
+        "record must PORT the wait_turn turn-done poll into driver-interactive.sh (SEAM 2) before driving \u2014 it is currently stubbed"
       ],
       "setup": [
         "Driver launches vibe under tmux in a fresh real cwd; the session dir + messages.jsonl and meta.json sidecar materialize at launch. cwd is read from meta.json for PID binding.",
-        "The first post-turn sleep (20s) is ~1.33x the 15s TTL — long enough to prove the pid-liveness skip (pid_manager.go:942-948) holds the bound session past readyTTL without burning a full minute."
+        "The first post-turn sleep (20s) is ~1.33x the 15s TTL \u2014 long enough to prove the pid-liveness skip (pid_manager.go:942-948) holds the bound session past readyTTL without burning a full minute."
       ],
       "script": [
         {
@@ -106,7 +107,7 @@
         "the vibe session binds pid>0 (cwd resolved from meta.json, matched via processCmdRegex) after turn 1 enters ready",
         "no transcript_removed for the session during the 20s idle window (not swept while the vibe process is alive)",
         "no state_transition to working or waiting during the idle window (state stays ready)",
-        "after the second send: ready → working → ready for the SAME session",
+        "after the second send: ready \u2192 working \u2192 ready for the SAME session",
         "final session state is ready; tool calls = 0"
       ],
       "settings": {},

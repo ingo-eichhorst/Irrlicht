@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestValidateExpected runs the spec-grounded expected.jsonl validator
@@ -298,6 +299,59 @@ func TestValidateExpected_newSession_failsWhenOnlyOldSeen(t *testing.T) {
 	reason := report.Phases[1].Reason
 	if !strings.Contains(reason, "NEW session") {
 		t.Errorf("expected reason to mention new-session requirement, got %q", reason)
+	}
+}
+
+// TestValidateExpected_sessionIDPrefix_disambiguatesConcurrentAdapters
+// models #988 item 5: a concurrent multi-adapter recording where a
+// partner adapter's own presession reaches "ready" first (a fresh
+// session_id, so plain new_session would bind it), but only the
+// intended adapter's session_id carries the expected prefix.
+// session_id_prefix must skip the partner's presession and match the
+// later, correctly-prefixed session instead.
+func TestValidateExpected_sessionIDPrefix_disambiguatesConcurrentAdapters(t *testing.T) {
+	dir := t.TempDir()
+	writeRec(t, dir, "events.jsonl",
+		`{"ts":"2026-01-01T00:00:00Z","kind":"state_transition","session_id":"proc-1","new_state":"ready"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:01Z","kind":"state_transition","session_id":"proc-2","new_state":"ready"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:15Z","kind":"state_transition","session_id":"session_real_abc","new_state":"ready"}`+"\n")
+	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
+			`{"phase":"presession_birth","expected_state":"ready","relative_to":"start","max_delay_ms":1000,"text":"vibe's own proc-<PID> presession"}`+"\n"+
+			`{"phase":"session_birth","expected_state":"ready","relative_to":"presession_birth","new_session":true,"session_id_prefix":"session_","max_delay_ms":30000,"text":"vibe's real session — must skip the partner adapter's proc-2 presession"}`+"\n")
+	report, err := ValidateExpected(dir)
+	if err != nil {
+		t.Fatalf("ValidateExpected: %v", err)
+	}
+	if !report.Pass {
+		for _, p := range report.Phases {
+			t.Logf("phase %s: pass=%v reason=%q", p.Phase, p.Pass, p.Reason)
+		}
+		t.Fatal("expected all phases to pass — session_id_prefix should skip proc-2 and match session_real_abc")
+	}
+	if got := report.Phases[1].MatchedTs; !got.Equal(time.Date(2026, 1, 1, 0, 0, 15, 0, time.UTC)) {
+		t.Errorf("session_birth matched_ts = %v, want 00:00:15 (session_real_abc, not proc-2)", got)
+	}
+}
+
+// TestValidateExpected_sessionIDPrefix_failsWhenNoMatch — the prefix
+// filter rejects every candidate session_id, so the phase fails even
+// though new_session alone would have matched.
+func TestValidateExpected_sessionIDPrefix_failsWhenNoMatch(t *testing.T) {
+	dir := t.TempDir()
+	writeRec(t, dir, "events.jsonl",
+		`{"ts":"2026-01-01T00:00:00Z","kind":"state_transition","session_id":"proc-1","new_state":"ready"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:01Z","kind":"state_transition","session_id":"proc-2","new_state":"ready"}`+"\n")
+	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
+			`{"phase":"v1","expected_state":"ready","relative_to":"start","text":"first presession"}`+"\n"+
+			`{"phase":"v2","expected_state":"ready","relative_to":"v1","new_session":true,"session_id_prefix":"session_","max_delay_ms":5000,"text":"no session_id ever carries the prefix"}`+"\n")
+	report, err := ValidateExpected(dir)
+	if err != nil {
+		t.Fatalf("ValidateExpected: %v", err)
+	}
+	if report.Pass {
+		t.Fatal("expected failure — no session_id matches the required prefix")
 	}
 }
 

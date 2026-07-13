@@ -741,7 +741,12 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	now := time.Now().Unix()
 	newState, reason := ClassifyState(state.State, state.Metrics)
 	newState, reason, parentHeldWorking := d.holdParentForActiveChildren(state, ev, newState, reason)
-	newState, reason = d.synthesizeCollapsedWaitingIfNeeded(state, ev, collapsedWaitingCandidate{
+	newState, reason = d.synthesizeCollapsedTurnBoundaryIfNeeded(state, ev, classifierCandidate{
+		NewState:          newState,
+		Reason:            reason,
+		ParentHeldWorking: parentHeldWorking,
+	})
+	newState, reason = d.synthesizeCollapsedWaitingIfNeeded(state, ev, classifierCandidate{
 		NewState:          newState,
 		Reason:            reason,
 		ParentHeldWorking: parentHeldWorking,
@@ -844,14 +849,54 @@ func (d *SessionDetector) holdParentForActiveChildren(state *session.SessionStat
 	return session.StateWorking, "", true
 }
 
-// collapsedWaitingCandidate carries the classifier's candidate next
-// state/reason plus whether holdParentForActiveChildren already overrode it
-// — keeping synthesizeCollapsedWaitingIfNeeded's parameter list small
-// (go:S107) instead of threading each field through individually.
-type collapsedWaitingCandidate struct {
+// classifierCandidate carries the classifier's candidate next state/reason
+// plus whether holdParentForActiveChildren already overrode it — keeping
+// the synthesizeCollapsed*IfNeeded functions' parameter lists small
+// (go:S107) instead of threading each field through individually. Shared by
+// synthesizeCollapsedTurnBoundaryIfNeeded and synthesizeCollapsedWaitingIfNeeded.
+type classifierCandidate struct {
 	NewState          string
 	Reason            string
 	ParentHeldWorking bool
+}
+
+// synthesizeCollapsedTurnBoundaryIfNeeded emits a synthetic
+// working→ready→working pair when the tailer's batch scan coalesces a
+// genuinely distinct queued turn boundary — e.g. mistral-vibe's in-memory
+// message queue, which drains a follow-up prompt synchronously the instant
+// the prior turn's agent_running() clears, leaving no observable ready gap
+// between the two turns (issue #988). Without this, the debounce/batch scan
+// folds both turns' activity into a single working→ready span and the
+// queued turn's own start is never observed. Skipped when
+// holdParentForActiveChildren already rewrote newState: that parent has
+// active children and must stay working, so briefly recording it as ready
+// (even synthetically) would misrepresent the hold. Mirrors
+// synthesizeCollapsedWaitingIfNeeded's same-pass-collapse shape (issue
+// #150) but for a turn_done boundary instead of a user-blocking tool.
+func (d *SessionDetector) synthesizeCollapsedTurnBoundaryIfNeeded(state *session.SessionState, ev agent.Event, candidate classifierCandidate) (string, string) {
+	newState, reason := candidate.NewState, candidate.Reason
+	if candidate.ParentHeldWorking || !ShouldSynthesizeCollapsedTurnBoundary(state.State, state.Metrics) {
+		return newState, reason
+	}
+	d.log.LogInfo(logComponentSessionDetector, ev.SessionID, SyntheticTurnSettleReason)
+	d.record(lifecycle.Event{
+		Kind:      lifecycle.KindStateTransition,
+		SessionID: ev.SessionID,
+		PrevState: session.StateWorking,
+		NewState:  session.StateReady,
+		Reason:    SyntheticTurnSettleReason,
+		Inputs:    classifierInputs(state.Metrics),
+	})
+	d.record(lifecycle.Event{
+		Kind:      lifecycle.KindStateTransition,
+		SessionID: ev.SessionID,
+		PrevState: session.StateReady,
+		NewState:  session.StateWorking,
+		Reason:    SyntheticQueuedTurnStartReason,
+		Inputs:    classifierInputs(state.Metrics),
+	})
+	state.State = session.StateWorking
+	return newState, reason
 }
 
 // synthesizeCollapsedWaitingIfNeeded emits a synthetic working→waiting
@@ -865,7 +910,7 @@ type collapsedWaitingCandidate struct {
 // active children and must stay working, and reclassifying from waiting
 // would let rule 3 fire and transition it to ready despite children still
 // running — undoing the hold.
-func (d *SessionDetector) synthesizeCollapsedWaitingIfNeeded(state *session.SessionState, ev agent.Event, candidate collapsedWaitingCandidate) (string, string) {
+func (d *SessionDetector) synthesizeCollapsedWaitingIfNeeded(state *session.SessionState, ev agent.Event, candidate classifierCandidate) (string, string) {
 	newState, reason := candidate.NewState, candidate.Reason
 	if candidate.ParentHeldWorking || !ShouldSynthesizeCollapsedWaiting(state.State, newState, state.Metrics) {
 		return newState, reason
