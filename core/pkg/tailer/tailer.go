@@ -162,6 +162,19 @@ type SessionMetrics struct {
 	// missing working→waiting step (issue #150).
 	SawUserBlockingToolClosedThisPass bool `json:"-"`
 
+	// SawMidPassTurnBoundary is true when a "turn_done" event was followed
+	// by further substantive transcript activity within the SAME
+	// TailAndProcess call — a genuinely distinct subsequent turn began (and
+	// possibly also completed) before the classifier ever saw the
+	// intervening ready state. This is the batch-scan analog of
+	// SawUserBlockingToolClosedThisPass (#150): an agent whose message queue
+	// drains a follow-up prompt synchronously, with no observable ready gap
+	// between the two turns (e.g. mistral-vibe's in-memory queue, issue
+	// #988), would otherwise have both turns collapsed into one
+	// working→ready span. Per-pass transient; daemon uses it to synthesise
+	// the missing ready→working step.
+	SawMidPassTurnBoundary bool `json:"-"`
+
 	// NoSubstantiveActivity is true when a TailAndProcess pass consumed new
 	// transcript content but every parsed line was Skip=true and produced no
 	// state-relevant change (no SubagentCompletions, no TaskSnapshot, no
@@ -484,6 +497,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// Compute current metrics.
 	t.computeMetrics()
 	t.metrics.SawUserBlockingToolClosedThisPass = scan.sawUserBlockingClosed
+	t.metrics.SawMidPassTurnBoundary = scan.sawMidPassTurnBoundary
 	// NoSubstantiveActivity is set only when at least one parsed line was seen
 	// AND none of them produced substantive output (no processParsedEvent
 	// call, no subagent completion, no task snapshot). An empty pass (zero
@@ -543,7 +557,14 @@ type transcriptScanResult struct {
 	substantive           bool
 	sawManualCompact      bool
 	sawUserBlockingClosed bool
-	err                   error
+	// sawMidPassTurnBoundary and turnDoneSeen implement
+	// SessionMetrics.SawMidPassTurnBoundary's detection: turnDoneSeen is
+	// scan-local bookkeeping (was the previous substantive event a
+	// turn_done?), set by scanParsedLine after each event; sawMidPassTurnBoundary
+	// latches true the first time a later substantive event follows one.
+	sawMidPassTurnBoundary bool
+	turnDoneSeen           bool
+	err                    error
 }
 
 // scanNewLines reads and processes every complete line available from reader
@@ -633,6 +654,12 @@ func (t *TranscriptTailer) scanParsedLine(line string, isRawLine bool, rawLinePa
 	res.substantive = true
 	if parsed.IsManualCompactBoundary {
 		res.sawManualCompact = true
+	}
+	if qs, ok := t.parser.(queuedTurnSplitter); ok && qs.SplitsQueuedFollowUpTurns() {
+		if res.turnDoneSeen {
+			res.sawMidPassTurnBoundary = true
+		}
+		res.turnDoneSeen = parsed.EventType == "turn_done"
 	}
 	t.processParsedEvent(parsed, &res.sawUserBlockingClosed)
 }

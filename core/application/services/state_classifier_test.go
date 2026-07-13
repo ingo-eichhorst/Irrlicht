@@ -462,3 +462,67 @@ func TestShouldSynthesizeCollapsedWaiting(t *testing.T) {
 		})
 	}
 }
+
+// TestShouldSynthesizeCollapsedTurnBoundary covers issue #988's gate
+// function — the batch-scan analog of TestShouldSynthesizeCollapsedWaiting
+// (#150) for a mid-pass turn_done boundary instead of a user-blocking tool.
+func TestShouldSynthesizeCollapsedTurnBoundary(t *testing.T) {
+	tests := []struct {
+		name    string
+		current string
+		metrics *session.SessionMetrics
+		want    bool
+	}{
+		{
+			name:    "collapsed queued turn while working → synthesize",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{SawMidPassTurnBoundary: true},
+			want:    true,
+		},
+		{
+			name:    "no synthesis when no mid-pass boundary was seen",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{SawMidPassTurnBoundary: false},
+			want:    false,
+		},
+		{
+			name:    "no synthesis from ready state (force-r2w flips ready to working BEFORE this check)",
+			current: session.StateReady,
+			metrics: &session.SessionMetrics{SawMidPassTurnBoundary: true},
+			want:    false,
+		},
+		{
+			name:    "no synthesis from waiting state",
+			current: session.StateWaiting,
+			metrics: &session.SessionMetrics{SawMidPassTurnBoundary: true},
+			want:    false,
+		},
+		{
+			name:    "no synthesis while a real permission prompt is pending",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{SawMidPassTurnBoundary: true, PermissionPending: true},
+			want:    false,
+		},
+		{
+			name:    "no synthesis while a manual compact is in progress",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{SawMidPassTurnBoundary: true, CompactInProgress: true},
+			want:    false,
+		},
+		{
+			name:    "nil metrics — no synthesis",
+			current: session.StateWorking,
+			metrics: nil,
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ShouldSynthesizeCollapsedTurnBoundary(tt.current, tt.metrics); got != tt.want {
+				t.Errorf("ShouldSynthesizeCollapsedTurnBoundary(%q) = %v, want %v",
+					tt.current, got, tt.want)
+			}
+		})
+	}
+}

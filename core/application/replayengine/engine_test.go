@@ -5,9 +5,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/vibe"
 	"irrlicht/core/application/replayengine"
+	"irrlicht/core/application/services"
 	"irrlicht/core/domain/session"
 )
 
@@ -24,11 +27,18 @@ func repoRoot(t *testing.T) string {
 }
 
 // newestTranscript returns the committed transcript.jsonl of the NEWEST
-// recording for a scenarios/ cell. Every recording lives under
+// recording for a claudecode scenarios/ cell. Every recording lives under
 // recordings/<name>/; the newest is the lexicographically-greatest name.
 func newestTranscript(t *testing.T, cellFolder string) string {
 	t.Helper()
-	recsDir := filepath.Join(repoRoot(t), "replaydata", "agents", "claudecode", "scenarios", cellFolder, "recordings")
+	return newestTranscriptForAdapter(t, "claudecode", cellFolder)
+}
+
+// newestTranscriptForAdapter is newestTranscript generalized to any adapter's
+// replaydata/agents/<adapter>/scenarios/ tree.
+func newestTranscriptForAdapter(t *testing.T, adapter, cellFolder string) string {
+	t.Helper()
+	recsDir := filepath.Join(repoRoot(t), "replaydata", "agents", adapter, "scenarios", cellFolder, "recordings")
 	entries, err := os.ReadDir(recsDir)
 	if err != nil {
 		t.Fatalf("read recordings dir %s: %v", recsDir, err)
@@ -170,5 +180,39 @@ func TestReplayTranscript_metricsTimelineClimbs(t *testing.T) {
 	// ComputeMetrics — the timeline is the same accumulation, just sampled.
 	if lm := res.LastMetrics; lm != nil && last.EstimatedCostUSD != lm.EstimatedCostUSD {
 		t.Errorf("final timeline cost %v != LastMetrics cost %v", last.EstimatedCostUSD, lm.EstimatedCostUSD)
+	}
+}
+
+// TestReplayTranscript_queuedTurnBoundary_doesNotSynthesizeSplit locks down
+// a deliberate decision for issue #988: the replay engine must NOT mirror
+// SessionDetector's ShouldSynthesizeCollapsedTurnBoundary synthesis. Vibe's
+// transcript carries no per-line timestamps, so replay's batchByDebounce
+// (which approximates the live daemon's real wall-clock debounce from the
+// transcript's OWN timestamps) folds this whole multi-turn transcript into
+// one mega-batch — a poor approximation of the live daemon's real batching,
+// which saw the two turns arrive within its 2s debounce window. Applying the
+// live synthesis rule to that mega-batch would spuriously split nearly
+// every multi-turn vibe transcript, not just this genuine same-pass
+// collapse. See engine.go's classifyBatch comment for the full rationale.
+func TestReplayTranscript_queuedTurnBoundary_doesNotSynthesizeSplit(t *testing.T) {
+	src := newestTranscriptForAdapter(t, "mistral-vibe", "2-10_mid-turn-message-queued")
+
+	res, err := replayengine.ReplayTranscript(src, replayengine.Options{
+		Adapter:                    vibe.AdapterName,
+		Parser:                     &vibe.Parser{},
+		DebounceWindow:             2 * time.Second,
+		DisableModelConfigFallback: true,
+	})
+	if err != nil {
+		t.Fatalf("ReplayTranscript: %v", err)
+	}
+	if res == nil || len(res.Transitions) == 0 {
+		t.Fatal("expected transitions, got none")
+	}
+
+	for _, tr := range res.Transitions {
+		if tr.Reason == services.SyntheticTurnSettleReason || tr.Reason == services.SyntheticQueuedTurnStartReason {
+			t.Errorf("replay must not synthesize a collapsed-turn-boundary split: %+v", tr)
+		}
 	}
 }

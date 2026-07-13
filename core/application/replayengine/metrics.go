@@ -80,6 +80,7 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		SawUserBlockingToolClosedThisPass: m.SawUserBlockingToolClosedThisPass,
 		NoSubstantiveActivity:             m.NoSubstantiveActivity,
 		SawManualCompactBoundary:          m.SawManualCompactBoundary,
+		SawMidPassTurnBoundary:            m.SawMidPassTurnBoundary,
 	}
 	if len(m.SubagentCompletions) > 0 {
 		result.SubagentCompletions = make([]session.SubagentCompletion, len(m.SubagentCompletions))

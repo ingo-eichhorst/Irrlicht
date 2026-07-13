@@ -211,6 +211,17 @@ type SessionMetrics struct {
 	// episode (issue #150). Transient — per-pass, not persisted.
 	SawUserBlockingToolClosedThisPass bool `json:"-"`
 
+	// SawMidPassTurnBoundary reflects the last tailer pass: true when a
+	// turn_done was followed by further substantive transcript activity in
+	// the same pass — a genuinely distinct subsequent turn began (and
+	// possibly finished) before the classifier ever saw the intervening
+	// ready state. Triggers the daemon's synthetic working→ready→working
+	// emission so observers see the collapsed turn boundary instead of one
+	// merged working→ready span (issue #988). Per-pass: MergeMetrics copies
+	// it from newM with no fallback, and json:"-" keeps it out of
+	// serialized state.
+	SawMidPassTurnBoundary bool `json:"-"`
+
 	// OpenToolStalled is a transient, live-only signal set by the detector
 	// when a permission-gated file-edit tool (Edit/Write/MultiEdit/
 	// NotebookEdit) has stayed open with no transcript progress long enough
@@ -501,6 +512,7 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 		Tasks:                    newM.Tasks,
 		NoSubstantiveActivity:    newM.NoSubstantiveActivity,
 		SawManualCompactBoundary: newM.SawManualCompactBoundary,
+		SawMidPassTurnBoundary:   newM.SawMidPassTurnBoundary,
 		RateLimit:                newM.RateLimit,
 		RateLimitForecastEta:     newM.RateLimitForecastEta,
 		TaskEstimate:             newM.TaskEstimate,

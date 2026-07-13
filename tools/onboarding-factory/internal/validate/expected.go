@@ -115,6 +115,17 @@ type ObservationSpec struct {
 //     equal any previously-matched phase's session_id. Use this to
 //     assert "this phase happens on a brand-new session" (e.g. the
 //     post-/clear UUID after session-reset).
+//
+// SessionIDPrefix (optional, combinable with NewSession) additionally
+// requires the matched event's session_id to start with this string.
+// events.jsonl carries no adapter field on state_transition/pid_discovered
+// events, so a concurrent multi-adapter recording can't be disambiguated by
+// adapter identity directly; session_id shape is often adapter-specific
+// (e.g. mistral-vibe's reconciled real sessions are "session_<ts>_<hash>",
+// distinct from presession "proc-<pid>" rows and from other adapters' own
+// session-id formats), so a prefix filter is a lightweight way to pin
+// new_session matching to the intended adapter's session in a shared,
+// multi-agent-workspace recording (see #988 item 5).
 type ExpectedPhase struct {
 	Phase             string   `json:"phase"`
 	ExpectedState     string   `json:"expected_state,omitempty"`
@@ -124,6 +135,7 @@ type ExpectedPhase struct {
 	DurationAtLeastMs int64    `json:"duration_at_least_ms,omitempty"`
 	SameSessionAs     string   `json:"same_session_as,omitempty"`
 	NewSession        bool     `json:"new_session,omitempty"`
+	SessionIDPrefix   string   `json:"session_id_prefix,omitempty"`
 	Invariants        []string `json:"invariants,omitempty"`
 	Trigger           string   `json:"trigger,omitempty"` // documentation-only this iteration
 	Text              string   `json:"text,omitempty"`
@@ -624,6 +636,9 @@ func findMatchingEvent(p ExpectedPhase, events []recordedEvent, anchor time.Time
 			if _, seen := sc.SeenSIDs[ev.SessionID]; seen {
 				continue
 			}
+		}
+		if p.SessionIDPrefix != "" && !strings.HasPrefix(ev.SessionID, p.SessionIDPrefix) {
+			continue
 		}
 		return ev
 	}

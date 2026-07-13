@@ -47,6 +47,15 @@ type Parser struct {
 // the transcript path so the parser can locate the sibling meta.json sidecar.
 func (p *Parser) SetTranscriptPath(path string) { p.path = path }
 
+// SplitsQueuedFollowUpTurns implements the tailer's queuedTurnSplitter opt-in
+// (issue #988): vibe's message_queue.py enqueues a mid-turn follow-up
+// entirely in-memory and drains it synchronously the instant the prior
+// turn's agent_running() clears — a genuinely new, distinct turn with no
+// observable ready gap. Enables SessionMetrics.SawMidPassTurnBoundary
+// detection so the daemon synthesizes the missing ready→working step instead
+// of collapsing both turns into one working→ready span.
+func (p *Parser) SplitsQueuedFollowUpTurns() bool { return true }
+
 // ParseLine normalizes one Vibe transcript line into a ParsedEvent. Each role
 // carries its own well-defined shape, so the per-role logic is delegated to a
 // dedicated parseXMessage function instead of growing one large switch body.
