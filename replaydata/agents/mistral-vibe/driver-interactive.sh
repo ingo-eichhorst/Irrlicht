@@ -318,6 +318,21 @@ launch_repl() {
 # stop_reason=="end_turn"; codex polls the rollout for task_complete; opencode
 # polls the SQLite store for a step-finish. Return 0 when a NEW turn completed
 # (or times out via remaining_seconds()).
+#
+# A tool call that resolves to ToolPermission.ASK holds the turn on a TUI-only
+# approval_app dialog ("Permission for the <tool> tool" / "Allow for remainder
+# of this session") that never touches messages.jsonl (see sibling
+# 2-19_tool-gate-permission-prompt) — turn_count alone would stall on that
+# until DEADLINE. Poll the live pane on every tick and dismiss the dialog the
+# instant it renders, instead of guessing a fixed sleep window that's
+# sometimes too short (dialog still rendering — recording fails as
+# transcript_missing/timeout) and sometimes irrelevant (the turn already
+# resolved, so a blind wait only delays an already-done recording) — issue
+# #1003. This mirrors antigravity/driver-interactive.sh's wait_turn(), which
+# already merges an identical mid-turn dialog dismiss into its own poll loop.
+# The marker text matches the daemon's own trustDialogMarkers
+# (core/domain/backchannel/uidetect.go) so the driver and the daemon agree on
+# what "the dialog is up" means.
 wait_turn() {
   resolve_transcript || {
     echo "[driver] wait_turn[s$ACTIVE]: vibe never created a session dir under ~/.vibe/logs/session" >&2
@@ -330,6 +345,11 @@ wait_turn() {
     if [[ $now -ge $EXPECTED_TURNS ]]; then
       echo "[driver] wait_turn[s$ACTIVE]: count=$now (expected >= $EXPECTED_TURNS)" >&2
       return 0
+    fi
+    if tmux capture-pane -t "$SESSION" -p -S -50 2>/dev/null \
+         | grep -qiE 'Permission for the|Allow for remainder of this session'; then
+      tmux send-keys -t "$SESSION" Enter
+      echo "[driver] wait_turn[s$ACTIVE]: dismissed tool-permission dialog" >&2
     fi
     sleep 1
   done

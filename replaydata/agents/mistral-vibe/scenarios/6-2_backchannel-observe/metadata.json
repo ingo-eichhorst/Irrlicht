@@ -7,7 +7,7 @@
     "agent_cli_version": "2.19.0",
     "daemon_version": "0.5.5+5e22e47.dirty",
     "confidence": 0.9,
-    "notes": "RE-ASSESS after Control fix (5e22e47c). agent=yes (vibe renders a TUI-only tool-permission dialog); daemon=bug — RE-RECORDED 2026-07-13 against irrlichd 0.5.7+62118c4 (issue #988 worktree): the DetectUI marker fix is CONFIRMED CORRECT (captured screen text exactly matches; ui_detected + a real ready->waiting/waiting->working arc now fire via terminal read-back) but a DISTINCT, newly-exposed presession-identity-continuity gap keeps this known_failing — the waiting arc fires on the transient proc-<PID> presession, not the reconciled real session_<id> the spec anchors to (matcher can't find it; 4/7 phases pass). See issue #988. driver=ready (send+sleep+keys). Known-failing."
+    "notes": "RE-ASSESS after Control fix (5e22e47c). agent=yes (vibe renders a TUI-only tool-permission dialog); daemon=bug — RE-RECORDED 2026-07-13 against irrlichd 0.5.7+62118c4 (issue #988 worktree): the DetectUI marker fix is CONFIRMED CORRECT (captured screen text exactly matches; ui_detected + a real ready->waiting/waiting->working arc now fire via terminal read-back) but a DISTINCT, newly-exposed presession-identity-continuity gap keeps this known_failing — the waiting arc fires on the transient proc-<PID> presession, not the reconciled real session_<id> the spec anchors to (matcher can't find it; 4/7 phases pass). See issue #988. driver=ready (send+wait_turn, dialog dismissed via wait_turn's own capture-pane poll — issue #1003). Known-failing."
   },
   "details": {
     "assessment": {
@@ -86,16 +86,11 @@
           "text": "Run the shell command: touch onboarding-backchannel-observe.txt"
         },
         {
-          "type": "sleep",
-          "seconds": 15
-        },
-        {
-          "type": "keys",
-          "keys": "Enter"
+          "type": "wait_turn"
         },
         {
           "type": "sleep",
-          "seconds": 8
+          "seconds": 4
         }
       ],
       "verify": [
