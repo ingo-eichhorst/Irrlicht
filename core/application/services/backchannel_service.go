@@ -237,30 +237,10 @@ func (e *BackchannelEngine) RekeySession(oldID, newID string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if v, ok := e.prevState[oldID]; ok {
-		delete(e.prevState, oldID)
-		if _, exists := e.prevState[newID]; !exists {
-			e.prevState[newID] = v
-		}
-	}
-	if v, ok := e.prevUtil[oldID]; ok {
-		delete(e.prevUtil, oldID)
-		if _, exists := e.prevUtil[newID]; !exists {
-			e.prevUtil[newID] = v
-		}
-	}
-	if v, ok := e.prevTokens[oldID]; ok {
-		delete(e.prevTokens, oldID)
-		if _, exists := e.prevTokens[newID]; !exists {
-			e.prevTokens[newID] = v
-		}
-	}
-	if v, ok := e.recent[oldID]; ok {
-		delete(e.recent, oldID)
-		if _, exists := e.recent[newID]; !exists {
-			e.recent[newID] = v
-		}
-	}
+	rekeyMapEntry(e.prevState, oldID, newID)
+	rekeyMapEntry(e.prevUtil, oldID, newID)
+	rekeyMapEntry(e.prevTokens, oldID, newID)
+	rekeyMapEntry(e.recent, oldID, newID)
 
 	oldSuffix := "\x00" + oldID
 	newSuffix := "\x00" + newID
@@ -273,6 +253,23 @@ func (e *BackchannelEngine) RekeySession(oldID, newID string) {
 		if _, exists := e.lastFired[newKey]; !exists {
 			e.lastFired[newKey] = v
 		}
+	}
+}
+
+// rekeyMapEntry moves m[oldID] onto m[newID], but only when newID doesn't
+// already have an entry (see RekeySession's fill-if-absent rationale) — a
+// no-op when oldID has no tracked entry. Shared by every scalar per-session
+// map RekeySession carries forward; lastFired's composite-key rewrite
+// doesn't fit this shape (it matches by suffix, not by direct key) so it
+// stays inline in RekeySession.
+func rekeyMapEntry[V any](m map[string]V, oldID, newID string) {
+	v, ok := m[oldID]
+	if !ok {
+		return
+	}
+	delete(m, oldID)
+	if _, exists := m[newID]; !exists {
+		m[newID] = v
 	}
 }
 
