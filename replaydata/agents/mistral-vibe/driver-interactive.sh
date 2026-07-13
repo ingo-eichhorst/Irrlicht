@@ -347,7 +347,7 @@ wait_turn() {
       return 0
     fi
     if tmux capture-pane -t "$SESSION" -p -S -50 2>/dev/null \
-         | grep -qE 'Permission for the|Allow for remainder of this session'; then
+         | grep -qiE 'Permission for the|Allow for remainder of this session'; then
       tmux send-keys -t "$SESSION" Enter
       echo "[driver] wait_turn[s$ACTIVE]: dismissed tool-permission dialog" >&2
     fi
