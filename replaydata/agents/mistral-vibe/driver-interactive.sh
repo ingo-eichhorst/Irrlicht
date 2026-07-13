@@ -95,6 +95,8 @@ DRIVE_MARKER_PREFIX="$STAGING/.mistral-vibe-marker"
 source "$_DRIVE_LIB/slots.sh"
 # shellcheck source=/dev/null
 source "$_DRIVE_LIB/contracts.sh"
+# shellcheck source=/dev/null
+source "$_DRIVE_LIB/dialogs.sh"
 
 # Slot state the lib reads/writes (the driver owns these globals). A run starts
 # with zero slots; launch_repl allocs slot 1, and restart/start_session alloc
@@ -329,8 +331,10 @@ launch_repl() {
 # transcript_missing/timeout) and sometimes irrelevant (the turn already
 # resolved, so a blind wait only delays an already-done recording) — issue
 # #1003. This mirrors antigravity/driver-interactive.sh's wait_turn(), which
-# already merges an identical mid-turn dialog dismiss into its own poll loop.
-# The marker text matches the daemon's own trustDialogMarkers
+# already merges an identical mid-turn dialog dismiss into its own poll loop —
+# both now call the shared _lib/drive/dialogs.sh helper (#1009) so the
+# poll+dismiss mechanics live in one place; only the marker regex below stays
+# adapter-local. The marker text matches the daemon's own trustDialogMarkers
 # (core/domain/backchannel/uidetect.go) so the driver and the daemon agree on
 # what "the dialog is up" means.
 wait_turn() {
@@ -346,9 +350,7 @@ wait_turn() {
       echo "[driver] wait_turn[s$ACTIVE]: count=$now (expected >= $EXPECTED_TURNS)" >&2
       return 0
     fi
-    if tmux capture-pane -t "$SESSION" -p -S -50 2>/dev/null \
-         | grep -qiE 'Permission for the|Allow for remainder of this session'; then
-      tmux send-keys -t "$SESSION" Enter
+    if dismiss_dialog_if_visible "$SESSION" 'Permission for the|Allow for remainder of this session'; then
       echo "[driver] wait_turn[s$ACTIVE]: dismissed tool-permission dialog" >&2
     fi
     sleep 1
