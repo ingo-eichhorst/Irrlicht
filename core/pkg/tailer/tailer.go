@@ -1102,9 +1102,10 @@ func (t *TranscriptTailer) applyAssistantTextAndMarkers(parsed *ParsedEvent) {
 	if parsed.TaskQuestion != nil {
 		t.applyTaskQuestion(parsed.TaskQuestion)
 	}
-	if parsed.AwaySummary != nil {
-		t.applyAwaySummary(parsed.AwaySummary)
-	}
+	// AwaySummary is applied in applySkippedEvent, not here: it is only ever
+	// set by handleSystemEvent, which always sets Skip=true, so it never
+	// reaches this function — the two paths are mutually exclusive per event
+	// (scanParsedLine routes Skip=true events to applySkippedEvent only).
 	// Capture the first user prompt once as the heuristic-fallback summary
 	// (issue #738) — never overwritten, so it describes what the session was
 	// originally about even after many turns.

@@ -21,8 +21,11 @@ var issueRefPattern = regexp.MustCompile(`#\d+`)
 // optionally backtick-wrapped).
 var filePathPattern = regexp.MustCompile("`?\\b[\\w-]+(?:/[\\w.-]+)+\\.\\w+\\b`?")
 
-// eitherOrPattern flags either/or framing, which usually marks the sentence
-// actually posing the choice.
+// eitherOrPattern flags disjunction framing ("either X or Y", or plain "X, or
+// Y") — a weak, tie-breaking signal (weight 1): the bare "or" branch matches
+// on any ordinary conjunction too, which is deliberate (the real either/or
+// example this fallback targets, e.g. "resolve the conflict now, or dig into
+// the design decision first", never uses the word "either" at all).
 var eitherOrPattern = regexp.MustCompile(`(?i)\beither\b|\bor\b`)
 
 // ExtractStatusFallback picks the highest-signal sentence in text — the
