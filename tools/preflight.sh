@@ -18,7 +18,7 @@
 #                                      needs Docker, by far the slowest gate)
 #
 # The `security` group has no matching workflow — GitHub Actions doesn't run
-# it yet (see .claude/skills/ir:release/skill.md's Step 5.5, which runs the
+# it yet (see .claude/skills/ir:release/SKILL.md's Step 5.5, which runs the
 # same tools/security-scan.sh at release time). It's local-only for now
 # because govulncheck/gosec/npm audit cost real time (~1 minute) and are
 # more valuable as a pre-push gate than on every PR push; a GH Actions

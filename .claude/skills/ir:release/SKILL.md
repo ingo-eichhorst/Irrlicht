@@ -49,7 +49,7 @@ frontends (Cursor variants, Antigravity Gemini models, etc.) price at $0
 until we sync.
 
 1. Fetch upstream and diff against the in-repo map (see
-   `.claude/skills/ir:refresh-aliases/skill.md` for the full workflow).
+   `.claude/skills/ir:refresh-aliases/SKILL.md` for the full workflow).
 2. If the diff is empty: continue to Step 2. No-op is the common case.
 3. If **Added** entries exist: append them to `core/pkg/capacity/aliases.go`
    in the appropriate grouping section, preserving the per-group comments.
@@ -955,7 +955,7 @@ git add version.json CHANGELOG.md site/ docs/ \
 git add -- README.md AGENTS.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md 2>/dev/null || true
 # ir:doc-review's fuller surface — tool/skill docs the sweep can also touch.
 git add -- tools/*/README.md tools/*/SKILL.md \
-        .claude/skills/*/SKILL.md .claude/skills/*/skill.md \
+        .claude/skills/*/SKILL.md \
         tools/irrlicht-design-system/README.md \
         tools/irrlicht-design-system/ui_kits/*/README.md 2>/dev/null || true
 

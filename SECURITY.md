@@ -44,7 +44,7 @@ We'll coordinate timing with you.
 ## Proactive scanning
 
 Beyond the reactive process above, every release runs a security gate
-(`tools/security-scan.sh`, invoked from `.claude/skills/ir:release/skill.md`)
+(`tools/security-scan.sh`, invoked from `.claude/skills/ir:release/SKILL.md`)
 before artifacts are built: open GitHub Dependabot and CodeQL alerts,
 `govulncheck`, `gosec`, and `npm audit` across every Go module and web
 tree. Critical/High findings abort the release. The same local checks
