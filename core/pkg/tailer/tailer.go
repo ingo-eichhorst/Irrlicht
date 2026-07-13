@@ -655,13 +655,22 @@ func (t *TranscriptTailer) scanParsedLine(line string, isRawLine bool, rawLinePa
 	if parsed.IsManualCompactBoundary {
 		res.sawManualCompact = true
 	}
-	if qs, ok := t.parser.(queuedTurnSplitter); ok && qs.SplitsQueuedFollowUpTurns() {
-		if res.turnDoneSeen {
-			res.sawMidPassTurnBoundary = true
-		}
-		res.turnDoneSeen = parsed.EventType == "turn_done"
-	}
+	t.updateMidPassTurnBoundary(parsed, res)
 	t.processParsedEvent(parsed, &res.sawUserBlockingClosed)
+}
+
+// updateMidPassTurnBoundary implements SessionMetrics.SawMidPassTurnBoundary's
+// detection (see transcriptScanResult), gated on the parser's queuedTurnSplitter
+// opt-in. Split out of scanParsedLine to keep that function's branching flat.
+func (t *TranscriptTailer) updateMidPassTurnBoundary(parsed *ParsedEvent, res *transcriptScanResult) {
+	qs, ok := t.parser.(queuedTurnSplitter)
+	if !ok || !qs.SplitsQueuedFollowUpTurns() {
+		return
+	}
+	if res.turnDoneSeen {
+		res.sawMidPassTurnBoundary = true
+	}
+	res.turnDoneSeen = parsed.EventType == "turn_done"
 }
 
 // parseTranscriptLine converts a single trimmed transcript line into a
