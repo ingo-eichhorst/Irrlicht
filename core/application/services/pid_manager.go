@@ -910,6 +910,58 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 	return foundDead
 }
 
+// IsPIDAlive reports whether pid still refers to a live OS process, using the
+// same syscall.Kill(pid, 0) probe reapDeadOrInfraPID already uses for
+// dead-PID reaping. Exposed as a standalone predicate so callers outside the
+// periodic sweep (e.g. parentProcessLive, issue #999) can reuse the exact
+// same liveness semantics instead of re-deriving them. A pid <= 0 is never
+// alive (mirrors reapDeadOrInfraPID's own guard, which never calls this probe
+// for such a pid, but a defensive check keeps this exported predicate safe
+// for any future caller). Note: like reapDeadOrInfraPID's own check, this
+// can't distinguish a still-alive original process from an unrelated process
+// that later reused the same PID — an existing, accepted risk, not one this
+// helper introduces.
+func (pm *PIDManager) IsPIDAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	return syscall.Kill(pid, 0) != syscall.ESRCH
+}
+
+// parentProcessLive is the child-session analog of a superseded live
+// pre-session (see finalizeNewSession's liveSignal computation in
+// session_detector_activity.go): proof that a subagent's parent OS process is
+// still running right now, as opposed to the daemon cold-rediscovering an
+// already-finished historical subagent after a restart (issue #999). Returns
+// false — and thus no synthesis — when the parent session is unknown or was
+// never PID-bound (state.PID <= 0), so a genuinely live but
+// very-recently-spawned parent (PID discovery still in flight) is treated the
+// same as a dead one: a narrow, deliberately accepted false-negative window
+// traded for guaranteed safety against a backlog flood.
+//
+// Lives on PIDManager rather than SessionDetector because every dependency it
+// touches — repo, WithSessionStateLock, IsPIDAlive — already lives here; it is
+// pure PID-liveness plumbing, not session-detection policy (unlike
+// holdParentWorkingForNewChild, which mutates the parent's classified state
+// and stays a SessionDetector-level decision).
+//
+// Runs under WithSessionStateLock, matching holdParentWorkingForNewChild's
+// existing parent-load pattern: the parent may have its own PID-discovery
+// goroutine in flight, and reading its fields without the lock would race
+// that goroutine's assignPIDLocked write to the same shared *SessionState
+// (issue #606).
+func (pm *PIDManager) parentProcessLive(parentID string) bool {
+	live := false
+	pm.WithSessionStateLock(func() {
+		parent, err := pm.repo.Load(parentID)
+		if err != nil || parent == nil || parent.PID <= 0 {
+			return
+		}
+		live = pm.IsPIDAlive(parent.PID)
+	})
+	return live
+}
+
 // reapDeadOrInfraPID handles the two ways a bound PID can prove the session is
 // gone: the process has actually exited (ESRCH), or — for the case ESRCH can
 // never catch — the PID is alive but is the adapter's background infra (e.g.

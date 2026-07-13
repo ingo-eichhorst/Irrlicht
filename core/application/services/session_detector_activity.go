@@ -307,12 +307,18 @@ func (d *SessionDetector) finalizeNewSession(id agent.Identity, ev agent.Event, 
 	// created" record, or — if catching up on a swallowed first turn
 	// (issue #996) — a synthetic ready->working->ready pair instead, mirroring
 	// synthesizeCollapsedTurnBoundaryIfNeeded's pattern (issue #988) for a
-	// different collapsed-boundary shape. Scoped to top-level sessions:
-	// pre-sessions are only ever minted for a top-level OS process, so a
-	// child/subagent session can't be the one superseding one — children
-	// keep today's behavior (correct final state, no synthesized transition)
-	// as a separate, deliberately unfixed gap (issue #999).
-	if state.ParentSessionID == "" && ShouldSynthesizeCatchUpTurn(supersedingLivePreSession, state.Metrics) {
+	// different collapsed-boundary shape. The liveness proof fed into
+	// ShouldSynthesizeCatchUpTurn differs by branch: top-level sessions use
+	// supersedingLivePreSession (a pre-session is only ever minted for a
+	// top-level OS process); child/subagent sessions have no pre-session of
+	// their own, so they use parentProcessLive instead — proof their parent's
+	// OS process is still running right now, not a cold-restart rediscovery
+	// of old history (issue #999).
+	liveSignal := supersedingLivePreSession
+	if state.ParentSessionID != "" {
+		liveSignal = d.pidMgr.parentProcessLive(state.ParentSessionID)
+	}
+	if ShouldSynthesizeCatchUpTurn(liveSignal, state.Metrics) {
 		d.recordCatchUpTurn(ev.SessionID, state)
 	} else {
 		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, NewState: state.State, Reason: "new session created"})

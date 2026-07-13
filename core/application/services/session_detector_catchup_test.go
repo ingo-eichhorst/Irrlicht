@@ -2,6 +2,7 @@ package services_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -199,5 +200,151 @@ func TestSessionDetector_CatchUpTurn_NoSynthesisWhenTurnNotYetDone(t *testing.T)
 	}
 	if transitions[0].NewState != session.StateReady || transitions[0].Reason != "new session created" {
 		t.Errorf("transition = %+v, want the ordinary flat new_state=ready reason=\"new session created\"", transitions[0])
+	}
+}
+
+// TestSessionDetector_CatchUpTurn_ChildSynthesizesWhenParentProcessLive is the
+// regression test for issue #999: a child (subagent) session never gets a
+// pre-session of its own, so finalizeNewSession's synthesis gate can't use
+// supersedingLivePreSession for it as it does for a top-level session (see
+// TestSessionDetector_CatchUpTurn_SynthesizesWhenSupersedingLivePreSession
+// above). Instead it uses parentProcessLive — proof the parent's OS process
+// is still running right now. When the parent is alive and the child's very
+// first observation already shows a completed turn, the missing
+// working->ready cycle must be synthesized, mirroring the top-level case.
+func TestSessionDetector_CatchUpTurn_ChildSynthesizesWhenParentProcessLive(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	rec := &mockRecorder{}
+
+	metrics := &funcMetrics{fn: func(path, adapter string) (*session.SessionMetrics, error) {
+		if path == "" {
+			return nil, nil
+		}
+		return &session.SessionMetrics{LastEventType: "turn_done"}, nil
+	}}
+
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	det.SetRecorder(rec)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+
+	// The parent is a real, live OS process — PID = the test process's own
+	// PID, the reliably-alive convention already used elsewhere in this
+	// suite (see pid_manager_test.go's livePID).
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID:      "parent-999-live",
+		State:          session.StateWorking,
+		PID:            os.Getpid(),
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent-999-live.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	})
+
+	// The child's transcript is discovered late, already showing a completed
+	// turn — the same swallowed-first-turn shape as #996, one level down.
+	tw.ch <- agent.Event{
+		Type:            agent.EventNewSession,
+		SessionID:       "child-999-live",
+		ProjectDir:      "subagents",
+		TranscriptPath:  "/home/.claude/projects/-Users-test/parent-999-live/subagents/child-999-live.jsonl",
+		ParentSessionID: "parent-999-live",
+	}
+	waitForCondition(func() bool { s, _ := repo.Load("child-999-live"); return s != nil }, time.Second)
+	cancel()
+	<-done
+
+	transitions := transitionsFor(rec, "child-999-live")
+	if len(transitions) != 2 {
+		t.Fatalf("expected 2 synthesized state transitions for child-999-live, got %d: %+v", len(transitions), transitions)
+	}
+	if transitions[0].NewState != session.StateWorking || transitions[0].Reason != services.SyntheticCatchUpTurnStartReason {
+		t.Errorf("first transition = %+v, want new_state=working reason=%q", transitions[0], services.SyntheticCatchUpTurnStartReason)
+	}
+	if transitions[1].PrevState != session.StateWorking || transitions[1].NewState != session.StateReady ||
+		transitions[1].Reason != services.SyntheticCatchUpTurnDoneReason {
+		t.Errorf("second transition = %+v, want working->ready reason=%q", transitions[1], services.SyntheticCatchUpTurnDoneReason)
+	}
+}
+
+// TestSessionDetector_CatchUpTurn_ChildNoSynthesisWithoutLiveParent is the
+// critical regression guard for issue #999's design decision, mirroring
+// #996's own NoSynthesisWithoutLivePreSession guard one level down: a child
+// whose parent's OS process is confirmed dead, or whose parent session is
+// unknown altogether — exactly what a daemon restart rediscovering old
+// historical subagents looks like — must NOT get a synthetic bounce even
+// though its own first observation already shows a completed turn. Firing
+// unconditionally on metrics.IsAgentDone() alone would flood the lifecycle
+// stream with spurious bounces for every already-finished historical
+// subagent within the backlog-scan's age cutoff.
+func TestSessionDetector_CatchUpTurn_ChildNoSynthesisWithoutLiveParent(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	rec := &mockRecorder{}
+
+	metrics := &funcMetrics{fn: func(path, adapter string) (*session.SessionMetrics, error) {
+		if path == "" {
+			return nil, nil
+		}
+		return &session.SessionMetrics{LastEventType: "turn_done"}, nil
+	}}
+
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	det.SetRecorder(rec)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+
+	// Parent exists in the repo but its OS process is confirmed dead — a
+	// historical subagent's parent, long gone.
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID:      "parent-999-dead",
+		State:          session.StateReady,
+		PID:            deadPIDForTest(t),
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent-999-dead.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	})
+
+	tw.ch <- agent.Event{
+		Type:            agent.EventNewSession,
+		SessionID:       "child-999-dead-parent",
+		ProjectDir:      "subagents",
+		TranscriptPath:  "/home/.claude/projects/-Users-test/parent-999-dead/subagents/child-999-dead-parent.jsonl",
+		ParentSessionID: "parent-999-dead",
+	}
+	waitForCondition(func() bool { s, _ := repo.Load("child-999-dead-parent"); return s != nil }, time.Second)
+
+	// No parent session at all — an even colder case than a dead PID.
+	tw.ch <- agent.Event{
+		Type:            agent.EventNewSession,
+		SessionID:       "child-999-no-parent",
+		ProjectDir:      "subagents",
+		TranscriptPath:  "/home/.claude/projects/-Users-test/parent-999-missing/subagents/child-999-no-parent.jsonl",
+		ParentSessionID: "parent-999-missing",
+	}
+	waitForCondition(func() bool { s, _ := repo.Load("child-999-no-parent"); return s != nil }, time.Second)
+
+	time.Sleep(30 * time.Millisecond) // let any (undesired) second transition land before asserting
+	cancel()
+	<-done
+
+	for _, sid := range []string{"child-999-dead-parent", "child-999-no-parent"} {
+		transitions := transitionsFor(rec, sid)
+		if len(transitions) != 1 {
+			t.Fatalf("%s: expected 1 (unchanged) state transition, got %d: %+v", sid, len(transitions), transitions)
+		}
+		if transitions[0].NewState != session.StateReady || transitions[0].Reason != "new session created" {
+			t.Errorf("%s: transition = %+v, want the ordinary flat new_state=ready reason=\"new session created\"", sid, transitions[0])
+		}
 	}
 }
