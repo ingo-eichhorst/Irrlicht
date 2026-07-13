@@ -113,16 +113,16 @@
 
       <div class="callout callout-tip">
         <strong>First-time contributors</strong>
-        Look for issues labeled <code>good first issue</code> -- these are specifically chosen to be approachable for newcomers to the codebase.
+        Look for issues labeled <code>good first issue</code> -- these are specifically chosen to be approachable for newcomers to the codebase. Then start with <code>/ir:exec</code> -- see "Learn by Directing an Agent" below.
       </div>
 
       <!-- ─── Learn by Directing an Agent ─── -->
       <h2>Learn by Directing an Agent</h2>
 
-      <p>Irrlicht doubles as a hands-on learning platform -- the skill on offer is <em>directing a coding agent to build software</em>, not learning to use the Irrlicht app itself. This repo's own contribution loop is the practice ground.</p>
+      <p>Irrlicht doubles as a hands-on learning platform -- the skill on offer is <em>directing a coding agent to build software</em>, not learning to use the Irrlicht app itself. This repo's own contribution loop is the practice ground, and <code>/ir:exec</code> is the starting point for it.</p>
 
       <ul>
-        <li><strong>The loop itself is the lesson.</strong> <code>/ir:exec #&lt;issue&gt;</code> -- investigate &rarr; plan &rarr; approve &rarr; implement &rarr; review -- is the practice rep, whether you're a maintainer or a first-time contributor. Issues labeled <code>good first issue</code> or <code>ready-for-agent</code> are low-stakes starting reps.</li>
+        <li><strong>Start here.</strong> <code>/ir:exec &lt;issue-number&gt;</code> runs the full loop end to end -- investigate &rarr; plan &rarr; (approve &rarr;) implement &rarr; review &rarr; PR -- deciding how much oversight to ask for from the issue itself (<code>/ir:exec plan &lt;N&gt;</code> always asks first, if you'd rather control that explicitly). This is the practice rep, whether you're a maintainer or a first-time contributor. Issues labeled <code>good first issue</code> or <code>ready-for-agent</code> are low-stakes starting reps.</li>
         <li><strong>See it work first.</strong> The repo's <code>examples/</code> directory has runnable, no-toolchain-needed demos of multiple agents operating on real sessions: <code>relay/</code>, <code>roundtrip/</code>, and <code>coding-factory/</code>.</li>
         <li><strong>You don't need to read a diff to contribute.</strong> Describing a problem clearly in an issue or Discussion is a complete contribution -- the <code>/ir:triage</code> skill turns it into something an agent can pick up.</li>
       </ul>

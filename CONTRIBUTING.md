@@ -16,17 +16,21 @@ This file is the short version that GitHub surfaces directly on the repo.
 - **Improve docs** — fixes to the site under `site/docs/` and to this repo's markdown are always welcome
 
 First time? Look for issues labeled
-[`good first issue`](https://github.com/ingo-eichhorst/Irrlicht/labels/good%20first%20issue).
+[`good first issue`](https://github.com/ingo-eichhorst/Irrlicht/labels/good%20first%20issue),
+then start with `/ir:exec` — see "Learn by directing an agent" below.
 
 ## Learn by directing an agent
 
 Irrlicht doubles as a hands-on learning platform — the skill on offer is
 *directing a coding agent to build software*, not learning to use the
-Irrlicht app itself. This repo's own contribution loop is the practice ground:
+Irrlicht app itself. This repo's own contribution loop is the practice ground,
+and `/ir:exec` is the starting point for it:
 
-- **The loop itself is the lesson.** `/ir:exec #<issue>` — investigate → plan
-  → approve → implement → review — is the practice rep, whether you're a
-  maintainer or a first-time contributor. Issues labeled
+- **Start here.** `/ir:exec <issue-number>` runs the full loop end to end —
+  investigate → plan → (approve →) implement → review → PR — deciding how
+  much oversight to ask for from the issue itself (`/ir:exec plan <N>` always
+  asks first, if you'd rather control that explicitly). This is the practice
+  rep, whether you're a maintainer or a first-time contributor. Issues labeled
   [`good first issue`](https://github.com/ingo-eichhorst/Irrlicht/labels/good%20first%20issue)
   or [`ready-for-agent`](https://github.com/ingo-eichhorst/Irrlicht/labels/ready-for-agent)
   are low-stakes starting reps.
