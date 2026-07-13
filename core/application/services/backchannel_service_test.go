@@ -283,3 +283,139 @@ func TestEvaluate_AdapterScope(t *testing.T) {
 		t.Fatalf("rule scoped to another adapter must not fire, got %d", len(got))
 	}
 }
+
+// --- RekeySession (issue #1002, mirroring TerminalObserver's #997 fix) ---
+
+// sessID is sess/sessTokens with a caller-chosen SessionID, for RekeySession
+// tests that need two distinct ids (the presession's and the reconciled real
+// session's) in play at once.
+func sessID(id, state string, util float64) *session.SessionState {
+	s := sess(state, util)
+	s.SessionID = id
+	return s
+}
+
+func TestBackchannelRekeySession_CarriesBaselineForwardSoThresholdCrossingIsCaught(t *testing.T) {
+	on := true
+	clk := time.Unix(1000, 0)
+	r := backchannel.Rule{ID: "p", Enabled: true,
+		Trigger:         backchannel.Trigger{Event: backchannel.EventContextPressure, Threshold: 80},
+		Actions:         []backchannel.Action{{Kind: backchannel.ActionInput, Data: "/compact\r"}},
+		CooldownSeconds: 1}
+	e := newEngine([]backchannel.Rule{r}, &on, &clk)
+
+	// The presession accumulates a below-threshold baseline before it's
+	// reconciled — the crossing hasn't happened yet, so nothing fires here.
+	e.evaluate(sessID("proc-123", "working", 50)) // baseline
+	if got := e.evaluate(sessID("proc-123", "working", 70)); got != nil {
+		t.Fatalf("still below threshold must not fire, got %d", len(got))
+	}
+
+	// Reconciliation: the presession is retired in favor of the real session.
+	e.RekeySession("proc-123", "real-abc")
+
+	// The real session's first-ever observation crosses the threshold. Without
+	// the carried-forward baseline this would hit the "!seen" branch and
+	// establish a fresh baseline instead of firing (issue #1002).
+	if got := e.evaluate(sessID("real-abc", "working", 85)); len(got) != 1 {
+		t.Fatalf("carried-forward baseline should let the crossing fire, got %d", len(got))
+	}
+}
+
+func TestBackchannelRekeySession_RemovesOldEntries(t *testing.T) {
+	on := true
+	clk := time.Unix(1000, 0)
+	e := newEngine([]backchannel.Rule{waitingRule()}, &on, &clk)
+
+	e.evaluate(sessID("proc-1", "working", 0)) // baseline
+	if len(e.evaluate(sessID("proc-1", "waiting", 0))) != 1 {
+		t.Fatal("first waiting edge should fire")
+	}
+
+	e.RekeySession("proc-1", "real-1")
+
+	e.mu.Lock()
+	_, stateLeft := e.prevState["proc-1"]
+	_, utilLeft := e.prevUtil["proc-1"]
+	_, firedLeft := e.lastFired["r1\x00proc-1"]
+	e.mu.Unlock()
+	if stateLeft || utilLeft || firedLeft {
+		t.Fatalf("RekeySession left old entries behind: state=%v util=%v fired=%v", stateLeft, utilLeft, firedLeft)
+	}
+
+	e.mu.Lock()
+	newState, stateMoved := e.prevState["real-1"]
+	_, firedMoved := e.lastFired["r1\x00real-1"]
+	e.mu.Unlock()
+	if !stateMoved || newState != "waiting" || !firedMoved {
+		t.Fatalf("RekeySession did not carry entries onto the new id: state=%q moved=%v fired=%v", newState, stateMoved, firedMoved)
+	}
+}
+
+func TestBackchannelRekeySession_DoesNotClobberExistingDestinationBaseline(t *testing.T) {
+	on := true
+	clk := time.Unix(1000, 0)
+	r := backchannel.Rule{ID: "p", Enabled: true,
+		Trigger:         backchannel.Trigger{Event: backchannel.EventContextPressure, Threshold: 80},
+		Actions:         []backchannel.Action{{Kind: backchannel.ActionInput, Data: "/compact\r"}},
+		CooldownSeconds: 1}
+	e := newEngine([]backchannel.Rule{r}, &on, &clk)
+
+	// The presession's own (stale) baseline.
+	e.evaluate(sessID("proc-1", "working", 90)) // baseline, already "high"
+
+	// The real session has ALREADY been observed independently — its own
+	// baseline is below threshold — before the reconciliation hook fires.
+	e.evaluate(sessID("real-1", "working", 60)) // baseline
+
+	e.RekeySession("proc-1", "real-1")
+
+	e.mu.Lock()
+	util := e.prevUtil["real-1"]
+	e.mu.Unlock()
+	if util != 60 {
+		t.Fatalf("RekeySession must not clobber an already-established destination baseline: prevUtil[real-1] = %v, want 60", util)
+	}
+
+	// Confirms the guard is load-bearing: crossing from the (preserved) 60
+	// baseline still fires normally.
+	if len(e.evaluate(sessID("real-1", "working", 85))) != 1 {
+		t.Fatal("crossing from the preserved real-session baseline should still fire")
+	}
+}
+
+func TestBackchannelRekeySession_CarriesCooldownForward(t *testing.T) {
+	on := true
+	clk := time.Unix(1000, 0)
+	r := waitingRule()
+	r.CooldownSeconds = 60
+	e := newEngine([]backchannel.Rule{r}, &on, &clk)
+
+	e.evaluate(sessID("proc-1", "working", 0))
+	if len(e.evaluate(sessID("proc-1", "waiting", 0))) != 1 {
+		t.Fatal("first waiting edge should fire")
+	}
+
+	e.RekeySession("proc-1", "real-1")
+	e.evaluate(sessID("real-1", "working", 0)) // leave waiting
+
+	clk = clk.Add(5 * time.Second) // well within the 60s cooldown
+	if got := e.evaluate(sessID("real-1", "waiting", 0)); got != nil {
+		t.Fatalf("cooldown recorded on the presession should still suppress a re-fire on the reconciled id, got %d", len(got))
+	}
+}
+
+func TestBackchannelRekeySession_NoOpWhenSourceUntracked(t *testing.T) {
+	on := true
+	clk := time.Unix(1000, 0)
+	e := newEngine([]backchannel.Rule{waitingRule()}, &on, &clk)
+
+	e.RekeySession("never-seen", "real-1") // must not panic or create a spurious entry
+
+	e.mu.Lock()
+	_, ok := e.prevState["real-1"]
+	e.mu.Unlock()
+	if ok {
+		t.Fatal("RekeySession should not create an entry when the source id was never tracked")
+	}
+}

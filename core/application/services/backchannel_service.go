@@ -216,6 +216,63 @@ func (e *BackchannelEngine) forget(sessionID string) {
 	}
 }
 
+// RekeySession moves oldID's per-session bookkeeping onto newID when a
+// presession (proc-<PID>) is reconciled into the real session that
+// superseded it — otherwise an edge-crossing baseline already established on
+// the presession (e.g. context utilization already past a rule's threshold)
+// is discarded outright, and the real session re-establishes a fresh
+// "first sight, never fire" baseline on its own id instead of firing on the
+// crossing that already happened (issue #1002, mirroring TerminalObserver.
+// RekeySession from issue #997 — see that method for the analogous fix on a
+// different subsystem's per-session cache).
+//
+// Unlike TerminalObserver's unconditional overwrite, this only fills newID's
+// entry when it doesn't already have one: if the real session already
+// observed its own baseline independently (its first live push arrived
+// before the reconciliation hook fired), overwriting it with the
+// presession's older reading could revert already-advanced state and cause a
+// rule to fire twice for one crossing — worse than the bug being fixed here.
+// A no-op for any map where oldID has no tracked entry.
+func (e *BackchannelEngine) RekeySession(oldID, newID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	rekeyMapEntry(e.prevState, oldID, newID)
+	rekeyMapEntry(e.prevUtil, oldID, newID)
+	rekeyMapEntry(e.prevTokens, oldID, newID)
+	rekeyMapEntry(e.recent, oldID, newID)
+
+	oldSuffix := "\x00" + oldID
+	newSuffix := "\x00" + newID
+	for k, v := range e.lastFired {
+		if !strings.HasSuffix(k, oldSuffix) {
+			continue
+		}
+		delete(e.lastFired, k)
+		newKey := strings.TrimSuffix(k, oldSuffix) + newSuffix
+		if _, exists := e.lastFired[newKey]; !exists {
+			e.lastFired[newKey] = v
+		}
+	}
+}
+
+// rekeyMapEntry moves m[oldID] onto m[newID], but only when newID doesn't
+// already have an entry (see RekeySession's fill-if-absent rationale) — a
+// no-op when oldID has no tracked entry. Shared by every scalar per-session
+// map RekeySession carries forward; lastFired's composite-key rewrite
+// doesn't fit this shape (it matches by suffix, not by direct key) so it
+// stays inline in RekeySession.
+func rekeyMapEntry[V any](m map[string]V, oldID, newID string) {
+	v, ok := m[oldID]
+	if !ok {
+		return
+	}
+	delete(m, oldID)
+	if _, exists := m[newID]; !exists {
+		m[newID] = v
+	}
+}
+
 // triggered reports whether a trigger matches this transition. State triggers
 // fire on the edge into the state; context_pressure / context_pressure_tokens
 // fire on the rising crossing of the threshold (hysteresis is inherent in
