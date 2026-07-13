@@ -300,7 +300,7 @@ func (d *SessionDetector) finalizeNewSession(id agent.Identity, ev agent.Event, 
 	// (issue #996) can see its return value.
 	supersedingLivePreSession := false
 	if ev.TranscriptPath != "" {
-		supersedingLivePreSession = d.cleanupPreSessionsForProject(ev.ProjectDir, state.CWD, id.Name)
+		supersedingLivePreSession = d.cleanupPreSessionsForProject(ev.ProjectDir, state.CWD, id.Name, ev.SessionID)
 	}
 
 	// Record initial state transition(s): the ordinary flat "new session

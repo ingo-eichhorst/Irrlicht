@@ -65,7 +65,10 @@ func (d *SessionDetector) broadcast(msgType string, state *session.SessionState)
 // arrived. Returns whether at least one pre-session was actually retired —
 // callers feed this into ShouldSynthesizeCatchUpTurn (state_classifier.go)
 // as its "was this daemon already live-tracking the process" signal.
-func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adapter string) bool {
+// newSessionID (the real session's id) lets it fire onSessionSuperseded so
+// TerminalObserver/SessionDetector can carry per-session backchannel state
+// forward before the pre-session row is deleted (issue #997).
+func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adapter, newSessionID string) bool {
 	// Collect candidates under the lock; defer I/O (repo.Load) to outside.
 	d.mu.Lock()
 	var ids []string
@@ -99,6 +102,11 @@ func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adap
 
 	for _, sid := range ids {
 		state, _ := d.repo.Load(sid)
+		// Fire before the delete so a re-key handler's own Load(sid) is
+		// guaranteed to still succeed (issue #997).
+		if d.onSessionSuperseded != nil {
+			d.onSessionSuperseded(sid, newSessionID)
+		}
 		_ = d.repo.Delete(sid)
 		adapterName := adapter
 		if state != nil {

@@ -105,6 +105,17 @@ type PIDManager struct {
 	// child (see hasActiveChildren in session_detector.go).
 	onChildDeleted func(parentID string)
 
+	// onSessionSuperseded is called when a presession is retired because a
+	// real session was reconciled onto the same identity (same PID, or same
+	// adapter+project/CWD). Unlike onSessionDeleted, it carries BOTH ids, so
+	// a subsystem that keeps its own per-session state (e.g. TerminalObserver's
+	// dialog-edge cache, or a Waiting state SessionDetector already persisted
+	// onto the presession's own row via a live terminal-observer signal) can
+	// carry that state forward onto the new id instead of losing it — the
+	// presession row is about to be deleted outright, unlike onSessionDeleted's
+	// other callers which only need to forget the old id (issue #997).
+	onSessionSuperseded func(oldID, newID string)
+
 	// pendingPIDs stores PIDs discovered by background goroutines, to be
 	// applied by processActivity on its next run. This avoids a race where
 	// HandlePIDAssigned's load-modify-save overwrites a state transition
@@ -175,6 +186,16 @@ func (pm *PIDManager) SetRecorder(r outbound.EventRecorder, seq *int64) {
 // `working` solely because of that child.
 func (pm *PIDManager) SetChildDeletedHandler(fn func(parentID string)) {
 	pm.onChildDeleted = fn
+}
+
+// SetSessionSupersededHandler registers a callback invoked whenever a
+// presession is retired in favor of a reconciled real session — from every
+// PIDManager-owned path that performs that reconciliation (same-PID match at
+// PID-assignment time, and both the seed-time and periodic pre-session
+// sweeps). Both ids are passed so the caller can re-key any per-session state
+// it owns onto the new id before the presession row is deleted (issue #997).
+func (pm *PIDManager) SetSessionSupersededHandler(fn func(oldID, newID string)) {
+	pm.onSessionSuperseded = fn
 }
 
 // SetLauncherEnvReader installs a reader that captures launcher identity
@@ -577,6 +598,11 @@ func (pm *PIDManager) cleanupStalePIDHolders(stale []*session.SessionState, sess
 			TranscriptPath: old.TranscriptPath,
 		})
 
+		// Fire before the delete so a re-key handler's own Load(old.SessionID)
+		// is guaranteed to still succeed (issue #997).
+		if pm.onSessionSuperseded != nil {
+			pm.onSessionSuperseded(old.SessionID, sessionID)
+		}
 		if pm.onSessionDeleted != nil {
 			pm.onSessionDeleted(old.SessionID)
 		}
@@ -1235,21 +1261,27 @@ func (pm *PIDManager) dedupeByPID(states []*session.SessionState, newestByPID ma
 				continue
 			}
 			pm.removeSessionUntracked(logComponentSessionDetectorSeed, state,
-				fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", pid, newest.SessionID))
+				fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", pid, newest.SessionID), "")
 		}
 	}
 }
 
-// removeSessionUntracked deletes s via the same log→onSessionDeleted→repo
-// .Delete→broadcast sequence used by the reconciliation sweeps (dedup and
-// pre-session supersession). Unlike deleteSession/deleteWithChildren, it does
-// NOT emit a lifecycle recorder event — these paths reconcile bookkeeping
-// artifacts (a duplicate PID row, a superseded proc-* placeholder) rather
-// than tearing down a session whose disappearance belongs in the offline
-// replay trace. tag and msg are the caller's log identity and message, kept
-// verbatim so log output is unchanged by this extraction.
-func (pm *PIDManager) removeSessionUntracked(tag string, s *session.SessionState, msg string) {
+// removeSessionUntracked deletes s via the same log→onSessionSuperseded→
+// onSessionDeleted→repo.Delete→broadcast sequence used by the reconciliation
+// sweeps (dedup and pre-session supersession). Unlike deleteSession/
+// deleteWithChildren, it does NOT emit a lifecycle recorder event — these
+// paths reconcile bookkeeping artifacts (a duplicate PID row, a superseded
+// proc-* placeholder) rather than tearing down a session whose disappearance
+// belongs in the offline replay trace. tag and msg are the caller's log
+// identity and message, kept verbatim so log output is unchanged by this
+// extraction. supersededBy is the reconciled session's id s is being retired
+// in favor of (empty for a plain same-PID dedup, which has no single
+// superseding identity to re-key state onto — issue #997).
+func (pm *PIDManager) removeSessionUntracked(tag string, s *session.SessionState, msg string, supersededBy string) {
 	pm.log.LogInfo(tag, s.SessionID, msg)
+	if supersededBy != "" && pm.onSessionSuperseded != nil {
+		pm.onSessionSuperseded(s.SessionID, supersededBy)
+	}
 	if pm.onSessionDeleted != nil {
 		pm.onSessionDeleted(s.SessionID)
 	}
@@ -1304,7 +1336,7 @@ func (pm *PIDManager) sweepSupersededPreSessions(states []*session.SessionState)
 		}
 		if candidate, _ := findSupersedingSession(proc, states); candidate != nil {
 			pm.removeSessionUntracked(logComponentSessionDetectorSeed, proc,
-				fmt.Sprintf("pre-session superseded by %s — deleting", candidate.SessionID))
+				fmt.Sprintf("pre-session superseded by %s — deleting", candidate.SessionID), candidate.SessionID)
 		}
 	}
 }
@@ -1362,7 +1394,7 @@ func (pm *PIDManager) sweepSupersededPreSessionsPeriodic() {
 			continue
 		}
 		pm.removeSessionUntracked(logComponentSessionDetector, v.state,
-			fmt.Sprintf("pre-session superseded by %s (PID-bound to a sibling) — deleting", v.candidate))
+			fmt.Sprintf("pre-session superseded by %s (PID-bound to a sibling) — deleting", v.candidate), v.candidate)
 	}
 }
 
