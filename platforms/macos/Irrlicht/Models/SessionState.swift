@@ -376,8 +376,8 @@ struct SessionMetrics: Codable {
     let estimatedCO2Grams: Double?  // estimated CO2e footprint in grams — always a model, never a measurement (issue #829)
     let co2Tier: String?            // confidence tier behind estimatedCO2Grams: "provider_disclosed" or "fallback"
     let lastAssistantText: String?  // last assistant message text, truncated (~200 chars) — full text for the question tooltip
-    let taskSummary: String?        // human-readable "what is this session about" (issue #738) — full text for the intent tooltip
-    let intentHeadline: String?     // terse one-line version of taskSummary for the sidebar (issue #759)
+    let taskSummary: String?        // human-readable "what is this session about" (issue #738) — decoded but not rendered by any UI since the intent pill was removed (#979)
+    let intentHeadline: String?     // terse one-line version of taskSummary (issue #759) — same #979 note as taskSummary above
     let questionHeadline: String?   // terse one-line version of the pending question for the sidebar (issue #759)
     let tasks: [SessionTask]?              // Claude Code task list (nil when TaskCreate never called)
     let rateLimit: RateLimitInfo?          // subscription-quota snapshot (nil for API-key / Bedrock / Vertex)

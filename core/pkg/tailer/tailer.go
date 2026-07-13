@@ -241,6 +241,12 @@ type SessionMetrics struct {
 	// emitted a question marker; the surfaced waiting headline then falls back
 	// to compacting the raw last-assistant text.
 	TaskQuestion *TaskQuestion `json:"task_question,omitempty"`
+
+	// AwaySummary is Claude Code's own idle recap, once it has arrived (issue
+	// #979) — a passive, higher-quality alternative source for the surfaced
+	// waiting headline when no agent marker is present. Cleared on a real
+	// user message, like TaskQuestion.
+	AwaySummary *AwaySummary `json:"away_summary,omitempty"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics.
@@ -356,6 +362,11 @@ type TranscriptTailer struct {
 	// (issue #759). Sporadic like lastTaskSummary — the last one seen persists
 	// across markerless passes; cleared on a real user message.
 	lastTaskQuestion *TaskQuestion
+
+	// lastAwaySummary holds Claude Code's own idle recap, once it has arrived
+	// (issue #979). Sporadic and lower-priority than lastTaskQuestion — the
+	// last one seen persists across passes; cleared on a real user message.
+	lastAwaySummary *AwaySummary
 
 	// tasks accumulates the session's task list from TaskCreate / TaskUpdate
 	// tool_use events parsed by the Claude Code adapter.
@@ -724,6 +735,13 @@ func (t *TranscriptTailer) applySkippedEvent(parsed *ParsedEvent) bool {
 	if parsed.TaskSnapshot != nil {
 		substantive = true
 	}
+	// away_summary arrives on a Skip=true system event by design (it must
+	// never be promoted to turn_done, issue #329) — but its content is still
+	// worth reading, so it's applied here without flipping substantive: a
+	// passive data upgrade, not activity that should reset any idle clock.
+	if parsed.AwaySummary != nil {
+		t.applyAwaySummary(parsed.AwaySummary)
+	}
 	t.reconcileTaskSnapshot(parsed)
 	return substantive
 }
@@ -1084,6 +1102,10 @@ func (t *TranscriptTailer) applyAssistantTextAndMarkers(parsed *ParsedEvent) {
 	if parsed.TaskQuestion != nil {
 		t.applyTaskQuestion(parsed.TaskQuestion)
 	}
+	// AwaySummary is applied in applySkippedEvent, not here: it is only ever
+	// set by handleSystemEvent, which always sets Skip=true, so it never
+	// reaches this function — the two paths are mutually exclusive per event
+	// (scanParsedLine routes Skip=true events to applySkippedEvent only).
 	// Capture the first user prompt once as the heuristic-fallback summary
 	// (issue #738) — never overwritten, so it describes what the session was
 	// originally about even after many turns.
@@ -1106,6 +1128,9 @@ func (t *TranscriptTailer) applyAssistantTextAndMarkers(parsed *ParsedEvent) {
 		// The question was answered by this very user message — clear it so the
 		// next waiting turn re-derives from the new last-assistant text.
 		t.lastTaskQuestion = nil
+		// The recap described the now-superseded turn; clear it so a later
+		// away_summary arriving for a stale turn can't leak into the new one.
+		t.lastAwaySummary = nil
 	}
 }
 
@@ -1177,6 +1202,20 @@ func (t *TranscriptTailer) applyTaskQuestion(q *TaskQuestion) {
 		return
 	}
 	t.lastTaskQuestion = q
+}
+
+// applyAwaySummary keeps the latest away_summary recap (issue #979). A recap
+// observed BEFORE the current latest is dropped so an out-of-order delivery
+// can't regress a fresher one. The user-message reset stays in
+// processParsedEvent: it is transcript-line-driven.
+func (t *TranscriptTailer) applyAwaySummary(s *AwaySummary) {
+	if s == nil || s.Text == "" {
+		return
+	}
+	if t.lastAwaySummary != nil && s.ObservedAt < t.lastAwaySummary.ObservedAt {
+		return
+	}
+	t.lastAwaySummary = s
 }
 
 // PurgeBackgroundProcs drops the tracked background processes whose output

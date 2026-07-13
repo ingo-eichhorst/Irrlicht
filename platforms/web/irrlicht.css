@@ -805,10 +805,13 @@
       cursor: default;
     }
 
-    /* Task summary + waiting question — collapsible block beneath the parent
-       (issue #738). A clickable head (chevron + one-line summary title) and,
-       while waiting and expanded, the pending question in a dim rounded box.
-       Mirrors macOS SessionRowView.summaryBlock. */
+    /* Pending question — collapsible block beneath the parent row, shown only
+       while waiting (issue #738, narrowed by #979: a finished session has
+       nothing left to report). A clickable head (chevron + "Waiting for
+       input" teaser) and, expanded, the actual question in a dim rounded box
+       — one consistent waiting-colored element throughout, since there's no
+       longer a separate summary line to visually distinguish it from.
+       Mirrors macOS's single question pill in SessionRowView.summaryBlock. */
     .row-summary-row {
       margin: 0 10px 4px 24px;
       font-family: var(--font-mono);
@@ -820,7 +823,7 @@
       gap: 4px;
       font-size: 9px;
       font-weight: 600;
-      color: var(--muted);
+      color: var(--waiting);
       cursor: pointer;
       overflow: hidden;
     }
@@ -835,8 +838,6 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    /* No summary yet (waiting-only) — render the placeholder in waiting color. */
-    .summary-title.no-summary { color: var(--waiting); font-weight: 600; }
     .summary-question {
       margin-top: 2px;
       display: -webkit-box;

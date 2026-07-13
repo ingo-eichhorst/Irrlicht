@@ -232,6 +232,13 @@ type ParsedEvent struct {
 	// most recent one across passes and clears it on a real user message.
 	TaskQuestion *TaskQuestion
 
+	// AwaySummary, when non-nil, is Claude Code's own idle "away_summary"
+	// recap read from a system transcript event (issue #979) — a passive,
+	// higher-quality upgrade over the deterministic fallback, arriving a few
+	// minutes after the turn ends. Adapters without an equivalent recap
+	// simply never set this field.
+	AwaySummary *AwaySummary
+
 	// UserText is the prose of a genuine user prompt on this event (not a
 	// tool result). The tailer captures the FIRST non-empty one as the
 	// heuristic-fallback task summary (issue #738). Adapters that don't set
@@ -311,6 +318,23 @@ type TaskQuestion struct {
 	Text string
 	// ObservedAt is the unix-seconds timestamp of the transcript event the
 	// marker appeared in (replay-deterministic), used for latest-wins.
+	ObservedAt int64
+}
+
+// AwaySummary mirrors Claude Code's own idle recap — a system transcript
+// event written a few minutes after a turn ends, e.g.
+//
+//	{"type":"system","subtype":"away_summary","content":"Goal was X. Done: Y. Next: Z."}
+//
+// It is a passive, lower-priority alternative to TaskQuestion: a real
+// self-report always wins when present, but a session that never emits one
+// still gets upgraded from the deterministic fallback once the recap lands.
+// See issue #979. Wall-clock independent (ObservedAt is the transcript
+// event's own timestamp), so it survives replay.
+type AwaySummary struct {
+	Text string
+	// ObservedAt is the unix-seconds timestamp of the transcript event the
+	// recap appeared in (replay-deterministic), used for latest-wins.
 	ObservedAt int64
 }
 

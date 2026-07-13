@@ -402,6 +402,7 @@ func (t *TranscriptTailer) surfaceSporadicMetrics() {
 	t.metrics.FirstUserText = t.firstUserText
 
 	t.metrics.TaskQuestion = t.lastTaskQuestion
+	t.metrics.AwaySummary = t.lastAwaySummary
 }
 
 // computeBackgroundProcessMetrics surfaces background-process bookkeeping.

@@ -8,10 +8,13 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// maxHeadlineRunes caps the surfaced one-line headline. The instruction asks
-// the agent for ~70 chars; the cap is the hard ceiling for the raw-text
-// fallback so a paragraph never bloats the sidebar row.
-const maxHeadlineRunes = 70
+// maxHeadlineRunes is a generous safety bound, not a presentation cut: it
+// only stops a raw paragraph from bloating the payload. Each UI truncates to
+// its own real estate (macOS's multi-line pill vs. web's 3-line clamp) — a
+// tighter daemon-side cut here would just throw away content before either
+// UI gets to decide. See issue #979: the previous 70-rune value chopped an
+// already-correctly-extracted question sentence in half.
+const maxHeadlineRunes = 200
 
 // Noise-stripping regexes, applied before headline selection. Each is
 // non-greedy and (?s) so a block spanning lines still matches.
@@ -45,11 +48,13 @@ func (DeterministicCompactor) Compact(text string, kind outbound.CompactKind) st
 	case outbound.CompactQuestion:
 		// The same extractor the waiting-state classifier uses, so the headline
 		// matches the question that put the session into `waiting`. Fall back to
-		// the first non-empty line when there is no literal question.
+		// the shared heuristic scorer (issue #979) when there is no literal
+		// question — it picks the highest-signal sentence instead of an
+		// arbitrary positional one.
 		if snippet := session.ExtractQuestionSnippet(cleaned); snippet != "" {
 			headline = snippet
 		} else {
-			headline = firstNonEmptyLine(cleaned)
+			headline = session.ExtractStatusFallback(cleaned)
 		}
 	default: // CompactIntent
 		headline = firstSentence(cleaned)
@@ -77,16 +82,6 @@ func stripInlineMarkdown(s string) string {
 	s = inlineMarkupRe.ReplaceAllString(s, "")
 	s = strings.TrimLeft(s, "#> ")
 	return strings.TrimSpace(s)
-}
-
-// firstNonEmptyLine returns the first line with non-whitespace content.
-func firstNonEmptyLine(s string) string {
-	for _, line := range strings.Split(s, "\n") {
-		if t := strings.TrimSpace(line); t != "" {
-			return t
-		}
-	}
-	return ""
 }
 
 // firstSentence returns the leading sentence of s — text up to the first

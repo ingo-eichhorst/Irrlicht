@@ -89,6 +89,29 @@ func TestConvert_QuestionHeadline_FallsBackToLastAssistantText(t *testing.T) {
 	}
 }
 
+func TestConvert_QuestionHeadline_AwaySummaryUpgradesLastAssistantText(t *testing.T) {
+	m := &tailer.SessionMetrics{
+		LastAssistantText: "a raw, unhelpful status line",
+		AwaySummary:       &tailer.AwaySummary{Text: "Goal was X. Next: merge or wait?", ObservedAt: 100},
+	}
+	got := NewMetricsConverter(fakeCompactor{}).Convert(m)
+	if got.QuestionHeadline != "question:Goal was X. Next: merge or wait?" {
+		t.Errorf("QuestionHeadline = %q, want the away_summary recap to win over raw last-assistant text", got.QuestionHeadline)
+	}
+}
+
+func TestConvert_QuestionHeadline_MarkerWinsOverAwaySummary(t *testing.T) {
+	m := &tailer.SessionMetrics{
+		LastAssistantText: "a raw, unhelpful status line",
+		AwaySummary:       &tailer.AwaySummary{Text: "Goal was X. Next: merge or wait?", ObservedAt: 100},
+		TaskQuestion:      &tailer.TaskQuestion{Text: "run the migration?", ObservedAt: 200},
+	}
+	got := NewMetricsConverter(fakeCompactor{}).Convert(m)
+	if got.QuestionHeadline != "question:run the migration?" {
+		t.Errorf("QuestionHeadline = %q, want the agent's own marker to win over the away_summary recap", got.QuestionHeadline)
+	}
+}
+
 func TestTailerToDomain_NilCompactor_HeadlinesAreIdentity(t *testing.T) {
 	m := &tailer.SessionMetrics{
 		TaskSummary:       &tailer.TaskSummary{Text: "add the logout button", ObservedAt: 100},

@@ -145,8 +145,8 @@ extension View {
     }
 }
 
-/// Header collapse mode for every session's task-summary/question block
-/// (issue #985): strictly 2 states — `collapsed` hides every row's block;
+/// Header collapse mode for every session's question pill (issue #985):
+/// strictly 2 states — `collapsed` hides every row's pill;
 /// `waiting` shows it only for sessions currently `state == .waiting`, so
 /// ones blocked on the user don't get buried among working/ready rows.
 /// Replaces a former "expand all" state — every summary shown at once was
@@ -494,7 +494,7 @@ struct SessionListView: View {
     }
 
     /// Header control that flips the global display mode for every
-    /// session's task-summary block at once (issue #985): collapsed, or
+    /// session's question pill at once (issue #985): collapsed, or
     /// waiting-only (show it only for sessions currently blocked on the
     /// user). No third "expand all" state.
     private var summaryCollapseAllButton: some View {
@@ -509,7 +509,7 @@ struct SessionListView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .tooltip(waiting ? "Collapse all task summaries" : "Show summaries for sessions waiting on you")
+        .tooltip(waiting ? "Collapse all pending questions" : "Show questions for sessions waiting on you")
         .accessibilityIdentifier("summary-collapse-all")
     }
 
