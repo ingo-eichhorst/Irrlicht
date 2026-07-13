@@ -36,7 +36,7 @@ func TestSawMidPassTurnBoundary_QueuedFollowUpInSamePass(t *testing.T) {
 		{"type": "user", "timestamp": ts(0)},
 		{"type": "assistant", "timestamp": ts(1)},
 		{"type": "system", "subtype": "turn_duration", "timestamp": ts(2)}, // turn 1 done
-		{"type": "user", "timestamp": ts(3)},                              // queued follow-up
+		{"type": "user", "timestamp": ts(3)},                               // queued follow-up
 		{"type": "assistant", "timestamp": ts(4)},
 		{"type": "system", "subtype": "turn_duration", "timestamp": ts(5)}, // turn 2 done
 	})
