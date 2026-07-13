@@ -101,22 +101,30 @@ func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adap
 	}
 
 	for _, sid := range ids {
-		state, _ := d.repo.Load(sid)
-		// Fire before the delete so a re-key handler's own Load(sid) is
-		// guaranteed to still succeed (issue #997). Read directly off pidMgr
-		// (same package) rather than keeping a second copy of the handler here.
-		if d.pidMgr.onSessionSuperseded != nil {
-			d.pidMgr.onSessionSuperseded(sid, newSessionID)
-		}
-		_ = d.repo.Delete(sid)
-		adapterName := adapter
-		if state != nil {
-			adapterName = state.Adapter
-			d.broadcast(outbound.PushTypeDeleted, state)
-		}
-		d.record(lifecycle.Event{Kind: lifecycle.KindPreSessionRemoved, SessionID: sid, Adapter: adapterName, Reason: "superseded by real session for project"})
-		d.log.LogInfo(logComponentSessionDetector, sid,
-			fmt.Sprintf("removed pre-session — real session arrived in %s", projectDir))
+		d.retirePreSession(sid, newSessionID, adapter, projectDir)
 	}
 	return len(ids) > 0
+}
+
+// retirePreSession fires the supersession hook and deletes a single retired
+// pre-session, then records + logs its removal. Extracted from
+// cleanupPreSessionsForProject's per-id loop to keep that function's
+// cognitive complexity down — pure refactor, no behavior change (issue #997).
+func (d *SessionDetector) retirePreSession(sid, newSessionID, adapter, projectDir string) {
+	state, _ := d.repo.Load(sid)
+	// Fire before the delete so a re-key handler's own Load(sid) is
+	// guaranteed to still succeed (issue #997). Read directly off pidMgr
+	// (same package) rather than keeping a second copy of the handler here.
+	if d.pidMgr.onSessionSuperseded != nil {
+		d.pidMgr.onSessionSuperseded(sid, newSessionID)
+	}
+	_ = d.repo.Delete(sid)
+	adapterName := adapter
+	if state != nil {
+		adapterName = state.Adapter
+		d.broadcast(outbound.PushTypeDeleted, state)
+	}
+	d.record(lifecycle.Event{Kind: lifecycle.KindPreSessionRemoved, SessionID: sid, Adapter: adapterName, Reason: "superseded by real session for project"})
+	d.log.LogInfo(logComponentSessionDetector, sid,
+		fmt.Sprintf("removed pre-session — real session arrived in %s", projectDir))
 }
