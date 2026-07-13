@@ -11,7 +11,7 @@ Take an issue from a number to a review-clean, landed PR:
 /ir:exec [mode] <N>
 ```
 
-Five modes share one flow; `mode` defaults to `auto` when omitted.
+Four modes share one flow; `mode` defaults to `auto` when omitted.
 `ir:exec` always works in its own worktree (Phase 1), so there's no separate
 "runs in a worktree" naming convention to invoke — the mode is just an
 argument.
@@ -19,8 +19,8 @@ argument.
 ```
 /ir:exec [mode] <N>
   → worktree → investigate → (auto resolves to plan or full here)
-    → plan: HTML + ⛔ approval, or full/exec: inline summary → assign issue
-    → implement → verify                                        [exec stops here]
+    → plan: HTML + ⛔ approval, or full: inline summary → assign issue
+    → implement → verify
     → PR → /code-review (low) → fix → /simplify → recommendation [plan / full stop here]
     → land: confirm mergeable → squash-merge → remove worktree   [close]
 ```
@@ -31,13 +31,12 @@ argument.
 |---|---|---|---|
 | `auto` (default) | `/ir:exec <N>` or `/ir:exec auto <N>` | Decided from the issue's `/ir:triage` signals — see Auto mode below | Whatever the resolved mode (`plan` or `full`) stops after |
 | `plan` | `/ir:exec plan <N>` | Yes — render HTML plan, end turn, wait for explicit approval | Phase 6 (hand-back), once approved |
-| `exec` | `/ir:exec exec <N>` | No — skip the wait | Phase 4 (implement + verify) |
 | `full` | `/ir:exec full <N>` | No — skip the wait | Phase 6 (hand-back) |
 | `close` | `/ir:exec close [N]` (or replying "merge" to Phase 6) | n/a | Phase 7 (land) |
 
-`exec` and `full` still follow every other rule in this skill — worktree
-isolation, one branch/PR per issue, AGENTS.md conventions — only the approval
-wait and the HTML plan artifact are dropped.
+`full` still follows every other rule in this skill — worktree isolation, one
+branch/PR per issue, AGENTS.md conventions — only the approval wait and the
+HTML plan artifact are dropped.
 
 ### Auto mode
 
@@ -63,10 +62,10 @@ Low/Medium/High call yourself during Phase 2's investigation, reusing
 Medium; multi-package/schema/cross-adapter/multi-phase = High) rather than a
 new one.
 
-`auto` only ever resolves to `plan` or `full` — never to `exec` or `close`
-(those express a specific stopping point only a human would ask for
-directly) — and it must never itself invoke the Workflow tool no matter how
-high the detected complexity; that AGENTS.md rule is unconditional.
+`auto` only ever resolves to `plan` or `full` — never to `close` (landing is a
+step only a human would ask for directly) — and it must never itself invoke
+the Workflow tool no matter how high the detected complexity; that AGENTS.md
+rule is unconditional.
 
 ## Inputs
 
@@ -174,7 +173,7 @@ worktree name. `close` additionally resolves it from `pwd` / `git status -sb` /
    partial reply ("looks good, but…") is a change request — revise the plan + HTML and
    re-present. Do not edit a single implementation file until the user approves.
 
-### `exec` / `full` modes (gate-skipped)
+### `full` mode (gate-skipped)
 
 Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
 
@@ -197,10 +196,6 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
 11. **Verify** before declaring done: run the test suites relevant to what you touched
     (per AGENTS.md — `go test ./core/... -race -count=1`, the factory/web suites, replay
     fixtures, `swift build`/`swift test`, as applicable). Fix what you broke.
-
-**`exec` mode stops here.** Report what was implemented and verified, and note that
-opening a PR (or re-invoking as `/ir:exec full <N>`) continues the flow. Do not
-auto-open a PR for this mode.
 
 ## Phase 5 — PR, review, simplify
 
