@@ -8,7 +8,7 @@
 #
 # Codes:
 #   cli_not_found, cli_too_old, auth_failed, daemon_dirty,
-#   working_tree_dirty, transcript_missing, timeout, unknown
+#   working_tree_dirty, transcript_missing, timeout, daemon_crashed, unknown
 
 set -euo pipefail
 
@@ -64,6 +64,15 @@ if [[ -f "$DRIVER_LOG" ]]; then
   fi
   if grep -qiE "please log in|authentication required|401|unauthorized|api key not set|no api key" "$DRIVER_LOG" 2>/dev/null; then
     emit "auth_failed" "Adapter is installed but not authenticated" "$(grep -m1 -iE "log in|auth|401|api key" "$DRIVER_LOG")"
+  fi
+fi
+
+# Daemon-side crashes (#1018: DAEMON_LOG was already staged but never read —
+# a Go panic or fatal runtime error here is the richest signal available for
+# daemon-caused failures, ahead of falling to unknown).
+if [[ -f "$DAEMON_LOG" ]]; then
+  if grep -qE "^panic:|fatal error:" "$DAEMON_LOG" 2>/dev/null; then
+    emit "daemon_crashed" "irrlichd panicked or hit a fatal runtime error" "$(grep -m1 -E "^panic:|fatal error:" "$DAEMON_LOG")"
   fi
 fi
 

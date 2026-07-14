@@ -145,6 +145,8 @@ DRIVE_MARKER_PREFIX="$STAGING/.pi-start-marker"
 source "$_DRIVE_LIB/slots.sh"
 # shellcheck source=lib/drive/contracts.sh
 source "$_DRIVE_LIB/contracts.sh"
+# shellcheck source=lib/drive/teardown.sh
+source "$_DRIVE_LIB/teardown.sh"
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS
 # (a subset of its case arms — accepting ≠ producing), read directly by
@@ -290,7 +292,7 @@ step_exit_clean() {
   # process_exited. Sleep gives pi time to terminate. (Ctrl-C would only
   # clear the input buffer on the first press, so it can't be used here.)
   tmux send-keys -t "$SESSION" C-d
-  sleep 2
+  wait_tmux_session_gone "$SESSION" 2
   SES_ALIVE[$ACTIVE]=0
   echo "[driver] exit_clean[s$ACTIVE]: sent Ctrl-D to $SESSION" >&2
 }
@@ -314,7 +316,7 @@ step_resume() {
   local resume_transcript="$TRANSCRIPT"
 
   tmux send-keys -t "$SESSION" C-d
-  sleep 2
+  wait_tmux_session_gone "$SESSION" 2
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   sleep 1
 

@@ -97,6 +97,8 @@ source "$_DRIVE_LIB/slots.sh"
 source "$_DRIVE_LIB/contracts.sh"
 # shellcheck source=/dev/null
 source "$_DRIVE_LIB/dialogs.sh"
+# shellcheck source=/dev/null
+source "$_DRIVE_LIB/teardown.sh"
 
 # Slot state the lib reads/writes (the driver owns these globals). A run starts
 # with zero slots; launch_repl allocs slot 1, and restart/start_session alloc
@@ -420,7 +422,7 @@ agy_pid() {
 step_exit_clean() {
   resolve_transcript || true
   tmux send-keys -t "$SESSION" C-d
-  sleep 2
+  wait_tmux_session_gone "$SESSION" 2
   SES_ALIVE[$ACTIVE]=0
   echo "[driver] exit_clean[s$ACTIVE]: sent Ctrl-D to $SESSION" >&2
 }
@@ -429,15 +431,14 @@ step_exit_clean() {
 step_sigkill() {
   resolve_transcript || true
   local pid; pid="$(agy_pid)"
+  # Leave the dead tmux pane for teardown — the kill alone produces process_exited.
   if [[ -n "$pid" ]]; then
-    kill -9 "$pid" 2>/dev/null || true
     echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (conv-id=$UUID)" >&2
   else
     echo "[driver] sigkill[s$ACTIVE]: no agy PID found (cwd=${SES_CWD[$ACTIVE]}, session=$SESSION)" >&2
   fi
+  sigkill_and_wait "$pid" 1
   SES_ALIVE[$ACTIVE]=0
-  # Leave the dead tmux pane for teardown — the kill alone produces process_exited.
-  sleep 1
 }
 
 # --- AGENT-SPECIFIC SEAM: restart — end this session, start a FRESH one -------
@@ -474,7 +475,7 @@ step_resume() {
   # If exit_clean didn't precede this, end the running agy cleanly first.
   if [[ "${SES_ALIVE[$ACTIVE]}" == "1" ]]; then
     tmux send-keys -t "$SESSION" C-d
-    sleep 2
+    wait_tmux_session_gone "$SESSION" 2
   fi
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   sleep 1

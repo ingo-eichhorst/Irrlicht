@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # drive-lib_test.sh — unit tests for the shared interactive-driver helpers
-# extracted in #508 #3 (lib/drive/slots.sh + contracts.sh) and #1009
-# (lib/drive/dialogs.sh). Plain bash, no framework. The interactive drivers
-# themselves can't run in CI (they need a live agent CLI + tmux + daemon), so
-# these pure helpers — slot bookkeeping, staging-contract emission, and the
-# mid-turn dialog-dismiss poll, which touch only bash arrays + the filesystem
-# (dialogs.sh's tmux calls are faked below) — are the automated net for the
+# extracted in #508 #3 (lib/drive/slots.sh + contracts.sh), #1009
+# (lib/drive/dialogs.sh), and #1018 (lib/drive/teardown.sh). Plain bash, no
+# framework. The interactive drivers themselves can't run in CI (they need a
+# live agent CLI + tmux + daemon), so these pure helpers — slot bookkeeping,
+# staging-contract emission, the mid-turn dialog-dismiss poll, and the
+# session/pid-death polls, which touch only bash arrays + the filesystem
+# (tmux/kill calls are faked below) — are the automated net for the
 # extraction. Run directly or via scripts/smoke-test.sh.
 
 set -uo pipefail   # NOT -e: assertions capture non-zero return codes
@@ -17,6 +18,8 @@ source "$DIR/slots.sh"
 source "$DIR/contracts.sh"
 # shellcheck source=dialogs.sh
 source "$DIR/dialogs.sh"
+# shellcheck source=teardown.sh
+source "$DIR/teardown.sh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -119,6 +122,84 @@ dismiss_dialog_if_visible "agy-sess" 'Requesting permission for|Do you want to p
 assert_eq "adapters' marker regexes stay independent (vibe text doesn't trip agy's)" 1 "$?"
 
 unset -f tmux
+
+echo "== wait_tmux_session_gone: polls until has-session fails, capped at max_wait =="
+# Fake tmux/sleep so the poll runs at wall-clock-zero speed: `sleep` is
+# shadowed to a no-op tick counter (bash resolves a function before the
+# builtin), and `has-session` returns true for a fixed number of calls before
+# "the session is gone".
+HAS_SESSION_CALLS=0; HAS_SESSION_TRUE_COUNT=0; SLEEP_CALLS=0
+tmux() {
+  case "$1" in
+    has-session)
+      HAS_SESSION_CALLS=$((HAS_SESSION_CALLS + 1))
+      [[ $HAS_SESSION_CALLS -le $HAS_SESSION_TRUE_COUNT ]]
+      ;;
+  esac
+}
+sleep() { SLEEP_CALLS=$((SLEEP_CALLS + 1)); }
+
+HAS_SESSION_TRUE_COUNT=0; HAS_SESSION_CALLS=0; SLEEP_CALLS=0
+wait_tmux_session_gone "sess" 2
+assert_eq "already gone: no sleep" 0 "$SLEEP_CALLS"
+assert_eq "already gone: checks once" 1 "$HAS_SESSION_CALLS"
+
+HAS_SESSION_TRUE_COUNT=3; HAS_SESSION_CALLS=0; SLEEP_CALLS=0
+wait_tmux_session_gone "sess" 2
+assert_eq "gone after 3 checks: sleeps 3x" 3 "$SLEEP_CALLS"
+assert_eq "gone after 3 checks: checks 4x" 4 "$HAS_SESSION_CALLS"
+
+HAS_SESSION_TRUE_COUNT=999; HAS_SESSION_CALLS=0; SLEEP_CALLS=0
+wait_tmux_session_gone "sess" 1
+assert_eq "never gone: capped at max_wait*5 ticks" 5 "$SLEEP_CALLS"
+
+unset -f tmux sleep
+
+echo "== wait_pid_gone: polls until kill -0 fails, capped at max_wait; no-op on empty pid =="
+KILL_CALLS=0; KILL_TRUE_COUNT=0; SLEEP_CALLS=0
+kill() {
+  if [[ "$1" == "-0" ]]; then
+    KILL_CALLS=$((KILL_CALLS + 1))
+    [[ $KILL_CALLS -le $KILL_TRUE_COUNT ]]
+  fi
+}
+sleep() { SLEEP_CALLS=$((SLEEP_CALLS + 1)); }
+
+wait_pid_gone "" 1
+assert_eq "empty pid: no kill call"  0 "$KILL_CALLS"
+assert_eq "empty pid: no sleep call" 0 "$SLEEP_CALLS"
+
+KILL_TRUE_COUNT=2; KILL_CALLS=0; SLEEP_CALLS=0
+wait_pid_gone "4242" 1
+assert_eq "gone after 2 checks: sleeps 2x" 2 "$SLEEP_CALLS"
+assert_eq "gone after 2 checks: checks 3x" 3 "$KILL_CALLS"
+
+unset -f kill sleep
+
+echo "== sigkill_and_wait: kills+waits when pid known, sleeps when empty =="
+KILL9_LOG=""; KILL_CALLS=0; KILL_TRUE_COUNT=0; SLEEP_CALLS=0; SLEEP_ARG=""
+kill() {
+  if [[ "$1" == "-9" ]]; then
+    KILL9_LOG="$2"
+  elif [[ "$1" == "-0" ]]; then
+    KILL_CALLS=$((KILL_CALLS + 1))
+    [[ $KILL_CALLS -le $KILL_TRUE_COUNT ]]
+  fi
+}
+sleep() { SLEEP_CALLS=$((SLEEP_CALLS + 1)); SLEEP_ARG="$1"; }
+
+KILL_TRUE_COUNT=1; KILL_CALLS=0; SLEEP_CALLS=0; KILL9_LOG=""
+sigkill_and_wait "4242" 1
+assert_eq "known pid: sends kill -9"       "4242" "$KILL9_LOG"
+assert_eq "known pid: waits via wait_pid_gone, not a flat sleep" 1 "$SLEEP_CALLS"
+
+KILL9_LOG=""; SLEEP_CALLS=0; SLEEP_ARG=""
+sigkill_and_wait "" 1
+assert_eq "empty pid: no kill -9 sent" "" "$KILL9_LOG"
+assert_eq "empty pid: falls back to a flat sleep" 1 "$SLEEP_CALLS"
+assert_eq "empty pid: sleeps for max_wait"        1 "$SLEEP_ARG"
+
+unset -f kill sleep
 
 echo ""
 if [[ "$fails" -eq 0 ]]; then
