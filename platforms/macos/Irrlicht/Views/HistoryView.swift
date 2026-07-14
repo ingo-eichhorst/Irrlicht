@@ -10,19 +10,21 @@ import SwiftUI
 // changes. The web's side-by-side chart + side-panel is restacked vertically
 // to fit the 380pt popover.
 
-/// Top-level History tabs. The three concerns are too different to share one
-/// control bar, so each is its own tab with only the controls it needs:
-/// Usage (cost/token time series), Metrics (a growing set of derived
-/// analytics — Yield's productive-vs-reverted plus DORA, #951), and Quota
-/// (live per-provider subscription rate-limit forecast).
+/// Top-level History tabs. Each concern is too different from the others to
+/// share one control bar, so each is its own tab with only the controls it
+/// needs: Usage (cost/token time series), Activity (the projects × time
+/// grid of working/waiting/ready counts, #981/#1028), Metrics (a growing set
+/// of derived analytics — Yield's productive-vs-reverted plus DORA, #951),
+/// and Quota (live per-provider subscription rate-limit forecast).
 enum HistoryTab: String, CaseIterable, Identifiable {
-    case usage, metrics, quota
+    case usage, activity, metrics, quota
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .usage: return "Usage"
+        case .activity: return "Activity"
         case .metrics: return "Metrics"
         case .quota: return "Quota"
         }
@@ -74,9 +76,15 @@ struct HistoryView: View {
     @State private var knownProjects: [String] = []
     @State private var doraProject: String?
 
+    // Activity Matrix (#1028) — its own granularity zoom level, replacing
+    // range/start/end entirely rather than adding to them (mirrors the
+    // daemon's own chart=="state" special-case in resolveHistoryQuery).
+    @State private var stateGranularity: HistoryGranularity = .hr24
+
     @State private var response: HistoryResponse?
     @State private var yieldResponse: HistoryYieldResponse?
     @State private var doraResponse: HistoryDoraResponse?
+    @State private var stateResponse: HistoryStateResponse?
     @State private var loadFailed = false
 
     init(onClose: @escaping () -> Void, initialTab: HistoryTab = .usage) {
@@ -88,17 +96,19 @@ struct HistoryView: View {
     /// This is the macOS equivalent of the web's manual `historyFetchSeq`
     /// dedup — `.task(id:)` cancels the in-flight request when the key changes.
     private var queryKey: String {
-        let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(doraProject ?? "")"
+        let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(doraProject ?? "")-\(stateGranularity.rawValue)"
         if range == .custom {
             return "custom-\(appliedCustomStart ?? 0)-\(appliedCustomEnd ?? 0)-\(dims)"
         }
         return "\(range.rawValue)-\(dims)"
     }
 
-    /// The chart metric actually sent to the daemon: the Metrics tab forces
-    /// whichever section is active (Yield's aggregate or DORA); otherwise the
-    /// Usage tab's Cost/Tokens choice. (Quota does not fetch.)
+    /// The chart metric actually sent to the daemon: Activity forces `.state`,
+    /// the Metrics tab forces whichever section is active (Yield's aggregate
+    /// or DORA), otherwise the Usage tab's Cost/Tokens choice. (Quota does
+    /// not fetch.)
     private var fetchChart: HistoryChart {
+        if tab == .activity { return .state }
         guard tab == .metrics else { return chart }
         return metricsSection == .dora ? .dora : .yieldRatio
     }
@@ -192,6 +202,7 @@ struct HistoryView: View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
             switch tab {
             case .usage: usageControls
+            case .activity: activityControls
             case .metrics: metricsControls
             case .quota: EmptyView()
             }
@@ -251,6 +262,23 @@ struct HistoryView: View {
         .font(.caption)
 
         if range == .custom { customRangeRow }
+    }
+
+    /// Activity tab (#1028): just the granularity zoom level — there's no
+    /// Range/Group to pick, since granularity fully replaces range and the
+    /// grid is always grouped by project.
+    @ViewBuilder private var activityControls: some View {
+        HStack(spacing: IrrSpacing.sp3) {
+            Picker("Granularity", selection: $stateGranularity) {
+                ForEach(HistoryGranularity.allCases) { Text($0.label).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
+            Spacer(minLength: 0)
+        }
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .font(.caption)
     }
 
     /// Metrics tab (#951): a section picker (Yield | DORA, more later) plus
@@ -332,6 +360,7 @@ struct HistoryView: View {
             VStack(alignment: .leading, spacing: 0) {
                 switch tab {
                 case .usage: usageContent
+                case .activity: activityContent
                 case .metrics: metricsContent
                 case .quota: quotaContent
                 }
@@ -353,6 +382,23 @@ struct HistoryView: View {
                 onClearDrill: { clearDrill() },
                 onExportCSV: { save(ext: "csv", text: HistoryExport.csv(r)) },
                 onExportJSON: { save(ext: "json", text: HistoryExport.json(r)) }
+            )
+        } else if loadFailed {
+            loadFailedText
+        } else {
+            ProgressView()
+                .frame(maxWidth: .infinity, minHeight: 220)
+        }
+    }
+
+    /// Activity tab (#1028): the projects × time-bucket grid.
+    @ViewBuilder private var activityContent: some View {
+        if let s = stateResponse {
+            HistoryActivityContentView(
+                data: s,
+                granularity: stateGranularity,
+                onExportCSV: { save(ext: "csv", text: HistoryExport.csvState(s)) },
+                onExportJSON: { save(ext: "json", text: HistoryExport.jsonState(s)) }
             )
         } else if loadFailed {
             loadFailedText
@@ -436,10 +482,21 @@ struct HistoryView: View {
         if fetchChart == .dora, doraProject == nil { return }
         loadFailed = false
         var comps = URLComponents(string: "\(DaemonEndpoint.httpBase)/api/v1/history")
-        // queryItems ignores the custom bounds unless range == .custom.
-        comps?.queryItems = range.queryItems(chart: fetchChart, group: effectiveGroup, scope: scope, forecast: false, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
-        if fetchChart == .dora, let doraProject {
-            comps?.queryItems?.append(URLQueryItem(name: "project", value: doraProject))
+        if fetchChart == .state {
+            // Activity's first-ever fork away from range.queryItems(...):
+            // granularity replaces range/start/end entirely, matching the
+            // daemon's own chart=="state" special-case.
+            comps?.queryItems = [
+                URLQueryItem(name: "chart", value: HistoryChart.state.rawValue),
+                URLQueryItem(name: "granularity", value: stateGranularity.rawValue),
+                URLQueryItem(name: "group", value: HistoryGroup.project.rawValue),
+            ]
+        } else {
+            // queryItems ignores the custom bounds unless range == .custom.
+            comps?.queryItems = range.queryItems(chart: fetchChart, group: effectiveGroup, scope: scope, forecast: false, customStart: appliedCustomStart, customEnd: appliedCustomEnd)
+            if fetchChart == .dora, let doraProject {
+                comps?.queryItems?.append(URLQueryItem(name: "project", value: doraProject))
+            }
         }
         guard let url = comps?.url else { return }
         do {
@@ -449,7 +506,11 @@ struct HistoryView: View {
                 loadFailed = true
                 return
             }
-            if fetchChart == .dora {
+            if fetchChart == .state {
+                let decoded = try JSONDecoder().decode(HistoryStateResponse.self, from: data)
+                if Task.isCancelled { return }
+                stateResponse = decoded
+            } else if fetchChart == .dora {
                 let decoded = try JSONDecoder().decode(HistoryDoraResponse.self, from: data)
                 if Task.isCancelled { return }
                 doraResponse = decoded
@@ -484,7 +545,12 @@ struct HistoryView: View {
 
     private func save(ext: String, text: String) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "irrlicht-history-\(range.rawValue)-\(chart.rawValue).\(ext)"
+        // Activity's range/chart aren't meaningful (granularity replaces
+        // range entirely) — name the file after granularity instead rather
+        // than embedding a stale range/chart pair.
+        panel.nameFieldStringValue = tab == .activity
+            ? "irrlicht-history-activity-\(stateGranularity.rawValue).\(ext)"
+            : "irrlicht-history-\(range.rawValue)-\(chart.rawValue).\(ext)"
         panel.begin { resp in
             guard resp == .OK, let url = panel.url else { return }
             try? text.write(to: url, atomically: true, encoding: .utf8)
@@ -944,6 +1010,170 @@ private struct HistoryDoraMetricRow: View {
                     .foregroundColor(.secondary)
             }
         }
+    }
+}
+
+// MARK: - Activity Matrix grid (#981, #1028)
+//
+// Web parity for the projects × time-bucket grid of working/waiting/ready
+// counts. Web renders this as a hand-built CSS grid with position:sticky on
+// both the row-label column and the column-header row; SwiftUI has no
+// built-in two-axis sticky-header grid. This ports only the row-label
+// column as sticky (a plain non-scrolling VStack beside a horizontally
+// scrolling grid, both riding the same outer vertical ScrollView from
+// HistoryView.content) — the column headers scroll away vertically, a
+// deliberate v1 scope reduction rather than a bigger from-scratch two-axis
+// layout (see issue #1028's plan).
+
+struct HistoryActivityContentView: View {
+    let data: HistoryStateResponse
+    let granularity: HistoryGranularity
+    let onExportCSV: () -> Void
+    let onExportJSON: () -> Void
+
+    private static let cellWidth: CGFloat = 28
+    private static let rowHeight: CGFloat = 34
+    private static let rowLabelWidth: CGFloat = 130
+    private static let cellInnerHeight: CGFloat = 26
+
+    /// Bar-height scale is global across the whole grid (comparable busyness
+    /// across projects), not normalized per row — matches web's explicit
+    /// design choice, not an oversight. Computed once per render and threaded
+    /// through to each cell as a parameter — this used to be a `var` re-scanning
+    /// every (project, bucket) pair from inside `cell(...)` itself, making the
+    /// whole grid's render cost quadratic instead of linear in cell count.
+    private func computeMaxTotal() -> Double {
+        var m = 0.0
+        for project in data.projects {
+            for i in data.bucketStarts.indices {
+                let t = data.counts(project: project, bucketIndex: i).total
+                if t > m { m = t }
+            }
+        }
+        return max(m, 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
+            Text("Activity · \(granularity.label)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if !data.hasData {
+                Text("no activity recorded in this window yet")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 220)
+            } else {
+                if let c = data.concurrency {
+                    concurrencySummary(c)
+                }
+                grid
+                HStack(spacing: IrrSpacing.sp2) {
+                    Button("Export CSV", action: onExportCSV)
+                    Button("Export JSON", action: onExportJSON)
+                    Spacer()
+                }
+                .font(.caption)
+            }
+        }
+        .padding(.horizontal, IrrSpacing.sp4)
+        .padding(.vertical, IrrSpacing.sp3)
+    }
+
+    private func concurrencySummary(_ c: HistoryStateConcurrency) -> some View {
+        HStack(spacing: IrrSpacing.sp3) {
+            Text("Peak \(Int(c.peak))").font(.caption).foregroundColor(.secondary)
+            Text("Avg \(String(format: "%.1f", c.average))").font(.caption).foregroundColor(.secondary)
+            Text("Now \(Int(c.current))").font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    private var grid: some View {
+        let maxTotal = computeMaxTotal()
+        return HStack(alignment: .top, spacing: 0) {
+            // Sticky row-label column: not inside the horizontal ScrollView
+            // below, so it never scrolls away as the grid scrolls sideways.
+            VStack(alignment: .leading, spacing: 0) {
+                Color.clear.frame(height: Self.rowHeight)
+                ForEach(data.projects, id: \.self) { project in
+                    Text(project)
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(height: Self.rowHeight, alignment: .leading)
+                }
+            }
+            .frame(width: Self.rowLabelWidth, alignment: .leading)
+
+            ScrollView(.horizontal, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 0) {
+                        ForEach(Array(data.bucketStarts.enumerated()), id: \.offset) { _, ts in
+                            Text(HistoryFormat.axisLabel(Date(timeIntervalSince1970: TimeInterval(ts)), bucketSeconds: data.bucketSeconds))
+                                .font(.system(size: 8))
+                                .foregroundColor(.secondary)
+                                .frame(width: Self.cellWidth, height: Self.rowHeight)
+                        }
+                    }
+                    ForEach(data.projects, id: \.self) { project in
+                        HStack(spacing: 0) {
+                            ForEach(Array(data.bucketStarts.enumerated()), id: \.offset) { i, ts in
+                                cell(project: project, bucketIndex: i, ts: ts, maxTotal: maxTotal)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func cell(project: String, bucketIndex: Int, ts: Int64, maxTotal: Double) -> some View {
+        let counts = data.counts(project: project, bucketIndex: bucketIndex)
+        let total = counts.total
+        let barHeight = total > 0 ? max(3, CGFloat(total / maxTotal) * Self.cellInnerHeight) : 0
+
+        VStack {
+            Spacer(minLength: 0)
+            if total > 0 {
+                VStack(spacing: 1) {
+                    if counts.ready > 0 { Rectangle().fill(IrrColors.ready).frame(height: segHeight(counts.ready, total, barHeight)) }
+                    if counts.waiting > 0 { Rectangle().fill(IrrColors.waiting).frame(height: segHeight(counts.waiting, total, barHeight)) }
+                    if counts.working > 0 { Rectangle().fill(IrrColors.working).frame(height: segHeight(counts.working, total, barHeight)) }
+                }
+                .frame(width: 20, height: barHeight)
+                .clipShape(RoundedRectangle(cornerRadius: 2))
+            }
+        }
+        .frame(width: Self.cellWidth, height: Self.rowHeight)
+        .tooltip(Self.tooltipText(project: project, ts: ts, counts: counts))
+        .accessibilityLabel(Self.tooltipText(project: project, ts: ts, counts: counts))
+    }
+
+    private func segHeight(_ count: Double, _ total: Double, _ barHeight: CGFloat) -> CGFloat {
+        guard total > 0 else { return 0 }
+        return max(0, CGFloat(count / total) * barHeight)
+    }
+
+    /// Full date+time for the tooltip — the column header uses the existing
+    /// shared `HistoryFormat.axisLabel` (same HH:mm-vs-date split every other
+    /// chart's x-axis already uses), but nothing there covers a full
+    /// timestamp, so this one's genuinely new.
+    private static let fullDateTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }()
+
+    /// Matches the web tooltip's field order (project, full timestamp, then
+    /// working/waiting/ready). Ready is explicitly labeled as a per-bucket
+    /// transition count, not a concurrency count — it has no duration to be
+    /// "concurrent" in, unlike working/waiting.
+    private static func tooltipText(project: String, ts: Int64, counts: HistoryStateResponse.Counts) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(ts))
+        let when = fullDateTimeFormatter.string(from: date)
+        return "\(project), \(when): \(Int(counts.working)) working, \(Int(counts.waiting)) waiting, \(Int(counts.ready)) transitioned to ready"
     }
 }
 
@@ -1427,6 +1657,35 @@ enum HistoryExport {
             return "{}"
         }
         return s
+    }
+
+    /// `bucket_start,project,working,waiting,ready` rows, one per (project,
+    /// bucket) pair — matching the web `exportHistoryCSV`'s chart=state branch.
+    static func csvState(_ data: HistoryStateResponse) -> String {
+        var lines = ["bucket_start,project,working,waiting,ready"]
+        for project in data.projects {
+            for (i, ts) in data.bucketStarts.enumerated() {
+                let counts = data.counts(project: project, bucketIndex: i)
+                let dateStr = iso.string(from: Date(timeIntervalSince1970: TimeInterval(ts)))
+                lines.append("\(dateStr),\(cell(project)),\(fmt(counts.working)),\(fmt(counts.waiting)),\(fmt(counts.ready))")
+            }
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// Pretty-printed JSON of the whole state response, matching `json(_:)`'s
+    /// raw-payload-stringify convention.
+    static func jsonState(_ data: HistoryStateResponse) -> String {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard let out = try? enc.encode(data), let s = String(data: out, encoding: .utf8) else {
+            return "{}"
+        }
+        return s
+    }
+
+    private static func fmt(_ v: Double) -> String {
+        v == v.rounded() ? String(Int(v)) : String(format: "%.6f", v)
     }
 
     private static func cell(_ s: String) -> String {
