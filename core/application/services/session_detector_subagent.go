@@ -220,6 +220,19 @@ func (d *SessionDetector) holdIfChildrenActive(sessionID string) bool {
 	return d.hasActiveChildren(sessionID)
 }
 
+// hasPendingBackgroundAgents reports whether Claude Code's own turn_duration
+// accounting (issue #1036) says a background subagent is still running. This
+// is a second, independent signal alongside hasActiveChildren's file-based
+// child-session tracking — it closes a race where a child subagent's
+// transcript finishes and gets reclassified to ready (and cleaned up) a few
+// seconds before Claude Code delivers the task-notification that would give
+// the parent a reason to keep working. Used by both holdParentForActiveChildren
+// (the parent's own activity pass) and reevaluateParent (triggered by a
+// child's state change), which share the identical race.
+func hasPendingBackgroundAgents(m *session.SessionMetrics) bool {
+	return m != nil && m.PendingBackgroundAgentCount > 0
+}
+
 // holdParentWorkingForNewChild forces a parent session that is sitting at
 // ready back to working the moment a new child of it is discovered.
 //
@@ -287,8 +300,9 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 	// — see finishOrphanedChildren doc for rationale.
 	d.finishOrphanedChildren(parentID)
 
-	// Still have active children — stay working.
-	if d.hasActiveChildren(parentID) {
+	// Still have active children, or Claude Code's own accounting says a
+	// background subagent is still pending (issue #1036) — stay working.
+	if d.hasActiveChildren(parentID) || hasPendingBackgroundAgents(parent.Metrics) {
 		return
 	}
 

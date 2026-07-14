@@ -130,6 +130,13 @@ type ParsedEvent struct {
 	// the PreCompact force-working hold (#657). Auto-compaction never sets this.
 	IsManualCompactBoundary bool
 
+	// PendingBackgroundAgentCount, when non-nil, is Claude Code's own
+	// live count of background subagents (Agent-tool launches) still
+	// running as of this turn_duration event. Nil when the transcript's
+	// turn_duration event carries no such field (older Claude Code
+	// versions) — absence must not be read as zero. See issue #1036.
+	PendingBackgroundAgentCount *int
+
 	// IsToolDenial is true when the user denied a permission prompt for a
 	// tool call ("[Request interrupted by user for tool use]" text marker).
 	// This is a *different* signal from IsUserInterrupt: a tool denial does

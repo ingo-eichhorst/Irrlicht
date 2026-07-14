@@ -21,6 +21,9 @@ func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
 	if parsed.RateLimit != nil {
 		t.ingestRateLimit(parsed.RateLimit)
 	}
+	if parsed.PendingBackgroundAgentCount != nil {
+		t.lastPendingBackgroundAgentCount = parsed.PendingBackgroundAgentCount
+	}
 }
 
 // IngestRateLimit accepts an externally-sourced snapshot (the Claude Code
@@ -403,6 +406,7 @@ func (t *TranscriptTailer) surfaceSporadicMetrics() {
 
 	t.metrics.TaskQuestion = t.lastTaskQuestion
 	t.metrics.AwaySummary = t.lastAwaySummary
+	t.metrics.PendingBackgroundAgentCount = t.lastPendingBackgroundAgentCount
 }
 
 // computeBackgroundProcessMetrics surfaces background-process bookkeeping.

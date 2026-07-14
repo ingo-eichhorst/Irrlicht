@@ -82,6 +82,9 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		SawManualCompactBoundary:          m.SawManualCompactBoundary,
 		SawMidPassTurnBoundary:            m.SawMidPassTurnBoundary,
 	}
+	if m.PendingBackgroundAgentCount != nil {
+		result.PendingBackgroundAgentCount = *m.PendingBackgroundAgentCount
+	}
 	if len(m.SubagentCompletions) > 0 {
 		result.SubagentCompletions = make([]session.SubagentCompletion, len(m.SubagentCompletions))
 		for i, c := range m.SubagentCompletions {

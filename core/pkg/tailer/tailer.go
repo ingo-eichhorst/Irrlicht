@@ -247,6 +247,13 @@ type SessionMetrics struct {
 	// waiting headline when no agent marker is present. Cleared on a real
 	// user message, like TaskQuestion.
 	AwaySummary *AwaySummary `json:"away_summary,omitempty"`
+
+	// PendingBackgroundAgentCount is Claude Code's own last-reported count
+	// of still-running background subagents (issue #1036), read from the
+	// turn_duration system event's pendingBackgroundAgentCount field. Nil
+	// when never observed — adapters other than claudecode, and older
+	// Claude Code versions, never set this.
+	PendingBackgroundAgentCount *int `json:"pending_background_agent_count,omitempty"`
 }
 
 // TranscriptTailer monitors transcript files and computes metrics.
@@ -367,6 +374,13 @@ type TranscriptTailer struct {
 	// (issue #979). Sporadic and lower-priority than lastTaskQuestion — the
 	// last one seen persists across passes; cleared on a real user message.
 	lastAwaySummary *AwaySummary
+
+	// lastPendingBackgroundAgentCount holds Claude Code's own last-reported
+	// count of still-running background subagents, from the turn_duration
+	// system event's pendingBackgroundAgentCount field (issue #1036).
+	// Sticky like lastAwaySummary — persists across passes that carry no
+	// fresh turn_duration event; nil when never observed.
+	lastPendingBackgroundAgentCount *int
 
 	// tasks accumulates the session's task list from TaskCreate / TaskUpdate
 	// tool_use events parsed by the Claude Code adapter.

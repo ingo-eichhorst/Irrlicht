@@ -870,10 +870,17 @@ func (d *SessionDetector) overlayPermissionPending(state *session.SessionState) 
 // "orphaned" children — subagents whose own tail has no open tool calls but
 // whose transcript ends with `stop_reason: null` (Claude Code never writes
 // end_turn for in-process subagents) — via holdIfChildrenActive, so a merely
-// stale child doesn't hold the parent forever. Returns the (possibly
-// overridden) newState/reason and whether the hold fired, so the caller can
-// skip the same-pass collapsed-waiting synthesis: that path would otherwise
-// reclassify from waiting and undo the hold.
+// stale child doesn't hold the parent forever. Also holds when Claude Code's
+// own pendingBackgroundAgentCount (issue #1036) still reports a background
+// subagent running — an independent signal from the file-based child-session
+// check, needed because a child's transcript can finish and get reclassified
+// to ready (and cleaned up) a few seconds before Claude Code delivers the
+// task-notification that gives the parent a reason to keep working; without
+// this, hasActiveChildren finds nothing in that gap and the parent flips to
+// ready. Returns the (possibly overridden) newState/reason and whether the
+// hold fired, so the caller can skip the same-pass collapsed-waiting
+// synthesis: that path would otherwise reclassify from waiting and undo the
+// hold.
 func (d *SessionDetector) holdParentForActiveChildren(state *session.SessionState, ev agent.Event, newState, reason string) (string, string, bool) {
 	if state.ParentSessionID != "" {
 		return newState, reason, false
@@ -885,12 +892,17 @@ func (d *SessionDetector) holdParentForActiveChildren(state *session.SessionStat
 	if newState != session.StateReady && !turnDoneWaiting {
 		return newState, reason, false
 	}
-	if !d.holdIfChildrenActive(state.SessionID) {
+	activeChildren := d.holdIfChildrenActive(state.SessionID)
+	if !activeChildren && !hasPendingBackgroundAgents(state.Metrics) {
 		return newState, reason, false
 	}
-	logMsg := "holding parent working — active children still running"
+	holdSource := "active children still running"
+	if !activeChildren {
+		holdSource = "Claude Code reports a background agent still pending"
+	}
+	logMsg := "holding parent working — " + holdSource
 	if turnDoneWaiting {
-		logMsg = "holding parent working — active children still running (turn ended in waiting cue)"
+		logMsg += " (turn ended in waiting cue)"
 	}
 	d.log.LogInfo(logComponentSessionDetector, ev.SessionID, logMsg)
 	return session.StateWorking, "", true
