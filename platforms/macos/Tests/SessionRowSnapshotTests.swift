@@ -371,6 +371,14 @@ final class SessionRowSnapshotTests: XCTestCase {
     /// (The metrics-present-but-empty shape is covered by the antigravity-ghost
     /// fixture, whose metrics object carries zero tokens / zero utilization, so a
     /// separate zero-token unit case would render an identical row.)
+    ///
+    /// Issue #1034: this and testFixtureAntigravityGhost both render the 14×14
+    /// antigravity SVG icon, whose rasterized anti-aliasing shifts slightly
+    /// across Xcode/toolchain versions. A failure confined to a few dozen
+    /// pixels around the icon (not the whole row) is that drift, not a real
+    /// regression — regenerate with `SNAPSHOT_TESTING_RECORD=failed swift
+    /// test --filter SessionRowSnapshotTests/<testName>` rather than chasing
+    /// a pixel-perfect match across toolchains.
     func testGhostRowPID0NilMetrics() {
         let session = makeSession(state: .ready, metrics: nil, pid: 0, adapter: "antigravity")
         assertSnapshot(of: host(session), as: .image)
@@ -486,6 +494,8 @@ final class SessionRowSnapshotTests: XCTestCase {
 
     /// Drives a render straight from a captured `{type, session}` websocket
     /// envelope — the antigravity PID=0 ghost that Phase 1's trace explains.
+    /// See testGhostRowPID0NilMetrics for a note on toolchain-drift pixel
+    /// diffs isolated to this fixture's icon (issue #1034).
     func testFixtureAntigravityGhost() throws {
         let session = try loadSession("antigravity-ghost.json")
         assertSnapshot(of: host(session), as: .image)
