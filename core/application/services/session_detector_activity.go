@@ -864,23 +864,17 @@ func (d *SessionDetector) overlayPermissionPending(state *session.SessionState) 
 
 // holdParentForActiveChildren fast-forwards a parent's own transition when
 // it would otherwise land on ready, or on a turn-done "waiting"
-// (question/cue), while a child subagent is still working or waiting —
-// mirroring the ready case so the dashboard doesn't read "nothing happening"
-// while a subagent runs (issue #897). Before holding, it fast-forwards any
-// "orphaned" children — subagents whose own tail has no open tool calls but
-// whose transcript ends with `stop_reason: null` (Claude Code never writes
-// end_turn for in-process subagents) — via holdIfChildrenActive, so a merely
-// stale child doesn't hold the parent forever. Also holds when Claude Code's
-// own pendingBackgroundAgentCount (issue #1036) still reports a background
-// subagent running — an independent signal from the file-based child-session
-// check, needed because a child's transcript can finish and get reclassified
-// to ready (and cleaned up) a few seconds before Claude Code delivers the
-// task-notification that gives the parent a reason to keep working; without
-// this, hasActiveChildren finds nothing in that gap and the parent flips to
-// ready. Returns the (possibly overridden) newState/reason and whether the
-// hold fired, so the caller can skip the same-pass collapsed-waiting
-// synthesis: that path would otherwise reclassify from waiting and undo the
-// hold.
+// (question/cue), while a child subagent is still working or waiting, per
+// holdIfChildrenActive/hasActiveChildren — mirroring the ready case so the
+// dashboard doesn't read "nothing happening" while a subagent runs (issue
+// #897). Before holding, it fast-forwards any "orphaned" children —
+// subagents whose own tail has no open tool calls but whose transcript ends
+// with `stop_reason: null` (Claude Code never writes end_turn for in-process
+// subagents) — via holdIfChildrenActive, so a merely stale child doesn't
+// hold the parent forever. Returns the (possibly overridden) newState/reason
+// and whether the hold fired, so the caller can skip the same-pass
+// collapsed-waiting synthesis: that path would otherwise reclassify from
+// waiting and undo the hold.
 func (d *SessionDetector) holdParentForActiveChildren(state *session.SessionState, ev agent.Event, newState, reason string) (string, string, bool) {
 	if state.ParentSessionID != "" {
 		return newState, reason, false
@@ -892,17 +886,12 @@ func (d *SessionDetector) holdParentForActiveChildren(state *session.SessionStat
 	if newState != session.StateReady && !turnDoneWaiting {
 		return newState, reason, false
 	}
-	activeChildren := d.holdIfChildrenActive(state.SessionID)
-	if !activeChildren && !hasPendingBackgroundAgents(state.Metrics) {
+	if !d.holdIfChildrenActive(state.SessionID, state.Metrics) {
 		return newState, reason, false
 	}
-	holdSource := "active children still running"
-	if !activeChildren {
-		holdSource = "Claude Code reports a background agent still pending"
-	}
-	logMsg := "holding parent working — " + holdSource
+	logMsg := "holding parent working — active children still running"
 	if turnDoneWaiting {
-		logMsg += " (turn ended in waiting cue)"
+		logMsg = "holding parent working — active children still running (turn ended in waiting cue)"
 	}
 	d.log.LogInfo(logComponentSessionDetector, ev.SessionID, logMsg)
 	return session.StateWorking, "", true

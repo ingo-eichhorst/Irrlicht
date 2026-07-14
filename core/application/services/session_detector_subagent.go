@@ -193,9 +193,20 @@ func (d *SessionDetector) applyOneSubagentCompletion(s *session.SessionState, pa
 }
 
 // hasActiveChildren returns true if any child session of the given parent is
-// still working or waiting. Used to prevent a parent from transitioning to
-// ready while background/foreground subagents are still processing.
-func (d *SessionDetector) hasActiveChildren(parentID string) bool {
+// still working or waiting, OR Claude Code's own turn_duration accounting
+// (issue #1036) says a background subagent is still running. The two are
+// independent signals for the same question — has the parent's background
+// work actually finished — combined here so every caller gets one
+// indivisible verdict instead of two booleans it would otherwise have to
+// remember to OR together. The metrics-based signal matters because a child
+// subagent's transcript can finish and get reclassified to ready (and
+// cleaned up) a few seconds before Claude Code delivers the
+// task-notification that would give the parent a reason to keep working —
+// in that gap the file-based check below finds nothing on its own.
+func (d *SessionDetector) hasActiveChildren(parentID string, metrics *session.SessionMetrics) bool {
+	if metrics != nil && metrics.PendingBackgroundAgentCount > 0 {
+		return true
+	}
 	states, err := d.repo.ListAll()
 	if err != nil {
 		return false
@@ -211,26 +222,13 @@ func (d *SessionDetector) hasActiveChildren(parentID string) bool {
 
 // holdIfChildrenActive fast-forwards any orphaned children of sessionID
 // (see finishOrphanedChildren) and reports whether a genuinely active one
-// remains. Shared by processActivity's ready and turn-done-waiting branches,
-// which both hold the parent working identically when it does (#897) — a
-// single call site keeps that hold logic from drifting out of sync between
-// the two.
-func (d *SessionDetector) holdIfChildrenActive(sessionID string) bool {
+// remains, per hasActiveChildren. Shared by processActivity's ready and
+// turn-done-waiting branches, which both hold the parent working identically
+// when it does (#897) — a single call site keeps that hold logic from
+// drifting out of sync between the two.
+func (d *SessionDetector) holdIfChildrenActive(sessionID string, metrics *session.SessionMetrics) bool {
 	d.finishOrphanedChildren(sessionID)
-	return d.hasActiveChildren(sessionID)
-}
-
-// hasPendingBackgroundAgents reports whether Claude Code's own turn_duration
-// accounting (issue #1036) says a background subagent is still running. This
-// is a second, independent signal alongside hasActiveChildren's file-based
-// child-session tracking — it closes a race where a child subagent's
-// transcript finishes and gets reclassified to ready (and cleaned up) a few
-// seconds before Claude Code delivers the task-notification that would give
-// the parent a reason to keep working. Used by both holdParentForActiveChildren
-// (the parent's own activity pass) and reevaluateParent (triggered by a
-// child's state change), which share the identical race.
-func hasPendingBackgroundAgents(m *session.SessionMetrics) bool {
-	return m != nil && m.PendingBackgroundAgentCount > 0
+	return d.hasActiveChildren(sessionID, metrics)
 }
 
 // holdParentWorkingForNewChild forces a parent session that is sitting at
@@ -300,9 +298,8 @@ func (d *SessionDetector) reevaluateParent(parentID string) {
 	// — see finishOrphanedChildren doc for rationale.
 	d.finishOrphanedChildren(parentID)
 
-	// Still have active children, or Claude Code's own accounting says a
-	// background subagent is still pending (issue #1036) — stay working.
-	if d.hasActiveChildren(parentID) || hasPendingBackgroundAgents(parent.Metrics) {
+	// Still have active children, per hasActiveChildren — stay working.
+	if d.hasActiveChildren(parentID, parent.Metrics) {
 		return
 	}
 

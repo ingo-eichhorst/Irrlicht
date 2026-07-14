@@ -22,7 +22,7 @@ func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
 		t.ingestRateLimit(parsed.RateLimit)
 	}
 	if parsed.PendingBackgroundAgentCount != nil {
-		t.lastPendingBackgroundAgentCount = parsed.PendingBackgroundAgentCount
+		t.lastPendingBackgroundAgentCount = *parsed.PendingBackgroundAgentCount
 	}
 }
 

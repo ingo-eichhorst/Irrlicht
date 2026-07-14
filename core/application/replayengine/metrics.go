@@ -63,6 +63,7 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		BackgroundProcessCount:            m.BackgroundProcessCount,
 		BackgroundProcessOutputs:          m.BackgroundProcessOutputs,
 		BackgroundProcessPIDs:             m.BackgroundProcessPIDs,
+		PendingBackgroundAgentCount:       m.PendingBackgroundAgentCount,
 		LastEventType:                     m.LastEventType,
 		LastOpenToolNames:                 copyStrings(m.LastOpenToolNames),
 		LastWasUserInterrupt:              m.LastWasUserInterrupt,
@@ -81,9 +82,6 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		NoSubstantiveActivity:             m.NoSubstantiveActivity,
 		SawManualCompactBoundary:          m.SawManualCompactBoundary,
 		SawMidPassTurnBoundary:            m.SawMidPassTurnBoundary,
-	}
-	if m.PendingBackgroundAgentCount != nil {
-		result.PendingBackgroundAgentCount = *m.PendingBackgroundAgentCount
 	}
 	if len(m.SubagentCompletions) > 0 {
 		result.SubagentCompletions = make([]session.SubagentCompletion, len(m.SubagentCompletions))
