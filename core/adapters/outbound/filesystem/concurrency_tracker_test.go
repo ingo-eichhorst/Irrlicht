@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
@@ -66,7 +68,7 @@ func TestAgentsSeries_SingleSession(t *testing.T) {
 		transition(2, 100, "s1", session.StateWorking),
 		transition(3, 200, "s1", session.StateReady),
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
 	if err != nil {
@@ -110,7 +112,7 @@ func TestAgentsSeries_OverlapSameProject(t *testing.T) {
 		transition(5, 150, "s2", session.StateWorking),
 		transition(6, 300, "s2", session.StateReady),
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 360, BucketSeconds: 60})
 	if err != nil {
@@ -136,7 +138,7 @@ func TestAgentsSeries_IdleWaitingCounts(t *testing.T) {
 		transition(2, 100, "s1", session.StateWorking),
 		transition(3, 200, "s1", session.StateWaiting), // last event; idle thereafter
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
 	if err != nil {
@@ -163,7 +165,7 @@ func TestAgentsSeries_ExitAtEndNotCurrent(t *testing.T) {
 		transition(2, 100, "s1", session.StateWorking),
 		transition(3, 300, "s1", session.StateReady), // ready exactly at End
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
 	if err != nil {
@@ -189,7 +191,7 @@ func TestAgentsSeries_TwoProjects(t *testing.T) {
 		transition(5, 150, "s2", session.StateWorking),
 		transition(6, 300, "s2", session.StateReady),
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 360, BucketSeconds: 60})
 	if err != nil {
@@ -213,7 +215,7 @@ func TestAgentsSeries_CurrentReachesEnd(t *testing.T) {
 		transition(2, 250, "s1", session.StateWorking),
 		activity(3, 350, "s1", "/home/me/projX"), // last event after window end
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
 	if err != nil {
@@ -237,7 +239,7 @@ func TestAgentsSeries_ProcessExitEndsConcurrency(t *testing.T) {
 		processExited(3, 160, "s1"),
 		activity(4, 400, "s1", "/home/me/projX"), // stray late event must not revive it
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 480, BucketSeconds: 60})
 	if err != nil {
@@ -257,7 +259,7 @@ func TestAgentsSeries_ProcessExitEndsConcurrency(t *testing.T) {
 // TestAgentsSeries_Empty: a missing recordings dir yields a valid empty result,
 // not an error (the common case — --record is opt-in).
 func TestAgentsSeries_Empty(t *testing.T) {
-	tr := NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"))
+	tr := NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"), nil)
 	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
 	if err != nil {
 		t.Fatalf("AgentsSeries: %v", err)
@@ -286,7 +288,7 @@ func TestAgentsSeries_SoleTransitionStillCounts(t *testing.T) {
 		transcriptNew(1, 90, "s1", "/home/me/projY"),
 		transition(2, 100, "s1", session.StateWorking), // last event; no later activity
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
 	if err != nil {
@@ -312,7 +314,7 @@ func TestAgentsSeries_ScopeProject(t *testing.T) {
 		transition(5, 100, "s2", session.StateWorking),
 		transition(6, 250, "s2", session.StateReady),
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 360, BucketSeconds: 60, ScopeField: "project", ScopeValue: "projA"})
 	if err != nil {
@@ -342,7 +344,7 @@ func TestStateSeries_ActiveAtEndIsNotReady(t *testing.T) {
 		transition(2, 100, "s1", session.StateWorking),
 		activity(3, 280, "s1", "/home/me/projX"), // last event; still working, no exit
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
 	if err != nil {
@@ -368,7 +370,7 @@ func TestStateSeries_WorkingThenWaiting(t *testing.T) {
 		transition(3, 150, "s1", session.StateWaiting),
 		transition(4, 220, "s1", session.StateReady),
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
 	if err != nil {
@@ -406,7 +408,7 @@ func TestStateSeries_ReadyIsTransitionCount(t *testing.T) {
 		transition(5, 95, "s2", session.StateWorking),
 		transition(6, 140, "s2", session.StateReady),
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 180, BucketSeconds: 60})
 	if err != nil {
@@ -431,7 +433,7 @@ func TestStateSeries_TwoProjectsIsolated(t *testing.T) {
 		transition(5, 100, "s2", session.StateWaiting),
 		transition(6, 250, "s2", session.StateReady),
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 360, BucketSeconds: 60})
 	if err != nil {
@@ -463,7 +465,7 @@ func TestStateSeries_ScopeProject(t *testing.T) {
 		transition(5, 100, "s2", session.StateWorking),
 		transition(6, 250, "s2", session.StateReady),
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 360, BucketSeconds: 60, ScopeField: "project", ScopeValue: "projA"})
 	if err != nil {
@@ -480,7 +482,7 @@ func TestStateSeries_ScopeProject(t *testing.T) {
 // TestStateSeries_Empty: a missing recordings dir yields a valid empty
 // result, not an error — same convention as AgentsSeries.
 func TestStateSeries_Empty(t *testing.T) {
-	tr := NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"))
+	tr := NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"), nil)
 	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
 	if err != nil {
 		t.Fatalf("StateSeries: %v", err)
@@ -508,7 +510,7 @@ func TestStateSeries_SoleTransitionStillCounts(t *testing.T) {
 		transcriptNew(1, 90, "s1", "/home/me/projY"),
 		transition(2, 100, "s1", session.StateWorking), // last event; no later activity
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 
 	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
 	if err != nil {
@@ -540,7 +542,7 @@ func TestStateSeries_SummaryMatchesAgentsSeries(t *testing.T) {
 		transition(6, 145, "s2", session.StateWorking),
 		activity(7, 280, "s2", "/home/me/projA"), // still active at window end
 	})
-	tr := NewConcurrencyTrackerWithDir(dir)
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
 	q := outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60}
 
 	agents, err := tr.AgentsSeries(q)
@@ -584,4 +586,189 @@ func maxOf(vs []float64) float64 {
 		}
 	}
 	return m
+}
+
+// TestConcurrencyProject_NoCWDLeftRaw: a session whose events never carry a
+// CWD is keyed by the raw "" project, not a literal "unknown" — the eager
+// substitution moved out of this package to handlers.go's share-based
+// resolveUnknownConcurrencyProject/resolveUnknownStateProject (#1046), so the
+// tracker itself must behave exactly like CostSeriesResult here.
+func TestConcurrencyProject_NoCWDLeftRaw(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, dir, "run.jsonl", []lifecycle.Event{
+		{Seq: 1, Timestamp: time.Unix(90, 0), Kind: lifecycle.KindTranscriptNew, SessionID: "s1"}, // no CWD
+		transition(2, 100, "s1", session.StateWorking),
+		transition(3, 200, "s1", session.StateReady),
+	})
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
+
+	agents, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("AgentsSeries: %v", err)
+	}
+	if _, ok := agents.PeakByKey["unknown"]; ok {
+		t.Errorf("AgentsSeries must not label a CWD-less session \"unknown\" itself, got keys %+v", agents.PeakByKey)
+	}
+	if _, ok := agents.PeakByKey[""]; !ok {
+		t.Errorf("AgentsSeries should key a CWD-less session by raw \"\", got %+v", agents.PeakByKey)
+	}
+
+	states, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("StateSeries: %v", err)
+	}
+	if _, ok := states.ByState[session.StateWorking]["unknown"]; ok {
+		t.Errorf("StateSeries must not label a CWD-less session \"unknown\" itself, got %+v", states.ByState[session.StateWorking])
+	}
+	if _, ok := states.ByState[session.StateWorking][""]; !ok {
+		t.Errorf("StateSeries should key a CWD-less session by raw \"\", got %+v", states.ByState[session.StateWorking])
+	}
+}
+
+// gitInitRepo creates a minimal git repo at a fresh temp dir (no commits
+// needed — GetGitRoot only requires a valid .git, not any history).
+func gitInitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := exec.Command("git", "init", dir).Run(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	return dir
+}
+
+// TestConcurrencyProject_WorktreeFoldsIntoRealRepo: a session cwd'd into a
+// path shaped like the ir:exec skill's .claude/worktrees/<N>-<slug>/ dir
+// resolves (via the injected git.Adapter) to its parent repo's name, not the
+// worktree directory's own basename — the #1046 root-cause fix.
+func TestConcurrencyProject_WorktreeFoldsIntoRealRepo(t *testing.T) {
+	repoDir := gitInitRepo(t)
+	repoName := filepath.Base(repoDir)
+	worktreeDir := filepath.Join(repoDir, ".claude", "worktrees", "1046-activity-matrix-cleanup")
+	if err := os.MkdirAll(worktreeDir, 0o755); err != nil {
+		t.Fatalf("mkdir worktree dir: %v", err)
+	}
+
+	recDir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, recDir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", worktreeDir),
+		transition(2, 100, "s1", session.StateWorking),
+		transition(3, 200, "s1", session.StateReady),
+	})
+	tr := NewConcurrencyTrackerWithDir(recDir, git.New())
+
+	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("AgentsSeries: %v", err)
+	}
+	if _, ok := res.PeakByKey[repoName]; !ok {
+		t.Errorf("want session folded into repo project %q, got keys %+v", repoName, res.PeakByKey)
+	}
+	if _, ok := res.PeakByKey["1046-activity-matrix-cleanup"]; ok {
+		t.Errorf("worktree dir name should not appear as its own project, got %+v", res.PeakByKey)
+	}
+}
+
+// TestConcurrencyProject_DeletedWorktreeStillFoldsIn: the same fold-in must
+// still work when the worktree directory was never created (or has since been
+// `git worktree remove`'d) — GetGitRoot walks up to the nearest existing
+// ancestor before resolving, so this doesn't depend on the exact leaf dir
+// still being on disk (the common case for old ir:exec worktrees by the time
+// anyone looks at the Activity Matrix chart).
+func TestConcurrencyProject_DeletedWorktreeStillFoldsIn(t *testing.T) {
+	repoDir := gitInitRepo(t)
+	repoName := filepath.Base(repoDir)
+	// Note: never created on disk.
+	worktreeDir := filepath.Join(repoDir, ".claude", "worktrees", "1018-onboa-followups")
+
+	recDir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, recDir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", worktreeDir),
+		transition(2, 100, "s1", session.StateWorking),
+		transition(3, 200, "s1", session.StateReady),
+	})
+	tr := NewConcurrencyTrackerWithDir(recDir, git.New())
+
+	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("AgentsSeries: %v", err)
+	}
+	if _, ok := res.PeakByKey[repoName]; !ok {
+		t.Errorf("want session folded into repo project %q even with a non-existent worktree dir, got keys %+v", repoName, res.PeakByKey)
+	}
+}
+
+// TestConcurrencyProject_NilResolverFallsBackToBasename: without a resolver
+// (nil), the same worktree CWD keys by its own bare basename — the pre-#1046
+// behavior — confirming the fold-in is specifically the resolver's doing, not
+// some incidental effect of the directory layout.
+func TestConcurrencyProject_NilResolverFallsBackToBasename(t *testing.T) {
+	repoDir := gitInitRepo(t)
+	worktreeDir := filepath.Join(repoDir, ".claude", "worktrees", "1046-activity-matrix-cleanup")
+	if err := os.MkdirAll(worktreeDir, 0o755); err != nil {
+		t.Fatalf("mkdir worktree dir: %v", err)
+	}
+
+	recDir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, recDir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", worktreeDir),
+		transition(2, 100, "s1", session.StateWorking),
+		transition(3, 200, "s1", session.StateReady),
+	})
+	tr := NewConcurrencyTrackerWithDir(recDir, nil)
+
+	res, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("AgentsSeries: %v", err)
+	}
+	if _, ok := res.PeakByKey["1046-activity-matrix-cleanup"]; !ok {
+		t.Errorf("nil resolver should fall back to bare basename, got keys %+v", res.PeakByKey)
+	}
+}
+
+// countingResolver counts GetProjectName calls per distinct dir, so
+// TestConcurrencyProject_MemoizesPerCWD can assert the tracker resolves each
+// raw CWD once per scan rather than once per event.
+type countingResolver struct {
+	calls map[string]int
+}
+
+func (r *countingResolver) GetProjectName(dir string) string {
+	if r.calls == nil {
+		r.calls = map[string]int{}
+	}
+	r.calls[dir]++
+	return filepath.Base(dir)
+}
+
+// TestConcurrencyProject_MemoizesPerCWD: two sessions sharing one CWD across
+// several events must only trigger one resolver call for that CWD — loadTimelines'
+// per-scan memo, not a re-shell-out-to-git per event (which would scale with
+// event count instead of distinct-directory count on a large recordings dir).
+func TestConcurrencyProject_MemoizesPerCWD(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, dir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", "/home/me/projX"),
+		activity(2, 95, "s1", "/home/me/projX"),
+		transition(3, 100, "s1", session.StateWorking),
+		activity(4, 110, "s1", "/home/me/projX"),
+		transition(5, 200, "s1", session.StateReady),
+		transcriptNew(6, 140, "s2", "/home/me/projX"),
+		transition(7, 150, "s2", session.StateWorking),
+		transition(8, 250, "s2", session.StateReady),
+		transcriptNew(9, 90, "s3", "/home/me/projY"),
+		transition(10, 100, "s3", session.StateWorking),
+		transition(11, 200, "s3", session.StateReady),
+	})
+	resolver := &countingResolver{}
+	tr := NewConcurrencyTrackerWithDir(dir, resolver)
+
+	if _, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60}); err != nil {
+		t.Fatalf("AgentsSeries: %v", err)
+	}
+	if got := resolver.calls["/home/me/projX"]; got != 1 {
+		t.Errorf("projX shared across 2 sessions/5 CWD-carrying events: want 1 resolver call, got %d", got)
+	}
+	if got := resolver.calls["/home/me/projY"]; got != 1 {
+		t.Errorf("projY: want 1 resolver call, got %d", got)
+	}
 }

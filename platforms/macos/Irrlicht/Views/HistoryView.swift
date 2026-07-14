@@ -1089,6 +1089,14 @@ struct HistoryActivityContentView: View {
         }
     }
 
+    // .frame(maxWidth: .infinity) forces this view to report "fill available
+    // width" instead of hugging the horizontal ScrollView's full unclipped
+    // content width — every other section in this file already does this on
+    // its own content (see e.g. the top-controls/summary views above); this
+    // was the one hand-rolled (non-Chart) view that didn't, so its ideal
+    // width bubbled straight up through the tab's vertical ScrollView and
+    // overrode the fixed panel width (issue #1046). .clipped() is a defensive
+    // backstop in case a very wide grid still reports past its frame.
     private var grid: some View {
         let maxTotal = computeMaxTotal()
         return HStack(alignment: .top, spacing: 0) {
@@ -1126,6 +1134,8 @@ struct HistoryActivityContentView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
     }
 
     @ViewBuilder private func cell(project: String, bucketIndex: Int, ts: Int64, maxTotal: Double) -> some View {

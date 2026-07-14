@@ -26,7 +26,7 @@ func TestHandleGetHistory_StateChart(t *testing.T) {
 		{Seq: 3, Timestamp: at(3400), Kind: lifecycle.KindStateTransition, SessionID: "s1", NewState: session.StateWaiting},
 		{Seq: 4, Timestamp: at(1800), Kind: lifecycle.KindStateTransition, SessionID: "s1", NewState: session.StateReady},
 	})
-	conc := filesystem.NewConcurrencyTrackerWithDir(recDir)
+	conc := filesystem.NewConcurrencyTrackerWithDir(recDir, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?chart=state&granularity=24h", nil)
 	rec := httptest.NewRecorder()
@@ -67,7 +67,7 @@ func TestHandleGetHistory_StateChart(t *testing.T) {
 // TestHandleGetHistory_StateChartEmpty: no recordings (the common case —
 // --record is opt-in) returns a clean empty payload, not an error.
 func TestHandleGetHistory_StateChartEmpty(t *testing.T) {
-	conc := filesystem.NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"))
+	conc := filesystem.NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?chart=state", nil)
 	rec := httptest.NewRecorder()
 	handleGetHistory(nil, nil, conc, nil)(rec, req)
@@ -92,7 +92,7 @@ func TestHandleGetHistory_StateChartEmpty(t *testing.T) {
 // TestHandleGetHistory_StateChartBadGranularity: an unrecognized ?granularity=
 // is a client error, matching every other malformed history query param.
 func TestHandleGetHistory_StateChartBadGranularity(t *testing.T) {
-	conc := filesystem.NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"))
+	conc := filesystem.NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?chart=state&granularity=fortnight", nil)
 	rec := httptest.NewRecorder()
 	handleGetHistory(nil, nil, conc, nil)(rec, req)
@@ -104,7 +104,7 @@ func TestHandleGetHistory_StateChartBadGranularity(t *testing.T) {
 // TestHandleGetHistory_StateChartGranularitySteps: every one of the nine named
 // granularities resolves to its own fixed bucket width.
 func TestHandleGetHistory_StateChartGranularitySteps(t *testing.T) {
-	conc := filesystem.NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"))
+	conc := filesystem.NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"), nil)
 	want := map[string]int64{
 		"1m": 60, "10m": 600, "60m": 3600, "8h": 8 * 3600, "24h": 86400,
 		"7d": 7 * 86400, "1mo": 30 * 86400, "6mo": 182 * 86400, "1y": 365 * 86400,

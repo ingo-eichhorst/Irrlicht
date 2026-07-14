@@ -1067,6 +1067,8 @@ func buildHistoryResponse(rangeKey, chart, group, scope string, s *outbound.Cost
 // panel shows. Total carries the exact whole-window peak (the side panel's
 // headline). No forecast or token split — neither is meaningful for a count.
 func buildAgentsResponse(rangeKey, scope string, c *outbound.ConcurrencyResult) historyResponse {
+	resolveUnknownConcurrencyProject(c)
+
 	resp := historyResponse{
 		Range:           rangeKey,
 		Chart:           "agents",
@@ -1088,11 +1090,19 @@ func buildAgentsResponse(rangeKey, scope string, c *outbound.ConcurrencyResult) 
 	return resp
 }
 
+// historyStateProjectLimit caps chart=state's project rows: unlike the cost
+// chart's separate top-contributors side list, a state-chart project IS a
+// rendered grid row, so only the busiest N are worth showing — years of
+// one-off worktree sessions would otherwise render as an unbounded, mostly
+// stale row list (issue #1046).
+const historyStateProjectLimit = 8
+
 // buildStateResponse flattens a per-state concurrency reconstruction into the
 // activity-matrix envelope (#981). Project row order is busiest-first, by
 // each project's total count summed across every state and bucket — the same
 // "rank by what the reader cares about" convention sortKeysByValueDesc gives
-// every other chart's top-contributors list.
+// every other chart's top-contributors list. Rows are capped to the busiest
+// historyStateProjectLimit and ByState is pruned to match (#1046).
 func buildStateResponse(rangeKey, scope string, s *outbound.StateSeriesResult) historyStateResponse {
 	totals := map[string]float64{}
 	for _, byProject := range s.ByState {
@@ -1102,6 +1112,13 @@ func buildStateResponse(rangeKey, scope string, s *outbound.StateSeriesResult) h
 			}
 		}
 	}
+	resolveUnknownStateProject(s, totals)
+
+	projects := sortKeysByValueDesc(totals)
+	if len(projects) > historyStateProjectLimit {
+		projects = projects[:historyStateProjectLimit]
+	}
+
 	return historyStateResponse{
 		Range:         rangeKey,
 		Chart:         "state",
@@ -1110,11 +1127,43 @@ func buildStateResponse(rangeKey, scope string, s *outbound.StateSeriesResult) h
 		End:           s.End,
 		BucketSeconds: s.BucketSeconds,
 		BucketStarts:  s.BucketStarts,
-		Projects:      sortKeysByValueDesc(totals),
-		ByState:       s.ByState,
+		Projects:      projects,
+		ByState:       pruneStateProjects(s.ByState, projects),
 		Concurrency:   &historyConcurrency{Peak: s.Peak, Average: s.Average, Current: s.Current},
 		Scope:         scope,
 	}
+}
+
+// pruneStateProjects drops every by-state project entry outside the capped
+// row set kept (all three canonical state keys are always preserved, even if
+// their pruned sub-map ends up empty) — the response shouldn't carry
+// per-bucket series for rows the client will never draw (#1046).
+func pruneStateProjects(byState map[string]map[string][]float64, keep []string) map[string]map[string][]float64 {
+	keepSet := make(map[string]bool, len(keep))
+	for _, p := range keep {
+		keepSet[p] = true
+	}
+	out := make(map[string]map[string][]float64, len(byState))
+	for state, byProject := range byState {
+		pruned := make(map[string][]float64, len(keep))
+		for project, vals := range byProject {
+			if keepSet[project] {
+				pruned[project] = vals
+			}
+		}
+		out[state] = pruned
+	}
+	return out
+}
+
+// historyUnknownShareKeep is the one policy decision every chart's "unknown"/
+// CWD-less/keyless bucket shares: surfaced only when its value is at least
+// historyUnknownMinShare of the window's grand total, dropped otherwise as a
+// misleading sliver. Factored out so resolveUnknownBucket/
+// resolveUnknownConcurrencyProject/resolveUnknownStateProject each implement
+// only their own map shape's mutation, not three copies of this arithmetic.
+func historyUnknownShareKeep(value, grand float64) bool {
+	return grand > 0 && value/grand >= historyUnknownMinShare
 }
 
 // resolveUnknownBucket relabels or drops the "" key that CostSeries emits for
@@ -1132,10 +1181,65 @@ func resolveUnknownBucket(s *outbound.CostSeriesResult) {
 	uSeries := s.ByKey[""]
 	delete(s.Totals, "")
 	delete(s.ByKey, "")
-	if grand > 0 && uTotal/grand >= historyUnknownMinShare {
+	if historyUnknownShareKeep(uTotal, grand) {
 		s.Totals[historyUnknownLabel] = uTotal
 		if uSeries != nil {
 			s.ByKey[historyUnknownLabel] = uSeries
+		}
+	}
+}
+
+// resolveUnknownConcurrencyProject is resolveUnknownBucket's chart=agents
+// counterpart, over ConcurrencyResult's ByKey/PeakByKey shape — both keyed by
+// project, unlike CostSeriesResult's single Totals/ByKey pair (#1046).
+func resolveUnknownConcurrencyProject(c *outbound.ConcurrencyResult) {
+	uPeak, ok := c.PeakByKey[""]
+	if !ok {
+		return
+	}
+	grand := 0.0
+	for _, v := range c.PeakByKey {
+		grand += v
+	}
+	uSeries := c.ByKey[""]
+	delete(c.PeakByKey, "")
+	delete(c.ByKey, "")
+	if historyUnknownShareKeep(uPeak, grand) {
+		c.PeakByKey[historyUnknownLabel] = uPeak
+		if uSeries != nil {
+			c.ByKey[historyUnknownLabel] = uSeries
+		}
+	}
+}
+
+// resolveUnknownStateProject is resolveUnknownBucket's chart=state
+// counterpart: totals is buildStateResponse's already-computed per-project
+// ranking sum (mutated in place); s.ByState's three per-state sub-maps are
+// mutated to match — deleting the "" project entirely, or relabeling it to
+// historyUnknownLabel in every state that has one, per the same ≥10%-share
+// rule (#1046).
+func resolveUnknownStateProject(s *outbound.StateSeriesResult, totals map[string]float64) {
+	uTotal, ok := totals[""]
+	if !ok {
+		return
+	}
+	grand := 0.0
+	for _, v := range totals {
+		grand += v
+	}
+	keep := historyUnknownShareKeep(uTotal, grand)
+	delete(totals, "")
+	if keep {
+		totals[historyUnknownLabel] = uTotal
+	}
+	for _, byProject := range s.ByState {
+		vals, ok := byProject[""]
+		if !ok {
+			continue
+		}
+		delete(byProject, "")
+		if keep {
+			byProject[historyUnknownLabel] = vals
 		}
 	}
 }

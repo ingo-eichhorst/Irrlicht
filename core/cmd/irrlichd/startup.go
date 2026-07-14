@@ -589,8 +589,9 @@ func registerSessionRoutes(mux *http.ServeMux, deps registerSessionRoutesDeps) {
 	// 3 (#751) adds chart=agents, a concurrent-agents series reconstructed from
 	// the lifecycle recordings (read-only; empty unless --record has been used).
 	// #951 adds chart=dora, computed on request from deps.GitResolver — no
-	// persistence, no background sweep.
-	concurrencyTracker := filesystem.NewConcurrencyTrackerWithDir(resolveRecordingsDir(deps.SockPath))
+	// persistence, no background sweep. The tracker also reuses GitResolver to
+	// fold worktree sessions into their real repo's project name (#1046).
+	concurrencyTracker := filesystem.NewConcurrencyTrackerWithDir(resolveRecordingsDir(deps.SockPath), deps.GitResolver)
 	mux.HandleFunc("GET /api/v1/history", handleGetHistory(deps.CostTracker, deps.CachedRepo, concurrencyTracker, deps.GitResolver))
 
 	focusService := services.NewFocusService(deps.CachedRepo, deps.Push, deps.Logger)

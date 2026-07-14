@@ -146,7 +146,7 @@ func TestHandleGetHistory_AgentsConcurrency(t *testing.T) {
 		{Seq: 3, Timestamp: at(1800), Kind: lifecycle.KindStateTransition, SessionID: "s1", NewState: session.StateReady},
 	})
 	cost := filesystem.NewCostTrackerWithDir(filepath.Join(t.TempDir(), "cost"))
-	conc := filesystem.NewConcurrencyTrackerWithDir(recDir)
+	conc := filesystem.NewConcurrencyTrackerWithDir(recDir, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?range=day&chart=agents", nil)
 	rec := httptest.NewRecorder()
@@ -178,7 +178,7 @@ func TestHandleGetHistory_AgentsConcurrency(t *testing.T) {
 // TestHandleGetHistory_AgentsEmpty: no recordings (the common case — --record is
 // opt-in) returns a clean empty payload, not an error.
 func TestHandleGetHistory_AgentsEmpty(t *testing.T) {
-	conc := filesystem.NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"))
+	conc := filesystem.NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?range=day&chart=agents", nil)
 	rec := httptest.NewRecorder()
 	handleGetHistory(nil, nil, conc, nil)(rec, req)
