@@ -1115,6 +1115,42 @@ func TestParser_RateLimits_V3Schema(t *testing.T) {
 	}
 }
 
+// TestParser_RateLimits_SingleWeeklyWindow covers the current Codex schema,
+// which can report only a 7-day primary window. The parser must preserve that
+// source-of-truth shape and must not invent a missing five-hour window.
+func TestParser_RateLimits_SingleWeeklyWindow(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "event_msg",
+		"payload": map[string]interface{}{
+			"type": "token_count",
+			"rate_limits": map[string]interface{}{
+				"limit_id": "codex",
+				"primary": map[string]interface{}{
+					"used_percent":   7.0,
+					"window_minutes": 10080.0,
+					"resets_at":      1784509226.0,
+				},
+				"secondary": nil,
+				"plan_type": "plus",
+			},
+		},
+	})
+	if ev == nil || !ev.Skip {
+		t.Fatal("expected token_count to be skipped (post-rate-limit extraction)")
+	}
+	if ev.RateLimit == nil {
+		t.Fatal("expected RateLimit snapshot on token_count event")
+	}
+	if got := ev.RateLimit.Windows; len(got) != 1 {
+		t.Fatalf("windows = %+v, want exactly one reported weekly window", got)
+	}
+	weekly := ev.RateLimit.Windows[0]
+	if weekly.WindowMinutes != 10080 || weekly.UsedPercent != 7.0 || weekly.ResetsAt != 1784509226 {
+		t.Errorf("weekly window = %+v, want 7%% / 10080m / 1784509226", weekly)
+	}
+}
+
 // TestParser_RateLimits_V2WithCredits exercises the API-key / usage-path
 // shape where plan_type is null and credits carries a balance.
 func TestParser_RateLimits_V2WithCredits(t *testing.T) {

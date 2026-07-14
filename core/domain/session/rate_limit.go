@@ -6,16 +6,17 @@ import (
 
 // RateLimitSnapshot is one provider-emitted reading of subscription quota.
 // Codex's schema is the superset; Claude Code's statusline JSON is a strict
-// subset that maps to a two-window snapshot (five_hour, seven_day) with no
-// credits and no reached-type.
+// subset that maps to a five-hour and/or seven-day snapshot with no credits
+// and no reached-type.
 //
 // Snapshots are per-account: a Claude Pro/Max user running multiple sessions
 // on the same OAuth account sees identical Windows in every snapshot — the
 // bucket is account-scoped, not per-session.
 type RateLimitSnapshot struct {
-	// Windows holds one entry per rate-limit window (typically two: a 5-hour
-	// primary and a 7-day secondary). Order is provider-defined; callers
-	// pick the most-imminent for display.
+	// Windows holds the provider-emitted rate-limit windows. Providers may
+	// report one, both, or neither of the commonly observed 5-hour and 7-day
+	// windows; an absent window was not reported and must not be synthesized.
+	// Order is provider-defined; callers pick the most-imminent for display.
 	Windows []RateLimitWindow `json:"windows"`
 
 	// PlanType identifies the subscription tier when the provider supplies
@@ -45,11 +46,10 @@ type RateLimitWindow struct {
 	// 14.000000000000002) which the UI should round, not the parser.
 	UsedPercent float64 `json:"used_percent"`
 
-	// WindowMinutes is the nominal window length. Codex emits this
-	// explicitly (300, 10080); Claude Code's flat five_hour / seven_day
-	// fields map to 300 and 10080 respectively. Some Codex v1 samples
-	// emit 299 / 10079 due to a server-side rounding quirk — the parser
-	// must tolerate both.
+	// WindowMinutes is the nominal window length. Codex emits the duration
+	// explicitly; Claude Code's flat five_hour / seven_day fields map to 300
+	// and 10080 respectively. Some Codex v1 samples emit 299 / 10079 due to
+	// a server-side rounding quirk — the parser must tolerate both.
 	WindowMinutes int `json:"window_minutes"`
 
 	// ResetsAt is the wall-clock time (Unix seconds) at which the window

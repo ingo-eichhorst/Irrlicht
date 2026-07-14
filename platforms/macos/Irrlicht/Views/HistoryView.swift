@@ -586,7 +586,7 @@ private struct HistoryQuotaTabContent: View {
     }
 
     /// One projection view-model per active subscription provider, each carrying
-    /// its 5h/7d windows. Reads the live session snapshots (not the history API),
+    /// its reported quota windows. Reads the live session snapshots (not the history API),
     /// so it's independent of the selected range. Mirrors the per-provider dedup
     /// in SessionListView.quotaChipData: one bucket per provider, the freshest
     /// non-stale snapshot wins.
