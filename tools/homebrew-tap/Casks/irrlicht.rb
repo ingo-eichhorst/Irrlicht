@@ -13,7 +13,7 @@ cask "irrlicht" do
     strategy :github_latest
   end
 
-  depends_on macos: ">= :ventura"
+  depends_on macos: :ventura
 
   app "Irrlicht.app"
 
