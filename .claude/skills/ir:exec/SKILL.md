@@ -183,37 +183,40 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
 
 ## Phase 4 — Implement
 
-9. **Mark the issue in progress.** Now that work is actually starting, assign the issue
-   to the current GitHub user so others can see it's being worked:
+9. **Assign the issue before touching any implementation file** — this is a gated
+   precondition of starting Phase 4, not a step to fire-and-forget:
    ```bash
    gh issue edit <N> --add-assignee @me   # add --repo <owner/repo> for cross-repo
+   gh issue view <N> --json assignees -q '.assignees | length'
    ```
-10. **Push through the implementation** in the worktree.
+   If the count comes back `0`, retry the `edit` once and re-check — don't silently
+   proceed on an unconfirmed assignment. Only once the count is non-zero, **push
+   through the implementation** in the worktree.
     - If the work is complex/multi-part, break it into tasks with `TaskCreate` and work
       them in order (as you naturally would). For a small change, just implement it.
     - Follow the repo's conventions (AGENTS.md): surgical changes, match surrounding
       style, three-state model, hexagonal layering, etc.
-11. **Verify** before declaring done: run the test suites relevant to what you touched
+10. **Verify** before declaring done: run the test suites relevant to what you touched
     (per AGENTS.md — `go test ./core/... -race -count=1`, the factory/web suites, replay
     fixtures, `swift build`/`swift test`, as applicable). Fix what you broke.
 
 ## Phase 5 — PR, review, simplify
 
-12. **Open the PR** against `main`:
+11. **Open the PR** against `main`:
     ```bash
     git push -u origin feat/<N>-<slug>
     gh pr create --base main --fill   # or a written title/body; reference "Closes #<N>"
     ```
     End the PR body with the `🤖 Generated with [Claude Code]` line.
-13. **Review the diff.** Run the `/code-review` skill at **low** effort on the local
+12. **Review the diff.** Run the `/code-review` skill at **low** effort on the local
     diff, then fix every finding it surfaces in the worktree and push the fixes.
     - **IMPORTANT: do NOT use the Workflow tool / multi-agent orchestration for the
       review — it is too expensive.** A single review pass, not a fan-out.
-14. **Run the `/simplify` skill** on the change to clean up reuse/complexity, then push.
+13. **Run the `/simplify` skill** on the change to clean up reuse/complexity, then push.
 
 ## Phase 6 — Hand back
 
-15. **Present the final PR link** and ask whether the user wants to **test** or **merge**.
+14. **Present the final PR link** and ask whether the user wants to **test** or **merge**.
     Make a recommendation, and let your **confidence** decide which you lead with:
     - **Lean merge** when: `/code-review` came back clean (no unresolved findings), all
       relevant suites are green, and the diff is small/low-risk and fully covered by
@@ -231,19 +234,19 @@ Self-sufficient: this phase resolves the issue/PR itself rather than assuming
 continuity from earlier phases, so it works standalone or as a continuation of
 Phase 6.
 
-16. **Resolve the worktree, branch, and PR** if not already known from context —
+15. **Resolve the worktree, branch, and PR** if not already known from context —
     `pwd` / `git status -sb` for the worktree and branch, `gh pr view` for the PR —
     the same way Phase 1 resolves the issue number.
-17. **Confirm the worktree is clean and pushed**: `git status -sb` shows nothing
+16. **Confirm the worktree is clean and pushed**: `git status -sb` shows nothing
     outstanding and the branch is up to date with its remote.
-18. **Confirm the PR is mergeable**: `gh pr view <N> --json mergeable,state`. If
+17. **Confirm the PR is mergeable**: `gh pr view <N> --json mergeable,state`. If
     checks are pending or failing, **surface that and pause** rather than forcing
     the merge.
-19. **Merge**: `gh pr merge --squash` (no `--delete-branch` — keep the remote
+18. **Merge**: `gh pr merge --squash` (no `--delete-branch` — keep the remote
     branch, per existing repo convention).
-20. **Clean up the local worktree**: `git -C <main-repo> worktree remove <path>`,
+19. **Clean up the local worktree**: `git -C <main-repo> worktree remove <path>`,
     and move the session back to the main repo.
-21. **Confirm final state** (`git worktree list`) and report the merged PR link.
+20. **Confirm final state** (`git worktree list`) and report the merged PR link.
 
 ## Notes
 
