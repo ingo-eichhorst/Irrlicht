@@ -484,16 +484,14 @@ step_sigkill() {
       break
     fi
   done
+  # Leave the dead tmux pane for teardown — the kill alone produces
+  # process_exited.
   if [[ -n "$pid" ]]; then
-    kill -9 "$pid" 2>/dev/null || true
     echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (uuid=$UUID, cwd=$slot_cwd)" >&2
-    # Leave the dead tmux pane for teardown — the kill alone produces
-    # process_exited.
-    wait_pid_gone "$pid" 1
   else
     echo "[driver] sigkill[s$ACTIVE]: no kiro-cli PID found for cwd=$slot_cwd (uuid=$UUID)" >&2
-    sleep 1
   fi
+  sigkill_and_wait "$pid" 1
   SES_ALIVE[$ACTIVE]=0
 }
 

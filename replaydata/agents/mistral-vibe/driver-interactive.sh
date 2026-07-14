@@ -520,13 +520,11 @@ step_sigkill() {
   local pid
   pid=$(tmux list-panes -t "$SESSION" -F '#{pane_pid}' 2>/dev/null | head -1)
   if [[ -n "$pid" ]]; then
-    kill -9 "$pid" 2>/dev/null || true
     echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (sid=$(daemon_sid "$TRANSCRIPT"))" >&2
-    wait_pid_gone "$pid" 1
   else
     echo "[driver] sigkill[s$ACTIVE]: no vibe PID found (session=$SESSION)" >&2
-    sleep 1
   fi
+  sigkill_and_wait "$pid" 1
   SES_ALIVE[$ACTIVE]=0
 }
 

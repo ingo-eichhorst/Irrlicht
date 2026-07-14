@@ -395,15 +395,13 @@ step_sigkill() {
       [[ -z "$pid" ]] && pid="$pane_pid"
     fi
   fi
+  # Leave the dead tmux pane for teardown — the kill alone produces process_exited.
   if [[ -n "$pid" ]]; then
-    kill -9 "$pid" 2>/dev/null || true
     echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (sid=$(daemon_sid "$TRANSCRIPT"))" >&2
-    # Leave the dead tmux pane for teardown — the kill alone produces process_exited.
-    wait_pid_gone "$pid" 1
   else
     echo "[driver] sigkill[s$ACTIVE]: no gemini PID found (cwd=${SES_CWD[$ACTIVE]}, session=$SESSION)" >&2
-    sleep 1
   fi
+  sigkill_and_wait "$pid" 1
   SES_ALIVE[$ACTIVE]=0
 }
 

@@ -176,6 +176,31 @@ assert_eq "gone after 2 checks: checks 3x" 3 "$KILL_CALLS"
 
 unset -f kill sleep
 
+echo "== sigkill_and_wait: kills+waits when pid known, sleeps when empty =="
+KILL9_LOG=""; KILL_CALLS=0; KILL_TRUE_COUNT=0; SLEEP_CALLS=0; SLEEP_ARG=""
+kill() {
+  if [[ "$1" == "-9" ]]; then
+    KILL9_LOG="$2"
+  elif [[ "$1" == "-0" ]]; then
+    KILL_CALLS=$((KILL_CALLS + 1))
+    [[ $KILL_CALLS -le $KILL_TRUE_COUNT ]]
+  fi
+}
+sleep() { SLEEP_CALLS=$((SLEEP_CALLS + 1)); SLEEP_ARG="$1"; }
+
+KILL_TRUE_COUNT=1; KILL_CALLS=0; SLEEP_CALLS=0; KILL9_LOG=""
+sigkill_and_wait "4242" 1
+assert_eq "known pid: sends kill -9"       "4242" "$KILL9_LOG"
+assert_eq "known pid: waits via wait_pid_gone, not a flat sleep" 1 "$SLEEP_CALLS"
+
+KILL9_LOG=""; SLEEP_CALLS=0; SLEEP_ARG=""
+sigkill_and_wait "" 1
+assert_eq "empty pid: no kill -9 sent" "" "$KILL9_LOG"
+assert_eq "empty pid: falls back to a flat sleep" 1 "$SLEEP_CALLS"
+assert_eq "empty pid: sleeps for max_wait"        1 "$SLEEP_ARG"
+
+unset -f kill sleep
+
 echo ""
 if [[ "$fails" -eq 0 ]]; then
   echo "drive-lib_test: ALL PASS"

@@ -431,15 +431,13 @@ step_exit_clean() {
 step_sigkill() {
   resolve_transcript || true
   local pid; pid="$(agy_pid)"
+  # Leave the dead tmux pane for teardown — the kill alone produces process_exited.
   if [[ -n "$pid" ]]; then
-    kill -9 "$pid" 2>/dev/null || true
     echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (conv-id=$UUID)" >&2
-    # Leave the dead tmux pane for teardown — the kill alone produces process_exited.
-    wait_pid_gone "$pid" 1
   else
     echo "[driver] sigkill[s$ACTIVE]: no agy PID found (cwd=${SES_CWD[$ACTIVE]}, session=$SESSION)" >&2
-    sleep 1
   fi
+  sigkill_and_wait "$pid" 1
   SES_ALIVE[$ACTIVE]=0
 }
 

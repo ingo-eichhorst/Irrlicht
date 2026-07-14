@@ -46,3 +46,19 @@ wait_pid_gone() { # <pid> [max_wait_secs]
     w=$((w + 1))
   done
 }
+
+# sigkill_and_wait <pid> [max_wait_secs]
+#   The step_sigkill mechanics shared by every driver: kill -9 <pid> then
+#   wait_pid_gone, or a flat sleep if <pid> couldn't be resolved. Callers keep
+#   their own diagnostic echo (the PID lookup and log wording are
+#   adapter-specific) — this only dedupes the kill+wait-or-sleep shape that
+#   was copy-pasted near-identically across every driver's step_sigkill.
+sigkill_and_wait() { # <pid> [max_wait_secs]
+  local pid="$1" max_wait="${2:-1}"
+  if [[ -n "$pid" ]]; then
+    kill -9 "$pid" 2>/dev/null || true
+    wait_pid_gone "$pid" "$max_wait"
+  else
+    sleep "$max_wait"
+  fi
+}
