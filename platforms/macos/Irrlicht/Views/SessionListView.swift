@@ -590,7 +590,7 @@ struct SessionListView: View {
     }
 
     /// Render mode for a provider chip. Subscription chips show the
-    /// 5h/7d bars; usage chips show cumulative spend across all
+    /// provider-emitted quota bars; usage chips show cumulative spend across all
     /// sessions on that provider.
     private enum QuotaMode {
         case subscription
@@ -742,7 +742,7 @@ struct SessionListView: View {
     }
 
     /// The chip-style header widget. Dispatches on mode:
-    ///   - subscription → provider icon + stacked 5h/7d bars (mockup 1/2)
+    ///   - subscription → provider icon + its reported quota bars (mockup 1/2)
     ///   - usage        → provider icon + windowed spend, click-to-cycle (mockup 2)
     @ViewBuilder
     private func quotaChipView(_ d: QuotaWidgetData, compact: Bool) -> some View {
@@ -801,7 +801,7 @@ struct SessionListView: View {
     /// cycle the timeframe (day → week → month → year), mirroring the
     /// project-group cost text; the choice is shared across all usage
     /// chips via `usageCostTimeframe`. Always 2 lines so the chip has the
-    /// same height as the subscription variant (5h + 7d rows) and the two
+    /// same height as the usual two-row subscription variant and the two
     /// render cleanly side-by-side in the header.
     ///
     /// Sourced from the daemon's per-provider cost rollup (`provider_costs`),
@@ -999,7 +999,8 @@ struct SessionListView: View {
     }
 
     private func quotaWindowLabel(_ minutes: Int) -> String {
-        // Tolerate Codex v1's 299 / 10079 off-by-one quirk.
+        // Tolerate Codex v1's 299 / 10079 off-by-one quirk. Codex may report
+        // a single weekly window, so label every supplied duration directly.
         switch minutes {
         case 299, 300: return "5h"
         case 10079, 10080: return "7d"

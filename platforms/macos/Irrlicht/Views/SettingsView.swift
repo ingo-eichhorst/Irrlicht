@@ -127,7 +127,7 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .fontWeight(.medium)
                                 .foregroundColor(.secondary)
-                            InfoIcon(text: "Lights shows session-state dots (today's default). Usage replaces them with 5h/7d subscription quota bars. Combined shows both side by side.")
+                            InfoIcon(text: "Lights shows session-state dots (today's default). Usage replaces them with reported subscription quota bars. Combined shows both side by side.")
                             Spacer()
                         }
                         // A real Picker(pickerStyle: .segmented) only centers

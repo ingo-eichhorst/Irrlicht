@@ -46,7 +46,7 @@ enum MenuBarQuotaProvider {
 }
 
 /// How the quota portion of the icon renders when MenuBarStyle is `.usage`
-/// or `.combined`: the stacked 5h/7d bars, or a single compact ring for the
+/// or `.combined`: the stacked provider-reported quota bars, or a single compact ring for the
 /// most-imminent window (mirrors Claude Usage Tracker's "Compact" icon
 /// style, requested alongside issue #909). Stored under
 /// @AppStorage("menuBarQuotaVisual"); defaults to `.bars`.

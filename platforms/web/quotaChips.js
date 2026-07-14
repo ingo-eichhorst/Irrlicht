@@ -138,8 +138,9 @@ function barColorClass(used, pace) {
   return 'quota-bar-fill--green';
 }
 
-function quotaWindowLabel(minutes) {
-  // Tolerate Codex v1's 299 / 10079 off-by-one quirk.
+export function quotaWindowLabel(minutes) {
+  // Tolerate Codex v1's 299 / 10079 off-by-one quirk. Codex may report a
+  // single weekly window, so derive every label from its supplied duration.
   if (minutes === 299 || minutes === 300) return '5h';
   if (minutes === 10079 || minutes === 10080) return '7d';
   if (minutes >= 1440) return Math.floor(minutes / 1440) + 'd';
