@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 
 	"irrlicht/core/domain/session"
@@ -145,5 +146,5 @@ func TestBuildStateResponse_Top8Cap(t *testing.T) {
 }
 
 func projectName(i int) string {
-	return "project" + string(rune('0'+i/10)) + string(rune('0'+i%10))
+	return fmt.Sprintf("project%02d", i)
 }

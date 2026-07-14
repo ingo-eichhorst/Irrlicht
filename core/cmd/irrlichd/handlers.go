@@ -1156,6 +1156,16 @@ func pruneStateProjects(byState map[string]map[string][]float64, keep []string) 
 	return out
 }
 
+// historyUnknownShareKeep is the one policy decision every chart's "unknown"/
+// CWD-less/keyless bucket shares: surfaced only when its value is at least
+// historyUnknownMinShare of the window's grand total, dropped otherwise as a
+// misleading sliver. Factored out so resolveUnknownBucket/
+// resolveUnknownConcurrencyProject/resolveUnknownStateProject each implement
+// only their own map shape's mutation, not three copies of this arithmetic.
+func historyUnknownShareKeep(value, grand float64) bool {
+	return grand > 0 && value/grand >= historyUnknownMinShare
+}
+
 // resolveUnknownBucket relabels or drops the "" key that CostSeries emits for
 // rows missing a value on the group axis (branch/provider/model), per the ≥10%
 // share rule. A no-op for project/session, which always carry a key.
@@ -1171,7 +1181,7 @@ func resolveUnknownBucket(s *outbound.CostSeriesResult) {
 	uSeries := s.ByKey[""]
 	delete(s.Totals, "")
 	delete(s.ByKey, "")
-	if grand > 0 && uTotal/grand >= historyUnknownMinShare {
+	if historyUnknownShareKeep(uTotal, grand) {
 		s.Totals[historyUnknownLabel] = uTotal
 		if uSeries != nil {
 			s.ByKey[historyUnknownLabel] = uSeries
@@ -1194,7 +1204,7 @@ func resolveUnknownConcurrencyProject(c *outbound.ConcurrencyResult) {
 	uSeries := c.ByKey[""]
 	delete(c.PeakByKey, "")
 	delete(c.ByKey, "")
-	if grand > 0 && uPeak/grand >= historyUnknownMinShare {
+	if historyUnknownShareKeep(uPeak, grand) {
 		c.PeakByKey[historyUnknownLabel] = uPeak
 		if uSeries != nil {
 			c.ByKey[historyUnknownLabel] = uSeries
@@ -1217,7 +1227,7 @@ func resolveUnknownStateProject(s *outbound.StateSeriesResult, totals map[string
 	for _, v := range totals {
 		grand += v
 	}
-	keep := grand > 0 && uTotal/grand >= historyUnknownMinShare
+	keep := historyUnknownShareKeep(uTotal, grand)
 	delete(totals, "")
 	if keep {
 		totals[historyUnknownLabel] = uTotal
