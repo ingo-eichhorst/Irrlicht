@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
@@ -29,10 +30,19 @@ type concurrencyProjectResolver interface {
 // lifecycle recordings irrlichd writes under <dataDir>/recordings when started
 // with --record (issue #751, History tab Phase 3). It is read-only — it never
 // writes the recordings dir — and is the recordings analog of CostTracker's
-// CostSeries over the cost dir.
+// CostSeries over the cost dir. One instance is constructed at daemon startup
+// and reused for every chart=agents/chart=state request, which is what makes
+// resolveCache (below) an effective cross-request cache rather than a
+// per-request one.
 type ConcurrencyTracker struct {
 	dir string
 	git concurrencyProjectResolver
+
+	// resolveMu guards resolveCache: chart=agents/state can be requested
+	// concurrently (dashboard polling + a manual refresh), and this tracker
+	// instance is shared across every request.
+	resolveMu    sync.Mutex
+	resolveCache map[string]string // raw CWD -> resolved project name
 }
 
 // NewConcurrencyTrackerWithDir returns a reader rooted at the given recordings
@@ -41,7 +51,11 @@ type ConcurrencyTracker struct {
 // event's raw CWD to its git repo's project name (issue #1046); pass nil to
 // fall back to a bare filepath.Base(cwd).
 func NewConcurrencyTrackerWithDir(dir string, git concurrencyProjectResolver) *ConcurrencyTracker {
-	return &ConcurrencyTracker{dir: dir, git: git}
+	return &ConcurrencyTracker{
+		dir:          dir,
+		git:          git,
+		resolveCache: make(map[string]string),
+	}
 }
 
 // Dir returns the recordings directory this reader scans.
@@ -80,30 +94,34 @@ func concurrencyActive(state string) bool {
 	return state == session.StateWorking || state == session.StateWaiting
 }
 
-// concurrencyProject derives a project label for an event from its working
-// directory, preferring git-root resolution (folding a worktree session into
-// its parent repo, issue #1046) when a resolver is available, falling back to
-// a bare basename otherwise (nil resolver, or a directory GetProjectName
-// itself can't resolve to a git repo). State and process events carry no CWD,
-// so the label is sourced from the session's transcript events (which do) via
-// "last non-empty wins" in loadTimelines. memo caches the resolution per raw
-// CWD within one loadTimelines() scan, so a CWD shared across many events/
-// sessions is only ever resolved (and, if git-backed, shelled out to `git`)
-// once per request rather than once per event.
-func concurrencyProject(ev lifecycle.Event, git concurrencyProjectResolver, memo map[string]string) string {
-	if ev.CWD == "" {
+// resolveProject derives a project label for a raw CWD, preferring git-root
+// resolution (folding a worktree session into its parent repo, issue #1046)
+// when a resolver is available, falling back to a bare basename otherwise
+// (nil resolver, or a directory GetProjectName itself can't resolve to a git
+// repo). Resolutions are cached on the tracker for its whole lifetime (issue
+// #1049): a git-backed resolution shells out to `git rev-parse`, and this
+// endpoint is polled repeatedly by the dashboard — caching only within one
+// request meant every poll re-ran that subprocess for every distinct
+// historical CWD ever recorded (~20s+ once a recordings dir accumulates a few
+// hundred of them). A CWD's resolved project is effectively permanent (a
+// historical session's working directory doesn't change repos after the
+// fact), so caching for the daemon's lifetime is safe.
+func (t *ConcurrencyTracker) resolveProject(cwd string) string {
+	if cwd == "" {
 		return ""
 	}
-	if p, ok := memo[ev.CWD]; ok {
+	t.resolveMu.Lock()
+	defer t.resolveMu.Unlock()
+	if p, ok := t.resolveCache[cwd]; ok {
 		return p
 	}
-	p := filepath.Base(ev.CWD)
-	if git != nil {
-		if resolved := git.GetProjectName(ev.CWD); resolved != "" {
+	p := filepath.Base(cwd)
+	if t.git != nil {
+		if resolved := t.git.GetProjectName(cwd); resolved != "" {
 			p = resolved
 		}
 	}
-	memo[ev.CWD] = p
+	t.resolveCache[cwd] = p
 	return p
 }
 
@@ -519,17 +537,13 @@ func (t *ConcurrencyTracker) loadTimelines() (map[string]*sessionTimeline, error
 		}
 		return nil, err
 	}
-	// memo caches each raw CWD's resolved project name for this one scan (see
-	// concurrencyProject) so a git-backed resolution never re-shells `git` for
-	// a CWD it's already resolved.
-	memo := map[string]string{}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
 		}
 		path := filepath.Join(t.dir, e.Name())
 		if err := scanRecordingFile(path, func(ev lifecycle.Event) {
-			recordTimelineEvent(timelines, ev, t.git, memo)
+			t.recordTimelineEvent(timelines, ev)
 		}); err != nil {
 			return nil, err
 		}
@@ -544,7 +558,7 @@ func (t *ConcurrencyTracker) loadTimelines() (map[string]*sessionTimeline, error
 // (process exit / transcript removal, both treated as going ready — a
 // terminated session is ready even if no state_transition to ready was
 // recorded for it).
-func recordTimelineEvent(timelines map[string]*sessionTimeline, ev lifecycle.Event, git concurrencyProjectResolver, memo map[string]string) {
+func (t *ConcurrencyTracker) recordTimelineEvent(timelines map[string]*sessionTimeline, ev lifecycle.Event) {
 	tl := timelines[ev.SessionID]
 	if tl == nil {
 		tl = &sessionTimeline{}
@@ -554,7 +568,7 @@ func recordTimelineEvent(timelines map[string]*sessionTimeline, ev lifecycle.Eve
 	if ts > tl.lastEventTS {
 		tl.lastEventTS = ts
 	}
-	if p := concurrencyProject(ev, git, memo); p != "" {
+	if p := t.resolveProject(ev.CWD); p != "" {
 		tl.project = p
 	}
 	switch ev.Kind {
