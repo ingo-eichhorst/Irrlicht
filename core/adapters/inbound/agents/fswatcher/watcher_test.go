@@ -155,6 +155,52 @@ done:
 	}
 }
 
+// TestWatch_MetadataParentIsPresentOnFirstNewEvent proves that an adapter
+// whose relationship lives in its first transcript record does not expose a
+// zero-byte Create as an unlinked top-level session before the header arrives.
+func TestWatch_MetadataParentIsPresentOnFirstNewEvent(t *testing.T) {
+	root := setupFakeProjects(t)
+	w := NewWithRoot(root, testAdapter, 0).WithParentSessionID(func(path string) string {
+		contents, _ := os.ReadFile(path)
+		if strings.Contains(string(contents), "parent-thread") {
+			return "parent-thread"
+		}
+		return ""
+	})
+	ch := w.Subscribe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Watch(ctx) }()
+	select {
+	case <-w.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not signal Ready")
+	}
+
+	path := filepath.Join(root, "-Users-test-myproject", "child.jsonl")
+	if err := os.WriteFile(path, []byte("parent-thread\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case ev := <-ch:
+		if ev.Type != agent.EventNewSession {
+			t.Errorf("event Type = %q, want new_session", ev.Type)
+		}
+		if ev.ParentSessionID != "parent-thread" {
+			t.Errorf("ParentSessionID = %q, want parent-thread", ev.ParentSessionID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for linked new-session event")
+	}
+
+	cancel()
+	if err := <-done; err != nil && err != context.Canceled {
+		t.Errorf("Watch returned unexpected error: %v", err)
+	}
+}
+
 func TestWatch_EmitsActivity(t *testing.T) {
 	root := setupFakeProjects(t)
 

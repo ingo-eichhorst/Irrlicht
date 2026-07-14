@@ -36,7 +36,9 @@ func Agent() agent.Agent {
 			PIDForSession: DiscoverPID,
 		},
 		Source: agent.FilesUnderRoot{
-			Dir: sessionsDir(),
+			Dir:                     sessionsDir(),
+			SessionIDFromPath:       sessionIDFromPath,
+			ParentSessionIDFromPath: parentSessionIDFromPath,
 			Parser: agent.JSONLineParser{
 				NewParser: func() agent.LineParser { return &Parser{} },
 			},

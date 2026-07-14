@@ -55,6 +55,9 @@ func buildAgentWatchers(
 			if s.SessionIDFromPath != nil {
 				w = w.WithSessionID(s.SessionIDFromPath)
 			}
+			if s.ParentSessionIDFromPath != nil {
+				w = w.WithParentSessionID(s.ParentSessionIDFromPath)
+			}
 			watchers = append(watchers, w)
 			labels = append(labels, fmt.Sprintf("%s (%s)", a.Identity.Name, w.Root()))
 		}

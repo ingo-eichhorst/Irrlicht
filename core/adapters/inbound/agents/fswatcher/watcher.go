@@ -34,6 +34,14 @@ type Watcher struct {
 	// filename is constant use this both to source the ID from a path component
 	// and to ignore sibling files (e.g. Antigravity's transcript_full.jsonl).
 	sessionID func(path string) string
+	// parentSessionID, when non-nil, derives a child transcript's parent from
+	// its contents before the event is emitted. The callback is only enabled
+	// for adapters that persist an authoritative header relationship.
+	parentSessionID func(path string) string
+	// pendingNew holds zero-byte Create events for header-linked adapters.
+	// Deferring them until the first Write lets the adapter read the metadata
+	// header and prevents a child from briefly appearing as a top-level row.
+	pendingNew map[string]struct{}
 
 	subMu sync.Mutex
 	subs  []chan agent.Event
@@ -100,6 +108,14 @@ func (w *Watcher) WithSessionID(fn func(path string) string) *Watcher {
 	return w
 }
 
+// WithParentSessionID sets a transcript-header parent-ID extractor. A
+// zero-byte Create is deferred until the first Write so the callback can read
+// the header before the new-session event reaches the session detector.
+func (w *Watcher) WithParentSessionID(fn func(path string) string) *Watcher {
+	w.parentSessionID = fn
+	return w
+}
+
 // idFor derives a transcript file's session ID using the custom extractor when
 // one is set, otherwise the default filename-stem rule. Returning "" means the
 // file should be skipped.
@@ -108,6 +124,24 @@ func (w *Watcher) idFor(path string) string {
 		return w.sessionID(path)
 	}
 	return extractSessionID(path)
+}
+
+func (w *Watcher) parentIDFor(path string) string {
+	if w.parentSessionID == nil {
+		return ""
+	}
+	return w.parentSessionID(path)
+}
+
+func (w *Watcher) eventFor(typ agent.EventType, sessionID, projectDir, path string, size int64) agent.Event {
+	return agent.Event{
+		Type:            typ,
+		SessionID:       sessionID,
+		ProjectDir:      projectDir,
+		TranscriptPath:  path,
+		Size:            size,
+		ParentSessionID: w.parentIDFor(path),
+	}
 }
 
 // New creates a Watcher for the given directory. If dir is absolute, it is
@@ -283,35 +317,30 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 		if w.isStale(mtime) {
 			return
 		}
-		w.broadcast(agent.Event{
-			Type:           agent.EventNewSession,
-			SessionID:      sessionID,
-			ProjectDir:     projectDir,
-			TranscriptPath: name,
-			Size:           size,
-		})
+		if size == 0 && w.parentSessionID != nil {
+			if w.pendingNew == nil {
+				w.pendingNew = make(map[string]struct{})
+			}
+			w.pendingNew[name] = struct{}{}
+			return
+		}
+		w.broadcast(w.eventFor(agent.EventNewSession, sessionID, projectDir, name, size))
 
 	case ev.Op&fsnotify.Write != 0:
 		size, mtime := fileSizeAndMtime(name)
 		if w.isStale(mtime) {
 			return
 		}
-		w.broadcast(agent.Event{
-			Type:           agent.EventActivity,
-			SessionID:      sessionID,
-			ProjectDir:     projectDir,
-			TranscriptPath: name,
-			Size:           size,
-		})
+		if _, pending := w.pendingNew[name]; pending {
+			delete(w.pendingNew, name)
+			w.broadcast(w.eventFor(agent.EventNewSession, sessionID, projectDir, name, size))
+			return
+		}
+		w.broadcast(w.eventFor(agent.EventActivity, sessionID, projectDir, name, size))
 
 	case ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
-		w.broadcast(agent.Event{
-			Type:           agent.EventRemoved,
-			SessionID:      sessionID,
-			ProjectDir:     projectDir,
-			TranscriptPath: name,
-			Size:           0,
-		})
+		delete(w.pendingNew, name)
+		w.broadcast(w.eventFor(agent.EventRemoved, sessionID, projectDir, name, 0))
 	}
 }
 
@@ -568,13 +597,7 @@ func (w *Watcher) emitExistingFiles(dir string) {
 		if w.maxAge > 0 && !mtime.IsZero() && time.Since(mtime) > w.maxAge {
 			continue
 		}
-		w.broadcast(agent.Event{
-			Type:           agent.EventNewSession,
-			SessionID:      sessionID,
-			ProjectDir:     projectDir,
-			TranscriptPath: fullPath,
-			Size:           size,
-		})
+		w.broadcast(w.eventFor(agent.EventNewSession, sessionID, projectDir, fullPath, size))
 	}
 }
 
