@@ -608,6 +608,9 @@ struct HistoryContentView: View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
             breadcrumb
             chartView
+                .overlay(alignment: .topTrailing) {
+                    if chart.isCO2 { co2MethodologyLink }
+                }
             Divider()
             summary
         }
@@ -638,9 +641,6 @@ struct HistoryContentView: View {
                 chart: chart
             )
             .frame(height: 200)
-            .overlay(alignment: .topTrailing) {
-                if chart.isCO2 { co2MethodologyLink }
-            }
         } else {
             Text(chart == .tokens ? "no token usage in this range yet" : "no cost data in this range yet")
                 .font(.callout)

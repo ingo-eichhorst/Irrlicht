@@ -93,14 +93,13 @@ final class HistoryViewSnapshotTests: XCTestCase {
     }
 
     /// Tokens chart (#750): the side panel is the input/output/cache split.
-    private func populatedTokens() -> HistoryResponse {
+    /// Shared two-branch, 8-bucket series builder behind `populatedTokens()`
+    /// and `populatedCO2()` — both chart fixtures differ only in `chart`,
+    /// the value magnitudes, and whether a token split applies.
+    private func twoBranchMonth(chart: String, perKey: [(String, [Double])], tokenSplit: HistoryTokenSplit? = nil) -> HistoryResponse {
         let day: Int64 = 86_400
         let base: Int64 = 1_700_000_000
         let buckets = (0..<8).map { base + Int64($0) * day }
-        let perKey: [(String, [Double])] = [
-            ("main", [12000, 14000, 16000, 15000, 20000, 24000, 26000, 30000]),
-            ("feat/x", [4000, 5000, 6000, 7000, 6000, 9000, 11000, 12000]),
-        ]
         var series: [HistoryPoint] = []
         for (key, values) in perKey {
             for (i, v) in values.enumerated() {
@@ -109,13 +108,25 @@ final class HistoryViewSnapshotTests: XCTestCase {
         }
         let grand = perKey.reduce(0.0) { $0 + $1.1.reduce(0, +) }
         return HistoryResponse(
-            range: "month", chart: "tokens", group: "branch",
+            range: "month", chart: chart, group: "branch",
             start: base, end: base + Int64(buckets.count) * day,
             bucketSeconds: day, bucketStarts: buckets, total: grand,
             series: series,
             topContributors: perKey.map { HistoryContributor(label: $0.0, value: $0.1.reduce(0, +)) },
-            tokenSplit: HistoryTokenSplit(input: grand * 0.6, output: grand * 0.1, cache: grand * 0.3),
+            tokenSplit: tokenSplit,
             scope: nil
+        )
+    }
+
+    private func populatedTokens() -> HistoryResponse {
+        let perKey: [(String, [Double])] = [
+            ("main", [12000, 14000, 16000, 15000, 20000, 24000, 26000, 30000]),
+            ("feat/x", [4000, 5000, 6000, 7000, 6000, 9000, 11000, 12000]),
+        ]
+        let grand = perKey.reduce(0.0) { $0 + $1.1.reduce(0, +) }
+        return twoBranchMonth(
+            chart: "tokens", perKey: perKey,
+            tokenSplit: HistoryTokenSplit(input: grand * 0.6, output: grand * 0.1, cache: grand * 0.3)
         )
     }
 
@@ -147,29 +158,10 @@ final class HistoryViewSnapshotTests: XCTestCase {
     /// regression (e.g. accidentally scoping it to another chart, or losing
     /// it entirely) shows up as a snapshot diff.
     private func populatedCO2() -> HistoryResponse {
-        let day: Int64 = 86_400
-        let base: Int64 = 1_700_000_000
-        let buckets = (0..<8).map { base + Int64($0) * day }
-        let perKey: [(String, [Double])] = [
+        twoBranchMonth(chart: "co2", perKey: [
             ("main", [120, 140, 160, 150, 200, 240, 260, 300]),
             ("feat/x", [40, 50, 60, 70, 60, 90, 110, 120]),
-        ]
-        var series: [HistoryPoint] = []
-        for (key, values) in perKey {
-            for (i, v) in values.enumerated() {
-                series.append(HistoryPoint(ts: buckets[i], project: key, value: v))
-            }
-        }
-        let grand = perKey.reduce(0.0) { $0 + $1.1.reduce(0, +) }
-        return HistoryResponse(
-            range: "month", chart: "co2", group: "branch",
-            start: base, end: base + Int64(buckets.count) * day,
-            bucketSeconds: day, bucketStarts: buckets, total: grand,
-            series: series,
-            topContributors: perKey.map { HistoryContributor(label: $0.0, value: $0.1.reduce(0, +)) },
-            tokenSplit: nil,
-            scope: nil
-        )
+        ])
     }
 
     func testHistoryCO2() {
@@ -183,6 +175,26 @@ final class HistoryViewSnapshotTests: XCTestCase {
             onExportJSON: { /* unused in this snapshot */ }
         )
         assertSnapshot(of: host(view, height: 460), as: .image)
+    }
+
+    /// #1029 (code-review follow-up): the methodology link is gated on
+    /// chart.isCO2 alone — same as web's #history-co2-info, gated only on
+    /// historyState.chart === 'co2' — not on whether the range has any data.
+    /// Regression guard for a real bug this change introduced and fixed in
+    /// the same PR: the link was originally attached only to the
+    /// `data.hasData` chart branch, so it silently vanished for an empty
+    /// CO2 range instead of staying visible like web.
+    func testHistoryCO2EmptyStateStillShowsMethodologyLink() {
+        let view = HistoryContentView(
+            data: empty(),
+            range: .day,
+            chart: .co2,
+            group: .project,
+            scope: nil,
+            onExportCSV: { /* unused in this snapshot */ },
+            onExportJSON: { /* unused in this snapshot */ }
+        )
+        assertSnapshot(of: host(view, height: 320), as: .image)
     }
 
     func testHistoryDrilldown() {
