@@ -46,6 +46,7 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	delete(d.permissionPending, ev.SessionID)
 	delete(d.compactPending, ev.SessionID)
 	delete(d.editToolOpenSince, ev.SessionID)
+	delete(d.idleProjectRetryAttempts, ev.SessionID)
 	d.permMu.Unlock()
 
 	state, err := d.repo.Load(ev.SessionID)

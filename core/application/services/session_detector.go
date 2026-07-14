@@ -41,6 +41,14 @@ const activityDebounceWindow = 2 * time.Second
 // transcript on this interval catches the missed events.
 const staleWorkingRefreshInterval = 5 * time.Second
 
+// maxIdleProjectResolveAttempts bounds how many refreshStaleSessions ticks
+// retry CWD/project resolution for an idle (waiting/ready) session whose
+// ProjectName never resolved — e.g. mistral-vibe's meta.json sidecar hadn't
+// been written yet at the moment the transcript went quiet (#1021). Without
+// a cap, a session in a non-git cwd, or on an adapter with no sidecar at
+// all, would be re-read on this ticker forever.
+const maxIdleProjectResolveAttempts = 12
+
 // Logger component tags shared by SessionDetector's collaborators, split
 // across this file, session_detector_activity.go, session_detector_lifecycle.go,
 // session_detector_subagent.go, and pid_manager.go.
@@ -191,6 +199,13 @@ type SessionDetector struct {
 	// removed.
 	editToolOpenSince map[string]int64 // sessionID → unix seconds
 
+	// idleProjectRetryAttempts tracks, per session, how many
+	// refreshStaleSessions ticks have retried CWD/project resolution while
+	// idle with an unresolved ProjectName. Guarded by permMu. Capped at
+	// maxIdleProjectResolveAttempts (#1021); cleared when the session is
+	// removed (onRemoved).
+	idleProjectRetryAttempts map[string]int // sessionID → attempts so far
+
 	// bgLiveProbe answers "does this session still have a live background
 	// process?" from its output-file paths. Defaults to anyLiveOutputWriter
 	// (lsof); tests override it. See issue #445.
@@ -265,28 +280,29 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		}
 	}
 	det := &SessionDetector{
-		watchers:          watchers,
-		merged:            make(chan identifiedEvent, 16),
-		repo:              deps.Repo,
-		log:               deps.Log,
-		broadcaster:       deps.Broadcaster,
-		version:           deps.Version,
-		enricher:          newMetadataEnricher(deps.Git, deps.Metrics),
-		metrics:           deps.Metrics,
-		projectSessions:   make(map[string]string),
-		deletedSessions:   make(map[string]int64),
-		hostGateRejected:  make(map[string]struct{}),
-		debounce:          make(map[string]*debounceEntry),
-		debouncedEvents:   make(chan agent.Event, 64),
-		deletedCooldown:   10 * time.Second,
-		permissionPending: make(map[string]bool),
-		compactPending:    make(map[string]int64),
-		editToolOpenSince: make(map[string]int64),
-		bgLiveProbe:       anyLiveOutputWriter,
-		bgPIDProbe:        anyLivePID,
-		bgLive:            make(map[string]bool),
-		bgProbing:         make(map[string]bool),
-		uiSignals:         make(chan terminalUISignal, 64),
+		watchers:                 watchers,
+		merged:                   make(chan identifiedEvent, 16),
+		repo:                     deps.Repo,
+		log:                      deps.Log,
+		broadcaster:              deps.Broadcaster,
+		version:                  deps.Version,
+		enricher:                 newMetadataEnricher(deps.Git, deps.Metrics),
+		metrics:                  deps.Metrics,
+		projectSessions:          make(map[string]string),
+		deletedSessions:          make(map[string]int64),
+		hostGateRejected:         make(map[string]struct{}),
+		debounce:                 make(map[string]*debounceEntry),
+		debouncedEvents:          make(chan agent.Event, 64),
+		deletedCooldown:          10 * time.Second,
+		permissionPending:        make(map[string]bool),
+		compactPending:           make(map[string]int64),
+		editToolOpenSince:        make(map[string]int64),
+		idleProjectRetryAttempts: make(map[string]int),
+		bgLiveProbe:              anyLiveOutputWriter,
+		bgPIDProbe:               anyLivePID,
+		bgLive:                   make(map[string]bool),
+		bgProbing:                make(map[string]bool),
+		uiSignals:                make(chan terminalUISignal, 64),
 	}
 	det.pidMgr = NewPIDManager(PIDManagerDeps{
 		PW:               deps.PW,
