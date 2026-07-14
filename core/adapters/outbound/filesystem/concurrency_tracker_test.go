@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -726,25 +727,38 @@ func TestConcurrencyProject_NilResolverFallsBackToBasename(t *testing.T) {
 }
 
 // countingResolver counts GetProjectName calls per distinct dir, so
-// TestConcurrencyProject_MemoizesPerCWD can assert the tracker resolves each
-// raw CWD once per scan rather than once per event.
+// TestConcurrencyProject_MemoizesAcrossRequests can assert the tracker resolves
+// each raw CWD once for its lifetime rather than once per event or request.
 type countingResolver struct {
+	mu    sync.Mutex
 	calls map[string]int
+	delay time.Duration
 }
 
 func (r *countingResolver) GetProjectName(dir string) string {
+	r.mu.Lock()
 	if r.calls == nil {
 		r.calls = map[string]int{}
 	}
 	r.calls[dir]++
+	delay := r.delay
+	r.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
 	return filepath.Base(dir)
 }
 
-// TestConcurrencyProject_MemoizesPerCWD: two sessions sharing one CWD across
-// several events must only trigger one resolver call for that CWD — loadTimelines'
-// per-scan memo, not a re-shell-out-to-git per event (which would scale with
-// event count instead of distinct-directory count on a large recordings dir).
-func TestConcurrencyProject_MemoizesPerCWD(t *testing.T) {
+func (r *countingResolver) Calls(dir string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls[dir]
+}
+
+// TestConcurrencyProject_MemoizesAcrossRequests: two chart reads over sessions
+// sharing CWDs must resolve each CWD once for the tracker lifetime. That keeps
+// dashboard polling from re-running git rev-parse for every historical CWD.
+func TestConcurrencyProject_MemoizesAcrossRequests(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "recordings")
 	seedRecording(t, dir, "run.jsonl", []lifecycle.Event{
 		transcriptNew(1, 90, "s1", "/home/me/projX"),
@@ -765,10 +779,49 @@ func TestConcurrencyProject_MemoizesPerCWD(t *testing.T) {
 	if _, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60}); err != nil {
 		t.Fatalf("AgentsSeries: %v", err)
 	}
-	if got := resolver.calls["/home/me/projX"]; got != 1 {
+	if _, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60}); err != nil {
+		t.Fatalf("StateSeries: %v", err)
+	}
+	if got := resolver.Calls("/home/me/projX"); got != 1 {
 		t.Errorf("projX shared across 2 sessions/5 CWD-carrying events: want 1 resolver call, got %d", got)
 	}
-	if got := resolver.calls["/home/me/projY"]; got != 1 {
+	if got := resolver.Calls("/home/me/projY"); got != 1 {
 		t.Errorf("projY: want 1 resolver call, got %d", got)
+	}
+}
+
+func TestConcurrencyProject_MemoizesConcurrentRequests(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, dir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", "/home/me/projX"),
+		transition(2, 100, "s1", session.StateWorking),
+		transition(3, 200, "s1", session.StateReady),
+	})
+	resolver := &countingResolver{delay: 20 * time.Millisecond}
+	tr := NewConcurrencyTrackerWithDir(dir, resolver)
+	q := outbound.SeriesQuery{Start: 0, End: 300, BucketSeconds: 60}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := tr.AgentsSeries(q)
+		errs <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := tr.StateSeries(q)
+		errs <- err
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent chart read: %v", err)
+		}
+	}
+	if got := resolver.Calls("/home/me/projX"); got != 1 {
+		t.Errorf("concurrent chart reads: want 1 resolver call, got %d", got)
 	}
 }
