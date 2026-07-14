@@ -864,16 +864,17 @@ func (d *SessionDetector) overlayPermissionPending(state *session.SessionState) 
 
 // holdParentForActiveChildren fast-forwards a parent's own transition when
 // it would otherwise land on ready, or on a turn-done "waiting"
-// (question/cue), while a child subagent is still working or waiting —
-// mirroring the ready case so the dashboard doesn't read "nothing happening"
-// while a subagent runs (issue #897). Before holding, it fast-forwards any
-// "orphaned" children — subagents whose own tail has no open tool calls but
-// whose transcript ends with `stop_reason: null` (Claude Code never writes
-// end_turn for in-process subagents) — via holdIfChildrenActive, so a merely
-// stale child doesn't hold the parent forever. Returns the (possibly
-// overridden) newState/reason and whether the hold fired, so the caller can
-// skip the same-pass collapsed-waiting synthesis: that path would otherwise
-// reclassify from waiting and undo the hold.
+// (question/cue), while a child subagent is still working or waiting, per
+// holdIfChildrenActive/hasActiveChildren — mirroring the ready case so the
+// dashboard doesn't read "nothing happening" while a subagent runs (issue
+// #897). Before holding, it fast-forwards any "orphaned" children —
+// subagents whose own tail has no open tool calls but whose transcript ends
+// with `stop_reason: null` (Claude Code never writes end_turn for in-process
+// subagents) — via holdIfChildrenActive, so a merely stale child doesn't
+// hold the parent forever. Returns the (possibly overridden) newState/reason
+// and whether the hold fired, so the caller can skip the same-pass
+// collapsed-waiting synthesis: that path would otherwise reclassify from
+// waiting and undo the hold.
 func (d *SessionDetector) holdParentForActiveChildren(state *session.SessionState, ev agent.Event, newState, reason string) (string, string, bool) {
 	if state.ParentSessionID != "" {
 		return newState, reason, false
@@ -885,7 +886,7 @@ func (d *SessionDetector) holdParentForActiveChildren(state *session.SessionStat
 	if newState != session.StateReady && !turnDoneWaiting {
 		return newState, reason, false
 	}
-	if !d.holdIfChildrenActive(state.SessionID) {
+	if !d.holdIfChildrenActive(state.SessionID, state.Metrics) {
 		return newState, reason, false
 	}
 	logMsg := "holding parent working — active children still running"

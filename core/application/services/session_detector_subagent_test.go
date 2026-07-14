@@ -158,6 +158,69 @@ func TestSessionDetector_ParentHeldWorking_WhenChildrenActive(t *testing.T) {
 	<-done
 }
 
+// TestSessionDetector_ParentHeldWorking_ByPendingBackgroundAgentCount
+// reproduces issue #1036: a child subagent's transcript finishes and gets
+// reclassified to ready (and cleaned up) a few seconds before Claude Code
+// delivers the task-notification that would give the parent a reason to
+// keep working. In that gap the file-based hasActiveChildren check finds
+// nothing — here there is no child session in the repo at all — so without
+// consulting Claude Code's own pendingBackgroundAgentCount signal the parent
+// would incorrectly flip to ready while a background subagent is still
+// actually running.
+func TestSessionDetector_ParentHeldWorking_ByPendingBackgroundAgentCount(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+
+	// Parent session: turn is done, no open tool calls, and no child session
+	// exists in the repo — but Claude Code's own turn_duration event still
+	// reports one background agent pending.
+	repo.Save(&session.SessionState{
+		SessionID:      "parent-1036",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent-1036.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:               "turn_done",
+			HasOpenToolCall:             false,
+			LastAssistantText:           "Waiting on the other investigation.",
+			PendingBackgroundAgentCount: 1,
+		},
+	})
+
+	// Trigger parent activity — should be held in working because Claude
+	// Code's own count says a background agent is still pending, even
+	// though the repo has no child session tracking it.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "parent-1036",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent-1036.jsonl",
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	state, _ := repo.Load("parent-1036")
+	if state.State != session.StateWorking {
+		t.Errorf("parent state: got %q, want working (PendingBackgroundAgentCount=1)", state.State)
+	}
+
+	cancel()
+	<-done
+}
+
 // TestSessionDetector_ParentHeldWorking_WhenNewChildDiscoveredWhileReady
 // reproduces issue #889: a parent running a background Workflow-tool call can
 // have its own turn-done fire while it has zero active children — either
@@ -307,6 +370,87 @@ func TestSessionDetector_ParentReleasedToReady_WhenChildFinishes(t *testing.T) {
 	repo.mu.Unlock()
 	if got != session.StateReady {
 		t.Errorf("parent state: got %q, want ready (child finished, parent turn was done)", got)
+	}
+
+	cancel()
+	<-done
+}
+
+// TestSessionDetector_ReevaluateParent_HeldByPendingBackgroundAgentCount
+// reproduces the exact issue #1036 incident: two subagents are running, one
+// finishes first, its own activity pass transitions it to ready and (via
+// finalizeActivityPass) triggers reevaluateParent on the parent — the same
+// path TestSessionDetector_ParentReleasedToReady_WhenChildFinishes exercises.
+// But here the parent's own turn_duration event still reports ONE background
+// agent pending (the other subagent, not tracked as a child session in this
+// test — mirroring the real race where it had already been cleaned up).
+// hasActiveChildren alone would find nothing and release the parent to
+// ready; the PendingBackgroundAgentCount check must hold it instead.
+func TestSessionDetector_ReevaluateParent_HeldByPendingBackgroundAgentCount(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	det := newDetector(tw, pw, repo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+
+	now := time.Now().Unix()
+
+	// Parent: turn done, held in working — Claude Code's own accounting
+	// says one background agent (not the tracked child below) is still
+	// pending.
+	repo.Save(&session.SessionState{
+		SessionID:      "parent-1036b",
+		State:          session.StateWorking,
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent-1036b.jsonl",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+		EventCount:     5,
+		Metrics: &session.SessionMetrics{
+			LastEventType:               "turn_done",
+			HasOpenToolCall:             false,
+			LastAssistantText:           "Web implementation mapped — waiting on the other investigation.",
+			PendingBackgroundAgentCount: 1,
+		},
+	})
+
+	// Tracked child: finishes this pass.
+	repo.Save(&session.SessionState{
+		SessionID:       "child-1036b",
+		State:           session.StateWorking,
+		ParentSessionID: "parent-1036b",
+		TranscriptPath:  "/home/.claude/projects/-Users-test/parent-1036b/subagents/child-1036b.jsonl",
+		FirstSeen:       now,
+		UpdatedAt:       now,
+		EventCount:      3,
+		Metrics: &session.SessionMetrics{
+			LastEventType:   "turn_done",
+			HasOpenToolCall: false,
+		},
+	})
+
+	// Trigger the tracked child's activity — it transitions to ready and
+	// reevaluates the parent. The parent must stay working: its own
+	// PendingBackgroundAgentCount still says a (differently-tracked)
+	// background agent is running.
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      "child-1036b",
+		ProjectDir:     "-Users-test",
+		TranscriptPath: "/home/.claude/projects/-Users-test/parent-1036b/subagents/child-1036b.jsonl",
+	}
+
+	waitForSessionState(repo, "child-1036b", session.StateReady, 500*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+
+	parent, _ := repo.Load("parent-1036b")
+	if parent.State != session.StateWorking {
+		t.Errorf("parent state: got %q, want working — PendingBackgroundAgentCount=1 must hold it even though the tracked child finished", parent.State)
 	}
 
 	cancel()

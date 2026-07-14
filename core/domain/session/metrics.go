@@ -47,6 +47,20 @@ type SessionMetrics struct {
 	// domain model is agnostic to how each adapter represents subagents.
 	OpenSubagents int `json:"open_subagents,omitempty"`
 
+	// PendingBackgroundAgentCount is Claude Code's own last-reported count of
+	// still-running background subagents (Agent-tool launches), read from the
+	// transcript's turn_duration system event. It is a second, independent
+	// signal alongside the file-based child-session tracking that
+	// holdParentForActiveChildren normally relies on — Claude Code's own
+	// accounting closes a race where a child subagent's transcript finishes
+	// and gets reclassified to ready moments before Claude Code delivers the
+	// task-notification that gives the parent a reason to keep working (issue
+	// #1036). Zero when Claude Code reports none pending, or when the
+	// adapter/version doesn't surface this field at all — either way, the
+	// file-based check remains the source of truth this signal is only ORed
+	// against, never a replacement for it.
+	PendingBackgroundAgentCount int `json:"pending_background_agent_count,omitempty"`
+
 	// BackgroundProcessCount is the number of agent-spawned background
 	// processes the transcript shows as still open — for Claude Code, a
 	// `Bash` tool call with `run_in_background: true` that has not yet been
@@ -479,6 +493,12 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 		HasOpenToolCall:      newM.HasOpenToolCall,
 		OpenToolCallCount:    newM.OpenToolCallCount,
 		OpenSubagents:        newM.OpenSubagents,
+		// PendingBackgroundAgentCount is already sticky one layer down (the
+		// tailer carries the last-observed value across passes with no fresh
+		// turn_duration event), and 0 is a legitimate, must-not-be-overridden
+		// "none pending" verdict — so it's copied verbatim, like
+		// BackgroundProcessCount, with no zero-carry-forward here.
+		PendingBackgroundAgentCount: newM.PendingBackgroundAgentCount,
 		// Background-process fields are recomputed from the transcript every
 		// pass (count + output paths + PIDs) — copy the new values verbatim.
 		// HasLiveBackgroundProcess is set by the detector's probe *after* this

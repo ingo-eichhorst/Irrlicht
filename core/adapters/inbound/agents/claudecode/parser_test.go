@@ -247,6 +247,43 @@ func TestParser_SystemEvent_TurnDone(t *testing.T) {
 	}
 }
 
+func TestParser_SystemEvent_TurnDone_PendingBackgroundAgentCount(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":                        "system",
+		"subtype":                     "turn_duration",
+		"timestamp":                   "2026-04-05T22:00:00Z",
+		"pendingBackgroundAgentCount": float64(2),
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.PendingBackgroundAgentCount == nil {
+		t.Fatal("expected PendingBackgroundAgentCount to be set")
+	}
+	if *ev.PendingBackgroundAgentCount != 2 {
+		t.Errorf("PendingBackgroundAgentCount = %d, want 2", *ev.PendingBackgroundAgentCount)
+	}
+}
+
+func TestParser_SystemEvent_TurnDone_PendingBackgroundAgentCountAbsent(t *testing.T) {
+	// Older Claude Code versions write turn_duration with no
+	// pendingBackgroundAgentCount field at all — absence must not be read
+	// as an explicit zero. See issue #1036.
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "system",
+		"subtype":   "turn_duration",
+		"timestamp": "2026-04-05T22:00:00Z",
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
+	if ev.PendingBackgroundAgentCount != nil {
+		t.Errorf("PendingBackgroundAgentCount = %v, want nil when the field is absent", *ev.PendingBackgroundAgentCount)
+	}
+}
+
 func TestParser_SystemEvent_StopHookSummary(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{

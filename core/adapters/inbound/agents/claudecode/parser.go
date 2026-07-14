@@ -227,6 +227,10 @@ func handleSystemEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 	subtype, _ := raw["subtype"].(string)
 	if subtype == "turn_duration" || subtype == "stop_hook_summary" {
 		ev.EventType = "turn_done"
+		if v, ok := raw["pendingBackgroundAgentCount"].(float64); ok {
+			n := int(v)
+			ev.PendingBackgroundAgentCount = &n
+		}
 		return
 	}
 	if subtype == "compact_boundary" {
