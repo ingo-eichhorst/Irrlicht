@@ -37,6 +37,32 @@ final class HistoryViewSnapshotTests: XCTestCase {
         return hosting
     }
 
+    /// host() wraps its view directly in `.frame(width:)`, which alone bounds
+    /// the child correctly — it doesn't reproduce issue #1046's width overflow,
+    /// which only occurs because production's HistoryView.content puts a
+    /// *vertical* ScrollView between the fixed panel frame and the tab's
+    /// content (a plain ScrollView proposes unbounded cross-axis width to its
+    /// content unless that content explicitly claims `.frame(maxWidth:
+    /// .infinity)`). This helper reproduces that exact chain — outer fixed
+    /// frame → ScrollView { VStack { view } }, matching HistoryView.content
+    /// verbatim — so a regression in the grid's width-clamping modifier shows
+    /// up as an image diff here even though it wouldn't via host().
+    private func hostInScrollingTab(_ view: some View, height: CGFloat) -> NSView {
+        let width = SessionListView.panelWidth
+        let wrapped = ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                view
+            }
+        }
+        .frame(width: width, height: height)
+        .background(Color(NSColor.windowBackgroundColor))
+        let hosting = NSHostingView(rootView: wrapped)
+        hosting.appearance = NSAppearance(named: .darkAqua)
+        hosting.frame = CGRect(x: 0, y: 0, width: width, height: height)
+        hosting.layoutSubtreeIfNeeded()
+        return hosting
+    }
+
     /// Four daily buckets (bucketSeconds = 86400 → M/d axis labels), three
     /// projects — exercises the stacked-area chart, the summary total, and
     /// the contributor list.
@@ -309,6 +335,31 @@ final class HistoryViewSnapshotTests: XCTestCase {
         )
     }
 
+    /// 30 hourly buckets across 8 projects — matches real .hr24 granularity's
+    /// bucket count (see historyGranularitySpecs) and the #1046 top-8 cap, so
+    /// the width-regression test below exercises a grid at the size that
+    /// actually triggered the overflow, not the 10-bucket/2-project happy path
+    /// activityFixture() uses for content-correctness coverage.
+    private func wideActivityFixture() -> HistoryStateResponse {
+        let hour: Int64 = 3_600
+        let base: Int64 = 1_700_000_000
+        let bucketCount = 30
+        let buckets = (0..<bucketCount).map { base + Int64($0) * hour }
+        let projects = (1...8).map { "project-\($0)" }
+        var byState: [String: [String: [Double]]] = ["working": [:], "waiting": [:], "ready": [:]]
+        for (i, project) in projects.enumerated() {
+            byState["working"]?[project] = (0..<bucketCount).map { Double(($0 + i) % 3) }
+        }
+        return HistoryStateResponse(
+            range: "24h", chart: "state", group: "project",
+            start: base, end: base + Int64(bucketCount) * hour,
+            bucketSeconds: hour, bucketStarts: buckets,
+            projects: projects, byState: byState,
+            concurrency: HistoryStateConcurrency(peak: 3, average: 1.2, current: 1),
+            scope: nil
+        )
+    }
+
     private func activityEmptyFixture() -> HistoryStateResponse {
         HistoryStateResponse(
             range: "24h", chart: "state", group: "project",
@@ -337,6 +388,20 @@ final class HistoryViewSnapshotTests: XCTestCase {
             onExportJSON: { /* unused in this snapshot */ }
         )
         assertSnapshot(of: host(view, height: 260), as: .image)
+    }
+
+    /// Regression guard for issue #1046: hosted through the real nested
+    /// ScrollView chain (hostInScrollingTab, not host()) with a wide,
+    /// 8-project/30-bucket fixture, so the grid overflowing the fixed panel
+    /// width shows up as an image diff instead of silently passing.
+    func testActivityWideGridStaysWithinPanelWidth() {
+        let view = HistoryActivityContentView(
+            data: wideActivityFixture(),
+            granularity: .hr24,
+            onExportCSV: { /* unused in this snapshot */ },
+            onExportJSON: { /* unused in this snapshot */ }
+        )
+        assertSnapshot(of: hostInScrollingTab(view, height: 400), as: .image)
     }
 
     // MARK: Quota projection

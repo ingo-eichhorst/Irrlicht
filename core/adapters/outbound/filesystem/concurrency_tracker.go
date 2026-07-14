@@ -14,10 +14,16 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// concurrencyUnknownProject labels sessions whose recordings carry no working
-// directory (so no project can be derived). Matches the handler's "unknown"
-// contributor label for cost.
-const concurrencyUnknownProject = "unknown"
+// concurrencyProjectResolver is the narrow git-aware project-name resolution
+// ConcurrencyTracker needs to fold worktree sessions (.claude/worktrees/<N>-
+// <slug>/, created by the ir:exec skill per GitHub issue) into their real repo
+// instead of keying them as their own separate project (issue #1046).
+// *git.Adapter already satisfies this structurally. nil is valid (falls back
+// to a bare basename, i.e. pre-#1046 behavior) so every recordings-dir-only
+// test fixture can omit it.
+type concurrencyProjectResolver interface {
+	GetProjectName(dir string) string
+}
 
 // ConcurrencyTracker reconstructs concurrent-agent counts over time from the
 // lifecycle recordings irrlichd writes under <dataDir>/recordings when started
@@ -26,13 +32,16 @@ const concurrencyUnknownProject = "unknown"
 // CostSeries over the cost dir.
 type ConcurrencyTracker struct {
 	dir string
+	git concurrencyProjectResolver
 }
 
 // NewConcurrencyTrackerWithDir returns a reader rooted at the given recordings
 // directory. The daemon passes the same dir the recorder writes to (see
-// resolveRecordingsDir), so reads and writes can't drift.
-func NewConcurrencyTrackerWithDir(dir string) *ConcurrencyTracker {
-	return &ConcurrencyTracker{dir: dir}
+// resolveRecordingsDir), so reads and writes can't drift. git resolves each
+// event's raw CWD to its git repo's project name (issue #1046); pass nil to
+// fall back to a bare filepath.Base(cwd).
+func NewConcurrencyTrackerWithDir(dir string, git concurrencyProjectResolver) *ConcurrencyTracker {
+	return &ConcurrencyTracker{dir: dir, git: git}
 }
 
 // Dir returns the recordings directory this reader scans.
@@ -72,14 +81,30 @@ func concurrencyActive(state string) bool {
 }
 
 // concurrencyProject derives a project label for an event from its working
-// directory (basename), matching how the cost chart keys projects. State and
-// process events carry no CWD, so the label is sourced from the session's
-// transcript events (which do) via "last non-empty wins" in loadTimelines.
-func concurrencyProject(ev lifecycle.Event) string {
-	if ev.CWD != "" {
-		return filepath.Base(ev.CWD)
+// directory, preferring git-root resolution (folding a worktree session into
+// its parent repo, issue #1046) when a resolver is available, falling back to
+// a bare basename otherwise (nil resolver, or a directory GetProjectName
+// itself can't resolve to a git repo). State and process events carry no CWD,
+// so the label is sourced from the session's transcript events (which do) via
+// "last non-empty wins" in loadTimelines. memo caches the resolution per raw
+// CWD within one loadTimelines() scan, so a CWD shared across many events/
+// sessions is only ever resolved (and, if git-backed, shelled out to `git`)
+// once per request rather than once per event.
+func concurrencyProject(ev lifecycle.Event, git concurrencyProjectResolver, memo map[string]string) string {
+	if ev.CWD == "" {
+		return ""
 	}
-	return ""
+	if p, ok := memo[ev.CWD]; ok {
+		return p
+	}
+	p := filepath.Base(ev.CWD)
+	if git != nil {
+		if resolved := git.GetProjectName(ev.CWD); resolved != "" {
+			p = resolved
+		}
+	}
+	memo[ev.CWD] = p
+	return p
 }
 
 // AgentsSeries reconstructs a per-project concurrent-agents time series over
@@ -141,10 +166,11 @@ func collectScopedIntervals(timelines map[string]*sessionTimeline, q outbound.Se
 		if !concurrencyScopeMatches(q, sid, tl.project) {
 			continue
 		}
+		// tl.project may be "" (no event ever carried a CWD) — left raw here,
+		// same as CostSeriesResult, so handlers.go's share-based unknown-bucket
+		// rule (resolveUnknownConcurrencyProject) is the sole place that
+		// decides whether to surface or drop it (issue #1046).
 		project := tl.project
-		if project == "" {
-			project = concurrencyUnknownProject
-		}
 		for _, iv := range tl.activeIntervals() {
 			if iv.enter < end && iv.exit > end {
 				current++ // spans the window end → still active "now"
@@ -237,10 +263,9 @@ func collectScopedStateIntervals(timelines map[string]*sessionTimeline, q outbou
 		if !concurrencyScopeMatches(q, sid, tl.project) {
 			continue
 		}
+		// See the matching comment in collectScopedIntervals: "" is left raw
+		// for handlers.go's resolveUnknownStateProject to decide (issue #1046).
 		project := tl.project
-		if project == "" {
-			project = concurrencyUnknownProject
-		}
 		ivs, readyAt := tl.stateReconstruction()
 		for _, iv := range ivs {
 			if iv.enter < end && iv.exit > end {
@@ -494,13 +519,17 @@ func (t *ConcurrencyTracker) loadTimelines() (map[string]*sessionTimeline, error
 		}
 		return nil, err
 	}
+	// memo caches each raw CWD's resolved project name for this one scan (see
+	// concurrencyProject) so a git-backed resolution never re-shells `git` for
+	// a CWD it's already resolved.
+	memo := map[string]string{}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
 		}
 		path := filepath.Join(t.dir, e.Name())
 		if err := scanRecordingFile(path, func(ev lifecycle.Event) {
-			recordTimelineEvent(timelines, ev)
+			recordTimelineEvent(timelines, ev, t.git, memo)
 		}); err != nil {
 			return nil, err
 		}
@@ -515,7 +544,7 @@ func (t *ConcurrencyTracker) loadTimelines() (map[string]*sessionTimeline, error
 // (process exit / transcript removal, both treated as going ready — a
 // terminated session is ready even if no state_transition to ready was
 // recorded for it).
-func recordTimelineEvent(timelines map[string]*sessionTimeline, ev lifecycle.Event) {
+func recordTimelineEvent(timelines map[string]*sessionTimeline, ev lifecycle.Event, git concurrencyProjectResolver, memo map[string]string) {
 	tl := timelines[ev.SessionID]
 	if tl == nil {
 		tl = &sessionTimeline{}
@@ -525,7 +554,7 @@ func recordTimelineEvent(timelines map[string]*sessionTimeline, ev lifecycle.Eve
 	if ts > tl.lastEventTS {
 		tl.lastEventTS = ts
 	}
-	if p := concurrencyProject(ev); p != "" {
+	if p := concurrencyProject(ev, git, memo); p != "" {
 		tl.project = p
 	}
 	switch ev.Kind {
