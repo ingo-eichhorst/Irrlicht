@@ -8,23 +8,24 @@ import (
 	"irrlicht/core/domain/session"
 )
 
-// delayedCWDGit fails to resolve a cwd for the first failFor calls to
-// GetCWDFromTranscript, then returns cwd — modeling an adapter sidecar (e.g.
-// mistral-vibe's meta.json) that's lazily created a few ticks after the
-// transcript goes idle (#1021).
-type delayedCWDGit struct {
-	mockGit
-	calls   int
-	failFor int
-	cwd     string
-}
-
-func (g *delayedCWDGit) GetCWDFromTranscript(path string) string {
-	g.calls++
-	if g.calls <= g.failFor {
-		return ""
-	}
-	return g.cwd
+// newIdleUnresolvedSession persists an idle session fixture with an
+// unresolved ProjectName — the #1021 precondition (a metadata sidecar, e.g.
+// mistral-vibe's meta.json, wasn't readable yet when the transcript went
+// quiet). Shared by the retry-cap tests below.
+func newIdleUnresolvedSession(t *testing.T, repo *mockRepo, sessionID, state string) {
+	t.Helper()
+	transcriptPath := filepath.Join(t.TempDir(), sessionID+".jsonl")
+	writeOldTranscript(t, transcriptPath, 0)
+	now := time.Now().Unix()
+	repo.Save(&session.SessionState{
+		SessionID:      sessionID,
+		State:          state,
+		Adapter:        "mistral-vibe",
+		TranscriptPath: transcriptPath,
+		PID:            4242,
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	})
 }
 
 // TestSessionDetector_IdleUnresolvedProject_RetriesUntilSidecarAppears
@@ -39,22 +40,9 @@ func TestSessionDetector_IdleUnresolvedProject_RetriesUntilSidecarAppears(t *tes
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 
-	git := &delayedCWDGit{failFor: 2, cwd: t.TempDir()}
+	git := &cwdGit{cwd: t.TempDir(), failFor: 2}
 	det := newDetectorWithLiveCWDs(tw, pw, repo, git, nil, nil)
-
-	transcriptPath := filepath.Join(t.TempDir(), "vibe1.jsonl")
-	writeOldTranscript(t, transcriptPath, 0)
-
-	now := time.Now().Unix()
-	repo.Save(&session.SessionState{
-		SessionID:      "vibe1",
-		State:          session.StateWaiting,
-		Adapter:        "mistral-vibe",
-		TranscriptPath: transcriptPath,
-		PID:            4242,
-		FirstSeen:      now,
-		UpdatedAt:      now,
-	})
+	newIdleUnresolvedSession(t, repo, "vibe1", session.StateWaiting)
 
 	for range 3 {
 		det.RunStaleSessionRefreshForTest()
@@ -79,22 +67,9 @@ func TestSessionDetector_IdleUnresolvedProject_StopsRetryingAfterCap(t *testing.
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 
-	git := &delayedCWDGit{failFor: 1000} // never resolves within this test
+	git := &cwdGit{failFor: 1000} // never resolves within this test
 	det := newDetectorWithLiveCWDs(tw, pw, repo, git, nil, nil)
-
-	transcriptPath := filepath.Join(t.TempDir(), "vibe2.jsonl")
-	writeOldTranscript(t, transcriptPath, 0)
-
-	now := time.Now().Unix()
-	repo.Save(&session.SessionState{
-		SessionID:      "vibe2",
-		State:          session.StateReady,
-		Adapter:        "mistral-vibe",
-		TranscriptPath: transcriptPath,
-		PID:            4242,
-		FirstSeen:      now,
-		UpdatedAt:      now,
-	})
+	newIdleUnresolvedSession(t, repo, "vibe2", session.StateReady)
 
 	for range 20 {
 		det.RunStaleSessionRefreshForTest()

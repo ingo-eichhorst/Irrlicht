@@ -319,12 +319,26 @@ func (g *mockGit) GetCWDFromTranscript(path string) string    { return "" }
 // cwdGit is a mockGit whose GetCWDFromTranscript returns a fixed cwd. It
 // mimics the production fswatcher path, where EventNewSession carries no
 // CWD and the cwd comes from transcript content (issue #576 rescue).
+//
+// failFor optionally models an adapter sidecar (e.g. mistral-vibe's
+// meta.json) that isn't readable yet: the first failFor calls return "" and
+// only later calls return cwd. Zero (the default used by every other caller)
+// means "always resolve immediately" — today's behavior. calls records the
+// running call count so #1021's bounded-retry tests can assert on it.
 type cwdGit struct {
 	mockGit
-	cwd string
+	cwd     string
+	failFor int
+	calls   int
 }
 
-func (g *cwdGit) GetCWDFromTranscript(path string) string { return g.cwd }
+func (g *cwdGit) GetCWDFromTranscript(path string) string {
+	g.calls++
+	if g.calls <= g.failFor {
+		return ""
+	}
+	return g.cwd
+}
 
 // defaultSessionDetectorDeps returns the SessionDetectorDeps most detector
 // tests in this file build identically (mockLogger/mockGit/mockMetrics, no
