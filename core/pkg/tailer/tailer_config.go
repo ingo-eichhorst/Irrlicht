@@ -42,19 +42,26 @@ func isUserBlockingToolName(name string) bool {
 // --- Model config fallback ---
 
 // getDefaultModelFromConfig reads the default model from the appropriate config
-// based on adapter name.
+// based on adapter name. Adapters with no known operator-config source return
+// "" rather than falling through to Claude's settings.json — issue #1019
+// found a mistral-vibe session (whose own meta.json sidecar hadn't been
+// written yet) picking up an unrelated claude-code session's model name this
+// way, since "mistral-vibe" matched neither "pi" nor "codex" and fell into
+// what used to be a catch-all default.
 func getDefaultModelFromConfig(adapter string) string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
 	switch adapter {
+	case "claude-code":
+		return getClaudeModel(homeDir)
 	case "pi":
 		return getPiModel(homeDir)
 	case "codex":
 		return getCodexModel(homeDir)
 	default:
-		return getClaudeModel(homeDir)
+		return ""
 	}
 }
 
