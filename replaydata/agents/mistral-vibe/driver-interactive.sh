@@ -97,6 +97,7 @@ source "$_DRIVE_LIB/slots.sh"
 source "$_DRIVE_LIB/contracts.sh"
 # shellcheck source=/dev/null
 source "$_DRIVE_LIB/dialogs.sh"
+source "$_DRIVE_LIB/teardown.sh"
 
 # Slot state the lib reads/writes (the driver owns these globals). A run starts
 # with zero slots; launch_repl allocs slot 1, and restart/start_session alloc
@@ -485,10 +486,7 @@ step_interrupt() {
 step_exit_clean() {
   resolve_transcript || true
   type_enter "/exit"
-  local w=0
-  while [[ $w -lt 30 ]] && tmux has-session -t "$SESSION" 2>/dev/null; do
-    sleep 0.5; w=$((w + 1))
-  done
+  wait_tmux_session_gone "$SESSION" 15
   SES_ALIVE[$ACTIVE]=0
   echo "[driver] exit_clean[s$ACTIVE]: sent /exit; process exited (sid=$(daemon_sid "$TRANSCRIPT"))" >&2
 }
@@ -524,11 +522,12 @@ step_sigkill() {
   if [[ -n "$pid" ]]; then
     kill -9 "$pid" 2>/dev/null || true
     echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (sid=$(daemon_sid "$TRANSCRIPT"))" >&2
+    wait_pid_gone "$pid" 1
   else
     echo "[driver] sigkill[s$ACTIVE]: no vibe PID found (session=$SESSION)" >&2
+    sleep 1
   fi
   SES_ALIVE[$ACTIVE]=0
-  sleep 1
 }
 
 # step_resume — relaunch the SAME session in a new process lifetime. The

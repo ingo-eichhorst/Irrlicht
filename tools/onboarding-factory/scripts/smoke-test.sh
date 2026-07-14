@@ -40,6 +40,10 @@ echo ""
 echo "== unit tests (lib/cell-integrity_test.sh) =="
 bash "$SCRIPT_DIR/lib/cell-integrity_test.sh" || rc=1
 
+echo ""
+echo "== unit tests (lib/classify-failure_test.sh) =="
+bash "$SCRIPT_DIR/lib/classify-failure_test.sh" || rc=1
+
 # completeness-gate / catalog-drift / consistency gates were retired (#528):
 # `of validate` + `of coverage` (Go) now own schema + referential + coverage
 # integrity, and a per-scenario shard is the single source for a cell, so the

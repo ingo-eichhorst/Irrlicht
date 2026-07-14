@@ -169,6 +169,8 @@ DRIVE_MARKER_PREFIX="$STAGING/.kiro-launch-marker"
 source "$_DRIVE_LIB/slots.sh"
 # shellcheck source=../../_lib/drive/contracts.sh
 source "$_DRIVE_LIB/contracts.sh"
+# shellcheck source=../../_lib/drive/teardown.sh
+source "$_DRIVE_LIB/teardown.sh"
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,
 # read directly by recipe-lint (no separate manifest). A stubbed `not_implemented`
@@ -435,7 +437,7 @@ step_exit_clean() {
   tmux send-keys -t "$SESSION" -l -- "/quit"
   sleep 0.3
   tmux send-keys -t "$SESSION" Enter
-  sleep 2
+  wait_tmux_session_gone "$SESSION" 2
   SES_ALIVE[$ACTIVE]=0
   echo "[driver] exit_clean[s$ACTIVE]: sent /quit to $SESSION (uuid=$UUID)" >&2
 }
@@ -485,13 +487,14 @@ step_sigkill() {
   if [[ -n "$pid" ]]; then
     kill -9 "$pid" 2>/dev/null || true
     echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (uuid=$UUID, cwd=$slot_cwd)" >&2
+    # Leave the dead tmux pane for teardown — the kill alone produces
+    # process_exited.
+    wait_pid_gone "$pid" 1
   else
     echo "[driver] sigkill[s$ACTIVE]: no kiro-cli PID found for cwd=$slot_cwd (uuid=$UUID)" >&2
+    sleep 1
   fi
   SES_ALIVE[$ACTIVE]=0
-  # Leave the dead tmux pane for teardown — the kill alone produces
-  # process_exited.
-  sleep 1
 }
 
 # --- TEARDOWN SEAM C: restart ------------------------------------------------
@@ -539,7 +542,7 @@ step_resume() {
     tmux send-keys -t "$SESSION" -l -- "/quit"
     sleep 0.3
     tmux send-keys -t "$SESSION" Enter
-    sleep 2
+    wait_tmux_session_gone "$SESSION" 2
   fi
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   sleep 1

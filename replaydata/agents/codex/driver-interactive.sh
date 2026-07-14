@@ -149,6 +149,8 @@ DRIVE_MARKER_PREFIX="$STAGING/.codex-start-marker"
 source "$_DRIVE_LIB/slots.sh"
 # shellcheck source=lib/drive/contracts.sh
 source "$_DRIVE_LIB/contracts.sh"
+# shellcheck source=lib/drive/teardown.sh
+source "$_DRIVE_LIB/teardown.sh"
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS
 # (a subset of its case arms — accepting a step type ≠ producing its effect),
@@ -400,7 +402,7 @@ step_exit_clean() {
   # shutdown so codex flushes its rollout and the daemon emits
   # process_exited. Sleep gives codex time to terminate.
   tmux send-keys -t "$SESSION" C-d
-  sleep 2
+  wait_tmux_session_gone "$SESSION" 2
   SES_ALIVE[$ACTIVE]=0
   echo "[driver] exit_clean: sent Ctrl-D to $SESSION" >&2
 }
@@ -420,7 +422,7 @@ step_resume() {
   local saved_transcript="$TRANSCRIPT"
 
   tmux send-keys -t "$SESSION" C-d
-  sleep 2
+  wait_tmux_session_gone "$SESSION" 2
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   sleep 1
 
@@ -474,13 +476,14 @@ step_sigkill() {
   if [[ -n "$pid" ]]; then
     kill -9 "$pid" 2>/dev/null || true
     echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (sid=$(daemon_sid "$TRANSCRIPT"))" >&2
+    # Leave the dead tmux pane for teardown — the kill alone produces
+    # process_exited.
+    wait_pid_gone "$pid" 1
   else
     echo "[driver] sigkill[s$ACTIVE]: no codex PID found (transcript=${TRANSCRIPT:-none}, session=$SESSION)" >&2
+    sleep 1
   fi
   SES_ALIVE[$ACTIVE]=0
-  # Leave the dead tmux pane for teardown — the kill alone produces
-  # process_exited.
-  sleep 1
 }
 
 step_restart() {

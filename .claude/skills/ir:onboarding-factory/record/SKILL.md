@@ -138,7 +138,11 @@ between two consecutive recordings means the recipe has variance — tighten it
 If the LIVE recording refutes the doc-based assessment (e.g. assessed
 `daemon=full` but the transcript/store proved the signal isn't emitted →
 `incapable`; or it's atomic so streaming never happens), correct the cell IN THE
-SAME COMMIT — this is the backflow loop, not a cue:
+SAME COMMIT — this is the backflow loop, not a cue. If the newly-discovered
+`bug` looks like state going stale/missing right after a presession
+reconciles into its real session id, check
+[`../../../../tools/onboarding-factory/docs/KNOWN_SEAMS.md`](../../../../tools/onboarding-factory/docs/KNOWN_SEAMS.md)
+before treating it as brand new:
 
 ```bash
 of cell write --agent <agent> --scenario <scenario> --file /tmp/<agent>-<scenario>.corrected-metadata.json

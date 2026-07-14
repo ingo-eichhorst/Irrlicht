@@ -100,7 +100,11 @@ would prove this?" then "does this adapter's parser produce that event today?"
 - yes for all, handled correctly → `daemon=full`.
 - a trace exists but the daemon mis-handles a spec-required observable →
   `daemon=bug` (cite the event; the cell records `known_failing`, and `record`
-  hands an `issue:` payload back for the dispatcher to file).
+  hands an `issue:` payload back for the dispatcher to file). Before treating
+  this as a fresh investigation, check
+  [`../../../../tools/onboarding-factory/docs/KNOWN_SEAMS.md`](../../../../tools/onboarding-factory/docs/KNOWN_SEAMS.md) —
+  a symptom that looks like state keyed to a presession id going stale/missing
+  on reconciliation may be one more instance of an already-understood shape.
 - no trace at all (cloud session with no local file; behavior the 3-state model
   can't represent) → `daemon=incapable`.
 
