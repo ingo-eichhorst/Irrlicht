@@ -142,6 +142,49 @@ final class HistoryViewSnapshotTests: XCTestCase {
         assertSnapshot(of: host(view, height: 460), as: .image)
     }
 
+    /// #1029: the CO2 chart is the only one with a methodology-link overlay
+    /// (top-trailing on the chart) — this pins its presence so a future
+    /// regression (e.g. accidentally scoping it to another chart, or losing
+    /// it entirely) shows up as a snapshot diff.
+    private func populatedCO2() -> HistoryResponse {
+        let day: Int64 = 86_400
+        let base: Int64 = 1_700_000_000
+        let buckets = (0..<8).map { base + Int64($0) * day }
+        let perKey: [(String, [Double])] = [
+            ("main", [120, 140, 160, 150, 200, 240, 260, 300]),
+            ("feat/x", [40, 50, 60, 70, 60, 90, 110, 120]),
+        ]
+        var series: [HistoryPoint] = []
+        for (key, values) in perKey {
+            for (i, v) in values.enumerated() {
+                series.append(HistoryPoint(ts: buckets[i], project: key, value: v))
+            }
+        }
+        let grand = perKey.reduce(0.0) { $0 + $1.1.reduce(0, +) }
+        return HistoryResponse(
+            range: "month", chart: "co2", group: "branch",
+            start: base, end: base + Int64(buckets.count) * day,
+            bucketSeconds: day, bucketStarts: buckets, total: grand,
+            series: series,
+            topContributors: perKey.map { HistoryContributor(label: $0.0, value: $0.1.reduce(0, +)) },
+            tokenSplit: nil,
+            scope: nil
+        )
+    }
+
+    func testHistoryCO2() {
+        let view = HistoryContentView(
+            data: populatedCO2(),
+            range: .month,
+            chart: .co2,
+            group: .branch,
+            scope: nil,
+            onExportCSV: { /* unused in this snapshot */ },
+            onExportJSON: { /* unused in this snapshot */ }
+        )
+        assertSnapshot(of: host(view, height: 460), as: .image)
+    }
+
     func testHistoryDrilldown() {
         let view = HistoryContentView(
             data: populated(),

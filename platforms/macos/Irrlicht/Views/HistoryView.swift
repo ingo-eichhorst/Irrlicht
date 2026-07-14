@@ -638,12 +638,35 @@ struct HistoryContentView: View {
                 chart: chart
             )
             .frame(height: 200)
+            .overlay(alignment: .topTrailing) {
+                if chart.isCO2 { co2MethodologyLink }
+            }
         } else {
             Text(chart == .tokens ? "no token usage in this range yet" : "no cost data in this range yet")
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, minHeight: 200)
         }
+    }
+
+    /// Web parity (#1029): the web dashboard's CO2 chart has a "How is this
+    /// calculated?" link to the CO2 Methodology docs page; the macOS chart had
+    /// no equivalent, leaving no in-app way to find that explanation. Same
+    /// copy/destination as web's `#history-co2-info`, reusing the existing
+    /// Button + .buttonStyle(.link) + NSWorkspace.shared.open(_:) convention
+    /// already used for external links elsewhere in Settings.
+    private var co2MethodologyLink: some View {
+        Button {
+            if let url = URL(string: "https://irrlicht.io/docs/co2-methodology.html") {
+                NSWorkspace.shared.open(url)
+            }
+        } label: {
+            Text("How is this calculated?")
+                .font(.caption2)
+        }
+        .buttonStyle(.link)
+        .tooltip("How the CO2e estimate and its equivalents are calculated")
+        .padding(6)
     }
 
     private var summary: some View {
