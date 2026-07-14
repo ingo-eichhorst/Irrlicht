@@ -388,7 +388,13 @@ func (p *testParser) PendingContribution() *PerTurnContribution {
 // deterministic testCapacityFixture capacity manager. Tests must not depend
 // on the real on-disk LiteLLM cache.
 func newTestTailer(path string) *TranscriptTailer {
-	t := NewTranscriptTailer(path, &testParser{}, "claude-code")
+	return newTestTailerForAdapter(path, "claude-code")
+}
+
+// newTestTailerForAdapter is newTestTailer for a caller that needs a specific
+// adapter name (e.g. to exercise adapter-specific config-fallback behavior).
+func newTestTailerForAdapter(path, adapter string) *TranscriptTailer {
+	t := NewTranscriptTailer(path, &testParser{}, adapter)
 	t.capacityMgr = capacity.NewForTest(testCapacityFixture)
 	return t
 }
