@@ -183,11 +183,15 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
 
 ## Phase 4 — Implement
 
-9. **Mark the issue in progress.** Now that work is actually starting, assign the issue
-   to the current GitHub user so others can see it's being worked:
+9. **Assign the issue** — a gated precondition of starting Phase 4, not a step to
+   fire-and-forget:
    ```bash
    gh issue edit <N> --add-assignee @me   # add --repo <owner/repo> for cross-repo
+   gh issue view <N> --json assignees -q '.assignees | length'
    ```
+   If the count comes back `0`, retry the `edit` once and re-check; if it's still
+   `0`, **surface that and pause** rather than silently proceeding unassigned — the
+   same idiom Phase 7 uses for an unmergeable PR.
 10. **Push through the implementation** in the worktree.
     - If the work is complex/multi-part, break it into tasks with `TaskCreate` and work
       them in order (as you naturally would). For a small change, just implement it.
