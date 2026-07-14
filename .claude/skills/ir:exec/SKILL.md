@@ -97,7 +97,16 @@ worktree name. `close` additionally resolves it from `pwd` / `git status -sb` /
    Don't grep manually first; the subagent protects the main context.
 5. **Synthesize the plan**: Problem (one sentence), Approach/Design (the chosen
    direction, naming files/functions), Steps (ordered, concrete, one logical change
-   each), Files touched (new/mod/del), Risks/unknowns.
+   each), Files touched (new/mod/del), Risks/unknowns. **For a user-facing feature,
+   identify which frontends this repo ships (`platforms/macos/` Swift app,
+   `platforms/web/` dashboard) and scope Approach + Steps to implement it in every
+   frontend the capability applies to — not just whichever is easiest to reach
+   first. If one is deliberately excluded, say so explicitly under Risks/unknowns
+   with the reason; never let a single-frontend implementation land silently as if
+   it shipped everywhere.** (Real incident: the Activity Matrix History chart
+   landed web-only, its changelog entry didn't say so — unlike the DORA entry
+   right above it, which explicitly said "on both macOS and web" — and a later
+   from-scratch QA pass on the macOS app couldn't find the feature at all.)
 6. **If invoked as `auto`**, resolve the signal per the Auto mode table above and
    continue as whichever of `plan`/`full` it names — everything from here on follows
    that mode's path.
@@ -195,7 +204,11 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
       style, three-state model, hexagonal layering, etc.
 11. **Verify** before declaring done: run the test suites relevant to what you touched
     (per AGENTS.md — `go test ./core/... -race -count=1`, the factory/web suites, replay
-    fixtures, `swift build`/`swift test`, as applicable). Fix what you broke.
+    fixtures, `swift build`/`swift test`, as applicable). Fix what you broke. **For a
+    UI-facing change, also confirm it's actually reachable in every frontend the plan
+    scoped it to** — open the macOS app (`/ir:test-mac`) and/or the web dashboard and
+    look. A passing test suite in the same area is not evidence the specific feature
+    exists on a specific platform — name the exact test that covers the claim, or look.
 
 ## Phase 5 — PR, review, simplify
 
@@ -253,3 +266,6 @@ Phase 6.
 - If the issue is ambiguous, surface it under Risks/unknowns in the plan rather than
   guessing — that's what the approval gate is for.
 - One worktree + one branch + one PR per issue.
+- User-facing features ship on every applicable frontend (macOS + web), or the plan
+  says explicitly why not (Phase 2). Verify each one directly rather than trusting an
+  adjacent green test suite (Phase 4) — see the Activity Matrix incident above.
