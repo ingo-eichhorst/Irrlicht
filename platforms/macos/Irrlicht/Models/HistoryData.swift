@@ -209,6 +209,7 @@ enum HistoryChart: String, CaseIterable, Identifiable {
     case cost, tokens, co2, models, providers
     case yieldRatio = "yield" // #373 — per-project productive vs reverted spend
     case dora // #951 — per-project DORA metrics (deploy frequency, lead time, CFR, MTTR)
+    case state // #1028 — per-project/per-state Activity Matrix grid
 
     var id: String { rawValue }
 
@@ -221,11 +222,12 @@ enum HistoryChart: String, CaseIterable, Identifiable {
         case .providers: return "Providers"
         case .yieldRatio: return "Yield"
         case .dora: return "DORA"
+        case .state: return "Activity"
         }
     }
 
     /// True for the USD metrics (everything but tokens and co2) — they render a $ axis.
-    var isCost: Bool { self != .tokens && self != .co2 }
+    var isCost: Bool { self != .tokens && self != .co2 && self != .state }
 
     /// True for the co2 metric — renders a CO2e axis (mg/g/kg), not $ or tokens.
     var isCO2: Bool { self == .co2 }
@@ -282,4 +284,110 @@ struct HistoryScope: Equatable {
 
     /// The `scope=field:value` query-param form the daemon parses.
     var query: String { "\(field.rawValue):\(value)" }
+}
+
+// Codable mirror of the daemon's `chart=state` response (#981, #1028 — the
+// Activity Matrix): a per-project, per-state agent-count grid, unlike every
+// other chart's single-value-per-point series. `projects` is row order
+// (server-sorted busiest-first); `byState` is keyed state -> project ->
+// one count per bucket index, aligned to `bucketStarts`. Working/waiting
+// counts are per-bucket peak concurrency; ready counts are a transition
+// histogram (sessions that turned ready within the bucket), since ready has
+// no duration to be "concurrent" in — not a bug, just a different meaning
+// behind the same-shaped number, and worth remembering wherever this is
+// rendered or described.
+struct HistoryStateResponse: Codable {
+    let range: String
+    let chart: String
+    let group: String
+    let start: Int64
+    let end: Int64
+    let bucketSeconds: Int64
+    let bucketStarts: [Int64]
+    let projects: [String]
+    let byState: [String: [String: [Double]]]
+    let concurrency: HistoryStateConcurrency?
+    let scope: String?
+
+    enum CodingKeys: String, CodingKey {
+        case range, chart, group, start, end, projects, scope, concurrency
+        case bucketSeconds = "bucket_seconds"
+        case bucketStarts = "bucket_starts"
+        case byState = "by_state"
+    }
+
+    /// A nil/unresolved recordings dir yields an empty-but-valid payload
+    /// (empty `projects`/`bucketStarts`) rather than an error — this mirrors
+    /// the web `hasData` gate for that same empty case.
+    var hasData: Bool { !projects.isEmpty && !bucketStarts.isEmpty }
+
+    /// One cell's raw counts. A named triple (not a `[String: Double]`)
+    /// so every call site gets `.total` for free instead of re-deriving it,
+    /// and painting order — working bottom, waiting middle, ready top,
+    /// mirroring the canonical state order in core/domain/session/session.go
+    /// and the web's STATE_STACK_ORDER — is just field order, not a runtime
+    /// loop over string keys.
+    struct Counts {
+        let working: Double
+        let waiting: Double
+        let ready: Double
+        var total: Double { working + waiting + ready }
+    }
+
+    /// Raw counts for one project at one bucket index, defaulting any
+    /// missing state/project/index to 0 — mirrors the web `stateCellCounts`.
+    func counts(project: String, bucketIndex: Int) -> Counts {
+        Counts(
+            working: byState["working"]?[project]?[safe: bucketIndex] ?? 0,
+            waiting: byState["waiting"]?[project]?[safe: bucketIndex] ?? 0,
+            ready: byState["ready"]?[project]?[safe: bucketIndex] ?? 0
+        )
+    }
+}
+
+struct HistoryStateConcurrency: Codable {
+    let peak: Double
+    let average: Double
+    let current: Double
+}
+
+/// Granularity step for the Activity Matrix (#981, #1028) — picks both the
+/// server's bucket width and the matrix's visible column count at once (see
+/// `historyGranularitySpecs` on the daemon side). Unlike every other chart,
+/// this one sends `granularity=` instead of `range=`/`start=`/`end=`.
+enum HistoryGranularity: String, CaseIterable, Identifiable {
+    case min1 = "1m"
+    case min10 = "10m"
+    case min60 = "60m"
+    case hr8 = "8h"
+    case hr24 = "24h"
+    case day7 = "7d"
+    case mo1 = "1mo"
+    case mo6 = "6mo"
+    case yr1 = "1y"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .min1: return "1 min"
+        case .min10: return "10 min"
+        case .min60: return "60 min"
+        case .hr8: return "8 hr"
+        case .hr24: return "24 hr"
+        case .day7: return "7 day"
+        case .mo1: return "1 mo"
+        case .mo6: return "6 mo"
+        case .yr1: return "1 yr"
+        }
+    }
+}
+
+extension Array {
+    /// Bounds-safe index — the state matrix's `[Double]` arrays are always
+    /// dense/bucket-aligned server-side, but defending against a short array
+    /// here is cheap and keeps a malformed payload from crashing the view.
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
 }

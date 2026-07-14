@@ -233,6 +233,57 @@ final class HistoryViewSnapshotTests: XCTestCase {
         assertSnapshot(of: host(view, height: 200), as: .image)
     }
 
+    // MARK: Activity Matrix (#1028)
+
+    private func activityFixture() -> HistoryStateResponse {
+        let hour: Int64 = 3_600
+        let base: Int64 = 1_700_000_000
+        let buckets = (0..<10).map { base + Int64($0) * hour }
+        return HistoryStateResponse(
+            range: "24h", chart: "state", group: "project",
+            start: base, end: base + Int64(buckets.count) * hour,
+            bucketSeconds: hour, bucketStarts: buckets,
+            projects: ["irrlicht", "besenkammer"],
+            byState: [
+                "working": ["irrlicht": [1, 2, 2, 1, 0, 1, 3, 2, 1, 0], "besenkammer": [0, 1, 0, 0, 1, 0, 0, 1, 0, 0]],
+                "waiting": ["irrlicht": [0, 0, 1, 1, 0, 0, 1, 0, 0, 0], "besenkammer": [0, 0, 0, 1, 0, 0, 0, 0, 0, 0]],
+                "ready":   ["irrlicht": [1, 0, 0, 1, 1, 0, 1, 0, 1, 1], "besenkammer": [0, 0, 1, 0, 0, 1, 0, 0, 0, 0]],
+            ],
+            concurrency: HistoryStateConcurrency(peak: 3, average: 1.2, current: 0),
+            scope: nil
+        )
+    }
+
+    private func activityEmptyFixture() -> HistoryStateResponse {
+        HistoryStateResponse(
+            range: "24h", chart: "state", group: "project",
+            start: 1_700_000_000, end: 1_700_000_000,
+            bucketSeconds: 3_600, bucketStarts: [],
+            projects: [], byState: [:],
+            concurrency: nil, scope: nil
+        )
+    }
+
+    func testActivityPopulated() {
+        let view = HistoryActivityContentView(
+            data: activityFixture(),
+            granularity: .hr24,
+            onExportCSV: { /* unused in this snapshot */ },
+            onExportJSON: { /* unused in this snapshot */ }
+        )
+        assertSnapshot(of: host(view, height: 260), as: .image)
+    }
+
+    func testActivityEmptyState() {
+        let view = HistoryActivityContentView(
+            data: activityEmptyFixture(),
+            granularity: .hr24,
+            onExportCSV: { /* unused in this snapshot */ },
+            onExportJSON: { /* unused in this snapshot */ }
+        )
+        assertSnapshot(of: host(view, height: 260), as: .image)
+    }
+
     // MARK: Quota projection
 
     /// 5h window, 60% used 2h in → over pace, projected to hit the cap before
