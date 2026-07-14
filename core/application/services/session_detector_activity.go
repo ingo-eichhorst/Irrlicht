@@ -1253,10 +1253,19 @@ func (d *SessionDetector) markStalledEditTool(sessionID string, m *session.Sessi
 	}
 }
 
-// refreshStaleSessions re-reads transcripts for working sessions that haven't
-// received a file-system watcher event recently. This catches tool calls
-// (AskUserQuestion, ExitPlanMode) that were missed because the subscriber
-// channel was full during concurrent bursts.
+// refreshStaleSessions re-reads transcripts for two categories of session the
+// normal fswatcher-driven pipeline can't self-correct:
+//   - working sessions that haven't received a file-system watcher event
+//     recently. This catches tool calls (AskUserQuestion, ExitPlanMode) that
+//     were missed because the subscriber channel was full during concurrent
+//     bursts.
+//   - idle (waiting/ready) sessions whose ProjectName never resolved because
+//     their adapter's metadata sidecar (e.g. mistral-vibe's meta.json)
+//     hadn't been written yet at the moment the transcript went quiet —
+//     nothing else ever revisits an idle session, so without this the
+//     session would stay in the "unknown" project group forever even once
+//     the sidecar appears (#1021). Bounded by maxIdleProjectResolveAttempts,
+//     since a non-git cwd or a sidecar-less adapter never resolves.
 func (d *SessionDetector) refreshStaleSessions() {
 	sessions, err := d.repo.ListAll()
 	if err != nil {
@@ -1264,7 +1273,16 @@ func (d *SessionDetector) refreshStaleSessions() {
 	}
 	now := time.Now()
 	for _, state := range sessions {
-		if state.State != session.StateWorking {
+		switch state.State {
+		case session.StateWorking:
+			if now.Sub(time.Unix(state.UpdatedAt, 0)) < staleWorkingRefreshInterval {
+				continue
+			}
+		case session.StateWaiting, session.StateReady:
+			if state.ProjectName != "" || !d.shouldRetryIdleProjectResolution(state.SessionID) {
+				continue
+			}
+		default:
 			continue
 		}
 		if state.TranscriptPath == "" {
@@ -1278,13 +1296,26 @@ func (d *SessionDetector) refreshStaleSessions() {
 		if !d.observeAllowed(state.Adapter) {
 			continue
 		}
-		if now.Sub(time.Unix(state.UpdatedAt, 0)) < staleWorkingRefreshInterval {
-			continue
-		}
 		d.processActivityWithoutIdentity(agent.Event{
 			Type:           agent.EventActivity,
 			SessionID:      state.SessionID,
 			TranscriptPath: state.TranscriptPath,
 		})
 	}
+}
+
+// shouldRetryIdleProjectResolution reports whether an idle session with an
+// unresolved ProjectName should get another CWD/project-resolution pass this
+// tick, and records the attempt. Bounded by maxIdleProjectResolveAttempts so
+// a session whose cwd is genuinely unresolvable (non-git, or an adapter with
+// no sidecar) stops being re-read after a bounded window rather than forever
+// (#1021).
+func (d *SessionDetector) shouldRetryIdleProjectResolution(sessionID string) bool {
+	d.permMu.Lock()
+	defer d.permMu.Unlock()
+	if d.idleProjectRetryAttempts[sessionID] >= maxIdleProjectResolveAttempts {
+		return false
+	}
+	d.idleProjectRetryAttempts[sessionID]++
+	return true
 }
