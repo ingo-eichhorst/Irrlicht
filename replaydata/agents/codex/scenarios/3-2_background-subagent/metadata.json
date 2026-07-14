@@ -2,77 +2,45 @@
   "scenario_id": "background-subagent",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "incapable",
+    "daemon_capability": "full",
     "driver_capability": "ready",
-    "agent_cli_version": "0.135.0",
-    "daemon_version": "0.4.8+5321b6d.dirty",
-    "confidence": 0.82,
-    "notes": "agent_supports: yes (codex 0.135.0 spawn_agent/wait_agent fire-and-forget) — daemon_capability: incapable: the parent→child spawn edge lives ONLY in ~/.codex/state_5.sqlite thread_spawn_edges (+ the in-memory thread manager), never in the rollout JSONL the codex adapter tails — so irrlicht can never link the sub-agent to its parent or hold the parent working → route: frozen"
+    "agent_cli_version": "0.144.4",
+    "confidence": 0.95,
+    "notes": "Observed Codex 0.144.4 rollout metadata exposes the local spawned-child edge. Route: record."
   },
   "details": {
     "assessment": {
       "schema_version": 1,
       "scenario_id": "background-subagent",
       "agent": "codex",
-      "assessed_at": "2026-05-31T00:00:00Z",
+      "assessed_at": "2026-07-14T00:00:00Z",
       "agent_supports": "yes",
-      "daemon_capability": "incapable",
+      "daemon_capability": "full",
       "driver_capability": "ready",
-      "confidence": 0.82,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n→ route: **frozen** (irrlicht's codex adapter fundamentally cannot link a spawned sub-agent to its parent)\n\n## The scenario's user-observable signal (unified rule)\n\n`background-subagent` (scenario id 3.2): the parent dispatches a fire-and-forget child, finishes its OWN reply (parent assistant turn reaches `end_turn`), yet the SESSION stays `working` while the detached child is alive; `SubagentCount(parent)` INCLUDES the live child; the session goes `working → ready` only after the last background child drains. Same daemon mechanism as `foreground-subagent` (reevaluateParent holds the parent on `hasActiveChildren`; ComputeSubagentSummary counts the live child); the distinguishing observable is the TIMING (parent `end_turn` lands BEFORE child drain). EVERY assertion here is a parent↔child LINK assertion — it presupposes the daemon has bound the child session to the parent.\n\n## agent_supports: yes (codex 0.135.0 ships background sub-agents)\n\nThe context that 'codex is a single-agent loop' is OBSOLETE at 0.135.0. The installed native binary exposes a full multi-agent toolset (`strings` scan):\n\n- `spawn_agent` — 'Spawns an agent to work on the specified task… the agent will have canonical task name `/root/task1/task_3`'. 'This spawn_agent tool provides you access to sub-agents that inherit your current model by default.'\n- `wait_agent` — 'Wait for agents to reach a final status… Call wait_agent very sparingly. Only call wait_agent when you need the result immediately for the next critical-path step and you are blocked until it returns.' → spawning is FIRE-AND-FORGET by default; blocking is the explicit, discouraged exception. This is exactly the background-subagent shape (parent continues; does not block on the child).\n- `send_input` / `resume_agent` / `close` — message/resume/close a named non-root agent; plus `SubagentStart`/`SubagentStop` lifecycle hooks and a thread manager (`core/src/agent/control.rs`).\n- The base prompt states: 'While the subagent is running in the background, do meaningful non-overlapping work immediately.'\n\nGate: 'Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work.' This is ELICITABLE — a recipe `send` that explicitly asks for parallel sub-agents satisfies the gate. So agent_supports is an honest `yes` (codex CAN perform the behavior), held at confidence 0.82 because the surface is read from binary strings, not yet exercised live, and the in-process tool plumbing (does the spawned child get its own model turn vs. an MCP elicitation) is not fully pinned from strings alone.\n\n## daemon_capability: incapable (the parent→child link never reaches the watched Source)\n\nThis is the load-bearing pillar. The irrlicht codex adapter (`core/adapters/inbound/agents/codex/agent.go`) is `Source: FilesUnderRoot{sessionsDir()}` (`~/.codex/sessions/**/*.jsonl` rollout JSONL) with `JSONLineParser{Parser}`. The parser (`parser.go`) has ZERO parent-linking logic — no `ParentSessionID`, no sidechain/child discovery, nothing analogous to claudecode's `\u003cparent\u003e/subagents/agent-*.jsonl` path. It only emits per-line model / token / turn_done events.\n\nWhere does codex record the spawn relationship? In `~/.codex/state_5.sqlite`:\n- a dedicated table `thread_spawn_edges(parent_thread_id, child_thread_id, status)` holds the edge (confirmed live: the table exists; it is empty = 0 rows on this machine because no sub-agent has been spawned, consistent with the explicit-request gate);\n- the `threads` table itself has NO parent column (confirmed via PRAGMA table_info: id, rollout_path, source, cwd, …, agent_nickname, agent_role, agent_path — but no parent_id / spawned_by);\n- the Thread protocol metadata that DOES carry linkage ('Session id shared by threads that belong to the same session tree', 'Source thread id when this thread was created by forking', `agent_nickname`/`agent_role` for an AgentControl-spawned sub-agent) is surfaced over the app-server protocol and the state DB — NOT written into the rollout JSONL the adapter tails.\n\nWorse, the Thread schema includes 'Whether the thread is ephemeral and should not be materialized on disk' — a spawned sub-agent may be EPHEMERAL, producing NO rollout file at all, in which case the daemon never even sees a second session.\n\nNet: when codex spawns a background sub-agent, irrlicht's codex Source receives — at best — an independent, UNLINKED rollout with no parent reference (or nothing, if ephemeral). The daemon cannot bind the child to the parent, so `SubagentCount(parent)` can never include it and `reevaluateParent` is never engaged — the parent simply settles `working → ready` at its own `end_turn`, with the (possibly invisible) child as a stray top-level session. The scenario's entire user-observable arc (parent held working by a linked live child; subagent count steps down; parent settles only after the last child drains) is UNOBSERVABLE with no local trace the adapter reads. This is an architecture limit of the codex adapter's transport, not a mishandled trace — hence `incapable`, not `bug`. (It is also NOT a driver gap: the recipe step types all exist; the limit is upstream of the driver.)\n\n## What would unblock this cell (re-assess triggers)\n\nThe agent CAN do it and the data EXISTS on disk — the gap is purely that the codex adapter doesn't read it. A future codex adapter that (a) reads `thread_spawn_edges` from `state_5.sqlite` (or a `ProcessOwnedStore`-style reader over the state DB) to recover parent_thread_id → child_thread_id and projects it as `ParentSessionID`, or (b) consumes a parent-link field if codex ever starts writing one into the rollout JSONL, would flip this to `daemon=full`. Until then the cell stays frozen. (Cross-ref: the opencode adapter already uses `ProcessOwnedStore` for a SQLite-backed agent — the same shape would apply if codex sub-agent linkage were wired.)\n\n## driver_capability: ready\n\nNot the blocker, but recorded for completeness: the codex interactive driver (`replaydata/agents/codex/driver-interactive.sh`) elicits `send wait_turn sleep slash keys fork resume reset_session restart sigkill exit_clean start_session session interrupt` — every step a background-subagent recipe would need (`send` the parallel-agents prompt, `sleep` across the child lifetime, `wait_turn`/`exit_clean`). No `gap:*`. The driver readiness is moot while daemon=incapable freezes the route.\n\n## Routing\n\nagent=yes, daemon=incapable, driver=ready → **frozen** (the agent performs it, but irrlicht fundamentally cannot observe it with the current codex transport). No recording; no spec phases beyond the meta. Re-assess when the codex adapter learns to read `thread_spawn_edges` / a rollout parent-link.",
+      "confidence": 0.95,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\nRoute: record. The prior freeze was based on an obsolete transport assumption. In Codex 0.144.4, a materialized subagent rollout begins with session_meta containing thread_source: subagent and an authoritative source.subagent.thread_spawn.parent_thread_id. Irrlicht reads that header before session creation, keeps payload.id as the per-thread session identity, and never uses the shared payload.session_id.\n\nA linked live child participates in the existing file-based subagent summary and parent hold logic. Thus a parent that has finished its own turn remains working while one or more background children are live, and becomes ready only after the final linked child settles.\n\n## Recording status\n\nThe driver has the required foreground-independent steps. Record and promote the recipe below on Codex 0.144.4+ when it passes; the compact redacted incident fixture preserves the observed header shape in the meantime.",
       "caveats": [
-        "agent_supports=yes is read from a strings scan of the codex 0.135.0 native binary (spawn_agent/wait_agent/send_input/resume_agent tool descriptions + SubagentStart/Stop hooks + the 'do meaningful non-overlapping work while the subagent runs in the background' prompt), NOT from a live spawn. confidence 0.82: the toolset and fire-and-forget default are unambiguous in the binary, but the exact transcript shape a spawned sub-agent produces (own rollout vs ephemeral; whether the child turn lands in the parent's rollout as an MCP/tool round-trip) is not pinned from strings alone. A live run would settle it.",
-        "daemon=incapable is anchored in code + live DB inspection: the codex adapter Source is FilesUnderRoot over rollout JSONL with a parser that has no parent-linking logic, while the spawn edge is persisted ONLY in ~/.codex/state_5.sqlite thread_spawn_edges (table present, 0 rows = never spawned here) and the threads table has no parent column. If a future codex release writes a parent-thread id INTO the rollout JSONL, or the irrlicht adapter starts reading the state DB, this flips to daemon=full — re-assess on either.",
-        "Some spawned sub-agents may be ephemeral ('should not be materialized on disk' per the Thread schema), in which case the daemon sees NO second session at all — a strictly stronger form of the same incapability.",
-        "This is NOT cloud-background-agent (1.7): that is a separately-scoped hosted long-running surface. This cell is the LOCAL spawn_agent sub-agent."
+        "The adapter intentionally leaves ordinary non-subagent forks top-level.",
+        "Ephemeral children that create no local rollout cannot appear in the dashboard."
       ],
       "sources": [
-        {
-          "kind": "file",
-          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
-          "note": "strings scan of the codex 0.135.0 native (Mach-O arm64) binary. Tool descriptions: spawn_agent ('Spawns an agent to work on the specified task… inherit your current model by default'); wait_agent ('Call wait_agent very sparingly. Only call wait_agent when you need the result immediately… and you are blocked until it returns') → fire-and-forget by default; send_input / resume_agent / close; SubagentStart/SubagentStop hooks; thread manager (core/src/agent/control.rs); base prompt 'While the subagent is running in the background, do meaningful non-overlapping work immediately'; gate 'Only use spawn_agent if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work'. ESTABLISHES agent_supports=yes; codex-is-single-agent is obsolete at 0.135.0."
-        },
-        {
-          "kind": "file",
-          "ref": "core/adapters/inbound/agents/codex/agent.go",
-          "note": "Source: FilesUnderRoot{sessionsDir()} with JSONLineParser{Parser} — the adapter tails ONLY ~/.codex/sessions/**/*.jsonl rollout JSONL. It does not read ~/.codex/state_5.sqlite. sessionsDir() (adapter.go) = $CODEX_HOME/sessions or .codex/sessions."
-        },
-        {
-          "kind": "file",
-          "ref": "core/adapters/inbound/agents/codex/parser.go",
-          "note": "The codex line parser has NO parent-linking logic whatsoever — no ParentSessionID assignment, no sidechain/child-thread discovery (contrast claudecode's parser, which knows about \u003cparent\u003e/subagents/agent-*.jsonl). It only emits model / token / turn_done / tool events per line. A spawned sub-agent's rollout, even if discovered as a session, would be an unlinked top-level codex session."
-        },
-        {
-          "kind": "file",
-          "ref": "/Users/ingo/.codex/state_5.sqlite",
-          "note": "Live state DB inspection. (1) thread_spawn_edges(parent_thread_id, child_thread_id TEXT PRIMARY KEY, status) — the ONLY place the parent→child spawn edge is persisted; table present, COUNT(*)=0 on this machine (no sub-agent ever spawned, consistent with the explicit-request gate). (2) PRAGMA table_info(threads): id, rollout_path, source, model_provider, cwd, …, agent_nickname, agent_role, agent_path, thread_source — NO parent_id / spawned_by column. The linkage the scenario needs exists on disk but NOT in any field the codex adapter reads."
-        },
-        {
-          "kind": "file",
-          "ref": ".claude/skills/ir:onboarding-factory/assess/SKILL.md",
-          "note": "Observation-vs-emission rule: the parent→child link is the spec's load-bearing observable; since it never reaches the codex Source (rollout JSONL), daemon=incapable is the right owner — an architecture/transport limit, not a parser bug (no trace to mis-handle) and not a driver gap (recipe step types all exist)."
-        },
-        {
-          "kind": "file",
-          "ref": "replaydata/agents/codex/driver-interactive.sh",
-          "note": "DRIVE_ELICITS includes send / wait_turn / sleep / slash / keys / fork / resume / reset_session / restart / sigkill / exit_clean / start_session / session / interrupt — every step a background-subagent recipe would need. driver_capability=ready (moot under the frozen route, recorded for completeness)."
-        },
-        {
-          "kind": "file",
-          "ref": "replaydata/agents/claudecode/scenarios/3-2_background-subagent/metadata.json",
-          "note": "Reference cell (claudecode, daemon=full): claude writes each child as \u003cparent\u003e/subagents/agent-*.jsonl UNDER the watched transcriptsDir, so the fswatcher discovers it as a file-based child SessionState and links by ParentSessionID. Codex has NO equivalent on-disk, adapter-readable parent reference — this is exactly the difference that makes codex incapable where claudecode is full."
-        }
+        {"kind": "issue", "ref": "#1050", "note": "Observed local Codex 0.144.4 rollout linkage."},
+        {"kind": "file", "ref": "replaydata/agents/codex/regressions/subagent-parent-link/README.md", "note": "Redacted parent plus three sibling child header fixture."},
+        {"kind": "file", "ref": "core/application/services/session_detector_codex_subagent_test.go", "note": "Parent hold, nesting, and final-child release regression."}
       ]
     },
     "recipe": {
-      "applicable": false,
-      "frozen_reason": "daemon=incapable: the codex adapter tails rollout JSONL only; the spawn_agent parent→child edge is persisted exclusively in ~/.codex/state_5.sqlite thread_spawn_edges (and the in-memory thread manager), with the threads table carrying no parent column and sub-agent threads possibly ephemeral. irrlicht cannot link the child to the parent, so the held-working / SubagentCount-includes-child arc this scenario asserts is unobservable. The agent CAN perform the behavior (spawn_agent/wait_agent in codex 0.135.0); the gap is purely that the adapter does not read the state DB. Unblock: teach the codex adapter to read thread_spawn_edges (ProcessOwnedStore-style, as opencode does for its SQLite store) and project parent_thread_id→child_thread_id as ParentSessionID — then re-assess to daemon=full.",
-      "preconditions": [],
-      "setup": [],
-      "script": [],
-      "verify": [],
+      "applicable": true,
+      "preconditions": ["Codex CLI 0.144.4+ authenticated", "irrlichd recording with transcript consent granted"],
+      "setup": ["Seed independent small read tasks in the driver's fresh working directory."],
+      "script": [
+        {"type": "send", "text": "Spawn a subagent to read README.md, continue with a small unrelated task without waiting, then wait for the child and reply done."},
+        {"type": "wait_turn"},
+        {"type": "sleep", "seconds": 6}
+      ],
+      "verify": ["events.jsonl contains parent_linked", "parent remains working after its own turn while the child is live", "parent reaches ready once the final child completes"],
       "settings": {},
-      "timeout_seconds": 0
+      "timeout_seconds": 240
     }
   }
 }

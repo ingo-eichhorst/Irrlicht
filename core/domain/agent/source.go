@@ -50,6 +50,13 @@ type FilesUnderRoot struct {
 	// function receives the absolute file path and returns "" for any file the
 	// adapter does not own (skipping it entirely).
 	SessionIDFromPath func(path string) string
+
+	// ParentSessionIDFromPath optionally derives a session's parent from its
+	// transcript before the watcher emits the event. It is used by flat
+	// transcript stores whose child relationship lives in a metadata header
+	// rather than their directory layout. Returning "" leaves the session
+	// top-level.
+	ParentSessionIDFromPath func(path string) string
 }
 
 func (FilesUnderRoot) isSource() {

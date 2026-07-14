@@ -2,90 +2,43 @@
   "scenario_id": "foreground-subagent",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "incapable",
+    "daemon_capability": "full",
     "driver_capability": "ready",
-    "agent_cli_version": "0.135.0",
-    "daemon_version": "0.4.8+a9ab9ea",
-    "confidence": 0.8,
-    "notes": "agent_supports: yes (multi_agent stable, spawn_agent); daemon_capability: incapable (no codex parent-link path); driver_capability: ready"
+    "agent_cli_version": "0.144.4",
+    "confidence": 0.95,
+    "notes": "Observed Codex 0.144.4 child rollouts carry an authoritative session_meta parent_thread_id; the adapter projects it before session creation. Route: record."
   },
   "details": {
     "assessment": {
       "schema_version": 1,
       "scenario_id": "foreground-subagent",
       "agent": "codex",
-      "assessed_at": "2026-05-31T00:00:00Z",
+      "assessed_at": "2026-07-14T00:00:00Z",
       "agent_supports": "yes",
-      "daemon_capability": "incapable",
+      "daemon_capability": "full",
       "driver_capability": "ready",
-      "confidence": 0.8,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\nRoute: frozen — codex CAN spawn foreground subagents, but the irrlicht codex adapter has no mechanism to bind a codex child thread to its parent, so none of this scenario's load-bearing observables (ParentSessionID linkage, SubagentCount, parent_linked, child transcript under \u003cparent\u003e/subagents/) can be emitted today.\n\n## agent_supports = yes\n\nUnlike pi (which ships no subagent primitive), codex 0.135.0 has a first-class, default-on multi-agent / sub-agent control surface:\n\n- `codex features list` reports `multi_agent  stable  true` — the spawn-a-subagent feature is STABLE and enabled by default (no flag needed). (`multi_agent_v2` is the next-gen variant, still `under development`.)\n- The native binary's strings expose the full agent-control vocabulary: a `spawn_agent` tool (\"Spawn a sub-agent for a well-scoped task\", \"Spawns an agent to work on the specified task\"), `AgentControl`-spawned sub-agents with an `agent_role` / nickname, `_delegate` guidance prompts (\"Use a subagent when a subtask is easy enough... can run in parallel\", \"Do not redo delegated subagent tasks yourself\"), `SubAgentSource`, a `\"subAgentThreadSpawn\"` thread source, and `core/src/agent/control.rs` references (`spawn_agent fork requires a thread-spawn session source`, `skipping subagent thread analytics: failed to load parent thread metadata`).\n- Threads form a tree: the Thread schema carries `Session id shared by threads that belong to the same session tree` and `Source thread id when this thread was created by forking another thread`, plus an `agent_name`/`agent_status`/`last_task_message` inventory and `SubagentStart`/`SubagentStop` hooks.\n\nSo codex genuinely performs the behavior the scenario asserts: a parent delegates a bounded subtask to a child agent and integrates the result.\n\n## daemon_capability = incapable (the freeze)\n\nThe irrlicht codex adapter cannot OBSERVE the parent/child binding, for a structural reason:\n\n1. **No parent signal in the codex parser.** `core/adapters/inbound/agents/codex/parser.go` sets no `ParentSessionID` on any ParsedEvent (grep: zero hits for parent/subagent). It emits only assistant/user messages, function_call(_output), token/rate-limit, and turn_done.\n2. **Flat on-disk layout — no `\u003cparent\u003e/subagents/` directory.** Codex's Source is `FilesUnderRoot{~/.codex/sessions}` and every thread — parent OR child — is a sibling `sessions/YYYY/MM/DD/rollout-\u003cts\u003e-\u003cuuid\u003e.jsonl`. Confirmed against the local store (newest rollout header is a flat `session_meta` with `thread_source:\"user\"`, `source:\"cli\"`, and NO parent field; no `subagents/` subtree exists anywhere under `~/.codex/sessions`).\n3. **`deriveParentSession` recognizes only two formats, neither codex's.** `core/application/services/helpers.go` derives a parent ID from (a) the Claude-Code path pattern `.../\u003cparent\u003e/subagents/\u003cagent\u003e.jsonl` or (b) a Pi-style `{\"type\":\"session\",\"parentSession\":\"...\"}` header. A codex child rollout matches NEITHER: its filename is a flat `rollout-*.jsonl`, and its `session_meta` header has no `parentSession` key (codex's fork/spawn linkage lives in a different shape — a `subAgentThreadSpawn` source / fork source-thread-id — that no codex code path reads).\n\nConsequence: a codex parent + spawned child surface to the daemon as TWO UNRELATED top-level sessions. `ParentSessionID` stays empty, so `SubagentCount(parent)` is 0, no `parent_linked` event ever fires, and the parent's `working→ready` is governed only by its own turn (it does NOT wait on the child). Every load-bearing assertion of this scenario is unobservable.\n\nThis is `incapable` rather than `bug`: there is no codex trace today that the daemon mis-handles — the adapter has no parent-link rule at all, and the linkage field codex DOES write to a child thread's session_meta (a fork/spawn source) is not on any path the codex parser or `deriveParentSession` reads. Representing it would require a NEW codex-specific linkage rule (parser emits ParentSessionID from the child's session_meta fork/spawn-source, or a codex branch in `deriveParentSession`), i.e. an adapter capability that does not exist — not a fix to a mishandled signal.\n\n## driver_capability = ready\n\nNot the constraint, but recorded honestly: `replaydata/agents/codex/driver-interactive.sh` exposes `send`, `keys`, `interrupt`, `fork`, `reset_session`, `restart`, `resume`, `session`, `sigkill`, `exit_clean`. The recipe below (a single `send` that asks codex to delegate a file-read to a subagent + wait) needs only `send`/wait/sleep — all present. The driver could elicit the behavior the moment the daemon could observe it.\n\n## What would unblock\n\nA codex-adapter change that binds child→parent: emit `ParentSessionID` from the child rollout's `session_meta` fork/spawn source (the `subAgentThreadSpawn` thread source + fork source-thread-id codex already writes), or add a codex branch to `deriveParentSession`. Once a codex child carries a daemon-readable parent link, re-assess: agent=yes + driver=ready means the cell would flip to `record`.",
+      "confidence": 0.95,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\nRoute: record. Codex 0.144.4 writes each spawned child as a flat rollout whose first session_meta payload identifies the child thread and declares thread_source: subagent. The nested source.subagent.thread_spawn.parent_thread_id is the authoritative parent edge; compatible payload.parent_thread_id and payload.forked_from_id fallbacks are accepted only for subagent threads.\n\nThe Codex adapter now derives both session identity and parent linkage from that header before fswatcher emits a new-session event. payload.id is the unique per-thread identity; payload.session_id is deliberately excluded because it is shared across the tree. Existing lifecycle and dashboard grouping then nest children and hold a completed parent working until every linked child settles.\n\n## Recording status\n\nThe prior frozen assumption is obsolete. The interactive driver already supplies the required send, wait_turn, and sleep steps. Run this recipe against Codex 0.144.4+ and promote its recording when it passes.",
       "caveats": [
-        "agent_supports=yes is grounded in the binary strings + `features list` (multi_agent stable/true), not a captured spawn_agent recording — the local ~/.codex/sessions store has no real subagent child thread to inspect, so the EXACT on-disk shape of a spawned child's session_meta linkage field (subAgentThreadSpawn source / fork source-thread-id) is inferred from strings, not observed. Confidence is held at 0.8 for that reason; a live spawn_agent capture would confirm the precise field name an adapter fix must read.",
-        "If codex's spawn_agent ran the child in a DETACHED thread that codex itself never persists as a local rollout (cloud-side only), the daemon would see only the parent — that would harden the verdict toward incapable for a transport reason too. Local strings suggest threads are persisted (FilesUnderRoot already tails them), but only a recording settles it."
+        "Only child rollouts materialized on disk can be represented. A future ephemeral child without a rollout remains intentionally invisible.",
+        "A normal Codex /fork is not a subagent: fallback parent fields are ignored unless thread_source is subagent."
       ],
       "sources": [
-        {
-          "kind": "command",
-          "ref": "codex features list",
-          "note": "0.135.0: `multi_agent  stable  true` — the subagent/spawn_agent surface is STABLE and on by default (multi_agent_v2 still under development)"
-        },
-        {
-          "kind": "command",
-          "ref": "strings @openai/codex-darwin-arm64/.../bin/codex | grep -iE 'spawn_agent|SubAgentSource|agent_role|subagent'",
-          "note": "native binary exposes spawn_agent tool ('Spawn a sub-agent for a well-scoped task'), AgentControl-spawned sub-agents, _delegate prompts, SubAgentSource, subAgentThreadSpawn thread source, core/src/agent/control.rs ('spawn_agent fork requires a thread-spawn session source')"
-        },
-        {
-          "kind": "file",
-          "ref": "core/adapters/inbound/agents/codex/parser.go",
-          "note": "codex parser sets NO ParentSessionID and has no subagent/parent path (grep: zero hits) — emits only message/function_call/token/turn_done"
-        },
-        {
-          "kind": "file",
-          "ref": "core/adapters/inbound/agents/codex/adapter.go",
-          "note": "Source = FilesUnderRoot{~/.codex/sessions}; flat sessions/YYYY/MM/DD/rollout-*.jsonl per thread — no \u003cparent\u003e/subagents/ directory exists for parent-link path-matching"
-        },
-        {
-          "kind": "file",
-          "ref": "core/application/services/helpers.go",
-          "note": "deriveParentSession recognizes ONLY the Claude-Code .../\u003cparent\u003e/subagents/\u003cagent\u003e.jsonl path pattern and the Pi {\"type\":\"session\",\"parentSession\":...} header — a flat codex rollout matches neither, so no parent ID is derived"
-        },
-        {
-          "kind": "file",
-          "ref": "~/.codex/sessions/2026/05/29/rollout-2026-05-29T23-41-35-...jsonl",
-          "note": "live codex rollout session_meta header: thread_source:\"user\", source:\"cli\", model_provider:\"openai\" — no parentSession / parent-thread field the daemon reads; no subagents/ subtree anywhere under ~/.codex/sessions"
-        }
+        {"kind": "issue", "ref": "#1050", "note": "Observed local Codex 0.144.4 session_meta child header with source.subagent.thread_spawn.parent_thread_id."},
+        {"kind": "file", "ref": "core/adapters/inbound/agents/codex/session_meta.go", "note": "Header identity and parent-link extraction."},
+        {"kind": "file", "ref": "core/application/services/session_detector_codex_subagent_test.go", "note": "Three-child nesting and parent hold regression."}
       ]
     },
     "recipe": {
       "applicable": true,
-      "preconditions": [
-        "codex CLI 0.135.0+ on PATH and authenticated; multi_agent feature stable/on by default (no flag needed)",
-        "irrlichd is recording (dev daemon with --record, isolated IRRLICHT_HOME)",
-        "FROZEN: this recipe is documentary — the daemon cannot bind the codex child to the parent today (daemon=incapable), so a recording would NOT satisfy the spec until an adapter parent-link rule lands"
-      ],
-      "setup": [
-        "Driver generates a fresh cwd under \u003cstaging\u003e/cwd/",
-        "A README.md with a single H1 heading is seeded into the cwd so the subagent has a deterministic file to read"
-      ],
+      "preconditions": ["Codex CLI 0.144.4+ authenticated", "irrlichd recording with transcript consent granted"],
+      "setup": ["Seed a README.md with one H1 in the driver's fresh working directory."],
       "script": [
-        {
-          "type": "send",
-          "text": "Use a subagent (spawn_agent) to read the README.md in the current directory and report its first heading. Wait for the subagent to finish, then reply 'done'."
-        },
-        {
-          "type": "wait_turn"
-        },
-        {
-          "type": "sleep",
-          "seconds": 6
-        }
+        {"type": "send", "text": "Use a subagent (spawn_agent) to read README.md and report its first heading. Wait for the subagent to finish, then reply done."},
+        {"type": "wait_turn"},
+        {"type": "sleep", "seconds": 6}
       ],
-      "verify": [
-        "(unblock-time) events.jsonl contains \u003e= 1 parent_linked event binding the codex child rollout to the parent UUID",
-        "(unblock-time) the parent stays working until the child reports back, then a single working-\u003eready",
-        "(unblock-time) final parent state is ready"
-      ],
+      "verify": ["events.jsonl contains parent_linked for the child rollout", "the child is nested under its parent", "the parent reaches ready after the child completes"],
       "settings": {},
       "timeout_seconds": 240
     }
