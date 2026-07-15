@@ -67,7 +67,7 @@ you verified against, since it may lag the newest release.
 #### Aider
 - Fetch: `https://raw.githubusercontent.com/Aider-AI/aider/main/HISTORY.md` (curl it — a summarizer returned a stale read of this file)
 - **PyPI is authoritative for dates**: `https://pypi.org/pypi/aider-chat/json`. The GitHub Releases page **lags badly** (newest tag v0.86.0 from 2025-08-09 while PyPI had 0.86.2).
-- Focus on: chat history file format (`.aider.chat.history.md`), CLI process naming, config file changes
+- Focus on: chat history file format (`.aider.chat.history.md`) — specifically its `#### ` / `> ` marker prose, which is the whole break surface — and CLI process naming. **Not config**: irrlicht never reads `.aider.conf.yml` (see `references/monitoring-surface.md` §9).
 - **Aider is effectively dormant** — no release since 2026-02-12, 5 commits in the 2.5 months before 2026-07-15. Safe to check every few runs rather than every run.
 
 #### OpenCode
@@ -77,7 +77,8 @@ you verified against, since it may lag the newest release.
 - Note: sessions have been SQLite (drizzle) since ~2026-02-14, **not** JSON files. Legacy JSON storage still exists in `packages/opencode/src/storage/storage.ts` but `session.ts` no longer routes through it — do not mistake the leftover for live storage.
 - The DB filename is channel-scoped upstream (`opencode-<channel>.db`); stable channels (`latest`/`beta`/`prod`) get plain `opencode.db` — see `packages/core/src/database/database.ts`
 
-#### Gemini CLI
+#### Gemini CLI — ⚠️ unmaintained, skip by default
+- **Unmaintained — skip in sweeps** unless the user explicitly asks. The standing watches below are not being acted on. `references/monitoring-surface.md` §10 is the authoritative statement (rationale + reopen condition); don't restate it here.
 - Check: `https://github.com/google-gemini/gemini-cli/releases` — **authoritative; the repo has no root `CHANGELOG.md`** (404s on `main`)
 - Releases very frequently (nightlies + previews) — focus on stable, group the rest
 - Best evidence is a local clone + `git diff <old-tag>..<new-tag>` on `packages/core/src/config/storage.ts` and `packages/core/src/services/chatRecordingService.ts`
