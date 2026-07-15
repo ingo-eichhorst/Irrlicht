@@ -1,6 +1,6 @@
 import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
 import { isSummaryCollapsed, toggleSummaryCollapsed, getSummaryMode, toggleSummaryMode } from './collapsedSummaries.js';
-import { initHistoryTab } from './historyTab.js';
+import { initHistoryTab, syncActivityChartVisibility, leaveActivityChartIfSelected } from './historyTab.js';
 import { initPermissionsWizard, refreshPermissions } from './permissionsWizard.js';
 import {
   showQuotaForecast, setShowQuotaForecast, renderHeaderTitle, refreshProviderSettings,
@@ -127,6 +127,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       notifyOnReady: false,
       notifyOnWaiting: false,
       notifyOnContextPressure: false,
+      // Activity chart (#1075): opt-in, since the matrix only means anything
+      // with recordings enabled. Mirrors the macOS enableActivityChart key.
+      enableActivityChart: false,
       // Sources: the local source (the origin that served this page) is on by
       // default; a relay source is opt-in by URL. Mirrors the macOS
       // useLocalDaemon / useRelayServer / relayServerURL @AppStorage keys.
@@ -158,6 +161,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function applySettings() {
       document.body.classList.toggle('no-cost', !settings.showCostDisplay);
       document.body.classList.toggle('debug-mode', !!settings.debugMode);
+      syncActivityChartVisibility(!!settings.enableActivityChart);
     }
     applySettings();
 
@@ -2092,6 +2096,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         refreshPermNote();
         // Source toggles/URL reconnect live, no page reload.
         if (SOURCE_SETTING_KEYS.has(key)) rebuildSources();
+        // Hiding the Activity button isn't enough if it's the chart on screen
+        // right now — back out of it too (#1075).
+        if (key === 'enableActivityChart' && !settings[key]) leaveActivityChartIfSelected();
       });
     }
 
@@ -2144,4 +2151,5 @@ export {
   histDoraPerWeek, histDoraPercent, histDoraHours,
   CO2_EQUIVALENTS, pickCO2Equivalents,
   stateCellCounts, stateCellTotal, stateMatrixMaxTotal, stateBucketLabel,
+  syncActivityChartVisibility, leaveActivityChartIfSelected,
 } from './historyTab.js';

@@ -1336,12 +1336,16 @@
       margin: 0; padding: 0; min-width: 0;
     }
     .history-seg button {
-      background: none; border: none; border-right: 1px solid var(--border);
+      background: none; border: none; border-left: 1px solid var(--border);
       color: var(--text); font-family: var(--font-mono); font-size: 10px;
       letter-spacing: 0.03em; padding: 4px 10px; cursor: pointer;
       transition: background 0.15s, color 0.15s;
     }
-    .history-seg button:last-child { border-right: none; }
+    /* Separators hang off each button's leading edge, not its trailing one, so
+       that hiding the last button (Activity, gated by a beta toggle — #1075)
+       can't strand a border against the fieldset's own right edge. */
+    .history-seg button:first-child { border-left: none; }
+    .history-seg button[hidden] { display: none; }
     .history-seg button:hover:not(:disabled):not(.active) {
       background: var(--surface-hover); color: var(--text-bright);
     }

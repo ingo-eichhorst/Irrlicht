@@ -29,6 +29,14 @@ enum HistoryTab: String, CaseIterable, Identifiable {
         case .quota: return "Quota"
         }
     }
+
+    /// The tabs to offer, given the Activity beta toggle (#1075). Activity is
+    /// opt-in because its matrix is reconstructed from recordings: a bucket
+    /// that was never recorded renders identically to an idle one, so without
+    /// recordings it reads as a grid of misleading blanks.
+    static func visible(activityEnabled: Bool) -> [HistoryTab] {
+        allCases.filter { $0 != .activity || activityEnabled }
+    }
 }
 
 /// Which analytic is shown inside the Metrics tab (#951) — a single-selection
@@ -80,6 +88,13 @@ struct HistoryView: View {
     // range/start/end entirely rather than adding to them (mirrors the
     // daemon's own chart=="state" special-case in resolveHistoryQuery).
     @State private var stateGranularity: HistoryGranularity = .hr24
+
+    // Activity is opt-in (#1075): the matrix is reconstructed from recordings,
+    // and a bucket that was never recorded looks exactly like an idle one, so
+    // without recordings enabled it reads as a grid of misleading blanks.
+    // Declared here as well as in SettingsView — the established shape for a
+    // flag that gates UI elsewhere (cf. showQuotaForecast).
+    @AppStorage("enableActivityChart") private var enableActivityChart: Bool = false
 
     @State private var response: HistoryResponse?
     @State private var yieldResponse: HistoryYieldResponse?
@@ -167,6 +182,13 @@ struct HistoryView: View {
             scope = nil
             if newTab == .usage, chart == .yieldRatio || chart == .dora { chart = .cost }
         }
+        // Settings is a separate window, so the toggle can go off while Activity
+        // is on screen. Without this the tab vanishes from the picker but stays
+        // selected — a segmented control with nothing lit, still showing the
+        // matrix underneath it.
+        .onChange(of: enableActivityChart) { enabled in
+            if !enabled, tab == .activity { tab = .usage }
+        }
     }
 
     // MARK: Header
@@ -178,7 +200,7 @@ struct HistoryView: View {
         HStack {
             Spacer(minLength: 0)
             Picker("", selection: $tab) {
-                ForEach(HistoryTab.allCases) { Text($0.label).tag($0) }
+                ForEach(HistoryTab.visible(activityEnabled: enableActivityChart)) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()

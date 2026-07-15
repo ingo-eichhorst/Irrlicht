@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeEach } from 'vitest'
+import { describe, test, expect, beforeEach, beforeAll, afterAll } from 'vitest'
+
 import { formatCO2, co2TierTitle } from './formatters.js'
 import {
   pendingWizardAgents,
@@ -42,7 +43,14 @@ import {
   stateCellTotal,
   stateMatrixMaxTotal,
   stateBucketLabel,
+  syncActivityChartVisibility,
+  leaveActivityChartIfSelected,
 } from './irrlicht.js'
+// The gate's reset path needs the module's private historyState to actually be
+// on chart=state, which only a real click can do — so this suite drives the
+// wired-up control rather than a state literal. Same module instance irrlicht.js
+// imported (ESM caches), so historyState is shared.
+import { initHistoryTab } from './historyTab.js'
 
 describe('resolvedTheme', () => {
   beforeEach(() => localStorage.clear())
@@ -884,6 +892,55 @@ describe('agents chart (#751 Phase 3)', () => {
     expect(histCount(2)).toBe('2')
     expect(histCount(2.6)).toBe('3')
     expect(histCount(undefined)).toBe('0')
+  })
+})
+
+describe('Activity chart beta gate (#1075)', () => {
+  const btn = (chart) => document.querySelector(`#history-chart-sel button[data-chart="${chart}"]`)
+  const isActive = (chart) => btn(chart).classList.contains('active')
+  let host
+
+  // Wired once, not per test: initHistoryTab also registers a window resize
+  // listener, and it has no teardown to pair with.
+  beforeAll(() => {
+    // The real chart selector, trimmed to the three buttons this suite drives.
+    // Activity ships hidden in index.html so a default-off gate never flashes it.
+    host = document.createElement('div')
+    host.innerHTML = `
+      <fieldset id="history-chart-sel">
+        <button data-chart="cost" class="active">Cost</button>
+        <button data-chart="agents">Agents</button>
+        <button data-chart="state" hidden>Activity</button>
+      </fieldset>`
+    document.body.append(host)
+    initHistoryTab()
+  })
+  afterAll(() => host.remove())
+
+  test('the Activity button is hidden until the toggle turns it on', () => {
+    expect(btn('state').hidden).toBe(true) // as it ships in index.html
+    syncActivityChartVisibility(true)
+    expect(btn('state').hidden).toBe(false)
+    syncActivityChartVisibility(false)
+    expect(btn('state').hidden).toBe(true)
+  })
+
+  test('turning the toggle off while Activity is the live chart falls back to Cost', () => {
+    syncActivityChartVisibility(true)
+    btn('state').click()
+    expect(isActive('state')).toBe(true)
+
+    leaveActivityChartIfSelected()
+    // Otherwise the view strands on a chart the setting says is off.
+    expect(isActive('state')).toBe(false)
+    expect(isActive('cost')).toBe(true)
+  })
+
+  test('turning the toggle off leaves a non-Activity chart selected', () => {
+    syncActivityChartVisibility(true)
+    btn('agents').click()
+    leaveActivityChartIfSelected()
+    expect(isActive('agents')).toBe(true)
   })
 })
 
