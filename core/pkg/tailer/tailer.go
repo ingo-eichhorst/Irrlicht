@@ -437,11 +437,16 @@ type TranscriptTailer struct {
 	// the tail of the content this tailer has already consumed. Re-hashing
 	// that window on the next pass is what lets the tailer notice an in-place
 	// rewrite whose new size is >= lastOffset, which the size-shrink check
-	// alone cannot see. hasResumeFingerprint distinguishes "window hashed to
-	// zero" from "never computed" (a pre-#1104 ledger, where the only safe
-	// read is the historical one: trust the offset). See issue #1104.
-	resumeFingerprint    uint64
-	hasResumeFingerprint bool
+	// alone cannot see. See issue #1104.
+	//
+	// Zero means "unknown": no pass has anchored it yet, the window was
+	// unreadable, or the ledger predates #1104. Every such case resumes at
+	// lastOffset exactly as the tailer always has. A window that genuinely
+	// hashes to zero (1-in-2^64) reads as unknown too and costs a single pass
+	// of that same pre-#1104 behavior — cheaper than a second field to tell
+	// the two apart, especially since the ledger would have to collapse them
+	// back into one number anyway.
+	resumeFingerprint uint64
 }
 
 // rateLimitHistoryCap caps the rolling history at a small number of changed
@@ -547,7 +552,14 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// Re-anchor the rewrite detector at the new resume point. Safe to read
 	// after the scan even against a live writer: an append only adds bytes at
 	// or beyond lastOffset, so the window ending at lastOffset is stable.
-	t.captureResumeFingerprint(file)
+	//
+	// Skipped when the scan advanced nothing and we already hold an anchor —
+	// the window is then the very one resumePrefixChanged just verified, so
+	// re-reading it would recompute a value already in hand. That is the
+	// common case: the unconditional 5s sweep over an idle session.
+	if scan.endOffset != startPos || t.resumeFingerprint == 0 {
+		t.captureResumeFingerprint(file)
+	}
 
 	// Idle-flush hook: parsers whose transcript has no in-band end-of-turn
 	// marker (currently aider) synthesize turn_done when the file has been
@@ -590,11 +602,16 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 }
 
 // resumeFingerprintWindow is how many bytes ending at lastOffset are hashed to
-// anchor the resume point. It only has to be wide enough that a rewrite is
-// overwhelmingly likely to disturb it — well over a typical JSONL record, so a
-// rewrite that shifts content by even one byte changes the window — while
-// staying a fixed, negligible read on a path that runs per transcript write
-// plus once every 5s per active session.
+// anchor the resume point — wide enough that any rewrite which SHIFTS content
+// disturbs it, small enough to stay a negligible fixed read on a per-write path.
+//
+// Residual gap: a SIZE-NEUTRAL edit further back than this window leaves the
+// window byte-identical, so it still resumes incrementally over stale
+// accumulators. Closing it needs a rolling hash of the whole consumed prefix —
+// O(filesize) per pass, which this path cannot afford. Left open because every
+// rewrite shape observed in-tree either shrinks the file (claudecode's rewind)
+// or changes an edited message's length (vibe's _overwrite_messages_sync), and
+// both are caught.
 const resumeFingerprintWindow = 512
 
 // resumePrefixChanged reports whether the already-consumed bytes ending at
@@ -606,40 +623,40 @@ const resumeFingerprintWindow = 512
 // accumulating on top of pre-rewrite state (issue #1104).
 //
 // An append never rewrites bytes below lastOffset, so a matching window means
-// a genuine append. Both uncertain cases — a pre-#1104 ledger that carries an
-// offset but no fingerprint, and an unreadable window — return false, keeping
-// the historical resume-at-offset behavior rather than forcing a re-read.
+// a genuine append. Every uncertain case — no anchor yet, a pre-#1104 ledger,
+// an unreadable window — reports false, keeping the historical
+// resume-at-offset behavior rather than forcing a re-read.
 func (t *TranscriptTailer) resumePrefixChanged(r io.ReaderAt) bool {
-	if !t.hasResumeFingerprint {
+	if t.resumeFingerprint == 0 {
 		return false
 	}
-	fp, ok := fingerprintEndingAt(r, t.lastOffset)
-	return ok && fp != t.resumeFingerprint
+	fp := fingerprintEndingAt(r, t.lastOffset)
+	return fp != 0 && fp != t.resumeFingerprint
 }
 
 // captureResumeFingerprint anchors the rewrite detector at the current
-// lastOffset. A window that can't be read leaves the tailer with no
-// fingerprint, which resumePrefixChanged reads as "can't tell".
+// lastOffset. A window that can't be read leaves the tailer unanchored, which
+// resumePrefixChanged reads as "can't tell".
 func (t *TranscriptTailer) captureResumeFingerprint(r io.ReaderAt) {
-	t.resumeFingerprint, t.hasResumeFingerprint = fingerprintEndingAt(r, t.lastOffset)
+	t.resumeFingerprint = fingerprintEndingAt(r, t.lastOffset)
 }
 
 // fingerprintEndingAt hashes the up-to-resumeFingerprintWindow bytes ending at
-// off, reporting false when there is nothing to hash (off <= 0) or the read
-// fails. FNV-1a is chosen over a cryptographic hash deliberately: this detects
-// an accidental rewrite by a cooperating agent, not a forged collision.
-func fingerprintEndingAt(r io.ReaderAt, off int64) (uint64, bool) {
+// off, returning 0 ("unknown") when there is nothing to hash (off <= 0) or the
+// read fails. FNV-1a is chosen over a cryptographic hash deliberately: this
+// detects an accidental rewrite by a cooperating agent, not a forged collision.
+func fingerprintEndingAt(r io.ReaderAt, off int64) uint64 {
 	if off <= 0 {
-		return 0, false
+		return 0
 	}
 	n := min(off, int64(resumeFingerprintWindow))
 	buf := make([]byte, n)
 	if _, err := r.ReadAt(buf, off-n); err != nil {
-		return 0, false
+		return 0
 	}
 	h := fnv.New64a()
 	h.Write(buf) // hash.Hash.Write never returns an error
-	return h.Sum64(), true
+	return h.Sum64()
 }
 
 // resetAccumulatorsForRotation clears every accumulator that belongs to the
@@ -688,6 +705,10 @@ func (t *TranscriptTailer) resetAccumulatorsForRotation() {
 	// Drop the pre-rotation idle anchor so the post-scan idleFlusher
 	// hook doesn't synthesize a phantom turn_done against stale time.
 	t.lastLineSeenAt = time.Time{}
+	// The resume anchor describes the previous contents, so it is meaningless
+	// now. Clearing it also keeps TailAndProcess's skip-the-re-anchor guard
+	// honest: a rotated pass always re-anchors, because unknown forces it to.
+	t.resumeFingerprint = 0
 }
 
 // transcriptScanResult carries the outcomes of one scanNewLines pass: how far
