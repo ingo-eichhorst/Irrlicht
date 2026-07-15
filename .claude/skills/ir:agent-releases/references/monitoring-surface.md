@@ -34,7 +34,10 @@ Irrlicht is a daemon that monitors coding agent sessions. It watches transcript 
 - **User-blocking tools**: `AskUserQuestion`, `ExitPlanMode` — trigger immediate waiting state
 - **`Agent` tool name**: counted as in-process subagents
 - **`is_error` on tool_result**: indicates ESC/rejection (maps to ready state)
-- **`permission-mode` event**: values `default`, `plan`, `bypassPermissions`
+- **`permissionMode` field**: passthrough only, no classifier branching. Census
+  across 320 local transcripts (v2.1.210, 2026-07-15): `auto` 5000, `plan` 331,
+  `default` 8, `acceptEdits` 3; `bypassPermissions`/`manual` never observed
+  (v2.1.200 renamed "default" to "manual")
 - **Assistant text**: last assistant message checked for trailing `?` (waiting heuristic)
 - **Token/cost fields**: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`
 - **Model name field**: normalized (e.g., `sonnet` -> `claude-sonnet-4-6`)
@@ -68,10 +71,23 @@ Irrlicht is a daemon that monitors coding agent sessions. It watches transcript 
   mayor, deacon, witness, refinery, polecat, crew, **boot, dog** (the latter two are
   already defined in `gastown/types.go`)
 - **JSON output schema**: rig objects with polecats, crew fields. Unknown fields are
-  ignored by `json.Unmarshal`, so additive upstream fields are harmless; **new enum
-  values are the real risk** — e.g. `polecat.state` is passed through raw at
-  `poller.go:366`, so an unknown state (like v1.2.0's `review-needed`) surfaces
-  unstyled in the UI rather than failing loudly
+  ignored by `json.Unmarshal`, so additive upstream fields are harmless. **New enum
+  values are also currently inert**, but not for the reason once assumed here:
+  `polecat.state` is passed through raw at `poller.go:366` (overridden at `:371`
+  only when a live session matches the polecat's worktree), yet that raw value
+  never reaches any client. `addCodebaseWorkers`
+  (`core/domain/session/grouped.go:326-343`) builds `workerInfo` and never copies
+  `w.State`; `workerInfo` (`grouped.go:45-52`) has no `State` field at all, and
+  `Agent` (`grouped.go:28-42`) exposes no orchestrator state either. The
+  dashboard's displayed state is always `SessionState.State` from irrlicht's own
+  classifier, never gastown's string. The only live reader of `Worker.State` is a
+  change-detection diff (`gastown/adapter.go:211-215`) used to decide whether to
+  broadcast — benign. So an unknown state (like v1.2.0's `review-needed`)
+  surfaces nowhere, styled or not — it just doesn't show up. `Worker.State` and
+  `GlobalAgent.State` are both dead fields (`addGlobalAgentWorkers`,
+  `grouped.go:313-323`, likewise drops `ga.State`), a pre-existing plumbing gap.
+  If orchestrator-reported state is ever wanted in the UI, that plumbing is the
+  actual work — not a defensive default for the raw string.
 
 ## State Classification Logic
 
