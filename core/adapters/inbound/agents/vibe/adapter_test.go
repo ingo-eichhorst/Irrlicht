@@ -7,6 +7,33 @@ import (
 	"irrlicht/core/domain/backchannel"
 )
 
+// TestSessionsDir pins the $VIBE_HOME seam. Upstream honors the override in
+// source (v2.19.1, vibe/core/paths/_vibe_home.py) though not in its docs, so
+// a hardcoded root would make every session of a $VIBE_HOME user invisible.
+// Absolute-only, matching the sibling adapters: irrlicht performs no shell
+// expansion, so a relative or "~"-prefixed value is logged and ignored.
+func TestSessionsDir(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want string
+	}{
+		{"empty falls back to default", "", defaultRootDir},
+		{"absolute override produces $VIBE_HOME/logs/session", "/tmp/vibe-home", "/tmp/vibe-home/logs/session"},
+		{"trailing slash is cleaned", "/tmp/vibe-home/", "/tmp/vibe-home/logs/session"},
+		{"relative override is rejected (falls back to default)", "relative/home", defaultRootDir},
+		{"tilde-prefixed override is rejected (no shell expansion)", "~/custom", defaultRootDir},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(vibeHomeEnvVar, tc.env)
+			if got := sessionsDir(); got != tc.want {
+				t.Errorf("sessionsDir() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAgent_Identity(t *testing.T) {
 	a := Agent()
 	if a.Identity.Name != AdapterName {
@@ -21,12 +48,17 @@ func TestAgent_Identity(t *testing.T) {
 }
 
 func TestAgent_Source_FilesUnderRoot(t *testing.T) {
+	// Pin the default root explicitly: Agent() resolves Dir through
+	// sessionsDir(), so a $VIBE_HOME set in the developer's own shell would
+	// otherwise leak into this assertion.
+	t.Setenv(vibeHomeEnvVar, "")
+
 	src, ok := Agent().Source.(agent.FilesUnderRoot)
 	if !ok {
 		t.Fatalf("Source is %T, want FilesUnderRoot", Agent().Source)
 	}
-	if src.Dir != ".vibe/logs/session" {
-		t.Errorf("Dir = %q", src.Dir)
+	if src.Dir != defaultRootDir {
+		t.Errorf("Dir = %q, want %q", src.Dir, defaultRootDir)
 	}
 	if src.SessionIDFromPath == nil {
 		t.Error("expected SessionIDFromPath (filename is the constant messages.jsonl)")
