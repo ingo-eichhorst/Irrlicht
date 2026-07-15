@@ -1326,6 +1326,9 @@
 
     .history-controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
     .history-ctl-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    /* The author display above outranks the UA [hidden] rule, so historyTab.js's
+       per-chart row toggles are inert without this hatch (#1079). */
+    .history-ctl-row[hidden] { display: none; }
     .history-ctl-label {
       font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
       text-transform: uppercase; color: var(--muted); width: 52px; flex-shrink: 0;
@@ -1422,6 +1425,10 @@
       border-radius: 8px; padding: 10px;
     }
     #history-chart { width: 100%; height: 100%; display: block; }
+    /* Same as .history-ctl-row[hidden] (#1079), but must repeat the id to
+       outrank the display above — a bare [hidden] hatch would lose. Otherwise
+       the stale chart stays painted behind the activity matrix. */
+    #history-chart[hidden] { display: none; }
     .history-chart-empty {
       position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
       font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.1em;
