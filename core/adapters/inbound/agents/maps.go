@@ -88,8 +88,8 @@ func ProcessNames(agents []agent.Agent) map[string]string {
 // the liveness sweep's infra re-validation: a session bound to a still-alive PID
 // whose argv the adapter rejects (e.g. Claude Code's --bg-spare pool helper) is a
 // ghost and must be reaped (#727). Only adapters that declare a non-nil
-// Process.ExcludeArgv appear (today: claude-code); the rest get no entry, so the
-// sweep leaves their sessions untouched.
+// Process.ExcludeArgv appear (today: claude-code and gemini-cli); the rest get
+// no entry, so the sweep leaves their sessions untouched.
 func ArgvExcluders(agents []agent.Agent) map[string]func([]string) bool {
 	m := make(map[string]func([]string) bool)
 	for _, a := range agents {

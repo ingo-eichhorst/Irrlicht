@@ -66,7 +66,7 @@ An adapter's `Source` variant determines how sessions are found at all. This is 
 
 `core/adapters/inbound/agents/fswatcher/watcher.go`
 
-- **Recursive, unbounded depth** — `filepath.WalkDir` per root child (`watcher.go:490-499`), plus `addSubtree` for dirs created at runtime (`watcher.go:566-577`). ⚠️ The package doc comment (`watcher.go:2-3`) still says "two-level directory tree" — **it is stale**; the recursion is load-bearing for Claude Code's `subagents/`, gemini's `chats/<uuid>/`, vibe's `agents/`, and antigravity's 3-deep layout.
+- **Recursive, unbounded depth** — `filepath.WalkDir` per root child (`watcher.go:490-499`), plus `addSubtree` for dirs created at runtime (`watcher.go:566-577`). The recursion is load-bearing for Claude Code's `subagents/`, gemini's `chats/<uuid>/`, vibe's `agents/`, and antigravity's 3-deep layout.
 - **`.jsonl` only** (`transcriptExt`, `watcher.go:21`; enforced `:303`, `:588`, `:610`). This is how sibling non-transcripts are ignored for free (gemini's `logs.json`/`.project_root`, vibe's `meta.json`, kiro's `.json`/`.lock`). aider's `.md` is invisible to it entirely — hence `FilesUnderCWD`.
 - **Session ID** defaults to the filename stem (`extractSessionID`, `watcher.go:608-614`), overridable per adapter via `FilesUnderRoot.SessionIDFromPath`; returning `""` **skips the file** (antigravity uses this to ignore `transcript_full.jsonl`).
 - **Max session age**: default **5 days** (`core/domain/config/config.go:13`), overridable via `IRRLICHT_MAX_SESSION_AGE`. Applied to Create/Write, **not** to Remove/Rename (`watcher.go:341-344`).
@@ -89,7 +89,7 @@ Adapters with no timestamps in-band at all (**vibe**, **aider**, and every kiro 
 
 `ComputeContextUtilization` (`tailer_metrics.go:548-579`). Window precedence: `contextWindowOverride` > `capacityMgr.GetModelCapacity(model).ContextWindow`. Thresholds: ≥90 critical, ≥80 warning, ≥60 caution.
 
-⚠️ `tailer.go:66-70` documents `ContextWindowUnknown` as "true when ContextWindow is the 32k sentinel fallback". **There is no 32k sentinel** — `GetModelCapacity` returns a zero value on miss (`capacity.go:97-99`). Don't repeat the 32k claim.
+**There is no 32k sentinel fallback** — `GetModelCapacity` returns a zero value on miss (`capacity.go:97-99`), and `ContextWindowUnknown` is what marks that zero as "unknown" rather than "not yet computed".
 
 ### User-blocking tools — a hardcoded, Claude-flavored list
 
@@ -124,7 +124,7 @@ Adjacent hardcoded list: `isPermissionGatedEditTool` (`metrics.go:388-397`) matc
 
 ## State Classification Logic
 
-⚠️ **corrected (#1090):** this was documented as a 5-step order. The real body (`core/application/services/state_classifier.go:22-87`) evaluates **seven** rules. The source file's *own* header comment (`:15-19`) still claims four — don't trust it either.
+⚠️ **corrected (#1090):** this was documented as a 5-step order. The real body (`core/application/services/state_classifier.go:22-87`) evaluates **seven** rules.
 
 | # | Condition | Result |
 |---|---|---|
@@ -408,7 +408,7 @@ Per-step (not cumulative) tokens from `part.data.tokens`; `cost` is a top-level 
 - **Model** comes *only* from a regex over a `<USER_SETTINGS_CHANGE>` block in USER_INPUT content (`Model Selection…from X to Y`), updated on **every** occurrence (mid-session `/model` switches). It's then superseded by the store's canonical id on turn_done — so **before the first turn_done, a session shows no model**.
 - **CWD** comes only from a `run_command` call's `Cwd` arg, with the sandbox scratch dir rejected by a `Contains(".gemini/antigravity")` + `Contains("/scratch")` match. Fallback: the `<root>/history.jsonl` index (keys `conversationId`/`workspace`).
 - **`created_at`** is parsed as **strict RFC3339**; anything else silently falls back to `time.Now()`.
-- **Never read, despite being present**: `status` (on every line), `thinking`, `truncated_fields`. ⚠️ The parser's own doc comment claims the envelope includes "thinking text", implying use — **the code never touches it**.
+- **Never read, despite being present**: `status` (on every line), `thinking`, `truncated_fields`.
 - **User-blocking: none.** Plan-approval gates are live UI prompts, **never persisted to the transcript**, so no `waiting` episode is ever written. `waiting` can only come from generic text cues.
 - **Subagent linking** depends on the parent writing the child's conv-id into its transcript, found by a **substring scan** — safe only because conv-ids are random UUIDs (non-UUID ids would false-positive). Bounded by three heuristic constants upstream timing could invalidate: a 2-minute spawn window, a 40-sibling scan cap, and a 256KB tail.
 
@@ -427,7 +427,7 @@ Per-step (not cumulative) tokens from `part.data.tokens`; `cost` is a top-level 
 - **Transcript**: **`.aider.chat.history.md`** — a Markdown chat history, living in the **aider process's CWD**, not under `$HOME`.
 - **Source model**: `agent.FilesUnderCWD` — **the only adapter**. It carries a **basename only**; it structurally cannot express a path. **No root, no glob, and no fswatcher is constructed** (`wiring.go:71-75`). Discovery is a **stat poll of `<pid's CWD>/<filename>`** by the process scanner (1s, backing off to 5s when the PID set is stable): first sight → new session, size change → activity.
 - ⚠️ **Consequence: if aider's process isn't matched, the transcript is never found**, no matter that it's sitting on disk. Every other adapter's watcher would still see the file. **aider's process matcher is a hard dependency of transcript detection**, not just of PID features.
-- **Process**: `agent.CommandPattern{Regex: "/aider"}` over the full command line — aider's real OS process is `python` invoking a console script (**the same problem as vibe**), so `pgrep -x aider` finds nothing. The leading slash anchors to the binary path and excludes wrappers (tmux, sh) that merely mention "aider". ⚠️ `adapter.go:6-8` claims `ProcessName` is "used by the process scanner via `pgrep -x`" — **stale comment**; `wiring.go:99-103` is authoritative: the `CommandPattern` path bypasses `pgrep -x` and the name is never matched.
+- **Process**: `agent.CommandPattern{Regex: "/aider"}` over the full command line — aider's real OS process is `python` invoking a console script (**the same problem as vibe**), so `pgrep -x aider` finds nothing. The leading slash anchors to the binary path and excludes wrappers (tmux, sh) that merely mention "aider". The `CommandPattern` path bypasses `pgrep -x` entirely (`wiring.go:99-103`), so the adapter's `ProcessName` const is never matched against running processes.
 - **Config**: ⚠️ **corrected (#1090): `~/.aider.conf.yml` is read nowhere in irrlicht** — zero matches repo-wide. It's purely how *the user* configures aider. **Corollary: if `> Model:` is absent from the transcript, irrlicht has no fallback model source for aider at all.**
 - **Session ID = `proc-<pid>`** — **session identity is the aider process, not the file.** An append-only `.md` needs no session boundary because the boundary *is* the process lifetime. Aider's own `# aider chat started at …` delimiter is **explicitly discarded**.
 
