@@ -1,6 +1,6 @@
 // StateClassifier provides pure functions for session state classification.
-// These functions encapsulate the four-way decision tree used to determine
-// whether a session is working, waiting, or ready based on transcript metrics.
+// These functions encapsulate the decision tree used to determine whether a
+// session is working, waiting, or ready based on transcript metrics.
 package services
 
 import (
@@ -9,14 +9,17 @@ import (
 	"irrlicht/core/domain/session"
 )
 
-// ClassifyState applies the four-way decision tree to determine what state a
-// session should be in based on its current state and latest metrics.
+// ClassifyState applies the decision tree to determine what state a session
+// should be in based on its current state and latest metrics.
 //
-// Decision order:
-//  1. NeedsUserAttention → waiting
-//  2. IsAgentDone → ready (from working/waiting only)
-//  3. ESC cancellation (user + error + no open tools) → ready
-//  4. Default → working
+// Decision order (the body's rule numbering in parentheses):
+//   - PermissionPending → waiting (0)
+//   - CompactInProgress → working (0b)
+//   - NeedsUserAttention → waiting (1)
+//   - OpenToolStalled → waiting (1b)
+//   - IsAgentDone → ready, from working/waiting only (2)
+//   - ESC cancellation / tool denial (user + error + no open tools) → ready (3)
+//   - Default → working (4)
 //
 // Returns (newState, reason). An empty reason means no transition occurred.
 func ClassifyState(currentState string, metrics *session.SessionMetrics) (string, string) {

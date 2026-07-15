@@ -12,7 +12,9 @@ import (
 // Parser implements tailer.TranscriptParser for Antigravity session transcripts
 // (the filtered transcript.jsonl). Each line is one step sharing the envelope
 // {step_index, source, type, status, created_at, content} plus an optional
-// tool_calls array and thinking text. The shapes:
+// tool_calls array and thinking text. The parser reads step_index, source,
+// type, created_at, content and tool_calls; status, thinking and
+// truncated_fields are on the wire but never read. The shapes:
 //
 //   - source "USER_EXPLICIT", type "USER_INPUT" — the user's prompt, wrapped in
 //     <USER_REQUEST>…</USER_REQUEST> plus metadata blocks. Opens a turn. A

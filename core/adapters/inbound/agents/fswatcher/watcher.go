@@ -1,6 +1,9 @@
 // Package fswatcher implements a generic fsnotify-based watcher for agent
-// transcript files. It watches a two-level directory tree (root/<project>/<id>.jsonl)
-// and emits TranscriptEvents tagged with the adapter name.
+// transcript files. It watches a directory tree recursively, to unbounded depth
+// (root/<project>/<id>.jsonl is the common shape, but nested layouts — Claude
+// Code's subagents/, gemini's chats/<uuid>/, vibe's agents/, antigravity's
+// 3-deep tree — are covered by the same recursion), and emits TranscriptEvents
+// tagged with the adapter name.
 package fswatcher
 
 import (

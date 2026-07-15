@@ -27,11 +27,11 @@ type SessionMetrics struct {
 	ContextUtilization float64 `json:"context_utilization_percentage"`
 	PressureLevel      string  `json:"pressure_level"`
 
-	// ContextWindowUnknown signals that the model has no LiteLLM pricing
-	// entry, so ContextWindow is a sentinel fallback (32k) rather than a
-	// known value. The UI uses this to render a tentative bar (dashed
-	// outline / "~" prefix) instead of suppressing context display
-	// entirely. Without this fallback, sessions on local models like
+	// ContextWindowUnknown signals that no context window could be resolved
+	// for the model (e.g. no LiteLLM pricing entry), so ContextWindow is
+	// left at zero rather than a known value. The UI uses this to keep
+	// showing tokens — without a percentage — instead of suppressing the
+	// context display entirely. Without this signal, sessions on local models like
 	// `gemma-4-26b-a4b` (aider via LM Studio) had pressure_level="unknown"
 	// which the macOS app treated as "no data" and hid the row's context
 	// column.
