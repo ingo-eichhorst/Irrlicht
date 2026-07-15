@@ -1162,29 +1162,6 @@ func TestIDTracking_SendMessageSurvivesTurnDone(t *testing.T) {
 	}
 }
 
-func TestSurviveTurnDone(t *testing.T) {
-	tests := []struct {
-		name string
-		want bool
-	}{
-		{"Agent", true},
-		{"SendMessage", true},
-		{"AskUserQuestion", true},
-		{"ExitPlanMode", true},
-		{"Bash", false},
-		{"Read", false},
-		{"Write", false},
-		{"", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := surviveTurnDone(tt.name); got != tt.want {
-				t.Errorf("surviveTurnDone(%q) = %v, want %v", tt.name, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestHasOpenToolCall_TurnDonePreservesAskUserQuestion(t *testing.T) {
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"type": "user", "timestamp": ts(0)},
