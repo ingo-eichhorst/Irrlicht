@@ -227,10 +227,7 @@ func handleSystemEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 	subtype, _ := raw["subtype"].(string)
 	if subtype == "turn_duration" || subtype == "stop_hook_summary" {
 		ev.EventType = "turn_done"
-		if v, ok := raw["pendingBackgroundAgentCount"].(float64); ok {
-			n := int(v)
-			ev.PendingBackgroundAgentCount = &n
-		}
+		applyPendingBackgroundAgentCount(raw, ev, subtype)
 		return
 	}
 	if subtype == "compact_boundary" {
@@ -250,6 +247,36 @@ func handleSystemEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 		}
 	}
 	ev.Skip = true
+}
+
+// applyPendingBackgroundAgentCount reads Claude Code's background-agent count
+// off a turn-boundary event onto ev, resolving what an *absent* field means —
+// which differs by subtype, and is the whole point of this function.
+//
+// On turn_duration, absence means zero. Claude Code serializes the count with
+// omitempty: zero is written as absence, never as an explicit 0 (verified
+// across 1,698 turn_duration lines — the value 0 never appears, and the same
+// CC version emits the field only when it is > 0). A turn_duration is an
+// authoritative end-of-turn snapshot, so absence is a real "none pending"
+// verdict and is normalized to an explicit 0 — otherwise the tailer's sticky
+// counter can never fall back to 0 and the #1037 hold never releases.
+//
+// On stop_hook_summary, absence means nothing at all: it shares the turn_done
+// branch but never carries the field (0 of 88 observed lines). Leaving the
+// pointer nil keeps the tailer's last known count intact; normalizing it to 0
+// here would clobber a live count on every stop-hook event and re-open #1036.
+//
+// See issue #1076.
+func applyPendingBackgroundAgentCount(raw map[string]interface{}, ev *tailer.ParsedEvent, subtype string) {
+	if v, ok := raw["pendingBackgroundAgentCount"].(float64); ok {
+		n := int(v)
+		ev.PendingBackgroundAgentCount = &n
+		return
+	}
+	if subtype == "turn_duration" {
+		n := 0
+		ev.PendingBackgroundAgentCount = &n
+	}
 }
 
 // handleUserEvent handles the user event variants that should short-circuit

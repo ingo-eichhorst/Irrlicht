@@ -266,10 +266,14 @@ func TestParser_SystemEvent_TurnDone_PendingBackgroundAgentCount(t *testing.T) {
 	}
 }
 
-func TestParser_SystemEvent_TurnDone_PendingBackgroundAgentCountAbsent(t *testing.T) {
-	// Older Claude Code versions write turn_duration with no
-	// pendingBackgroundAgentCount field at all — absence must not be read
-	// as an explicit zero. See issue #1036.
+// TestParser_SystemEvent_TurnDone_PendingBackgroundAgentCountAbsentMeansZero
+// replaces the former …CountAbsent test, which asserted absence stays nil on
+// the premise that only "older Claude Code versions" omit the field. Not so:
+// the same version emits turn_duration with the field when the count is > 0
+// and without it when the count is 0 (omitempty), so absence on an
+// authoritative end-of-turn snapshot means "none pending". Without this, the
+// #1037 guard's release condition is unreachable. See issue #1076.
+func TestParser_SystemEvent_TurnDone_PendingBackgroundAgentCountAbsentMeansZero(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(map[string]interface{}{
 		"type":      "system",
@@ -279,8 +283,32 @@ func TestParser_SystemEvent_TurnDone_PendingBackgroundAgentCountAbsent(t *testin
 	if ev == nil {
 		t.Fatal("expected non-nil event")
 	}
+	if ev.PendingBackgroundAgentCount == nil {
+		t.Fatal("expected an explicit 0 — a fieldless turn_duration is the drain-to-zero signal")
+	}
+	if *ev.PendingBackgroundAgentCount != 0 {
+		t.Errorf("PendingBackgroundAgentCount = %d, want 0", *ev.PendingBackgroundAgentCount)
+	}
+}
+
+// stop_hook_summary shares handleSystemEvent's turn_done branch but never
+// carries the count (0 of 88 observed lines). Absence there is "no
+// information", not zero — normalizing it would clobber a live count and
+// re-open #1036. This test is what stops the turn_duration absent→0 rule from
+// being widened to the whole branch. See issue #1076.
+func TestParser_SystemEvent_StopHookSummary_PendingCountAbsentStaysNil(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":      "system",
+		"subtype":   "stop_hook_summary",
+		"timestamp": "2026-04-05T22:00:00Z",
+	})
+	if ev == nil {
+		t.Fatal("expected non-nil event")
+	}
 	if ev.PendingBackgroundAgentCount != nil {
-		t.Errorf("PendingBackgroundAgentCount = %v, want nil when the field is absent", *ev.PendingBackgroundAgentCount)
+		t.Errorf("PendingBackgroundAgentCount = %d, want nil on a fieldless stop_hook_summary",
+			*ev.PendingBackgroundAgentCount)
 	}
 }
 
