@@ -181,7 +181,7 @@ source "$_DRIVE_LIB/teardown.sh"
 # it is invisible to the daemon and MUST NOT be used for recording (FINDINGS.md
 # §7). slash commands reach the live TUI directly (a bare send "/cmd" is NOT
 # stored as literal text), so DRIVE_SLASH_REQUIRES_STEP_TYPE stays false.
-DRIVE_ELICITS="send slash wait_turn sleep keys interrupt restart resume reset_session sigkill exit_clean start_session session"
+DRIVE_ELICITS="send slash wait_turn sleep keys rewind_fork interrupt restart resume reset_session sigkill exit_clean start_session session"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
@@ -393,6 +393,65 @@ send_keys() { # <key-token-list>
   tmux send-keys -t "$SESSION" $keys
   echo "[driver] keys[s$ACTIVE]: $keys (no turn expected)" >&2
   sleep 0.3
+}
+
+# /rewind forks the active conversation into a new session while keeping the
+# same terminal process and cwd. The new sidecar names the original session in
+# top-level parent_session_id; record both transcripts so curation retains the
+# original's removal and the fork's post-rewind turn.
+step_rewind_fork() {
+  local parent_uuid="$UUID" parent_transcript="$TRANSCRIPT" child_sidecar="" child_uuid="" fork_ready=false
+  [[ -n "$parent_uuid" && -n "$parent_transcript" ]] || {
+    echo "[driver] rewind_fork[s$ACTIVE]: no resolved parent session" >&2
+    EXIT_REASON="$NONZERO_2"
+    return 1
+  }
+
+  for _ in $(seq 1 60); do
+    for child_sidecar in "$KIRO_SESSIONS_DIR"/*.json; do
+      [[ -f "$child_sidecar" ]] || continue
+      child_uuid="$(basename "$child_sidecar" .json)"
+      [[ "$child_uuid" == "$parent_uuid" ]] && continue
+      jq -e --arg parent "$parent_uuid" '.parent_session_id == $parent' "$child_sidecar" >/dev/null 2>&1 || continue
+      [[ -s "$KIRO_SESSIONS_DIR/$child_uuid.jsonl" ]] || continue
+
+      save_active
+      N_SLOTS=$((N_SLOTS + 1))
+      SES_SESSION[$N_SLOTS]="$SESSION"
+      SES_TRANSCRIPT[$N_SLOTS]="$KIRO_SESSIONS_DIR/$child_uuid.jsonl"
+      SES_UUID[$N_SLOTS]="$child_uuid"
+      SES_EXPECTED[$N_SLOTS]=0
+      SES_MARKER[$N_SLOTS]="$MARKER"
+      SES_CWD[$N_SLOTS]="${SES_CWD[$ACTIVE]}"
+      SES_ALIVE[$N_SLOTS]=1
+      ACTIVE=$N_SLOTS
+      TRANSCRIPT="${SES_TRANSCRIPT[$ACTIVE]}"
+      UUID="$child_uuid"
+      EXPECTED_TURNS=0
+      # The sidecar appears before the TUI finishes loading the fork. Do not
+      # deliver the next recipe prompt into that transition screen.
+      for _ in $(seq 1 60); do
+        if tmux capture-pane -t "$SESSION" -p -S -20 2>/dev/null | grep -q 'ask a question or describe a task'; then
+          sleep 1
+          fork_ready=true
+          break
+        fi
+        sleep 0.5
+      done
+      if [[ "$fork_ready" != true ]]; then
+        echo "[driver] rewind_fork[s$ACTIVE]: forked TUI did not become ready" >&2
+        EXIT_REASON="readiness_timeout"
+        return 1
+      fi
+      echo "[driver] rewind_fork: parent=$parent_uuid child=$child_uuid (slot=$ACTIVE)" >&2
+      return 0
+    done
+    sleep 0.5
+  done
+
+  echo "[driver] rewind_fork[s$ACTIVE]: no forked session with parent_session_id=$parent_uuid" >&2
+  EXIT_REASON="readiness_timeout"
+  return 1
 }
 
 # --- AGENT-SPECIFIC SEAM: interrupt — cancel the in-flight turn (Escape) -----
@@ -734,6 +793,7 @@ while IFS= read -r step; do
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)       step_interrupt ;;
     keys)            send_keys "$(jq -r '.keys' <<<"$step")" ;;
+    rewind_fork)     step_rewind_fork || STEP_OK=false ;;
     reset_session)   step_reset_session || STEP_OK=false ;;
     restart)         step_restart ;;
     resume)          step_resume || STEP_OK=false ;;

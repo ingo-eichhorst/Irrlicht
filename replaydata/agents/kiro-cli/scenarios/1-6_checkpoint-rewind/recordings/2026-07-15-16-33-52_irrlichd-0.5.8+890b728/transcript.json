@@ -1,0 +1,139 @@
+{
+  "session_id": "8799deca-3405-4e04-9328-f76e07e48669",
+  "cwd": "/Users/ingo/projects/irrlicht/.claude/worktrees/1064-kirocli-rewind-v3-storage/.build/refresh/kiro-cli/1-6_checkpoint-rewind-20260715T143349/cwd",
+  "created_at": "2026-07-15T14:33:56.738428Z",
+  "updated_at": "2026-07-15T14:34:16.695508Z",
+  "title": "Reply with exactly the word: one",
+  "session_created_reason": "subagent",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [
+        {
+          "loop_id": {
+            "agent_id": {
+              "name": "kiro_default",
+              "parent_id": null,
+              "rand": null
+            },
+            "rand": 3292245806
+          },
+          "result": {
+            "Ok": {
+              "id": "a54a4a36-b463-48dd-83e4-15db456fa782",
+              "role": "assistant",
+              "content": [
+                {
+                  "kind": "text",
+                  "data": "one"
+                }
+              ],
+              "meta": {
+                "timestamp": 1784126038
+              }
+            }
+          },
+          "message_ids": [
+            "8cc97f5e-873e-4b57-9406-7466f5345b6c",
+            "1cc27212-7f11-44b4-be30-0e0504e97c32"
+          ],
+          "total_request_count": 1,
+          "number_of_cycles": 0,
+          "builtin_tool_uses": 0,
+          "turn_duration": {
+            "secs": 1,
+            "nanos": 509650625
+          },
+          "end_reason": "UserTurnEnd",
+          "end_timestamp": "2026-07-15T14:33:58.748901Z",
+          "input_token_count": 0,
+          "output_token_count": 0,
+          "context_usage_percentage": 4.566797,
+          "metering_usage": [
+            {
+              "value": 0.015805053067993367,
+              "unit": "credit",
+              "unitPlural": "credits"
+            }
+          ]
+        },
+        {
+          "loop_id": {
+            "agent_id": {
+              "name": "kiro_default",
+              "parent_id": null,
+              "rand": null
+            },
+            "rand": 64961948
+          },
+          "result": {
+            "Ok": {
+              "id": "5d0e1881-4da0-48be-a229-aed07bd5d545",
+              "role": "assistant",
+              "content": [
+                {
+                  "kind": "text",
+                  "data": "two"
+                }
+              ],
+              "meta": {
+                "timestamp": 1784126046
+              }
+            }
+          },
+          "message_ids": [
+            "69de12a7-5804-4a4f-a2ec-b65fbf09a54d",
+            "4f8b858e-2b0a-4bd8-a46d-40ba52e102a7"
+          ],
+          "total_request_count": 1,
+          "number_of_cycles": 0,
+          "builtin_tool_uses": 0,
+          "turn_duration": {
+            "secs": 3,
+            "nanos": 205879833
+          },
+          "end_reason": "UserTurnEnd",
+          "end_timestamp": "2026-07-15T14:34:06.977431Z",
+          "input_token_count": 0,
+          "output_token_count": 0,
+          "context_usage_percentage": 4.5960937,
+          "metering_usage": [
+            {
+              "value": 0.015906421227197348,
+              "unit": "credit",
+              "unitPlural": "credits"
+            }
+          ]
+        }
+      ],
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "8799deca-3405-4e04-9328-f76e07e48669",
+      "model_info": {
+        "model_name": "qwen3-coder-next",
+        "description": "Experimental preview of Qwen3 Coder Next",
+        "model_id": "qwen3-coder-next",
+        "context_window_tokens": 256000,
+        "rate_multiplier": 0.05,
+        "rate_unit": "Credit"
+      },
+      "context_usage_percentage": 4.5960937
+    },
+    "permissions": {
+      "filesystem": {
+        "allowed_read_paths": [
+          "/Users/ingo/projects/irrlicht/.claude/worktrees/1064-kirocli-rewind-v3-storage/.build/refresh/kiro-cli/1-6_checkpoint-rewind-20260715T143349/cwd"
+        ],
+        "allowed_write_paths": [],
+        "denied_read_paths": [],
+        "denied_write_paths": []
+      },
+      "trusted_tools": [],
+      "denied_tools": [],
+      "allowed_commands": []
+    },
+    "agent_name": "kiro_default"
+  }
+}

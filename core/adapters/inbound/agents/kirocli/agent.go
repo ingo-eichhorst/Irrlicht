@@ -49,12 +49,13 @@ func Agent() agent.Agent {
 				Kind:            permission.KindObserve,
 				Title:           "Read session transcripts",
 				FeatureUnlocked: "Session list, timeline & live state",
-				Touches: "Reads session transcripts under ~/.kiro/sessions/cli/ " +
+				Touches: "Reads Kiro CLI v2 session transcripts under ~/.kiro/sessions/cli/ " +
 					"(or $KIRO_HOME/sessions/cli/ if KIRO_HOME is set)",
-				Detail: "Tails *.jsonl session files under ~/.kiro/sessions/cli/ " +
+				Detail: "Tails Kiro CLI v2 *.jsonl session files under ~/.kiro/sessions/cli/ " +
 					"(relocated to $KIRO_HOME/sessions/cli/ if KIRO_HOME is set) to " +
 					"derive session state and activity, and reads the *.json " +
-					"metadata sidecar for the working directory. Read-only — no " +
+					"metadata sidecar for the working directory. Kiro CLI V3 uses an " +
+					"incompatible per-workspace format and is not monitored. Read-only — no " +
 					"file is ever modified. Toggling off stops all reading " +
 					"immediately.",
 			},

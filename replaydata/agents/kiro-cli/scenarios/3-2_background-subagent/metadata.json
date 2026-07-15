@@ -4,85 +4,33 @@
     "agent_supports": "yes",
     "daemon_capability": "incapable",
     "driver_capability": "ready",
-    "agent_cli_version": "2.5.1",
-    "daemon_version": "0.4.8+7042b3f.dirty",
-    "confidence": 0.82,
-    "notes": "agent_supports: yes (kiro-cli 2.5.1 /spawn 'Spawn a new agent session with a task to run in parallel' + use_subagent tool) — daemon_capability: incapable: a spawned child writes its OWN independent ~/.kiro/sessions/cli/<uuid>.jsonl with NO parent reference in any field the adapter reads (JSONL keys = version/kind/data only; sidecar .json marks session_created_reason='subagent' but carries no parent_id), so the kiro adapter (FilesUnderRoot + parser with zero ParentSessionID logic) can never link the child to its parent or hold the parent working → route: frozen"
+    "agent_cli_version": "2.6.0",
+    "daemon_version": "0.5.8+f87ebdb0",
+    "confidence": 0.88,
+    "notes": "Corrected after the 2026-07-15 rewind record: Kiro sidecars can carry a top-level parent_session_id, disproving the former claim that no parent field exists at any depth. The current adapter still tails JSONL and uses sidecars only for cwd, so it cannot project a spawned child edge as ParentSessionID; this cell remains frozen pending a real /spawn trace plus adapter support."
   },
   "details": {
     "assessment": {
       "schema_version": 1,
       "scenario_id": "background-subagent",
       "agent": "kiro-cli",
-      "assessed_at": "2026-06-05T00:00:00Z",
+      "assessed_at": "2026-07-15T14:33:50Z",
       "agent_supports": "yes",
       "daemon_capability": "incapable",
       "driver_capability": "ready",
-      "confidence": 0.82,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n→ route: **frozen** (irrlicht's kiro-cli adapter fundamentally cannot link a spawned sub-agent to its parent)\n\n## The scenario's user-observable signal (unified rule)\n\n`background-subagent` (scenario id 3.2): the parent dispatches a fire-and-forget child, finishes its OWN reply (parent assistant turn reaches `end_turn`/turn_done), yet the SESSION stays `working` while the detached child is alive; `SubagentCount(parent)` INCLUDES the live child; the session goes `working → ready` only after the last background child drains. Same daemon mechanism as `foreground-subagent` (reevaluateParent holds the parent on `hasActiveChildren`; ComputeSubagentSummary counts the live child); the distinguishing observable is the TIMING (parent turn_done lands BEFORE child drain). EVERY assertion here is a parent↔child LINK assertion — it presupposes the daemon has bound the child session to the parent.\n\n## agent_supports: yes (kiro-cli 2.5.1 ships parallel sub-agents)\n\nThe installed `Kiro CLI.app` chat binary (`kiro-cli-chat`, v2.5.1) exposes TWO surfaces for the background-subagent shape (`strings` scan of the binary):\n\n- **`/spawn`** — the slash command's embedded doc block is `\"title\": \"/spawn\", \"description\": \"Spawn a new agent session with a task to run in parallel\", \"path\": \"slash-commands/spawn.md\"`. The verb is literally \"spawn a NEW agent session\" that runs \"in parallel\" — a fire-and-forget detached dispatch (the parent's own turn does not block on it; the spawn creates a sibling session). FINDINGS.md §8 lists `spawn` in the live 2.5.1 slash surface.\n- **`use_subagent`** — the base prompt block: \"**Subagent System** - Delegate complex, multi-step tasks to specialized subagents that run in parallel with isolated context. This prevents context bloat in the main conversation while handling auxiliary tasks efficiently. Use the `use_subagent` tool when tasks can be broken into independent subtasks.\" The local subagent store is the `.kiro/.subagents` path constant (also in the binary).\n\nEither surface is ELICITABLE from a recipe `send` (\"spawn a parallel agent that …\"). So agent_supports is an honest `yes`, held at confidence 0.82 because the surface is read from binary strings + the live smoke (FINDINGS.md), not from a live `/spawn` dispatch that was itself recorded through the daemon — the exact transcript shape a spawned child produces is inferred from the sidecar's `session_created_reason: \"subagent\"` marker (see below), not from a captured parent+child pair.\n\n## daemon_capability: incapable (the parent→child link never reaches the watched Source)\n\nThis is the load-bearing pillar. The irrlicht kiro-cli adapter (`core/adapters/inbound/agents/kirocli/agent.go`) is `Source: FilesUnderRoot{Dir: \".kiro/sessions/cli\"}` with `JSONLineParser{Parser}` — it tails `~/.kiro/sessions/cli/*.jsonl` and reads the sibling `<uuid>.json` sidecar ONLY for cwd (`pid.go` → `transcript.ExtractCWDFromSidecar`). The parser (`parser.go`) has ZERO parent-linking logic — no `ParentSessionID`, no sidechain/child discovery; it only emits `user_message` / `assistant` (+ToolUses) / `turn_done` / `tool_result` per line. A `/spawn` child is just another top-level `<uuid>.jsonl` in the same flat directory.\n\nWhere would the parent→child relationship live? It DOESN'T reach the watched Source:\n\n1. **The JSONL transcript has no parent field.** Live smoke session top-level keys are `version`, `kind`, `data` ONLY (the versioned envelope). No `parentId` / `parentSessionId` anywhere in the lines. (The strings `parentId`/`parentSessionId`/`parent_id`/`parent_session_id` DO exist in the chat binary, but they are not written into the session JSONL — they belong to internal/protocol structs, not the on-disk transcript.)\n2. **The sidecar `.json` marks the child but not its parent.** Recursive key dump of a live `session_created_reason: \"subagent\"` sidecar: top-level keys are `created_at`, `cwd`, `session_created_reason`, `session_id`, `session_state`, `title`, `updated_at`; `session_state` nests `conversation_metadata.user_turn_metadatas[]` (loop_id, result, message_ids, metering_usage, …). There is NO `parent_id` / `parent_session_id` / `spawned_by` / parent-thread field at ANY depth. `session_created_reason: \"subagent\"` tells you a session IS a subagent — but NOT whose. The forward edge (parent → which child) is nowhere on disk in a field the adapter reads.\n\nNet: when kiro-cli spawns a parallel sub-agent, irrlicht's kiro Source receives an independent, UNLINKED `<uuid>.jsonl` with no parent reference. The daemon cannot bind the child to the parent, so `SubagentCount(parent)` can never include it and `reevaluateParent` is never engaged — the parent simply settles `working → ready` at its own turn_done, with the child as a stray top-level kiro session. The scenario's entire user-observable arc (parent held working by a linked live child; subagent count steps down; parent settles only after the last child drains) is UNOBSERVABLE with no adapter-readable parent trace. This is an architecture limit of the kiro adapter's transport, not a mishandled trace — hence `incapable`, not `bug`. (It is also NOT a driver gap: the recipe step types all exist; the limit is upstream of the driver.) This mirrors the codex cell exactly: codex persists its spawn edge only in `state_5.sqlite thread_spawn_edges`, never in the rollout JSONL it tails; kiro has no equivalent on-disk parent reference at all.\n\n## What would unblock this cell (re-assess triggers)\n\nThe agent CAN do it; the gap is purely that no adapter-readable parent reference exists. This flips to `daemon=full` if EITHER: (a) a future kiro-cli release writes a `parent_session_id` (or equivalent) INTO the child's `<uuid>.json` sidecar or `<uuid>.jsonl` envelope, and the kiro adapter is taught to project it as `ParentSessionID`; or (b) kiro exposes an adapter-readable spawn-edge store (analogous to codex's `thread_spawn_edges` or opencode's ProcessOwnedStore SQLite) that the adapter reads to recover parent→child. The `.kiro/.subagents` store is a candidate if it persists the edge in a stable, readable shape. Until then the cell stays frozen.\n\n## driver_capability: ready\n\nNot the blocker, recorded for completeness. The kiro-cli interactive driver (`replaydata/agents/kiro-cli/driver-interactive.sh`) has `DRIVE_ELICITS=\"send slash wait_turn sleep\"` — exactly the step types a background-subagent recipe needs (`send` the spawn-parallel-agents prompt, `wait_turn` for the parent's turn_done, `sleep` across the child lifetime). No `gap:*`. Driver readiness is moot while daemon=incapable freezes the route.\n\n## Observations (no tokens/cost/model from kiro JSONL)\n\nPer FINDINGS.md §4 + the live sidecar: the kiro `<uuid>.jsonl` carries NO model/usage/cost; `input_token_count`/`output_token_count` are 0; metering is in `credits`, not tokens, and the kiro adapter does not read the sidecar's metering in v1. So a hypothetical recording would observe `model: unknown`, `cost_nonzero: false`, `tokens_nonzero: false`. Recorded on the meta line for when the unblock above lands.\n\n## Routing\n\nagent=yes, daemon=incapable, driver=ready → **frozen** (the agent performs it, but irrlicht fundamentally cannot observe it with the current kiro transport). No recording; no spec phases beyond the meta. Re-assess when a parent-link reaches an adapter-readable Source.",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\nKiro exposes /spawn and subagent tools, so the agent supports the background-agent primitive. The old assessment was too broad: a live /rewind child sidecar in Kiro 2.6.0 contains top-level parent_session_id, proving this storage schema can persist an edge. That does not prove a /spawn child has the same edge.\n\nThe daemon remains incapable today because the Kiro adapter tails only *.jsonl and reads the sibling .json sidecar solely to obtain cwd; neither the parser nor session discovery projects parent_session_id into ParentSessionID. Thus even an observed /spawn edge would currently surface as an unlinked top-level session.\n\n## Unblock\n\nCapture a real /spawn parent/child pair and teach the adapter's sidecar path to emit the verified parent_session_id as ParentSessionID. Then re-assess this cell; do not infer /spawn semantics from the rewind record alone.",
       "caveats": [
-        "agent_supports=yes is read from a strings scan of the kiro-cli 2.5.1 chat binary (/spawn slash-command doc 'Spawn a new agent session with a task to run in parallel' + the use_subagent 'run in parallel with isolated context' base-prompt block + the .kiro/.subagents path constant) and the live smoke (FINDINGS.md §8 lists 'spawn' in the slash surface). It is NOT read from a captured parent+child /spawn pair recorded through the daemon. confidence 0.82: the parallel-subagent surface is unambiguous in the binary, but the exact dual-session transcript shape (and whether a /spawn child is ever ephemeral) is inferred from the single 'session_created_reason: subagent' sidecar, not a captured spawn.",
-        "daemon=incapable is anchored in code + live file inspection: the kiro adapter Source is FilesUnderRoot over ~/.kiro/sessions/cli/*.jsonl with a parser that has no ParentSessionID logic, and reads the sidecar .json only for cwd. The child sidecar records session_created_reason='subagent' but has NO parent_id/parent_session_id/spawned_by at any depth (recursive key dump), and the JSONL envelope keys are version/kind/data only. If a future kiro release writes a parent-link into the sidecar/JSONL, or the adapter starts reading an .kiro/.subagents spawn-edge store, this flips to daemon=full — re-assess on either.",
-        "The strings parentId/parentSessionId/parent_id/parent_session_id EXIST in the chat binary but are NOT emitted to the on-disk session JSONL or sidecar (verified by the live smoke's actual keys) — they are internal/protocol struct fields, not a persisted, adapter-readable parent reference. Do not mistake their presence in the binary for an observable link.",
-        "This is the LOCAL /spawn + use_subagent surface, not a cloud/hosted long-running agent (cloud-background-agent, 1.7), which is separately scoped."
+        "The rewind child is not evidence that every Kiro child type, including /spawn, writes parent_session_id.",
+        "The prior absolute 'NO parent field at any depth' claim was false and has been removed.",
+        "The driver can run the needed send, wait_turn, and sleep steps once daemon observability is available."
       ],
       "sources": [
-        {
-          "kind": "file",
-          "ref": "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat",
-          "note": "strings scan of the kiro-cli 2.5.1 chat binary. (1) Embedded slash-command doc block: '\"title\": \"/spawn\", \"description\": \"Spawn a new agent session with a task to run in parallel\", \"path\": \"slash-commands/spawn.md\"' — establishes the fire-and-forget parallel-agent surface. (2) Base prompt: '**Subagent System** - Delegate complex, multi-step tasks to specialized subagents that run in parallel with isolated context … Use the use_subagent tool when tasks can be broken into independent subtasks.' (3) Path constant '.kiro/.subagents' (the local subagent store). (4) The strings parentId/parentSessionId/parent_id/parent_session_id are present as internal struct names but are NOT written to the on-disk session JSONL/sidecar. ESTABLISHES agent_supports=yes."
-        },
-        {
-          "kind": "file",
-          "ref": ".build/refresh/kiro-cli-smoke/FINDINGS.md",
-          "note": "Live kiro-cli 2.5.1 smoke. §4: event vocabulary is Prompt/AssistantMessage/ToolResults/Clear with NO model/usage/cost in the JSONL; the <uuid>.json sidecar has metering_usage (credits) + context_usage_percentage + model_id but input/output_token_count = 0. §8: slash surface includes 'spawn'. Grounds agent_supports=yes and the observations vector (model unknown / cost_nonzero false / tokens_nonzero false)."
-        },
-        {
-          "kind": "file",
-          "ref": ".build/refresh/kiro-cli-smoke/c423461a-e49e-4d30-8101-6ee082d28483.json",
-          "note": "Live session sidecar with session_created_reason='subagent'. Recursive key dump: top-level created_at/cwd/session_created_reason/session_id/session_state/title/updated_at; session_state nests conversation_metadata.user_turn_metadatas[] (loop_id, result, message_ids, metering_usage in credits, input/output_token_count=0). NO parent_id/parent_session_id/spawned_by/parent-thread field at ANY depth — a subagent session knows it IS a subagent but NOT whose. This is the decisive evidence: the parent→child link is nowhere on disk in a field the adapter reads."
-        },
-        {
-          "kind": "file",
-          "ref": ".build/refresh/kiro-cli-smoke/c423461a-e49e-4d30-8101-6ee082d28483.jsonl",
-          "note": "Live session transcript. Top-level keys are version/kind/data ONLY (the versioned envelope); kinds = Prompt/AssistantMessage/ToolResults/Clear. No parent reference in any line. A /spawn child would be an independent <uuid>.jsonl of the same flat shape under ~/.kiro/sessions/cli/, unlinked."
-        },
-        {
-          "kind": "file",
-          "ref": "core/adapters/inbound/agents/kirocli/agent.go",
-          "note": "Source: FilesUnderRoot{Dir: \".kiro/sessions/cli\", JSONLineParser{Parser}} — the adapter tails ~/.kiro/sessions/cli/*.jsonl only. ProcessMatcher = ExactName{kiro-cli}; PIDForSession = DiscoverPID (CWD match). It does not read any spawn-edge store."
-        },
-        {
-          "kind": "file",
-          "ref": "core/adapters/inbound/agents/kirocli/parser.go",
-          "note": "The kiro line parser has NO parent-linking logic — no ParentSessionID assignment, no sidechain/child discovery. It maps Prompt→user_message, AssistantMessage(toolUse)→assistant+ToolUses, AssistantMessage(text-only)→turn_done, ToolResults→tool_result, Clear→skip. A spawned sub-agent's <uuid>.jsonl, even when discovered as a session, is an unlinked top-level kiro session."
-        },
-        {
-          "kind": "file",
-          "ref": "core/adapters/inbound/agents/kirocli/pid.go",
-          "note": "DiscoverPID reads the <uuid>.json sidecar via transcript.ExtractCWDFromSidecar ONLY for cwd (when the caller has none yet). The adapter's only use of the sidecar is cwd — it does not project any parent reference from it. So even the sidecar's session_created_reason='subagent' is invisible to linkage."
-        },
-        {
-          "kind": "file",
-          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
-          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep\" — every step a background-subagent recipe would need (send the spawn-parallel prompt, wait_turn for the parent turn_done, sleep across the child lifetime). driver_capability=ready (moot under the frozen route, recorded for completeness). The multi-session/signal arms (restart, start_session, …) remain stubbed but this scenario needs none of them."
-        },
-        {
-          "kind": "file",
-          "ref": "replaydata/agents/codex/scenarios/3-2_background-subagent/metadata.json",
-          "note": "Calibration cell (codex, daemon=incapable, route=frozen): codex CAN spawn (spawn_agent/wait_agent) but the parent→child edge lives only in ~/.codex/state_5.sqlite thread_spawn_edges, never in the rollout JSONL the adapter tails. kiro-cli is the SAME shape — agent capable, but no adapter-readable parent reference reaches the watched Source. Contrast the claudecode cell (daemon=full), where each child is written as <parent>/subagents/agent-*.jsonl UNDER the watched transcriptsDir and discovered as a file-based child SessionState linked by ParentSessionID; kiro has no such nested/parent-bearing layout."
-        }
+        {"kind": "file", "ref": "~/.kiro/sessions/cli/08c7f033-67e3-4de1-941d-07c4cfe171d2.json", "note": "Live rewind child sidecar with top-level parent_session_id."},
+        {"kind": "file", "ref": "core/adapters/inbound/agents/kirocli/pid.go", "note": "Sidecar is used for cwd discovery only; no parent projection."},
+        {"kind": "file", "ref": "core/adapters/inbound/agents/kirocli/parser.go", "note": "Parser has no ParentSessionID emission."}
       ]
     },
-    "recipe": {
-      "applicable": false,
-      "frozen_reason": "daemon=incapable: the kiro-cli adapter tails ~/.kiro/sessions/cli/*.jsonl (flat, one <uuid>.jsonl per session) and reads the <uuid>.json sidecar only for cwd. A /spawn (or use_subagent) child writes its OWN independent <uuid>.jsonl with NO parent reference anywhere the adapter reads: the JSONL envelope keys are version/kind/data only, and the sidecar marks session_created_reason='subagent' but carries no parent_id/parent_session_id/spawned_by at any depth. So irrlicht cannot bind the child to the parent — the held-working / SubagentCount-includes-child arc this scenario asserts is unobservable. The agent CAN perform the behavior (/spawn 'Spawn a new agent session … in parallel' + use_subagent in kiro-cli 2.5.1); the gap is purely that no adapter-readable parent link exists. Unblock: a future kiro release that writes a parent-link into the sidecar/JSONL, OR teaching the adapter to read a stable .kiro/.subagents spawn-edge store and project parent→child as ParentSessionID — then re-assess to daemon=full. Same architecture limit as the codex cell.",
-      "preconditions": [],
-      "setup": [],
-      "script": [],
-      "verify": [],
-      "settings": {},
-      "timeout_seconds": 0
-    }
+    "recipe": {"applicable": false, "frozen_reason": "Await a real /spawn trace and adapter support for projecting a verified sidecar parent_session_id.", "script": []}
   }
 }
