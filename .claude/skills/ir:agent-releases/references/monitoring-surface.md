@@ -235,12 +235,9 @@ The single highest-value thing to know per adapter. **Four adapters get an expli
 
 ### 5. Mistral Vibe (`mistral-vibe`)
 
-- **Transcript path**: `~/.vibe/logs/session/<session-dir>/messages.jsonl`, plus a **sibling `meta.json`** (tier (b) — load-bearing, see below).
+- **Transcript path**: `$VIBE_HOME/logs/session/<session-dir>/messages.jsonl` (default `~/.vibe/logs/session`), plus a **sibling `meta.json`** (tier (b) — load-bearing, see below).
 - **Session ID = the directory name, and irrlicht reads no naming shape.** ⚠️ **corrected (#1090):** there is no glob and no regex. `sessionIDFromPath` (`adapter.go:56-65`) accepts a file iff its basename is exactly `messages.jsonl`, then takes `filepath.Base(filepath.Dir(path))` as the ID. Upstream *does* mint `session_<ts>_<shortid>`, but **nothing in irrlicht parses it** — a bare `<session-id>` dir would work identically. Do not write that irrlicht depends on the timestamp pattern.
-- **Env override: irrlicht honors NONE — and this may already be a live gap.** ⚠️ **corrected (#1090), then re-corrected — read carefully, the two halves are about different subjects:**
-  - **irrlicht side**: `sessionsDir()` (`adapter.go:30`) is a bare constant. No `$VIBE_HOME` support. Its comment justifies this with "Vibe documents no env var that relocates this root" — but *undocumented* is not *absent*, and that comment appears to have been written from upstream's **docs**, not its source.
-  - **upstream side**: `tracked-releases.md:235` records, verified against upstream **source** at tag, `SESSION_LOG_DIR = VIBE_HOME/"logs"/"session"` with `VIBE_HOME = ~/.vibe` **overridable via `$VIBE_HOME`**.
-  - **If that holds, this is not a hypothetical break — it is a live blackout**: any user who sets `$VIBE_HOME` has every vibe session silently invisible to irrlicht today (the watcher blocks in `waitForRoot` on a directory that never appears). **Not yet confirmed against a vibe checkout — tracked as #1095; resolve it before trusting either claim.** Whichever way it lands, exactly one file should assert it.
+- **Env override**: **`VIBE_HOME`** (#1095, `adapter.go`) → `<VIBE_HOME>/logs/session`. **Absolute paths only** — a relative or `~`-prefixed value is logged and ignored, so irrlicht is narrower than upstream, which also `expanduser().resolve()`s those. Same two caveats as `KIRO_HOME` below: it's a **boot-time snapshot**, and irrlicht watches **exactly one** root. Upstream honors it in **source but not in its docs** (v2.19.1 `vibe/core/paths/_vibe_home.py`) — which is why the adapter was hardcoded until #1095; the old "Vibe documents no env var" comment read the docs, not the source. `adapter.go`'s `vibeHomeEnvVar` is the single assertion of this fact.
 - **Process**: `agent.CommandPattern{Regex: "(^|/)vibe( |$)|mistral-vibe/bin/python"}` → `pgrep -f` over the **full command line** (`adapter.go:43`, `agent.go:30`). Vibe is a Python console-script with no `setproctitle`, so `ExactName{"vibe"}` would never fire. No `ExcludeArgv`.
 - **PID discovery**: `DiscoverPIDByCWDAndCmdLine` (`pid.go:16-21`) — cmdline regex, then narrow by CWD.
 - **CWD comes only from `meta.json`.** The JSONL carries none. **No sidecar → no cwd → `DiscoverPID` early-returns `0, nil` → no PID bind**, and the session is exposed to the unbound-ghost reaper.
@@ -270,7 +267,7 @@ Read on `turn_done` only; memoized by `(mtime, size)`; failures return last-good
 
 #### What breaks it
 - Rename `messages.jsonl`, move the root, drop the `.jsonl` extension, or flatten to `<root>/<id>.jsonl` (which would collapse every session onto the ID `session`) → **silent total blackout**.
-- `$VIBE_HOME` (see above — possibly already live) or any XDG relocation → same.
+- Any XDG relocation, or a **second** relocation seam landing alongside `$VIBE_HOME` → same. (`$VIBE_HOME` itself is handled — see Env override above.) One such seam already exists and is **unhandled**: `[session_logging].save_dir` in `config.toml` overrides the session root outright (`vibe/core/config/models.py`, defaulting to `SESSION_LOG_DIR`); irrlicht reads no vibe config, so a user who sets it is invisible.
 - Drop/rename `meta.json` or `environment.working_directory` → no PID bind, no model, no tokens, no context window, in one stroke.
 - Adopt `setproctitle`, or launch as `python -m vibe.cli` → the cmdline regex never fires.
 - Emit a trailing summary/telemetry line after the final assistant message → premature `ready`.

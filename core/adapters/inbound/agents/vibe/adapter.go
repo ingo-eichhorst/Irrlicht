@@ -1,5 +1,6 @@
 // Package vibe provides an inbound adapter that watches Mistral Vibe
-// transcript files under ~/.vibe/logs/session/<session-id>/messages.jsonl.
+// transcript files under $VIBE_HOME/logs/session/<session-id>/messages.jsonl
+// (default ~/.vibe/logs/session).
 //
 // Mistral Vibe (https://github.com/mistralai/mistral-vibe) is Mistral AI's
 // open-source CLI coding agent. It appends one JSON object per line to a
@@ -12,6 +13,8 @@ package vibe
 import (
 	"path/filepath"
 	"regexp"
+
+	"irrlicht/core/adapters/inbound/agents/agentpaths"
 )
 
 // AdapterName identifies sessions originating from Mistral Vibe. It matches
@@ -23,11 +26,34 @@ const AdapterName = "mistral-vibe"
 const transcriptFilename = "messages.jsonl"
 
 // defaultRootDir is the path relative to $HOME where Vibe stores session
-// directories. Each session is a <session-id>/ folder holding messages.jsonl
-// (the conversation) and meta.json (the sidecar). Vibe documents no env var
-// that relocates this root, so it is constant — kept as a function to mirror
-// the sibling adapters.
-func sessionsDir() string { return ".vibe/logs/session" }
+// directories when $VIBE_HOME is unset. Each session is a <session-id>/
+// folder holding messages.jsonl (the conversation) and meta.json (the
+// sidecar).
+const defaultRootDir = ".vibe/logs/session"
+
+// vibeHomeEnvVar is the upstream Vibe env var that relocates the agent's home
+// directory (default: ~/.vibe). Verified against the installed package source
+// at v2.19.1 — vibe/core/paths/_vibe_home.py resolves
+//
+//	SESSION_LOG_DIR = VIBE_HOME/"logs"/"session"
+//	VIBE_HOME       = os.getenv("VIBE_HOME") or ~/.vibe
+//
+// so when it is set, sessions move to $VIBE_HOME/logs/session. It is honored
+// in source but absent from Vibe's docs — the previous justification here
+// ("Vibe documents no env var that relocates this root") read the docs, not
+// the source, and was wrong: undocumented is not absent.
+//
+// Note a deliberate narrowing vs upstream: Vibe applies expanduser().resolve()
+// to the value, so it also accepts "~/x" and cwd-relative paths. irrlicht
+// honors absolute values only (agentpaths.FromEnv logs and ignores the rest),
+// matching every sibling adapter rather than reimplementing shell expansion.
+const vibeHomeEnvVar = "VIBE_HOME"
+
+// sessionsDir returns the directory the Vibe adapter should watch —
+// $VIBE_HOME/logs/session when that override is set, else defaultRootDir.
+func sessionsDir() string {
+	return agentpaths.FromEnv("vibe", vibeHomeEnvVar, defaultRootDir, "logs", "session")
+}
 
 // processCmdPattern recognizes a running Vibe process on the full command
 // line. Vibe ships as a Python console-script (no setproctitle), so the OS
