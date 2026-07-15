@@ -77,7 +77,8 @@ you verified against, since it may lag the newest release.
 - Note: sessions have been SQLite (drizzle) since ~2026-02-14, **not** JSON files. Legacy JSON storage still exists in `packages/opencode/src/storage/storage.ts` but `session.ts` no longer routes through it — do not mistake the leftover for live storage.
 - The DB filename is channel-scoped upstream (`opencode-<channel>.db`); stable channels (`latest`/`beta`/`prod`) get plain `opencode.db` — see `packages/core/src/database/database.ts`
 
-#### Gemini CLI
+#### Gemini CLI — ⚠️ unmaintained, skip by default
+- **As of 2026-07-15 this adapter is no longer actively maintained. Skip it in sweeps** unless the user explicitly asks for it. The adapter still ships and still monitors live sessions, but upstream changes are not tracked and the standing watches below are not being acted on. See `references/monitoring-surface.md` §10.
 - Check: `https://github.com/google-gemini/gemini-cli/releases` — **authoritative; the repo has no root `CHANGELOG.md`** (404s on `main`)
 - Releases very frequently (nightlies + previews) — focus on stable, group the rest
 - Best evidence is a local clone + `git diff <old-tag>..<new-tag>` on `packages/core/src/config/storage.ts` and `packages/core/src/services/chatRecordingService.ts`
