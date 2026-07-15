@@ -2,11 +2,7 @@
 // transcript files under ~/.claude/projects/*/*.jsonl.
 package claudecode
 
-import (
-	"log"
-	"os"
-	"path/filepath"
-)
+import "irrlicht/core/adapters/inbound/agents/agentpaths"
 
 // AdapterName identifies sessions originating from Claude Code.
 const AdapterName = "claude-code"
@@ -27,16 +23,9 @@ const defaultProjectsDir = ".claude/projects"
 // is unverified, so pid.go intentionally keeps the hardcoded path.
 const configDirEnvVar = "CLAUDE_CONFIG_DIR"
 
-// transcriptsDir returns the directory the Claude Code adapter should watch.
-// Non-absolute env values are rejected so a misconfigured path surfaces in
-// logs instead of silently watching the wrong place.
+// transcriptsDir returns the directory the Claude Code adapter should watch —
+// $CLAUDE_CONFIG_DIR/projects when that override is set, else
+// defaultProjectsDir.
 func transcriptsDir() string {
-	if v := os.Getenv(configDirEnvVar); v != "" {
-		cleaned := filepath.Clean(v)
-		if filepath.IsAbs(cleaned) {
-			return filepath.Join(cleaned, "projects")
-		}
-		log.Printf("claudecode: ignoring %s=%q — must be an absolute path (no shell expansion)", configDirEnvVar, v)
-	}
-	return defaultProjectsDir
+	return agentpaths.FromEnv("claudecode", configDirEnvVar, defaultProjectsDir, "projects")
 }

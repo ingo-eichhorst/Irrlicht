@@ -2,11 +2,7 @@
 // transcript files under ~/.codex/*/*.jsonl.
 package codex
 
-import (
-	"log"
-	"os"
-	"path/filepath"
-)
+import "irrlicht/core/adapters/inbound/agents/agentpaths"
 
 // AdapterName identifies sessions originating from OpenAI Codex.
 const AdapterName = "codex"
@@ -25,16 +21,8 @@ const defaultRootDir = ".codex/sessions"
 // $CODEX_HOME/sessions.
 const codexHomeEnvVar = "CODEX_HOME"
 
-// sessionsDir returns the directory the Codex adapter should watch. Non-
-// absolute env values are rejected so a misconfigured path surfaces in
-// logs instead of silently watching the wrong place.
+// sessionsDir returns the directory the Codex adapter should watch —
+// $CODEX_HOME/sessions when that override is set, else defaultRootDir.
 func sessionsDir() string {
-	if v := os.Getenv(codexHomeEnvVar); v != "" {
-		cleaned := filepath.Clean(v)
-		if filepath.IsAbs(cleaned) {
-			return filepath.Join(cleaned, "sessions")
-		}
-		log.Printf("codex: ignoring %s=%q — must be an absolute path (no shell expansion)", codexHomeEnvVar, v)
-	}
-	return defaultRootDir
+	return agentpaths.FromEnv("codex", codexHomeEnvVar, defaultRootDir, "sessions")
 }
