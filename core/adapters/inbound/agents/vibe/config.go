@@ -179,32 +179,22 @@ func tomlString(v string) string {
 	}
 	switch v[0] {
 	case '"':
-		// strconv.Unquote covers the escapes a path realistically carries
-		// (\\ and \"); a value it rejects falls back to the default root.
-		if s, err := strconv.Unquote(quotedSpan(v, '"')); err == nil {
+		// QuotedPrefix finds the closing quote across the escapes a path
+		// realistically carries (\\ and \"), which is also what separates the
+		// value from a trailing comment; Unquote then decodes them. A value
+		// either rejects falls back to the default root.
+		p, err := strconv.QuotedPrefix(v)
+		if err != nil {
+			return ""
+		}
+		if s, err := strconv.Unquote(p); err == nil {
 			return s
 		}
 	case '\'':
-		// A literal string has no escapes — its content is verbatim.
-		if span := quotedSpan(v, '\''); len(span) >= 2 {
-			return span[1 : len(span)-1]
-		}
-	}
-	return ""
-}
-
-// quotedSpan returns v's leading quoted run including both quotes, or "" when
-// the quote is never closed. Escapes are honored only for basic strings, which
-// is where TOML defines them.
-func quotedSpan(v string, quote byte) string {
-	escaped := quote == '"'
-	for i := 1; i < len(v); i++ {
-		if escaped && v[i] == '\\' {
-			i++
-			continue
-		}
-		if v[i] == quote {
-			return v[:i+1]
+		// A TOML literal string has no escapes, so its content runs verbatim
+		// to the next quote.
+		if end := strings.IndexByte(v[1:], '\''); end >= 0 {
+			return v[1 : 1+end]
 		}
 	}
 	return ""

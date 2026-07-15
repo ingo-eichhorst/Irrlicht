@@ -15,20 +15,24 @@ import (
 // Absolute-only, matching the sibling adapters: irrlicht performs no shell
 // expansion, so a relative or "~"-prefixed value is logged and ignored.
 //
-// $HOME is redirected to an empty temp dir throughout: sessionsDir now also
-// reads $VIBE_HOME/config.toml, and a developer running this on a machine
-// with a real ~/.vibe/config.toml would otherwise get that file's save_dir
-// (an absolute path) where the test expects the $HOME-relative default —
-// green in CI, red locally.
+// Both $HOME and the $VIBE_HOME values are pinned to empty temp dirs, because
+// sessionsDir now reads $VIBE_HOME/config.toml rather than only an env var:
+// a real ~/.vibe/config.toml (every Vibe install has one) or a stray
+// config.toml under a hardcoded scratch path would otherwise supply a save_dir
+// where these cases expect the plain path arithmetic — green in CI, red on a
+// developer's machine.
 func TestSessionsDir(t *testing.T) {
+	// An empty temp dir stands in for $VIBE_HOME, so no case names a real
+	// filesystem path that could hold a config.toml.
+	vibeHome := t.TempDir()
 	tests := []struct {
 		name string
 		env  string
 		want string
 	}{
 		{"empty falls back to default", "", defaultRootDir},
-		{"absolute override produces $VIBE_HOME/logs/session", "/tmp/vibe-home", "/tmp/vibe-home/logs/session"},
-		{"trailing slash is cleaned", "/tmp/vibe-home/", "/tmp/vibe-home/logs/session"},
+		{"absolute override produces $VIBE_HOME/logs/session", vibeHome, filepath.Join(vibeHome, "logs", "session")},
+		{"trailing slash is cleaned", vibeHome + "/", filepath.Join(vibeHome, "logs", "session")},
 		{"relative override is rejected (falls back to default)", "relative/home", defaultRootDir},
 		{"tilde-prefixed override is rejected (no shell expansion)", "~/custom", defaultRootDir},
 	}
@@ -60,21 +64,12 @@ func TestSessionsDir_SaveDirOverridesRoot(t *testing.T) {
 		}
 	})
 
-	t.Run("unset save_dir leaves $VIBE_HOME/logs/session", func(t *testing.T) {
+	// No save_dir to apply ⇒ the env override still decides. The reasons a
+	// save_dir yields nothing (unset, unresolvable, absent config) are pinned
+	// on configuredSaveDir itself; this only pins the composition.
+	t.Run("no usable save_dir leaves $VIBE_HOME/logs/session", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
 		home := writeConfig(t, t.TempDir(), "[session_logging]\nenabled = true\n")
-		t.Setenv(vibeHomeEnvVar, home)
-
-		want := filepath.Join(home, "logs", "session")
-		if got := sessionsDir(); got != want {
-			t.Errorf("sessionsDir() = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("unresolvable save_dir leaves $VIBE_HOME/logs/session", func(t *testing.T) {
-		captureLog(t)
-		t.Setenv("HOME", t.TempDir())
-		home := writeConfig(t, t.TempDir(), "[session_logging]\nsave_dir = \"relative/logs\"\n")
 		t.Setenv(vibeHomeEnvVar, home)
 
 		want := filepath.Join(home, "logs", "session")

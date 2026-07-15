@@ -34,7 +34,7 @@ const defaultHomeDirName = ".vibe"
 // directories when $VIBE_HOME is unset. Each session is a <session-id>/
 // folder holding messages.jsonl (the conversation) and meta.json (the
 // sidecar).
-var defaultRootDir = filepath.Join(defaultHomeDirName, "logs", "session")
+const defaultRootDir = defaultHomeDirName + "/logs/session"
 
 // vibeHomeEnvVar is the upstream Vibe env var that relocates the agent's home
 // directory (default: ~/.vibe). Verified against the installed package source

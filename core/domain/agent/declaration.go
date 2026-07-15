@@ -84,6 +84,11 @@ func ControlPermission() Permission {
 // it touches, what feature it unlocks, and (for modify-kind entries) how
 // to apply and undo the modification. The daemon exercises nothing — no
 // install, no read — until the user grants the permission (issue #570).
+// At most ONE observe-kind permission per adapter is meaningful: the gate that
+// enforces observe consent resolves an adapter to its first observe-kind
+// permission, so a second would never be consulted. An adapter that reads an
+// additional file names it in the existing observe permission's Touches/Detail
+// (the user-visible contract) rather than declaring another one.
 type Permission struct {
 	Key             string          // stable identifier, e.g. "hooks", "transcripts"
 	Kind            permission.Kind // modify (writes a file) or observe (reads only)
