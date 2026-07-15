@@ -2,11 +2,7 @@
 // transcript files under ~/.pi/agent/sessions/--<cwd>--/*.jsonl.
 package pi
 
-import (
-	"log"
-	"os"
-	"path/filepath"
-)
+import "irrlicht/core/adapters/inbound/agents/agentpaths"
 
 // AdapterName identifies sessions originating from Pi coding agent.
 const AdapterName = "pi"
@@ -29,12 +25,5 @@ const sessionDirEnvVar = "PI_CODING_AGENT_SESSION_DIR"
 // absolute env values are rejected so a misconfigured path surfaces in
 // logs instead of silently watching the wrong place.
 func sessionsDir() string {
-	if v := os.Getenv(sessionDirEnvVar); v != "" {
-		cleaned := filepath.Clean(v)
-		if filepath.IsAbs(cleaned) {
-			return cleaned
-		}
-		log.Printf("pi: ignoring %s=%q — must be an absolute path (no shell expansion)", sessionDirEnvVar, v)
-	}
-	return defaultRootDir
+	return agentpaths.FromEnv("pi", sessionDirEnvVar, defaultRootDir)
 }

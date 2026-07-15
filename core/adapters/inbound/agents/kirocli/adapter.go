@@ -2,11 +2,7 @@
 // transcript files under ~/.kiro/sessions/cli/<uuid>.jsonl.
 package kirocli
 
-import (
-	"log"
-	"os"
-	"path/filepath"
-)
+import "irrlicht/core/adapters/inbound/agents/agentpaths"
 
 // AdapterName identifies sessions originating from Kiro CLI.
 const AdapterName = "kiro-cli"
@@ -36,12 +32,5 @@ const kiroHomeEnvVar = "KIRO_HOME"
 // absolute env values are rejected so a misconfigured path surfaces in logs
 // instead of silently watching the wrong place.
 func sessionsDir() string {
-	if v := os.Getenv(kiroHomeEnvVar); v != "" {
-		cleaned := filepath.Clean(v)
-		if filepath.IsAbs(cleaned) {
-			return filepath.Join(cleaned, "sessions", "cli")
-		}
-		log.Printf("kirocli: ignoring %s=%q — must be an absolute path (no shell expansion)", kiroHomeEnvVar, v)
-	}
-	return defaultRootDir
+	return agentpaths.FromEnv("kirocli", kiroHomeEnvVar, defaultRootDir, "sessions", "cli")
 }
