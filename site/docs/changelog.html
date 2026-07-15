@@ -89,7 +89,63 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
-      <h2>v0.5.8 <small>(2026-07-15)</small></h2>
+      <h2 id="v0-5-9">v0.5.9 <small>(2026-07-15)</small></h2>
+
+      <h3>A correctness release: sessions no longer wedge at &ldquo;working&rdquo; after a background subagent, and agents whose session directories are relocated by an env var or config key are finally visible instead of silently absent.</h3>
+
+      <p>No new marquee surface this cycle. This one closes a set of gaps where Irrlicht either got a session&rsquo;s state wrong and stayed wrong, or never saw the session at all.</p>
+
+      <p>The headline is a regression introduced in v0.5.8: the <code>pendingBackgroundAgentCount</code> guard from <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1037" target="_blank" rel="noopener">#1037</a> could never release, because Claude Code serializes the count with <code>omitempty</code> &mdash; a zero is written as <em>absence</em>, never as an explicit <code>0</code>. So the release condition the guard waited for never occurred. Any parent session that spawned a single background subagent could never reach <code>ready</code> again for the life of that tailer. v0.5.8 traded a false-<code>ready</code> for a permanent false-<code>working</code>; this release makes the guard actually release.</p>
+
+      <p>The rest is discovery and accounting. Three agents honored environment variables and config keys that relocate their session root, and Irrlicht read none of them &mdash; so setting <code>VIBE_HOME</code>, <code>KIRO_HOME</code>, or Vibe&rsquo;s <code>[session_logging].save_dir</code> made every session from that agent silently invisible, with no error and no log. All three are now read. Alongside that, the transcript tailer learned to notice a file rewritten in place rather than only one that shrank, which is the difference between resuming mid-record on top of stale state and re-reading correctly.</p>
+
+      <h3>Added</h3>
+      <ul>
+        <li><strong>The History Activity chart is now behind a beta toggle</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1080" target="_blank" rel="noopener">#1080</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1075" target="_blank" rel="noopener">#1075</a>) &mdash; in Advanced Settings, default off, on both the web dashboard and the macOS app. The matrix is reconstructed from opt-in recordings, and a never-recorded bucket renders identically to an idle one, so for anyone not recording it was a grid of blanks reading as &ldquo;idle&rdquo;. Turning the toggle off while Activity is on screen backs out to the default chart rather than stranding the view.</li>
+      </ul>
+
+      <h3>Fixed</h3>
+      <ul>
+        <li><strong>A parent session no longer stays stuck at <code>working</code> forever</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1098" target="_blank" rel="noopener">#1098</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1076" target="_blank" rel="noopener">#1076</a>) &mdash; once a Claude Code session had spawned a background subagent. Absence of <code>pendingBackgroundAgentCount</code> on an end-of-turn <code>turn_duration</code> line now normalizes to zero, and the count survives a daemon restart via the ledger instead of going inert.</li>
+        <li><strong>Mistral Vibe sessions are found when <code>$VIBE_HOME</code> is set</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1108" target="_blank" rel="noopener">#1108</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1095" target="_blank" rel="noopener">#1095</a>) &mdash; upstream honors the variable; the adapter hardcoded <code>~/.vibe</code> and found nothing.</li>
+        <li><strong>Mistral Vibe sessions are found when <code>[session_logging].save_dir</code> is set</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1123" target="_blank" rel="noopener">#1123</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1115" target="_blank" rel="noopener">#1115</a>) &mdash; Vibe writes that key into every installation&rsquo;s default <code>config.toml</code> on first run as a resolved absolute path, so it is an inviting edit rather than an obscure knob.</li>
+        <li><strong>Kiro CLI sessions are found when <code>KIRO_HOME</code> is set</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1074" target="_blank" rel="noopener">#1074</a>) &mdash; Kiro CLI v2.3.0 added the variable; the adapter was authored after the sweep that wired the equivalent fix into <code>codex</code>, <code>claudecode</code>, and <code>pi</code>, and was missed.</li>
+        <li><strong>Mistral Vibe tokens and cost no longer flatline at zero after an in-place rewind</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1078" target="_blank" rel="noopener">#1078</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1063" target="_blank" rel="noopener">#1063</a>) &mdash; the parser&rsquo;s token high-water mark and todo reconciler now reset when the tailer detects a rotation, instead of computing a negative delta against the rewound session&rsquo;s smaller counters and clamping to zero for the rest of the session. Vibe&rsquo;s auto-compact threshold also now reads the effective per-model value rather than the global default.</li>
+        <li><strong>The tailer detects a transcript rewritten in place, not just one that shrank</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1120" target="_blank" rel="noopener">#1120</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1104" target="_blank" rel="noopener">#1104</a>) &mdash; a rewrite whose new size was greater than or equal to the last read offset previously took the incremental path, seeking to a stale offset inside a file whose earlier bytes had changed. A fingerprint of the bytes ending at the resume point now catches this, and it is persisted so a rewrite landing while the daemon is down is caught on the next boot.</li>
+        <li><strong>Open tool calls are cleared when a transcript rotates</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1118" target="_blank" rel="noopener">#1118</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1088" target="_blank" rel="noopener">#1088</a>) &mdash; so a call left open in the pre-rotation content can no longer keep a session pinned.</li>
+        <li><strong>Mistral Vibe forces the <code>waiting</code> state when it asks a structured question</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1109" target="_blank" rel="noopener">#1109</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1087" target="_blank" rel="noopener">#1087</a>) &mdash; its tool is named <code>ask_user_question</code>, which the shared user-blocking matcher did not recognize, so Vibe fell through to the trailing-question-mark text heuristic instead. Its <code>write_file</code> tool is also now recognized as a permission-gated edit.</li>
+        <li><strong>History control rows that ask to be hidden are actually hidden</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1101" target="_blank" rel="noopener">#1101</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1079" target="_blank" rel="noopener">#1079</a>) &mdash; an author <code>display: flex</code> on <code>.history-ctl-row</code> outranked the user-agent <code>[hidden]</code> rule, so all three per-chart toggles were silently inert, and two rows shipped the <code>hidden</code> attribute in the markup, so the default page load mis-rendered too.</li>
+      </ul>
+
+      <h3>Changed / Docs / Testing</h3>
+      <ul>
+        <li><code>monitoring-surface.md</code> documents all 10 agent adapters; it previously covered 4 (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1092" target="_blank" rel="noopener">#1092</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1090" target="_blank" rel="noopener">#1090</a>).</li>
+        <li>The structural claims in <code>monitoring-surface.md</code> are now enforced as census tests, so the doc cannot drift from the adapters it describes without a test failing (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1107" target="_blank" rel="noopener">#1107</a>).</li>
+        <li>Five stale source comments were corrected and their remote annotations dropped (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1111" target="_blank" rel="noopener">#1111</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1097" target="_blank" rel="noopener">#1097</a>).</li>
+        <li>The four duplicated copies of the <code>sessionsDir()</code> env-override helper were extracted into one (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1094" target="_blank" rel="noopener">#1094</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1085" target="_blank" rel="noopener">#1085</a>).</li>
+        <li><code>/ir:triage</code> gained an Observability axis with a cost-tiered instrument plan &mdash; it asks whether a reported behavior can be reproduced and observed with what exists today, which is the gap that blocks an agent before verifiability does (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1093" target="_blank" rel="noopener">#1093</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1091" target="_blank" rel="noopener">#1091</a>).</li>
+        <li>The 2026-07-15 agent-release sweep was recorded, and false claims it surfaced across the source and docs were corrected (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1072" target="_blank" rel="noopener">#1072</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1077" target="_blank" rel="noopener">#1077</a>).</li>
+        <li>The Kiro CLI rewind fork lifecycle was re-recorded, and the Vibe rewind driver verdict reconciled against replay (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1105" target="_blank" rel="noopener">#1105</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1124" target="_blank" rel="noopener">#1124</a>).</li>
+        <li>The Vibe checkpoint-rewind daemon premise is scoped to the TUI path in <code>replaydata</code>, matching the ACP-only reachability the rotation fix depends on (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1110" target="_blank" rel="noopener">#1110</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1089" target="_blank" rel="noopener">#1089</a>).</li>
+        <li><strong>Model alias map:</strong> re-synced against codeburn&rsquo;s <code>BUILTIN_ALIASES</code> with no changes this cycle.</li>
+      </ul>
+
+      <h3>Technical appendix</h3>
+      <ul>
+        <li><strong>pendingBackgroundAgentCount guard release (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1098" target="_blank" rel="noopener">#1098</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1076" target="_blank" rel="noopener">#1076</a>):</strong> <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1037" target="_blank" rel="noopener">#1037</a> (v0.5.8) added the guard; its release condition was observing <code>pendingBackgroundAgentCount: 0</code>, which never occurs. Across 1,698 observed <code>turn_duration</code> lines the value <code>0</code> appears zero times, while <code>1</code>&ndash;<code>13</code> appear 176 times and the field is omitted 1,522 times &mdash; it is value-driven, not version-driven. The fix normalizes absent &rarr; <code>0</code> in <code>claudecode/parser.go</code>, scoped to <code>turn_duration</code> only. That scoping is load-bearing: <code>stop_hook_summary</code> shares the same <code>turn_done</code> branch but never carries the field (0 of 88 observed lines), so absence there means &ldquo;no information&rdquo;, not &ldquo;zero&rdquo; &mdash; conflating them would clobber a live non-zero count on every stop-hook event and re-open <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1036" target="_blank" rel="noopener">#1036</a>. Two tests exist purely to lock the scoping. Part 2 persists the count in <code>LedgerState</code> alongside <code>BackgroundProcs</code> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/445" target="_blank" rel="noopener">#445</a>) and <code>LastEventType</code> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/649" target="_blank" rel="noopener">#649</a>), because a restart resumes at <code>LastOffset</code> and processes zero lines, which left the guard inert on every restart. No schema bump.</li>
+        <li><strong>In-place rewrite detection (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1120" target="_blank" rel="noopener">#1120</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1104" target="_blank" rel="noopener">#1104</a>):</strong> <code>TranscriptTailer.TailAndProcess</code> had one rotation check, <code>fileSize &lt; t.lastOffset</code>. The fix hashes the up-to-512 bytes ending at <code>lastOffset</code> after each pass and re-hashes that window before trusting the offset on the next. The soundness argument is one line: an append never rewrites bytes below <code>lastOffset</code>, so a matching window means a genuine append and a mismatch means the consumed prefix was rewritten &mdash; routed through the same reset-and-replay-from-byte-0 path a shrink already used. A newline-boundary probe was rejected as insufficient (the prefix is corrupt whether or not the stale offset lands on a boundary); inode identity was rejected as the wrong signal (an in-place rewrite keeps the inode, and reading it needs build-tagged files on a platform-neutral package). Failure modes are asymmetric by design: a pre-#1104 ledger carrying an offset but no fingerprint, and an unreadable window, both fall back to historical resume-at-offset behavior &mdash; a false positive costs a full re-read, a false negative is what <code>main</code> did. Because <code>resetAccumulatorsForRotation</code> is the only caller of <code>ResetForRotation()</code>, #1063/#1078&rsquo;s <code>rotationResetter</code> opt-in inherited this blind spot exactly &mdash; those fixed what happens <em>on</em> a detected rotation, not detection itself.</li>
+        <li><strong>openToolCalls on rotation (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1118" target="_blank" rel="noopener">#1118</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1088" target="_blank" rel="noopener">#1088</a>):</strong> #1088 was a verification task over four narrow relocation/prune edges, none known broken. Three proved not real and are now pinned by lock tests plus documented evidence: delete-then-create ordering during relocation; subagent relocation detection (unreachable); prune vs. cumulative totals. The fourth was real: <code>resetAccumulatorsForRotation</code> cleared every other per-file accumulator but not <code>openToolCalls</code>. Re-reading from byte 0 re-inserts every surviving <code>tool_use</code> by id and the map is id-keyed, so that much is idempotent &mdash; what it cannot fix is a call left open in the pre-rotation content, which no surviving line re-inserts or closes. The headline relocation finding from parent issue <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1065" target="_blank" rel="noopener">#1065</a> was already solved in <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/877" target="_blank" rel="noopener">#877</a> and is untouched.</li>
+        <li><strong>Vibe rotation parser reset (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1078" target="_blank" rel="noopener">#1078</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1063" target="_blank" rel="noopener">#1063</a>):</strong> Vibe&rsquo;s parser tracks a token high-water mark (<code>lastPromptTokens</code>/<code>lastCompletionTokens</code>) derived from <code>meta.json</code>&rsquo;s session-cumulative counters and emits each turn&rsquo;s delta. Previously unreachable because Vibe&rsquo;s <code>/rewind</code> always forked a new session directory &mdash; 2.19.1 made it reachable via the ACP path only: <code>_overwrite_messages_sync</code> (tempfile + <code>os.replace</code>) is gated on <code>inplace=True</code>, which the TUI does not pass (defaults to <code>inplace=False</code> &rarr; forks) but ACP does, and ACP shares the session directory. Without a parser-side reset the stale high-water mark computes a negative delta, both values clamp to zero, and <code>emitContribution</code>&rsquo;s early return skips updating the mark &mdash; so every subsequent <code>turn_done</code> repeats the clamp. The fix adds an optional <code>rotationResetter</code> interface (<code>ResetForRotation()</code>) the tailer type-asserts for, a no-op for the six other adapters sharing the tailer. Vibe&rsquo;s implementation resets the token high-water mark and the <code>TodoReconciler</code> &mdash; the latter because its synthetic per-todo task IDs are assigned in lockstep with the tailer&rsquo;s <code>taskSeq</code>, which is already reset to 0 on rotation, so leaving <code>nextID</code>/<code>idByKey</code> stale would desync the two ID spaces. Deliberately not reset: <code>path</code> (the file does not change across an in-place rewrite) and <code>sidecarCache</code> (self-invalidates via its own mtime/size check).</li>
+        <li><strong>Vibe <code>$VIBE_HOME</code> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1108" target="_blank" rel="noopener">#1108</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1095" target="_blank" rel="noopener">#1095</a>):</strong> settled against the installed <code>mistral-vibe</code> 2.19.1 package two independent ways &mdash; source read of <code>vibe/core/paths/_vibe_home.py</code> and executing that same installed code. Upstream honors the variable; the adapter&rsquo;s contradicting in-repo claim was wrong and the changelog was right.</li>
+        <li><strong>Vibe <code>save_dir</code> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1123" target="_blank" rel="noopener">#1123</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1115" target="_blank" rel="noopener">#1115</a>):</strong> <code>vibe/core/config/models.py:58-63</code> &mdash; <code>save_dir</code> defaults to <code>SESSION_LOG_DIR</code> (<code>$VIBE_HOME/logs/session</code>) and, when set, <em>replaces</em> the root rather than layering under it. <code>vibe/core/session/session_logger.py:56-76</code> writes <code>&lt;save_dir&gt;/&lt;prefix&gt;_&lt;ts&gt;_&lt;id&gt;/</code>, holding the <code>messages.jsonl</code> + <code>meta.json</code> pair the adapter watches. #1115 asked for a worth-fixing judgement first: <code>cli/cli.py:133-141</code> (<code>bootstrap_config_files</code>) writes a default <code>config.toml</code> on first run with <code>save_dir</code> already spelled out as a resolved absolute path, so the key sits in every installation&rsquo;s config. That same fact makes the fix low-risk &mdash; in the common case the configured value equals what Irrlicht already computed, so the read is a no-op. Without it, the fswatcher blocks in <code>waitForRoot</code> on a path that never appears, indistinguishable from &ldquo;no vibe sessions exist&rdquo;.</li>
+        <li><strong>Kiro <code>KIRO_HOME</code> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1074" target="_blank" rel="noopener">#1074</a>):</strong> follows <code>1165dcdf</code> (&ldquo;honor agent-CLI env vars for relocated session dirs&rdquo;, #349/#362), which wired the same fix into <code>codex</code> (<code>CODEX_HOME</code>), <code>claudecode</code> (<code>CLAUDE_CONFIG_DIR</code>), and <code>pi</code> (<code>PI_CODING_AGENT_SESSION_DIR</code>); kirocli was authored later (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/590" target="_blank" rel="noopener">#590</a>) and missed. <code>sessionsDir()</code> now reads <code>KIRO_HOME</code>, rejects non-absolute values with a log (same as siblings), and joins <code>sessions/cli</code> onto an absolute override; the default stays home-relative <code>.kiro/sessions/cli</code>. The false comment claiming &ldquo;Kiro documents no env var that relocates the session root&rdquo; &mdash; already false when written &mdash; is deleted. kirocli had no adapter tests at all; a table test modeled on <code>codex/adapter_test.go</code> is new. Caveat carried forward from the PR: the <code>sessions/cli</code> append is <strong>not</strong> docs-confirmed &mdash; kiro.dev&rsquo;s settings reference says <code>KIRO_HOME</code> overrides the <code>~/.kiro</code> directory &ldquo;used for &hellip; sessions&rdquo; without stating whether sessions live directly under it or under a subdirectory. The append was implemented by analogy with <code>CODEX_HOME</code> (identical shape) rather than guessing a flat layout.</li>
+        <li><strong>Vibe tool-name matchers (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1109" target="_blank" rel="noopener">#1109</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1087" target="_blank" rel="noopener">#1087</a>):</strong> two shared matchers used exact equality and did not know Vibe&rsquo;s snake_case names. <code>ask_user_question</code> is Vibe&rsquo;s structured question tool (live in 2.19.1 <code>tools_available</code>), but the user-blocking set was <code>{AskUserQuestion, ExitPlanMode, question}</code> &mdash; the <code>question</code> entry matches a tool literally named <code>question</code>, not a substring &mdash; so Vibe never fired rule 1 (<code>NeedsUserAttention</code>). Fixed in both copies: <code>core/pkg/tailer/tailer_config.go</code> and <code>core/domain/session/metrics.go</code>. The duplication is kept deliberately &mdash; <code>isUserBlockingToolName</code>&rsquo;s doc comment records that it is kept local to the tailer to avoid a domain-package import, and that rationale is intact (no production file in <code>core/pkg/tailer</code> imports <code>domain/session</code>; only its tests do). Both sites now carry an explicit KEEP-IN-SYNC cross-reference and twin tests pin both sets. Separately, <code>write_file</code> was added to <code>isPermissionGatedEditTool</code>: upstream&rsquo;s v2.14.0 <code>search_replace</code>&rarr;<code>edit</code> rename had silently opted <code>edit</code> into the OpenToolStalled heuristic with no change on our side, while <code>write_file</code> never matched <code>write</code>. Because that matcher is shared, every adapter under <code>core/adapters/inbound/agents/</code> was re-checked against the doc comment&rsquo;s &ldquo;no adapter names a long-running tool with one of these spellings&rdquo; claim.</li>
+        <li><strong>History <code>[hidden]</code> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1101" target="_blank" rel="noopener">#1101</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1079" target="_blank" rel="noopener">#1079</a>):</strong> <code>.history-ctl-row</code> sets an author <code>display: flex</code>, which outranks the UA <code>[hidden] { display: none }</code> rule, so every <code>el.hidden = true</code> flipped the property and left the row on screen &mdash; <code>syncHistoryRangeRow</code>, <code>syncGranularityRow</code>, and <code>syncDoraProjectRow</code> were all silently inert. <code>#history-dora-row</code> and <code>#history-granularity-row</code> ship the <code>hidden</code> attribute in <code>index.html</code>, so the default page load mis-rendered too; <code>#history-chart</code> had the same shape with an author <code>display: block</code>. Fixed with two scoped hatches mirroring the existing <code>.history-matrix-scroll[hidden]</code> precedent &mdash; the one element that already worked because someone hit this exact bug there and patched it locally while the siblings were missed. <code>#history-chart[hidden]</code> needs the id to win the cascade (1,1,0 beats <code>#history-chart</code>&rsquo;s 1,0,0). Deliberately not a global <code>[hidden] { display: none !important }</code> reset: that would change every element currently relying on the buggy behavior and wants its own sweep of <code>.hidden =</code> call sites first. The whole <code>platforms/web/</code> tree was swept &mdash; DOM <code>hidden</code> toggling happens exclusively in <code>historyTab.js</code> (12 call sites), everything else hides via <code>classList</code>; of the 12, the 4 fixed here were the only unhatched ones. This is a real visible change: rows users currently see start disappearing, per each helper&rsquo;s stated intent.</li>
+        <li><strong>Activity chart gate (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1080" target="_blank" rel="noopener">#1080</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1075" target="_blank" rel="noopener">#1075</a>):</strong> a plain local display preference, <code>enableActivityChart</code>, default off, on both frontends. Unlike the task-eta (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/558" target="_blank" rel="noopener">#558</a>) and backchannel (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/724" target="_blank" rel="noopener">#724</a>) activations it sits beside in Advanced Settings, nothing is installed &mdash; no <code>ActivationClient</code>, no daemon reconcile, no <code>.onAppear</code> mirror; the daemon still serves <code>chart=state</code> unconditionally. Web: <code>SETTINGS_DEFAULTS</code> plus an Advanced Settings row with the existing <code>beta-badge</code>, split deliberately into two halves &mdash; <code>syncActivityChartVisibility()</code> hides <code>button[data-chart=state]</code> and rides <code>applySettings()</code> alongside the other reflect-onto-DOM toggles, while <code>leaveActivityChartIfSelected()</code> hangs off the per-key effect path next to <code>SOURCE_SETTING_KEYS</code> (a first draft had both in <code>applySettings()</code>, which meant editing <code>relayUrl</code> fired a history fetch). The button ships <code>hidden</code> in <code>index.html</code> so a default-off gate never flashes it. macOS: <code>@AppStorage("enableActivityChart")</code> plus <code>LeadingToggle(beta: true)</code>, with <code>HistoryTab.visible(activityEnabled:)</code> filtering the picker per the existing <code>visibleCharts</code> precedent. Both platforms reset the selection when the gate is turned off while Activity is live (web &rarr; <code>cost</code>, macOS &rarr; <code>.usage</code>); on macOS this is reachable in normal use since Settings is a separate window.</li>
+        <li><strong><code>/ir:triage</code> Observability axis (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1093" target="_blank" rel="noopener">#1093</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1091" target="_blank" rel="noopener">#1091</a>):</strong> Verifiability names the <em>measurement</em>; Observability asks whether the <em>instrument</em> exists &mdash; &#10003; Verifiability with &#10007; Observability is the case the axis is built for. One deliberate deviation from #1091 as filed: a cost gate rather than a hard fail to <code>needs-info</code>. Low (instrument exists, just run it) and Medium (extend an existing surface &mdash; new <code>lifecycle.Kind</code>, metric field, snapshot scene) leave the verdict unchanged and land the plan in the brief as the ticket&rsquo;s first step; only High (the rig outweighs the fix) routes to <code>needs-info</code> plus a child issue. The skill&rsquo;s standing &ldquo;never propose solutions&rdquo; contract gets an explicit carve-out, stated in both the opening paragraph and &ldquo;What to leave out&rdquo; so the two cannot drift: triage may prescribe the instrument, never the fix.</li>
+      </ul>
+
+      <h2 id="v0-5-8">v0.5.8 <small>(2026-07-15)</small></h2>
 
       <h3>Mistral Vibe becomes a fully supported agent, the Activity Matrix lands on macOS, and a long sweep of session-lifecycle fixes closes the gaps where a session could silently stall in the wrong state.</h3>
 
@@ -169,7 +225,7 @@
         <li><strong>Model alias map:</strong> re-synced against codeburn&rsquo;s <code>BUILTIN_ALIASES</code> with no changes &mdash; the only upstream addition is a <code>gpt-4.1</code> self-alias that is a no-op for us and stays deliberately omitted.</li>
       </ul>
 
-      <h2>v0.5.7 <small>(2026-07-13)</small></h2>
+      <h2 id="v0-5-7">v0.5.7 <small>(2026-07-13)</small></h2>
 
       <h3>History gains three new lenses &mdash; agent activity over time, DORA metrics, and CO2 equivalents &mdash; alongside a major flaky-test cleanup, non-English waiting-cue detection, and a wave of accessibility and mechanical-quality fixes.</h3>
 
@@ -226,7 +282,7 @@
         <li><strong>SonarQube backlog (#901, #932, #950, #960, #961)</strong> &mdash; mechanical fixes, a cognitive-complexity extraction (<code>resolveHistoryQuery</code> out of <code>handleGetHistory</code>, complexity 20&rarr;under 15), a <code>&lt;dialog&gt;</code>-element conversion for Settings/Permissions modals, and 79 already-fixed findings closed via the SonarQube API.</li>
       </ul>
 
-      <h2>v0.5.6 <small>(2026-07-09)</small></h2>
+      <h2 id="v0-5-6">v0.5.6 <small>(2026-07-09)</small></h2>
 
       <h3>Subscription quota lands in the menu bar icon; a full security &amp; code-health sweep closes every open CodeQL/SonarQube finding.</h3>
 
@@ -306,7 +362,7 @@
         <li><strong><code>tools/security-scan.sh</code>&rsquo;s Dependabot/CodeQL gate was silently non-functional</strong> &mdash; missing an explicit <code>--method GET</code>, <code>gh api</code> defaulted every alert query to POST (since <code>-f</code> params force POST) and 404&rsquo;d, misreported as an auth/scope failure. Running it for real surfaced CodeQL alert #54 (<code>go/request-forgery</code>, relay URL), already documented as accepted risk in #913 but never dismissed &mdash; dismissed now.</li>
       </ul>
 
-      <h2>v0.5.5 <small>(2026-07-04)</small></h2>
+      <h2 id="v0-5-5">v0.5.5 <small>(2026-07-04)</small></h2>
 
       <h3>CO2 estimates next to cost, a self-explaining cache-regression badge, and reconnect reliability fixes.</h3>
 
@@ -383,7 +439,7 @@
         <li><strong>Docs</strong> &mdash; worktree shortcuts + Task Management tidy-up and a git-stash note in AGENTS.md (#789, #825), Karpathy Guidelines section removed (#787), <code>ir:test-mac</code> doc defaults to replace mode (#786), CodeScene/ARS README badges given their own line plus a workflow badge (#836, #823).</li>
       </ul>
 
-      <h2>v0.5.4 <small>(2026-06-29)</small></h2>
+      <h2 id="v0-5-4">v0.5.4 <small>(2026-06-29)</small></h2>
 
       <h3>A full History view with spend analytics, a backchannel that acts on your agents, and plain-language session summaries.</h3>
 
@@ -481,7 +537,7 @@
         <li><strong>Dependencies</strong> &mdash; <code>form-data</code> 4.0.5 &rarr; 4.0.6 in <code>platforms/web</code> (#739).</li>
       </ul>
 
-      <h2>v0.5.3 <small>(2026-06-21)</small></h2>
+      <h2 id="v0-5-3">v0.5.3 <small>(2026-06-21)</small></h2>
 
       <h3>Google Antigravity support, publish your sessions to a remote relay, and a clutch of daemon + adapter fixes.</h3>
 
@@ -519,7 +575,7 @@
         <li><strong>Daemon watcher dispatch (#714)</strong> &mdash; <code>buildAgentWatchers</code> switched to an exhaustive <code>Source</code> dispatch so an unmapped source is an explicit gap, not a silent no-op.</li>
       </ul>
 
-      <h2>v0.5.2 <small>(2026-06-19)</small></h2>
+      <h2 id="v0-5-2">v0.5.2 <small>(2026-06-19)</small></h2>
 
       <h3>Gemini CLI joins the lineup, the menu bar gets ~3&times; lighter under load, and context-pressure alerts become configurable.</h3>
 
@@ -601,7 +657,7 @@
         <li><strong>Model aliases</strong> &mdash; codeburn <code>BUILTIN_ALIASES</code> sync ran at release time: no new entries needed (the upstream <code>gpt-4.1</code> self-alias is a documented no-op); all eight <code>LOCAL_OVERRIDE</code> entries unchanged.</li>
       </ul>
 
-      <h2>v0.5.1 <small>(2026-06-07)</small></h2>
+      <h2 id="v0-5-1">v0.5.1 <small>(2026-06-07)</small></h2>
 
       <h3>Ghost sessions and stuck states fixed: /compact strandings, Claude Code 2.1.168&rsquo;s background daemon, and restart amnesia.</h3>
 
@@ -632,7 +688,7 @@
         <li><strong>Model aliases</strong> &mdash; codeburn <code>BUILTIN_ALIASES</code> sync ran at release time: no new entries needed (the upstream <code>gpt-4.1</code> self-alias is a documented no-op); all eight <code>LOCAL_OVERRIDE</code> entries unchanged.</li>
       </ul>
 
-      <h2>v0.5.0 <small>(2026-06-06)</small></h2>
+      <h2 id="v0-5-0">v0.5.0 <small>(2026-06-06)</small></h2>
 
       <h3>Consent-first permissions, agent-authored task ETAs, and Kiro CLI joins the watch list.</h3>
 
@@ -726,7 +782,7 @@
         <li><strong>Model aliases</strong> &mdash; codeburn <code>BUILTIN_ALIASES</code> sync ran at release time: no new entries; all eight <code>LOCAL_OVERRIDE</code> entries unchanged upstream.</li>
       </ul>
 
-      <h2>v0.4.8 <small>(2026-05-30)</small></h2>
+      <h2 id="v0-4-8">v0.4.8 <small>(2026-05-30)</small></h2>
 
       <h3>Watch your agents from any machine &mdash; the <code>irrlichtrelay</code> ships, alongside a Linux daemon and per-provider quota tracking.</h3>
 
@@ -778,7 +834,7 @@
         <li><strong>Tests / CI</strong> &mdash; per-worktree state isolation + headless daemon startup smoke test (#448); hermetic replay so byte-identity goldens reproduce (#447, #451); fswatcher flake fixes (#485, #487); three-dot diff in the replaydata deletion guard (#466); web dashboard Vitest suite (#418).</li>
       </ul>
 
-      <h2>v0.4.7 <small>(2026-05-22)</small></h2>
+      <h2 id="v0-4-7">v0.4.7 <small>(2026-05-22)</small></h2>
 
       <h3>macOS distribution levels up: Sparkle auto-updates and a notarized DMG, plus OpenCode task progress reaches dashboard parity.</h3>
 
@@ -833,7 +889,7 @@
         <li><strong>Installer rate-limit hardening (#401)</strong> &mdash; <code>site/install.sh</code> falls back to the <code>/releases/latest</code> redirect URL when the GitHub API returns 403.</li>
       </ul>
 
-      <h2>v0.4.6 <small>(2026-05-17)</small></h2>
+      <h2 id="v0-4-6">v0.4.6 <small>(2026-05-17)</small></h2>
 
       <h3>Public roadmap page lands, with screenshots and concept tiles for every release row</h3>
 
@@ -892,7 +948,7 @@
         <li><strong>Model aliases &mdash; codeburn sync</strong> &mdash; adds <code>kimi-auto</code>, <code>kimi-code</code>, <code>kimi-for-coding</code> to <code>core/pkg/capacity/aliases.go</code>, all <code>LOCAL_OVERRIDE</code> to <code>moonshot.kimi-k2-thinking</code> since LiteLLM only ships the dotted-prefix key. Five changed entries in the codeburn diff are intentional <code>LOCAL_OVERRIDE</code>s &mdash; not updated.</li>
       </ul>
 
-      <h2>v0.4.5 <small>(2026-05-16)</small></h2>
+      <h2 id="v0-4-5">v0.4.5 <small>(2026-05-16)</small></h2>
 
       <h3>Added</h3>
 
@@ -917,7 +973,7 @@
         <li><strong>List VS Code extension as a planned platform</strong> (#370) &mdash; Adds "VS Code extension" between CLI (alpha) and Linux (planned) in both the landing-page Platforms column (<code>site/index.html</code>) and the README Platforms table; the README row links to the tracking issue (#350). Groups editor/UI surfaces (menu bar, web, CLI, VS Code) before OS-target planned items (Linux, Windows, iOS/iPadOS)</li>
       </ul>
 
-      <h2>v0.4.4 <small>(2026-05-16)</small></h2>
+      <h2 id="v0-4-4">v0.4.4 <small>(2026-05-16)</small></h2>
 
       <h3>Added</h3>
 
@@ -944,7 +1000,7 @@
         <li><strong>Five release-skill guardrails against v0.4.3's shipping defect</strong> (#360) &mdash; v0.4.3 shipped a binary that crashed on every end-user install (#357 root-caused; #356 + #358 fixed). Five further guardrails prevent recurrence. (1) Drop <code>NSFocusStatusUsageDescription</code> from the Info.plist template &mdash; with <code>Intents.framework</code> statically linked, TCC preflights <code>kTCCServiceListenEvent</code> at process startup and SIGABRTs ad-hoc-signed builds regardless of the usage description. (2) Rewrite the coupling-rule prose with a per-key include/exclude table explaining the three-way relationship between AMFI-gated entitlements, TCC-gated <code>NS*UsageDescription</code> keys, and the linked frameworks themselves (the structural lever). (3) Add a framework-link audit between Swift build and signing: <code>otool -L</code> against a <code>FORBIDDEN_FRAMEWORKS</code> list aborts the release on any match. (4) Strengthen smoke-test failure semantics with explicit "DO NOT SHIP" framing, a <code>tccutil reset</code> prereq to clear poisoned cache, and a four-step debugging checklist. (5) Replace Step 9 verify with a real end-to-end install canary that runs <code>curl ... | sh</code> against the just-published release and validates via <code>pgrep</code> &mdash; the installer's <code>"Launching... &check;"</code> lies when AMFI kills the app immediately</li>
       </ul>
 
-      <h2>v0.4.3 <small>(2026-05-15)</small></h2>
+      <h2 id="v0-4-3">v0.4.3 <small>(2026-05-15)</small></h2>
 
       <blockquote><strong>Note:</strong> Assets re-cut later the same day. The original v0.4.3 binary statically linked <code>Intents.framework</code> via <code>FocusMonitor.swift</code>'s direct <code>INFocusStatusCenter</code> calls, which made macOS TCC preflight <code>kTCCServiceListenEvent</code> at process startup and AMFI/TCC SIGABRT the ad-hoc-signed binary with <code>launchd POSIX 153</code> on every end-user install. The re-cut moves <code>FocusMonitor</code> to dynamic dispatch (<code>NSClassFromString</code> + <code>SecCodeCopySigningInformation</code> gate) so Intents.framework is never loaded on ad-hoc builds. DND-aware notification silencing is paused until Developer-ID signing lands (#233); restoration tracked in #357. Release-skill regression fix that prevents recurrence: #356.</blockquote>
 
@@ -967,7 +1023,7 @@
         <li><strong>Landscape page refresh against live GitHub data</strong> (#346) &mdash; <code>site/landscape/index.html</code> and <code>site/landscape/compare/index.html</code> regenerated from a fresh <code>gh api</code> sweep of 38 tracked agents (May 15, 2026 snapshot). Aider and OpenCode flip from <code>planned</code> to <code>live</code> in the landscape table to match their existing adapters under <code>core/adapters/inbound/agents/</code>. Two repo renames propagated: Pi <code>badlogic/pi-mono</code> &rarr; <code>earendil-works/pi</code> (the v0.74 move) and Warp <code>warpdotdev/Warp</code> &rarr; <code>warpdotdev/warp</code>. Two plausibility-rule trips noted with explicit reasoning: Warp jumped 26.5k&rarr;58.5k stars after open-sourcing its codebase; Ruflo grew 33.1k&rarr;51.3k on viral promotion. The <code>ir:agent-releases</code> skill's <code>tracked-releases.md</code> adds 22 new versions across Claude Code (v2.1.120&ndash;v2.1.142), Codex (v0.125&ndash;v0.130 stables), Pi (v0.71&ndash;v0.74), and Gas Town (v1.0.1, v1.1.0)</li>
       </ul>
 
-      <h2>v0.4.2 <small>(2026-05-15)</small></h2>
+      <h2 id="v0-4-2">v0.4.2 <small>(2026-05-15)</small></h2>
 
       <h3>Changed</h3>
 
@@ -989,7 +1045,7 @@
         <li><strong>assets: version reference screenshots</strong> (#336) &mdash; <code>assets/session_limits.png</code> and <code>assets/straeter_light.png</code> are now versioned alongside the other reference shots used in README drafts and social posts</li>
       </ul>
 
-      <h2>v0.4.1 <small>(2026-05-14)</small></h2>
+      <h2 id="v0-4-1">v0.4.1 <small>(2026-05-14)</small></h2>
 
       <h3>Fixed</h3>
 
@@ -1021,7 +1077,7 @@
         <li><strong>Release skill hardening</strong> (#332) &mdash; Step 6 checksum recipe now includes <code>irrlichd-darwin-universal.tar.gz</code> (the curl <code>--daemon-only</code> path verifies it; omitting it shipped a release where the standalone daemon installer failed the integrity check). Step 7b drops <code>--delete-branch</code> from <code>gh pr merge --squash</code> so the release branch remains addressable post-squash. Step 4b trigger table gains rows for adapter-package edits and <code>main.go</code> slice/wiring renames so future Phase-A-style shape changes can't slip past doc sweeps</li>
       </ul>
 
-      <h2>v0.4.0 <small>(2026-05-14)</small></h2>
+      <h2 id="v0-4-0">v0.4.0 <small>(2026-05-14)</small></h2>
 
       <h3>Added</h3>
 
@@ -1051,7 +1107,7 @@
         <li><strong><code>/ir:release</code> skill &mdash; adapt to PR-required <code>main</code> + fix tap-publish race</strong> (#306) &mdash; <code>main</code> is now protected by a "Changes must be made through a pull request" repo rule. The release flow now stages on a short-lived <code>release/v$NEW_VERSION</code> branch, opens a PR with the drafted release notes, squash-merges, hard-resets local <code>main</code> to <code>origin/main</code>, and tags the merged commit. Step 6.5 patches the in-repo cask template via <code>sed</code> and leaves the sibling tap untouched until Step 8.5</li>
       </ul>
 
-      <h2>v0.3.13 <small>(2026-05-11)</small></h2>
+      <h2 id="v0-3-13">v0.3.13 <small>(2026-05-11)</small></h2>
 
       <h3>Fixed</h3>
 
@@ -1076,7 +1132,7 @@
         <li><strong>README</strong> &mdash; note codeburn alongside other quota &amp; cost trackers in the positioning section</li>
       </ul>
 
-      <h2>v0.3.12 <small>(2026-05-09)</small></h2>
+      <h2 id="v0-3-12">v0.3.12 <small>(2026-05-09)</small></h2>
 
       <h3>Added</h3>
 
@@ -1118,7 +1174,7 @@
         <li><strong>Replay: refresh stale opencode <code>baseline-hello</code> golden</strong> (#285) &mdash; golden was committed in #255 with a populated <code>source_transcript</code> field that the test zeros before comparison; regenerated via <code>UPDATE_REPLAY_GOLDENS=1</code> to bring opencode in line with the other 4 adapters</li>
       </ul>
 
-      <h2>v0.3.11 <small>(2026-05-02)</small></h2>
+      <h2 id="v0-3-11">v0.3.11 <small>(2026-05-02)</small></h2>
 
       <h3>Fixed</h3>
 
@@ -1158,7 +1214,7 @@
         <li><strong>Replay: zero <code>source_transcript</code> so goldens are worktree-portable</strong> (#250)</li>
       </ul>
 
-      <h2>v0.3.10 <small>(2026-04-27)</small></h2>
+      <h2 id="v0-3-10">v0.3.10 <small>(2026-04-27)</small></h2>
 
       <h3>Fixed</h3>
 
@@ -1180,7 +1236,7 @@
         <li>5 new <code>SessionManagerApiGroupsTests</code> cases covering top-level / child / parent removal, gas-town empty-rigs survival, and unknown-id no-op (#244)</li>
       </ul>
 
-      <h2>v0.3.9 <small>(2026-04-27)</small></h2>
+      <h2 id="v0-3-9">v0.3.9 <small>(2026-04-27)</small></h2>
 
       <h3>Added</h3>
 
@@ -1235,7 +1291,7 @@
         <li><strong>Design system reference</strong> added under <code>tools/irrlicht-design-system/</code></li>
       </ul>
 
-      <h2>v0.3.8 <small>(2026-04-24)</small></h2>
+      <h2 id="v0-3-8">v0.3.8 <small>(2026-04-24)</small></h2>
 
       <h3>Added</h3>
 
@@ -1273,7 +1329,7 @@
         <li><strong>Landing page: Terminals &amp; IDEs column dropped</strong> &mdash; the click-to-focus host list grew past what fit cleanly in the features grid; replaced with a single &quot;works with your terminal&quot; sentence</li>
       </ul>
 
-      <h2>v0.3.7 <small>(2026-04-24)</small></h2>
+      <h2 id="v0-3-7">v0.3.7 <small>(2026-04-24)</small></h2>
 
       <h3>Added</h3>
 
@@ -1319,7 +1375,7 @@
         <li>New <code>SessionRowView</code> snapshot suite (waiting-question block + ContextBar token-count label); <code>NSHostingView.appearance</code> pinned to <code>.darkAqua</code> so snapshots are deterministic</li>
       </ul>
 
-      <h2>v0.3.6 <small>(2026-04-19)</small></h2>
+      <h2 id="v0-3-6">v0.3.6 <small>(2026-04-19)</small></h2>
 
       <h3>Added</h3>
 
@@ -1348,7 +1404,7 @@
         <li><strong>Persistent self-signed "Irrlicht Dev" identity</strong> &mdash; <code>ir:test-mac</code> now signs dev builds with a stable designated requirement so Accessibility and Automation TCC grants survive rebuilds. Run <code>scripts/dev-sign-setup.sh</code> once to install it</li>
       </ul>
 
-      <h2>v0.3.5 <small>(2026-04-19)</small></h2>
+      <h2 id="v0-3-5">v0.3.5 <small>(2026-04-19)</small></h2>
 
       <h3>Added</h3>
 
@@ -1384,7 +1440,7 @@
         <li><code>ir:release</code> skill guards against stale Swift binaries and missing SwiftPM resource bundles &mdash; the two root causes of the broken v0.3.4 bundle</li>
       </ul>
 
-      <h2>v0.3.4 <small>(2026-04-14)</small></h2>
+      <h2 id="v0-3-4">v0.3.4 <small>(2026-04-14)</small></h2>
 
       <h3>Added</h3>
 
@@ -1419,7 +1475,7 @@
         <li><code>CHANGELOG.md</code> added at the repo root and wired into the <code>ir:release</code> skill so every release updates it</li>
       </ul>
 
-      <h2>v0.3.3 <small>(2026-04-11)</small></h2>
+      <h2 id="v0-3-3">v0.3.3 <small>(2026-04-11)</small></h2>
 
       <h3>Fixed — Subagent lifecycle reliability</h3>
 
@@ -1450,7 +1506,7 @@
         <li>GitHub-recognized community health files added: <code>CODE_OF_CONDUCT.md</code>, <code>CONTRIBUTING.md</code>, <code>SECURITY.md</code>, issue and PR templates</li>
       </ul>
 
-      <h2>v0.3.2 <small>(2026-04-07)</small></h2>
+      <h2 id="v0-3-2">v0.3.2 <small>(2026-04-07)</small></h2>
 
       <h3>Fixed — Claude Code session state flicker (#102)</h3>
 
@@ -1487,7 +1543,7 @@
         <li>API reference: session metrics schema updated (<code>last_tool_result_was_error</code> removed, <code>last_was_user_interrupt</code> added)</li>
       </ul>
 
-      <h2>v0.3.1 <small>(2026-04-06)</small></h2>
+      <h2 id="v0-3-1">v0.3.1 <small>(2026-04-06)</small></h2>
 
       <h3>Added</h3>
 
@@ -1523,7 +1579,7 @@
         <li>Agent landscape page with 63 tracked agents, 3-month trends, and deny list</li>
       </ul>
 
-      <h2>v0.3.0 <small>(2026-04-05)</small></h2>
+      <h2 id="v0-3-0">v0.3.0 <small>(2026-04-05)</small></h2>
 
       <h3>Added</h3>
 
@@ -1567,7 +1623,7 @@
         <li>Added counter.dev analytics to all pages</li>
       </ul>
 
-      <h2>v0.2.5 <small>(2026-04-05)</small></h2>
+      <h2 id="v0-2-5">v0.2.5 <small>(2026-04-05)</small></h2>
 
       <h3>Added</h3>
 
@@ -1576,7 +1632,7 @@
         <li><strong>Pi icon in macOS menu bar</strong> &mdash; Greek letter pi (&pi;) icon distinguishes Pi sessions from other agents</li>
       </ul>
 
-      <h2>v0.2.4 <small>(2026-04-05)</small></h2>
+      <h2 id="v0-2-4">v0.2.4 <small>(2026-04-05)</small></h2>
 
       <h3>Added</h3>
 
@@ -1600,7 +1656,7 @@
         <li>DMG background asset for branded installer experience</li>
       </ul>
 
-      <h2>v0.2.3 <small>(2026-04-04)</small></h2>
+      <h2 id="v0-2-3">v0.2.3 <small>(2026-04-04)</small></h2>
 
       <h3>Added</h3>
 
@@ -1631,7 +1687,7 @@
         <li>WebSocket connection state replaced <code>isWatching</code> flag with proper <code>ConnectionState</code> enum</li>
       </ul>
 
-      <h2>v0.2.2 <small>(2026-04-03)</small></h2>
+      <h2 id="v0-2-2">v0.2.2 <small>(2026-04-03)</small></h2>
 
       <h3>Added</h3>
 
@@ -1652,7 +1708,7 @@
         <li>Ready-session TTL cleanup (30min default)</li>
       </ul>
 
-      <h2>v0.2.0 <small>(2026-04-03)</small></h2>
+      <h2 id="v0-2-0">v0.2.0 <small>(2026-04-03)</small></h2>
 
       <h3>Added</h3>
 
@@ -1693,7 +1749,7 @@
         <li>Filesystem watcher race condition on directory creation</li>
       </ul>
 
-      <h2>v0.1.0 <small>(2026-03-20)</small></h2>
+      <h2 id="v0-1-0">v0.1.0 <small>(2026-03-20)</small></h2>
 
       <h3>Added</h3>
 

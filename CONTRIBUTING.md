@@ -61,8 +61,9 @@ Project layout:
 
 ```
 core/        Go daemon (hexagonal: domain → ports → adapters → services)
-platforms/   Swift macOS app, web frontend, build scripts
+platforms/   Swift macOS app, web frontend
 site/        Landing page and docs (GitHub Pages)
+tools/       Build, release, and replay-fixture scripts
 replaydata/  Sample transcripts and recorded sessions (onboarding-factory fixture catalog)
 ```
 

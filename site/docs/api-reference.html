@@ -183,7 +183,7 @@
       <p>Returns the running daemon's version. Used by the web dashboard's header chip and by client integrations (the upcoming VS Code panel, future relay-served clients) to gate behavior on daemon capabilities.</p>
 
       <pre><code>{
-  "version": "0.5.6"
+  "version": "0.5.9"
 }</code></pre>
 
       <h3>GET /api/v1/agents</h3>
@@ -345,17 +345,36 @@ curl -X POST http://127.0.0.1:7837/api/v1/sessions/52d087d1-.../interrupt</code>
 
       <p>The default-OFF master toggle that gates the whole backchannel capability. <code>GET</code> reads the state, <code>POST</code> enables, <code>DELETE</code> disables, each replying <code>{"backchannel_enabled": bool}</code>. <strong>Loopback only</strong>; the mutating verbs reject cross-origin browser requests. Enabling the toggle is necessary but not sufficient &mdash; each agent still needs its <code>control</code> permission granted before input is forwarded.</p>
 
+      <pre><code># Enable the backchannel master toggle
+curl -X POST http://127.0.0.1:7837/api/v1/activation/backchannel
+# → {"backchannel_enabled":true}</code></pre>
+
       <h3>GET / POST / DELETE /api/v1/activation/relay-control</h3>
 
       <p>Default-OFF toggle gating whether the relay forwarder acts on inbound control frames (the outer remote-control gate, for driving sessions from a relay-served client). Same verbs and loopback/cross-origin rules; replies <code>{"relay_control_enabled": bool}</code>. A standalone/headless daemon can instead enable it at startup via <code>IRRLICHT_RELAY_CONTROL=on</code>.</p>
+
+      <pre><code># Read the relay-control gate state
+curl http://127.0.0.1:7837/api/v1/activation/relay-control
+# → {"relay_control_enabled":false}</code></pre>
 
       <h3>GET / POST / DELETE /api/v1/activation/task-eta</h3>
 
       <p>Legacy alias (issue #558) over the <code>claude-code</code> adapter&rsquo;s <code>instructions</code> permission (issue #577), kept so the macOS Settings toggle&rsquo;s wire shape stays stable. <code>GET</code> reads the state, <code>POST</code> grants, <code>DELETE</code> revokes, each replying <code>{"task_eta_enabled": bool}</code>. <strong>Loopback only</strong>; the mutating verbs reject cross-origin browser requests, since the granted effect rewrites <code>~/.claude/CLAUDE.md</code>.</p>
 
+      <pre><code># Grant the task-eta instructions permission
+curl -X POST http://127.0.0.1:7837/api/v1/activation/task-eta
+# → {"task_eta_enabled":true}</code></pre>
+
       <h3>GET / PUT /api/v1/backchannel/rules</h3>
 
       <p>The event&rarr;action rule set (e.g. context pressure &rarr; <code>/compact</code>). <code>GET</code> returns the current rules; <code>PUT</code> replaces the set with <code>{"rules": [&hellip;]}</code>. The rule engine fires through the same backchannel write path, so the same master-toggle + per-adapter <code>control</code> gates apply. <strong>Loopback only</strong>; <code>PUT</code> rejects cross-origin browser requests.</p>
+
+      <p>Each rule carries an <code>id</code>, an <code>enabled</code> flag, a <code>trigger</code>, and an ordered <code>actions</code> list. <code>trigger.event</code> is one of <code>waiting</code> / <code>ready</code> / <code>working</code> / <code>context_pressure</code> / <code>context_pressure_tokens</code>; <code>trigger.threshold</code> is a percentage (0&ndash;100) for <code>context_pressure</code> or an absolute token count for <code>context_pressure_tokens</code>, and defaults to 85 / 150000 when omitted. <code>actions[].kind</code> is <code>input</code> or <code>interrupt</code>; an <code>input</code> action either names a <code>preset</code> (currently <code>compact</code>, translated per agent) or sends <code>data</code> verbatim. Optional <code>name</code>, <code>adapter</code> (scope to one agent), and <code>cooldown_seconds</code> (default 60) round out the rule.</p>
+
+      <pre><code># Replace the rule set: at 85% context utilization, send the agent-agnostic compact preset
+curl -X PUT http://127.0.0.1:7837/api/v1/backchannel/rules \
+  -H 'Content-Type: application/json' \
+  -d '{"rules":[{"id":"compact-at-85","enabled":true,"name":"Compact at 85%","trigger":{"event":"context_pressure","threshold":85},"actions":[{"kind":"input","preset":"compact"}],"adapter":"claude-code"}]}'</code></pre>
 
       <h3>GET /api/v1/relay/publish</h3>
 
