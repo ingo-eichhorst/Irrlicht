@@ -1,6 +1,6 @@
 import { isGroupCollapsed, toggleGroupCollapsed } from './collapsedGroups.js';
 import { isSummaryCollapsed, toggleSummaryCollapsed, getSummaryMode, toggleSummaryMode } from './collapsedSummaries.js';
-import { initHistoryTab } from './historyTab.js';
+import { initHistoryTab, setActivityChartEnabled } from './historyTab.js';
 import { initPermissionsWizard, refreshPermissions } from './permissionsWizard.js';
 import {
   showQuotaForecast, setShowQuotaForecast, renderHeaderTitle, refreshProviderSettings,
@@ -127,6 +127,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       notifyOnReady: false,
       notifyOnWaiting: false,
       notifyOnContextPressure: false,
+      // Activity chart (#1075): opt-in, since the matrix only means anything
+      // with recordings enabled. Mirrors the macOS enableActivityChart key.
+      enableActivityChart: false,
       // Sources: the local source (the origin that served this page) is on by
       // default; a relay source is opt-in by URL. Mirrors the macOS
       // useLocalDaemon / useRelayServer / relayServerURL @AppStorage keys.
@@ -158,6 +161,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function applySettings() {
       document.body.classList.toggle('no-cost', !settings.showCostDisplay);
       document.body.classList.toggle('debug-mode', !!settings.debugMode);
+      setActivityChartEnabled(!!settings.enableActivityChart);
     }
     applySettings();
 
@@ -2144,4 +2148,5 @@ export {
   histDoraPerWeek, histDoraPercent, histDoraHours,
   CO2_EQUIVALENTS, pickCO2Equivalents,
   stateCellCounts, stateCellTotal, stateMatrixMaxTotal, stateBucketLabel,
+  setActivityChartEnabled,
 } from './historyTab.js';

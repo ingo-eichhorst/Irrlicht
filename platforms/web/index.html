@@ -99,6 +99,13 @@
             <span class="settings-hint">Show session IDs and elapsed time in each row.</span>
           </span>
         </label>
+        <label>
+          <input type="checkbox" data-setting="enableActivityChart">
+          <span class="settings-label-text">
+            <span class="settings-title">Activity chart <span class="beta-badge">Beta</span></span>
+            <span class="settings-hint">Adds a projects × time grid of session states to History. Reconstructed from opt-in recordings — a blank cell may mean "not recorded" rather than "idle".</span>
+          </span>
+        </label>
 
         <h2>Sources <span class="beta-badge">Beta</span></h2>
         <label>
@@ -195,7 +202,7 @@
             <button type="button" data-chart="models">Models</button>
             <button type="button" data-chart="providers">Providers</button>
             <button type="button" data-chart="agents">Agents</button>
-            <button type="button" data-chart="state" title="Working/waiting/ready mix per project over time">Activity</button>
+            <button type="button" data-chart="state" hidden title="Working/waiting/ready mix per project over time">Activity</button>
           </fieldset>
           <fieldset class="history-seg" id="history-metrics-sel" aria-label="Metrics">
             <button type="button" data-chart="yield" title="Metrics: productive vs reverted spend per project">Yield</button>

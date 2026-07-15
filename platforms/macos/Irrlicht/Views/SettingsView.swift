@@ -24,6 +24,8 @@ struct SettingsView: View {
     let sessionManager: SessionManager
     @EnvironmentObject var daemonManager: DaemonManager
     @AppStorage("debugMode") private var debugMode: Bool = false
+    /// Gates the History Activity tab (#1075); also read by HistoryView.
+    @AppStorage("enableActivityChart") private var enableActivityChart: Bool = false
     @AppStorage("showCostDisplay") private var showCostDisplay: Bool = false
     @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = true
@@ -366,7 +368,7 @@ struct SettingsView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .tooltip("Show debug, task-estimate markers, sources, and the command-line tool")
+                        .tooltip("Show debug, activity chart, task-estimate markers, sources, and the command-line tool")
                         .accessibilityElement(children: .combine)
                         .accessibilityValue(advancedSettingsExpanded ? "expanded" : "collapsed")
 
@@ -375,6 +377,16 @@ struct SettingsView: View {
                                 isOn: $debugMode,
                                 label: "Debug Mode",
                                 info: "Show session IDs, creation time, and time since last update."
+                            )
+
+                            // Activity Matrix tab (issue #1075). Purely local UI
+                            // state — unlike the two activations below it, nothing
+                            // is installed, so there's no daemon to reconcile with.
+                            LeadingToggle(
+                                isOn: $enableActivityChart,
+                                label: "Activity Chart",
+                                info: "Adds a projects × time grid of session states to History. Reconstructed from opt-in recordings — a blank cell may mean \"not recorded\" rather than \"idle\".",
+                                beta: true
                             )
 
                             // Task-eta global activation (issue #558). The daemon is

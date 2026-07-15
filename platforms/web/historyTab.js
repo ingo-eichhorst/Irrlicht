@@ -1030,6 +1030,26 @@ function clearHistoryDrilldown() {
   fetchHistory();
 }
 
+// setActivityChartEnabled gates the Activity chart (chart=state) behind the
+// Advanced Settings beta toggle (#1075). The matrix is reconstructed from
+// opt-in recordings, and a bucket with no recording renders identically to a
+// genuinely idle one (see renderStateMatrix), so anyone not recording reads a
+// grid of blanks as "idle" — misleading enough that it's off by default.
+export function setActivityChartEnabled(enabled) {
+  const btn = document.querySelector('#history-chart-sel button[data-chart="state"]');
+  if (btn) btn.hidden = !enabled;
+  // Turning it off while it's the live chart would otherwise strand the view on
+  // a chart the setting says is off — the matrix grid stays up, and the
+  // per-chart control rows only resync on a render. Fall back to the default
+  // chart, same shape as drillInto.
+  if (!enabled && historyState.chart === 'state') {
+    historyState.chart = 'cost';
+    historyState.scope = null;
+    syncHistorySelectors();
+    fetchHistory();
+  }
+}
+
 // syncHistorySelectors reflects historyState.chart/group onto the segmented
 // controls — drilldown and the models/providers presets change them
 // programmatically, so the active classes must follow.
