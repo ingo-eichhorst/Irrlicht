@@ -20,6 +20,26 @@ type FilesUnderRoot struct {
 	Dir    string // path relative to $HOME, e.g. ".claude/projects"
 	Parser FileParser
 
+	// DirFunc optionally replaces Dir with a resolver called at watcher-build
+	// time instead of at Agent() declaration time. Nil (the common case) means
+	// "use Dir".
+	//
+	// It exists for adapters whose root cannot be derived from constants and
+	// env vars alone — Vibe's root can be relocated by a key in its own
+	// config.toml, so resolving it means reading a file. Doing that in Agent()
+	// would read the filesystem before the permission store is even loaded
+	// (and, under --diagnose, before any consent machinery exists), violating
+	// the rule that an adapter exercises nothing while its permission is
+	// pending or denied. RootDirFor is reached only from buildAgentWatchers,
+	// which the PermissionService invokes only after an observe grant, so a
+	// resolver here reads under consent.
+	//
+	// Two consequences worth knowing: the resolver runs on every grant, so a
+	// re-grant re-resolves rather than reusing a boot-time snapshot; and it
+	// must stay cheap and side-effect-free, since RootDirFor is also called
+	// from tests and tooling.
+	DirFunc func() string
+
 	// DirByOS optionally overrides Dir on specific platforms, keyed by
 	// runtime.GOOS ("windows", "linux", ...). A value follows the same rule
 	// as Dir — absolute is used as-is, otherwise it resolves under $HOME.
@@ -65,11 +85,18 @@ func (FilesUnderRoot) isSource() {
 
 // RootDirFor returns the directory the runtime should watch for this source
 // on the given OS (pass runtime.GOOS): the DirByOS override when one is set
-// for that OS, otherwise Dir. Keeping the lookup here means the daemon wiring
-// and any tests resolve the path the same way.
+// for that OS, otherwise DirFunc's result when one is supplied, otherwise Dir.
+// Keeping the lookup here means the daemon wiring and any tests resolve the
+// path the same way.
+//
+// DirByOS outranks DirFunc so a per-OS override stays authoritative: DirFunc
+// is "Dir, computed lazily", and DirByOS overrides Dir.
 func (s FilesUnderRoot) RootDirFor(goos string) string {
 	if d, ok := s.DirByOS[goos]; ok && d != "" {
 		return d
+	}
+	if s.DirFunc != nil {
+		return s.DirFunc()
 	}
 	return s.Dir
 }
