@@ -56,6 +56,43 @@ func (p *Parser) SetTranscriptPath(path string) { p.path = path }
 // of collapsing both turns into one working→ready span.
 func (p *Parser) SplitsQueuedFollowUpTurns() bool { return true }
 
+// ResetForRotation implements the tailer's rotationResetter opt-in (issue
+// #1063). Vibe's meta.json session_prompt_tokens / session_completion_tokens
+// counters are monotonic within a session (only ever +=), so the parser
+// tracks its own high-water mark — lastPromptTokens / lastCompletionTokens —
+// to emit each turn's DELTA instead of the running cumulative total (see
+// emitContribution). Vibe 2.19.1's ACP /rewind path
+// (_overwrite_messages_sync with inplace=True) rewrites messages.jsonl in
+// place instead of forking a new session directory the way the TUI's
+// /rewind does, so a rewind can land as a legitimate rotation/truncation
+// under the tailer's watched root (fileSize < lastOffset). Without this
+// reset, the parser's stale (larger) high-water mark would out-run the
+// freshly-rewound session's smaller counters: emitContribution's dPrompt and
+// dCompletion both go negative, clamp to zero, and hit the early return —
+// which also skips updating lastPromptTokens/lastCompletionTokens, so every
+// subsequent turn_done repeats the same clamp-to-zero comparison. Tokens and
+// cost then flatline at zero for the rest of the session.
+//
+// todos (the TodoReconciler) is reset for the same reason: its synthetic
+// per-Key task IDs are assigned in lockstep with the tailer's own taskSeq
+// counter — both increment once per Create delta, in the same order, for
+// every vibe session (see TodoReconciler's doc comment). The tailer already
+// zeroes ITS taskSeq back to 0 on rotation (resetAccumulatorsForRotation);
+// leaving the reconciler's nextID/idByKey at their pre-rotation values would
+// desync the two counters and start handing the tailer IDs that collide with
+// (or never match) the fresh session's own numbering.
+//
+// path and sidecar are deliberately left alone: path is the transcript file
+// being tailed, which doesn't change across an in-place rewrite, and
+// sidecarCache is keyed by meta.json's own (mtime, size) — it self-invalidates
+// the moment Vibe rewrites the sidecar for the rewound session, so it needs
+// no manual reset here.
+func (p *Parser) ResetForRotation() {
+	p.lastPromptTokens = 0
+	p.lastCompletionTokens = 0
+	p.todos = tailer.TodoReconciler{}
+}
+
 // ParseLine normalizes one Vibe transcript line into a ParsedEvent. Each role
 // carries its own well-defined shape, so the per-role logic is delegated to a
 // dedicated parseXMessage function instead of growing one large switch body.

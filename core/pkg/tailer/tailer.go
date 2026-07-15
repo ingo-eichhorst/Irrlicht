@@ -150,8 +150,13 @@ type SessionMetrics struct {
 	// message, truncated to ~200 characters.
 	LastAssistantText string `json:"last_assistant_text,omitempty"`
 
-	// PermissionMode is the session's permission mode (e.g. "default",
-	// "plan", "bypassPermissions"). Extracted from "permission-mode" events.
+	// PermissionMode is the session's permission mode. Extracted from
+	// "permission-mode" events. A census of 320 live Claude Code transcripts
+	// found the values actually in use are overwhelmingly "auto" (~5000
+	// occurrences) and "plan" (331), with "default" (8) and "acceptEdits" (3)
+	// rare and "bypassPermissions" never observed. Claude Code v2.1.200
+	// renamed "default" to "manual". Pass-through field only — nothing here
+	// branches on its value.
 	PermissionMode string `json:"permission_mode,omitempty"`
 
 	// SawUserBlockingToolClosedThisPass is true when an AskUserQuestion or
@@ -555,7 +560,16 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 // detects fileSize < lastOffset — the transcript was rotated or truncated —
 // so replaying from byte 0 doesn't double-count tokens, resurrect stale
 // background processes, or misattribute the previous file's tasks.
+//
+// This only resets the TAILER's own accumulators. A parser that tracks its
+// own session-scoped state derived from an upstream monotonic counter (e.g.
+// Mistral Vibe's token high-water mark, issue #1063) must reset that state
+// too, or its next delta computation will be measured against the stale
+// pre-rotation value. See the rotationResetter optional interface.
 func (t *TranscriptTailer) resetAccumulatorsForRotation() {
+	if resetter, ok := t.parser.(rotationResetter); ok {
+		resetter.ResetForRotation()
+	}
 	t.cumInputTokens = 0
 	t.cumOutputTokens = 0
 	t.cumCacheReadTokens = 0
