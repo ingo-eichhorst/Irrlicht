@@ -220,55 +220,60 @@ func TestResolveSaveDir_RejectionIsLogged(t *testing.T) {
 func TestConfiguredSaveDir(t *testing.T) {
 	const saveDirConfig = "[session_logging]\nsave_dir = \"/srv/logs\"\n"
 
-	t.Run("save_dir in $VIBE_HOME/config.toml wins", func(t *testing.T) {
-		setVibeHome(t, saveDirConfig)
-
-		if got := configuredSaveDir(); got != "/srv/logs" {
-			t.Errorf("configuredSaveDir() = %q, want %q", got, "/srv/logs")
-		}
-	})
-
-	t.Run("save_dir in ~/.vibe/config.toml when VIBE_HOME is unset", func(t *testing.T) {
-		setDefaultVibeHome(t, saveDirConfig)
-		t.Setenv(vibeHomeEnvVar, "")
-
-		if got := configuredSaveDir(); got != "/srv/logs" {
-			t.Errorf("configuredSaveDir() = %q, want %q", got, "/srv/logs")
-		}
-	})
-
-	t.Run("relative VIBE_HOME falls back to ~/.vibe for the config too", func(t *testing.T) {
-		setDefaultVibeHome(t, saveDirConfig)
-		t.Setenv(vibeHomeEnvVar, "relative/home")
-
-		if got := configuredSaveDir(); got != "/srv/logs" {
-			t.Errorf("configuredSaveDir() = %q, want %q", got, "/srv/logs")
-		}
-	})
-
-	t.Run("absent config yields empty", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		t.Setenv(vibeHomeEnvVar, t.TempDir())
-
-		if got := configuredSaveDir(); got != "" {
-			t.Errorf("configuredSaveDir() = %q, want \"\"", got)
-		}
-	})
-
-	t.Run("unset save_dir yields empty", func(t *testing.T) {
-		setVibeHome(t, "[session_logging]\nenabled = true\n")
-
-		if got := configuredSaveDir(); got != "" {
-			t.Errorf("configuredSaveDir() = %q, want \"\"", got)
-		}
-	})
-
-	t.Run("unresolvable save_dir yields empty", func(t *testing.T) {
-		captureLog(t)
-		setVibeHome(t, "[session_logging]\nsave_dir = \"relative/logs\"\n")
-
-		if got := configuredSaveDir(); got != "" {
-			t.Errorf("configuredSaveDir() = %q, want \"\"", got)
-		}
-	})
+	tests := []struct {
+		name  string
+		setup func(t *testing.T)
+		want  string
+	}{
+		{
+			name:  "save_dir in $VIBE_HOME/config.toml wins",
+			setup: func(t *testing.T) { setVibeHome(t, saveDirConfig) },
+			want:  "/srv/logs",
+		},
+		{
+			name: "save_dir in ~/.vibe/config.toml when VIBE_HOME is unset",
+			setup: func(t *testing.T) {
+				setDefaultVibeHome(t, saveDirConfig)
+				t.Setenv(vibeHomeEnvVar, "")
+			},
+			want: "/srv/logs",
+		},
+		{
+			name: "relative VIBE_HOME falls back to ~/.vibe for the config too",
+			setup: func(t *testing.T) {
+				setDefaultVibeHome(t, saveDirConfig)
+				t.Setenv(vibeHomeEnvVar, "relative/home")
+			},
+			want: "/srv/logs",
+		},
+		{
+			name: "absent config yields empty",
+			setup: func(t *testing.T) {
+				t.Setenv("HOME", t.TempDir())
+				t.Setenv(vibeHomeEnvVar, t.TempDir())
+			},
+			want: "",
+		},
+		{
+			name:  "unset save_dir yields empty",
+			setup: func(t *testing.T) { setVibeHome(t, "[session_logging]\nenabled = true\n") },
+			want:  "",
+		},
+		{
+			name: "unresolvable save_dir yields empty",
+			setup: func(t *testing.T) {
+				captureLog(t)
+				setVibeHome(t, "[session_logging]\nsave_dir = \"relative/logs\"\n")
+			},
+			want: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.setup(t)
+			if got := configuredSaveDir(); got != tc.want {
+				t.Errorf("configuredSaveDir() = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
