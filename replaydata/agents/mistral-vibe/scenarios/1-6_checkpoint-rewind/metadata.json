@@ -75,7 +75,7 @@
         {
           "kind": "issue",
           "ref": "ingo-eichhorst/Irrlicht#1078",
-          "note": "Fixes the live consequence of an in-place rewrite: the tailer's rotation branch now resets the vibe parser's accumulators via the rotationResetter opt-in (core/pkg/tailer/tailer.go:569-572, core/adapters/inbound/agents/vibe/parser.go:59-90), so vibe tokens/cost stop flatlining to 0 after a rotation. Regression test TestTokenAccounting_ResumesAfterRotationReset. Why #1089 is a fixture/assessment accuracy matter rather than an open bug."
+          "note": "Fixes the live consequence of an in-place rewrite: the tailer's rotation branch now resets the vibe parser's accumulators via the rotationResetter opt-in (the code comments credit the underlying issue, #1063; #1078 is the PR that closed it) (core/pkg/tailer/tailer.go:569-572, core/adapters/inbound/agents/vibe/parser.go:59-90), so vibe tokens/cost stop flatlining to 0 after a rotation. Regression test TestTokenAccounting_ResumesAfterRotationReset. Why #1089 is a fixture/assessment accuracy matter rather than an open bug."
         },
         {
           "kind": "issue",
