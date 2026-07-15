@@ -6,7 +6,7 @@ This file exists to brief a release-sweep analysis (`/ir:agent-releases`) on wha
 
 ## How to use this file
 
-**Verify against adapter source before briefing an analysis on a claim here.** This file has repeatedly been wrong in ways that produced *confident false findings* — a wrong reference is worse than a thin one, because it costs real assessment time to kill a HIGH report for behavior that always worked. Two such errors were corrected in #1077 (the "flat" Claude Code watcher; `gt convoy list` being polled), and six more in #1090 (see the per-adapter notes marked **⚠️ corrected**).
+**Verify against adapter source before briefing an analysis on a claim here.** This file has repeatedly been wrong in ways that produced *confident false findings* — a wrong reference is worse than a thin one, because it costs real assessment time to kill a HIGH report for behavior that always worked. Two such errors were corrected in #1077 (the "flat" Claude Code watcher; `gt convoy list` being polled), and nine more in #1090 — every one is marked **⚠️ corrected (#1090)** inline, so `grep` for that string to see the full list.
 
 Two rules that follow from that history:
 
@@ -41,7 +41,7 @@ The aider case has a consequence worth internalizing: **if aider's process isn't
 
 | Tier | Adapters | Meaning |
 |---|---|---|
-| **(a)** Tailer only | claude-code, codex, pi, gemini-cli, aider | All state comes from the transcript |
+| **(a)** Tailer only | claude-code, codex, pi, gemini-cli, aider | No second file feeds the parser. (claude-code is still not *purely* transcript-driven — its hooks deliver `PermissionPending`/`CompactInProgress` out-of-band, and `settings.json` supplies the model fallback.) |
 | **(b)** Tailer + sibling side-read | antigravity, kiro-cli, mistral-vibe | Parser reads a sibling store for data the transcript lacks, via the `TranscriptPathAware` seam |
 | **(c)** Full bypass | **opencode** | `MetricsProvider` short-circuits before a tailer is ever constructed (`core/adapters/outbound/metrics/adapter.go:110-112`) |
 
@@ -186,7 +186,7 @@ The single highest-value thing to know per adapter. **Four adapters get an expli
 #### Transcript parsing dependencies
 - **JSONL event structure**: each line is a JSON object with role/type fields
 - **Event types recognized**: `user`, `assistant`, `tool_use`, `tool_result`, `turn_done`
-- **`turn_done` event**: primary signal that agent finished its turn — one of only three adapters with an explicit upstream marker
+- **`turn_done` event**: primary signal that agent finished its turn — one of only four adapters with an explicit upstream marker (see the marker-vs-heuristic table above)
 - **Tool call structure**: `tool_use` blocks with `name` field; matched against `tool_result`
 - **User-blocking tools**: `AskUserQuestion`, `ExitPlanMode` — trigger immediate waiting state
 - **`is_error` on tool_result**: indicates ESC/rejection (maps to ready state)
@@ -211,7 +211,7 @@ The single highest-value thing to know per adapter. **Four adapters get an expli
 - **Must not use** the `assistant`/`assistant_output` fallback in `IsAgentDone` — Codex writes an intermediate assistant message before calling a tool, so the fallback would flicker working→ready→working every turn (`metrics.go:451-455`).
 - **User-blocking**: earns it by aliasing — synthesizes a tool call literally named `ExitPlanMode` for `<proposed_plan>` (`parser.go:294-300`).
 
-> Thin section — not source-audited to the depth of the rest of this file.
+> Thin section — the source-cited bullets above were verified in #1090; the unattributed ones predate this file's expansion and have not had the same audit.
 
 ### 3. Pi Coding Agent (`pi`)
 - **Transcript path**: `~/.pi/agent/sessions/--<cwd-dashes>--/<timestamp>_<uuid>.jsonl`
@@ -222,7 +222,7 @@ The single highest-value thing to know per adapter. **Four adapters get an expli
 - **`turn_done`**: explicit — an assistant message with **`stopReason == "stop"`**; any other `stopReason` (toolUse, etc.) is mid-turn `assistant` (`parser.go:116-122`).
 - **Cost**: the only adapter that sets `ProviderCostUSD` from a provider-reported figure (`tailer/parser.go:375`); everything else is estimated from the capacity price map.
 
-> Thin section — not source-audited to the depth of the rest of this file.
+> Thin section — the source-cited bullets above were verified in #1090; the unattributed ones predate this file's expansion and have not had the same audit.
 
 ### 4. Gas Town Orchestrator (`gastown`)
 - **Detection**: `GT_ROOT` environment variable + `gt` binary
@@ -479,7 +479,7 @@ Lines arrive `TrimSpace`'d, so leading indentation is already gone.
 | **Root relocation via a new env var** | Upstream ships `$VIBE_HOME`-style override for an adapter that hardcodes its root | CRITICAL — silent blackout; the watcher waits on a path that never appears |
 | **DB schema change** (opencode, antigravity) | Table/column rename, protobuf field renumbering | CRITICAL — errors are logged and swallowed, or decode silently returns zeroes |
 | **Transcript format change** | JSONL schema altered, event types renamed/removed | HIGH — state classification fails |
-| **Turn-end shape change** | Trailing tool call on the final message, or a text-only message mid-turn | HIGH — the 5 heuristic adapters stick in `working` forever, or flicker to `ready` early |
+| **Turn-end shape change** | Trailing tool call on the final message, or a text-only message mid-turn | HIGH — the 4 heuristic adapters (vibe, kiro-cli, antigravity, gemini-cli) stick in `working` forever, or flicker to `ready` early. aider is spared the stick by its idle flush; the 4 explicit adapters are unaffected. |
 | **Tool system change** | Tool names renamed, tool_use/tool_result structure changed | HIGH — waiting/subagent detection breaks |
 | **Process change** | Binary renamed, wrapped under `node`/`python`, `setproctitle` adopted, CWD no longer accessible | HIGH — PID tracking fails; **total loss for aider** (no file fallback) and **opencode** (live-process discovery gate) |
 | **Prose/marker rewording** | `"The command failed"`, `"Request cancelled"`, `> Applied edit to`, `#### ` | HIGH — English-literal dependencies; localization breaks them silently |
