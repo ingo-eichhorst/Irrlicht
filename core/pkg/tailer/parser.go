@@ -438,6 +438,28 @@ type queuedTurnSplitter interface {
 	SplitsQueuedFollowUpTurns() bool
 }
 
+// rotationResetter is an optional interface a parser implements when it
+// holds session-scoped accumulated state derived from an upstream MONOTONIC
+// counter — one that only ever increases across a session, so the parser
+// tracks its own high-water mark to compute per-turn deltas. When the tailer
+// detects a legitimate rotation/truncation (fileSize < lastOffset) it already
+// zeroes its OWN cumulative accumulators (resetAccumulatorsForRotation) so a
+// replay from byte 0 doesn't double-count; without this hook a parser's own
+// high-water mark would stay stale, computing deltas against the PREVIOUS
+// file's counters instead of the fresh one's — for a monotonic counter that
+// resets lower after rotation, the delta clamps negative-to-zero and can
+// flatline the parser's contribution forever. See issue #1063 (Mistral Vibe's
+// ACP /rewind path overwrites messages.jsonl in place, unlike the TUI path
+// which forks a new session directory instead).
+//
+// Deliberately opt-in and a no-op for every parser that doesn't implement
+// it (the common case: claudecode, codex, pi, kirocli, aider, antigravity
+// carry no such monotonic-counter state) — the tailer's type-assertion costs
+// nothing for them.
+type rotationResetter interface {
+	ResetForRotation()
+}
+
 // ParserLedger holds the durable state a stateful parser checkpoints across
 // daemon restarts. Fields are parser-specific; unused ones stay zero.
 type ParserLedger struct {
