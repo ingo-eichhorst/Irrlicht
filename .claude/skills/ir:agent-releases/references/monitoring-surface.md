@@ -30,10 +30,17 @@ An adapter's `Source` variant determines how sessions are found at all. This is 
 | Variant | Adapters | How sessions are discovered |
 |---|---|---|
 | `agent.FilesUnderRoot` | claude-code, codex, pi, gemini-cli, mistral-vibe, kiro-cli, antigravity | fswatcher over a `$HOME`-relative root |
-| `agent.FilesUnderCWD` | **aider only** | **No watcher at all** — the process scanner stat-polls `<pid's CWD>/<filename>` |
-| `agent.ProcessOwnedStore` | **opencode only** | Dedicated SQLite watcher; full tailer bypass |
+| `agent.FilesUnderCWD` | aider | **No watcher at all** — the process scanner stat-polls `<pid's CWD>/<filename>` |
+| `agent.ProcessOwnedStore` | opencode | Dedicated SQLite watcher; full tailer bypass |
 
 `core/domain/agent/source.go`; wired in `core/cmd/irrlichd/wiring.go:53-86` (which **panics** for any `ProcessOwnedStore` adapter other than opencode, `wiring.go:66`).
+
+> **This table is enforced, not asserted.** `TestSourceCensus`
+> (`core/adapters/inbound/agents/maps_test.go`) runs the same type-switch over
+> the real `agents.All()` and fails when any adapter's variant changes. `Source`
+> is a sealed sum, so a brand-new variant fails there too. Don't hand-audit
+> these columns — if the test is green, they're right; if you change them, the
+> test tells you.
 
 ### Tailer tiers
 
@@ -93,10 +100,17 @@ Adapters with no timestamps in-band at all (**vibe**, **aider**, and every kiro 
 
 ### User-blocking tools — a hardcoded, Claude-flavored list
 
-The list is **`AskUserQuestion`, `ExitPlanMode`, `question`**, hardcoded in **two** places (deliberate duplication to avoid a domain import):
+The list is `AskUserQuestion`, `ExitPlanMode`, `question`, hardcoded in **two** places (deliberate duplication to avoid a domain import):
 
 - `core/pkg/tailer/tailer_config.go:34-40` — feeds `SawUserBlockingToolClosedThisPass`
 - `core/domain/session/metrics.go:380-382` — the **classifier-facing** one, via `NeedsUserAttention()`
+
+> **The duplication is pinned, not just documented.** Both predicates are probed
+> against one shared table (`core/internal/contracttesting/userblocking`) by a
+> paired `TestUserBlockingListsAgree` in each package, so editing one list
+> without the other turns that side red. The duplication is deliberate — pin it,
+> don't "fix" it by extracting a shared constant; the tailer's copy exists
+> precisely to avoid the domain import.
 
 The names are Claude Code's, but the mechanism is name-matching, so **any adapter that emits one of those names gets user-blocking detection**. Codex earns it by *aliasing*: it synthesizes a fake tool call named `ExitPlanMode` for its `<proposed_plan>` block (`codex/parser.go:294-300`).
 
@@ -109,16 +123,23 @@ Adjacent hardcoded list: `isPermissionGatedEditTool` (`metrics.go:388-397`) matc
 | Seam | Implementers |
 |---|---|
 | `TranscriptParser` (required) | all |
-| `RawLineParser` | **aider** only |
-| `idleFlusher` | **aider** only |
-| `rotationResetter` (`ResetForRotation`) | **vibe** only |
-| `queuedTurnSplitter` | **vibe** only |
-| `TranscriptPathAware` | **vibe**, **kiro-cli**, **antigravity** |
-| `pendingContributor` | **claude-code** only |
-| `ParserStateProvider` | **claude-code**, **codex** |
-| `ReplayStoreStager` | **antigravity** only |
+| `RawLineParser` | aider |
+| `idleFlusher` | aider |
+| `rotationResetter` (`ResetForRotation`) | vibe |
+| `queuedTurnSplitter` | vibe |
+| `TranscriptPathAware` | vibe, kiro-cli, antigravity |
+| `pendingContributor` | claude-code |
+| `ParserStateProvider` | claude-code, codex |
+| `ReplayStoreStager` | antigravity |
 
 `core/pkg/tailer/parser.go:381-509`.
+
+> **This table is enforced, not asserted.** `TestParserSeamCensus`
+> (`core/adapters/inbound/agents/maps_test.go`) type-asserts every seam against
+> every parser in `agents.All()`, one subtest per row. An adapter that gains or
+> loses a seam fails the matching row. Each seam is consumed by a type assertion
+> in the tailer, so implementing one silently changes runtime behavior — which is
+> why the row set is worth pinning rather than restating.
 
 ---
 
