@@ -8,6 +8,7 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	s := LedgerState{
 		SchemaVersion:               LedgerSchemaVersion,
 		LastOffset:                  t.lastOffset,
+		ResumeFingerprint:           t.resumeFingerprint,
 		CumProviderCostUSD:          t.cumProviderCostUSD,
 		ModelName:                   t.metrics.ModelName,
 		AgentVersion:                t.metrics.AgentVersion,
@@ -63,6 +64,12 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 		return
 	}
 	t.lastOffset = s.LastOffset
+	// A zero fingerprint means the ledger predates #1104 (or the window
+	// genuinely hashed to zero, 1-in-2^64): leave hasResumeFingerprint false so
+	// the first post-restart pass resumes at the offset as it always has, and
+	// re-anchors itself afterwards.
+	t.resumeFingerprint = s.ResumeFingerprint
+	t.hasResumeFingerprint = s.ResumeFingerprint != 0
 	t.restoreCumByModel(s.CumByModel)
 	t.cumProviderCostUSD = s.CumProviderCostUSD
 	if s.ModelName != "" {

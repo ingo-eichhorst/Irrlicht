@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"os"
@@ -431,6 +432,16 @@ type TranscriptTailer struct {
 	// statusline events repopulate the history before forecasting resumes.
 	rateLimit        *RateLimitSnapshot
 	rateLimitHistory []RateLimitSnapshot
+
+	// resumeFingerprint hashes the bytes immediately preceding lastOffset —
+	// the tail of the content this tailer has already consumed. Re-hashing
+	// that window on the next pass is what lets the tailer notice an in-place
+	// rewrite whose new size is >= lastOffset, which the size-shrink check
+	// alone cannot see. hasResumeFingerprint distinguishes "window hashed to
+	// zero" from "never computed" (a pre-#1104 ledger, where the only safe
+	// read is the historical one: trust the offset). See issue #1104.
+	resumeFingerprint    uint64
+	hasResumeFingerprint bool
 }
 
 // rateLimitHistoryCap caps the rolling history at a small number of changed
@@ -495,14 +506,18 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 
 	startPos := int64(0)
 	switch {
-	case fileSize < t.lastOffset:
-		// File rotated/truncated — reset cumulative accumulators to avoid
-		// double-counting tokens from the previous file.
+	case t.lastOffset == 0:
+		// First open (or a resume with no persisted offset): read from the top.
+	case fileSize < t.lastOffset || t.resumePrefixChanged(file):
+		// Rotated, truncated, or rewritten in place — the bytes this tailer
+		// already consumed are gone or are no longer the bytes it consumed.
+		// Reset cumulative accumulators and replay from byte 0 so tokens from
+		// the previous contents aren't double-counted.
 		//
-		// A shrink also covers Claude Code v2.1.208's transcript prune ("up to
-		// 79x smaller" by dropping superseded file-history backups), which
-		// rebuilds cumulative totals from the surviving lines only. That is
-		// safe because the prune does not touch usage-carrying lines: it
+		// The shrink half also covers Claude Code v2.1.208's transcript prune
+		// ("up to 79x smaller" by dropping superseded file-history backups),
+		// which rebuilds cumulative totals from the surviving lines only. That
+		// is safe because the prune does not touch usage-carrying lines: it
 		// targets the separate top-level `file-history-snapshot` event type,
 		// whose records carry no `usage`, `requestId`, `uuid` or `parentUuid`
 		// at all (0 of 3624 on a real machine) and sit outside the
@@ -514,7 +529,7 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 		// pruning assistant lines. See issue #1088.
 		startPos = 0
 		t.resetAccumulatorsForRotation()
-	case t.lastOffset > 0:
+	default:
 		// Normal incremental path: never skip ahead of the last processed byte.
 		startPos = t.lastOffset
 	}
@@ -529,6 +544,10 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	reader := bufio.NewReaderSize(file, 64*1024)
 	scan := t.scanNewLines(reader, startPos)
 	t.lastOffset = scan.endOffset
+	// Re-anchor the rewrite detector at the new resume point. Safe to read
+	// after the scan even against a live writer: an append only adds bytes at
+	// or beyond lastOffset, so the window ending at lastOffset is stable.
+	t.captureResumeFingerprint(file)
 
 	// Idle-flush hook: parsers whose transcript has no in-band end-of-turn
 	// marker (currently aider) synthesize turn_done when the file has been
@@ -570,11 +589,65 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	return t.metrics, scan.err
 }
 
+// resumeFingerprintWindow is how many bytes ending at lastOffset are hashed to
+// anchor the resume point. It only has to be wide enough that a rewrite is
+// overwhelmingly likely to disturb it — well over a typical JSONL record, so a
+// rewrite that shifts content by even one byte changes the window — while
+// staying a fixed, negligible read on a path that runs per transcript write
+// plus once every 5s per active session.
+const resumeFingerprintWindow = 512
+
+// resumePrefixChanged reports whether the already-consumed bytes ending at
+// lastOffset differ from what this tailer actually consumed — i.e. the
+// transcript was rewritten in place rather than appended to. It is the half of
+// rotation detection that a size check cannot cover: a rewrite whose new size
+// is >= lastOffset leaves the size test happy while the offset now points into
+// unrelated content, so the tailer would resume mid-record and keep
+// accumulating on top of pre-rewrite state (issue #1104).
+//
+// An append never rewrites bytes below lastOffset, so a matching window means
+// a genuine append. Both uncertain cases — a pre-#1104 ledger that carries an
+// offset but no fingerprint, and an unreadable window — return false, keeping
+// the historical resume-at-offset behavior rather than forcing a re-read.
+func (t *TranscriptTailer) resumePrefixChanged(r io.ReaderAt) bool {
+	if !t.hasResumeFingerprint {
+		return false
+	}
+	fp, ok := fingerprintEndingAt(r, t.lastOffset)
+	return ok && fp != t.resumeFingerprint
+}
+
+// captureResumeFingerprint anchors the rewrite detector at the current
+// lastOffset. A window that can't be read leaves the tailer with no
+// fingerprint, which resumePrefixChanged reads as "can't tell".
+func (t *TranscriptTailer) captureResumeFingerprint(r io.ReaderAt) {
+	t.resumeFingerprint, t.hasResumeFingerprint = fingerprintEndingAt(r, t.lastOffset)
+}
+
+// fingerprintEndingAt hashes the up-to-resumeFingerprintWindow bytes ending at
+// off, reporting false when there is nothing to hash (off <= 0) or the read
+// fails. FNV-1a is chosen over a cryptographic hash deliberately: this detects
+// an accidental rewrite by a cooperating agent, not a forged collision.
+func fingerprintEndingAt(r io.ReaderAt, off int64) (uint64, bool) {
+	if off <= 0 {
+		return 0, false
+	}
+	n := min(off, int64(resumeFingerprintWindow))
+	buf := make([]byte, n)
+	if _, err := r.ReadAt(buf, off-n); err != nil {
+		return 0, false
+	}
+	h := fnv.New64a()
+	h.Write(buf) // hash.Hash.Write never returns an error
+	return h.Sum64(), true
+}
+
 // resetAccumulatorsForRotation clears every accumulator that belongs to the
 // previous transcript file's contents. TailAndProcess calls this when it
-// detects fileSize < lastOffset — the transcript was rotated or truncated —
-// so replaying from byte 0 doesn't double-count tokens, resurrect stale
-// background processes, or misattribute the previous file's tasks.
+// detects that the consumed bytes are gone or changed — the transcript was
+// rotated, truncated, or rewritten in place — so replaying from byte 0 doesn't
+// double-count tokens, resurrect stale background processes, or misattribute
+// the previous file's tasks.
 //
 // This only resets the TAILER's own accumulators. A parser that tracks its
 // own session-scoped state derived from an upstream monotonic counter (e.g.
