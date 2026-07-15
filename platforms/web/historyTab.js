@@ -1030,24 +1030,27 @@ function clearHistoryDrilldown() {
   fetchHistory();
 }
 
-// setActivityChartEnabled gates the Activity chart (chart=state) behind the
-// Advanced Settings beta toggle (#1075). The matrix is reconstructed from
-// opt-in recordings, and a bucket with no recording renders identically to a
-// genuinely idle one (see renderStateMatrix), so anyone not recording reads a
-// grid of blanks as "idle" — misleading enough that it's off by default.
-export function setActivityChartEnabled(enabled) {
+// syncActivityChartVisibility reflects the Activity beta toggle (#1075) onto the
+// chart selector. The matrix is reconstructed from opt-in recordings, and a
+// bucket with no recording renders identically to a genuinely idle one (see
+// renderStateMatrix), so anyone not recording reads a grid of blanks as "idle"
+// — misleading enough that it's off by default.
+export function syncActivityChartVisibility(enabled) {
   const btn = document.querySelector('#history-chart-sel button[data-chart="state"]');
   if (btn) btn.hidden = !enabled;
-  // Turning it off while it's the live chart would otherwise strand the view on
-  // a chart the setting says is off — the matrix grid stays up, and the
-  // per-chart control rows only resync on a render. Fall back to the default
-  // chart, same shape as drillInto.
-  if (!enabled && historyState.chart === 'state') {
-    historyState.chart = 'cost';
-    historyState.scope = null;
-    syncHistorySelectors();
-    fetchHistory();
-  }
+}
+
+// leaveActivityChartIfSelected backs out of chart=state when the gate is turned
+// off underneath it — otherwise the view strands on a chart the setting says is
+// off, with the matrix grid still up. No-op unless Activity is live, so it's
+// only the toggle's own change handler that needs to call it. Same shape as
+// drillInto.
+export function leaveActivityChartIfSelected() {
+  if (historyState.chart !== 'state') return;
+  historyState.chart = 'cost';
+  historyState.scope = null;
+  syncHistorySelectors();
+  fetchHistory();
 }
 
 // syncHistorySelectors reflects historyState.chart/group onto the segmented

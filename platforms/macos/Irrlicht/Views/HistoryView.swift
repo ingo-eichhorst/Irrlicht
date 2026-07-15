@@ -196,17 +196,11 @@ struct HistoryView: View {
     /// Tab switcher row, below the shared `PanelHeader` (issue #940 — the
     /// header itself is now identical across every sub-panel; view-specific
     /// controls live in their own row underneath it).
-    /// Mirrors `visibleCharts`; the filter itself lives on HistoryTab so it's
-    /// testable without standing up a view.
-    private var visibleTabs: [HistoryTab] {
-        HistoryTab.visible(activityEnabled: enableActivityChart)
-    }
-
     private var tabSwitcher: some View {
         HStack {
             Spacer(minLength: 0)
             Picker("", selection: $tab) {
-                ForEach(visibleTabs) { Text($0.label).tag($0) }
+                ForEach(HistoryTab.visible(activityEnabled: enableActivityChart)) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
