@@ -12,6 +12,82 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.5.8] — 2026-07-15
+
+### Mistral Vibe becomes a fully supported agent, the Activity Matrix lands on macOS, and a long sweep of session-lifecycle fixes closes the gaps where a session could silently stall in the wrong state
+
+### Highlights
+
+#### Mistral Vibe is now a supported agent
+
+![The Irrlicht dashboard listing three sessions in one project — a Codex session on gpt-5.6-terra, a Claude Code session on opus-4-8, and a Mistral Vibe session on mistral-medium-3.5, each with its own context bar and running cost](assets/releases/v0.5.8/mistral-vibe-adapter.png)
+
+Irrlicht now watches [Mistral Vibe](https://github.com/mistralai/mistral-vibe) sessions the same way it watches Claude Code, Codex, and the rest: working/waiting/ready state, the model chip, the context bar, running cost, task summaries, and backchannel control all work out of the box. No configuration — start `vibe` in a project and it shows up.
+
+**Why it matters:** if you run Vibe alongside your other agents, it no longer sits invisible in a terminal you have to remember to check.
+
+(#921)
+
+#### The Activity Matrix comes to the macOS app
+
+![The Activity Matrix in the macOS History panel — a grid of projects down the left and time buckets across the top, each cell a stacked working/waiting/ready mini bar, with Export CSV and Export JSON buttons](assets/releases/v0.5.8/activity-matrix-macos.png)
+
+The Activity Matrix — a projects × time grid showing when your agents were working, waiting on you, or idle — shipped web-only in v0.5.7. It is now a top-level History tab in the macOS app too, zoomable across nine granularities from one minute to one year, with CSV and JSON export.
+
+**Why it matters:** the menu bar app was the one place you could not see your own activity history, which is where most people actually live.
+
+(#1038, #1028, #1047, #1046)
+
+### Also in this release
+
+**Added**
+- macOS: the CO2 chart gained the same "How is this calculated?" link to the CO2 Methodology page that the web dashboard already had, and it stays visible in the empty-data state. (#1035, #1029)
+- The task-summary header button is now a strict two-state toggle — collapsed, or waiting-only — instead of a noisy expand-all that flattened every session's summary into a wall of text. Sessions pop open and closed automatically as they enter and leave the waiting state. (#993, #985)
+
+**Fixed**
+- Codex subagent rollouts now link to their parent session instead of appearing as unrelated top-level sessions. (#1055, #1050)
+- Codex accounts that report only a single 7-day quota window no longer get a phantom 5-hour bucket invented alongside it, and the macOS and web copy no longer promises a fixed 5h/7d pair. (#1052)
+- A parent session no longer flips to ready while one of its background subagents is still running — Claude Code's own `pendingBackgroundAgentCount` is now an independent hold condition alongside the file-based check it used to race against. (#1037, #1036)
+- Non-Claude adapters (mistral-vibe, aider, antigravity, gemini-cli, kiro-cli, opencode) no longer fall back to reading your `~/.claude/settings.json` for a model name, which could surface an unrelated Claude Code session's model on a Vibe session. (#1022, #1019)
+- The waiting pill no longer truncates mid-question at a hard 70-character cut, and falls back to a scored sentence when a session ends a turn without a literal question. The separate purple "intent" pill is gone on both platforms. (#1004, #979)
+- A session's first turn is no longer swallowed when the daemon discovers it late, or when it is a child session — the missing ready→working step is synthesized instead of collapsing the turn. (#1010, #1000, #999)
+- Backchannel state is now re-keyed across presession reconciliation, so a session that is discovered before its process is identified keeps working control instead of silently losing it. (#1007, #1001)
+- Cold-start session discovery is now bounded: the filesystem watcher arms a root watch and scans newest-first instead of walking an unbounded history. (#1011)
+- A tracked pre-session is no longer reaped until its PID is confirmed dead. (#994)
+- History's concurrency charts resolve each project once per scan and cache it, instead of invoking git per request. (#1058, #1049)
+- A session whose only recorded transition is still active is now counted in the concurrency series instead of vanishing from the chart. (#990, #983)
+- Idle Mistral Vibe sessions retry cwd/project resolution instead of staying unattributed. (#1031)
+- Homebrew: the cask uses the symbol form `depends_on macos: :ventura`, silencing the deprecation warning Homebrew printed on every `brew upgrade`. (#1053)
+
+**Changed / Docs / Distribution**
+- Two macOS snapshot references drifted by a toolchain antialiasing change were regenerated. (#1044)
+- `ir:test-mac` now stamps the dev version string into the replace-mode Info.plist, so a dev build is identifiable in the GUI. (#1006)
+- onboarding-factory: teardown now polls instead of sleeping, daemon.log lines are classified, and a known-seams document records the gaps that are deliberate. (#1025)
+- onboarding-factory: the TUI-dialog-dismiss poll shared by several drivers moved into `_lib/drive`, and mistral-vibe's tool-permission step waits on a condition instead of a fixed sleep. (#1014, #1008)
+- CI: the star-history chart commit routes through a PR, and its stargazer fetch uses a PAT instead of `GITHUB_TOKEN`. (#1015, #1013)
+- `/ir:exec` docs: `[mode] <N>` invocation and auto mode documented; the skill now requires implementing and verifying a feature across every frontend it touches; Phase 4's self-assign is a verified precondition rather than a best-effort step. (#1023, #991, #1030, #1027)
+
+### Technical appendix
+
+- **Mistral Vibe adapter (#921):** a full agent column — Go adapter under `core/adapters/inbound/agents/vibe/` plus the complete onboarding-factory matrix column (44 scenario cells, driver, recordings). `Source` is `FilesUnderRoot` on `~/.vibe/logs/session` with `SessionIDFromPath`, since the transcript filename is the constant `messages.jsonl` and the session id is therefore the parent `<session-id>` directory. The adapter was verified against a real `~/.vibe` transcript rather than the AI-generated handover doc, which was wrong on two points now corrected: tool calls use the OpenAI nested `function.name` shape (not a flat `name`), and `vibe` is a Python console-script whose `comm` is the interpreter — so an `ExactName{"vibe"}` process match would never fire and it needs a `CommandPattern` on the command line instead. cwd, model, context window, and token counts come from the sibling `meta.json` sidecar (`config.active_model`, `config.auto_compact_threshold`, `stats.context_tokens`), memoized by (mtime, size), since the JSONL itself carries no timestamp, cwd, model, or usage. `SplitsQueuedFollowUpTurns` opts into the queued-turn boundary detection (#988) because vibe's `message_queue.py` drains a mid-turn follow-up synchronously the instant the prior turn's `agent_running()` clears — a genuinely distinct turn with no observable ready gap.
+- **Activity Matrix on macOS (#1038, #1028):** the daemon's `chart=state` API was already correct and fully tested from v0.5.7; nothing on the macOS side ever consumed it, and the v0.5.7 changelog did not disclose the gap. Adds `HistoryStateResponse` (a sibling to `HistoryYieldResponse`/`HistoryDoraResponse`, matching the wire shape 1:1) and `HistoryGranularity` (the nine-step 1m..1y zoom that replaces range/start/end entirely for this chart, mirroring the daemon's own `chart=="state"` special case). Activity is a top-level tab rather than nested under Metrics because it has no Range/Group at all. `HistoryActivityContentView` pins the project-name column beside a horizontally-scrollable grid — SwiftUI has no built-in two-axis sticky-header grid, so only the row-label column is pinned in this pass, a deliberate v1 scope reduction. Cells scale against the busiest cell in the whole grid, not per-row. Tooltips go through the app's own `.tooltip()` rather than SwiftUI's `.help()`, which does not render inside the `NSPanel`.
+- **Activity Matrix cleanup (#1047, #1046):** live QA of the new macOS tab surfaced four bugs in `chart=state`, two of them shared with its `chart=agents` sibling. A session with no recorded CWD was labeled "unknown" unconditionally inside the concurrency tracker, unlike every other chart, which only surfaces "unknown" past a 10%-of-window-total share — the substitution moved out to `resolveUnknownConcurrencyProject`/`resolveUnknownStateProject` so it reuses the existing share-based rule. `buildStateResponse` never capped project rows, so every project with any historical activity appeared, including years-old one-off worktree sessions; capped to the busiest 8 (`historyStateProjectLimit`) with `ByState` pruned to match. `concurrencyProject()` did a raw `filepath.Base(cwd)` with no git-root resolution, so a session run inside `.claude/worktrees/<N>-<slug>/` was keyed as its own project instead of folding into the real repo; now wired through `git.Adapter.GetProjectName` via a `concurrencyProjectResolver` interface, memoized per scan (#1058 extends that memoization across concurrent history requests so git is invoked once per CWD). `HistoryActivityContentView` was the one view in `HistoryView.swift` not constraining its width with `.frame(maxWidth: .infinity)` and overflowed the fixed 380pt panel; the regression test hosts the view through the real nested ScrollView chain, since the existing `host()` helper did not reproduce the bug.
+- **pendingBackgroundAgentCount hold (#1037, #1036):** the file-based `hasActiveChildren` check loses a short race when a child's transcript finishes and is reclassified to ready (and cleaned up) moments before Claude Code delivers the task-notification that would give the parent a reason to keep working. Claude Code's own `turn_duration` system event already reports `pendingBackgroundAgentCount`; it is now parsed and folded into `holdParentForActiveChildren` and `reevaluateParent` as an independent OR condition alongside the existing check.
+- **Non-Claude model fallback (#1022, #1019):** `getDefaultModelFromConfig`'s switch only special-cased "pi" and "codex", so every other adapter fell into a catch-all default that read the operator's `~/.claude/settings.json`. A mistral-vibe session whose `meta.json` sidecar had not been written yet (the window right after a `/clear` rotation) would surface an unrelated claude-code session's model name instead of staying empty.
+- **Waiting pill (#1004, #979):** the summary fell back to the raw first prompt cut at a period, and the question box truncated an already-correctly-extracted question at a hard 70-rune cut, sometimes chopping off the actual question. The daemon's safety bound rises to ~200 runes, a shared heuristic sentence-scorer covers the case where no literal question exists, and the pill passively upgrades from Claude Code's own `away_summary` recap once it arrives. Presentation-wise the separate purple "intent" pill is deleted on both platforms — the surviving orange/waiting pill is the only textual element and shows only while waiting, so a finished session shows no textual pill by design.
+- **Waiting-only summary mode (#993, #985):** replaces the expand-all/collapse-all toggle with a strict two-state toggle — collapsed (unchanged) and waiting (summary/question block shown only for sessions whose `state === 'waiting'`), computed live off session state so a session transitioning in or out of waiting pops open or closed automatically instead of relying on a stale snapshot. Web keeps its per-row manual chevron as a separate row-scoped concern layered on top of the global mode; macOS has no per-row toggle, so the mode alone drives `summaryBlock` visibility.
+- **First-turn synthesis (#1010, #1000, #999):** a session discovered after its first turn had already begun never emitted the ready→working transition, collapsing the turn; the daemon now synthesizes the swallowed step, for late-discovered top-level sessions and for child sessions alike.
+- **Backchannel re-keying (#1007, #1001):** both `BackchannelEngine`'s edge state and the terminal-observer/session state were keyed on an identity that changes when a presession reconciles into a real session, so control silently detached at reconciliation; both are now re-keyed across the transition.
+- **Cold-start discovery latency (#1011):** the fswatcher arms a root watch and scans newest-first, bounding the time to first discovery instead of walking an unbounded transcript history.
+- **Codex rollout linkage (#1055, #1050):** derives Codex thread identity and subagent parent linkage from rollout session metadata, and defers zero-byte child create events until their header is readable, preventing a child from flickering as a top-level session before its parent link is known.
+- **Codex 7d-only quota (#1052):** preserves the provider-emitted single 7-day window rather than inventing a missing 5-hour bucket, with parser and web-label regressions pinning the current payload shape.
+- **Concurrency project caching (#1058, #1049):** raw-CWD project resolution now persists on the daemon-lifetime concurrency tracker, with a cache-miss guard so concurrent history requests invoke git once per CWD rather than once per request.
+- **Sole still-active transition (#990, #983):** a session with exactly one recorded transition and no later event vanished from both `AgentsSeries` and `StateSeries`; its still-active interval is now counted. Found during the v0.5.7 Activity Matrix work and filed separately at the time.
+- **Homebrew cask (#1053):** Homebrew deprecated the string-comparison form `depends_on macos: ">= :ventura"`; the bare symbol already means "Ventura or newer", so this is behavior-preserving. `brew style` reports no offenses on the new form.
+- **onboarding-factory (#1025, #1014, #1008):** teardown-wait polls replace fixed sleeps, daemon.log lines are classified rather than dumped, a known-seams document records which gaps are deliberate, the TUI-dialog-dismiss poll shared across drivers is extracted into `_lib/drive`, and mistral-vibe's tool-permission step waits on a condition instead of a sleep.
+- **`/ir:exec` (#1023, #991, #1030, #1027):** documents the `[mode] <N>` invocation and auto mode, requires a feature to be implemented and verified across every frontend it touches (the gap that let the Activity Matrix ship web-only), and makes Phase 4's self-assign a verified, retry-once, surface-and-pause precondition rather than a best-effort step.
+- **Model alias map:** re-synced against codeburn's `BUILTIN_ALIASES` with no changes — the only upstream addition is a `gpt-4.1` self-alias that is a no-op for us and stays deliberately omitted.
+
 ## [0.5.7] — 2026-07-13
 
 ### History gains three new lenses — agent activity over time, DORA metrics, and CO2 equivalents — alongside a major flaky-test cleanup, non-English waiting-cue detection, and a wave of accessibility and mechanical-quality fixes
@@ -1391,7 +1467,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.5.7...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.5.8...HEAD
+[0.5.8]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.8
 [0.5.7]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.7
 [0.5.6]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.6
 [0.5.5]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.5

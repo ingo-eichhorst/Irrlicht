@@ -139,7 +139,7 @@ Subagent sessions run independent state machines with the same 3 states.
 | Axis | Values |
 |------|--------|
 | **CompactionState** | `not_compacting` / `compacting` / `post_compact` -- overlaid on `working` |
-| **Adapter** | `claude-code` / `codex` / `pi` / `aider` / `opencode` / `kiro-cli` / `gemini-cli` / `antigravity` -- identifies source agent |
+| **Adapter** | `claude-code` / `codex` / `pi` / `aider` / `opencode` / `kiro-cli` / `gemini-cli` / `antigravity` / `mistral-vibe` -- identifies source agent |
 | **PressureLevel** | `safe` / `caution` / `warning` / `critical` -- context window utilization |
 
 ---
@@ -163,3 +163,4 @@ Memory store merges disk on `ListAll` to pick up sessions created externally (e.
 | Kiro CLI | `~/.kiro/sessions/cli/*.jsonl` |
 | Gemini CLI | `~/.gemini/tmp/**/chats/*.jsonl` |
 | Antigravity | `~/.gemini/antigravity-cli/brain/**/transcript.jsonl` (CLI) and `~/.gemini/antigravity/brain/**/transcript.jsonl` (IDE) |
+| Mistral Vibe | `~/.vibe/logs/session/<session-id>/messages.jsonl` (plus a sibling `meta.json`) |

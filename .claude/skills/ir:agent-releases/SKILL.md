@@ -1,6 +1,6 @@
 ---
 name: "ir:agent-releases"
-description: "Check latest releases of coding agents monitored by irrlicht (Claude Code, OpenAI Codex, Pi, Gas Town, Aider, OpenCode, Gemini CLI, Kiro CLI, Antigravity) and report new features that impact session monitoring. Use when user says 'agent releases', 'check releases', 'agent updates', '/ir:agent-releases', or wants to know if upstream agent changes affect irrlicht."
+description: "Check latest releases of coding agents monitored by irrlicht (Claude Code, OpenAI Codex, Pi, Gas Town, Aider, OpenCode, Gemini CLI, Kiro CLI, Antigravity, Mistral Vibe) and report new features that impact session monitoring. Use when user says 'agent releases', 'check releases', 'agent updates', '/ir:agent-releases', or wants to know if upstream agent changes affect irrlicht."
 ---
 
 # Agent Release Monitor for Irrlicht
@@ -60,6 +60,11 @@ Use WebSearch and WebFetch to find recent releases for each agent. Search in thi
 #### Antigravity
 - Search: `"Google Antigravity" IDE changelog OR release notes`
 - Note: Antigravity is closed-source with no public GitHub repo; check the official product site/blog. If no results found, note "no public releases found" and move on.
+
+#### Mistral Vibe
+- Search: `"mistral vibe" changelog OR release notes site:github.com/mistralai`
+- Also check: `https://github.com/mistralai/mistral-vibe/releases`
+- Focus on: transcript format under `~/.vibe/logs/session/<session-id>/messages.jsonl`, the sibling `meta.json` sidecar schema (`config.active_model`, `config.auto_compact_threshold`, `stats.context_tokens`), and process naming (a Python console-script, so the command line — not the process name — is what matches)
 
 ### 3. Analyze Impact
 

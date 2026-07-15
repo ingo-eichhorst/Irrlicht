@@ -190,6 +190,20 @@
         <li>Stage: <strong>alpha</strong></li>
       </ul>
 
+      <h3>Mistral Vibe Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/vibe/</code></li>
+        <li><strong>Watches:</strong> <code>messages.jsonl</code> under <code>~/.vibe/logs/session/&lt;session-id&gt;/</code></li>
+        <li>Because the transcript filename is the constant <code>messages.jsonl</code>, the session id is derived from the parent directory name</li>
+        <li>Process discovery via command-line match: <code>vibe</code> is a Python console-script, so the OS process name is the interpreter and an exact-name match would never fire</li>
+        <li>Tool calls use the OpenAI nested <code>function.name</code> shape rather than a flat <code>name</code></li>
+        <li>The transcript carries no timestamp, working directory, model, or usage &mdash; those are read from the sibling <code>meta.json</code> sidecar (<code>config.active_model</code>, <code>config.auto_compact_threshold</code>, <code>stats.context_tokens</code>), memoized by (mtime, size), so the model chip and context bar render</li>
+        <li>Opts into queued-turn boundary detection: vibe drains a mid-turn follow-up synchronously the instant the prior turn finishes, a genuinely distinct turn with no observable ready gap</li>
+        <li><strong>Adapter name:</strong> <code>"mistral-vibe"</code></li>
+        <li>Stage: <strong>alpha</strong></li>
+      </ul>
+
       <h3>Process Scanner</h3>
 
       <ul>

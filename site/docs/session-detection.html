@@ -206,6 +206,16 @@
         <li><strong>Adapter name:</strong> <code>antigravity</code></li>
       </ul>
 
+      <h3>Mistral Vibe</h3>
+
+      <ul>
+        <li><strong>Transcript location:</strong> <code>messages.jsonl</code> under <code>~/.vibe/logs/session/&lt;session-id&gt;/</code></li>
+        <li>Since the transcript filename is the constant <code>messages.jsonl</code>, the session id is derived from the parent directory name</li>
+        <li>Discovery matches the command line rather than the process name: <code>vibe</code> is a Python console-script, so the OS process name is the interpreter</li>
+        <li>The transcript carries no timestamp, working directory, model, or usage &mdash; those come from the sibling <code>meta.json</code> sidecar, so the model chip and context bar render</li>
+        <li><strong>Adapter name:</strong> <code>mistral-vibe</code></li>
+      </ul>
+
       <h2>PID Discovery</h2>
 
       <table>
