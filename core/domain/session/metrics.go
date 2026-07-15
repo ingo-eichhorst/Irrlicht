@@ -377,8 +377,20 @@ func (m *SessionMetrics) NeedsUserAttention() bool {
 // isUserBlockingTool returns true for tools that always block for user input,
 // regardless of permission settings. These are the only tools that should
 // trigger the "waiting" state.
+//
+// Adapters spell the same tool differently: claudecode emits PascalCase
+// (AskUserQuestion/ExitPlanMode), vibe emits snake_case (ask_user_question —
+// see its live tools_available). The match is exact rather than case-folded or
+// substring, so near-miss names that are NOT user-blocking stay out.
+//
+// This list is duplicated at tailer.isUserBlockingToolName, which is kept local
+// to that package to avoid a domain-package import. KEEP THE TWO IN SYNC — a
+// tool added here must be added there too, and vice versa. Their twin tests
+// (TestNeedsUserAttention_UserBlockingToolNames here, TestIsUserBlockingToolName
+// in pkg/tailer) pin both sets.
 func isUserBlockingTool(name string) bool {
-	return name == "AskUserQuestion" || name == "ExitPlanMode" || name == "question"
+	return name == "AskUserQuestion" || name == "ExitPlanMode" ||
+		name == "question" || name == "ask_user_question"
 }
 
 // HasOpenEditPermissionTool reports whether an open tool call is a
@@ -407,12 +419,23 @@ func (m *SessionMetrics) HasOpenEditPermissionTool() bool {
 // differently: claudecode emits PascalCase (Edit/Write/MultiEdit/
 // NotebookEdit) while kiro-cli and pi emit lowercase (write/edit). All
 // are fast in-process file edits, so an open one that lingers is the same
-// "blocked on a permission prompt" signal regardless of casing (#588). No
-// adapter names a long-running tool (bash/read/web_search/MCP) with one of
-// these spellings, so case-folding introduces no false positives.
+// "blocked on a permission prompt" signal regardless of casing (#588).
+//
+// write_file is the snake_case spelling emitted by vibe, gemini-cli and
+// antigravity; each is a fast, permission-gated disk write, the same class as
+// Write (#1087). Adding it kept vibe from being half-in: upstream's v2.14.0
+// search_replace→edit rename had silently opted "edit" into this heuristic
+// while "write_file" still fell through.
+//
+// No adapter names a long-running tool (bash/read/web_search/MCP) with one of
+// these spellings, so case-folding introduces no false positives. That claim
+// rests on the match being exact equality on the folded name, never a prefix
+// or substring: codex's write_stdin is an interactive PTY session that can
+// stream for seconds, and gemini-cli's write_todos is a todo list — both would
+// be false positives under substring matching, and both are excluded here.
 func isPermissionGatedEditTool(name string) bool {
 	switch strings.ToLower(name) {
-	case "edit", "write", "multiedit", "notebookedit":
+	case "edit", "write", "multiedit", "notebookedit", "write_file":
 		return true
 	default:
 		return false

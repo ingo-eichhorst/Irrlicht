@@ -26,14 +26,24 @@ func surviveTurnDone(name string) bool {
 }
 
 // isUserBlockingToolName returns true for tools that always block the agent
-// until the user responds: AskUserQuestion and ExitPlanMode. Used by
-// TailAndProcess to flag same-pass open+close of these tools so the daemon
-// can synthesise the collapsed working→waiting transition (issue #150).
+// until the user responds. Used by TailAndProcess to flag same-pass open+close
+// of these tools so the daemon can synthesise the collapsed working→waiting
+// transition (issue #150).
+//
+// Adapters spell the same always-blocks-for-input tool differently:
+// claudecode emits PascalCase (AskUserQuestion/ExitPlanMode), while vibe emits
+// snake_case (ask_user_question — see its live tools_available). The match is
+// exact rather than case-folded or substring, so near-miss names that are NOT
+// user-blocking (e.g. a hypothetical ask_user_question_v2) stay out.
+//
 // Kept local to the tailer to avoid a domain-package import; the canonical
-// list also lives at session.isUserBlockingTool.
+// list also lives at session.isUserBlockingTool. KEEP THE TWO IN SYNC — a tool
+// added here must be added there too, and vice versa. Their twin tests
+// (TestIsUserBlockingToolName here, TestNeedsUserAttention_UserBlockingToolNames
+// in domain/session) pin both sets.
 func isUserBlockingToolName(name string) bool {
 	switch name {
-	case "AskUserQuestion", "ExitPlanMode", "question":
+	case "AskUserQuestion", "ExitPlanMode", "question", "ask_user_question":
 		return true
 	}
 	return false

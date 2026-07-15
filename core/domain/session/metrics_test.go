@@ -20,12 +20,23 @@ func TestHasOpenEditPermissionTool(t *testing.T) {
 		{"open lowercase edit (pi)", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"edit"}}, true},
 		{"open lowercase multiedit", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"multiedit"}}, true},
 		{"open lowercase notebookedit", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"notebookedit"}}, true},
+		// Snake_case variants emitted by vibe/gemini-cli must gate too (#1087).
+		// vibe was previously half-in: upstream's search_replace→edit rename
+		// silently opted "edit" in, but "write_file" never matched "write".
+		{"open write_file (vibe)", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"write_file"}}, true},
+		{"open Write_File (case-folded)", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Write_File"}}, true},
 		// Tools that can legitimately run long must NOT qualify — duration
 		// can't distinguish "blocked on prompt" from "executing" for them.
 		{"open Bash", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}}, false},
 		{"open WebFetch", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"WebFetch"}}, false},
 		{"open Read", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Read"}}, false},
 		{"open mcp tool", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"mcp__server__do"}}, false},
+		// codex's write_stdin is an interactive PTY session that can stream for
+		// a long time — the near-miss that exact matching (not prefix/substring)
+		// keeps out. Guards the write_file addition against regressing into a
+		// substring match.
+		{"open write_stdin (codex)", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"write_stdin"}}, false},
+		{"open write_todos (gemini)", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"write_todos"}}, false},
 		{"open AskUserQuestion", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"AskUserQuestion"}}, false},
 		{"mixed: Bash + Edit", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash", "Edit"}}, true},
 		{"open tool, no names", &SessionMetrics{HasOpenToolCall: true}, false},
@@ -34,6 +45,41 @@ func TestHasOpenEditPermissionTool(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.metrics.HasOpenEditPermissionTool(); got != tt.want {
 				t.Errorf("HasOpenEditPermissionTool() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNeedsUserAttention_UserBlockingToolNames pins the user-blocking tool set
+// this package matches. The canonical list is duplicated at
+// tailer.isUserBlockingToolName (kept local there to avoid a domain-package
+// import); TestIsUserBlockingToolName in that package is this test's twin and
+// the two must be updated together.
+func TestNeedsUserAttention_UserBlockingToolNames(t *testing.T) {
+	tests := []struct {
+		name    string
+		metrics *SessionMetrics
+		want    bool
+	}{
+		{"nil metrics", nil, false},
+		{"no open tools", &SessionMetrics{HasOpenToolCall: false, LastOpenToolNames: []string{"AskUserQuestion"}}, false},
+		{"open AskUserQuestion", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"AskUserQuestion"}}, true},
+		{"open ExitPlanMode", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"ExitPlanMode"}}, true},
+		{"open question", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"question"}}, true},
+		// vibe names the same always-blocks-for-input tool in snake_case
+		// (live 2.19.1 tools_available). Without this the session fell through
+		// to the trailing-'?' text heuristic instead of forcing waiting (#1087).
+		{"open ask_user_question (vibe)", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"ask_user_question"}}, true},
+		{"mixed: Bash + ask_user_question", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash", "ask_user_question"}}, true},
+		// Auto-executing tools must not trigger waiting.
+		{"open Bash", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}}, false},
+		{"open Write", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Write"}}, false},
+		{"open tool, no names", &SessionMetrics{HasOpenToolCall: true}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.metrics.NeedsUserAttention(); got != tt.want {
+				t.Errorf("NeedsUserAttention() = %v, want %v", got, tt.want)
 			}
 		})
 	}
