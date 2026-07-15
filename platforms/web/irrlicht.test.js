@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, beforeAll, afterAll } from 'vitest'
 
 import { formatCO2, co2TierTitle } from './formatters.js'
+import { readCss } from './snapshots/serialize.js'
 import {
   pendingWizardAgents,
   stillPendingForAgents,
@@ -941,6 +942,56 @@ describe('Activity chart beta gate (#1075)', () => {
     btn('agents').click()
     leaveActivityChartIfSelected()
     expect(isActive('agents')).toBe(true)
+  })
+})
+
+// The three per-chart row toggles in historyTab.js set el.hidden, which only
+// hides anything if the cascade lets the UA's [hidden] { display: none } rule
+// win. .history-ctl-row and #history-chart both set an author display, which
+// outranks it — so every toggle was silently inert (#1079). Asserting
+// el.hidden here would prove nothing (the property always flipped correctly);
+// the regression only shows up in the computed style, so this suite injects
+// the real stylesheet and reads getComputedStyle. Verified falsifiable: against
+// pristine origin/main CSS these resolve to flex/block rather than none.
+describe('[hidden] survives the author display cascade (#1079)', () => {
+  let style
+
+  beforeAll(() => {
+    style = document.createElement('style')
+    style.textContent = readCss()
+    document.head.append(style)
+  })
+  afterAll(() => style.remove())
+
+  const displayOf = (markup) => {
+    const host = document.createElement('div')
+    host.innerHTML = markup
+    document.body.append(host)
+    const display = getComputedStyle(host.firstElementChild).display
+    host.remove()
+    return display
+  }
+
+  test('a hidden control row computes to display:none', () => {
+    // As they ship in index.html: #history-dora-row and #history-granularity-row
+    // carry the attribute in the markup, so this is the default-load state too.
+    expect(displayOf('<div class="history-ctl-row" id="history-dora-row" hidden></div>')).toBe('none')
+    expect(displayOf('<div class="history-ctl-row" id="history-granularity-row" hidden></div>')).toBe('none')
+    expect(displayOf('<div class="history-ctl-row" id="history-range-row" hidden></div>')).toBe('none')
+  })
+
+  test('a visible control row still lays out as flex', () => {
+    // Guards against a fix that over-reaches and hides the rows unconditionally.
+    expect(displayOf('<div class="history-ctl-row" id="history-range-row"></div>')).toBe('flex')
+  })
+
+  test('the hidden chart canvas computes to display:none', () => {
+    // Needs an id-level hatch to outrank #history-chart's author display:block.
+    expect(displayOf('<canvas id="history-chart" hidden></canvas>')).toBe('none')
+  })
+
+  test('the visible chart canvas still lays out as block', () => {
+    expect(displayOf('<canvas id="history-chart"></canvas>')).toBe('block')
   })
 })
 
