@@ -208,9 +208,13 @@ type SessionMetrics struct {
 	// LastAssistantText is the tooltip. Empty when there is no question source.
 	QuestionHeadline string `json:"question_headline,omitempty"`
 
-	// PermissionMode is the session's permission mode from the JSONL
-	// (e.g. "default", "plan", "bypassPermissions"). Surfaced by the tailer
-	// and carried on session state for UI/telemetry.
+	// PermissionMode is the session's permission mode from the JSONL.
+	// Verified on-disk census across 320 local Claude Code transcripts
+	// (v2.1.210, 2026-07-15): "auto" 5000, "plan" 331, "default" 8,
+	// "acceptEdits" 3 — "bypassPermissions" has never been observed. Claude
+	// Code v2.1.200 (2026-07-03) renamed "default" to "manual"; not yet seen
+	// on disk. Pure passthrough for UI/telemetry — ClassifyState never reads
+	// this field, and the only comparison anywhere is `== ""` (see below).
 	PermissionMode string `json:"permission_mode,omitempty"`
 
 	// PermissionPending is true when a PermissionRequest hook has fired and no

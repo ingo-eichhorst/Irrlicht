@@ -108,6 +108,15 @@ you verified against, since it may lag the newest release.
 
 For each NEW release not already in `references/tracked-releases.md`, check every change against the monitoring surface.
 
+⚠️ **An upstream change is not an irrlicht problem until you've checked irrlicht's own
+adapter code.** The 2026-07-15 sweep reported several findings that were already fixed,
+already tolerated by construction, or targeted fields no consumer reads — because it
+reasoned from changelogs/monitoring-surface.md alone (see `references/tracked-releases.md`'s
+"Rejected Findings" section for the specifics). Before writing up any candidate finding:
+grep/read the relevant adapter source for how irrlicht actually handles the surface in
+question, and cite the file:line that proves the gap is real (or that it isn't). If you
+can't point at a specific line where the described behavior would break, don't report it.
+
 **Only report a change if it falls into one of these categories:**
 - Transcript path or directory structure changed
 - Transcript JSONL event schema changed (new/renamed/removed event types)
