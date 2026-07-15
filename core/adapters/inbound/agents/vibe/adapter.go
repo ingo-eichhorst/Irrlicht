@@ -25,11 +25,16 @@ const AdapterName = "mistral-vibe"
 // the session ID therefore comes from the parent directory, not the filename.
 const transcriptFilename = "messages.jsonl"
 
+// defaultHomeDirName is Vibe's home directory relative to $HOME when
+// $VIBE_HOME is unset (vibe/core/paths/_vibe_home.py: _DEFAULT_VIBE_HOME =
+// Path.home()/".vibe"). Both the session root and config.toml hang off it.
+const defaultHomeDirName = ".vibe"
+
 // defaultRootDir is the path relative to $HOME where Vibe stores session
 // directories when $VIBE_HOME is unset. Each session is a <session-id>/
 // folder holding messages.jsonl (the conversation) and meta.json (the
 // sidecar).
-const defaultRootDir = ".vibe/logs/session"
+const defaultRootDir = defaultHomeDirName + "/logs/session"
 
 // vibeHomeEnvVar is the upstream Vibe env var that relocates the agent's home
 // directory (default: ~/.vibe). Verified against the installed package source
@@ -49,9 +54,22 @@ const defaultRootDir = ".vibe/logs/session"
 // matching every sibling adapter rather than reimplementing shell expansion.
 const vibeHomeEnvVar = "VIBE_HOME"
 
-// sessionsDir returns the directory the Vibe adapter should watch —
-// $VIBE_HOME/logs/session when that override is set, else defaultRootDir.
+// sessionsDir returns the directory the Vibe adapter should watch, applying
+// upstream's precedence (verified at v2.19.1 — see configuredSaveDir):
+//
+//	[session_logging].save_dir in $VIBE_HOME/config.toml   (replaces the root)
+//	$VIBE_HOME/logs/session                                (when VIBE_HOME is set)
+//	~/.vibe/logs/session                                   (default)
+//
+// It reads a file, so it is wired as FilesUnderRoot.DirFunc rather than called
+// from Agent(): the resolver runs when the daemon builds Vibe's watchers,
+// which happens only once the transcripts permission is granted. Calling it
+// from Agent() would read the filesystem while that permission is still
+// pending — and under --diagnose, before any consent machinery exists.
 func sessionsDir() string {
+	if dir := configuredSaveDir(); dir != "" {
+		return dir
+	}
 	return agentpaths.FromEnv("vibe", vibeHomeEnvVar, defaultRootDir, "logs", "session")
 }
 

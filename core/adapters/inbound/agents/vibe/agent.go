@@ -31,7 +31,7 @@ func Agent() agent.Agent {
 			PIDForSession: DiscoverPID,
 		},
 		Source: agent.FilesUnderRoot{
-			Dir:               sessionsDir(),
+			DirFunc:           sessionsDir,
 			SessionIDFromPath: sessionIDFromPath,
 			Parser: agent.JSONLineParser{
 				NewParser: func() agent.LineParser { return &Parser{} },
@@ -52,11 +52,14 @@ func Agent() agent.Agent {
 				Title:           "Read session transcripts",
 				FeatureUnlocked: "Session list, timeline, state, model & context-window usage",
 				Touches: "Reads session transcripts and their meta.json sidecar under " +
-					"~/.vibe/logs/session/ and the working directory of running vibe processes",
+					"~/.vibe/logs/session/, ~/.vibe/config.toml to locate that folder, and " +
+					"the working directory of running vibe processes",
 				Detail: "Tails messages.jsonl files under ~/.vibe/logs/session/<session-id>/ " +
 					"to derive session state, activity, and timeline, and reads the sibling " +
 					"meta.json sidecar for the working directory, active model, and context-" +
-					"token count (context-window usage). Also scans for running vibe processes " +
+					"token count (context-window usage). Reads one key from ~/.vibe/config.toml " +
+					"([session_logging].save_dir) because it can move that folder elsewhere — " +
+					"no other setting is read. Also scans for running vibe processes " +
 					"and reads their working directory to bind a session to its process. " +
 					"Read-only — no file is ever modified. Toggling off stops all reading " +
 					"immediately.",

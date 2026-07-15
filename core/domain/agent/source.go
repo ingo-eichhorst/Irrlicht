@@ -16,9 +16,31 @@ type Source interface {
 // FilesUnderRoot — transcripts live one-file-per-session under a fixed
 // directory under $HOME. The runtime fswatches Dir and emits
 // new/activity/removed events.
+//
+// Four fields now answer "where is the root" — Dir, DirByOS, DirFunc, and
+// ExtraDirs — resolved together by AllRootsFor, with a documented precedence
+// between the first three. That is the ceiling: if a fifth is ever wanted,
+// collapse the lot into one resolver (`Roots func(goos string) []string`, with
+// constructors for the static cases) rather than extending the ladder.
 type FilesUnderRoot struct {
 	Dir    string // path relative to $HOME, e.g. ".claude/projects"
 	Parser FileParser
+
+	// DirFunc optionally replaces Dir with a resolver, for an adapter whose
+	// root cannot be derived from constants and env vars alone and so must be
+	// resolved by reading something. Nil (the common case) means "use Dir".
+	//
+	// It is the seam for a root whose resolution must be CONSENT-GATED: the
+	// daemon calls it when it builds the adapter's watchers, which happens
+	// only once that adapter's observe permission is granted, whereas Dir is
+	// evaluated when the adapter declares itself — before any permission state
+	// exists. An adapter that reads a file to find its root belongs here.
+	//
+	// Two consequences: the resolver runs on every grant, so a re-grant
+	// re-resolves rather than reusing a declaration-time snapshot; and it must
+	// stay cheap and side-effect-free, since tests and tooling call RootDirFor
+	// too. See the vibe adapter's sessionsDir for the worked example.
+	DirFunc func() string
 
 	// DirByOS optionally overrides Dir on specific platforms, keyed by
 	// runtime.GOOS ("windows", "linux", ...). A value follows the same rule
@@ -65,11 +87,18 @@ func (FilesUnderRoot) isSource() {
 
 // RootDirFor returns the directory the runtime should watch for this source
 // on the given OS (pass runtime.GOOS): the DirByOS override when one is set
-// for that OS, otherwise Dir. Keeping the lookup here means the daemon wiring
-// and any tests resolve the path the same way.
+// for that OS, otherwise DirFunc's result when one is supplied, otherwise Dir.
+// Keeping the lookup here means the daemon wiring and any tests resolve the
+// path the same way.
+//
+// DirByOS outranks DirFunc so a per-OS override stays authoritative: DirFunc
+// is "Dir, computed lazily", and DirByOS overrides Dir.
 func (s FilesUnderRoot) RootDirFor(goos string) string {
 	if d, ok := s.DirByOS[goos]; ok && d != "" {
 		return d
+	}
+	if s.DirFunc != nil {
+		return s.DirFunc()
 	}
 	return s.Dir
 }

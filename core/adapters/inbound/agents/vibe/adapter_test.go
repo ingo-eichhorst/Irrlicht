@@ -1,6 +1,8 @@
 package vibe
 
 import (
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"irrlicht/core/domain/agent"
@@ -12,26 +14,65 @@ import (
 // a hardcoded root would make every session of a $VIBE_HOME user invisible.
 // Absolute-only, matching the sibling adapters: irrlicht performs no shell
 // expansion, so a relative or "~"-prefixed value is logged and ignored.
+//
+// Both $HOME and the $VIBE_HOME values are pinned to empty temp dirs, because
+// sessionsDir now reads $VIBE_HOME/config.toml rather than only an env var:
+// a real ~/.vibe/config.toml (every Vibe install has one) or a stray
+// config.toml under a hardcoded scratch path would otherwise supply a save_dir
+// where these cases expect the plain path arithmetic — green in CI, red on a
+// developer's machine.
 func TestSessionsDir(t *testing.T) {
+	// An empty temp dir stands in for $VIBE_HOME, so no case names a real
+	// filesystem path that could hold a config.toml.
+	vibeHome := t.TempDir()
 	tests := []struct {
 		name string
 		env  string
 		want string
 	}{
 		{"empty falls back to default", "", defaultRootDir},
-		{"absolute override produces $VIBE_HOME/logs/session", "/tmp/vibe-home", "/tmp/vibe-home/logs/session"},
-		{"trailing slash is cleaned", "/tmp/vibe-home/", "/tmp/vibe-home/logs/session"},
+		{"absolute override produces $VIBE_HOME/logs/session", vibeHome, filepath.Join(vibeHome, "logs", "session")},
+		{"trailing slash is cleaned", vibeHome + "/", filepath.Join(vibeHome, "logs", "session")},
 		{"relative override is rejected (falls back to default)", "relative/home", defaultRootDir},
 		{"tilde-prefixed override is rejected (no shell expansion)", "~/custom", defaultRootDir},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
 			t.Setenv(vibeHomeEnvVar, tc.env)
 			if got := sessionsDir(); got != tc.want {
 				t.Errorf("sessionsDir() = %q, want %q", got, tc.want)
 			}
 		})
 	}
+}
+
+// TestSessionsDir_SaveDirOverridesRoot pins upstream's precedence: a set
+// [session_logging].save_dir REPLACES the session root rather than layering
+// under $VIBE_HOME (v2.19.1, vibe/core/config/models.py:58-63), so it must
+// outrank both the env override and the default. Issue #1115: without this,
+// a user who edits the key — which Vibe writes into every config on first run
+// — has every session silently invisible.
+func TestSessionsDir_SaveDirOverridesRoot(t *testing.T) {
+	t.Run("save_dir beats $VIBE_HOME", func(t *testing.T) {
+		setVibeHome(t, "[session_logging]\nsave_dir = \"/srv/vibe-logs\"\n")
+
+		if got := sessionsDir(); got != "/srv/vibe-logs" {
+			t.Errorf("sessionsDir() = %q, want %q", got, "/srv/vibe-logs")
+		}
+	})
+
+	// No save_dir to apply ⇒ the env override still decides. The reasons a
+	// save_dir yields nothing (unset, unresolvable, absent config) are pinned
+	// on configuredSaveDir itself; this only pins the composition.
+	t.Run("no usable save_dir leaves $VIBE_HOME/logs/session", func(t *testing.T) {
+		home := setVibeHome(t, "[session_logging]\nenabled = true\n")
+
+		want := filepath.Join(home, "logs", "session")
+		if got := sessionsDir(); got != want {
+			t.Errorf("sessionsDir() = %q, want %q", got, want)
+		}
+	})
 }
 
 func TestAgent_Identity(t *testing.T) {
@@ -48,17 +89,27 @@ func TestAgent_Identity(t *testing.T) {
 }
 
 func TestAgent_Source_FilesUnderRoot(t *testing.T) {
-	// Pin the default root explicitly: Agent() resolves Dir through
-	// sessionsDir(), so a $VIBE_HOME set in the developer's own shell would
+	// Pin the default root explicitly: the resolver reads both $VIBE_HOME and
+	// $VIBE_HOME/config.toml, so the developer's own env and config would
 	// otherwise leak into this assertion.
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv(vibeHomeEnvVar, "")
 
 	src, ok := Agent().Source.(agent.FilesUnderRoot)
 	if !ok {
 		t.Fatalf("Source is %T, want FilesUnderRoot", Agent().Source)
 	}
-	if src.Dir != defaultRootDir {
-		t.Errorf("Dir = %q, want %q", src.Dir, defaultRootDir)
+	// The root is resolved lazily, at watcher-build time (post-consent), so it
+	// arrives via DirFunc rather than the static Dir — Agent() must not read
+	// config.toml while the transcripts permission is still pending.
+	if src.Dir != "" {
+		t.Errorf("Dir = %q, want \"\" (root resolves through DirFunc)", src.Dir)
+	}
+	if src.DirFunc == nil {
+		t.Fatal("expected DirFunc (root depends on config.toml, which may only be read post-consent)")
+	}
+	if got := src.RootDirFor(runtime.GOOS); got != defaultRootDir {
+		t.Errorf("RootDirFor() = %q, want %q", got, defaultRootDir)
 	}
 	if src.SessionIDFromPath == nil {
 		t.Error("expected SessionIDFromPath (filename is the constant messages.jsonl)")
