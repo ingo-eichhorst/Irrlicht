@@ -1,5 +1,7 @@
 // Package kirocli provides an inbound adapter that watches Kiro CLI
-// transcript files under ~/.kiro/sessions/cli/<uuid>.jsonl.
+// v2 transcript files under ~/.kiro/sessions/cli/<uuid>.jsonl. Kiro CLI V3
+// stores an incompatible per-workspace session format and is intentionally not
+// discovered by this adapter.
 package kirocli
 
 import "irrlicht/core/adapters/inbound/agents/agentpaths"
@@ -15,7 +17,7 @@ const AdapterName = "kiro-cli"
 // lookup for "kiro-cli".
 const ProcessName = "kiro-cli"
 
-// defaultRootDir is the path relative to $HOME where Kiro CLI stores
+// defaultRootDir is the path relative to $HOME where Kiro CLI v2 stores
 // session transcripts. Each session is a <uuid>.jsonl conversation log
 // with a <uuid>.json metadata sidecar (cwd, title, per-turn credits)
 // next to it.
