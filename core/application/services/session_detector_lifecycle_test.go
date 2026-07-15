@@ -225,6 +225,72 @@ func TestSessionDetector_Removed_TranscriptRelocation_StaysAlive(t *testing.T) {
 	}
 }
 
+// The companion to the relocation test above: when the transcript is really
+// gone — no surviving copy under any sibling slug — onRemoved must take the
+// normal removal path and flip the session to ready.
+//
+// This is the documented fallback for issue #1088's first edge. relocatedTranscript
+// depends on the destination already existing when the Remove arrives, which
+// holds because Claude Code renames transcripts rather than copying them (see
+// that function's doc comment for the on-disk census). This test pins what
+// happens if that assumption is ever violated — a clean, self-recovering flip
+// to ready rather than a hang or a wrong path — so the fallback stays a
+// deliberate behaviour rather than an accident. It passes on main by
+// construction; it is a lock, not a bug reproduction.
+func TestSessionDetector_Removed_TranscriptGone_FlipsReady(t *testing.T) {
+	root := t.TempDir()
+	// Both slugs exist, but the transcript is absent from both: a genuine
+	// deletion, not a relocation.
+	gonePath := filepath.Join(root, "-Users-test", "gone1.jsonl")
+	if err := os.MkdirAll(filepath.Join(root, "-Users-test"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "-Users-test--claude-worktrees-1088"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	repo.states["gone1"] = &session.SessionState{
+		SessionID:      "gone1",
+		State:          session.StateWorking,
+		TranscriptPath: gonePath,
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	det := newDetector(tw, pw, repo)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventRemoved,
+		SessionID:      "gone1",
+		TranscriptPath: gonePath,
+	}
+
+	waitForCondition(func() bool {
+		repo.mu.Lock()
+		defer repo.mu.Unlock()
+		return repo.lastSavedState["gone1"] == string(session.StateReady)
+	}, time.Second)
+	cancel()
+	<-done
+
+	repo.mu.Lock()
+	gotState := repo.lastSavedState["gone1"]
+	repo.mu.Unlock()
+	if gotState != string(session.StateReady) {
+		t.Errorf("state: got %q, want ready (a genuine removal must flip the session to ready)", gotState)
+	}
+	// The dead path must be left as-is — there is no surviving copy to follow.
+	if got := repo.transcriptPathOf("gone1"); got != gonePath {
+		t.Errorf("transcript_path: got %q, want %q (unchanged on a genuine removal)", got, gonePath)
+	}
+}
+
 func TestSessionDetector_ExistingSession_UpdatesTranscriptPath(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()

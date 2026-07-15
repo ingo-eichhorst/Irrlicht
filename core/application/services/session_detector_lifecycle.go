@@ -117,6 +117,35 @@ func (d *SessionDetector) onRelocated(ev agent.Event, newPath string) {
 // and fall through to the normal removal path. filepath.Glob only returns paths
 // that exist, and the removed path no longer does, so any other match is a live
 // relocated copy.
+//
+// Two consequences of that Glob-only-returns-existing-paths property were
+// assessed in issue #1088 and both came back benign:
+//
+//  1. Ordering. Relying on the destination already existing when the Remove
+//     arrives would break if Claude Code deleted the source before writing the
+//     destination. It does not: a census of every relocated transcript on a
+//     real machine (50 files, 2104 relocation markers, up to 179 moves in a
+//     single session) found birthtime == the session's first-line timestamp in
+//     50/50 cases, while the files kept growing for hours afterwards. The inode
+//     is preserved across every move, i.e. the transcript is renamed, never
+//     copied or recreated — so the destination exists at the instant the source
+//     stops existing. If that ever changed, the fallback here is graceful, not
+//     corrupting: the glob returns "", the session flips ready, and the next
+//     activity event revives it. That fallback is pinned by
+//     TestSessionDetector_Removed_TranscriptGone_FlipsReady.
+//
+//  2. Subagents. Dir(Dir(removedPath)) resolves a subagent path
+//     (<slug>/<parent-id>/subagents/<x>.jsonl) to <slug>/<parent-id>, so
+//     sibling slugs are never searched and a relocated subagent is not detected
+//     as such. That path is unreachable rather than merely harmless: Claude Code
+//     relocates a parent by renaming the whole <parent-id>/ subtree, and
+//     renaming a directory leaves the child files' vnodes untouched, so
+//     fswatcher (which only emits events for paths ending in .jsonl) never
+//     delivers a Remove for the subagent at all. The watcher instead re-walks
+//     the destination dir and re-emits the child as a new session at its new
+//     path. onRemoved is therefore never called for a relocating subagent.
+//     TestRelocatedTranscript pins the limitation so the reasoning is
+//     discoverable if the watcher's dir handling ever changes.
 func relocatedTranscript(removedPath string) string {
 	if removedPath == "" {
 		return ""

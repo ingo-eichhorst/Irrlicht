@@ -497,6 +497,20 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	case fileSize < t.lastOffset:
 		// File rotated/truncated — reset cumulative accumulators to avoid
 		// double-counting tokens from the previous file.
+		//
+		// A shrink also covers Claude Code v2.1.208's transcript prune ("up to
+		// 79x smaller" by dropping superseded file-history backups), which
+		// rebuilds cumulative totals from the surviving lines only. That is
+		// safe because the prune does not touch usage-carrying lines: it
+		// targets the separate top-level `file-history-snapshot` event type,
+		// whose records carry no `usage`, `requestId`, `uuid` or `parentUuid`
+		// at all (0 of 3624 on a real machine) and sit outside the
+		// uuid/parentUuid message chain. Each such record repeats the entire
+		// cumulative trackedFileBackups map, so earlier ones are wholly
+		// superseded — that redundancy is what the prune reclaims. Every one of
+		// 109,248 assistant lines across that same corpus still carried
+		// message.usage under 2.1.210. Re-verify if a future release starts
+		// pruning assistant lines. See issue #1088.
 		startPos = 0
 		t.resetAccumulatorsForRotation()
 	case t.lastOffset > 0:
@@ -581,6 +595,17 @@ func (t *TranscriptTailer) resetAccumulatorsForRotation() {
 	t.tasks = nil
 	t.taskSeq = 0
 	t.pendingTaskCreates = make(map[string]string)
+	// Open tool calls belong to the prior file. Re-reading from byte 0
+	// re-inserts every surviving tool_use by ID (the map is id-keyed, so that
+	// much is idempotent), but a call left open in the *pre*-rotation content
+	// has no surviving line to re-insert or close it — it would linger
+	// forever. sweepOpenToolCallsOnTurnDone only half-heals that: it
+	// deliberately preserves the surviveTurnDone names (Agent,
+	// AskUserQuestion, ExitPlanMode), which are exactly the user-blocking ones
+	// SessionMetrics.NeedsUserAttention reads — so a stale AskUserQuestion
+	// pinned the session to `waiting` indefinitely. Same reasoning as
+	// openBackgroundProcs below (issue #445). See issue #1088.
+	t.openToolCalls = make(map[string]string)
 	// Background-process set belongs to the prior file; drop it so a
 	// rotated/truncated transcript doesn't keep a stale session `working`.
 	// See issue #445.
