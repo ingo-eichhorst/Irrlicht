@@ -114,7 +114,7 @@ once instead of round-tripping through GitHub Actions per fix:
 ```
 tools/preflight.sh                # everything except the Linux Docker gate
 tools/preflight.sh --linux        # + full Linux parity (slow: needs Docker)
-tools/preflight.sh --only go      # just the go-test.yml-equivalent gates
+tools/preflight.sh --only go      # just the test.yml-equivalent gates
 tools/preflight.sh --only arch    # just the ARS architecture gate
 ```
 

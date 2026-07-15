@@ -166,7 +166,7 @@
       <h3>OpenCode</h3>
 
       <ul>
-        <li><strong>Storage location:</strong> SQLite WAL at <code>~/.local/share/opencode/storage/opencode.db</code> (watched via <code>opencode.db-wal</code> &mdash; no JSONL files)</li>
+        <li><strong>Storage location:</strong> SQLite WAL at <code>~/.local/share/opencode/opencode.db</code> (watched via <code>opencode.db-wal</code> &mdash; no JSONL files)</li>
         <li>fsnotify on the WAL file triggers polling of <code>session</code>/<code>part</code> tables; cursor uses <code>(time_created, part_id)</code> for dedup across identical-millisecond timestamps</li>
         <li>Parent-child linking from the <code>parent_id</code> column &mdash; <code>EventNewSession</code> carries <code>ParentSessionID</code> directly; no path-based heuristics</li>
         <li><code>EventRemoved</code> emitted on <code>session.time_archived</code> so the daemon transitions to <code>ready</code> immediately rather than waiting for TTL</li>
@@ -188,7 +188,7 @@
       <h3>Gemini CLI</h3>
 
       <ul>
-        <li><strong>Transcript location:</strong> <code>~/.gemini/tmp/&lt;hash&gt;/session-&lt;timestamp&gt;-&lt;hash&gt;</code> (JSONL; nested subagent chats at <code>chats/&lt;parent-uuid&gt;/&lt;child-uuid&gt;.jsonl</code>)</li>
+        <li><strong>Transcript location:</strong> <code>~/.gemini/tmp/&lt;project&gt;/chats/session-&lt;timestamp&gt;-&lt;hash&gt;.jsonl</code> (the fswatcher recurses into each per-project <code>chats/</code> subdirectory; nested subagent chats at <code>chats/&lt;parent-uuid&gt;/&lt;child-uuid&gt;.jsonl</code>)</li>
         <li>The cwd is read from the transcript body, not a header line</li>
         <li>No explicit end-of-turn marker &mdash; a text-only assistant message maps to <code>turn_done</code>; benign info notices are ignored</li>
         <li>Process discovery via command-line match on <code>bin/gemini</code> (the OS process is <code>node</code>)</li>

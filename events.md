@@ -81,7 +81,7 @@ These transitions change the working/waiting/ready state of an existing session.
 ### `NeedsUserAttention()` -> triggers `waiting`
 
 ```
-HasOpenToolCall=true AND any LastOpenToolName in {AskUserQuestion, ExitPlanMode}
+HasOpenToolCall=true AND any LastOpenToolNames entry in {AskUserQuestion, ExitPlanMode}
 ```
 
 ### `IsAgentDone()` -> triggers `ready`
@@ -124,7 +124,7 @@ Note: transcript silence on a non-blocking open tool call (e.g. a long-running b
 
 ## Subagent Detection
 
-Parent-child relationships derived from a working session with an open `Agent` tool call in the same project dir. Parent sessions carry a `subagentSummary` under the JSON key `subagents`:
+Parent-child relationships are derived from the transcript path: Claude Code writes an `isSidechain` transcript under `<parent>/subagents/agent-*.jsonl` for every `Agent` tool call, and the fswatcher registers each as a child session linked via `ParentSessionID`. Parent sessions carry a `subagentSummary` under the JSON key `subagents`:
 
 ```
 subagentSummary { total, working, waiting, ready int }
@@ -138,7 +138,6 @@ Subagent sessions run independent state machines with the same 3 states.
 
 | Axis | Values |
 |------|--------|
-| **CompactionState** | `not_compacting` / `compacting` / `post_compact` -- overlaid on `working` |
 | **Adapter** | `claude-code` / `codex` / `pi` / `aider` / `opencode` / `kiro-cli` / `gemini-cli` / `antigravity` / `mistral-vibe` -- identifies source agent |
 | **PressureLevel** | `safe` / `caution` / `warning` / `critical` -- context window utilization |
 

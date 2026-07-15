@@ -60,7 +60,7 @@ In scope:
 - The Swift macOS app and its IPC with the daemon
 - Local state files under `~/Library/Application Support/Irrlicht/`
 - Transcript parsing in the agent adapters (Claude Code, Codex, Pi, Aider, OpenCode, Kiro CLI, Gemini CLI, Antigravity, Mistral Vibe) and the Gas Town orchestrator
-- Build and release scripts in `platforms/`
+- Build and release scripts in `tools/`
 
 Out of scope:
 

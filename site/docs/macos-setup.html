@@ -118,14 +118,14 @@
       <p>Irrlicht's popover panel is already configured to appear on any Space (including full-screen Spaces). Once the menu bar is visible, clicking the flame opens the session list wherever you are.</p>
 
       <!-- ── Launch at login ── -->
-      <h2>Launch at Login</h2>
+      <h2>Open at Login</h2>
 
-      <p>Enable the login item so Irrlicht is running before you open your first terminal each day:</p>
+      <p>Irrlicht registers itself as a login item on first launch and the setting is on by default, so it is running before you open your first terminal each day. To confirm it, or to turn it off:</p>
 
       <ol class="steps">
         <li>Click the flame icon in the menu bar to open the session list.</li>
         <li>Click the gear icon to open <strong>Settings</strong>.</li>
-        <li>Toggle <strong>Launch at Login</strong> on &mdash; the toggle shows enabled, and Irrlicht will start automatically at each login.</li>
+        <li>Check <strong>Open at Login</strong> &mdash; it is on by default, and Irrlicht will start automatically at each login. Toggle it off if you would rather launch the app yourself.</li>
       </ol>
 
       <p>Irrlicht registers itself via <code>SMAppService</code> so macOS manages the lifecycle &mdash; it starts early in the login sequence, before most apps open.</p>

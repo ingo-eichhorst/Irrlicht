@@ -146,7 +146,7 @@
           <tr>
             <td><code>PI_CODING_AGENT_SESSION_DIR</code></td>
             <td>Absolute path</td>
-            <td><code>~/.pi/coding-agent/sessions</code></td>
+            <td><code>~/.pi/agent/sessions</code></td>
             <td>Relocate the Pi adapter's transcript root. Read once at daemon startup; restart required after changing. Non-absolute values are rejected with a log warning</td>
           </tr>
           <tr>
@@ -160,6 +160,18 @@
             <td>Absolute path</td>
             <td><code>~/.codex</code></td>
             <td>Relocate the Codex adapter's transcript root (the daemon appends <code>/sessions</code>)</td>
+          </tr>
+          <tr>
+            <td><code>KIRO_HOME</code></td>
+            <td>Absolute path</td>
+            <td><code>~/.kiro/sessions/cli</code></td>
+            <td>Relocate the Kiro CLI adapter's transcript root (the daemon appends <code>/sessions/cli</code>). Non-absolute values are rejected with a log warning</td>
+          </tr>
+          <tr>
+            <td><code>VIBE_HOME</code></td>
+            <td>Absolute path</td>
+            <td><code>~/.vibe/logs/session</code></td>
+            <td>Relocate the Mistral Vibe adapter's transcript root (the daemon appends <code>/logs/session</code>). Non-absolute values are rejected with a log warning. Vibe's own <code>[session_logging].save_dir</code> in <code>$VIBE_HOME/config.toml</code> takes precedence and replaces the root outright</td>
           </tr>
           <tr>
             <td><code>IRRLICHT_PERMISSION_MODE</code></td>
@@ -219,7 +231,7 @@
             <td><code>IRRLICHT_RELAY_CONTROL</code></td>
             <td><code>on</code> | unset</td>
             <td>unset</td>
-            <td>When <code>on</code>, lets the relay forwarder act on inbound remote-control frames (the backchannel's outer remote gate). For standalone/headless daemons; the macOS app drives the same toggle via <code>PUT /api/v1/activation/relay-control</code></td>
+            <td>When <code>on</code>, lets the relay forwarder act on inbound remote-control frames (the backchannel's outer remote gate). For standalone/headless daemons; the macOS app drives the same toggle via <code>POST</code> / <code>DELETE /api/v1/activation/relay-control</code></td>
           </tr>
           <tr>
             <td><code>IRRLICHT_CACHE_BLOAT_THRESHOLD</code></td>
@@ -381,14 +393,6 @@ launchctl setenv IRRLICHT_DEBUG 1
 
       <p>The macOS app has a Settings panel accessible via the gear icon:</p>
 
-      <h3>Session TTL</h3>
-
-      <ul>
-        <li>Controls auto-deletion of idle ready sessions</li>
-        <li>Options: Never, 15 minutes, 30 minutes (default), 1 hour, 4 hours</li>
-        <li>Stored in <code>@AppStorage("sessionTTLMinutes")</code></li>
-      </ul>
-
       <h3>Notifications</h3>
 
       <ul>
@@ -431,7 +435,7 @@ launchctl setenv IRRLICHT_DEBUG 1
       <!-- ── Terminal hosts ── -->
       <h2>Terminal hosts</h2>
 
-      <p>Clicking a session in the menu bar or web UI brings the originating terminal's window &mdash; and where possible the exact tab &mdash; to the front. Most terminals work out of the box. Kitty needs one extra config line for precise tab focus.</p>
+      <p>Clicking a session in the menu bar or web UI brings the originating terminal's window &mdash; and where possible the exact tab &mdash; to the front. Most terminals work out of the box. Kitty needs two extra config lines for precise tab focus.</p>
 
       <h3>Kitty</h3>
 
