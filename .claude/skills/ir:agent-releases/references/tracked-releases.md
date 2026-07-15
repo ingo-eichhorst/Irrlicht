@@ -143,7 +143,7 @@ Each entry: `- <version> (<date>) — <one-line summary of impact or "no impact"
 ## Gas Town
 
 > **Repo**: `github.com/gastownhall/gastown` (`steveyegge/gastown` redirects there).
-> **Correction to monitoring-surface.md**: irrlicht does NOT poll `gt convoy list --json`. poller.go polls exactly four: `rig list`, `polecat list --all`, `dog list`, `boot status`. Convoy survives only in a comment (adapter.go:4) and permission text (permission.go:38) — convoy's JSON did change in v1.2.0 (`labels []string`), and it is irrelevant because nothing reads it.
+> **Correction to monitoring-surface.md** *(folded into that file in #1077 — it is no longer wrong about this; kept here as the release-time record)*: irrlicht does NOT poll `gt convoy list --json`. poller.go polls exactly four: `rig list`, `polecat list --all`, `dog list`, `boot status`. Convoy survives only in a comment (adapter.go:4) and permission text (permission.go:38) — convoy's JSON did change in v1.2.0 (`labels []string`), and it is irrelevant because nothing reads it.
 
 - v1.2.0 (2026-05-30) — LOW, no code change needed: `polecat list --json` gains 11 additive fields (cleanup_status, active_mr, branch, verdict, reason, reusable, safe_to_nuke, needs_recovery, needs_mq_submit, mq_status, counts_toward_capacity, reuse_status) — harmless, Go's json.Unmarshal ignores unknown fields, and the 5 fields irrlicht reads (rig, name, state, issue, session_running) are untouched. The other effect is **one new polecat state value: `review-needed`** (full set: working, idle, done, review-needed, stuck, stalled, zombie). CORRECTED (was wrong in an earlier pass of this file): poller.go:366 assigns `pcWorker.State = pc.State` as a raw passthrough, but that value never reaches any client — `addCodebaseWorkers` (`core/domain/session/grouped.go:326-343`) never copies `w.State` into `workerInfo` (`grouped.go:45-52`, no State field), and `Agent` (`grouped.go:28-42`) exposes no orchestrator state. The dashboard always shows `SessionState.State` from irrlicht's own classifier. So `review-needed` does not surface "unstyled/unlabeled in the UI" — it surfaces **nowhere**, same as every other polecat state. Semantically it means "work finished, awaiting a verdict" and would be worth surfacing deliberately, but that requires plumbing `Worker.State` (and `GlobalAgent.State`, same gap) to a consumer for the first time — not a defensive default for an unknown value. Verified by diffing tagged source v1.1.0..v1.2.0
 - v1.2.1 (2026-06-06) — no impact (patch; zero changes to any polled --json surface, command name, role, or env var)
@@ -166,7 +166,7 @@ Each entry: `- <version> (<date>) — <one-line summary of impact or "no impact"
 
 - **No releases 2026-05-01 → 2026-07-15.** Latest is v0.86.2 (2026-02-12), ~5 months stale. Only 5 commits exist in the whole window (2026-05-15 → 2026-05-22: an ANTHROPIC_MODELS expansion and bash tree-sitter repomap tags — both out of scope), then nothing for ~8 weeks
 - HISTORY.md's unreleased `main` section reviewed in full: model support, exception mapping, repo-map tags, a `/ok` shortcut, a symlink-loop fix. Nothing touches chat-history format, config paths, process naming, or session types
-- CONFIRMED UNCHANGED: `.aider.chat.history.md` (markdown transcript), `.aider.conf.yml`, Python console-script naming. The `pid_bind`→session-start and `/run`-is-not-a-tool_result quirks remain valid
+- CONFIRMED UNCHANGED: `.aider.chat.history.md` (markdown transcript), Python console-script naming. The `pid_bind`→session-start and `/run`-is-not-a-tool_result quirks remain valid. ⚠️ **`.aider.conf.yml` removed from this list in #1090 — irrlicht never reads it** (zero matches repo-wide; aider is not in `tailer_config.go`'s model-fallback switch). It's how the *user* configures aider; changes to it are non-events.
 - **Signal: aider is effectively dormant. Low future monitoring priority — consider checking it every few runs rather than every run.**
 
 ## OpenCode
@@ -266,12 +266,15 @@ a follow-up code assessment disproved or downgraded to already-safe.
   (`pi/parser.go:33-35`), with live proof being `custom_message` ×3 flowing harmlessly
   through 204 local transcripts. Nothing validates the filename stem as a UUID
   (`fswatcher/watcher.go:608-614` is a bare suffix trim, no format check).
-- **vibe tailer inode/truncation (general robustness)**: already handled by the shared
-  tailer — no long-lived FD is held across passes (`tailer.go:473-477` opens by path
-  fresh every call), and a size-shrink is detected as a rotation signal
-  (`tailer.go:491-500`). This is a narrower claim than, and does not resolve, the
-  v2.19.1 same-size-or-larger full-rewrite hazard tracked above in the Mistral Vibe
-  section (2026-07-08 entry) — that HIGH item remains open and unverified.
+- **vibe tailer truncation (shrink only)**: a size-*shrink* is handled — no long-lived FD
+  is held across passes (`tailer.go:478` opens by path fresh every call, `:482` closes it),
+  and `fileSize < lastOffset` is detected as a rotation signal (`tailer.go:496-505`,
+  resetting via `:569`). ⚠️ **Scoped down in #1090 — do not read this as "inode/truncation
+  is handled".** There is zero inode awareness anywhere in the tailer; the only signal is a
+  size comparison. Neither an inode swap at the same path nor the v2.19.1
+  same-size-or-larger full-rewrite hazard (tracked above in the Mistral Vibe section,
+  2026-07-08 entry) is resolved — both remain open. See `monitoring-surface.md` §
+  "The shared tailer — what it does and does NOT handle" for the full failure set.
 - **vibe tool renames**: no-op for the `todo` tool specifically — `vibe/parser.go` keys
   on exactly one tool name, `"todo"` (parser.go:249), which has never changed across any
   tagged release; its args are never read. (Distinct from the `read`/`read_file`/`edit`

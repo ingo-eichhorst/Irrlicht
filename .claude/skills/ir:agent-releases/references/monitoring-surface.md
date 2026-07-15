@@ -2,7 +2,9 @@
 
 Irrlicht is a daemon that monitors coding agent sessions. It watches transcript files and processes to classify sessions into 3 states: **working**, **waiting**, **ready**. Any upstream agent change that alters the items below can break detection.
 
-This file exists to brief a release-sweep analysis (`/ir:agent-releases`) on what it should actually look for. It covers all ten adapters shipped in `core/adapters/inbound/agents/`.
+This file exists to brief a release-sweep analysis (`/ir:agent-releases`) on what it should actually look for. It covers all ten sections irrlicht ships: the **nine agent adapters** in `core/adapters/inbound/agents/` (`all.go`'s `All()` — claude-code, codex, pi, aider, opencode, kiro-cli, gemini-cli, antigravity, mistral-vibe) **plus the Gas Town orchestrator**, which is a different layer entirely (`core/adapters/inbound/orchestrators/gastown` — it polls a CLI, has no `Source` variant, and so is absent from the discovery table below).
+
+*(#1090's title says "4 of 10 agent adapters" and its body lists nine names "+ the gastown orchestrator". Nine + one orchestrator = ten sections; there are not ten agent adapters. Noted because the miscount is exactly the kind of thing this file is supposed to stop.)*
 
 ## How to use this file
 
@@ -32,8 +34,6 @@ An adapter's `Source` variant determines how sessions are found at all. This is 
 | `agent.ProcessOwnedStore` | **opencode only** | Dedicated SQLite watcher; full tailer bypass |
 
 `core/domain/agent/source.go`; wired in `core/cmd/irrlichd/wiring.go:53-86` (which **panics** for any `ProcessOwnedStore` adapter other than opencode, `wiring.go:66`).
-
-The aider case has a consequence worth internalizing: **if aider's process isn't matched, its transcript is never found**, because nothing else looks for it. For every `FilesUnderRoot` adapter, the file is discovered independently of the process.
 
 ### Tailer tiers
 
@@ -190,7 +190,7 @@ The single highest-value thing to know per adapter. **Four adapters get an expli
 - **Tool call structure**: `tool_use` blocks with `name` field; matched against `tool_result`
 - **User-blocking tools**: `AskUserQuestion`, `ExitPlanMode` — trigger immediate waiting state
 - **`is_error` on tool_result**: indicates ESC/rejection (maps to ready state)
-- **`permissionMode` field**: passthrough only, no classifier branching. Census across 320 local transcripts (v2.1.210, 2026-07-15): `auto` 5000, `plan` 331, `default` 8, `acceptEdits` 3; `bypassPermissions`/`manual` never observed (v2.1.200 renamed "default" to "manual")
+- **`permissionMode` field**: passthrough only, no classifier branching — **new or renamed values are non-events** (v2.1.200 renamed "default" to "manual"; nothing noticed). Census across 320 local transcripts, v2.1.210, 2026-07-15.
 - **Assistant text**: last assistant message checked for trailing `?` (waiting heuristic)
 - **Token/cost fields**: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`
 - **Model name field**: normalized (e.g., `sonnet` -> `claude-sonnet-4-6`)
@@ -211,8 +211,6 @@ The single highest-value thing to know per adapter. **Four adapters get an expli
 - **Must not use** the `assistant`/`assistant_output` fallback in `IsAgentDone` — Codex writes an intermediate assistant message before calling a tool, so the fallback would flicker working→ready→working every turn (`metrics.go:451-455`).
 - **User-blocking**: earns it by aliasing — synthesizes a tool call literally named `ExitPlanMode` for `<proposed_plan>` (`parser.go:294-300`).
 
-> Thin section — the source-cited bullets above were verified in #1090; the unattributed ones predate this file's expansion and have not had the same audit.
-
 ### 3. Pi Coding Agent (`pi`)
 - **Transcript path**: `~/.pi/agent/sessions/--<cwd-dashes>--/<timestamp>_<uuid>.jsonl`
 - **Env override**: `PI_CODING_AGENT_SESSION_DIR`
@@ -222,21 +220,27 @@ The single highest-value thing to know per adapter. **Four adapters get an expli
 - **`turn_done`**: explicit — an assistant message with **`stopReason == "stop"`**; any other `stopReason` (toolUse, etc.) is mid-turn `assistant` (`parser.go:116-122`).
 - **Cost**: the only adapter that sets `ProviderCostUSD` from a provider-reported figure (`tailer/parser.go:375`); everything else is estimated from the capacity price map.
 
-> Thin section — the source-cited bullets above were verified in #1090; the unattributed ones predate this file's expansion and have not had the same audit.
-
 ### 4. Gas Town Orchestrator (`gastown`)
 - **Detection**: `GT_ROOT` environment variable + `gt` binary
 - **CLI commands polled** (verified against `poller.go`, 2026-07-15 — exactly four):
   `gt rig list --json`, `gt polecat list --all --json`, `gt dog list --json`, `gt boot status --json`
   - **`gt convoy list --json` is NOT polled.** Convoy survives only in a comment (`adapter.go:4`) and permission text (`permission.go:38`). Changes to convoy's JSON are irrelevant — nothing reads it.
 - **Role derivation**: from path segments under `$GT_ROOT`. Full roleMeta set is mayor, deacon, witness, refinery, polecat, crew, **boot, dog** (the latter two are already defined in `gastown/types.go`)
-- **JSON output schema**: rig objects with polecats, crew fields. Unknown fields are ignored by `json.Unmarshal`, so additive upstream fields are harmless. **New enum values are also currently inert**, but not for the reason once assumed here: `polecat.state` is passed through raw at `poller.go:366` (overridden at `:371` only when a live session matches the polecat's worktree), yet that raw value never reaches any client. `addCodebaseWorkers` (`core/domain/session/grouped.go:326-343`) builds `workerInfo` and never copies `w.State`; `workerInfo` (`grouped.go:45-52`) has no `State` field at all, and `Agent` (`grouped.go:28-42`) exposes no orchestrator state either. The dashboard's displayed state is always `SessionState.State` from irrlicht's own classifier, never gastown's string. The only live reader of `Worker.State` is a change-detection diff (`gastown/adapter.go:211-215`) used to decide whether to broadcast — benign. So an unknown state (like v1.2.0's `review-needed`) surfaces nowhere, styled or not — it just doesn't show up. `Worker.State` and `GlobalAgent.State` are both dead fields (`addGlobalAgentWorkers`, `grouped.go:313-323`, likewise drops `ga.State`), a pre-existing plumbing gap. If orchestrator-reported state is ever wanted in the UI, that plumbing is the actual work — not a defensive default for the raw string.
+- **JSON output schema**: rig objects with polecats, crew fields. Unknown fields are ignored by `json.Unmarshal`, so additive upstream fields are harmless. **New enum values are also inert** — but *not* because of a defensive default, which is the assumption that produced a false finding here once. `polecat.state` is passed through raw (`poller.go:366`, overridden at `:371` only when a live session matches the polecat's worktree) and then **never reaches any client**: `workerInfo` (`grouped.go:45-52`) has no `State` field, so `addCodebaseWorkers` (`grouped.go:326-343`) can't copy it. The dashboard always shows `SessionState.State` from irrlicht's own classifier, never gastown's string. `Worker.State`/`GlobalAgent.State` are dead fields; the only reader is a broadcast change-diff (`gastown/adapter.go:211-215`). So an unknown state (v1.2.0's `review-needed`) surfaces nowhere. If orchestrator state is ever wanted in the UI, **that plumbing is the work** — not a defensive default for the raw string.
+
+#### What breaks it
+- Any of the four polled `gt` commands changing its JSON shape, or being renamed/removed → orchestrator polling breaks (HIGH). Additive fields and new enum values are safe (see above).
+- `$GT_ROOT` path-segment layout changing → role derivation breaks.
+- Changes to `gt convoy list --json` → **non-event**, nothing reads it.
 
 ### 5. Mistral Vibe (`mistral-vibe`)
 
 - **Transcript path**: `~/.vibe/logs/session/<session-dir>/messages.jsonl`, plus a **sibling `meta.json`** (tier (b) — load-bearing, see below).
 - **Session ID = the directory name, and irrlicht reads no naming shape.** ⚠️ **corrected (#1090):** there is no glob and no regex. `sessionIDFromPath` (`adapter.go:56-65`) accepts a file iff its basename is exactly `messages.jsonl`, then takes `filepath.Base(filepath.Dir(path))` as the ID. Upstream *does* mint `session_<ts>_<shortid>`, but **nothing in irrlicht parses it** — a bare `<session-id>` dir would work identically. Do not write that irrlicht depends on the timestamp pattern.
-- **Env override: NONE.** ⚠️ **corrected (#1090): `$VIBE_HOME` does not exist.** `sessionsDir()` (`adapter.go:30`) is a bare constant; its comment states "Vibe documents no env var that relocates this root." The framework supports overrides and four siblings use them — vibe opts out. **If upstream ships one, every vibe session goes dark silently** (the watcher just blocks in `waitForRoot` on a directory that never appears).
+- **Env override: irrlicht honors NONE — and this may already be a live gap.** ⚠️ **corrected (#1090), then re-corrected — read carefully, the two halves are about different subjects:**
+  - **irrlicht side**: `sessionsDir()` (`adapter.go:30`) is a bare constant. No `$VIBE_HOME` support. Its comment justifies this with "Vibe documents no env var that relocates this root" — but *undocumented* is not *absent*, and that comment appears to have been written from upstream's **docs**, not its source.
+  - **upstream side**: `tracked-releases.md:235` records, verified against upstream **source** at tag, `SESSION_LOG_DIR = VIBE_HOME/"logs"/"session"` with `VIBE_HOME = ~/.vibe` **overridable via `$VIBE_HOME`**.
+  - **If that holds, this is not a hypothetical break — it is a live blackout**: any user who sets `$VIBE_HOME` has every vibe session silently invisible to irrlicht today (the watcher blocks in `waitForRoot` on a directory that never appears). **Not yet confirmed against a vibe checkout — resolve this before trusting either claim.** Whichever way it lands, exactly one file should assert it.
 - **Process**: `agent.CommandPattern{Regex: "(^|/)vibe( |$)|mistral-vibe/bin/python"}` → `pgrep -f` over the **full command line** (`adapter.go:43`, `agent.go:30`). Vibe is a Python console-script with no `setproctitle`, so `ExactName{"vibe"}` would never fire. No `ExcludeArgv`.
 - **PID discovery**: `DiscoverPIDByCWDAndCmdLine` (`pid.go:16-21`) — cmdline regex, then narrow by CWD.
 - **CWD comes only from `meta.json`.** The JSONL carries none. **No sidecar → no cwd → `DiscoverPID` early-returns `0, nil` → no PID bind**, and the session is exposed to the unbound-ghost reaper.
@@ -266,7 +270,7 @@ Read on `turn_done` only; memoized by `(mtime, size)`; failures return last-good
 
 #### What breaks it
 - Rename `messages.jsonl`, move the root, drop the `.jsonl` extension, or flatten to `<root>/<id>.jsonl` (which would collapse every session onto the ID `session`) → **silent total blackout**.
-- Ship a `$VIBE_HOME`/XDG relocation → same.
+- `$VIBE_HOME` (see above — possibly already live) or any XDG relocation → same.
 - Drop/rename `meta.json` or `environment.working_directory` → no PID bind, no model, no tokens, no context window, in one stroke.
 - Adopt `setproctitle`, or launch as `python -m vibe.cli` → the cmdline regex never fires.
 - Emit a trailing summary/telemetry line after the final assistant message → premature `ready`.
@@ -359,7 +363,7 @@ Note the two paths order by **different columns** — dropping either fails asym
 
 ⚠️ **Two things that make opencode uniquely fragile:**
 - The terminal-reason set is **duplicated** in `parser.go:122-144` **and** `watcher.go:474-478`. An upstream reason rename must be patched in **both**.
-- opencode emits `assistant_message`, which the `IsAgentDone` fallback does **not** match — so it is **100% dependent on `turn_done`**. Any break there is unrecoverable, not degraded.
+- It is **100% dependent on `turn_done`** (see State Classification above) — so any break in the paths below is unrecoverable, not degraded.
 
 #### Metrics
 Per-step (not cumulative) tokens from `part.data.tokens`; `cost` is a top-level float on the part; model from `message.data.model.modelID`, defaulting to `"unknown"`. `CacheCreation` is accumulated into the contribution but has no `Cum*` field. `ComputeMetricsTimeline` returns nil for provider-backed adapters — **opencode has no metrics timeline**.
@@ -462,12 +466,13 @@ Lines arrive `TrimSpace`'d, so leading indentation is already gone.
 
 ### 10. Gemini CLI (`gemini-cli`) — ⚠️ unmaintained
 
-**As of 2026-07-15 this adapter is no longer actively maintained and is skipped in release sweeps.** It still ships and still monitors live sessions, so it is listed here for completeness — but upstream Gemini CLI changes are **not** tracked, and a break-risk analysis for this adapter is deliberately out of scope.
+**As of 2026-07-15 this adapter is no longer actively maintained and is skipped in release sweeps** (this section is the authoritative statement of that; `SKILL.md` only points here). It still ships and still monitors live sessions, so it is listed for completeness — but upstream Gemini CLI changes are **not** tracked, and a break-risk analysis is deliberately out of scope.
 
 - **Transcript path**: `~/.gemini/tmp/<project>/chats/session-<timestamp>-<8hex>.jsonl`
 - **Adapter source**: `core/adapters/inbound/agents/geminicli/` — consult it directly if this adapter ever needs attention again.
+- **Reopen condition**: someone resumes maintenance, or a user reports gemini-cli sessions misbehaving. Until then, an upstream Gemini change is not a finding.
 
-> **Note on #1068**: that issue is a *watch item* about the native SEA binary possibly becoming default (which would break `DiscoverPID` and the heap-bump exclusion). It was closed as completed with the verdict "**No impact today; no code change required**". **It is not a deprecation notice** — the maintenance decision is separate and out-of-band. Don't cite #1068 as the reason this adapter is unmaintained.
+> ⚠️ **#1068 is not the reason, and is not a deprecation notice** — don't cite it as either. It's a *watch item* about the native SEA binary possibly becoming default (which would break `DiscoverPID` and the heap-bump exclusion), closed as completed with the verdict "No impact today; no code change required". The maintenance decision is separate and out-of-band.
 
 ---
 
