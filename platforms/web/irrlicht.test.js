@@ -961,7 +961,7 @@ describe('[hidden] survives the author display cascade (#1079)', () => {
     style.textContent = readCss()
     document.head.append(style)
   })
-  afterAll(() => style.remove())
+  afterAll(() => style?.remove())
 
   const displayOf = (markup) => {
     const host = document.createElement('div')

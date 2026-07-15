@@ -1326,10 +1326,8 @@
 
     .history-controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
     .history-ctl-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    /* Author display: flex above outranks the UA [hidden] { display: none }
-       rule, so the per-chart row toggles in historyTab.js (syncHistoryRangeRow,
-       syncGranularityRow, syncDoraProjectRow) need this hatch to take effect
-       (#1079). Same pattern as .history-matrix-scroll[hidden] below. */
+    /* The author display above outranks the UA [hidden] rule, so historyTab.js's
+       per-chart row toggles are inert without this hatch (#1079). */
     .history-ctl-row[hidden] { display: none; }
     .history-ctl-label {
       font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
@@ -1427,10 +1425,9 @@
       border-radius: 8px; padding: 10px;
     }
     #history-chart { width: 100%; height: 100%; display: block; }
-    /* Needs the id to outrank #history-chart's author display: block above —
-       a bare [hidden] or class hatch would lose the cascade. Without it
-       syncHistoryMatrixVisibility's canvas.hidden is inert and the stale
-       chart bleeds through behind the (background-less) activity matrix. */
+    /* Same as .history-ctl-row[hidden] (#1079), but must repeat the id to
+       outrank the display above — a bare [hidden] hatch would lose. Otherwise
+       the stale chart stays painted behind the activity matrix. */
     #history-chart[hidden] { display: none; }
     .history-chart-empty {
       position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
