@@ -21,9 +21,9 @@ const defaultRootDir = ".pi/agent/sessions"
 // directory itself (not a parent).
 const sessionDirEnvVar = "PI_CODING_AGENT_SESSION_DIR"
 
-// sessionsDir returns the directory the Pi adapter should watch. Non-
-// absolute env values are rejected so a misconfigured path surfaces in
-// logs instead of silently watching the wrong place.
+// sessionsDir returns the directory the Pi adapter should watch —
+// $PI_CODING_AGENT_SESSION_DIR itself when that override is set (it names the
+// session directory, not a root above it), else defaultRootDir.
 func sessionsDir() string {
 	return agentpaths.FromEnv("pi", sessionDirEnvVar, defaultRootDir)
 }

@@ -23,9 +23,9 @@ const defaultProjectsDir = ".claude/projects"
 // is unverified, so pid.go intentionally keeps the hardcoded path.
 const configDirEnvVar = "CLAUDE_CONFIG_DIR"
 
-// transcriptsDir returns the directory the Claude Code adapter should watch.
-// Non-absolute env values are rejected so a misconfigured path surfaces in
-// logs instead of silently watching the wrong place.
+// transcriptsDir returns the directory the Claude Code adapter should watch —
+// $CLAUDE_CONFIG_DIR/projects when that override is set, else
+// defaultProjectsDir.
 func transcriptsDir() string {
 	return agentpaths.FromEnv("claudecode", configDirEnvVar, defaultProjectsDir, "projects")
 }

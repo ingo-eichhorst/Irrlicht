@@ -28,9 +28,8 @@ const defaultRootDir = ".kiro/sessions/cli"
 // move to $KIRO_HOME/sessions/cli.
 const kiroHomeEnvVar = "KIRO_HOME"
 
-// sessionsDir returns the directory the Kiro CLI adapter should watch. Non-
-// absolute env values are rejected so a misconfigured path surfaces in logs
-// instead of silently watching the wrong place.
+// sessionsDir returns the directory the Kiro CLI adapter should watch —
+// $KIRO_HOME/sessions/cli when that override is set, else defaultRootDir.
 func sessionsDir() string {
 	return agentpaths.FromEnv("kirocli", kiroHomeEnvVar, defaultRootDir, "sessions", "cli")
 }
