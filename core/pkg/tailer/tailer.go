@@ -431,6 +431,21 @@ type TranscriptTailer struct {
 	// statusline events repopulate the history before forecasting resumes.
 	rateLimit        *RateLimitSnapshot
 	rateLimitHistory []RateLimitSnapshot
+
+	// resumeFingerprint hashes the bytes immediately preceding lastOffset —
+	// the tail of the content this tailer has already consumed. Re-hashing
+	// that window on the next pass is what lets the tailer notice an in-place
+	// rewrite whose new size is >= lastOffset, which the size-shrink check
+	// alone cannot see. See issue #1104.
+	//
+	// Zero means "unknown": no pass has anchored it yet, the window was
+	// unreadable, or the ledger predates #1104. Every such case resumes at
+	// lastOffset exactly as the tailer always has. A window that genuinely
+	// hashes to zero (1-in-2^64) reads as unknown too and costs a single pass
+	// of that same pre-#1104 behavior — cheaper than a second field to tell
+	// the two apart, especially since the ledger would have to collapse them
+	// back into one number anyway.
+	resumeFingerprint uint64
 }
 
 // rateLimitHistoryCap caps the rolling history at a small number of changed
@@ -493,31 +508,9 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	t.metrics.SubagentCompletions = nil
 	t.metrics.AppliedTaskDeltas = nil
 
-	startPos := int64(0)
-	switch {
-	case fileSize < t.lastOffset:
-		// File rotated/truncated — reset cumulative accumulators to avoid
-		// double-counting tokens from the previous file.
-		//
-		// A shrink also covers Claude Code v2.1.208's transcript prune ("up to
-		// 79x smaller" by dropping superseded file-history backups), which
-		// rebuilds cumulative totals from the surviving lines only. That is
-		// safe because the prune does not touch usage-carrying lines: it
-		// targets the separate top-level `file-history-snapshot` event type,
-		// whose records carry no `usage`, `requestId`, `uuid` or `parentUuid`
-		// at all (0 of 3624 on a real machine) and sit outside the
-		// uuid/parentUuid message chain. Each such record repeats the entire
-		// cumulative trackedFileBackups map, so earlier ones are wholly
-		// superseded — that redundancy is what the prune reclaims. Every one of
-		// 109,248 assistant lines across that same corpus still carried
-		// message.usage under 2.1.210. Re-verify if a future release starts
-		// pruning assistant lines. See issue #1088.
-		startPos = 0
-		t.resetAccumulatorsForRotation()
-	case t.lastOffset > 0:
-		// Normal incremental path: never skip ahead of the last processed byte.
-		startPos = t.lastOffset
-	}
+	// Where to resume, and whether the previous contents' accumulators survive
+	// this pass. See rotation_detect.go.
+	startPos := t.resolveStartPos(file, fileSize)
 
 	if _, err := file.Seek(startPos, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("failed to seek transcript: %w", err)
@@ -529,6 +522,17 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	reader := bufio.NewReaderSize(file, 64*1024)
 	scan := t.scanNewLines(reader, startPos)
 	t.lastOffset = scan.endOffset
+	// Re-anchor the rewrite detector at the new resume point. Safe to read
+	// after the scan even against a live writer: an append only adds bytes at
+	// or beyond lastOffset, so the window ending at lastOffset is stable.
+	//
+	// Skipped when the scan advanced nothing and we already hold an anchor —
+	// the window is then the very one resumePrefixChanged just verified, so
+	// re-reading it would recompute a value already in hand. That is the
+	// common case: the unconditional 5s sweep over an idle session.
+	if scan.endOffset != startPos || t.resumeFingerprint == 0 {
+		t.captureResumeFingerprint(file)
+	}
 
 	// Idle-flush hook: parsers whose transcript has no in-band end-of-turn
 	// marker (currently aider) synthesize turn_done when the file has been
@@ -568,53 +572,6 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	t.computeContextUtilization()
 
 	return t.metrics, scan.err
-}
-
-// resetAccumulatorsForRotation clears every accumulator that belongs to the
-// previous transcript file's contents. TailAndProcess calls this when it
-// detects fileSize < lastOffset — the transcript was rotated or truncated —
-// so replaying from byte 0 doesn't double-count tokens, resurrect stale
-// background processes, or misattribute the previous file's tasks.
-//
-// This only resets the TAILER's own accumulators. A parser that tracks its
-// own session-scoped state derived from an upstream monotonic counter (e.g.
-// Mistral Vibe's token high-water mark, issue #1063) must reset that state
-// too, or its next delta computation will be measured against the stale
-// pre-rotation value. See the rotationResetter optional interface.
-func (t *TranscriptTailer) resetAccumulatorsForRotation() {
-	if resetter, ok := t.parser.(rotationResetter); ok {
-		resetter.ResetForRotation()
-	}
-	t.cumInputTokens = 0
-	t.cumOutputTokens = 0
-	t.cumCacheReadTokens = 0
-	t.cumCacheCreationTokens = 0
-	t.lastRequestID = ""
-	t.pendingSnapshot = nil
-	t.cumByModel = make(map[string]*UsageBreakdown)
-	t.cumProviderCostUSD = 0
-	t.tasks = nil
-	t.taskSeq = 0
-	t.pendingTaskCreates = make(map[string]string)
-	// Open tool calls belong to the prior file. Re-reading from byte 0
-	// re-inserts every surviving tool_use by ID (the map is id-keyed, so that
-	// much is idempotent), but a call left open in the *pre*-rotation content
-	// has no surviving line to re-insert or close it — it would linger
-	// forever. sweepOpenToolCallsOnTurnDone only half-heals that: it
-	// deliberately preserves the surviveTurnDone names (Agent,
-	// AskUserQuestion, ExitPlanMode), which are exactly the user-blocking ones
-	// SessionMetrics.NeedsUserAttention reads — so a stale AskUserQuestion
-	// pinned the session to `waiting` indefinitely. Same reasoning as
-	// openBackgroundProcs below (issue #445). See issue #1088.
-	t.openToolCalls = make(map[string]string)
-	// Background-process set belongs to the prior file; drop it so a
-	// rotated/truncated transcript doesn't keep a stale session `working`.
-	// See issue #445.
-	t.openBackgroundProcs = make(map[string]string)
-	t.pendingBashPolls = make(map[string]string)
-	// Drop the pre-rotation idle anchor so the post-scan idleFlusher
-	// hook doesn't synthesize a phantom turn_done against stale time.
-	t.lastLineSeenAt = time.Time{}
 }
 
 // transcriptScanResult carries the outcomes of one scanNewLines pass: how far

@@ -81,12 +81,16 @@ func TestResetAccumulatorsForRotation_ClearsOpenToolCalls(t *testing.T) {
 
 // rotationResetParser is a minimal TranscriptParser that also implements
 // rotationResetter, so tests can observe whether/when the tailer invokes the
-// hook without depending on any real adapter's parsing logic.
+// hook without depending on any real adapter's parsing logic. parsedLines
+// counts ParseLine calls, which lets a test distinguish a full re-read from
+// byte 0 from a resume at a stale offset.
 type rotationResetParser struct {
-	resetCalls int
+	resetCalls  int
+	parsedLines int
 }
 
 func (p *rotationResetParser) ParseLine(raw map[string]interface{}) *ParsedEvent {
+	p.parsedLines++
 	return &ParsedEvent{Skip: true}
 }
 
@@ -126,6 +130,205 @@ func TestResetAccumulatorsForRotation_InvokesParserHook(t *testing.T) {
 	}
 	if p.resetCalls != 1 {
 		t.Fatalf("resetCalls = %d after a rotated pass, want 1", p.resetCalls)
+	}
+}
+
+// TestTailAndProcess_InPlaceRewriteWithGrowthIsRotation is the regression test
+// for issue #1104. The tailer used to detect rotation ONLY by the file
+// shrinking (fileSize < lastOffset). An in-place rewrite whose new size is
+// >= lastOffset slipped through: the tailer seeked to a stale byte offset
+// inside content that had since changed, resumed mid-record, and kept
+// accumulating on top of pre-rewrite state — silently wrong tokens/cost and
+// missed messages, the same failure class #1063/#1078 fixed for the shrink
+// path.
+//
+// The rewrite here both changes the already-consumed bytes AND grows the file,
+// which is the exact shape that escaped detection (vibe's fingerprint-mismatch
+// rewrite; a truncate-then-append coalesced into one debounced pass).
+func TestTailAndProcess_InPlaceRewriteWithGrowthIsRotation(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"line": 1},
+		{"line": 2},
+		{"line": 3},
+	})
+	p := &rotationResetParser{}
+	tl := NewTranscriptTailer(path, p, "test-adapter")
+
+	if _, err := tl.TailAndProcess(); err != nil {
+		t.Fatalf("first TailAndProcess: %v", err)
+	}
+	consumed := tl.lastOffset
+	p.parsedLines = 0
+
+	// Rewrite in place: different content in the already-consumed region, and
+	// a net-larger file, so the historical fileSize < lastOffset test cannot
+	// see it.
+	rewritten := []byte(`{"line":11}` + "\n" + `{"line":22}` + "\n" + `{"line":33}` + "\n" + `{"line":44}` + "\n")
+	if err := os.WriteFile(path, rewritten, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if int64(len(rewritten)) < consumed {
+		t.Fatalf("test setup is wrong: rewritten file (%d bytes) is smaller than the consumed offset (%d) — "+
+			"the shrink check would catch it and the #1104 gap wouldn't be exercised", len(rewritten), consumed)
+	}
+	if _, err := tl.TailAndProcess(); err != nil {
+		t.Fatalf("second (rewritten) TailAndProcess: %v", err)
+	}
+
+	if p.resetCalls != 1 {
+		t.Errorf("resetCalls = %d after an in-place rewrite that grew the file, want 1: "+
+			"the rewrite went undetected and stale accumulators carried over", p.resetCalls)
+	}
+	if p.parsedLines != 4 {
+		t.Errorf("parsedLines = %d on the pass after the rewrite, want 4 (a full re-read from byte 0): "+
+			"the tailer resumed at the stale offset %d and read only part of the rewritten file", p.parsedLines, consumed)
+	}
+}
+
+// TestTailAndProcess_AppendIsNotRotation pins the other side of issue #1104's
+// resume check: an ordinary append must stay on the cheap incremental path.
+// Detecting a rewrite by re-hashing the consumed bytes is only sound because an
+// append never rewrites bytes below lastOffset — a false positive here would
+// re-read and re-reset the world on every single transcript write.
+func TestTailAndProcess_AppendIsNotRotation(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"line": 1},
+		{"line": 2},
+	})
+	p := &rotationResetParser{}
+	tl := NewTranscriptTailer(path, p, "test-adapter")
+
+	if _, err := tl.TailAndProcess(); err != nil {
+		t.Fatalf("first TailAndProcess: %v", err)
+	}
+	p.parsedLines = 0
+
+	appendTranscriptLine(t, path, map[string]interface{}{"line": 3})
+	if _, err := tl.TailAndProcess(); err != nil {
+		t.Fatalf("second (appended) TailAndProcess: %v", err)
+	}
+
+	if p.resetCalls != 0 {
+		t.Errorf("resetCalls = %d after a plain append, want 0 (an append is not a rotation)", p.resetCalls)
+	}
+	if p.parsedLines != 1 {
+		t.Errorf("parsedLines = %d after a plain append, want 1 (only the appended line): "+
+			"the tailer re-read content it had already consumed", p.parsedLines)
+	}
+}
+
+// TestTailAndProcess_IdenticalRewriteIsNotRotation pins the benign case issue
+// #1104 called out explicitly: a rewrite that reproduces the same bytes (a
+// legacy no-fingerprint full rewrite of unchanged content) leaves the consumed
+// prefix intact, so there is nothing to re-read and no reason to reset.
+func TestTailAndProcess_IdenticalRewriteIsNotRotation(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"line": 1},
+		{"line": 2},
+	})
+	p := &rotationResetParser{}
+	tl := NewTranscriptTailer(path, p, "test-adapter")
+
+	if _, err := tl.TailAndProcess(); err != nil {
+		t.Fatalf("first TailAndProcess: %v", err)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.parsedLines = 0
+
+	// Same path, same bytes, new write.
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tl.TailAndProcess(); err != nil {
+		t.Fatalf("second (identical rewrite) TailAndProcess: %v", err)
+	}
+
+	if p.resetCalls != 0 {
+		t.Errorf("resetCalls = %d after a byte-identical rewrite, want 0 (content never changed)", p.resetCalls)
+	}
+	if p.parsedLines != 0 {
+		t.Errorf("parsedLines = %d after a byte-identical rewrite, want 0 (offset already at EOF)", p.parsedLines)
+	}
+}
+
+// TestSetLedgerState_DetectsRewriteAcrossRestart pins that the resume
+// fingerprint survives a daemon restart (issue #1104). The ledger persists
+// lastOffset, so without a persisted fingerprint a rewrite landing while the
+// daemon is DOWN would be trusted blindly on the next boot — the restart is
+// precisely when the tailer has no in-memory memory of what it consumed.
+func TestSetLedgerState_DetectsRewriteAcrossRestart(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"line": 1},
+		{"line": 2},
+		{"line": 3},
+	})
+	before := NewTranscriptTailer(path, &rotationResetParser{}, "test-adapter")
+	if _, err := before.TailAndProcess(); err != nil {
+		t.Fatalf("pre-restart TailAndProcess: %v", err)
+	}
+	ledger := before.GetLedgerState()
+	if ledger.ResumeFingerprint == 0 {
+		t.Fatalf("ledger carries no ResumeFingerprint after a pass that consumed %d bytes; "+
+			"a restart would have nothing to validate the offset against", ledger.LastOffset)
+	}
+
+	// The transcript is rewritten in place (bigger, different) while "down".
+	if err := os.WriteFile(path, []byte(`{"line":11}`+"\n"+`{"line":22}`+"\n"+`{"line":33}`+"\n"+`{"line":44}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &rotationResetParser{}
+	after := NewTranscriptTailer(path, p, "test-adapter")
+	after.SetLedgerState(ledger)
+	if _, err := after.TailAndProcess(); err != nil {
+		t.Fatalf("post-restart TailAndProcess: %v", err)
+	}
+
+	if p.resetCalls != 1 {
+		t.Errorf("resetCalls = %d on the first post-restart pass, want 1: the rehydrated offset was "+
+			"trusted even though the file had been rewritten underneath it", p.resetCalls)
+	}
+	if p.parsedLines != 4 {
+		t.Errorf("parsedLines = %d on the first post-restart pass, want 4 (a full re-read from byte 0)", p.parsedLines)
+	}
+}
+
+// TestSetLedgerState_PreFingerprintLedgerResumesAtOffset pins the backward
+// compatibility that let #1104's fingerprint land WITHOUT a LedgerSchemaVersion
+// bump: a ledger written before the field existed carries an offset and no
+// fingerprint, and must resume exactly as it always did rather than being
+// treated as a rewrite. Bumping the schema instead would discard every live
+// session's accumulated cost to re-scan for a latent gap.
+func TestSetLedgerState_PreFingerprintLedgerResumesAtOffset(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"line": 1},
+		{"line": 2},
+	})
+	seed := NewTranscriptTailer(path, &rotationResetParser{}, "test-adapter")
+	if _, err := seed.TailAndProcess(); err != nil {
+		t.Fatalf("seed TailAndProcess: %v", err)
+	}
+
+	// A pre-#1104 ledger: offset only, no fingerprint.
+	legacy := LedgerState{SchemaVersion: LedgerSchemaVersion, LastOffset: seed.lastOffset}
+
+	p := &rotationResetParser{}
+	tl := NewTranscriptTailer(path, p, "test-adapter")
+	tl.SetLedgerState(legacy)
+	appendTranscriptLine(t, path, map[string]interface{}{"line": 3})
+	if _, err := tl.TailAndProcess(); err != nil {
+		t.Fatalf("TailAndProcess on a legacy ledger: %v", err)
+	}
+
+	if p.resetCalls != 0 {
+		t.Errorf("resetCalls = %d resuming a pre-#1104 ledger, want 0: a missing fingerprint means "+
+			"'can't tell', which must fall back to trusting the offset, not to a spurious rotation", p.resetCalls)
+	}
+	if p.parsedLines != 1 {
+		t.Errorf("parsedLines = %d resuming a pre-#1104 ledger, want 1 (only the newly appended line)", p.parsedLines)
 	}
 }
 

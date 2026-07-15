@@ -8,6 +8,7 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	s := LedgerState{
 		SchemaVersion:               LedgerSchemaVersion,
 		LastOffset:                  t.lastOffset,
+		ResumeFingerprint:           t.resumeFingerprint,
 		CumProviderCostUSD:          t.cumProviderCostUSD,
 		ModelName:                   t.metrics.ModelName,
 		AgentVersion:                t.metrics.AgentVersion,
@@ -63,6 +64,10 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 		return
 	}
 	t.lastOffset = s.LastOffset
+	// Zero (a pre-#1104 ledger, which simply lacks the field) means "unknown",
+	// so the first post-restart pass resumes at the offset as it always has and
+	// re-anchors itself afterwards.
+	t.resumeFingerprint = s.ResumeFingerprint
 	t.restoreCumByModel(s.CumByModel)
 	t.cumProviderCostUSD = s.CumProviderCostUSD
 	if s.ModelName != "" {

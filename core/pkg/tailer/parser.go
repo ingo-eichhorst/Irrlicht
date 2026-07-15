@@ -442,9 +442,11 @@ type queuedTurnSplitter interface {
 // holds session-scoped accumulated state derived from an upstream MONOTONIC
 // counter — one that only ever increases across a session, so the parser
 // tracks its own high-water mark to compute per-turn deltas. When the tailer
-// detects a legitimate rotation/truncation (fileSize < lastOffset) it already
-// zeroes its OWN cumulative accumulators (resetAccumulatorsForRotation) so a
-// replay from byte 0 doesn't double-count; without this hook a parser's own
+// detects a legitimate rotation/truncation (the file shrank below lastOffset,
+// or the consumed bytes ending at lastOffset changed under it — an in-place
+// rewrite, see issue #1104) it already zeroes its OWN cumulative accumulators
+// (resetAccumulatorsForRotation) so a replay from byte 0 doesn't
+// double-count; without this hook a parser's own
 // high-water mark would stay stale, computing deltas against the PREVIOUS
 // file's counters instead of the fresh one's — for a monotonic counter that
 // resets lower after rotation, the delta clamps negative-to-zero and can
@@ -525,8 +527,18 @@ const LedgerSchemaVersion = 5
 // to disk after every TailAndProcess pass so that daemon restarts don't reset
 // cumulative cost to zero for in-flight sessions.
 type LedgerState struct {
-	SchemaVersion      int                        `json:"schema_version"`
-	LastOffset         int64                      `json:"last_offset"`
+	SchemaVersion int   `json:"schema_version"`
+	LastOffset    int64 `json:"last_offset"`
+	// ResumeFingerprint hashes the consumed bytes ending at LastOffset so an
+	// in-place rewrite that lands while the daemon is down is still detected
+	// on the next pass — without it, a restart would trust LastOffset blindly
+	// and resume inside rewritten content. Deliberately added WITHOUT a schema
+	// bump: a pre-#1104 ledger simply lacks the field, and a zero value means
+	// "no fingerprint", which the tailer already reads as "can't tell — resume
+	// at the offset", exactly the pre-#1104 behavior. Discarding every live
+	// session's ledger to force a re-scan would be a far bigger hammer than
+	// this latent gap warrants. See issue #1104.
+	ResumeFingerprint  uint64                     `json:"resume_fingerprint,omitempty"`
 	CumByModel         map[string]*UsageBreakdown `json:"cum_by_model,omitempty"`
 	CumProviderCostUSD float64                    `json:"cum_provider_cost_usd,omitempty"`
 	ParserState        *ParserLedger              `json:"parser_state,omitempty"`
