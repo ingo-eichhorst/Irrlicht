@@ -33,6 +33,30 @@ func writeConfig(t *testing.T, dir, content string) string {
 	return dir
 }
 
+// setVibeHome points $VIBE_HOME at a fresh temp dir holding the given
+// config.toml, and returns it. $HOME is pinned to a separate empty temp dir so
+// the developer's own ~/.vibe/config.toml can never reach the code under test.
+func setVibeHome(t *testing.T, content string) string {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	home := writeConfig(t, t.TempDir(), content)
+	t.Setenv(vibeHomeEnvVar, home)
+	return home
+}
+
+// setDefaultVibeHome pins $HOME at a temp dir and writes the given config.toml
+// into its .vibe/, exercising the $VIBE_HOME-unset path.
+func setDefaultVibeHome(t *testing.T, content string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	vibeDir := filepath.Join(home, defaultHomeDirName)
+	if err := os.MkdirAll(vibeDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeConfig(t, vibeDir, content)
+}
+
 // TestParseSaveDir pins the table-aware scan. save_dir is meaningless without
 // its [session_logging] table — the same bare key lives under other tables in
 // Vibe's own default config — so a table-blind scan (the shape of the codex
@@ -194,9 +218,10 @@ func TestResolveSaveDir_RejectionIsLogged(t *testing.T) {
 // (v2.19.1, _harness_manager.py:55), so relocating the home relocates the file
 // that can relocate the session root.
 func TestConfiguredSaveDir(t *testing.T) {
+	const saveDirConfig = "[session_logging]\nsave_dir = \"/srv/logs\"\n"
+
 	t.Run("save_dir in $VIBE_HOME/config.toml wins", func(t *testing.T) {
-		home := writeConfig(t, t.TempDir(), "[session_logging]\nsave_dir = \"/srv/logs\"\n")
-		t.Setenv(vibeHomeEnvVar, home)
+		setVibeHome(t, saveDirConfig)
 
 		if got := configuredSaveDir(); got != "/srv/logs" {
 			t.Errorf("configuredSaveDir() = %q, want %q", got, "/srv/logs")
@@ -204,14 +229,17 @@ func TestConfiguredSaveDir(t *testing.T) {
 	})
 
 	t.Run("save_dir in ~/.vibe/config.toml when VIBE_HOME is unset", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
+		setDefaultVibeHome(t, saveDirConfig)
 		t.Setenv(vibeHomeEnvVar, "")
-		vibeDir := filepath.Join(home, defaultHomeDirName)
-		if err := os.MkdirAll(vibeDir, 0o755); err != nil {
-			t.Fatalf("mkdir: %v", err)
+
+		if got := configuredSaveDir(); got != "/srv/logs" {
+			t.Errorf("configuredSaveDir() = %q, want %q", got, "/srv/logs")
 		}
-		writeConfig(t, vibeDir, "[session_logging]\nsave_dir = \"/srv/logs\"\n")
+	})
+
+	t.Run("relative VIBE_HOME falls back to ~/.vibe for the config too", func(t *testing.T) {
+		setDefaultVibeHome(t, saveDirConfig)
+		t.Setenv(vibeHomeEnvVar, "relative/home")
 
 		if got := configuredSaveDir(); got != "/srv/logs" {
 			t.Errorf("configuredSaveDir() = %q, want %q", got, "/srv/logs")
@@ -219,6 +247,7 @@ func TestConfiguredSaveDir(t *testing.T) {
 	})
 
 	t.Run("absent config yields empty", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
 		t.Setenv(vibeHomeEnvVar, t.TempDir())
 
 		if got := configuredSaveDir(); got != "" {
@@ -227,8 +256,7 @@ func TestConfiguredSaveDir(t *testing.T) {
 	})
 
 	t.Run("unset save_dir yields empty", func(t *testing.T) {
-		home := writeConfig(t, t.TempDir(), "[session_logging]\nenabled = true\n")
-		t.Setenv(vibeHomeEnvVar, home)
+		setVibeHome(t, "[session_logging]\nenabled = true\n")
 
 		if got := configuredSaveDir(); got != "" {
 			t.Errorf("configuredSaveDir() = %q, want \"\"", got)
@@ -237,26 +265,10 @@ func TestConfiguredSaveDir(t *testing.T) {
 
 	t.Run("unresolvable save_dir yields empty", func(t *testing.T) {
 		captureLog(t)
-		home := writeConfig(t, t.TempDir(), "[session_logging]\nsave_dir = \"relative/logs\"\n")
-		t.Setenv(vibeHomeEnvVar, home)
+		setVibeHome(t, "[session_logging]\nsave_dir = \"relative/logs\"\n")
 
 		if got := configuredSaveDir(); got != "" {
 			t.Errorf("configuredSaveDir() = %q, want \"\"", got)
-		}
-	})
-
-	t.Run("relative VIBE_HOME falls back to ~/.vibe for the config too", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
-		t.Setenv(vibeHomeEnvVar, "relative/home")
-		vibeDir := filepath.Join(home, defaultHomeDirName)
-		if err := os.MkdirAll(vibeDir, 0o755); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
-		writeConfig(t, vibeDir, "[session_logging]\nsave_dir = \"/srv/logs\"\n")
-
-		if got := configuredSaveDir(); got != "/srv/logs" {
-			t.Errorf("configuredSaveDir() = %q, want %q", got, "/srv/logs")
 		}
 	})
 }

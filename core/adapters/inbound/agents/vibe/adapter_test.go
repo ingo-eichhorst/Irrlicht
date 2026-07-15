@@ -55,9 +55,7 @@ func TestSessionsDir(t *testing.T) {
 // — has every session silently invisible.
 func TestSessionsDir_SaveDirOverridesRoot(t *testing.T) {
 	t.Run("save_dir beats $VIBE_HOME", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		home := writeConfig(t, t.TempDir(), "[session_logging]\nsave_dir = \"/srv/vibe-logs\"\n")
-		t.Setenv(vibeHomeEnvVar, home)
+		setVibeHome(t, "[session_logging]\nsave_dir = \"/srv/vibe-logs\"\n")
 
 		if got := sessionsDir(); got != "/srv/vibe-logs" {
 			t.Errorf("sessionsDir() = %q, want %q", got, "/srv/vibe-logs")
@@ -68,9 +66,7 @@ func TestSessionsDir_SaveDirOverridesRoot(t *testing.T) {
 	// save_dir yields nothing (unset, unresolvable, absent config) are pinned
 	// on configuredSaveDir itself; this only pins the composition.
 	t.Run("no usable save_dir leaves $VIBE_HOME/logs/session", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		home := writeConfig(t, t.TempDir(), "[session_logging]\nenabled = true\n")
-		t.Setenv(vibeHomeEnvVar, home)
+		home := setVibeHome(t, "[session_logging]\nenabled = true\n")
 
 		want := filepath.Join(home, "logs", "session")
 		if got := sessionsDir(); got != want {
