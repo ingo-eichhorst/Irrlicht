@@ -230,6 +230,23 @@ func handleSystemEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 		if v, ok := raw["pendingBackgroundAgentCount"].(float64); ok {
 			n := int(v)
 			ev.PendingBackgroundAgentCount = &n
+		} else if subtype == "turn_duration" {
+			// Claude Code serializes the count with omitempty: zero is
+			// written as absence, never as an explicit 0 (verified across
+			// 1,698 turn_duration lines — the value 0 never appears, and the
+			// same CC version emits the field only when it is > 0). A
+			// turn_duration is an authoritative end-of-turn snapshot, so
+			// absence here means "none pending" — normalize it so the
+			// tailer's sticky counter can actually fall back to 0 and the
+			// #1037 hold can release. See issue #1076.
+			//
+			// Deliberately NOT applied to stop_hook_summary, which shares
+			// this branch but never carries the field (0 of 88 observed
+			// lines): absence there is "no information", not zero, and
+			// normalizing it would clobber a live count on every stop-hook
+			// event and re-open #1036.
+			n := 0
+			ev.PendingBackgroundAgentCount = &n
 		}
 		return
 	}

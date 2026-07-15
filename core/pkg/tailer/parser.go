@@ -591,6 +591,17 @@ type LedgerState struct {
 	// (turn ended on a question) loses the question text on restart and the seed
 	// re-classification demotes it to `ready`. See issue #705.
 	LastAssistantText string `json:"last_assistant_text,omitempty"`
+	// PendingBackgroundAgentCount persists Claude Code's last-reported
+	// background-agent count so a daemon restart that resumes at LastOffset
+	// (zero new lines) keeps holding the parent `working` while agents are
+	// still running. Without it the #1037 guard goes inert on every restart
+	// and the parent is free to flip `ready` mid-run. See issue #1076.
+	//
+	// omitempty is safe here: the value it drops is 0, which is also the zero
+	// value the field rehydrates to — so a ledger written before this field
+	// existed restores exactly the (inert-guard) behaviour it had when it was
+	// written, and no schema bump is needed to read it.
+	PendingBackgroundAgentCount int `json:"pending_background_agent_count,omitempty"`
 }
 
 // --- Shared helpers used by multiple parsers ---

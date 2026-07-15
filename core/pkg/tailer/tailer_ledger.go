@@ -6,13 +6,14 @@ import "maps"
 // can be persisted to disk and rehydrated after a daemon restart.
 func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	s := LedgerState{
-		SchemaVersion:      LedgerSchemaVersion,
-		LastOffset:         t.lastOffset,
-		CumProviderCostUSD: t.cumProviderCostUSD,
-		ModelName:          t.metrics.ModelName,
-		AgentVersion:       t.metrics.AgentVersion,
-		LastEventType:      t.metrics.LastEventType,
-		LastAssistantText:  t.lastAssistantText,
+		SchemaVersion:               LedgerSchemaVersion,
+		LastOffset:                  t.lastOffset,
+		CumProviderCostUSD:          t.cumProviderCostUSD,
+		ModelName:                   t.metrics.ModelName,
+		AgentVersion:                t.metrics.AgentVersion,
+		LastEventType:               t.metrics.LastEventType,
+		LastAssistantText:           t.lastAssistantText,
+		PendingBackgroundAgentCount: t.lastPendingBackgroundAgentCount,
 	}
 	if len(t.cumByModel) > 0 {
 		// Direct assignment is safe: the caller JSON-marshals immediately
@@ -87,6 +88,14 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 		t.lastAssistantText = s.LastAssistantText
 		t.metrics.LastAssistantText = s.LastAssistantText
 	}
+	// Restore the background-agent hold: a resume-at-EOF pass reads no
+	// turn_duration, so without this the #1037 guard goes inert on every
+	// restart and the parent flips `ready` while agents are still running
+	// (issue #1076). Only the private field needs setting — unlike
+	// LastAssistantText above, surfaceSporadicMetrics copies it onto
+	// t.metrics on every pass, above computeMetrics' empty-MessageHistory
+	// early return.
+	t.lastPendingBackgroundAgentCount = s.PendingBackgroundAgentCount
 	t.restoreParserState(s.ParserState)
 	if len(s.Tasks) > 0 {
 		t.tasks = append([]Task(nil), s.Tasks...)
