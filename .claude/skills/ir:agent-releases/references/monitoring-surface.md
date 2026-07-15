@@ -2,10 +2,24 @@
 
 Irrlicht is a daemon that monitors coding agent sessions. It watches transcript files and processes to classify sessions into 3 states: **working**, **waiting**, **ready**. Any upstream agent change that alters the items below can break detection.
 
+> **⚠️ This file is incomplete and documents only 4 of irrlicht's 10 agent adapters.**
+> `core/adapters/inbound/agents/` also ships **aider, antigravity, geminicli, kirocli, opencode,
+> and vibe**, none of which are described below. Their monitoring surfaces are captured (for now)
+> in the per-agent sections of `tracked-releases.md`. Verify claims here against the adapter
+> source before briefing an analysis on them — this file has been wrong in ways that produced
+> false findings (see the recursive-watcher note below).
+
 ## Supported Agents
 
 ### 1. Claude Code (`claude-code`)
 - **Transcript path**: `~/.claude/projects/<project-dir>/<uuid>.jsonl`
+- **The watcher is RECURSIVE, not flat.** `fswatcher` walks pre-existing subdirs
+  (`addExistingDirs`) and adds fsnotify watches for new ones as they appear. Claude Code
+  writes subagent transcripts to `<project-dir>/<session-uuid>/subagents/agent-*.jsonl`
+  (live since 2026-06-12), and these are picked up as child SessionStates by design —
+  `parser.go:907-920` documents the file-based path as the single source of truth, which
+  is why `CountOpenSubagents()` deliberately returns 0. Sibling dirs also exist:
+  `tool-results/`, `workflows/`, `session-memory/`
 - **Process binary name**: `claude` (detected via `pgrep -x claude`)
 - **Process CWD**: used to match process to project (via `lsof`)
 - **Config**: `~/.claude/settings.json` (model fallback)
@@ -45,9 +59,19 @@ Irrlicht is a daemon that monitors coding agent sessions. It watches transcript 
 
 ### 4. Gas Town Orchestrator (`gastown`)
 - **Detection**: `GT_ROOT` environment variable + `gt` binary
-- **CLI commands polled**: `gt rig list --json`, `gt polecat list --all --json`, `gt convoy list --json`
-- **Role derivation**: from path segments under `$GT_ROOT` (mayor, deacon, witness, refinery, polecat, crew)
-- **JSON output schema**: rig objects with polecats, crew, convoy fields
+- **CLI commands polled** (verified against `poller.go`, 2026-07-15 — exactly four):
+  `gt rig list --json`, `gt polecat list --all --json`, `gt dog list --json`, `gt boot status --json`
+  - **`gt convoy list --json` is NOT polled.** Convoy survives only in a comment
+    (`adapter.go:4`) and permission text (`permission.go:38`). Changes to convoy's JSON
+    are irrelevant — nothing reads it.
+- **Role derivation**: from path segments under `$GT_ROOT`. Full roleMeta set is
+  mayor, deacon, witness, refinery, polecat, crew, **boot, dog** (the latter two are
+  already defined in `gastown/types.go`)
+- **JSON output schema**: rig objects with polecats, crew fields. Unknown fields are
+  ignored by `json.Unmarshal`, so additive upstream fields are harmless; **new enum
+  values are the real risk** — e.g. `polecat.state` is passed through raw at
+  `poller.go:366`, so an unknown state (like v1.2.0's `review-needed`) surfaces
+  unstyled in the UI rather than failing loudly
 
 ## State Classification Logic
 
