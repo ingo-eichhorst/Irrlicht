@@ -270,3 +270,29 @@ func TestIsWaitingForUserInput_PendingQuestionMarker(t *testing.T) {
 		}
 	})
 }
+
+// TestIsWaitingForUserInput_PendingWaitingCue pins issue #1150: a prose waiting
+// cue (imperative, no marker) that sits before the trailing 200 runes is
+// invisible to the tail-only scans on LastAssistantText, so the adapter parser
+// scans the FULL text and carries the verdict as PendingWaitingCue. That flag
+// must flip the session to waiting on its own, mirroring PendingQuestionMarker.
+func TestIsWaitingForUserInput_PendingWaitingCue(t *testing.T) {
+	// The tail the display kept is a declarative fragment (the cue sat earlier
+	// in the long final turn), so the tail scan alone returns false — only the
+	// full-text-derived flag flips it to waiting.
+	declarativeTail := "…so the classifier now receives an accurate signal on every pass instead of relying on the trailing fragment that used to hide the earlier sentence."
+
+	t.Run("cue flag set with declarative tail → waiting", func(t *testing.T) {
+		m := &SessionMetrics{LastAssistantText: declarativeTail, PendingWaitingCue: true}
+		if !m.IsWaitingForUserInput() {
+			t.Error("IsWaitingForUserInput() = false, want true when PendingWaitingCue is set")
+		}
+	})
+
+	t.Run("sanity: same tail without the flag → not waiting", func(t *testing.T) {
+		m := &SessionMetrics{LastAssistantText: declarativeTail}
+		if m.IsWaitingForUserInput() {
+			t.Error("IsWaitingForUserInput() = true, want false for a declarative tail with no cue flag (guards against the flag path masking a prose regression)")
+		}
+	})
+}

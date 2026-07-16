@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/pkg/transcript"
 )
@@ -766,10 +767,22 @@ func isAssistantEventType(eventType string) bool {
 func applyAssistantText(raw map[string]interface{}, ev *tailer.ParsedEvent, eventType, askUserQuestion string) {
 	switch eventType {
 	case "assistant", eventTypeAssistantStreaming, "assistant_message", "assistant_output":
-		ev.AssistantText = tailer.ExtractAssistantText(raw)
+		full := tailer.ExtractAssistantFullText(raw)
+		ev.AssistantText = tailer.TruncateAssistantText(full)
 		if ev.AssistantText == "" && askUserQuestion != "" {
+			full = askUserQuestion
 			ev.AssistantText = tailer.TruncateAssistantText(askUserQuestion)
 		}
+		// issue #1150: the prose waiting heuristics see only the tail-truncated
+		// AssistantText, so a cue or question sitting before the trailing 200
+		// runes is invisible to them. Scan a larger (but bounded) tail window
+		// here and carry the verdict as a boolean — the prose analogue of the
+		// TaskQuestion marker path. Bounded, not full text: ExtractWaitingCue
+		// over-fires on very long turns (see MaxWaitingScanRunes). Kept a boolean
+		// (not the string) so the tailer/domain metrics and ledger stay lean.
+		win := tailer.WaitingScanWindow(full)
+		ev.PendingWaitingCue = win != "" &&
+			(session.ExtractQuestionSnippet(win) != "" || session.ExtractWaitingCue(win) != "")
 	case "user", "user_message", "user_input":
 		ev.ClearToolNames = true
 		ev.UserText = tailer.ExtractUserText(raw)

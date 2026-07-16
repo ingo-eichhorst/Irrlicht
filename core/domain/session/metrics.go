@@ -220,6 +220,16 @@ type SessionMetrics struct {
 	// tailer→domain conversion, so it is transient and not persisted.
 	PendingQuestionMarker bool `json:"-"`
 
+	// PendingWaitingCue is true when the most recent assistant message's FULL
+	// (untruncated) text carried a literal question or an imperative waiting cue
+	// (issue #1150). It is the prose-heuristic analogue of PendingQuestionMarker:
+	// derived by the adapter parser from the complete text, not from the
+	// tail-truncated LastAssistantText the prose detectors below would otherwise
+	// see, so a cue/question sitting before the trailing 200 runes still flips
+	// the session to waiting. Recomputed fresh each pass (restored from the
+	// tailer ledger on restart), so it is transient and not persisted here.
+	PendingWaitingCue bool `json:"-"`
+
 	// PermissionMode is the session's permission mode from the JSONL.
 	// Verified on-disk census across 320 local Claude Code transcripts
 	// (v2.1.210, 2026-07-15): "auto" 5000, "plan" 331, "default" 8,
@@ -558,6 +568,7 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 		IntentHeadline:           newM.IntentHeadline,
 		QuestionHeadline:         newM.QuestionHeadline,
 		PendingQuestionMarker:    newM.PendingQuestionMarker,
+		PendingWaitingCue:        newM.PendingWaitingCue,
 		PermissionMode:           newM.PermissionMode,
 		SubagentCompletions:      newM.SubagentCompletions,
 		AppliedTaskDeltas:        newM.AppliedTaskDeltas,

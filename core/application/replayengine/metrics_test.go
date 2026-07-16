@@ -153,6 +153,29 @@ func TestConvert_PendingQuestionMarker(t *testing.T) {
 	})
 }
 
+// TestConvert_PendingWaitingCue pins issue #1150: the full-text waiting-cue
+// verdict the adapter parser computes rides through the tailer→domain
+// conversion untouched, so the classifier sees it. The parser derives it from
+// the FULL assistant text; the conversion is a plain passthrough.
+func TestConvert_PendingWaitingCue(t *testing.T) {
+	t.Run("flag set on tailer metrics → copied to domain", func(t *testing.T) {
+		m := &tailer.SessionMetrics{
+			LastAssistantText: "a declarative status tail with no cue",
+			PendingWaitingCue: true,
+		}
+		if got := TailerToDomain(m); !got.PendingWaitingCue {
+			t.Error("PendingWaitingCue = false, want true — the parser's full-text verdict must pass through")
+		}
+	})
+
+	t.Run("flag unset → stays false", func(t *testing.T) {
+		m := &tailer.SessionMetrics{LastAssistantText: "a declarative status tail with no cue"}
+		if got := TailerToDomain(m); got.PendingWaitingCue {
+			t.Error("PendingWaitingCue = true, want false when the parser set no cue")
+		}
+	})
+}
+
 func TestTailerToDomain_NilCompactor_HeadlinesAreIdentity(t *testing.T) {
 	m := &tailer.SessionMetrics{
 		TaskSummary:       &tailer.TaskSummary{Text: "add the logout button", ObservedAt: 100},

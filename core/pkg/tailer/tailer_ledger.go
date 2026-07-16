@@ -14,6 +14,7 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 		AgentVersion:                t.metrics.AgentVersion,
 		LastEventType:               t.metrics.LastEventType,
 		LastAssistantText:           t.lastAssistantText,
+		PendingWaitingCue:           t.lastPendingWaitingCue,
 		PendingBackgroundAgentCount: t.lastPendingBackgroundAgentCount,
 	}
 	if len(t.cumByModel) > 0 {
@@ -93,6 +94,13 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 		t.lastAssistantText = s.LastAssistantText
 		t.metrics.LastAssistantText = s.LastAssistantText
 	}
+	// Restore the full-text waiting-cue signal the same way (issue #1150) so a
+	// resume-at-EOF pass keeps a beyond-tail cue/question session `waiting`.
+	// surfaceSporadicMetrics republishes it onto t.metrics every pass (above
+	// computeMetrics' empty-history early return), so only the private field
+	// needs restoring — unlike LastAssistantText above, whose t.metrics copy
+	// lives below that early return.
+	t.lastPendingWaitingCue = s.PendingWaitingCue
 	// Restore the background-agent hold: a resume-at-EOF pass reads no
 	// turn_duration, so without this the #1037 guard goes inert on every
 	// restart and the parent flips `ready` while agents are still running

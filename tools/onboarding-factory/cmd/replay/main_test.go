@@ -536,6 +536,71 @@ func TestReplay_Issue1138_QuestionMarkerWaiting(t *testing.T) {
 	}
 }
 
+// TestReplay_Issue1150_WaitingCueBeyondTailWaiting is the end-to-end regression
+// for issue #1150, the cue analogue of TestReplay_Issue1138_QuestionMarkerWaiting:
+// a turn ends with an imperative waiting cue (no marker, no literal question)
+// that sits EARLY in a long final message, while the tail (all LastAssistantText
+// keeps — 200 runes) is a declarative padding sentence. Before the fix the prose
+// heuristics saw only the truncated tail and the session went straight to ready;
+// after it, the adapter parser scans the FULL assistant text, derives
+// PendingWaitingCue, and the finished turn routes to waiting via the same
+// turn-done cue path #1138 uses for the marker.
+//
+// Modeled inline rather than as a replaydata cell for the same reason #1138 is:
+// the fix lives in the parser + tailer→domain conversion + classifier, and a
+// full recording cell would be disproportionate ceremony for a state-classifier
+// guard.
+func TestReplay_Issue1150_WaitingCueBeyondTailWaiting(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "session.jsonl")
+
+	// Assistant turn: the cue ("Please review the diff and let me know before I
+	// merge.") is the FIRST sentence, followed by a single ~290-rune declarative
+	// sentence so the trailing 200 runes (all TruncateAssistantText keeps) fall
+	// entirely inside the padding — the cue is outside the tail window. No
+	// irrlicht-question marker, so only the full-text cue scan can flip it.
+	transcriptBody := `{"type":"user","timestamp":"2026-04-11T10:00:00Z","message":{"role":"user","content":"Is the waiting-cue fix ready?"}}
+{"type":"assistant","timestamp":"2026-04-11T10:00:01Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"Please review the diff and let me know before I merge. I have already wired the full-text scan through the parser and the tailer and the ledger and the shared conversion so the classifier now receives an accurate signal on every pass instead of relying on the trailing fragment that used to hide this earlier sentence from the heuristics entirely."}]}}
+{"type":"system","subtype":"turn_duration","timestamp":"2026-04-11T10:00:02Z"}
+`
+	if err := os.WriteFile(transcript, []byte(transcriptBody), 0644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	report, err := replay(transcript, reportSettings{
+		Adapter:            claudecode.AdapterName,
+		DebounceWindow:     2 * time.Second,
+		FlickerMaxDuration: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+
+	waitingIdx := -1
+	for i := range report.Transitions {
+		if report.Transitions[i].NewState == session.StateWaiting {
+			waitingIdx = i
+		}
+	}
+	if waitingIdx < 0 {
+		t.Fatalf("no transition to waiting; the finished cue turn was not detected as waiting. transitions: %+v", report.Transitions)
+	}
+	waiting := report.Transitions[waitingIdx]
+	// No open/blocking tool, and the cue sits outside the 200-rune tail, so the
+	// ONLY route to waiting is classifyAgentDone's cue path fed by the full-text
+	// PendingWaitingCue flag. Assert that exact route.
+	if !waiting.IsAgentDone {
+		t.Errorf("waiting transition IsAgentDone = false, want true (should be the turn-done cue route)")
+	}
+	const wantReason = "turn ended with question or cue → waiting"
+	if waiting.Reason != wantReason {
+		t.Errorf("waiting transition reason = %q, want %q (the agent-done cue route, which only fires here via the full-text scan)", waiting.Reason, wantReason)
+	}
+	if waiting.NeedsAttn {
+		t.Errorf("waiting transition NeedsAttn = true, want false — reached waiting via a cue, not a blocking tool")
+	}
+}
+
 func TestDetectAdapter(t *testing.T) {
 	cases := []struct {
 		name string
