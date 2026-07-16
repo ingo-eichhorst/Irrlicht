@@ -102,7 +102,12 @@ final class MenuBarController: NSObject {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.delegate = self
 
-        panel.contentViewController = hostingController
+        // The hosting controller is NOT attached here: the panel starts
+        // hidden, and an attached hosting view keeps animating and laying
+        // out the whole SwiftUI tree even while the window is ordered out
+        // (the working-dot breathe alone re-renders at frame rate) — ~10%
+        // CPU with the panel closed. showPanel() attaches on demand;
+        // hidePanel() detaches again.
 
         // Rounded corners to match the previous MenuBarExtra(.window) look.
         // Panel is already transparent (isOpaque = false, backgroundColor =
@@ -201,6 +206,16 @@ final class MenuBarController: NSObject {
     }
 
     private func showPanel() {
+        // Attach the SwiftUI content (detached while hidden — see
+        // configurePanel). Ordering matters: attach first, then flush, so
+        // the layout pass below measures current data.
+        if panel.contentViewController == nil {
+            panel.contentViewController = hostingController
+        }
+        // Switch the coalesced refresh back to the visible window and apply
+        // any updates accumulated on the hidden window — before the layout
+        // pass below, so the measured content is current.
+        sessionManager.setPanelVisible(true)
         // Force the hosting controller to lay out so preferredContentSize
         // is measured before we position the panel.
         hostingController.view.layoutSubtreeIfNeeded()
@@ -215,7 +230,13 @@ final class MenuBarController: NSObject {
     }
 
     private func hidePanel() {
+        sessionManager.setPanelVisible(false)
         panel.orderOut(nil)
+        // Detach the SwiftUI content: orderOut alone keeps the hosting view
+        // window-attached and rendering off screen (see configurePanel).
+        // The hosting controller (and its view state) is retained by this
+        // controller, so reattaching on the next show is lossless.
+        panel.contentViewController = nil
         removeDismissMonitors()
         statusItem.button?.highlight(false)
     }

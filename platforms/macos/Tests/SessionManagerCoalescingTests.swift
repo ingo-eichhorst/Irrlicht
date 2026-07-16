@@ -26,9 +26,10 @@ final class SessionManagerCoalescingTests: XCTestCase {
         // as the apiGroups tests).
         originalProjectGroupOrder = UserDefaults.standard.object(forKey: "projectGroupOrder")
         sut = SessionManager()
-        // Long window so the trailing timer never fires mid-test — flushes are
+        // Long windows so the trailing timer never fires mid-test — flushes are
         // driven explicitly via flushPendingUIRefreshForTests().
         sut.uiRefreshInterval = 1000
+        sut.uiRefreshHiddenInterval = 1000
     }
 
     override func tearDown() async throws {
@@ -76,6 +77,50 @@ final class SessionManagerCoalescingTests: XCTestCase {
                        "a state transition flushes immediately, without waiting for the window")
         let stateA = sut.apiGroups.flatMap { $0.agents ?? [] }.first { $0.id == "a" }?.state
         XCTAssertEqual(stateA, .waiting, "the transition is reflected in the list-view surface")
+    }
+
+    /// The coalescing window follows panel visibility: hidden sessions ride
+    /// the slow window so off-screen flushes stop burning CPU, visible ones
+    /// keep the snappy 0.1s cadence.
+    func testRefreshWindowFollowsPanelVisibility() {
+        sut.uiRefreshInterval = 0.1
+        sut.uiRefreshHiddenInterval = 2.0
+
+        XCTAssertEqual(sut.currentUIRefreshWindow, 2.0,
+                       "the panel starts hidden, so coalescing starts on the slow window")
+
+        sut.setPanelVisible(true)
+        XCTAssertEqual(sut.currentUIRefreshWindow, 0.1,
+                       "a visible panel coalesces on the fast window")
+
+        sut.setPanelVisible(false)
+        XCTAssertEqual(sut.currentUIRefreshWindow, 2.0,
+                       "hiding the panel returns to the slow window")
+    }
+
+    /// Opening the panel must not show rows that are up to a hidden-window
+    /// stale: pending updates flush synchronously on show.
+    func testShowingPanelFlushesPendingUpdates() {
+        seedWorkingSessions(["a"])
+        sut.handleWsMessage(updatedEnvelope(id: "a", seq: 1, cost: 7))
+        XCTAssertEqual(sut.uiRefreshFlushCount, 0, "metric push coalesces while hidden")
+
+        sut.setPanelVisible(true)
+
+        XCTAssertEqual(sut.uiRefreshFlushCount, 1, "showing the panel applies pending updates")
+        let costA = sut.apiGroups.flatMap { $0.agents ?? [] }.first { $0.id == "a" }?.metrics?.estimatedCostUSD
+        XCTAssertEqual(costA, 7, "the update accumulated on the hidden window is visible on open")
+    }
+
+    /// Show/hide with nothing pending is a no-op — no phantom render passes.
+    func testPanelVisibilityWithNothingPendingDoesNotFlush() {
+        seedWorkingSessions(["a"])
+
+        sut.setPanelVisible(true)
+        sut.setPanelVisible(false)
+
+        XCTAssertEqual(sut.uiRefreshFlushCount, 0,
+                       "visibility changes alone must not trigger render passes")
     }
 
     // MARK: - Helpers
