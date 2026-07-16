@@ -120,8 +120,16 @@ tools/preflight.sh --only arch    # just the ARS architecture gate
 
 `tools/install-git-hooks.sh` (run once per clone; worktrees share the parent
 repo's hooks automatically) wires `tools/preflight.sh`'s fast gates as a
-pre-push hook, so a push that would fail CI is rejected locally instead.
-Skip once with `git push --no-verify`.
+pre-push hook, so a push that would fail CI is rejected locally instead. The
+hook runs `tools/preflight.sh --changed`, which scopes every gate to the
+packages and web trees the push's diff actually touches (vs `origin/main`), so
+a typical push finishes in seconds rather than re-running the whole suite —
+important for automated callers, whose bounded command timeout the full run
+routinely blew past, killing the push after the commit had already landed. A
+large or cross-cutting diff (or a `go.mod`/`go.sum` change, which falls back to
+the full core suite) can still take a few minutes. Skip once with `git push
+--no-verify`; run `tools/preflight.sh` manually (no `--changed`) for the
+unscoped full gate.
 
 Two of the failure modes it won't catch: environment-specific timing flakes
 that only manifest on loaded Linux CI runners (not this machine), and true
