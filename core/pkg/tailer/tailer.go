@@ -151,6 +151,12 @@ type SessionMetrics struct {
 	// message, truncated to ~200 characters.
 	LastAssistantText string `json:"last_assistant_text,omitempty"`
 
+	// PendingWaitingCue is true when the most recent assistant message's FULL
+	// text carried a literal question or imperative waiting cue (issue #1150).
+	// Transient like the domain PendingQuestionMarker — recomputed each pass and
+	// restored from the ledger on restart, never serialized into session JSON.
+	PendingWaitingCue bool `json:"-"`
+
 	// PermissionMode is the session's permission mode. Extracted from
 	// "permission-mode" events. A census of 320 live Claude Code transcripts
 	// found the values actually in use are overwhelmingly "auto" (~5000
@@ -350,6 +356,12 @@ type TranscriptTailer struct {
 	// lastAssistantText holds the text content of the most recent assistant
 	// message, truncated to ~200 characters.
 	lastAssistantText string
+
+	// lastPendingWaitingCue holds the full-text waiting-cue signal derived from
+	// the most recent assistant message (issue #1150), kept in lockstep with
+	// lastAssistantText: set from the parsed event's PendingWaitingCue whenever
+	// the assistant text updates, cleared when a user message clears the text.
+	lastPendingWaitingCue bool
 
 	// lastTaskEstimate holds the most recent agent-emitted task-progress
 	// marker. Markers are sporadic (model-discretion, every few turns), so
@@ -1104,9 +1116,12 @@ func (t *TranscriptTailer) updateInterruptAndDenialFlags(parsed *ParsedEvent) {
 func (t *TranscriptTailer) applyAssistantTextAndMarkers(parsed *ParsedEvent) {
 	if parsed.AssistantText != "" {
 		t.lastAssistantText = parsed.AssistantText
+		// Kept in lockstep with the text it was derived from (issue #1150).
+		t.lastPendingWaitingCue = parsed.PendingWaitingCue
 	}
 	if parsed.ClearToolNames {
 		t.lastAssistantText = ""
+		t.lastPendingWaitingCue = false
 	}
 	if parsed.TaskEstimate != nil {
 		t.applyTaskEstimate(parsed.TaskEstimate)

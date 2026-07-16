@@ -212,8 +212,15 @@ type ParsedEvent struct {
 	CumulativeTokens *TokenSnapshot
 	RequestID        string
 	AssistantText    string // ≤200 chars, for waiting-state display
-	CWD              string // working directory if found
-	PermissionMode   string // Claude Code only
+	// PendingWaitingCue is true when the FULL (untruncated) assistant text of
+	// this event carries a literal question or an imperative waiting cue. The
+	// adapter parser computes it from the complete text because AssistantText
+	// above is tail-truncated to 200 runes and would hide a cue/question that
+	// sits before the trailing text — the prose-heuristic analogue of the
+	// TaskQuestion marker path. See issue #1150.
+	PendingWaitingCue bool
+	CWD               string // working directory if found
+	PermissionMode    string // Claude Code only
 
 	// RateLimit, when non-nil, is a subscription-quota snapshot extracted from
 	// this event. Codex emits one per token_count event_msg; Claude Code feeds
@@ -603,6 +610,16 @@ type LedgerState struct {
 	// (turn ended on a question) loses the question text on restart and the seed
 	// re-classification demotes it to `ready`. See issue #705.
 	LastAssistantText string `json:"last_assistant_text,omitempty"`
+	// PendingWaitingCue persists the full-text waiting-cue signal (issue #1150)
+	// so a daemon restart that resumes at LastOffset (zero new lines) keeps a
+	// session whose turn ended on a cue/question beyond the 200-rune tail in
+	// `waiting` instead of demoting it to `ready` — the cue analogue of the
+	// LastAssistantText heal above (#705). Deliberately added WITHOUT a schema
+	// bump: a ledger written before this field simply lacks it and rehydrates to
+	// false, which falls back to the tail-truncated scan (the pre-fix behaviour),
+	// so discarding every live session's ledger to force a re-scan would be a
+	// bigger hammer than this narrow gap warrants.
+	PendingWaitingCue bool `json:"pending_waiting_cue,omitempty"`
 	// PendingBackgroundAgentCount persists Claude Code's last-reported
 	// background-agent count so a daemon restart that resumes at LastOffset
 	// (zero new lines) keeps holding the parent `working` while agents are
@@ -682,10 +699,20 @@ func NormalizeModelName(rawModel string) string {
 	return normalized
 }
 
-// ExtractAssistantText extracts and concatenates text blocks from an assistant
-// message, returning at most 200 characters. Checks both Claude Code
-// (message.content[].text) and Codex (content[].text / content[].output_text) formats.
+// ExtractAssistantText extracts the assistant message's text blocks, truncated
+// to ~200 runes for waiting-state display. It is the display form of
+// ExtractAssistantFullText.
 func ExtractAssistantText(raw map[string]interface{}) string {
+	return TruncateAssistantText(ExtractAssistantFullText(raw))
+}
+
+// ExtractAssistantFullText concatenates the text blocks of an assistant message
+// WITHOUT the ~200-rune display truncation ExtractAssistantText applies. Checks
+// both Claude Code (message.content[].text) and Codex (content[].text /
+// content[].output_text) formats. The prose waiting-state heuristics need the
+// full text so a cue or question sitting before the trailing 200 runes is still
+// visible; the truncated form is display-only. See issue #1150.
+func ExtractAssistantFullText(raw map[string]interface{}) string {
 	var parts []string
 
 	// Claude Code: message.content[]
@@ -699,7 +726,7 @@ func ExtractAssistantText(raw map[string]interface{}) string {
 		collectAssistantTextBlocks(arr, &parts)
 	}
 
-	return TruncateAssistantText(strings.Join(parts, " "))
+	return strings.Join(parts, " ")
 }
 
 // collectAssistantTextBlocks appends the text of each "text"/"output_text"
@@ -770,6 +797,41 @@ func collectUserTextBlocks(arr []interface{}, parts *[]string) {
 // MaxAssistantTextRunes caps the assistant text kept for waiting-state display.
 const MaxAssistantTextRunes = 200
 
+// MaxWaitingScanRunes bounds how much of an assistant message's tail the prose
+// waiting-state heuristics scan (issue #1150). It is deliberately larger than
+// MaxAssistantTextRunes (the display cap) so a cue or question pushed past the
+// 200-rune display tail by trailing text is still seen — but still bounded, so a
+// long declarative or creative-writing turn can't manufacture a spurious cue
+// from mid-message prose. ExtractWaitingCue's false-positive rate grows with
+// scan length (see issue #381 and the 2-16 oversized-transcript-line fixture,
+// an 18k-rune poem that reads as a cue once the whole message is scanned), so
+// the detection window stays coupled to a bound — just a larger one than
+// display. Twice the display cap.
+const MaxWaitingScanRunes = 2 * MaxAssistantTextRunes
+
+// WaitingScanWindow returns the trailing MaxWaitingScanRunes runes of s — the
+// bounded input the prose waiting-state heuristics scan. Unlike
+// TruncateAssistantText it adds no ellipsis: the result feeds the detectors, not
+// the UI. See issue #1150.
+func WaitingScanWindow(s string) string {
+	tail, _ := tailRunes(s, MaxWaitingScanRunes)
+	return tail
+}
+
+// tailRunes trims s and returns its trailing n runes (all of it when shorter),
+// plus whether any leading runes were dropped. "Keep the tail, not the head"
+// preserves the agent's most recent words — where a waiting question/cue lands.
+// Shared by the two tail-keeping helpers: TruncateAssistantText (display) and
+// WaitingScanWindow (detection).
+func tailRunes(s string, n int) (tail string, truncated bool) {
+	text := strings.TrimSpace(s)
+	runes := []rune(text)
+	if len(runes) > n {
+		return string(runes[len(runes)-n:]), true
+	}
+	return text, false
+}
+
 // TruncateAssistantText reduces s to the assistant text kept for waiting-state
 // display: trimmed, then at most the trailing MaxAssistantTextRunes runes with a
 // leading ellipsis when it drops text. Keeping the tail (not the head) preserves
@@ -780,12 +842,11 @@ const MaxAssistantTextRunes = 200
 // Adapters MUST scan the full text for markers (ScanTaskEstimate) BEFORE calling
 // this — the dropped head can carry a task-estimate marker.
 func TruncateAssistantText(s string) string {
-	text := strings.TrimSpace(s)
-	runes := []rune(text)
-	if len(runes) > MaxAssistantTextRunes {
-		return "…" + string(runes[len(runes)-MaxAssistantTextRunes:])
+	tail, truncated := tailRunes(s, MaxAssistantTextRunes)
+	if truncated {
+		return "…" + tail
 	}
-	return text
+	return tail
 }
 
 // ExtractUsage pulls token breakdown fields from a usage map.

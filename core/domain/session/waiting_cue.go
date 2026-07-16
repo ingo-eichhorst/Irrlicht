@@ -48,6 +48,14 @@ func (m *SessionMetrics) IsWaitingForUserInput() bool {
 	if m.PendingQuestionMarker {
 		return true
 	}
+	// PendingWaitingCue is the prose analogue: the adapter parser ran these same
+	// detectors against the FULL assistant text (issue #1150), so an imperative
+	// cue or literal question sitting before the trailing 200 runes is caught
+	// even though the tail-only scans below cannot see it. The tail scans remain
+	// for adapters/passes that don't populate it (the flag stays false then).
+	if m.PendingWaitingCue {
+		return true
+	}
 	if ExtractQuestionSnippet(m.LastAssistantText) != "" {
 		return true
 	}

@@ -77,6 +77,7 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		CumCacheCreationTokens:            m.CumCacheCreationTokens,
 		LastCWD:                           m.LastCWD,
 		LastAssistantText:                 m.LastAssistantText,
+		PendingWaitingCue:                 m.PendingWaitingCue,
 		PermissionMode:                    m.PermissionMode,
 		SawUserBlockingToolClosedThisPass: m.SawUserBlockingToolClosedThisPass,
 		NoSubstantiveActivity:             m.NoSubstantiveActivity,
