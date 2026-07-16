@@ -26,8 +26,14 @@
 #     logged prominently as an upgrade recommendation, not blocking.
 #   - gosec: High-severity + High-confidence findings fail the gate.
 #     Everything else is logged for visibility, not blocking.
-#   - npm audit --audit-level=high already implements this split natively
-#     (fails only on high/critical advisories).
+#   - npm audit: gate on the High+Critical count in the JSON report's
+#     `.metadata.vulnerabilities` block. A non-zero exit alone is ambiguous —
+#     npm exits non-zero both when it finds advisories and when the audit
+#     itself can't run (registry unreachable, TLS failure) — so a report with
+#     no metadata (an `.error`/`.message` payload instead) is classified as
+#     "could not run" and reported as such, not as a fabricated advisory. Per
+#     the "can't run at all" policy below that is still a hard failure, just
+#     an accurately-labelled one.
 #
 # A check that can't run at all — missing tool, `gh` auth/scope failure — is
 # a hard failure, not a skip. A silently-skipped scan is indistinguishable
@@ -160,10 +166,28 @@ fi
 for tree in "${WEB_TREES[@]}"; do
   echo "-- npm audit: $tree --"
   command -v npm >/dev/null 2>&1 || { fail "npm audit: $tree — npm not found"; continue; }
-  if ( cd "$tree" && npm audit --audit-level=high ); then
-    ok "npm audit: $tree — no High/Critical advisories"
+  # npm audit exits non-zero both when it finds advisories AND when the audit
+  # can't run at all (registry unreachable, TLS failure) — so the exit code
+  # alone can't tell the two apart. Parse the JSON report and branch on its
+  # shape, the same way the govulncheck block distinguishes a real finding
+  # from a scan error: a completed audit carries a `.metadata.vulnerabilities`
+  # block; a failed audit has no metadata and instead carries an
+  # `.error`/`.message` payload.
+  na_json=$( cd "$tree" && npm audit --json 2>/dev/null )
+  if echo "$na_json" | jq -e '.metadata.vulnerabilities' >/dev/null 2>&1; then
+    hc=$(echo "$na_json" | jq '(.metadata.vulnerabilities.high // 0) + (.metadata.vulnerabilities.critical // 0)')
+    if [[ "$hc" -gt 0 ]]; then
+      fail "npm audit: $tree — $hc High/Critical advisory/ies found; fix with npm audit fix, or document a suppression"
+      echo "$na_json" | jq -r '.vulnerabilities // {} | to_entries[] | select(.value.severity=="high" or .value.severity=="critical") | "  - " + .key + " (" + .value.severity + ")"' >&2
+    else
+      ok "npm audit: $tree — no High/Critical advisories"
+    fi
   else
-    fail "npm audit: $tree — High/Critical advisory/ies found (see above); fix with npm audit fix, or document a suppression"
+    # No metadata block: the audit never completed. A silently-skipped scan is
+    # indistinguishable from a clean one, so this is a hard failure — but named
+    # accurately (registry/network) rather than misreported as an advisory.
+    na_msg=$(echo "$na_json" | jq -r '.message // .error.summary // .error.detail // empty' 2>/dev/null)
+    fail "npm audit: $tree — audit could not run (registry unreachable / network failure): ${na_msg:-no error detail} — re-run; this is NOT a vulnerability finding"
   fi
 done
 
