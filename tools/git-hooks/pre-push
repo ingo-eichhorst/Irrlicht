@@ -2,9 +2,15 @@
 # pre-push hook — runs tools/preflight.sh's fast gate set (the go + web CI
 # jobs; not the slow opt-in --linux Docker gate) before a push leaves this
 # machine, so a failure shows up here instead of several minutes later on
-# GitHub Actions. Installed via tools/install-git-hooks.sh (not automatic —
-# git doesn't version .git/hooks/, so every clone needs one run; worktrees
-# share the parent repo's hooks automatically).
+# GitHub Actions. Runs with --changed, so each gate is scoped to the packages
+# and web trees this push actually touches (vs origin/main) — a small diff
+# pushes in seconds instead of re-running the whole suite, which routinely
+# exceeded an automated caller's command timeout and left the push half-done
+# (committed locally, never sent). Run tools/preflight.sh manually (no
+# --changed) for the unscoped full gate. Installed via
+# tools/install-git-hooks.sh (not automatic — git doesn't version .git/hooks/,
+# so every clone needs one run; worktrees share the parent repo's hooks
+# automatically).
 #
 # Git runs hooks with CWD set to the working tree performing the push — a
 # worktree's own root, not wherever tools/install-git-hooks.sh was run from
@@ -27,5 +33,10 @@ set -uo pipefail
 # Unset them so preflight's git-touching tests see a clean environment.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
-echo "pre-push: running tools/preflight.sh (skip with --no-verify)"
-./tools/preflight.sh
+echo "pre-push: running tools/preflight.sh --changed"
+echo "pre-push: gates are scoped to this push's diff vs origin/main — usually"
+echo "pre-push: seconds, but a large or cross-cutting diff (or a go.mod/go.sum"
+echo "pre-push: change) can still take a few minutes. Skip with"
+echo "pre-push: 'git push --no-verify' (run tools/preflight.sh manually for the"
+echo "pre-push: full unscoped gate)."
+./tools/preflight.sh --changed
