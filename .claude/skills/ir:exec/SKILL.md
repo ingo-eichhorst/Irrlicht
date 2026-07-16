@@ -21,7 +21,7 @@ argument.
   → worktree → investigate → (auto resolves to plan or full here)
     → plan: HTML + ⛔ approval, or full: inline summary → assign issue
     → implement → verify
-    → PR → /code-review (low) → fix → /simplify → recommendation [plan / full stop here]
+    → PR → /code-review (effort scaled to diff) → fix → /simplify (or inline) → recommendation [plan / full stop here]
     → land: confirm mergeable → squash-merge → remove worktree   [close]
 ```
 
@@ -216,17 +216,46 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
 
 ## Phase 5 — PR, review, simplify
 
+**Calibrate the depth of steps 13–14 to the diff you just produced** — a
+one-line string edit and a multi-package refactor must not get identical
+scrutiny (spending four `/simplify` subagents on a doc-string is the failure
+this guards against). The diff exists as soon as Phase 4 is done; measure it
+cheaply first:
+
+```bash
+git diff --shortstat origin/main...HEAD   # files + lines; origin/main, not local (stale-ref footgun)
+```
+
+…then glance at *what* changed (docs/strings/tests only? new control flow? how
+many packages?) and read it into one of four tiers. These are calibration
+anchors, not hard gates — use judgment at the boundaries:
+
+| Diff tier | Looks like | Step 13 review | Step 14 simplify |
+|---|---|---|---|
+| **Trivial** | docs / comments / string-constants / config only, or ≤~30 non-test lines in 1 file | `low` | **skip the fan-out** — do an inline reuse/simplification/efficiency/altitude glance and say so |
+| **Small** | 1–3 files, one concern, no new logic, <~150 lines | `low` | inline glance, no 4-agent fan-out |
+| **Medium** | 2–5 files / one slice / some new logic | `medium` | run `/simplify` (fan-out is fine) |
+| **Large / risky** | multi-package, schema, cross-adapter, logic-heavy, >~400 lines | `high` | run `/simplify` (fan-out) |
+
+**Guardrails (unconditional):** never auto-select `/code-review ultra` (the
+cloud, billed, human-only path) and never use the Workflow tool for either
+step. The auto range is bounded **low↔high**; `max`/`ultra` stay
+human-triggered.
+
 12. **Open the PR** against `main`:
     ```bash
     git push -u origin feat/<N>-<slug>
     gh pr create --base main --fill   # or a written title/body; reference "Closes #<N>"
     ```
     End the PR body with the `🤖 Generated with [Claude Code]` line.
-13. **Review the diff.** Run the `/code-review` skill at **low** effort on the local
-    diff, then fix every finding it surfaces in the worktree and push the fixes.
-    - **IMPORTANT: do NOT use the Workflow tool / multi-agent orchestration for the
-      review — it is too expensive.** A single review pass, not a fan-out.
-14. **Run the `/simplify` skill** on the change to clean up reuse/complexity, then push.
+13. **Review the diff** at the **calibrated effort** (`low` for trivial/small,
+    up to `high` for large/risky — never `ultra`/Workflow). Run the
+    `/code-review` skill on the local diff, then fix every finding it surfaces
+    in the worktree and push the fixes. A single review pass, not a fan-out.
+14. **Simplify per the tier.** For **Medium/Large** diffs run the `/simplify`
+    skill; for **Trivial/Small** diffs skip its 4-agent fan-out and do the
+    reuse/simplification/efficiency/altitude review inline, stating what you
+    checked. Push any cleanup.
 
 ## Phase 6 — Hand back
 
@@ -270,6 +299,9 @@ Phase 6.
 - If the issue is ambiguous, surface it under Risks/unknowns in the plan rather than
   guessing — that's what the approval gate is for.
 - One worktree + one branch + one PR per issue.
+- Scale Phase 5 to the diff (the tier table there): trivial changes get a `low`
+  review and an inline simplify glance, not a `high` review and a four-agent
+  fan-out. Depth follows the change, and never auto-escalates to `ultra`/Workflow.
 - User-facing features ship on every applicable frontend (macOS + web), or the plan
   says explicitly why not (Phase 2). Verify each one directly rather than trusting an
   adjacent green test suite (Phase 4) — see the Activity Matrix incident above.
