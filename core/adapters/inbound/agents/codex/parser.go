@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/pkg/transcript"
 )
@@ -288,7 +289,24 @@ func parseCodexMessage(raw map[string]interface{}, ev *tailer.ParsedEvent) bool 
 	switch role {
 	case "assistant":
 		ev.EventType = "assistant_message"
-		ev.AssistantText = tailer.ExtractAssistantText(raw)
+		full := tailer.ExtractAssistantFullText(raw)
+		ev.AssistantText = tailer.TruncateAssistantText(full)
+		// issue #1159: mirror the claudecode fix (#1150). The prose waiting
+		// heuristics see only the tail-truncated AssistantText, so a cue or
+		// question sitting before the trailing 200 runes is invisible to them.
+		// Scan a larger (but bounded) tail window of the FULL text and carry the
+		// verdict as PendingWaitingCue — the prose analogue of the TaskQuestion
+		// marker path. The plumbing (ParsedEvent.PendingWaitingCue → tailer →
+		// domain) is adapter-agnostic; codex only had to compute the flag here.
+		//
+		// Codex-specific: this fires on the preliminary assistant_message codex
+		// emits before tool calls too, but IsAgentDone() excludes
+		// assistant_message from its fallback (codex settles only on the
+		// turn_done primary path from task_complete), so a mid-turn cue can't
+		// route to waiting — only the last assistant text before turn_done does.
+		win := tailer.WaitingScanWindow(full)
+		ev.PendingWaitingCue = win != "" &&
+			(session.ExtractQuestionSnippet(win) != "" || session.ExtractWaitingCue(win) != "")
 		scanCodexTaskEstimate(raw, ev)
 		// Codex's `<proposed_plan>` block has no structured tool-use; map
 		// it to ExitPlanMode so the classifier treats it as user-blocking.
