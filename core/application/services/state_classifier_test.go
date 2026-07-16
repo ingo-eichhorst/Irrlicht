@@ -214,6 +214,22 @@ func TestClassifyState(t *testing.T) {
 			wantState:  session.StateWaiting,
 			wantReason: true,
 		},
+		// Rule 2a (issue #1138): an explicit irrlicht-question marker routes to
+		// waiting even when the (tail-truncated) LastAssistantText carries no
+		// question or cue — the real question sat earlier in a long final
+		// message. Reproduces the 71f27332 session's shape.
+		{
+			name:    "working → waiting (turn_done + question marker, declarative tail)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType:         "turn_done",
+				HasOpenToolCall:       false,
+				LastAssistantText:     "I can stand up the throwaway OTLP sink and drive a session through a permission prompt to capture the payload.",
+				PendingQuestionMarker: true,
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
 
 		// Rule 2b: IsAgentDone without question → ready.
 		{
@@ -233,6 +249,21 @@ func TestClassifyState(t *testing.T) {
 			metrics: &session.SessionMetrics{
 				LastEventType:   "turn_done",
 				HasOpenToolCall: false,
+			},
+			wantState:  session.StateReady,
+			wantReason: true,
+		},
+		// Rule 2b guard (issue #1138): QuestionHeadline is populated from the
+		// LastAssistantText fallback on nearly every turn, so it must NOT by
+		// itself force waiting — only the real PendingQuestionMarker does.
+		{
+			name:    "working → ready (turn_done, QuestionHeadline set but no marker)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType:     "turn_done",
+				HasOpenToolCall:   false,
+				LastAssistantText: "Done. The tests pass.",
+				QuestionHeadline:  "Done. The tests pass.",
 			},
 			wantState:  session.StateReady,
 			wantReason: true,
