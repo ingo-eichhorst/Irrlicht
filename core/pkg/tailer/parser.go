@@ -814,12 +814,22 @@ const MaxWaitingScanRunes = 2 * MaxAssistantTextRunes
 // TruncateAssistantText it adds no ellipsis: the result feeds the detectors, not
 // the UI. See issue #1150.
 func WaitingScanWindow(s string) string {
+	tail, _ := tailRunes(s, MaxWaitingScanRunes)
+	return tail
+}
+
+// tailRunes trims s and returns its trailing n runes (all of it when shorter),
+// plus whether any leading runes were dropped. "Keep the tail, not the head"
+// preserves the agent's most recent words — where a waiting question/cue lands.
+// Shared by the two tail-keeping helpers: TruncateAssistantText (display) and
+// WaitingScanWindow (detection).
+func tailRunes(s string, n int) (tail string, truncated bool) {
 	text := strings.TrimSpace(s)
 	runes := []rune(text)
-	if len(runes) > MaxWaitingScanRunes {
-		return string(runes[len(runes)-MaxWaitingScanRunes:])
+	if len(runes) > n {
+		return string(runes[len(runes)-n:]), true
 	}
-	return text
+	return text, false
 }
 
 // TruncateAssistantText reduces s to the assistant text kept for waiting-state
@@ -832,12 +842,11 @@ func WaitingScanWindow(s string) string {
 // Adapters MUST scan the full text for markers (ScanTaskEstimate) BEFORE calling
 // this — the dropped head can carry a task-estimate marker.
 func TruncateAssistantText(s string) string {
-	text := strings.TrimSpace(s)
-	runes := []rune(text)
-	if len(runes) > MaxAssistantTextRunes {
-		return "…" + string(runes[len(runes)-MaxAssistantTextRunes:])
+	tail, truncated := tailRunes(s, MaxAssistantTextRunes)
+	if truncated {
+		return "…" + tail
 	}
-	return text
+	return tail
 }
 
 // ExtractUsage pulls token breakdown fields from a usage map.

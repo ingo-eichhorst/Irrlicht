@@ -780,6 +780,12 @@ func applyAssistantText(raw map[string]interface{}, ev *tailer.ParsedEvent, even
 		// TaskQuestion marker path. Bounded, not full text: ExtractWaitingCue
 		// over-fires on very long turns (see MaxWaitingScanRunes). Kept a boolean
 		// (not the string) so the tailer/domain metrics and ledger stay lean.
+		//
+		// Wired for Claude Code only (the adapter #1150 was filed against). Other
+		// adapters that set AssistantText via the same ExtractAssistantText
+		// truncation (e.g. codex) share this beyond-tail blind spot; the plumbing
+		// (ParsedEvent.PendingWaitingCue → tailer → domain) is adapter-agnostic,
+		// so each can adopt it by computing PendingWaitingCue the same way here.
 		win := tailer.WaitingScanWindow(full)
 		ev.PendingWaitingCue = win != "" &&
 			(session.ExtractQuestionSnippet(win) != "" || session.ExtractWaitingCue(win) != "")
