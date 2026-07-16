@@ -21,7 +21,7 @@ argument.
   → worktree → investigate → (auto resolves to plan or full here)
     → plan: HTML + ⛔ approval, or full: inline summary → assign issue
     → implement → verify
-    → PR → /code-review (low) → fix → /simplify → recommendation [plan / full stop here]
+    → PR → /code-review (effort scaled to diff) → fix → /simplify (or inline) → recommendation [plan / full stop here]
     → land: confirm mergeable → squash-merge → remove worktree   [close]
 ```
 
