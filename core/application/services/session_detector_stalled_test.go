@@ -102,13 +102,13 @@ func markStalledEditToolCases(threshold int64) []markStalledEditToolCase {
 }
 
 // TestMarkStalledEditTool covers the transcript-based stalled-edit-tool
-// fallback (#488): an open permission-gated edit tool that lingers past the
-// stale-refresh interval is flagged OpenToolStalled, while a fresh one, a
+// fallback (#488): an open permission-gated edit tool that lingers past
+// stalledEditToolThreshold is flagged OpenToolStalled, while a fresh one, a
 // non-edit tool, or one already covered by the hook is not. White-box so it
 // can exercise the unexported method + editToolOpenSince map directly,
-// injecting `now` instead of sleeping out the real 5s window.
+// injecting `now` instead of sleeping out the real window.
 func TestMarkStalledEditTool(t *testing.T) {
-	threshold := int64(staleWorkingRefreshInterval.Seconds())
+	threshold := int64(stalledEditToolThreshold.Seconds())
 
 	for _, tt := range markStalledEditToolCases(threshold) {
 		t.Run(tt.name, func(t *testing.T) {
@@ -162,7 +162,7 @@ func assertOpenSinceEquals(t *testing.T, d *SessionDetector, key string, want in
 // held Edit prompt observed across two passes flips to stalled on the second
 // (a stale-refresh) pass; an arriving tool_result then clears the window.
 func TestMarkStalledEditTool_HeldPromptSequence(t *testing.T) {
-	threshold := int64(staleWorkingRefreshInterval.Seconds())
+	threshold := int64(stalledEditToolThreshold.Seconds())
 	d := &SessionDetector{editToolOpenSince: map[string]int64{}}
 	start := time.Now().Unix()
 
@@ -183,4 +183,53 @@ func TestMarkStalledEditTool_HeldPromptSequence(t *testing.T) {
 	if _, ok := d.editToolOpenSince["s"]; ok {
 		t.Fatal("approval must clear the window")
 	}
+}
+
+// TestMarkStalledEditTool_SlowEditNotFlagged reproduces issue #1130: a
+// permission-gated Edit that is legitimately executing (not blocked on a
+// prompt) must not be flagged OpenToolStalled just because it runs longer than
+// the 5s poll cadence. The fixture pins the real timings from the report: the
+// Edit opens at T+0, is still open when a stale-refresh re-reads it at T+11s,
+// and completes successfully (tool_result, is_error unset) at T+16.2s. Across
+// that whole span nothing is ever flagged, so ClassifyState never routes to
+// waiting.
+//
+// The paired positive case confirms the #488 fallback is intact: an edit that
+// stays open past stalledEditToolThreshold with no result still flags.
+func TestMarkStalledEditTool_SlowEditNotFlagged(t *testing.T) {
+	editOpen := func() *session.SessionMetrics {
+		return &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Edit"}}
+	}
+
+	t.Run("slow-but-executing edit never flags across its lifetime", func(t *testing.T) {
+		d := &SessionDetector{editToolOpenSince: map[string]int64{}}
+		const start = int64(0)
+
+		// T+0: tool_use observed, the open-since window is recorded.
+		m0 := editOpen()
+		d.markStalledEditTool("s", m0, start)
+		assertOpenToolStalled(t, m0, false)
+
+		// T+11s: a stale-refresh re-reads the still-open edit. This is the
+		// exact instant the daemon misfired in the report; it must not flag.
+		m11 := editOpen()
+		d.markStalledEditTool("s", m11, start+11)
+		assertOpenToolStalled(t, m11, false)
+
+		// T+16.2s (17s whole): tool_result lands (is_error unset), the tool
+		// closes. Still under threshold and now resolved, so the window clears
+		// and nothing was ever flagged.
+		m16 := &session.SessionMetrics{HasOpenToolCall: false}
+		d.markStalledEditTool("s", m16, start+17)
+		assertOpenToolStalled(t, m16, false)
+		assertOpenSinceCleared(t, d, "s")
+	})
+
+	t.Run("genuinely stalled edit past threshold still flags (#488)", func(t *testing.T) {
+		threshold := int64(stalledEditToolThreshold.Seconds())
+		d := &SessionDetector{editToolOpenSince: map[string]int64{"s": 0}}
+		m := editOpen()
+		d.markStalledEditTool("s", m, threshold) // open past the window, no tool_result
+		assertOpenToolStalled(t, m, true)
+	})
 }
