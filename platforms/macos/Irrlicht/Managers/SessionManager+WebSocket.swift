@@ -311,10 +311,19 @@ extension SessionManager {
     // the notifications that depend on them (ready/waiting sounds and banners)
     // still fire synchronously at message time; only context-pressure alerts —
     // which ride `rebuildSessionsFromMap` — are deferred, by at most one window.
+    //
+    // The window is visibility-tiered: `orderOut` keeps the hosting view
+    // attached, so each flush re-lays out the whole list even off screen —
+    // at the visible cadence that alone was ~10% CPU with the panel closed.
+    // Hidden flushes ride `uiRefreshHiddenInterval` instead, which keeps the
+    // hidden-time consumers (menu-bar quota bars, context-pressure alerts,
+    // debug-state file) fresh within that window; `setPanelVisible(true)`
+    // flushes on open so the visible list never starts stale.
 
     /// Queue a session for the next coalesced UI refresh. `immediate` bypasses
     /// the window (used for state transitions, which are rare and want to feel
-    /// instant); the metric-tick storm always coalesces.
+    /// instant); the metric-tick storm always coalesces. The window widens
+    /// while the panel is hidden — see `uiRefreshHiddenInterval`.
     func enqueueUIRefresh(for sessionID: String, immediate: Bool) {
         pendingDirtySessionIDs.insert(sessionID)
         if immediate {
@@ -323,9 +332,31 @@ extension SessionManager {
         }
         guard !uiRefreshScheduled else { return }
         uiRefreshScheduled = true
-        Timer.scheduledTimer(withTimeInterval: uiRefreshInterval, repeats: false) { [weak self] _ in
+        uiRefreshTimer = Timer.scheduledTimer(
+            withTimeInterval: currentUIRefreshWindow, repeats: false
+        ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.flushUIRefresh() }
         }
+    }
+
+    /// The coalescing window for the panel's current visibility.
+    var currentUIRefreshWindow: TimeInterval {
+        isPanelVisible ? uiRefreshInterval : uiRefreshHiddenInterval
+    }
+
+    /// MenuBarController reports panel show/hide here. Showing cancels any
+    /// pending hidden-window timer and flushes synchronously, so the list the
+    /// user sees on open is current — the caller lays out the hosting view
+    /// right after this returns. Hiding just flips the flag; a fast timer
+    /// already in flight fires once more, then subsequent ticks coalesce on
+    /// the hidden window.
+    func setPanelVisible(_ visible: Bool) {
+        isPanelVisible = visible
+        guard visible else { return }
+        uiRefreshTimer?.invalidate()
+        uiRefreshTimer = nil
+        uiRefreshScheduled = false
+        flushUIRefresh()
     }
 
     /// Apply all pending session updates in one pass: a single flat-surface
@@ -333,6 +364,8 @@ extension SessionManager {
     /// one synchronous turn, so SwiftUI coalesces them into a single render.
     func flushUIRefresh() {
         uiRefreshScheduled = false
+        uiRefreshTimer?.invalidate()
+        uiRefreshTimer = nil
         guard !pendingDirtySessionIDs.isEmpty else { return }
         let dirty = pendingDirtySessionIDs
         pendingDirtySessionIDs.removeAll()

@@ -161,8 +161,24 @@ class SessionManager: ObservableObject {
     var pendingDirtySessionIDs = Set<String>()
     /// True while a trailing flush is already scheduled (dedupes timers).
     var uiRefreshScheduled = false
-    /// Refresh window. Injectable so tests can flush deterministically.
+    /// The scheduled trailing flush, kept so showing the panel can cancel a
+    /// pending hidden-window timer and flush immediately instead.
+    var uiRefreshTimer: Timer?
+    /// Refresh window while the panel is visible. Injectable so tests can
+    /// flush deterministically.
     var uiRefreshInterval: TimeInterval = 0.1
+    /// Refresh window while the panel is hidden. The hosting view stays
+    /// attached when the panel is ordered out, so every flush still re-lays
+    /// out the whole SwiftUI session list — at the visible cadence that
+    /// burned ~10% CPU with the panel closed whenever any agent was working.
+    /// The slow window keeps the consumers that matter while hidden — the
+    /// menu-bar quota bars, context-pressure alerts, and the debug-state
+    /// file — fresh at negligible cost; `setPanelVisible(true)` flushes
+    /// immediately so opening the panel never shows stale rows.
+    var uiRefreshHiddenInterval: TimeInterval = 2.0
+    /// Whether the menu-bar panel is currently on screen — flipped by
+    /// MenuBarController on show/hide. Starts hidden, matching the panel.
+    var isPanelVisible = false
     /// Count of coalesced flushes performed — test seam proving a burst of N
     /// pushes collapses into far fewer renders.
     var uiRefreshFlushCount = 0
