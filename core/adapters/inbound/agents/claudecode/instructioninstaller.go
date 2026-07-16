@@ -140,6 +140,19 @@ const (
 // Claude Code strips bare HTML comments from CLAUDE.md at injection time. The
 // daemon always falls back to compacting the raw last-assistant text, so the
 // marker is a refinement, not a requirement.
+//
+// v2 (#1142): the v1 guidance ("plain prose, under ~70 chars") produced
+// context-free headlines — the raw question with no hint of what task it
+// belongs to, cryptic to anyone scanning sessions. v2 asks for a
+// context → state → ask structure with good/bad examples, and relaxes the
+// hard ~70 cap to a soft ~90. That fuller headline survives to the UI: the
+// daemon-side compaction caps at 200 runes (not 70) since #979, and
+// ExtractQuestionSnippet keeps a single such sentence whole — the em-dash,
+// semicolon and colon separators used in the examples are not sentence
+// terminators (verified against core/domain/session's splitter). Only the
+// example placeholder and prose change; the marker key and sentinels are
+// untouched, so patchManagedBlock upgrades installed v1 blocks in place on
+// the next daemon start.
 const managedTaskQuestionBlock = taskQuestionBeginSentinel + `
 ## Pending-question marker (managed by Irrlicht)
 
@@ -147,11 +160,20 @@ When you end your turn by asking the user a question, also emit a hidden
 one-line version of that question so tools can show a terse headline:
 
 ` + "```" + `
-<!-- {"marker":"irrlicht-question","question":"<the question, ~70 chars>"} -->
+<!-- {"marker":"irrlicht-question","question":"<topic — what happened — the choice>"} -->
 ` + "```" + `
 
 Emit it on its own line at the very end of your response, only when you are
-actually waiting on the user. Keep it under ~70 characters, plain prose.
+actually waiting on the user.
+
+Structure the headline so someone who never saw the session understands it:
+lead with the topic, then what just happened, then the choice — context,
+then state, then the ask. Keep it high-signal; aim for ~90 characters, and
+when clarity and brevity conflict, choose clarity.
+
+- Bad "Should I proceed?" → Good "DB migration ready; drops users.legacy_id — run it or keep the column?"
+- Bad "Which approach?" → Good "Auth refactor: 2 endpoints still untested — ship now or add tests first?"
+- Bad "Yes or no?" → Good "PR #482 review: 1 blocking finding left — fix now or merge and follow up?"
 ` + taskQuestionEndSentinel
 
 // claudeMemoryPath returns the user-level Claude Code instruction file path.

@@ -429,6 +429,28 @@ func TestEnsureTaskQuestionBlock_CreatesFileIfAbsent(t *testing.T) {
 	}
 }
 
+// TestTaskQuestionBlock_DocumentsStructureAndExamples guards issue #1142: the
+// pending-question guidance must teach the context → state → ask structure and
+// carry good/bad examples, not just say "plain prose, ~70 chars". Assert on the
+// structural contract (the deliverable), tolerant of later wording tweaks to
+// the examples themselves.
+func TestTaskQuestionBlock_DocumentsStructureAndExamples(t *testing.T) {
+	for _, want := range []string{
+		"context",      // names the three-part structure...
+		"then the ask", // ...in order
+		"Bad ",         // carries labelled bad/good example pairs
+		"Good ",
+	} {
+		if !strings.Contains(managedTaskQuestionBlock, want) {
+			t.Errorf("task-question block missing %q — issue #1142 structure/examples regressed", want)
+		}
+	}
+	// The cap moved from a hard ~70 to a soft ~90; the old absolute rule must be gone.
+	if strings.Contains(managedTaskQuestionBlock, "under ~70 characters") {
+		t.Error("task-question block still carries the old hard ~70-char rule (issue #1142 relaxed it to ~90)")
+	}
+}
+
 func TestApplyInstructionBlocks_InstallsAllAndCoexist(t *testing.T) {
 	home := withTempHome(t)
 	if err := applyInstructionBlocks(); err != nil {
