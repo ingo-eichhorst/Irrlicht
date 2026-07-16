@@ -7,10 +7,10 @@
   (`.claude/skills/ir:exec/SKILL.md`) for what each mode does.
 - NEVER RUN: the Workflow tool (multi-agent orchestration) if not explicitly requested (too expensive)
 
-Worktrees share the parent repo's `.git` dir, so **`git stash` is not
-isolated per worktree** — it's a single shared stack. Concurrent agents
-stashing in different worktrees can pop each other's WIP. Use a local
-commit as a checkpoint instead (`git commit -m wip`, amend/reset later).
+## Process Rules
+
+Worktrees share the parent repo's `.git` dir, so **`git stash` is not isolated per worktree** — it's a single shared stack. Concurrent agents stashing in different worktrees can pop each other's WIP. Use a local commit as a checkpoint instead (`git commit -m wip`, amend/reset later).
+When encountering suboptimal processes or issues make improvment suggestions in you final answer to the user.
 
 ## Build Artifacts
 
