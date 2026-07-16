@@ -223,6 +223,7 @@ this guards against). The diff exists as soon as Phase 4 is done; measure it
 cheaply first:
 
 ```bash
+git fetch origin main                     # refresh origin/main first; steps 13–14 diff against it, not stale local main
 git diff --shortstat origin/main...HEAD   # files + lines; origin/main, not local (stale-ref footgun)
 ```
 
@@ -250,12 +251,19 @@ human-triggered.
     End the PR body with the `🤖 Generated with [Claude Code]` line.
 13. **Review the diff** at the **calibrated effort** (`low` for trivial/small,
     up to `high` for large/risky — never `ultra`/Workflow). Run the
-    `/code-review` skill on the local diff, then fix every finding it surfaces
+    `/code-review` skill with the **explicit base** `origin/main...HEAD` (e.g.
+    `/code-review low origin/main...HEAD`), then fix every finding it surfaces
     in the worktree and push the fixes. A single review pass, not a fan-out.
+    Pass the base explicitly because in this worktree *both* of the skill's own
+    defaults mislead: the local `main` ref is stale (never updated when other
+    PRs merge, so `main...HEAD` drags in already-merged hunks) and after step
+    12's `git push -u`, `@{upstream}...HEAD` is ~empty (upstream now points at
+    the pushed branch, so it reviews nothing).
 14. **Simplify per the tier.** For **Medium/Large** diffs run the `/simplify`
-    skill; for **Trivial/Small** diffs skip its 4-agent fan-out and do the
-    reuse/simplification/efficiency/altitude review inline, stating what you
-    checked. Push any cleanup.
+    skill with the same explicit base (`/simplify origin/main...HEAD`, for the
+    reason in step 13); for **Trivial/Small** diffs skip its 4-agent fan-out
+    and do the reuse/simplification/efficiency/altitude review inline, stating
+    what you checked. Push any cleanup.
 
 ## Phase 6 — Hand back
 
