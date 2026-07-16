@@ -1081,7 +1081,9 @@ git reset --hard origin/main
 PR_NUMBER=$(cat /tmp/irrlicht-release-pr.num 2>/dev/null)
 [ -z "$PR_NUMBER" ] && PR_NUMBER=$(gh pr view "release/v$NEW_VERSION" --json number --jq '.number')
 RELEASE_SHA=$(gh pr view "$PR_NUMBER" --json mergeCommit --jq '.mergeCommit.oid')
-if [ -z "$RELEASE_SHA" ]; then
+# Empty OR the literal "null" (gh's jq emits null when mergeCommit isn't
+# populated yet — e.g. API lag right after 7b-merge) both mean "not resolved".
+if [ -z "$RELEASE_SHA" ] || [ "$RELEASE_SHA" = "null" ]; then
   echo "FAIL: could not resolve the squash-merge commit for PR #$PR_NUMBER (did 7b-merge complete?)."
   exit 1
 fi
