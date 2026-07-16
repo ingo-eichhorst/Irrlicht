@@ -173,7 +173,8 @@ for tree in "${WEB_TREES[@]}"; do
   # from a scan error: a completed audit carries a `.metadata.vulnerabilities`
   # block; a failed audit has no metadata and instead carries an
   # `.error`/`.message` payload.
-  na_json=$( cd "$tree" && npm audit --json 2>/dev/null )
+  na_err=$(mktemp)
+  na_json=$( cd "$tree" && npm audit --json 2>"$na_err" )
   if echo "$na_json" | jq -e '.metadata.vulnerabilities' >/dev/null 2>&1; then
     hc=$(echo "$na_json" | jq '(.metadata.vulnerabilities.high // 0) + (.metadata.vulnerabilities.critical // 0)')
     if [[ "$hc" -gt 0 ]]; then
@@ -185,10 +186,14 @@ for tree in "${WEB_TREES[@]}"; do
   else
     # No metadata block: the audit never completed. A silently-skipped scan is
     # indistinguishable from a clean one, so this is a hard failure — but named
-    # accurately (registry/network) rather than misreported as an advisory.
+    # for the real cause rather than misreported as an advisory. Prefer the
+    # JSON error payload; fall back to npm's stderr when the report is empty
+    # (e.g. the tree is missing or npm errored before emitting JSON).
     na_msg=$(echo "$na_json" | jq -r '.message // .error.summary // .error.detail // empty' 2>/dev/null)
-    fail "npm audit: $tree — audit could not run (registry unreachable / network failure): ${na_msg:-no error detail} — re-run; this is NOT a vulnerability finding"
+    [[ -z "$na_msg" ]] && na_msg=$(tr '\n' ' ' <"$na_err" | sed 's/  */ /g; s/^ *//; s/ *$//')
+    fail "npm audit: $tree — audit could not run (could not reach the npm registry, or the audit errored): ${na_msg:-no detail available} — re-run; this is NOT a vulnerability finding"
   fi
+  rm -f "$na_err"
 done
 
 echo
