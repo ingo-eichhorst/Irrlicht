@@ -4,6 +4,7 @@ use (
 	./core
 	./tools/eta-research
 	./tools/onboarding-factory
+	./tools/otel-spike
 	./tools/seed-demo-sessions
 	./tools/starhistory
 	./tools/wsload

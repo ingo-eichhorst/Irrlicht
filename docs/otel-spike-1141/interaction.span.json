@@ -1,0 +1,91 @@
+{
+  "traceId": "df605895eb51206cd4cf83cb235cdd0b",
+  "spanId": "a314b66fb9473aed",
+  "name": "claude_code.interaction",
+  "kind": 1,
+  "startTimeUnixNano": "1784204657987000000",
+  "endTimeUnixNano": "1784204671263757125",
+  "attributes": [
+    {
+      "key": "user.id",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "session.id",
+      "value": {
+        "stringValue": "34e3bc12-5e26-4082-b119-092f05060307"
+      }
+    },
+    {
+      "key": "organization.id",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "user.email",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "user.account_uuid",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "user.account_id",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "terminal.type",
+      "value": {
+        "stringValue": "tmux"
+      }
+    },
+    {
+      "key": "span.type",
+      "value": {
+        "stringValue": "interaction"
+      }
+    },
+    {
+      "key": "user_prompt",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "user_prompt_length",
+      "value": {
+        "intValue": 57
+      }
+    },
+    {
+      "key": "interaction.sequence",
+      "value": {
+        "intValue": 2
+      }
+    },
+    {
+      "key": "interaction.duration_ms",
+      "value": {
+        "intValue": 13276
+      }
+    }
+  ],
+  "droppedAttributesCount": 0,
+  "events": [],
+  "droppedEventsCount": 0,
+  "status": {
+    "code": 0
+  },
+  "links": [],
+  "droppedLinksCount": 0,
+  "flags": 257
+}

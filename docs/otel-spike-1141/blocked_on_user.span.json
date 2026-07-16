@@ -1,0 +1,86 @@
+{
+  "traceId": "df605895eb51206cd4cf83cb235cdd0b",
+  "spanId": "06cf12e679151d82",
+  "parentSpanId": "fff18c18117dc306",
+  "name": "claude_code.tool.blocked_on_user",
+  "kind": 1,
+  "startTimeUnixNano": "1784204661591000000",
+  "endTimeUnixNano": "1784204668057209041",
+  "attributes": [
+    {
+      "key": "user.id",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "session.id",
+      "value": {
+        "stringValue": "34e3bc12-5e26-4082-b119-092f05060307"
+      }
+    },
+    {
+      "key": "organization.id",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "user.email",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "user.account_uuid",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "user.account_id",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "terminal.type",
+      "value": {
+        "stringValue": "tmux"
+      }
+    },
+    {
+      "key": "span.type",
+      "value": {
+        "stringValue": "tool.blocked_on_user"
+      }
+    },
+    {
+      "key": "duration_ms",
+      "value": {
+        "intValue": 6466
+      }
+    },
+    {
+      "key": "decision",
+      "value": {
+        "stringValue": "accept"
+      }
+    },
+    {
+      "key": "source",
+      "value": {
+        "stringValue": "user_temporary"
+      }
+    }
+  ],
+  "droppedAttributesCount": 0,
+  "events": [],
+  "droppedEventsCount": 0,
+  "status": {
+    "code": 0
+  },
+  "links": [],
+  "droppedLinksCount": 0,
+  "flags": 257
+}

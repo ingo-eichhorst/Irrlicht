@@ -1,0 +1,103 @@
+{
+  "timeUnixNano": "1784204668056000000",
+  "observedTimeUnixNano": "1784204668056000000",
+  "body": {
+    "stringValue": "claude_code.tool_decision"
+  },
+  "attributes": [
+    {
+      "key": "user.id",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "session.id",
+      "value": {
+        "stringValue": "34e3bc12-5e26-4082-b119-092f05060307"
+      }
+    },
+    {
+      "key": "organization.id",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "user.email",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "user.account_uuid",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "user.account_id",
+      "value": {
+        "stringValue": "<REDACTED>"
+      }
+    },
+    {
+      "key": "terminal.type",
+      "value": {
+        "stringValue": "tmux"
+      }
+    },
+    {
+      "key": "event.name",
+      "value": {
+        "stringValue": "tool_decision"
+      }
+    },
+    {
+      "key": "event.timestamp",
+      "value": {
+        "stringValue": "2026-07-16T12:24:28.056Z"
+      }
+    },
+    {
+      "key": "event.sequence",
+      "value": {
+        "intValue": 37
+      }
+    },
+    {
+      "key": "prompt.id",
+      "value": {
+        "stringValue": "add56d23-52b2-4ca7-9942-df76c1506581"
+      }
+    },
+    {
+      "key": "decision",
+      "value": {
+        "stringValue": "accept"
+      }
+    },
+    {
+      "key": "source",
+      "value": {
+        "stringValue": "user_temporary"
+      }
+    },
+    {
+      "key": "tool_name",
+      "value": {
+        "stringValue": "Bash"
+      }
+    },
+    {
+      "key": "tool_use_id",
+      "value": {
+        "stringValue": "toolu_016MeTE6z8nPoGgzupmm612r"
+      }
+    }
+  ],
+  "droppedAttributesCount": 0,
+  "flags": 1,
+  "traceId": "df605895eb51206cd4cf83cb235cdd0b",
+  "spanId": "06cf12e679151d82"
+}
