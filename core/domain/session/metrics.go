@@ -264,10 +264,12 @@ type SessionMetrics struct {
 
 	// OpenToolStalled is a transient, live-only signal set by the detector
 	// when a permission-gated file-edit tool (Edit/Write/MultiEdit/
-	// NotebookEdit) has stayed open with no transcript progress long enough
+	// NotebookEdit) has stayed open long enough (stalledEditToolThreshold)
 	// that the agent is almost certainly blocked on a permission prompt
-	// rather than mid-execution (those tools complete near-instantly). It is
-	// the transcript-based fallback for permission detection when the
+	// rather than mid-execution. Those tools are usually fast, but a minority
+	// run long (a ~16s tail has been observed), so the threshold is set well
+	// past that tail to avoid flagging a slow-but-executing edit (#1130). It
+	// is the transcript-based fallback for permission detection when the
 	// curl-delivered PermissionRequest hook can't reach the daemon (#488).
 	// Like HasLiveBackgroundProcess it is wall-clock derived and never set
 	// under replay. Read by ClassifyState.
@@ -417,11 +419,13 @@ func isUserBlockingTool(name string) bool {
 
 // HasOpenEditPermissionTool reports whether an open tool call is a
 // permission-gated file-edit tool (Edit/Write/MultiEdit/NotebookEdit). These
-// run in-process and complete near-instantly, so an open one that lingers is
-// a strong signal the agent is blocked on a permission prompt — the basis for
-// the OpenToolStalled fallback (#488). Bash/WebFetch/MCP are deliberately
-// excluded: they can legitimately run for seconds, so duration alone can't
-// distinguish "blocked" from "executing" for them (they rely on the hook).
+// are usually fast, and while a minority run long their duration tail is
+// bounded (~16s observed), so an open one that has lingered well past that
+// tail (stalledEditToolThreshold) is a reasonable signal the agent is blocked
+// on a permission prompt — the basis for the OpenToolStalled fallback (#488,
+// #1130). Bash/WebFetch/MCP are deliberately excluded: they can run for
+// minutes, so no fixed duration distinguishes "blocked" from "executing" for
+// them (they rely on the hook).
 func (m *SessionMetrics) HasOpenEditPermissionTool() bool {
 	if m == nil || !m.HasOpenToolCall {
 		return false

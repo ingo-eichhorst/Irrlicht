@@ -41,6 +41,25 @@ const activityDebounceWindow = 2 * time.Second
 // transcript on this interval catches the missed events.
 const staleWorkingRefreshInterval = 5 * time.Second
 
+// stalledEditToolThreshold is how long a permission-gated file-edit tool
+// (Edit/Write/MultiEdit/NotebookEdit) may stay open before the detector treats
+// it as a held permission prompt and sets OpenToolStalled — the transcript
+// -based fallback for when the PermissionRequest hook can't reach the daemon
+// (#488, ClassifyState rule 1b).
+//
+// It is deliberately NOT staleWorkingRefreshInterval. That constant is a
+// polling cadence (how often a lingering working session is re-read); reusing
+// it as the "a human is looking at a prompt" threshold conflated two unrelated
+// quantities. Edit tools are usually near-instant (observed median ~0.1s, mean
+// ~1.4s), but a real minority run long — legitimately-executing, prompt-free
+// edits of 14–16s have been observed — so a 5s gate sat inside that tail and
+// mislabelled slow-but-progressing edits as stalled, flickering
+// working→waiting→working (#1130). 30s clears the observed tail with margin
+// while still catching a genuinely held prompt, which stays open until the
+// user answers. The window is tracked from first observation, so a fresh
+// tool_use is never flagged on the spot.
+const stalledEditToolThreshold = 30 * time.Second
+
 // maxIdleProjectResolveAttempts bounds how many refreshStaleSessions ticks
 // retry CWD/project resolution for an idle (waiting/ready) session whose
 // ProjectName never resolved — e.g. mistral-vibe's meta.json sidecar hadn't

@@ -1191,18 +1191,24 @@ func (d *SessionDetector) purgeDeadBackgroundProcesses(result backgroundProbeRes
 
 // markStalledEditTool maintains the per-session editToolOpenSince window and
 // sets metrics.OpenToolStalled when a permission-gated edit tool
-// (Edit/Write/MultiEdit/NotebookEdit) has been open past the stale-refresh
-// interval — the transcript-based fallback for a held permission prompt when
-// the curl-delivered PermissionRequest hook can't reach the daemon (#488).
+// (Edit/Write/MultiEdit/NotebookEdit) has been open past
+// stalledEditToolThreshold — the transcript-based fallback for a held
+// permission prompt when the curl-delivered PermissionRequest hook can't
+// reach the daemon (#488).
 //
-// Those tools run in-process and complete near-instantly, so one still open
-// after the window means the agent is blocked on the prompt, not executing.
-// The window is tracked from first observation (not state.UpdatedAt), so a
-// fresh tool_use write is never flagged on the spot — only the 5s
-// refreshStaleSessions re-evaluation of a lingering open tool is, which also
-// lets a held prompt flip without any new transcript write. The flag is
-// redundant once PermissionPending fired (the classifier prefers the hook),
-// so it is skipped then. now is injected for testability.
+// Those tools are usually near-instant, but a real minority run long
+// (observed median ~0.1s, mean ~1.4s, with a tail up to ~16s), and a slow
+// edit that is still executing is not blocked on a prompt — so "open past the
+// 5s poll cadence" is not a safe stalled signal (#1130). The flag therefore
+// fires only after stalledEditToolThreshold, which is decoupled from
+// staleWorkingRefreshInterval and set well past the observed tail; a genuinely
+// held prompt stays open indefinitely and still trips it. The window is
+// tracked from first observation (not state.UpdatedAt), so a fresh tool_use
+// write is never flagged on the spot — only a later refreshStaleSessions
+// re-evaluation of a lingering open tool is, which also lets a held prompt
+// flip without any new transcript write. The flag is redundant once
+// PermissionPending fired (the classifier prefers the hook), so it is skipped
+// then. now is injected for testability.
 // applyCompactHold maintains the PreCompact force-working hold (#657) for one
 // session. While a manual /compact is in flight the transcript receives no
 // writes, so this overlays CompactInProgress to keep the session in working
@@ -1249,7 +1255,7 @@ func (d *SessionDetector) markStalledEditTool(sessionID string, m *session.Sessi
 		since = now
 		d.editToolOpenSince[sessionID] = since
 	}
-	if !m.PermissionPending && now-since >= int64(staleWorkingRefreshInterval.Seconds()) {
+	if !m.PermissionPending && now-since >= int64(stalledEditToolThreshold.Seconds()) {
 		m.OpenToolStalled = true
 	}
 }
