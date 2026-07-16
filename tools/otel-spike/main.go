@@ -251,5 +251,5 @@ func shortNano(nano string) string {
 	return time.Unix(0, n).Format("15:04:05.000")
 }
 
-func now() string           { return time.Now().Format("15:04:05.000") }
+func now() string           { return ts(time.Now()) }
 func ts(t time.Time) string { return t.Format("15:04:05.000") }
