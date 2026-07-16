@@ -235,3 +235,38 @@ func TestIsWaitingForUserInput_ImperativeCues(t *testing.T) {
 	}
 	runBoolCueCases(t, cases, isWaitingForUserInput)
 }
+
+// TestIsWaitingForUserInput_PendingQuestionMarker pins issue #1138: an explicit
+// agent-authored irrlicht-question marker must register as waiting even when the
+// (tail-truncated) LastAssistantText carries no question or cue — the real
+// question sat earlier in a long final message and never reached the prose
+// heuristic. The marker is the authoritative signal.
+func TestIsWaitingForUserInput_PendingQuestionMarker(t *testing.T) {
+	// The 71f27332 shape: the visible tail is a declarative sentence, so the
+	// prose heuristic alone returns false — only the marker flips it to waiting.
+	declarativeTail := "I can stand up the throwaway OTLP sink and drive a real claudecode session through a permission prompt via tmux to capture the payload and measure its latency."
+
+	t.Run("marker set with declarative tail → waiting", func(t *testing.T) {
+		m := &SessionMetrics{LastAssistantText: declarativeTail, PendingQuestionMarker: true}
+		if !m.IsWaitingForUserInput() {
+			t.Error("IsWaitingForUserInput() = false, want true when PendingQuestionMarker is set")
+		}
+	})
+
+	t.Run("sanity: same tail without the marker → not waiting", func(t *testing.T) {
+		m := &SessionMetrics{LastAssistantText: declarativeTail}
+		if m.IsWaitingForUserInput() {
+			t.Error("IsWaitingForUserInput() = true, want false for a declarative tail with no marker (guards against the marker path masking a prose regression)")
+		}
+	})
+
+	t.Run("QuestionHeadline populated but no marker → not waiting", func(t *testing.T) {
+		// QuestionHeadline falls back to LastAssistantText, so it is set on
+		// nearly every turn; it must NOT by itself imply waiting. Only
+		// PendingQuestionMarker (the real marker) does.
+		m := &SessionMetrics{LastAssistantText: declarativeTail, QuestionHeadline: "some compacted headline"}
+		if m.IsWaitingForUserInput() {
+			t.Error("IsWaitingForUserInput() = true, want false — QuestionHeadline must not force waiting without a real marker")
+		}
+	})
+}

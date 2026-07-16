@@ -208,6 +208,18 @@ type SessionMetrics struct {
 	// LastAssistantText is the tooltip. Empty when there is no question source.
 	QuestionHeadline string `json:"question_headline,omitempty"`
 
+	// PendingQuestionMarker is true when the agent emitted an explicit in-band
+	// irrlicht-question marker in its latest turn (issue #1138). Unlike
+	// QuestionHeadline — whose source falls back to LastAssistantText and is
+	// therefore populated on nearly every turn — this is set only from the
+	// deliberate, agent-authored marker, so it is a trustworthy "the agent is
+	// blocked on the user" signal for state classification. It is the fix for
+	// the failure mode where the real question sits earlier in a long final
+	// message and the prose heuristic (which only sees the tail-truncated
+	// LastAssistantText) misses it. Recomputed fresh each pass by the
+	// tailer→domain conversion, so it is transient and not persisted.
+	PendingQuestionMarker bool `json:"-"`
+
 	// PermissionMode is the session's permission mode from the JSONL.
 	// Verified on-disk census across 320 local Claude Code transcripts
 	// (v2.1.210, 2026-07-15): "auto" 5000, "plan" 331, "default" 8,
@@ -545,6 +557,7 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 		TaskSummary:              newM.TaskSummary,
 		IntentHeadline:           newM.IntentHeadline,
 		QuestionHeadline:         newM.QuestionHeadline,
+		PendingQuestionMarker:    newM.PendingQuestionMarker,
 		PermissionMode:           newM.PermissionMode,
 		SubagentCompletions:      newM.SubagentCompletions,
 		AppliedTaskDeltas:        newM.AppliedTaskDeltas,

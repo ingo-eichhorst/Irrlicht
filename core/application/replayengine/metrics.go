@@ -144,6 +144,12 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 	}
 	if m.TaskQuestion != nil && m.TaskQuestion.Text != "" {
 		questionSource = m.TaskQuestion.Text
+		// Only the deliberate irrlicht-question marker feeds the waiting-state
+		// classifier (issue #1138) — not the away_summary recap (a passive
+		// "here's what I was doing" note, not necessarily a question) and not
+		// the LastAssistantText fallback (populated on nearly every turn). See
+		// SessionMetrics.PendingQuestionMarker / IsWaitingForUserInput.
+		result.PendingQuestionMarker = true
 	}
 	result.QuestionHeadline = mc.compact(questionSource, outbound.CompactQuestion)
 	return result

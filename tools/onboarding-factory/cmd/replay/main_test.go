@@ -472,6 +472,70 @@ func TestReplay_Issue150_AskUserQuestion(t *testing.T) {
 	}
 }
 
+// TestReplay_Issue1138_QuestionMarkerWaiting is the end-to-end regression for
+// issue #1138, reproducing the real 71f27332 session: a turn ends asking the
+// user a question, but the visible question sits EARLY in a long final message
+// while the tail (which is all LastAssistantText keeps — 200 runes) is a
+// declarative sentence plus the hidden irrlicht-question marker. Before the fix
+// the prose heuristic saw no question in the tail and the session went straight
+// to ready; after it, the parsed marker (PendingQuestionMarker) routes the
+// finished turn to waiting.
+//
+// Modeled inline rather than as a replaydata cell on purpose: the fix lives in
+// the tailer→domain conversion + classifier, and a full recording cell (manifest
+// + events.jsonl goldens + `of validate`) would be disproportionate ceremony for
+// a pure state-classification guard.
+func TestReplay_Issue1138_QuestionMarkerWaiting(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "session.jsonl")
+
+	// Assistant turn: the real question ("Want me to run the spike now?") is far
+	// enough from the end that it falls outside the 200-rune LastAssistantText
+	// tail; the tail is the declarative sentence + the marker comment (whose own
+	// trailing '?' is inside `"} -->` and is not a catchable sentence question).
+	transcriptBody := `{"type":"user","timestamp":"2026-04-11T10:00:00Z","message":{"role":"user","content":"Should we run the OTel blocked_on_user spike?"}}
+{"type":"assistant","timestamp":"2026-04-11T10:00:01Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"Here is my read on the OTel blocked_on_user spike, weighed against the recommendation already written up in the design doc. Want me to run the spike now? I can stand up the throwaway OTLP collector sink locally and drive a real claudecode session through a permission prompt via tmux to capture the blocked_on_user payload end to end and measure its wall-clock latency.\n\n<!-- {\"marker\":\"irrlicht-question\",\"question\":\"Run the OTel blocked_on_user spike now, or just keep the recommendation?\"} -->"}]}}
+{"type":"system","subtype":"turn_duration","timestamp":"2026-04-11T10:00:02Z"}
+`
+	if err := os.WriteFile(transcript, []byte(transcriptBody), 0644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	report, err := replay(transcript, reportSettings{
+		Adapter:            claudecode.AdapterName,
+		DebounceWindow:     2 * time.Second,
+		FlickerMaxDuration: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+
+	waitingIdx := -1
+	for i := range report.Transitions {
+		if report.Transitions[i].NewState == session.StateWaiting {
+			waitingIdx = i
+		}
+	}
+	if waitingIdx < 0 {
+		t.Fatalf("no transition to waiting; the finished question turn was not detected as waiting. transitions: %+v", report.Transitions)
+	}
+	waiting := report.Transitions[waitingIdx]
+	// The transcript has no open/blocking tool, so the ONLY route to waiting is
+	// classifyAgentDone's question path — and with a declarative tail, the prose
+	// heuristic sees no question, so the parsed irrlicht-question marker is what
+	// flips it. Assert that exact route: turn done + the question-waiting reason.
+	if !waiting.IsAgentDone {
+		t.Errorf("waiting transition IsAgentDone = false, want true (should be the turn-done question route)")
+	}
+	const wantReason = "turn ended with question or cue → waiting"
+	if waiting.Reason != wantReason {
+		t.Errorf("waiting transition reason = %q, want %q (the agent-done question route, which only fires here via the marker)", waiting.Reason, wantReason)
+	}
+	if waiting.NeedsAttn {
+		t.Errorf("waiting transition NeedsAttn = true, want false — reached waiting via a blocking tool, not the question marker")
+	}
+}
+
 func TestDetectAdapter(t *testing.T) {
 	cases := []struct {
 		name string

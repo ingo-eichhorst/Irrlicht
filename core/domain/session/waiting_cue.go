@@ -38,6 +38,16 @@ func (m *SessionMetrics) IsWaitingForUserInput() bool {
 	if m == nil {
 		return false
 	}
+	// An explicit agent-authored irrlicht-question marker is the most
+	// trustworthy "blocked on the user" signal — more so than the prose
+	// heuristics below, which only see the tail-truncated LastAssistantText and
+	// miss a question that sits earlier in a long final message (issue #1138).
+	// It is set (in the tailer→domain conversion) only from the deliberate
+	// marker, never from the LastAssistantText fallback, so it can't false-fire
+	// on an ordinary turn.
+	if m.PendingQuestionMarker {
+		return true
+	}
 	if ExtractQuestionSnippet(m.LastAssistantText) != "" {
 		return true
 	}

@@ -112,6 +112,47 @@ func TestConvert_QuestionHeadline_MarkerWinsOverAwaySummary(t *testing.T) {
 	}
 }
 
+// TestConvert_PendingQuestionMarker pins issue #1138: only the deliberate
+// irrlicht-question marker sets PendingQuestionMarker (the waiting-state
+// classifier's authoritative signal). The away_summary recap and the
+// LastAssistantText fallback — both of which can populate QuestionHeadline —
+// must NOT set it, or nearly every finished turn would read as waiting.
+func TestConvert_PendingQuestionMarker(t *testing.T) {
+	t.Run("marker present → set", func(t *testing.T) {
+		m := &tailer.SessionMetrics{
+			LastAssistantText: "a declarative status line with no question",
+			TaskQuestion:      &tailer.TaskQuestion{Text: "run the migration?", ObservedAt: 100},
+		}
+		if got := TailerToDomain(m); !got.PendingQuestionMarker {
+			t.Error("PendingQuestionMarker = false, want true when a TaskQuestion marker is present")
+		}
+	})
+
+	t.Run("only last-assistant text → not set", func(t *testing.T) {
+		m := &tailer.SessionMetrics{LastAssistantText: "should I proceed?"}
+		if got := TailerToDomain(m); got.PendingQuestionMarker {
+			t.Error("PendingQuestionMarker = true, want false — the LastAssistantText fallback must not set it")
+		}
+	})
+
+	t.Run("only away_summary → not set", func(t *testing.T) {
+		m := &tailer.SessionMetrics{
+			LastAssistantText: "a raw status line",
+			AwaySummary:       &tailer.AwaySummary{Text: "Goal was X. Next: merge or wait?", ObservedAt: 100},
+		}
+		if got := TailerToDomain(m); got.PendingQuestionMarker {
+			t.Error("PendingQuestionMarker = true, want false — the away_summary recap is not an authoritative question signal")
+		}
+	})
+
+	t.Run("empty marker text → not set", func(t *testing.T) {
+		m := &tailer.SessionMetrics{TaskQuestion: &tailer.TaskQuestion{Text: "", ObservedAt: 100}}
+		if got := TailerToDomain(m); got.PendingQuestionMarker {
+			t.Error("PendingQuestionMarker = true, want false for an empty marker")
+		}
+	})
+}
+
 func TestTailerToDomain_NilCompactor_HeadlinesAreIdentity(t *testing.T) {
 	m := &tailer.SessionMetrics{
 		TaskSummary:       &tailer.TaskSummary{Text: "add the logout button", ObservedAt: 100},
