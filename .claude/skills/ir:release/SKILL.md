@@ -976,6 +976,14 @@ ships in three places (PR, CHANGELOG, GitHub release).
 gh pr create --title "chore: release v$NEW_VERSION" \
   --body-file /tmp/release-notes-v$NEW_VERSION.md
 
+# Capture the release PR number now, while we're still on its branch — Step 7c
+# tags the *exact* commit this PR squash-merges into, resolved via this number
+# (not HEAD). Persist it to a file (like BASE_SHA in Step 1) so it survives the
+# separate shell invocations of Steps 7b-merge and 7c.
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+echo "$PR_NUMBER" > /tmp/irrlicht-release-pr.num
+echo "release PR: #$PR_NUMBER"
+
 # Wait for mergeability if needed:
 gh pr view --json mergeable,mergeStateStatus \
   --jq '"mergeable=\(.mergeable) state=\(.mergeStateStatus)"'
@@ -1051,15 +1059,46 @@ The squash creates a new commit SHA on `origin/main`, so a plain
 remote — your local release commit (the pre-squash one on the deleted
 branch) is now redundant.
 
+Tag the **squash-merge commit by its explicit SHA** — resolved from the
+merged PR (`gh pr view <N> --json mergeCommit`) — never `HEAD`. In the
+window between the merge (7b-merge) and this tag step, the star-history
+bot or a second PR can land on `main`; `HEAD`/`origin/main` would then be
+that unrelated commit, and a bare `git tag "v$NEW_VERSION"` would pin the
+release to it (this is exactly what nearly happened in v0.5.9 — #1135).
+Note the 7b-guard race check only covers the *build* window, before the
+merge — it does not cover this post-merge window. The `version.json`
+assertion below is the cheap backstop: a bot bump never touches
+`version.json`, so a mis-tag fails loudly before the tag is pushed.
+
 ```bash
 git checkout main
 git fetch origin main
 git reset --hard origin/main
 
-# v$NEW_VERSION must point at the squashed commit, not the local one.
-# Drop any local tag from before the squash, then re-tag.
+# Resolve the EXACT squash-merge commit of the release PR — never HEAD, which
+# may have moved past it (see the prose above). PR_NUMBER was captured in Step
+# 7b; fall back to the deterministic release branch if /tmp was cleared.
+PR_NUMBER=$(cat /tmp/irrlicht-release-pr.num 2>/dev/null)
+[ -z "$PR_NUMBER" ] && PR_NUMBER=$(gh pr view "release/v$NEW_VERSION" --json number --jq '.number')
+RELEASE_SHA=$(gh pr view "$PR_NUMBER" --json mergeCommit --jq '.mergeCommit.oid')
+if [ -z "$RELEASE_SHA" ]; then
+  echo "FAIL: could not resolve the squash-merge commit for PR #$PR_NUMBER (did 7b-merge complete?)."
+  exit 1
+fi
+
+# v$NEW_VERSION must point at that squashed commit, not the local one or HEAD.
+# Drop any local tag from before the squash, then tag the release SHA explicitly.
 git tag -d "v$NEW_VERSION" 2>/dev/null || true
-git tag "v$NEW_VERSION"
+git tag "v$NEW_VERSION" "$RELEASE_SHA"
+
+# Backstop before pushing: the tagged tree's version.json must equal
+# $NEW_VERSION. A bot bump (or any non-release commit) wouldn't touch
+# version.json, so this fails loudly if the tag ever lands on the wrong commit.
+TAGGED_VERSION=$(git show "v$NEW_VERSION":version.json \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["version"])')
+[ "$TAGGED_VERSION" = "$NEW_VERSION" ] \
+  || { echo "FAIL: v$NEW_VERSION tags a tree whose version.json is '$TAGGED_VERSION', not $NEW_VERSION"; exit 1; }
+
 git push origin "v$NEW_VERSION"
 ```
 
