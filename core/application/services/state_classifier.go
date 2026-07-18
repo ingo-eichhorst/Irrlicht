@@ -17,6 +17,7 @@ import (
 //   - CompactInProgress → working (0b)
 //   - NeedsUserAttention → waiting (1)
 //   - OpenToolStalled → waiting (1b)
+//   - IdlePromptPending → waiting (1c)
 //   - IsAgentDone → ready, from working/waiting only (2)
 //   - ESC cancellation / tool denial (user + error + no open tools) → ready (3)
 //   - Default → working (4)
@@ -59,6 +60,17 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 	// progress, so this never fires on a tool that is actively executing.
 	if metrics.OpenToolStalled {
 		return transitionTo(currentState, session.StateWaiting, "stalled edit tool → likely permission prompt → waiting")
+	}
+
+	// 1c. Claude Code's Notification/idle_prompt hook reported the agent is idle
+	// at the prompt waiting for the user (#1173) → waiting. Authoritative tier
+	// above the turn-done → ready verdict below: it corrects the case where the
+	// turn ended on a plain statement with no trailing question/cue, which rule 2
+	// would otherwise route to ready. Live-only — the detector's overlayIdlePrompt
+	// only sets this while the finished turn is still idle (and never under
+	// replay), so this rule is inert for every non-hook path.
+	if metrics.IdlePromptPending {
+		return transitionTo(currentState, session.StateWaiting, "idle prompt hook → waiting")
 	}
 
 	// 2. Agent finished turn — check if waiting for user input first. A

@@ -5,7 +5,9 @@
 // permission gates (issue #108); PreToolUse on AskUserQuestion / ExitPlanMode
 // covers user-input overlays that block the agent before the transcript is
 // flushed (issue #307); Stop is the authoritative per-turn done signal
-// delivered at true turn end, carrying the final assistant text (issue #1161).
+// delivered at true turn end, carrying the final assistant text (issue #1161);
+// Notification/idle_prompt is the authoritative "idle at the prompt waiting for
+// the user" signal for turns that end with no prose waiting-cue (issue #1173).
 package claudecode
 
 import (
@@ -32,7 +34,20 @@ const (
 	// HookStop fires once at true turn end, carrying last_assistant_message.
 	// It is the authoritative turn-done signal for claudecode (issue #1161).
 	HookStop = "Stop"
+	// HookNotification fires for Claude Code UI notifications, carrying a
+	// notification_type discriminator. The daemon acts only on the idle_prompt
+	// type — the agent finished its turn and is idle at the prompt waiting for
+	// the user — as an authoritative waiting signal (issue #1173).
+	HookNotification = "Notification"
 )
+
+// notificationTypeIdlePrompt is the Notification hook's notification_type value
+// for "the agent is idle at the prompt waiting for the user" — the only
+// notification the daemon acts on (issue #1173). Claude Code's Notification
+// matcher filters on notification_type; the handler re-checks it as
+// defense-in-depth so a broadened matcher can't dispatch other notification
+// types (auth_success, permission_prompt, …).
+const notificationTypeIdlePrompt = "idle_prompt"
 
 // compactTriggerManual is the PreCompact trigger value for a user-invoked
 // /compact (as opposed to "auto"). Only manual compaction forces working — an
@@ -69,6 +84,9 @@ type hookPayload struct {
 	// LastAssistantMessage is the full text of the turn's final assistant
 	// message, carried by the Stop hook (issue #1161). Empty on other events.
 	LastAssistantMessage string `json:"last_assistant_message,omitempty"`
+	// NotificationType is the Notification hook's discriminator (e.g.
+	// "idle_prompt", "permission_prompt"). Empty on other events (issue #1173).
+	NotificationType string `json:"notification_type,omitempty"`
 }
 
 // HookTarget is the interface the handler calls into. Satisfied by
@@ -85,6 +103,11 @@ type HookTarget interface {
 	// carried a question or imperative cue (computed from the full text so a cue
 	// beyond the display tail still routes the turn to waiting, not ready).
 	HandleStopHook(sessionID, transcriptPath, lastAssistantText string, waitingCue bool)
+	// HandleIdlePromptHook records the Notification/idle_prompt signal — the
+	// agent finished its turn and is idle at the prompt waiting for the user
+	// (issue #1173). An authoritative waiting signal for the case the prose
+	// waiting-cue heuristic can't detect (a turn that ended on a plain statement).
+	HandleIdlePromptHook(sessionID, transcriptPath string)
 }
 
 // MarkerTarget is the narrow interface for hook-carried task-estimate
@@ -251,6 +274,8 @@ func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGrant
 		handlePreToolUseHook(markers, log, sessionID, payload, dispatch)
 	case HookStop:
 		handleStopHook(target, log, sessionID, payload)
+	case HookNotification:
+		handleNotificationHook(target, log, sessionID, payload)
 	default:
 		// Unrecognized hook event — accept but ignore.
 		log.LogInfo(logComponentHookReceiver, sessionID,
@@ -309,6 +334,25 @@ func waitingCueInTail(full string) bool {
 	win := tailer.WaitingScanWindow(full)
 	return win != "" &&
 		(session.ExtractQuestionSnippet(win) != "" || session.ExtractWaitingCue(win) != "")
+}
+
+// handleNotificationHook processes a Claude Code Notification hook. It acts only
+// on the idle_prompt type — the agent finished its turn and is idle at the
+// prompt waiting for the user (issue #1173) — forwarding it as an authoritative
+// waiting signal. Every other notification_type (permission_prompt is already
+// covered by the blocking PermissionRequest hook; auth_success and friends are
+// irrelevant to state) is accepted and ignored, mirroring handlePreToolUseHook's
+// defense-in-depth reject: the installer matches only idle_prompt, but the
+// handler re-checks so a broadened settings.json matcher can't dispatch others.
+func handleNotificationHook(target HookTarget, log outbound.Logger, sessionID string, payload hookPayload) {
+	if payload.NotificationType != notificationTypeIdlePrompt {
+		log.LogInfo(logComponentHookReceiver, sessionID,
+			fmt.Sprintf("ignored Notification of type %q (only %s drives state)", payload.NotificationType, notificationTypeIdlePrompt))
+		return
+	}
+	log.LogInfo(logComponentHookReceiver, sessionID,
+		fmt.Sprintf("received %s (type=%s)", payload.HookEventName, payload.NotificationType))
+	target.HandleIdlePromptHook(sessionID, payload.TranscriptPath)
 }
 
 // handlePreToolUseHook processes a PreToolUse hook event: scans the tool

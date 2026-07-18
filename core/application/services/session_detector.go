@@ -219,6 +219,16 @@ type SessionDetector struct {
 	// Guarded by permMu — same goroutine-crossing story as permissionPending.
 	hookTurnDone map[string]hookStopSignal // sessionID → Stop-hook payload
 
+	// idlePromptPending tracks sessions whose Claude Code Notification/idle_prompt
+	// hook reported the agent is idle at the prompt waiting for the user (#1173):
+	// sessionID → true. Set by HandleIdlePromptHook; overlaid onto metrics by
+	// overlayIdlePrompt every classify pass while the finished turn stays idle,
+	// and cleared there the moment new activity arrives (IsAgentDone flips false)
+	// — so it holds the session in waiting without pinning it into the next turn.
+	// Persistent (not consume-once, unlike hookTurnDone): a lower-tier reclassify
+	// must never revert the corrected waiting back to ready. Guarded by permMu.
+	idlePromptPending map[string]bool // sessionID → true
+
 	// editToolOpenSince tracks, per session, the Unix time a permission-gated
 	// file-edit tool first appeared open. Guarded by permMu. Drives the
 	// OpenToolStalled transcript fallback (#488): an edit tool open past
@@ -325,6 +335,7 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		permissionPending:        make(map[string]bool),
 		compactPending:           make(map[string]int64),
 		hookTurnDone:             make(map[string]hookStopSignal),
+		idlePromptPending:        make(map[string]bool),
 		editToolOpenSince:        make(map[string]int64),
 		idleProjectRetryAttempts: make(map[string]int),
 		bgLiveProbe:              anyLiveOutputWriter,

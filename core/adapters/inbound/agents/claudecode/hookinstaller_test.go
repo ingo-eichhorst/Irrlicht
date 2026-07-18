@@ -343,6 +343,70 @@ func TestEnsureHooksInstalled_InstallsPreToolUseAndExpandedMatcher(t *testing.T)
 		t.Errorf("Stop group must not carry a matcher key, got %v", stopGroup["matcher"])
 	}
 	assertHTTPEntry(t, stopGroup)
+
+	// Notification: one group whose matcher is the notification_type
+	// "idle_prompt" (not a tool-name regex), so the hook fires only when the
+	// agent goes idle at the prompt (#1173).
+	notif, ok := hooksMap[HookNotification].([]interface{})
+	if !ok || len(notif) != 1 {
+		t.Fatalf("expected 1 Notification group, got %d", len(notif))
+	}
+	notifGroup := notif[0].(map[string]interface{})
+	if m, _ := notifGroup["matcher"].(string); m != hookMatcherNotification {
+		t.Errorf("Notification matcher = %q, want %q", m, hookMatcherNotification)
+	}
+	assertHTTPEntry(t, notifGroup)
+}
+
+// TestEnsureHooksInstalled_AddsNotificationToExistingInstall verifies the
+// idempotent installer adds the newly-listed Notification event to a
+// settings.json that already carries the six prior events, without duplicating
+// them — the upgrade path for existing installs (#1173).
+func TestEnsureHooksInstalled_AddsNotificationToExistingInstall(t *testing.T) {
+	home := withTempHome(t)
+
+	existing := map[string]interface{}{"hooks": map[string]interface{}{}}
+	hooks := existing["hooks"].(map[string]interface{})
+	for _, ev := range []string{HookPermissionRequest, HookPreToolUse, HookPostToolUse, HookPostToolUseFailure, HookPreCompact, HookStop} {
+		hooks[ev] = []interface{}{ourHookGroup(matcherForEvent(ev))}
+	}
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(existing)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	modified, err := EnsureHooksInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !modified {
+		t.Fatal("expected modified=true (Notification was missing)")
+	}
+
+	settings := readJSON(t, path)
+	hooksMap := settings["hooks"].(map[string]interface{})
+	notif, ok := hooksMap[HookNotification].([]interface{})
+	if !ok || len(notif) != 1 {
+		t.Fatalf("expected exactly 1 Notification group after upgrade, got %d", len(notif))
+	}
+	notifGroup := notif[0].(map[string]interface{})
+	if m, _ := notifGroup["matcher"].(string); m != hookMatcherNotification {
+		t.Errorf("Notification matcher = %q, want %q", m, hookMatcherNotification)
+	}
+	assertHTTPEntry(t, notifGroup)
+
+	// Re-running must be a no-op now that all seven events are present.
+	modified, err = EnsureHooksInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modified {
+		t.Errorf("expected modified=false on second run (already installed)")
+	}
 }
 
 // TestEnsureHooksInstalled_AddsStopToExistingInstall verifies the idempotent

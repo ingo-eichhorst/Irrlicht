@@ -1,8 +1,8 @@
 // hookinstaller.go manages Claude Code hook entries in ~/.claude/settings.json
 // for the irrlicht daemon. It installs PermissionRequest, PreToolUse,
-// PostToolUse, PostToolUseFailure, PreCompact and Stop hooks that POST to the
-// daemon's HTTP endpoint via native `type: http` delivery, and can remove them
-// cleanly. (Issues #108, #307, #657, #1161.)
+// PostToolUse, PostToolUseFailure, PreCompact, Stop and Notification hooks that
+// POST to the daemon's HTTP endpoint via native `type: http` delivery, and can
+// remove them cleanly. (Issues #108, #307, #657, #1161, #1173.)
 package claudecode
 
 import (
@@ -56,6 +56,14 @@ const hookMatcherPreToolUse = "AskUserQuestion|ExitPlanMode"
 // so forcing working there would be a spurious blip (#657).
 const hookMatcherPreCompact = "manual"
 
+// hookMatcherNotification is the matcher for the Notification event. Like
+// PreCompact (whose matcher is the compaction trigger), Claude Code's
+// Notification matcher matches the notification_type rather than a tool name.
+// We install "idle_prompt" so the hook fires only when the agent goes idle at
+// the prompt (issue #1173) — permission_prompt is already covered by the
+// blocking PermissionRequest hook, and the other types don't affect state.
+const hookMatcherNotification = "idle_prompt"
+
 // installedHookEvents are the Claude Code hook events we install handlers for.
 var installedHookEvents = []string{
 	HookPermissionRequest,
@@ -64,19 +72,23 @@ var installedHookEvents = []string{
 	HookPostToolUseFailure,
 	HookPreCompact,
 	HookStop,
+	HookNotification,
 }
 
 // matcherForEvent returns the matcher we install for the given event. For most
 // events this is a tool-name regex; for PreCompact it is the compaction trigger
-// ("manual"); for Stop it is empty — Claude Code's Stop hook takes no matcher
-// (it fires at every turn end) and rejects settings.json that gives it one, so
-// addOurHook omits the matcher key entirely for an empty matcher.
+// ("manual"); for Notification it is the notification_type ("idle_prompt"); for
+// Stop it is empty — Claude Code's Stop hook takes no matcher (it fires at every
+// turn end) and rejects settings.json that gives it one, so addOurHook omits the
+// matcher key entirely for an empty matcher.
 func matcherForEvent(event string) string {
 	switch event {
 	case HookPreToolUse:
 		return hookMatcherPreToolUse
 	case HookPreCompact:
 		return hookMatcherPreCompact
+	case HookNotification:
+		return hookMatcherNotification
 	case HookStop:
 		return ""
 	default:

@@ -254,6 +254,18 @@ type SessionMetrics struct {
 	// heuristic (and its codex carve-out) below.
 	HookTurnDone bool `json:"-"`
 
+	// IdlePromptPending is true when Claude Code's Notification/idle_prompt hook
+	// reported that the agent has finished its turn and is now sitting idle at
+	// the prompt waiting for the user (issue #1173) — the authoritative signal
+	// for the "turn ended with no trailing question or cue" case that
+	// PendingWaitingCue's prose heuristic (rule 2) cannot reach. Transient and
+	// live-only: set by the detector's overlayIdlePrompt from a per-session map
+	// held only while the finished turn is still the last thing on the
+	// transcript, and never set under replay. ClassifyState reads it as an
+	// authoritative waiting tier above the turn-done → ready verdict, so a turn
+	// that ends on a plain statement still routes to waiting once the hook lands.
+	IdlePromptPending bool `json:"-"`
+
 	// SawUserBlockingToolClosedThisPass reflects the last tailer pass: true
 	// when an AskUserQuestion / ExitPlanMode tool_use and its tool_result
 	// were processed together in one pass. Triggers the daemon's synthetic
@@ -550,7 +562,7 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 
 // newMergedMetrics copies the fields a fresh tailer pass always recomputes
 // verbatim from newM. Fields not listed here are deliberately left at their
-// zero value: LastCWD, PermissionPending, HookTurnDone,
+// zero value: LastCWD, PermissionPending, HookTurnDone, IdlePromptPending,
 // SawUserBlockingToolClosedThisPass, OpenToolStalled, and CompactInProgress are
 // per-pass overlay/transient signals that the detector (re-)sets fresh after
 // each merge, so carrying stale values here would be a bug, not a convenience.
