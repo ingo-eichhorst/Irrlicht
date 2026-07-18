@@ -46,6 +46,7 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	delete(d.permissionPending, ev.SessionID)
 	delete(d.compactPending, ev.SessionID)
 	delete(d.hookTurnDone, ev.SessionID)
+	delete(d.idlePromptPending, ev.SessionID)
 	delete(d.editToolOpenSince, ev.SessionID)
 	delete(d.idleProjectRetryAttempts, ev.SessionID)
 	d.permMu.Unlock()
@@ -359,6 +360,33 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 	// The literal "Stop" mirrors HandleCompactHook's "PreCompact" — the services
 	// layer must not import the claudecode adapter for its HookStop constant.
 	d.dispatchHookActivity(sessionID, transcriptPath, "Stop")
+}
+
+// HandleIdlePromptHook records Claude Code's Notification/idle_prompt hook
+// (issue #1173): the agent has finished its turn and is now idle at the prompt
+// waiting for the user. Marking idlePromptPending makes every subsequent
+// classify pass overlay SessionMetrics.IdlePromptPending (ClassifyState rule 1c)
+// so the session shows waiting even when the turn ended on a plain statement
+// that PendingWaitingCue's prose heuristic can't detect. The flag is held until
+// the next turn begins (overlayIdlePrompt clears it once IsAgentDone flips
+// false), not consumed once — a lower-tier reclassify must not revert the
+// corrected waiting back to ready.
+//
+// The idle_prompt hook fires after the turn goes idle (the session is typically
+// already ready by then), so this is a reconcile-and-correct: the synthetic
+// activity below drives a ready→waiting transition without the intermediate
+// working blip forceReadyToWorkingIfActive would otherwise record (it skips the
+// bounce while this flag is pending). The literal "Notification" mirrors
+// HandleStopHook's "Stop" — the services layer must not import the claudecode
+// adapter for its HookNotification constant.
+//
+// Safe to call from any goroutine (e.g. the HTTP handler).
+func (d *SessionDetector) HandleIdlePromptHook(sessionID, transcriptPath string) {
+	d.permMu.Lock()
+	d.idlePromptPending[sessionID] = true
+	d.permMu.Unlock()
+
+	d.dispatchHookActivity(sessionID, transcriptPath, "Notification")
 }
 
 // HandleCompactHook processes a Claude Code PreCompact hook for a manual

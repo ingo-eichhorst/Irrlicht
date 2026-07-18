@@ -137,6 +137,62 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateWorking,
 		},
 
+		// Rule 1c: IdlePromptPending (Notification/idle_prompt hook) → waiting.
+		{
+			name:    "ready → waiting (idle prompt hook)",
+			current: session.StateReady,
+			metrics: &session.SessionMetrics{
+				IdlePromptPending: true,
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
+		{
+			name:    "working → waiting (idle prompt hook)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				IdlePromptPending: true,
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
+		{
+			name:    "waiting stays waiting (idle prompt hook, already waiting)",
+			current: session.StateWaiting,
+			metrics: &session.SessionMetrics{
+				IdlePromptPending: true,
+			},
+			wantState: session.StateWaiting,
+		},
+		{
+			// The core correction: a turn that ended on a plain statement (no
+			// question/cue) would route to ready via rule 2, but the idle-prompt
+			// hook overrides it to waiting — the false-negative gap #1173 closes.
+			name:    "ready → waiting (idle prompt overrides turn-done ready verdict)",
+			current: session.StateReady,
+			metrics: &session.SessionMetrics{
+				IdlePromptPending: true,
+				LastEventType:     "turn_done",
+				LastAssistantText: "Done. All tests pass.",
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
+		{
+			// Regression guard: with no idle-prompt signal, the same plain
+			// turn-done metrics still route to ready (rule 1c is inert without
+			// the live hook — no behavior change for the non-hook path).
+			name:    "working → ready (turn done, no idle prompt, no cue)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				IdlePromptPending: false,
+				LastEventType:     "turn_done",
+				LastAssistantText: "Done. All tests pass.",
+			},
+			wantState:  session.StateReady,
+			wantReason: true,
+		},
+
 		// Rule 1: NeedsUserAttention → waiting.
 		{
 			name:    "working → waiting (AskUserQuestion)",

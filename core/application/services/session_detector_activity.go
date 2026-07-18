@@ -783,6 +783,11 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// waiting-vs-ready inputs from the hook's final assistant message.
 	d.overlayHookTurnDone(state)
 
+	// Overlay the Notification/idle_prompt hook's idle-waiting signal (#1173).
+	// Persistent (held while the turn stays idle), so ClassifyState rule 1c can
+	// correct a turn that ended with no prose cue from ready to waiting.
+	d.overlayIdlePrompt(state)
+
 	// Overlay the PreCompact force-working hold (#657).
 	d.applyCompactHold(ev.SessionID, state.Metrics, time.Now().Unix())
 
@@ -839,6 +844,17 @@ func (d *SessionDetector) forceReadyToWorkingIfActive(state *session.SessionStat
 		return
 	}
 	if !transcriptGrew && !ev.Synthetic {
+		return
+	}
+	// The Notification/idle_prompt hook (#1173) dispatches a synthetic activity
+	// on an already-ready session to correct it ready→waiting. Skip the bounce
+	// while that signal is pending: without this, the synthetic event would
+	// force ready→working here and then classify working→waiting, recording a
+	// spurious working blip between the two (the flap this reconcile must avoid).
+	// ClassifyState still routes correctly on its own — to waiting via rule 1c
+	// (idle case), or to working via rule 4 should real activity have arrived in
+	// the same pass (overlayIdlePrompt clears the flag when IsAgentDone flips).
+	if d.hasPendingIdlePrompt(state.SessionID) {
 		return
 	}
 	d.log.LogInfo(logComponentSessionDetector, ev.SessionID, ForceReadyToWorkingReason)
@@ -901,6 +917,48 @@ func (d *SessionDetector) overlayHookTurnDone(state *session.SessionState) {
 	if sig.waitingCue {
 		state.Metrics.PendingWaitingCue = true
 	}
+}
+
+// overlayIdlePrompt folds the Claude Code Notification/idle_prompt hook signal
+// (#1173) onto metrics for the classify pass. Unlike overlayHookTurnDone it is
+// persistent, not consume-once: the flag is re-applied every pass so a stray
+// lower-tier reclassify (e.g. an fswatcher touch that re-runs ClassifyState)
+// can't flip the corrected waiting back to ready via rule 2.
+//
+// The signal holds only while the finished turn is still the last thing on the
+// transcript. IsAgentDone is the gate: while it is true the turn is genuinely
+// idle, so keep the entry and overlay IdlePromptPending (rule 1c → waiting). The
+// moment new activity arrives — the user replied, a new turn began — IsAgentDone
+// flips false; the idle window is over, so drop the backing entry and overlay
+// nothing, letting the session transition out of waiting normally. An open tool
+// (IsAgentDone false via HasOpenToolCall) likewise clears it: the open-tool
+// rules own that case, not idle-prompt. Must run after RefreshOnActivity (which
+// rebuilds metrics from the transcript, zeroing this transient field) and before
+// ClassifyState, which reads it.
+func (d *SessionDetector) overlayIdlePrompt(state *session.SessionState) {
+	if state.Metrics == nil {
+		return
+	}
+	d.permMu.Lock()
+	defer d.permMu.Unlock()
+
+	if !d.idlePromptPending[state.SessionID] {
+		return
+	}
+	if !state.Metrics.IsAgentDone() {
+		delete(d.idlePromptPending, state.SessionID)
+		return
+	}
+	state.Metrics.IdlePromptPending = true
+}
+
+// hasPendingIdlePrompt reports whether an idle_prompt hook signal is pending for
+// the session (#1173). Read by forceReadyToWorkingIfActive to skip the
+// ready→working bounce on the hook's synthetic reclassify. Guarded by permMu.
+func (d *SessionDetector) hasPendingIdlePrompt(sessionID string) bool {
+	d.permMu.Lock()
+	defer d.permMu.Unlock()
+	return d.idlePromptPending[sessionID]
 }
 
 // holdParentForActiveChildren fast-forwards a parent's own transition when

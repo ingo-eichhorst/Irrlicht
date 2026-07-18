@@ -13,13 +13,14 @@ import (
 	"irrlicht/core/internal/contracttesting"
 )
 
-// mockTarget records calls to HandlePermissionHook, HandleCompactHook and
-// HandleStopHook for assertions.
+// mockTarget records calls to HandlePermissionHook, HandleCompactHook,
+// HandleStopHook and HandleIdlePromptHook for assertions.
 type mockTarget struct {
-	mu           sync.Mutex
-	calls        []hookCall
-	compactCalls []compactCall
-	stopCalls    []stopCall
+	mu              sync.Mutex
+	calls           []hookCall
+	compactCalls    []compactCall
+	stopCalls       []stopCall
+	idlePromptCalls []idlePromptCall
 }
 
 type hookCall struct {
@@ -33,6 +34,10 @@ type compactCall struct {
 type stopCall struct {
 	sessionID, transcriptPath, lastAssistantText string
 	waitingCue                                   bool
+}
+
+type idlePromptCall struct {
+	sessionID, transcriptPath string
 }
 
 func (m *mockTarget) HandlePermissionHook(sessionID, transcriptPath, hookEventName string) {
@@ -53,6 +58,12 @@ func (m *mockTarget) HandleStopHook(sessionID, transcriptPath, lastAssistantText
 	m.stopCalls = append(m.stopCalls, stopCall{sessionID, transcriptPath, lastAssistantText, waitingCue})
 }
 
+func (m *mockTarget) HandleIdlePromptHook(sessionID, transcriptPath string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.idlePromptCalls = append(m.idlePromptCalls, idlePromptCall{sessionID, transcriptPath})
+}
+
 func (m *mockTarget) getCalls() []hookCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -64,7 +75,14 @@ func (m *mockTarget) reset() {
 	m.calls = nil
 	m.compactCalls = nil
 	m.stopCalls = nil
+	m.idlePromptCalls = nil
 	m.mu.Unlock()
+}
+
+func (m *mockTarget) getIdlePromptCalls() []idlePromptCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]idlePromptCall{}, m.idlePromptCalls...)
 }
 
 func (m *mockTarget) getCompactCalls() []compactCall {
@@ -350,6 +368,78 @@ func TestHookHandler_StopEndingInQuestion(t *testing.T) {
 	}
 	if !stops[0].waitingCue {
 		t.Errorf("waitingCue = false for a message ending in a question, want true")
+	}
+}
+
+func TestHookHandler_NotificationIdlePrompt(t *testing.T) {
+	target := &mockTarget{}
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
+
+	rec := postHook(t, handler, hookPayload{
+		TranscriptPath:   "/Users/u/.claude/projects/p/sess-idle.jsonl",
+		HookEventName:    "Notification",
+		NotificationType: "idle_prompt",
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if len(target.getCalls()) != 0 || len(target.getStopCalls()) != 0 || len(target.getCompactCalls()) != 0 {
+		t.Errorf("idle_prompt Notification must not reach permission/stop/compact paths")
+	}
+	idles := target.getIdlePromptCalls()
+	if len(idles) != 1 {
+		t.Fatalf("got %d HandleIdlePromptHook calls, want 1", len(idles))
+	}
+	if idles[0].sessionID != "sess-idle" {
+		t.Errorf("sessionID = %q, want %q", idles[0].sessionID, "sess-idle")
+	}
+	if idles[0].transcriptPath != "/Users/u/.claude/projects/p/sess-idle.jsonl" {
+		t.Errorf("transcriptPath = %q, want the payload path", idles[0].transcriptPath)
+	}
+}
+
+// TestHookHandler_NotificationNonIdleType asserts the defense-in-depth reject:
+// only idle_prompt drives state, even though the installer already narrows the
+// matcher — a broadened settings.json matcher must not dispatch other types.
+func TestHookHandler_NotificationNonIdleType(t *testing.T) {
+	for _, ntype := range []string{"permission_prompt", "auth_success", "agent_completed", ""} {
+		target := &mockTarget{}
+		handler := NewHookHandler(target, nil, nil, mockLogger{})
+
+		rec := postHook(t, handler, hookPayload{
+			TranscriptPath:   "/Users/u/.claude/projects/p/sess-n.jsonl",
+			HookEventName:    "Notification",
+			NotificationType: ntype,
+		})
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("type %q: status = %d, want %d", ntype, rec.Code, http.StatusOK)
+		}
+		if n := len(target.getIdlePromptCalls()); n != 0 {
+			t.Errorf("type %q: got %d HandleIdlePromptHook calls, want 0", ntype, n)
+		}
+	}
+}
+
+// TestHookHandler_NotificationConsentGated confirms the Notification path is
+// behind the same "hooks" consent gate as every other event: nothing is
+// dispatched while the permission is not granted.
+func TestHookHandler_NotificationConsentGated(t *testing.T) {
+	target := &mockTarget{}
+	handler := NewHookHandler(target, nil, fakeGate(false), mockLogger{})
+
+	rec := postHook(t, handler, hookPayload{
+		TranscriptPath:   "/Users/u/.claude/projects/p/sess-gated.jsonl",
+		HookEventName:    "Notification",
+		NotificationType: "idle_prompt",
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if n := len(target.getIdlePromptCalls()); n != 0 {
+		t.Fatalf("dispatched %d idle-prompt calls while permission not granted", n)
 	}
 }
 
