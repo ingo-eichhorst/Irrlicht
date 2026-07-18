@@ -1010,14 +1010,11 @@ func startBackgroundLoops(deps startBackgroundLoopsDeps) context.CancelFunc {
 
 	if !deps.DemoMode {
 		deps.PermService.Start(detectorCtx)
-		// The installed hooks POST via curl; without it they silently no-op
-		// and tool-use permission prompts never surface as `waiting`. Warn
-		// loudly so this isn't an invisible failure (the transcript
-		// heuristic still covers held file-edit prompts). See #488.
-		if deps.PermService.Granted(claudecode.AdapterName, claudecode.PermissionKeyHooks) &&
-			!claudecode.HookDeliveryAvailable() {
-			logger.LogError("startup", "", "curl not found on PATH — Claude Code permission-prompt detection is degraded: hooks POST via curl, so without it permission prompts may not surface as 'waiting'. Install curl to restore full detection (#488).")
-		}
+		// Hooks are delivered by Claude Code's native `type: http` transport
+		// straight to the daemon (#1161) — no curl, no shell — so there is no
+		// external tool whose absence could silently no-op delivery (the reason
+		// the pre-#1161 curl-on-PATH startup warning existed). The transcript
+		// OpenToolStalled fallback (#488) still covers a down/unreachable daemon.
 	}
 
 	return detectorCancel

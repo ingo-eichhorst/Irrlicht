@@ -79,12 +79,13 @@ func Agent() agent.Agent {
 				Kind:            permission.KindModify,
 				Title:           "Install status hooks",
 				FeatureUnlocked: "Instant waiting-state detection (permission prompts, plan approval, questions)",
-				Touches:         "Writes 4 hook entries to ~/.claude/settings.json",
-				Detail: "Adds PermissionRequest, PreToolUse, PostToolUse, and " +
-					"PostToolUseFailure hook entries whose command is: " +
-					installedHookCommand + " — each POSTs the hook payload to the " +
-					"local daemon. Toggling off removes exactly these entries " +
-					"(also available via `irrlichd --uninstall-hooks`).",
+				Touches:         "Writes 6 hook entries to ~/.claude/settings.json",
+				Detail: "Adds PermissionRequest, PreToolUse, PostToolUse, " +
+					"PostToolUseFailure, PreCompact, and Stop hook entries that POST " +
+					"the hook payload to the local daemon at " + hookEndpointURL +
+					" via Claude Code's native http hook (no shell/curl). Toggling " +
+					"off removes exactly these entries (also available via " +
+					"`irrlichd --uninstall-hooks`).",
 				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
 				Remove: func() error { _, err := UninstallHooks(); return err },
 			},

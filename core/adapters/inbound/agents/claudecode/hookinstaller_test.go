@@ -34,8 +34,14 @@ func readJSON(t *testing.T, path string) map[string]interface{} {
 // AskUserQuestion / ExitPlanMode expansion.
 const legacyMatcher = "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*"
 
+// legacyCurlHookCommand is the pre-#1161 curl command form of our hook, used to
+// seed fixtures that simulate an existing install from before native http
+// delivery, so the migration path can be exercised.
+const legacyCurlHookCommand = "curl -fsS --max-time 1 -X POST --data-binary @- http://localhost:7837/api/v1/hooks/claudecode || true"
+
 // makeHookGroup builds a settings.json hook matcher group with the given
-// matcher and command. Used by tests to seed fixtures.
+// matcher and a legacy `type: command` inner hook. Used by tests to seed
+// pre-#1161 (curl) and foreign fixtures.
 func makeHookGroup(matcher, command string) map[string]interface{} {
 	return map[string]interface{}{
 		"matcher": matcher,
@@ -45,6 +51,37 @@ func makeHookGroup(matcher, command string) map[string]interface{} {
 				"command": command,
 			},
 		},
+	}
+}
+
+// ourHookGroup builds a settings.json group in our current native-http form
+// (matcher key omitted when empty), mirroring addOurHook. Used to seed fixtures
+// that simulate an already-migrated install.
+func ourHookGroup(matcher string) map[string]interface{} {
+	group := map[string]interface{}{"hooks": []interface{}{ourHookEntry()}}
+	if matcher != "" {
+		group["matcher"] = matcher
+	}
+	return group
+}
+
+// assertHTTPEntry fails unless the group's single inner hook is our canonical
+// native-http entry: type "http", our endpoint url, and no leftover command key.
+func assertHTTPEntry(t *testing.T, group map[string]interface{}) {
+	t.Helper()
+	inner, ok := group["hooks"].([]interface{})
+	if !ok || len(inner) != 1 {
+		t.Fatalf("expected exactly 1 inner hook, got %v", group["hooks"])
+	}
+	hook := inner[0].(map[string]interface{})
+	if _, hasCmd := hook["command"]; hasCmd {
+		t.Errorf("http entry must not carry a legacy command key: %v", hook)
+	}
+	if ty, _ := hook["type"].(string); ty != "http" {
+		t.Errorf("type = %q, want %q", ty, "http")
+	}
+	if u, _ := hook["url"].(string); u != hookEndpointURL {
+		t.Errorf("url = %q, want %q", u, hookEndpointURL)
 	}
 }
 
@@ -128,22 +165,20 @@ func TestEnsureHooksInstalled_PreservesExistingHooks(t *testing.T) {
 	}
 }
 
-func TestEnsureHooksInstalled_UpgradesStaleCommand(t *testing.T) {
+// TestEnsureHooksInstalled_MigratesCurlToHTTP verifies that a pre-#1161 install
+// whose hook is the legacy curl `command` is migrated in place to native
+// `type: http` delivery — the command key dropped, the http url set, no group
+// appended — and that the matcher is reconciled at the same time (#1161).
+func TestEnsureHooksInstalled_MigratesCurlToHTTP(t *testing.T) {
 	home := withTempHome(t)
 	path := filepath.Join(home, ".claude", "settings.json")
 
-	// Stale command: same sentinel, but missing the trailing `|| true`.
-	const staleCommand = "curl -fsS --max-time 1 -X POST --data-binary @- http://localhost:7837/api/v1/hooks/claudecode"
-	if staleCommand == installedHookCommand {
-		t.Fatal("stale command must differ from canonical command for this test to be meaningful")
-	}
-
 	// Legacy install: a single PostToolUse group with the pre-#307 narrow
-	// matcher and the stale command. EnsureHooksInstalled should upgrade
-	// both the command and the matcher in place — no group append.
+	// matcher and the curl command. EnsureHooksInstalled should upgrade both the
+	// delivery (curl → http) and the matcher in place — no group append.
 	existing := map[string]interface{}{
 		"hooks": map[string]interface{}{
-			HookPostToolUse: []interface{}{makeHookGroup(legacyMatcher, staleCommand)},
+			HookPostToolUse: []interface{}{makeHookGroup(legacyMatcher, legacyCurlHookCommand)},
 		},
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -159,7 +194,7 @@ func TestEnsureHooksInstalled_UpgradesStaleCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !modified {
-		t.Fatal("expected modified=true when upgrading stale command")
+		t.Fatal("expected modified=true when migrating curl → http")
 	}
 
 	settings := readJSON(t, path)
@@ -177,11 +212,7 @@ func TestEnsureHooksInstalled_UpgradesStaleCommand(t *testing.T) {
 	if m, _ := group["matcher"].(string); m != hookMatcher {
 		t.Errorf("expected matcher upgraded to %q, got %q", hookMatcher, m)
 	}
-	innerHooks := group["hooks"].([]interface{})
-	cmd := innerHooks[0].(map[string]interface{})["command"].(string)
-	if cmd != installedHookCommand {
-		t.Fatalf("expected upgraded command, got %q", cmd)
-	}
+	assertHTTPEntry(t, group)
 
 	// Second call must be idempotent.
 	modified, err = EnsureHooksInstalled()
@@ -300,6 +331,69 @@ func TestEnsureHooksInstalled_InstallsPreToolUseAndExpandedMatcher(t *testing.T)
 	if m, _ := preCompactGroup["matcher"].(string); m != hookMatcherPreCompact {
 		t.Errorf("PreCompact matcher = %q, want %q", m, hookMatcherPreCompact)
 	}
+
+	// Stop: one group with NO matcher key (Claude Code rejects a Stop matcher)
+	// and native http delivery (#1161).
+	stop, ok := hooksMap[HookStop].([]interface{})
+	if !ok || len(stop) != 1 {
+		t.Fatalf("expected 1 Stop group, got %d", len(stop))
+	}
+	stopGroup := stop[0].(map[string]interface{})
+	if _, has := stopGroup["matcher"]; has {
+		t.Errorf("Stop group must not carry a matcher key, got %v", stopGroup["matcher"])
+	}
+	assertHTTPEntry(t, stopGroup)
+}
+
+// TestEnsureHooksInstalled_AddsStopToExistingInstall verifies the idempotent
+// installer adds the newly-listed Stop event to a settings.json that already
+// carries the five prior events (in native-http form), without duplicating them
+// — the upgrade path for existing installs (#1161).
+func TestEnsureHooksInstalled_AddsStopToExistingInstall(t *testing.T) {
+	home := withTempHome(t)
+
+	existing := map[string]interface{}{"hooks": map[string]interface{}{}}
+	hooks := existing["hooks"].(map[string]interface{})
+	for _, ev := range []string{HookPermissionRequest, HookPreToolUse, HookPostToolUse, HookPostToolUseFailure, HookPreCompact} {
+		hooks[ev] = []interface{}{ourHookGroup(matcherForEvent(ev))}
+	}
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(existing)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	modified, err := EnsureHooksInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !modified {
+		t.Fatal("expected modified=true (Stop was missing)")
+	}
+
+	settings := readJSON(t, path)
+	hooksMap := settings["hooks"].(map[string]interface{})
+	stop, ok := hooksMap[HookStop].([]interface{})
+	if !ok || len(stop) != 1 {
+		t.Fatalf("expected exactly 1 Stop group after upgrade, got %d", len(stop))
+	}
+	stopGroup := stop[0].(map[string]interface{})
+	if _, has := stopGroup["matcher"]; has {
+		t.Errorf("Stop group must not carry a matcher key, got %v", stopGroup["matcher"])
+	}
+	assertHTTPEntry(t, stopGroup)
+
+	// Re-running must be a no-op now that all six events are present.
+	modified, err = EnsureHooksInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modified {
+		t.Errorf("expected modified=false on second run (already installed)")
+	}
 }
 
 // TestEnsureHooksInstalled_AddsPreCompactToExistingInstall verifies the
@@ -313,7 +407,7 @@ func TestEnsureHooksInstalled_AddsPreCompactToExistingInstall(t *testing.T) {
 	existing := map[string]interface{}{"hooks": map[string]interface{}{}}
 	hooks := existing["hooks"].(map[string]interface{})
 	for _, ev := range []string{HookPermissionRequest, HookPreToolUse, HookPostToolUse, HookPostToolUseFailure} {
-		hooks[ev] = []interface{}{makeHookGroup(matcherForEvent(ev), installedHookCommand)}
+		hooks[ev] = []interface{}{ourHookGroup(matcherForEvent(ev))}
 	}
 	path := filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -359,7 +453,7 @@ func TestEnsureHooksInstalled_MigratesLegacyMatchers(t *testing.T) {
 	path := filepath.Join(home, ".claude", "settings.json")
 
 	legacy := func() []interface{} {
-		return []interface{}{makeHookGroup(legacyMatcher, installedHookCommand)}
+		return []interface{}{makeHookGroup(legacyMatcher, legacyCurlHookCommand)}
 	}
 	existing := map[string]interface{}{
 		"hooks": map[string]interface{}{

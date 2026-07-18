@@ -210,6 +210,15 @@ type SessionDetector struct {
 	// permissionPending.
 	compactPending map[string]int64 // sessionID → unix seconds (hook fire time)
 
+	// hookTurnDone tracks sessions whose Claude Code Stop hook (#1161) has fired
+	// but whose resulting classify pass hasn't consumed it yet: sessionID → the
+	// turn's final assistant text (display-truncated) and whether it carried a
+	// waiting cue. Set by HandleStopHook; consumed and cleared by
+	// overlayHookTurnDone on the next classify pass (consume-once, so the
+	// authoritative turn-done signal never bleeds into the following turn).
+	// Guarded by permMu — same goroutine-crossing story as permissionPending.
+	hookTurnDone map[string]hookStopSignal // sessionID → Stop-hook payload
+
 	// editToolOpenSince tracks, per session, the Unix time a permission-gated
 	// file-edit tool first appeared open. Guarded by permMu. Drives the
 	// OpenToolStalled transcript fallback (#488): an edit tool open past
@@ -315,6 +324,7 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		deletedCooldown:          10 * time.Second,
 		permissionPending:        make(map[string]bool),
 		compactPending:           make(map[string]int64),
+		hookTurnDone:             make(map[string]hookStopSignal),
 		editToolOpenSince:        make(map[string]int64),
 		idleProjectRetryAttempts: make(map[string]int),
 		bgLiveProbe:              anyLiveOutputWriter,

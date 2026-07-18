@@ -244,6 +244,16 @@ type SessionMetrics struct {
 	// set by the hook receiver in processActivity, not derived from transcript.
 	PermissionPending bool `json:"-"`
 
+	// HookTurnDone is true when Claude Code's Stop hook fired for this session's
+	// current turn — an authoritative, per-adapter turn-done push delivered at
+	// true turn end (issue #1161). Transient and live-only: the detector's
+	// overlayHookTurnDone sets it for the single classify pass triggered by the
+	// Stop hook and then clears its backing map (consume-once), so it never
+	// bleeds into the next turn and is never set under replay. IsAgentDone()
+	// treats it as authoritative, taking precedence over the transcript-tail
+	// heuristic (and its codex carve-out) below.
+	HookTurnDone bool `json:"-"`
+
 	// SawUserBlockingToolClosedThisPass reflects the last tailer pass: true
 	// when an AskUserQuestion / ExitPlanMode tool_use and its tool_result
 	// were processed together in one pass. Triggers the daemon's synthetic
@@ -492,6 +502,17 @@ func (m *SessionMetrics) IsAgentDone() bool {
 	if m.HasLiveBackgroundProcess {
 		return false
 	}
+	// Authoritative: Claude Code's Stop hook fired at true turn end (#1161),
+	// overlaid by the detector for claudecode. It takes precedence over the
+	// transcript-tail signals below — a clean, per-adapter turn-done push that
+	// doesn't depend on the "assistant"/"assistant_output" heuristic (and its
+	// codex carve-out). Only ever set live, never under replay. Checked after
+	// the open-tool / live-background guards so a Stop that fires while a
+	// sub-agent tool or Bash run_in_background is still outstanding does not
+	// prematurely flip the session to ready.
+	if m.HookTurnDone {
+		return true
+	}
 	// Primary: Claude Code writes a system/turn_duration event at end of turn.
 	if m.LastEventType == "turn_done" {
 		return true
@@ -529,10 +550,10 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 
 // newMergedMetrics copies the fields a fresh tailer pass always recomputes
 // verbatim from newM. Fields not listed here are deliberately left at their
-// zero value: LastCWD, PermissionPending, SawUserBlockingToolClosedThisPass,
-// OpenToolStalled, and CompactInProgress are per-pass overlay/transient
-// signals that the detector (re-)sets fresh after each merge, so carrying
-// stale values here would be a bug, not a convenience.
+// zero value: LastCWD, PermissionPending, HookTurnDone,
+// SawUserBlockingToolClosedThisPass, OpenToolStalled, and CompactInProgress are
+// per-pass overlay/transient signals that the detector (re-)sets fresh after
+// each merge, so carrying stale values here would be a bug, not a convenience.
 func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 	return &SessionMetrics{
 		ElapsedSeconds:       newM.ElapsedSeconds,

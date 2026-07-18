@@ -1,9 +1,11 @@
 // hooks.go provides the HTTP handler for receiving Claude Code hook events.
-// Claude Code fires hooks on PermissionRequest, PreToolUse, PostToolUse, and
-// PostToolUseFailure — the daemon uses these to surface user-blocking state
-// in the classifier. PermissionRequest covers permission gates (issue #108);
-// PreToolUse on AskUserQuestion / ExitPlanMode covers user-input overlays
-// that block the agent before the transcript is flushed (issue #307).
+// Claude Code fires hooks on PermissionRequest, PreToolUse, PostToolUse,
+// PostToolUseFailure, PreCompact and Stop — the daemon uses these to surface
+// user-blocking and turn-done state in the classifier. PermissionRequest covers
+// permission gates (issue #108); PreToolUse on AskUserQuestion / ExitPlanMode
+// covers user-input overlays that block the agent before the transcript is
+// flushed (issue #307); Stop is the authoritative per-turn done signal
+// delivered at true turn end, carrying the final assistant text (issue #1161).
 package claudecode
 
 import (
@@ -20,13 +22,16 @@ import (
 )
 
 // Hook event names. Claude Code fires these; the daemon recognizes only
-// these five and ignores everything else.
+// these six and ignores everything else.
 const (
 	HookPermissionRequest  = "PermissionRequest"
 	HookPreToolUse         = "PreToolUse"
 	HookPostToolUse        = "PostToolUse"
 	HookPostToolUseFailure = "PostToolUseFailure"
 	HookPreCompact         = "PreCompact"
+	// HookStop fires once at true turn end, carrying last_assistant_message.
+	// It is the authoritative turn-done signal for claudecode (issue #1161).
+	HookStop = "Stop"
 )
 
 // compactTriggerManual is the PreCompact trigger value for a user-invoked
@@ -61,6 +66,9 @@ type hookPayload struct {
 	// Trigger is "manual" or "auto" on PreCompact events (the compaction
 	// cause). Empty on other hook events.
 	Trigger string `json:"trigger,omitempty"`
+	// LastAssistantMessage is the full text of the turn's final assistant
+	// message, carried by the Stop hook (issue #1161). Empty on other events.
+	LastAssistantMessage string `json:"last_assistant_message,omitempty"`
 }
 
 // HookTarget is the interface the handler calls into. Satisfied by
@@ -71,6 +79,12 @@ type HookTarget interface {
 	// manual /compact, whose compaction window writes nothing to the transcript
 	// (#657). trigger is the PreCompact cause ("manual" / "auto").
 	HandleCompactHook(sessionID, transcriptPath, trigger string)
+	// HandleStopHook records the authoritative turn-done signal from Claude
+	// Code's Stop hook (#1161). lastAssistantText is the turn's final assistant
+	// text, already display-truncated; waitingCue reports whether that message
+	// carried a question or imperative cue (computed from the full text so a cue
+	// beyond the display tail still routes the turn to waiting, not ready).
+	HandleStopHook(sessionID, transcriptPath, lastAssistantText string, waitingCue bool)
 }
 
 // MarkerTarget is the narrow interface for hook-carried task-estimate
@@ -235,6 +249,8 @@ func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGrant
 		handlePreCompactHook(target, log, sessionID, payload)
 	case HookPreToolUse:
 		handlePreToolUseHook(markers, log, sessionID, payload, dispatch)
+	case HookStop:
+		handleStopHook(target, log, sessionID, payload)
 	default:
 		// Unrecognized hook event — accept but ignore.
 		log.LogInfo(logComponentHookReceiver, sessionID,
@@ -261,6 +277,38 @@ func handlePreCompactHook(target HookTarget, log outbound.Logger, sessionID stri
 		log.LogInfo(logComponentHookReceiver, sessionID,
 			fmt.Sprintf("ignored %s (trigger=%q, not manual)", payload.HookEventName, payload.Trigger))
 	}
+}
+
+// handleStopHook processes a Claude Code Stop hook — the authoritative
+// turn-done push delivered at true turn end (#1161). It forwards a turn-done
+// signal plus the turn's final assistant text so the classifier decides
+// ready-vs-waiting from the same message IsWaitingForUserInput reads, without
+// depending on the transcript-tail heuristic (and its codex carve-out).
+//
+// The forwarded text is display-truncated; the waiting-cue verdict is computed
+// from a bounded tail window (WaitingScanWindow) of the FULL message — the same
+// window parser.go uses for PendingWaitingCue — so a question or cue sitting
+// before the display tail still routes the turn to waiting, while ExtractWaitingCue
+// is not fed the whole (possibly very long) turn, where it over-fires.
+func handleStopHook(target HookTarget, log outbound.Logger, sessionID string, payload hookPayload) {
+	log.LogInfo(logComponentHookReceiver, sessionID,
+		fmt.Sprintf("received %s (%d chars of assistant text)", payload.HookEventName, len(payload.LastAssistantMessage)))
+
+	target.HandleStopHook(sessionID, payload.TranscriptPath,
+		tailer.TruncateAssistantText(payload.LastAssistantMessage),
+		waitingCueInTail(payload.LastAssistantMessage))
+}
+
+// waitingCueInTail reports whether the bounded tail window of an assistant
+// message carries a trailing question or an imperative waiting cue (issue
+// #1150). Bounded, not full text: ExtractWaitingCue over-fires on very long
+// turns (see tailer.MaxWaitingScanRunes). Shared by the transcript parser
+// (PendingWaitingCue) and the Stop-hook handler (#1161) so the window size and
+// the OR-of-two-detectors rule can't drift between the two paths.
+func waitingCueInTail(full string) bool {
+	win := tailer.WaitingScanWindow(full)
+	return win != "" &&
+		(session.ExtractQuestionSnippet(win) != "" || session.ExtractWaitingCue(win) != "")
 }
 
 // handlePreToolUseHook processes a PreToolUse hook event: scans the tool

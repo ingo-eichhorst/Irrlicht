@@ -1,30 +1,40 @@
 // hookinstaller.go manages Claude Code hook entries in ~/.claude/settings.json
 // for the irrlicht daemon. It installs PermissionRequest, PreToolUse,
-// PostToolUse, and PostToolUseFailure hooks that POST to the daemon's HTTP
-// endpoint, and can remove them cleanly. (Issues #108, #307.)
+// PostToolUse, PostToolUseFailure, PreCompact and Stop hooks that POST to the
+// daemon's HTTP endpoint via native `type: http` delivery, and can remove them
+// cleanly. (Issues #108, #307, #657, #1161.)
 package claudecode
 
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
-// hookSentinel is the substring in the hook command that identifies irrlicht-
-// managed entries. Used by both install (idempotency check) and uninstall.
+// hookSentinel is the substring in the hook entry (curl command or http url)
+// that identifies irrlicht-managed entries. Used by both install (idempotency
+// check) and uninstall, and by the curl→http migration. It is a substring of
+// both the legacy command and the current URL, so a pre-#1161 install is still
+// recognized as ours and upgraded in place.
 const hookSentinel = "localhost:7837/api/v1/hooks/claudecode"
 
-// installedHookCommand is the curl command installed as the hook handler. It
-// pipes the hook payload (stdin) to the daemon's HTTP endpoint. Flags:
-//   - -f: fail silently on HTTP errors (non-blocking)
-//   - -sS: silent but show errors
-//   - --max-time 1: abort after 1 second (fast no-op when daemon is down)
-//
-// `|| true` keeps exit status 0 when the daemon is down so Claude Code
-// doesn't surface "connection refused" as a PostToolUse hook error.
-const installedHookCommand = "curl -fsS --max-time 1 -X POST --data-binary @- http://localhost:7837/api/v1/hooks/claudecode || true"
+// hookEndpointURL is the daemon endpoint the installed hook posts to. Claude
+// Code delivers the hook payload as a JSON POST body directly to this URL via
+// its native `type: http` hook — no shell, no curl (issue #1161). Removing the
+// curl dependency means hook delivery no longer silently no-ops when curl is
+// missing from PATH, which was the failure mode the OpenToolStalled transcript
+// fallback (#488) exists to cover; that fallback is retained (it still covers a
+// down/unreachable daemon), but its primary trigger is now gone.
+const hookEndpointURL = "http://localhost:7837/api/v1/hooks/claudecode"
+
+// hookTimeoutSeconds bounds how long Claude Code waits on the daemon before
+// giving up on a hook delivery. The daemon's handler is near-instant (an
+// in-memory map write plus a channel send) and a down daemon fails the
+// connection immediately, so this is only a safety ceiling against a wedged
+// daemon — well below Claude Code's 600s default so a hook can never stall a
+// turn.
+const hookTimeoutSeconds = 5
 
 // hookMatcher is the matcher used by PermissionRequest, PostToolUse, and
 // PostToolUseFailure. AskUserQuestion / ExitPlanMode are included so the
@@ -53,31 +63,37 @@ var installedHookEvents = []string{
 	HookPostToolUse,
 	HookPostToolUseFailure,
 	HookPreCompact,
+	HookStop,
 }
 
 // matcherForEvent returns the matcher we install for the given event. For most
 // events this is a tool-name regex; for PreCompact it is the compaction trigger
-// ("manual").
+// ("manual"); for Stop it is empty — Claude Code's Stop hook takes no matcher
+// (it fires at every turn end) and rejects settings.json that gives it one, so
+// addOurHook omits the matcher key entirely for an empty matcher.
 func matcherForEvent(event string) string {
 	switch event {
 	case HookPreToolUse:
 		return hookMatcherPreToolUse
 	case HookPreCompact:
 		return hookMatcherPreCompact
+	case HookStop:
+		return ""
 	default:
 		return hookMatcher
 	}
 }
 
-// HookDeliveryAvailable reports whether the tool the installed hook command
-// relies on to reach the daemon is on PATH. installedHookCommand POSTs via
-// `curl`, so a missing curl means every hook silently no-ops (the trailing
-// `|| true` swallows "command not found") and permission prompts never
-// surface as `waiting`. main.go calls this at startup to turn that otherwise
-// invisible failure into a logged warning (#488).
-func HookDeliveryAvailable() bool {
-	_, err := exec.LookPath("curl")
-	return err == nil
+// ourHookEntry builds the inner hook object we install: native `type: http`
+// delivery straight to the daemon (issue #1161), no shell wrapper. Claude Code
+// POSTs the hook payload as a JSON body to url and treats a 2xx with no body as
+// "no decision" — exactly the daemon's behaviour.
+func ourHookEntry() map[string]interface{} {
+	return map[string]interface{}{
+		"type":    "http",
+		"url":     hookEndpointURL,
+		"timeout": hookTimeoutSeconds,
+	}
 }
 
 // EnsureHooksInstalled adds irrlicht hook entries to ~/.claude/settings.json
@@ -99,7 +115,7 @@ func EnsureHooksInstalled() (bool, error) {
 	modified := false
 	for _, event := range installedHookEvents {
 		expected := matcherForEvent(event)
-		if upgradeStaleHookCommands(hooksMap, event) {
+		if upgradeStaleHookDelivery(hooksMap, event) {
 			modified = true
 		}
 		if upgradeStaleHookMatchers(hooksMap, event, expected) {
@@ -216,28 +232,30 @@ func hasOurHook(hooksMap map[string]interface{}, event string) bool {
 	return false
 }
 
-// upgradeStaleHookCommands rewrites any hook command that contains hookSentinel
-// but isn't the canonical installedHookCommand. Returns true if any entry was
-// rewritten. This migrates users whose settings.json still has an older form
-// of our command (e.g., missing the trailing `|| true`).
-func upgradeStaleHookCommands(hooksMap map[string]interface{}, event string) bool {
+// upgradeStaleHookDelivery rewrites any sentinel-bearing inner hook that is not
+// the canonical native-http entry to the current form. Returns true if any
+// entry was rewritten. This migrates an existing install from the legacy curl
+// `command` wrapper to native `type: http` delivery (issue #1161) — and, more
+// generally, any older shape carrying our sentinel — in place, without
+// appending a duplicate group.
+func upgradeStaleHookDelivery(hooksMap map[string]interface{}, event string) bool {
 	arr, ok := hooksMap[event].([]interface{})
 	if !ok {
 		return false
 	}
 	upgraded := false
 	for _, g := range arr {
-		if upgradeGroupHookCommand(g) {
+		if upgradeGroupHookDelivery(g) {
 			upgraded = true
 		}
 	}
 	return upgraded
 }
 
-// upgradeGroupHookCommand rewrites the command of any inner hook entry in a
-// single matcher group that contains hookSentinel but isn't the canonical
-// installedHookCommand. Returns true if any entry was rewritten.
-func upgradeGroupHookCommand(g interface{}) bool {
+// upgradeGroupHookDelivery rewrites, in one matcher group, every inner hook that
+// carries our sentinel but isn't the canonical native-http entry (e.g. the
+// legacy curl command). Returns true if any entry was rewritten.
+func upgradeGroupHookDelivery(g interface{}) bool {
 	group, ok := g.(map[string]interface{})
 	if !ok {
 		return false
@@ -247,28 +265,25 @@ func upgradeGroupHookCommand(g interface{}) bool {
 		return false
 	}
 	upgraded := false
-	for _, h := range innerHooks {
+	for i, h := range innerHooks {
 		hook, ok := h.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		cmd, ok := hook["command"].(string)
-		if !ok {
-			continue
-		}
-		if strings.Contains(cmd, hookSentinel) && cmd != installedHookCommand {
-			hook["command"] = installedHookCommand
+		if hookEntryIsSentinel(hook) && !hookEntryIsCanonical(hook) {
+			innerHooks[i] = ourHookEntry()
 			upgraded = true
 		}
 	}
 	return upgraded
 }
 
-// upgradeStaleHookMatchers rewrites the matcher of any group containing our
-// sentinel whose matcher differs from the expected value. Used to migrate
-// existing installs when we widen (or change) the matcher for an event — for
-// example, the #307 expansion that adds AskUserQuestion|ExitPlanMode to the
-// PostToolUse matcher.
+// upgradeStaleHookMatchers reconciles the matcher of any group containing our
+// sentinel with the expected value. Used to migrate existing installs when we
+// widen or change an event's matcher (e.g. the #307 expansion that added
+// AskUserQuestion|ExitPlanMode to the PostToolUse matcher). For an event whose
+// expected matcher is empty (Stop, #1161) it strips any matcher key entirely,
+// since Claude Code rejects a Stop hook that carries one.
 func upgradeStaleHookMatchers(hooksMap map[string]interface{}, event, expected string) bool {
 	arr, ok := hooksMap[event].([]interface{})
 	if !ok {
@@ -283,24 +298,41 @@ func upgradeStaleHookMatchers(hooksMap map[string]interface{}, event, expected s
 		if !containsHookSentinel(g) {
 			continue
 		}
-		if m, _ := group["matcher"].(string); m != expected {
-			group["matcher"] = expected
+		if reconcileGroupMatcher(group, expected) {
 			upgraded = true
 		}
 	}
 	return upgraded
 }
 
-// addOurHook appends a matcher group with our hook command to the event's array.
+// reconcileGroupMatcher brings one sentinel-bearing group's matcher into line
+// with expected: sets it when it differs, or deletes the key when expected is
+// empty (a Stop hook must carry no matcher). Returns true if it changed the group.
+func reconcileGroupMatcher(group map[string]interface{}, expected string) bool {
+	m, has := group["matcher"].(string)
+	if expected == "" {
+		if has {
+			delete(group, "matcher")
+			return true
+		}
+		return false
+	}
+	if m != expected {
+		group["matcher"] = expected
+		return true
+	}
+	return false
+}
+
+// addOurHook appends a matcher group with our native-http hook entry to the
+// event's array. The matcher key is omitted entirely for an empty matcher
+// (Stop), which Claude Code requires.
 func addOurHook(hooksMap map[string]interface{}, event, matcher string) {
 	entry := map[string]interface{}{
-		"matcher": matcher,
-		"hooks": []interface{}{
-			map[string]interface{}{
-				"type":    "command",
-				"command": installedHookCommand,
-			},
-		},
+		"hooks": []interface{}{ourHookEntry()},
+	}
+	if matcher != "" {
+		entry["matcher"] = matcher
 	}
 
 	existing, ok := hooksMap[event]
@@ -342,7 +374,8 @@ func removeOurHook(hooksMap map[string]interface{}, event string) bool {
 	return true
 }
 
-// containsHookSentinel checks if a matcher group contains a hook command with our sentinel.
+// containsHookSentinel checks if a matcher group contains an inner hook entry
+// carrying our sentinel — either the legacy curl command or the native-http url.
 func containsHookSentinel(g interface{}) bool {
 	group, ok := g.(map[string]interface{})
 	if !ok {
@@ -357,9 +390,36 @@ func containsHookSentinel(g interface{}) bool {
 		if !ok {
 			continue
 		}
-		if cmd, ok := hook["command"].(string); ok && strings.Contains(cmd, hookSentinel) {
+		if hookEntryIsSentinel(hook) {
 			return true
 		}
 	}
 	return false
+}
+
+// hookEntryIsSentinel reports whether an inner hook object is one of ours,
+// identified by our sentinel appearing in either the legacy `command` (curl) or
+// the current `url` (native http) field.
+func hookEntryIsSentinel(hook map[string]interface{}) bool {
+	if cmd, ok := hook["command"].(string); ok && strings.Contains(cmd, hookSentinel) {
+		return true
+	}
+	if url, ok := hook["url"].(string); ok && strings.Contains(url, hookSentinel) {
+		return true
+	}
+	return false
+}
+
+// hookEntryIsCanonical reports whether an inner hook object is already in the
+// current native-http form: type "http", our endpoint url, and no leftover
+// legacy `command` key. The timeout value is deliberately not part of the
+// identity check, so tuning hookTimeoutSeconds never forces a churny rewrite of
+// every existing install.
+func hookEntryIsCanonical(hook map[string]interface{}) bool {
+	if _, hasCmd := hook["command"]; hasCmd {
+		return false
+	}
+	t, _ := hook["type"].(string)
+	u, _ := hook["url"].(string)
+	return t == "http" && u == hookEndpointURL
 }

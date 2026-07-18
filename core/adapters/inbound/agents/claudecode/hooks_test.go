@@ -13,12 +13,13 @@ import (
 	"irrlicht/core/internal/contracttesting"
 )
 
-// mockTarget records calls to HandlePermissionHook and HandleCompactHook for
-// assertions.
+// mockTarget records calls to HandlePermissionHook, HandleCompactHook and
+// HandleStopHook for assertions.
 type mockTarget struct {
 	mu           sync.Mutex
 	calls        []hookCall
 	compactCalls []compactCall
+	stopCalls    []stopCall
 }
 
 type hookCall struct {
@@ -27,6 +28,11 @@ type hookCall struct {
 
 type compactCall struct {
 	sessionID, transcriptPath, trigger string
+}
+
+type stopCall struct {
+	sessionID, transcriptPath, lastAssistantText string
+	waitingCue                                   bool
 }
 
 func (m *mockTarget) HandlePermissionHook(sessionID, transcriptPath, hookEventName string) {
@@ -41,6 +47,12 @@ func (m *mockTarget) HandleCompactHook(sessionID, transcriptPath, trigger string
 	m.compactCalls = append(m.compactCalls, compactCall{sessionID, transcriptPath, trigger})
 }
 
+func (m *mockTarget) HandleStopHook(sessionID, transcriptPath, lastAssistantText string, waitingCue bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stopCalls = append(m.stopCalls, stopCall{sessionID, transcriptPath, lastAssistantText, waitingCue})
+}
+
 func (m *mockTarget) getCalls() []hookCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -51,6 +63,7 @@ func (m *mockTarget) reset() {
 	m.mu.Lock()
 	m.calls = nil
 	m.compactCalls = nil
+	m.stopCalls = nil
 	m.mu.Unlock()
 }
 
@@ -58,6 +71,12 @@ func (m *mockTarget) getCompactCalls() []compactCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]compactCall{}, m.compactCalls...)
+}
+
+func (m *mockTarget) getStopCalls() []stopCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]stopCall{}, m.stopCalls...)
 }
 
 // mockLogger satisfies outbound.Logger.
@@ -260,6 +279,77 @@ func TestHookHandler_PreCompactAuto(t *testing.T) {
 	}
 	if got := target.getCompactCalls(); len(got) != 0 {
 		t.Errorf("auto PreCompact should not dispatch; got %+v", got)
+	}
+}
+
+// TestHookHandler_Stop verifies a Stop hook routes to HandleStopHook with the
+// turn's final assistant text (display-truncated) and waitingCue=false when the
+// message is a plain completion, so the classifier can mark the turn done →
+// ready (#1161). It must not reach the permission or compact paths.
+func TestHookHandler_Stop(t *testing.T) {
+	target := &mockTarget{}
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
+
+	payload := hookPayload{
+		TranscriptPath:       "/Users/u/.claude/projects/p/sess-stop.jsonl",
+		HookEventName:        "Stop",
+		LastAssistantMessage: "All tests pass. The refactor is complete.",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if len(target.getCalls()) != 0 || len(target.getCompactCalls()) != 0 {
+		t.Errorf("Stop must not reach permission/compact paths; perm=%+v compact=%+v",
+			target.getCalls(), target.getCompactCalls())
+	}
+	stops := target.getStopCalls()
+	if len(stops) != 1 {
+		t.Fatalf("got %d HandleStopHook calls, want 1", len(stops))
+	}
+	if stops[0].sessionID != "sess-stop" {
+		t.Errorf("sessionID = %q, want %q", stops[0].sessionID, "sess-stop")
+	}
+	if stops[0].lastAssistantText != "All tests pass. The refactor is complete." {
+		t.Errorf("lastAssistantText = %q, want the full (short) message", stops[0].lastAssistantText)
+	}
+	if stops[0].waitingCue {
+		t.Errorf("waitingCue = true for a plain completion message, want false")
+	}
+}
+
+// TestHookHandler_StopEndingInQuestion verifies a Stop hook whose final message
+// ends on a question is reported with waitingCue=true, so a turn that ended by
+// asking the user routes to waiting rather than ready (#1161).
+func TestHookHandler_StopEndingInQuestion(t *testing.T) {
+	target := &mockTarget{}
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
+
+	payload := hookPayload{
+		TranscriptPath:       "/Users/u/.claude/projects/p/sess-q.jsonl",
+		HookEventName:        "Stop",
+		LastAssistantMessage: "I can take either approach. Which option do you prefer?",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	stops := target.getStopCalls()
+	if len(stops) != 1 {
+		t.Fatalf("got %d HandleStopHook calls, want 1", len(stops))
+	}
+	if !stops[0].waitingCue {
+		t.Errorf("waitingCue = false for a message ending in a question, want true")
 	}
 }
 

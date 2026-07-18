@@ -4,7 +4,6 @@ import (
 	"regexp"
 	"strings"
 
-	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/pkg/transcript"
 )
@@ -786,9 +785,7 @@ func applyAssistantText(raw map[string]interface{}, ev *tailer.ParsedEvent, even
 		// truncation (e.g. codex) share this beyond-tail blind spot; the plumbing
 		// (ParsedEvent.PendingWaitingCue → tailer → domain) is adapter-agnostic,
 		// so each can adopt it by computing PendingWaitingCue the same way here.
-		win := tailer.WaitingScanWindow(full)
-		ev.PendingWaitingCue = win != "" &&
-			(session.ExtractQuestionSnippet(win) != "" || session.ExtractWaitingCue(win) != "")
+		ev.PendingWaitingCue = waitingCueInTail(full)
 	case "user", "user_message", "user_input":
 		ev.ClearToolNames = true
 		ev.UserText = tailer.ExtractUserText(raw)
