@@ -2,86 +2,112 @@
   "scenario_id": "tool-gate-permission-prompt",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "incapable",
+    "daemon_capability": "full",
     "driver_capability": "ready",
-    "agent_cli_version": "0.135.0",
-    "daemon_version": "0.4.8+aa1c70d.dirty",
-    "confidence": 0.85,
-    "notes": "agent_supports: yes (codex --ask-for-approval untrusted/on-request gates non-trusted commands); daemon_capability: incapable (the held approval gate is a live protocol/TUI state, never written to the watched rollout JSONL); driver_capability: ready"
+    "agent_cli_version": "0.144.4",
+    "daemon_version": "0.5.9+fd771c1",
+    "confidence": 0.9,
+    "notes": "RE-ASSESSED after PR #1171: codex now has an HTTP hook channel (POST /api/v1/hooks/codex). PermissionRequest → HandlePermissionHook → PermissionPending → state_classifier rule 0 → waiting; Stop → ready. LIVE-CONFIRMED under codex 0.144.4. daemon_capability: full (was incapable). Recording DEFERRED: the installed hook POSTs to hardcoded http://localhost:7837, but the :7838 coexist recorder never receives it — record on a :7837 --record daemon via `of record run --attach`."
   },
   "details": {
     "assessment": {
       "schema_version": 1,
       "scenario_id": "tool-gate-permission-prompt",
       "agent": "codex",
-      "assessed_at": "2026-05-31T00:00:00Z",
+      "assessed_at": "2026-07-18T00:00:00Z",
       "agent_supports": "yes",
-      "daemon_capability": "incapable",
+      "daemon_capability": "full",
       "driver_capability": "ready",
-      "confidence": 0.85,
-      "body": "## Verdict\n\nagent_supports: yes (codex CLI 0.135.0 has `-a/--ask-for-approval \u003cAPPROVAL_POLICY\u003e`; under `untrusted` every non-trusted command escalates and blocks on a human approval prompt)\ndaemon_capability: incapable (the held approval gate is a LIVE protocol/TUI state, never written to the watched rollout JSONL the daemon tails)\ndriver_capability: ready (codex's interactive driver has both `send` to elicit the gate and `keys` to resolve the picker)\n\n## Scenario signal\n\n`tool-gate-permission-prompt` asserts the user-observable arc `ready → working → waiting` when a tool invocation opens a permission prompt, and (the resolve half / late-hook variant) `waiting → working → ready` after the user answers, with a delayed post-tool signal NOT bouncing the session. The load-bearing observable is the `working → waiting` episode while the gate is held.\n\n## Agent supports it (agent_supports: yes)\n\ncodex CLI 0.135.0 ships `-a, --ask-for-approval \u003cAPPROVAL_POLICY\u003e` with `untrusted` / `on-request` / `on-failure` / `never` (codex --help). Under `untrusted`, only trusted commands (ls, cat, sed) auto-run; any other model-proposed command escalates to the user for approval and blocks the turn until answered. The codex rust binary's protocol schema carries `exec_approval_request` and `apply_patch_approval_request` EventMsg variants plus the runtime thread states `waitingOnApproval` / `waitingOnUserInput` (strings in the aarch64 codex binary). So codex unambiguously HAS the blocking permission gate this scenario asserts — stronger than the sibling `auto-classified-permission` cell's `partial`, because that scenario needs a per-call safe-vs-risky classifier (`permission_hooks`) codex lacks, whereas THIS scenario only needs the generic approval prompt, which `--ask-for-approval untrusted` provides.\n\n## Daemon cannot observe it (daemon_capability: incapable)\n\nThe codex adapter is `FilesUnderRoot` over `$HOME/.codex/sessions/rollout-*.jsonl` with a JSONL parser (agent.go) — there is NO HTTP hook channel of the Claude-Code kind. The held approval gate produces no trace the daemon can turn into `waiting`:\n\n1. **No hook → rule 0 dead.** `state_classifier.go` rule 0 (`PermissionPending` → waiting) is fed solely by Claude Code's HTTP `HandlePermissionHook` (PermissionRequest/PreToolUse). codex's FilesUnderRoot transport never calls it, so `PermissionPending` is always false for codex.\n2. **The approval request is never persisted to the rollout.** `exec_approval_request` / `apply_patch_approval_request` are live protocol notifications between the codex core and its TUI/client, correlated with ExecCommandBegin/PatchApplyBegin — they are NOT `RolloutItem`s. Surveyed across every recorded codex rollout in `replaydata/agents/codex/`, the persisted `event_msg` payload types are only `token_count`, `agent_message`, `task_started`, `user_message`, `task_complete`, `exec_command_end`, `patch_apply_end`, `turn_aborted`, `item_completed`, `context_compacted`; NO `*_approval_request` line appears in any rollout (the only `approval` substrings are the agent's own system-prompt escalation prose). So the gate's held state lives entirely in the live protocol / TUI (`waitingOnApproval`), outside the watched Source.\n3. **The most the rollout shows is an ordinary open tool call, which classifies as `working`.** A held command appears (if at all) as a `response_item` `function_call name=exec_command`/`shell` with no `function_call_output` yet → `HasOpenToolCall=true`. But the codex parser copies the raw codex tool name (`exec_command`, `shell`, `apply_patch`), and none of the three transcript waiting rules match it: rule 1 `NeedsUserAttention` matches only `AskUserQuestion`/`ExitPlanMode`/`question` (codex maps `\u003cproposed_plan\u003e` → `ExitPlanMode`, but that is the plan-mode scenario, not an exec/shell gate); rule 1b `OpenToolStalled` matches only `Edit`/`Write`/`MultiEdit`/`NotebookEdit`. The classifier test `state_classifier_test.go` (\"working stays working (Bash open, no permission pending)\") is verbatim authority: a generic open tool call with no permission-pending hook STAYS working, never waiting.\n\nNet: a held codex approval gate yields, in the watched rollout, at most a normal open tool call the daemon classifies as `working` — never `waiting`. The waiting episode the cell asserts leaves no trace the 3-state model can represent. That is `incapable` (no trace in the Source / architecture-transport limit on the FilesUnderRoot adapter) — NOT a `bug` (no spec-required observable is mis-handled; the gate simply isn't in the read path). This mirrors the committed `opencode × tool-gate-permission-prompt` verdict (held gate outside the watched Source → incapable) and the sibling `codex × auto-classified-permission` verdict (incapable, same parser limitation).\n\n## Driver is ready (driver_capability: ready)\n\nUnlike opencode (whose interactive driver lacked a raw-keystroke step to answer its overlay → gap:permission-approval), codex's `driver-interactive.sh` already implements both halves: `send` types a tool-inducing prompt (under `--ask-for-approval untrusted` this elicits the gate) and `keys` sends raw tmux key sequences (Up/Down/Enter/Escape) to navigate and answer the approval picker. recipe-lint `driver_step_types_from_file` reports the full set incl. `keys`. So there is NO driver gap — but the route is governed by the incapable daemon pillar, so driver readiness is moot here.\n\n## Route\n\nincapable daemon → **frozen**: irrlicht fundamentally cannot observe the held codex approval gate today, so no recipe and no recording are authored. This would unblock only if codex began persisting an approval-request / `waitingOnApproval` marker into the rollout AND the codex parser learned to translate the held gate into a `working → waiting` transition (e.g. a new parser branch + a dwell/approval-pending signal the classifier could read).",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes (codex `-a/--ask-for-approval untrusted` gates every non-trusted command on a blocking approval overlay)\ndaemon_capability: **full** (was `incapable`) — PR #1171 gave codex an HTTP hook channel; a held approval overlay now drives a real `working → waiting` transition. **LIVE-CONFIRMED.**\ndriver_capability: ready (the codex interactive driver has `send`, `wait_turn`, `keys`, `sleep` — every step type the recipe needs)\n\n## Why the prior `incapable` verdict is now STALE\n\nThe committed metadata judged `daemon=incapable` on the thesis that codex's Source is `FilesUnderRoot` with **no HTTP hook channel of the Claude-Code kind**, so `state_classifier.go` rule 0 (`PermissionPending → waiting`) is **dead for codex** and `PermissionPending` is always false. That thesis is now FALSE. PR #1171 (epic #1129) added exactly that hook channel:\n\n1. **`core/adapters/inbound/agents/codex/hooks.go`** — a `POST /api/v1/hooks/codex` receiver. `PermissionRequest` and `PostToolUse` dispatch to `HandlePermissionHook`; `Stop` dispatches to `HandleStopHook` (carrying the turn's final assistant text). Session id is resolved from the transcript path, not the payload's shared `session_id`.\n2. **`core/adapters/inbound/agents/codex/hookinstaller.go`** — installs curl `type: command` hooks into `~/.codex/hooks.json` (a dedicated file, never `config.toml`). PermissionRequest/PostToolUse carry matcher `\".*\"`; Stop takes no matcher. Version-gated to codex ≥ 0.114.0 (`codexSupportsHooks`), sentinel-idempotent, atomic write.\n3. **`core/adapters/inbound/agents/codex/agent.go`** — a new `hooks` permission (`permission.KindModify`) whose `Apply` closure runs `applyCodexHooks()` (install) and `Remove` runs `UninstallHooks()`.\n4. **`core/cmd/irrlichd/startup.go:917`** — `registerHookRoutes` wires `POST /api/v1/hooks/codex` → `codex.NewHookHandler(detector, permService, logger)`.\n\nNet effect: `PermissionRequest → HandlePermissionHook` (`session_detector_lifecycle.go:282`) → `state.Metrics.PermissionPending = true` (`session_detector_activity.go:867`) → `state_classifier.go:35` rule 0 → **waiting**. `Stop → HandleStopHook` (`session_detector_lifecycle.go:347`) → turn-end → **ready**. `PostToolUse` clears the pending overlay once an approved tool runs. Rule 0 is no longer dead for codex.\n\n## LIVE VERIFICATION (promotes daemon from doc/binary-strings to live-confirmed)\n\nUnder codex-cli **0.144.4** with a worktree-built `irrlichd` on `:7837` (`IRRLICHT_PERMISSION_MODE=grant-all`), codex was driven under tmux with `-a untrusted -s read-only` on a write task. At the approval prompt (a TUI overlay, NOT written to the rollout JSONL) the daemon flipped the codex session to **waiting**; after approving and the turn ending it went **ready**. The `hooks` permission auto-installed `~/.codex/hooks.json` (PermissionRequest & PostToolUse matcher `\".*\"`; Stop no matcher). This is the exact arc the scenario asserts, observed on a live session — the prior assessment's provisional emission claim is now settled.\n\n## Scenario signal\n\n`tool-gate-permission-prompt` asserts `ready → working → waiting` when a tool invocation opens a permission prompt (the load-bearing episode), with the recipe capturing entry into waiting and stopping. The hook path above produces exactly this. The resolve half (`waiting → working → ready`) and the late-hook no-bounce are also covered by the live arc, but — mirroring the claudecode sibling — the spec stops at the waiting entry.\n\n## Recording is DEFERRED (infra limit, NOT a capability limit)\n\nThe installed hook POSTs to a **hardcoded** `http://localhost:7837` (`hookinstaller.go` `hookEndpointURL`). The factory coexist recorder runs on `:7838` and `tools/onboarding-factory/scripts/run-cell-multi.sh` explicitly notes that codex/claudecode hooks (hardcoded to :7837) reach **production, not the :7838 recorder**. So a coexist recording on :7838 would never receive the PermissionRequest hook and could not capture the waiting transition. This is the SAME hardcoded-port limitation claudecode's hooks carry — and claudecode's own tool-gate cell was recorded by attaching to a :7837 `--record` daemon. So the daemon is CAPABLE now; the recording is deferred to a `:7837 --record` daemon via `of record run --attach` (or a future configurable hook port). Route stays **record** (pending-record) — the honest \"recordable in principle, not yet recorded\" state — never `frozen`, which is reserved for a daemon that fundamentally cannot observe.\n\n## Deployment detail to record\n\ncodex gates hook EXECUTION behind a one-time interactive \"Trust hooks\" prompt: after irrlicht installs the entries into `~/.codex/hooks.json`, the user must trust them in codex before they fire. A recording run must complete that trust step first.",
       "caveats": [
-        "agent_supports is yes, NOT the sibling auto-classified-permission cell's partial: tool-gate-permission-prompt only needs the generic blocking approval prompt, which codex's --ask-for-approval untrusted provides for every non-trusted command. auto-classified-permission additionally needs a per-call safe-vs-risky classifier (permission_hooks) codex lacks — different scenario, different agent verdict.",
-        "daemon=incapable, not bug: the approval request (exec_approval_request / apply_patch_approval_request) is a live protocol/TUI event (waitingOnApproval), never a RolloutItem, so it is absent from the watched rollout JSONL entirely — confirmed by surveying every recorded codex rollout (no *_approval_request line ever persists). A held gate shows at most as a normal open exec_command/shell function_call, which the classifier keeps in working (verbatim test: 'working stays working (Bash open, no permission pending)'). No spec-required observable is mis-handled; the gate is simply not in the read path.",
-        "This is a doc+code+binary-strings + recorded-rollout-survey verdict, NOT live-confirmed: no live codex run was driven through a held --ask-for-approval untrusted gate while inspecting the rollout in real time. The emission claim (the approval request never lands in the rollout) is grounded in the protocol schema (RolloutItem vs EventMsg) and the absence across all recorded rollouts, but a future live probe under untrusted could promote it from provisional to settled. Confidence 0.85 reflects this.",
-        "driver_capability is ready (codex driver has send + keys), unlike opencode's gap:permission-approval — but the route is frozen on the incapable daemon pillar regardless."
+        "daemon=full is LIVE-CONFIRMED (codex 0.144.4, worktree irrlichd on :7837): a `-a untrusted -s read-only` write task flipped the session to waiting at the approval overlay, then ready after approval. This supersedes the prior doc+binary-strings `incapable` verdict, which is now stale (PR #1171 added the hook channel it assumed absent).",
+        "RECORDING DEFERRED by a hardcoded-port infra limit, not a capability gap: the installed hook POSTs to hardcoded http://localhost:7837 (hookinstaller.go hookEndpointURL). The :7838 coexist recorder (run-cell-multi.sh) never receives it, so a coexist recording cannot capture the waiting transition. Record instead against a :7837 --record daemon via `of record run --attach` (same path claudecode's tool-gate cell used), or add a configurable hook port. of validate stays green: this is a pending-record cell, and validate does not demand a recording for a record-route cell.",
+        "Deployment prerequisite: codex gates hook EXECUTION behind a one-time interactive \"Trust hooks\" prompt. After irrlicht installs entries into ~/.codex/hooks.json the user must trust them in codex before any hook fires — a recording run must complete that trust step.",
+        "Recipe launch flag: the codex process must be launched with `-a untrusted -s read-only` so a write task escalates to the approval overlay. The interactive driver currently boots `codex --no-alt-screen` with no approval flags, so recording this cell needs the driver's boot line to carry those flags (the live verification launched them by hand under tmux). This is a launch-configuration precondition, not a missing step type — every script step type (send/wait_turn/keys/sleep) is present, so driver=ready.",
+        "PostToolUse (not PostToolUseFailure — codex has none) is the sole pending-clear signal; a denied approval that aborts the turn with no following PostToolUse clears the overlay only on the next tool call (known gap, issue #1174). The recipe holds in waiting and never approves, so this gap is out of the asserted arc."
       ],
       "sources": [
         {
           "kind": "file",
-          "ref": "core/adapters/inbound/agents/codex/agent.go",
-          "note": "codex Source is FilesUnderRoot over $HOME/.codex/sessions with a JSONL parser — no HTTP hook channel, so the daemon's hook-fed PermissionPending (rule 0) path can never fire for codex."
+          "ref": "core/adapters/inbound/agents/codex/hooks.go",
+          "note": "NEW (PR #1171): POST /api/v1/hooks/codex receiver. PermissionRequest/PostToolUse → HandlePermissionHook; Stop → HandleStopHook. Codex now HAS the HTTP hook channel the prior assessment said was absent."
         },
         {
           "kind": "file",
-          "ref": "core/adapters/inbound/agents/codex/parser.go",
-          "note": "Parser copies raw codex tool names (exec_command/shell/apply_patch) on function_call; maps only \u003cproposed_plan\u003e → ExitPlanMode. No approval/permission/waiting branch; persisted event_msg payloads are token_count/task_complete/turn_aborted (no approval_request)."
+          "ref": "core/adapters/inbound/agents/codex/hookinstaller.go",
+          "note": "NEW (PR #1171): installs curl hooks into ~/.codex/hooks.json, version-gated ≥ codex 0.114.0, sentinel-idempotent. hookEndpointURL is HARDCODED http://localhost:7837 — the source of the recording deferral on the :7838 coexist recorder."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/agent.go",
+          "note": "NEW (PR #1171): `hooks` permission (permission.KindModify) with Apply=applyCodexHooks / Remove=UninstallHooks install closures, alongside the existing transcripts observe permission."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/startup.go",
+          "note": "registerHookRoutes (line 917) wires POST /api/v1/hooks/codex → codex.NewHookHandler(detector, permService, logger) — the receiver is live in the daemon."
         },
         {
           "kind": "file",
           "ref": "core/application/services/state_classifier.go",
-          "note": "The three waiting paths: rule 0 PermissionPending (hook-only, dead for codex), rule 1 NeedsUserAttention (AskUserQuestion/ExitPlanMode/question only), rule 1b OpenToolStalled (Edit/Write/MultiEdit/NotebookEdit only). A generic open exec_command matches none → working."
+          "note": "Rule 0 (line 35): PermissionPending → waiting, the most authoritative gate. Now reachable for codex via the hook path — the prior 'rule 0 dead for codex' reasoning is obsolete."
         },
         {
           "kind": "file",
-          "ref": "core/application/services/state_classifier_test.go",
-          "note": "Verbatim authority: test case 'working stays working (Bash open, no permission pending)' — an open generic tool call with no permission-pending hook stays working, never waiting."
+          "ref": "core/application/services/session_detector_lifecycle.go",
+          "note": "HandlePermissionHook (line 282) sets PermissionPending; HandleStopHook (line 347) handles turn-end. Codex's HookTarget is *services.SessionDetector — the same agent-agnostic surface claudecode's hooks use."
         },
         {
           "kind": "file",
-          "ref": "core/domain/session/session.go",
-          "note": "isUserBlockingTool = {AskUserQuestion, ExitPlanMode, question}; isPermissionGatedEditTool = {Edit, Write, MultiEdit, NotebookEdit}. codex's exec_command/shell/apply_patch are in neither set."
+          "ref": "tools/onboarding-factory/scripts/run-cell-multi.sh",
+          "note": "Lines 23-24: the isolated daemon is NOT on :7837, so codex/claudecode hooks (hardcoded :7837) reach production, not the :7838 recorder — the concrete reason a coexist recording cannot capture the hook-driven waiting transition."
         },
         {
           "kind": "file",
-          "ref": "replaydata/agents/codex/driver-interactive.sh",
-          "note": "Interactive driver implements both `send` (elicit a tool-inducing prompt) and `keys` (raw tmux key sequence to answer the approval picker) → driver=ready; recipe-lint driver_step_types_from_file lists keys."
+          "ref": "replaydata/agents/claudecode/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "Sibling reference: same scenario, hook-driven waiting via rule 0, daemon=full, recorded against a :7837 --record daemon — the template for codex's now-symmetric verdict and for the :7837 recording path."
         },
         {
           "kind": "file",
-          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
-          "note": "codex 0.135.0 aarch64 binary strings: protocol carries exec_approval_request / apply_patch_approval_request EventMsg variants and runtime thread states waitingOnApproval / waitingOnUserInput — live protocol/TUI state, correlated with ExecCommandBegin, NOT a RolloutItem persisted to the rollout JSONL."
-        },
-        {
-          "kind": "file",
-          "ref": "replaydata/agents/codex/scenarios/2-2_auto-executed-tool-call/recordings/2026-05-23-22-48-46_irrlichd-0.4.7+14e1e7a/transcript.jsonl",
-          "note": "Recorded codex rollout: an un-gated exec_command is response_item function_call → function_call_output with no approval line. Survey of all codex rollouts shows persisted event_msg payloads never include any *_approval_request; the only 'approval' substrings are the agent's system-prompt escalation prose."
-        },
-        {
-          "kind": "file",
-          "ref": "replaydata/agents/codex/scenarios/2-11_auto-classified-permission/metadata.json",
-          "note": "Sibling codex cell, same parser limitation: daemon=incapable because codex emits no structured permission/waiting signal the parser can map to a selective working→waiting; precedent for this verdict."
-        },
-        {
-          "kind": "file",
-          "ref": "replaydata/agents/opencode/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
-          "note": "Same scenario, other non-hook agent: daemon=incapable because the held gate is outside the watched Source. Codex differs only in driver pillar (ready vs opencode's gap:permission-approval); the daemon verdict is the same."
+          "ref": "replaydata/agents/codex/scenarios/2-17_user-blocking-question/expected.jsonl",
+          "note": "Codex presession-birth template: proc-<PID> presession born ready, rollout session reconciles with a distinct session_id, pid_bind, then working/waiting phases anchored to the REAL session."
         }
       ]
     },
     "recipe": {
-      "applicable": false,
-      "note": "Route is frozen on daemon=incapable — no recipe authored. If a future codex version persists an approval-request / waitingOnApproval marker into the rollout AND the codex parser maps a held gate to a working→waiting transition, re-assess and author the interactive recipe (send a non-trusted command under --ask-for-approval untrusted, then `keys` to elicit/answer the picker)."
+      "applicable": true,
+      "preconditions": [
+        "codex CLI ≥ 0.114.0 (hooks support; live-confirmed on 0.144.4) on PATH and authenticated (~/.codex/config.toml or OPENAI_API_KEY)",
+        "irrlichd is recording on :7837 via a --record daemon (of record run --attach) — NOT the :7838 coexist recorder: the installed hook POSTs to hardcoded http://localhost:7837, so :7838 never receives PermissionRequest",
+        "irrlicht's codex `hooks` permission is granted so applyCodexHooks() installs PermissionRequest/PostToolUse/Stop into ~/.codex/hooks.json",
+        "the user has completed codex's one-time interactive 'Trust hooks' prompt so the installed hooks actually fire"
+      ],
+      "setup": [
+        "The interactive driver launches codex in a fresh per-run cwd under <staging>/cwd/ with `-a untrusted -s read-only --no-alt-screen`, accepts the trust dialog, and waits for the TUI banner + MCP boot before sending the first prompt",
+        "Under `-a untrusted -s read-only`, any model-proposed write/command escalates to a blocking approval overlay; the recipe never answers it, so the session holds in waiting until teardown (mirrors the claudecode sibling that stops at waiting)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Create a new file called hello.txt in the current directory containing the text 'hi' using a shell command. Do it now."
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created (proc-<PID>) event in ready within 1000 ms of agent launch",
+        "events.jsonl contains a transcript_new for the rollout session with a distinct session_id, born ready",
+        "events.jsonl contains a pid_discovered event bound to the rollout session_id",
+        "events.jsonl contains a state_transition→working on the rollout session_id when the prompt is sent",
+        "events.jsonl contains a state_transition→waiting on the SAME rollout session_id once the PermissionRequest hook fires (PermissionPending=true → rule 0), while the approval overlay is held",
+        "events.jsonl contains NO state_transition→ready on the rollout session_id after the waiting transition (the recipe never approves; it terminates in waiting)",
+        "final session state is waiting"
+      ],
+      "timeout_seconds": 180,
+      "settings": {}
     }
   }
 }
