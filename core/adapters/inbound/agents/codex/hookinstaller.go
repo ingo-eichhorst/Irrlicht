@@ -53,8 +53,8 @@ const (
 )
 
 // installedHookEvents are the Codex hook events we install handlers for. Codex
-// has no PostToolUseFailure event (denial is handled on the Stop path), and
-// PreCompact/PostCompact are deferred (only needed if Codex grows a
+// has no PostToolUseFailure event, so PostToolUse is the sole pending-clear
+// signal; PreCompact/PostCompact are deferred (only needed if Codex grows a
 // transcript-goes-silent-during-compaction problem like Claude Code's #657).
 var installedHookEvents = []string{
 	HookPermissionRequest,

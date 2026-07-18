@@ -14,13 +14,12 @@ import (
 	"irrlicht/core/internal/contracttesting"
 )
 
-// mockTarget records calls to HandlePermissionHook, HandleStopHook and
-// ClearPermissionPending for assertions.
+// mockTarget records calls to HandlePermissionHook and HandleStopHook for
+// assertions.
 type mockTarget struct {
-	mu         sync.Mutex
-	permCalls  []permCall
-	stopCalls  []stopCall
-	clearCalls []string
+	mu        sync.Mutex
+	permCalls []permCall
+	stopCalls []stopCall
 }
 
 type permCall struct {
@@ -44,12 +43,6 @@ func (m *mockTarget) HandleStopHook(sessionID, transcriptPath, lastAssistantText
 	m.stopCalls = append(m.stopCalls, stopCall{sessionID, transcriptPath, lastAssistantText, waitingCue})
 }
 
-func (m *mockTarget) ClearPermissionPending(sessionID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.clearCalls = append(m.clearCalls, sessionID)
-}
-
 func (m *mockTarget) getPermCalls() []permCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -62,16 +55,10 @@ func (m *mockTarget) getStopCalls() []stopCall {
 	return append([]stopCall{}, m.stopCalls...)
 }
 
-func (m *mockTarget) getClearCalls() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return append([]string{}, m.clearCalls...)
-}
-
 func (m *mockTarget) totalCalls() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.permCalls) + len(m.stopCalls) + len(m.clearCalls)
+	return len(m.permCalls) + len(m.stopCalls)
 }
 
 func (m *mockTarget) reset() {
@@ -79,11 +66,11 @@ func (m *mockTarget) reset() {
 	defer m.mu.Unlock()
 	m.permCalls = nil
 	m.stopCalls = nil
-	m.clearCalls = nil
 }
 
 // mutableGate is a ConsentGranter whose grant state can be flipped between
-// permission states for the AssertPermissionGated contract.
+// permission states for the AssertPermissionGated contract. It grants (or
+// denies) every key uniformly.
 type mutableGate struct {
 	mu      sync.Mutex
 	granted bool
@@ -101,13 +88,32 @@ func (g *mutableGate) setGranted(v bool) {
 	g.granted = v
 }
 
+// keyedGate grants exactly the permission keys in its set — used to exercise
+// the hooks-granted / transcripts-denied combination.
+type keyedGate map[string]bool
+
+func (g keyedGate) Granted(_, key string) bool { return g[key] }
+
 // mockLogger is a no-op outbound.Logger for the handler under test.
 type mockLogger struct{}
 
-func (mockLogger) LogInfo(string, string, string)                        {}
-func (mockLogger) LogError(string, string, string)                       {}
+func (mockLogger) LogInfo(string, string, string)                       {}
+func (mockLogger) LogError(string, string, string)                      {}
 func (mockLogger) LogProcessingTime(string, string, int64, int, string) {}
-func (mockLogger) Close() error                                          { return nil }
+func (mockLogger) Close() error                                         { return nil }
+
+// writeSessionTranscript creates a Codex rollout file whose session_meta header
+// carries id, so sessionIDFromPath (and thus the handler) resolves to id.
+func writeSessionTranscript(t *testing.T, id string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout-2026-07-18T00-00-00-abcdefabcdef.jsonl")
+	meta := `{"type":"session_meta","payload":{"id":"` + id + `"}}` + "\n"
+	if err := os.WriteFile(path, []byte(meta), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	return path
+}
 
 func postHook(t *testing.T, handler http.HandlerFunc, payload codexHookPayload) *httptest.ResponseRecorder {
 	t.Helper()
@@ -126,9 +132,9 @@ func TestHookHandler_PermissionRequest(t *testing.T) {
 	handler := NewHookHandler(target, nil, mockLogger{})
 
 	rec := postHook(t, handler, codexHookPayload{
-		SessionID:     "sess-1",
-		HookEventName: HookPermissionRequest,
-		ToolName:      "shell",
+		TranscriptPath: writeSessionTranscript(t, "sess-1"),
+		HookEventName:  HookPermissionRequest,
+		ToolName:       "shell",
 	})
 
 	if rec.Code != http.StatusOK {
@@ -148,9 +154,9 @@ func TestHookHandler_PostToolUseClears(t *testing.T) {
 	handler := NewHookHandler(target, nil, mockLogger{})
 
 	postHook(t, handler, codexHookPayload{
-		SessionID:     "sess-1",
-		HookEventName: HookPostToolUse,
-		ToolName:      "shell",
+		TranscriptPath: writeSessionTranscript(t, "sess-1"),
+		HookEventName:  HookPostToolUse,
+		ToolName:       "shell",
 	})
 
 	calls := target.getPermCalls()
@@ -164,19 +170,13 @@ func TestHookHandler_Stop(t *testing.T) {
 	handler := NewHookHandler(target, nil, mockLogger{})
 
 	rec := postHook(t, handler, codexHookPayload{
-		SessionID:            "sess-1",
+		TranscriptPath:       writeSessionTranscript(t, "sess-1"),
 		HookEventName:        HookStop,
 		LastAssistantMessage: "All set. Want me to continue?",
 	})
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200", rec.Code)
-	}
-	// Stop must clear any pending approval (deny-then-abort edge) before
-	// recording turn-done.
-	clears := target.getClearCalls()
-	if len(clears) != 1 || clears[0] != "sess-1" {
-		t.Fatalf("ClearPermissionPending: got %v, want [sess-1]", clears)
 	}
 	stops := target.getStopCalls()
 	if len(stops) != 1 {
@@ -199,7 +199,7 @@ func TestHookHandler_StopNoCue(t *testing.T) {
 	handler := NewHookHandler(target, nil, mockLogger{})
 
 	postHook(t, handler, codexHookPayload{
-		SessionID:            "sess-1",
+		TranscriptPath:       writeSessionTranscript(t, "sess-1"),
 		HookEventName:        HookStop,
 		LastAssistantMessage: "Done. I applied the change and the tests pass.",
 	})
@@ -216,20 +216,11 @@ func TestHookHandler_StopNoCue(t *testing.T) {
 func TestHookHandler_ResolvesSessionIDFromTranscript(t *testing.T) {
 	// A Codex session ID is the session_meta header's payload.id, not the
 	// filename stem, so the handler must resolve it via the transcript path —
-	// the same way fswatcher assigns IDs — and prefer it over the payload's
-	// own session_id.
-	dir := t.TempDir()
-	transcript := filepath.Join(dir, "rollout-2026-07-18T00-00-00-abcdefabcdef.jsonl")
-	meta := `{"type":"session_meta","payload":{"id":"real-session-uuid"}}` + "\n"
-	if err := os.WriteFile(transcript, []byte(meta), 0o600); err != nil {
-		t.Fatalf("write transcript: %v", err)
-	}
-
+	// the same way fswatcher assigns IDs.
 	target := &mockTarget{}
 	handler := NewHookHandler(target, nil, mockLogger{})
 	postHook(t, handler, codexHookPayload{
-		SessionID:      "hook-payload-session-id",
-		TranscriptPath: transcript,
+		TranscriptPath: writeSessionTranscript(t, "real-session-uuid"),
 		HookEventName:  HookPermissionRequest,
 		ToolName:       "shell",
 	})
@@ -239,7 +230,7 @@ func TestHookHandler_ResolvesSessionIDFromTranscript(t *testing.T) {
 		t.Fatalf("HandlePermissionHook calls: got %d, want 1", len(calls))
 	}
 	if calls[0].sessionID != "real-session-uuid" {
-		t.Errorf("resolved sessionID: got %q, want real-session-uuid (from session_meta, not payload session_id)", calls[0].sessionID)
+		t.Errorf("resolved sessionID: got %q, want real-session-uuid (from session_meta)", calls[0].sessionID)
 	}
 }
 
@@ -267,15 +258,53 @@ func TestHookHandler_BadJSON(t *testing.T) {
 	}
 }
 
-func TestHookHandler_MissingSessionIdentity(t *testing.T) {
+func TestHookHandler_MissingTranscriptPath(t *testing.T) {
 	target := &mockTarget{}
 	handler := NewHookHandler(target, nil, mockLogger{})
 	rec := postHook(t, handler, codexHookPayload{HookEventName: HookPermissionRequest})
 	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status: got %d, want 400", rec.Code)
+		t.Errorf("status: got %d, want 400 (transcript_path is required to resolve the session id)", rec.Code)
 	}
 	if target.totalCalls() != 0 {
-		t.Error("target should not be called when session identity is missing")
+		t.Error("target should not be called when transcript_path is missing")
+	}
+}
+
+func TestHookHandler_UnresolvableTranscriptDropped(t *testing.T) {
+	// A transcript_path that can't be read (no header yet / gone) is dropped
+	// with 200 rather than mis-keyed onto a guessed session id.
+	target := &mockTarget{}
+	handler := NewHookHandler(target, nil, mockLogger{})
+	rec := postHook(t, handler, codexHookPayload{
+		TranscriptPath: filepath.Join(t.TempDir(), "does-not-exist.jsonl"),
+		HookEventName:  HookPermissionRequest,
+	})
+	if rec.Code != http.StatusOK {
+		t.Errorf("status: got %d, want 200 (unresolvable transcript is dropped, not an error)", rec.Code)
+	}
+	if target.totalCalls() != 0 {
+		t.Error("target should not be called when the session id can't be resolved")
+	}
+}
+
+func TestHookHandler_TranscriptsConsentGatesTheRead(t *testing.T) {
+	// The receiver reads the transcript file to resolve the session id, so that
+	// read must be gated behind the "transcripts" consent — not merely the
+	// "hooks" write consent. With hooks granted but transcripts denied, the
+	// hook is dropped and the target is never called (issue #1174 review).
+	target := &mockTarget{}
+	gate := keyedGate{PermissionKeyHooks: true, PermissionKeyTranscripts: false}
+	handler := NewHookHandler(target, gate, mockLogger{})
+
+	rec := postHook(t, handler, codexHookPayload{
+		TranscriptPath: writeSessionTranscript(t, "sess-1"),
+		HookEventName:  HookPermissionRequest,
+	})
+	if rec.Code != http.StatusOK {
+		t.Errorf("status: got %d, want 200", rec.Code)
+	}
+	if target.totalCalls() != 0 {
+		t.Error("transcript read (and dispatch) happened without transcripts consent")
 	}
 }
 
@@ -283,8 +312,8 @@ func TestHookHandler_UnrecognizedEvent(t *testing.T) {
 	target := &mockTarget{}
 	handler := NewHookHandler(target, nil, mockLogger{})
 	rec := postHook(t, handler, codexHookPayload{
-		SessionID:     "sess-1",
-		HookEventName: "PreToolUse", // not installed for codex
+		TranscriptPath: writeSessionTranscript(t, "sess-1"),
+		HookEventName:  "PreToolUse", // not installed for codex
 	})
 	if rec.Code != http.StatusOK {
 		t.Errorf("status: got %d, want 200 (unrecognized events are accepted and ignored)", rec.Code)
@@ -299,9 +328,9 @@ func TestHookHandler_PermissionGateContract(t *testing.T) {
 	gate := &mutableGate{}
 	handler := NewHookHandler(target, gate, mockLogger{})
 	payload := codexHookPayload{
-		SessionID:     "sess-gate",
-		HookEventName: HookPermissionRequest,
-		ToolName:      "shell",
+		TranscriptPath: writeSessionTranscript(t, "sess-gate"),
+		HookEventName:  HookPermissionRequest,
+		ToolName:       "shell",
 	}
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
 		SetState: func(state permission.State) { gate.setGranted(state == permission.StateGranted) },

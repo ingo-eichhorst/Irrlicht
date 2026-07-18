@@ -294,19 +294,6 @@ func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEv
 	d.dispatchHookActivity(sessionID, transcriptPath, hookEventName)
 }
 
-// ClearPermissionPending drops any pending-approval overlay for a session
-// without dispatching a synthetic activity. It exists for adapters whose agent
-// has no PostToolUseFailure hook to clear a denied approval (Codex, issue
-// #1171): the Codex hook receiver calls it on Stop — a turn cannot end while
-// blocked on an approval, so a Stop authoritatively means nothing is pending,
-// covering the deny-then-abort edge. The caller's own follow-up (e.g.
-// HandleStopHook) drives the re-classification, so no activity is injected here.
-func (d *SessionDetector) ClearPermissionPending(sessionID string) {
-	d.permMu.Lock()
-	delete(d.permissionPending, sessionID)
-	d.permMu.Unlock()
-}
-
 // dispatchHookActivity records a hook-received lifecycle event and injects a
 // synthetic activity event so the event loop re-classifies the session now —
 // without waiting on a transcript flush. Shared by the permission and

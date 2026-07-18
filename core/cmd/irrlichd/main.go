@@ -16,6 +16,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/agentwiring"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
@@ -100,21 +101,15 @@ func main() {
 	runDaemon()
 }
 
-// uninstallHooks removes irrlicht's Claude Code hooks from
-// ~/.claude/settings.json and, if the hooks permission was previously
-// granted, records the explicit opt-out in the consent store (#570) — a
-// persisted "granted" would otherwise re-install the hooks on the next
-// daemon start, silently reverting this decision.
+// uninstallHooks removes irrlicht's hooks from both Claude Code
+// (~/.claude/settings.json) and Codex (~/.codex/hooks.json) and, for each
+// adapter whose hooks permission was previously granted, records the explicit
+// opt-out in the consent store (#570) — a persisted "granted" would otherwise
+// re-install the hooks on the next daemon start (via the Apply closure),
+// silently reverting this decision.
 func uninstallHooks() {
-	modified, err := claudecode.UninstallHooks()
-	if err != nil {
-		log.Fatalf("failed to uninstall hooks: %v", err)
-	}
-	if modified {
-		fmt.Println("Removed irrlicht hooks from ~/.claude/settings.json")
-	} else {
-		fmt.Println("No irrlicht hooks found in ~/.claude/settings.json")
-	}
+	reportUninstall("~/.claude/settings.json", claudecode.UninstallHooks)
+	reportUninstall("~/.codex/hooks.json", codex.UninstallHooks)
 
 	home, _ := os.UserHomeDir()
 	store := filesystem.NewPermissionStore(dataDir(home))
@@ -122,15 +117,38 @@ func uninstallHooks() {
 	if err != nil {
 		return
 	}
-	if set.Get(claudecode.AdapterName, claudecode.PermissionKeyHooks) != permission.StateGranted {
+
+	denied := false
+	if set.Get(claudecode.AdapterName, claudecode.PermissionKeyHooks) == permission.StateGranted {
+		set.Put(claudecode.AdapterName, claudecode.PermissionKeyHooks, permission.StateDenied)
+		denied = true
+	}
+	if set.Get(codex.AdapterName, codex.PermissionKeyHooks) == permission.StateGranted {
+		set.Put(codex.AdapterName, codex.PermissionKeyHooks, permission.StateDenied)
+		denied = true
+	}
+	if !denied {
 		return
 	}
-	set.Put(claudecode.AdapterName, claudecode.PermissionKeyHooks, permission.StateDenied)
 	if err := store.Save(set); err != nil {
-		fmt.Printf("warning: failed to record hooks permission as denied: %v\n", err)
+		fmt.Printf("warning: failed to record hooks permission(s) as denied: %v\n", err)
 		return
 	}
-	fmt.Println("Recorded the hooks permission as denied (re-grant via the permission wizard)")
+	fmt.Println("Recorded the hooks permission(s) as denied (re-grant via the permission wizard)")
+}
+
+// reportUninstall runs one adapter's hook uninstaller and prints whether it
+// removed anything.
+func reportUninstall(path string, uninstall func() (bool, error)) {
+	modified, err := uninstall()
+	if err != nil {
+		log.Fatalf("failed to uninstall hooks from %s: %v", path, err)
+	}
+	if modified {
+		fmt.Printf("Removed irrlicht hooks from %s\n", path)
+	} else {
+		fmt.Printf("No irrlicht hooks found in %s\n", path)
+	}
 }
 
 // uninstallTaskEtaBlocks removes irrlicht's managed task-eta and
