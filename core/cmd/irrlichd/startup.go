@@ -18,6 +18,7 @@ import (
 	activationhandler "irrlicht/core/adapters/inbound/activation"
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	backchannelhandler "irrlicht/core/adapters/inbound/backchannel"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
@@ -900,18 +901,21 @@ func setupBackchannel(mux *http.ServeMux, deps setupBackchannelDeps) (*services.
 	return backchannelEngine, terminalObserver
 }
 
-// registerHookRoutes wires Claude Code's hook receivers: PermissionRequest/
-// PostToolUse events (routed to the detector, which satisfies
-// claudecode.HookTarget via HandlePermissionHook) and the per-tick
-// statusline JSON carrying rate_limits for Pro/Max subscribers (issue #309).
-// Both are consent-gated: hooks installed by a pre-consent daemon keep
-// firing until the wizard is answered, so payloads are dropped while
-// pending.
+// registerHookRoutes wires the hook receivers: Claude Code's PermissionRequest/
+// PostToolUse/Stop events (routed to the detector, which satisfies
+// claudecode.HookTarget) and the per-tick statusline JSON carrying rate_limits
+// for Pro/Max subscribers (issue #309); plus Codex's PermissionRequest/
+// PostToolUse/Stop events (issue #1171) — the detector satisfies
+// codex.HookTarget the same way. All are consent-gated: hooks installed by a
+// pre-consent daemon keep firing until the wizard is answered, so payloads are
+// dropped while pending.
 func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, metricsCollector outbound.MetricsCollector, permService *services.PermissionService, logger outbound.Logger) {
 	mux.HandleFunc("POST /api/v1/hooks/claudecode",
 		claudecode.NewHookHandler(detector, metricsCollector, permService, logger))
 	mux.HandleFunc("POST /api/v1/hooks/claudecode/statusline",
 		claudecode.NewStatuslineHandler(metricsCollector, permService, logger))
+	mux.HandleFunc("POST /api/v1/hooks/codex",
+		codex.NewHookHandler(detector, permService, logger))
 }
 
 // publishAddrFile writes the addr file and thereby signals "the daemon is
