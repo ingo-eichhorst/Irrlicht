@@ -294,12 +294,21 @@ func handleStopHook(target HookTarget, log outbound.Logger, sessionID string, pa
 	log.LogInfo(logComponentHookReceiver, sessionID,
 		fmt.Sprintf("received %s (%d chars of assistant text)", payload.HookEventName, len(payload.LastAssistantMessage)))
 
-	win := tailer.WaitingScanWindow(payload.LastAssistantMessage)
-	waitingCue := win != "" &&
-		(session.ExtractQuestionSnippet(win) != "" || session.ExtractWaitingCue(win) != "")
-
 	target.HandleStopHook(sessionID, payload.TranscriptPath,
-		tailer.TruncateAssistantText(payload.LastAssistantMessage), waitingCue)
+		tailer.TruncateAssistantText(payload.LastAssistantMessage),
+		waitingCueInTail(payload.LastAssistantMessage))
+}
+
+// waitingCueInTail reports whether the bounded tail window of an assistant
+// message carries a trailing question or an imperative waiting cue (issue
+// #1150). Bounded, not full text: ExtractWaitingCue over-fires on very long
+// turns (see tailer.MaxWaitingScanRunes). Shared by the transcript parser
+// (PendingWaitingCue) and the Stop-hook handler (#1161) so the window size and
+// the OR-of-two-detectors rule can't drift between the two paths.
+func waitingCueInTail(full string) bool {
+	win := tailer.WaitingScanWindow(full)
+	return win != "" &&
+		(session.ExtractQuestionSnippet(win) != "" || session.ExtractWaitingCue(win) != "")
 }
 
 // handlePreToolUseHook processes a PreToolUse hook event: scans the tool
