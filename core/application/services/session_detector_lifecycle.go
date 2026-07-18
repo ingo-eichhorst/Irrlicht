@@ -45,6 +45,7 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	d.permMu.Lock()
 	delete(d.permissionPending, ev.SessionID)
 	delete(d.compactPending, ev.SessionID)
+	delete(d.hookTurnDone, ev.SessionID)
 	delete(d.editToolOpenSince, ev.SessionID)
 	delete(d.idleProjectRetryAttempts, ev.SessionID)
 	d.permMu.Unlock()
@@ -322,6 +323,42 @@ func (d *SessionDetector) dispatchHookActivity(sessionID, transcriptPath, hookNa
 		d.log.LogError("hook-receiver", sessionID,
 			fmt.Sprintf("debouncedEvents channel full, %s hook event dropped", hookName))
 	}
+}
+
+// hookStopSignal carries what Claude Code's Stop hook (#1161) delivers for one
+// turn: the turn's final assistant text (already display-truncated by the
+// adapter) and whether that message carried a question / imperative waiting cue
+// (computed by the adapter from the full text). Stored per session until the
+// next classify pass consumes it.
+type hookStopSignal struct {
+	lastAssistantText string
+	waitingCue        bool
+}
+
+// HandleStopHook records the authoritative turn-done signal from Claude Code's
+// Stop hook (issue #1161), which fires once at true turn end and carries the
+// turn's final assistant text. Marking hookTurnDone makes the next classify
+// pass overlay SessionMetrics.HookTurnDone (so IsAgentDone is authoritative,
+// not inferred from the transcript tail) and overwrite LastAssistantText /
+// PendingWaitingCue from the hook's message — so a turn that ended on a
+// question still routes to waiting, not ready.
+//
+// Safe to call from any goroutine (e.g. the HTTP handler).
+func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistantText string, waitingCue bool) {
+	d.permMu.Lock()
+	d.hookTurnDone[sessionID] = hookStopSignal{
+		lastAssistantText: lastAssistantText,
+		waitingCue:        waitingCue,
+	}
+	d.permMu.Unlock()
+
+	// classifyAndTransition overlays HookTurnDone onto the metrics before
+	// calling ClassifyState. The Stop hook fires at true turn end (after the
+	// transcript flush), so a synthetic activity event is what drives the
+	// re-classification now rather than waiting for the next fswatcher pass.
+	// The literal "Stop" mirrors HandleCompactHook's "PreCompact" — the services
+	// layer must not import the claudecode adapter for its HookStop constant.
+	d.dispatchHookActivity(sessionID, transcriptPath, "Stop")
 }
 
 // HandleCompactHook processes a Claude Code PreCompact hook for a manual

@@ -287,6 +287,54 @@ func TestClassifyState(t *testing.T) {
 			},
 			wantState: session.StateReady,
 		},
+
+		// Rule 2 via the Stop hook (#1161): HookTurnDone is authoritative even
+		// when the transcript-tail signal (LastEventType) hasn't landed yet.
+		{
+			name:    "working → ready (hook Stop, no cue, no turn_done)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				HookTurnDone:      true,
+				LastEventType:     "assistant_streaming", // not a transcript-done signal
+				LastAssistantText: "Done. The tests pass.",
+			},
+			wantState:  session.StateReady,
+			wantReason: true,
+		},
+		{
+			name:    "working → waiting (hook Stop carried a waiting cue)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				HookTurnDone:      true,
+				PendingWaitingCue: true,
+				LastAssistantText: "Which option do you prefer?",
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
+		{
+			// A Stop that fires while a sub-agent tool is still open must NOT
+			// flip the session to ready — the open-tool guard in IsAgentDone
+			// wins over HookTurnDone.
+			name:    "working stays working (hook Stop but tool still open)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				HookTurnDone:    true,
+				HasOpenToolCall: true,
+			},
+			wantState: session.StateWorking,
+		},
+		{
+			// Likewise a live background process (Bash run_in_background)
+			// outlives the turn — HookTurnDone does not override it (#445).
+			name:    "working stays working (hook Stop but live background process)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				HookTurnDone:             true,
+				HasLiveBackgroundProcess: true,
+			},
+			wantState: session.StateWorking,
+		},
 		{
 			// Codex emits preliminary assistant_message events BEFORE tool
 			// calls in the same turn — treating them as terminal would cause

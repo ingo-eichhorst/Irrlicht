@@ -61,7 +61,11 @@ func ClassifyState(currentState string, metrics *session.SessionMetrics) (string
 		return transitionTo(currentState, session.StateWaiting, "stalled edit tool → likely permission prompt → waiting")
 	}
 
-	// 2. Agent finished turn — check if waiting for user input first.
+	// 2. Agent finished turn — check if waiting for user input first. A
+	// hook-delivered Stop (claudecode, #1161) is authoritative here: IsAgentDone
+	// consults metrics.HookTurnDone ahead of the transcript-tail heuristic, so a
+	// Stop routes through the same classifyAgentDone path (a turn that ended on a
+	// question/cue still lands in waiting, not ready).
 	if metrics.IsAgentDone() {
 		return classifyAgentDone(currentState, metrics)
 	}

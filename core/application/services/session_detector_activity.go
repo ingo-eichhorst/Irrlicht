@@ -778,6 +778,11 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// fswatcher re-evaluations while the permission prompt is shown.
 	d.overlayPermissionPending(state)
 
+	// Overlay the authoritative Stop-hook turn-done signal (#1161). Consume-once:
+	// makes IsAgentDone authoritative for this pass and refreshes the
+	// waiting-vs-ready inputs from the hook's final assistant message.
+	d.overlayHookTurnDone(state)
+
 	// Overlay the PreCompact force-working hold (#657).
 	d.applyCompactHold(ev.SessionID, state.Metrics, time.Now().Unix())
 
@@ -860,6 +865,42 @@ func (d *SessionDetector) overlayPermissionPending(state *session.SessionState) 
 		return
 	}
 	state.Metrics.PermissionPending = true
+}
+
+// overlayHookTurnDone folds the Claude Code Stop-hook turn-done signal (#1161)
+// onto metrics for one classify pass. It is consume-once: the entry is deleted
+// as it is read, so the authoritative done-signal applies to exactly the pass
+// the Stop hook triggered and never bleeds into the next turn (a later real
+// turn's first activity re-opens the session normally via
+// forceReadyToWorkingIfActive). Must run after RefreshOnActivity (which rebuilds
+// metrics from the transcript, zeroing this transient field) and before
+// ClassifyState / IsAgentDone, which read it.
+//
+// The final assistant text overwrites LastAssistantText for display; the
+// waiting-cue verdict — computed by the adapter from the message's full text —
+// only ever adds to PendingWaitingCue, never clears the parser's own verdict,
+// so the hook can push a turn to waiting but never mask a cue the transcript
+// already found.
+func (d *SessionDetector) overlayHookTurnDone(state *session.SessionState) {
+	if state.Metrics == nil {
+		return
+	}
+	d.permMu.Lock()
+	defer d.permMu.Unlock()
+
+	sig, ok := d.hookTurnDone[state.SessionID]
+	if !ok {
+		return
+	}
+	delete(d.hookTurnDone, state.SessionID)
+
+	state.Metrics.HookTurnDone = true
+	if sig.lastAssistantText != "" {
+		state.Metrics.LastAssistantText = sig.lastAssistantText
+	}
+	if sig.waitingCue {
+		state.Metrics.PendingWaitingCue = true
+	}
 }
 
 // holdParentForActiveChildren fast-forwards a parent's own transition when
