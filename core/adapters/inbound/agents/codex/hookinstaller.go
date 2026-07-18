@@ -222,8 +222,17 @@ func parseCodexVersion(version string) (major, minor, patch int, ok bool) {
 // install-time proxy for "the running Codex version" — the adapter captures
 // cli_version from each session's session_meta header (parser.go), so the
 // newest session reflects the Codex the user is running now.
+//
+// It resolves the ABSOLUTE sessions dir via codexHome rather than sessionsDir:
+// sessionsDir returns a $HOME-relative path (".codex/sessions") when CODEX_HOME
+// is unset (its home expansion happens downstream in fswatcher), which would
+// make this walk run against the daemon's CWD and always find nothing.
 func newestObservedCLIVersion() string {
-	dir := sessionsDir()
+	home, err := codexHome()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(home, "sessions")
 	var newestPath string
 	var newestMod int64
 	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {

@@ -16,12 +16,12 @@ func TestCodexSupportsHooks(t *testing.T) {
 		version string
 		want    bool
 	}{
-		{"0.114.0", true},   // exactly the floor
-		{"0.114.1", true},   // above the floor patch
-		{"0.115.0", true},   // above the floor minor
-		{"0.113.9", false},  // just below the floor minor
-		{"0.100.0", false},  // well below
-		{"1.0.0", true},     // above the floor major
+		{"0.114.0", true},       // exactly the floor
+		{"0.114.1", true},       // above the floor patch
+		{"0.115.0", true},       // above the floor minor
+		{"0.113.9", false},      // just below the floor minor
+		{"0.100.0", false},      // well below
+		{"1.0.0", true},         // above the floor major
 		{"rust-v0.114.0", true}, // release-tag prefix stripped
 		{"v0.113.0", false},     // v-prefix stripped, still too old
 		{"0.114.0-rc1", true},   // pre-release suffix trimmed off patch
@@ -196,6 +196,49 @@ func TestEnsurePreservesUnrelatedContent(t *testing.T) {
 	if !eventHasSentinel(hooks, HookStop) {
 		t.Error("irrlicht Stop hook not installed alongside existing content")
 	}
+}
+
+// seedSession writes a Codex session file with the given cli_version under
+// home/sessions so newestObservedCLIVersion can read it.
+func seedSession(t *testing.T, home, cliVersion string) {
+	t.Helper()
+	dir := filepath.Join(home, "sessions", "2026", "07", "18")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir sessions: %v", err)
+	}
+	meta := `{"type":"session_meta","payload":{"id":"s","cli_version":"` + cliVersion + `"}}` + "\n"
+	f := filepath.Join(dir, "rollout-2026-07-18T00-00-00-abcdefabcdef.jsonl")
+	if err := os.WriteFile(f, []byte(meta), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+}
+
+func TestApplyCodexHooks_VersionGate(t *testing.T) {
+	t.Run("too_old_skips_install", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv(codexHomeEnvVar, home)
+		seedSession(t, home, "0.100.0") // predates hooks
+
+		if err := applyCodexHooks(); err != nil {
+			t.Fatalf("applyCodexHooks: %v", err)
+		}
+		if eventHasSentinel(readHooks(t, home), HookStop) {
+			t.Error("hooks installed despite a too-old Codex version")
+		}
+	})
+
+	t.Run("supported_installs", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv(codexHomeEnvVar, home)
+		seedSession(t, home, "0.144.0") // supports hooks
+
+		if err := applyCodexHooks(); err != nil {
+			t.Fatalf("applyCodexHooks: %v", err)
+		}
+		if !eventHasSentinel(readHooks(t, home), HookStop) {
+			t.Error("hooks not installed for a supported Codex version")
+		}
+	})
 }
 
 // TestHooksPermission_InstallGateContract exercises the install-type gate: the
