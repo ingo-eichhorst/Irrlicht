@@ -8,6 +8,10 @@ import (
 // PermissionKeyTranscripts gates all Codex monitoring (issue #570).
 const PermissionKeyTranscripts = "transcripts"
 
+// PermissionKeyHooks gates installing Codex hooks into ~/.codex/hooks.json for
+// the hook-authoritative live-state tier (issue #1171).
+const PermissionKeyHooks = "hooks"
+
 // Codex — circle with >_ terminal prompt. Color picks contrast against
 // the surrounding chrome: near-black on light themes, near-white on dark.
 const iconSVGLight = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
@@ -56,6 +60,22 @@ func Agent() agent.Agent {
 					"to derive session state, cost, and token metrics. Read-only — " +
 					"no file is ever modified. Toggling off stops all reading " +
 					"immediately.",
+			},
+			{
+				Key:             PermissionKeyHooks,
+				Kind:            permission.KindModify,
+				Title:           "Install Codex hooks",
+				FeatureUnlocked: "Instant waiting/ready detection (approval prompts, turn end)",
+				Touches:         "Writes hook entries to ~/.codex/hooks.json",
+				Detail: "Adds PermissionRequest, PostToolUse and Stop hooks to " +
+					"~/.codex/hooks.json (a dedicated file, never config.toml) that " +
+					"POST the hook payload to the local daemon at " + hookEndpointURL +
+					" via curl. PermissionRequest drives a live waiting transition " +
+					"the moment an approval prompt appears; Stop carries the final " +
+					"assistant message for turn-end. Install is version-gated on the " +
+					"running Codex's cli_version. Toggling off removes the entries.",
+				Apply:  func() error { return applyCodexHooks() },
+				Remove: func() error { _, err := UninstallHooks(); return err },
 			},
 		},
 	}
