@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -12,7 +13,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -72,52 +72,158 @@ func loadStargazersFile(path string) ([]stargazer, error) {
 	return stars, nil
 }
 
-// fetchStargazers pages through GET /repos/{repo}/stargazers, requesting
-// the starred_at timestamp via the star+json media type.
-func fetchStargazers(ctx context.Context, repo, token string) ([]stargazer, error) {
-	var all []stargazer
-	url := fmt.Sprintf("https://api.github.com/repos/%s/stargazers?per_page=100", repo)
-	client := &http.Client{Timeout: 30 * time.Second}
-	for url != "" {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Accept", "application/vnd.github.star+json")
-		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-		if token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("GET %s: %s: %s", url, resp.Status, strings.TrimSpace(string(body)))
-		}
-		var page []stargazer
-		if err := json.Unmarshal(body, &page); err != nil {
-			return nil, err
-		}
-		all = append(all, page...)
-		url = nextPageURL(resp.Header.Get("Link"))
-	}
-	return all, nil
+// graphqlEndpoint is a var so tests can point the fetch at a stub server.
+var graphqlEndpoint = "https://api.github.com/graphql"
+
+const stargazersQuery = `query($owner:String!,$name:String!,$after:String){
+  repository(owner:$owner,name:$name){
+    stargazers(first:100,after:$after,orderBy:{field:STARRED_AT,direction:ASC}){
+      pageInfo{hasNextPage endCursor}
+      edges{starredAt}
+    }
+  }
+}`
+
+// stargazerPage is one page of the GraphQL stargazers connection.
+type stargazerPage struct {
+	PageInfo struct {
+		HasNextPage bool   `json:"hasNextPage"`
+		EndCursor   string `json:"endCursor"`
+	} `json:"pageInfo"`
+	Edges []struct {
+		StarredAt time.Time `json:"starredAt"`
+	} `json:"edges"`
 }
 
-var linkNextRe = regexp.MustCompile(`<([^>]+)>;\s*rel="next"`)
+type stargazersResponse struct {
+	Data struct {
+		Repository *struct {
+			Stargazers stargazerPage `json:"stargazers"`
+		} `json:"repository"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
 
-// nextPageURL extracts the rel="next" URL from a GitHub API Link header,
-// or "" once there are no more pages.
-func nextPageURL(linkHeader string) string {
-	m := linkNextRe.FindStringSubmatch(linkHeader)
-	if m == nil {
-		return ""
+// fetchStargazers pages through the GraphQL stargazers connection, which
+// carries the starredAt timestamp per edge.
+//
+// The REST equivalent (GET /repos/{repo}/stargazers with the
+// application/vnd.github.star+json media type) is not usable from CI: it
+// 403s for the Actions installation token ("Resource not accessible by
+// integration", #1012) and, since 2026-07-24, for personal access tokens
+// too ("Resource not accessible by personal access token"). GraphQL
+// returns the same data for both token types, so this path needs no
+// PAT-scoped secret.
+func fetchStargazers(ctx context.Context, repo, token string) ([]stargazer, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
 	}
-	return m[1]
+	if token == "" {
+		return nil, fmt.Errorf("GITHUB_TOKEN is empty: the GraphQL API requires authentication")
+	}
+
+	fetcher := stargazerFetcher{
+		client: &http.Client{Timeout: 30 * time.Second},
+		token:  token,
+		owner:  owner,
+		name:   name,
+	}
+
+	var all []stargazer
+	var after any
+	for {
+		page, err := fetcher.page(ctx, after)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range page.Edges {
+			all = append(all, stargazer{StarredAt: e.StarredAt})
+		}
+		if !page.PageInfo.HasNextPage || page.PageInfo.EndCursor == "" {
+			return all, nil
+		}
+		after = page.PageInfo.EndCursor
+	}
+}
+
+// stargazerFetcher holds the per-run request context for paging through
+// one repo's stargazers connection.
+type stargazerFetcher struct {
+	client *http.Client
+	token  string
+	owner  string
+	name   string
+}
+
+// page fetches the stargazers page starting at the given cursor (nil for
+// the first page).
+func (f stargazerFetcher) page(ctx context.Context, after any) (stargazerPage, error) {
+	body, err := f.post(ctx, after)
+	if err != nil {
+		return stargazerPage{}, err
+	}
+	return f.parsePage(body)
+}
+
+func (f stargazerFetcher) post(ctx context.Context, after any) ([]byte, error) {
+	payload, err := json.Marshal(map[string]any{
+		"query":     stargazersQuery,
+		"variables": map[string]any{"owner": f.owner, "name": f.name, "after": after},
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, graphqlEndpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+f.token)
+
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("POST %s: %s: %s", graphqlEndpoint, resp.Status, strings.TrimSpace(string(body)))
+	}
+	return body, nil
+}
+
+func (f stargazerFetcher) parsePage(body []byte) (stargazerPage, error) {
+	var parsed stargazersResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return stargazerPage{}, err
+	}
+	if len(parsed.Errors) > 0 {
+		msgs := make([]string, len(parsed.Errors))
+		for i, e := range parsed.Errors {
+			msgs[i] = e.Message
+		}
+		return stargazerPage{}, fmt.Errorf("graphql: %s", strings.Join(msgs, "; "))
+	}
+	if parsed.Data.Repository == nil {
+		return stargazerPage{}, fmt.Errorf("graphql: no repository %s/%s in response", f.owner, f.name)
+	}
+	return parsed.Data.Repository.Stargazers, nil
+}
+
+// splitRepo splits an "owner/name" repo reference into its two halves.
+func splitRepo(repo string) (owner, name string, err error) {
+	// A repo with no "/" cuts to an empty name, so the halves alone tell
+	// us whether the reference was well-formed.
+	owner, name, _ = strings.Cut(repo, "/")
+	if owner == "" || name == "" {
+		return "", "", fmt.Errorf("repo %q is not in owner/name form", repo)
+	}
+	return owner, name, nil
 }
