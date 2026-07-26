@@ -33,14 +33,17 @@ jobs:
           cache: false
 
       - name: Generate star history chart
-        # The default GITHUB_TOKEN is a GitHub App installation token, which
-        # GitHub blocks from reading the starred_at-enriched stargazers
-        # listing (403 "You do not have permission to view the stargazers
-        # of this repository") no matter what `permissions:` this workflow
-        # declares — there's no fine-grained permission that grants it. A
-        # PAT with public-repo read access is required instead. See #1012.
+        # tools/starhistory reads starred_at over the GraphQL API, which
+        # works with the default GITHUB_TOKEN. The REST stargazers listing
+        # (application/vnd.github.star+json) does not: it 403s for the
+        # Actions installation token ("Resource not accessible by
+        # integration", #1012) and, since 2026-07-24, for personal access
+        # tokens as well ("Resource not accessible by personal access
+        # token"), which is what broke the PAT-based workaround. GraphQL
+        # serves both, so no PAT-scoped secret is needed — the
+        # STARHISTORY_TOKEN secret is now unused and can be deleted.
         env:
-          GITHUB_TOKEN: ${{ secrets.STARHISTORY_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p assets
           go run ./tools/starhistory -repo ingo-eichhorst/Irrlicht -out assets/star-history.svg
