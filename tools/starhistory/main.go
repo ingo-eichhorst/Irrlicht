@@ -219,8 +219,10 @@ func (f stargazerFetcher) parsePage(body []byte) (stargazerPage, error) {
 
 // splitRepo splits an "owner/name" repo reference into its two halves.
 func splitRepo(repo string) (owner, name string, err error) {
-	owner, name, ok := strings.Cut(repo, "/")
-	if !ok || owner == "" || name == "" {
+	// A repo with no "/" cuts to an empty name, so the halves alone tell
+	// us whether the reference was well-formed.
+	owner, name, _ = strings.Cut(repo, "/")
+	if owner == "" || name == "" {
 		return "", "", fmt.Errorf("repo %q is not in owner/name form", repo)
 	}
 	return owner, name, nil
