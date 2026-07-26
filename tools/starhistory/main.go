@@ -125,11 +125,17 @@ func fetchStargazers(ctx context.Context, repo, token string) ([]stargazer, erro
 		return nil, fmt.Errorf("GITHUB_TOKEN is empty: the GraphQL API requires authentication")
 	}
 
+	fetcher := stargazerFetcher{
+		client: &http.Client{Timeout: 30 * time.Second},
+		token:  token,
+		owner:  owner,
+		name:   name,
+	}
+
 	var all []stargazer
-	client := &http.Client{Timeout: 30 * time.Second}
 	var after any
 	for {
-		page, err := fetchStargazerPage(ctx, client, token, owner, name, after)
+		page, err := fetcher.page(ctx, after)
 		if err != nil {
 			return nil, err
 		}
@@ -143,48 +149,70 @@ func fetchStargazers(ctx context.Context, repo, token string) ([]stargazer, erro
 	}
 }
 
-func fetchStargazerPage(ctx context.Context, client *http.Client, token, owner, name string, after any) (stargazerPage, error) {
-	var zero stargazerPage
+// stargazerFetcher holds the per-run request context for paging through
+// one repo's stargazers connection.
+type stargazerFetcher struct {
+	client *http.Client
+	token  string
+	owner  string
+	name   string
+}
+
+// page fetches the stargazers page starting at the given cursor (nil for
+// the first page).
+func (f stargazerFetcher) page(ctx context.Context, after any) (stargazerPage, error) {
+	body, err := f.post(ctx, after)
+	if err != nil {
+		return stargazerPage{}, err
+	}
+	return f.parsePage(body)
+}
+
+func (f stargazerFetcher) post(ctx context.Context, after any) ([]byte, error) {
 	payload, err := json.Marshal(map[string]any{
 		"query":     stargazersQuery,
-		"variables": map[string]any{"owner": owner, "name": name, "after": after},
+		"variables": map[string]any{"owner": f.owner, "name": f.name, "after": after},
 	})
 	if err != nil {
-		return zero, err
+		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, graphqlEndpoint, bytes.NewReader(payload))
 	if err != nil {
-		return zero, err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+f.token)
 
-	resp, err := client.Do(req)
+	resp, err := f.client.Do(req)
 	if err != nil {
-		return zero, err
+		return nil, err
 	}
+	defer resp.Body.Close()
+
 	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
 	if err != nil {
-		return zero, err
+		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return zero, fmt.Errorf("POST %s: %s: %s", graphqlEndpoint, resp.Status, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("POST %s: %s: %s", graphqlEndpoint, resp.Status, strings.TrimSpace(string(body)))
 	}
+	return body, nil
+}
 
+func (f stargazerFetcher) parsePage(body []byte) (stargazerPage, error) {
 	var parsed stargazersResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return zero, err
+		return stargazerPage{}, err
 	}
 	if len(parsed.Errors) > 0 {
 		msgs := make([]string, len(parsed.Errors))
 		for i, e := range parsed.Errors {
 			msgs[i] = e.Message
 		}
-		return zero, fmt.Errorf("graphql: %s", strings.Join(msgs, "; "))
+		return stargazerPage{}, fmt.Errorf("graphql: %s", strings.Join(msgs, "; "))
 	}
 	if parsed.Data.Repository == nil {
-		return zero, fmt.Errorf("graphql: no repository %s/%s in response", owner, name)
+		return stargazerPage{}, fmt.Errorf("graphql: no repository %s/%s in response", f.owner, f.name)
 	}
 	return parsed.Data.Repository.Stargazers, nil
 }
