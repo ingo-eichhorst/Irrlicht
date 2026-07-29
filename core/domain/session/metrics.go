@@ -191,8 +191,9 @@ type SessionMetrics struct {
 	// marker was retired in #1186, so this is now sourced from the first user
 	// message heuristic (an older marker in a live transcript still parses).
 	// Decoded-but-not-rendered by any UI since the intent pill was removed
-	// (#979); kept as the full text and as the prefix source for the question
-	// headline's regex path.
+	// (#979) — a tolerated no-op, like IntentHeadline. (The question headline's
+	// topic prefix is derived from the tailer's FirstUserText directly, not from
+	// this field.)
 	TaskSummary string `json:"task_summary,omitempty"`
 
 	// IntentHeadline is the terse one-line version of TaskSummary, produced by

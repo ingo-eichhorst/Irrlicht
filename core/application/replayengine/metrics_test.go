@@ -133,7 +133,6 @@ func TestConvert_QuestionHeadline_ComposesTopicPrefix(t *testing.T) {
 	}
 }
 
-
 // TestConvert_PendingQuestionMarker pins issue #1138: only the deliberate
 // irrlicht-question marker sets PendingQuestionMarker (the waiting-state
 // classifier's authoritative signal). The away_summary recap and the

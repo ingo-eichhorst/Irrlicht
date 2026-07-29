@@ -54,6 +54,8 @@ func TestQuestionHasTopicPrefix(t *testing.T) {
 	}{
 		{"question starts with topic", "Add OAuth login now or later?", "Add OAuth login", true},
 		{"case-insensitive start match", "add oauth LOGIN now?", "Add OAuth login", true},
+		{"punctuation boundary after topic", "Add OAuth login, or add tests first?", "Add OAuth login", true},
+		{"short topic is not a mid-word prefix", "Additional context needed?", "Add", false},
 		{"question carries its own colon lead", "Auth refactor: ship now or wait?", "Something else", true},
 		{"no prefix present", "Should I use PKCE or implicit?", "Auth refactor", false},
 		{"mid-sentence colon is not a topic lead", "Should I use this ratio 3:2 or 16:9?", "Layout", false},

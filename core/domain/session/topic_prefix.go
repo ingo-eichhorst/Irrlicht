@@ -7,6 +7,7 @@ package session
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -58,7 +59,7 @@ func DeriveTopicPrefix(prompt string) string {
 		fields = fields[:len(fields)-1]
 	}
 	topic := strings.TrimRight(strings.Join(fields, " "), topicTrailingPunct)
-	return capTopicRunes(topic, maxTopicPrefixRunes)
+	return CapRunes(topic, maxTopicPrefixRunes)
 }
 
 // QuestionHasTopicPrefix reports whether question already leads with a topic —
@@ -66,8 +67,13 @@ func DeriveTopicPrefix(prompt string) string {
 // colon prefix — so the caller doesn't prepend a second one (issue #1186).
 func QuestionHasTopicPrefix(question, topic string) bool {
 	q := strings.TrimSpace(question)
-	if topic != "" && strings.HasPrefix(strings.ToLower(q), strings.ToLower(topic)) {
-		return true
+	if topic != "" {
+		lq, lt := strings.ToLower(q), strings.ToLower(topic)
+		// Require a word boundary after the match so a short topic ("Add")
+		// doesn't count as a prefix of a longer first word ("Additional").
+		if strings.HasPrefix(lq, lt) && endsOnWordBoundary(lq[len(lt):]) {
+			return true
+		}
 	}
 	// A short "Lead words: …" already present in the question counts as a
 	// topic prefix. Bounded to the topic budget and to a few words — and
@@ -84,11 +90,25 @@ func QuestionHasTopicPrefix(question, topic string) bool {
 	return false
 }
 
-// capTopicRunes truncates s to at most max runes on a rune boundary, with a
-// trailing ellipsis when it drops text. Mirrors the compaction adapter's
-// capRunes; kept here so the domain owns its own bound without importing an
-// outbound adapter.
-func capTopicRunes(s string, max int) string {
+// endsOnWordBoundary reports whether rest (the text immediately after a
+// prefix match) begins at a word boundary — i.e. it is empty or starts with a
+// non-alphanumeric rune (space, punctuation). This keeps "Add" from matching
+// inside "Additional" while still treating "login, or…" or "login now" as a
+// boundary after the topic "…login".
+func endsOnWordBoundary(rest string) bool {
+	if rest == "" {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(rest)
+	return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+}
+
+// CapRunes truncates s to at most max runes, trimming trailing spaces and
+// appending an ellipsis on a rune boundary when it drops text (so the result
+// never exceeds max). The canonical one-line-headline rune bound: the
+// compaction adapter reuses it for its own cap (it already depends on this
+// package), so live and derived headlines share one truncation rule.
+func CapRunes(s string, max int) string {
 	if utf8.RuneCountInString(s) <= max {
 		return s
 	}

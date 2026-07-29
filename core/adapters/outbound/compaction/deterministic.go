@@ -70,7 +70,7 @@ func (DeterministicCompactor) Compact(text string, kind outbound.CompactKind) st
 
 	headline = stripInlineMarkdown(headline)
 	headline = strings.Join(strings.Fields(headline), " ")
-	return capRunes(headline, maxHeadlineRunes)
+	return session.CapRunes(headline, maxHeadlineRunes)
 }
 
 // stripNoise removes fenced code, HTML comments and system-reminder blocks —
@@ -111,15 +111,4 @@ func firstSentence(s string) string {
 		}
 	}
 	return strings.TrimSpace(s)
-}
-
-// capRunes truncates s to at most max runes, replacing the last kept rune with
-// an ellipsis when it has to drop text (so the total never exceeds max).
-func capRunes(s string, max int) string {
-	runes := []rune(s)
-	if len(runes) <= max {
-		return s
-	}
-	truncated := strings.TrimRight(string(runes[:max-1]), " ")
-	return truncated + "…"
 }
