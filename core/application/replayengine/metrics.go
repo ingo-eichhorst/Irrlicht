@@ -143,7 +143,8 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 	if m.AwaySummary != nil && m.AwaySummary.Text != "" {
 		questionSource = m.AwaySummary.Text
 	}
-	if m.TaskQuestion != nil && m.TaskQuestion.Text != "" {
+	markerAuthored := m.TaskQuestion != nil && m.TaskQuestion.Text != ""
+	if markerAuthored {
 		questionSource = m.TaskQuestion.Text
 		// Only the deliberate irrlicht-question marker feeds the waiting-state
 		// classifier (issue #1138) — not the away_summary recap (a passive
@@ -152,8 +153,36 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		// SessionMetrics.PendingQuestionMarker / IsWaitingForUserInput.
 		result.PendingQuestionMarker = true
 	}
-	result.QuestionHeadline = mc.compact(questionSource, outbound.CompactQuestion)
+	result.QuestionHeadline = mc.questionHeadline(questionSource, markerAuthored, m.FirstUserText)
 	return result
+}
+
+// questionHeadline shapes the surfaced pending-question headline as
+// "<3–5 word topic>: <question>" (issue #1186).
+//
+// An agent-authored marker already carries that shape, so it is compacted
+// VERBATIM — no sentence selection, which would drop the topic off a
+// multi-sentence marker. Otherwise the daemon composes the shape itself: it
+// compacts the raw question, then prefixes a topic derived from the session's
+// first user prompt, unless the question already leads with one. The prefix is
+// a compaction-tier refinement — skipped on the identity path (nil compactor),
+// where headlines intentionally carry the raw text, so the replay path is
+// unchanged. The join is re-capped through the verbatim kind so the topic and
+// question share one rune budget, trimming the question tail rather than the
+// topic.
+func (mc *MetricsConverter) questionHeadline(source string, markerAuthored bool, firstUserText string) string {
+	if markerAuthored {
+		return mc.compact(source, outbound.CompactQuestionVerbatim)
+	}
+	q := mc.compact(source, outbound.CompactQuestion)
+	if q == "" || mc == nil || mc.compactor == nil {
+		return q
+	}
+	topic := session.DeriveTopicPrefix(firstUserText)
+	if topic == "" || session.QuestionHasTopicPrefix(q, topic) {
+		return q
+	}
+	return mc.compact(topic+": "+q, outbound.CompactQuestionVerbatim)
 }
 
 // copyTailerTaskEstimate copies a tailer task estimate struct so a timeline

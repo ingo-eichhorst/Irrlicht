@@ -395,23 +395,6 @@ func TestPatchManagedBlock_BeginWithoutEndAppendsFresh(t *testing.T) {
 	}
 }
 
-func TestEnsureTaskSummaryBlock_CreatesFileIfAbsent(t *testing.T) {
-	home := withTempHome(t)
-	modified, err := EnsureTaskSummaryBlockInstalled()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !modified {
-		t.Fatal("expected modified=true on first install")
-	}
-	content := readFileString(t, memoryPathFor(home))
-	for _, want := range []string{taskSummaryBeginSentinel, taskSummaryEndSentinel, `"marker":"irrlicht-summary"`} {
-		if !strings.Contains(content, want) {
-			t.Errorf("installed file missing %q", want)
-		}
-	}
-}
-
 func TestEnsureTaskQuestionBlock_CreatesFileIfAbsent(t *testing.T) {
 	home := withTempHome(t)
 	modified, err := EnsureTaskQuestionBlockInstalled()
@@ -449,9 +432,16 @@ func TestTaskQuestionBlock_DocumentsStructureAndExamples(t *testing.T) {
 	if strings.Contains(managedTaskQuestionBlock, "under ~70 characters") {
 		t.Error("task-question block still carries the old hard ~70-char rule (issue #1142 relaxed it to ~90)")
 	}
+	// v3 (#1186): the block teaches the explicit "<topic>: <question>" shape.
+	if !strings.Contains(managedTaskQuestionBlock, `"<3–5 word topic>: <what happened — the choice>"`) {
+		t.Error("task-question block missing the v3 <topic>: <question> placeholder (issue #1186)")
+	}
+	if !strings.Contains(managedTaskQuestionBlock, `then ": ", then`) {
+		t.Error("task-question block must teach the colon join (issue #1186)")
+	}
 }
 
-func TestApplyInstructionBlocks_InstallsAllAndCoexist(t *testing.T) {
+func TestApplyInstructionBlocks_InstallsEtaAndQuestion_RetiresSummary(t *testing.T) {
 	home := withTempHome(t)
 	if err := applyInstructionBlocks(); err != nil {
 		t.Fatal(err)
@@ -459,11 +449,16 @@ func TestApplyInstructionBlocks_InstallsAllAndCoexist(t *testing.T) {
 	content := readFileString(t, memoryPathFor(home))
 	for _, want := range []string{
 		taskEtaBeginSentinel, taskEtaEndSentinel, `"marker":"irrlicht-eta"`,
-		taskSummaryBeginSentinel, taskSummaryEndSentinel, `"marker":"irrlicht-summary"`,
 		taskQuestionBeginSentinel, taskQuestionEndSentinel, `"marker":"irrlicht-question"`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("file missing %q after applyInstructionBlocks", want)
+		}
+	}
+	// The retired summary marker (#1186) is never installed.
+	for _, absent := range []string{taskSummaryBeginSentinel, `"marker":"irrlicht-summary"`} {
+		if strings.Contains(content, absent) {
+			t.Errorf("file unexpectedly contains retired summary marker %q", absent)
 		}
 	}
 	// Idempotent: re-applying changes nothing.
@@ -472,6 +467,40 @@ func TestApplyInstructionBlocks_InstallsAllAndCoexist(t *testing.T) {
 	}
 	if readFileString(t, memoryPathFor(home)) != content {
 		t.Error("re-applying instruction blocks changed bytes")
+	}
+}
+
+// TestApplyInstructionBlocks_UninstallsLegacySummaryBlock pins issue #1186: a
+// CLAUDE.md an older daemon left with the irrlicht-summary block installed is
+// cleaned up on the next granted apply, with surrounding user content and the
+// other managed blocks intact.
+func TestApplyInstructionBlocks_UninstallsLegacySummaryBlock(t *testing.T) {
+	home := withTempHome(t)
+	path := memoryPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacySummary := taskSummaryBeginSentinel + "\n## Task summary marker\n" +
+		`<!-- {"marker":"irrlicht-summary","summary":"old"} -->` + "\n" + taskSummaryEndSentinel
+	seeded := "# My setup\n\nAlways use tabs.\n\n" + legacySummary + "\n"
+	if err := os.WriteFile(path, []byte(seeded), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applyInstructionBlocks(); err != nil {
+		t.Fatal(err)
+	}
+	content := readFileString(t, path)
+	if strings.Contains(content, taskSummaryBeginSentinel) || strings.Contains(content, `"marker":"irrlicht-summary"`) {
+		t.Errorf("legacy summary block survived apply:\n%s", content)
+	}
+	if !strings.HasPrefix(content, "# My setup\n\nAlways use tabs.\n") {
+		t.Errorf("user content not preserved:\n%s", content)
+	}
+	for _, want := range []string{taskEtaBeginSentinel, taskQuestionBeginSentinel} {
+		if !strings.Contains(content, want) {
+			t.Errorf("expected block %q installed alongside the cleanup", want)
+		}
 	}
 }
 

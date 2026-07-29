@@ -1,7 +1,8 @@
 // instructioninstaller.go manages the Irrlicht-managed emission rules in the
 // user-level Claude Code instruction file ~/.claude/CLAUDE.md: the task-eta
-// progress marker (issue #558), the task-summary marker (issue #738) and the
-// task-question marker (issue #759), each in its own BEGIN/END-delimited block.
+// progress marker (issue #558) and the task-question marker (issue #759), each
+// in its own BEGIN/END-delimited block. The task-summary marker (issue #738)
+// was retired in #1186 — its block is now actively uninstalled, not written.
 // The blocks instruct the agent to emit in-band markers; with them in the
 // user-level file every project inherits the rules without per-repo opt-in.
 //
@@ -88,38 +89,18 @@ appended to the ` + descriptionFieldLiteral + ` of the next Bash call you make, 
 response text when no Bash call is coming.
 ` + taskEtaEndSentinel
 
-// Sentinels delimiting the task-summary managed block (issue #738). Distinct
-// from the task-eta pair so both blocks can coexist and be patched/removed
-// independently.
+// Sentinels delimiting the (now-retired) task-summary managed block. The
+// irrlicht-summary agent instruction was removed in issue #1186 — everything
+// the user sees now lives in the question headline, and TaskSummary /
+// IntentHeadline have been decoded-but-never-rendered since #979. The
+// sentinels stay so applyInstructionBlocks can UNINSTALL a block any prior
+// version installed, cleaning it out of ~/.claude/CLAUDE.md on the next daemon
+// start. The tailer's ScanTaskSummary is left tolerant so an older marker in a
+// live transcript still parses harmlessly.
 const (
 	taskSummaryBeginSentinel = "<!-- BEGIN IRRLICHT MANAGED BLOCK (task-summary) -->"
 	taskSummaryEndSentinel   = "<!-- END IRRLICHT MANAGED BLOCK (task-summary) -->"
 )
-
-// managedTaskSummaryBlock instructs the agent to emit a one-line description
-// of the current task so a human scanning sessions can tell what each is
-// about — surfaced in both the waiting and ready states (issue #738). The
-// summary is the stable companion to the task-eta progress marker: emitted
-// once near the start, not churned per phase. The example marker MUST sit
-// inside a fenced code block for the same reason as the task-eta block —
-// Claude Code strips bare HTML comments from CLAUDE.md at injection time. The
-// `+"`description`"+` carrier mirrors the eta block so the marker survives the
-// claude ≥2.1.162 transcript text-drop via the PreToolUse hook.
-const managedTaskSummaryBlock = taskSummaryBeginSentinel + `
-## Task summary marker (managed by Irrlicht)
-
-So a human scanning sessions can tell what each one is about, emit a one-line
-summary of the overall task as a hidden marker, early in the task:
-
-` + "```" + `
-<!-- {"marker":"irrlicht-summary","summary":"<one sentence: what this task is about>"} -->
-` + "```" + `
-
-Emit it once near the start by appending it to the ` + descriptionFieldLiteral + ` of an
-early Bash call (never to the command itself). Re-emit only if the task
-fundamentally changes. Keep it a short one-liner — under ~70 characters, plain
-prose, no secrets.
-` + taskSummaryEndSentinel
 
 // Sentinels delimiting the task-question managed block (issue #759). Distinct
 // from the eta/summary pairs so all three blocks coexist and are patched or
@@ -153,6 +134,17 @@ const (
 // example placeholder and prose change; the marker key and sentinels are
 // untouched, so patchManagedBlock upgrades installed v1 blocks in place on
 // the next daemon start.
+//
+// v3 (#1186): the headline shape is now the explicit "<3–5 word topic>:
+// <question>" — a chat-conversation-title topic, then a colon, then the ask.
+// This is the same shape the daemon composes for the no-marker fallback path
+// (a topic derived from the first user prompt + the extracted question), so
+// marker and heuristic paths surface one consistent form. The marker carries
+// the whole line to question_headline verbatim (issue #1186 routes an
+// agent-authored marker through the verbatim compaction kind — no
+// sentence-selection that would drop the topic off a two-sentence marker).
+// Only the placeholder and examples change; the marker key and sentinels stay
+// put, so patchManagedBlock upgrades installed v1/v2 blocks in place.
 const managedTaskQuestionBlock = taskQuestionBeginSentinel + `
 ## Pending-question marker (managed by Irrlicht)
 
@@ -160,18 +152,19 @@ When you end your turn by asking the user a question, also emit a hidden
 one-line version of that question so tools can show a terse headline:
 
 ` + "```" + `
-<!-- {"marker":"irrlicht-question","question":"<topic — what happened — the choice>"} -->
+<!-- {"marker":"irrlicht-question","question":"<3–5 word topic>: <what happened — the choice>"} -->
 ` + "```" + `
 
 Emit it on its own line at the very end of your response, only when you are
 actually waiting on the user.
 
-Structure the headline so someone who never saw the session understands it:
-lead with the topic, then what just happened, then the choice — context,
-then state, then the ask. Keep it high-signal; aim for ~90 characters, and
-when clarity and brevity conflict, choose clarity.
+Start with a 3–5 word topic (like a chat conversation title), then ": ", then
+the question. The topic is the context; what follows the colon is the state
+then the ask — context, then state, then the ask — so someone who never saw
+the session understands it at a glance. Keep it high-signal; aim for ~90
+characters, and when clarity and brevity conflict, choose clarity.
 
-- Bad "Should I proceed?" → Good "DB migration ready; drops users.legacy_id — run it or keep the column?"
+- Bad "Should I proceed?" → Good "DB migration: drops users.legacy_id — run it or keep the column?"
 - Bad "Which approach?" → Good "Auth refactor: 2 endpoints still untested — ship now or add tests first?"
 - Bad "Yes or no?" → Good "PR #482 review: 1 blocking finding left — fix now or merge and follow up?"
 ` + taskQuestionEndSentinel
@@ -236,14 +229,8 @@ func UninstallTaskEtaBlock() (bool, error) {
 	return uninstallBlock(taskEtaBeginSentinel, taskEtaEndSentinel)
 }
 
-// EnsureTaskSummaryBlockInstalled writes-or-patches the task-summary managed
-// block (issue #738) — installed alongside the task-eta block under the same
-// instructions permission.
-func EnsureTaskSummaryBlockInstalled() (bool, error) {
-	return ensureBlockInstalled(taskSummaryBeginSentinel, taskSummaryEndSentinel, managedTaskSummaryBlock)
-}
-
-// UninstallTaskSummaryBlock removes only the task-summary managed block.
+// UninstallTaskSummaryBlock removes only the (retired, issue #1186) task-summary
+// managed block — the cleanup path for CLAUDE.md files a prior version wrote.
 func UninstallTaskSummaryBlock() (bool, error) {
 	return uninstallBlock(taskSummaryBeginSentinel, taskSummaryEndSentinel)
 }
@@ -260,14 +247,17 @@ func UninstallTaskQuestionBlock() (bool, error) {
 	return uninstallBlock(taskQuestionBeginSentinel, taskQuestionEndSentinel)
 }
 
-// applyInstructionBlocks installs both managed blocks — the grant effect of
-// the instructions permission. Both are installed together so a single toggle
-// governs all irrlicht-managed instruction text. Returns on the first error.
+// applyInstructionBlocks installs the managed instruction blocks — the grant
+// effect of the instructions permission. All are governed by a single toggle
+// so it covers every irrlicht-managed instruction. The retired irrlicht-summary
+// block (issue #1186) is actively uninstalled here rather than installed, so a
+// CLAUDE.md a prior version wrote is cleaned up on the next granted daemon
+// start. Returns on the first error.
 func applyInstructionBlocks() error {
 	if _, err := EnsureTaskEtaBlockInstalled(); err != nil {
 		return err
 	}
-	if _, err := EnsureTaskSummaryBlockInstalled(); err != nil {
+	if _, err := UninstallTaskSummaryBlock(); err != nil {
 		return err
 	}
 	_, err := EnsureTaskQuestionBlockInstalled()

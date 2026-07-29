@@ -187,25 +187,28 @@ type SessionMetrics struct {
 	LastAssistantText string `json:"last_assistant_text,omitempty"`
 
 	// TaskSummary is a human-readable one-line description of what the
-	// session's current task is about (issue #738). Sourced from the agent's
-	// in-band irrlicht-summary marker when present, else a daemon-side
-	// heuristic (the first user message). Surfaced in both the waiting and
-	// ready states so a human can tell what a session was about at a glance.
-	// Kept as the full text; the sidebar shows IntentHeadline and uses this as
-	// the hover tooltip.
+	// session's current task is about (issue #738). The irrlicht-summary agent
+	// marker was retired in #1186, so this is now sourced from the first user
+	// message heuristic (an older marker in a live transcript still parses).
+	// Decoded-but-not-rendered by any UI since the intent pill was removed
+	// (#979) — a tolerated no-op, like IntentHeadline. (The question headline's
+	// topic prefix is derived from the tailer's FirstUserText directly, not from
+	// this field.)
 	TaskSummary string `json:"task_summary,omitempty"`
 
-	// IntentHeadline is the terse ~70-char one-line version of TaskSummary,
-	// produced by the compaction seam (issue #759). The sidebar renders this in
-	// the purple "intent" block; the full TaskSummary is the tooltip. Empty
-	// when there is no summary source.
+	// IntentHeadline is the terse one-line version of TaskSummary, produced by
+	// the compaction seam (issue #759). Decoded-but-not-rendered by any UI
+	// since the intent pill was removed (#979); retained as a tolerated no-op.
 	IntentHeadline string `json:"intent_headline,omitempty"`
 
-	// QuestionHeadline is the terse ~70-char one-line version of the pending
-	// question, produced by the compaction seam from the agent's in-band
-	// irrlicht-question marker when present, else from LastAssistantText (issue
-	// #759). The sidebar renders this in the orange "waiting" block; the full
-	// LastAssistantText is the tooltip. Empty when there is no question source.
+	// QuestionHeadline is the terse one-line pending-question headline, shaped
+	// as "<3–5 word topic>: <question>" (issue #1186). An agent-authored
+	// irrlicht-question marker carries that whole shape (compacted verbatim);
+	// otherwise the daemon composes it — a topic derived from the session's
+	// first user prompt joined to the question extracted from LastAssistantText
+	// / away_summary (issue #759). The sidebar renders this in the orange
+	// "waiting" block; the full LastAssistantText is the tooltip. Empty when
+	// there is no question source.
 	QuestionHeadline string `json:"question_headline,omitempty"`
 
 	// PendingQuestionMarker is true when the agent emitted an explicit in-band

@@ -11,8 +11,17 @@ const (
 	// task-summary marker or the first user prompt) into a one-line headline.
 	CompactIntent CompactKind = iota
 	// CompactQuestion compacts the agent's pending question (the task-question
-	// marker or the raw last-assistant text) into a one-line headline.
+	// marker or the raw last-assistant text) into a one-line headline. It runs
+	// question-sentence selection, keeping the single most headline-worthy
+	// sentence — the right shape for the raw, multi-sentence fallback sources.
 	CompactQuestion
+	// CompactQuestionVerbatim compacts an already-composed one-line headline
+	// (an agent-authored "<topic>: <question>" marker, or the daemon's own
+	// "topic: question" join) WITHOUT sentence selection: it strips noise and
+	// markdown, collapses whitespace and caps runes, but keeps every sentence.
+	// Sentence selection would drop the topic prefix off a multi-sentence
+	// marker; this kind preserves it (issue #1186).
+	CompactQuestionVerbatim
 )
 
 // TextCompactor turns a possibly-bloated piece of session text into a terse
