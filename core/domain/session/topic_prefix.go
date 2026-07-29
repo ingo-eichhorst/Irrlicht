@@ -67,27 +67,34 @@ func DeriveTopicPrefix(prompt string) string {
 // colon prefix — so the caller doesn't prepend a second one (issue #1186).
 func QuestionHasTopicPrefix(question, topic string) bool {
 	q := strings.TrimSpace(question)
-	if topic != "" {
-		lq, lt := strings.ToLower(q), strings.ToLower(topic)
-		// Require a word boundary after the match so a short topic ("Add")
-		// doesn't count as a prefix of a longer first word ("Additional").
-		if strings.HasPrefix(lq, lt) && endsOnWordBoundary(lq[len(lt):]) {
-			return true
-		}
+	return startsWithTopic(q, topic) || hasOwnColonLead(q)
+}
+
+// startsWithTopic reports whether q begins with topic followed by a word
+// boundary — so a short topic ("Add") doesn't count as a prefix of a longer
+// first word ("Additional").
+func startsWithTopic(q, topic string) bool {
+	if topic == "" {
+		return false
 	}
-	// A short "Lead words: …" already present in the question counts as a
-	// topic prefix. Bounded to the topic budget and to a few words — and
-	// vetoed by sentence punctuation before the colon — so a mid-sentence
-	// colon (or a "PKCE: implicit" style clause) doesn't false-match.
-	if idx := strings.Index(q, ": "); idx > 0 {
-		lead := q[:idx]
-		if utf8.RuneCountInString(lead) <= maxTopicPrefixRunes &&
-			len(strings.Fields(lead)) <= topicWordMax &&
-			!strings.ContainsAny(lead, "?!.") {
-			return true
-		}
+	lq, lt := strings.ToLower(q), strings.ToLower(topic)
+	return strings.HasPrefix(lq, lt) && endsOnWordBoundary(lq[len(lt):])
+}
+
+// hasOwnColonLead reports whether q already opens with its own short
+// "Lead words: …" topic. Bounded to the topic budget and to a few words, and
+// vetoed by sentence punctuation before the colon, so a mid-sentence colon (or
+// a "PKCE: implicit" style clause) doesn't false-match.
+func hasOwnColonLead(q string) bool {
+	idx := strings.Index(q, ": ")
+	if idx <= 0 {
+		return false
 	}
-	return false
+	lead := q[:idx]
+	shortEnough := utf8.RuneCountInString(lead) <= maxTopicPrefixRunes
+	fewWords := len(strings.Fields(lead)) <= topicWordMax
+	noSentencePunct := !strings.ContainsAny(lead, "?!.")
+	return shortEnough && fewWords && noSentencePunct
 }
 
 // endsOnWordBoundary reports whether rest (the text immediately after a
