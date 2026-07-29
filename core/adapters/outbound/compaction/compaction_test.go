@@ -43,6 +43,40 @@ func TestDeterministic_Question_UsesQuestionSnippet(t *testing.T) {
 	}
 }
 
+func TestDeterministic_QuestionVerbatim_KeepsAllSentences(t *testing.T) {
+	// A multi-sentence, already-composed "<topic>: <question>" marker must
+	// survive whole — CompactQuestion would sentence-select and drop the topic
+	// (issue #1186).
+	in := "Auth refactor: 2 endpoints still untested. Ship now or add tests first?"
+	got := (DeterministicCompactor{}).Compact(in, outbound.CompactQuestionVerbatim)
+	if got != in {
+		t.Errorf("Compact(verbatim) = %q, want the whole line kept", got)
+	}
+	// Contrast: CompactQuestion selects a single sentence and loses the topic.
+	if q := (DeterministicCompactor{}).Compact(in, outbound.CompactQuestion); q == in {
+		t.Errorf("CompactQuestion should sentence-select, got the whole line %q", q)
+	}
+}
+
+func TestDeterministic_QuestionVerbatim_StripsAndCaps(t *testing.T) {
+	// Verbatim still strips noise/markdown, collapses whitespace and caps runes.
+	in := "Topic:   fix the **flaky** `TestThing`   now?"
+	got := (DeterministicCompactor{}).Compact(in, outbound.CompactQuestionVerbatim)
+	if got != "Topic: fix the flaky TestThing now?" {
+		t.Errorf("Compact(verbatim) = %q, want stripped + whitespace-collapsed", got)
+	}
+
+	long := "Topic: " + strings.Repeat("word ", 100)
+	capped := (DeterministicCompactor{}).Compact(long, outbound.CompactQuestionVerbatim)
+	runes := []rune(capped)
+	if len(runes) > maxHeadlineRunes {
+		t.Errorf("verbatim len = %d runes, want <= %d", len(runes), maxHeadlineRunes)
+	}
+	if !strings.HasPrefix(capped, "Topic: ") {
+		t.Errorf("verbatim cap dropped the leading topic: %q", capped)
+	}
+}
+
 func TestDeterministic_Question_FallsBackToFirstLine(t *testing.T) {
 	in := "Let me know how you want to proceed.\nSecond line should be ignored."
 	got := (DeterministicCompactor{}).Compact(in, outbound.CompactQuestion)

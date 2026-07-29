@@ -28,10 +28,11 @@ var (
 
 // DeterministicCompactor is the default pure-heuristic strategy: it strips
 // fenced code, HTML-comment markers and system-reminder tags, picks the most
-// headline-worthy fragment per kind (the question sentence, or the first
-// sentence of an intent), strips inline markdown, collapses whitespace and caps
-// the result to ~70 runes with an ellipsis on a rune boundary. Empty in → empty
-// out. It never errors. See issue #759.
+// headline-worthy fragment per kind (the question sentence, the first sentence
+// of an intent, or — for the verbatim kind — the whole already-composed line),
+// strips inline markdown, collapses whitespace and caps the result to
+// maxHeadlineRunes with an ellipsis on a rune boundary. Empty in → empty out.
+// It never errors. See issues #759 and #1186.
 type DeterministicCompactor struct{}
 
 var _ outbound.TextCompactor = DeterministicCompactor{}
@@ -56,6 +57,13 @@ func (DeterministicCompactor) Compact(text string, kind outbound.CompactKind) st
 		} else {
 			headline = session.ExtractStatusFallback(cleaned)
 		}
+	case outbound.CompactQuestionVerbatim:
+		// Already a one-line "<topic>: <question>" — keep the whole thing so a
+		// multi-sentence marker doesn't lose its topic prefix to sentence
+		// selection (issue #1186). The shared strip/collapse/cap below still
+		// runs, so the 200-rune budget is enforced (trimming the question tail,
+		// never the leading topic).
+		headline = cleaned
 	default: // CompactIntent
 		headline = firstSentence(cleaned)
 	}

@@ -17,6 +17,8 @@ func (fakeCompactor) Compact(text string, kind outbound.CompactKind) string {
 		return "intent:" + text
 	case outbound.CompactQuestion:
 		return "question:" + text
+	case outbound.CompactQuestionVerbatim:
+		return "verbatim:" + text
 	default:
 		return text
 	}
@@ -70,8 +72,8 @@ func TestConvert_QuestionHeadline_MarkerWinsOverLastAssistantText(t *testing.T) 
 		TaskQuestion:      &tailer.TaskQuestion{Text: "run the migration?", ObservedAt: 100},
 	}
 	got := NewMetricsConverter(fakeCompactor{}).Convert(m)
-	if got.QuestionHeadline != "question:run the migration?" {
-		t.Errorf("QuestionHeadline = %q, want the marker to win", got.QuestionHeadline)
+	if got.QuestionHeadline != "verbatim:run the migration?" {
+		t.Errorf("QuestionHeadline = %q, want the marker to win (compacted verbatim, #1186)", got.QuestionHeadline)
 	}
 	// The full last-assistant text is preserved for the tooltip + classifier.
 	if got.LastAssistantText != "a long rambling message ending in a question?" {
@@ -107,10 +109,30 @@ func TestConvert_QuestionHeadline_MarkerWinsOverAwaySummary(t *testing.T) {
 		TaskQuestion:      &tailer.TaskQuestion{Text: "run the migration?", ObservedAt: 200},
 	}
 	got := NewMetricsConverter(fakeCompactor{}).Convert(m)
-	if got.QuestionHeadline != "question:run the migration?" {
-		t.Errorf("QuestionHeadline = %q, want the agent's own marker to win over the away_summary recap", got.QuestionHeadline)
+	if got.QuestionHeadline != "verbatim:run the migration?" {
+		t.Errorf("QuestionHeadline = %q, want the agent's own marker to win over the away_summary recap (verbatim, #1186)", got.QuestionHeadline)
 	}
 }
+
+// TestConvert_QuestionHeadline_ComposesTopicPrefix pins issue #1186: on the
+// no-marker (regex/heuristic) path, the converter prefixes a 3–5 word topic
+// derived from the first user prompt onto the compacted question, joined by
+// ": " and re-capped through the verbatim kind. Uses the fakeCompactor so the
+// composition/routing is visible in the output tags.
+func TestConvert_QuestionHeadline_ComposesTopicPrefix(t *testing.T) {
+	m := &tailer.SessionMetrics{
+		LastAssistantText: "should I proceed?",
+		FirstUserText:     "Add OAuth login to the web dashboard",
+	}
+	got := NewMetricsConverter(fakeCompactor{}).Convert(m)
+	// fakeCompactor tags each stage: the question is compacted (question:),
+	// then the "<topic>: <question>" join is re-compacted verbatim (verbatim:).
+	want := "verbatim:Add OAuth login: question:should I proceed?"
+	if got.QuestionHeadline != want {
+		t.Errorf("QuestionHeadline = %q, want the topic prefix composed (%q)", got.QuestionHeadline, want)
+	}
+}
+
 
 // TestConvert_PendingQuestionMarker pins issue #1138: only the deliberate
 // irrlicht-question marker sets PendingQuestionMarker (the waiting-state
