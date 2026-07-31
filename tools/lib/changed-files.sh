@@ -41,11 +41,16 @@ changed_files_vs_origin_main() {
     echo "cannot resolve a merge base with origin/main — scoping to a diff against an unknown baseline would skip every gate. Run 'git fetch origin main'." >&2
     return 1
   fi
+  # LC_ALL=C so the order is byte-wise and identical everywhere. No consumer
+  # depends on the order today (they all grep or glob the set), but a set whose
+  # order changes with the caller's locale is a trap for anyone who later
+  # diffs, caches or golden-files it — and it already bit this repo once, as a
+  # macOS-green / Linux-CI-red assertion in changed-files_test.sh.
   {
     git diff --name-only "$base" HEAD
     git diff --name-only HEAD
     git diff --name-only --cached
-  } 2>/dev/null | sort -u
+  } 2>/dev/null | LC_ALL=C sort -u
 }
 
 # go_module_touched <module-dir> <changed-files> — true when the changed set
