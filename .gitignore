@@ -114,6 +114,10 @@ ehthumbs.db
 # Gas Town (added by gt)
 .runtime/
 .claude/worktrees/
+# Per-machine Claude Code permission grants — never belongs in a commit.
+# Only ~/.config/git/ignore covered this, which doesn't travel to other clones,
+# so ir:exec step 11b's `git add -A` would sweep it into the implementation commit.
+.claude/settings.local.json
 .logs/
 __pycache__/
 state.json
