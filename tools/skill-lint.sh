@@ -13,11 +13,13 @@
 #   1. conflict-marker    ERROR  unresolved <<<<<<< / ======= / >>>>>>> / |||||||
 #   2. template-token     ERROR  {{TOKEN}} left unfilled
 #      template-scaffold  ERROR  <!-- REPEAT:x --> / <!-- OPTIONAL:x --> left in
+#      unbalanced-fence   ERROR  an odd number of ``` / ~~~ delimiters
 #   3. ref-direction      WARN   "X above" where heading X is below (or vice versa)
 #      ref-dangling       WARN   a delimited "X above/below" naming no heading
 #   4. list-count         WARN   "Three moves:" followed by a list of four
 #   5. frontmatter        WARN   SKILL.md name: disagrees with its directory,
-#                                or description: missing/empty
+#                                description: missing/empty, or the block never
+#                                closes / holds something that is not YAML
 #
 # Checks 1–2 are unambiguous, so they fail the gate. 3–5 are heuristics with a
 # real false-positive rate and only warn; `--strict` promotes them to failures,
@@ -30,11 +32,22 @@
 # `.claude/skills/ir:exec/SKILL.md` documents the plan.html template and so
 # mentions `{{TOKEN}}`, `REPEAT:step` and `OPTIONAL:ui` a dozen times — always
 # inside backticks. So checks 2 and 4 read a prose view of each file with
-# fenced code blocks, inline code spans and YAML frontmatter blanked out.
-# Check 3 keeps inline code (a reference can legitimately be written
-# `` `Auto mode` below ``) and check 1 reads raw lines outside fences, because
-# a conflict marker inside a fence is illustrative but anywhere else is a
-# corrupted file.
+# fenced code blocks and inline code spans blanked out. Check 3 keeps inline
+# code (a reference can legitimately be written `` `Auto mode` below ``) and
+# check 1 reads raw lines outside fences, because a conflict marker inside a
+# fence is illustrative but anywhere else is a corrupted file. Frontmatter is
+# structured data, never prose that documents a marker, so check 2 reads it —
+# an unfilled {{TOKEN}} in `description:` is what the skill loader matches on
+# — while checks 3 and 4 skip it, since a description legitimately contains
+# quoted phrases and counted lead-ins.
+#
+# Blanking is the whole mechanism, which makes an unbalanced delimiter a
+# silencer: every blanked line is a line no check reads, so one missing closing
+# fence used to hide the entire rest of the file, and an unterminated
+# frontmatter used to swallow however much of the body sat above the next `---`.
+# Both are therefore detected first, reported, and then not allowed to blank
+# anything — a corrupted skill file reporting 0 errors is the exact failure
+# this script exists to remove.
 #
 # Known limits (deliberate, not oversights)
 # ----------------------------------------
@@ -43,8 +56,10 @@
 #   two markers and so passes. Counting what a reader would call an item is a
 #   judgement call; counting markers is not.
 # * Check 3 only recognises a reference when the name is delimited
-#   (`"X"`, `` `X` ``, `**X**`) or matches a heading verbatim. "see the rule
-#   above" names nothing checkable and is ignored by design.
+#   (`"X"`, `` `X` ``, `**X**`) or matches a heading — verbatim, or up to a
+#   trailing parenthetical, so "Readiness Rubric" finds
+#   `## Readiness Rubric (7 axes)`. "see the rule above" names nothing
+#   checkable and is ignored by design.
 # * Setext headings (underlined with === or ---) are not indexed as headings;
 #   every heading in this repo's skill files is ATX (#).
 #
@@ -146,44 +161,90 @@ function phrase_at(hay, needle, pos,   before, after) {
 { n++; raw[n] = $0 }
 
 END {
-  # ---- build the three views ---------------------------------------------
+  # ---- build the views ----------------------------------------------------
   # raw[]   verbatim, for conflict markers
   # text[]  fences + frontmatter blanked, inline code KEPT   (checks 3, 4)
-  # prose[] text[] with inline code spans blanked too        (check 2)
-  fm_end = 0
+  # prose[] text[] with inline code spans blanked too, but frontmatter KEPT
+  #                                                          (check 2)
+  #
+  # Blanking is how the linter tells "documents a marker" from "has one", and
+  # every line it blanks is a line no check reads. That makes an unbalanced
+  # delimiter a silencer: one missing closing fence, or a frontmatter that
+  # never closes, and the rest of the file passes unread — a corrupted skill
+  # file linting 0/0, which is the exact failure #1209 is about. So both are
+  # detected up front, reported, and then NOT allowed to blank anything.
+
+  # Frontmatter must close within FM_MAX lines. Unbounded, the closing `---`
+  # binds to the first thematic break in the body — arbitrarily far down —
+  # and swallows everything in between. The longest real one in this repo is
+  # a folded description of ~10 lines.
+  FM_MAX = 40
+  fm_end = 0; fm_unterminated = 0
   if (n >= 1 && raw[1] ~ /^---[ \t\r]*$/) {
-    for (i = 2; i <= n; i++)
+    for (i = 2; i <= n && i <= FM_MAX; i++)
       if (raw[i] ~ /^---[ \t\r]*$/) { fm_end = i; break }
+    if (fm_end == 0) fm_unterminated = 1
   }
+
+  # Fence balance, decided before any blanking. An odd number of delimiters
+  # means the file's own view of what is code is untrustworthy, so treat none
+  # of it as fenced and let every check read the whole file.
+  fences = 0
+  for (i = 1; i <= n; i++)
+    if (raw[i] ~ /^[ \t]*(```|~~~)/) fences++
+  fence_broken = (fences % 2)
 
   fence = 0
   for (i = 1; i <= n; i++) {
     line = raw[i]
     sub(/\r$/, "", line)
 
-    if (line ~ /^[ \t]*(```|~~~)/) {
+    if (!fence_broken && line ~ /^[ \t]*(```|~~~)/) {
       infence[i] = 1          # the delimiter itself is never prose
       fence = !fence
       text[i] = ""; prose[i] = ""
       continue
     }
     infence[i] = fence
-    if (fence || (fm_end > 0 && i <= fm_end)) { text[i] = ""; prose[i] = ""; continue }
 
-    text[i] = line
     p = line
     gsub(/`[^`]*`/, " ", p)
+
+    if (fence) { text[i] = ""; prose[i] = ""; continue }
+    if (fm_end > 0 && i <= fm_end) {
+      # Frontmatter is structured data, never prose that *documents* a marker,
+      # so check 2 reads it — an unfilled {{TOKEN}} in `description:` is what
+      # the skill loader matches on. Checks 3 and 4 still skip it: a
+      # description legitimately contains quoted phrases and counted lead-ins.
+      text[i] = ""; prose[i] = p
+      continue
+    }
+
+    text[i] = line
     prose[i] = p
 
-    if (line ~ /^#{1,6}[ \t]+/) {
+    # `#+` rather than `#{1,6}`: ERE interval expressions are not supported by
+    # every awk this may run on, and an awk that silently matches no heading
+    # would leave check 3a dead and check 3b flagging every reference.
+    if (line ~ /^#+[ \t]+/) {
       h = line
       sub(/^#+[ \t]+/, "", h)
       sub(/[ \t]+#+[ \t]*$/, "", h)
       nh++
       hline[nh] = i
       htext[nh] = normalize(h)
+      # A second searchable form without a trailing parenthetical, so prose
+      # referring to "Readiness Rubric" finds `## Readiness Rubric (7 axes)`.
+      hshort[nh] = htext[nh]
+      sub(/[ \t]*\(.*$/, "", hshort[nh])
+      if (hshort[nh] == "" || hshort[nh] == htext[nh]) hshort[nh] = ""
     }
   }
+
+  if (fence_broken)
+    err(1, "unbalanced-fence", "odd number of code-fence delimiters — the file's code blocks cannot be identified, so nothing was treated as fenced")
+  if (fm_unterminated)
+    warn(1, "frontmatter", "frontmatter opens with --- but never closes within the first " FM_MAX " lines")
 
   # ---- 1. unresolved conflict markers (ERROR) -----------------------------
   open_conflict = 0
@@ -195,7 +256,7 @@ END {
     } else if (raw[i] ~ /^>>>>>>>([ \t]|$)/) {
       err(i, "conflict-marker", "unresolved merge conflict marker >>>>>>>")
       open_conflict = 0
-    } else if (open_conflict && raw[i] ~ /^=======[ \t]*$/) {
+    } else if (open_conflict && raw[i] ~ /^=======[ \t\r]*$/) {
       # Only inside an open conflict: a bare row of = is also a setext H2
       # underline, and flagging those would be a false positive on real prose.
       err(i, "conflict-marker", "unresolved merge conflict marker =======")
@@ -223,11 +284,18 @@ END {
     lp = normalize(text[i])
     for (j = 1; j <= nh; j++) {
       if (hline[j] == i) continue
-      if (length(htext[j]) < 4) continue
-      pos = index(lp, htext[j])
-      if (pos == 0) continue
-      if (!phrase_at(lp, htext[j], pos)) continue
-      tail = substr(lp, pos + length(htext[j]), 40)
+      # Try the full heading, then the form without its trailing parenthetical
+      # — `## Readiness Rubric (7 axes)` is referred to as "Readiness Rubric",
+      # and matching only verbatim leaves a wrong direction on this repo's most
+      # common heading shape invisible.
+      hname = htext[j]
+      if (length(hname) >= 4 && index(lp, hname) > 0 && phrase_at(lp, hname, index(lp, hname))) {
+        pos = index(lp, hname)
+      } else if (hshort[j] != "" && length(hshort[j]) >= 4 && index(lp, hshort[j]) > 0 && phrase_at(lp, hshort[j], index(lp, hshort[j]))) {
+        hname = hshort[j]
+        pos = index(lp, hname)
+      } else continue
+      tail = substr(lp, pos + length(hname), 40)
       # The direction word has to follow the name directly — at most one
       # structural noun and a comma in between. Anything looser binds a stray
       # "below" to whatever heading-shaped word happened to appear earlier in
@@ -240,7 +308,7 @@ END {
       said = (substr(tail, RSTART, RLENGTH) ~ /above/) ? "above" : "below"
       actual = (hline[j] < i) ? "above" : "below"
       if (said != actual)
-        warn(i, "ref-direction", "says \"" htext[j] "\" " said ", but that heading is " actual " (line " hline[j] ")")
+        warn(i, "ref-direction", "says \"" hname "\" " said ", but that heading is " actual " (line " hline[j] ")")
     }
   }
 
@@ -263,8 +331,10 @@ END {
       name = normalize(name)
       if (name == "") continue
       found = 0
+      # hshort[] too, so `**Readiness Rubric** below` is not called dangling
+      # when the heading is `## Readiness Rubric (7 axes)`.
       for (j = 1; j <= nh; j++)
-        if (htext[j] == name) { found = 1; break }
+        if (htext[j] == name || hshort[j] == name) { found = 1; break }
       if (!found)
         warn(i, "ref-dangling", "reference to \"" name "\" " (m ~ /above([^A-Za-z]|$)$/ ? "above" : "below") " names no heading in this file")
     }
@@ -295,14 +365,14 @@ END {
     if (want == 0) continue
 
     j = i + 1
-    while (j <= n && raw[j] ~ /^[ \t]*$/) j++
+    while (j <= n && raw[j] ~ /^[ \t\r]*$/) j++
     if (j > n || infence[j] || !is_list_marker(raw[j])) continue
 
     base = indent_of(raw[j])
     got = 1
     blanks = 0
     for (k = j + 1; k <= n; k++) {
-      if (raw[k] ~ /^[ \t]*$/) { blanks++; if (blanks >= 2) break; continue }
+      if (raw[k] ~ /^[ \t\r]*$/) { blanks++; if (blanks >= 2) break; continue }
       ind = indent_of(raw[k])
       if (ind > base) { blanks = 0; continue }           # continuation or nested
       if (ind == base && is_list_marker(raw[k])) { got++; blanks = 0; continue }
@@ -332,6 +402,19 @@ END {
           gsub(/^[ \t\r]+|[ \t\r]+$/, "", desc_value)
         }
       }
+      # A frontmatter span containing prose is a frontmatter whose closing ---
+      # went missing and bound to a thematic break further down: the span then
+      # covers body text, and everything in it is read as YAML. Checks 3 and 4
+      # skip that span, so without this the only symptom is silence. A line is
+      # not YAML when it is unindented (not a continuation), not a `key:`, not
+      # a `- ` item, and not a `#` comment.
+      for (i = 2; i < fm_end; i++) {
+        if (raw[i] ~ /^[ \t\r]*$/ || raw[i] ~ /^[ \t#]/ || raw[i] ~ /^-[ \t]/) continue
+        if (raw[i] ~ /^[A-Za-z_][A-Za-z0-9_.-]*:/) continue
+        warn(i, "frontmatter", "frontmatter contains a line that is not YAML — the closing --- is probably missing")
+        break
+      }
+
       if (namelines == 0)
         warn(1, "frontmatter", "frontmatter has no name: key")
       else if (expected_name != "" && gotname != expected_name)
@@ -360,6 +443,9 @@ if [[ -t 1 ]]; then RED=$'\033[31m'; YELLOW=$'\033[33m'; BOLD=$'\033[1m'; RESET=
 
 errors=0
 warnings=0
+FINDINGS="$(mktemp)"
+trap 'rm -f "$FINDINGS"' EXIT
+
 for f in "${FILES[@]}"; do
   if [[ ! -f "$f" ]]; then
     echo "skill-lint: no such file: $f" >&2
@@ -372,16 +458,31 @@ for f in "${FILES[@]}"; do
     is_skill_md=1
     expected="$(expected_skill_name "$f")"
   fi
+  # Via a temp file, not process substitution: `done < <(awk …)` discards
+  # awk's exit status, so an awk that cannot read the file — or that rejects
+  # a construct in the program — yields zero lines and the file is tallied as
+  # clean. That would turn any awk incompatibility into a silently green gate,
+  # which is the failure mode this whole script exists to remove.
+  if ! awk -v is_skill_md="$is_skill_md" -v expected_name="$expected" "$LINT_AWK" "$f" >"$FINDINGS"; then
+    echo "skill-lint: awk failed on $f — treating as a failure, not a clean file" >&2
+    errors=$((errors + 1))
+    continue
+  fi
   while IFS=$'\t' read -r sev line check msg; do
     [[ -z "$sev" ]] && continue
     if [[ "$sev" == "ERROR" ]]; then
       errors=$((errors + 1))
-      printf '%s%s:%s:%s %s [%s]\n' "$RED" "$f" "$line" "$RESET" "$msg" "$check"
+      color="$RED"
     else
       warnings=$((warnings + 1))
-      printf '%s%s:%s:%s %s [%s]\n' "$YELLOW" "$f" "$line" "$RESET" "$msg" "$check"
+      color="$YELLOW"
     fi
-  done < <(awk -v is_skill_md="$is_skill_md" -v expected_name="$expected" "$LINT_AWK" "$f")
+    # The severity is printed as a word, not encoded in the color: colors are
+    # suppressed whenever stdout is not a TTY, which is exactly the case in a
+    # GitHub Actions log — where a developer looking at a failed gate most
+    # needs to tell the blocking lines from the advisory ones.
+    printf '%s%s:%s:%s %-5s %s [%s]\n' "$color" "$f" "$line" "$RESET" "$sev" "$msg" "$check"
+  done <"$FINDINGS"
 done
 
 printf '\n%sskill-lint:%s %d file(s), %d error(s), %d warning(s)\n' \

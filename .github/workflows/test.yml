@@ -34,6 +34,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # .claude/skills/**/*.md are executable instructions — they decide how
+      # agents triage, plan, implement and review — and until #1209 no gate
+      # read them. PR #1204 changed two skill files: preflight skipped all ten
+      # gates and all thirteen PR checks went green having checked nothing that
+      # changed. This step is the missing CI reader.
+      #
+      # First step after checkout, before setup-go: it needs no toolchain and
+      # takes a fraction of a second, and behind the Go suites a `go test`
+      # failure would abort the job and give a skills-only PR no skill feedback
+      # at all. Deliberately unscoped — scoping is what let the gap exist.
+      # Unresolved conflict markers, leftover template scaffolding and an
+      # unbalanced code fence fail; the reference/list/frontmatter heuristics
+      # only warn until their noise floor is known (`--strict` promotes them).
+      - name: Lint skill files
+        run: tools/skill-lint.sh
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -92,16 +108,3 @@ jobs:
             echo "== $t =="
             bash "$t"
           done
-
-      # .claude/skills/**/*.md are executable instructions — they decide how
-      # agents triage, plan, implement and review — and until #1209 no gate
-      # read them. PR #1204 changed two skill files: preflight skipped all ten
-      # gates and all thirteen PR checks went green having checked nothing that
-      # changed. This step is the missing CI reader. It is deliberately
-      # unscoped (the whole corpus, every push) — the run is a fraction of a
-      # second, and scoping is what let the gap exist in the first place.
-      # Unresolved conflict markers and leftover template scaffolding fail;
-      # the reference/list/frontmatter heuristics only warn until their noise
-      # floor is known (tools/skill-lint.sh --strict promotes them).
-      - name: Lint skill files
-        run: tools/skill-lint.sh
