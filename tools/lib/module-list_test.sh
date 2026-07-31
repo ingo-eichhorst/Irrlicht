@@ -32,21 +32,49 @@ fail() { echo "FAIL: $1" >&2; rc=1; }
 need() { command -v "$1" >/dev/null 2>&1 || { echo "FAIL: module-list_test — $1 not found; cannot verify the module lists agree" >&2; exit 1; }; }
 need go
 need jq
-need python3
 
 # Read one ecosystem's directories out of dependabot.yml, newline-separated and
 # leading-slash-stripped so both sides of every comparison share a shape.
+#
+# Deliberately awk, not a YAML library. The first version used python3 with
+# PyYAML: it passed locally and failed in CI, where python3 exists but PyYAML
+# does not — `import yaml` raised, stderr was swallowed, and both ecosystems
+# came back empty. Adding a pip install to CI to satisfy one assertion is a
+# worse trade than parsing a file whose shape this repo controls.
+#
+# Brittleness is bounded by the emptiness guards below: a shape this parser
+# cannot read yields nothing, and nothing is a loud failure rather than a
+# vacuous match. That is how the CI break above surfaced at all.
 dependabot_dirs() {
-  python3 -c '
-import sys, yaml
-eco = sys.argv[1]
-cfg = yaml.safe_load(open(sys.argv[2]))
-for u in cfg.get("updates", []):
-    if u.get("package-ecosystem") == eco:
-        for d in (u.get("directories") or [u.get("directory")]):
-            if d:
-                print(d.lstrip("/"))
-' "$1" "$DEPENDABOT" 2>/dev/null | sort
+  awk -v want="$1" '
+    # A new list item resets block state; capture the ecosystem it declares.
+    /^[[:space:]]*-[[:space:]]*package-ecosystem:[[:space:]]*/ {
+      eco = $NF; in_dirs = 0; next
+    }
+    # Plural form: `directories:` opens a list of paths.
+    /^[[:space:]]*directories:[[:space:]]*$/ { in_dirs = (eco == want); next }
+    # Singular form: `directory: /` carries its value inline.
+    /^[[:space:]]*directory:[[:space:]]*/ {
+      if (eco == want) { v = $NF; gsub(/^"|"$/, "", v); print v }
+      in_dirs = 0; next
+    }
+    # Inside a directories: block, list items are the paths. Anything else
+    # (schedule:, groups:, a comment) closes it — which is what keeps the
+    # `- "*"` items under groups.patterns from being read as directories.
+    {
+      if (in_dirs && $0 ~ /^[[:space:]]*-[[:space:]]/) {
+        v = $NF; gsub(/^"|"$/, "", v); print v
+      } else if ($0 !~ /^[[:space:]]*-[[:space:]]/) {
+        in_dirs = 0
+      }
+    }
+  ' "$DEPENDABOT" |
+    # Repo-relative, to match go.work's and WEB_TREES' shape. The repo root is
+    # "/" in dependabot's spelling; stripping the slash would leave the empty
+    # string, which the blank-line filter would then drop — silently losing an
+    # ecosystem that watches the root (github-actions does). Map it to "." so
+    # it survives as a real entry.
+    sed 's|^/||; s|^$|.|' | sed '/^$/d' | sort
 }
 
 # --- gomod: dependabot must cover exactly go.work's modules -----------------
