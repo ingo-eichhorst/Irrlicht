@@ -906,11 +906,11 @@ func setupBackchannel(mux *http.ServeMux, deps setupBackchannelDeps) (*services.
 // pre-consent daemon keep firing until the wizard is answered, so payloads are
 // dropped while pending.
 func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, metricsCollector outbound.MetricsCollector, permService *services.PermissionService, logger outbound.Logger) {
-	mux.HandleFunc("POST /api/v1/hooks/claudecode",
+	mux.HandleFunc("POST "+claudecode.HookEndpointPath,
 		claudecode.NewHookHandler(detector, metricsCollector, permService, logger))
-	mux.HandleFunc("POST /api/v1/hooks/claudecode/statusline",
+	mux.HandleFunc("POST "+claudecode.StatuslineEndpointPath,
 		claudecode.NewStatuslineHandler(metricsCollector, permService, logger))
-	mux.HandleFunc("POST /api/v1/hooks/codex",
+	mux.HandleFunc("POST "+codex.HookEndpointPath,
 		codex.NewHookHandler(detector, permService, logger))
 }
 

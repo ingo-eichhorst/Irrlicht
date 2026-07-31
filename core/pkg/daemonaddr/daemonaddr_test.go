@@ -2,20 +2,29 @@ package daemonaddr
 
 import "testing"
 
+// TestDefaultsAgree pins the two spellings of the default together: PortOf's
+// fallback and the address the daemon binds must never drift apart, or an
+// unset environment would resolve a hook endpoint the daemon does not serve.
+func TestDefaultsAgree(t *testing.T) {
+	if got := PortOf(defaultBindAddr); got != defaultPort {
+		t.Errorf("PortOf(%q) = %d, want defaultPort %d", defaultBindAddr, got, defaultPort)
+	}
+}
+
 func TestResolveBindAddr(t *testing.T) {
 	tests := []struct {
 		in, want string
 	}{
-		{"", DefaultBindAddr},
-		{"garbage", DefaultBindAddr},
+		{"", defaultBindAddr},
+		{"garbage", defaultBindAddr},
 		{"127.0.0.1:7837", "127.0.0.1:7837"},
 		{"0.0.0.0:7837", "0.0.0.0:7837"},
 		{":7837", ":7837"},
 		{"127.0.0.1:7838", "127.0.0.1:7838"},
 	}
 	for _, tt := range tests {
-		if got := ResolveBindAddr(tt.in); got != tt.want {
-			t.Errorf("ResolveBindAddr(%q) = %q, want %q", tt.in, got, tt.want)
+		if got := resolveBindAddr(tt.in); got != tt.want {
+			t.Errorf("resolveBindAddr(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}
 }
@@ -29,11 +38,11 @@ func TestPortOf(t *testing.T) {
 		{"127.0.0.1:7838", 7838},
 		{":7838", 7838},
 		{"0.0.0.0:9000", 9000},
-		{"garbage", DefaultPort},
-		{"127.0.0.1:notaport", DefaultPort},
+		{"garbage", defaultPort},
+		{"127.0.0.1:notaport", defaultPort},
 		// An ephemeral request has no value a client can be pointed at.
-		{"127.0.0.1:0", DefaultPort},
-		{"127.0.0.1:99999", DefaultPort},
+		{"127.0.0.1:0", defaultPort},
+		{"127.0.0.1:99999", defaultPort},
 	}
 	for _, tt := range tests {
 		if got := PortOf(tt.in); got != tt.want {
@@ -42,31 +51,22 @@ func TestPortOf(t *testing.T) {
 	}
 }
 
-func TestPortAndLocalURLFollowEnv(t *testing.T) {
-	t.Run("unset falls back to the default port", func(t *testing.T) {
-		t.Setenv(EnvBindAddr, "")
-		if got := Port(); got != DefaultPort {
-			t.Errorf("Port() = %d, want %d", got, DefaultPort)
-		}
-		if got, want := LocalURL("/api/v1/hooks/codex"), "http://localhost:7837/api/v1/hooks/codex"; got != want {
-			t.Errorf("LocalURL = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("alternate port", func(t *testing.T) {
-		t.Setenv(EnvBindAddr, "127.0.0.1:7838")
-		if got := Port(); got != 7838 {
-			t.Errorf("Port() = %d, want 7838", got)
-		}
-		if got, want := LocalURL("/api/v1/hooks/codex"), "http://localhost:7838/api/v1/hooks/codex"; got != want {
-			t.Errorf("LocalURL = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("wildcard bind still yields a loopback client URL", func(t *testing.T) {
-		t.Setenv(EnvBindAddr, "0.0.0.0:7900")
-		if got, want := LocalURL("/api/v1/hooks/claudecode"), "http://localhost:7900/api/v1/hooks/claudecode"; got != want {
-			t.Errorf("LocalURL = %q, want %q", got, want)
-		}
-	})
+func TestLocalURLFollowsEnv(t *testing.T) {
+	tests := []struct {
+		name, bindAddr, want string
+	}{
+		{"unset falls back to the default port", "", "http://localhost:7837/x"},
+		{"alternate port", "127.0.0.1:7838", "http://localhost:7838/x"},
+		// A daemon on 0.0.0.0 is still reached at loopback; never point a
+		// hook at a wildcard address.
+		{"wildcard bind still yields a loopback URL", "0.0.0.0:7900", "http://localhost:7900/x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(EnvBindAddr, tt.bindAddr)
+			if got := LocalURL("/x"); got != tt.want {
+				t.Errorf("LocalURL(\"/x\") = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }

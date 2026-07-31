@@ -24,8 +24,9 @@
 # #1178 the hook endpoint follows IRRLICHT_BIND_ADDR, so claudecode's hooks
 # reach us rather than production. The transcript fswatcher (~/.claude/projects,
 # keyed off the real $HOME) covers this scenario's working->ready arcs either
-# way. run-cell.sh snapshots and restores the shared ~/.claude/settings.json
-# it rewrites, so production's hooks are put back when the recording ends.
+# way. This script snapshots and restores the shared agent config the daemon
+# rewrites (lib/hook-config-snapshot.sh), so production's hooks are put back
+# when the recording ends.
 #
 # Coexist is MANDATORY here: IRRLICHT_ONBOARD_HOME must be set (defaulting
 # the bind port to 7838) so we never touch the running production daemon.
@@ -53,6 +54,8 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$REPO_ROOT" ]] || { echo "not in a git repo" >&2; exit 1; }
 # shellcheck source=lib/shard-lib.sh
 source "$SCRIPT_DIR/lib/shard-lib.sh"   # per-scenario shard reader (#511)
+# shellcheck source=lib/hook-config-snapshot.sh
+source "$SCRIPT_DIR/lib/hook-config-snapshot.sh"   # save/restore shared agent config (#1178)
 
 # Session-id reconciliation helpers (daemon_sid_for_transcript,
 # sid_in_recording, reconcile_slot_csv) — shared + unit-tested in lib/.
@@ -87,10 +90,6 @@ ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7838}"
 ONBOARD_SOCK="$ONBOARD_HOME/irrlichd.sock"
 export IRRLICHT_ONBOARD_HOME="$ONBOARD_HOME"
 export IRRLICHT_ONBOARD_BIND_ADDR="$ONBOARD_BIND"
-# Marks this as the cross-adapter run for anything downstream that cares. It
-# used to double as precheck's bypass for claudecode-in-coexist-mode; that
-# refusal is gone since #1178 made the hook endpoint follow the bind address.
-export IRRLICHT_ONBOARD_MULTI=1
 
 # --- Resolve the cross-adapter cell -------------------------------------
 # Post-consolidation (#511): there is no `cross_adapter[]` list. The cell lives
@@ -198,6 +197,10 @@ write_error_manifest() {
 
 # --- Spawn ONE isolated --record daemon ---------------------------------
 DAEMON_LOG="$STAGING/daemon.log"
+# Save the shared agent config the daemon is about to rewrite (see
+# lib/hook-config-snapshot.sh); cleanup hands it back. This script spawns its
+# own daemon rather than delegating to run-cell.sh, so it needs its own call.
+snapshot_hook_configs "$STAGING/hook-config-backup"
 # grant-all: the consent-first permission gate (#570) would otherwise leave
 # a fresh recording daemon monitoring nothing until a wizard is answered.
 env IRRLICHT_RECORDINGS_DIR="$STAGING/recordings" \
@@ -227,6 +230,7 @@ cleanup() {
     kill -KILL "$DAEMON_PID" 2>/dev/null || true
   fi
   echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"
+  restore_hook_configs
 }
 trap cleanup EXIT
 

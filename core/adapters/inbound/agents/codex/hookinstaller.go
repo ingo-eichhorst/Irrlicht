@@ -19,11 +19,13 @@ import (
 	"irrlicht/core/pkg/daemonaddr"
 )
 
-// hookEndpointPath is the daemon's Codex hook path. Host and port are resolved
+// HookEndpointPath is the daemon's Codex hook path. Host and port are resolved
 // at install time from the daemon's own bind address, so a daemon on an
 // alternate port installs hooks that reach it rather than whatever owns :7837
-// (issue #1178).
-const hookEndpointPath = "/api/v1/hooks/codex"
+// (issue #1178). Exported so the daemon's route comes from the same constant
+// the installer writes and matches on — since #1178 this path *is* the
+// sentinel, so drift would orphan every existing entry rather than 404.
+const HookEndpointPath = "/api/v1/hooks/codex"
 
 // hookSentinel is the substring in a hook entry's curl command that identifies
 // irrlicht-managed entries. Used by both install (idempotency) and uninstall.
@@ -31,13 +33,13 @@ const hookEndpointPath = "/api/v1/hooks/codex"
 // recognizing our own entries the moment the daemon moves, orphaning them and
 // appending a duplicate group instead of upgrading in place. As the bare
 // endpoint path it still matches a pre-#1178 :7837 command.
-const hookSentinel = hookEndpointPath
+const hookSentinel = HookEndpointPath
 
 // hookEndpointURL is the daemon endpoint the installed hook posts to. Codex
 // execs the curl command below with the hook payload on stdin (Codex has no
 // native http-delivery hook like Claude Code's, so a curl command is used).
 func hookEndpointURL() string {
-	return daemonaddr.LocalURL(hookEndpointPath)
+	return daemonaddr.LocalURL(HookEndpointPath)
 }
 
 // hookDeliveryCommand is the shell command Codex runs for each installed hook.

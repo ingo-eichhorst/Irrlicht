@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"irrlicht/core/pkg/daemonaddr"
 )
 
 const altBindAddr = "127.0.0.1:7838"
@@ -62,11 +64,11 @@ func onlyHookURL(t *testing.T, path, event string) string {
 }
 
 func TestHookEndpointURL_FollowsBindAddr(t *testing.T) {
-	t.Setenv("IRRLICHT_BIND_ADDR", "")
+	t.Setenv(daemonaddr.EnvBindAddr, "")
 	if got, want := hookEndpointURL(), legacyPortHookURL; got != want {
 		t.Errorf("default: hookEndpointURL() = %q, want %q", got, want)
 	}
-	t.Setenv("IRRLICHT_BIND_ADDR", altBindAddr)
+	t.Setenv(daemonaddr.EnvBindAddr, altBindAddr)
 	if got, want := hookEndpointURL(), "http://localhost:7838/api/v1/hooks/claudecode"; got != want {
 		t.Errorf("alt port: hookEndpointURL() = %q, want %q", got, want)
 	}
@@ -89,10 +91,9 @@ func TestEnsureHooksInstalled_UsesResolvedPort(t *testing.T) {
 		if !ok || len(arr) != 1 {
 			t.Fatalf("event %s: expected 1 matcher group, got %v", event, hooksMap[event])
 		}
+		// assertHTTPEntry compares against hookEndpointURL(), which under
+		// altBindAddr is the :7838 form — so this pins the resolved port too.
 		assertHTTPEntry(t, arr[0].(map[string]interface{}))
-		if url := onlyHookURL(t, path, event); !strings.Contains(url, ":7838/") {
-			t.Errorf("event %s: url = %q, want the resolved :7838 port", event, url)
-		}
 	}
 
 	// Idempotent on the same port.
@@ -193,7 +194,7 @@ func TestUninstallHooks_RemovesDefaultPortInstall(t *testing.T) {
 }
 
 func TestInstalledStatuslineCommand_FollowsBindAddr(t *testing.T) {
-	t.Setenv("IRRLICHT_BIND_ADDR", altBindAddr)
+	t.Setenv(daemonaddr.EnvBindAddr, altBindAddr)
 	if got := installedStatuslineCommand(); !strings.Contains(got, "http://localhost:7838/api/v1/hooks/claudecode/statusline") {
 		t.Errorf("statusline command = %q, want the resolved :7838 endpoint", got)
 	}
@@ -203,10 +204,10 @@ func TestInstalledStatuslineCommand_FollowsBindAddr(t *testing.T) {
 // install is ours (port-independent sentinel), so it must be rewritten to the
 // resolved port rather than mistaken for a third-party command and wrapped.
 func TestChainStatuslineCommand_RewritesDefaultPortStandalone(t *testing.T) {
-	t.Setenv("IRRLICHT_BIND_ADDR", altBindAddr)
-	stale := "curl -fsS --max-time 1 -X POST --data-binary @- " +
-		"http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true"
+	t.Setenv(daemonaddr.EnvBindAddr, "")
+	stale := installedStatuslineCommand() // what a :7837 daemon installed
 
+	t.Setenv(daemonaddr.EnvBindAddr, altBindAddr)
 	got := chainStatuslineCommand(stale)
 	if got != installedStatuslineCommand() {
 		t.Errorf("expected rewrite to the resolved port, got %q", got)
@@ -220,13 +221,13 @@ func TestChainStatuslineCommand_RewritesDefaultPortStandalone(t *testing.T) {
 func TestChainStatuslineCommand_RepointsWrapPreservingUserCommand(t *testing.T) {
 	user := "/usr/local/bin/my-statusline --foo"
 
-	t.Setenv("IRRLICHT_BIND_ADDR", "")
+	t.Setenv(daemonaddr.EnvBindAddr, "")
 	wrappedOnDefault := chainStatuslineCommand(user)
 	if !strings.Contains(wrappedOnDefault, ":7837/") {
 		t.Fatalf("fixture should carry the default port, got %q", wrappedOnDefault)
 	}
 
-	t.Setenv("IRRLICHT_BIND_ADDR", altBindAddr)
+	t.Setenv(daemonaddr.EnvBindAddr, altBindAddr)
 	got := chainStatuslineCommand(wrappedOnDefault)
 	if !strings.Contains(got, user) {
 		t.Errorf("user command lost on repoint: %q", got)
@@ -242,6 +243,23 @@ func TestChainStatuslineCommand_RepointsWrapPreservingUserCommand(t *testing.T) 
 	}
 }
 
+// TestChainStatuslineCommand_LeavesForeignTeePipelineWhole guards the other
+// edge of the structural unchain: a third-party command that happens to look
+// like a wrap but carries none of our sentinel must be wrapped whole, not
+// mistaken for one of ours and truncated to its first half.
+func TestChainStatuslineCommand_LeavesForeignTeePipelineWhole(t *testing.T) {
+	t.Setenv(daemonaddr.EnvBindAddr, "")
+	foreign := `tee >(/usr/local/bin/log) | curl -s https://example.invalid/statusline`
+
+	got := chainStatuslineCommand(foreign)
+	if !strings.Contains(got, foreign) {
+		t.Errorf("foreign tee|curl pipeline was not preserved whole: %q", got)
+	}
+	if u := unchainStatuslineCommand(got); u != foreign {
+		t.Errorf("wrapped foreign command does not round-trip: got %q want %q", u, foreign)
+	}
+}
+
 // TestUninstallStatusline_RestoresUserCommandFromDefaultPortWrap pins the
 // same structural unchain on the uninstall side.
 func TestUninstallStatusline_RestoresUserCommandFromDefaultPortWrap(t *testing.T) {
@@ -253,7 +271,7 @@ func TestUninstallStatusline_RestoresUserCommandFromDefaultPortWrap(t *testing.T
 		"statusLine": map[string]interface{}{"type": "command", "command": wrappedOnDefault},
 	})
 
-	t.Setenv("IRRLICHT_BIND_ADDR", altBindAddr)
+	t.Setenv(daemonaddr.EnvBindAddr, altBindAddr)
 	modified, err := UninstallStatusline()
 	if err != nil {
 		t.Fatal(err)
