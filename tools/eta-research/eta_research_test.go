@@ -10,11 +10,18 @@ import (
 // reachedEpisode builds a finished task: rounds 0..total at 60s spacing, base
 // pinned to the first marker (the production rate anchor). Ground truth is the
 // last marker (rounds==total).
-func reachedEpisode(total int) Episode {
+func reachedEpisode(total int) Episode { return reachedEpisodeWithTail(total, nil) }
+
+// reachedEpisodeWithTail additionally appends markerless activity after the
+// final marker, at the given offsets (seconds past that marker), so the
+// last-mile walk has something to find.
+func reachedEpisodeWithTail(total int, tailOffsets []int64) Episode {
 	base := &session.TaskEstimate{TotalRounds: total, CompletedRounds: 0, UpdatedAt: 1000, Source: session.MarkerEstimateSource}
 	var turns []Turn
+	var activity []int64
 	for c := 0; c <= total; c++ {
 		ts := int64(1000 + c*60)
+		activity = append(activity, ts)
 		turns = append(turns, Turn{
 			VirtualUnix:    ts,
 			Est:            &session.TaskEstimate{TotalRounds: total, CompletedRounds: c, UpdatedAt: ts, Source: session.MarkerEstimateSource},
@@ -22,8 +29,12 @@ func reachedEpisode(total int) Episode {
 			ElapsedSeconds: ts - 990,
 		})
 	}
+	last := int64(1000 + total*60)
+	for _, off := range tailOffsets {
+		activity = append(activity, last+off)
+	}
 	ep := Episode{Source: "synthetic", Turns: turns}
-	finalizeEpisode(&ep)
+	finalizeEpisode(&ep, activity, math.MaxInt64)
 	return ep
 }
 
@@ -73,6 +84,64 @@ func TestBootstrapSurfacesSooner(t *testing.T) {
 	}
 	if boot.MeanSecsToFirst != 0 {
 		t.Fatalf("bootstrap secs-to-first = %v, want 0 (surfaces at the first marker)", boot.MeanSecsToFirst)
+	}
+}
+
+// The `production` row must BE production, not a lookalike — that is the whole
+// reason it exists, so the report can never describe code nobody runs.
+func TestProductionEstimatorIsTheShippedSeam(t *testing.T) {
+	ep := reachedEpisode(4)
+	for i := range ep.Turns {
+		tn := ep.Turns[i]
+		want := session.ForecastTaskCompletion(tn.Est, tn.Base, tn.ElapsedSeconds, unix(tn.VirtualUnix))
+		got := Production().Predict(ep, i)
+		if (got == nil) != (want == nil) {
+			t.Fatalf("turn %d: production=%v, seam=%v", i, got, want)
+		}
+		if got != nil && !got.Equal(*want) {
+			t.Fatalf("turn %d: production=%v, seam=%v", i, got, want)
+		}
+	}
+}
+
+// The last mile is the measurement the accuracy table structurally cannot make:
+// its ground truth IS the final marker, so work after it scores as nothing.
+func TestLastMileMeasuresPostCompletionTail(t *testing.T) {
+	// 60s/round; 120s of markerless work after the final marker = 2.0 rounds.
+	ep := reachedEpisodeWithTail(4, []int64{60, 120})
+	if got := ep.TailSeconds(); got != 120 {
+		t.Fatalf("tail = %ds, want 120", got)
+	}
+	lm := LastMile([]Episode{ep}, 0.4, idleGapCutoffSeconds)
+	if lm.Episodes != 1 || lm.WithTail != 1 {
+		t.Fatalf("lastmile = %d episodes / %d with tail, want 1/1", lm.Episodes, lm.WithTail)
+	}
+	if math.Abs(lm.MedianRounds-2.0) > 0.001 {
+		t.Errorf("median tail = %v rounds, want 2.0", lm.MedianRounds)
+	}
+	// Predicting zero is wrong by the whole tail; the 0.4-round floor
+	// (0.4 × 60s = 24s) leaves 96s.
+	if lm.ErrZeroSeconds != 120 || math.Abs(lm.ErrPaddedSeconds-96) > 0.001 {
+		t.Errorf("err before/after = %v/%v, want 120/96", lm.ErrZeroSeconds, lm.ErrPaddedSeconds)
+	}
+}
+
+// An absent user must not be scored as a working agent: the walk stops at the
+// first gap wider than the idle cutoff.
+func TestLastMileStopsAtIdleGap(t *testing.T) {
+	ep := reachedEpisodeWithTail(4, []int64{60, 60 + idleGapCutoffSeconds + 1, 6 * 3600})
+	if got := ep.TailSeconds(); got != 60 {
+		t.Fatalf("tail = %ds, want 60 (walk stops before the idle gap)", got)
+	}
+}
+
+// A task that never reported all its rounds has no last mile to measure.
+func TestLastMileSkipsUnreachedEpisodes(t *testing.T) {
+	ep := reachedEpisodeWithTail(4, []int64{60})
+	ep.Turns = ep.Turns[:2] // 0/4 and 1/4 only
+	finalizeEpisode(&ep, []int64{1000, 1060}, math.MaxInt64)
+	if lm := LastMile([]Episode{ep}, 0.4, idleGapCutoffSeconds); lm.Episodes != 0 {
+		t.Errorf("unreached episode counted: %d", lm.Episodes)
 	}
 }
 

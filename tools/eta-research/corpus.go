@@ -12,6 +12,7 @@ package etaresearch
 import (
 	"bytes"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +52,26 @@ type Episode struct {
 	Turns         []Turn
 	ActualEndUnix int64 // ground truth: the episode's last marker timestamp
 	Reached       bool  // completed==total was reached → last marker IS the completion (clean accuracy subset)
+
+	// TailActivity holds the transcript timestamps after ActualEndUnix and
+	// before the next episode begins — the raw material of the last-mile
+	// measurement (#977). Because ActualEndUnix is the last MARKER, every turn
+	// at completed==total scores an actual-remaining of 0 and is skipped by
+	// ScoreEstimator: the accuracy table structurally cannot see work that
+	// happens after the agent stops reporting rounds. This is that work, kept
+	// raw so the idle cutoff can be swept rather than baked in — the answer to
+	// "how much work follows the last marker?" depends entirely on how long a
+	// pause still counts as working, and that is a judgment call the report
+	// should show rather than hide.
+	TailActivity []int64
 }
+
+// idleGapCutoffSeconds is the DEFAULT bound on the last-mile walk: transcript
+// turns during active work land seconds apart, so a wider gap means the agent
+// stopped and the clock is now measuring a human's absence. Mirrors
+// session.TaskEstimateGraceAge, the same "this signal has gone stale" boundary
+// the UIs use to dim a chip.
+const idleGapCutoffSeconds = int64(session.TaskEstimateGraceAge / time.Second)
 
 // FirstUnix is the episode's first marker timestamp (the task's start).
 func (e Episode) FirstUnix() int64 {
@@ -59,6 +79,40 @@ func (e Episode) FirstUnix() int64 {
 		return 0
 	}
 	return e.Turns[0].VirtualUnix
+}
+
+// TailSecondsAt is how long the agent kept working after reporting its last
+// round — the gap the forecast used to predict as exactly zero — counting
+// consecutive activity while it stays within cutoff seconds of the previous
+// turn. A wider cutoff is a more generous reading of "still working".
+func (e Episode) TailSecondsAt(cutoff int64) int64 {
+	end := e.ActualEndUnix
+	for _, t := range e.TailActivity {
+		if t-end > cutoff {
+			break
+		}
+		end = t
+	}
+	return max(end-e.ActualEndUnix, 0)
+}
+
+// TailSeconds is TailSecondsAt at the default idle cutoff.
+func (e Episode) TailSeconds() int64 { return e.TailSecondsAt(idleGapCutoffSeconds) }
+
+// RoundRateSeconds is the episode's own average seconds-per-round over its
+// marker span, the unit TailSeconds is expressed in when deriving
+// session.TaskWrapUpRounds. 0 when the episode never advanced a round.
+func (e Episode) RoundRateSeconds() float64 {
+	if len(e.Turns) < 2 {
+		return 0
+	}
+	first, last := e.Turns[0], e.Turns[len(e.Turns)-1]
+	dr := last.Est.CompletedRounds - first.Est.CompletedRounds
+	dt := last.VirtualUnix - first.VirtualUnix
+	if dr <= 0 || dt <= 0 {
+		return 0
+	}
+	return float64(dt) / float64(dr)
 }
 
 // DiscoverTranscripts walks root for Claude Code transcripts (*.jsonl) that
@@ -118,10 +172,14 @@ func episodesFromTranscript(path string) []Episode {
 
 	// Segment by the tailer's own task anchor (the base re-anchors on a new
 	// task / user message), so an episode is exactly one task's marker run.
+	// activity collects EVERY snapshot time, markerless ones included, because
+	// the last-mile tail is exactly the activity that carries no marker.
 	var eps []Episode
 	var cur *Episode
+	var activity []int64
 	curAnchor := int64(-1)
 	for _, s := range res.MetricsTimeline {
+		activity = append(activity, s.VirtualTime.Unix())
 		est := toDomainEstimate(s.TaskEstimate)
 		if est == nil {
 			continue
@@ -144,7 +202,13 @@ func episodesFromTranscript(path string) []Episode {
 		eps = append(eps, *cur)
 	}
 	for i := range eps {
-		finalizeEpisode(&eps[i])
+		// The next episode's start bounds the tail: once the user has sent the
+		// message that begins the next task, later activity belongs to that task.
+		limit := int64(math.MaxInt64)
+		if i+1 < len(eps) {
+			limit = eps[i+1].FirstUnix()
+		}
+		finalizeEpisode(&eps[i], activity, limit)
 	}
 	return eps
 }
@@ -165,11 +229,31 @@ func advanceEpisode(eps []Episode, cur *Episode, curAnchor int64, anchor int64, 
 
 // finalizeEpisode sets the ground-truth completion to the episode's last marker
 // and flags whether the task reached completed==total (see Episode doc for why
-// the last marker, not the working→terminal transition, is the target).
-func finalizeEpisode(ep *Episode) {
+// the last marker, not the working→terminal transition, is the target). It then
+// measures the last-mile tail from the full activity timeline.
+func finalizeEpisode(ep *Episode, activity []int64, limit int64) {
 	last := ep.Turns[len(ep.Turns)-1]
 	ep.ActualEndUnix = last.VirtualUnix
 	ep.Reached = last.Est.CompletedRounds >= last.Est.TotalRounds
+	ep.TailActivity = activityAfter(activity, ep.ActualEndUnix, limit)
+}
+
+// activityAfter slices the chronological activity timeline down to the turns
+// that follow the episode's last marker and precede the next episode's start.
+// No idle judgment is applied here — that is TailSecondsAt's cutoff, so it can
+// be varied without re-replaying the corpus.
+func activityAfter(activity []int64, from, limit int64) []int64 {
+	var out []int64
+	for _, t := range activity {
+		if t <= from {
+			continue
+		}
+		if t >= limit {
+			break
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 func toDomainEstimate(e *tailer.TaskEstimate) *session.TaskEstimate {

@@ -6,15 +6,16 @@ import (
 )
 
 func TestForecastTaskCompletion_MeasuredRate(t *testing.T) {
-	// No marker timestamp → anchored at now: 2 of 10 rounds in 240s →
-	// perRound = 120s, remaining 8 → eta = now + 960s.
+	// No marker timestamp → anchored at now: 2 of 10 rounds in 240s → observed
+	// 120s/round over n=2, shrunk toward the 240s prior at weight 2 →
+	// (2×240 + 2×120)/4 = 180s, remaining 8 → eta = now + 1440s (#977).
 	now := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
 	est := &TaskEstimate{TotalRounds: 10, CompletedRounds: 2}
 	eta := ForecastTaskCompletion(est, nil, 240, now)
 	if eta == nil {
 		t.Fatal("expected eta, got nil")
 	}
-	want := now.Add(960 * time.Second)
+	want := now.Add(1440 * time.Second)
 	if !eta.Equal(want) {
 		t.Errorf("eta = %v, want %v", eta, want)
 	}
@@ -27,8 +28,8 @@ func TestForecastTaskCompletion_AnchoredAtMarker(t *testing.T) {
 	marker := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
 	est := &TaskEstimate{TotalRounds: 10, CompletedRounds: 2, UpdatedAt: marker.Unix()}
 
-	// At the marker: elapsed 240s → perRound 120 → eta = marker + 960s.
-	want := marker.Add(960 * time.Second)
+	// At the marker: elapsed 240s → blended 180s/round → eta = marker + 1440s.
+	want := marker.Add(1440 * time.Second)
 	etaAtMarker := ForecastTaskCompletion(est, nil, 240, marker)
 	if etaAtMarker == nil || !etaAtMarker.Equal(want) {
 		t.Fatalf("eta at marker = %v, want %v", etaAtMarker, want)
@@ -45,8 +46,9 @@ func TestForecastTaskCompletion_AnchoredAtMarker(t *testing.T) {
 func TestForecastTaskCompletion_DeltaRatePreferred(t *testing.T) {
 	// With the task's first marker as base, the rate comes from marker
 	// deltas — immune to previous tasks/idle time in the session elapsed:
-	// 8 rounds in 320s since the 0/10 base → perRound 40s, remaining 2 →
-	// eta = marker + 80s. The huge session elapsed must be ignored.
+	// 8 rounds in 320s since the 0/10 base → observed 40s/round over n=8,
+	// blended (2×240 + 8×40)/10 = 80s, remaining 2 → eta = marker + 160s. The
+	// huge session elapsed must be ignored.
 	taskStart := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
 	base := &TaskEstimate{TotalRounds: 10, CompletedRounds: 0, UpdatedAt: taskStart.Unix()}
 	est := &TaskEstimate{TotalRounds: 10, CompletedRounds: 8, UpdatedAt: taskStart.Add(320 * time.Second).Unix()}
@@ -56,7 +58,7 @@ func TestForecastTaskCompletion_DeltaRatePreferred(t *testing.T) {
 	if eta == nil {
 		t.Fatal("expected eta, got nil")
 	}
-	want := taskStart.Add((320 + 80) * time.Second)
+	want := taskStart.Add((320 + 160) * time.Second)
 	if !eta.Equal(want) {
 		t.Errorf("eta = %v, want %v (delta rate, not session elapsed)", eta, want)
 	}
@@ -64,16 +66,53 @@ func TestForecastTaskCompletion_DeltaRatePreferred(t *testing.T) {
 
 func TestForecastTaskCompletion_BaseWithoutProgressFallsBack(t *testing.T) {
 	// base == est (single marker so far): no delta to measure → fall back
-	// to the session-elapsed rate.
+	// to the session-elapsed rate (then blended, as everywhere).
 	marker := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
 	est := &TaskEstimate{TotalRounds: 10, CompletedRounds: 2, UpdatedAt: marker.Unix()}
 	eta := ForecastTaskCompletion(est, est, 240, marker)
 	if eta == nil {
 		t.Fatal("expected fallback eta, got nil")
 	}
-	want := marker.Add(960 * time.Second)
+	want := marker.Add(1440 * time.Second)
 	if !eta.Equal(want) {
 		t.Errorf("eta = %v, want %v (elapsed fallback)", eta, want)
+	}
+}
+
+func TestBlendRoundRate_ShrinksTowardPriorByEvidence(t *testing.T) {
+	// The convergence property #977 is about: a rate backed by one round barely
+	// moves the forecast off the prior; the same rate backed by many rounds
+	// almost entirely replaces it. Without this, one unrepresentative first
+	// round anchored hours of projection (failure mode #2).
+	const observed = 600.0 // wildly slow vs the 240s prior
+	one := BlendRoundRate(observed, 1, TaskRoundPriorSeconds, TaskRoundPriorWeight)
+	many := BlendRoundRate(observed, 20, TaskRoundPriorSeconds, TaskRoundPriorWeight)
+	if one != 360 { // (2×240 + 1×600)/3
+		t.Errorf("n=1 blend = %v, want 360", one)
+	}
+	if many <= one || many >= observed {
+		t.Errorf("n=20 blend = %v, want between %v and %v", many, one, observed)
+	}
+	if got := BlendRoundRate(observed, 0, TaskRoundPriorSeconds, TaskRoundPriorWeight); got != TaskRoundPriorSeconds {
+		t.Errorf("no observations = %v, want the bare prior %v", got, TaskRoundPriorSeconds)
+	}
+}
+
+func TestObservedRoundRate_ReportsEvidenceCount(t *testing.T) {
+	// The observation count is the whole point of the split: it is what
+	// BlendRoundRate weighs. Delta rung reports the rounds spanned; the
+	// elapsed rung reports every completed round.
+	taskStart := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
+	base := &TaskEstimate{TotalRounds: 10, CompletedRounds: 2, UpdatedAt: taskStart.Unix()}
+	est := &TaskEstimate{TotalRounds: 10, CompletedRounds: 6, UpdatedAt: taskStart.Add(200 * time.Second).Unix()}
+	if rate, n := ObservedRoundRate(est, base, 9999, taskStart); rate != 50 || n != 4 {
+		t.Errorf("delta rung = (%v, %d), want (50, 4)", rate, n)
+	}
+	if rate, n := ObservedRoundRate(est, nil, 300, time.Unix(est.UpdatedAt, 0)); rate != 50 || n != 6 {
+		t.Errorf("elapsed rung = (%v, %d), want (50, 6)", rate, n)
+	}
+	if rate, n := ObservedRoundRate(nil, nil, 300, taskStart); rate != 0 || n != 0 {
+		t.Errorf("nil estimate = (%v, %d), want (0, 0)", rate, n)
 	}
 }
 
@@ -94,7 +133,7 @@ func TestForecastTaskCompletion_PriorBootstrapAtZeroRounds(t *testing.T) {
 	if eta == nil {
 		t.Fatal("zero completed rounds should now surface a prior-based eta (#753), got nil")
 	}
-	want := marker.Add(time.Duration(4*taskRoundPriorSeconds) * time.Second)
+	want := marker.Add(time.Duration(4*TaskRoundPriorSeconds) * time.Second)
 	if !eta.Equal(want) {
 		t.Errorf("eta = %v, want %v (total_rounds × prior)", eta, want)
 	}
@@ -111,13 +150,29 @@ func TestForecastTaskCompletion_PriorConfinedToZeroRounds(t *testing.T) {
 	}
 }
 
-func TestForecastTaskCompletion_AllRoundsDone(t *testing.T) {
-	// completed == total → remaining 0 → eta = now ("about to finish").
+func TestForecastTaskCompletion_AllRoundsDoneProjectsTheMarker(t *testing.T) {
+	// completed == total → remaining 0 → eta = the anchor. #977 evaluated
+	// padding this with a wrap-up allowance and rejected it: the post-completion
+	// tail is bimodal, so zero is the median-optimal prediction (see
+	// tools/eta-research's last-mile section). The UIs relabel this moment
+	// "wrapping up" rather than the daemon inventing time for it.
 	now := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
 	est := &TaskEstimate{TotalRounds: 5, CompletedRounds: 5}
 	eta := ForecastTaskCompletion(est, nil, 600, now)
 	if eta == nil || !eta.Equal(now) {
 		t.Fatalf("eta = %v, want now (%v)", eta, now)
+	}
+}
+
+func TestForecastTaskCompletion_OvershootClampsToTheMarker(t *testing.T) {
+	// An agent that reports more completed rounds than it planned (a re-scoped
+	// task) must not produce an eta in the PAST — remaining clamps at 0 rather
+	// than going negative.
+	now := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
+	est := &TaskEstimate{TotalRounds: 3, CompletedRounds: 7}
+	eta := ForecastTaskCompletion(est, nil, 490, now)
+	if eta == nil || eta.Before(now) {
+		t.Fatalf("eta = %v, want not before %v", eta, now)
 	}
 }
 
@@ -156,11 +211,12 @@ func TestTaskEstimateFromTasks_NoCompletions(t *testing.T) {
 }
 
 func TestTaskEstimateFromTasks_DeltaRateThroughForecast(t *testing.T) {
-	// 4 tasks, 2 completed 90s apart → est anchors at the latest completion,
+	// 4 tasks, 2 completed 120s apart → est anchors at the latest completion,
 	// base reconstructs the first → ForecastTaskCompletion's delta rate:
-	// perRound = 90s, remaining 2 → eta = latest + 180s.
+	// observed 120s/round over n=1, blended (2×240 + 120)/3 = 200s, remaining 2
+	// → eta = latest + 400s.
 	t1 := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
-	t2 := t1.Add(90 * time.Second)
+	t2 := t1.Add(120 * time.Second)
 	tasks := []Task{
 		{ID: "1", Status: "completed", CompletedAt: t1.Unix()},
 		{ID: "2", Status: "completed", CompletedAt: t2.Unix()},
@@ -178,7 +234,7 @@ func TestTaskEstimateFromTasks_DeltaRateThroughForecast(t *testing.T) {
 		t.Fatalf("base = %+v, want 1/4 at first completion", base)
 	}
 	eta := ForecastTaskCompletion(est, base, 9999 /* poisoned session elapsed */, t2.Add(10*time.Second))
-	want := t2.Add(180 * time.Second)
+	want := t2.Add(400 * time.Second)
 	if eta == nil || !eta.Equal(want) {
 		t.Errorf("eta = %v, want %v (delta rate from completion stamps)", eta, want)
 	}
@@ -196,9 +252,10 @@ func TestTaskEstimateFromTasks_SingleCompletionFallsBack(t *testing.T) {
 	if est == nil || est.CompletedRounds != 1 || base != nil {
 		t.Fatalf("got (%+v, %+v), want (1/2 est, nil base)", est, base)
 	}
-	// 1 round in 60s elapsed → remaining 1 → eta = completion + 60s.
-	eta := ForecastTaskCompletion(est, base, 60, t1)
-	want := t1.Add(60 * time.Second)
+	// 1 round in 120s elapsed → observed 120s/round over n=1, blended
+	// (2×240 + 120)/3 = 200s, remaining 1 → eta = completion + 200s.
+	eta := ForecastTaskCompletion(est, base, 120, t1)
+	want := t1.Add(200 * time.Second)
 	if eta == nil || !eta.Equal(want) {
 		t.Errorf("eta = %v, want %v (elapsed fallback)", eta, want)
 	}
@@ -209,7 +266,7 @@ func TestTaskEstimateFromTasks_UnstampedCompletionsCountAsPreFirst(t *testing.T)
 	// counts toward progress, and the base treats it as done before the
 	// first stamp — rate spans only the stamped interval.
 	t1 := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
-	t2 := t1.Add(40 * time.Second)
+	t2 := t1.Add(120 * time.Second)
 	tasks := []Task{
 		{ID: "1", Status: "completed"}, // unstamped
 		{ID: "2", Status: "completed", CompletedAt: t1.Unix()},
@@ -223,9 +280,10 @@ func TestTaskEstimateFromTasks_UnstampedCompletionsCountAsPreFirst(t *testing.T)
 	if base == nil || base.CompletedRounds != 2 || base.UpdatedAt != t1.Unix() {
 		t.Fatalf("base = %+v, want 2/4 at first stamp", base)
 	}
-	// perRound = (t2−t1)/(3−2) = 40s, remaining 1 → eta = t2 + 40s.
+	// observed = (t2−t1)/(3−2) = 120s over n=1, blended (2×240 + 120)/3 = 200s,
+	// remaining 1 → eta = t2 + 200s.
 	eta := ForecastTaskCompletion(est, base, 9999, t2)
-	want := t2.Add(40 * time.Second)
+	want := t2.Add(200 * time.Second)
 	if eta == nil || !eta.Equal(want) {
 		t.Errorf("eta = %v, want %v", eta, want)
 	}

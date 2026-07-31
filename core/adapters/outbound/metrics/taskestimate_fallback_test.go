@@ -100,8 +100,10 @@ func TestComputeMetrics_TasksFallbackEstimate(t *testing.T) {
 	if m.TaskCompletionEta == nil {
 		t.Fatal("expected projected TaskCompletionEta, got nil")
 	}
-	// Delta rate: 60s per task, 1 remaining → eta = latest completion + 60s.
-	if want := start.Add(180 * time.Second).Unix(); *m.TaskCompletionEta != want {
+	// Delta rate: 60s per task over n=1, shrunk toward the 240s corpus prior at
+	// weight 2 (#977) → (2×240 + 60)/3 = 180s per round, 1 remaining → eta =
+	// latest completion + 180s.
+	if want := start.Add(300 * time.Second).Unix(); *m.TaskCompletionEta != want {
 		t.Errorf("TaskCompletionEta = %d, want %d", *m.TaskCompletionEta, want)
 	}
 }

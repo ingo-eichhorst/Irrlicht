@@ -490,6 +490,27 @@ final class SessionRowSnapshotTests: XCTestCase {
         assertSnapshot(of: host(session, height: 72), as: .image)
     }
 
+    /// All rounds reported done while the session is still working: the chip
+    /// reads "wrapping up" rather than the confident "<1m left" the collapsed
+    /// projection used to produce (#977). The measured post-completion tail is
+    /// bimodal — usually seconds, occasionally another hour — so a sub-minute
+    /// countdown claims a precision the corpus does not support. Stale marker
+    /// again, so the snapshot never depends on the clock.
+    func testTaskProgressChipWrappingUp() {
+        let session = makeSession(
+            state: .working,
+            metrics: makeMetrics(
+                taskEstimate: TaskEstimateInfo(
+                    totalRounds: 6,
+                    completedRounds: 6,
+                    updatedAt: Self.stalePast,
+                    source: "marker"
+                )
+            )
+        )
+        assertSnapshot(of: host(session, height: 72), as: .image)
+    }
+
     // MARK: - Fixture-driven rendering (issue #757)
 
     /// Drives a render straight from a captured `{type, session}` websocket

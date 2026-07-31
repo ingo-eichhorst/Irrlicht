@@ -17,28 +17,13 @@ type Estimator struct {
 	Predict func(ep Episode, i int) *time.Time
 }
 
-// observedRoundRate replicates the PRODUCTION rate measurement verbatim:
-// within-task marker delta preferred (immune to previous tasks + idle gaps),
-// whole-session elapsed as the single-marker fallback. Returns (seconds-per-
-// round, observationCount); count 0 means no rate could be measured yet.
+// observedRoundRate is the PRODUCTION rate measurement, called directly rather
+// than reimplemented (#977): the harness used to keep a verbatim copy of the
+// forecaster's switch, which meant every change to the shipped model had to be
+// mirrored here by hand or the research numbers would quietly describe code
+// nobody runs.
 func observedRoundRate(est, base *session.TaskEstimate, elapsed int64, now time.Time) (float64, int) {
-	if est == nil {
-		return 0, 0
-	}
-	switch {
-	case base != nil && est.CompletedRounds > base.CompletedRounds && est.UpdatedAt > base.UpdatedAt:
-		n := est.CompletedRounds - base.CompletedRounds
-		return float64(est.UpdatedAt-base.UpdatedAt) / float64(n), n
-	case elapsed > 0 && est.CompletedRounds > 0:
-		elapsedAtMarker := elapsed
-		if est.UpdatedAt > 0 {
-			if gap := now.Unix() - est.UpdatedAt; gap > 0 && gap < elapsed {
-				elapsedAtMarker = elapsed - gap
-			}
-		}
-		return float64(elapsedAtMarker) / float64(est.CompletedRounds), est.CompletedRounds
-	}
-	return 0, 0
+	return session.ObservedRoundRate(est, base, elapsed, now)
 }
 
 // project anchors the ETA at the marker (UpdatedAt) so it is stable between
@@ -88,15 +73,25 @@ func PriorBootstrap(prior float64) Estimator {
 // PriorBlend shrinks the observed rate toward the prior at every turn:
 // (w·prior + n·observed)/(w+n). Prior dominates at n=0, observed takes over
 // within a couple of rounds; w is the prior's strength in pseudo-rounds.
+// Parameterised on (prior, w) so the sweep can vary both; production pins them
+// to session.TaskRoundPriorSeconds / TaskRoundPriorWeight.
 func PriorBlend(prior, w float64) Estimator {
 	return Estimator{Name: "prior-blend", Predict: func(ep Episode, i int) *time.Time {
 		t := ep.Turns[i]
 		obs, n := observedRoundRate(t.Est, t.Base, t.ElapsedSeconds, unix(t.VirtualUnix))
-		per := prior
-		if n > 0 && obs > 0 {
-			per = (w*prior + float64(n)*obs) / (w + float64(n))
-		}
+		per := session.BlendRoundRate(obs, n, prior, w)
 		return project(t.Est, per, unix(t.VirtualUnix))
+	}}
+}
+
+// Production scores the SHIPPED seam itself — session.ForecastTaskCompletion
+// with production's own constants — instead of a model that merely resembles
+// it. It is the row that answers "what do users actually get?", and it cannot
+// drift from the daemon because it is the daemon's code.
+func Production() Estimator {
+	return Estimator{Name: "production", Predict: func(ep Episode, i int) *time.Time {
+		t := ep.Turns[i]
+		return session.ForecastTaskCompletion(t.Est, t.Base, t.ElapsedSeconds, unix(t.VirtualUnix))
 	}}
 }
 

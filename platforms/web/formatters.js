@@ -164,6 +164,25 @@ function roundsOnlyEtaPresentation(est, nowSec, sourceLabel) {
   };
 }
 
+// Every round reported done, but the session is still working (#977). The
+// daemon projects the marker itself here — the measured post-completion tail
+// is bimodal, so any padded number would be wrong for most sessions (see
+// tools/eta-research's last-mile section). What was wrong was rendering that
+// as a confident "<1m left" when the truth is "usually seconds, sometimes
+// another hour": "wrapping up" is honest across the whole distribution.
+// Mirrored in SessionRowView.swift.
+function wrappingUpEtaPresentation(est, nowSec, sourceLabel) {
+  const age = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
+  let title = 'Task ETA — ' + sourceLabel + ' ' + est.completed_rounds + '/' + est.total_rounds
+    + ' rounds, all reported done';
+  if (est.updated_at > 0) title += ', updated ' + fmtDuration(age) + ' ago';
+  return {
+    text: 'wrapping up',
+    stale: est.updated_at > 0 && age > 180,
+    title: title + ' · verification and wrap-up may still be running',
+  };
+}
+
 // Progress with a projected eta: range whose HIGH bound is pinned at the
 // last marker — see taskEtaPresentation's doc comment for the full rationale.
 function projectedEtaPresentation(est, eta, nowSec, sourceLabel) {
@@ -200,6 +219,12 @@ export function taskEtaPresentation(metrics, state, nowSec) {
   // must still take the zero-rounds fallback, not fall through to a path
   // that renders "undefined/N rounds").
   if (est.completed_rounds == null || est.completed_rounds <= 0) return zeroRoundsEtaPresentation(est, eta, nowSec, sourceLabel);
+  // All rounds reported done but still working: a countdown would claim a
+  // precision the data doesn't support (#977). Checked before the !eta guard
+  // so it also covers a subagent aggregate with no projection.
+  if (est.total_rounds > 0 && est.completed_rounds >= est.total_rounds) {
+    return wrappingUpEtaPresentation(est, nowSec, sourceLabel);
+  }
   if (!eta) return roundsOnlyEtaPresentation(est, nowSec, sourceLabel);
   return projectedEtaPresentation(est, eta, nowSec, sourceLabel);
 }
