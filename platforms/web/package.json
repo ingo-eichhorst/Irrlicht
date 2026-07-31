@@ -2,6 +2,7 @@
   "name": "irrlicht-web",
   "type": "module",
   "scripts": {
+    "pretest": "[ -e node_modules/.bin/vitest ] || npm ci --ignore-scripts",
     "test": "vitest run",
     "snapshot": "vitest run snapshots/render-html.test.js",
     "snapshot:png": "node snapshots/snapshot.png.mjs"
