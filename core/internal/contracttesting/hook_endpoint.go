@@ -82,82 +82,93 @@ type HookInstaller struct {
 // the ":<port>/" fragment — true of every hook endpoint the daemon serves.
 func AssertHookEndpointFollowsBindAddr(t *testing.T, h HookInstaller) {
 	t.Helper()
+	t.Run("endpoint_follows_bind_addr", func(t *testing.T) { assertEndpointFollowsBindAddr(t, h) })
+	t.Run("install_writes_resolved_port", func(t *testing.T) { assertInstallWritesResolvedPort(t, h) })
+	t.Run("default_port_install_upgraded_in_place", func(t *testing.T) { assertUpgradedInPlace(t, h) })
+	t.Run("uninstall_is_not_port_scoped", func(t *testing.T) { assertUninstallIsNotPortScoped(t, h) })
+}
 
-	// Obligation 1, at the source: the endpoint the adapter would install is a
-	// function of the bind address at all. An installer that hardcodes the port
-	// fails here first, and most legibly.
-	t.Run("endpoint_follows_bind_addr", func(t *testing.T) {
-		// Relocate the config home even though this sub-test writes nothing:
-		// an Entry() that reads anything home-relative must never be evaluated
-		// against the developer's real agent config.
-		h.SettingsPath(t)
+// assertEndpointFollowsBindAddr is obligation 1 at the source: the endpoint the
+// adapter would install is a function of the bind address at all. An installer
+// that hardcodes the port fails here first, and most legibly.
+func assertEndpointFollowsBindAddr(t *testing.T, h HookInstaller) {
+	t.Helper()
+	// Relocate the config home even though this sub-test writes nothing: an
+	// Entry() that reads anything home-relative must never be evaluated against
+	// the developer's real agent config.
+	h.SettingsPath(t)
 
-		onDefault := deliveryOn(t, h, "")
-		onAlt := deliveryOn(t, h, AltBindAddr)
-		if onDefault == onAlt {
-			t.Fatalf("delivery is identical on the default and %s bind addresses (%q) — the endpoint does not follow %s",
-				AltBindAddr, onDefault, daemonaddr.EnvBindAddr)
-		}
-		assertResolvedPort(t, "delivery on "+AltBindAddr, onAlt)
-	})
+	onDefault := deliveryOn(t, h, "")
+	onAlt := deliveryOn(t, h, AltBindAddr)
+	if onDefault == onAlt {
+		t.Fatalf("delivery is identical on the default and %s bind addresses (%q) — the endpoint does not follow %s",
+			AltBindAddr, onDefault, daemonaddr.EnvBindAddr)
+	}
+	assertResolvedPort(t, "delivery on "+AltBindAddr, onAlt)
+}
 
-	// Obligation 1, end to end: what actually lands in the settings file.
-	t.Run("install_writes_resolved_port", func(t *testing.T) {
-		path := h.SettingsPath(t)
-		want := deliveryOn(t, h, AltBindAddr)
+// assertInstallWritesResolvedPort is obligation 1 end to end: what actually
+// lands in the settings file, plus idempotency on an unchanged bind address.
+func assertInstallWritesResolvedPort(t *testing.T, h HookInstaller) {
+	t.Helper()
+	path := h.SettingsPath(t)
+	want := deliveryOn(t, h, AltBindAddr)
 
-		if _, err := h.EnsureInstalled(); err != nil {
-			t.Fatalf("EnsureInstalled: %v", err)
-		}
-		assertEveryEventDelivers(t, h, path, want)
+	if _, err := h.EnsureInstalled(); err != nil {
+		t.Fatalf("EnsureInstalled: %v", err)
+	}
+	assertEveryEventDelivers(t, h, path, want)
 
-		modified, err := h.EnsureInstalled()
-		if err != nil {
-			t.Fatalf("second EnsureInstalled: %v", err)
-		}
-		if modified {
-			t.Error("second install on the same bind address: got modified=true, want false")
-		}
-	})
+	modified, err := h.EnsureInstalled()
+	if err != nil {
+		t.Fatalf("second EnsureInstalled: %v", err)
+	}
+	if modified {
+		t.Error("second install on the same bind address: got modified=true, want false")
+	}
+}
 
-	// Obligation 2.
-	t.Run("default_port_install_upgraded_in_place", func(t *testing.T) {
-		path := h.SettingsPath(t)
-		seedDefaultPortInstall(t, h, path)
-		want := deliveryOn(t, h, AltBindAddr)
+// assertUpgradedInPlace is obligation 2: a default-port install is recognized
+// as ours and repointed, not orphaned beside a duplicate group.
+func assertUpgradedInPlace(t *testing.T, h HookInstaller) {
+	t.Helper()
+	path := h.SettingsPath(t)
+	seedDefaultPortInstall(t, h, path)
+	want := deliveryOn(t, h, AltBindAddr)
 
-		modified, err := h.EnsureInstalled()
-		if err != nil {
-			t.Fatalf("EnsureInstalled: %v", err)
-		}
-		if !modified {
-			t.Fatal("expected modified=true when repointing a default-port install at the resolved port")
-		}
-		// assertEveryEventDelivers fails on a second matcher group, which is
-		// the "upgraded in place, not duplicated" half of this obligation.
-		assertEveryEventDelivers(t, h, path, want)
-	})
+	modified, err := h.EnsureInstalled()
+	if err != nil {
+		t.Fatalf("EnsureInstalled: %v", err)
+	}
+	if !modified {
+		t.Fatal("expected modified=true when repointing a default-port install at the resolved port")
+	}
+	// assertEveryEventDelivers fails on a second matcher group, which is the
+	// "upgraded in place, not duplicated" half of this obligation.
+	assertEveryEventDelivers(t, h, path, want)
+}
 
-	// Obligation 3.
-	t.Run("uninstall_is_not_port_scoped", func(t *testing.T) {
-		path := h.SettingsPath(t)
-		seedDefaultPortInstall(t, h, path)
-		t.Setenv(daemonaddr.EnvBindAddr, AltBindAddr)
+// assertUninstallIsNotPortScoped is obligation 3: a daemon on one port cleans
+// up entries another port's daemon installed.
+func assertUninstallIsNotPortScoped(t *testing.T, h HookInstaller) {
+	t.Helper()
+	path := h.SettingsPath(t)
+	seedDefaultPortInstall(t, h, path)
+	t.Setenv(daemonaddr.EnvBindAddr, AltBindAddr)
 
-		modified, err := h.Uninstall()
-		if err != nil {
-			t.Fatalf("Uninstall: %v", err)
+	modified, err := h.Uninstall()
+	if err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if !modified {
+		t.Fatalf("expected modified=true removing a default-port install from a daemon on %s", AltBindAddr)
+	}
+	hooksMap := readHooksMap(t, path)
+	for _, event := range h.Events {
+		if hookjson.HasOurHook(hooksMap, event, h.Sentinel) {
+			t.Errorf("event %s: a default-port entry survived uninstall", event)
 		}
-		if !modified {
-			t.Fatalf("expected modified=true removing a default-port install from a daemon on %s", AltBindAddr)
-		}
-		hooksMap := readHooksMap(t, path)
-		for _, event := range h.Events {
-			if hookjson.HasOurHook(hooksMap, event, h.Sentinel) {
-				t.Errorf("event %s: a default-port entry survived uninstall", event)
-			}
-		}
-	})
+	}
 }
 
 // --- helpers ---
