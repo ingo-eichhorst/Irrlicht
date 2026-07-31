@@ -75,10 +75,17 @@ func PortOf(addr string) int {
 		return defaultPort
 	}
 	n, err := strconv.Atoi(p)
-	if err != nil || n <= 0 || n > 65535 {
+	if err != nil || !isFixedPort(n) {
 		return defaultPort
 	}
 	return n
+}
+
+// isFixedPort reports whether n is a port a client can be pointed at ahead of
+// the daemon's bind: in range, and not 0 — which does not name a port at all,
+// it asks the OS to pick one.
+func isFixedPort(n int) bool {
+	return n > 0 && n <= 65535
 }
 
 // LocalURL builds the loopback URL a same-machine client should call for path
