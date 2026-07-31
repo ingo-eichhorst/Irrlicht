@@ -8,7 +8,8 @@
 #
 # Mirrors:
 #   .github/workflows/test.yml      — gofmt, core + onboarding-factory tests,
-#                                      of validate, recording-rig smoke test
+#                                      of validate, recording-rig smoke test,
+#                                      shared shell libs, skill-file lint
 #   .github/workflows/web-test.yml  — npm test in both web trees
 #   .github/workflows/ars-gate.yml  — ARS architecture-regression gate
 #                                      (composite/category score vs origin/main)
@@ -30,6 +31,13 @@
 # tests of the pre-push gate's own scoping logic, and a gate whose only runner
 # is itself is one `--no-verify` away from never running at all.
 #
+# The `skills` group lints .claude/skills/**/*.md — the files that tell agents
+# how to triage, plan, implement and review. It exists because those files had
+# zero mechanical coverage (#1209): PR #1204 changed two of them and this
+# script skipped all ten gates, so thirteen green PR checks proved nothing
+# about the only files that changed. It mirrors test.yml's "Lint skill files"
+# step, for the same reason the `tools` group does.
+#
 # Usage:
 #   tools/preflight.sh                 # everything except the Linux gate
 #   tools/preflight.sh --linux         # + full Linux parity via Docker
@@ -38,6 +46,7 @@
 #   tools/preflight.sh --only arch     # just the ARS architecture gate
 #   tools/preflight.sh --only security # just govulncheck + gosec + npm audit
 #   tools/preflight.sh --only tools    # just the tools/lib shell-lib unit tests
+#   tools/preflight.sh --only skills   # just the .claude/skills/**/*.md linter
 #   tools/preflight.sh --only linux    # just the Linux Docker gate
 #   tools/preflight.sh --changed       # scope every gate to the packages/trees
 #                                        this branch changes vs origin/main —
@@ -249,6 +258,17 @@ shell_lib_tests() {
 if want tools; then
   run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$' \
                   "tools/lib shell-lib tests" shell_lib_tests
+fi
+
+# ---- skills group (mirrors test.yml's "Lint skill files" step) ------------
+# Scoped to the skill markdown itself plus the linter, so editing a check
+# re-lints the corpus it governs. The whole corpus is linted whenever the gate
+# fires rather than just the changed files: it is 22 small files and a fraction
+# of a second, and a finding that a *neighbouring* file already carries is
+# worth surfacing on the push that finally reads it.
+if want skills; then
+  run_gate_scoped '^\.claude/skills/.*\.md$|^tools/skill-lint\.sh$' \
+                  "skill-file lint" tools/skill-lint.sh
 fi
 
 # ---- security group (mirrors tools/security-scan.sh's local mode; the same

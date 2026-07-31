@@ -92,3 +92,16 @@ jobs:
             echo "== $t =="
             bash "$t"
           done
+
+      # .claude/skills/**/*.md are executable instructions — they decide how
+      # agents triage, plan, implement and review — and until #1209 no gate
+      # read them. PR #1204 changed two skill files: preflight skipped all ten
+      # gates and all thirteen PR checks went green having checked nothing that
+      # changed. This step is the missing CI reader. It is deliberately
+      # unscoped (the whole corpus, every push) — the run is a fraction of a
+      # second, and scoping is what let the gap exist in the first place.
+      # Unresolved conflict markers and leftover template scaffolding fail;
+      # the reference/list/frontmatter heuristics only warn until their noise
+      # floor is known (tools/skill-lint.sh --strict promotes them).
+      - name: Lint skill files
+        run: tools/skill-lint.sh
