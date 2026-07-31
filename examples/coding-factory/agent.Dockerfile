@@ -39,7 +39,7 @@ ARG CODEX_VERSION
 # the daemon can read codex's transcripts under ~/.codex/sessions.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates git tini procps curl tmux jq \
+        ca-certificates curl git jq procps tini tmux \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g --ignore-scripts "@openai/codex@${CODEX_VERSION}" \
     && useradd --create-home --shell /bin/bash agent

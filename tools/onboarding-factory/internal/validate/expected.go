@@ -626,23 +626,29 @@ func findMatchingEvent(p ExpectedPhase, events []recordedEvent, anchor time.Time
 		if ev.Ts.Before(anchor) {
 			continue
 		}
-		if !eventMatchesPhaseKind(p, ev) {
-			continue
+		if eventSatisfiesPhase(p, ev, sc) {
+			return ev
 		}
-		if sc.RequireSID != "" && ev.SessionID != sc.RequireSID {
-			continue
-		}
-		if p.NewSession {
-			if _, seen := sc.SeenSIDs[ev.SessionID]; seen {
-				continue
-			}
-		}
-		if p.SessionIDPrefix != "" && !strings.HasPrefix(ev.SessionID, p.SessionIDPrefix) {
-			continue
-		}
-		return ev
 	}
 	return nil
+}
+
+// eventSatisfiesPhase reports whether ev clears the phase's kind predicate and
+// every session-id constraint it carries: a required session id, "must be a
+// session id not seen before", and a required id prefix.
+func eventSatisfiesPhase(p ExpectedPhase, ev *recordedEvent, sc sessionConstraint) bool {
+	if !eventMatchesPhaseKind(p, ev) {
+		return false
+	}
+	if sc.RequireSID != "" && ev.SessionID != sc.RequireSID {
+		return false
+	}
+	if p.NewSession {
+		if _, seen := sc.SeenSIDs[ev.SessionID]; seen {
+			return false
+		}
+	}
+	return p.SessionIDPrefix == "" || strings.HasPrefix(ev.SessionID, p.SessionIDPrefix)
 }
 
 // noMatchReason builds the "no matching event" failure explanation,

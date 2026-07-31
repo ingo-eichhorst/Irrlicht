@@ -13,7 +13,7 @@ window.InstallBlock = function InstallBlock() {
       <div className="install-pill">
         <span className="install-prompt">$</span>
         <code className="install-cmd">{cmd}</code>
-        <button className="install-copy" onClick={copy}>{copied ? '✓ copied' : 'copy'}</button>
+        <button type="button" className="install-copy" onClick={copy}>{copied ? '✓ copied' : 'copy'}</button>
       </div>
       <div className="install-foot">macOS 13+ · ~5 MB · Apple Silicon &amp; Intel</div>
     </div>

@@ -1108,7 +1108,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function hasTaskSummaryOrQuestion(a) {
       // Question content only exists while waiting (issue #979) — a
       // finished session shows nothing here, by design (silence-by-default).
-      return a.state === 'waiting' && !!(a.metrics && a.metrics.last_assistant_text);
+      return a.state === 'waiting' && !!a.metrics?.last_assistant_text;
     }
 
     // --- Render ---

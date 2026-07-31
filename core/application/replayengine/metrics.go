@@ -43,6 +43,61 @@ func (mc *MetricsConverter) compact(text string, kind outbound.CompactKind) stri
 	return mc.compactor.Compact(text, kind)
 }
 
+// convertSubagentCompletions copies the tailer's subagent completions into
+// their domain counterparts, returning nil for an empty input so the domain
+// field stays absent rather than becoming an empty slice.
+func convertSubagentCompletions(in []tailer.SubagentCompletion) []session.SubagentCompletion {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]session.SubagentCompletion, len(in))
+	for i, c := range in {
+		out[i] = session.SubagentCompletion{
+			AgentID:   c.AgentID,
+			ToolUseID: c.ToolUseID,
+			Status:    c.Status,
+		}
+	}
+	return out
+}
+
+// convertAppliedTaskDeltas is convertSubagentCompletions' counterpart for the
+// task deltas applied during the pass.
+func convertAppliedTaskDeltas(in []tailer.AppliedTaskDelta) []session.AppliedTaskDelta {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]session.AppliedTaskDelta, len(in))
+	for i, d := range in {
+		out[i] = session.AppliedTaskDelta{
+			Op:      d.Op,
+			ID:      d.ID,
+			Subject: d.Subject,
+			Status:  d.Status,
+		}
+	}
+	return out
+}
+
+// convertTasks is convertSubagentCompletions' counterpart for the task list.
+func convertTasks(in []tailer.Task) []session.Task {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]session.Task, len(in))
+	for i, t := range in {
+		out[i] = session.Task{
+			ID:          t.ID,
+			Subject:     t.Subject,
+			Description: t.Description,
+			ActiveForm:  t.ActiveForm,
+			Status:      t.Status,
+			CompletedAt: t.CompletedAt,
+		}
+	}
+	return out
+}
+
 // Convert maps the tailer's metrics struct into the domain type consumed by
 // services.ClassifyState.
 func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMetrics {
@@ -83,40 +138,9 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		NoSubstantiveActivity:             m.NoSubstantiveActivity,
 		SawManualCompactBoundary:          m.SawManualCompactBoundary,
 		SawMidPassTurnBoundary:            m.SawMidPassTurnBoundary,
-	}
-	if len(m.SubagentCompletions) > 0 {
-		result.SubagentCompletions = make([]session.SubagentCompletion, len(m.SubagentCompletions))
-		for i, c := range m.SubagentCompletions {
-			result.SubagentCompletions[i] = session.SubagentCompletion{
-				AgentID:   c.AgentID,
-				ToolUseID: c.ToolUseID,
-				Status:    c.Status,
-			}
-		}
-	}
-	if len(m.AppliedTaskDeltas) > 0 {
-		result.AppliedTaskDeltas = make([]session.AppliedTaskDelta, len(m.AppliedTaskDeltas))
-		for i, d := range m.AppliedTaskDeltas {
-			result.AppliedTaskDeltas[i] = session.AppliedTaskDelta{
-				Op:      d.Op,
-				ID:      d.ID,
-				Subject: d.Subject,
-				Status:  d.Status,
-			}
-		}
-	}
-	if len(m.Tasks) > 0 {
-		result.Tasks = make([]session.Task, len(m.Tasks))
-		for i, t := range m.Tasks {
-			result.Tasks[i] = session.Task{
-				ID:          t.ID,
-				Subject:     t.Subject,
-				Description: t.Description,
-				ActiveForm:  t.ActiveForm,
-				Status:      t.Status,
-				CompletedAt: t.CompletedAt,
-			}
-		}
+		SubagentCompletions:               convertSubagentCompletions(m.SubagentCompletions),
+		AppliedTaskDeltas:                 convertAppliedTaskDeltas(m.AppliedTaskDeltas),
+		Tasks:                             convertTasks(m.Tasks),
 	}
 	// Task summary (issue #738): the agent's in-band marker wins; the first
 	// user message is the heuristic fallback for agents that emit none. Both

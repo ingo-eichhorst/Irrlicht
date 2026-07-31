@@ -92,10 +92,13 @@ echo "== dismiss_dialog_if_visible: poll+dismiss mechanics only (tmux faked) =="
 FAKE_PANE=""
 SENDKEYS_LOG=""
 tmux() {
-  case "$1" in
+  local subcmd="$1"
+  case "$subcmd" in
     capture-pane) printf '%s\n' "$FAKE_PANE" ;;
     send-keys)    shift; SENDKEYS_LOG="$*" ;;
+    *) ;;  # any other subcommand is uninteresting here — stay silent, succeed
   esac
+  return 0
 }
 
 FAKE_PANE=$'some noise\nPermission for the bash tool\nmore noise'
@@ -130,14 +133,17 @@ echo "== wait_tmux_session_gone: polls until has-session fails, capped at max_wa
 # "the session is gone".
 HAS_SESSION_CALLS=0; HAS_SESSION_TRUE_COUNT=0; SLEEP_CALLS=0
 tmux() {
-  case "$1" in
+  local subcmd="$1" rc=0
+  case "$subcmd" in
     has-session)
       HAS_SESSION_CALLS=$((HAS_SESSION_CALLS + 1))
-      [[ $HAS_SESSION_CALLS -le $HAS_SESSION_TRUE_COUNT ]]
+      [[ $HAS_SESSION_CALLS -le $HAS_SESSION_TRUE_COUNT ]] || rc=1
       ;;
+    *) ;;  # only has-session drives this poll — everything else is a no-op
   esac
+  return "$rc"
 }
-sleep() { SLEEP_CALLS=$((SLEEP_CALLS + 1)); }
+sleep() { SLEEP_CALLS=$((SLEEP_CALLS + 1)); return 0; }
 
 HAS_SESSION_TRUE_COUNT=0; HAS_SESSION_CALLS=0; SLEEP_CALLS=0
 wait_tmux_session_gone "sess" 2
@@ -158,12 +164,14 @@ unset -f tmux sleep
 echo "== wait_pid_gone: polls until kill -0 fails, capped at max_wait; no-op on empty pid =="
 KILL_CALLS=0; KILL_TRUE_COUNT=0; SLEEP_CALLS=0
 kill() {
-  if [[ "$1" == "-0" ]]; then
+  local sig="$1" rc=0
+  if [[ "$sig" == "-0" ]]; then
     KILL_CALLS=$((KILL_CALLS + 1))
-    [[ $KILL_CALLS -le $KILL_TRUE_COUNT ]]
+    [[ $KILL_CALLS -le $KILL_TRUE_COUNT ]] || rc=1
   fi
+  return "$rc"
 }
-sleep() { SLEEP_CALLS=$((SLEEP_CALLS + 1)); }
+sleep() { SLEEP_CALLS=$((SLEEP_CALLS + 1)); return 0; }
 
 wait_pid_gone "" 1
 assert_eq "empty pid: no kill call"  0 "$KILL_CALLS"
@@ -179,14 +187,16 @@ unset -f kill sleep
 echo "== sigkill_and_wait: kills+waits when pid known, sleeps when empty =="
 KILL9_LOG=""; KILL_CALLS=0; KILL_TRUE_COUNT=0; SLEEP_CALLS=0; SLEEP_ARG=""
 kill() {
-  if [[ "$1" == "-9" ]]; then
-    KILL9_LOG="$2"
-  elif [[ "$1" == "-0" ]]; then
+  local sig="$1" target="$2" rc=0
+  if [[ "$sig" == "-9" ]]; then
+    KILL9_LOG="$target"
+  elif [[ "$sig" == "-0" ]]; then
     KILL_CALLS=$((KILL_CALLS + 1))
-    [[ $KILL_CALLS -le $KILL_TRUE_COUNT ]]
+    [[ $KILL_CALLS -le $KILL_TRUE_COUNT ]] || rc=1
   fi
+  return "$rc"
 }
-sleep() { SLEEP_CALLS=$((SLEEP_CALLS + 1)); SLEEP_ARG="$1"; }
+sleep() { local secs="$1"; SLEEP_CALLS=$((SLEEP_CALLS + 1)); SLEEP_ARG="$secs"; return 0; }
 
 KILL_TRUE_COUNT=1; KILL_CALLS=0; SLEEP_CALLS=0; KILL9_LOG=""
 sigkill_and_wait "4242" 1

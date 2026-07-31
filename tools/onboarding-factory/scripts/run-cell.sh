@@ -236,9 +236,14 @@ if [[ "$ATTACH" == "1" ]]; then
   # .jsonl check above can't catch (prior recordings satisfy it). Accept
   # grant-all mode, a fully-granted daemon, or a pre-#570 daemon (no
   # /api/v1/permissions endpoint → empty response → skip the check).
-  PERM_JSON="$(curl -fsS --max-time 2 "http://$ONBOARD_BIND/api/v1/permissions" 2>/dev/null || true)"
+  # $ONBOARD_BIND is a loopback host:port for a daemon this rig starts itself,
+  # which shell:S5332 would exempt if it could resolve the variable; it can't, and
+  # it carries the finding into every reader of the response, hence both
+  # annotations. The daemon's local API is plain HTTP by design — there is no TLS
+  # listener to point at instead.
+  PERM_JSON="$(curl -fsS --max-time 2 "http://$ONBOARD_BIND/api/v1/permissions" 2>/dev/null || true)" # NOSONAR (shell:S5332) — loopback-only daemon API
   if [[ -n "$PERM_JSON" ]]; then
-    PERM_OK="$(jq -r '(.mode == "grant-all") or ([.agents[].permissions[].state] | all(. == "granted"))' <<<"$PERM_JSON" 2>/dev/null || echo false)"
+    PERM_OK="$(jq -r '(.mode == "grant-all") or ([.agents[].permissions[].state] | all(. == "granted"))' <<<"$PERM_JSON" 2>/dev/null || echo false)" # NOSONAR (shell:S5332) — reads the loopback response above
     if [[ "$PERM_OK" != "true" ]]; then
       echo "attach: daemon at $ONBOARD_BIND has unanswered/denied permissions — it would monitor nothing and record an empty fixture" >&2
       echo "        restart it with IRRLICHT_PERMISSION_MODE=grant-all (or grant every permission via the wizard)" >&2

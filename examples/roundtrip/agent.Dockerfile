@@ -44,7 +44,7 @@ ARG CLAUDE_CODE_VERSION
 # irrlichd run as this user.
 # (UID auto-assigned — the node base already uses 1000 for its `node` user.)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git tini procps curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl git procps tini \
     && rm -rf /var/lib/apt/lists/* \
     # No --ignore-scripts here, unlike the sibling coding-factory image: this
     # package ships bin/claude as a placeholder and its postinstall copies the

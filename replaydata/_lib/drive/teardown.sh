@@ -31,6 +31,7 @@ wait_tmux_session_gone() { # <session> [max_wait_secs]
     sleep 0.2
     w=$((w + 1))
   done
+  return 0   # best-effort poll: hitting the cap is not a caller-visible failure
 }
 
 # wait_pid_gone <pid> [max_wait_secs]
@@ -61,4 +62,5 @@ sigkill_and_wait() { # <pid> [max_wait_secs]
   else
     sleep "$max_wait"
   fi
+  return 0   # best-effort teardown: the kill is already `|| true`
 }

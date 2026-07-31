@@ -77,16 +77,23 @@ done
 echo "daemon listening on $ADDR"
 
 # 1. TCP round-trip.
+# shell:S5332 exempts loopback hosts, but $ADDR hides the 127.0.0.1 this script
+# itself pins via IRRLICHT_BIND_ADDR above, so the analyzer can't apply that
+# exception — and it then treats every reader of the response body as clear-text
+# traffic too. The daemon speaks plain HTTP on loopback by design (no TLS
+# anywhere in the local API), hence the annotations rather than an https:// swap.
 echo -n "GET /api/v1/agents over TCP… "
-TCP_BODY="$(curl -fsS "http://$ADDR/api/v1/agents")" || fail "TCP request failed"
-echo "$TCP_BODY" | grep -q '"name"' || fail "TCP response has no agents: $TCP_BODY"
+TCP_BODY="$(curl -fsS "http://$ADDR/api/v1/agents")" || fail "TCP request failed"   # NOSONAR (shell:S5332) — loopback-only daemon API
+echo "$TCP_BODY" | grep -q '"name"' || fail "TCP response has no agents: $TCP_BODY" # NOSONAR (shell:S5332) — reads the loopback response above
 echo "ok"
 
 # 2. Unix socket round-trip.
 echo -n "GET /api/v1/agents over unix socket… "
 SOCK="$STATE_DIR/irrlichd.sock"
-UNIX_BODY="$(curl -fsS --unix-socket "$SOCK" "http://unix/api/v1/agents")" || fail "unix socket request failed"
-echo "$UNIX_BODY" | grep -q '"name"' || fail "unix response has no agents: $UNIX_BODY"
+# No TCP at all here: --unix-socket carries the request and "unix" is only the
+# Host placeholder curl requires, so there is no clear-text network hop to secure.
+UNIX_BODY="$(curl -fsS --unix-socket "$SOCK" "http://unix/api/v1/agents")" || fail "unix socket request failed" # NOSONAR (shell:S5332) — unix-socket transport
+echo "$UNIX_BODY" | grep -q '"name"' || fail "unix response has no agents: $UNIX_BODY" # NOSONAR (shell:S5332) — reads the unix-socket response above
 echo "ok"
 
 # 3. Clean shutdown on SIGTERM.

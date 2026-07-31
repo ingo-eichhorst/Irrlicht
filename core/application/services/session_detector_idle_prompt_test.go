@@ -6,6 +6,9 @@ import (
 	"irrlicht/core/domain/session"
 )
 
+// idlePromptSID is the session id every case below drives the overlay with.
+const idlePromptSID = "s"
+
 // idleDoneMetrics returns metrics for a turn that has genuinely finished and is
 // idle at the prompt (IsAgentDone true): no open tool, no live background
 // process, transcript tail ends on turn_done.
@@ -18,79 +21,83 @@ func idleDoneMetrics() *session.SessionMetrics {
 // new turn begins, and the no-op guards. White-box so it can drive the
 // unexported overlay + idlePromptPending map directly.
 func TestOverlayIdlePrompt(t *testing.T) {
-	const sid = "s"
+	t.Run("applied while the turn is idle, and held (not consumed)", idlePromptHeldWhileIdle)
+	t.Run("cleared when a new turn begins (IsAgentDone false)", idlePromptClearedOnNewTurn)
+	t.Run("cleared when an open tool blocks the turn", idlePromptClearedByOpenTool)
+	t.Run("no pending signal is a no-op", idlePromptNoSignalIsNoOp)
+	t.Run("nil metrics is a no-op and preserves the signal", idlePromptNilMetricsIsNoOp)
+}
 
-	t.Run("applied while the turn is idle, and held (not consumed)", func(t *testing.T) {
-		d := &SessionDetector{idlePromptPending: map[string]bool{sid: true}}
+func idlePromptHeldWhileIdle(t *testing.T) {
+	d := &SessionDetector{idlePromptPending: map[string]bool{idlePromptSID: true}}
 
-		state := &session.SessionState{SessionID: sid, Metrics: idleDoneMetrics()}
-		d.overlayIdlePrompt(state)
-		if !state.Metrics.IdlePromptPending {
-			t.Error("IdlePromptPending must be set while the finished turn is idle")
-		}
-		if !d.idlePromptPending[sid] {
-			t.Error("signal must be held (not consumed) after an overlay pass")
-		}
+	state := &session.SessionState{SessionID: idlePromptSID, Metrics: idleDoneMetrics()}
+	d.overlayIdlePrompt(state)
+	if !state.Metrics.IdlePromptPending {
+		t.Error("IdlePromptPending must be set while the finished turn is idle")
+	}
+	if !d.idlePromptPending[idlePromptSID] {
+		t.Error("signal must be held (not consumed) after an overlay pass")
+	}
 
-		// A second pass on fresh metrics must re-apply — persistent, unlike the
-		// consume-once Stop overlay, so a lower-tier reclassify can't revert the
-		// corrected waiting back to ready.
-		next := &session.SessionState{SessionID: sid, Metrics: idleDoneMetrics()}
-		d.overlayIdlePrompt(next)
-		if !next.Metrics.IdlePromptPending {
-			t.Error("held signal must re-apply on the next pass")
-		}
-	})
+	// A second pass on fresh metrics must re-apply — persistent, unlike the
+	// consume-once Stop overlay, so a lower-tier reclassify can't revert the
+	// corrected waiting back to ready.
+	next := &session.SessionState{SessionID: idlePromptSID, Metrics: idleDoneMetrics()}
+	d.overlayIdlePrompt(next)
+	if !next.Metrics.IdlePromptPending {
+		t.Error("held signal must re-apply on the next pass")
+	}
+}
 
-	t.Run("cleared when a new turn begins (IsAgentDone false)", func(t *testing.T) {
-		d := &SessionDetector{idlePromptPending: map[string]bool{sid: true}}
-		// New user activity: not turn_done → IsAgentDone false.
-		state := &session.SessionState{SessionID: sid, Metrics: &session.SessionMetrics{LastEventType: "user"}}
+func idlePromptClearedOnNewTurn(t *testing.T) {
+	d := &SessionDetector{idlePromptPending: map[string]bool{idlePromptSID: true}}
+	// New user activity: not turn_done → IsAgentDone false.
+	state := &session.SessionState{SessionID: idlePromptSID, Metrics: &session.SessionMetrics{LastEventType: "user"}}
 
-		d.overlayIdlePrompt(state)
-		if state.Metrics.IdlePromptPending {
-			t.Error("IdlePromptPending must NOT be set once a new turn started")
-		}
-		if _, ok := d.idlePromptPending[sid]; ok {
-			t.Error("signal must be dropped when the idle window ends")
-		}
-	})
+	d.overlayIdlePrompt(state)
+	if state.Metrics.IdlePromptPending {
+		t.Error("IdlePromptPending must NOT be set once a new turn started")
+	}
+	if _, ok := d.idlePromptPending[idlePromptSID]; ok {
+		t.Error("signal must be dropped when the idle window ends")
+	}
+}
 
-	t.Run("cleared when an open tool blocks the turn", func(t *testing.T) {
-		d := &SessionDetector{idlePromptPending: map[string]bool{sid: true}}
-		// An open tool call makes IsAgentDone false — the open-tool rules own
-		// that case, not idle-prompt.
-		state := &session.SessionState{SessionID: sid, Metrics: &session.SessionMetrics{
-			LastEventType:   "turn_done",
-			HasOpenToolCall: true,
-		}}
+func idlePromptClearedByOpenTool(t *testing.T) {
+	d := &SessionDetector{idlePromptPending: map[string]bool{idlePromptSID: true}}
+	// An open tool call makes IsAgentDone false — the open-tool rules own
+	// that case, not idle-prompt.
+	state := &session.SessionState{SessionID: idlePromptSID, Metrics: &session.SessionMetrics{
+		LastEventType:   "turn_done",
+		HasOpenToolCall: true,
+	}}
 
-		d.overlayIdlePrompt(state)
-		if state.Metrics.IdlePromptPending {
-			t.Error("IdlePromptPending must NOT be set while a tool call is open")
-		}
-		if _, ok := d.idlePromptPending[sid]; ok {
-			t.Error("signal must be dropped when an open tool blocks the turn")
-		}
-	})
+	d.overlayIdlePrompt(state)
+	if state.Metrics.IdlePromptPending {
+		t.Error("IdlePromptPending must NOT be set while a tool call is open")
+	}
+	if _, ok := d.idlePromptPending[idlePromptSID]; ok {
+		t.Error("signal must be dropped when an open tool blocks the turn")
+	}
+}
 
-	t.Run("no pending signal is a no-op", func(t *testing.T) {
-		d := &SessionDetector{idlePromptPending: map[string]bool{}}
-		state := &session.SessionState{SessionID: sid, Metrics: idleDoneMetrics()}
-		d.overlayIdlePrompt(state)
-		if state.Metrics.IdlePromptPending {
-			t.Error("a session with no pending idle-prompt signal must not be marked waiting")
-		}
-	})
+func idlePromptNoSignalIsNoOp(t *testing.T) {
+	d := &SessionDetector{idlePromptPending: map[string]bool{}}
+	state := &session.SessionState{SessionID: idlePromptSID, Metrics: idleDoneMetrics()}
+	d.overlayIdlePrompt(state)
+	if state.Metrics.IdlePromptPending {
+		t.Error("a session with no pending idle-prompt signal must not be marked waiting")
+	}
+}
 
-	t.Run("nil metrics is a no-op and preserves the signal", func(t *testing.T) {
-		d := &SessionDetector{idlePromptPending: map[string]bool{sid: true}}
-		state := &session.SessionState{SessionID: sid, Metrics: nil}
-		d.overlayIdlePrompt(state) // must not panic
-		if !d.idlePromptPending[sid] {
-			t.Error("nil metrics must leave the pending signal untouched")
-		}
-	})
+func idlePromptNilMetricsIsNoOp(t *testing.T) {
+	d := &SessionDetector{idlePromptPending: map[string]bool{idlePromptSID: true}}
+	state := &session.SessionState{SessionID: idlePromptSID, Metrics: nil}
+	d.overlayIdlePrompt(state) // must not panic
+	if !d.idlePromptPending[idlePromptSID] {
+		t.Error("nil metrics must leave the pending signal untouched")
+	}
 }
 
 // TestHasPendingIdlePrompt covers the guard forceReadyToWorkingIfActive reads to

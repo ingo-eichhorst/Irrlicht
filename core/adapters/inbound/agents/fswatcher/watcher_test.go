@@ -696,13 +696,12 @@ func TestAddExistingDirs_NewestFirst(t *testing.T) {
 // cost (favoring determinism over a tight bound, to avoid CI flakiness)
 // while still being short enough that only prompt, backlog-size-independent
 // delivery can satisfy it.
-func TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan(t *testing.T) {
-	root := setupFakeProjects(t)
-
-	const backlogDirs = 300
-	const filesPerDir = 50
+// seedAgedBacklog creates dirs × filesPerDir transcript files under root, all
+// backdated 48h, so a full sequential backlog scan takes measurably long.
+func seedAgedBacklog(t *testing.T, root string, dirs, filesPerDir int) {
+	t.Helper()
 	old := time.Now().Add(-48 * time.Hour)
-	for i := 0; i < backlogDirs; i++ {
+	for i := 0; i < dirs; i++ {
 		dir := filepath.Join(root, fmt.Sprintf("backlog-%03d", i))
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
@@ -717,6 +716,31 @@ func TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// awaitNewSessionFor drains ch until a new-session event for projectDir
+// arrives, failing the test if timeout elapses first.
+func awaitNewSessionFor(t *testing.T, ch <-chan agent.Event, projectDir string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == agent.EventNewSession && ev.ProjectDir == projectDir {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for the new top-level directory %q to be discovered — discovery appears to be waiting on the full backlog scan", projectDir)
+		}
+	}
+}
+
+func TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan(t *testing.T) {
+	root := setupFakeProjects(t)
+
+	const backlogDirs = 300
+	const filesPerDir = 50
+	seedAgedBacklog(t, root, backlogDirs, filesPerDir)
 
 	w := NewWithRoot(root, testAdapter, 0)
 	ch := w.Subscribe()
@@ -747,19 +771,10 @@ func TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deadline := time.After(400 * time.Millisecond)
-	for {
-		select {
-		case ev := <-ch:
-			if ev.Type == agent.EventNewSession && ev.ProjectDir == "brand-new-session" {
-				cancel()
-				if err := <-watchErr; err != nil && err != context.Canceled {
-					t.Errorf("Watch returned unexpected error: %v", err)
-				}
-				return
-			}
-		case <-deadline:
-			t.Fatal("timed out waiting for the new top-level directory to be discovered — discovery appears to be waiting on the full backlog scan")
-		}
+	awaitNewSessionFor(t, ch, "brand-new-session", 400*time.Millisecond)
+
+	cancel()
+	if err := <-watchErr; err != nil && err != context.Canceled {
+		t.Errorf("Watch returned unexpected error: %v", err)
 	}
 }

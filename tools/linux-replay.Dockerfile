@@ -45,7 +45,10 @@ COPY --chown=runner:runner replaydata/ ./replaydata/
 USER runner
 
 # Compile gate: nothing below matters if the tree doesn't build on Linux.
-RUN cd core && go build ./...
+WORKDIR /src/core
+RUN go build ./...
+# Back to the repo root: CMD's entrypoint script resolves its paths from there.
+WORKDIR /src
 
 # Run the cross-platform gate. Kept as the image's default command (not a
 # RUN) so `docker run` re-executes it against the built layers and a fresh

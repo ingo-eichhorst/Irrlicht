@@ -17,17 +17,33 @@ import (
 // arrive with explicit ParentSessionID values, never become dashboard roots,
 // hold their completed parent working, and release it only after the final
 // child is ready.
+// codexChildMetrics reports an in-flight turn (open tool call) for the codex
+// child transcripts this test writes, and no metrics for anything else.
+func codexChildMetrics(path, _ string) (*session.SessionMetrics, error) {
+	if strings.Contains(path, "codex-child-") {
+		return &session.SessionMetrics{LastEventType: "tool_use", HasOpenToolCall: true}, nil
+	}
+	return nil, nil
+}
+
+// countLinkedChildren reports how many stored sessions name parentID as their
+// parent.
+func countLinkedChildren(repo *mockRepo, parentID string) int {
+	states, _ := repo.ListAll()
+	linked := 0
+	for _, state := range states {
+		if state.ParentSessionID == parentID {
+			linked++
+		}
+	}
+	return linked
+}
+
 func TestSessionDetector_CodexMetadataChildrenStayNested(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
-	metrics := &funcMetrics{fn: func(path, _ string) (*session.SessionMetrics, error) {
-		if strings.Contains(path, "codex-child-") {
-			return &session.SessionMetrics{LastEventType: "tool_use", HasOpenToolCall: true}, nil
-		}
-		return nil, nil
-	}}
-	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	det := newDetectorWithMetrics(tw, pw, repo, &funcMetrics{fn: codexChildMetrics})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -58,14 +74,7 @@ func TestSessionDetector_CodexMetadataChildrenStayNested(t *testing.T) {
 
 	waitForSessionState(repo, parentID, session.StateWorking, time.Second)
 	waitForCondition(func() bool {
-		states, _ := repo.ListAll()
-		linked := 0
-		for _, state := range states {
-			if state.ParentSessionID == parentID {
-				linked++
-			}
-		}
-		return linked == len(childIDs)
+		return countLinkedChildren(repo, parentID) == len(childIDs)
 	}, time.Second)
 
 	states, _ := repo.ListAll()

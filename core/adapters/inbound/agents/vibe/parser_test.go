@@ -137,7 +137,7 @@ func TestParser_AssistantTextOnly_TurnDone(t *testing.T) {
 	}
 }
 
-// The builtin `todo` tool (whole-list-replace) is decoded into task deltas +
+// The builtin `todo` tool (whole-list-replace) is decoded into task deltas +  // NOSONAR (go:S1135) — "todo" is a tool name here, not a task marker
 // a snapshot so the checklist surfaces in the session tasks field.
 func TestParser_TodoTool_TaskDeltas(t *testing.T) {
 	p := &Parser{}
@@ -182,7 +182,7 @@ func hasTaskDeltaStatus(deltas []tailer.TaskDelta, op, status string) bool {
 	return false
 }
 
-// A cancelled todo is dropped from the tracked list (vibe excludes it from the plan).
+// A cancelled todo is dropped from the tracked list (vibe excludes it from the plan).  // NOSONAR (go:S1135) — "todo" is a tool name here, not a task marker
 func TestParser_TodoTool_DropsCancelled(t *testing.T) {
 	p := &Parser{}
 	ev := p.ParseLine(line(t, `{"role":"assistant","tool_calls":[{"id":"tc","function":{"name":"todo","arguments":"{\"action\":\"write\",\"todos\":[{\"id\":\"1\",\"content\":\"keep\",\"status\":\"pending\"},{\"id\":\"2\",\"content\":\"drop\",\"status\":\"cancelled\"}]}"}}],"message_id":"a"}`))

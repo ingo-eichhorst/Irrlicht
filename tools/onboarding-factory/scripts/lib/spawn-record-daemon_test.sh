@@ -34,6 +34,9 @@ trap 'rm -rf "$TMP"' EXIT
 # ~/.claude/settings.json (#1212).
 HOME="$TMP/nohome"
 
+# Assertion label reused by every shutdown-ladder case below.
+SHUTDOWN_REASON="shutdown reason"
+
 fails=0
 pass() { local label="$1"; echo "  PASS: $label"; return 0; }
 fail() {
@@ -130,21 +133,21 @@ echo "== a daemon that honors SIGINT ends at sigint =="
 fresh_staging sigint
 fake_daemon
 kill_record_daemon
-assert_eq "shutdown reason" "sigint" "$(cat "$STAGING/daemon.shutdown")"
+assert_eq "$SHUTDOWN_REASON" "sigint" "$(cat "$STAGING/daemon.shutdown")"
 assert_eq "no escalation past INT" "INT" "$SIGNALS_SENT"
 
 echo "== a daemon deaf to SIGINT escalates to SIGTERM =="
 fresh_staging sigterm
 fake_daemon INT
 kill_record_daemon
-assert_eq "shutdown reason" "sigterm" "$(cat "$STAGING/daemon.shutdown")"
+assert_eq "$SHUTDOWN_REASON" "sigterm" "$(cat "$STAGING/daemon.shutdown")"
 assert_eq "escalation order" "INT,TERM" "$SIGNALS_SENT"
 
 echo "== a daemon deaf to both escalates to SIGKILL =="
 fresh_staging sigkill
 fake_daemon INT TERM
 kill_record_daemon
-assert_eq "shutdown reason" "sigkill" "$(cat "$STAGING/daemon.shutdown")"
+assert_eq "$SHUTDOWN_REASON" "sigkill" "$(cat "$STAGING/daemon.shutdown")"
 assert_eq "escalation order" "INT,TERM,KILL" "$SIGNALS_SENT"
 
 echo "== a daemon that never started records 'unknown' and still returns 0 =="
@@ -153,7 +156,7 @@ unset -f kill    # back to the real builtin: there is no fake process to probe
 kill_record_daemon
 rc=$?
 assert_eq "returns 0" "0" "$rc"
-assert_eq "shutdown reason" "unknown" "$(cat "$STAGING/daemon.shutdown")"
+assert_eq "$SHUTDOWN_REASON" "unknown" "$(cat "$STAGING/daemon.shutdown")"
 
 echo "== the teardown hands the shared agent config back =="
 fresh_staging restore

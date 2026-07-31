@@ -95,11 +95,17 @@ type stargazerPage struct {
 	} `json:"edges"`
 }
 
+// stargazerRepository is the `data.repository` object. It is referenced by
+// pointer above so a null repository — the shape GraphQL returns when the
+// name is wrong or the token can't see it — stays distinguishable from a
+// real repository that simply has no stargazers yet.
+type stargazerRepository struct {
+	Stargazers stargazerPage `json:"stargazers"`
+}
+
 type stargazersResponse struct {
 	Data struct {
-		Repository *struct {
-			Stargazers stargazerPage `json:"stargazers"`
-		} `json:"repository"`
+		Repository *stargazerRepository `json:"repository"`
 	} `json:"data"`
 	Errors []struct {
 		Message string `json:"message"`

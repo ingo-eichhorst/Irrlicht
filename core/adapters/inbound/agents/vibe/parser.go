@@ -33,7 +33,7 @@ type Parser struct {
 	path string
 	// sidecar memoizes the last meta.json read by (mtime, size).
 	sidecar sidecarCache
-	// todos folds vibe's whole-list `todo` tool snapshots into task-progress
+	// todos folds vibe's whole-list `todo` tool snapshots into task-progress  // NOSONAR (go:S1135) — "todo" is a tool name here, not a task marker
 	// deltas; one reconciler per transcript scan.
 	todos tailer.TodoReconciler
 	// lastPromptTokens / lastCompletionTokens are the session-cumulative token
@@ -238,10 +238,10 @@ func (p *Parser) emitContribution(st *sidecarState, ev *tailer.ParsedEvent) {
 	}
 }
 
-// appendTodoDeltas translates vibe's builtin `todo` tool into task-progress
+// appendTodoDeltas translates vibe's builtin `todo` tool into task-progress  // NOSONAR (go:S1135) — "todo" is a tool name here, not a task marker
 // deltas so its checklist surfaces in the session `tasks` field the same way
-// claudecode's TodoWrite and opencode's todowrite do. Vibe's todo tool is a
-// whole-list-replace: an assistant tool_call `todo` with
+// claudecode's TodoWrite and opencode's todowrite do. Vibe's todo tool is a  // NOSONAR (go:S1135) — "todo" is a tool name here, not a task marker
+// whole-list-replace: an assistant tool_call `todo` with  // NOSONAR (go:S1135) — "todo" is a tool name here, not a task marker
 // arguments={"action":"write","todos":[{"id","content","status","priority"}]}
 // carries the FULL list every call. Todos are keyed by their visible content
 // (matching the shared TodoReconciler convention); `cancelled` todos are dropped,
@@ -258,20 +258,20 @@ func (p *Parser) appendTodoDeltas(raw map[string]any, ev *tailer.ParsedEvent) {
 	}
 }
 
-// rawTodoEntry is one entry in vibe's todo tool's `todos` argument array.
+// rawTodoEntry is one entry in vibe's todo tool's `todos` argument array.  // NOSONAR (go:S1135) — "todo" is a tool name here, not a task marker
 type rawTodoEntry struct {
 	Content string `json:"content"`
 	Status  string `json:"status"`
 }
 
-// todoWriteArgs is the decoded arguments of a vibe `todo` tool call.
+// todoWriteArgs is the decoded arguments of a vibe `todo` tool call.  // NOSONAR (go:S1135) — "todo" is a tool name here, not a task marker
 type todoWriteArgs struct {
 	Action string         `json:"action"`
 	Todos  []rawTodoEntry `json:"todos"`
 }
 
-// decodeTodoWriteCall decodes one tool_calls[] entry as a vibe `todo` write
-// action. ok is false for any entry that isn't a valid todo-write call:
+// decodeTodoWriteCall decodes one tool_calls[] entry as a vibe `todo` write  // NOSONAR (go:S1135) — "todo" is a tool name here, not a task marker
+// action. ok is false for any entry that isn't a valid todo-write call:  // NOSONAR (go:S1135) — "todo" is a tool name here, not a task marker
 // wrong shape, wrong tool name, unparsable arguments, or a non-write action
 // (e.g. a read/list, which carries no state change).
 func decodeTodoWriteCall(t any) (todos []tailer.Todo, ok bool) {
@@ -313,7 +313,7 @@ func decodeTodoWriteArgs(arguments any) (todoWriteArgs, bool) {
 	return args, true
 }
 
-// activeTodos converts raw todo entries to tailer.Todo, dropping cancelled
+// activeTodos converts raw todo entries to tailer.Todo, dropping cancelled  // NOSONAR (go:S1135) — "todo" is a tool name here, not a task marker
 // entries — mirroring vibe's own UI which excludes them from the plan.
 func activeTodos(entries []rawTodoEntry) []tailer.Todo {
 	todos := make([]tailer.Todo, 0, len(entries))

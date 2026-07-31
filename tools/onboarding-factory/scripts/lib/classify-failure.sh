@@ -70,10 +70,8 @@ fi
 # Daemon-side crashes (#1018: DAEMON_LOG was already staged but never read —
 # a Go panic or fatal runtime error here is the richest signal available for
 # daemon-caused failures, ahead of falling to unknown).
-if [[ -f "$DAEMON_LOG" ]]; then
-  if grep -qE "^panic:|fatal error:" "$DAEMON_LOG" 2>/dev/null; then
-    emit "daemon_crashed" "irrlichd panicked or hit a fatal runtime error" "$(grep -m1 -E "^panic:|fatal error:" "$DAEMON_LOG")"
-  fi
+if [[ -f "$DAEMON_LOG" ]] && grep -qE "^panic:|fatal error:" "$DAEMON_LOG" 2>/dev/null; then
+  emit "daemon_crashed" "irrlichd panicked or hit a fatal runtime error" "$(grep -m1 -E "^panic:|fatal error:" "$DAEMON_LOG")"
 fi
 
 emit "unknown" "Run failed for an unrecognized reason; inspect $STAGING manually"

@@ -11,33 +11,43 @@ import (
 	"time"
 )
 
-func TestSplitRepo(t *testing.T) {
+func TestSplitRepoSplitsOwnerAndName(t *testing.T) {
+	cases := []struct {
+		name      string
+		repo      string
+		wantOwner string
+		wantName  string
+	}{
+		{name: "owner and name", repo: "ingo-eichhorst/Irrlicht", wantOwner: "ingo-eichhorst", wantName: "Irrlicht"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			owner, name, err := splitRepo(c.repo)
+			if err != nil {
+				t.Fatalf("splitRepo(%q) unexpected err: %v", c.repo, err)
+			}
+			if owner != c.wantOwner || name != c.wantName {
+				t.Errorf("splitRepo(%q) = %q, %q, want %q, %q", c.repo, owner, name, c.wantOwner, c.wantName)
+			}
+		})
+	}
+}
+
+func TestSplitRepoRejectsMalformed(t *testing.T) {
 	cases := []struct {
 		name       string
 		repo       string
-		wantOwner  string
-		wantName   string
 		wantErrSub string
 	}{
-		{name: "owner and name", repo: "ingo-eichhorst/Irrlicht", wantOwner: "ingo-eichhorst", wantName: "Irrlicht"},
 		{name: "no slash", repo: "Irrlicht", wantErrSub: "owner/name"},
 		{name: "empty owner", repo: "/Irrlicht", wantErrSub: "owner/name"},
 		{name: "empty name", repo: "ingo-eichhorst/", wantErrSub: "owner/name"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			owner, name, err := splitRepo(c.repo)
-			if c.wantErrSub != "" {
-				if err == nil || !strings.Contains(err.Error(), c.wantErrSub) {
-					t.Fatalf("splitRepo(%q) err = %v, want error containing %q", c.repo, err, c.wantErrSub)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("splitRepo(%q) unexpected err: %v", c.repo, err)
-			}
-			if owner != c.wantOwner || name != c.wantName {
-				t.Errorf("splitRepo(%q) = %q, %q, want %q, %q", c.repo, owner, name, c.wantOwner, c.wantName)
+			_, _, err := splitRepo(c.repo)
+			if err == nil || !strings.Contains(err.Error(), c.wantErrSub) {
+				t.Fatalf("splitRepo(%q) err = %v, want error containing %q", c.repo, err, c.wantErrSub)
 			}
 		})
 	}
