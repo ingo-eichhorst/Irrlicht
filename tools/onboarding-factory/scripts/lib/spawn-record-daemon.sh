@@ -56,6 +56,7 @@ record_daemon_sock() {
   else
     printf '%s\n' "$HOME/.local/share/irrlicht/irrlichd.sock"
   fi
+  return 0
 }
 
 # record_daemon_env <recordings-dir> <bind-addr> [<irrlicht-home>] prints the
@@ -173,4 +174,5 @@ stop_record_daemon() {
   kill_record_daemon
   restore_hook_configs
   trap - EXIT
+  return 0
 }

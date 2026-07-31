@@ -37,6 +37,7 @@ snapshot_hook_configs() {
       cp "${HOOK_CONFIG_FILES[$i]}" "$HOOK_CONFIG_BACKUP_DIR/$i"
     fi
   done
+  return 0
 }
 
 # restore_hook_configs puts each snapshotted file back exactly as it was.

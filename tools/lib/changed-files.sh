@@ -62,14 +62,17 @@ changed_files_vs_origin_main() {
 # lives *inside* the tools/onboarding-factory module, so a lockfile-only change
 # there must not drag in a full Go vulnerability scan.
 go_module_touched() {
-  local mod="$1" file
+  local mod="$1" changed="$2" file
   while IFS= read -r file; do
     # `*` spans `/` in a case pattern, so "$mod"/*.go means a Go file at any
     # depth under the module.
     case "$file" in
       "$mod"/*.go | "$mod"/go.mod | "$mod"/go.sum) return 0 ;;
+      # Anything else is not an input this module's scanners read — keep
+      # looking; the loop falls through to `return 1` once the set is drained.
+      *) ;;
     esac
-  done <<<"$2"
+  done <<<"$changed"
   return 1
 }
 
@@ -78,11 +81,14 @@ go_module_touched() {
 # lockfile. A diff that changes neither cannot alter the resolved dependency
 # graph, so it cannot introduce (or clear) an advisory there.
 web_tree_touched() {
-  local tree="$1" file
+  local tree="$1" changed="$2" file
   while IFS= read -r file; do
     case "$file" in
       "$tree"/package.json | "$tree"/package-lock.json) return 0 ;;
+      # Not a manifest or lockfile of this tree — `npm audit` never reads it,
+      # so it cannot put the tree in scope. Keep looking.
+      *) ;;
     esac
-  done <<<"$2"
+  done <<<"$changed"
   return 1
 }

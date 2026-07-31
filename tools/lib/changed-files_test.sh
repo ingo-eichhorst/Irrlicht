@@ -45,9 +45,10 @@ assert_scope() {
 }
 # assert_contains <label> <needle> <haystack>
 assert_contains() {
-  case "$3" in
-    *"$2"*) pass "$1" ;;
-    *) fail "$1" "contains: $2" "$3" ;;
+  local label="$1" needle="$2" haystack="$3"
+  case "$haystack" in
+    *"$needle"*) pass "$label" ;;
+    *) fail "$label" "contains: $needle" "$haystack" ;;
   esac
   return 0
 }
@@ -136,7 +137,7 @@ out=$( cd "$TMP" && . "$DIR/changed-files.sh" && changed_files_vs_origin_main )
 assert_eq "collects committed + staged + unstaged, sorted and de-duplicated" \
   "$(printf 'README.md\ncore/go.mod\ncore/main.go')" "$out"
 
-echo "== changed_files_vs_origin_main: no resolvable baseline is an error, not an empty set =="
+echo "== changed_files_vs_origin_main: no resolvable baseline must abort, not return an empty set =="
 # An empty result is byte-for-byte what "nothing changed" looks like, and an
 # empty set scopes every gate to a skip. Returning 0 there would mean a fresh
 # or shallow clone gets a fully green pre-push run that checked nothing.
