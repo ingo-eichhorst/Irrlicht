@@ -2,6 +2,10 @@ name: web-test
 
 on: [push, pull_request]
 
+# Checkout only — the matrix runs npm ci + vitest and writes nothing back.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

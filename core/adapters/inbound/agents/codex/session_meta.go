@@ -48,6 +48,16 @@ func parentSessionIDFromPath(path string) string {
 }
 
 func sessionMetaPayload(path string) map[string]interface{} {
+	// Sink-local traversal guard. Every real caller already hands over a
+	// confined path — hooks.go rebuilds it from the trusted sessions root, and
+	// hookinstaller walks that root itself — but the plain ".." check is the
+	// form CodeQL's go/path-injection query recognizes as a sanitizer, which
+	// the Rel-based confinement in confineToSessionsDir is not (same lesson as
+	// store.go's underRoot in #910). A rejected path falls through to the same
+	// "no metadata" result an unreadable file already produces.
+	if strings.Contains(path, "..") {
+		return nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
