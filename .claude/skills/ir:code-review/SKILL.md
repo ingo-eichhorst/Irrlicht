@@ -40,8 +40,9 @@ git diff --stat <base>                     # scope
 git diff <base>                            # the review surface
 ```
 
-Pass `base` explicitly when reviewing inside a worktree, because both of the
-convenient defaults mislead there: the local `main` ref is stale (never updated
+This skill already defaults to `origin/main...HEAD`. Keep it — inside a
+worktree, both of the defaults you'd otherwise reach for by hand mislead:
+the local `main` ref is stale (never updated
 when other PRs merge, so `main...HEAD` drags in already-merged hunks), and once
 the branch has been pushed with `git push -u`, `@{upstream}...HEAD` is ~empty
 (upstream now points at the pushed branch, so it reviews nothing).
@@ -127,11 +128,17 @@ Rank **most-severe first**. Every finding carries:
 | `category` | `correctness` · `convention` · `test-coverage` · `efficiency` · `simplification` |
 | `verdict` | `CONFIRMED` / `PLAUSIBLE` — omit at `low`, where no verify pass ran |
 
-If the `ReportFindings` tool is available, call it once with the surviving
-findings (empty array if none survived) and do not also print them as prose.
-Otherwise return the same fields as your final text — when running as a
-subagent, that text **is** the return value to the caller, so it must be the
-findings themselves, not a description of having reviewed.
+**Always put the findings in your final text**, carrying the fields above.
+This is not optional and not a fallback: when you run as a subagent — the
+common case, and the one `ir:exec` step 13 depends on — your tool calls never
+reach the agent that spawned you. Only your final text does. A reply like
+*"reviewed at medium effort, 3 findings reported"* delivers nothing to the
+caller, and worse, reads to it as a **clean** gate.
+
+`ReportFindings` is an *additional* rendering channel, not a substitute for
+that text. Call it once (empty array if nothing survived) only when you are
+the main-loop agent and the active review instructions ask for it; a subagent
+should skip it and simply return the findings.
 
 Always state the effort you actually ran at, and say **"no findings"**
 explicitly when that's the outcome — a silent report is indistinguishable from

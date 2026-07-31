@@ -312,7 +312,12 @@ either step.
     - the **explicit base** `origin/main...HEAD`;
     - the instruction to follow `.claude/skills/ir:code-review/SKILL.md` —
       point at it *by path*, which works whether or not skill invocation is
-      available inside a subagent.
+      available inside a subagent;
+    - an explicit **"return the findings themselves as your final text"**. A
+      subagent's tool calls never reach you — only its final message does — so
+      a reviewer that files its findings through a tool and replies "3 findings
+      reported" hands you nothing, and an empty-looking return reads as a clean
+      gate at step 15.
 
     The reviewer reports; **you** fix. Apply every surviving finding in the
     worktree, push, and state in the transcript what came back — including an
