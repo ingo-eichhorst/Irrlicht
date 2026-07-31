@@ -12,6 +12,27 @@ import (
 	"unicode/utf8"
 )
 
+// ProseIndicatesWaiting reports whether an assistant message carries a trailing
+// question or an imperative waiting cue — the OR of the two detectors below,
+// and the single place that rule lives (issue #1179). Before it was extracted
+// the same OR had been written out four times: IsWaitingForUserInput's tail
+// scan, both adapters' Stop-hook handlers, and both adapters' transcript
+// parsers.
+//
+// A caller judging a turn's FINAL message must pass a BOUNDED tail window
+// (tailer.WaitingScanWindow), never the whole turn — ExtractWaitingCue
+// over-fires on very long text — and never the display-truncated
+// LastAssistantText alone, which hides a cue sitting before the trailing 200
+// runes (issue #1150). The windowing stays at the call site rather than moving
+// in here because core/pkg/tailer, which owns the window, deliberately does not
+// import this package (see userblocking_contract_test.go).
+func ProseIndicatesWaiting(text string) bool {
+	if text == "" {
+		return false
+	}
+	return ExtractQuestionSnippet(text) != "" || ExtractWaitingCue(text) != ""
+}
+
 // trailingMarkdownNoise are characters that commonly appear AFTER a
 // question mark when models wrap questions in markdown or punctuation.
 // e.g. `**Question?**` (bold), `*Question?*` (italic), `_Question?_`,
@@ -56,10 +77,7 @@ func (m *SessionMetrics) IsWaitingForUserInput() bool {
 	if m.PendingWaitingCue {
 		return true
 	}
-	if ExtractQuestionSnippet(m.LastAssistantText) != "" {
-		return true
-	}
-	return ExtractWaitingCue(m.LastAssistantText) != ""
+	return ProseIndicatesWaiting(m.LastAssistantText)
 }
 
 // ExtractQuestionSnippet returns the first non-rhetorical question sentence

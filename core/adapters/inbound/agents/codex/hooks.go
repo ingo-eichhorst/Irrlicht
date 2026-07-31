@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/outbound"
@@ -72,13 +73,11 @@ type HookTarget interface {
 	HandleStopHook(sessionID, transcriptPath, lastAssistantText string, waitingCue bool)
 }
 
-// ConsentGranter reports whether the user has granted a permission (issue
-// #570). Satisfied by *services.PermissionService. Hooks installed by a
-// pre-consent daemon keep firing until answered, so the receiver drops
-// payloads while its permission is pending or denied.
-type ConsentGranter interface {
-	Granted(agentName, key string) bool
-}
+// ConsentGranter is the shared consent check every JSON-hook receiver gates on
+// (issue #570) — an alias, not a copy, so this adapter and claudecode cannot
+// drift on it (issue #1179). See hookjson for why the HookTarget below is NOT
+// shared the same way.
+type ConsentGranter = hookjson.ConsentGranter
 
 // NewHookHandler returns an http.HandlerFunc that receives Codex hook events
 // (PermissionRequest, PostToolUse, Stop) and dispatches them to the target.
@@ -217,16 +216,5 @@ func handleStopHook(target HookTarget, log outbound.Logger, sessionID string, pa
 
 	target.HandleStopHook(sessionID, payload.TranscriptPath,
 		tailer.TruncateAssistantText(payload.LastAssistantMessage),
-		waitingCueInTail(payload.LastAssistantMessage))
-}
-
-// waitingCueInTail reports whether the bounded tail window of an assistant
-// message carries a trailing question or an imperative waiting cue. Bounded,
-// not full text: ExtractWaitingCue over-fires on very long turns. Mirrors the
-// same window+OR rule parser.go uses for PendingWaitingCue and claudecode's
-// hooks.go uses for its Stop hook (issue #1171 — see the DRY note in the PR).
-func waitingCueInTail(full string) bool {
-	win := tailer.WaitingScanWindow(full)
-	return win != "" &&
-		(session.ExtractQuestionSnippet(win) != "" || session.ExtractWaitingCue(win) != "")
+		session.ProseIndicatesWaiting(tailer.WaitingScanWindow(payload.LastAssistantMessage)))
 }
