@@ -30,10 +30,17 @@ HOME="$TMP/nohome"
 CODEX_HOME="$TMP/nocodex"
 
 fails=0
-pass() { echo "  PASS: $1"; return 0; }
-fail() { echo "  FAIL: $1 — expected [$2] got [$3]"; fails=$((fails + 1)); return 0; }
+pass() { local label="$1"; echo "  PASS: $label"; return 0; }
+fail() {
+  local label="$1" expected="$2" got="$3"
+  echo "  FAIL: $label — expected [$expected] got [$got]"
+  fails=$((fails + 1))
+  return 0
+}
 assert_eq() {
-  [[ "$2" == "$3" ]] && pass "$1" || fail "$1" "$2" "$3"
+  local label="$1" expected="$2" actual="$3"
+  [[ "$expected" == "$actual" ]] && pass "$label" || fail "$label" "$expected" "$actual"
+  return 0
 }
 
 # fresh_env points $HOME and $CODEX_HOME at a clean subdir, sets $ROOT, and
@@ -41,12 +48,14 @@ assert_eq() {
 # called in a command substitution — the env assignments have to land in this
 # shell, not a subshell.
 fresh_env() {
-  ROOT="$TMP/$1"
+  local name="$1"
+  ROOT="$TMP/$name"
   mkdir -p "$ROOT/home/.claude" "$ROOT/codex"
   HOME="$ROOT/home"
   CODEX_HOME="$ROOT/codex"
   HOOK_CONFIG_FILES=()
   HOOK_CONFIG_BACKUP_DIR=""
+  return 0
 }
 
 echo "== an existing config is restored byte-for-byte =="
@@ -72,7 +81,7 @@ snapshot_hook_configs "$ROOT/backup"
 restore_hook_configs
 assert_eq "hooks.json unchanged" "original" "$(cat "$CODEX_HOME/hooks.json")"
 
-echo "== restore without a snapshot is a no-op, not an error =="
+echo "== restore without a snapshot is a harmless no-op that still returns 0 =="
 fresh_env nosnapshot
 printf 'untouched\n' > "$HOME/.claude/settings.json"
 restore_hook_configs

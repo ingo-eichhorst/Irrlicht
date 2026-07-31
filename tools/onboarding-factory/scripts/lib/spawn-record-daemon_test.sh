@@ -35,10 +35,17 @@ trap 'rm -rf "$TMP"' EXIT
 HOME="$TMP/nohome"
 
 fails=0
-pass() { echo "  PASS: $1"; return 0; }
-fail() { echo "  FAIL: $1 — expected [$2] got [$3]"; fails=$((fails + 1)); return 0; }
+pass() { local label="$1"; echo "  PASS: $label"; return 0; }
+fail() {
+  local label="$1" expected="$2" got="$3"
+  echo "  FAIL: $label — expected [$expected] got [$got]"
+  fails=$((fails + 1))
+  return 0
+}
 assert_eq() {
-  [[ "$2" == "$3" ]] && pass "$1" || fail "$1" "$2" "$3"
+  local label="$1" expected="$2" actual="$3"
+  [[ "$expected" == "$actual" ]] && pass "$label" || fail "$label" "$expected" "$actual"
+  return 0
 }
 
 # Spend no real time in the grace periods; the tick COUNTS stay >1 so the
@@ -50,11 +57,13 @@ RECORD_DAEMON_SOCK_TICKS=3
 
 # fresh_staging gives a case its own staging dir and clears the lib's state.
 fresh_staging() {
-  STAGING="$TMP/$1"
+  local name="$1"
+  STAGING="$TMP/$name"
   mkdir -p "$STAGING/recordings"
   RECORD_DAEMON_PID=""
   RECORD_DAEMON_SOCK=""
   RECORD_DAEMON_STAGING="$STAGING"
+  return 0
 }
 
 # fake_daemon <ignored-signals...> models a running daemon that survives the
@@ -68,12 +77,16 @@ fake_daemon() {
   SIGNALS_SENT=""
   RECORD_DAEMON_PID=4242
   kill() {
-    case "$1" in
+    local arg="$1" sig
+    case "$arg" in
       -0)  [[ "$FAKE_ALIVE" == "1" ]] && return 0 || return 1 ;;
-      -*)  local sig="${1#-}"
+      -*)  sig="${arg#-}"
            SIGNALS_SENT+="${SIGNALS_SENT:+,}$sig"
            if [[ "$sig" == "KILL" || "$FAKE_IGNORES" != *" $sig "* ]]; then FAKE_ALIVE=0; fi
            return 0 ;;
+      # Not a flag, so not a liveness probe or a signal — nothing the ladder is
+      # asserted on. Accept it the way the real builtin would.
+      *) ;;
     esac
     return 0
   }
@@ -134,7 +147,7 @@ kill_record_daemon
 assert_eq "shutdown reason" "sigkill" "$(cat "$STAGING/daemon.shutdown")"
 assert_eq "escalation order" "INT,TERM,KILL" "$SIGNALS_SENT"
 
-echo "== a daemon that never started records 'unknown', not an error =="
+echo "== a daemon that never started records 'unknown' and still returns 0 =="
 fresh_staging nodaemon
 unset -f kill    # back to the real builtin: there is no fake process to probe
 kill_record_daemon

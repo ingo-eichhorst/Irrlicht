@@ -94,7 +94,7 @@ SKIPPED=0
 # same reasoning that makes a can't-run check a hard failure above; the
 # difference is that this skip is a deliberate, stated narrowing rather than
 # an unknown.
-skip() { echo "SKIP: $1 — $2"; SKIPPED=$((SKIPPED + 1)); return 0; }
+skip() { local what="$1" why="$2"; echo "SKIP: $what — $why"; SKIPPED=$((SKIPPED + 1)); return 0; }
 
 # Narrow GO_MODULES/WEB_TREES in place, once, before anything reads them.
 # Doing it here rather than inside each scanner loop matters: the scanners'
