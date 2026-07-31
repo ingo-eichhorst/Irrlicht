@@ -16,22 +16,37 @@ import (
 	"strings"
 
 	"irrlicht/core/adapters/inbound/agents/hookjson"
+	"irrlicht/core/pkg/daemonaddr"
 )
+
+// hookEndpointPath is the daemon's Codex hook path. Host and port are resolved
+// at install time from the daemon's own bind address, so a daemon on an
+// alternate port installs hooks that reach it rather than whatever owns :7837
+// (issue #1178).
+const hookEndpointPath = "/api/v1/hooks/codex"
 
 // hookSentinel is the substring in a hook entry's curl command that identifies
 // irrlicht-managed entries. Used by both install (idempotency) and uninstall.
-const hookSentinel = "localhost:7837/api/v1/hooks/codex"
+// Deliberately port-independent: a sentinel carrying a port would stop
+// recognizing our own entries the moment the daemon moves, orphaning them and
+// appending a duplicate group instead of upgrading in place. As the bare
+// endpoint path it still matches a pre-#1178 :7837 command.
+const hookSentinel = hookEndpointPath
 
 // hookEndpointURL is the daemon endpoint the installed hook posts to. Codex
 // execs the curl command below with the hook payload on stdin (Codex has no
 // native http-delivery hook like Claude Code's, so a curl command is used).
-const hookEndpointURL = "http://localhost:7837/api/v1/hooks/codex"
+func hookEndpointURL() string {
+	return daemonaddr.LocalURL(hookEndpointPath)
+}
 
 // hookDeliveryCommand is the shell command Codex runs for each installed hook.
 // It streams the payload (stdin, @-) to the daemon and never fails the turn
 // (|| true): a down/unreachable daemon fails the connection fast, well under
 // the --max-time ceiling, and the transcript path still covers turn-end.
-const hookDeliveryCommand = "curl -fsS --max-time 1 -X POST --data-binary @- " + hookEndpointURL + " || true"
+func hookDeliveryCommand() string {
+	return "curl -fsS --max-time 1 -X POST --data-binary @- " + hookEndpointURL() + " || true"
+}
 
 // hookTimeoutSeconds bounds how long Codex waits on the hook command. The
 // daemon's handler is near-instant (a map write plus a channel send); this is
@@ -78,7 +93,7 @@ func matcherForEvent(event string) string {
 func ourHookEntry() map[string]interface{} {
 	return map[string]interface{}{
 		"type":    "command",
-		"command": hookDeliveryCommand,
+		"command": hookDeliveryCommand(),
 		"timeout": hookTimeoutSeconds,
 	}
 }
@@ -295,8 +310,12 @@ func atomicWriteFile(path string, data []byte) error {
 // current canonical form: type "command" with our exact delivery command. The
 // timeout value is deliberately excluded from the identity check so tuning
 // hookTimeoutSeconds never forces a churny rewrite of every existing install.
+//
+// The command comparison is against the *currently resolved* endpoint, so an
+// entry left behind by a daemon on a different port reads as stale and is
+// rewritten in place by upgradeStaleHookCommand (#1178).
 func hookEntryIsCanonical(hook map[string]interface{}) bool {
 	t, _ := hook["type"].(string)
 	cmd, _ := hook["command"].(string)
-	return t == "command" && cmd == hookDeliveryCommand
+	return t == "command" && cmd == hookDeliveryCommand()
 }

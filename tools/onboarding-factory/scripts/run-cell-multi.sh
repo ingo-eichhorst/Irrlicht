@@ -20,12 +20,12 @@
 #     → replay each staged transcript
 #     → write run-manifest.json
 #
-# claudecode observation: the isolated daemon is NOT on :7837, so
-# claudecode's hooks (hardcoded to :7837) reach production, not us. That's
-# fine — the daemon also observes claudecode via its transcript fswatcher
-# (~/.claude/projects, keyed off the real $HOME), which is enough for this
-# scenario's working->ready arcs. IRRLICHT_ONBOARD_MULTI=1 tells precheck
-# to allow claudecode in coexist mode for exactly this reason.
+# claudecode observation: the isolated daemon is NOT on :7837, but since
+# #1178 the hook endpoint follows IRRLICHT_BIND_ADDR, so claudecode's hooks
+# reach us rather than production. The transcript fswatcher (~/.claude/projects,
+# keyed off the real $HOME) covers this scenario's working->ready arcs either
+# way. run-cell.sh snapshots and restores the shared ~/.claude/settings.json
+# it rewrites, so production's hooks are put back when the recording ends.
 #
 # Coexist is MANDATORY here: IRRLICHT_ONBOARD_HOME must be set (defaulting
 # the bind port to 7838) so we never touch the running production daemon.
@@ -87,6 +87,9 @@ ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7838}"
 ONBOARD_SOCK="$ONBOARD_HOME/irrlichd.sock"
 export IRRLICHT_ONBOARD_HOME="$ONBOARD_HOME"
 export IRRLICHT_ONBOARD_BIND_ADDR="$ONBOARD_BIND"
+# Marks this as the cross-adapter run for anything downstream that cares. It
+# used to double as precheck's bypass for claudecode-in-coexist-mode; that
+# refusal is gone since #1178 made the hook endpoint follow the bind address.
 export IRRLICHT_ONBOARD_MULTI=1
 
 # --- Resolve the cross-adapter cell -------------------------------------

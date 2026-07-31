@@ -129,7 +129,7 @@
             <td><code>IRRLICHT_BIND_ADDR</code></td>
             <td>host:port</td>
             <td><code>127.0.0.1:7837</code></td>
-            <td>Override the daemon's TCP bind &mdash; use <code>0.0.0.0:7837</code> to expose on the LAN</td>
+            <td>Override the daemon's TCP bind &mdash; use <code>0.0.0.0:7837</code> to expose on the LAN, or <code>127.0.0.1:7838</code> to run a second daemon alongside your production one. The agent hooks and Claude Code statusline feed the daemon installs POST to whichever port this resolves to, so a daemon on an alternate port receives its own hook traffic instead of the default port's.</td>
           </tr>
           <tr>
             <td><code>IRRLICHT_MDNS</code></td>

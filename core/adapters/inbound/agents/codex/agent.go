@@ -69,7 +69,7 @@ func Agent() agent.Agent {
 				Touches:         "Writes hook entries to ~/.codex/hooks.json",
 				Detail: "Adds PermissionRequest, PostToolUse and Stop hooks to " +
 					"~/.codex/hooks.json (a dedicated file, never config.toml) that " +
-					"POST the hook payload to the local daemon at " + hookEndpointURL +
+					"POST the hook payload to the local daemon at " + hookEndpointURL() +
 					" via curl. PermissionRequest drives a live waiting transition " +
 					"the moment an approval prompt appears; Stop carries the final " +
 					"assistant message for turn-end. Install is version-gated on the " +
