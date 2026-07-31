@@ -20,7 +20,7 @@ argument.
 /ir:exec [mode] <N>
   → not-already-claimed? → worktree → investigate → (auto resolves to plan or full here)
     → plan: HTML + ⛔ approval, or full: inline summary → assign issue
-    → implement → verify
+    → implement → verify → commit
     → PR → review subagent (effort scaled to diff) → fix → /simplify (or inline) → recommendation [plan / full stop here]
     → land: confirm mergeable → squash-merge → remove worktree   [close]
 ```
@@ -339,6 +339,32 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
     under test — the literal AC would have passed on `main` while the bug
     shipped. Three of six issues in that batch specified tests that pass on
     `main`; nothing in this skill caught it.)
+11b. **Commit the implementation** before leaving Phase 4. Everything downstream
+    assumes you did, and until #1282 nothing in this skill ever said to — the
+    only `git commit` in the file was step 11a's scaffold:
+    ```bash
+    git add -A
+    git commit -m "<type>(<scope>): <what changed>"   # conventional commits; reference #<N>
+    git status --porcelain                            # must print nothing
+    ```
+    This is not step 11a's `git commit -m wip`. That one is a checkpoint that
+    gets reverted and restored to prove a test red; this is the commit the PR is
+    made of. If a `wip` checkpoint is still in place, fold it in (`--amend`, or
+    reset and recommit) rather than shipping it as history.
+
+    A dirty tree at the Phase 5 boundary fails three ways at once, and **none of
+    them announces itself as a missing commit**:
+    - Phase 5's `origin/main...HEAD` diffs are commit-to-commit and cannot see
+      the working tree, so the tier table measures an **empty diff** and step 13's
+      reviewer is handed nothing to review — which reads as a clean gate rather
+      than a skipped one, and Phase 6 then leans *merge* on a review that never
+      saw a line of code.
+    - `git rebase` aborts (`cannot rebase: You have unstaged changes`), and its
+      obvious recovery — `git stash` — is the one AGENTS.md forbids in a worktree,
+      since the stash stack is shared repo-wide and a concurrent agent can pop
+      your WIP.
+    - The push carries zero commits, so `gh pr create` has nothing to open a PR
+      from.
 
 ## Phase 5 — PR, review, simplify
 
@@ -360,15 +386,9 @@ git diff --name-only -z origin/main...HEAD \
   | xargs -0 -r git log --oneline HEAD..origin/main --   # did it move *here*?
 ```
 
-**Commit the implementation first** — the porcelain check is a precondition, not
-decoration. `git rebase` aborts outright on a dirty tree (`cannot rebase: You have
-unstaged changes`), and the obvious recovery — `git stash` — is the one AGENTS.md
-forbids in a worktree, since the stash stack is shared repo-wide and a concurrent
-agent can pop your WIP. Nothing before this point in the skill has told you to
-commit; step 11a's `git commit -m wip` is a temporary red-first checkpoint that
-gets restored, not the real one. The `origin/main...HEAD` diff is commit-to-commit
-and cannot see the working tree either, so an uncommitted worktree makes the
-collision probe read empty no matter what you changed.
+The porcelain line is a precondition, not decoration: step 11b should have left
+the tree clean, and if it didn't, every check below reads the wrong answer — see
+there for why. Go back and commit rather than working around it.
 
 Use the `-z`/`xargs -0 -r` form rather than an unquoted `$(git diff --name-only …)`.
 Both of its failure modes are silent and both point the wrong way: unquoted
