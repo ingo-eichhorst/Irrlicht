@@ -193,12 +193,25 @@ type SessionDetector struct {
 	recorder    outbound.EventRecorder
 	recorderSeq int64
 
-	// permMu guards permissionPending. The map tracks sessions with an active
-	// PermissionRequest hook that hasn't been cleared by PostToolUse/
-	// PostToolUseFailure. Written by HandlePermissionHook (HTTP handler
-	// goroutine), read by processActivity (event-loop goroutine).
-	permMu            sync.Mutex
-	permissionPending map[string]bool // sessionID → true
+	// signals holds the out-of-band state signals (hook-delivered today,
+	// OTel/process/screen in the later phases of #1129) between arrival on
+	// their own goroutine and the classify pass that consumes them. It
+	// replaces the three hand-rolled per-signal overlay maps this struct
+	// carried before #1288 — permissionPending, hookTurnDone and
+	// idlePromptPending — each of which had its own lifecycle rule spelled
+	// out in its own overlay method. The per-signal policy now lives in
+	// session.signalPolicies; adding a Phase 4-7 signal is a row there, not a
+	// fourth map and a fourth overlay here.
+	//
+	// Carries its own lock (hooks arrive on HTTP handler goroutines, the
+	// event loop classifies), so it is deliberately NOT guarded by permMu.
+	signals *session.SignalHolds
+
+	// permMu guards the remaining per-session hook/bookkeeping maps below
+	// (compactPending, editToolOpenSince, idleProjectRetryAttempts). Written
+	// from HTTP handler goroutines, read by processActivity (event-loop
+	// goroutine).
+	permMu sync.Mutex
 
 	// compactPending tracks sessions in a manual /compact: sessionID → the Unix
 	// time the PreCompact hook fired. Set by HandleCompactHook; cleared when the
@@ -209,25 +222,6 @@ type SessionDetector struct {
 	// window (#657). Guarded by permMu — same goroutine-crossing story as
 	// permissionPending.
 	compactPending map[string]int64 // sessionID → unix seconds (hook fire time)
-
-	// hookTurnDone tracks sessions whose Claude Code Stop hook (#1161) has fired
-	// but whose resulting classify pass hasn't consumed it yet: sessionID → the
-	// turn's final assistant text (display-truncated) and whether it carried a
-	// waiting cue. Set by HandleStopHook; consumed and cleared by
-	// overlayHookTurnDone on the next classify pass (consume-once, so the
-	// authoritative turn-done signal never bleeds into the following turn).
-	// Guarded by permMu — same goroutine-crossing story as permissionPending.
-	hookTurnDone map[string]hookStopSignal // sessionID → Stop-hook payload
-
-	// idlePromptPending tracks sessions whose Claude Code Notification/idle_prompt
-	// hook reported the agent is idle at the prompt waiting for the user (#1173):
-	// sessionID → true. Set by HandleIdlePromptHook; overlaid onto metrics by
-	// overlayIdlePrompt every classify pass while the finished turn stays idle,
-	// and cleared there the moment new activity arrives (IsAgentDone flips false)
-	// — so it holds the session in waiting without pinning it into the next turn.
-	// Persistent (not consume-once, unlike hookTurnDone): a lower-tier reclassify
-	// must never revert the corrected waiting back to ready. Guarded by permMu.
-	idlePromptPending map[string]bool // sessionID → true
 
 	// editToolOpenSince tracks, per session, the Unix time a permission-gated
 	// file-edit tool first appeared open. Guarded by permMu. Drives the
@@ -332,10 +326,8 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		debounce:                 make(map[string]*debounceEntry),
 		debouncedEvents:          make(chan agent.Event, 64),
 		deletedCooldown:          10 * time.Second,
-		permissionPending:        make(map[string]bool),
+		signals:                  session.NewSignalHolds(),
 		compactPending:           make(map[string]int64),
-		hookTurnDone:             make(map[string]hookStopSignal),
-		idlePromptPending:        make(map[string]bool),
 		editToolOpenSince:        make(map[string]int64),
 		idleProjectRetryAttempts: make(map[string]int),
 		bgLiveProbe:              anyLiveOutputWriter,
@@ -534,7 +526,23 @@ func classifierInputs(m *session.SessionMetrics) *lifecycle.ClassifierInputs {
 		LastEventType:                     m.LastEventType,
 		LastWasUserInterrupt:              m.LastWasUserInterrupt,
 		LastWasToolDenial:                 m.LastWasToolDenial,
+		HookTurnDone:                      m.HookTurnDone,
+		IdlePromptPending:                 m.IdlePromptPending,
 	}
+}
+
+// withProvenance stamps the deciding rule and tier onto a classifier-inputs
+// snapshot. Separate from classifierInputs because provenance is a property of
+// the *verdict*, not of the metrics: the synthesizers emit transitions that no
+// rule decided, and those must record no tier rather than borrow whichever one
+// the ladder would have reached on its own.
+func withProvenance(in *lifecycle.ClassifierInputs, v StateVerdict) *lifecycle.ClassifierInputs {
+	if in == nil || !v.Tier.Known() {
+		return in
+	}
+	in.DecidedByTier = v.Tier.String()
+	in.DecidedByRule = v.Rule
+	return in
 }
 
 // AddWatcher registers a watcher with the running (or not-yet-running)
