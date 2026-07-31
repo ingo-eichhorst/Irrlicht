@@ -74,14 +74,14 @@ func TestSessionDetector_Activity_SamePassUserBlocking_EmitsSyntheticWaiting(t *
 	go func() { done <- det.Run(ctx) }()
 
 	// Let seedFromDisk complete before injecting the session — otherwise
-	// seedFromDisk's own re-evaluation would apply rule 3 and transition
+	// seedFromDisk's own re-evaluation would apply the user_interrupt rule and transition
 	// the session to ready before our activity event arrives.
 	time.Sleep(20 * time.Millisecond)
 
 	// Metrics as if the tailer just processed tool_use(AskUserQuestion) +
 	// tool_result(is_error=true) + denial text in one pass. Denial flag is
 	// still set (the user text "[Request interrupted by user for tool use]"
-	// was the last user event in the batch), so the classifier's rule 3
+	// was the last user event in the batch), so the classifier's the user_interrupt rule
 	// would return ready and skip waiting without the synthetic emit.
 	repo.Save(&session.SessionState{
 		SessionID:      "pass1",
@@ -140,9 +140,9 @@ func TestSessionDetector_Activity_SamePassUserBlocking_EmitsSyntheticWaiting(t *
 // TestSessionDetector_Activity_SamePassUserBlocking_RespectsParentHold
 // guards the parent-hold invariant against the same-pass synthesis path
 // from issue #150. A parent with active children must stay working even
-// when its own metrics would otherwise classify ready (rule 3 denial).
+// when its own metrics would otherwise classify ready (the user_interrupt rule denial).
 // Without the parentHeldWorking guard, the synth path would flip the
-// parent to waiting, reclassify, and let rule 3 fire → parent goes to
+// parent to waiting, reclassify, and let the user_interrupt rule fire → parent goes to
 // ready despite the child still running. This test locks down the fix.
 func TestSessionDetector_Activity_SamePassUserBlocking_RespectsParentHold(t *testing.T) {
 	tw := newMockAgentWatcher()
@@ -181,7 +181,7 @@ func TestSessionDetector_Activity_SamePassUserBlocking_RespectsParentHold(t *tes
 	// Parent session: metrics identical to
 	// TestSessionDetector_Activity_SamePassUserBlocking_EmitsSyntheticWaiting
 	// — same-pass collapse of AskUserQuestion with a sticky denial marker.
-	// Classifier rule 3 wants to return ready; parent-hold must veto that
+	// Classifier the user_interrupt rule wants to return ready; parent-hold must veto that
 	// and the synth path must not fire.
 	repo.Save(&session.SessionState{
 		SessionID:      "parentA",

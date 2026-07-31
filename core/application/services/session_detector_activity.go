@@ -797,6 +797,15 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	verdict := ClassifyStateTiered(state.State, state.Metrics)
 	newState, reason := verdict.State, verdict.Reason
 	newState, reason, parentHeldWorking := d.holdParentForActiveChildren(state, ev, newState, reason)
+
+	// A synthesizer that fires re-bases the session's effective current state
+	// before the real transition is applied. Remembering it here is what lets
+	// the provenance stamp below tell "the ladder's verdict still stands" from
+	// "something else authored this", structurally — rather than by comparing
+	// reason prose, which would couple the correctness of the recorded trace
+	// to the wording of a string.
+	stateBeforeSynthesis := state.State
+
 	newState, reason = d.synthesizeCollapsedTurnBoundaryIfNeeded(state, ev, classifierCandidate{
 		NewState:          newState,
 		Reason:            reason,
@@ -809,13 +818,19 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	})
 
 	if newState != state.State {
-		// Attach provenance only when the ladder's verdict is still what is
-		// being applied. The parent-hold and the two synthesizers above can
-		// each override it, and a transition they authored was not decided by
-		// the rule that fired — stamping its tier anyway would put a
-		// confident, wrong attribution into the permanent trace.
 		applied := stateTransitionUpdate{NewState: newState, Reason: reason, Now: now}
-		if newState == verdict.State && reason == verdict.Reason {
+		switch {
+		case parentHeldWorking:
+			// The parent hold overrode the ladder: this transition was
+			// authored by the parent-child rule, not decided by the rule that
+			// fired, so it records no tier rather than a confident wrong one.
+		case state.State != stateBeforeSynthesis:
+			// The collapsed-waiting synthesizer re-based the current state and
+			// re-classified from it. What is being applied really is a
+			// classifier verdict — just not the one computed above — so
+			// attribute it to the re-run rather than dropping provenance.
+			applied.Verdict = ClassifyStateTiered(state.State, state.Metrics)
+		default:
 			applied.Verdict = verdict
 		}
 		d.applyStateTransition(state, ev, applied)

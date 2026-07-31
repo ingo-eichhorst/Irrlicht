@@ -28,7 +28,7 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateReady,
 		},
 
-		// Rule 0: PermissionPending → waiting.
+		// the permission_prompt rule: PermissionPending → waiting.
 		{
 			name:    "working → waiting (permission pending)",
 			current: session.StateWorking,
@@ -55,7 +55,7 @@ func TestClassifyState(t *testing.T) {
 			wantState:  session.StateWaiting,
 			wantReason: true,
 		},
-		// Rule 0b: CompactInProgress (manual /compact) → working, holding the
+		// the compact_in_progress rule: CompactInProgress (manual /compact) → working, holding the
 		// session busy through the silent compaction window (#657).
 		{
 			name:    "ready → working (compact in progress)",
@@ -79,7 +79,7 @@ func TestClassifyState(t *testing.T) {
 		},
 		{
 			// Once the boundary lands the detector clears CompactInProgress, so
-			// the same turn_done metrics route to ready via rule 2 (#656).
+			// the same turn_done metrics route to ready via the agent_done rule (#656).
 			name:    "working → ready (compact cleared, turn_done)",
 			current: session.StateWorking,
 			metrics: &session.SessionMetrics{
@@ -102,7 +102,7 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateWorking,
 		},
 
-		// Rule 1b: OpenToolStalled → waiting (transcript fallback, #488).
+		// the open_tool_stalled rule: OpenToolStalled → waiting (transcript fallback, #488).
 		{
 			name:    "working → waiting (stalled edit tool)",
 			current: session.StateWorking,
@@ -137,7 +137,7 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateWorking,
 		},
 
-		// Rule 1c: IdlePromptPending (Notification/idle_prompt hook) → waiting.
+		// the idle_prompt rule: IdlePromptPending (Notification/idle_prompt hook) → waiting.
 		{
 			name:    "ready → waiting (idle prompt hook)",
 			current: session.StateReady,
@@ -166,7 +166,7 @@ func TestClassifyState(t *testing.T) {
 		},
 		{
 			// The core correction: a turn that ended on a plain statement (no
-			// question/cue) would route to ready via rule 2, but the idle-prompt
+			// question/cue) would route to ready via the agent_done rule, but the idle-prompt
 			// hook overrides it to waiting — the false-negative gap #1173 closes.
 			name:    "ready → waiting (idle prompt overrides turn-done ready verdict)",
 			current: session.StateReady,
@@ -180,7 +180,7 @@ func TestClassifyState(t *testing.T) {
 		},
 		{
 			// Regression guard: with no idle-prompt signal, the same plain
-			// turn-done metrics still route to ready (rule 1c is inert without
+			// turn-done metrics still route to ready (the idle_prompt rule is inert without
 			// the live hook — no behavior change for the non-hook path).
 			name:    "working → ready (turn done, no idle prompt, no cue)",
 			current: session.StateWorking,
@@ -193,7 +193,7 @@ func TestClassifyState(t *testing.T) {
 			wantReason: true,
 		},
 
-		// Rule 1: NeedsUserAttention → waiting.
+		// the user_blocking_tool rule: NeedsUserAttention → waiting.
 		{
 			name:    "working → waiting (AskUserQuestion)",
 			current: session.StateWorking,
@@ -344,7 +344,7 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateReady,
 		},
 
-		// Rule 2 via the Stop hook (#1161): HookTurnDone is authoritative even
+		// the agent_done rule via the Stop hook (#1161): HookTurnDone is authoritative even
 		// when the transcript-tail signal (LastEventType) hasn't landed yet.
 		{
 			name:    "working → ready (hook Stop, no cue, no turn_done)",
@@ -434,7 +434,7 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateWorking,
 		},
 
-		// Rule 3: ESC cancellation → ready. The signal is LastWasUserInterrupt
+		// the user_interrupt rule: ESC cancellation → ready. The signal is LastWasUserInterrupt
 		// (the exact "[Request interrupted by user]" text marker), NOT
 		// LastToolResultWasError (issue #102 Bug B), and NOT LastWasToolDenial
 		// (the "for tool use" suffix variant — denial doesn't end the turn,
@@ -485,7 +485,7 @@ func TestClassifyState(t *testing.T) {
 			wantReason: true,
 		},
 
-		// Rule 4: Default → working.
+		// the transcript_activity rule: Default → working.
 		{
 			name:    "ready → working (activity)",
 			current: session.StateReady,
@@ -538,14 +538,14 @@ func TestShouldSynthesizeCollapsedWaiting(t *testing.T) {
 		want    bool
 	}{
 		{
-			name:    "Case A: collapsed + denial → rule 3 returns ready",
+			name:    "Case A: collapsed + denial → the user_interrupt rule returns ready",
 			current: session.StateWorking,
 			newS:    session.StateReady,
 			metrics: &session.SessionMetrics{SawUserBlockingToolClosedThisPass: true},
 			want:    true,
 		},
 		{
-			name:    "Case B: collapsed with cleared denial → rule 4 returns working",
+			name:    "Case B: collapsed with cleared denial → the transcript_activity rule returns working",
 			current: session.StateWorking,
 			newS:    session.StateWorking,
 			metrics: &session.SessionMetrics{SawUserBlockingToolClosedThisPass: true},

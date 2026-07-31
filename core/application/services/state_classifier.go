@@ -33,36 +33,64 @@ type StateVerdict struct {
 // Before #1288 these were bare if-statements in a fixed sequence, and the fact
 // that a hook's verdict outranked a transcript guess was encoded as nothing
 // more than which if-statement was written first. Declaring each rule's tier
-// makes that arbitration checkable — see TestStateRules_OrderIsTierConsistent,
+// makes that arbitration checkable — see TestStateRules_LadderIsTierConsistent,
 // which fails if a future edit reorders the ladder so a lower tier preempts a
 // higher one for signals that can be true at the same time.
 type stateRule struct {
-	// id is a stable identifier for logs and traces.
+	// id is a stable identifier for logs and traces. For a rule driven by a
+	// held signal it is that signal's kind, so one vocabulary spans the policy
+	// table, the classifier and the recorded trace.
 	id string
 
-	// tier reports the authority of this rule's evidence. It is a function
-	// because one rule genuinely has two tiers: agent-done is TierHook when a
-	// Stop hook delivered it and TierTranscript when it was inferred from the
-	// transcript tail — the exact distinction AC3 asks to be able to see.
-	tier func(m *session.SessionMetrics) session.SignalTier
+	// signal names the held signal this rule reads, when there is one. It is
+	// how the rule resolves its tier (via session.TierOf), so a signal's
+	// authority is declared once in its policy row rather than restated here.
+	signal session.SignalKind
 
-	// eval reports whether this rule claims the decision, and if so what it
-	// decides. fired=true with an empty reason is normal and meaningful: the
-	// rule owns the outcome but the session is already in the target state,
-	// so no transition is emitted and no lower rule may run.
-	eval func(currentState string, m *session.SessionMetrics) (state, reason string, fired bool)
+	// tier is the authority of a rule that reads no held signal — the
+	// transcript-native rules. Ignored when signal is set.
+	tier session.SignalTier
+
+	// tierOf overrides both for the one rule whose tier is genuinely dynamic:
+	// agent-done is hook-tier when a Stop hook delivered it and
+	// transcript-tier when it was inferred from the transcript tail.
+	tierOf func(m *session.SessionMetrics) session.SignalTier
+
+	// when reports whether this rule claims the decision. Nil means "always"
+	// — the ladder's total default.
+	when func(currentState string, m *session.SessionMetrics) bool
+
+	// decide returns the state to move to and the reason. An empty reason is
+	// normal and meaningful: the rule owns the outcome but the session is
+	// already in the target state, so no transition is emitted and no lower
+	// rule may run.
+	decide func(currentState string, m *session.SessionMetrics) (string, string)
 }
 
-// tierAlways returns a tier function for a rule whose evidence always arrives
-// on the same tier.
-func tierAlways(t session.SignalTier) func(*session.SessionMetrics) session.SignalTier {
-	return func(*session.SessionMetrics) session.SignalTier { return t }
+// tierFor resolves the rule's authority for this pass, preferring the dynamic
+// override, then the held signal's declared tier, then the rule's own.
+func (r stateRule) tierFor(m *session.SessionMetrics) session.SignalTier {
+	if r.tierOf != nil {
+		return r.tierOf(m)
+	}
+	if r.signal != "" {
+		return session.TierOf(r.signal)
+	}
+	return r.tier
+}
+
+// toState builds the decide func shared by every rule whose outcome is a fixed
+// target state and a fixed reason.
+func toState(target, reason string) func(string, *session.SessionMetrics) (string, string) {
+	return func(cur string, _ *session.SessionMetrics) (string, string) {
+		return transitionTo(cur, target, reason)
+	}
 }
 
 // stateRules is the classifier's decision ladder, most authoritative first.
 //
 // Order is still significant — the first rule to fire decides — but it is no
-// longer the *only* record of the intended arbitration: each rule now carries
+// longer the *only* record of the intended arbitration: each rule now resolves
 // the tier its evidence arrives on, so the ordering can be asserted rather
 // than merely commented.
 //
@@ -71,7 +99,7 @@ func tierAlways(t session.SignalTier) func(*session.SessionMetrics) session.Sign
 // both require an open tool call, an open tool call makes IsAgentDone false,
 // and the idle_prompt hold is dropped as stale the moment IsAgentDone goes
 // false. The three can never contend for the same pass. That claim is not left
-// to inspection — TestStateRules_OrderIsTierConsistent enforces it by finding
+// to inspection — TestStateRules_LadderIsTierConsistent enforces it by finding
 // metrics where a pair does contend, and would fail if a future change made
 // these reachable together.
 var stateRules = []stateRule{
@@ -81,15 +109,10 @@ var stateRules = []stateRule{
 		// Checked before NeedsUserAttention because it doesn't depend on
 		// HasOpenToolCall (avoids the race where the hook fires before
 		// fswatcher processes the tool_use JSONL event).
-		id:   "permission_prompt",
-		tier: tierAlways(session.TierHook),
-		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
-			if !m.PermissionPending {
-				return "", "", false
-			}
-			s, r := transitionTo(cur, session.StateWaiting, "permission prompt open → waiting")
-			return s, r, true
-		},
+		id:     string(session.SignalPermissionPrompt),
+		signal: session.SignalPermissionPrompt,
+		when:   func(_ string, m *session.SessionMetrics) bool { return m.PermissionPending },
+		decide: toState(session.StateWaiting, "permission prompt open → waiting"),
 	},
 	{
 		// Manual /compact in progress (PreCompact hook) → working, regardless
@@ -99,27 +122,22 @@ var stateRules = []stateRule{
 		// for that window (#657). The detector clears it the pass the manual
 		// compact_boundary lands, which then routes to ready via agent_done
 		// (#656).
-		id:   "compact_in_progress",
-		tier: tierAlways(session.TierHook),
-		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
-			if !m.CompactInProgress {
-				return "", "", false
-			}
-			s, r := transitionTo(cur, session.StateWorking, "manual /compact in progress → working")
-			return s, r, true
-		},
+		//
+		// Hook-tier like the rules above, but it names no signal: the
+		// PreCompact hold is still the detector's own map rather than a
+		// signalPolicies row, because its staleness rule is time-based and the
+		// policy shape carries no clock. See #1297.
+		id:     "compact_in_progress",
+		tier:   session.TierHook,
+		when:   func(_ string, m *session.SessionMetrics) bool { return m.CompactInProgress },
+		decide: toState(session.StateWorking, "manual /compact in progress → working"),
 	},
 	{
 		// User-blocking tool open → waiting.
-		id:   "user_blocking_tool",
-		tier: tierAlways(session.TierTranscript),
-		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
-			if !m.NeedsUserAttention() {
-				return "", "", false
-			}
-			s, r := transitionTo(cur, session.StateWaiting, "user-blocking tool open → waiting")
-			return s, r, true
-		},
+		id:     "user_blocking_tool",
+		tier:   session.TierTranscript,
+		when:   func(_ string, m *session.SessionMetrics) bool { return m.NeedsUserAttention() },
+		decide: toState(session.StateWaiting, "user-blocking tool open → waiting"),
 	},
 	{
 		// A permission-gated file-edit tool has been open and idle long enough
@@ -129,15 +147,10 @@ var stateRules = []stateRule{
 		// sets OpenToolStalled only after the open tool has lingered with no
 		// transcript progress, so this never fires on a tool that is actively
 		// executing.
-		id:   "open_tool_stalled",
-		tier: tierAlways(session.TierTranscript),
-		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
-			if !m.OpenToolStalled {
-				return "", "", false
-			}
-			s, r := transitionTo(cur, session.StateWaiting, "stalled edit tool → likely permission prompt → waiting")
-			return s, r, true
-		},
+		id:     "open_tool_stalled",
+		tier:   session.TierTranscript,
+		when:   func(_ string, m *session.SessionMetrics) bool { return m.OpenToolStalled },
+		decide: toState(session.StateWaiting, "stalled edit tool → likely permission prompt → waiting"),
 	},
 	{
 		// Claude Code's Notification/idle_prompt hook reported the agent is
@@ -148,15 +161,10 @@ var stateRules = []stateRule{
 		// ready. Live-only — the hold is only ever placed while the finished
 		// turn is still idle (and never under replay), so this rule is inert
 		// for every non-hook path.
-		id:   "idle_prompt",
-		tier: tierAlways(session.TierHook),
-		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
-			if !m.IdlePromptPending {
-				return "", "", false
-			}
-			s, r := transitionTo(cur, session.StateWaiting, "idle prompt hook → waiting")
-			return s, r, true
-		},
+		id:     string(session.SignalIdlePrompt),
+		signal: session.SignalIdlePrompt,
+		when:   func(_ string, m *session.SessionMetrics) bool { return m.IdlePromptPending },
+		decide: toState(session.StateWaiting, "idle prompt hook → waiting"),
 	},
 	{
 		// Agent finished turn — check if waiting for user input first. A
@@ -168,15 +176,10 @@ var stateRules = []stateRule{
 		// This is the one rule whose tier is genuinely dynamic — the same
 		// verdict is authoritative when a hook delivered it and inferred when
 		// the transcript tail did.
-		id:   "agent_done",
-		tier: tierAgentDone,
-		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
-			if !m.IsAgentDone() {
-				return "", "", false
-			}
-			s, r := classifyAgentDone(cur, m)
-			return s, r, true
-		},
+		id:     "agent_done",
+		tierOf: tierAgentDone,
+		when:   func(_ string, m *session.SessionMetrics) bool { return m.IsAgentDone() },
+		decide: classifyAgentDone,
 	},
 	{
 		// User interruption: ESC or tool-permission denial while
@@ -189,27 +192,24 @@ var stateRules = []stateRule{
 		// (writes a new assistant message), the next activity will transition
 		// back to working.
 		id:   "user_interrupt",
-		tier: tierAlways(session.TierTranscript),
-		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
-			if !isUserInterruptReady(cur, m) {
-				return "", "", false
-			}
+		tier: session.TierTranscript,
+		when: isUserInterruptReady,
+		decide: func(cur string, m *session.SessionMetrics) (string, string) {
 			reason := "user ESC interrupt"
 			if m.LastWasToolDenial {
 				reason = "tool permission denied"
 			}
-			return session.StateReady, fmt.Sprintf("%s while %s → ready", reason, cur), true
+			return session.StateReady, fmt.Sprintf("%s while %s → ready", reason, cur)
 		},
 	},
 	{
-		// Default: transcript activity → working. Always fires, so the ladder
-		// is total and every pass has a decision.
+		// Default: transcript activity → working. A nil `when` means it always
+		// fires, so the ladder is total and every pass has a decision.
 		id:   "transcript_activity",
-		tier: tierAlways(session.TierTranscript),
-		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
-			s, r := transitionTo(cur, session.StateWorking,
+		tier: session.TierTranscript,
+		decide: func(cur string, _ *session.SessionMetrics) (string, string) {
+			return transitionTo(cur, session.StateWorking,
 				fmt.Sprintf("transcript activity (%s → working)", cur))
-			return s, r, true
 		},
 	},
 }
@@ -220,7 +220,7 @@ var stateRules = []stateRule{
 // distinguishable from a guessed one in a recorded trace.
 func tierAgentDone(m *session.SessionMetrics) session.SignalTier {
 	if m.HookTurnDone {
-		return session.TierHook
+		return session.TierOf(session.SignalTurnDone)
 	}
 	return session.TierTranscript
 }
@@ -243,11 +243,11 @@ func ClassifyStateTiered(currentState string, metrics *session.SessionMetrics) S
 		return StateVerdict{State: currentState}
 	}
 	for _, rule := range stateRules {
-		state, reason, fired := rule.eval(currentState, metrics)
-		if !fired {
+		if rule.when != nil && !rule.when(currentState, metrics) {
 			continue
 		}
-		return StateVerdict{State: state, Reason: reason, Tier: rule.tier(metrics), Rule: rule.id}
+		state, reason := rule.decide(currentState, metrics)
+		return StateVerdict{State: state, Reason: reason, Tier: rule.tierFor(metrics), Rule: rule.id}
 	}
 	// Unreachable while the ladder ends in an always-firing rule; kept so a
 	// future edit that removes it degrades to "no transition" rather than to
