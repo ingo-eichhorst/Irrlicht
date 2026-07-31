@@ -36,10 +36,9 @@ func TestHookEndpointFollowsBindAddr(t *testing.T) {
 			t.Setenv(codexHomeEnvVar, home)
 			return filepath.Join(home, "hooks.json")
 		},
-		Sentinel:   hookSentinel,
-		Events:     installedHookEvents,
-		MatcherFor: matcherForEvent,
-		Entry:      ourHookEntry,
+		Sentinel: hookSentinel,
+		Events:   installedHookEvents,
+		Entry:    ourHookEntry,
 		// Codex delivers via a curl `type: command` entry, so the endpoint is
 		// embedded in the command string rather than carried in a url field.
 		EndpointOf: func(hook map[string]interface{}) string {

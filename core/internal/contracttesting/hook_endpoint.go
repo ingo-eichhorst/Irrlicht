@@ -8,10 +8,7 @@
 package contracttesting
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -53,18 +50,10 @@ type HookInstaller struct {
 	// some events and not others is caught.
 	Events []string
 
-	// MatcherFor returns the matcher the adapter installs for an event, empty
-	// for a group that carries no matcher key. Used only to seed the
-	// default-port fixture faithfully: seeding it with the matcher the adapter
-	// already expects means the in-place upgrade is driven purely by the stale
-	// port, not incidentally by a matcher reconciliation.
-	MatcherFor func(event string) string
-
 	// Entry builds the adapter's canonical inner hook object at the CURRENTLY
-	// resolved bind address. The contract calls it under a default-port
-	// environment to synthesize "what a :7837 daemon left behind", which is
-	// more honest than a hand-copied literal — the fixture cannot drift from
-	// the shape the adapter actually writes.
+	// resolved bind address — the same builder the adapter hands to
+	// hookjson.Config. Used to learn what endpoint the adapter would install on
+	// a given bind address without going near the filesystem.
 	Entry func() map[string]interface{}
 
 	// EndpointOf extracts the delivery string carrying the endpoint from an
@@ -98,6 +87,11 @@ func AssertHookEndpointFollowsBindAddr(t *testing.T, h HookInstaller) {
 	// function of the bind address at all. An installer that hardcodes the port
 	// fails here first, and most legibly.
 	t.Run("endpoint_follows_bind_addr", func(t *testing.T) {
+		// Relocate the config home even though this sub-test writes nothing:
+		// an Entry() that reads anything home-relative must never be evaluated
+		// against the developer's real agent config.
+		h.SettingsPath(t)
+
 		onDefault := deliveryOn(t, h, "")
 		onAlt := deliveryOn(t, h, AltBindAddr)
 		if onDefault == onAlt {
@@ -182,8 +176,9 @@ func deliveryOn(t *testing.T, h HookInstaller, bindAddr string) string {
 // the endpoint stopped following the bind address.
 func assertEveryEventDelivers(t *testing.T, h HookInstaller, path, want string) {
 	t.Helper()
+	hooksMap := readHooksMap(t, path)
 	for _, event := range h.Events {
-		got := h.EndpointOf(onlyEntry(t, h, path, event))
+		got := h.EndpointOf(onlyEntry(t, hooksMap, event))
 		if got != want {
 			t.Errorf("event %s: installed delivery = %q, want %q", event, got, want)
 		}
@@ -209,31 +204,28 @@ func portMarker(bindAddr string) string {
 	return fmt.Sprintf(":%d/", daemonaddr.PortOf(bindAddr))
 }
 
-// seedDefaultPortInstall writes the settings file a daemon on the DEFAULT port
-// would have left behind: one matcher group per event, each holding the
-// adapter's own canonical entry built while the bind address is the default.
+// seedDefaultPortInstall leaves behind exactly what a daemon on the DEFAULT
+// port would have: the adapter's own installer, run under a default-port
+// environment. Synthesizing the matcher groups by hand instead would be a
+// second implementation of what hookjson.EnsureInstalled already does, and one
+// that could drift from the shape the adapter actually writes.
 func seedDefaultPortInstall(t *testing.T, h HookInstaller, path string) {
 	t.Helper()
 	t.Setenv(daemonaddr.EnvBindAddr, "")
+	if _, err := h.EnsureInstalled(); err != nil {
+		t.Fatalf("seeding a default-port install: %v", err)
+	}
 
-	hooks := map[string]interface{}{}
+	// Sentinel is the one field nothing else cross-checks, and a wrong value
+	// makes the uninstall-survival assertion pass vacuously — HasOurHook would
+	// simply find nothing, for the wrong reason. Confirming the adapter's own
+	// install is matched by the declared sentinel turns that silent hole into a
+	// wiring error.
+	seeded := readHooksMap(t, path)
 	for _, event := range h.Events {
-		group := map[string]interface{}{"hooks": []interface{}{h.Entry()}}
-		if matcher := h.MatcherFor(event); matcher != "" {
-			group["matcher"] = matcher
+		if !hookjson.HasOurHook(seeded, event, h.Sentinel) {
+			t.Fatalf("event %s: the adapter's own default-port install is not matched by Sentinel %q — the contract is wired wrong", event, h.Sentinel)
 		}
-		hooks[event] = []interface{}{group}
-	}
-
-	data, err := json.Marshal(map[string]interface{}{"hooks": hooks})
-	if err != nil {
-		t.Fatalf("marshal seed settings: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("seed %s: %v", path, err)
 	}
 }
 
@@ -241,11 +233,11 @@ func seedDefaultPortInstall(t *testing.T, h HookInstaller, path string) {
 // failing on any other shape — which is the assertion, not incidental: an
 // upgrade that appends a second group instead of rewriting in place shows up
 // here as a group count of 2.
-func onlyEntry(t *testing.T, h HookInstaller, path, event string) map[string]interface{} {
+func onlyEntry(t *testing.T, hooksMap map[string]interface{}, event string) map[string]interface{} {
 	t.Helper()
-	groups, ok := readHooksMap(t, path)[event].([]interface{})
+	groups, ok := hooksMap[event].([]interface{})
 	if !ok {
-		t.Fatalf("event %s: missing from %s or not an array", event, path)
+		t.Fatalf("event %s: missing from the settings file or not an array", event)
 	}
 	if len(groups) != 1 {
 		t.Fatalf("event %s: expected exactly 1 matcher group (in-place upgrade, no duplicate appended), got %d", event, len(groups))

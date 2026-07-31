@@ -23,10 +23,9 @@ func TestHookEndpointFollowsBindAddr(t *testing.T) {
 		SettingsPath: func(t *testing.T) string {
 			return filepath.Join(withTempHome(t), ".claude", "settings.json")
 		},
-		Sentinel:   hookSentinel,
-		Events:     installedHookEvents,
-		MatcherFor: matcherForEvent,
-		Entry:      ourHookEntry,
+		Sentinel: hookSentinel,
+		Events:   installedHookEvents,
+		Entry:    ourHookEntry,
 		// Claude Code delivers natively over http (#1161), so the endpoint is
 		// the entry's own url field rather than embedded in a shell command.
 		EndpointOf: func(hook map[string]interface{}) string {
