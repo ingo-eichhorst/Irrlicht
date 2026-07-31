@@ -1141,20 +1141,40 @@ func (d *SessionDetector) beginBackgroundProbe(sid string) (alive, startProbe bo
 // verdict changed (issues #649, #661). Must not alias state: outputs/pids
 // are copies taken by the caller before this runs on its own goroutine.
 func (d *SessionDetector) runBackgroundLivenessProbe(sid, transcriptPath string, outputs, pids []string) {
-	liveOut := len(outputs) > 0 && d.bgLiveProbe != nil && d.bgLiveProbe(outputs)
+	liveOut, outConclusive := false, true
+	if len(outputs) > 0 && d.bgLiveProbe != nil {
+		liveOut, outConclusive = d.bgLiveProbe(outputs)
+	}
 	livePID := len(pids) > 0 && d.bgPIDProbe != nil && d.bgPIDProbe(pids)
 	live := liveOut || livePID
 
+	if !outConclusive && d.log != nil {
+		d.log.LogError(logComponentSessionDetector, sid, fmt.Sprintf(
+			"background liveness probe was inconclusive for %d output path(s); holding the previous verdict rather than purging", len(outputs)))
+	}
+
+	// An inconclusive output probe is not evidence of death, and the purge it
+	// would otherwise trigger is durable (issue #1299) — so skip it and keep
+	// whatever the last real verdict was. A live PID still counts: it is
+	// positive proof from the other probe, independent of lsof.
 	d.purgeDeadBackgroundProcesses(backgroundProbeResult{
 		TranscriptPath: transcriptPath,
 		Outputs:        outputs,
 		PIDs:           pids,
-		LiveOut:        liveOut,
+		LiveOut:        liveOut || !outConclusive,
 		LivePID:        livePID,
 	})
 
 	d.bgMu.Lock()
 	prev, had := d.bgLive[sid]
+	if !outConclusive && !livePID {
+		// Optimistically alive on first sight, matching beginBackgroundProbe's
+		// never-declare-an-unprobed-process-dead rule (#445).
+		live = true
+		if had {
+			live = prev
+		}
+	}
 	d.bgLive[sid] = live
 	d.bgProbing[sid] = false
 	d.bgMu.Unlock()

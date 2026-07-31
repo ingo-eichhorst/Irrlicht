@@ -372,8 +372,9 @@ func (d *SessionDetector) SetSessionSupersededHandler(fn func(oldID, newID strin
 
 // SetBackgroundProbeForTest overrides the background-process liveness probe so
 // tests can simulate live / dead background processes without real lsof. See
-// issue #445.
-func (d *SessionDetector) SetBackgroundProbeForTest(p func(outputPaths []string) bool) {
+// issue #445. The second return is "was this conclusive?" — pass false to
+// simulate an lsof timeout (issue #1299), not to mean "dead".
+func (d *SessionDetector) SetBackgroundProbeForTest(p func(outputPaths []string) (alive, conclusive bool)) {
 	d.bgLiveProbe = p
 }
 
