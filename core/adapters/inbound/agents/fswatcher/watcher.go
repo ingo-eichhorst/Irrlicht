@@ -25,6 +25,23 @@ import (
 // transcriptExt is the file extension for agent transcript files.
 const transcriptExt = ".jsonl"
 
+// defaultReconcileInterval is how often Watch re-walks the tree to catch
+// anything fsnotify never reported. It bounds the blind spot left by a
+// dropped kernel notification (issue #1248) without turning the watcher into
+// a poller: notifications remain the fast path and this is the safety net.
+//
+// The cost of one sweep is a ReadDir per directory plus a stat per transcript
+// file — every transcript ever written, not just the recent ones, because
+// maxAge is applied after the stat rather than pruning the walk. On a
+// heavily-used machine three of the eight roots alone hold ~794 directories
+// and ~1541 transcripts, of which only ~101 are inside the 5-day window; treat
+// that as a lower bound on the per-sweep cost, not a total. It is cheap enough
+// at this interval, but it scales with total history rather than with active
+// sessions, so pruning the descent (skipping directories whose mtime hasn't
+// moved, and stat-ing only known paths for growth) is the prerequisite for
+// shortening this.
+const defaultReconcileInterval = 15 * time.Second
+
 // Watcher watches a directory tree for .jsonl transcript file events.
 // It implements inbound.Watcher.
 type Watcher struct {
@@ -48,6 +65,31 @@ type Watcher struct {
 	// Deferring them until the first Write lets the adapter read the metadata
 	// header and prevents a child from briefly appearing as a top-level row.
 	pendingNew map[string]struct{}
+
+	// reconcileInterval overrides how often the reconcile sweep runs (see
+	// WithReconcileInterval). Zero means defaultReconcileInterval; negative
+	// disables the sweep.
+	reconcileInterval time.Duration
+	// emitted records the size last broadcast for each transcript path, so the
+	// reconcile sweep can distinguish state fsnotify already reported from
+	// state it missed. Entries are removed when a file is deleted, so a
+	// recreated path is reported as a new session again. It is otherwise
+	// bounded by the number of transcript files this run has reported on —
+	// the same order as the tree the watcher already walks — so it is not
+	// pruned on any other schedule.
+	emitted map[string]int64
+	// watched records directories already registered with fsnotify, so the
+	// reconcile sweep re-arms only the ones that are genuinely new — and
+	// retries any whose earlier Add failed.
+	watched map[string]struct{}
+	// watchFailed records directories whose rejected registration has already
+	// been reported, so the sweep's retry doesn't re-log the same blind spot
+	// every interval.
+	//
+	// pendingNew, emitted, watched and watchFailed are all confined to Watch's
+	// goroutine (handleEvent, the backlog scan and reconcile all run on it), so
+	// none of them take a lock.
+	watchFailed map[string]struct{}
 
 	subMu sync.Mutex
 	subs  []chan agent.Event
@@ -81,7 +123,9 @@ type Watcher struct {
 // then continues and Ready() still fires: one unreadable directory must not
 // strand the whole watcher. What that costs is a blind spot under that one
 // subtree, so addWatch reports every rejection through the Logger set by
-// WithLogger rather than discarding it (#1255).
+// WithLogger rather than discarding it (#1255), and the reconcile sweep
+// retries the registration so the blind spot closes on its own if whatever
+// rejected it clears (#1248).
 func (w *Watcher) Ready() <-chan struct{} { return w.readyChan() }
 
 // readyChan lazily creates the ready channel so the literal constructors
@@ -137,6 +181,17 @@ func (w *Watcher) WithSessionID(fn func(path string) string) *Watcher {
 // the header before the new-session event reaches the session detector.
 func (w *Watcher) WithParentSessionID(fn func(path string) string) *Watcher {
 	w.parentSessionID = fn
+	return w
+}
+
+// WithReconcileInterval overrides how often Watch runs the reconcile sweep
+// that catches transcript files fsnotify never reported. Zero (the default)
+// uses defaultReconcileInterval; a negative value disables the sweep entirely,
+// leaving fsnotify as the only source of events. Returns the watcher for
+// chaining. Tests use it to pull the safety net inside their own deadline;
+// production wiring leaves it at the default.
+func (w *Watcher) WithReconcileInterval(d time.Duration) *Watcher {
+	w.reconcileInterval = d
 	return w
 }
 
@@ -221,6 +276,8 @@ func (w *Watcher) Watch(ctx context.Context) error {
 		return err
 	}
 
+	w.resetRunState()
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -259,10 +316,15 @@ func (w *Watcher) Watch(ctx context.Context) error {
 	// waiting on Ready() before mutating files.
 	w.signalReady()
 
+	reconcileC, stopReconcile := w.reconcileTicker()
+	defer stopReconcile()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-reconcileC:
+			w.reconcile(ctx, watcher)
 		case ev, ok := <-watcher.Events:
 			if !w.dispatchEvent(watcher, ev, ok) {
 				return nil
@@ -273,6 +335,53 @@ func (w *Watcher) Watch(ctx context.Context) error {
 			}
 			// Transient errors — continue watching.
 		}
+	}
+}
+
+// resetRunState starts a Watch run's bookkeeping from empty, so a Watcher
+// driven twice doesn't inherit the previous run's view of what was already
+// emitted or already armed. pendingNew is left nil because its write sites
+// allocate it lazily.
+func (w *Watcher) resetRunState() {
+	w.emitted = make(map[string]int64)
+	w.watched = make(map[string]struct{})
+	w.watchFailed = make(map[string]struct{})
+	w.pendingNew = nil
+}
+
+// reconcileTicker returns the channel Watch selects on to run the sweep that
+// periodically re-walks the tree, plus the func to stop it.
+//
+// The sweep exists because fsnotify's macOS kqueue backend discovers new files
+// by diffing a directory listing rather than receiving a per-file
+// notification, so a creation can be missed outright — the failure mode behind
+// issue #1248, where the symptom is an event that never arrives rather than
+// one that arrives late. A dropped notification would otherwise leave that
+// session invisible for the daemon's whole lifetime; this bounds it to one
+// interval.
+//
+// When the sweep is disabled the channel is nil, which parks Watch's reconcile
+// select case forever, and the stop func is a no-op — so the caller needs no
+// conditional of its own.
+func (w *Watcher) reconcileTicker() (<-chan time.Time, func()) {
+	interval := w.effectiveReconcileInterval()
+	if interval <= 0 {
+		return nil, func() {}
+	}
+	ticker := time.NewTicker(interval)
+	return ticker.C, ticker.Stop
+}
+
+// effectiveReconcileInterval resolves the configured sweep interval: zero
+// means the default, negative means disabled (reported as zero).
+func (w *Watcher) effectiveReconcileInterval() time.Duration {
+	switch {
+	case w.reconcileInterval == 0:
+		return defaultReconcileInterval
+	case w.reconcileInterval < 0:
+		return 0
+	default:
+		return w.reconcileInterval
 	}
 }
 
@@ -323,6 +432,16 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 		return
 	}
 
+	if ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+		// A path that goes away takes any fsnotify watch on it with it, so
+		// forget it here: otherwise a directory recreated at the same path is
+		// short-circuited by addWatch as already-watched and never re-armed,
+		// leaving that subtree reachable only by the reconcile sweep. A
+		// no-op for transcript files, which are never in these maps.
+		delete(w.watched, name)
+		delete(w.watchFailed, name)
+	}
+
 	// Only process .jsonl files (transcript files).
 	if !strings.HasSuffix(name, transcriptExt) {
 		return
@@ -344,6 +463,9 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 
 	case ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
 		delete(w.pendingNew, name)
+		// Forget the emitted size too, so a path that is recreated later is
+		// reported as a new session rather than as activity.
+		delete(w.emitted, name)
 		w.broadcast(w.eventFor(agent.EventRemoved, sessionID, projectDir, name, 0))
 	}
 }
@@ -364,7 +486,7 @@ func (w *Watcher) handleTranscriptCreate(name, sessionID, projectDir string) {
 		w.pendingNew[name] = struct{}{}
 		return
 	}
-	w.broadcast(w.eventFor(agent.EventNewSession, sessionID, projectDir, name, size))
+	w.emit(agent.EventNewSession, sessionID, projectDir, name, size)
 }
 
 // handleTranscriptWrite emits EventActivity for a write to a known transcript,
@@ -377,10 +499,10 @@ func (w *Watcher) handleTranscriptWrite(name, sessionID, projectDir string) {
 	}
 	if _, pending := w.pendingNew[name]; pending {
 		delete(w.pendingNew, name)
-		w.broadcast(w.eventFor(agent.EventNewSession, sessionID, projectDir, name, size))
+		w.emit(agent.EventNewSession, sessionID, projectDir, name, size)
 		return
 	}
-	w.broadcast(w.eventFor(agent.EventActivity, sessionID, projectDir, name, size))
+	w.emit(agent.EventActivity, sessionID, projectDir, name, size)
 }
 
 // handleDirCreate handles a Create event that names a directory: starts
@@ -409,6 +531,29 @@ func (w *Watcher) handleDirCreate(watcher *fsnotify.Watcher, name string) bool {
 // A non-positive maxAge disables the cutoff.
 func (w *Watcher) isStale(mtime time.Time) bool {
 	return w.maxAge > 0 && !mtime.IsZero() && time.Since(mtime) > w.maxAge
+}
+
+// emit records the size being reported for path and broadcasts the event.
+// Every new-session and activity emission goes through here so the reconcile
+// sweep can tell the state fsnotify already reported from the state it missed,
+// and therefore never re-reports a file the normal event path handled.
+// EventRemoved deliberately does not: it deletes the entry instead.
+func (w *Watcher) emit(typ agent.EventType, sessionID, projectDir, path string, size int64) {
+	// The guard is symmetric: the sweep skips what fsnotify already reported,
+	// and this skips what the sweep already reported. Both directions matter,
+	// because fsnotify's event channel is unbuffered — a Create can sit blocked
+	// in the producer while a sweep runs, walks the same file and reports it,
+	// and only then get delivered to the ordinary create path. Restricted to
+	// new-session events: a repeated activity event is absorbed downstream by
+	// the detector's debounce, and suppressing one could hide a real write.
+	if prev, ok := w.emitted[path]; ok && prev == size && typ == agent.EventNewSession {
+		return
+	}
+	if w.emitted == nil {
+		w.emitted = make(map[string]int64)
+	}
+	w.emitted[path] = size
+	w.broadcast(w.eventFor(typ, sessionID, projectDir, path, size))
 }
 
 // broadcast sends an event to all subscribers. Non-blocking: drops if consumer
@@ -522,6 +667,14 @@ func (w *Watcher) addExistingDirs(ctx context.Context, watcher *fsnotify.Watcher
 	if err != nil {
 		return nil // root existence already confirmed by waitForRoot; treat as empty
 	}
+	// Root's own transcript files, before descending. The root is watched but
+	// is never itself a WalkDir start point below, so without this a flat
+	// layout — kiro-cli keeps <uuid>.jsonl directly under sessions/cli with no
+	// project directory — has its entire pre-existing backlog skipped, and
+	// Ready()'s "every pre-existing transcript file has already been emitted"
+	// is false for that adapter. The reconcile sweep applies the same rule on
+	// a timer; this is what makes that a schedule rather than a special case.
+	w.emitExistingFiles(w.root)
 	for _, dir := range newestFirst(w.root, entries) {
 		if ctx.Err() != nil {
 			return nil // Watch's own select loop will observe ctx.Done() and return
@@ -554,9 +707,34 @@ func (w *Watcher) addExistingDirs(ctx context.Context, watcher *fsnotify.Watcher
 // originally discarded), but it is reported through the Logger per Key
 // Conventions' logged-not-propagated rule, so the blind spot leaves a trace
 // instead of none at all (#1255).
+// A rejected directory is retried by the next reconcile sweep, because only a
+// successful registration is recorded in watched — so a watch lost to a
+// transient condition recovers on its own instead of staying blind for the
+// daemon's lifetime. The rejection is reported once per directory rather than
+// once per retry (watchFailed), so a genuinely unreadable directory leaves a
+// trace without repeating it every sweep; clearing the entry on success means
+// a later failure is reported again.
 func (w *Watcher) addWatch(watcher *fsnotify.Watcher, dir string) {
+	if _, ok := w.watched[dir]; ok {
+		return // already armed — re-registering every sweep would be churn
+	}
 	err := watcher.Add(dir)
-	if err == nil || w.logger == nil {
+	if err == nil {
+		if w.watched == nil {
+			w.watched = make(map[string]struct{})
+		}
+		w.watched[dir] = struct{}{}
+		delete(w.watchFailed, dir)
+		return
+	}
+	if _, reported := w.watchFailed[dir]; reported {
+		return
+	}
+	if w.watchFailed == nil {
+		w.watchFailed = make(map[string]struct{})
+	}
+	w.watchFailed[dir] = struct{}{}
+	if w.logger == nil {
 		return
 	}
 	w.logger.LogError("fswatcher", "", fmt.Sprintf(
@@ -591,10 +769,15 @@ func (w *Watcher) drainPendingEvents(watcher *fsnotify.Watcher) {
 }
 
 // newestFirst returns the absolute paths of root's directory entries, sorted
-// by modification time descending (newest first). Non-directory entries
-// (loose files directly under root — no adapter's layout uses these) are
-// skipped; an entry whose mtime can't be read sorts as if it were the oldest
-// rather than aborting the scan.
+// by modification time descending (newest first). Non-directory entries are
+// skipped — a flat layout's transcripts (kiro-cli) are handled by the caller
+// before it descends, not here; an entry whose mtime can't be read sorts as if
+// it were the oldest rather than aborting the scan.
+//
+// Only the startup scan uses this. The ordering exists to bound *first*
+// discovery latency over a one-shot backlog (#998); the reconcile sweep visits
+// every directory unconditionally and repeats, so ordering changes nothing
+// observable there and it walks entries directly instead.
 func newestFirst(root string, entries []os.DirEntry) []string {
 	type dirMtime struct {
 		path  string
@@ -656,10 +839,111 @@ func (w *Watcher) emitExistingFiles(dir string) {
 			continue
 		}
 		size, mtime := fileSizeAndMtime(fullPath)
-		if w.maxAge > 0 && !mtime.IsZero() && time.Since(mtime) > w.maxAge {
+		if w.isStale(mtime) {
 			continue
 		}
-		w.broadcast(w.eventFor(agent.EventNewSession, sessionID, projectDir, fullPath, size))
+		w.emit(agent.EventNewSession, sessionID, projectDir, fullPath, size)
+	}
+}
+
+// reconcile re-walks the tree and reports anything fsnotify never did: a
+// transcript file with no emission recorded for it becomes an EventNewSession,
+// and one whose size has moved since the last emission becomes an
+// EventActivity. In the healthy case every file's recorded size already
+// matches what is on disk and the sweep emits nothing at all, so this is
+// invisible unless a notification was genuinely lost (issue #1248).
+//
+// Deletions are deliberately not reconciled. Inferring EventRemoved from a
+// file's absence would turn any transient ReadDir failure into a spurious
+// teardown of every session under that directory, and a lost Remove is far
+// less costly than a lost creation — the session is stale rather than
+// invisible.
+//
+// Like the backlog scan in addExistingDirs, this drains fsnotify's (unbuffered
+// on kqueue) event channel between top-level directories so a live event isn't
+// left blocked behind a long walk, and checks ctx there so cancellation isn't
+// delayed by the rest of the sweep. It runs on Watch's goroutine, which is what
+// makes its use of pendingNew/emitted/watched lock-free.
+func (w *Watcher) reconcile(ctx context.Context, watcher *fsnotify.Watcher) {
+	entries, err := os.ReadDir(w.root)
+	if err != nil {
+		return
+	}
+	// One pass over root's entries, handling its own transcript files inline
+	// rather than only descending into subdirectories: a flat layout —
+	// kiro-cli keeps <uuid>.jsonl directly under sessions/cli with no project
+	// directory at all — would otherwise gain nothing from this sweep. This
+	// deliberately does not sort via newestFirst: see its doc comment, the
+	// ordering earns nothing here and costs an lstat per directory per sweep.
+	for _, e := range entries {
+		path := filepath.Join(w.root, e.Name())
+		if !e.IsDir() {
+			w.reconcileFile(path)
+			continue
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		_ = filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil // skip unreadable dirs
+			}
+			if d.IsDir() {
+				w.addWatch(watcher, p)
+				return nil
+			}
+			w.reconcileFile(p)
+			return nil
+		})
+		w.drainPendingEvents(watcher)
+	}
+}
+
+// reconcileFile emits the event fsnotify should have delivered for path, if
+// any. It mirrors handleTranscriptCreate/handleTranscriptWrite's rules — same
+// session-ID extraction, same staleness cutoff, same zero-byte deferral for
+// header-linked adapters — so a file recovered by the sweep is indistinguishable
+// from one reported normally.
+// The filters run cheapest-first, and that ordering is load-bearing rather
+// than cosmetic. A stat plus two map lookups is a syscall; idFor can be far
+// more than that — codex derives its session ID by opening the transcript and
+// JSON-decoding its first record (codex.sessionIDFromPath), so hoisting it
+// above the size compare made every sweep re-read every transcript in the tree
+// to produce nothing. Measured on a real 301-file codex tree that is ~250ms
+// per sweep versus ~3ms, spent on the goroutine that also dispatches fsnotify
+// events — the sweep would have been delaying the fast path it exists to back
+// up. Only files with a valid session ID are ever recorded in emitted, so
+// consulting it before idFor cannot mask a file idFor would have skipped.
+func (w *Watcher) reconcileFile(path string) {
+	if !strings.HasSuffix(path, transcriptExt) {
+		return
+	}
+	size, mtime := fileSizeAndMtime(path)
+	if w.isStale(mtime) {
+		return
+	}
+	prev, known := w.emitted[path]
+	if known && prev == size {
+		return // fsnotify already reported this exact state
+	}
+	sessionID := w.idFor(path)
+	if sessionID == "" {
+		return
+	}
+	projectDir := filepath.Base(filepath.Dir(path))
+	switch {
+	case known:
+		w.emit(agent.EventActivity, sessionID, projectDir, path, size)
+	case size == 0 && w.parentSessionID != nil:
+		// Same deferral as a zero-byte Create: park it so the header is
+		// readable before the new-session event goes out.
+		if w.pendingNew == nil {
+			w.pendingNew = make(map[string]struct{})
+		}
+		w.pendingNew[path] = struct{}{}
+	default:
+		delete(w.pendingNew, path)
+		w.emit(agent.EventNewSession, sessionID, projectDir, path, size)
 	}
 }
 
