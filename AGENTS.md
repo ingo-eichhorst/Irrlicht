@@ -142,6 +142,14 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `@rolldown/binding-linux-*` entries, and that churn then rides along in an
   unrelated PR. `npm ci` installs *from* the lockfile and never writes it.
 
+  Because the two trees resolve independently, they can drift onto different
+  versions of the same transitive package — which is how one ended up carrying
+  a vulnerable `postcss` while the other was patched (#1225). Both are kept
+  current by weekly dependabot updates configured in `.github/dependabot.yml`,
+  which covers the Go modules and GitHub Actions on the same schedule; a bump
+  landing in only one tree is a signal something is wrong with that config, not
+  normal.
+
 ### Local CI parity — catch failures before pushing
 
 `tools/preflight.sh` runs every PR-gating check (test.yml + web-test.yml +
