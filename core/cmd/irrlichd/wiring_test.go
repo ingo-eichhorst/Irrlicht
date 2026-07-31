@@ -72,7 +72,7 @@ func assertWatcherCountsForSource(t *testing.T, name string, source agent.Source
 // one process scanner, plus the Source variant's dedicated watcher.
 func assertAgentWatcherSet(t *testing.T, a agent.Agent, noCheck func(string, int) bool) {
 	t.Helper()
-	watchers, _ := buildAgentWatchers(a, time.Minute, noCheck)
+	watchers, _ := buildAgentWatchers(a, time.Minute, noCheck, nil)
 	scanners, fswatchers, stores := countWatcherKinds(t, a.Identity.Name, watchers)
 	if scanners != 1 {
 		t.Errorf("%s: got %d process scanners, want 1", a.Identity.Name, scanners)

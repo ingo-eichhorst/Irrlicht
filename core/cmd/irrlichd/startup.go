@@ -637,7 +637,7 @@ func buildDetector(deps buildDetectorDeps) (*services.SessionDetector, map[strin
 		watcherFactories = make(map[string]services.WatcherFactory, len(deps.AllAgents))
 		for _, a := range deps.AllAgents {
 			watcherFactories[a.Identity.Name] = func() []inbound.Watcher {
-				ws, _ := buildAgentWatchers(a, deps.Cfg.MaxSessionAge, realSessionCheck)
+				ws, _ := buildAgentWatchers(a, deps.Cfg.MaxSessionAge, realSessionCheck, deps.Logger)
 				return ws
 			}
 		}
