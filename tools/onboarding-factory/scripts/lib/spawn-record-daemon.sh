@@ -15,12 +15,12 @@
 #   source "$SCRIPT_DIR/lib/spawn-record-daemon.sh"
 #   spawn_record_daemon "$DAEMON" "$STAGING" "$BIND_ADDR" "$ONBOARD_HOME" || exit 1
 #   ... drive the agent ...
-#   stop_record_daemon; trap - EXIT      # drain before reading the recording
+#   stop_record_daemon                   # drain before reading the recording
 #
-# spawn_record_daemon installs `stop_record_daemon` as the EXIT trap itself, so
-# any failure between spawn and drain still shuts the daemon down and hands the
-# user's config back. Call it explicitly (then clear the trap) when you need the
-# recorder flushed before continuing.
+# The EXIT trap is the lib's, both halves: spawn_record_daemon arms
+# stop_record_daemon (so any failure between spawn and drain still shuts the
+# daemon down and hands the user's config back), and stop_record_daemon disarms
+# it. Callers never write `trap` themselves.
 #
 # Artifacts it writes under <staging>:
 #   daemon.log           — the daemon's stdout+stderr
@@ -28,7 +28,8 @@
 #   hook-config-backup/  — the pre-run copy of the shared agent config
 #   recordings/          — IRRLICHT_RECORDINGS_DIR (the caller mkdir -p's it)
 
-# shellcheck source=lib/hook-config-snapshot.sh
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=hook-config-snapshot.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hook-config-snapshot.sh"
 
 # State published for the caller (and read back by stop_record_daemon).
@@ -38,12 +39,12 @@ RECORD_DAEMON_STAGING=""
 
 # Poll knobs, read at call time. The defaults ARE the production timings; they
 # are overridable only so the unit tests can drive the ladder without spending
-# the grace periods in real seconds.
-#   RECORD_DAEMON_SOCK_TICKS  × SOCK_TICK_S  = 40 × 0.25s = 10s for the socket
-#   RECORD_DAEMON_INT_TICKS   × KILL_TICK_S  = 12 × 0.5s  = 6s grace after INT,
-#                                              i.e. the recorder's 5s flush
-#                                              interval + 1s slack
-#   RECORD_DAEMON_TERM_TICKS  × KILL_TICK_S  =  6 × 0.5s  = 3s grace after TERM
+# the grace periods in real seconds. Each loop keeps its own tick DEFAULT;
+# RECORD_DAEMON_POLL_TICK_S overrides them together.
+#   RECORD_DAEMON_SOCK_TICKS = 40 × 0.25s = 10s for the socket to appear
+#   RECORD_DAEMON_INT_TICKS  = 12 × 0.5s  = 6s grace after INT, i.e. the
+#                                           recorder's 5s flush interval + 1s slack
+#   RECORD_DAEMON_TERM_TICKS =  6 × 0.5s  = 3s grace after TERM
 
 # record_daemon_sock <irrlicht-home> prints the unix socket the daemon will
 # listen on. A non-empty home is coexist mode (the daemon keeps its socket,
@@ -58,7 +59,10 @@ record_daemon_sock() {
 }
 
 # record_daemon_env <recordings-dir> <bind-addr> [<irrlicht-home>] prints the
-# daemon's environment, one NAME=VALUE per line, for `env` to apply.
+# daemon's environment, one NAME=VALUE per line, for `env` to apply. One per
+# line (rather than an array) so it can be asserted directly by the unit tests;
+# spaces in a value survive, a literal newline in one would not — no caller can
+# produce one (a bind address, and paths under the repo root).
 #
 # grant-all: the consent-first permission gate (#570) would otherwise leave a
 # fresh recording daemon monitoring nothing until a wizard is answered —
@@ -121,9 +125,21 @@ wait_for_record_daemon() {
   local _
   for _ in $(seq 1 "${RECORD_DAEMON_SOCK_TICKS:-40}"); do
     [[ -S "$RECORD_DAEMON_SOCK" ]] && return 0
-    sleep "${RECORD_DAEMON_SOCK_TICK_S:-0.25}"
+    sleep "${RECORD_DAEMON_POLL_TICK_S:-0.25}"
   done
   echo "daemon socket never appeared: $RECORD_DAEMON_SOCK" >&2
+  return 1
+}
+
+# signal_record_daemon <signal-name> <grace-ticks> sends the signal and polls for
+# the daemon to go. 0 if it died within the grace, 1 if it outlived it.
+signal_record_daemon() {
+  local sig="$1" ticks="$2" _
+  kill -"$sig" "$RECORD_DAEMON_PID" 2>/dev/null || true
+  for _ in $(seq 1 "$ticks"); do
+    kill -0 "$RECORD_DAEMON_PID" 2>/dev/null || return 0
+    sleep "${RECORD_DAEMON_POLL_TICK_S:-0.5}"
+  done
   return 1
 }
 
@@ -133,31 +149,28 @@ wait_for_record_daemon() {
 # matching what the pre-extraction scripts wrote.
 kill_record_daemon() {
   [[ -n "$RECORD_DAEMON_STAGING" ]] || return 0
-  local shutdown_file="$RECORD_DAEMON_STAGING/daemon.shutdown"
-  local reason="unknown" _
+  local reason="unknown"
   if [[ -n "$RECORD_DAEMON_PID" ]] && kill -0 "$RECORD_DAEMON_PID" 2>/dev/null; then
-    reason="sigint"
-    kill -INT "$RECORD_DAEMON_PID" 2>/dev/null || true
-    for _ in $(seq 1 "${RECORD_DAEMON_INT_TICKS:-12}"); do
-      kill -0 "$RECORD_DAEMON_PID" 2>/dev/null || { echo "$reason" > "$shutdown_file"; return 0; }
-      sleep "${RECORD_DAEMON_KILL_TICK_S:-0.5}"
-    done
-    reason="sigterm"
-    kill -TERM "$RECORD_DAEMON_PID" 2>/dev/null || true
-    for _ in $(seq 1 "${RECORD_DAEMON_TERM_TICKS:-6}"); do
-      kill -0 "$RECORD_DAEMON_PID" 2>/dev/null || { echo "$reason" > "$shutdown_file"; return 0; }
-      sleep "${RECORD_DAEMON_KILL_TICK_S:-0.5}"
-    done
-    reason="sigkill"
-    kill -KILL "$RECORD_DAEMON_PID" 2>/dev/null || true
+    if signal_record_daemon INT "${RECORD_DAEMON_INT_TICKS:-12}"; then
+      reason="sigint"
+    elif signal_record_daemon TERM "${RECORD_DAEMON_TERM_TICKS:-6}"; then
+      reason="sigterm"
+    else
+      reason="sigkill"
+      kill -KILL "$RECORD_DAEMON_PID" 2>/dev/null || true
+    fi
   fi
-  echo "$reason" > "$shutdown_file"
+  echo "$reason" > "$RECORD_DAEMON_STAGING/daemon.shutdown"
 }
 
-# stop_record_daemon is the whole teardown: drain the daemon, then hand the
-# user's agent config back. Armed as the EXIT trap by spawn_record_daemon, and
-# safe to call explicitly before clearing that trap.
+# stop_record_daemon is the whole teardown: drain the daemon, hand the user's
+# agent config back, and disarm the EXIT trap spawn_record_daemon armed. Owning
+# both halves of that trap is the point — a caller that had to remember its own
+# `trap - EXIT` would be back to a contract split across two files, which is the
+# shape of duplication this lib exists to remove. Callers just call it; running
+# as the trap itself, the disarm is a harmless no-op.
 stop_record_daemon() {
   kill_record_daemon
   restore_hook_configs
+  trap - EXIT
 }

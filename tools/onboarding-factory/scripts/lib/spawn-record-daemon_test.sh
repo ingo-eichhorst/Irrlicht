@@ -21,7 +21,8 @@ set -uo pipefail   # NOT -e: assertions capture non-zero return codes
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPTS_DIR="$(cd "$DIR/.." && pwd)"
-# shellcheck source=lib/spawn-record-daemon.sh
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=spawn-record-daemon.sh
 source "$DIR/spawn-record-daemon.sh"
 
 TMP="$(mktemp -d)"
@@ -42,10 +43,9 @@ assert_eq() {
 
 # Spend no real time in the grace periods; the tick COUNTS stay >1 so the
 # escalation still has to poll its way through each rung.
-RECORD_DAEMON_KILL_TICK_S=0
+RECORD_DAEMON_POLL_TICK_S=0
 RECORD_DAEMON_INT_TICKS=3
 RECORD_DAEMON_TERM_TICKS=3
-RECORD_DAEMON_SOCK_TICK_S=0
 RECORD_DAEMON_SOCK_TICKS=3
 
 # fresh_staging gives a case its own staging dir and clears the lib's state.
@@ -153,6 +153,11 @@ snapshot_hook_configs "$STAGING/hook-config-backup"
 printf '{"hooks":{"Stop":"localhost:7838"}}\n' > "$HOME/.claude/settings.json"   # daemon repoints it
 stop_record_daemon
 assert_eq "settings.json restored" '{"hooks":{"Stop":"localhost:7837"}}' "$(cat "$HOME/.claude/settings.json")"
+# The teardown owns BOTH halves of the trap spawn_record_daemon arms, so callers
+# never write `trap` themselves. That also clears this file's own EXIT trap —
+# re-arm it so $TMP is still cleaned up.
+assert_eq "EXIT trap disarmed" "" "$(trap -p EXIT)"
+trap 'rm -rf "$TMP"' EXIT
 HOME="$TMP/nohome"
 
 echo "== an unwritable backup dir refuses to start the daemon =="
@@ -190,17 +195,24 @@ fi
 
 echo "== the lifecycle has exactly one owner (#1214) =="
 # The defect this lib exists to prevent is a SECOND copy of the lifecycle
-# growing back in a caller: `kill -INT` is the shutdown ladder's fingerprint and
-# `snapshot_hook_configs` the hook-config snapshot's. Both now belong to the lib
-# alone; a caller may only ask for the lifecycle by name.
+# growing back in a caller. Each rung of the lifecycle has a fingerprint: a
+# signal sent to a process (the shutdown ladder), `snapshot_hook_configs` (the
+# config snapshot), and an `IRRLICHT_RECORDINGS_DIR=` assignment (the env
+# assembly). All three belong to the lib alone; a caller may only ask for the
+# lifecycle by name. The signal pattern covers the spellings a re-implementation
+# would plausibly use — `kill -INT`, `kill -s INT`, `kill -2` — rather than only
+# the literal text that leaked last time.
+SIGNAL_RE='kill +-(s +)?(INT|TERM|KILL|2|15|9)'
 for script in run-cell.sh run-cell-multi.sh; do
   path="$SCRIPTS_DIR/$script"
   assert_eq "$script delegates to the lib" "yes" \
     "$(grep -q 'spawn_record_daemon' "$path" && echo yes || echo no)"
-  assert_eq "$script has no shutdown ladder of its own" "0" \
-    "$(grep -c 'kill -INT' "$path" | tr -d ' ')"
+  assert_eq "$script signals no process of its own" "0" \
+    "$(grep -cE "$SIGNAL_RE" "$path" | tr -d ' ')"
   assert_eq "$script has no hook-config snapshot of its own" "0" \
     "$(grep -c 'snapshot_hook_configs' "$path" | tr -d ' ')"
+  assert_eq "$script assembles no daemon env of its own" "0" \
+    "$(grep -c 'IRRLICHT_RECORDINGS_DIR=' "$path" | tr -d ' ')"
 done
 
 echo ""

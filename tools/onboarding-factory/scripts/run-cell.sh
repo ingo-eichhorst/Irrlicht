@@ -285,7 +285,6 @@ if [[ "$ATTACH" == "1" ]]; then
   sleep 6
 else
   stop_record_daemon
-  trap - EXIT
 fi
 
 # --- Read driver-resolved transcript + actual UUID ----------------------

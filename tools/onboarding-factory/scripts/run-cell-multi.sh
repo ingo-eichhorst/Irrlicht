@@ -242,8 +242,7 @@ for i in "${!DRV_PIDS[@]}"; do
 done
 
 # --- Drain the daemon ---------------------------------------------------
-stop_record_daemon
-trap - EXIT
+stop_record_daemon   # also disarms the EXIT trap it armed
 DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo unknown)"
 
 # --- Locate the single recording ----------------------------------------
