@@ -109,28 +109,28 @@ func TestProductionEstimatorIsTheShippedSeam(t *testing.T) {
 func TestLastMileMeasuresPostCompletionTail(t *testing.T) {
 	// 60s/round; 120s of markerless work after the final marker = 2.0 rounds.
 	ep := reachedEpisodeWithTail(4, []int64{60, 120})
-	if got := ep.TailSeconds(); got != 120 {
+	if got := ep.TailSecondsAt(DefaultIdleCutoffSeconds); got != 120 {
 		t.Fatalf("tail = %ds, want 120", got)
 	}
-	lm := LastMile([]Episode{ep}, 0.4, idleGapCutoffSeconds)
+	lm := LastMile([]Episode{ep}, 0.4, DefaultIdleCutoffSeconds)
 	if lm.Episodes != 1 || lm.WithTail != 1 {
 		t.Fatalf("lastmile = %d episodes / %d with tail, want 1/1", lm.Episodes, lm.WithTail)
 	}
 	if math.Abs(lm.MedianRounds-2.0) > 0.001 {
 		t.Errorf("median tail = %v rounds, want 2.0", lm.MedianRounds)
 	}
-	// Predicting zero is wrong by the whole tail; the 0.4-round floor
-	// (0.4 × 60s = 24s) leaves 96s.
-	if lm.ErrZeroSeconds != 120 || math.Abs(lm.ErrPaddedSeconds-96) > 0.001 {
-		t.Errorf("err before/after = %v/%v, want 120/96", lm.ErrZeroSeconds, lm.ErrPaddedSeconds)
+	// Predicting zero is wrong by the whole tail, which is what MedianSeconds
+	// already reports; the 0.4-round floor (0.4 × 60s = 24s) leaves 96s.
+	if lm.MedianSeconds != 120 || math.Abs(lm.ErrPaddedSeconds-96) > 0.001 {
+		t.Errorf("err zero/padded = %v/%v, want 120/96", lm.MedianSeconds, lm.ErrPaddedSeconds)
 	}
 }
 
 // An absent user must not be scored as a working agent: the walk stops at the
 // first gap wider than the idle cutoff.
 func TestLastMileStopsAtIdleGap(t *testing.T) {
-	ep := reachedEpisodeWithTail(4, []int64{60, 60 + idleGapCutoffSeconds + 1, 6 * 3600})
-	if got := ep.TailSeconds(); got != 60 {
+	ep := reachedEpisodeWithTail(4, []int64{60, 60 + DefaultIdleCutoffSeconds + 1, 6 * 3600})
+	if got := ep.TailSecondsAt(DefaultIdleCutoffSeconds); got != 60 {
 		t.Fatalf("tail = %ds, want 60 (walk stops before the idle gap)", got)
 	}
 }
@@ -140,7 +140,7 @@ func TestLastMileSkipsUnreachedEpisodes(t *testing.T) {
 	ep := reachedEpisodeWithTail(4, []int64{60})
 	ep.Turns = ep.Turns[:2] // 0/4 and 1/4 only
 	finalizeEpisode(&ep, []int64{1000, 1060}, math.MaxInt64)
-	if lm := LastMile([]Episode{ep}, 0.4, idleGapCutoffSeconds); lm.Episodes != 0 {
+	if lm := LastMile([]Episode{ep}, 0.4, DefaultIdleCutoffSeconds); lm.Episodes != 0 {
 		t.Errorf("unreached episode counted: %d", lm.Episodes)
 	}
 }

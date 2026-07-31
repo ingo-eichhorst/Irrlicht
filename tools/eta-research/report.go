@@ -27,13 +27,20 @@ type ReportInput struct {
 	// the `production` row scores, so the report states which constants
 	// produced its own numbers rather than leaving them to be looked up in Go
 	// source.
-	LastMileSweep     []LastMileStats
-	ShippedPrior      float64
-	ShippedWeight     float64
-	CandidateWrapUp   float64 // the wrap-up floor the last-mile table evaluates and rejects
-	ShippedPriorDrift float64 // corpus prior − shipped prior; large ⇒ recompute the constant
+	LastMileSweep []LastMileStats
+	ShippedPrior  float64
+	ShippedWeight float64
 
 	Recommendation string
+}
+
+// lastMileWrapUp is the padding the sweep was scored against — carried on the
+// rows themselves, so the table header can't disagree with the numbers under it.
+func lastMileWrapUp(in ReportInput) float64 {
+	if len(in.LastMileSweep) == 0 {
+		return 0
+	}
+	return in.LastMileSweep[0].WrapUpRounds
 }
 
 // RenderReport produces the committed Markdown comparison. Pure: same input →
@@ -53,7 +60,7 @@ func RenderReport(in ReportInput) string {
 	fmt.Fprintf(&b, "- Corpus per-round prior (median seconds/round): **%s**\n", fmtDur(in.PriorSeconds))
 	fmt.Fprintf(&b, "- Shipped `session.TaskRoundPriorSeconds`: **%s** (drift vs corpus: **%s** — "+
 		"recompute the constant when this grows)\n\n",
-		fmtDur(in.ShippedPrior), fmtSigned(in.ShippedPriorDrift))
+		fmtDur(in.ShippedPrior), fmtSigned(in.PriorSeconds-in.ShippedPrior))
 
 	b.WriteString("## Approaches\n\n")
 	b.WriteString("- **baseline** — the pre-#753 model: pure observed round-rate, no estimate\n")
@@ -133,26 +140,29 @@ func renderLastMile(in ReportInput) string {
 	b.WriteString("How much work \"follows the last marker\" depends entirely on how long a pause\n")
 	b.WriteString("still counts as the agent working, so that cutoff is swept rather than\n")
 	b.WriteString("assumed. `has tail` is the fraction of completed episodes with ANY activity\n")
-	b.WriteString("after the final marker. The last two columns compare the two candidate\n")
-	b.WriteString("predictions at that moment: keeping the hard zero, or padding the forecast\n")
-	b.WriteString("with a wrap-up allowance scaled to the episode's own round rate.\n\n")
+	b.WriteString("after the final marker.\n\n")
+	b.WriteString("Predicting \"done now\" is wrong by exactly the tail, so the `median` column\n")
+	b.WriteString("**is** the shipped model's median error here — it is not a separate\n")
+	b.WriteString("measurement. The last column is what a wrap-up allowance scaled to the\n")
+	b.WriteString("episode's own round rate would be wrong by instead; lower would be better.\n\n")
 
-	fmt.Fprintf(&b, "| idle cutoff | episodes | has tail | median | p90 | max | median rounds | err @0 | err @%.2f rounds |\n",
-		in.CandidateWrapUp)
+	fmt.Fprintf(&b, "| idle cutoff | episodes | has tail | median (= err @0) | p90 | max | rounds: median | rounds: p90 | err @%.2f rounds |\n",
+		lastMileWrapUp(in))
 	b.WriteString("|---|--:|--:|--:|--:|--:|--:|--:|--:|\n")
 	for _, lm := range in.LastMileSweep {
 		pct := 0.0
 		if lm.Episodes > 0 {
 			pct = float64(lm.WithTail) / float64(lm.Episodes) * 100
 		}
-		fmt.Fprintf(&b, "| %s | %d | %.0f%% | %s | %s | %s | %.2f | %s | %s |\n",
+		fmt.Fprintf(&b, "| %s | %d | %.0f%% | %s | %s | %s | %.2f | %.2f | %s |\n",
 			fmtDur(float64(lm.CutoffSeconds)), lm.Episodes, pct,
 			fmtDur(lm.MedianSeconds), fmtDur(lm.P90Seconds), fmtDur(lm.MaxSeconds),
-			lm.MedianRounds, fmtDur(lm.ErrZeroSeconds), fmtDur(lm.ErrPaddedSeconds))
+			lm.MedianRounds, lm.P90Rounds, fmtDur(lm.ErrPaddedSeconds))
 	}
 	b.WriteString("\n")
-	b.WriteString("**The padding was rejected.** `err @0` wins at every cutoff, because the tail\n")
-	b.WriteString("is bimodal rather than centred: most completed episodes stop dead, and the\n")
+	b.WriteString("**The padding was rejected.** Predicting zero wins at every cutoff, because\n")
+	b.WriteString("the tail is bimodal rather than centred — compare the median and p90 rounds\n")
+	b.WriteString("columns: most completed episodes stop dead, and the\n")
 	b.WriteString("minority that keep going run far longer than any constant would cover. Zero\n")
 	b.WriteString("is the median-optimal prediction, so a blanket floor buys the minority a\n")
 	b.WriteString("little accuracy by making the majority worse. Note also how much of the\n")

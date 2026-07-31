@@ -66,12 +66,13 @@ type Episode struct {
 	TailActivity []int64
 }
 
-// idleGapCutoffSeconds is the DEFAULT bound on the last-mile walk: transcript
-// turns during active work land seconds apart, so a wider gap means the agent
-// stopped and the clock is now measuring a human's absence. Mirrors
+// DefaultIdleCutoffSeconds is the reference bound on the last-mile walk:
+// transcript turns during active work land seconds apart, so a wider gap means
+// the agent stopped and the clock is now measuring a human's absence. Mirrors
 // session.TaskEstimateGraceAge, the same "this signal has gone stale" boundary
-// the UIs use to dim a chip.
-const idleGapCutoffSeconds = int64(session.TaskEstimateGraceAge / time.Second)
+// the UIs use to dim a chip — exported so the cutoff sweep can anchor on it
+// rather than restating 180 as a literal.
+const DefaultIdleCutoffSeconds = int64(session.TaskEstimateGraceAge / time.Second)
 
 // FirstUnix is the episode's first marker timestamp (the task's start).
 func (e Episode) FirstUnix() int64 {
@@ -96,12 +97,11 @@ func (e Episode) TailSecondsAt(cutoff int64) int64 {
 	return max(end-e.ActualEndUnix, 0)
 }
 
-// TailSeconds is TailSecondsAt at the default idle cutoff.
-func (e Episode) TailSeconds() int64 { return e.TailSecondsAt(idleGapCutoffSeconds) }
-
 // RoundRateSeconds is the episode's own average seconds-per-round over its
-// marker span, the unit TailSeconds is expressed in when deriving
-// session.TaskWrapUpRounds. 0 when the episode never advanced a round.
+// marker span: the unit the last-mile tail is expressed in, and the per-episode
+// value MedianPerRound takes the corpus prior from — one definition, so the
+// report's prior and its rounds columns are provably the same quantity.
+// 0 when the episode never advanced a round.
 func (e Episode) RoundRateSeconds() float64 {
 	if len(e.Turns) < 2 {
 		return 0

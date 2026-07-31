@@ -222,7 +222,7 @@ func BlendRoundRate(observed float64, observations int, prior, weight float64) f
 //     lot, so more information can no longer make the forecast dramatically
 //     worse than the round before it.
 //   - remaining clamps at 0, so completed==total projects the marker itself.
-//     That is the median-optimal prediction (see the TaskWrapUpRounds comment
+//     That is the median-optimal prediction (see the "Deliberately absent" note
 //     above for why padding it lost); the UIs relabel it rather than pad it.
 //
 // This function is the single seam to swap when the estimation approach
@@ -237,16 +237,32 @@ func ForecastTaskCompletion(est, base *TaskEstimate, elapsedSeconds int64, now t
 	observed, observations := ObservedRoundRate(est, base, elapsedSeconds, now)
 	var perRound float64
 	switch {
-	case observations > 0 && observed > 0:
+	case observations > 0:
 		perRound = BlendRoundRate(observed, observations, TaskRoundPriorSeconds, TaskRoundPriorWeight)
 	case est.CompletedRounds == 0:
 		perRound = TaskRoundPriorSeconds
 	default:
 		return nil
 	}
+	return ProjectCompletion(est, perRound, now)
+}
 
+// ProjectCompletion turns a per-round rate into a completion time: the marker
+// anchor plus the remaining rounds at that rate. Remaining clamps at 0, so an
+// agent reporting more rounds than it planned (a re-scoped task) projects the
+// marker rather than a time in the past.
+//
+// Split out of ForecastTaskCompletion so tools/eta-research's candidate
+// estimators project exactly the way production does. They previously kept
+// their own copy of this arithmetic, which meant a change to the anchoring or
+// clamping rule would move the shipped model while leaving every research
+// baseline on the old one — the drift #977 removed from the rate half of the
+// calculation, and this closes for the projection half.
+func ProjectCompletion(est *TaskEstimate, perRound float64, now time.Time) *time.Time {
+	if est == nil || perRound <= 0 {
+		return nil
+	}
 	remaining := max(est.TotalRounds-est.CompletedRounds, 0)
-
 	anchor := now
 	if est.UpdatedAt > 0 {
 		anchor = time.Unix(est.UpdatedAt, 0)

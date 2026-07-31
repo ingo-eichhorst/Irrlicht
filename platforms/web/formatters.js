@@ -221,8 +221,16 @@ export function taskEtaPresentation(metrics, state, nowSec) {
   if (est.completed_rounds == null || est.completed_rounds <= 0) return zeroRoundsEtaPresentation(est, eta, nowSec, sourceLabel);
   // All rounds reported done but still working: a countdown would claim a
   // precision the data doesn't support (#977). Checked before the !eta guard
-  // so it also covers a subagent aggregate with no projection.
-  if (est.total_rounds > 0 && est.completed_rounds >= est.total_rounds) {
+  // so it also covers an aggregate with no projection.
+  //
+  // The eta test is not redundant with the round counts. A subagent aggregate
+  // SUMS rounds across children and takes the LATEST child eta, so one child
+  // overshooting its own plan (5/2) can push the sum to "done" while a sibling
+  // still has real work and a real future eta. Deferring to the daemon's
+  // projection keeps that countdown instead of discarding it: for a genuine
+  // completion the eta is the marker itself, so `eta <= updated_at` holds.
+  const allRoundsDone = est.total_rounds > 0 && est.completed_rounds >= est.total_rounds;
+  if (allRoundsDone && (!eta || (est.updated_at > 0 && eta <= est.updated_at))) {
     return wrappingUpEtaPresentation(est, nowSec, sourceLabel);
   }
   if (!eta) return roundsOnlyEtaPresentation(est, nowSec, sourceLabel);

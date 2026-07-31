@@ -17,56 +17,38 @@ type Estimator struct {
 	Predict func(ep Episode, i int) *time.Time
 }
 
-// observedRoundRate is the PRODUCTION rate measurement, called directly rather
-// than reimplemented (#977): the harness used to keep a verbatim copy of the
-// forecaster's switch, which meant every change to the shipped model had to be
+// Every estimator below measures the rate with session.ObservedRoundRate and
+// projects with session.ProjectCompletion — production's own functions, called
+// directly rather than reimplemented (#977). The harness used to keep verbatim
+// copies of both, which meant each change to the shipped model had to be
 // mirrored here by hand or the research numbers would quietly describe code
-// nobody runs.
-func observedRoundRate(est, base *session.TaskEstimate, elapsed int64, now time.Time) (float64, int) {
-	return session.ObservedRoundRate(est, base, elapsed, now)
-}
+// nobody runs. What distinguishes the candidates is only how they turn an
+// observed rate into the rate they project with.
 
-// project anchors the ETA at the marker (UpdatedAt) so it is stable between
-// markers, mirroring production. nil when there is nothing to project.
-func project(est *session.TaskEstimate, perRound float64, now time.Time) *time.Time {
-	if est == nil || perRound <= 0 {
-		return nil
-	}
-	remaining := max(est.TotalRounds-est.CompletedRounds, 0)
-	anchor := now
-	if est.UpdatedAt > 0 {
-		anchor = time.Unix(est.UpdatedAt, 0)
-	}
-	eta := anchor.Add(time.Duration(perRound * float64(remaining) * float64(time.Second)))
-	return &eta
-}
-
-// Baseline is the current production model (pre-#753): pure observed round-rate,
-// nil until at least one round has completed. The control.
+// Baseline is the pre-#753 production model: pure observed round-rate, nil until
+// at least one round has completed. The control.
 func Baseline() Estimator {
 	return Estimator{Name: "baseline", Predict: func(ep Episode, i int) *time.Time {
 		t := ep.Turns[i]
-		obs, n := observedRoundRate(t.Est, t.Base, t.ElapsedSeconds, unix(t.VirtualUnix))
-		if n <= 0 || obs <= 0 {
+		obs, n := session.ObservedRoundRate(t.Est, t.Base, t.ElapsedSeconds, unix(t.VirtualUnix))
+		if n <= 0 {
 			return nil
 		}
-		return project(t.Est, obs, unix(t.VirtualUnix))
+		return session.ProjectCompletion(t.Est, obs, unix(t.VirtualUnix))
 	}}
 }
 
 // PriorBootstrap shows total_rounds × prior at zero rounds (the early-surfacing
 // lever), then switches to the pure observed rate the moment a round completes —
 // so it is byte-identical to Baseline for every measured turn and differs ONLY
-// by surfacing a number sooner.
+// by surfacing a number sooner. That is BlendRoundRate at zero prior weight:
+// all prior with no observations, all measurement with any.
 func PriorBootstrap(prior float64) Estimator {
 	return Estimator{Name: "prior-bootstrap", Predict: func(ep Episode, i int) *time.Time {
 		t := ep.Turns[i]
-		obs, n := observedRoundRate(t.Est, t.Base, t.ElapsedSeconds, unix(t.VirtualUnix))
-		per := obs
-		if n <= 0 || obs <= 0 {
-			per = prior
-		}
-		return project(t.Est, per, unix(t.VirtualUnix))
+		obs, n := session.ObservedRoundRate(t.Est, t.Base, t.ElapsedSeconds, unix(t.VirtualUnix))
+		per := session.BlendRoundRate(obs, n, prior, 0)
+		return session.ProjectCompletion(t.Est, per, unix(t.VirtualUnix))
 	}}
 }
 
@@ -78,9 +60,9 @@ func PriorBootstrap(prior float64) Estimator {
 func PriorBlend(prior, w float64) Estimator {
 	return Estimator{Name: "prior-blend", Predict: func(ep Episode, i int) *time.Time {
 		t := ep.Turns[i]
-		obs, n := observedRoundRate(t.Est, t.Base, t.ElapsedSeconds, unix(t.VirtualUnix))
+		obs, n := session.ObservedRoundRate(t.Est, t.Base, t.ElapsedSeconds, unix(t.VirtualUnix))
 		per := session.BlendRoundRate(obs, n, prior, w)
-		return project(t.Est, per, unix(t.VirtualUnix))
+		return session.ProjectCompletion(t.Est, per, unix(t.VirtualUnix))
 	}}
 }
 
@@ -116,7 +98,7 @@ func EWMA(prior, alpha float64) Estimator {
 				rate = alpha*inst + (1-alpha)*rate
 			}
 		}
-		return project(t.Est, rate, unix(t.VirtualUnix))
+		return session.ProjectCompletion(t.Est, rate, unix(t.VirtualUnix))
 	}}
 }
 
@@ -130,11 +112,8 @@ func EWMA(prior, alpha float64) Estimator {
 func MedianPerRound(eps []Episode) float64 {
 	var durs []float64
 	for _, ep := range eps {
-		first, last := ep.Turns[0], ep.Turns[len(ep.Turns)-1]
-		dr := last.Est.CompletedRounds - first.Est.CompletedRounds
-		dt := last.VirtualUnix - first.VirtualUnix
-		if dr > 0 && dt > 0 {
-			durs = append(durs, float64(dt)/float64(dr))
+		if r := ep.RoundRateSeconds(); r > 0 {
+			durs = append(durs, r)
 		}
 	}
 	m, _ := stats.Median(durs)

@@ -555,6 +555,9 @@ describe('taskEtaPresentation', () => {
     // render as "<1m left". The measured post-completion tail is bimodal —
     // usually seconds, occasionally another hour — so a sub-minute countdown
     // claims a precision the data does not support.
+    // The daemon projects the marker itself at completed==total, so the eta
+    // equals updated_at — that is what distinguishes a genuine completion from
+    // a subagent aggregate that merely sums to one (see the next test).
     const m = metricsFor({ est: { completed_rounds: 10, updated_at: now }, metrics: { task_completion_eta: now } })
     const info = taskEtaPresentation(m, 'working', now)
     expect(info).not.toBeNull()
@@ -563,15 +566,31 @@ describe('taskEtaPresentation', () => {
     expect(info.title).toContain('10/10 rounds, all reported done')
   })
 
+  test('a subagent aggregate summing to "done" with a real future eta keeps its countdown (#977)', () => {
+    // aggregateSubagentEstimate SUMS rounds across working children and takes
+    // the LATEST child eta — it never re-forecasts the sum. So one child
+    // overshooting its own plan (5/2) can push the sum to completed >= total
+    // while a sibling still has genuine work outstanding. Deferring to the
+    // daemon's projection keeps that sibling's countdown rather than
+    // discarding it behind a "wrapping up" label.
+    const m = metricsFor({
+      est: { source: 'subagents', completed_rounds: 5, total_rounds: 5, updated_at: now },
+      metrics: { task_completion_eta: now + 600 },
+    })
+    const info = taskEtaPresentation(m, 'working', now)
+    expect(info.text).not.toBe('wrapping up')
+    expect(info.text).toContain('left')
+  })
+
   test('wrapping up covers overshoot, a missing projection, and still dims when stale (#977)', () => {
     // An agent that re-scopes past its own plan (11/10) is still wrapping up,
     // and the branch sits before the eta guard so a subagent aggregate with no
     // projection reaches it too.
-    const over = metricsFor({ est: { completed_rounds: 11, updated_at: now } })
+    const over = metricsFor({ est: { completed_rounds: 11, updated_at: now }, metrics: { task_completion_eta: now } })
     expect(taskEtaPresentation(over, 'working', now).text).toBe('wrapping up')
     const noEta = metricsFor({ est: { completed_rounds: 10, updated_at: now }, metrics: { task_completion_eta: null } })
     expect(taskEtaPresentation(noEta, 'working', now).text).toBe('wrapping up')
-    const stale = metricsFor({ est: { completed_rounds: 10, updated_at: now - 200 } })
+    const stale = metricsFor({ est: { completed_rounds: 10, updated_at: now - 200 }, metrics: { task_completion_eta: now - 200 } })
     expect(taskEtaPresentation(stale, 'working', now).stale).toBe(true)
   })
 

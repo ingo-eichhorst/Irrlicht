@@ -88,25 +88,23 @@ func main() {
 	// longer pauses. If the tail only appears at the generous end, it is a
 	// human's absence being measured, not an agent's work.
 	var lastMileSweep []eta.LastMileStats
-	for _, cutoff := range []int64{180, 600, 3600} {
+	for _, cutoff := range []int64{eta.DefaultIdleCutoffSeconds, 600, 3600} {
 		lastMileSweep = append(lastMileSweep, eta.LastMile(eps, eta.CandidateWrapUpRounds, cutoff))
 	}
 
 	in := eta.ReportInput{
-		Transcripts:       len(transcripts),
-		Episodes:          len(eps),
-		CleanEpisodes:     clean,
-		PriorSeconds:      prior,
-		CorpusNote:        corpusNote,
-		Scores:            scores,
-		BlendSweep:        blendSweep,
-		EWMASweep:         ewmaSweep,
-		LastMileSweep:     lastMileSweep,
-		ShippedPrior:      session.TaskRoundPriorSeconds,
-		ShippedWeight:     session.TaskRoundPriorWeight,
-		CandidateWrapUp:   eta.CandidateWrapUpRounds,
-		ShippedPriorDrift: prior - session.TaskRoundPriorSeconds,
-		Recommendation:    recommend(scores, blendSweep, lastMileSweep),
+		Transcripts:    len(transcripts),
+		Episodes:       len(eps),
+		CleanEpisodes:  clean,
+		PriorSeconds:   prior,
+		CorpusNote:     corpusNote,
+		Scores:         scores,
+		BlendSweep:     blendSweep,
+		EWMASweep:      ewmaSweep,
+		LastMileSweep:  lastMileSweep,
+		ShippedPrior:   session.TaskRoundPriorSeconds,
+		ShippedWeight:  session.TaskRoundPriorWeight,
+		Recommendation: recommend(scores, blendSweep, lastMileSweep),
 	}
 	if err := os.WriteFile(*out, []byte(eta.RenderReport(in)), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "write report:", err)
@@ -155,10 +153,10 @@ func recommend(scores []eta.Score, blendSweep []eta.SweepPoint, lastMile []eta.L
 			"at %.0f%% episode coverage — the zero-round path is the bare prior exactly as before.\n"+
 			"- **Steadier:** jitter %s → %s between consecutive turns.\n"+
 			"- **Rejected — the wrap-up floor (#977 failure mode #1).** Only %.0f%% of completed "+
-			"episodes kept working past their final marker (median %s), and predicting zero there "+
-			"is wrong by %s at the median versus %s for a %.2f-round pad. See the last-mile "+
-			"section: the tail is bimodal, so no constant fits it. Fixed in the UIs instead, by "+
-			"labelling that moment \"wrapping up\" rather than `<1m left`.\n"+
+			"episodes kept working past their final marker, so predicting zero there is wrong by "+
+			"%s at the median versus %s for a %.2f-round pad. See the last-mile section: the tail "+
+			"is bimodal, so no constant fits it. Fixed in the UIs instead, by labelling that "+
+			"moment \"wrapping up\" rather than `<1m left`.\n"+
 			"- **Watch the bias.** Blending trades a worse mean signed error (%s → %s) for the "+
 			"better MAE/median above; the corpus is dominated by a few very long episodes, so the "+
 			"median columns are the more robust read.\n"+
@@ -172,8 +170,8 @@ func recommend(scores []eta.Score, blendSweep []eta.SweepPoint, lastMile []eta.L
 		boot.MedianRelErr*100, prod.MedianRelErr*100,
 		fmtSecs(prod.MeanSecsToFirst), prod.FirstCoverage*100,
 		fmtSecs(boot.MeanJitter), fmtSecs(prod.MeanJitter),
-		tailPct, fmtSecs(lm.MedianSeconds),
-		fmtSecs(lm.ErrZeroSeconds), fmtSecs(lm.ErrPaddedSeconds), eta.CandidateWrapUpRounds,
+		tailPct,
+		fmtSecs(lm.MedianSeconds), fmtSecs(lm.ErrPaddedSeconds), lm.WrapUpRounds,
 		fmtSecs(boot.BiasSeconds), fmtSecs(prod.BiasSeconds),
 		fmtSecs(bestBlend.MAESeconds), fmtSecs(bestBlend.MedianAbsSeconds),
 	)
