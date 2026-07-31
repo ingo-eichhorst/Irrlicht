@@ -11,6 +11,10 @@
 ARG GO_VERSION=1.25
 ARG NODE_VERSION=22
 ARG VERSION=docker
+# Pinned like GO_VERSION/NODE_VERSION above: an unpinned `npm install -g` makes
+# the image non-reproducible and silently adopts whatever codex published since
+# the last build. Override with --build-arg CODEX_VERSION=… to test a newer CLI.
+ARG CODEX_VERSION=0.146.0
 
 # ---- builder: compile a static Linux irrlichd ----
 FROM golang:${GO_VERSION}-bookworm AS build
@@ -23,6 +27,7 @@ RUN go build -trimpath -ldflags "-X main.Version=${VERSION}" \
 
 # ---- runtime: Node (Codex CLI) + the daemon, run as a non-root user ----
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+ARG CODEX_VERSION
 # git: the scratch repo codex edits. tini: PID-1 reaper/signals. procps: debug.
 # tmux + jq: the auto-driver drives codex's TUI via tmux and watches the rollout
 # for `task_complete` with jq. curl: REQUIRED — the daemon's auto-installed hook
@@ -36,7 +41,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates git tini procps curl tmux jq \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @openai/codex \
+    && npm install -g --ignore-scripts "@openai/codex@${CODEX_VERSION}" \
     && useradd --create-home --shell /bin/bash agent
 COPY --from=build /out/irrlichd /usr/local/bin/irrlichd
 COPY examples/coding-factory/entrypoint.sh /usr/local/bin/entrypoint.sh

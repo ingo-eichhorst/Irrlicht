@@ -24,7 +24,11 @@ jobs:
           cache: false
 
       - name: Install ARS CLI
-        run: go install github.com/ingo-eichhorst/agent-readyness/cmd/ars@v0.0.9
+        # Pinned to the commit v0.0.9 points at, not the tag: a tag can be moved
+        # to different code after the fact, and this job holds contents: write.
+        # Go resolves the hash back to v0.0.9 and still verifies it against the
+        # checksum database.
+        run: go install github.com/ingo-eichhorst/agent-readyness/cmd/ars@e0ce48b9644df71b8f41b11c8c5655e3efa59660
 
       - name: Run ARS scan
         run: |

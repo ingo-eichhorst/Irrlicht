@@ -41,6 +41,14 @@ ok()   { printf '%s✓%s\n' "$GREEN" "$RESET"; }
 fail() { printf '%s✗%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
 warn() { printf '%s!%s %s\n' "$YELLOW" "$RESET" "$*" >&2; }
 
+# fetch downloads over HTTPS, following redirects with the protocol pinned.
+# -L is required — GitHub release assets redirect to a CDN — but on its own it
+# lets a redirect target choose the protocol, so a tampered or hijacked
+# Location header could downgrade a release download to plaintext http and
+# hand us a substituted binary. --proto pins the first request and
+# --proto-redir every hop after it.
+fetch() { curl -fsSL --proto '=https' --proto-redir '=https' "$@"; }
+
 usage() {
     cat <<'EOF'
 Irrlicht installer
@@ -206,7 +214,7 @@ fi
 if [ -z "$VERSION" ]; then
     step "Detecting latest version"
     # Follow the /releases/latest redirect to avoid GitHub API rate limits
-    VERSION=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+    VERSION=$(fetch -o /dev/null -w '%{url_effective}' \
         "https://github.com/$REPO/releases/latest" \
         | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$')
     [ -n "$VERSION" ] || fail "Could not detect latest version"
@@ -231,7 +239,7 @@ BASE="https://github.com/$REPO/releases/download/v${VERSION}"
 # ─── Download checksums ────────────────────────────────────────────────────
 
 step "Downloading checksums"
-curl -fsSL -o "$TMPDIR/checksums.sha256" "$BASE/checksums.sha256" \
+fetch -o "$TMPDIR/checksums.sha256" "$BASE/checksums.sha256" \
     || fail "Could not download $BASE/checksums.sha256"
 ok
 
@@ -252,7 +260,7 @@ if [ "$DAEMON_ONLY" -eq 1 ]; then
     UI_DIR="$HOME/.local/share/irrlicht/web"
 
     step "Downloading $ASSET"
-    curl -fsSL -o "$TMPDIR/$ASSET" "$BASE/$ASSET" || fail "Download failed"
+    fetch -o "$TMPDIR/$ASSET" "$BASE/$ASSET" || fail "Download failed"
     ok
 
     step "Verifying checksum"
@@ -317,7 +325,7 @@ fi
 ASSET="Irrlicht-${VERSION}.zip"
 
 step "Downloading $ASSET"
-curl -fsSL -o "$TMPDIR/$ASSET" "$BASE/$ASSET" \
+fetch -o "$TMPDIR/$ASSET" "$BASE/$ASSET" \
     || fail "Download failed — does this version have a .zip asset? (see --help)"
 ok
 

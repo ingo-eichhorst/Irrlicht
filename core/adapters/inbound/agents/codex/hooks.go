@@ -27,6 +27,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
@@ -129,7 +131,20 @@ func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logge
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	sessionID := sessionIDFromPath(payload.TranscriptPath)
+	// transcript_path arrives in an HTTP body, so it is untrusted: any local
+	// process able to reach the hook port could otherwise steer the daemon into
+	// opening a file of its choosing. Confine it to the sessions tree before any
+	// read, and carry the confined path downstream so the target reads it too.
+	transcriptPath, ok := confineToSessionsDir(payload.TranscriptPath)
+	if !ok {
+		// Not a rollout inside ~/.codex/sessions — drop it. The "transcripts"
+		// consent covers exactly that tree and nothing outside it.
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	payload.TranscriptPath = transcriptPath
+
+	sessionID := sessionIDFromPath(transcriptPath)
 	if sessionID == "" {
 		// Header not yet written or transcript unreadable — drop rather than
 		// guess an id. The transcript tailer covers the state once it lands.
@@ -139,6 +154,35 @@ func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logge
 
 	dispatchHookEvent(target, log, sessionID, payload)
 	w.WriteHeader(http.StatusOK)
+}
+
+// confineToSessionsDir validates a hook-supplied transcript path and returns
+// the file the daemon may open, rebuilt from the trusted sessions root so no
+// caller-controlled string reaches os.Open (SonarQube gosecurity:S2083).
+//
+// Two conditions bound it: the file must be a .jsonl rollout, and it must
+// resolve inside $CODEX_HOME/sessions — the tree agent.go's "transcripts"
+// permission scopes the user's consent to. Symlinks are resolved before the
+// containment check, so a link planted inside the tree cannot point out of it;
+// that resolution also means a path that does not exist is rejected here rather
+// than failing later at the open, which the caller already treats as a drop.
+func confineToSessionsDir(raw string) (string, bool) {
+	if filepath.Ext(raw) != ".jsonl" {
+		return "", false
+	}
+	root, err := codexSessionsDir()
+	if err != nil {
+		return "", false
+	}
+	resolved, err := filepath.EvalSymlinks(raw)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.Join(root, rel), true
 }
 
 // dispatchHookEvent routes a decoded, consent-passed, session-resolved payload

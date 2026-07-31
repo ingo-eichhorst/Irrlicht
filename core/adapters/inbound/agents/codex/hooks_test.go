@@ -104,9 +104,18 @@ func (mockLogger) Close() error                                         { return
 
 // writeSessionTranscript creates a Codex rollout file whose session_meta header
 // carries id, so sessionIDFromPath (and thus the handler) resolves to id.
+//
+// The fixture lives under a $CODEX_HOME/sessions tree because the handler only
+// opens transcripts confined to that directory — a bare t.TempDir() path would
+// be dropped as out-of-tree before the id is ever resolved.
 func writeSessionTranscript(t *testing.T, id string) string {
 	t.Helper()
-	dir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv(codexHomeEnvVar, home)
+	dir := filepath.Join(home, "sessions", "2026", "07", "18")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
 	path := filepath.Join(dir, "rollout-2026-07-18T00-00-00-abcdefabcdef.jsonl")
 	meta := `{"type":"session_meta","payload":{"id":"` + id + `"}}` + "\n"
 	if err := os.WriteFile(path, []byte(meta), 0o600); err != nil {
@@ -284,6 +293,44 @@ func TestHookHandler_UnresolvableTranscriptDropped(t *testing.T) {
 	}
 	if target.totalCalls() != 0 {
 		t.Error("target should not be called when the session id can't be resolved")
+	}
+}
+
+func TestHookHandler_OutOfTreeTranscriptDropped(t *testing.T) {
+	// transcript_path is attacker-controllable — it comes straight out of an
+	// HTTP body — so a readable file outside $CODEX_HOME/sessions must never be
+	// opened, however well-formed its session_meta header is. Both a plain
+	// out-of-tree path and one traversing back out of the tree are dropped.
+	outside := t.TempDir()
+	path := filepath.Join(outside, "rollout-2026-07-18T00-00-00-abcdefabcdef.jsonl")
+	meta := `{"type":"session_meta","payload":{"id":"sess-escape"}}` + "\n"
+	if err := os.WriteFile(path, []byte(meta), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	home := t.TempDir()
+	t.Setenv(codexHomeEnvVar, home)
+	if err := os.MkdirAll(filepath.Join(home, "sessions"), 0o700); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
+
+	for name, transcript := range map[string]string{
+		"absolute":  path,
+		"traversal": filepath.Join(home, "sessions", "..", "..", filepath.Base(outside), filepath.Base(path)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			target := &mockTarget{}
+			handler := NewHookHandler(target, nil, mockLogger{})
+			rec := postHook(t, handler, codexHookPayload{
+				TranscriptPath: transcript,
+				HookEventName:  HookPermissionRequest,
+			})
+			if rec.Code != http.StatusOK {
+				t.Errorf("status: got %d, want 200 (out-of-tree transcript is dropped, not an error)", rec.Code)
+			}
+			if target.totalCalls() != 0 {
+				t.Error("handler read a transcript outside the declared sessions tree")
+			}
+		})
 	}
 }
 
