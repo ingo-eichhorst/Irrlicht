@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1333,5 +1334,47 @@ func TestParser_TaskEstimate_UserMessageIgnored(t *testing.T) {
 	})
 	if ev.TaskEstimate != nil {
 		t.Fatalf("user-pasted marker must not feed the estimate, got %+v", ev.TaskEstimate)
+	}
+}
+
+// TestParser_PendingWaitingCue_BeyondDisplayTail pins issue #1159 (codex's
+// mirror of claudecode's #1150) at the parser level: a question sitting BEFORE
+// the trailing 200 runes is invisible to the display-truncated AssistantText
+// the prose heuristics normally scan, so the parser computes the verdict from a
+// larger bounded window of the FULL text and carries it as PendingWaitingCue.
+//
+// It also guards the shared rule extracted in #1179: this parser and
+// claudecode's both call session.ProseIndicatesWaiting(tailer.WaitingScanWindow(full)),
+// and this is the assertion that fails if that composition is dropped.
+func TestParser_PendingWaitingCue_BeyondDisplayTail(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"question before the display tail", "Which option do you want? " + strings.Repeat("x", 250), true},
+		{"plain statement", "The refactor is complete. " + strings.Repeat("x", 250), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &Parser{}
+			ev := p.ParseLine(map[string]interface{}{
+				"type":      "message",
+				"role":      "assistant",
+				"timestamp": ts(1),
+				"content": []interface{}{
+					map[string]interface{}{"type": "output_text", "text": tc.text},
+				},
+			})
+			if ev == nil {
+				t.Fatal("expected non-nil event")
+			}
+			if ev.PendingWaitingCue != tc.want {
+				t.Errorf("PendingWaitingCue = %v, want %v", ev.PendingWaitingCue, tc.want)
+			}
+			if strings.Contains(ev.AssistantText, "?") {
+				t.Fatalf("test is not exercising the beyond-tail path: the question survived truncation into AssistantText %q", ev.AssistantText)
+			}
+		})
 	}
 }

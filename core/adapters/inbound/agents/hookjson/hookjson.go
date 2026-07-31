@@ -84,15 +84,14 @@ func EnsureInstalled(cfg Config) (bool, error) {
 
 	modified := false
 	for _, event := range cfg.Events {
-		expected := cfg.MatcherFor(event)
 		if upgradeStaleEntries(hooksMap, event, cfg) {
 			modified = true
 		}
-		if upgradeStaleMatchers(hooksMap, event, expected, cfg.Sentinel) {
+		if upgradeStaleMatchers(hooksMap, event, cfg) {
 			modified = true
 		}
 		if !HasOurHook(hooksMap, event, cfg.Sentinel) {
-			addOurHook(hooksMap, event, expected, cfg.Entry())
+			addOurHook(hooksMap, event, cfg.MatcherFor(event), cfg.Entry())
 			modified = true
 		}
 	}
@@ -120,7 +119,7 @@ func Uninstall(cfg Config) (bool, error) {
 
 	modified := false
 	for _, event := range cfg.Events {
-		if removeOurHook(hooksMap, event, cfg.Sentinel) {
+		if removeOurHook(hooksMap, event, cfg) {
 			modified = true
 		}
 	}
@@ -245,18 +244,19 @@ func upgradeGroupEntries(g interface{}, cfg Config) bool {
 }
 
 // upgradeStaleMatchers reconciles the matcher of every sentinel-bearing group of
-// the event with expected. Used to migrate existing installs when an event's
-// matcher is widened or changed; for an expected of "" it strips the key
-// entirely, since a Stop hook must carry no matcher.
-func upgradeStaleMatchers(hooksMap map[string]interface{}, event, expected, sentinel string) bool {
+// the event with the one cfg now expects. Used to migrate existing installs
+// when an event's matcher is widened or changed; for an expected of "" it
+// strips the key entirely, since a Stop hook must carry no matcher.
+func upgradeStaleMatchers(hooksMap map[string]interface{}, event string, cfg Config) bool {
 	arr, ok := eventGroups(hooksMap, event)
 	if !ok {
 		return false
 	}
+	expected := cfg.MatcherFor(event)
 	upgraded := false
 	for _, g := range arr {
 		group, ok := g.(map[string]interface{})
-		if !ok || !containsSentinel(g, sentinel) {
+		if !ok || !containsSentinel(g, cfg.Sentinel) {
 			continue
 		}
 		if reconcileGroupMatcher(group, expected) {
@@ -305,7 +305,7 @@ func addOurHook(hooksMap map[string]interface{}, event, matcher string, entry ma
 // removeOurHook drops every sentinel-bearing matcher group from the event's
 // array, deleting the event key outright once nothing is left. Returns true if
 // any group was removed.
-func removeOurHook(hooksMap map[string]interface{}, event, sentinel string) bool {
+func removeOurHook(hooksMap map[string]interface{}, event string, cfg Config) bool {
 	arr, ok := eventGroups(hooksMap, event)
 	if !ok {
 		return false
@@ -314,7 +314,7 @@ func removeOurHook(hooksMap map[string]interface{}, event, sentinel string) bool
 	var kept []interface{}
 	removed := false
 	for _, g := range arr {
-		if containsSentinel(g, sentinel) {
+		if containsSentinel(g, cfg.Sentinel) {
 			removed = true
 			continue
 		}
