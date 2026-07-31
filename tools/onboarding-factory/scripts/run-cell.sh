@@ -38,8 +38,11 @@ JSONL_GLOB='*.jsonl'
 
 # shellcheck source=lib/shard-lib.sh
 source "$SCRIPT_DIR/lib/shard-lib.sh"   # per-scenario shard reader (#511)
-# shellcheck source=lib/hook-config-snapshot.sh
-source "$SCRIPT_DIR/lib/hook-config-snapshot.sh"   # save/restore shared agent config (#1178)
+# Recording-daemon lifecycle — env, spawn, socket wait, shutdown ladder, and the
+# shared agent config snapshot/restore (#1178) — owned once and shared with
+# run-cell-multi.sh so a recorder fix can't reach only one of them (#1214).
+# shellcheck source=lib/spawn-record-daemon.sh
+source "$SCRIPT_DIR/lib/spawn-record-daemon.sh"
 
 RECORDER="off"
 ATTACH=0
@@ -193,10 +196,8 @@ if [[ -n "$ONBOARD_HOME" ]]; then
   # 7837 default here would make the one-knob `IRRLICHT_ONBOARD_HOME=…`
   # path abort at precheck.
   ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7838}"
-  ONBOARD_SOCK="$ONBOARD_HOME/irrlichd.sock"
 else
   ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7837}"
-  ONBOARD_SOCK="$HOME/.local/share/irrlicht/irrlichd.sock"
 fi
 
 # --- Daemon source ------------------------------------------------------
@@ -212,7 +213,6 @@ fi
 #    periodic flush, and pick the recording file from whatever the
 #    daemon is writing to (env override > default
 #    ~/.local/share/irrlicht/recordings/).
-DAEMON_PID=""
 if [[ "$ATTACH" == "1" ]]; then
   ATTACHED_RECORDINGS_DIR="${IRRLICHT_RECORDINGS_DIR:-$HOME/.local/share/irrlicht/recordings}"
   if [[ ! -d "$ATTACHED_RECORDINGS_DIR" ]]; then
@@ -247,72 +247,11 @@ if [[ "$ATTACH" == "1" ]]; then
   fi
   echo "attach: using running daemon's recordings at $ATTACHED_RECORDINGS_DIR"
 else
-  DAEMON_LOG="$STAGING/daemon.log"
-  # Build the env assignments as an array so a value containing spaces
-  # (e.g. an IRRLICHT_HOME path with a space) stays one word — an
-  # unquoted ${ONBOARD_HOME:+VAR="$ONBOARD_HOME"} would word-split on it.
-  # IRRLICHT_HOME is only added when ONBOARD_HOME is non-empty.
-  # grant-all: the consent-first permission gate (#570) would otherwise
-  # leave a fresh recording daemon monitoring nothing until a wizard is
-  # answered — fixtures must never hang on consent.
-  # Save the shared agent config the daemon is about to rewrite (see
-  # lib/hook-config-snapshot.sh); cleanup hands it back.
-  snapshot_hook_configs "$STAGING/hook-config-backup"
-
-  DAEMON_ENV=(IRRLICHT_RECORDINGS_DIR="$STAGING/recordings"
-              IRRLICHT_BIND_ADDR="$ONBOARD_BIND"
-              IRRLICHT_PERMISSION_MODE=grant-all)
-  [[ -n "$ONBOARD_HOME" ]] && DAEMON_ENV+=(IRRLICHT_HOME="$ONBOARD_HOME")
-  # Forward a caller-set ready-session TTL so idle-survival cells (1.3) can
-  # shrink the 30-min production default to a recordable window. The daemon's
-  # explicit env array would otherwise drop the inherited override.
-  [[ -n "${IRRLICHT_READY_SESSION_TTL:-}" ]] && DAEMON_ENV+=(IRRLICHT_READY_SESSION_TTL="$IRRLICHT_READY_SESSION_TTL")
-  env "${DAEMON_ENV[@]}" "$DAEMON" --record >"$DAEMON_LOG" 2>&1 &
-  DAEMON_PID=$!
-  echo "daemon started (pid $DAEMON_PID, bind=$ONBOARD_BIND${ONBOARD_HOME:+, home=$ONBOARD_HOME})"
-
-  # Cleanup: graceful shutdown, then hand the user's agent config back. Runs
-  # once: either via explicit call before transcript resolution (we must drain
-  # before continuing), or as the EXIT trap if we fail before reaching that
-  # point. `trap - EXIT` after the explicit call prevents double-invocation.
-  SHUTDOWN_REASON="unknown"
-  cleanup() {
-    stop_daemon
-    restore_hook_configs
-  }
-
-  # stop_daemon escalates INT -> TERM -> KILL, giving the recorder time to
-  # flush between each.
-  stop_daemon() {
-    if kill -0 "$DAEMON_PID" 2>/dev/null; then
-      SHUTDOWN_REASON="sigint"
-      kill -INT "$DAEMON_PID" 2>/dev/null || true
-      # 6s grace = 5s recorder flush interval + 1s slack.
-      for _ in $(seq 1 12); do
-        kill -0 "$DAEMON_PID" 2>/dev/null || { echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"; return; }
-        sleep 0.5
-      done
-      SHUTDOWN_REASON="sigterm"
-      kill -TERM "$DAEMON_PID" 2>/dev/null || true
-      for _ in $(seq 1 6); do
-        kill -0 "$DAEMON_PID" 2>/dev/null || { echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"; return; }
-        sleep 0.5
-      done
-      SHUTDOWN_REASON="sigkill"
-      kill -KILL "$DAEMON_PID" 2>/dev/null || true
-    fi
-    echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"
-  }
-  trap cleanup EXIT
-
-  # Wait up to 10s for the unix socket to appear — signals the daemon is
-  # ready to accept connections.
-  SOCK="$ONBOARD_SOCK"
-  for _ in $(seq 1 40); do
-    [[ -S "$SOCK" ]] && break
-    sleep 0.25
-  done
-  [[ -S "$SOCK" ]] || { echo "daemon socket never appeared: $SOCK" >&2; exit 1; }
+  # The lib snapshots the shared agent config, spawns the daemon, arms
+  # stop_record_daemon as the EXIT trap, and waits for its socket. A non-zero
+  # return means the socket never appeared (it has already said so on stderr);
+  # the trap still drains the daemon and restores the config on the way out.
+  spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" || exit 1
 fi
 
 # --- Drive the agent ----------------------------------------------------
@@ -341,13 +280,11 @@ DRIVER_REASON="$(cat "$STAGING/driver.exit-reason" 2>/dev/null || echo "unknown"
 #    slack is enough to land all writes from this run on disk. The
 #    user's daemon keeps running and the dashboard stays connected.
 if [[ "$ATTACH" == "1" ]]; then
-  SHUTDOWN_REASON="attached"
-  echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"
+  echo "attached" > "$STAGING/daemon.shutdown"
   echo "attach: waiting 6s for recorder flush..."
   sleep 6
 else
-  cleanup
-  trap - EXIT
+  stop_record_daemon
 fi
 
 # --- Read driver-resolved transcript + actual UUID ----------------------

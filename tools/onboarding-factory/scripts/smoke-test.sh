@@ -48,6 +48,10 @@ echo ""
 echo "== unit tests (lib/hook-config-snapshot_test.sh) =="
 bash "$SCRIPT_DIR/lib/hook-config-snapshot_test.sh" || rc=1
 
+echo ""
+echo "== unit tests (lib/spawn-record-daemon_test.sh) =="
+bash "$SCRIPT_DIR/lib/spawn-record-daemon_test.sh" || rc=1
+
 # completeness-gate / catalog-drift / consistency gates were retired (#528):
 # `of validate` + `of coverage` (Go) now own schema + referential + coverage
 # integrity, and a per-scenario shard is the single source for a cell, so the

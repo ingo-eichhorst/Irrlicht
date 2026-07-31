@@ -54,8 +54,12 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$REPO_ROOT" ]] || { echo "not in a git repo" >&2; exit 1; }
 # shellcheck source=lib/shard-lib.sh
 source "$SCRIPT_DIR/lib/shard-lib.sh"   # per-scenario shard reader (#511)
-# shellcheck source=lib/hook-config-snapshot.sh
-source "$SCRIPT_DIR/lib/hook-config-snapshot.sh"   # save/restore shared agent config (#1178)
+# Recording-daemon lifecycle — env, spawn, socket wait, shutdown ladder, and the
+# shared agent config snapshot/restore (#1178) — shared with run-cell.sh, which
+# this script does NOT delegate to otherwise, so a recorder fix reaches both
+# recording paths rather than whichever one the author was editing (#1214).
+# shellcheck source=lib/spawn-record-daemon.sh
+source "$SCRIPT_DIR/lib/spawn-record-daemon.sh"
 
 # Session-id reconciliation helpers (daemon_sid_for_transcript,
 # sid_in_recording, reconcile_slot_csv) — shared + unit-tested in lib/.
@@ -87,7 +91,6 @@ if [[ -z "$ONBOARD_HOME" ]]; then
   exit 2
 fi
 ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7838}"
-ONBOARD_SOCK="$ONBOARD_HOME/irrlichd.sock"
 export IRRLICHT_ONBOARD_HOME="$ONBOARD_HOME"
 export IRRLICHT_ONBOARD_BIND_ADDR="$ONBOARD_BIND"
 
@@ -196,49 +199,13 @@ write_error_manifest() {
 }
 
 # --- Spawn ONE isolated --record daemon ---------------------------------
-DAEMON_LOG="$STAGING/daemon.log"
-# Save the shared agent config the daemon is about to rewrite (see
-# lib/hook-config-snapshot.sh); cleanup hands it back. This script spawns its
-# own daemon rather than delegating to run-cell.sh, so it needs its own call.
-snapshot_hook_configs "$STAGING/hook-config-backup"
-# grant-all: the consent-first permission gate (#570) would otherwise leave
-# a fresh recording daemon monitoring nothing until a wizard is answered.
-env IRRLICHT_RECORDINGS_DIR="$STAGING/recordings" \
-  IRRLICHT_BIND_ADDR="$ONBOARD_BIND" \
-  IRRLICHT_HOME="$ONBOARD_HOME" \
-  IRRLICHT_PERMISSION_MODE=grant-all \
-  "$DAEMON" --record >"$DAEMON_LOG" 2>&1 &
-DAEMON_PID=$!
-echo "daemon started (pid $DAEMON_PID, bind=$ONBOARD_BIND, home=$ONBOARD_HOME)"
-
-SHUTDOWN_REASON="unknown"
-cleanup() {
-  if kill -0 "$DAEMON_PID" 2>/dev/null; then
-    SHUTDOWN_REASON="sigint"
-    kill -INT "$DAEMON_PID" 2>/dev/null || true
-    for _ in $(seq 1 12); do
-      kill -0 "$DAEMON_PID" 2>/dev/null || { echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"; return; }
-      sleep 0.5
-    done
-    SHUTDOWN_REASON="sigterm"
-    kill -TERM "$DAEMON_PID" 2>/dev/null || true
-    for _ in $(seq 1 6); do
-      kill -0 "$DAEMON_PID" 2>/dev/null || { echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"; return; }
-      sleep 0.5
-    done
-    SHUTDOWN_REASON="sigkill"
-    kill -KILL "$DAEMON_PID" 2>/dev/null || true
-  fi
-  echo "$SHUTDOWN_REASON" > "$STAGING/daemon.shutdown"
-  restore_hook_configs
-}
-trap cleanup EXIT
-
-for _ in $(seq 1 40); do
-  [[ -S "$ONBOARD_SOCK" ]] && break
-  sleep 0.25
-done
-[[ -S "$ONBOARD_SOCK" ]] || { echo "daemon socket never appeared: $ONBOARD_SOCK" >&2; write_error_manifest "daemon_socket_missing"; exit 1; }
+# The lib snapshots the shared agent config, spawns the daemon, arms
+# stop_record_daemon as the EXIT trap, and waits for its socket. A non-zero
+# return means the socket never appeared (it has already said so on stderr); the
+# trap still drains the daemon and restores the config on the way out, so all
+# that is left here is the ERROR manifest the implement skill reads.
+spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" \
+  || { write_error_manifest "daemon_socket_missing"; exit 1; }
 
 # --- Launch every adapter's interactive driver CONCURRENTLY -------------
 # All share $SHARED_CWD (the same workspace). Each gets its own staging
@@ -275,8 +242,7 @@ for i in "${!DRV_PIDS[@]}"; do
 done
 
 # --- Drain the daemon ---------------------------------------------------
-cleanup
-trap - EXIT
+stop_record_daemon   # also disarms the EXIT trap it armed
 DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo unknown)"
 
 # --- Locate the single recording ----------------------------------------
