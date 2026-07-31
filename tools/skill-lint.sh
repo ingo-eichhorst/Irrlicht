@@ -31,21 +31,21 @@
 # Markdown that *talks about* markers is not markdown that *has* them.
 # `.claude/skills/ir:exec/SKILL.md` documents the plan.html template and so
 # mentions `{{TOKEN}}`, `REPEAT:step` and `OPTIONAL:ui` a dozen times — always
-# inside backticks. So checks 2 and 4 read a prose view of each file with
-# fenced code blocks and inline code spans blanked out. Check 3 keeps inline
-# code (a reference can legitimately be written `` `Auto mode` below ``) and
-# check 1 reads raw lines outside fences, because a conflict marker inside a
-# fence is illustrative but anywhere else is a corrupted file. Frontmatter is
+# inside backticks. So checks 2 and 4 skip fenced blocks and blank inline code
+# spans. Check 3 keeps inline code (a reference can legitimately be written
+# `` `Auto mode` below ``) and check 1 reads raw lines outside fences, because
+# a conflict marker inside a fence is illustrative but anywhere else is a
+# corrupted file. Frontmatter is
 # structured data, never prose that documents a marker, so check 2 reads it —
 # an unfilled {{TOKEN}} in `description:` is what the skill loader matches on
 # — while checks 3 and 4 skip it, since a description legitimately contains
 # quoted phrases and counted lead-ins.
 #
-# Blanking is the whole mechanism, which makes an unbalanced delimiter a
-# silencer: every blanked line is a line no check reads, so one missing closing
+# Skipping is the whole mechanism, which makes an unbalanced delimiter a
+# silencer: every skipped line is a line no check reads, so one missing closing
 # fence used to hide the entire rest of the file, and an unterminated
 # frontmatter used to swallow however much of the body sat above the next `---`.
-# Both are therefore detected first, reported, and then not allowed to blank
+# Both are therefore detected first, reported, and then not allowed to suppress
 # anything — a corrupted skill file reporting 0 errors is the exact failure
 # this script exists to remove.
 #
@@ -57,14 +57,19 @@
 #   judgement call; counting markers is not.
 # * Check 3 only recognises a reference when the name is delimited
 #   (`"X"`, `` `X` ``, `**X**`) or matches a heading — verbatim, or up to a
-#   trailing parenthetical, so "Readiness Rubric" finds
-#   `## Readiness Rubric (7 axes)`. "see the rule above" names nothing
-#   checkable and is ignored by design.
+#   subtitle separator, so "Readiness Rubric" finds
+#   `## Readiness Rubric (7 axes)` and "Phase 1" finds `## Phase 1 — Worktree`.
+#   "see the rule above" names nothing checkable and is ignored by design.
 # * Setext headings (underlined with === or ---) are not indexed as headings;
 #   every heading in this repo's skill files is ATX (#).
 #
+# Scope: every `.md` under `.claude/skills/`, plus any other tracked `SKILL.md`
+# in the repo (`tools/irrlicht-design-system/SKILL.md` is one — a real skill
+# that lived outside every gate). `testdata/` is excluded: the fixture corpus is
+# deliberately broken and is driven by the unit test, not by the gate.
+#
 # Usage:
-#   tools/skill-lint.sh                  # lint every .claude/skills/**/*.md
+#   tools/skill-lint.sh                  # lint every skill markdown file
 #   tools/skill-lint.sh --strict         # warnings fail too
 #   tools/skill-lint.sh FILE...          # lint just these files (used by tests)
 #   tools/skill-lint.sh --strict FILE...
@@ -73,7 +78,8 @@
 # the nearest `skills/` ancestor — `ir:exec`, or `ir:onboarding-factory/assess`
 # for a nested one. Deriving it from the path rather than a hard-coded list is
 # what lets the fixture corpus under tools/lib/testdata/ exercise check 5
-# without living in .claude/skills/.
+# without living in .claude/skills/, and what lets a skill outside
+# `.claude/skills/` be linted with the name check simply switched off.
 set -uo pipefail
 
 STRICT=0
@@ -90,14 +96,25 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
   cd "$ROOT_DIR" || exit 2
+  # Two roots, not one: `.claude/skills/` is where skills normally live, but a
+  # SKILL.md anywhere else is still a skill by every definition these checks
+  # use, and scoping to one directory left `tools/irrlicht-design-system/`
+  # outside every gate. `testdata/` is excluded because the fixture corpus is
+  # deliberately corrupt — the unit test drives it, the gate must not.
+  #
+  # The index rather than `find`: `find .` would descend into
+  # `.claude/worktrees/`, which holds entire checkouts of this repo, and lint
+  # every other branch's skill files as if they were this one's. Staged files
+  # are index entries, so a newly added skill is covered on the push that adds
+  # it.
   while IFS= read -r f; do
+    [[ "$f" == */testdata/* ]] && continue
     FILES+=("$f")
-  done < <(find .claude/skills -name '*.md' -type f | LC_ALL=C sort)
+  done < <(git ls-files -- '.claude/skills/*.md' '*/SKILL.md' 'SKILL.md' | LC_ALL=C sort -u)
 fi
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
@@ -112,8 +129,7 @@ fi
 # when the path has no `skills/` ancestor, which turns the name comparison off
 # rather than inventing an expectation.
 expected_skill_name() {
-  local path="$1" dir
-  dir="$(dirname "$path")"
+  local dir="${1%/*}"
   case "$dir" in
     */skills/*) echo "${dir##*/skills/}" ;;
     *) echo "" ;;
@@ -141,6 +157,16 @@ function finding(sev, line, check, msg) {
 function err(line, check, msg)  { finding("ERROR", line, check, msg) }
 function warn(line, check, msg) { finding("WARN",  line, check, msg) }
 
+# One parser for both keys. As two near-identical blocks they had drifted:
+# `name:` trimmed trailing whitespace only, so a leading space survived into
+# the mismatch message while `description:` trimmed both ends.
+function fm_value(s, key,   v) {
+  v = s
+  sub("^" key ":[ \t]*", "", v)
+  gsub(/^["']|["'][ \t]*$/, "", v)
+  gsub(/^[ \t]+|[ \t]+$/, "", v)
+  return v
+}
 function indent_of(s,   t) {
   t = s
   sub(/[^ \t].*$/, "", t)
@@ -150,6 +176,13 @@ function indent_of(s,   t) {
 function is_list_marker(s) {
   return (s ~ /^[ \t]*([-*+]|[0-9]+[.)])[ \t]+/)
 }
+# nonprose(i) — lines no prose check may read: inside a fence, or inside the
+# frontmatter span. Checks 3 and 4 skip frontmatter because a description
+# legitimately contains quoted phrases and counted lead-ins; check 2 does NOT
+# skip it, since frontmatter is structured data that never *documents* a
+# marker, and an unfilled {{TOKEN}} in `description:` is the field the skill
+# loader matches on.
+function nonprose(i) { return (infence[i] || (fm_end > 0 && i <= fm_end)) }
 # Word-boundary containment: index() would match "modes" inside "submodes".
 function phrase_at(hay, needle, pos,   before, after) {
   before = (pos > 1) ? substr(hay, pos - 1, 1) : " "
@@ -158,21 +191,23 @@ function phrase_at(hay, needle, pos,   before, after) {
   return (before !~ /[A-Za-z0-9]/ && after !~ /[A-Za-z0-9]/)
 }
 
-{ n++; raw[n] = $0 }
+# `\r` is stripped once, here, rather than defended against in a dozen
+# regexes downstream — a per-regex `[ \t\r]` vs `[ \t]` decision that every
+# future check would have to re-make, and get silently wrong. Fence balance is
+# counted on the way past for the same reason: it needs a whole traversal, and
+# this is already one.
+{ sub(/\r$/, ""); n++; raw[n] = $0; if ($0 ~ /^[ \t]*(```|~~~)/) fences++ }
 
 END {
-  # ---- build the views ----------------------------------------------------
-  # raw[]   verbatim, for conflict markers
-  # text[]  fences + frontmatter blanked, inline code KEPT   (checks 3, 4)
-  # prose[] text[] with inline code spans blanked too, but frontmatter KEPT
-  #                                                          (check 2)
-  #
-  # Blanking is how the linter tells "documents a marker" from "has one", and
-  # every line it blanks is a line no check reads. That makes an unbalanced
-  # delimiter a silencer: one missing closing fence, or a frontmatter that
-  # never closes, and the rest of the file passes unread — a corrupted skill
-  # file linting 0/0, which is the exact failure #1209 is about. So both are
-  # detected up front, reported, and then NOT allowed to blank anything.
+  # ---- classify each line -------------------------------------------------
+  # Checks read raw[] and ask nonprose() what to skip, rather than each
+  # consulting its own blanked copy of the file. Skipping is how the linter
+  # tells "documents a marker" from "has one", and every skipped line is a line
+  # no check reads. That makes an unbalanced delimiter a silencer: one missing
+  # closing fence, or a frontmatter that never closes, and the rest of the file
+  # passes unread — a corrupted skill file linting 0/0, which is the exact
+  # failure #1209 is about. So both are detected up front, reported, and then
+  # NOT allowed to suppress anything.
 
   # Frontmatter must close within FM_MAX lines. Unbounded, the closing `---`
   # binds to the first thematic break in the body — arbitrarily far down —
@@ -180,64 +215,59 @@ END {
   # a folded description of ~10 lines.
   FM_MAX = 40
   fm_end = 0; fm_unterminated = 0
-  if (n >= 1 && raw[1] ~ /^---[ \t\r]*$/) {
+  if (n >= 1 && raw[1] ~ /^---[ \t]*$/) {
     for (i = 2; i <= n && i <= FM_MAX; i++)
-      if (raw[i] ~ /^---[ \t\r]*$/) { fm_end = i; break }
+      if (raw[i] ~ /^---[ \t]*$/) { fm_end = i; break }
     if (fm_end == 0) fm_unterminated = 1
   }
 
-  # Fence balance, decided before any blanking. An odd number of delimiters
-  # means the file's own view of what is code is untrustworthy, so treat none
-  # of it as fenced and let every check read the whole file.
-  fences = 0
-  for (i = 1; i <= n; i++)
-    if (raw[i] ~ /^[ \t]*(```|~~~)/) fences++
+  # An odd number of fence delimiters means the file's own view of what is code
+  # is untrustworthy, so treat none of it as fenced and let every check read
+  # everything. The invariant for any suppression-based linter: when the file
+  # cannot be parsed with confidence, degrade toward MORE checking, never less.
   fence_broken = (fences % 2)
 
   fence = 0
   for (i = 1; i <= n; i++) {
-    line = raw[i]
-    sub(/\r$/, "", line)
-
-    if (!fence_broken && line ~ /^[ \t]*(```|~~~)/) {
+    if (!fence_broken && raw[i] ~ /^[ \t]*(```|~~~)/) {
       infence[i] = 1          # the delimiter itself is never prose
       fence = !fence
-      text[i] = ""; prose[i] = ""
       continue
     }
     infence[i] = fence
-
-    p = line
-    gsub(/`[^`]*`/, " ", p)
-
-    if (fence) { text[i] = ""; prose[i] = ""; continue }
-    if (fm_end > 0 && i <= fm_end) {
-      # Frontmatter is structured data, never prose that *documents* a marker,
-      # so check 2 reads it — an unfilled {{TOKEN}} in `description:` is what
-      # the skill loader matches on. Checks 3 and 4 still skip it: a
-      # description legitimately contains quoted phrases and counted lead-ins.
-      text[i] = ""; prose[i] = p
-      continue
-    }
-
-    text[i] = line
-    prose[i] = p
+    if (fence) continue
 
     # `#+` rather than `#{1,6}`: ERE interval expressions are not supported by
-    # every awk this may run on, and an awk that silently matches no heading
+    # every awk this may run on, and an awk that silently matched no heading
     # would leave check 3a dead and check 3b flagging every reference.
-    if (line ~ /^#+[ \t]+/) {
-      h = line
+    if (raw[i] ~ /^#+[ \t]+/) {
+      h = raw[i]
       sub(/^#+[ \t]+/, "", h)
       sub(/[ \t]+#+[ \t]*$/, "", h)
-      nh++
-      hline[nh] = i
-      htext[nh] = normalize(h)
-      # A second searchable form without a trailing parenthetical, so prose
-      # referring to "Readiness Rubric" finds `## Readiness Rubric (7 axes)`.
-      hshort[nh] = htext[nh]
-      sub(/[ \t]*\(.*$/, "", hshort[nh])
-      if (hshort[nh] == "" || hshort[nh] == htext[nh]) hshort[nh] = ""
+      nh++; hline[nh] = i; htext[nh] = normalize(h)
+      # A subtitled heading gets a second ROW in the same table rather than a
+      # parallel column, so both forms match through one code path. Prose says
+      # "Readiness Rubric" for `## Readiness Rubric (7 axes)` and "Phase 1" for
+      # `## Phase 1 — Worktree`; the corpus has 91 of the first shape and 48 of
+      # the second, so handling only parentheses covered a third of nothing.
+      # Written as separate sub()s, not one bracket class: the dashes are
+      # multi-byte, and a byte-oriented awk would match their bytes piecemeal
+      # inside an unrelated character.
+      #
+      # Parentheses and dashes only — NOT a colon. `## Step 6: Build Artifacts`
+      # would shorten to "step 6", and ir:release's prose says "step 6" a dozen
+      # times meaning *something inside* step 6, not the heading: it produced a
+      # false "says step 6 below, but that heading is above" on the first run.
+      # A parenthetical or dashed tail is a subtitle; a colon here yields a
+      # label the body then reuses as an ordinary noun.
+      short = htext[nh]
+      sub(/[ \t]*\(.*$/, "", short)
+      sub(/[ \t]*—.*$/, "", short)
+      sub(/[ \t]*–.*$/, "", short)
+      if (short != "" && short != htext[nh] && !seen_heading[short]) {
+        nh++; hline[nh] = i; htext[nh] = short
+      }
+      seen_heading[htext[nh]] = 1
     }
   }
 
@@ -267,10 +297,12 @@ END {
 
   # ---- 2. unfilled template tokens / leftover scaffolding (ERROR) ---------
   for (i = 1; i <= n; i++) {
-    if (prose[i] == "") continue
-    if (match(prose[i], /\{\{[A-Za-z0-9_.-]+\}\}/))
-      err(i, "template-token", "unfilled template token " substr(prose[i], RSTART, RLENGTH))
-    if (prose[i] ~ /<!--[ \t]*\/?(REPEAT|OPTIONAL):/)
+    if (infence[i]) continue          # NOT nonprose(): frontmatter is in scope
+    p = raw[i]
+    gsub(/`[^`]*`/, " ", p)
+    if (match(p, /\{\{[A-Za-z0-9_.-]+\}\}/))
+      err(i, "template-token", "unfilled template token " substr(p, RSTART, RLENGTH))
+    if (p ~ /<!--[ \t]*\/?(REPEAT|OPTIONAL):/)
       err(i, "template-scaffold", "template scaffolding comment left in output (REPEAT:/OPTIONAL:)")
   }
 
@@ -280,22 +312,23 @@ END {
   # reported — a correct forward reference is the overwhelmingly common case
   # and saying so would drown the real ones.
   for (i = 1; i <= n; i++) {
-    if (text[i] == "") continue
-    lp = normalize(text[i])
+    if (nonprose(i)) continue
+    lp = normalize(raw[i])
+    # This check can only fire on a line that says "above" or "below" — 94 of
+    # the corpus's 6,416 lines. Without the guard the other 98.5% each pay a
+    # full sweep of the heading table to reach `continue`, which is O(lines ×
+    # headings): measured at 57% of the awk CPU on the largest skill file, and
+    # growing ~3.2x per doubling of file size. Guarding on the normalized line
+    # rather than the raw one also catches "Above"/"BELOW".
+    if (lp !~ /above|below/) continue
     for (j = 1; j <= nh; j++) {
-      if (hline[j] == i) continue
-      # Try the full heading, then the form without its trailing parenthetical
-      # — `## Readiness Rubric (7 axes)` is referred to as "Readiness Rubric",
-      # and matching only verbatim leaves a wrong direction on this repo's most
-      # common heading shape invisible.
-      hname = htext[j]
-      if (length(hname) >= 4 && index(lp, hname) > 0 && phrase_at(lp, hname, index(lp, hname))) {
-        pos = index(lp, hname)
-      } else if (hshort[j] != "" && length(hshort[j]) >= 4 && index(lp, hshort[j]) > 0 && phrase_at(lp, hshort[j], index(lp, hshort[j]))) {
-        hname = hshort[j]
-        pos = index(lp, hname)
-      } else continue
-      tail = substr(lp, pos + length(hname), 40)
+      if (hline[j] == i || length(htext[j]) < 4) continue
+      # The 4-character floor is a noise guard: without it a heading like "the"
+      # or "and" would match half the prose in the file. No real heading in
+      # this repo is shorter.
+      pos = index(lp, htext[j])
+      if (pos == 0 || !phrase_at(lp, htext[j], pos)) continue
+      tail = substr(lp, pos + length(htext[j]), 40)
       # The direction word has to follow the name directly — at most one
       # structural noun and a comma in between. Anything looser binds a stray
       # "below" to whatever heading-shaped word happened to appear earlier in
@@ -308,7 +341,7 @@ END {
       said = (substr(tail, RSTART, RLENGTH) ~ /above/) ? "above" : "below"
       actual = (hline[j] < i) ? "above" : "below"
       if (said != actual)
-        warn(i, "ref-direction", "says \"" hname "\" " said ", but that heading is " actual " (line " hline[j] ")")
+        warn(i, "ref-direction", "says \"" htext[j] "\" " said ", but that heading is " actual " (line " hline[j] ")")
     }
   }
 
@@ -318,34 +351,42 @@ END {
   # prose about identifiers routinely says "…the caveat `KIRO_HOME` below
   # carries" while pointing at a bullet, not a heading — so backticks need an
   # explicit structural noun ("`X` section below") before this fires.
+  # Built once and used three times: match(), the backtick exemption and the
+  # sub() that strips the suffix back off must describe the SAME span, and as
+  # three hand-copied literals an edit to one silently changed what `name`
+  # ended up being. 3b's nouns are narrower than 3a's on purpose — 3a's name
+  # comes from the heading table and is already known to be a heading, so it
+  # can afford "list"/"rule"/"step"; 3b's is arbitrary quoted prose.
+  NOUN = "((sub-?)?section|table|heading|chapter)"
+  DIRSUF = "[ \t]*" NOUN "?[ \t]*,?[ \t]*(above|below)([^A-Za-z]|$)"
   for (i = 1; i <= n; i++) {
-    if (text[i] == "") continue
-    s = text[i]
-    while (match(s, /("[^"]+"|`[^`]+`|\*\*[^*]+\*\*)[ \t]*((sub-?)?section|table|heading|chapter)?[ \t]*,?[ \t]*(above|below)([^A-Za-z]|$)/)) {
+    if (nonprose(i)) continue
+    s = raw[i]
+    while (match(s, "(\"[^\"]+\"|`[^`]+`|\\*\\*[^*]+\\*\\*)" DIRSUF)) {
       m = substr(s, RSTART, RLENGTH)
       s = substr(s, RSTART + RLENGTH)
-      if (m ~ /^`/ && m !~ /((sub-?)?section|table|heading|chapter)/) continue
+      if (m ~ /^`/ && m !~ NOUN) continue
       name = m
-      sub(/[ \t]*((sub-?)?section|table|heading|chapter)?[ \t]*,?[ \t]*(above|below)([^A-Za-z]|$)$/, "", name)
+      sub(DIRSUF "$", "", name)
       gsub(/^[`"*]+/, "", name); gsub(/[`"*]+$/, "", name)
       name = normalize(name)
       if (name == "") continue
       found = 0
-      # hshort[] too, so `**Readiness Rubric** below` is not called dangling
-      # when the heading is `## Readiness Rubric (7 axes)`.
       for (j = 1; j <= nh; j++)
-        if (htext[j] == name || hshort[j] == name) { found = 1; break }
+        if (htext[j] == name) { found = 1; break }
       if (!found)
         warn(i, "ref-dangling", "reference to \"" name "\" " (m ~ /above([^A-Za-z]|$)$/ ? "above" : "below") " names no heading in this file")
     }
   }
 
   # ---- 4. announced count vs list length (WARN) ---------------------------
-  split("two three four five six seven eight nine ten", words, " ")
-  for (w = 1; w <= 9; w++) numword[words[w]] = w + 1
+  # The value IS the index: words[1]="two" means 2, so `w + 1` replaces a
+  # lookup table. nw rather than a literal 9, so adding a count word is a
+  # one-place edit.
+  nw = split("two three four five six seven eight nine ten", words, " ")
 
   for (i = 1; i <= n; i++) {
-    if (text[i] == "" || text[i] !~ /:[ \t]*$/) continue
+    if (nonprose(i) || raw[i] !~ /:[ \t]*$/) continue
     want = 0; wantword = ""
     # Only the announcing sentence counts — the last one before the colon. A
     # count word stranded in an earlier sentence is describing something else:
@@ -353,30 +394,31 @@ END {
     # below:" introduces three items and announces none of them. Sentence
     # breaks only: splitting on an em dash too would lose the common
     # "**Two flavors** — pick one:" shape, which does announce its list.
-    lp = tolower(text[i])
+    lp = tolower(raw[i])
     if (match(lp, /^.*(\. |; )/)) lp = substr(lp, RSTART + RLENGTH)
-    for (w = 1; w <= 9; w++) {
+    for (w = 1; w <= nw; w++) {
       # Not hyphenated ("three-tier" is an adjective, not a count) and not
       # inside a longer word.
       if (match(lp, "(^|[^a-z-])" words[w] "([^a-z-]|$)")) {
-        if (want == 0 || RSTART < firstpos) { want = numword[words[w]]; wantword = words[w]; firstpos = RSTART }
+        if (want == 0 || RSTART < firstpos) { want = w + 1; wantword = words[w]; firstpos = RSTART }
       }
     }
     if (want == 0) continue
 
     j = i + 1
-    while (j <= n && raw[j] ~ /^[ \t\r]*$/) j++
+    while (j <= n && raw[j] ~ /^[ \t]*$/) j++
     if (j > n || infence[j] || !is_list_marker(raw[j])) continue
 
     base = indent_of(raw[j])
     got = 1
     blanks = 0
     for (k = j + 1; k <= n; k++) {
-      if (raw[k] ~ /^[ \t\r]*$/) { blanks++; if (blanks >= 2) break; continue }
+      if (raw[k] ~ /^[ \t]*$/) { if (++blanks >= 2) break; continue }
+      blanks = 0
       ind = indent_of(raw[k])
-      if (ind > base) { blanks = 0; continue }           # continuation or nested
-      if (ind == base && is_list_marker(raw[k])) { got++; blanks = 0; continue }
-      break
+      if (ind > base) continue                           # continuation or nested
+      if (ind < base || !is_list_marker(raw[k])) break
+      got++
     }
     if (got != want)
       warn(i, "list-count", "lead-in announces \"" wantword "\" (" want ") but " got " list item" (got == 1 ? "" : "s") " follow")
@@ -387,20 +429,10 @@ END {
     if (fm_end == 0) {
       warn(1, "frontmatter", "SKILL.md has no YAML frontmatter block")
     } else {
-      gotname = ""; namelines = 0; desc_line = 0; desc_value = ""
+      gotname = ""; has_name = 0; desc_line = 0; desc_value = ""
       for (i = 2; i < fm_end; i++) {
-        if (raw[i] ~ /^name:[ \t]*/) {
-          gotname = raw[i]; sub(/^name:[ \t]*/, "", gotname)
-          gsub(/^["']|["'][ \t\r]*$/, "", gotname)
-          gsub(/[ \t\r]+$/, "", gotname)
-          namelines++
-        }
-        if (raw[i] ~ /^description:[ \t]*/) {
-          desc_line = i
-          desc_value = raw[i]; sub(/^description:[ \t]*/, "", desc_value)
-          gsub(/^["']|["'][ \t\r]*$/, "", desc_value)
-          gsub(/^[ \t\r]+|[ \t\r]+$/, "", desc_value)
-        }
+        if (raw[i] ~ /^name:[ \t]*/)        { gotname = fm_value(raw[i], "name"); has_name = 1 }
+        if (raw[i] ~ /^description:[ \t]*/) { desc_line = i; desc_value = fm_value(raw[i], "description") }
       }
       # A frontmatter span containing prose is a frontmatter whose closing ---
       # went missing and bound to a thematic break further down: the span then
@@ -409,13 +441,13 @@ END {
       # not YAML when it is unindented (not a continuation), not a `key:`, not
       # a `- ` item, and not a `#` comment.
       for (i = 2; i < fm_end; i++) {
-        if (raw[i] ~ /^[ \t\r]*$/ || raw[i] ~ /^[ \t#]/ || raw[i] ~ /^-[ \t]/) continue
+        if (raw[i] ~ /^[ \t]*$/ || raw[i] ~ /^[ \t#]/ || raw[i] ~ /^-[ \t]/) continue
         if (raw[i] ~ /^[A-Za-z_][A-Za-z0-9_.-]*:/) continue
         warn(i, "frontmatter", "frontmatter contains a line that is not YAML — the closing --- is probably missing")
         break
       }
 
-      if (namelines == 0)
+      if (!has_name)
         warn(1, "frontmatter", "frontmatter has no name: key")
       else if (expected_name != "" && gotname != expected_name)
         warn(1, "frontmatter", "name: is \"" gotname "\" but the directory says \"" expected_name "\"")
@@ -443,8 +475,6 @@ if [[ -t 1 ]]; then RED=$'\033[31m'; YELLOW=$'\033[33m'; BOLD=$'\033[1m'; RESET=
 
 errors=0
 warnings=0
-FINDINGS="$(mktemp)"
-trap 'rm -f "$FINDINGS"' EXIT
 
 for f in "${FILES[@]}"; do
   if [[ ! -f "$f" ]]; then
@@ -454,16 +484,16 @@ for f in "${FILES[@]}"; do
   fi
   is_skill_md=0
   expected=""
-  if [[ "$(basename "$f")" == "SKILL.md" ]]; then
+  if [[ "${f##*/}" == "SKILL.md" ]]; then
     is_skill_md=1
     expected="$(expected_skill_name "$f")"
   fi
-  # Via a temp file, not process substitution: `done < <(awk …)` discards
-  # awk's exit status, so an awk that cannot read the file — or that rejects
-  # a construct in the program — yields zero lines and the file is tallied as
+  # Command substitution, NOT process substitution: `done < <(awk …)` discards
+  # awk's exit status, so an awk that cannot read the file — or that rejects a
+  # construct in the program — yields zero lines and the file is tallied as
   # clean. That would turn any awk incompatibility into a silently green gate,
   # which is the failure mode this whole script exists to remove.
-  if ! awk -v is_skill_md="$is_skill_md" -v expected_name="$expected" "$LINT_AWK" "$f" >"$FINDINGS"; then
+  if ! found="$(awk -v is_skill_md="$is_skill_md" -v expected_name="$expected" "$LINT_AWK" "$f")"; then
     echo "skill-lint: awk failed on $f — treating as a failure, not a clean file" >&2
     errors=$((errors + 1))
     continue
@@ -482,7 +512,7 @@ for f in "${FILES[@]}"; do
     # GitHub Actions log — where a developer looking at a failed gate most
     # needs to tell the blocking lines from the advisory ones.
     printf '%s%s:%s:%s %-5s %s [%s]\n' "$color" "$f" "$line" "$RESET" "$sev" "$msg" "$check"
-  done <"$FINDINGS"
+  done <<<"$found"
 done
 
 printf '\n%sskill-lint:%s %d file(s), %d error(s), %d warning(s)\n' \

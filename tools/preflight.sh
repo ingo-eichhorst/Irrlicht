@@ -82,6 +82,24 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
+# An unrecognised --only value used to select no group at all: every `want`
+# returned false, no gate ran, the summary printed empty and the script exited
+# 0. `tools/preflight.sh --only skils` was a fully green run that checked
+# nothing — the same silent-pass shape #1209 is about, reachable by one typo,
+# in the harness that hosts the gate for it.
+# Not `GROUPS` — that is a bash built-in holding the caller's supplementary
+# group IDs, and assigning to it silently does nothing, so the check would
+# compare against a list of numeric gids and reject every real group name.
+VALID_GROUPS=(go web arch tools skills security linux)
+if [[ -n "$ONLY" ]]; then
+  known=0
+  for g in "${VALID_GROUPS[@]}"; do [[ "$ONLY" == "$g" ]] && known=1; done
+  if [[ "$known" != 1 ]]; then
+    echo "unknown --only group: $ONLY (valid: ${VALID_GROUPS[*]})" >&2
+    exit 2
+  fi
+fi
+
 [[ "$ONLY" == "linux" ]] && RUN_LINUX=1
 
 want() {
@@ -261,13 +279,15 @@ if want tools; then
 fi
 
 # ---- skills group (mirrors test.yml's "Lint skill files" step) ------------
-# Scoped to the skill markdown itself plus the linter, so editing a check
-# re-lints the corpus it governs. The whole corpus is linted whenever the gate
-# fires rather than just the changed files: it is 22 small files and a fraction
-# of a second, and a finding that a *neighbouring* file already carries is
-# worth surfacing on the push that finally reads it.
+# Scoped to skill markdown plus the linter, so editing a check re-lints the
+# corpus it governs. `SKILL.md` matches at any path because skills are not all
+# under .claude/skills/ — tools/irrlicht-design-system/ holds one. The whole
+# corpus is linted whenever the gate fires rather than just the changed files:
+# it is ~23 small files and a fraction of a second, and a finding a
+# *neighbouring* file already carries is worth surfacing on the push that
+# finally reads it.
 if want skills; then
-  run_gate_scoped '^\.claude/skills/.*\.md$|^tools/skill-lint\.sh$' \
+  run_gate_scoped '^\.claude/skills/.*\.md$|(^|/)SKILL\.md$|^tools/skill-lint\.sh$' \
                   "skill-file lint" tools/skill-lint.sh
 fi
 
@@ -305,6 +325,12 @@ echo
 echo "$SEPARATOR"
 echo "  summary"
 echo "$SEPARATOR"
+if [[ ${#NAMES[@]} -eq 0 ]]; then
+  # Belt to the --only braces above: a run that recorded no gate at all is not
+  # a pass, whatever selected it down to nothing.
+  echo "  (no gates ran — refusing to report a green run that checked nothing)"
+  exit 2
+fi
 for i in "${!NAMES[@]}"; do
   printf "  %-58s %s\n" "${NAMES[$i]}" "${RESULTS[$i]}"
 done

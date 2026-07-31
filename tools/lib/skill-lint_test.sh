@@ -86,11 +86,10 @@ lint() {
   return 0
 }
 
-# fixture <name> — the single .md file of a fixture skill directory.
-fixture() {
-  local d="$FIXTURES/$1"
-  if [[ -f "$d/SKILL.md" ]]; then echo "$d/SKILL.md"; else echo "$d/reference.md"; fi
-}
+# fixture <name> — the SKILL.md of a fixture skill directory. The one fixture
+# that is deliberately NOT a SKILL.md is spelled out at its call site, where
+# that is the whole point of the assertion.
+fixture() { echo "$FIXTURES/$1/SKILL.md"; }
 
 # assert_tally <label> <errors> <warnings> — pin the summary line, so no
 # individual sub-check can change severity unnoticed.
@@ -140,7 +139,7 @@ assert_tally "one frontmatter warning" 0 1
 lint "$(fixture nodesc)"
 assert_contains "flags an empty folded description:" "WARN  description: is empty" "$OUT"
 assert_tally "one frontmatter warning" 0 1
-lint "$(fixture reference-doc)"
+lint "$FIXTURES/reference-doc/reference.md"
 assert_not_contains "a non-SKILL.md file is not checked for frontmatter" "[frontmatter]" "$OUT"
 # This fixture is also the positive case for check 4: "Three moves:" over three
 # items must produce NO warning. Asserting RC alone would not see a warning.
@@ -226,16 +225,43 @@ else
 fi
 
 echo "== the default file set: the glob and the preflight gate must agree =="
-# With no arguments the linter walks .claude/skills/. An empty walk would make
-# the gate green while reading nothing — the exact failure #1209 is about — so
-# the script exits 2 there rather than 0.
+# With no arguments the linter walks the repo's skill files. An empty walk
+# would make the gate green while reading nothing — the exact failure #1209 is
+# about — so the script exits 2 there rather than 0.
+#
+# Only the SIZE of the walk is asserted, not its verdict. Whether the real
+# corpus is clean is the gate's job (preflight's `skill-file lint` and
+# test.yml's "Lint skill files"), and asserting it here too would report a
+# defect in a real skill file as a unit-test failure of the linter — the worst
+# of the three places to see it — while contradicting this file's own rule that
+# assertions run against fixtures so they do not move when a skill is edited.
 lint
-assert_eq "the repo's own skill corpus has zero ERRORS" "0" "$RC"
 found=$(sed -n 's/^skill-lint: \([0-9][0-9]*\) file(s).*/\1/p' <<<"$OUT")
 if [[ -n "$found" && "$found" -ge 10 ]]; then
   pass "the walk found the real corpus ($found files)"
 else
   fail "the walk found the real corpus" ">= 10 files" "${found:-<no summary line>}"
+fi
+
+echo "== the template's marker vocabulary and the linter's must not drift =="
+# ir:exec's plan.html is where {{TOKEN}} and REPEAT:/OPTIONAL: come from, and it
+# is deliberately NOT linted (it carries dozens of each by construction, and the
+# markdown machinery is meaningless in HTML). That leaves the spelling defined
+# in two unconnected places: rename the convention in the template and check 2
+# silently stops detecting leftovers, with every fixture still green because the
+# fixtures embed the old spelling too. Pointing the linter at the template makes
+# it the vocabulary's fixture instead of a second definition.
+TEMPLATE="$ROOT/.claude/skills/ir:exec/templates/plan.html"
+if [[ -f "$TEMPLATE" ]]; then
+  # The template is HTML, so lint it as a one-off file argument (the walk never
+  # picks it up). Every token and marker it contains must be one check 2 knows.
+  lint "$TEMPLATE"
+  assert_contains "the linter recognises the template's {{TOKEN}} spelling" \
+    "[template-token]" "$OUT"
+  assert_contains "the linter recognises the template's REPEAT:/OPTIONAL: spelling" \
+    "[template-scaffold]" "$OUT"
+else
+  echo "  SKIP: $TEMPLATE not found — ir:exec template moved or removed"
 fi
 
 echo ""
