@@ -159,9 +159,16 @@ done:
 // TestWatch_MetadataParentIsPresentOnFirstNewEvent proves that an adapter
 // whose relationship lives in its first transcript record does not expose a
 // zero-byte Create as an unlinked top-level session before the header arrives.
+//
+// The short reconcile interval is what makes this test's own event delivery
+// unconditional rather than dependent on fsnotify never dropping a
+// notification (issue #1248): the failure it used to show was a create event
+// that never arrived at all, so the reconcile sweep — not a longer deadline —
+// is what closes it. The sweep is a fallback, so the assertions below still
+// exercise the ordinary event path in the overwhelmingly common case.
 func TestWatch_MetadataParentIsPresentOnFirstNewEvent(t *testing.T) {
 	root := setupFakeProjects(t)
-	w := NewWithRoot(root, testAdapter, 0).WithParentSessionID(func(path string) string {
+	w := NewWithRoot(root, testAdapter, 0).WithReconcileInterval(50 * time.Millisecond).WithParentSessionID(func(path string) string {
 		contents, _ := os.ReadFile(path)
 		if strings.Contains(string(contents), "parent-thread") {
 			return "parent-thread"
