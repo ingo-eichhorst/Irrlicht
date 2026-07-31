@@ -112,6 +112,20 @@ Before marking a ticket done, run the full suite — every layer must pass:
   assertion lands with the deliberate mutation that was seen red for each
   obligation recorded in its PR — the same bar the red-first rule above sets
   for defect tests.
+- Skill files: `tools/skill-lint.sh` reads `.claude/skills/**/*.md` — the
+  files that tell agents how to triage, plan, implement and review, and which
+  had no mechanical coverage at all until #1209 (PR #1204 changed two of them,
+  `preflight.sh --changed` skipped all ten gates, and thirteen PR checks went
+  green having read nothing that changed). Unresolved conflict markers and
+  leftover `{{TOKEN}}` / `REPEAT:` / `OPTIONAL:` template scaffolding are hard
+  failures; the internal-reference, list-count and frontmatter checks are
+  heuristics and only warn until their noise floor is known (`--strict`
+  promotes them, which is how one gets hardened). Runs as its own
+  `skill-file lint` gate in `tools/preflight.sh` (scoped to skill markdown plus
+  the linter itself) and unscoped as test.yml's "Lint skill files" step. Its
+  own tests are `tools/lib/skill-lint_test.sh`, over the fixture corpus under
+  `tools/lib/testdata/skill-lint/` — so the assertions never move when a real
+  skill file is edited.
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh`
 - Replay goldens (when a recording or replay-output change is in play):
@@ -163,6 +177,7 @@ tools/preflight.sh                # everything except the Linux Docker gate
 tools/preflight.sh --linux        # + full Linux parity (slow: needs Docker)
 tools/preflight.sh --only go      # just the test.yml-equivalent gates
 tools/preflight.sh --only arch    # just the ARS architecture gate
+tools/preflight.sh --only skills  # just the .claude/skills/**/*.md linter
 ```
 
 `tools/install-git-hooks.sh` (run once per clone; worktrees share the parent
