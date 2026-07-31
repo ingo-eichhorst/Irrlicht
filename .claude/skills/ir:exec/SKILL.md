@@ -45,22 +45,32 @@ signals `/ir:triage` already computes, then proceeds exactly as that mode
 would from there on:
 
 ```bash
-gh issue view <N> --json labels -q '.labels[].name'                            # ready-for-agent / needs-info?
-gh issue view <N> --comments | grep -o '\*\*Complexity:\*\*[^—]*' | tail -1     # value up to the em dash, if triaged
+gh issue view <N> --json labels -q '.labels[].name'                             # ready-for-agent / needs-info?
+C=$(gh issue view <N> --comments)
+grep -o '\*\*Run plan:\*\*[^—]*'   <<<"$C" | tail -1     # tier 1 — current triage output
+grep -o '\*\*Complexity:\*\*[^—]*' <<<"$C" | tail -1     # tiers 2/3 — numeric level, or legacy Low/Medium/High
 ```
 
-| Signal | Resolves to |
-|---|---|
-| `needs-info` label present | **Refuse.** Don't open a worktree — report the blockers (from the triage comment if present) and point at `/ir:triage <N>` or manual clarification. |
-| No readiness label and no `/ir:triage` comment at all | `plan` — safest default when nothing has assessed the issue. |
-| `ready-for-agent` label + Complexity Low or Medium | `full` |
-| `ready-for-agent` label + Complexity High, or any value that doesn't cleanly parse as Low/Medium (e.g. a hybrid like "Medium-to-High") | `plan` — a visual plan is still worth a human's eyes before multi-package work starts, even though the label says ready. An ambiguous read of the signal should never resolve toward skipping the gate. |
+Read the tiers **in order** and stop at the first that yields a value — the
+richer signal wins, and the legacy tier is explicit rather than an accident of
+a loose regex:
 
-If the issue was never triaged and has no readiness label, make the same
-Low/Medium/High call yourself during Phase 2's investigation, reusing
-`/ir:triage`'s calibration (one file/one concern = Low; 2–4 files one slice =
-Medium; multi-package/schema/cross-adapter/multi-phase = High) rather than a
-new one.
+| Tier | Signal | Resolves to |
+|---|---|---|
+| — | `needs-info` label present | **Refuse.** Don't open a worktree — report the blockers (from the triage comment if present) and point at `/ir:triage <N>` or manual clarification. |
+| 1 | A `**Run plan:**` line | Take its mode (`full` / `plan`) verbatim, plus its investigation depth, review effort and simplify depth — `/ir:triage` already did this arithmetic. |
+| 2 | A numeric `**Complexity:**` — e.g. `6 (base 5, openness +1)` | `full` at effective level ≤ 6, `plan` at 7–8. A level of 9–10 should not have reached `ready-for-agent`; if one has, treat it as `plan` and say so. |
+| 3 | A legacy `**Complexity:** Low` / `Medium` / `High` | `full` for Low or Medium, `plan` for High. Pre-dates the effective-level scale and stays supported — issues triaged before it cannot be migrated. |
+| 4 | No readiness label and no `/ir:triage` comment at all | `plan` — safest default when nothing has assessed the issue. |
+
+Anything that parses cleanly at none of these tiers (a hybrid like
+"Medium-to-High", a malformed line) resolves to `plan`. An ambiguous read of
+the signal should never resolve toward skipping the gate.
+
+If the issue was never triaged, make the call yourself during Phase 2's
+investigation using `/ir:triage`'s own base-level ladder (1–2 one file; 3–4 one
+function; 5–6 one slice across 2–4 files; 7–8 cross-cutting or schema; 9–10
+subsystem) rather than a new calibration.
 
 `auto` only ever resolves to `plan` or `full` — never to `close` (landing is a
 step only a human would ask for directly) — and it must never itself invoke
@@ -91,10 +101,17 @@ worktree name. `close` additionally resolves it from `pwd` / `git status -sb` /
    ```bash
    gh issue view <N> --comments        # add --repo <owner/repo> for cross-repo
    ```
-4. **Investigate the code.** Delegate to one or more `Explore` subagents (thoroughness
-   "medium") with a prompt naming the issue's key terms — file names, symbols, error
+4. **Investigate the code, at the depth the run plan names.** Delegate to `Explore`
+   subagents with a prompt naming the issue's key terms — file names, symbols, error
    strings, feature names — asking where it lives, what touches it, current behavior.
    Don't grep manually first; the subagent protects the main context.
+
+   **Scale the fan-out to the band** (from the triage comment's `**Run plan:**` line,
+   or from the effective level): **1–2** read the named file directly, no subagent at
+   all; **3–4** one `Explore` at "medium"; **5–6** one or two at "medium"; **7–8** two
+   or three at "very thorough". Dispatching a subagent fleet at a one-line fix is the
+   waste this scaling exists to prevent — and skipping investigation on a cross-cutting
+   change is the failure on the other side.
 5. **Synthesize the plan**: Problem (one sentence), Approach/Design (the chosen
    direction, naming files/functions), Steps (ordered, concrete, one logical change
    each), Files touched (new/mod/del), Risks/unknowns. **For a user-facing feature,
@@ -262,6 +279,13 @@ anchors, not hard gates — use judgment at the boundaries:
 | **Small** | 1–3 files, one concern, no new logic, <~150 lines | `low` | inline glance, no 4-agent fan-out |
 | **Medium** | 2–5 files / one slice / some new logic | `medium` | run `/simplify` (fan-out is fine) |
 | **Large / risky** | multi-package, schema, cross-adapter, logic-heavy, >~400 lines | `high` | run `/simplify` (fan-out) |
+
+**These tiers are the post-hoc correction.** Triage's run plan set a *predicted*
+review effort before any code existed; this table measures what the change
+actually turned out to be. When the two disagree, **this table wins** — a
+predicted level is a budget, a real diff is evidence. A large gap in either
+direction is worth one line in the Phase 6 hand-back: it is the only feedback
+the levelling scale ever gets.
 
 **Guardrails (unconditional):** never auto-select `/code-review ultra` (the
 cloud, billed, human-only path) and never use the Workflow tool for either
