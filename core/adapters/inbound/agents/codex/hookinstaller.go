@@ -223,16 +223,16 @@ func parseCodexVersion(version string) (major, minor, patch int, ok bool) {
 // cli_version from each session's session_meta header (parser.go), so the
 // newest session reflects the Codex the user is running now.
 //
-// It resolves the ABSOLUTE sessions dir via codexHome rather than sessionsDir:
-// sessionsDir returns a $HOME-relative path (".codex/sessions") when CODEX_HOME
-// is unset (its home expansion happens downstream in fswatcher), which would
-// make this walk run against the daemon's CWD and always find nothing.
+// It resolves the ABSOLUTE sessions dir via codexSessionsDir rather than
+// sessionsDir: sessionsDir returns a $HOME-relative path (".codex/sessions")
+// when CODEX_HOME is unset (its home expansion happens downstream in
+// fswatcher), which would make this walk run against the daemon's CWD and
+// always find nothing.
 func newestObservedCLIVersion() string {
-	home, err := codexHome()
+	dir, err := codexSessionsDir()
 	if err != nil {
 		return ""
 	}
-	dir := filepath.Join(home, "sessions")
 	var newestPath string
 	var newestMod int64
 	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -273,6 +273,20 @@ func codexHome() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".codex"), nil
+}
+
+// codexSessionsDir resolves the absolute sessions tree — $CODEX_HOME/sessions
+// when that override is set, else ~/.codex/sessions — with symlinks resolved so
+// that containment checks against it compare like with like (on macOS both
+// /tmp and a home directory routinely reach the real path through a symlink).
+// It reports an error when the tree does not exist, which is the honest answer
+// for both callers: nothing to walk, and nothing a transcript could sit inside.
+func codexSessionsDir() (string, error) {
+	home, err := codexHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(filepath.Join(home, "sessions"))
 }
 
 func codexHooksPath() (string, error) {

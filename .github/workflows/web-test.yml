@@ -16,7 +16,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm ci
+      # --ignore-scripts: install nothing but the locked package contents, so a
+      # compromised dependency can't run arbitrary code in CI at install time.
+      # The only dep here that declares one is fsevents (darwin-only, watch-mode
+      # only); vitest run needs neither.
+      - run: npm ci --ignore-scripts
         working-directory: ${{ matrix.tree }}
       - run: npm test
         working-directory: ${{ matrix.tree }}

@@ -10,6 +10,11 @@
 ARG GO_VERSION=1.25
 ARG NODE_VERSION=22
 ARG VERSION=docker
+# Pinned like GO_VERSION/NODE_VERSION above: an unpinned `npm install -g` makes
+# the image non-reproducible and silently adopts whatever Claude Code published
+# since the last build. Override with --build-arg CLAUDE_CODE_VERSION=… to test
+# a newer CLI.
+ARG CLAUDE_CODE_VERSION=2.1.220
 
 # ---- builder: compile a static Linux irrlichd ----
 FROM golang:${GO_VERSION}-bookworm AS build
@@ -26,6 +31,7 @@ RUN go build -trimpath -ldflags "-X main.Version=${VERSION}" \
 
 # ---- runtime: Node (Claude Code) + the daemon, run as a non-root user ----
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+ARG CLAUDE_CODE_VERSION
 # git: the scratch repo + Claude's own tooling. tini: PID-1 reaper/signals.
 # procps: handy for debugging inside the container. curl: REQUIRED — the
 # daemon's auto-installed Claude Code hooks POST to the daemon via
@@ -40,7 +46,11 @@ FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git tini procps curl \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @anthropic-ai/claude-code \
+    # No --ignore-scripts here, unlike the sibling coding-factory image: this
+    # package ships bin/claude as a placeholder and its postinstall copies the
+    # matching native binary from optionalDependencies over it. Skipping scripts
+    # leaves the stub, so `claude` never runs and the testbed observes nothing.
+    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && useradd --create-home --shell /bin/bash agent
 COPY --from=build /out/irrlichd /usr/local/bin/irrlichd
 COPY examples/roundtrip/entrypoint.sh /usr/local/bin/entrypoint.sh

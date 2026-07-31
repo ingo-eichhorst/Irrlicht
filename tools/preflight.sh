@@ -187,7 +187,9 @@ fi
 # ---- web group (mirrors web-test.yml) -----------------------------------
 web_tree() {
   local dir="$1"
-  ( cd "$dir" && npm ci && npm test )
+  # --ignore-scripts mirrors web-test.yml: no dependency lifecycle script runs
+  # at install time. Keep the two in step, or preflight stops being CI parity.
+  ( cd "$dir" && npm ci --ignore-scripts && npm test )
   return $?
 }
 
