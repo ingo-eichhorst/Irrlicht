@@ -41,9 +41,13 @@ The argument (if any) is the bump type: `patch` (default), `minor`, or `major`.
 
 ## Step 1.5: Refresh Model Aliases (codeburn sync)
 
-Run the `/ir:refresh-aliases` workflow inline before drafting release notes so
-any new frontend aliases ship with this release instead of waiting another
-cycle. The map in `core/pkg/capacity/aliases.go` is a hand-translated port of
+Run the `/ir:refresh-aliases` workflow inline — see
+`.claude/skills/ir:refresh-aliases/SKILL.md` for the full procedure — before
+drafting release notes so any new frontend aliases ship with this release
+instead of waiting another cycle. Follow the file by path rather than
+invoking the skill by name: a skill added or renamed after this session
+started is not registered in it, so the `Skill` call is rejected while the
+file is right there (#1249). The map in `core/pkg/capacity/aliases.go` is a hand-translated port of
 codeburn's `BUILTIN_ALIASES`; new entries upstream mean real users on new
 frontends (Cursor variants, Antigravity Gemini models, etc.) price at $0
 until we sync.
