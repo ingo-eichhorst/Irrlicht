@@ -342,14 +342,83 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
 
 ## Phase 5 — PR, review, simplify
 
-**Calibrate the depth of steps 13–14 to the diff you just produced** — a
-one-line string edit and a multi-package refactor must not get identical
-scrutiny (spending four `/simplify` subagents on a doc-string is the failure
-this guards against). The diff exists as soon as Phase 4 is done; measure it
-cheaply first:
+**Re-check the base before you push.** Phase 1 fetched `origin/main` at most
+once, to create the worktree — and not at all when step 2's "already in a clean,
+issue-matching worktree" skip fired. The branch point has been frozen ever since,
+while every step that reasons about "what changed" diffs against a
+remote-tracking ref that other agents sharing this `.git` dir advance
+underneath it. On a run of any length — investigation, an approval gate,
+implementation — `main` moves, and nothing in this skill looks again until the
+pre-push hook or the PR itself, by which point the work is committed onto a
+stale base:
 
 ```bash
-git fetch origin main                     # refresh origin/main first; steps 13–14 diff against it, not stale local main
+git status --porcelain                               # MUST be empty first — commit the work before rebasing
+git fetch origin main                                # also refreshes the ref steps 13–14 diff against
+git log --oneline HEAD..origin/main                  # did main move at all?  empty ⇒ base current, skip to calibration
+git diff --name-only -z origin/main...HEAD \
+  | xargs -0 -r git log --oneline HEAD..origin/main --   # did it move *here*?
+```
+
+**Commit the implementation first** — the porcelain check is a precondition, not
+decoration. `git rebase` aborts outright on a dirty tree (`cannot rebase: You have
+unstaged changes`), and the obvious recovery — `git stash` — is the one AGENTS.md
+forbids in a worktree, since the stash stack is shared repo-wide and a concurrent
+agent can pop your WIP. Nothing before this point in the skill has told you to
+commit; step 11a's `git commit -m wip` is a temporary red-first checkpoint that
+gets restored, not the real one. The `origin/main...HEAD` diff is commit-to-commit
+and cannot see the working tree either, so an uncommitted worktree makes the
+collision probe read empty no matter what you changed.
+
+Use the `-z`/`xargs -0 -r` form rather than an unquoted `$(git diff --name-only …)`.
+Both of its failure modes are silent and both point the wrong way: unquoted
+command substitution word-splits a path containing spaces (this repo tracks one)
+into fragments that match nothing, so a real collision reports as clean — the exact
+false negative this block exists to prevent; and on an empty file list the
+substitution leaves a bare trailing `--`, which git reads as *no pathspec at all*,
+so every unrelated commit reports as a collision. `xargs -0 -r` handles both: NUL
+delimiting survives spaces, and `-r` skips the command entirely on empty input
+(GNU honours it; BSD/macOS xargs accepts it and already skips by default).
+
+- **Nothing from the first `log`** — the base is current; continue.
+- **`main` moved, but not into this branch's files** — `git rebase origin/main`,
+  note it in one line, continue.
+- **`main` moved into files this branch touched** — `git rebase origin/main`, then
+  **surface the collision by name**: which commits, which overlapping files. Do not
+  let a clean rebase end the matter. A textual auto-merge is the *dangerous*
+  outcome, not the conflicted one — two branches editing adjacent prose, or
+  adjacent rows of the same table, merge without complaint and produce a document
+  that contradicts itself, and by then you have already reported the work done.
+  Read the merged region on both sides and confirm it still says one coherent
+  thing. Where the reconciliation is semantic rather than textual and you can't
+  verify it yourself, **surface it and pause** — the idiom step 1a, step 9, and
+  step 18 use.
+- **The rebase stops with a conflict** — expected on this path, not an anomaly;
+  the incident below hit exactly that. Resolve each conflicted hunk on its merits
+  (both sides deliberate, so neither `--ours` nor `--theirs` wholesale is an
+  answer), `git add` and `git rebase --continue`, then apply the semantic re-read
+  above. If you can't resolve it confidently, `git rebase --abort` — which returns
+  the branch intact to its pre-rebase state — and **surface it and pause**. Never
+  walk on to step 12 from inside a stopped rebase: `HEAD` is detached mid-replay,
+  so the `--shortstat` below mis-tiers steps 13–14 and the `git push -u` pushes
+  the wrong ref.
+
+  (Real incident: during #1199 / PR #1204, `origin/main` advanced twice mid-run,
+  and PR #1201 landed edits to *both* files that run was in the middle of
+  rewriting. It was caught only because an unrelated line-count check didn't
+  reconcile. The rebase then produced a real conflict in `ir:triage`'s axis table
+  — #1201 edited the Verifiability row while the branch edited the adjacent
+  Specification row — plus two semantic reconciliations a textual auto-merge would
+  have gotten silently wrong.)
+
+**Then calibrate the depth of steps 13–14 to the diff you just produced** — a
+one-line string edit and a multi-package refactor must not get identical
+scrutiny (spending four `/simplify` subagents on a doc-string is the failure
+this guards against). `origin/main` is fresh from the check above, so measure
+against it — never against local `main`, which is not updated when other PRs
+merge:
+
+```bash
 git diff --shortstat origin/main...HEAD   # files + lines; origin/main, not local (stale-ref footgun)
 ```
 
@@ -505,6 +574,10 @@ Phase 6.
 - One worktree + one branch + one PR per issue. Phase 1 step 1a is what enforces
   that against *other* agents' work, not just your own — run it before
   `worktree add`, every time.
+- Phase 5 re-fetches `origin/main` and rebases onto it before the push. Phase 1's
+  branch point is not a base check you can rely on — step 2 skips its fetch when
+  you resume inside an existing worktree — and a run long enough to be worth
+  automating is long enough for `main` to move under it either way.
 - Scale Phase 5 to the diff (the tier table there): trivial changes get a `low`
   review and an inline simplify glance, not a `high` review and a four-agent
   fan-out. Depth follows the change. Step 13 always delegates to exactly one
