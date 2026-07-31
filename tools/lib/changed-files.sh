@@ -26,17 +26,21 @@
 # work counts because a pre-push run should reflect the tree in front of you,
 # not only what is already committed.
 #
-# When origin/main has never been fetched the diff yields nothing, which is
-# byte-for-byte indistinguishable from "this branch changed nothing" — and an
-# empty set scopes every gate down to a skip. An empty diff is a legitimate
-# state, so this warns rather than failing, but it warns loudly: a caller that
-# skipped everything should be able to tell which of the two reasons applied.
+# Returns non-zero when no baseline can be established — origin/main never
+# fetched, a shallow clone, unrelated histories. That case has to be an error
+# rather than an empty set, because an empty set is byte-for-byte what "this
+# branch changed nothing" looks like, and it scopes every gate down to a skip:
+# a fully green pre-push run that checked nothing. A scoped run against an
+# unknown baseline is not a run. Callers are expected to abort.
+#
+# `git merge-base` already fails under exactly those conditions, so its exit
+# status is the check — no separate rev-parse probe needed.
 changed_files_vs_origin_main() {
-  if ! git rev-parse --verify --quiet origin/main >/dev/null; then
-    echo "WARN: origin/main not found — treating this branch as unchanged, so every scoped gate will skip. Run 'git fetch origin main' for a meaningful scoped run." >&2
-  fi
   local base
-  base=$(git merge-base origin/main HEAD 2>/dev/null || echo origin/main)
+  if ! base=$(git merge-base origin/main HEAD 2>/dev/null); then
+    echo "cannot resolve a merge base with origin/main — scoping to a diff against an unknown baseline would skip every gate. Run 'git fetch origin main'." >&2
+    return 1
+  fi
   {
     git diff --name-only "$base" HEAD
     git diff --name-only HEAD
@@ -55,9 +59,10 @@ changed_files_vs_origin_main() {
 go_module_touched() {
   local mod="$1" file
   while IFS= read -r file; do
-    [[ "$file" == "$mod"/* ]] || continue
+    # `*` spans `/` in a case pattern, so "$mod"/*.go means a Go file at any
+    # depth under the module.
     case "$file" in
-      *.go | "$mod"/go.mod | "$mod"/go.sum) return 0 ;;
+      "$mod"/*.go | "$mod"/go.mod | "$mod"/go.sum) return 0 ;;
     esac
   done <<<"$2"
   return 1

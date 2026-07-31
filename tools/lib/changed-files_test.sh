@@ -43,11 +43,19 @@ assert_scope() {
   assert_eq "$label" "$want" "$got"
   return 0
 }
+# assert_contains <label> <needle> <haystack>
+assert_contains() {
+  case "$3" in
+    *"$2"*) pass "$1" ;;
+    *) fail "$1" "contains: $2" "$3" ;;
+  esac
+  return 0
+}
 
-# The real module/tree lists from tools/security-scan.sh, so a rename there
-# that these tests don't follow shows up as a failure rather than silence.
-GO_MODULES=(core tools/onboarding-factory tools/wsload tools/seed-demo-sessions tools/eta-research tools/starhistory)
-WEB_TREES=(platforms/web tools/onboarding-factory/internal/viewer/web)
+# No copy of security-scan.sh's GO_MODULES/WEB_TREES lives here on purpose.
+# These predicates are pure string matching and never stat the filesystem, so
+# a copied list could not detect a rename over there — asserting over one
+# would only restate the same fact per entry while looking like coverage.
 
 # PR #1207's shape: a Go + bash change, zero files under either web tree.
 # The paths are illustrative — these predicates are pure string matching and
@@ -98,20 +106,16 @@ assert_scope "a nested package.json under node_modules is not the tree's manifes
   out web_tree_touched platforms/web "platforms/web/node_modules/postcss/package.json"
 
 echo "== #1213 regression: a Go-only push scopes in no web tree =="
-for tree in "${WEB_TREES[@]}"; do
-  assert_scope "Go-only diff → npm audit SKIPS $tree" \
-    out web_tree_touched "$tree" "$GO_ONLY_DIFF"
-done
+assert_scope "Go-only diff → npm audit SKIPS platforms/web" \
+  out web_tree_touched platforms/web "$GO_ONLY_DIFF"
+assert_scope "Go-only diff → npm audit SKIPS the viewer tree" \
+  out web_tree_touched tools/onboarding-factory/internal/viewer/web "$GO_ONLY_DIFF"
 
 echo "== an empty changed set scopes everything out =="
-for mod in "${GO_MODULES[@]}"; do
-  assert_scope "empty diff → govulncheck/gosec SKIP $mod" \
-    out go_module_touched "$mod" ""
-done
-for tree in "${WEB_TREES[@]}"; do
-  assert_scope "empty diff → npm audit SKIPS $tree" \
-    out web_tree_touched "$tree" ""
-done
+assert_scope "empty diff → govulncheck/gosec SKIP a Go module" \
+  out go_module_touched core ""
+assert_scope "empty diff → npm audit SKIPS a web tree" \
+  out web_tree_touched platforms/web ""
 
 echo "== changed_files_vs_origin_main: real repo, real git =="
 TMP="$(mktemp -d)"
@@ -132,9 +136,10 @@ out=$( cd "$TMP" && . "$DIR/changed-files.sh" && changed_files_vs_origin_main )
 assert_eq "collects committed + staged + unstaged, sorted and de-duplicated" \
   "$(printf 'README.md\ncore/go.mod\ncore/main.go')" "$out"
 
-echo "== changed_files_vs_origin_main: a missing origin/main warns, never passes silently =="
-# An empty result is indistinguishable from "nothing changed", and an empty set
-# scopes every gate to a skip — so the reason has to reach stderr.
+echo "== changed_files_vs_origin_main: no resolvable baseline is an error, not an empty set =="
+# An empty result is byte-for-byte what "nothing changed" looks like, and an
+# empty set scopes every gate to a skip. Returning 0 there would mean a fresh
+# or shallow clone gets a fully green pre-push run that checked nothing.
 NOREMOTE="$(mktemp -d)"
 trap 'rm -rf "$TMP" "$NOREMOTE"' EXIT
 (
@@ -143,10 +148,9 @@ trap 'rm -rf "$TMP" "$NOREMOTE"' EXIT
   echo hi >a.txt && git add -A && git commit -qm base
 ) >/dev/null 2>&1
 nr_err=$( cd "$NOREMOTE" && . "$DIR/changed-files.sh" && changed_files_vs_origin_main 2>&1 >/dev/null )
-case "$nr_err" in
-  *"origin/main not found"*) pass "missing origin/main warns on stderr" ;;
-  *) fail "missing origin/main warns on stderr" "a WARN mentioning origin/main" "$nr_err" ;;
-esac
+nr_rc=$( cd "$NOREMOTE" && . "$DIR/changed-files.sh" && changed_files_vs_origin_main >/dev/null 2>&1; echo $? )
+assert_eq "no origin/main → non-zero return, so callers abort" "1" "$nr_rc"
+assert_contains "no origin/main → explains itself on stderr" "origin/main" "$nr_err"
 
 echo "== callers hard-fail rather than skip everything when this lib is missing =="
 # Without the lib the scoping predicates are undefined; under `set -u` (no -e)
@@ -170,10 +174,7 @@ for script in security-scan.sh preflight.sh; do
   out=$( cd "$REPO_ROOT_FOR_TEST" && bash "$NOLIB/$script" "${args[@]}" 2>&1 )
   rc=$?
   assert_eq "$script --changed with no lib/ → exit 2, not a silent pass" "2" "$rc"
-  case "$out" in
-    *"changed-files.sh"*) pass "$script names the missing lib in its error" ;;
-    *) fail "$script names the missing lib in its error" "mentions changed-files.sh" "$out" ;;
-  esac
+  assert_contains "$script names the missing lib in its error" "changed-files.sh" "$out"
 done
 
 echo ""
