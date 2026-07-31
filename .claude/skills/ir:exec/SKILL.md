@@ -1,6 +1,6 @@
 ---
 name: ir:exec
-description: End-to-end execution of a GitHub issue via `/ir:exec [mode] <N>` — open a worktree, investigate, then either present a visual HTML plan for approval or proceed straight to implementation (mode-dependent), open a PR, review it with /code-review, fix findings, simplify, hand back the PR link with a test-or-merge recommendation, and land the merge on request. `mode` defaults to `auto`, which picks `plan` or `full` from the issue's `/ir:triage` signals. Triggers on "/ir:exec", "exec issue", "implement issue", "plan issue", or when the user gives an issue number/URL and asks to plan, implement, or land it.
+description: End-to-end execution of a GitHub issue via `/ir:exec [mode] <N>` — open a worktree, investigate, then either present a visual HTML plan for approval or proceed straight to implementation (mode-dependent), open a PR, review it with a dedicated review subagent, fix findings, simplify, hand back the PR link with a test-or-merge recommendation, and land the merge on request. `mode` defaults to `auto`, which picks `plan` or `full` from the issue's `/ir:triage` signals. Triggers on "/ir:exec", "exec issue", "implement issue", "plan issue", or when the user gives an issue number/URL and asks to plan, implement, or land it.
 ---
 
 # Execute a GitHub Issue, End to End
@@ -21,7 +21,7 @@ argument.
   → not-already-claimed? → worktree → investigate → (auto resolves to plan or full here)
     → plan: HTML + ⛔ approval, or full: inline summary → assign issue
     → implement → verify
-    → PR → /code-review (effort scaled to diff) → fix → /simplify (or inline) → recommendation [plan / full stop here]
+    → PR → review subagent (effort scaled to diff) → fix → /simplify (or inline) → recommendation [plan / full stop here]
     → land: confirm mergeable → squash-merge → remove worktree   [close]
 ```
 
@@ -306,12 +306,31 @@ git diff --shortstat origin/main...HEAD   # files + lines; origin/main, not loca
 many packages?) and read it into one of four tiers. These are calibration
 anchors, not hard gates — use judgment at the boundaries:
 
-| Diff tier | Looks like | Step 13 review | Step 14 simplify |
+| Diff tier | Looks like | Step 13 review effort | Step 14 simplify |
 |---|---|---|---|
 | **Trivial** | docs / comments / string-constants / config only, or ≤~30 non-test lines in 1 file | `low` | **skip the fan-out** — do an inline reuse/simplification/efficiency/altitude glance and say so |
 | **Small** | 1–3 files, one concern, no new logic, <~150 lines | `low` | inline glance, no 4-agent fan-out |
 | **Medium** | 2–5 files / one slice / some new logic | `medium` | run `/simplify` (fan-out is fine) |
 | **Large / risky** | multi-package, schema, cross-adapter, logic-heavy, >~400 lines | `high` | run `/simplify` (fan-out) |
+
+**The two columns are read independently.** A diff can legitimately land on
+different rows for review and for simplify, and forcing one row on both is a
+misread, not consistency. Take each column from whichever row describes that
+axis best:
+
+- **Review effort** follows how much *new behaviour or procedure* the diff
+  introduces — how much there is to get wrong.
+- **Simplify depth** follows what *kind of material* changed — a 4-agent
+  code-simplification fan-out returns nothing on prose, config, or fixtures
+  no matter how long the diff is.
+
+Worked example (this skill's own #1205 PR): docs-only markdown, which is the
+**Trivial** row's decisive clause for simplify — but two files of substantive
+new procedure, so **Medium** for review. Split that way, the `medium` review
+found a real defect that a `low` pass would have missed, while a `/simplify`
+fan-out would have had nothing to chew on. **Say which row you took each
+column from** whenever they differ, so the split is a visible decision rather
+than a silent inconsistency.
 
 **These tiers are the post-hoc correction.** Triage's run plan set a *predicted*
 review effort before any code existed; this table measures what the change
@@ -320,10 +339,12 @@ predicted level is a budget, a real diff is evidence. A large gap in either
 direction is worth one line in the Phase 6 hand-back: it is the only feedback
 the levelling scale ever gets.
 
-**Guardrails (unconditional):** never auto-select `/code-review ultra` (the
-cloud, billed, human-only path) and never use the Workflow tool for either
-step. The auto range is bounded **low↔high**; `max`/`ultra` stay
-human-triggered.
+**Guardrails (unconditional):** the built-in `/code-review` is human-only at
+*every* tier (it is `disable-model-invocation`), so no run auto-selects it —
+least of all `ultra`, the cloud, billed path. Step 13 is bounded to **one**
+review subagent at **low↔high** effort; `xhigh`/`max` and anything reaching for
+the built-in stay human-triggered, and the Workflow tool is never used for
+either step.
 
 12. **Open the PR** against `main`:
     ```bash
@@ -331,16 +352,55 @@ human-triggered.
     gh pr create --base main --fill   # or a written title/body; reference "Closes #<N>"
     ```
     End the PR body with the `🤖 Generated with [Claude Code]` line.
-13. **Review the diff** at the **calibrated effort** (`low` for trivial/small,
-    up to `high` for large/risky — never `ultra`/Workflow). Run the
-    `/code-review` skill with the **explicit base** `origin/main...HEAD` (e.g.
-    `/code-review low origin/main...HEAD`), then fix every finding it surfaces
-    in the worktree and push the fixes. A single review pass, not a fan-out.
-    Pass the base explicitly because in this worktree *both* of the skill's own
+13. **Review the diff** at the **calibrated effort** — by delegating to a
+    single review subagent, not by reviewing it yourself (the mind that just
+    wrote the code is the weakest available reviewer of it).
+
+    **Confirm the reviewer exists first.** This step's entire substance lives
+    in another file, so a moved or renamed skill leaves the subagent pointed at
+    a dead path, reviewing from nothing — the same silent degradation #1205 was
+    about, wearing a different mask:
+    ```bash
+    test -f .claude/skills/ir:code-review/SKILL.md && echo OK || echo MISSING
+    ```
+    On `MISSING`, **surface it and pause** — don't improvise a review, don't
+    fall through to step 14 — the idiom step 9 uses for a failed self-assign
+    and step 18 for an unmergeable PR.
+
+    Then spawn one `Agent` (`subagent_type: general-purpose`,
+    `run_in_background: false` so Phase 5 can't race past its own gate) whose
+    prompt names:
+    - the worktree path, the issue number, and one line of intent — a fresh
+      reviewer knows nothing about the plan, so a deliberate decision left
+      unstated comes back as a finding;
+    - the **effort** from the tier table above;
+    - the **explicit base** `origin/main...HEAD`;
+    - the instruction to follow `.claude/skills/ir:code-review/SKILL.md` —
+      point at it *by path*, which works whether or not skill invocation is
+      available inside a subagent;
+    - an explicit **"return the findings themselves as your final text"**. A
+      subagent's tool calls never reach you — only its final message does — so
+      a reviewer that files its findings through a tool and replies "3 findings
+      reported" hands you nothing, and an empty-looking return reads as a clean
+      gate at step 15.
+
+    The reviewer reports; **you** fix. Apply every surviving finding in the
+    worktree, push, and state in the transcript what came back — including an
+    explicit "no findings", so a clean gate stays distinguishable from a
+    skipped one. **One subagent, never a fan-out**, and never the Workflow tool.
+
+    Pass the base explicitly because in this worktree *both* of the convenient
     defaults mislead: the local `main` ref is stale (never updated when other
     PRs merge, so `main...HEAD` drags in already-merged hunks) and after step
     12's `git push -u`, `@{upstream}...HEAD` is ~empty (upstream now points at
     the pushed branch, so it reviews nothing).
+
+    ⚠ **Neither built-in review skill is a substitute.** `/code-review` is
+    `disable-model-invocation`: the `Skill` tool refuses it and it cannot be
+    reached from `Bash` either — don't attempt it. `/review` is *not* a
+    fallback either; it parses its first argument as a PR number, so
+    `/review low origin/main...HEAD` runs `gh pr view low` and reviews a PR
+    that doesn't exist. A *human* can still run `/code-review` — see step 15.
 14. **Simplify per the tier.** For **Medium/Large** diffs run the `/simplify`
     skill with the same explicit base (`/simplify origin/main...HEAD`, for the
     reason in step 13); for **Trivial/Small** diffs skip its 4-agent fan-out
@@ -351,13 +411,16 @@ human-triggered.
 
 15. **Present the final PR link** and ask whether the user wants to **test** or **merge**.
     Make a recommendation, and let your **confidence** decide which you lead with:
-    - **Lean merge** when: `/code-review` came back clean (no unresolved findings), all
-      relevant suites are green, and the diff is small/low-risk and fully covered by
-      tests. Suggested: proceed to Phase 7 (land), or `/ir:exec close`.
+    - **Lean merge** when: the review subagent came back clean (no unresolved
+      findings), all relevant suites are green, and the diff is small/low-risk and
+      fully covered by tests. Suggested: proceed to Phase 7 (land), or `/ir:exec close`.
     - **Lean test-first** when: review raised non-trivial findings, tests are
       failing/flaky/absent for the behavior, the diff is large or risky, or the change
       is user-visible and only confirmable by running it. Point at `/verify`, or
-      `/ir:test-mac` for macOS-app changes.
+      `/ir:test-mac` for macOS-app changes. For a **large or risky** diff, also say
+      plainly that step 13's subagent is the weaker reviewer and suggest the user run
+      `/code-review <tier> origin/main...HEAD` themselves before merging — that path
+      is human-only, so offering it is the only way it ever happens.
     State the recommendation in one line with the reason; the merge decision is the
     user's. A reply of "merge" (or `/ir:exec close`) moves into Phase 7.
 
@@ -393,7 +456,9 @@ Phase 6.
   `worktree add`, every time.
 - Scale Phase 5 to the diff (the tier table there): trivial changes get a `low`
   review and an inline simplify glance, not a `high` review and a four-agent
-  fan-out. Depth follows the change, and never auto-escalates to `ultra`/Workflow.
+  fan-out. Depth follows the change. Step 13 always delegates to exactly one
+  review subagent running `.claude/skills/ir:code-review/SKILL.md` — it never
+  reaches for the built-in `/code-review` (human-only) and never uses Workflow.
 - User-facing features ship on every applicable frontend (macOS + web), or the plan
   says explicitly why not (Phase 2). Verify each one directly rather than trusting an
   adjacent green test suite (Phase 4) — see the Activity Matrix incident above.
