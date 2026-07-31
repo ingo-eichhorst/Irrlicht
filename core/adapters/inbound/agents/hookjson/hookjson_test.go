@@ -22,43 +22,50 @@ const (
 	matcher          = "Bash|Write"
 )
 
-func httpConfig(path string) Config {
+// testConfig holds everything the two shapes share, so httpConfig and cmdConfig
+// below differ by exactly what a real adapter differs by — sentinel, entry
+// builder, canonical predicate — and nothing else.
+func testConfig(path, sentinel string, entry func() map[string]interface{}, isCanonical func(map[string]interface{}) bool) Config {
 	return Config{
-		Path:       path,
-		Sentinel:   httpSentinel,
-		Events:     []string{eventWithMatcher, eventNoMatcher},
-		MatcherFor: matcherForTestEvent,
-		Entry: func() map[string]interface{} {
+		Path:        path,
+		Sentinel:    sentinel,
+		Events:      []string{eventWithMatcher, eventNoMatcher},
+		MatcherFor:  matcherForTestEvent,
+		Entry:       entry,
+		IsCanonical: isCanonical,
+		WriteFile:   writeTestFile,
+	}
+}
+
+// httpConfig models a claudecode-shaped adapter: native `type: http` delivery,
+// and a canonical check that rejects any leftover legacy `command` key.
+func httpConfig(path string) Config {
+	return testConfig(path, httpSentinel,
+		func() map[string]interface{} {
 			return map[string]interface{}{"type": "http", "url": httpURL, "timeout": 5}
 		},
-		IsCanonical: func(hook map[string]interface{}) bool {
+		func(hook map[string]interface{}) bool {
 			if _, hasCmd := hook["command"]; hasCmd {
 				return false
 			}
 			t, _ := hook["type"].(string)
 			u, _ := hook["url"].(string)
 			return t == "http" && u == httpURL
-		},
-		WriteFile: writeTestFile,
-	}
+		})
 }
 
+// cmdConfig models a codex-shaped adapter: a `type: command` curl, canonical
+// when the command matches ours exactly.
 func cmdConfig(path string) Config {
-	return Config{
-		Path:       path,
-		Sentinel:   cmdSentinel,
-		Events:     []string{eventWithMatcher, eventNoMatcher},
-		MatcherFor: matcherForTestEvent,
-		Entry: func() map[string]interface{} {
+	return testConfig(path, cmdSentinel,
+		func() map[string]interface{} {
 			return map[string]interface{}{"type": "command", "command": cmdCommand, "timeout": 5}
 		},
-		IsCanonical: func(hook map[string]interface{}) bool {
+		func(hook map[string]interface{}) bool {
 			t, _ := hook["type"].(string)
 			c, _ := hook["command"].(string)
 			return t == "command" && c == cmdCommand
-		},
-		WriteFile: writeTestFile,
-	}
+		})
 }
 
 // matcherForTestEvent mirrors the real adapters' rule: every event but the
