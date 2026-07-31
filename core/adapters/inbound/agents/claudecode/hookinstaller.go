@@ -10,14 +10,29 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"irrlicht/core/pkg/daemonaddr"
 )
+
+// hookEndpointPath is the daemon's Claude Code hook path. Host and port are
+// resolved at install time from the daemon's own bind address, so a daemon on
+// an alternate port installs hooks that reach it rather than whatever owns
+// :7837 (issue #1178).
+const hookEndpointPath = "/api/v1/hooks/claudecode"
 
 // hookSentinel is the substring in the hook entry (curl command or http url)
 // that identifies irrlicht-managed entries. Used by both install (idempotency
-// check) and uninstall, and by the curl→http migration. It is a substring of
-// both the legacy command and the current URL, so a pre-#1161 install is still
-// recognized as ours and upgraded in place.
-const hookSentinel = "localhost:7837/api/v1/hooks/claudecode"
+// check) and uninstall, and by the delivery-form migration. It is deliberately
+// port-independent: a sentinel carrying a port would stop recognizing our own
+// entries the moment the daemon moves, orphaning them and appending a
+// duplicate group instead of upgrading in place (#1178). As the bare endpoint
+// path it is a substring of the legacy curl command, of a pre-#1178 :7837
+// url, and of the current url alike.
+//
+// It is also a prefix of statuslineSentinel, which is harmless: hook entries
+// and statusLine.command live under disjoint keys of settings.json and are
+// never matched against each other.
+const hookSentinel = hookEndpointPath
 
 // hookEndpointURL is the daemon endpoint the installed hook posts to. Claude
 // Code delivers the hook payload as a JSON POST body directly to this URL via
@@ -26,7 +41,9 @@ const hookSentinel = "localhost:7837/api/v1/hooks/claudecode"
 // missing from PATH, which was the failure mode the OpenToolStalled transcript
 // fallback (#488) exists to cover; that fallback is retained (it still covers a
 // down/unreachable daemon), but its primary trigger is now gone.
-const hookEndpointURL = "http://localhost:7837/api/v1/hooks/claudecode"
+func hookEndpointURL() string {
+	return daemonaddr.LocalURL(hookEndpointPath)
+}
 
 // hookTimeoutSeconds bounds how long Claude Code waits on the daemon before
 // giving up on a hook delivery. The daemon's handler is near-instant (an
@@ -103,7 +120,7 @@ func matcherForEvent(event string) string {
 func ourHookEntry() map[string]interface{} {
 	return map[string]interface{}{
 		"type":    "http",
-		"url":     hookEndpointURL,
+		"url":     hookEndpointURL(),
 		"timeout": hookTimeoutSeconds,
 	}
 }
@@ -427,11 +444,15 @@ func hookEntryIsSentinel(hook map[string]interface{}) bool {
 // legacy `command` key. The timeout value is deliberately not part of the
 // identity check, so tuning hookTimeoutSeconds never forces a churny rewrite of
 // every existing install.
+//
+// The url comparison is against the *currently resolved* endpoint, so an entry
+// left behind by a daemon on a different port reads as stale and is rewritten
+// in place by upgradeStaleHookDelivery (#1178).
 func hookEntryIsCanonical(hook map[string]interface{}) bool {
 	if _, hasCmd := hook["command"]; hasCmd {
 		return false
 	}
 	t, _ := hook["type"].(string)
 	u, _ := hook["url"].(string)
-	return t == "http" && u == hookEndpointURL
+	return t == "http" && u == hookEndpointURL()
 }

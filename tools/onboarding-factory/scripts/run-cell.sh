@@ -180,9 +180,10 @@ REPLAY_BIN="$REPO_ROOT/.build/refresh/bin/replay"
 # bind port, so it coexists with a running production irrlichd instead of
 # clashing on 7837. Filesystem-observed adapters (codex/pi/aider/opencode)
 # record fine this way because they watch the real $HOME (e.g.
-# ~/.codex/sessions) regardless of IRRLICHT_HOME. claudecode is the one
-# exception — its hooks POST to a hardcoded :7837 — so precheck refuses
-# claudecode in coexist mode.
+# ~/.codex/sessions) regardless of IRRLICHT_HOME. Hook-driven observation
+# (claudecode, codex) works too since #1178: the endpoint the installers write
+# follows IRRLICHT_BIND_ADDR, so hooks reach this daemon rather than
+# production's.
 ONBOARD_HOME="${IRRLICHT_ONBOARD_HOME:-}"
 if [[ -n "$ONBOARD_HOME" ]]; then
   # Coexist mode: default to an alternate port so we don't clash with a
@@ -252,6 +253,38 @@ else
   # grant-all: the consent-first permission gate (#570) would otherwise
   # leave a fresh recording daemon monitoring nothing until a wizard is
   # answered — fixtures must never hang on consent.
+  # The recording daemon installs its hooks into the user's REAL agent config
+  # (~/.claude/settings.json, $CODEX_HOME/hooks.json) — those paths follow
+  # $HOME, not IRRLICHT_HOME, so IRRLICHT_ONBOARD_HOME does not isolate them —
+  # and since #1178 the endpoint it writes carries $ONBOARD_BIND's port. On an
+  # alternate port that repoints a running production daemon's hooks at the
+  # recorder, and grant-all can install entries the user had denied. Snapshot
+  # before the daemon starts, restore on cleanup, so a recording never outlives
+  # its own edits to config it does not own.
+  HOOK_BACKUP_DIR="$STAGING/hook-config-backup"
+  HOOK_CONFIG_FILES=("$HOME/.claude/settings.json" "${CODEX_HOME:-$HOME/.codex}/hooks.json")
+  mkdir -p "$HOOK_BACKUP_DIR"
+  for i in "${!HOOK_CONFIG_FILES[@]}"; do
+    if [[ -f "${HOOK_CONFIG_FILES[$i]}" ]]; then
+      cp "${HOOK_CONFIG_FILES[$i]}" "$HOOK_BACKUP_DIR/$i"
+    else
+      : > "$HOOK_BACKUP_DIR/$i.absent"
+    fi
+  done
+
+  # restore_hook_configs puts each snapshotted file back exactly as it was —
+  # including removing one the daemon created from nothing.
+  restore_hook_configs() {
+    local i
+    for i in "${!HOOK_CONFIG_FILES[@]}"; do
+      if [[ -f "$HOOK_BACKUP_DIR/$i" ]]; then
+        cp "$HOOK_BACKUP_DIR/$i" "${HOOK_CONFIG_FILES[$i]}"
+      elif [[ -f "$HOOK_BACKUP_DIR/$i.absent" ]]; then
+        rm -f "${HOOK_CONFIG_FILES[$i]}"
+      fi
+    done
+  }
+
   DAEMON_ENV=(IRRLICHT_RECORDINGS_DIR="$STAGING/recordings"
               IRRLICHT_BIND_ADDR="$ONBOARD_BIND"
               IRRLICHT_PERMISSION_MODE=grant-all)
@@ -264,12 +297,19 @@ else
   DAEMON_PID=$!
   echo "daemon started (pid $DAEMON_PID, bind=$ONBOARD_BIND${ONBOARD_HOME:+, home=$ONBOARD_HOME})"
 
-  # Cleanup: graceful shutdown. Runs once: either via explicit call
-  # before transcript resolution (we must drain before continuing), or
-  # as the EXIT trap if we fail before reaching that point. `trap - EXIT`
-  # after the explicit call prevents double-invocation.
+  # Cleanup: graceful shutdown, then hand the user's agent config back. Runs
+  # once: either via explicit call before transcript resolution (we must drain
+  # before continuing), or as the EXIT trap if we fail before reaching that
+  # point. `trap - EXIT` after the explicit call prevents double-invocation.
   SHUTDOWN_REASON="unknown"
   cleanup() {
+    stop_daemon
+    restore_hook_configs
+  }
+
+  # stop_daemon escalates INT -> TERM -> KILL, giving the recorder time to
+  # flush between each.
+  stop_daemon() {
     if kill -0 "$DAEMON_PID" 2>/dev/null; then
       SHUTDOWN_REASON="sigint"
       kill -INT "$DAEMON_PID" 2>/dev/null || true

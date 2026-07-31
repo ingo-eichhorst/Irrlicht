@@ -8,6 +8,8 @@ package claudecode
 import (
 	"regexp"
 	"strings"
+
+	"irrlicht/core/pkg/daemonaddr"
 )
 
 // unchainBoundary matches the boundary between the user's tee-fed
@@ -16,15 +18,32 @@ import (
 // round-trips through unchainStatuslineCommand.
 var unchainBoundary = regexp.MustCompile(`\)\s*\|\s*curl\s`)
 
-// v3WrapPrefix is the fixed leading literal of the current wrap format.
-// The user's command follows immediately after this prefix and is
-// terminated by a closing single quote.
-const v3WrapPrefix = `bash -c 'tee >(` + installedStatuslineCommand + `) | `
+// wrapPipeBoundary matches the `) | ` that closes the process substitution in
+// a v3 wrap and opens the rest of the pipeline. Whitespace-tolerant for the
+// same reason as unchainBoundary.
+var wrapPipeBoundary = regexp.MustCompile(`\)\s*\|\s*`)
+
+// v3WrapOpen is the fixed opening literal of the current wrap format. Only the
+// opening is fixed: the curl command that follows carries the resolved daemon
+// port (#1178), so a v3 wrap is recognized structurally — see unchainV3 —
+// rather than by matching a full literal prefix.
+const v3WrapOpen = `bash -c 'tee >(`
+
+// v3WrapPipe is the literal separating our curl process substitution from the
+// user's command in a v3 wrap.
+const v3WrapPipe = `) | `
+
+// statuslineEndpointPath is the daemon's statusline ingest path. Host and port
+// are resolved at install time from the daemon's own bind address (#1178).
+const statuslineEndpointPath = "/api/v1/hooks/claudecode/statusline"
 
 // statuslineSentinel is the substring that identifies an irrlicht-managed
 // statusline command. Used for idempotency checks and chained-command
-// upgrades.
-const statuslineSentinel = "localhost:7837/api/v1/hooks/claudecode/statusline"
+// upgrades. Port-independent for the same reason as hookSentinel: a command
+// installed by a daemon on one port must still be recognized — and rewritten
+// in place — by a daemon on another, rather than being mistaken for a
+// third-party command and wrapped a second time (#1178).
+const statuslineSentinel = statuslineEndpointPath
 
 // installedStatuslineCommand is the canonical statusLine.command we install.
 // Reads the statusline JSON from stdin, POSTs it to the daemon, then echoes
@@ -37,8 +56,10 @@ const statuslineSentinel = "localhost:7837/api/v1/hooks/claudecode/statusline"
 //   - -fsS  : fail silently on HTTP errors, but show curl errors on stderr
 //   - --max-time 1 : abort if the daemon is unreachable, keeps statusline snappy
 //   - || true: don't surface non-zero exit (e.g. daemon down) to Claude Code
-const installedStatuslineCommand = "curl -fsS --max-time 1 -X POST --data-binary @- " +
-	"http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true"
+func installedStatuslineCommand() string {
+	return "curl -fsS --max-time 1 -X POST --data-binary @- " +
+		daemonaddr.LocalURL(statuslineEndpointPath) + " >/dev/null 2>&1 || true"
+}
 
 // EnsureStatuslineInstalled adds (or upgrades) the statusLine.command entry
 // in ~/.claude/settings.json. Returns true when the file was modified.
@@ -155,8 +176,9 @@ func writeStatuslineCommand(settings map[string]interface{}, cmd string) {
 // tee pipeline; v2: user command in the process sub) are migrated on the
 // next daemon start via unchainStatuslineCommand + re-chain.
 func chainStatuslineCommand(current string) string {
-	if current == "" || current == installedStatuslineCommand {
-		return installedStatuslineCommand
+	canonical := installedStatuslineCommand()
+	if current == "" || current == canonical {
+		return canonical
 	}
 	// If current is already a managed wrap (old or new format), unchain to
 	// recover the user's original command, then re-chain in the canonical
@@ -168,7 +190,7 @@ func chainStatuslineCommand(current string) string {
 	}
 	if strings.Contains(current, statuslineSentinel) {
 		// Managed standalone — no user command to preserve. Force canonical.
-		return installedStatuslineCommand
+		return canonical
 	}
 	// Pure user command — wrap it.
 	return wrapStatuslineCommand(current)
@@ -182,7 +204,7 @@ func chainStatuslineCommand(current string) string {
 // runs last so its stdout reaches Claude Code directly.
 func wrapStatuslineCommand(user string) string {
 	escaped := strings.ReplaceAll(user, "'", `'\''`)
-	return v3WrapPrefix + escaped + `'`
+	return v3WrapOpen + installedStatuslineCommand() + v3WrapPipe + escaped + `'`
 }
 
 // unchainStatuslineCommand returns the user's original command when current
@@ -195,15 +217,38 @@ func wrapStatuslineCommand(user string) string {
 //
 // v1 and v2 are still recognised for migration; new installs always emit v3.
 func unchainStatuslineCommand(current string) string {
-	// v3: user command follows the fixed curl-in-sub prefix and a closing quote.
-	// Note: v2 also ends with "'" (its bash -c closing quote), but v2 starts
-	// with `bash -c 'tee >(user`, not `bash -c 'tee >(curl`, so the HasPrefix
-	// check is unambiguous.
-	if strings.HasPrefix(current, v3WrapPrefix) && strings.HasSuffix(current, "'") {
-		inner := current[len(v3WrapPrefix) : len(current)-1]
-		return strings.ReplaceAll(inner, `'\''`, "'")
+	if user, ok := unchainV3(current); ok {
+		return user
 	}
-	// v1/v2: user command is before the `) | curl ` boundary.
+	return unchainLegacyWrap(current)
+}
+
+// unchainV3 recovers the user's command from a v3 wrap:
+//
+//	bash -c 'tee >(<our curl>) | <user>'
+//
+// Detection is structural rather than a full literal-prefix match, because our
+// curl carries the resolved daemon port — a wrap written by a daemon on one
+// port must still unwind under another, or the user's command would be
+// silently dropped when the port changes (#1178). What separates v3 from the
+// v2 wrap (`bash -c 'tee >(<user>) | curl … sentinel …'`) is which side of the
+// pipe our sentinel sits on: left for v3, right for v2.
+func unchainV3(current string) (string, bool) {
+	if !strings.HasPrefix(current, v3WrapOpen) || !strings.HasSuffix(current, "'") {
+		return "", false
+	}
+	rest := current[len(v3WrapOpen) : len(current)-1]
+	loc := wrapPipeBoundary.FindStringIndex(rest)
+	if loc == nil || !strings.Contains(rest[:loc[0]], statuslineSentinel) {
+		return "", false
+	}
+	return strings.ReplaceAll(rest[loc[1]:], `'\''`, "'"), true
+}
+
+// unchainLegacyWrap recovers the user's command from a v1 or v2 wrap, where
+// the user's command sits before the `) | curl ` boundary. Returns "" when
+// current is neither shape.
+func unchainLegacyWrap(current string) string {
 	for _, prefix := range []string{`bash -c 'tee >(`, `tee >(`} {
 		if !strings.HasPrefix(current, prefix) {
 			continue

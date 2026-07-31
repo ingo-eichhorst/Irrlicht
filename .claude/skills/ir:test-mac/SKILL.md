@@ -30,9 +30,10 @@ independent axes:
     daemon binds port **7838** and stores its state under a worktree-local
     `IRRLICHT_HOME`; the dev app is assembled at `/tmp/IrrlichtDev.app` and
     connects to 7838 via `IRRLICHT_DAEMON_PORT`. Production stays up
-    untouched on 7837. Note: the Claude Code statusline hook is hardcoded to
-    POST quota data to 7837, so a separate dev instance shows the
-    **subscription empty-state** (no rate-limit data) — that's expected.
+    untouched on 7837. Since #1178 the Claude Code hooks and statusline feed
+    follow the daemon's own bind address, so the dev daemon receives them —
+    but it installs them into the shared `~/.claude/settings.json`, which
+    repoints production's hooks at 7838 until production restarts.
 - **TARGET** — `full` (default), `daemon`, or `macos`:
   - **full** — rebuild and restart both the daemon and the app. Today's only
     behavior before this axis existed.
@@ -89,7 +90,7 @@ independent axes:
    esac
 
    if [ "$MODE" = "replace" ]; then
-     PORT=7837                                          # production port (statusline quota hook targets this)
+     PORT=7837                                          # production port
      DEV_HOME=""                                        # no IRRLICHT_HOME override → production state dir
      SOCK="$HOME/.local/share/irrlicht/irrlichd.sock"   # production socket
      APP_TARGET="$PROD_APP"
@@ -443,7 +444,7 @@ independent axes:
 
 ## Notes
 - **separate mode — production keeps running.** The production Irrlicht.app (from DMG) and its bundled daemon stay on port 7837 with state under `~/.local/share/irrlicht/` + `~/Library/Application Support/Irrlicht/`. The dev instance binds port 7838 and routes its WRITTEN state — socket, recordings, history, session store, ledgers, and cost store — beneath `IRRLICHT_HOME=$DEV_HOME`, so it never prunes or mutates production's session/cost data. The dev app reaches the dev daemon because `IRRLICHT_DAEMON_PORT` (via `open --env`) overrides the hardcoded default; `DaemonManager` also skips its global `pkill` when a custom port is set, so it can't take production down.
-- **separate mode shares with production:** it reads the same `~/.claude` transcripts (so the dev UI shows the same live sessions) and appends to the same `~/Library/Application Support/Irrlicht/logs/events.log`. It does NOT share the on-disk session/ledger/cost stores — and it does NOT receive the statusline quota feed (that hook posts only to 7837), so the subscription panel shows its empty-state.
+- **separate mode shares with production:** it reads the same `~/.claude` transcripts (so the dev UI shows the same live sessions) and appends to the same `~/Library/Application Support/Irrlicht/logs/events.log`. It does NOT share the on-disk session/ledger/cost stores. It DOES receive the hook + statusline quota feed since #1178 (both follow `IRRLICHT_BIND_ADDR`), at the cost of repointing the shared `~/.claude/settings.json` at 7838 for as long as the dev daemon is the last one to have installed — production picks its own port back up on its next start.
 - **replace mode — single instance on production's footprint.** Runs the dev binaries on port 7837 with the production state dir (no `IRRLICHT_HOME`), so the statusline quota feed and the production session/cost/ledger stores all apply, and (for `TARGET=macos`/`full`) the Swift app is installed directly into `/Applications/Irrlicht.app` rather than a parallel bundle. Because the dev daemon runs with `--record`, recordings land in the production recordings dir (`~/.local/share/irrlicht/recordings/`). **⚠️ The dev daemon mutates production data.** Without `IRRLICHT_HOME` its startup sweeps (`PruneStale` / dead-proc / orphan-ledger / cost prune) run against the real `~/.local/share/irrlicht/` + `~/Library/Application Support/Irrlicht/` stores — this is exactly the isolation #448 added, deliberately removed here. Only use replace mode when the dev build's on-disk schema matches the installed production build; a dev branch mid-migration can prune or rewrite production sessions/ledgers/cost rows that the production binary then misreads. **Returning to production requires the teardown step** (run `restore-prod.sh`) — quitting the app does NOT stop the adopted daemon, and a relaunched (or freshly *reinstalled*) production app will silently adopt the leftover dev daemon on 7837 if you skip it. Running the installer is not a substitute: it replaces the app bundle, not the running daemon.
 - **Backup freshness.** `PROD_BACKUP` is refreshed automatically whenever step 5 finds `$PROD_APP` still Developer-ID-signed (i.e. a genuine, untouched production build) — so installing a *new* production release via the DMG/PKG installer, then running replace mode again, correctly captures the new release as the restore baseline instead of reinstalling a stale one. If `$PROD_APP` is already dev-signed (mid-test) and `PROD_BACKUP` is missing (e.g. `.build` was wiped), step 5 refuses to proceed rather than overwriting the last remaining copy with no safety net — reinstall via the DMG/PKG installer to recover.
 - Daemon logs: `/tmp/irrlichd-dev.log` · Swift app logs: `/tmp/irrlicht-app-dev.log`
