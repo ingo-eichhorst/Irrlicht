@@ -132,8 +132,7 @@ worktree name. `close` additionally resolves it from `pwd` / `git status -sb` /
    triage comment, and the assumption you are making in place of each. Then proceed
    normally.
    ```
-   ⚠ #977 is needs-info (blockers: pick a direction; state a target).
-     Proceeding per `full`; assuming <X> and <Y>.
+   ⚠ #977 is needs-info (blockers: pick a direction; state a target). Proceeding per `full`; assuming <X>, <Y>.
    ```
    Naming a mode is the user's decision to skip the gate, so this **never** becomes a
    second gate: don't refuse, don't stop the turn, don't ask for confirmation. The
