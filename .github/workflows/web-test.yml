@@ -19,7 +19,17 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          # jsdom 30 pulls undici 8, whose webidl layer calls
+          # worker_threads.markAsUncloneable — added in Node 22.10 and absent
+          # from the whole Node 20 line. On 20 it is not a slow or flaky
+          # failure but a total one: every vitest worker dies before it can
+          # collect a single test, so the run reports "no tests" alongside one
+          # unhandled error per test file, which reads like a config problem
+          # rather than a missing runtime API. jsdom declares
+          # ^22.22.2 || ^24.15.0 || >=26.0.0; '24' resolves to the newest 24.x
+          # and stays inside that range, and the Node 20 line is deprecated on
+          # GitHub runners anyway.
+          node-version: '24'
       # --ignore-scripts: install nothing but the locked package contents, so a
       # compromised dependency can't run arbitrary code in CI at install time.
       # The only dep here that declares one is fsevents (darwin-only, watch-mode
