@@ -26,11 +26,15 @@
 # work counts because a pre-push run should reflect the tree in front of you,
 # not only what is already committed.
 #
-# When origin/main has never been fetched the merge-base lookup falls back to
-# the literal ref and the diff against a missing ref yields nothing — so
-# callers see an empty set and scope down to nothing rather than erroring out
-# mid-hook.
+# When origin/main has never been fetched the diff yields nothing, which is
+# byte-for-byte indistinguishable from "this branch changed nothing" — and an
+# empty set scopes every gate down to a skip. An empty diff is a legitimate
+# state, so this warns rather than failing, but it warns loudly: a caller that
+# skipped everything should be able to tell which of the two reasons applied.
 changed_files_vs_origin_main() {
+  if ! git rev-parse --verify --quiet origin/main >/dev/null; then
+    echo "WARN: origin/main not found — treating this branch as unchanged, so every scoped gate will skip. Run 'git fetch origin main' for a meaningful scoped run." >&2
+  fi
   local base
   base=$(git merge-base origin/main HEAD 2>/dev/null || echo origin/main)
   {

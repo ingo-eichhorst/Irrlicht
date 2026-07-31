@@ -94,6 +94,13 @@ want() {
 # agree on what "changed" means (issue #1213).
 CHANGED_FILES=""
 if [[ "$CHANGED" == 1 ]]; then
+  # Fatal, not a silent full-skip: without the lib the changed set would stay
+  # empty, every scoped gate would record SKIP, and the run would exit 0 — a
+  # green pre-push hook that ran nothing at all.
+  if [[ ! -r "$SCRIPT_DIR/lib/changed-files.sh" ]]; then
+    echo "cannot read $SCRIPT_DIR/lib/changed-files.sh — refusing to pass a run that would skip every gate" >&2
+    exit 2
+  fi
   # shellcheck source=lib/changed-files.sh
   . "$SCRIPT_DIR/lib/changed-files.sh"
   CHANGED_FILES=$(changed_files_vs_origin_main)

@@ -91,6 +91,16 @@ ok()   { local msg="$1"; echo "OK: $msg"; return 0; }
 CHANGED_FILES=""
 SKIPPED=0
 if [[ "$CHANGED" -eq 1 ]]; then
+  # A missing lib has to be fatal rather than a silent full-skip. This script
+  # runs under `set -u` without `-e`, so a failed source would leave the
+  # predicates undefined; every in-scope test would then return 127, every
+  # scanner would fall out of scope, and the run would exit 0 reporting
+  # "passed" — a clean bill of health from a scan that never happened, which
+  # is the one outcome the policy at the top of this file rules out.
+  if [[ ! -r "$SCRIPT_DIR/lib/changed-files.sh" ]]; then
+    echo "FAIL: --changed: cannot read $SCRIPT_DIR/lib/changed-files.sh — refusing to report a pass for a scan that never ran" >&2
+    exit 2
+  fi
   # shellcheck source=lib/changed-files.sh
   . "$SCRIPT_DIR/lib/changed-files.sh"
   CHANGED_FILES=$(changed_files_vs_origin_main)

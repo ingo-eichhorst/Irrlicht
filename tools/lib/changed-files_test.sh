@@ -132,6 +132,50 @@ out=$( cd "$TMP" && . "$DIR/changed-files.sh" && changed_files_vs_origin_main )
 assert_eq "collects committed + staged + unstaged, sorted and de-duplicated" \
   "$(printf 'README.md\ncore/go.mod\ncore/main.go')" "$out"
 
+echo "== changed_files_vs_origin_main: a missing origin/main warns, never passes silently =="
+# An empty result is indistinguishable from "nothing changed", and an empty set
+# scopes every gate to a skip — so the reason has to reach stderr.
+NOREMOTE="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$NOREMOTE"' EXIT
+(
+  cd "$NOREMOTE" || exit 1
+  git init -q . && git config user.email t@t && git config user.name t
+  echo hi >a.txt && git add -A && git commit -qm base
+) >/dev/null 2>&1
+nr_err=$( cd "$NOREMOTE" && . "$DIR/changed-files.sh" && changed_files_vs_origin_main 2>&1 >/dev/null )
+case "$nr_err" in
+  *"origin/main not found"*) pass "missing origin/main warns on stderr" ;;
+  *) fail "missing origin/main warns on stderr" "a WARN mentioning origin/main" "$nr_err" ;;
+esac
+
+echo "== callers hard-fail rather than skip everything when this lib is missing =="
+# Without the lib the scoping predicates are undefined; under `set -u` (no -e)
+# every in-scope test would return 127, every gate/scanner would fall out of
+# scope, and the run would exit 0 — a green report for work that never ran.
+# Both callers must refuse instead. Copying the script somewhere with no
+# sibling lib/ reproduces exactly that.
+REPO_ROOT_FOR_TEST="$(cd "$DIR/../.." && pwd)"
+NOLIB="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$NOREMOTE" "$NOLIB"' EXIT
+for script in security-scan.sh preflight.sh; do
+  # --local on security-scan.sh keeps a regression off the network: without the
+  # guard it would fall through to the gh alert gates instead of exiting here.
+  # preflight.sh rejects unknown args with the same code 2, so it must not get
+  # a flag it doesn't know or the assertion would pass for the wrong reason.
+  case "$script" in
+    security-scan.sh) args=(--local --changed) ;;
+    *)                args=(--changed) ;;
+  esac
+  cp "$REPO_ROOT_FOR_TEST/tools/$script" "$NOLIB/$script"
+  out=$( cd "$REPO_ROOT_FOR_TEST" && bash "$NOLIB/$script" "${args[@]}" 2>&1 )
+  rc=$?
+  assert_eq "$script --changed with no lib/ → exit 2, not a silent pass" "2" "$rc"
+  case "$out" in
+    *"changed-files.sh"*) pass "$script names the missing lib in its error" ;;
+    *) fail "$script names the missing lib in its error" "mentions changed-files.sh" "$out" ;;
+  esac
+done
+
 echo ""
 if [[ "$fails" -eq 0 ]]; then
   echo "changed-files_test: ALL PASS"
