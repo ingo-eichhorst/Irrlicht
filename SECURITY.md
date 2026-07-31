@@ -49,8 +49,14 @@ before artifacts are built: open GitHub Dependabot and CodeQL alerts,
 `govulncheck`, `gosec`, and `npm audit` across every Go module and web
 tree. Critical/High findings abort the release. The same local checks
 (without the GitHub alert queries) run via `tools/preflight.sh --only
-security` as part of the pre-push gate. GitHub CodeQL default setup covers
-Go and JavaScript/TypeScript continuously, independent of releases.
+security`, and a narrowed form of them runs as part of the pre-push gate:
+`tools/preflight.sh --changed` passes `--changed` down to the scan, which
+then covers only the Go modules and web trees whose own inputs
+(`.go`/`go.mod`/`go.sum`, `package.json`/`package-lock.json`) that branch
+touched. Full coverage of every module and tree therefore comes from the
+release gate and from an unscoped `tools/preflight.sh`, not from any single
+push. GitHub CodeQL default setup covers Go and JavaScript/TypeScript
+continuously, independent of releases.
 
 ## Scope
 
