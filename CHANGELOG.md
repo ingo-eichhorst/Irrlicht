@@ -15,6 +15,9 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 **Fixed**
 - The agent hooks the daemon installs now POST to the port the daemon actually binds, instead of a hardcoded `:7837`. A daemon on an alternate port — a `separate`-mode dev instance, or the onboarding factory's coexist recorder — installed Claude Code and Codex hooks (and the Claude Code statusline feed) that delivered to whatever owned `:7837`, so its own hook-authoritative waiting/ready tier silently received nothing. All three installers derive the endpoint from `IRRLICHT_BIND_ADDR`, and the entry sentinels are now port-independent, so an existing `:7837` install is still recognized as ours and repointed in place rather than orphaned beside a duplicate. The onboarding factory's recorder snapshots and restores the shared agent config it rewrites, so a recording no longer leaves the production daemon's hooks pointing at it. (#1178)
 
+**Changed**
+- The onboarding factory's two recording scripts (`run-cell.sh`, `run-cell-multi.sh`) now share one `lib/spawn-record-daemon.sh` for the record-daemon lifecycle, so a recorder fix can no longer reach only one of them. (#1214)
+
 ## [0.5.9] — 2026-07-15
 
 ### A correctness release: sessions no longer wedge at "working" after a background subagent, and agents whose session directories are relocated by an env var or config key are finally visible instead of silently absent
