@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -25,6 +24,7 @@ import (
 	"irrlicht/core/domain/config"
 	"irrlicht/core/domain/permission"
 	"irrlicht/core/pkg/capacity"
+	"irrlicht/core/pkg/daemonaddr"
 	"irrlicht/core/ports/outbound"
 )
 
@@ -273,8 +273,10 @@ func runDaemon() {
 
 	tcpL, resolvedAddr := setupTCPListener(logger)
 	// addrPath is where the "daemon is up" signal is published — see
-	// publishAddrFile, called once every route below is registered.
-	addrPath := filepath.Join(filepath.Dir(sockPath), "irrlichd.addr")
+	// publishAddrFile, called once every route below is registered. The path
+	// comes from daemonaddr because client CLIs read it back from there; the
+	// two must not drift (it sits next to sockPath either way).
+	addrPath := daemonaddr.AddrFilePath()
 
 	mdnsAdv := setupMDNS(resolvedAddr, logger)
 

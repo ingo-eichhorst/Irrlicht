@@ -129,7 +129,7 @@
             <td><code>IRRLICHT_BIND_ADDR</code></td>
             <td>host:port</td>
             <td><code>127.0.0.1:7837</code></td>
-            <td>Override the daemon's TCP bind &mdash; use <code>0.0.0.0:7837</code> to expose on the LAN, or <code>127.0.0.1:7838</code> to run a second daemon alongside your production one. The agent hooks and Claude Code statusline feed the daemon installs POST to whichever port this resolves to, so a daemon on an alternate port receives its own hook traffic instead of the default port's.</td>
+            <td>Override the daemon's TCP bind &mdash; use <code>0.0.0.0:7837</code> to expose on the LAN, or <code>127.0.0.1:7838</code> to run a second daemon alongside your production one. The agent hooks and Claude Code statusline feed the daemon installs POST to whichever port this resolves to, so a daemon on an alternate port receives its own hook traffic instead of the default port's. The <code>irrlicht-focus</code> CLI resolves the same way, falling back to the daemon's <code>irrlichd.addr</code> file when the variable isn't in its environment. The macOS app has its own knob for the same number, <code><a href="#daemon-port">IRRLICHT_DAEMON_PORT</a></code> &mdash; see <a href="#which-port-var">Which port variable do I set?</a></td>
           </tr>
           <tr>
             <td><code>IRRLICHT_MDNS</code></td>
@@ -276,10 +276,10 @@
             <td>Override the Gas Town root directory the orchestrator adapter probes for <code>daemon/state.json</code> and rig layout</td>
           </tr>
           <tr>
-            <td><code>IRRLICHT_DAEMON_PORT</code></td>
+            <td id="daemon-port"><code>IRRLICHT_DAEMON_PORT</code></td>
             <td>Integer</td>
             <td><code>7837</code></td>
-            <td>macOS app only &mdash; override which daemon port the dashboard connects to, so a dev-build daemon (e.g. port 7838) can coexist with the production daemon</td>
+            <td>macOS app only &mdash; override which daemon port the app connects to, so a dev-build daemon (e.g. port 7838) can coexist with the production daemon. It is the app-side spelling of <code><a href="#which-port-var">IRRLICHT_BIND_ADDR</a></code>, not a competing setting: when the app spawns the daemon it passes <code>IRRLICHT_BIND_ADDR=127.0.0.1:&lt;this port&gt;</code> down to it, so the two cannot disagree</td>
           </tr>
           <tr>
             <td><code>IRRLICHT_RELAY_MAX_MSG_BYTES</code></td>
@@ -339,6 +339,21 @@ launchctl setenv IRRLICHT_MDNS 1
       <p>If the three auto-detect paths (2&ndash;4) all miss &mdash; custom install layout, fork with a moved UI, broken symlink &mdash; set the env var so it takes precedence:</p>
 
       <pre><code>IRRLICHT_UI_DIR=/path/to/dir/containing/index.html irrlichd</code></pre>
+
+      <h3 id="which-port-var">Which port variable do I set?</h3>
+
+      <p>Two variables name the daemon's port, and which one you set depends on which side you are configuring &mdash; not on a preference. They are kept separate on purpose: the app validates a bare port number, the daemon takes a full <code>host:port</code> bind (loopback, LAN, or a specific interface), and one derives the other.</p>
+
+      <ul>
+        <li><strong>Configuring the macOS app</strong> &mdash; set <code>IRRLICHT_DAEMON_PORT</code>. The app connects to it, and when it spawns the daemon itself it passes <code>IRRLICHT_BIND_ADDR=127.0.0.1:&lt;that port&gt;</code> down to the daemon process, so you never set both.</li>
+        <li><strong>Running <code>irrlichd</code> yourself</strong> &mdash; set <code>IRRLICHT_BIND_ADDR</code>. It is the only one the daemon reads, and the only one that can bind somewhere other than loopback.</li>
+      </ul>
+
+      <p>Everything else derives the answer rather than assuming <code>:7837</code>. The agent hooks and the Claude Code statusline feed are written by the daemon from its own bind address. The <code>irrlicht-focus</code> CLI &mdash; which you usually run from a shell that inherited neither variable &mdash; prefers <code>IRRLICHT_BIND_ADDR</code> when it names a valid <code>host:port</code>, and otherwise reads <code>irrlichd.addr</code>, the file the daemon publishes next to its socket under <code>$IRRLICHT_HOME</code> (default <code>~/.local/share/irrlicht/</code>) and deletes on a clean shutdown. So focusing a session that a second daemon on <code>:7838</code> is monitoring reaches that daemon, with nothing to configure.</p>
+
+      <p>Two caveats worth knowing. A daemon killed with <code>SIGKILL</code> never deletes its addr file, so a leftover file can name a port nobody is listening on &mdash; the CLI then reports the daemon as unreachable rather than silently succeeding elsewhere. And when neither source yields a port the CLI falls back to <code>:7837</code>, which may be a <em>different</em> daemon than you meant; <code>irrlicht-focus</code> prints a line to stderr whenever it has to ignore what you configured.</p>
+
+      <p>One case still needs the variable spelled out: pointing a CLI at a daemon whose state tree is <em>not</em> the default one. Set <code>IRRLICHT_HOME</code> to that daemon's tree (so its addr file is the one found), or <code>IRRLICHT_BIND_ADDR</code> to its address directly.</p>
 
       <h3>The macOS app is misbehaving and I want to see its session state</h3>
 

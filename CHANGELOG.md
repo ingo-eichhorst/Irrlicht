@@ -16,6 +16,7 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 - The "installed hook endpoint follows the daemon's bind address" obligation is now a shared contract assertion (`contracttesting.AssertHookEndpointFollowsBindAddr`) that each hook-installing adapter wires with one call, so a future adapter cannot quietly ship a hardcoded port. (#1216)
 
 **Fixed**
+- `irrlicht-focus` now resolves the daemon's port (`IRRLICHT_BIND_ADDR`, else the running daemon's `irrlichd.addr` file, else the default) instead of hardcoding `:7837`, so focusing a session monitored by a dev daemon on an alternate port no longer sends the request to production. (#1215)
 - The agent hooks the daemon installs now POST to the port the daemon actually binds, instead of a hardcoded `:7837`. A daemon on an alternate port — a `separate`-mode dev instance, or the onboarding factory's coexist recorder — installed Claude Code and Codex hooks (and the Claude Code statusline feed) that delivered to whatever owned `:7837`, so its own hook-authoritative waiting/ready tier silently received nothing. All three installers derive the endpoint from `IRRLICHT_BIND_ADDR`, and the entry sentinels are now port-independent, so an existing `:7837` install is still recognized as ours and repointed in place rather than orphaned beside a duplicate. The onboarding factory's recorder snapshots and restores the shared agent config it rewrites, so a recording no longer leaves the production daemon's hooks pointing at it. (#1178)
 
 **Changed**
