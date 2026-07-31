@@ -46,11 +46,14 @@ ARG CLAUDE_CODE_VERSION
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git procps tini \
     && rm -rf /var/lib/apt/lists/* \
-    # No --ignore-scripts here, unlike the sibling coding-factory image: this
-    # package ships bin/claude as a placeholder and its postinstall copies the
-    # matching native binary from optionalDependencies over it. Skipping scripts
-    # leaves the stub, so `claude` never runs and the testbed observes nothing.
-    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    # --ignore-scripts, like the sibling coding-factory image — but this package
+    # ships bin/claude as a placeholder that its own postinstall replaces with the
+    # matching native binary from optionalDependencies, so skipping every script
+    # leaves `claude` exiting "native binary not installed" and the testbed
+    # observes nothing. Hence: block the whole dependency tree's install hooks,
+    # then run that one script explicitly, by name (docker:S6505).
+    && npm install -g --ignore-scripts "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    && node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs" \
     && useradd --create-home --shell /bin/bash agent
 COPY --from=build /out/irrlichd /usr/local/bin/irrlichd
 COPY examples/roundtrip/entrypoint.sh /usr/local/bin/entrypoint.sh
