@@ -42,14 +42,11 @@ HTML plan artifact are dropped.
 
 `auto` never invents a new strategy — it picks between `plan` and `full` using
 signals `/ir:triage` already computes, then proceeds exactly as that mode
-would from there on:
+would from there on.
 
-```bash
-gh issue view <N> --json labels -q '.labels[].name'                             # ready-for-agent / needs-info?
-C=$(gh issue view <N> --comments)
-grep -o '\*\*Run plan:\*\*[^—]*'   <<<"$C" | tail -1     # tier 1 — current triage output
-grep -o '\*\*Complexity:\*\*[^—]*' <<<"$C" | tail -1     # tiers 2/3 — numeric level, or legacy Low/Medium/High
-```
+`auto` issues no `gh` reads of its own: the readiness label and triage comment
+are read in **Phase 2 step 3**, which *every* mode runs. `auto` only interprets
+what that read already returned.
 
 Read the tiers **in order** and stop at the first that yields a value — the
 richer signal wins, and the legacy tier is explicit rather than an accident of
@@ -57,7 +54,7 @@ a loose regex:
 
 | Tier | Signal | Resolves to |
 |---|---|---|
-| — | `needs-info` label present | **Refuse.** Don't open a worktree — report the blockers (from the triage comment if present) and point at `/ir:triage <N>` or manual clarification. |
+| — | `needs-info` label present | **Refuse.** Implement nothing — report the blockers (from the triage comment if present) and point at `/ir:triage <N>` or manual clarification. Refusing is `auto`-only: it is what "the user named no mode" resolves to. A named mode does **not** refuse — it surfaces the label and continues (Phase 2 step 3a). |
 | 1 | A `**Run plan:**` line | Take its mode (`full` / `plan`) verbatim, plus its investigation depth, review effort and simplify depth — `/ir:triage` already did this arithmetic. |
 | 2 | A numeric `**Complexity:**` — e.g. `6 (base 5, openness +1)` | `full` at effective level ≤ 6, `plan` at 7–8. A level of 9–10 should not have reached `ready-for-agent`; if one has, treat it as `plan` and say so. |
 | 3 | A legacy `**Complexity:** Low` / `Medium` / `High` | `full` for Low or Medium, `plan` for High. Pre-dates the effective-level scale and stays supported — issues triaged before it cannot be migrated. |
@@ -118,10 +115,34 @@ worktree name. `close` additionally resolves it from `pwd` / `git status -sb` /
 
 ## Phase 2 — Investigate & plan
 
-3. **Fetch the issue and its comments** (comments often hold the real spec):
+3. **Fetch the issue, its comments, and its readiness signals** — one read, run by
+   **every mode**, not just `auto` (comments often hold the real spec):
    ```bash
-   gh issue view <N> --comments        # add --repo <owner/repo> for cross-repo
+   C=$(gh issue view <N> --comments); echo "$C"            # the spec (--repo <owner/repo> for cross-repo)
+   gh issue view <N> --json labels -q '.labels[].name'     # ready-for-agent / needs-info?
+   grep -o '\*\*Run plan:\*\*[^—]*'   <<<"$C" | tail -1    # tier 1 — current triage output
+   grep -o '\*\*Complexity:\*\*[^—]*' <<<"$C" | tail -1    # tiers 2/3 — numeric level, or legacy Low/Medium/High
    ```
+   These are the reads the Auto mode table consumes, hoisted out of that branch so a
+   named mode sees the same signals `auto` would have. `auto` resolves its mode from
+   them in step 6; a named mode uses them for step 3a and for step 4's fan-out depth.
+3a. **Surface a `needs-info` label — then continue.** If the readiness label is
+   `needs-info` and the mode was named explicitly (`plan` / `full`), say so in **one
+   line** of response text *before editing any file*: the label, the blockers from the
+   triage comment, and the assumption you are making in place of each. Then proceed
+   normally.
+   ```
+   ⚠ #977 is needs-info (blockers: pick a direction; state a target).
+     Proceeding per `full`; assuming <X> and <Y>.
+   ```
+   Naming a mode is the user's decision to skip the gate, so this **never** becomes a
+   second gate: don't refuse, don't stop the turn, don't ask for confirmation. The
+   point is only that a blocker triage deliberately reserved for the maintainer — and
+   the judgment call you substituted for it — is visible up front rather than buried in
+   the Phase 6 hand-back ~800 lines later. In `plan` mode, carry the same blockers into
+   the plan's Risks & Unknowns; the approval gate then covers them. (Real incident:
+   `/ir:exec full 977` invented answers to both of #977's open blockers and disclosed
+   it only at hand-back — PR #1211.)
 4. **Investigate the code, at the depth the run plan names.** Delegate to `Explore`
    subagents with a prompt naming the issue's key terms — file names, symbols, error
    strings, feature names — asking where it lives, what touches it, current behavior.
@@ -145,9 +166,10 @@ worktree name. `close` additionally resolves it from `pwd` / `git status -sb` /
    landed web-only, its changelog entry didn't say so — unlike the DORA entry
    right above it, which explicitly said "on both macOS and web" — and a later
    from-scratch QA pass on the macOS app couldn't find the feature at all.)
-6. **If invoked as `auto`**, resolve the signal per the Auto mode table above and
-   continue as whichever of `plan`/`full` it names — everything from here on follows
-   that mode's path.
+6. **If invoked as `auto`**, resolve the signals **already read in step 3** per the Auto
+   mode table above and continue as whichever of `plan`/`full` it names — everything
+   from here on follows that mode's path. (Re-running the `gh` reads here is the
+   duplication step 3 exists to avoid.)
 
 ## Phase 3 — Present the plan (branches by mode)
 
