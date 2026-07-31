@@ -216,8 +216,10 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
 11a. **Prove red-first.** For every test asserting a claimed defect, run it
     **before** the fix exists and confirm it **fails**. Paste the failure — in
     the PR body, or the issue if you're reporting back there. Do this during
-    step 10 (write the test first; or checkpoint the fix with a local commit and
-    revert it to re-run — never `git stash`, per AGENTS.md).
+    step 10: write the test first, before the fix exists. If the fix is already
+    in your worktree, checkpoint it (`git commit -m wip`), revert the fix, run
+    the test, then restore — never `git stash`, whose stack is shared across
+    worktrees (AGENTS.md).
 
     A test that **passes** on `main` is not a regression test. Either the
     diagnosis is wrong, or the test doesn't reach the defect — e.g. it exercises
