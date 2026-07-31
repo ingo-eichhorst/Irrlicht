@@ -21,7 +21,7 @@ Two flavors:
   - nested c
 - the second
 
-## Tier table
+## Tier table (three tiers)
 
 Documenting a template must not read as using one: replace every `{{TOKEN}}`,
 duplicate each `REPEAT:step` region, and delete any unused `OPTIONAL:ui` block.
