@@ -54,7 +54,16 @@ type SignalPayload struct {
 // remaining phases of #1129 would have added six more. Adding a signal should
 // mean adding a row here.
 type signalPolicy struct {
-	// tier is where this signal sits on the authority ladder.
+	// kind is the signal this policy governs. Carried in the row rather than
+	// used as a map key so the ordered table below is the single declaration
+	// of both *what* the policies are and *what order* they apply in — see
+	// signalPolicies' comment on why that order is load-bearing.
+	kind SignalKind
+
+	// tier is where this signal sits on the authority ladder. Read by
+	// TierOf, which is what the classifier's rules resolve their own tier
+	// through — so this is the single source of truth for a signal's
+	// authority, not a second copy of something the classifier restates.
 	tier SignalTier
 
 	// consumeOnce drops the hold as it is applied, so it affects exactly the
@@ -74,14 +83,28 @@ type signalPolicy struct {
 	apply func(m *SessionMetrics, p SignalPayload)
 }
 
-// signalPolicies is the declared behaviour of every out-of-band signal.
+// signalPolicies is the declared behaviour of every out-of-band signal, in
+// the order Overlay applies them.
 //
-// All three are TierHook today. That is not a redundancy to factor out — it
-// is the current state of a ladder whose other tiers are filed and unbuilt
-// (Phases 4-7 of #1129), and the field is what lets a Phase 4 OTel signal
-// land as a row here rather than as another bespoke overlay.
-var signalPolicies = map[SignalKind]signalPolicy{
-	SignalPermissionPrompt: {
+// THE ORDER IS LOAD-BEARING, which is why this is an ordered slice and not a
+// map keyed by SignalKind: a map range would silently randomise it.
+// SignalIdlePrompt's staleness test calls IsAgentDone, which reads the
+// HookTurnDone that SignalTurnDone.apply has just set. Applied in this order, a
+// Stop hook and an idle_prompt hook arriving for the same turn agree — the turn
+// is done, so the idle hold survives and correctly holds the session in
+// waiting. Reverse them and idle_prompt evaluates staleness against metrics
+// that do not yet know the turn ended: on any adapter whose transcript tail is
+// not literally "turn_done", IsAgentDone reads false, the hold is dropped as
+// stale, and the correction the hook exists to deliver is thrown away one
+// instruction before it would have been applied.
+//
+// All rows are TierHook today. That is not a redundancy to factor out — it is
+// the current state of a ladder whose other tiers are filed and unbuilt
+// (Phases 4-7 of #1129), and the field is what lets a Phase 4 OTel signal land
+// as a row here rather than as another bespoke overlay.
+var signalPolicies = []signalPolicy{
+	{
+		kind: SignalPermissionPrompt,
 		tier: TierHook,
 		// Persistent: the prompt stays open until the agent acts on it, and
 		// the hold must survive every fswatcher re-evaluation in between.
@@ -98,7 +121,8 @@ var signalPolicies = map[SignalKind]signalPolicy{
 		apply: func(m *SessionMetrics, _ SignalPayload) { m.PermissionPending = true },
 	},
 
-	SignalTurnDone: {
+	{
+		kind:        SignalTurnDone,
 		tier:        TierHook,
 		consumeOnce: true,
 		apply: func(m *SessionMetrics, p SignalPayload) {
@@ -115,7 +139,8 @@ var signalPolicies = map[SignalKind]signalPolicy{
 		},
 	},
 
-	SignalIdlePrompt: {
+	{
+		kind: SignalIdlePrompt,
 		tier: TierHook,
 		// Persistent, and deliberately so: this is the hold that makes the
 		// ~6s-late correction stick. A stray lower-tier reclassify between
@@ -131,22 +156,17 @@ var signalPolicies = map[SignalKind]signalPolicy{
 	},
 }
 
-// signalOrder fixes the sequence in which held signals are applied.
-//
-// THIS ORDER IS LOAD-BEARING, and a map range would silently randomise it.
-// SignalIdlePrompt's staleness test calls IsAgentDone, which reads the
-// HookTurnDone that SignalTurnDone.apply has just set. Applied in this order,
-// a Stop hook and an idle_prompt hook arriving for the same turn agree — the
-// turn is done, so the idle hold survives and correctly holds the session in
-// waiting. Reverse them and idle_prompt evaluates staleness against metrics
-// that do not yet know the turn ended: on any adapter whose transcript tail
-// is not literally "turn_done", IsAgentDone reads false, the hold is dropped
-// as stale, and the correction the hook exists to deliver is thrown away one
-// instruction before it would have been applied.
-var signalOrder = []SignalKind{
-	SignalPermissionPrompt,
-	SignalTurnDone,
-	SignalIdlePrompt,
+// TierOf reports the authority tier of a signal kind, or TierNone for a kind
+// with no declared policy. It is how the classifier's rules resolve their own
+// tier, so a signal's authority is declared exactly once — in its policy row —
+// rather than restated by every rule that reads it and left to drift.
+func TierOf(kind SignalKind) SignalTier {
+	for _, p := range signalPolicies {
+		if p.kind == kind {
+			return p.tier
+		}
+	}
+	return TierNone
 }
 
 // SignalHolds is the per-session store of out-of-band signals awaiting a
@@ -235,21 +255,20 @@ func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics) {
 		return
 	}
 
-	for _, kind := range signalOrder {
-		payload, ok := holds[kind]
+	for _, policy := range signalPolicies {
+		payload, ok := holds[policy.kind]
 		if !ok {
 			continue
 		}
-		policy := signalPolicies[kind]
 
 		if policy.stale != nil && policy.stale(m) {
-			delete(holds, kind)
+			delete(holds, policy.kind)
 			continue
 		}
 
 		policy.apply(m, payload)
 		if policy.consumeOnce {
-			delete(holds, kind)
+			delete(holds, policy.kind)
 		}
 	}
 

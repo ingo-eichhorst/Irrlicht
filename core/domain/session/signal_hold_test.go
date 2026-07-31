@@ -60,6 +60,54 @@ func TestSignalHolds_PersistentUntilStale(t *testing.T) {
 	}
 }
 
+// TestSignalHolds_TurnDonePreservesPriorText pins that an empty hook message
+// does not clobber the text the transcript already has: the Stop hook can
+// arrive carrying nothing, and the display text must survive it.
+func TestSignalHolds_TurnDonePreservesPriorText(t *testing.T) {
+	h := NewSignalHolds()
+	h.Hold(holdSID, SignalTurnDone, SignalPayload{})
+
+	m := &SessionMetrics{LastAssistantText: "prior text"}
+	h.Overlay(holdSID, m)
+	if m.LastAssistantText != "prior text" {
+		t.Errorf("LastAssistantText = %q, want the prior text preserved", m.LastAssistantText)
+	}
+	if !m.HookTurnDone {
+		t.Error("HookTurnDone must still be set even with an empty message")
+	}
+}
+
+// TestSignalHolds_TurnDoneCueIsAdditive pins the asymmetry: the hook's cue
+// verdict can add a waiting cue but must never clear one the parser already
+// found, so a hook that saw no question cannot mask the transcript's own.
+func TestSignalHolds_TurnDoneCueIsAdditive(t *testing.T) {
+	h := NewSignalHolds()
+	h.Hold(holdSID, SignalTurnDone, SignalPayload{LastAssistantText: "done"})
+
+	m := &SessionMetrics{PendingWaitingCue: true} // the parser already found a cue
+	h.Overlay(holdSID, m)
+	if !m.PendingWaitingCue {
+		t.Error("a false hook cue must not clear a PendingWaitingCue the parser set")
+	}
+}
+
+// TestSignalHolds_IdlePromptClearedByOpenTool covers the other way the idle
+// window ends: an open tool call makes IsAgentDone false, and the open-tool
+// rules own that case rather than idle_prompt.
+func TestSignalHolds_IdlePromptClearedByOpenTool(t *testing.T) {
+	h := NewSignalHolds()
+	h.Hold(holdSID, SignalIdlePrompt, SignalPayload{})
+
+	m := &SessionMetrics{LastEventType: "turn_done", HasOpenToolCall: true}
+	h.Overlay(holdSID, m)
+	if m.IdlePromptPending {
+		t.Error("IdlePromptPending must NOT be set while a tool call is open")
+	}
+	if h.Held(holdSID, SignalIdlePrompt) {
+		t.Error("signal must be dropped when an open tool blocks the turn")
+	}
+}
+
 // TestSignalHolds_PermissionStaleOnDenial pins the permission policy's one
 // unusual edge: Claude Code fires no PostToolUseFailure when the user rejects a
 // prompt, so the transcript's own denial marker is the only end-of-life notice
@@ -117,24 +165,34 @@ func TestSignalHolds_ApplicationOrderIsLoadBearing(t *testing.T) {
 	}
 }
 
-// TestSignalHolds_SignalOrderCoversEveryPolicy guards the other half of that
-// invariant: a signal added to signalPolicies but forgotten in signalOrder
-// would simply never be applied — a silent no-op, not a compile error.
-func TestSignalHolds_SignalOrderCoversEveryPolicy(t *testing.T) {
-	inOrder := map[SignalKind]bool{}
-	for _, k := range signalOrder {
-		if inOrder[k] {
-			t.Errorf("signalOrder lists %q twice", k)
+// TestSignalHolds_PolicyTableIsWellFormed replaces the old "is every policy
+// listed in the order slice?" check. Merging the map and the order slice into
+// one ordered table made that class of mistake unrepresentable rather than
+// test-caught, so what remains to verify is that no kind is declared twice.
+func TestSignalHolds_PolicyTableIsWellFormed(t *testing.T) {
+	seen := map[SignalKind]bool{}
+	for _, p := range signalPolicies {
+		if p.kind == "" {
+			t.Error("a policy row has no kind")
 		}
-		inOrder[k] = true
-		if _, ok := signalPolicies[k]; !ok {
-			t.Errorf("signalOrder lists %q, which has no policy", k)
+		if seen[p.kind] {
+			t.Errorf("signalPolicies declares %q twice", p.kind)
+		}
+		seen[p.kind] = true
+	}
+}
+
+// TestTierOf covers the accessor the classifier resolves rule tiers through —
+// the single-source-of-truth link that stops a signal's authority being
+// declared once in its policy and again in the rule that reads it.
+func TestTierOf(t *testing.T) {
+	for _, kind := range []SignalKind{SignalPermissionPrompt, SignalTurnDone, SignalIdlePrompt} {
+		if got := TierOf(kind); got != TierHook {
+			t.Errorf("TierOf(%q) = %v, want TierHook", kind, got)
 		}
 	}
-	for k := range signalPolicies {
-		if !inOrder[k] {
-			t.Errorf("policy %q is missing from signalOrder — it would never be applied", k)
-		}
+	if got := TierOf("not-a-signal"); got != TierNone {
+		t.Errorf("TierOf(unknown) = %v, want TierNone", got)
 	}
 }
 
@@ -149,12 +207,12 @@ func TestSignalHolds_SignalOrderCoversEveryPolicy(t *testing.T) {
 // exactly the shape a retrospective OTel signal would need (#1141): a span that
 // exports after the user has already replied must be discarded, not applied.
 func TestSignalHolds_EveryPolicyIsWellFormed(t *testing.T) {
-	for kind, p := range signalPolicies {
+	for _, p := range signalPolicies {
 		if p.apply == nil {
-			t.Errorf("policy %q has no apply func", kind)
+			t.Errorf("policy %q has no apply func", p.kind)
 		}
 		if !p.tier.Known() {
-			t.Errorf("policy %q has tier %v, which is not a real tier", kind, p.tier)
+			t.Errorf("policy %q has tier %v, which is not a real tier", p.kind, p.tier)
 		}
 	}
 }

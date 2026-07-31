@@ -250,8 +250,8 @@ type SessionMetrics struct {
 	// HookTurnDone is true when Claude Code's Stop hook fired for this session's
 	// current turn — an authoritative, per-adapter turn-done push delivered at
 	// true turn end (issue #1161). Transient and live-only: the detector's
-	// SignalTurnDone policy (consume-once) applies it for the single classify pass triggered by the
-	// Stop hook and then clears its backing map (consume-once), so it never
+	// SignalTurnDone policy applies it for the single classify pass the Stop
+	// hook triggered and then releases the hold (consume-once), so it never
 	// bleeds into the next turn and is never set under replay. IsAgentDone()
 	// treats it as authoritative, taking precedence over the transcript-tail
 	// heuristic (and its codex carve-out) below.

@@ -36,7 +36,7 @@ func TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting(t *testing.T) {
 			return &session.SessionMetrics{LastEventType: "user"}, nil
 		}
 		// A plain completion: turn_done, no trailing question or cue, so
-		// IsWaitingForUserInput is false and rule 2 alone would say ready.
+		// IsWaitingForUserInput is false and the agent_done rule alone would say ready.
 		return &session.SessionMetrics{
 			LastEventType:     "turn_done",
 			LastAssistantText: "Done. All tests pass.",
@@ -77,7 +77,7 @@ func TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting(t *testing.T) {
 	}
 
 	// A re-evaluation while still idle must HOLD waiting — the persistent
-	// overlay must not let rule 2 leak the session back to ready.
+	// overlay must not let the agent_done rule leak the session back to ready.
 	tw.ch <- agent.Event{Type: agent.EventActivity, SessionID: "idle1", ProjectDir: "-Users-test", TranscriptPath: path}
 	waitForCondition(func() bool { return repo.eventCountOf("idle1") >= 1 }, 5*time.Second)
 	repo.mu.Lock()
