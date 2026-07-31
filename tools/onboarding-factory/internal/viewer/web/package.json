@@ -2,6 +2,7 @@
   "name": "irrlicht-viewer",
   "type": "module",
   "scripts": {
+    "pretest": "[ -e node_modules/.bin/vitest ] || npm ci --ignore-scripts",
     "test": "vitest run"
   },
   "devDependencies": {

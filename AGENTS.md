@@ -119,6 +119,17 @@ Before marking a ticket done, run the full suite — every layer must pass:
 
   `npm test` runs `vitest run` (single CI-shaped pass, no watch).
 
+  `node_modules/` is gitignored, so a fresh clone — or any new
+  `git worktree add` — starts without dependencies. No manual install step is
+  needed: each tree's `pretest` script runs `npm ci --ignore-scripts` when
+  they're missing, so `npm test` self-heals on its first run (slow once,
+  instant afterwards). To get it out of the way up front, run `npm ci` in the
+  tree yourself. **Never `npm install`** — it re-resolves the dependency graph
+  and rewrites `package-lock.json`; on an npm older than the one that wrote the
+  lockfile it silently strips the `libc` fields from the
+  `@rolldown/binding-linux-*` entries, and that churn then rides along in an
+  unrelated PR. `npm ci` installs *from* the lockfile and never writes it.
+
 ### Local CI parity — catch failures before pushing
 
 `tools/preflight.sh` runs every PR-gating check (test.yml + web-test.yml +
