@@ -75,6 +75,8 @@ func configs() map[string]func(string) Config {
 	return map[string]func(string) Config{"http": httpConfig, "command": cmdConfig}
 }
 
+// --- helpers ---
+
 // writeTestFile stands in for the adapters' atomic writers, which stay on their
 // side of Config precisely because they differ.
 func writeTestFile(path string, data []byte) error {
@@ -82,6 +84,18 @@ func writeTestFile(path string, data []byte) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o600)
+}
+
+// seedSettings writes a pre-existing settings file for a test to merge onto.
+func seedSettings(t *testing.T, path string, settings map[string]interface{}) {
+	t.Helper()
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal seed: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
 }
 
 // readHooks returns the "hooks" sub-map of the settings file at path.
@@ -112,54 +126,67 @@ func groupsFor(t *testing.T, hooks map[string]interface{}, event string) []inter
 	return arr
 }
 
+// firstGroup returns the single matcher group installed for an event.
+func firstGroup(t *testing.T, path, event string) map[string]interface{} {
+	t.Helper()
+	return groupsFor(t, readHooks(t, path), event)[0].(map[string]interface{})
+}
+
+// mustEnsure runs EnsureInstalled and asserts whether it reported a change.
+func mustEnsure(t *testing.T, cfg Config, label string, wantModified bool) {
+	t.Helper()
+	modified, err := EnsureInstalled(cfg)
+	if err != nil {
+		t.Fatalf("%s: %v", label, err)
+	}
+	if modified != wantModified {
+		t.Errorf("%s: modified=%v, want %v", label, modified, wantModified)
+	}
+}
+
+// mustUninstall runs Uninstall and asserts whether it reported a change.
+func mustUninstall(t *testing.T, cfg Config, label string, wantModified bool) {
+	t.Helper()
+	modified, err := Uninstall(cfg)
+	if err != nil {
+		t.Fatalf("%s: %v", label, err)
+	}
+	if modified != wantModified {
+		t.Errorf("%s: modified=%v, want %v", label, modified, wantModified)
+	}
+}
+
+// assertInstalled checks every one of cfg's events for the presence (or, with
+// want=false, the complete absence) of our entry. Absence is the stricter
+// check: the event key itself must be gone once its last group was removed.
+func assertInstalled(t *testing.T, cfg Config, want bool) {
+	t.Helper()
+	hooks := readHooks(t, cfg.Path)
+	for _, event := range cfg.Events {
+		if got := HasOurHook(hooks, event, cfg.Sentinel); got != want {
+			t.Errorf("event %s: installed=%v, want %v", event, got, want)
+		}
+		if _, present := hooks[event]; !want && present {
+			t.Errorf("event %s: key kept after its last group was removed", event)
+		}
+	}
+}
+
+// --- tests ---
+
 func TestEnsureInstalled_CreatesIdempotentlyAndUninstalls(t *testing.T) {
 	for name, build := range configs() {
 		t.Run(name, func(t *testing.T) {
 			// A nested dir the writer must create.
-			path := filepath.Join(t.TempDir(), "nested", "settings.json")
-			cfg := build(path)
+			cfg := build(filepath.Join(t.TempDir(), "nested", "settings.json"))
 
-			modified, err := EnsureInstalled(cfg)
-			if err != nil {
-				t.Fatalf("first install: %v", err)
-			}
-			if !modified {
-				t.Fatal("first install: modified=false, want true")
-			}
+			mustEnsure(t, cfg, "first install", true)
+			assertInstalled(t, cfg, true)
+			mustEnsure(t, cfg, "second install (idempotency)", false)
 
-			hooks := readHooks(t, path)
-			for _, event := range cfg.Events {
-				if !HasOurHook(hooks, event, cfg.Sentinel) {
-					t.Errorf("event %s: no entry installed", event)
-				}
-			}
-
-			if modified, err = EnsureInstalled(cfg); err != nil {
-				t.Fatalf("second install: %v", err)
-			} else if modified {
-				t.Error("second install: modified=true, want false (not idempotent)")
-			}
-
-			if modified, err = Uninstall(cfg); err != nil {
-				t.Fatalf("uninstall: %v", err)
-			} else if !modified {
-				t.Error("uninstall: modified=false, want true")
-			}
-			hooks = readHooks(t, path)
-			for _, event := range cfg.Events {
-				if HasOurHook(hooks, event, cfg.Sentinel) {
-					t.Errorf("event %s: entry survived uninstall", event)
-				}
-				if _, present := hooks[event]; present {
-					t.Errorf("event %s: key kept after its last group was removed", event)
-				}
-			}
-
-			if modified, err = Uninstall(cfg); err != nil {
-				t.Fatalf("second uninstall: %v", err)
-			} else if modified {
-				t.Error("second uninstall: modified=true, want false")
-			}
+			mustUninstall(t, cfg, "uninstall", true)
+			assertInstalled(t, cfg, false)
+			mustUninstall(t, cfg, "second uninstall", false)
 		})
 	}
 }
@@ -170,18 +197,13 @@ func TestEnsureInstalled_CreatesIdempotentlyAndUninstalls(t *testing.T) {
 func TestEnsureInstalled_MatcherKeyOmittedWhenEmpty(t *testing.T) {
 	for name, build := range configs() {
 		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "settings.json")
-			if _, err := EnsureInstalled(build(path)); err != nil {
-				t.Fatalf("install: %v", err)
-			}
-			hooks := readHooks(t, path)
+			cfg := build(filepath.Join(t.TempDir(), "settings.json"))
+			mustEnsure(t, cfg, "install", true)
 
-			group := groupsFor(t, hooks, eventNoMatcher)[0].(map[string]interface{})
-			if _, has := group["matcher"]; has {
+			if group := firstGroup(t, cfg.Path, eventNoMatcher); group["matcher"] != nil {
 				t.Errorf("%s group carries a matcher key: %#v", eventNoMatcher, group)
 			}
-
-			group = groupsFor(t, hooks, eventWithMatcher)[0].(map[string]interface{})
+			group := firstGroup(t, cfg.Path, eventWithMatcher)
 			if m, _ := group["matcher"].(string); m != matcher {
 				t.Errorf("%s matcher = %q, want %q", eventWithMatcher, m, matcher)
 			}
@@ -193,32 +215,18 @@ func TestEnsureInstalled_MatcherKeyOmittedWhenEmpty(t *testing.T) {
 // matters most: these are user-authored config files, and a merge must leave
 // every key and every foreign hook group exactly where it was.
 func TestEnsureInstalled_PreservesUnrelatedContent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "settings.json")
-	existing := map[string]interface{}{
+	cfg := httpConfig(filepath.Join(t.TempDir(), "settings.json"))
+	seedSettings(t, cfg.Path, map[string]interface{}{
 		"model": "user-choice",
 		"hooks": map[string]interface{}{
-			eventWithMatcher: []interface{}{
-				map[string]interface{}{
-					"matcher": "Bash",
-					"hooks": []interface{}{
-						map[string]interface{}{"type": "command", "command": "echo mine"},
-					},
-				},
-			},
+			eventWithMatcher: []interface{}{userAuthoredGroup()},
 		},
-	}
-	data, _ := json.MarshalIndent(existing, "", "  ")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	})
 
-	cfg := httpConfig(path)
-	if _, err := EnsureInstalled(cfg); err != nil {
-		t.Fatalf("install: %v", err)
-	}
+	mustEnsure(t, cfg, "install", true)
 
 	var settings map[string]interface{}
-	raw, _ := os.ReadFile(path)
+	raw, _ := os.ReadFile(cfg.Path)
 	if err := json.Unmarshal(raw, &settings); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -226,23 +234,29 @@ func TestEnsureInstalled_PreservesUnrelatedContent(t *testing.T) {
 		t.Errorf("unrelated top-level key lost: %#v", settings["model"])
 	}
 
-	hooks := readHooks(t, path)
-	groups := groupsFor(t, hooks, eventWithMatcher)
+	groups := groupsFor(t, readHooks(t, cfg.Path), eventWithMatcher)
 	if len(groups) != 2 {
 		t.Fatalf("got %d groups, want 2 (the user's plus ours)", len(groups))
 	}
-	userGroup := groups[0].(map[string]interface{})
-	if m, _ := userGroup["matcher"].(string); m != "Bash" {
+	if m, _ := groups[0].(map[string]interface{})["matcher"].(string); m != "Bash" {
 		t.Errorf("user group matcher rewritten to %q; only sentinel-bearing groups may be touched", m)
 	}
 
-	// Uninstall must give the file back exactly as seeded.
-	if _, err := Uninstall(cfg); err != nil {
-		t.Fatalf("uninstall: %v", err)
-	}
-	groups = groupsFor(t, readHooks(t, path), eventWithMatcher)
-	if len(groups) != 1 {
+	// Uninstall must give the file back as seeded.
+	mustUninstall(t, cfg, "uninstall", true)
+	if groups := groupsFor(t, readHooks(t, cfg.Path), eventWithMatcher); len(groups) != 1 {
 		t.Fatalf("after uninstall: got %d groups, want 1 (the user's)", len(groups))
+	}
+}
+
+// userAuthoredGroup is a hook group the daemon must never touch — it carries no
+// sentinel of ours.
+func userAuthoredGroup() map[string]interface{} {
+	return map[string]interface{}{
+		"matcher": "Bash",
+		"hooks": []interface{}{
+			map[string]interface{}{"type": "command", "command": "echo mine"},
+		},
 	}
 }
 
@@ -253,11 +267,10 @@ func TestEnsureInstalled_PreservesUnrelatedContent(t *testing.T) {
 func TestEnsureInstalled_UpgradesStaleEntryInPlace(t *testing.T) {
 	for name, build := range configs() {
 		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "settings.json")
-			cfg := build(path)
-
-			// A legacy entry: our sentinel inside an outdated command wrapper.
-			stale := map[string]interface{}{
+			cfg := build(filepath.Join(t.TempDir(), "settings.json"))
+			// A legacy entry: our sentinel inside an outdated command wrapper,
+			// under a matcher we no longer install.
+			seedSettings(t, cfg.Path, map[string]interface{}{
 				"hooks": map[string]interface{}{
 					eventWithMatcher: []interface{}{
 						map[string]interface{}{
@@ -271,38 +284,31 @@ func TestEnsureInstalled_UpgradesStaleEntryInPlace(t *testing.T) {
 						},
 					},
 				},
-			}
-			data, _ := json.MarshalIndent(stale, "", "  ")
-			if err := os.WriteFile(path, data, 0o600); err != nil {
-				t.Fatalf("seed: %v", err)
-			}
+			})
 
-			if modified, err := EnsureInstalled(cfg); err != nil {
-				t.Fatalf("install: %v", err)
-			} else if !modified {
-				t.Fatal("modified=false, want true (a stale entry needs rewriting)")
-			}
-
-			groups := groupsFor(t, readHooks(t, path), eventWithMatcher)
-			if len(groups) != 1 {
-				t.Fatalf("got %d groups, want 1 — the stale entry was duplicated, not upgraded", len(groups))
-			}
-			group := groups[0].(map[string]interface{})
-			if m, _ := group["matcher"].(string); m != matcher {
-				t.Errorf("stale matcher = %q, want %q (not reconciled)", m, matcher)
-			}
-			entry := group["hooks"].([]interface{})[0].(map[string]interface{})
-			if !cfg.IsCanonical(entry) {
-				t.Errorf("entry not upgraded to canonical form: %#v", entry)
-			}
-
-			// And the upgrade converges: a re-run changes nothing.
-			if modified, err := EnsureInstalled(cfg); err != nil {
-				t.Fatalf("re-install: %v", err)
-			} else if modified {
-				t.Error("re-install after upgrade: modified=true, want false")
-			}
+			mustEnsure(t, cfg, "install over a stale entry", true)
+			assertUpgradedInPlace(t, cfg)
+			// The upgrade converges: a re-run changes nothing.
+			mustEnsure(t, cfg, "re-install after upgrade", false)
 		})
+	}
+}
+
+// assertUpgradedInPlace checks that the seeded stale group was rewritten where
+// it sat — same single group, matcher reconciled, entry now canonical.
+func assertUpgradedInPlace(t *testing.T, cfg Config) {
+	t.Helper()
+	groups := groupsFor(t, readHooks(t, cfg.Path), eventWithMatcher)
+	if len(groups) != 1 {
+		t.Fatalf("got %d groups, want 1 — the stale entry was duplicated, not upgraded", len(groups))
+	}
+	group := groups[0].(map[string]interface{})
+	if m, _ := group["matcher"].(string); m != matcher {
+		t.Errorf("stale matcher = %q, want %q (not reconciled)", m, matcher)
+	}
+	entry := group["hooks"].([]interface{})[0].(map[string]interface{})
+	if !cfg.IsCanonical(entry) {
+		t.Errorf("entry not upgraded to canonical form: %#v", entry)
 	}
 }
 
@@ -310,71 +316,48 @@ func TestEnsureInstalled_UpgradesStaleEntryInPlace(t *testing.T) {
 // matcher reconciliation: an install predating the "Stop takes no matcher" rule
 // must have the key removed, not merely overwritten.
 func TestEnsureInstalled_StripsMatcherFromStaleTurnEndGroup(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "settings.json")
-	cfg := httpConfig(path)
-
-	stale := map[string]interface{}{
+	cfg := httpConfig(filepath.Join(t.TempDir(), "settings.json"))
+	seedSettings(t, cfg.Path, map[string]interface{}{
 		"hooks": map[string]interface{}{
 			eventNoMatcher: []interface{}{
-				map[string]interface{}{
-					"matcher": "*",
-					"hooks":   []interface{}{cfg.Entry()},
-				},
+				map[string]interface{}{"matcher": "*", "hooks": []interface{}{cfg.Entry()}},
 			},
 		},
-	}
-	data, _ := json.MarshalIndent(stale, "", "  ")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	})
 
-	if modified, err := EnsureInstalled(cfg); err != nil {
-		t.Fatalf("install: %v", err)
-	} else if !modified {
-		t.Fatal("modified=false, want true (the stale matcher key needs stripping)")
-	}
+	mustEnsure(t, cfg, "install over a stale turn-end matcher", true)
 
-	group := groupsFor(t, readHooks(t, path), eventNoMatcher)[0].(map[string]interface{})
-	if _, has := group["matcher"]; has {
+	if group := firstGroup(t, cfg.Path, eventNoMatcher); group["matcher"] != nil {
 		t.Errorf("matcher key survived on the turn-end group: %#v", group)
 	}
 }
 
 // TestEnsureInstalled_ReplacesNonObjectHooksValue: these files are
-// hand-editable, so "hooks" can be anything. A non-object value is replaced
+// hand-editable, so "hooks" can hold anything. A non-object value is replaced
 // rather than crashing the install.
 func TestEnsureInstalled_ReplacesNonObjectHooksValue(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "settings.json")
-	if err := os.WriteFile(path, []byte(`{"hooks": "not-an-object", "keep": 1}`), 0o600); err != nil {
+	cfg := httpConfig(filepath.Join(t.TempDir(), "settings.json"))
+	if err := os.WriteFile(cfg.Path, []byte(`{"hooks": "not-an-object", "keep": 1}`), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	cfg := httpConfig(path)
-	if _, err := EnsureInstalled(cfg); err != nil {
-		t.Fatalf("install: %v", err)
-	}
-	if !HasOurHook(readHooks(t, path), eventNoMatcher, cfg.Sentinel) {
-		t.Error("install did not recover from a non-object hooks value")
-	}
+	mustEnsure(t, cfg, "install over a non-object hooks value", true)
+	assertInstalled(t, cfg, true)
 }
 
 // TestUninstall_NoHooksKey: nothing to remove is not an error, and must not
 // rewrite the file.
 func TestUninstall_NoHooksKey(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "settings.json")
-	if err := os.WriteFile(path, []byte(`{"model": "x"}`), 0o600); err != nil {
+	cfg := httpConfig(filepath.Join(t.TempDir(), "settings.json"))
+	if err := os.WriteFile(cfg.Path, []byte(`{"model": "x"}`), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	cfg := httpConfig(path)
 	cfg.WriteFile = func(string, []byte) error {
-		t.Fatal("uninstall wrote the file despite finding nothing of ours")
+		t.Error("uninstall wrote the file despite finding nothing of ours")
 		return nil
 	}
-	if modified, err := Uninstall(cfg); err != nil {
-		t.Fatalf("uninstall: %v", err)
-	} else if modified {
-		t.Error("modified=true, want false")
-	}
+
+	mustUninstall(t, cfg, "uninstall with no hooks key", false)
 }
 
 // TestSentinelMatchesEitherDeliveryField pins the one predicate the two
@@ -403,70 +386,61 @@ func TestSentinelMatchesEitherDeliveryField(t *testing.T) {
 	}
 }
 
-func TestReadSettings(t *testing.T) {
-	dir := t.TempDir()
+// assertReadsEmpty asserts ReadSettings yields a usable empty map — never a nil
+// one, which every later write would panic on.
+func assertReadsEmpty(t *testing.T, path string) {
+	t.Helper()
+	got, err := ReadSettings(path)
+	if err != nil {
+		t.Fatalf("ReadSettings(%s): %v", path, err)
+	}
+	if got == nil {
+		t.Fatalf("ReadSettings(%s): got a nil map; a later write would panic on it", path)
+	}
+	if len(got) != 0 {
+		t.Errorf("ReadSettings(%s) = %#v, want an empty map", path, got)
+	}
+}
 
-	t.Run("missing file is empty, not an error", func(t *testing.T) {
-		got, err := ReadSettings(filepath.Join(dir, "absent.json"))
-		if err != nil {
-			t.Fatalf("ReadSettings: %v", err)
-		}
-		if len(got) != 0 {
-			t.Errorf("got %#v, want an empty map", got)
-		}
-	})
+// seedRaw writes a literal file body (bypassing JSON marshalling) and returns
+// its path, for the shapes a settings file can degenerate into.
+func seedRaw(t *testing.T, name, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("seed %s: %v", name, err)
+	}
+	return path
+}
 
-	// A settings file the user (or a crashed writer) left blank must not block
-	// the install — there is simply nothing to merge onto yet.
-	t.Run("blank file is empty, not an error", func(t *testing.T) {
-		path := filepath.Join(dir, "blank.json")
-		if err := os.WriteFile(path, []byte("  \n\t "), 0o600); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-		got, err := ReadSettings(path)
-		if err != nil {
-			t.Fatalf("ReadSettings: %v", err)
-		}
-		if len(got) != 0 {
-			t.Errorf("got %#v, want an empty map", got)
-		}
-	})
+func TestReadSettings_MissingFileIsEmpty(t *testing.T) {
+	assertReadsEmpty(t, filepath.Join(t.TempDir(), "absent.json"))
+}
 
-	// A bare `null` decodes to a nil map with no error — and every later write
-	// would panic on it. Regression guard for that crash.
-	t.Run("null document is empty, not a nil map", func(t *testing.T) {
-		path := filepath.Join(dir, "null.json")
-		if err := os.WriteFile(path, []byte("null\n"), 0o600); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-		got, err := ReadSettings(path)
-		if err != nil {
-			t.Fatalf("ReadSettings: %v", err)
-		}
-		if got == nil {
-			t.Fatal("got a nil map; a later write would panic on it")
-		}
-		// The whole install must survive it, not just the read.
-		cfg := httpConfig(path)
-		if _, err := EnsureInstalled(cfg); err != nil {
-			t.Fatalf("EnsureInstalled over a null document: %v", err)
-		}
-		if !HasOurHook(readHooks(t, path), eventNoMatcher, cfg.Sentinel) {
-			t.Error("install did not recover from a null document")
-		}
-	})
+// A settings file the user (or a crashed writer) left blank must not block the
+// install — there is simply nothing to merge onto yet.
+func TestReadSettings_BlankFileIsEmpty(t *testing.T) {
+	assertReadsEmpty(t, seedRaw(t, "blank.json", "  \n\t "))
+}
 
-	// Malformed is different from blank: overwriting it would destroy content
-	// the user meant to keep, so it must surface as an error.
-	t.Run("malformed JSON errors", func(t *testing.T) {
-		path := filepath.Join(dir, "bad.json")
-		if err := os.WriteFile(path, []byte(`{"hooks":`), 0o600); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-		if _, err := ReadSettings(path); err == nil {
-			t.Error("ReadSettings on malformed JSON: got nil error, want a decode error")
-		}
-	})
+// TestReadSettings_NullDocumentIsEmpty: a bare `null` decodes to a NIL map with
+// no error, and every later write would panic on it. Regression guard.
+func TestReadSettings_NullDocumentIsEmpty(t *testing.T) {
+	path := seedRaw(t, "null.json", "null\n")
+	assertReadsEmpty(t, path)
+
+	// The whole install must survive it, not just the read.
+	cfg := httpConfig(path)
+	mustEnsure(t, cfg, "install over a null document", true)
+	assertInstalled(t, cfg, true)
+}
+
+// Malformed is different from blank: overwriting it would destroy content the
+// user meant to keep, so it must surface as an error.
+func TestReadSettings_MalformedJSONErrors(t *testing.T) {
+	if _, err := ReadSettings(seedRaw(t, "bad.json", `{"hooks":`)); err == nil {
+		t.Error("ReadSettings on malformed JSON: got nil error, want a decode error")
+	}
 }
 
 // TestWriteSettings_ShapeAndDelegation pins the on-disk shape (2-space indent,
