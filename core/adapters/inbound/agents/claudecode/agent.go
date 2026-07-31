@@ -82,7 +82,7 @@ func Agent() agent.Agent {
 				Touches:         "Writes 6 hook entries to ~/.claude/settings.json",
 				Detail: "Adds PermissionRequest, PreToolUse, PostToolUse, " +
 					"PostToolUseFailure, PreCompact, and Stop hook entries that POST " +
-					"the hook payload to the local daemon at " + hookEndpointURL +
+					"the hook payload to the local daemon at " + hookEndpointURL() +
 					" via Claude Code's native http hook (no shell/curl). Toggling " +
 					"off removes exactly these entries (also available via " +
 					"`irrlichd --uninstall-hooks`).",
@@ -95,7 +95,7 @@ func Agent() agent.Agent {
 				Title:           "Install statusline feed",
 				FeatureUnlocked: "Rate-limit / quota forecast for Pro & Max subscriptions",
 				Touches:         "Sets statusLine.command in ~/.claude/settings.json",
-				Detail: "Sets statusLine.command to: " + installedStatuslineCommand +
+				Detail: "Sets statusLine.command to: " + installedStatuslineCommand() +
 					" — POSTs Claude Code's statusline JSON (carrying rate-limit " +
 					"data) to the local daemon. An existing user statusline is " +
 					"chained, not replaced. Toggling off restores the previous " +

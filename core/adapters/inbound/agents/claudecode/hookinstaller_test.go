@@ -5,14 +5,27 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"irrlicht/core/pkg/daemonaddr"
 )
 
 // withTempHome overrides $HOME for the duration of the test so that
-// claudeSettingsPath() resolves to a temp directory.
+// claudeSettingsPath() resolves to a temp directory. It also pins the daemon
+// bind address to the default, so the endpoint port the installers resolve
+// (#1178) is the same whatever the developer's shell exports.
 func withTempHome(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv(daemonaddr.EnvBindAddr, "")
+	return tmp
+}
+
+// withTempHomeOnPort is withTempHome for a daemon bound to an alternate port.
+func withTempHomeOnPort(t *testing.T, bindAddr string) string {
+	t.Helper()
+	tmp := withTempHome(t)
+	t.Setenv(daemonaddr.EnvBindAddr, bindAddr)
 	return tmp
 }
 
@@ -80,8 +93,8 @@ func assertHTTPEntry(t *testing.T, group map[string]interface{}) {
 	if ty, _ := hook["type"].(string); ty != "http" {
 		t.Errorf("type = %q, want %q", ty, "http")
 	}
-	if u, _ := hook["url"].(string); u != hookEndpointURL {
-		t.Errorf("url = %q, want %q", u, hookEndpointURL)
+	if u, _ := hook["url"].(string); u != hookEndpointURL() {
+		t.Errorf("url = %q, want %q", u, hookEndpointURL())
 	}
 }
 

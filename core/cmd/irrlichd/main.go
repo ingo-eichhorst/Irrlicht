@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -52,24 +51,10 @@ func (l lazyControl) Interrupt(id string) error {
 	return fmt.Errorf("relay control: input service not ready")
 }
 
-const (
-	defaultBindAddr = "127.0.0.1:7837"
-	tcpPort         = 7837
-	envUIDir        = "IRRLICHT_UI_DIR"
-)
-
-// resolveBindAddr returns the TCP bind address for the daemon. Default is
-// loopback-only; set IRRLICHT_BIND_ADDR to override (e.g. "0.0.0.0:7837" to
-// expose the daemon on the LAN).
-func resolveBindAddr(envValue string) string {
-	if envValue == "" {
-		return defaultBindAddr
-	}
-	if _, _, err := net.SplitHostPort(envValue); err != nil {
-		return defaultBindAddr
-	}
-	return envValue
-}
+// The daemon's bind address and default port live in core/pkg/daemonaddr, so
+// the agent hook installers resolve the same endpoint the daemon actually
+// listens on rather than agreeing with it by convention (#1178).
+const envUIDir = "IRRLICHT_UI_DIR"
 
 func hasFlag(name string) bool {
 	for _, arg := range os.Args[1:] {

@@ -215,7 +215,7 @@ The single highest-value thing to know per adapter. **Four adapters get an expli
 - **Assistant text**: last assistant message checked for trailing `?` (waiting heuristic)
 - **Token/cost fields**: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`
 - **Model name field**: normalized (e.g., `sonnet` -> `claude-sonnet-4-6`)
-- **Hooks**: the hook matcher (`hookinstaller.go:34`) hardcodes `Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode`. Note hooks post to a **hardcoded port 7837**, so hook-delivered observations can't be re-recorded against a dev daemon on an alt port.
+- **Hooks**: the hook matcher (`hookinstaller.go:34`) hardcodes `Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode`. Since #1178 the hook endpoint follows the daemon's own `IRRLICHT_BIND_ADDR`, so hook-delivered observations *can* be recorded against a dev daemon on an alt port.
 
 #### Process-level dependencies
 - Binary named `claude` found via `pgrep -x claude`

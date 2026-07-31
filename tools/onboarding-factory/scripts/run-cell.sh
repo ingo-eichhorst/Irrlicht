@@ -38,6 +38,8 @@ JSONL_GLOB='*.jsonl'
 
 # shellcheck source=lib/shard-lib.sh
 source "$SCRIPT_DIR/lib/shard-lib.sh"   # per-scenario shard reader (#511)
+# shellcheck source=lib/hook-config-snapshot.sh
+source "$SCRIPT_DIR/lib/hook-config-snapshot.sh"   # save/restore shared agent config (#1178)
 
 RECORDER="off"
 ATTACH=0
@@ -180,9 +182,10 @@ REPLAY_BIN="$REPO_ROOT/.build/refresh/bin/replay"
 # bind port, so it coexists with a running production irrlichd instead of
 # clashing on 7837. Filesystem-observed adapters (codex/pi/aider/opencode)
 # record fine this way because they watch the real $HOME (e.g.
-# ~/.codex/sessions) regardless of IRRLICHT_HOME. claudecode is the one
-# exception — its hooks POST to a hardcoded :7837 — so precheck refuses
-# claudecode in coexist mode.
+# ~/.codex/sessions) regardless of IRRLICHT_HOME. Hook-driven observation
+# (claudecode, codex) works too since #1178: the endpoint the installers write
+# follows IRRLICHT_BIND_ADDR, so hooks reach this daemon rather than
+# production's.
 ONBOARD_HOME="${IRRLICHT_ONBOARD_HOME:-}"
 if [[ -n "$ONBOARD_HOME" ]]; then
   # Coexist mode: default to an alternate port so we don't clash with a
@@ -252,6 +255,10 @@ else
   # grant-all: the consent-first permission gate (#570) would otherwise
   # leave a fresh recording daemon monitoring nothing until a wizard is
   # answered — fixtures must never hang on consent.
+  # Save the shared agent config the daemon is about to rewrite (see
+  # lib/hook-config-snapshot.sh); cleanup hands it back.
+  snapshot_hook_configs "$STAGING/hook-config-backup"
+
   DAEMON_ENV=(IRRLICHT_RECORDINGS_DIR="$STAGING/recordings"
               IRRLICHT_BIND_ADDR="$ONBOARD_BIND"
               IRRLICHT_PERMISSION_MODE=grant-all)
@@ -264,12 +271,19 @@ else
   DAEMON_PID=$!
   echo "daemon started (pid $DAEMON_PID, bind=$ONBOARD_BIND${ONBOARD_HOME:+, home=$ONBOARD_HOME})"
 
-  # Cleanup: graceful shutdown. Runs once: either via explicit call
-  # before transcript resolution (we must drain before continuing), or
-  # as the EXIT trap if we fail before reaching that point. `trap - EXIT`
-  # after the explicit call prevents double-invocation.
+  # Cleanup: graceful shutdown, then hand the user's agent config back. Runs
+  # once: either via explicit call before transcript resolution (we must drain
+  # before continuing), or as the EXIT trap if we fail before reaching that
+  # point. `trap - EXIT` after the explicit call prevents double-invocation.
   SHUTDOWN_REASON="unknown"
   cleanup() {
+    stop_daemon
+    restore_hook_configs
+  }
+
+  # stop_daemon escalates INT -> TERM -> KILL, giving the recorder time to
+  # flush between each.
+  stop_daemon() {
     if kill -0 "$DAEMON_PID" 2>/dev/null; then
       SHUTDOWN_REASON="sigint"
       kill -INT "$DAEMON_PID" 2>/dev/null || true

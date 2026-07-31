@@ -221,23 +221,6 @@ func TestGate_WebSocketRejectsForeignOrigin(t *testing.T) {
 	}
 }
 
-func TestResolveBindAddr(t *testing.T) {
-	tests := []struct {
-		in, want string
-	}{
-		{"", defaultBindAddr},
-		{"garbage", defaultBindAddr},
-		{"127.0.0.1:7837", "127.0.0.1:7837"},
-		{"0.0.0.0:7837", "0.0.0.0:7837"},
-		{":7837", ":7837"},
-	}
-	for _, tt := range tests {
-		if got := resolveBindAddr(tt.in); got != tt.want {
-			t.Errorf("resolveBindAddr(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
 func TestDataDir(t *testing.T) {
 	// Default: derived from the passed-in home dir.
 	t.Run("default", func(t *testing.T) {

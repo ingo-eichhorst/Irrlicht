@@ -136,14 +136,14 @@ func TestStatuslineHandler_SampledAtUsesClock(t *testing.T) {
 
 func TestChainStatuslineCommand_BareInstall(t *testing.T) {
 	got := chainStatuslineCommand("")
-	if got != installedStatuslineCommand {
+	if got != installedStatuslineCommand() {
 		t.Errorf("expected canonical command on empty input, got %q", got)
 	}
 }
 
 func TestChainStatuslineCommand_IdempotentOnCanonical(t *testing.T) {
-	got := chainStatuslineCommand(installedStatuslineCommand)
-	if got != installedStatuslineCommand {
+	got := chainStatuslineCommand(installedStatuslineCommand())
+	if got != installedStatuslineCommand() {
 		t.Errorf("expected idempotency, got %q", got)
 	}
 }
@@ -165,7 +165,7 @@ func TestChainStatuslineCommand_WrapsThirdPartyCommand(t *testing.T) {
 func TestChainStatuslineCommand_RewritesStaleManagedForm(t *testing.T) {
 	stale := "curl --silent " + statuslineSentinel + " /old"
 	got := chainStatuslineCommand(stale)
-	if got != installedStatuslineCommand {
+	if got != installedStatuslineCommand() {
 		t.Errorf("expected stale managed command to be rewritten to canonical, got %q", got)
 	}
 }
@@ -179,7 +179,7 @@ func TestUnchainStatuslineCommand_RoundTripsUserCommand(t *testing.T) {
 }
 
 func TestUnchainStatuslineCommand_StandaloneReturnsEmpty(t *testing.T) {
-	if got := unchainStatuslineCommand(installedStatuslineCommand); got != "" {
+	if got := unchainStatuslineCommand(installedStatuslineCommand()); got != "" {
 		t.Errorf("expected empty for standalone install, got %q", got)
 	}
 }
@@ -256,7 +256,7 @@ func TestChainStatuslineCommand_MigratesOldWrapsToV3(t *testing.T) {
 		`http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true'`
 	for _, old := range []string{v1, v2} {
 		got := chainStatuslineCommand(old)
-		if !strings.HasPrefix(got, v3WrapPrefix) {
+		if !strings.HasPrefix(got, bashEnvelopeOpen+teeSubOpen+installedStatuslineCommand()+wrapPipe) {
 			t.Errorf("expected v3 form after migration, got %q", got)
 		}
 		if !strings.Contains(got, userCmd) {

@@ -9,7 +9,6 @@ import (
 	"net/http/pprof"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -36,6 +35,7 @@ import (
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/config"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/pkg/daemonaddr"
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
@@ -473,7 +473,7 @@ func setupUnixSocket(logger outbound.Logger) (string, net.Listener) {
 // parallel). Returns the listener and its actual bound address (the
 // OS-assigned port when the request was :0).
 func setupTCPListener(logger outbound.Logger) (net.Listener, string) {
-	bindAddr := resolveBindAddr(os.Getenv("IRRLICHT_BIND_ADDR"))
+	bindAddr := daemonaddr.BindAddr()
 	tcpL, err := net.Listen("tcp", bindAddr)
 	if err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("failed to listen on TCP %s: %v", bindAddr, err))
@@ -485,20 +485,16 @@ func setupTCPListener(logger outbound.Logger) (net.Listener, string) {
 // setupMDNS advertises _irrlicht._tcp on the local network, opt-in via
 // IRRLICHT_MDNS=1 to avoid broadcasting the daemon on networks the user did
 // not intend to share on. Advertises the port actually bound (resolvedAddr),
-// not the compile-time default — otherwise a daemon on a custom/ephemeral
-// port would point discovery clients at 7837 (a dead or production port).
+// not the default — otherwise a daemon on a custom/ephemeral port would point
+// discovery clients at 7837 (a dead or production port). resolvedAddr carries
+// the OS-assigned port when the request was :0, so PortOf's own :0 fallback is
+// never reached here.
 func setupMDNS(resolvedAddr string, logger outbound.Logger) *mdns.Advertiser {
 	if os.Getenv("IRRLICHT_MDNS") != "1" {
 		logger.LogInfo("startup", "", "mDNS: disabled (set IRRLICHT_MDNS=1 to advertise)")
 		return nil
 	}
-	advPort := tcpPort
-	if _, p, err := net.SplitHostPort(resolvedAddr); err == nil {
-		if n, err := strconv.Atoi(p); err == nil {
-			advPort = n
-		}
-	}
-	adv, err := mdns.New(advPort)
+	adv, err := mdns.New(daemonaddr.PortOf(resolvedAddr))
 	if err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("mDNS advertisement failed (non-fatal): %v", err))
 		return nil
@@ -910,11 +906,11 @@ func setupBackchannel(mux *http.ServeMux, deps setupBackchannelDeps) (*services.
 // pre-consent daemon keep firing until the wizard is answered, so payloads are
 // dropped while pending.
 func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, metricsCollector outbound.MetricsCollector, permService *services.PermissionService, logger outbound.Logger) {
-	mux.HandleFunc("POST /api/v1/hooks/claudecode",
+	mux.HandleFunc("POST "+claudecode.HookEndpointPath,
 		claudecode.NewHookHandler(detector, metricsCollector, permService, logger))
-	mux.HandleFunc("POST /api/v1/hooks/claudecode/statusline",
+	mux.HandleFunc("POST "+claudecode.StatuslineEndpointPath,
 		claudecode.NewStatuslineHandler(metricsCollector, permService, logger))
-	mux.HandleFunc("POST /api/v1/hooks/codex",
+	mux.HandleFunc("POST "+codex.HookEndpointPath,
 		codex.NewHookHandler(detector, permService, logger))
 }
 
