@@ -1,0 +1,93 @@
+# Scheduled dependency updates.
+#
+# Before this file existed, the only thing that ever moved a dependency in this
+# repo was a GitHub security alert. That is alert-driven and one-shot: when an
+# alert is missed, nothing else is coming, and the dependency sits still until
+# something trips over it. It happened twice — postcss was patched in
+# platforms/web and left stale in the onboarding viewer tree (#1213/#1225), and
+# golang.org/x/net sat on a vulnerable v0.55.0 in core for a month after its
+# one security bump (#801). Both were found by tools/security-scan.sh rejecting
+# an unrelated push, which is the worst time to find them.
+#
+# So: a weekly floor under every ecosystem, independent of whether an advisory
+# fires. Security updates still run on top of this — they are repo-settings
+# driven, not configured here.
+#
+# One entry per ecosystem, using the plural `directories:` key rather than one
+# entry per path. Sibling trees then share a single cadence, grouping and
+# commit convention by construction — they cannot drift apart in configuration,
+# which is the failure mode this file exists to prevent.
+#
+# Grouping keeps the volume sane: minor and patch bumps arrive as one PR per
+# ecosystem, majors individually so a breaking change is never buried in a
+# group. If the cadence proves noisy, lengthen `interval` to monthly rather
+# than dropping entries — a silent ecosystem is how this started.
+version: 2
+
+updates:
+  # The two web suites from AGENTS.md, each with its own node_modules and its
+  # own independently-resolved lockfile.
+  - package-ecosystem: npm
+    directories:
+      - /platforms/web
+      - /tools/onboarding-factory/internal/viewer/web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # Matches the prefixes dependabot already produced here (#1189, #688), so
+    # the PR stream looks unchanged apart from now running on a clock.
+    commit-message:
+      prefix: chore(deps)
+      prefix-development: chore(deps-dev)
+    groups:
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # Every module in go.work, which is also the list tools/security-scan.sh
+  # scans with govulncheck and gosec. Three copies of that list now exist
+  # (go.work, security-scan.sh's GO_MODULES, here) and nothing enforces their
+  # equality — it was checked by hand when this file was written. Adding a
+  # seventh module means editing all three.
+  - package-ecosystem: gomod
+    directories:
+      - /core
+      - /tools/eta-research
+      - /tools/onboarding-factory
+      - /tools/seed-demo-sessions
+      - /tools/starhistory
+      - /tools/wsload
+    schedule:
+      interval: weekly
+    # Above the directory count (6), not at dependabot's default of 5: the
+    # limit is a cap on concurrently-open PRs, so a catch-up week that wants
+    # one grouped PR per module would silently withhold the sixth.
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      go-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # Pinned action versions across .github/workflows/.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
