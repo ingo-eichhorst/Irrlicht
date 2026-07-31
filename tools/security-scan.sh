@@ -15,6 +15,17 @@
 # aren't meaningfully different push-to-push — and runs govulncheck + gosec +
 # npm audit only.
 #
+# Changed-scoped mode (--changed, added by preflight.sh --changed on top of
+# --local): each scanner runs only where this branch touched that scanner's
+# own inputs — govulncheck/gosec per Go module with a changed .go/go.mod/go.sum,
+# npm audit per web tree with a changed package.json/package-lock.json. A diff
+# that changes neither cannot introduce a finding there, so scanning it only
+# imports a pre-existing, unrelated advisory into an unrelated push — which
+# rejected every push on a Go-only branch and forced --no-verify, disabling
+# every other gate too (issue #1213). Skips are printed, never silent, per the
+# "can't-run is not a skip" policy below. Without --changed nothing narrows:
+# the default run (and /ir:release's Step 5.5) still scans everything.
+#
 # Severity semantics:
 #   - Dependabot / CodeQL: Critical or High severity alerts fail the gate.
 #     Medium/Low are logged, not blocking.
@@ -39,17 +50,24 @@
 # a hard failure, not a skip. A silently-skipped scan is indistinguishable
 # from a clean one, which defeats the point of a gate.
 #
-# Usage: tools/security-scan.sh [--local]
+# Usage: tools/security-scan.sh [--local] [--changed]
 set -uo pipefail
 
+# Resolve the script's own directory before cd'ing to the repo root, so the
+# lib/ source below still works from any caller's working directory.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT"
 
 LOCAL_ONLY=0
+CHANGED=0
 for arg in "$@"; do
   case "$arg" in
     --local) LOCAL_ONLY=1 ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    --changed) CHANGED=1 ;;
+    # Print the whole leading comment block — no line numbers to drift out of
+    # date as this header grows.
+    -h|--help) awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"; exit 0 ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
   esac
 done
@@ -66,6 +84,39 @@ FAILED=0
 fail() { local msg="$1"; echo "FAIL: $msg" >&2; FAILED=1; return 0; }
 warn() { local msg="$1"; echo "WARN: $msg" >&2; return 0; }
 ok()   { local msg="$1"; echo "OK: $msg"; return 0; }
+
+# ---- --changed scoping -----------------------------------------------------
+# CHANGED_FILES stays empty without --changed, and the in_scope helpers below
+# short-circuit to true — so the unscoped run is byte-for-byte what it was.
+CHANGED_FILES=""
+SKIPPED=0
+if [[ "$CHANGED" -eq 1 ]]; then
+  # shellcheck source=lib/changed-files.sh
+  . "$SCRIPT_DIR/lib/changed-files.sh"
+  CHANGED_FILES=$(changed_files_vs_origin_main)
+fi
+
+# skip <what> <why> — a skipped scan must be as loud as a failed one. A
+# silently-skipped scan is indistinguishable from a clean one, which is the
+# same reasoning that makes a can't-run check a hard failure above; the
+# difference is that this skip is a deliberate, stated narrowing rather than
+# an unknown.
+skip() { echo "SKIP: $1 — $2"; SKIPPED=$((SKIPPED + 1)); return 0; }
+
+# go_in_scope / web_in_scope — true when not scoping at all, else delegate to
+# the shared predicates in lib/changed-files.sh.
+go_in_scope() {
+  [[ "$CHANGED" -eq 1 ]] || return 0
+  go_module_touched "$1" "$CHANGED_FILES"
+}
+web_in_scope() {
+  [[ "$CHANGED" -eq 1 ]] || return 0
+  web_tree_touched "$1" "$CHANGED_FILES"
+}
+
+if [[ "$CHANGED" -eq 1 ]]; then
+  echo "-- scope: --changed — scanning only what this branch's diff vs origin/main feeds --"
+fi
 
 # ---- GitHub-native alerts (full mode only) --------------------------------
 
@@ -110,6 +161,10 @@ fi
 command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@latest
 
 for mod in "${GO_MODULES[@]}"; do
+  if ! go_in_scope "$mod"; then
+    skip "govulncheck: $mod" "--changed: no .go/go.mod/go.sum change under it"
+    continue
+  fi
   echo "-- govulncheck: $mod --"
   gv_json=$(mktemp)
   gv_err=$(mktemp)
@@ -149,6 +204,10 @@ command -v gosec >/dev/null 2>&1 || fail "gosec not found — install: go instal
 
 if command -v gosec >/dev/null 2>&1; then
   for mod in "${GO_MODULES[@]}"; do
+    if ! go_in_scope "$mod"; then
+      skip "gosec: $mod" "--changed: no .go/go.mod/go.sum change under it"
+      continue
+    fi
     echo "-- gosec: $mod (informational, all severities) --"
     ( cd "$mod" && gosec -no-fail -quiet ./... ) || true
 
@@ -164,6 +223,10 @@ fi
 # ---- npm audit (all modes) -------------------------------------------------
 
 for tree in "${WEB_TREES[@]}"; do
+  if ! web_in_scope "$tree"; then
+    skip "npm audit: $tree" "--changed: no package.json/package-lock.json change under it"
+    continue
+  fi
   echo "-- npm audit: $tree --"
   command -v npm >/dev/null 2>&1 || { fail "npm audit: $tree — npm not found"; continue; }
   # npm audit exits non-zero both when it finds advisories AND when the audit
@@ -197,8 +260,13 @@ for tree in "${WEB_TREES[@]}"; do
 done
 
 echo
+# Name the narrowing in the verdict too. "passed" after skipping most of the
+# scan means something weaker than an unscoped "passed", and the line a
+# developer actually reads should say so rather than implying full coverage.
+scope_note=""
+[[ "$SKIPPED" -gt 0 ]] && scope_note=" ($SKIPPED scan(s) skipped as out of scope for this diff — run tools/security-scan.sh without --changed for the full sweep)"
 if [[ "$FAILED" -eq 1 ]]; then
-  echo "security-scan: FAILED — resolve the Critical/High finding(s) above before shipping." >&2
+  echo "security-scan: FAILED — resolve the Critical/High finding(s) above before shipping.$scope_note" >&2
   exit 1
 fi
-echo "security-scan: passed"
+echo "security-scan: passed$scope_note"

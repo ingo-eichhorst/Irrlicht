@@ -147,6 +147,15 @@ the full core suite) can still take a few minutes. Skip once with `git push
 --no-verify`; run `tools/preflight.sh` manually (no `--changed`) for the
 unscoped full gate.
 
+The security gate is scoped twice over: its trigger regex decides whether the
+scan runs at all, and `tools/security-scan.sh --changed` then picks which Go
+modules and web trees to scan, matching each scanner against the files it
+actually reads. Without that second layer a pure-Go push paid for an `npm
+audit` of both web trees and was rejected by a pre-existing advisory it could
+not have caused (#1213) — forcing `--no-verify`, which disables every other
+gate too. Both layers read the same changed set, from
+`tools/lib/changed-files.sh`; its unit tests run in the `tools` gate.
+
 Two of the failure modes it won't catch: environment-specific timing flakes
 that only manifest on loaded Linux CI runners (not this machine), and true
 Linux-only bugs unless you pass `--linux`.

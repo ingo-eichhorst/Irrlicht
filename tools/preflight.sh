@@ -24,6 +24,11 @@
 # more valuable as a pre-push gate than on every PR push; a GH Actions
 # equivalent can be added later without changing tools/security-scan.sh.
 #
+# The `tools` group is local-only for the same reason: it runs the unit tests
+# for the shared shell libs under tools/lib/, which nothing else exercises
+# (tools/onboarding-factory/scripts/smoke-test.sh is scoped to the recording
+# rig's own scripts and never reaches top-level tools/).
+#
 # Usage:
 #   tools/preflight.sh                 # everything except the Linux gate
 #   tools/preflight.sh --linux         # + full Linux parity via Docker
@@ -31,12 +36,18 @@
 #   tools/preflight.sh --only web      # just the two npm test trees
 #   tools/preflight.sh --only arch     # just the ARS architecture gate
 #   tools/preflight.sh --only security # just govulncheck + gosec + npm audit
+#   tools/preflight.sh --only tools    # just the tools/lib shell-lib unit tests
 #   tools/preflight.sh --only linux    # just the Linux Docker gate
 #   tools/preflight.sh --changed       # scope every gate to the packages/trees
 #                                        this branch changes vs origin/main —
 #                                        used by the pre-push hook so a small
 #                                        push finishes in seconds. Without it
-#                                        the full run above is unchanged.
+#                                        the full run above is unchanged. The
+#                                        security gate is scoped twice over:
+#                                        the trigger regex decides whether it
+#                                        runs, then security-scan.sh --changed
+#                                        picks which Go modules / web trees to
+#                                        scan (issue #1213).
 #
 # PLATFORMS overrides the Linux gate's docker --platform (default: linux/amd64,
 # matching linux.yml's ubuntu-latest runner — QEMU-emulated on Apple Silicon,
@@ -55,7 +66,9 @@ while [[ $# -gt 0 ]]; do
     --linux) RUN_LINUX=1; shift ;;
     --only)  ONLY="${2:-}"; shift 2 ;;
     --changed) CHANGED=1; shift ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    # Print the whole leading comment block — including the Usage section,
+    # which the previous fixed line range had already drifted past.
+    -h|--help) awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -74,15 +87,16 @@ want() {
 # empty and changed_matches always returns true, so every gate runs
 # unconditionally — the manual `tools/preflight.sh` full run is byte-for-byte
 # identical to before.
+#
+# The changed set itself comes from tools/lib/changed-files.sh, shared with
+# tools/security-scan.sh --changed. That gate decides whether to run from this
+# set and then scopes its own scanners from the same one, so both layers must
+# agree on what "changed" means (issue #1213).
 CHANGED_FILES=""
 if [[ "$CHANGED" == 1 ]]; then
-  base=$(git merge-base origin/main HEAD 2>/dev/null || echo origin/main)
-  CHANGED_FILES=$(
-    { git diff --name-only "$base" HEAD
-      git diff --name-only HEAD
-      git diff --name-only --cached
-    } 2>/dev/null | sort -u
-  )
+  # shellcheck source=lib/changed-files.sh
+  . "$SCRIPT_DIR/lib/changed-files.sh"
+  CHANGED_FILES=$(changed_files_vs_origin_main)
 fi
 
 # changed_matches <extended-regex> — true when NOT scoping (full run) or when
@@ -207,12 +221,36 @@ if want arch; then
   run_gate_scoped '^core/' "ARS architecture gate" tools/ars-gate.sh
 fi
 
+# ---- tools group (shared shell libs; no matching workflow — see header) ----
+# Scoped to the scripts that consume tools/lib/, so the scoping rules are
+# re-checked exactly when someone edits them or one of their two callers.
+shell_lib_tests() {
+  local rc=0 t
+  for t in tools/lib/*_test.sh; do
+    [[ -e "$t" ]] || continue
+    bash "$t" || rc=1
+  done
+  return "$rc"
+}
+
+if want tools; then
+  run_gate_scoped '^tools/lib/|^tools/preflight\.sh$|^tools/security-scan\.sh$' \
+                  "tools/lib shell-lib tests" shell_lib_tests
+fi
+
 # ---- security group (mirrors tools/security-scan.sh's local mode; the same
 # script's full mode, with GitHub Dependabot/CodeQL alert checks, runs at
 # release time from ir:release's Step 5.5, not here) ------------------------
 if want security; then
+  # In --changed mode the gate's trigger regex only decides whether the scan
+  # runs at all; --changed then narrows *which* modules and trees it scans, so
+  # a diff that trips the trigger via one tree's lockfile doesn't also audit
+  # the other tree or sweep six Go modules (issue #1213).
+  security_args=(--local)
+  [[ "$CHANGED" == 1 ]] && security_args+=(--changed)
   run_gate_scoped '\.go$|(^|/)go\.(mod|sum)$|(^|/)package(-lock)?\.json$' \
-                  "security scan (govulncheck + gosec + npm audit)" tools/security-scan.sh --local
+                  "security scan (govulncheck + gosec + npm audit)" \
+                  tools/security-scan.sh "${security_args[@]}"
 fi
 
 # ---- linux group (mirrors linux.yml, opt-in: --linux or --only linux) ---
