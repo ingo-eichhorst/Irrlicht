@@ -21,7 +21,9 @@ func newFocusRecorder(t *testing.T) *focusRecorder {
 	t.Helper()
 	rec := &focusRecorder{}
 	rec.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rec.path = r.Method + " " + r.URL.Path
+		// EscapedPath, not Path: the server decodes %2F back into Path, which
+		// would hide whether the CLI escaped the session ID on the wire.
+		rec.path = r.Method + " " + r.URL.EscapedPath()
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(rec.srv.Close)
@@ -66,6 +68,41 @@ func TestFocusFallsBackToAddrFile(t *testing.T) {
 		t.Fatalf("run exit code = %d, want 0 (focus ignored the daemon's published addr file)", code)
 	}
 	if want := "POST /api/v1/sessions/sess-addrfile/focus"; rec.path != want {
+		t.Errorf("daemon received %q, want %q", rec.path, want)
+	}
+}
+
+// TestRunWarnsWhenItIgnoresTheEnvironment: a typo'd IRRLICHT_BIND_ADDR must
+// not silently route the request to whichever daemon owns the default port.
+func TestRunWarnsWhenItIgnoresTheEnvironment(t *testing.T) {
+	rec := newFocusRecorder(t)
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "irrlichd.addr"), []byte(rec.addr()+"\n"), 0o600); err != nil {
+		t.Fatalf("write addr file: %v", err)
+	}
+	t.Setenv("IRRLICHT_BIND_ADDR", "7838") // missing host — unusable
+	t.Setenv("IRRLICHT_HOME", home)
+
+	var stderr strings.Builder
+	if code := run([]string{"sess-warn"}, &stderr); code != 0 {
+		t.Fatalf("run exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stderr.String(), "IRRLICHT_BIND_ADDR") {
+		t.Errorf("stderr = %q, want it to name the variable it ignored", stderr.String())
+	}
+}
+
+// TestFocusEscapesTheSessionID: a stray argument can only ever be a session ID
+// the daemon does not know, never a different endpoint.
+func TestFocusEscapesTheSessionID(t *testing.T) {
+	rec := newFocusRecorder(t)
+	t.Setenv("IRRLICHT_BIND_ADDR", rec.addr())
+	t.Setenv("IRRLICHT_HOME", t.TempDir())
+
+	if code := run([]string{"../../state"}, io.Discard); code != 0 {
+		t.Fatalf("run exit code = %d, want 0", code)
+	}
+	if want := "POST /api/v1/sessions/..%2F..%2Fstate/focus"; rec.path != want {
 		t.Errorf("daemon received %q, want %q", rec.path, want)
 	}
 }

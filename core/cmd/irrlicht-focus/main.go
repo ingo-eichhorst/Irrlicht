@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -37,6 +38,12 @@ func run(args []string, stderr io.Writer) int {
 		return 1
 	}
 
+	// Say so when the daemon we resolved is not the one the environment asked
+	// for: dialing a stranger silently is the failure mode this CLI had.
+	if w := daemonaddr.ClientConfigWarning(); w != "" {
+		fmt.Fprintf(stderr, "irrlicht-focus: %s\n", w)
+	}
+
 	client := &http.Client{Timeout: 3 * time.Second}
 
 	resp, err := client.Post(focusURL(args[0]), "application/json", nil) //nolint:noctx
@@ -53,7 +60,9 @@ func run(args []string, stderr io.Writer) int {
 	return 2
 }
 
-// focusURL builds the daemon endpoint this CLI POSTs to for sessionID.
+// focusURL builds the daemon endpoint this CLI POSTs to for sessionID, which
+// is escaped so an unexpected argument can only ever be a session ID the
+// daemon does not know, never a different endpoint.
 func focusURL(sessionID string) string {
-	return daemonaddr.ClientURL("/api/v1/sessions/" + sessionID + "/focus")
+	return daemonaddr.ClientURL("/api/v1/sessions/" + url.PathEscape(sessionID) + "/focus")
 }

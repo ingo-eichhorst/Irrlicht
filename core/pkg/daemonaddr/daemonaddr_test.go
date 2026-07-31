@@ -3,6 +3,7 @@ package daemonaddr
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -146,7 +147,7 @@ func TestClientURLFallsBackToDefault(t *testing.T) {
 		name, bindAddr string
 		published      string // "" plants no file at all
 	}{
-		{"nothing set and no daemon running", "", ""},
+		{"a state tree whose daemon published nothing", "", ""},
 		{"addr file holds garbage", "", "not-an-address\n"},
 		{"addr file holds an unresolved ephemeral request", "", "127.0.0.1:0\n"},
 		{"addr file is empty", "", "\n"},
@@ -173,6 +174,108 @@ func TestClientURLIgnoresMalformedBindAddrInFavorOfFile(t *testing.T) {
 	publishAddr(t, "127.0.0.1:7838\n")
 	t.Setenv(EnvBindAddr, "127.0.0.1:notaport")
 	if got, want := ClientURL("/x"), "http://localhost:7838/x"; got != want {
+		t.Errorf("ClientURL(\"/x\") = %q, want %q", got, want)
+	}
+}
+
+// TestClientConfigWarning pins the other half of the ladder: whenever it has
+// to ignore what the environment asked for, the caller can say so instead of
+// quietly talking to whichever daemon owns the default port.
+func TestClientConfigWarning(t *testing.T) {
+	tests := []struct {
+		name, bindAddr, published string
+		wantSubstr                string // "" means: no warning at all
+	}{
+		{name: "unambiguous env", bindAddr: "127.0.0.1:7838", wantSubstr: ""},
+		{name: "unambiguous addr file", published: "127.0.0.1:7838\n", wantSubstr: ""},
+		{name: "nothing configured anywhere", wantSubstr: ""},
+		{
+			name:       "malformed bind addr",
+			bindAddr:   "7838",
+			wantSubstr: `IRRLICHT_BIND_ADDR="7838"`,
+		},
+		{
+			name:       "malformed bind addr is still reported when the file saves us",
+			bindAddr:   "7838",
+			published:  "127.0.0.1:7838\n",
+			wantSubstr: `IRRLICHT_BIND_ADDR="7838"`,
+		},
+		{
+			name:       "named state tree has no running daemon",
+			wantSubstr: "no daemon has published an address under IRRLICHT_HOME=",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.published == "" {
+				isolateStateTree(t)
+			} else {
+				publishAddr(t, tt.published)
+			}
+			// "nothing configured anywhere" means no named tree either —
+			// point HOME at an empty one so the run stays hermetic.
+			if tt.name == "nothing configured anywhere" {
+				t.Setenv(envHome, "")
+				t.Setenv("HOME", t.TempDir())
+			}
+			t.Setenv(EnvBindAddr, tt.bindAddr)
+
+			got := ClientConfigWarning()
+			if tt.wantSubstr == "" {
+				if got != "" {
+					t.Errorf("ClientConfigWarning() = %q, want no warning", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tt.wantSubstr) {
+				t.Errorf("ClientConfigWarning() = %q, want it to contain %q", got, tt.wantSubstr)
+			}
+		})
+	}
+}
+
+// TestAddrFilePathFollowsTheDefaultStateTree covers the branch IRRLICHT_HOME
+// hides: irrlichd publishes to this path (main.go calls AddrFilePath too), so
+// a change here that the daemon didn't make would strand every client on the
+// default port.
+func TestAddrFilePathFollowsTheDefaultStateTree(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(envHome, "")
+	t.Setenv("HOME", home)
+
+	want := filepath.Join(home, ".local", "share", "irrlicht", addrFileName)
+	if got := AddrFilePath(); got != want {
+		t.Errorf("AddrFilePath() = %q, want %q", got, want)
+	}
+
+	t.Setenv(envHome, home)
+	if got, want := AddrFilePath(), filepath.Join(home, addrFileName); got != want {
+		t.Errorf("AddrFilePath() with %s set = %q, want %q", envHome, got, want)
+	}
+}
+
+// TestClientURLIgnoresNonRegularAddrFile: the addr file now chooses a network
+// destination, so anything that is not a plain file — a symlink to a character
+// device is the pathological case — is refused rather than read.
+func TestClientURLIgnoresNonRegularAddrFile(t *testing.T) {
+	dir := isolateStateTree(t)
+	if err := os.Symlink(os.DevNull, filepath.Join(dir, addrFileName)); err != nil {
+		t.Skipf("symlink unsupported here: %v", err)
+	}
+	t.Setenv(EnvBindAddr, "")
+
+	if got, want := ClientURL("/x"), "http://localhost:7837/x"; got != want {
+		t.Errorf("ClientURL(\"/x\") = %q, want %q", got, want)
+	}
+}
+
+// TestClientURLBoundsTheAddrFileRead: an oversized file is not a host:port, and
+// must not be slurped whole just because it sits at the right path.
+func TestClientURLBoundsTheAddrFileRead(t *testing.T) {
+	publishAddr(t, strings.Repeat("7", 4096))
+	t.Setenv(EnvBindAddr, "")
+
+	if got, want := ClientURL("/x"), "http://localhost:7837/x"; got != want {
 		t.Errorf("ClientURL(\"/x\") = %q, want %q", got, want)
 	}
 }

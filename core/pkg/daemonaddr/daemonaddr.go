@@ -59,6 +59,7 @@ package daemonaddr
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -157,36 +158,106 @@ func LocalURL(path string) string {
 // then from the running daemon's published addr file, then the default. See
 // the package doc for why a client gets the extra source and the daemon
 // itself does not.
+//
+// The host is loopback for the same reason LocalURL's is, and with the same
+// limitation: a daemon bound to one non-loopback interface (IRRLICHT_BIND_ADDR
+// =192.168.1.5:7837) is not reachable this way. Bind loopback or 0.0.0.0.
 func ClientURL(path string) string {
-	return fmt.Sprintf("http://localhost:%d%s", clientPort(), path)
+	return fmt.Sprintf("http://localhost:%d%s", resolveClient().port, path)
 }
 
-// clientPort resolves the port a client should dial, in order of how much the
-// value can be trusted to name the daemon the caller means.
-func clientPort() int {
-	if p, ok := fixedPortOf(os.Getenv(EnvBindAddr)); ok {
-		return p
-	}
-	if p, ok := fixedPortOf(publishedAddr()); ok {
-		return p
-	}
-	return defaultPort
+// ClientConfigWarning returns a human-readable explanation when client
+// resolution could not honor the configuration it was given — a malformed
+// IRRLICHT_BIND_ADDR, or an IRRLICHT_HOME whose daemon has published no
+// address — and "" when the resolution was unambiguous.
+//
+// It exists because silently dialing the wrong daemon is the bug this package
+// is for: a CLI that has been pointed somewhere specific and ends up on the
+// default port should say so rather than succeed against a stranger. The
+// macOS side warns on the same class of typo (DaemonEndpoint.swift).
+func ClientConfigWarning() string {
+	return resolveClient().warning
 }
+
+// clientResolution is the outcome of the client ladder: the port to dial, plus
+// what had to be ignored to get there.
+type clientResolution struct {
+	port    int
+	warning string
+}
+
+// resolveClient walks the client ladder in order of how much each source can
+// be trusted to name the daemon the caller means.
+func resolveClient() clientResolution {
+	bind := os.Getenv(EnvBindAddr)
+	if p, ok := fixedPortOf(bind); ok {
+		return clientResolution{port: p}
+	}
+	warning := malformedBindWarning(bind)
+
+	if p, ok := fixedPortOf(publishedAddr()); ok {
+		return clientResolution{port: p, warning: warning}
+	}
+
+	// Falling all the way through means dialing a daemon nobody named. Say
+	// which named tree came up empty, if one was named at all.
+	if home := os.Getenv(envHome); warning == "" && home != "" {
+		warning = fmt.Sprintf(
+			"no daemon has published an address under %s=%s; using the default port %d",
+			envHome, home, defaultPort)
+	}
+	return clientResolution{port: defaultPort, warning: warning}
+}
+
+// malformedBindWarning describes a set-but-unusable IRRLICHT_BIND_ADDR, or ""
+// when the variable is unset (which is not a misconfiguration) or usable.
+func malformedBindWarning(bind string) string {
+	if bind == "" {
+		return ""
+	}
+	if _, ok := fixedPortOf(bind); ok {
+		return ""
+	}
+	return fmt.Sprintf("%s=%q does not name a host:port with a fixed port; ignoring it", EnvBindAddr, bind)
+}
+
+// maxAddrFileBytes bounds the addr file read. A host:port needs well under 64
+// bytes, and the path now decides where a request is sent, so an unbounded
+// read of something that is not really an addr file is not worth risking.
+const maxAddrFileBytes = 64
 
 // publishedAddr returns the address the running daemon wrote to its addr file,
 // or "" when there is no readable file — no daemon, a daemon too old to
 // publish one, or a state tree this process cannot see.
+//
+// It insists on a regular file and a bounded read: a symlink to a character
+// device such as /dev/zero would otherwise hang the caller in an unbounded
+// read that no HTTP timeout covers.
 func publishedAddr() string {
-	b, err := os.ReadFile(addrFilePath())
+	path := AddrFilePath()
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	f, err := os.Open(path) //nolint:gosec // path is the daemon's own state file
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	b, err := io.ReadAll(io.LimitReader(f, maxAddrFileBytes))
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
 }
 
-// addrFilePath locates the addr file the way irrlichd places it: under
-// IRRLICHT_HOME when set, else the default state tree.
-func addrFilePath() string {
+// AddrFilePath is where the daemon publishes the address it bound, and where a
+// client reads it back: under IRRLICHT_HOME when set, else the default state
+// tree, next to the daemon's socket. Both sides call this rather than spelling
+// the path twice — the two processes have to agree on it byte for byte, and a
+// silent disagreement would put the client back on the default port.
+func AddrFilePath() string {
 	if v := os.Getenv(envHome); v != "" {
 		return filepath.Join(v, addrFileName)
 	}
