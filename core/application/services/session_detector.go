@@ -45,7 +45,7 @@ const staleWorkingRefreshInterval = 5 * time.Second
 // (Edit/Write/MultiEdit/NotebookEdit) may stay open before the detector treats
 // it as a held permission prompt and sets OpenToolStalled — the transcript
 // -based fallback for when the PermissionRequest hook can't reach the daemon
-// (#488, ClassifyState rule 1b).
+// (#488, ClassifyState's open_tool_stalled rule).
 //
 // It is deliberately NOT staleWorkingRefreshInterval. That constant is a
 // polling cadence (how often a lingering working session is re-read); reusing
@@ -219,8 +219,9 @@ type SessionDetector struct {
 	// elapses (the safety net for an interrupted compaction that never writes a
 	// boundary). While set, processActivity overlays CompactInProgress so
 	// ClassifyState holds the session in working through the silent compaction
-	// window (#657). Guarded by permMu — same goroutine-crossing story as
-	// permissionPending.
+	// window (#657). Guarded by permMu — written from the hook receiver's
+	// goroutine, read by the event loop, the same goroutine-crossing story the
+	// signals store above handles under its own lock.
 	compactPending map[string]int64 // sessionID → unix seconds (hook fire time)
 
 	// editToolOpenSince tracks, per session, the Unix time a permission-gated

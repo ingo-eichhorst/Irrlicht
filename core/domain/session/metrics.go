@@ -250,7 +250,7 @@ type SessionMetrics struct {
 	// HookTurnDone is true when Claude Code's Stop hook fired for this session's
 	// current turn — an authoritative, per-adapter turn-done push delivered at
 	// true turn end (issue #1161). Transient and live-only: the detector's
-	// overlayHookTurnDone sets it for the single classify pass triggered by the
+	// SignalTurnDone policy (consume-once) applies it for the single classify pass triggered by the
 	// Stop hook and then clears its backing map (consume-once), so it never
 	// bleeds into the next turn and is never set under replay. IsAgentDone()
 	// treats it as authoritative, taking precedence over the transcript-tail
@@ -261,8 +261,8 @@ type SessionMetrics struct {
 	// reported that the agent has finished its turn and is now sitting idle at
 	// the prompt waiting for the user (issue #1173) — the authoritative signal
 	// for the "turn ended with no trailing question or cue" case that
-	// PendingWaitingCue's prose heuristic (rule 2) cannot reach. Transient and
-	// live-only: set by the detector's overlayIdlePrompt from a per-session map
+	// PendingWaitingCue's prose heuristic (the agent_done rule) cannot reach. Transient and
+	// live-only: applied by the SignalIdlePrompt policy from a SignalHolds entry
 	// held only while the finished turn is still the last thing on the
 	// transcript, and never set under replay. ClassifyState reads it as an
 	// authoritative waiting tier above the turn-done → ready verdict, so a turn

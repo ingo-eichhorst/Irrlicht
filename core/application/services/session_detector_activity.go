@@ -855,9 +855,10 @@ func (d *SessionDetector) forceReadyToWorkingIfActive(state *session.SessionStat
 	// while that signal is pending: without this, the synthetic event would
 	// force ready→working here and then classify working→waiting, recording a
 	// spurious working blip between the two (the flap this reconcile must avoid).
-	// ClassifyState still routes correctly on its own — to waiting via rule 1c
-	// (idle case), or to working via rule 4 should real activity have arrived in
-	// the same pass (overlayIdlePrompt clears the flag when IsAgentDone flips).
+	// ClassifyState still routes correctly on its own — to waiting via the
+	// idle_prompt rule (idle case), or to working via transcript_activity should
+	// real activity have arrived in
+	// the same pass (the SignalIdlePrompt policy goes stale when IsAgentDone flips).
 	if d.hasPendingIdlePrompt(state.SessionID) {
 		return
 	}
@@ -967,7 +968,7 @@ func (d *SessionDetector) synthesizeCollapsedTurnBoundaryIfNeeded(state *session
 // correct "while waiting" phrasing. Skipped when
 // holdParentForActiveChildren already rewrote newState: that parent has
 // active children and must stay working, and reclassifying from waiting
-// would let rule 3 fire and transition it to ready despite children still
+// would let the user_interrupt rule fire and transition it to ready despite children still
 // running — undoing the hold.
 func (d *SessionDetector) synthesizeCollapsedWaitingIfNeeded(state *session.SessionState, ev agent.Event, candidate classifierCandidate) (string, string) {
 	newState, reason := candidate.NewState, candidate.Reason
@@ -1228,7 +1229,7 @@ func (d *SessionDetector) purgeDeadBackgroundProcesses(result backgroundProbeRes
 // applyCompactHold maintains the PreCompact force-working hold (#657) for one
 // session. While a manual /compact is in flight the transcript receives no
 // writes, so this overlays CompactInProgress to keep the session in working
-// (ClassifyState rule 0b) through that silent window.
+// (ClassifyState's compact_in_progress rule) through that silent window.
 //
 // The hold clears on the first of:
 //   - the manual compact_boundary landing (SawManualCompactBoundary): the

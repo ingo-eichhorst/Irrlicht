@@ -15,9 +15,7 @@ func TestSignalHolds_ConsumeOnce(t *testing.T) {
 	h.Hold(holdSID, SignalTurnDone, SignalPayload{LastAssistantText: "done", WaitingCue: true})
 
 	m := &SessionMetrics{}
-	if tier := h.Overlay(holdSID, m); tier != TierHook {
-		t.Errorf("Overlay tier = %v, want TierHook", tier)
-	}
+	h.Overlay(holdSID, m)
 	if !m.HookTurnDone || m.LastAssistantText != "done" || !m.PendingWaitingCue {
 		t.Fatalf("turn-done payload not applied: %+v", m)
 	}
@@ -26,9 +24,7 @@ func TestSignalHolds_ConsumeOnce(t *testing.T) {
 	}
 
 	next := &SessionMetrics{}
-	if tier := h.Overlay(holdSID, next); tier != TierNone {
-		t.Errorf("second Overlay tier = %v, want TierNone", tier)
-	}
+	h.Overlay(holdSID, next)
 	if next.HookTurnDone {
 		t.Error("a consumed signal must not re-apply on the next pass")
 	}
@@ -145,6 +141,13 @@ func TestSignalHolds_SignalOrderCoversEveryPolicy(t *testing.T) {
 // TestSignalHolds_EveryPolicyIsWellFormed keeps a future Phase 4-7 row from
 // landing half-declared: a policy with no apply would be silently inert, and
 // one with no tier would report TierNone and lose every arbitration.
+//
+// It deliberately does NOT forbid combining consumeOnce with stale. Overlay
+// evaluates stale before apply on every pass, including the first, so the
+// combination is meaningful — "consume this on the pass it fires, unless the
+// metrics already contradict it, in which case drop it unapplied". That is
+// exactly the shape a retrospective OTel signal would need (#1141): a span that
+// exports after the user has already replied must be discarded, not applied.
 func TestSignalHolds_EveryPolicyIsWellFormed(t *testing.T) {
 	for kind, p := range signalPolicies {
 		if p.apply == nil {
@@ -153,9 +156,27 @@ func TestSignalHolds_EveryPolicyIsWellFormed(t *testing.T) {
 		if !p.tier.Known() {
 			t.Errorf("policy %q has tier %v, which is not a real tier", kind, p.tier)
 		}
-		if p.consumeOnce && p.stale != nil {
-			t.Errorf("policy %q is both consume-once and staleness-gated; the stale rule can never be reached on a second pass", kind)
-		}
+	}
+}
+
+// TestSignalHolds_StaleIsCheckedOnTheFirstPass pins the property the
+// well-formedness test above relies on: staleness is evaluated before apply on
+// every pass, so a signal that is already contradicted when it first arrives is
+// dropped rather than applied once and then consumed.
+func TestSignalHolds_StaleIsCheckedOnTheFirstPass(t *testing.T) {
+	h := NewSignalHolds()
+	h.Hold(holdSID, SignalIdlePrompt, SignalPayload{})
+
+	// The user replied before the ~6s-late hook ever landed: the very first
+	// Overlay must discard it, not honour it once.
+	m := &SessionMetrics{LastEventType: "user"}
+	h.Overlay(holdSID, m)
+
+	if m.IdlePromptPending {
+		t.Error("a signal already contradicted on arrival must not be applied even once")
+	}
+	if h.Held(holdSID, SignalIdlePrompt) {
+		t.Error("it must also be dropped")
 	}
 }
 
@@ -197,9 +218,7 @@ func TestSignalHolds_SessionsAreIsolated(t *testing.T) {
 func TestSignalHolds_NilMetricsPreservesHolds(t *testing.T) {
 	h := NewSignalHolds()
 	h.Hold(holdSID, SignalTurnDone, SignalPayload{})
-	if tier := h.Overlay(holdSID, nil); tier != TierNone {
-		t.Errorf("Overlay(nil) tier = %v, want TierNone", tier)
-	}
+	h.Overlay(holdSID, nil)
 	if !h.Held(holdSID, SignalTurnDone) {
 		t.Error("nil metrics must leave the hold intact for a later pass")
 	}

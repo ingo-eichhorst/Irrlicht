@@ -265,7 +265,7 @@ func transitionTo(currentState, target, reason string) (string, string) {
 	return currentState, ""
 }
 
-// classifyAgentDone handles rule 2 of ClassifyState: the agent has finished
+// classifyAgentDone handles the agent_done rule of ClassifyState: the agent has finished
 // its turn. It routes to waiting first when the turn ended with a question
 // or imperative cue (issue #381), otherwise to ready.
 func classifyAgentDone(currentState string, metrics *session.SessionMetrics) (string, string) {
@@ -278,7 +278,7 @@ func classifyAgentDone(currentState string, metrics *session.SessionMetrics) (st
 	return currentState, ""
 }
 
-// isUserInterruptReady reports whether rule 3 of ClassifyState applies: the
+// isUserInterruptReady reports whether the user_interrupt rule of ClassifyState applies: the
 // session was working/waiting with no open tool call, the last transcript
 // event was from the user, and that event was an ESC interrupt or
 // tool-permission denial — meaning the agent's turn is effectively over.
@@ -313,10 +313,10 @@ const ForceReadyToWorkingReason = "force ready→working on first activity"
 //
 //   - Case A: tool_result carries is_error=true AND a trailing user text
 //     "[Request interrupted by user for tool use]" sets LastWasToolDenial.
-//     Classifier returns ready via rule 3.
+//     Classifier returns ready via the user_interrupt rule.
 //   - Case B: the denial user text is followed by another user event in
 //     the same pass, which clears LastWasToolDenial. Classifier then
-//     returns working via rule 4 default. Without this helper the user
+//     returns working via the transcript_activity default. Without this helper the user
 //     never sees the waiting episode at all.
 //
 // Callers (SessionDetector.processActivity and the replay harness) should,

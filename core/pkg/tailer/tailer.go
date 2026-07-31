@@ -193,7 +193,7 @@ type SessionMetrics struct {
 	// processParsedEvent call). Lets the detector treat post-turn writes
 	// like Claude Code's `system/away_summary` recap as activity for
 	// timestamp purposes only — the state machine must not be re-run, since
-	// LastEventType still carries the prior turn_done and rule 4 would
+	// LastEventType still carries the prior turn_done and transcript_activity would
 	// bounce a ready session back to working. Per-pass transient
 	// (issue #329).
 	NoSubstantiveActivity bool `json:"-"`

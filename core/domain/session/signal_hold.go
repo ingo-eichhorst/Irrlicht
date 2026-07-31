@@ -210,16 +210,21 @@ func (h *SignalHolds) DropSession(sessionID string) {
 }
 
 // Overlay folds every currently-valid held signal for sessionID onto m, in
-// signalOrder, and returns the highest tier it actually applied (TierNone if
-// it applied nothing). Stale holds are dropped without being applied;
-// consume-once holds are dropped as they are applied.
+// signalOrder. Stale holds are dropped without being applied; consume-once
+// holds are dropped as they are applied.
 //
 // Call this after the metrics have been rebuilt from the transcript — which
 // zeroes the transient fields these signals set — and before classification,
 // which reads them.
-func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics) SignalTier {
+//
+// Note that staleness is evaluated before apply on every pass, including the
+// first: a signal that is already contradicted when it arrives is discarded
+// rather than applied once. That matters for a late signal (the ~6s
+// idle_prompt, or a retrospective OTel span) that lands after the condition it
+// describes has already ended.
+func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics) {
 	if m == nil {
-		return TierNone
+		return
 	}
 
 	h.mu.Lock()
@@ -227,10 +232,9 @@ func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics) SignalTier {
 
 	holds := h.held[sessionID]
 	if len(holds) == 0 {
-		return TierNone
+		return
 	}
 
-	applied := TierNone
 	for _, kind := range signalOrder {
 		payload, ok := holds[kind]
 		if !ok {
@@ -244,9 +248,6 @@ func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics) SignalTier {
 		}
 
 		policy.apply(m, payload)
-		if policy.tier.Outranks(applied) {
-			applied = policy.tier
-		}
 		if policy.consumeOnce {
 			delete(holds, kind)
 		}
@@ -255,5 +256,4 @@ func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics) SignalTier {
 	if len(holds) == 0 {
 		delete(h.held, sessionID)
 	}
-	return applied
 }

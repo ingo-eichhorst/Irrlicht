@@ -73,6 +73,12 @@ func (t SignalTier) Known() bool {
 
 // Outranks reports whether t is strictly more authoritative than other.
 //
+// This is the ladder's comparison semantics as a named, tested primitive. Its
+// caller today is the invariant test that enforces the classifier's rule order
+// against the declared tiers (TestStateRules_LadderIsTierConsistent); the
+// Phase 4-7 signals of #1129, which are the first to introduce tiers that
+// actually differ, arbitrate with it directly.
+//
 // Always prefer this to comparing tiers with `<`: TierNone is numerically
 // lowest but is the *absence* of a tier, so a raw comparison would have it
 // outrank every real signal — the one mistake this ladder cannot afford,
