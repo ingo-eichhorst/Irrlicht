@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -772,6 +773,162 @@ func TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan(t *testing.T) {
 	}
 
 	awaitNewSessionFor(t, ch, "brand-new-session", 400*time.Millisecond)
+
+	cancel()
+	if err := <-watchErr; err != nil && err != context.Canceled {
+		t.Errorf("Watch returned unexpected error: %v", err)
+	}
+}
+
+// --- watch-registration failures (#1255) ------------------------------------
+
+// recordingLogger is a fake outbound.Logger that captures LogError calls.
+// The watcher logs from its own goroutine, so every field is mutex-guarded.
+type recordingLogger struct {
+	mu     sync.Mutex
+	errors []string
+}
+
+func (l *recordingLogger) LogInfo(string, string, string) {}
+
+func (l *recordingLogger) LogError(eventType, sessionID, errorMsg string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.errors = append(l.errors, fmt.Sprintf("%s|%s|%s", eventType, sessionID, errorMsg))
+}
+
+func (l *recordingLogger) LogProcessingTime(string, string, int64, int, string) {}
+
+func (l *recordingLogger) Close() error { return nil }
+
+// matching returns the captured LogError lines containing substr.
+func (l *recordingLogger) matching(substr string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for _, e := range l.errors {
+		if strings.Contains(e, substr) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// TestAddWatch_LogsFailure is the platform-independent half of the #1255
+// regression: addWatch is the sole place either tree scan arms a directory,
+// and a rejected registration must leave a trace naming the directory rather
+// than being discarded. An unreachable path fails on every backend (kqueue
+// lstats, inotify stats) regardless of the caller's privileges, which the
+// chmod-based test below cannot promise.
+func TestAddWatch_LogsFailure(t *testing.T) {
+	log := &recordingLogger{}
+	w := NewWithRoot(t.TempDir(), testAdapter, 0).WithLogger(log)
+
+	fsw, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fsw.Close()
+
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	w.addWatch(fsw, missing)
+
+	got := log.matching(missing)
+	if len(got) != 1 {
+		t.Fatalf("addWatch on an unwatchable path logged %d errors naming %q, want 1 (all: %v)",
+			len(got), missing, log.errors)
+	}
+	if !strings.Contains(got[0], testAdapter) {
+		t.Errorf("logged error %q does not name the adapter %q", got[0], testAdapter)
+	}
+}
+
+// TestAddWatch_SucceedsSilently pins the other side: a registration that
+// works must not log anything. Without it the test above is satisfied by an
+// implementation that logs unconditionally.
+func TestAddWatch_SucceedsSilently(t *testing.T) {
+	log := &recordingLogger{}
+	dir := t.TempDir()
+	w := NewWithRoot(dir, testAdapter, 0).WithLogger(log)
+
+	fsw, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fsw.Close()
+
+	w.addWatch(fsw, dir)
+
+	if got := log.matching(""); len(got) != 0 {
+		t.Errorf("addWatch on a watchable dir logged %v, want nothing", got)
+	}
+}
+
+// TestAddWatch_NilLoggerDoesNotPanic covers the e2e and test callers that
+// never call WithLogger: a failure there stays unreported, but must not take
+// the watcher down.
+func TestAddWatch_NilLoggerDoesNotPanic(t *testing.T) {
+	w := NewWithRoot(t.TempDir(), testAdapter, 0)
+
+	fsw, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fsw.Close()
+
+	w.addWatch(fsw, filepath.Join(t.TempDir(), "does-not-exist"))
+}
+
+// TestWatch_UnwatchableSubdir_IsReportedNotSwallowed is the end-to-end half:
+// it drives the real startup scan over a project directory fsnotify cannot
+// arm and asserts (a) the failure is reported, and (b) Ready() still fires
+// and the rest of the tree is still watched — one unreadable directory must
+// not strand the watcher, which is why the error was discarded in the first
+// place.
+func TestWatch_UnwatchableSubdir_IsReportedNotSwallowed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: mode 0000 does not deny access, so watcher.Add would succeed")
+	}
+
+	root := setupFakeProjects(t)
+
+	locked := filepath.Join(root, "locked-project")
+	if err := os.MkdirAll(locked, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	// Restore before TempDir's cleanup, which cannot remove a 0000 dir.
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	log := &recordingLogger{}
+	w := NewWithRoot(root, testAdapter, 0).WithLogger(log)
+	ch := w.Subscribe()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	watchErr := make(chan error, 1)
+	go func() { watchErr <- w.Watch(ctx) }()
+
+	select {
+	case <-w.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Ready() — an unwatchable subdir must not strand the scan")
+	}
+
+	if got := log.matching(locked); len(got) != 1 {
+		t.Fatalf("startup scan logged %d errors naming the unwatchable dir %q, want 1 (all: %v)",
+			len(got), locked, log.errors)
+	}
+
+	// The watch is still live for the rest of the tree.
+	f := filepath.Join(root, "-Users-test-myproject", "sess.jsonl")
+	if err := os.WriteFile(f, []byte(`{"type":"start"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	awaitNewSessionFor(t, ch, "-Users-test-myproject", 2*time.Second)
 
 	cancel()
 	if err := <-watchErr; err != nil && err != context.Canceled {

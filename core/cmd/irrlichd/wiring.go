@@ -10,6 +10,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/ports/inbound"
+	"irrlicht/core/ports/outbound"
 )
 
 // buildAgentWatchers dispatches on the Agent's Source variant and
@@ -30,6 +31,7 @@ func buildAgentWatchers(
 	a agent.Agent,
 	maxSessionAge time.Duration,
 	sessionChecker func(projectDir string, pid int) bool,
+	logger outbound.Logger,
 ) ([]inbound.Watcher, []string) {
 	var (
 		watchers []inbound.Watcher
@@ -51,7 +53,9 @@ func buildAgentWatchers(
 		// when set, overrides the default filename-stem session-ID derivation
 		// (Antigravity's constant transcript.jsonl filename).
 		for _, root := range s.AllRootsFor(runtime.GOOS) {
-			w := fswatcher.New(root, a.Identity.Name, maxSessionAge).WithIdentity(a.Identity)
+			w := fswatcher.New(root, a.Identity.Name, maxSessionAge).
+				WithIdentity(a.Identity).
+				WithLogger(logger)
 			if s.SessionIDFromPath != nil {
 				w = w.WithSessionID(s.SessionIDFromPath)
 			}

@@ -8,6 +8,7 @@ package fswatcher
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/ports/outbound"
 )
 
 // transcriptExt is the file extension for agent transcript files.
@@ -26,10 +28,11 @@ const transcriptExt = ".jsonl"
 // Watcher watches a directory tree for .jsonl transcript file events.
 // It implements inbound.Watcher.
 type Watcher struct {
-	root     string         // resolved absolute path to the watched directory
-	adapter  string         // adapter name set on emitted events
-	identity agent.Identity // populated via WithIdentity
-	maxAge   time.Duration  // ignore files older than this (0 = no limit)
+	root     string          // resolved absolute path to the watched directory
+	adapter  string          // adapter name set on emitted events
+	identity agent.Identity  // populated via WithIdentity
+	maxAge   time.Duration   // ignore files older than this (0 = no limit)
+	logger   outbound.Logger // reports failed watch registrations (may be nil)
 
 	// sessionID, when non-nil, overrides how a transcript file's session ID is
 	// derived from its path (set via WithSessionID). The default uses the
@@ -70,6 +73,15 @@ type Watcher struct {
 // wait for the full scan too (rather than firing at that earlier point), so
 // every existing caller's guarantee — including writing into a pre-existing
 // subdirectory right after Ready() fires — is preserved exactly as before.
+//
+// The guarantee is bounded by what could actually be armed. Arming the root
+// is a hard precondition — Watch returns an error if it fails — but an
+// individual pre-existing subdir can still be rejected by fsnotify (FD
+// exhaustion, a permissions change, Linux's inotify watch limit). The scan
+// then continues and Ready() still fires: one unreadable directory must not
+// strand the whole watcher. What that costs is a blind spot under that one
+// subtree, so addWatch reports every rejection through the Logger set by
+// WithLogger rather than discarding it (#1255).
 func (w *Watcher) Ready() <-chan struct{} { return w.readyChan() }
 
 // readyChan lazily creates the ready channel so the literal constructors
@@ -101,6 +113,15 @@ func (w *Watcher) WithIdentity(id agent.Identity) *Watcher {
 // zero value if WithIdentity was never called.
 func (w *Watcher) Identity() agent.Identity {
 	return w.identity
+}
+
+// WithLogger sets the logger used to report watch registrations that fail
+// during the tree scan. Returns the watcher for chaining. cmd/irrlichd/
+// wiring.go supplies the daemon's logger; test and e2e callers may leave it
+// nil, in which case a failure stays non-fatal but goes unreported.
+func (w *Watcher) WithLogger(l outbound.Logger) *Watcher {
+	w.logger = l
+	return w
 }
 
 // WithSessionID sets a custom session-ID extractor (see the sessionID field).
@@ -510,7 +531,7 @@ func (w *Watcher) addExistingDirs(ctx context.Context, watcher *fsnotify.Watcher
 				return nil // skip unreadable dirs
 			}
 			if d.IsDir() {
-				_ = watcher.Add(path)
+				w.addWatch(watcher, path)
 				w.emitExistingFiles(path)
 			}
 			return nil
@@ -518,6 +539,29 @@ func (w *Watcher) addExistingDirs(ctx context.Context, watcher *fsnotify.Watcher
 		w.drainPendingEvents(watcher)
 	}
 	return nil
+}
+
+// addWatch registers dir with the fsnotify watcher. The single place either
+// tree scan (addExistingDirs at startup, addSubtree at runtime) arms a
+// directory, so the two can't drift apart in how they treat a rejected
+// registration.
+//
+// A failure — FD exhaustion (EMFILE), a permissions change, Linux's inotify
+// watch limit — leaves that directory unwatched while the rest of the tree
+// carries on, and every transcript written under it is then simply never
+// observed. It deliberately does not abort the scan (one unreadable
+// directory must not strand the whole watcher, which is why the error was
+// originally discarded), but it is reported through the Logger per Key
+// Conventions' logged-not-propagated rule, so the blind spot leaves a trace
+// instead of none at all (#1255).
+func (w *Watcher) addWatch(watcher *fsnotify.Watcher, dir string) {
+	err := watcher.Add(dir)
+	if err == nil || w.logger == nil {
+		return
+	}
+	w.logger.LogError("fswatcher", "", fmt.Sprintf(
+		"%s: failed to watch %s — transcript changes under it will not be observed: %v",
+		w.adapter, dir, err))
 }
 
 // drainPendingEvents processes any fsnotify events already queued on
@@ -587,7 +631,7 @@ func (w *Watcher) addSubtree(watcher *fsnotify.Watcher, dir string) {
 			return nil
 		}
 		if d.IsDir() {
-			_ = watcher.Add(path)
+			w.addWatch(watcher, path)
 			w.emitExistingFiles(path)
 		}
 		return nil
