@@ -20,7 +20,7 @@ argument.
 /ir:exec [mode] <N>
   → not-already-claimed? → worktree → investigate → (auto resolves to plan or full here)
     → plan: HTML + ⛔ approval, or full: inline summary → assign issue
-    → implement → verify
+    → implement → verify → commit
     → PR → review subagent (effort scaled to diff) → fix → /simplify (or inline) → recommendation [plan / full stop here]
     → land: confirm mergeable → squash-merge → remove worktree   [close]
 ```
@@ -339,6 +339,47 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
     under test — the literal AC would have passed on `main` while the bug
     shipped. Three of six issues in that batch specified tests that pass on
     `main`; nothing in this skill caught it.)
+11b. **Commit the implementation** before leaving Phase 4. Everything downstream
+    assumes you did, and no step before this one tells you to — the only
+    `git commit` above this line is step 11a's scaffold.
+
+    **Fold in the 11a checkpoint first, if you made one.** After 11a's
+    revert-and-restore dance the implementation is sitting in a commit literally
+    titled `wip` and the tree is *clean* — so a blind `git commit` here fails with
+    `nothing to commit` while the porcelain check still passes, and the run walks
+    on to step 12 with `wip` as the branch's only commit. `--fill` then takes the
+    PR title from it and step 19's squash lands **`wip` on `main`**. Amend it
+    (`git commit --amend`), or `git reset --soft origin/main` and recommit.
+
+    ```bash
+    git status --short                                # see what you're about to stage
+    git add -A
+    git commit -m "<type>(<scope>): <what changed>"   # conventional commits; reference #<N>
+    git status --porcelain                            # must print nothing
+    git log --oneline origin/main..HEAD               # ≥1 commit, and no `wip` subjects
+    ```
+
+    Both gates are needed and they catch opposite failures: porcelain proves
+    nothing was *left behind*, the `log` proves something is actually *there* and
+    isn't still a checkpoint. Read `git status --short` before the `add` rather
+    than trusting `-A` blindly — it stages anything untracked the repo's
+    `.gitignore` doesn't cover, and per-machine excludes don't travel.
+
+    Reaching Phase 5 without a real commit fails in three different places
+    depending on how much got committed, and **the two quiet ones look like a
+    clean gate**:
+    - *Quiet.* Phase 5's `origin/main...HEAD` diffs are commit-to-commit and
+      cannot see the working tree, so the tier table measures an **empty diff** and
+      step 13's reviewer is handed nothing to review — which reads as a clean gate
+      rather than a skipped one, and Phase 6 then leans *merge* on a review that
+      never saw a line of code.
+    - *Quiet.* A leftover `wip` checkpoint passes every check in this step, as
+      above, and ships as the squash subject.
+    - *Loud.* `git rebase` aborts (`cannot rebase: You have unstaged changes`) and
+      `gh pr create` refuses with `No commits between main and …`. Both stop the
+      run, which is the good outcome — but `git stash` is not the way out of the
+      abort: AGENTS.md forbids it in a worktree, since the stash stack is shared
+      repo-wide and a concurrent agent can pop your WIP.
 
 ## Phase 5 — PR, review, simplify
 
@@ -360,15 +401,10 @@ git diff --name-only -z origin/main...HEAD \
   | xargs -0 -r git log --oneline HEAD..origin/main --   # did it move *here*?
 ```
 
-**Commit the implementation first** — the porcelain check is a precondition, not
-decoration. `git rebase` aborts outright on a dirty tree (`cannot rebase: You have
-unstaged changes`), and the obvious recovery — `git stash` — is the one AGENTS.md
-forbids in a worktree, since the stash stack is shared repo-wide and a concurrent
-agent can pop your WIP. Nothing before this point in the skill has told you to
-commit; step 11a's `git commit -m wip` is a temporary red-first checkpoint that
-gets restored, not the real one. The `origin/main...HEAD` diff is commit-to-commit
-and cannot see the working tree either, so an uncommitted worktree makes the
-collision probe read empty no matter what you changed.
+The porcelain line is a precondition, not decoration: step 11b should have left
+the tree clean, and if it didn't, the collision probe below reads empty no matter
+what you changed — see 11b for why. Go back and commit rather than working
+around it.
 
 Use the `-z`/`xargs -0 -r` form rather than an unquoted `$(git diff --name-only …)`.
 Both of its failure modes are silent and both point the wrong way: unquoted
