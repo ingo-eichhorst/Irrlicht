@@ -49,8 +49,9 @@ struct SettingsView: View {
     // who don't want any of it. A brand-new key defaults to false, but
     // `reconcileNotificationsMasterDefault()` flips it true once on first
     // appearance for anyone upgrading with an event already enabled, so
-    // existing notification setups don't silently vanish.
-    @AppStorage("notificationsEnabled") private var notificationsEnabled: Bool = false
+    // existing notification setups don't silently vanish. Since #1183 this
+    // also gates the firing path itself (`NotificationSettings.masterEnabled`).
+    @AppStorage(NotificationSettings.masterEnabledKey) private var notificationsEnabled: Bool = false
     @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = false
     @AppStorage(NotificationEvent.waiting.enabledKey) private var notifyOnWaiting: Bool = false
     @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = false
@@ -688,9 +689,13 @@ struct SettingsView: View {
     /// behind a collapsed, seemingly-off section. Runs only while the key is
     /// still absent from `UserDefaults` — once set (by this reconcile or by
     /// the user), it's never overridden again.
+    ///
+    /// Materializes exactly what `NotificationSettings.masterEnabled()` already
+    /// computes for the absent-key case, so the firing path (#1183) and this
+    /// toggle share one definition of the fallback instead of two copies.
     private func reconcileNotificationsMasterDefault() {
-        guard UserDefaults.standard.object(forKey: "notificationsEnabled") == nil else { return }
-        notificationsEnabled = notifyOnReady || notifyOnWaiting || notifyOnContextPressure
+        guard UserDefaults.standard.object(forKey: NotificationSettings.masterEnabledKey) == nil else { return }
+        notificationsEnabled = NotificationSettings.masterEnabled()
     }
 
     private func checkNotificationAuth() {
