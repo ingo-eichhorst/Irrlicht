@@ -26,6 +26,7 @@ assert_code() {
   local got
   got="$(bash "$SCRIPT" "$staging" | jq -r '.code')"
   [[ "$got" == "$expected" ]] && pass "$label" || fail "$label" "$expected" "$got"
+  return 0
 }
 
 echo "== daemon_crashed: panic in daemon.log =="
@@ -33,7 +34,7 @@ d="$TMP/panic"; mkdir -p "$d"
 printf 'starting up\npanic: runtime error: invalid memory address\n' > "$d/daemon.log"
 assert_code "panic: -> daemon_crashed" "daemon_crashed" "$d"
 
-echo "== daemon_crashed: fatal error in daemon.log =="
+echo "== daemon_crashed: the runtime-abort prefix in daemon.log =="
 d="$TMP/fatal"; mkdir -p "$d"
 printf 'fatal error: all goroutines are asleep - deadlock!\n' > "$d/daemon.log"
 assert_code "fatal error: -> daemon_crashed" "daemon_crashed" "$d"

@@ -16,7 +16,7 @@
 #      scripts/drive-<agent>-interactive.sh
 #   sed -i '' 's/mistral-vibe/<agent>/g' scripts/drive-<agent>-interactive.sh
 #   chmod +x scripts/drive-<agent>-interactive.sh
-# Then fill the three AGENT-SPECIFIC SEAMS marked TODO(mistral-vibe) below by
+# Then fill the three blocks marked "AGENT-SPECIFIC SEAM" below by
 # porting from the reference drivers. For the slot-model multi-session arms
 # (restart / resume / reset_session / start_session / session) read a slot-model
 # driver — drive-codex-interactive.sh or drive-gemini-cli-interactive.sh;
@@ -89,6 +89,14 @@ DRIVER_LOG="$STAGING/driver.log"
 # so the lib is two dirs up under replaydata/_lib/drive. Sourcing it means a new
 # column starts ON the slot model: porting a multi-session step is "wire the seam
 # + call alloc_slot/load_slot", not rebuilding the slot bookkeeping (#666).
+# Repeated vocabulary, named once (SonarQube shelldre:S1192):
+#   VIBE_SESSION_GLOB   — vibe mints ~/.vibe/logs/session/session_<id>/ per session;
+#                         every set-difference snapshot below scans with this glob.
+#   EXIT_DRIVER_FAULT   — driver.exit-reason for "the driver itself could not
+#                         proceed"; contracts.sh maps nonzero(N) to exit code N.
+VIBE_SESSION_GLOB='session_*'
+EXIT_DRIVER_FAULT="nonzero(2)"
+
 _DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
 DRIVE_MARKER_PREFIX="$STAGING/.mistral-vibe-marker"
 # shellcheck source=/dev/null
@@ -162,7 +170,7 @@ resolve_transcript() {
       grep -qxF "$d" <<<"$PRE_LAUNCH_DIRS" && continue
       [[ -f "$d/messages.jsonl" && -s "$d/messages.jsonl" ]] || continue
       cand="$d"
-    done < <(find "$sroot" -maxdepth 1 -type d -name 'session_*' 2>/dev/null | sort)
+    done < <(find "$sroot" -maxdepth 1 -type d -name "$VIBE_SESSION_GLOB" 2>/dev/null | sort)
     if [[ -n "$cand" ]]; then
       TRANSCRIPT="$cand/messages.jsonl"
       UUID="$(basename "$cand")"
@@ -191,7 +199,8 @@ turn_count() {
 }
 
 not_implemented() { # <step-type>
-  echo "[driver] STUB: step type '$1' not yet ported for mistral-vibe — see scripts/templates/drive-interactive.sh.tmpl and drive-claudecode-interactive.sh" >&2
+  local step_type="$1"
+  echo "[driver] STUB: step type '$step_type' not yet ported for mistral-vibe — see scripts/templates/drive-interactive.sh.tmpl and drive-claudecode-interactive.sh" >&2
   EXIT_REASON="nonzero(3)"
   return 3
 }
@@ -246,8 +255,8 @@ FIRST_SEND_PENDING=0
 # older bumped session.
 boot_vibe_active() {
   local prompt="$1" resume_id="$2"
-  command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
-  PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name 'session_*' 2>/dev/null | sort)"
+  command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="$EXIT_DRIVER_FAULT"; exit 1; }
+  PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name "$VIBE_SESSION_GLOB" 2>/dev/null | sort)"
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   : > "$DRIVER_LOG.stdout.$ACTIVE"
   mkdir -p "${SES_CWD[$ACTIVE]}"
@@ -283,7 +292,7 @@ boot_vibe_active() {
   fi
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" -- \
     vibe "${vibe_args[@]}" 2>>"$DRIVER_LOG.stderr" \
-    || { echo "[driver] failed to launch vibe under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+    || { echo "[driver] failed to launch vibe under tmux" >&2; EXIT_REASON="$EXIT_DRIVER_FAULT"; exit 1; }
   tmux pipe-pane -t "$SESSION" -o "cat >> '$DRIVER_LOG.stdout.$ACTIVE'"
   echo "[driver] tmux started: $SESSION (slot=$ACTIVE, cwd=${SES_CWD[$ACTIVE]})" >&2
   # Bare-launch fallback (no positional prompt): a later send types into the
@@ -291,15 +300,15 @@ boot_vibe_active() {
   # clear before the first keystroke lands. Skipped on the positional path —
   # vibe processes the launch prompt itself, so no keystroke timing to gate.
   if [[ -z "$prompt" ]]; then
-    local WAITED=0
-    while [[ $WAITED -lt 120 ]]; do
+    local waited=0
+    while [[ $waited -lt 120 ]]; do
       tmux capture-pane -t "$SESSION" -p -S -40 2>/dev/null | grep -q 'Type /help' && break
-      sleep 0.5; WAITED=$((WAITED + 1))
+      sleep 0.5; waited=$((waited + 1))
     done
-    WAITED=0
-    while [[ $WAITED -lt 120 ]]; do
+    waited=0
+    while [[ $waited -lt 120 ]]; do
       tmux capture-pane -t "$SESSION" -p -S -40 2>/dev/null | grep -q 'Initializing' || break
-      sleep 0.5; WAITED=$((WAITED + 1))
+      sleep 0.5; waited=$((waited + 1))
     done
     sleep 2  # extra grace for the input prompt to settle
   fi
@@ -366,20 +375,22 @@ wait_turn() {
 # the Textual TUI's input handler render the typed text before Enter lands, so
 # Enter isn't dropped mid-render. No turn accounting — callers own that.
 type_enter() { # <text>
-  tmux send-keys -t "$SESSION" -l -- "$1"
+  local text="$1"
+  tmux send-keys -t "$SESSION" -l -- "$text"
   sleep 0.3
   tmux send-keys -t "$SESSION" Enter
 }
 
 send_text() { # <text>
+  local text="$1"
   # A leading '!' is a vibe SHELL ESCAPE: the REPL runs it directly in a subshell
   # and writes a !-result line that the daemon parser skips (#5e0b4f5c) — it is
   # NOT an LLM turn, so type it but do NOT bump EXPECTED_TURNS (else wait_turn
   # would wait for a turn that never comes). Never the launch positional (excluded
   # from FIRST_PROMPT above), so FIRST_SEND_PENDING is irrelevant here.
-  if [[ "$1" == "!"* ]]; then
-    type_enter "$1"
-    echo "[driver] send[s$ACTIVE]: shell-escape ${1:0:60} (no turn expected)" >&2
+  if [[ "$text" == "!"* ]]; then
+    type_enter "$text"
+    echo "[driver] send[s$ACTIVE]: shell-escape ${text:0:60} (no turn expected)" >&2
     return 0
   fi
   # The first send/slash of a run is already delivered as the launch positional
@@ -388,12 +399,12 @@ send_text() { # <text>
   if [[ "$FIRST_SEND_PENDING" == "1" ]]; then
     FIRST_SEND_PENDING=0
     EXPECTED_TURNS=$((EXPECTED_TURNS + 1))
-    echo "[driver] send[s$ACTIVE]: (delivered at launch) ${1:0:60} (expecting turn $EXPECTED_TURNS)" >&2
+    echo "[driver] send[s$ACTIVE]: (delivered at launch) ${text:0:60} (expecting turn $EXPECTED_TURNS)" >&2
     return 0
   fi
-  type_enter "$1"
+  type_enter "$text"
   EXPECTED_TURNS=$((EXPECTED_TURNS + 1))
-  echo "[driver] send[s$ACTIVE]: ${1:0:60} (expecting turn $EXPECTED_TURNS)" >&2
+  echo "[driver] send[s$ACTIVE]: ${text:0:60} (expecting turn $EXPECTED_TURNS)" >&2
 }
 
 # A session-rotating slash (/clear, /compact, /new) makes vibe mint a NEW
@@ -437,7 +448,7 @@ slash_cmd() { # <text>
     local old_tmux="$SESSION" old_cwd="${SES_CWD[$ACTIVE]}"
     save_active
     SES_ALIVE[$ACTIVE]=0
-    PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name 'session_*' 2>/dev/null | sort)"
+    PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name "$VIBE_SESSION_GLOB" 2>/dev/null | sort)"
     type_enter "$text"
     alloc_slot "$old_tmux" "$old_cwd"
     SES_ALIVE[$ACTIVE]=1
@@ -445,7 +456,7 @@ slash_cmd() { # <text>
     return 0
   fi
   if [[ " $ROTATING_SLASHES " == *" $text "* ]]; then
-    PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name 'session_*' 2>/dev/null | sort)"
+    PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name "$VIBE_SESSION_GLOB" 2>/dev/null | sort)"
     type_enter "$text"
     TRANSCRIPT=""; UUID=""
     SES_TRANSCRIPT[$ACTIVE]=""; SES_UUID[$ACTIVE]=""
@@ -598,7 +609,7 @@ while IFS= read -r step; do
       echo "[driver] switch -> session slot $tgt (sid=$(daemon_sid "$TRANSCRIPT"))" >&2
     else
       echo "[driver] switch: invalid session slot '$tgt' (have $N_SLOTS)" >&2
-      EXIT_REASON="nonzero(2)"; break
+      EXIT_REASON="$EXIT_DRIVER_FAULT"; break
     fi
   fi
   case "$type" in
@@ -616,14 +627,14 @@ while IFS= read -r step; do
                      tmux send-keys -t "$SESSION" $ks
                      echo "[driver] keys[s$ACTIVE]: $ks" >&2
                      sleep 0.5 ;;
-    reset_session)   not_implemented reset_session || break ;;   # TODO(mistral-vibe): in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)
+    reset_session)   not_implemented reset_session || break ;;   # UNPORTED (SEAM 3): in-REPL /clear|/new → new id, SAME slot; porting it means re-resolving SES_TRANSCRIPT[$ACTIVE]
     restart)         step_restart ;;
     resume)          step_resume ;;
     sigkill)         step_sigkill ;;
     exit_clean)      step_exit_clean ;;
     start_session)   step_start_session "$(jq -r '.cwd // empty' <<<"$step")" ;;
     session)         : ;;   # pure focus switch — already handled by the inline target block above
-    *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; break ;;
+    *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="$EXIT_DRIVER_FAULT"; break ;;
   esac
   (( $(remaining_seconds) <= 0 )) && { EXIT_REASON="timeout"; break; }
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")

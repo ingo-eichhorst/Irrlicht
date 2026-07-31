@@ -285,24 +285,44 @@ func collectScopedStateIntervals(timelines map[string]*sessionTimeline, q outbou
 		// for handlers.go's resolveUnknownStateProject to decide (issue #1046).
 		project := tl.project
 		ivs, readyAt := tl.stateReconstruction()
-		for _, iv := range ivs {
-			if iv.enter < end && iv.exit > end {
-				current++ // spans the window end → still active "now"
-			}
-			cl, ok := clampInterval(interval{iv.enter, iv.exit}, start, end)
-			if !ok {
-				continue
-			}
-			byState[iv.state][project] = append(byState[iv.state][project], cl)
-		}
-		for _, ts := range readyAt {
-			if ts < start || ts >= end {
-				continue
-			}
-			readyByProject[project] = append(readyByProject[project], ts)
+		current += appendClampedStateIntervals(byState, project, ivs, start, end)
+		// Only touch readyByProject when there is something to record: an
+		// unconditional append would mint a key for every in-scope project,
+		// turning "no ready transitions" into an empty series downstream.
+		if inWindow := readyInWindow(readyAt, start, end); len(inWindow) > 0 {
+			readyByProject[project] = append(readyByProject[project], inWindow...)
 		}
 	}
 	return byState, readyByProject, current
+}
+
+// appendClampedStateIntervals appends every interval in ivs — clamped to
+// [start, end), dropping those that clamp to nothing — onto
+// byState[<its state>][project], and reports how many of them span end and so
+// count as still active "now".
+func appendClampedStateIntervals(byState map[string]map[string][]interval, project string, ivs []stateInterval, start, end int64) (current float64) {
+	for _, iv := range ivs {
+		if iv.enter < end && iv.exit > end {
+			current++ // spans the window end → still active "now"
+		}
+		cl, ok := clampInterval(interval{iv.enter, iv.exit}, start, end)
+		if !ok {
+			continue
+		}
+		byState[iv.state][project] = append(byState[iv.state][project], cl)
+	}
+	return current
+}
+
+// readyInWindow returns the ready-transition timestamps landing in [start, end).
+func readyInWindow(readyAt []int64, start, end int64) []int64 {
+	var out []int64
+	for _, ts := range readyAt {
+		if ts >= start && ts < end {
+			out = append(out, ts)
+		}
+	}
+	return out
 }
 
 // emptyStateSeriesResult returns a valid zero-data result so the dashboard

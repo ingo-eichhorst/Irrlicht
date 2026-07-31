@@ -189,15 +189,11 @@ function setHistoryTab(on) {
   if (on) fetchHistory();
 }
 
-export function historyQuery(state = historyState) {
-  const p = new URLSearchParams();
-  p.set('chart', state.chart);
-  p.set('group', state.group);
-  p.set('forecast', state.forecast ? 'true' : 'false');
-  if (state.scope) p.set('scope', state.scope.field + ':' + state.scope.value);
+// setHistoryWindowParams writes whichever window selector the active chart
+// uses: the activity matrix resolves its window from a granularity zoom-level
+// instead of range/start/end — see historyGranularitySpecs on the daemon.
+function setHistoryWindowParams(p, state) {
   if (state.chart === 'state') {
-    // The activity matrix resolves its window from a granularity zoom-level
-    // instead of range/start/end — see historyGranularitySpecs on the daemon.
     p.set('granularity', state.granularity);
   } else if (state.range === 'custom' && state.start != null && state.end != null) {
     p.set('start', String(state.start));
@@ -205,8 +201,11 @@ export function historyQuery(state = historyState) {
   } else {
     p.set('range', state.range);
   }
-  // Orthogonal cross-filters: emit each non-empty dimension except the one
-  // being grouped on. token_type only narrows the tokens metric.
+}
+
+// setHistoryFilterParams emits the orthogonal cross-filters: each non-empty
+// dimension except the one being grouped on. token_type only narrows tokens.
+function setHistoryFilterParams(p, state) {
   const filters = state.filters || {};
   for (const dim of HISTORY_FILTER_DIMS) {
     if (dim === state.group) continue;
@@ -214,6 +213,16 @@ export function historyQuery(state = historyState) {
     const vals = filters[dim];
     if (vals?.length) p.set(dim, vals.join(','));
   }
+}
+
+export function historyQuery(state = historyState) {
+  const p = new URLSearchParams();
+  p.set('chart', state.chart);
+  p.set('group', state.group);
+  p.set('forecast', state.forecast ? 'true' : 'false');
+  if (state.scope) p.set('scope', state.scope.field + ':' + state.scope.value);
+  setHistoryWindowParams(p, state);
+  setHistoryFilterParams(p, state);
   // DORA is repo-scoped — exactly one project, not the multi-select project
   // filter above (#951).
   if (state.chart === 'dora' && state.doraProject) p.set('project', state.doraProject);
@@ -256,6 +265,52 @@ function syncHistoryCO2Info() {
   if (el) el.hidden = historyState.chart !== 'co2';
 }
 
+// historyEmptyCaption is the "nothing to show" caption for the active chart.
+// Yield counts completed sessions; agents/state are reconstructed from opt-in
+// recordings — each gets its own wording.
+function historyEmptyCaption() {
+  switch (historyState.chart) {
+    case 'yield':
+      return 'no completed sessions in this range yet';
+    case 'dora':
+      return historyState.doraProject ? 'DORA metrics — see panel' : 'select a project to see DORA metrics';
+    case 'agents':
+    case 'state':
+      return 'no recordings in this range yet';
+    default:
+      return 'no cost data in this range yet';
+  }
+}
+
+// markHistoryCanvasEmpty blanks the shared canvas wrapper — for the charts that
+// never paint onto it (DORA is a period summary whose content lives entirely in
+// the side panel, see renderDoraPanel) and whenever there is no data at all.
+function markHistoryCanvasEmpty() {
+  const wrap = document.getElementById('history-chart-wrap');
+  if (wrap) wrap.classList.add('empty');
+}
+
+// paintActiveHistoryChart routes to the active chart's painter and side panel.
+function paintActiveHistoryChart() {
+  switch (historyState.chart) {
+    case 'dora':
+      markHistoryCanvasEmpty();
+      renderDoraPanel();
+      break;
+    case 'yield':
+      paintYieldChart();
+      renderYieldPanel();
+      break;
+    case 'state':
+      renderStateMatrix();
+      renderStatePanel();
+      break;
+    default:
+      paintHistoryChart();
+      renderHistoryPanel();
+  }
+}
+
 function renderHistory() {
   renderHistoryBreadcrumb();
   renderHistoryFilters();
@@ -263,44 +318,17 @@ function renderHistory() {
   syncGranularityRow();
   syncHistoryRangeRow();
   syncHistoryCO2Info();
-  const isYield = historyState.chart === 'yield';
-  const isDora = historyState.chart === 'dora';
-  const isState = historyState.chart === 'state';
   // The activity matrix is a grid, not a time-series line — it replaces the
   // shared canvas with its own scrollable DOM grid (see history-matrix-scroll).
-  syncHistoryMatrixVisibility(isState);
-  // Yield counts completed sessions; agents/state are reconstructed from
-  // opt-in recordings — each gets its own empty caption. DORA never paints
-  // the canvas at all (it's a period summary, not a time series) — its
-  // content lives entirely in the side panel (see renderDoraPanel).
+  syncHistoryMatrixVisibility(historyState.chart === 'state');
   const emptyEl = document.getElementById('history-chart-empty');
-  if (emptyEl) {
-    let emptyText = 'no cost data in this range yet';
-    if (isYield) emptyText = 'no completed sessions in this range yet';
-    else if (isDora) emptyText = historyState.doraProject ? 'DORA metrics — see panel' : 'select a project to see DORA metrics';
-    else if (historyState.chart === 'agents' || isState) emptyText = 'no recordings in this range yet';
-    emptyEl.textContent = emptyText;
-  }
+  if (emptyEl) emptyEl.textContent = historyEmptyCaption();
   if (!historyState.data) {
-    const wrap = document.getElementById('history-chart-wrap');
-    if (wrap) wrap.classList.add('empty');
-    if (isDora) renderDoraPanel();
+    markHistoryCanvasEmpty();
+    if (historyState.chart === 'dora') renderDoraPanel();
     return;
   }
-  if (isDora) {
-    const wrap = document.getElementById('history-chart-wrap');
-    if (wrap) wrap.classList.add('empty');
-    renderDoraPanel();
-  } else if (isYield) {
-    paintYieldChart();
-    renderYieldPanel();
-  } else if (isState) {
-    renderStateMatrix();
-    renderStatePanel();
-  } else {
-    paintHistoryChart();
-    renderHistoryPanel();
-  }
+  paintActiveHistoryChart();
 }
 
 // syncHistoryMatrixVisibility toggles between the shared canvas (every
@@ -495,11 +523,11 @@ function drawHistoryCO2Equivalents(geo, { w, padL, padR, padT, maxY, danger }) {
     ctx.stroke();
     const below = (lineY - padT) < 10;
     let labelY = below ? lineY + 3 : lineY - 3;
-    let top = below ? labelY : labelY - TEXT_HEIGHT_PX;
+    const top = below ? labelY : labelY - TEXT_HEIGHT_PX;
     if (prevBottom !== null && top - prevBottom < MIN_LABEL_GAP_PX) {
-      const shift = MIN_LABEL_GAP_PX - (top - prevBottom);
-      labelY += shift;
-      top += shift;
+      // Only labelY is carried further — prevBottom below is recomputed from it,
+      // so the shifted top would never be read again.
+      labelY += MIN_LABEL_GAP_PX - (top - prevBottom);
     }
     ctx.textBaseline = below ? 'top' : 'bottom';
     ctx.fillText('≈ ' + eq.label, padL + 4, labelY);
@@ -1238,7 +1266,7 @@ function renderDoraPanel() {
     lbl.textContent = label;
     const val = document.createElement('span');
     val.className = 'val';
-    val.textContent = metric && metric.available ? format(metric.value) : (metric?.message || 'n/a');
+    val.textContent = metric?.available ? format(metric.value) : (metric?.message || 'n/a');
     li.appendChild(dot);
     li.appendChild(lbl);
     li.appendChild(val);
@@ -1261,53 +1289,73 @@ function historyCsvCell(s) {
   s = String(s);
   return /[",\n]/.test(s) ? '"' + s.replaceAll('"', '""') + '"' : s;
 }
+// Each *CsvLines builder returns the full CSV for one chart family, header
+// first. HISTORY_CSV_BUILDERS maps a chart to its builder; anything not listed
+// exports the plain bucket/project/value time series.
+function yieldCsvLines(d) {
+  const lines = ['project,productive_cost,reverted_cost,unknown_cost,total_cost,yield,reverted_count'];
+  for (const p of (d.projects || [])) {
+    lines.push([
+      historyCsvCell(p.project),
+      (p.productive_cost || 0).toFixed(6), (p.reverted_cost || 0).toFixed(6),
+      (p.unknown_cost || 0).toFixed(6), (p.total_cost || 0).toFixed(6),
+      (p.yield || 0).toFixed(6), String(p.reverted_count || 0),
+    ].join(','));
+  }
+  return lines;
+}
+
+function stateCsvLines(d) {
+  const lines = ['bucket_start,project,working,waiting,ready'];
+  const by = d.by_state || {};
+  for (const project of (d.projects || [])) {
+    (d.bucket_starts || []).forEach((ts, i) => {
+      const w = by.working?.[project]?.[i] || 0;
+      const wt = by.waiting?.[project]?.[i] || 0;
+      const r = by.ready?.[project]?.[i] || 0;
+      lines.push([new Date(ts * 1000).toISOString(), historyCsvCell(project), w, wt, r].join(','));
+    });
+  }
+  return lines;
+}
+
+function doraCsvLines(d) {
+  const lines = ['metric,value,unit,sample_size,available,message'];
+  const rows = [
+    ['deployment_frequency', d.deployment_frequency],
+    ['lead_time', d.lead_time],
+    ['change_failure_rate', d.change_failure_rate],
+    ['mttr', d.mttr],
+  ];
+  for (const [name, m] of rows) {
+    lines.push([
+      name, m ? String(m.value) : '', m ? historyCsvCell(m.unit) : '',
+      m ? String(m.sample_size) : '', m ? String(!!m.available) : '',
+      m?.message ? historyCsvCell(m.message) : '',
+    ].join(','));
+  }
+  return lines;
+}
+
+function seriesCsvLines(d) {
+  const lines = ['bucket_start,project,value'];
+  for (const pt of (d.series || [])) {
+    lines.push([new Date(pt.ts * 1000).toISOString(), historyCsvCell(pt.project), pt.value.toFixed(6)].join(','));
+  }
+  return lines;
+}
+
+const HISTORY_CSV_BUILDERS = {
+  yield: yieldCsvLines,
+  state: stateCsvLines,
+  dora: doraCsvLines,
+};
+
 function exportHistoryCSV() {
   const d = historyState.data;
   if (!d) return;
-  let lines;
-  if (historyState.chart === 'yield') {
-    lines = ['project,productive_cost,reverted_cost,unknown_cost,total_cost,yield,reverted_count'];
-    for (const p of (d.projects || [])) {
-      lines.push([
-        historyCsvCell(p.project),
-        (p.productive_cost || 0).toFixed(6), (p.reverted_cost || 0).toFixed(6),
-        (p.unknown_cost || 0).toFixed(6), (p.total_cost || 0).toFixed(6),
-        (p.yield || 0).toFixed(6), String(p.reverted_count || 0),
-      ].join(','));
-    }
-  } else if (historyState.chart === 'state') {
-    lines = ['bucket_start,project,working,waiting,ready'];
-    const by = d.by_state || {};
-    for (const project of (d.projects || [])) {
-      (d.bucket_starts || []).forEach((ts, i) => {
-        const w = by.working?.[project]?.[i] || 0;
-        const wt = by.waiting?.[project]?.[i] || 0;
-        const r = by.ready?.[project]?.[i] || 0;
-        lines.push([new Date(ts * 1000).toISOString(), historyCsvCell(project), w, wt, r].join(','));
-      });
-    }
-  } else if (historyState.chart === 'dora') {
-    lines = ['metric,value,unit,sample_size,available,message'];
-    const rows = [
-      ['deployment_frequency', d.deployment_frequency],
-      ['lead_time', d.lead_time],
-      ['change_failure_rate', d.change_failure_rate],
-      ['mttr', d.mttr],
-    ];
-    for (const [name, m] of rows) {
-      lines.push([
-        name, m ? String(m.value) : '', m ? historyCsvCell(m.unit) : '',
-        m ? String(m.sample_size) : '', m ? String(!!m.available) : '',
-        m?.message ? historyCsvCell(m.message) : '',
-      ].join(','));
-    }
-  } else {
-    lines = ['bucket_start,project,value'];
-    for (const pt of (d.series || [])) {
-      lines.push([new Date(pt.ts * 1000).toISOString(), historyCsvCell(pt.project), pt.value.toFixed(6)].join(','));
-    }
-  }
-  historyDownload('irrlicht-history-' + historyState.range + '-' + historyState.chart + '.csv', 'text/csv;charset=utf-8', lines.join('\n') + '\n');
+  const build = HISTORY_CSV_BUILDERS[historyState.chart] || seriesCsvLines;
+  historyDownload('irrlicht-history-' + historyState.range + '-' + historyState.chart + '.csv', 'text/csv;charset=utf-8', build(d).join('\n') + '\n');
 }
 function exportHistoryJSON() {
   const d = historyState.data;

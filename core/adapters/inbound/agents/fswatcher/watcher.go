@@ -316,35 +316,50 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 
 	switch {
 	case ev.Op&fsnotify.Create != 0:
-		size, mtime := fileSizeAndMtime(name)
-		if w.isStale(mtime) {
-			return
-		}
-		if size == 0 && w.parentSessionID != nil {
-			if w.pendingNew == nil {
-				w.pendingNew = make(map[string]struct{})
-			}
-			w.pendingNew[name] = struct{}{}
-			return
-		}
-		w.broadcast(w.eventFor(agent.EventNewSession, sessionID, projectDir, name, size))
+		w.handleTranscriptCreate(name, sessionID, projectDir)
 
 	case ev.Op&fsnotify.Write != 0:
-		size, mtime := fileSizeAndMtime(name)
-		if w.isStale(mtime) {
-			return
-		}
-		if _, pending := w.pendingNew[name]; pending {
-			delete(w.pendingNew, name)
-			w.broadcast(w.eventFor(agent.EventNewSession, sessionID, projectDir, name, size))
-			return
-		}
-		w.broadcast(w.eventFor(agent.EventActivity, sessionID, projectDir, name, size))
+		w.handleTranscriptWrite(name, sessionID, projectDir)
 
 	case ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0:
 		delete(w.pendingNew, name)
 		w.broadcast(w.eventFor(agent.EventRemoved, sessionID, projectDir, name, 0))
 	}
+}
+
+// handleTranscriptCreate emits EventNewSession for a newly created transcript,
+// unless it is stale or is the zero-byte create of a header-linked adapter — the
+// latter is parked in pendingNew so the first Write can emit it once the
+// metadata header is readable (see the pendingNew field comment).
+func (w *Watcher) handleTranscriptCreate(name, sessionID, projectDir string) {
+	size, mtime := fileSizeAndMtime(name)
+	if w.isStale(mtime) {
+		return
+	}
+	if size == 0 && w.parentSessionID != nil {
+		if w.pendingNew == nil {
+			w.pendingNew = make(map[string]struct{})
+		}
+		w.pendingNew[name] = struct{}{}
+		return
+	}
+	w.broadcast(w.eventFor(agent.EventNewSession, sessionID, projectDir, name, size))
+}
+
+// handleTranscriptWrite emits EventActivity for a write to a known transcript,
+// or the EventNewSession deferred by handleTranscriptCreate when this is the
+// first write to a parked zero-byte file.
+func (w *Watcher) handleTranscriptWrite(name, sessionID, projectDir string) {
+	size, mtime := fileSizeAndMtime(name)
+	if w.isStale(mtime) {
+		return
+	}
+	if _, pending := w.pendingNew[name]; pending {
+		delete(w.pendingNew, name)
+		w.broadcast(w.eventFor(agent.EventNewSession, sessionID, projectDir, name, size))
+		return
+	}
+	w.broadcast(w.eventFor(agent.EventActivity, sessionID, projectDir, name, size))
 }
 
 // handleDirCreate handles a Create event that names a directory: starts

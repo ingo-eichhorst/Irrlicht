@@ -55,9 +55,12 @@ func TestSessionDetector_IdlePromptHook_ReconcilesReadyToWaiting(t *testing.T) {
 		Metrics:        &session.SessionMetrics{LastEventType: "turn_done"},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// Defers run LIFO, so registering the drain first makes the teardown order
+	// cancel() → wait for Run to return, which is what reaps the goroutine.
 	done := make(chan error, 1)
-	defer func() { cancel(); <-done }()
+	defer func() { <-done }()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	go func() { done <- det.Run(ctx) }()
 
 	time.Sleep(20 * time.Millisecond) // let seedFromDisk finish

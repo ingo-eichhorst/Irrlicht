@@ -78,6 +78,25 @@ func ourHookGroup(matcher string) map[string]interface{} {
 	return group
 }
 
+// singleHookGroup returns the one hook group registered under event, failing
+// the test when the event is absent or carries any other number of groups.
+func singleHookGroup(t *testing.T, hooksMap map[string]interface{}, event string) map[string]interface{} {
+	t.Helper()
+	groups, ok := hooksMap[event].([]interface{})
+	if !ok || len(groups) != 1 {
+		t.Fatalf("expected 1 %s group, got %d", event, len(groups))
+	}
+	return groups[0].(map[string]interface{})
+}
+
+// assertHookMatcher fails unless the group's matcher is exactly want.
+func assertHookMatcher(t *testing.T, group map[string]interface{}, event, want string) {
+	t.Helper()
+	if m, _ := group["matcher"].(string); m != want {
+		t.Errorf("%s matcher = %q, want %q", event, m, want)
+	}
+}
+
 // assertHTTPEntry fails unless the group's single inner hook is our canonical
 // native-http entry: type "http", our endpoint url, and no leftover command key.
 func assertHTTPEntry(t *testing.T, group map[string]interface{}) {
@@ -315,43 +334,18 @@ func TestEnsureHooksInstalled_InstallsPreToolUseAndExpandedMatcher(t *testing.T)
 	hooksMap := settings["hooks"].(map[string]interface{})
 
 	// PreToolUse: one group with the narrow matcher.
-	pre, ok := hooksMap[HookPreToolUse].([]interface{})
-	if !ok || len(pre) != 1 {
-		t.Fatalf("expected 1 PreToolUse group, got %d", len(pre))
-	}
-	preGroup := pre[0].(map[string]interface{})
-	if m, _ := preGroup["matcher"].(string); m != hookMatcherPreToolUse {
-		t.Errorf("PreToolUse matcher = %q, want %q", m, hookMatcherPreToolUse)
-	}
+	assertHookMatcher(t, singleHookGroup(t, hooksMap, HookPreToolUse), HookPreToolUse, hookMatcherPreToolUse)
 
 	// PostToolUse: one group, matcher includes AskUserQuestion|ExitPlanMode.
-	post, ok := hooksMap[HookPostToolUse].([]interface{})
-	if !ok || len(post) != 1 {
-		t.Fatalf("expected 1 PostToolUse group, got %d", len(post))
-	}
-	postGroup := post[0].(map[string]interface{})
-	if m, _ := postGroup["matcher"].(string); m != hookMatcher {
-		t.Errorf("PostToolUse matcher = %q, want %q", m, hookMatcher)
-	}
+	assertHookMatcher(t, singleHookGroup(t, hooksMap, HookPostToolUse), HookPostToolUse, hookMatcher)
 
 	// PreCompact: one group whose matcher is the compaction trigger "manual"
 	// (not a tool-name regex), so the hook fires only for a user /compact (#657).
-	preCompact, ok := hooksMap[HookPreCompact].([]interface{})
-	if !ok || len(preCompact) != 1 {
-		t.Fatalf("expected 1 PreCompact group, got %d", len(preCompact))
-	}
-	preCompactGroup := preCompact[0].(map[string]interface{})
-	if m, _ := preCompactGroup["matcher"].(string); m != hookMatcherPreCompact {
-		t.Errorf("PreCompact matcher = %q, want %q", m, hookMatcherPreCompact)
-	}
+	assertHookMatcher(t, singleHookGroup(t, hooksMap, HookPreCompact), HookPreCompact, hookMatcherPreCompact)
 
 	// Stop: one group with NO matcher key (Claude Code rejects a Stop matcher)
 	// and native http delivery (#1161).
-	stop, ok := hooksMap[HookStop].([]interface{})
-	if !ok || len(stop) != 1 {
-		t.Fatalf("expected 1 Stop group, got %d", len(stop))
-	}
-	stopGroup := stop[0].(map[string]interface{})
+	stopGroup := singleHookGroup(t, hooksMap, HookStop)
 	if _, has := stopGroup["matcher"]; has {
 		t.Errorf("Stop group must not carry a matcher key, got %v", stopGroup["matcher"])
 	}
@@ -360,14 +354,8 @@ func TestEnsureHooksInstalled_InstallsPreToolUseAndExpandedMatcher(t *testing.T)
 	// Notification: one group whose matcher is the notification_type
 	// "idle_prompt" (not a tool-name regex), so the hook fires only when the
 	// agent goes idle at the prompt (#1173).
-	notif, ok := hooksMap[HookNotification].([]interface{})
-	if !ok || len(notif) != 1 {
-		t.Fatalf("expected 1 Notification group, got %d", len(notif))
-	}
-	notifGroup := notif[0].(map[string]interface{})
-	if m, _ := notifGroup["matcher"].(string); m != hookMatcherNotification {
-		t.Errorf("Notification matcher = %q, want %q", m, hookMatcherNotification)
-	}
+	notifGroup := singleHookGroup(t, hooksMap, HookNotification)
+	assertHookMatcher(t, notifGroup, HookNotification, hookMatcherNotification)
 	assertHTTPEntry(t, notifGroup)
 }
 

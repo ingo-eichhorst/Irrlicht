@@ -111,8 +111,9 @@ fi
 # changed_matches <extended-regex> — true when NOT scoping (full run) or when
 # some changed file matches. Lets a full-mode gate stay unconditional.
 changed_matches() {
+  local re="$1"
   [[ "$CHANGED" == 1 ]] || return 0
-  grep -qE "$1" <<<"$CHANGED_FILES"
+  grep -qE "$re" <<<"$CHANGED_FILES"
 }
 
 NAMES=()
@@ -141,12 +142,13 @@ run_gate() {
 # unchanged there.
 run_gate_scoped() {
   local re="$1"; shift
+  local name="$1"
   if ! changed_matches "$re"; then
     echo
     echo "$SEPARATOR"
-    echo "  $1  — SKIP (no changed files match)"
+    echo "  $name  — SKIP (no changed files match)"
     echo "$SEPARATOR"
-    NAMES+=("$1"); RESULTS+=("SKIP")
+    NAMES+=("$name"); RESULTS+=("SKIP")
     return 0
   fi
   run_gate "$@"
@@ -176,6 +178,7 @@ changed_core_packages() {
     go list "irrlicht/$dir" >/dev/null 2>&1 && pkgs+=("irrlicht/$dir")
   done < <(grep -E '^core/.*\.go$' <<<"$CHANGED_FILES" | sed -E 's#/[^/]+\.go$##' | sort -u)
   printf '%s\n' "${pkgs[@]}" | sort -u
+  return 0   # callers read stdout; the pkgs list is never empty (arch root)
 }
 
 # core_module_tests — full module under -race in full mode; in --changed mode,

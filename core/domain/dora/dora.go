@@ -14,6 +14,11 @@ import (
 	"irrlicht/core/domain/stats"
 )
 
+// msgNoReleasesInRange is the Message every metric reports when [from, to]
+// contains no release at all — the one unavailability reason that is shared
+// across metrics rather than specific to how a given one is computed.
+const msgNoReleasesInRange = "no releases in range"
+
 // TagInfo is a release tag: its name and creation-time unix epoch. Callers
 // must supply tags already filtered to real releases and sorted ascending
 // by Epoch — this package does not re-derive either.
@@ -96,7 +101,7 @@ func DeploymentFrequency(tags []TagInfo, from, to int64) Metric {
 	inRange := filterRange(tags, from, to)
 	n := len(inRange)
 	if n == 0 {
-		return Metric{Unit: "per_week", Available: false, Message: "no releases in range"}
+		return Metric{Unit: "per_week", Available: false, Message: msgNoReleasesInRange}
 	}
 	if n == 1 {
 		return Metric{Unit: "per_week", SampleSize: 1, Available: false, Message: "only one release in range"}
@@ -119,7 +124,7 @@ func DeploymentFrequency(tags []TagInfo, from, to int64) Metric {
 func LeadTime(tags []TagInfo, commitsByTag map[string][]CommitInfo, from, to int64) Metric {
 	inRange := filterRange(tags, from, to)
 	if len(inRange) == 0 {
-		return Metric{Unit: "hours", Available: false, Message: "no releases in range"}
+		return Metric{Unit: "hours", Available: false, Message: msgNoReleasesInRange}
 	}
 	var hours []float64
 	for _, tag := range inRange {
@@ -216,7 +221,7 @@ func ResolveRevert(tags []TagInfo, candidate RevertCandidate, originalTag string
 func ChangeFailureRate(tags []TagInfo, failures []ResolvedFailure, from, to int64) Metric {
 	inRange := filterRange(tags, from, to)
 	if len(inRange) == 0 {
-		return Metric{Unit: "percent", Available: false, Message: "no releases in range"}
+		return Metric{Unit: "percent", Available: false, Message: msgNoReleasesInRange}
 	}
 	unique := make(map[string]struct{}, len(failures))
 	for _, f := range failures {

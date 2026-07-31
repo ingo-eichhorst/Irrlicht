@@ -50,10 +50,10 @@ func TestHandleGetHistory_StateChart(t *testing.T) {
 	if resp.ByState == nil || resp.ByState[session.StateWorking] == nil || resp.ByState[session.StateWaiting] == nil || resp.ByState[session.StateReady] == nil {
 		t.Fatalf("by_state must carry all three canonical states, got %+v", resp.ByState)
 	}
-	if v := sum(resp.ByState[session.StateWorking]["projX"]); v <= 0 {
+	if sum(resp.ByState[session.StateWorking]["projX"]) <= 0 {
 		t.Errorf("working[projX] should have positive activity, got series %v", resp.ByState[session.StateWorking]["projX"])
 	}
-	if v := sum(resp.ByState[session.StateWaiting]["projX"]); v <= 0 {
+	if sum(resp.ByState[session.StateWaiting]["projX"]) <= 0 {
 		t.Errorf("waiting[projX] should have positive activity, got series %v", resp.ByState[session.StateWaiting]["projX"])
 	}
 	if v := sum(resp.ByState[session.StateReady]["projX"]); v != 1 {

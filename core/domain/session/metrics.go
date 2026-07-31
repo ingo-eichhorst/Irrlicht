@@ -482,7 +482,7 @@ func (m *SessionMetrics) HasOpenEditPermissionTool() bool {
 // these spellings, so case-folding introduces no false positives. That claim
 // rests on the match being exact equality on the folded name, never a prefix
 // or substring: codex's write_stdin is an interactive PTY session that can
-// stream for seconds, and gemini-cli's write_todos is a todo list — both would
+// stream for seconds, and gemini-cli's write_todos is a todo list — both would  // NOSONAR (go:S1135) — "todo" is a tool name here, not a task marker
 // be false positives under substring matching, and both are excluded here.
 func isPermissionGatedEditTool(name string) bool {
 	switch strings.ToLower(name) {
