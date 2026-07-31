@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/permission"
 	"irrlicht/core/internal/contracttesting"
 )
@@ -57,16 +58,7 @@ func readHooks(t *testing.T, home string) map[string]interface{} {
 }
 
 func eventHasSentinel(hooks map[string]interface{}, event string) bool {
-	arr, ok := hooks[event].([]interface{})
-	if !ok {
-		return false
-	}
-	for _, g := range arr {
-		if containsHookSentinel(g) {
-			return true
-		}
-	}
-	return false
+	return hookjson.HasOurHook(hooks, event, hookSentinel)
 }
 
 func TestEnsureAndUninstallHooks(t *testing.T) {

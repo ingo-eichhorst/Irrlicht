@@ -304,9 +304,7 @@ func parseCodexMessage(raw map[string]interface{}, ev *tailer.ParsedEvent) bool 
 		// assistant_message from its fallback (codex settles only on the
 		// turn_done primary path from task_complete), so a mid-turn cue can't
 		// route to waiting — only the last assistant text before turn_done does.
-		win := tailer.WaitingScanWindow(full)
-		ev.PendingWaitingCue = win != "" &&
-			(session.ExtractQuestionSnippet(win) != "" || session.ExtractWaitingCue(win) != "")
+		ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(full))
 		scanCodexTaskEstimate(raw, ev)
 		// Codex's `<proposed_plan>` block has no structured tool-use; map
 		// it to ExitPlanMode so the classifier treats it as user-blocking.

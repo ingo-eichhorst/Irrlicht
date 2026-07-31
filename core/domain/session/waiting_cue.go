@@ -12,6 +12,31 @@ import (
 	"unicode/utf8"
 )
 
+// ProseIndicatesWaiting reports whether an assistant message carries a trailing
+// question or an imperative waiting cue — the OR of the two detectors below,
+// and the single place that rule lives (issue #1179). Before it was extracted
+// the same OR had been written out four times: IsWaitingForUserInput's tail
+// scan, both adapters' Stop-hook handlers, and both adapters' transcript
+// parsers.
+//
+// A caller that HAS the turn's full final message should pass a bounded tail
+// window of it (tailer.WaitingScanWindow), not the whole turn — ExtractWaitingCue
+// over-fires on very long text — and not the display-truncated LastAssistantText,
+// which hides a cue sitting before the trailing 200 runes (issue #1150). That is
+// what both adapters' parsers and Stop-hook handlers do. IsWaitingForUserInput
+// below passes LastAssistantText deliberately: it is the fallback for passes that
+// never populated PendingWaitingCue, where the truncated text is all there is.
+//
+// The windowing stays at the call site rather than moving in here because
+// core/pkg/tailer, which owns the window, deliberately does not import this
+// package (see userblocking_contract_test.go).
+func ProseIndicatesWaiting(text string) bool {
+	if text == "" {
+		return false
+	}
+	return ExtractQuestionSnippet(text) != "" || ExtractWaitingCue(text) != ""
+}
+
 // trailingMarkdownNoise are characters that commonly appear AFTER a
 // question mark when models wrap questions in markdown or punctuation.
 // e.g. `**Question?**` (bold), `*Question?*` (italic), `_Question?_`,
@@ -31,9 +56,9 @@ const markdownWrapper = "*_~`\"')]"
 // "verify locally and reply with …") — both indicate the agent is gated on
 // the user even though no user-blocking tool is open.
 //
-// Two detectors are OR'd: ExtractQuestionSnippet (literal `?`, fired
-// anywhere in the text) and ExtractWaitingCue (cue regexes against the
-// trailing 1–2 sentences). See issue #381 for the cue coverage matrix.
+// The prose rule itself is ProseIndicatesWaiting above — ExtractQuestionSnippet
+// OR ExtractWaitingCue. See issue #381 for the cue coverage matrix it was built
+// against.
 func (m *SessionMetrics) IsWaitingForUserInput() bool {
 	if m == nil {
 		return false
@@ -56,10 +81,7 @@ func (m *SessionMetrics) IsWaitingForUserInput() bool {
 	if m.PendingWaitingCue {
 		return true
 	}
-	if ExtractQuestionSnippet(m.LastAssistantText) != "" {
-		return true
-	}
-	return ExtractWaitingCue(m.LastAssistantText) != ""
+	return ProseIndicatesWaiting(m.LastAssistantText)
 }
 
 // ExtractQuestionSnippet returns the first non-rhetorical question sentence

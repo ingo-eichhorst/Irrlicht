@@ -9,12 +9,13 @@
 package codex
 
 import (
-	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 )
 
 // hookSentinel is the substring in a hook entry's curl command that identifies
@@ -63,7 +64,7 @@ var installedHookEvents = []string{
 }
 
 // matcherForEvent returns the matcher we install for the given event. Stop
-// takes no matcher (it fires at every turn end); addOurHook omits the matcher
+// takes no matcher (it fires at every turn end); hookjson omits the matcher
 // key entirely for an empty matcher.
 func matcherForEvent(event string) string {
 	if event == HookStop {
@@ -82,6 +83,24 @@ func ourHookEntry() map[string]interface{} {
 	}
 }
 
+// hookConfig describes this adapter's install to the shared hookjson
+// machinery (issue #1179): which file to merge into, which sentinel marks our
+// entries, which events get installed with which matcher, and what the
+// canonical inner entry looks like. Everything the two JSON-hook adapters have
+// in common — the merge, idempotency, in-place upgrade and removal logic —
+// lives there; everything Codex-specific stays here.
+func hookConfig(path string) hookjson.Config {
+	return hookjson.Config{
+		Path:        path,
+		Sentinel:    hookSentinel,
+		Events:      installedHookEvents,
+		MatcherFor:  matcherForEvent,
+		Entry:       ourHookEntry,
+		IsCanonical: hookEntryIsCanonical,
+		WriteFile:   atomicWriteFile,
+	}
+}
+
 // EnsureHooksInstalled adds irrlicht hook entries to ~/.codex/hooks.json if
 // they are not already present. Creates the file if it doesn't exist. Returns
 // true if the file was modified, false if hooks were already installed.
@@ -90,34 +109,7 @@ func EnsureHooksInstalled() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-
-	settings, err := readCodexHooks(path)
-	if err != nil {
-		return false, err
-	}
-
-	hooksMap := ensureHooksMap(settings)
-
-	modified := false
-	for _, event := range installedHookEvents {
-		expected := matcherForEvent(event)
-		if upgradeStaleHookCommand(hooksMap, event) {
-			modified = true
-		}
-		if upgradeStaleHookMatchers(hooksMap, event, expected) {
-			modified = true
-		}
-		if !hasOurHook(hooksMap, event) {
-			addOurHook(hooksMap, event, expected)
-			modified = true
-		}
-	}
-
-	if !modified {
-		return false, nil
-	}
-
-	return true, writeCodexHooks(path, settings)
+	return hookjson.EnsureInstalled(hookConfig(path))
 }
 
 // UninstallHooks removes irrlicht hook entries from ~/.codex/hooks.json.
@@ -127,33 +119,7 @@ func UninstallHooks() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-
-	settings, err := readCodexHooks(path)
-	if err != nil {
-		return false, err
-	}
-
-	hooksObj, ok := settings["hooks"]
-	if !ok {
-		return false, nil
-	}
-	hooksMap, ok := hooksObj.(map[string]interface{})
-	if !ok {
-		return false, nil
-	}
-
-	modified := false
-	for _, event := range installedHookEvents {
-		if removeOurHook(hooksMap, event) {
-			modified = true
-		}
-	}
-
-	if !modified {
-		return false, nil
-	}
-
-	return true, writeCodexHooks(path, settings)
+	return hookjson.Uninstall(hookConfig(path))
 }
 
 // applyCodexHooks is the Apply closure for the "hooks" permission: it
@@ -297,34 +263,6 @@ func codexHooksPath() (string, error) {
 	return filepath.Join(home, "hooks.json"), nil
 }
 
-func readCodexHooks(path string) (map[string]interface{}, error) {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return map[string]interface{}{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	// An empty file is valid (nothing to merge onto yet).
-	if len(strings.TrimSpace(string(data))) == 0 {
-		return map[string]interface{}{}, nil
-	}
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return nil, err
-	}
-	return settings, nil
-}
-
-func writeCodexHooks(path string, settings map[string]interface{}) error {
-	data, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return atomicWriteFile(path, data)
-}
-
 // atomicWriteFile writes data to path via a temp file + rename so a reader (or
 // Codex) never observes a half-written hooks.json. Creates the parent dir.
 func atomicWriteFile(path string, data []byte) error {
@@ -351,186 +289,6 @@ func atomicWriteFile(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
-}
-
-// ensureHooksMap returns (or creates) the top-level "hooks" map in settings.
-func ensureHooksMap(settings map[string]interface{}) map[string]interface{} {
-	if h, ok := settings["hooks"]; ok {
-		if m, ok := h.(map[string]interface{}); ok {
-			return m
-		}
-	}
-	m := map[string]interface{}{}
-	settings["hooks"] = m
-	return m
-}
-
-// hasOurHook reports whether any matcher group carrying our sentinel already
-// exists in the event's hook array (matcher-agnostic).
-func hasOurHook(hooksMap map[string]interface{}, event string) bool {
-	arr, ok := hooksMap[event].([]interface{})
-	if !ok {
-		return false
-	}
-	for _, g := range arr {
-		if containsHookSentinel(g) {
-			return true
-		}
-	}
-	return false
-}
-
-// upgradeStaleHookCommand rewrites any sentinel-bearing inner hook whose command
-// differs from the current canonical one (e.g. after a curl-flag change) to
-// ourHookEntry, in place. Returns true if any entry was rewritten.
-func upgradeStaleHookCommand(hooksMap map[string]interface{}, event string) bool {
-	arr, ok := hooksMap[event].([]interface{})
-	if !ok {
-		return false
-	}
-	upgraded := false
-	for _, g := range arr {
-		if upgradeGroupHookCommand(g) {
-			upgraded = true
-		}
-	}
-	return upgraded
-}
-
-func upgradeGroupHookCommand(g interface{}) bool {
-	group, ok := g.(map[string]interface{})
-	if !ok {
-		return false
-	}
-	innerHooks, ok := group["hooks"].([]interface{})
-	if !ok {
-		return false
-	}
-	upgraded := false
-	for i, h := range innerHooks {
-		hook, ok := h.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if hookEntryIsSentinel(hook) && !hookEntryIsCanonical(hook) {
-			innerHooks[i] = ourHookEntry()
-			upgraded = true
-		}
-	}
-	return upgraded
-}
-
-// upgradeStaleHookMatchers reconciles the matcher of any sentinel-bearing group
-// with the expected value (used if an event's matcher changes). For Stop
-// (expected empty) it strips any matcher key entirely.
-func upgradeStaleHookMatchers(hooksMap map[string]interface{}, event, expected string) bool {
-	arr, ok := hooksMap[event].([]interface{})
-	if !ok {
-		return false
-	}
-	upgraded := false
-	for _, g := range arr {
-		group, ok := g.(map[string]interface{})
-		if !ok || !containsHookSentinel(g) {
-			continue
-		}
-		if reconcileGroupMatcher(group, expected) {
-			upgraded = true
-		}
-	}
-	return upgraded
-}
-
-func reconcileGroupMatcher(group map[string]interface{}, expected string) bool {
-	m, has := group["matcher"].(string)
-	if expected == "" {
-		if has {
-			delete(group, "matcher")
-			return true
-		}
-		return false
-	}
-	if m != expected {
-		group["matcher"] = expected
-		return true
-	}
-	return false
-}
-
-// addOurHook appends a matcher group with our hook entry to the event's array.
-// The matcher key is omitted entirely for an empty matcher (Stop).
-func addOurHook(hooksMap map[string]interface{}, event, matcher string) {
-	entry := map[string]interface{}{
-		"hooks": []interface{}{ourHookEntry()},
-	}
-	if matcher != "" {
-		entry["matcher"] = matcher
-	}
-
-	if existing, ok := hooksMap[event].([]interface{}); ok {
-		hooksMap[event] = append(existing, entry)
-		return
-	}
-	hooksMap[event] = []interface{}{entry}
-}
-
-// removeOurHook removes matcher groups containing our sentinel from the event's
-// array. Returns true if any were removed.
-func removeOurHook(hooksMap map[string]interface{}, event string) bool {
-	arr, ok := hooksMap[event].([]interface{})
-	if !ok {
-		return false
-	}
-
-	var kept []interface{}
-	removed := false
-	for _, g := range arr {
-		if containsHookSentinel(g) {
-			removed = true
-			continue
-		}
-		kept = append(kept, g)
-	}
-	if !removed {
-		return false
-	}
-
-	if len(kept) == 0 {
-		delete(hooksMap, event)
-	} else {
-		hooksMap[event] = kept
-	}
-	return true
-}
-
-// containsHookSentinel reports whether a matcher group contains an inner hook
-// entry carrying our sentinel.
-func containsHookSentinel(g interface{}) bool {
-	group, ok := g.(map[string]interface{})
-	if !ok {
-		return false
-	}
-	innerHooks, ok := group["hooks"].([]interface{})
-	if !ok {
-		return false
-	}
-	for _, h := range innerHooks {
-		hook, ok := h.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if hookEntryIsSentinel(hook) {
-			return true
-		}
-	}
-	return false
-}
-
-// hookEntryIsSentinel reports whether an inner hook object is one of ours,
-// identified by our sentinel appearing in its curl command.
-func hookEntryIsSentinel(hook map[string]interface{}) bool {
-	cmd, ok := hook["command"].(string)
-	return ok && strings.Contains(cmd, hookSentinel)
 }
 
 // hookEntryIsCanonical reports whether an inner hook object already matches the

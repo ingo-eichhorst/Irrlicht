@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -2130,4 +2131,57 @@ func TestTailer_PrunedToEmpty_EmitsNonNilTasks(t *testing.T) {
 	if len(m.Tasks) != 0 {
 		t.Fatalf("Tasks = %+v, want empty", m.Tasks)
 	}
+}
+
+// TestParser_PendingWaitingCue_BeyondDisplayTail pins issue #1150 at the parser
+// level: a question sitting BEFORE the trailing 200 runes is invisible to the
+// display-truncated AssistantText the prose heuristics normally scan, so the
+// parser computes the verdict from a larger bounded window of the FULL text and
+// carries it as PendingWaitingCue. Without this the turn would classify ready
+// instead of waiting.
+//
+// It also guards the shared rule extracted in #1179: this parser and codex's
+// both call session.ProseIndicatesWaiting(tailer.WaitingScanWindow(full)), and
+// this is the assertion that fails if that composition is dropped or rewritten.
+func TestParser_PendingWaitingCue_BeyondDisplayTail(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"question before the display tail", questionBeyondTail(), true},
+		{"plain statement", plainStatementBeyondTail(), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &Parser{}
+			ev := p.ParseLine(map[string]interface{}{
+				"type": "assistant",
+				"message": map[string]interface{}{
+					"role":    "assistant",
+					"content": []interface{}{map[string]interface{}{"type": "text", "text": tc.text}},
+				},
+			})
+			if ev == nil {
+				t.Fatal("expected non-nil event")
+			}
+			if ev.PendingWaitingCue != tc.want {
+				t.Errorf("PendingWaitingCue = %v, want %v", ev.PendingWaitingCue, tc.want)
+			}
+			if strings.Contains(ev.AssistantText, "?") {
+				t.Fatalf("test is not exercising the beyond-tail path: the question survived truncation into AssistantText %q", ev.AssistantText)
+			}
+		})
+	}
+}
+
+// questionBeyondTail builds an assistant message whose question sits outside
+// the trailing MaxAssistantTextRunes shown in the UI, but inside the larger
+// MaxWaitingScanRunes window the parser scans.
+func questionBeyondTail() string {
+	return "Which option do you want? " + strings.Repeat("x", 250)
+}
+
+func plainStatementBeyondTail() string {
+	return "The refactor is complete. " + strings.Repeat("x", 250)
 }

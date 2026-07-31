@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/outbound"
@@ -190,13 +191,11 @@ func walkMarkerValue(v interface{}, observedAt time.Time, est **tailer.TaskEstim
 	}
 }
 
-// ConsentGranter reports whether the user has granted a permission (issue
-// #570). Satisfied by *services.PermissionService. Hooks installed by a
-// pre-consent daemon version keep firing until answered, so the receivers
-// drop payloads while their permission is pending or denied.
-type ConsentGranter interface {
-	Granted(agentName, key string) bool
-}
+// ConsentGranter is the shared consent check every JSON-hook receiver gates on
+// (issue #570) — an alias, not a copy, so this adapter and codex cannot drift
+// on it (issue #1179). See hookjson for why the HookTarget above is NOT shared
+// the same way.
+type ConsentGranter = hookjson.ConsentGranter
 
 // sessionIDFromTranscriptPath extracts irrlicht's session ID (the UUID
 // filename stem) from a Claude Code transcript path. The hook payload's
@@ -321,19 +320,7 @@ func handleStopHook(target HookTarget, log outbound.Logger, sessionID string, pa
 
 	target.HandleStopHook(sessionID, payload.TranscriptPath,
 		tailer.TruncateAssistantText(payload.LastAssistantMessage),
-		waitingCueInTail(payload.LastAssistantMessage))
-}
-
-// waitingCueInTail reports whether the bounded tail window of an assistant
-// message carries a trailing question or an imperative waiting cue (issue
-// #1150). Bounded, not full text: ExtractWaitingCue over-fires on very long
-// turns (see tailer.MaxWaitingScanRunes). Shared by the transcript parser
-// (PendingWaitingCue) and the Stop-hook handler (#1161) so the window size and
-// the OR-of-two-detectors rule can't drift between the two paths.
-func waitingCueInTail(full string) bool {
-	win := tailer.WaitingScanWindow(full)
-	return win != "" &&
-		(session.ExtractQuestionSnippet(win) != "" || session.ExtractWaitingCue(win) != "")
+		session.ProseIndicatesWaiting(tailer.WaitingScanWindow(payload.LastAssistantMessage)))
 }
 
 // handleNotificationHook processes a Claude Code Notification hook. It acts only

@@ -6,10 +6,10 @@
 package claudecode
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 )
 
 // hookSentinel is the substring in the hook entry (curl command or http url)
@@ -79,7 +79,7 @@ var installedHookEvents = []string{
 // events this is a tool-name regex; for PreCompact it is the compaction trigger
 // ("manual"); for Notification it is the notification_type ("idle_prompt"); for
 // Stop it is empty — Claude Code's Stop hook takes no matcher (it fires at every
-// turn end) and rejects settings.json that gives it one, so addOurHook omits the
+// turn end) and rejects settings.json that gives it one, so hookjson omits the
 // matcher key entirely for an empty matcher.
 func matcherForEvent(event string) string {
 	switch event {
@@ -108,6 +108,24 @@ func ourHookEntry() map[string]interface{} {
 	}
 }
 
+// hookConfig describes this adapter's install to the shared hookjson
+// machinery (issue #1179): which file to merge into, which sentinel marks our
+// entries, which events get installed with which matcher, and what the
+// canonical inner entry looks like. Everything the two JSON-hook adapters have
+// in common — the merge, idempotency, in-place upgrade and removal logic —
+// lives there; everything Claude-Code-specific stays here.
+func hookConfig(path string) hookjson.Config {
+	return hookjson.Config{
+		Path:        path,
+		Sentinel:    hookSentinel,
+		Events:      installedHookEvents,
+		MatcherFor:  matcherForEvent,
+		Entry:       ourHookEntry,
+		IsCanonical: hookEntryIsCanonical,
+		WriteFile:   atomicWriteFile,
+	}
+}
+
 // EnsureHooksInstalled adds irrlicht hook entries to ~/.claude/settings.json
 // if they are not already present. Creates the file if it doesn't exist.
 // Returns true if the file was modified, false if hooks were already installed.
@@ -116,34 +134,7 @@ func EnsureHooksInstalled() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-
-	settings, err := readClaudeSettings(path)
-	if err != nil {
-		return false, err
-	}
-
-	hooksMap := ensureHooksMap(settings)
-
-	modified := false
-	for _, event := range installedHookEvents {
-		expected := matcherForEvent(event)
-		if upgradeStaleHookDelivery(hooksMap, event) {
-			modified = true
-		}
-		if upgradeStaleHookMatchers(hooksMap, event, expected) {
-			modified = true
-		}
-		if !hasOurHook(hooksMap, event) {
-			addOurHook(hooksMap, event, expected)
-			modified = true
-		}
-	}
-
-	if !modified {
-		return false, nil
-	}
-
-	return true, writeClaudeSettings(path, settings)
+	return hookjson.EnsureInstalled(hookConfig(path))
 }
 
 // UninstallHooks removes irrlicht hook entries from ~/.claude/settings.json.
@@ -153,33 +144,7 @@ func UninstallHooks() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-
-	settings, err := readClaudeSettings(path)
-	if err != nil {
-		return false, err
-	}
-
-	hooksObj, ok := settings["hooks"]
-	if !ok {
-		return false, nil
-	}
-	hooksMap, ok := hooksObj.(map[string]interface{})
-	if !ok {
-		return false, nil
-	}
-
-	modified := false
-	for _, event := range installedHookEvents {
-		if removeOurHook(hooksMap, event) {
-			modified = true
-		}
-	}
-
-	if !modified {
-		return false, nil
-	}
-
-	return true, writeClaudeSettings(path, settings)
+	return hookjson.Uninstall(hookConfig(path))
 }
 
 // --- helpers ---
@@ -192,234 +157,15 @@ func claudeSettingsPath() (string, error) {
 	return filepath.Join(home, ".claude", "settings.json"), nil
 }
 
+// readClaudeSettings / writeClaudeSettings are thin adapters onto the shared
+// codec so the statusline installer, which merges into the same settings.json,
+// keeps reading and writing it exactly the way the hook installer does.
 func readClaudeSettings(path string) (map[string]interface{}, error) {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return map[string]interface{}{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return nil, err
-	}
-	return settings, nil
+	return hookjson.ReadSettings(path)
 }
 
 func writeClaudeSettings(path string, settings map[string]interface{}) error {
-	data, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return atomicWriteFile(path, data)
-}
-
-// ensureHooksMap returns (or creates) the top-level "hooks" map in settings.
-func ensureHooksMap(settings map[string]interface{}) map[string]interface{} {
-	if h, ok := settings["hooks"]; ok {
-		if m, ok := h.(map[string]interface{}); ok {
-			return m
-		}
-	}
-	m := map[string]interface{}{}
-	settings["hooks"] = m
-	return m
-}
-
-// hasOurHook checks if any matcher group containing our sentinel command
-// already exists in the event's hook array. Matcher-agnostic: a group with
-// our sentinel is "ours" regardless of which matcher string it carries.
-func hasOurHook(hooksMap map[string]interface{}, event string) bool {
-	arr, ok := hooksMap[event].([]interface{})
-	if !ok {
-		return false
-	}
-	for _, g := range arr {
-		if containsHookSentinel(g) {
-			return true
-		}
-	}
-	return false
-}
-
-// upgradeStaleHookDelivery rewrites any sentinel-bearing inner hook that is not
-// the canonical native-http entry to the current form. Returns true if any
-// entry was rewritten. This migrates an existing install from the legacy curl
-// `command` wrapper to native `type: http` delivery (issue #1161) — and, more
-// generally, any older shape carrying our sentinel — in place, without
-// appending a duplicate group.
-func upgradeStaleHookDelivery(hooksMap map[string]interface{}, event string) bool {
-	arr, ok := hooksMap[event].([]interface{})
-	if !ok {
-		return false
-	}
-	upgraded := false
-	for _, g := range arr {
-		if upgradeGroupHookDelivery(g) {
-			upgraded = true
-		}
-	}
-	return upgraded
-}
-
-// upgradeGroupHookDelivery rewrites, in one matcher group, every inner hook that
-// carries our sentinel but isn't the canonical native-http entry (e.g. the
-// legacy curl command). Returns true if any entry was rewritten.
-func upgradeGroupHookDelivery(g interface{}) bool {
-	group, ok := g.(map[string]interface{})
-	if !ok {
-		return false
-	}
-	innerHooks, ok := group["hooks"].([]interface{})
-	if !ok {
-		return false
-	}
-	upgraded := false
-	for i, h := range innerHooks {
-		hook, ok := h.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if hookEntryIsSentinel(hook) && !hookEntryIsCanonical(hook) {
-			innerHooks[i] = ourHookEntry()
-			upgraded = true
-		}
-	}
-	return upgraded
-}
-
-// upgradeStaleHookMatchers reconciles the matcher of any group containing our
-// sentinel with the expected value. Used to migrate existing installs when we
-// widen or change an event's matcher (e.g. the #307 expansion that added
-// AskUserQuestion|ExitPlanMode to the PostToolUse matcher). For an event whose
-// expected matcher is empty (Stop, #1161) it strips any matcher key entirely,
-// since Claude Code rejects a Stop hook that carries one.
-func upgradeStaleHookMatchers(hooksMap map[string]interface{}, event, expected string) bool {
-	arr, ok := hooksMap[event].([]interface{})
-	if !ok {
-		return false
-	}
-	upgraded := false
-	for _, g := range arr {
-		group, ok := g.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if !containsHookSentinel(g) {
-			continue
-		}
-		if reconcileGroupMatcher(group, expected) {
-			upgraded = true
-		}
-	}
-	return upgraded
-}
-
-// reconcileGroupMatcher brings one sentinel-bearing group's matcher into line
-// with expected: sets it when it differs, or deletes the key when expected is
-// empty (a Stop hook must carry no matcher). Returns true if it changed the group.
-func reconcileGroupMatcher(group map[string]interface{}, expected string) bool {
-	m, has := group["matcher"].(string)
-	if expected == "" {
-		if has {
-			delete(group, "matcher")
-			return true
-		}
-		return false
-	}
-	if m != expected {
-		group["matcher"] = expected
-		return true
-	}
-	return false
-}
-
-// addOurHook appends a matcher group with our native-http hook entry to the
-// event's array. The matcher key is omitted entirely for an empty matcher
-// (Stop), which Claude Code requires.
-func addOurHook(hooksMap map[string]interface{}, event, matcher string) {
-	entry := map[string]interface{}{
-		"hooks": []interface{}{ourHookEntry()},
-	}
-	if matcher != "" {
-		entry["matcher"] = matcher
-	}
-
-	existing, ok := hooksMap[event]
-	if ok {
-		if arr, ok := existing.([]interface{}); ok {
-			hooksMap[event] = append(arr, entry)
-			return
-		}
-	}
-	hooksMap[event] = []interface{}{entry}
-}
-
-// removeOurHook removes matcher groups containing our sentinel from the event's
-// array. Returns true if any were removed.
-func removeOurHook(hooksMap map[string]interface{}, event string) bool {
-	arr, ok := hooksMap[event].([]interface{})
-	if !ok {
-		return false
-	}
-
-	var kept []interface{}
-	removed := false
-	for _, g := range arr {
-		if containsHookSentinel(g) {
-			removed = true
-			continue
-		}
-		kept = append(kept, g)
-	}
-	if !removed {
-		return false
-	}
-
-	if len(kept) == 0 {
-		delete(hooksMap, event)
-	} else {
-		hooksMap[event] = kept
-	}
-	return true
-}
-
-// containsHookSentinel checks if a matcher group contains an inner hook entry
-// carrying our sentinel — either the legacy curl command or the native-http url.
-func containsHookSentinel(g interface{}) bool {
-	group, ok := g.(map[string]interface{})
-	if !ok {
-		return false
-	}
-	innerHooks, ok := group["hooks"].([]interface{})
-	if !ok {
-		return false
-	}
-	for _, h := range innerHooks {
-		hook, ok := h.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if hookEntryIsSentinel(hook) {
-			return true
-		}
-	}
-	return false
-}
-
-// hookEntryIsSentinel reports whether an inner hook object is one of ours,
-// identified by our sentinel appearing in either the legacy `command` (curl) or
-// the current `url` (native http) field.
-func hookEntryIsSentinel(hook map[string]interface{}) bool {
-	if cmd, ok := hook["command"].(string); ok && strings.Contains(cmd, hookSentinel) {
-		return true
-	}
-	if url, ok := hook["url"].(string); ok && strings.Contains(url, hookSentinel) {
-		return true
-	}
-	return false
+	return hookjson.WriteSettings(path, settings, atomicWriteFile)
 }
 
 // hookEntryIsCanonical reports whether an inner hook object is already in the
