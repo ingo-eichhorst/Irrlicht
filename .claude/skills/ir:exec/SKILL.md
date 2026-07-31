@@ -312,14 +312,51 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
 
 ## Phase 5 — PR, review, simplify
 
-**Calibrate the depth of steps 13–14 to the diff you just produced** — a
-one-line string edit and a multi-package refactor must not get identical
-scrutiny (spending four `/simplify` subagents on a doc-string is the failure
-this guards against). The diff exists as soon as Phase 4 is done; measure it
-cheaply first:
+**Re-check the base before you push.** Phase 1 fetched `origin/main` exactly
+once, to create the worktree, and the branch point has been frozen ever since —
+while every step that reasons about "what changed" diffs against a
+remote-tracking ref that other agents sharing this `.git` dir advance
+underneath it. On a run of any length — investigation, an approval gate,
+implementation — `main` moves, and nothing in this skill looks again until the
+pre-push hook or the PR itself, by which point the work is already committed
+onto a stale base:
 
 ```bash
-git fetch origin main                     # refresh origin/main first; steps 13–14 diff against it, not stale local main
+git fetch origin main                                # also refreshes the ref steps 13–14 diff against
+git log --oneline HEAD..origin/main                  # did main move at all?
+git log --oneline HEAD..origin/main -- $(git diff --name-only origin/main...HEAD)   # did it move *here*?
+```
+
+- **Nothing from the first `log`** — the base is current; continue.
+- **`main` moved, but not into this branch's files** — `git rebase origin/main`,
+  note it in one line, continue.
+- **`main` moved into files this branch touched** — `git rebase origin/main`, then
+  **surface the collision by name**: which commits, which overlapping files. Do not
+  let a clean rebase end the matter. A textual auto-merge is the *dangerous*
+  outcome, not the conflicted one — two branches editing adjacent prose, or
+  adjacent rows of the same table, merge without complaint and produce a document
+  that contradicts itself, and by then you have already reported the work done.
+  Read the merged region on both sides and confirm it still says one coherent
+  thing. Where the reconciliation is semantic rather than textual and you can't
+  verify it yourself, **surface it and pause** — the idiom step 1a, step 9, and
+  step 18 use.
+
+  (Real incident: during #1199 / PR #1204, `origin/main` advanced twice mid-run,
+  and PR #1201 landed edits to *both* files that run was in the middle of
+  rewriting. It was caught only because an unrelated line-count check didn't
+  reconcile. The rebase then produced a real conflict in `ir:triage`'s axis table
+  — #1201 edited the Verifiability row while the branch edited the adjacent
+  Specification row — plus two semantic reconciliations a textual auto-merge would
+  have gotten silently wrong.)
+
+**Then calibrate the depth of steps 13–14 to the diff you just produced** — a
+one-line string edit and a multi-package refactor must not get identical
+scrutiny (spending four `/simplify` subagents on a doc-string is the failure
+this guards against). `origin/main` is fresh from the check above, so measure
+against it — never against local `main`, which is not updated when other PRs
+merge:
+
+```bash
 git diff --shortstat origin/main...HEAD   # files + lines; origin/main, not local (stale-ref footgun)
 ```
 
@@ -475,6 +512,9 @@ Phase 6.
 - One worktree + one branch + one PR per issue. Phase 1 step 1a is what enforces
   that against *other* agents' work, not just your own — run it before
   `worktree add`, every time.
+- The base is checked twice, not once: Phase 1 branches off a fresh `origin/main`,
+  and Phase 5 re-fetches and rebases onto it before the push. A run long enough to
+  be worth automating is long enough for `main` to move under it.
 - Scale Phase 5 to the diff (the tier table there): trivial changes get a `low`
   review and an inline simplify glance, not a `high` review and a four-agent
   fan-out. Depth follows the change. Step 13 always delegates to exactly one
