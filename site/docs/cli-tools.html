@@ -215,7 +215,7 @@ ready    api-server   e5f6g7h8 gpt-5 3% 400k codex  (1m ago)</code></pre>
       <h3>What It Does</h3>
 
       <ul>
-        <li>POSTs to the daemon's <code>POST /api/v1/sessions/{id}/focus</code> endpoint on <code>http://127.0.0.1:7837</code></li>
+        <li>POSTs to the daemon's <code>POST /api/v1/sessions/{id}/focus</code> endpoint on loopback. The port is resolved, not assumed: <code>IRRLICHT_BIND_ADDR</code> if set, else the address the running daemon published to <code>irrlichd.addr</code>, else <code>7837</code> &mdash; so a session monitored by a daemon on an alternate port is focused by that daemon (see <a href="configuration.html#which-port-var">Which port variable do I set?</a>)</li>
         <li>The daemon broadcasts a <code>focus_requested</code> WebSocket message; the macOS menu-bar app receives it and activates the window</li>
       </ul>
 
