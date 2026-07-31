@@ -116,11 +116,14 @@ Before marking a ticket done, run the full suite — every layer must pass:
   files that tell agents how to triage, plan, implement and review, and which
   had no mechanical coverage at all until #1209 (PR #1204 changed two of them,
   `preflight.sh --changed` skipped all ten gates, and thirteen PR checks went
-  green having read nothing that changed). Unresolved conflict markers and
-  leftover `{{TOKEN}}` / `REPEAT:` / `OPTIONAL:` template scaffolding are hard
-  failures; the internal-reference, list-count and frontmatter checks are
-  heuristics and only warn until their noise floor is known (`--strict`
-  promotes them, which is how one gets hardened). Runs as its own
+  green having read nothing that changed). Unresolved conflict markers,
+  leftover `{{TOKEN}}` / `REPEAT:` / `OPTIONAL:` template scaffolding and an
+  unbalanced code fence are hard failures; the internal-reference, list-count
+  and frontmatter checks are heuristics and only warn until their noise floor
+  is known (`--strict` promotes them, which is how one gets hardened). The
+  fence and frontmatter checks exist because blanking is how the linter tells
+  "documents a marker" from "has one", so an unbalanced delimiter would
+  otherwise silence the rest of the file. Runs as its own
   `skill-file lint` gate in `tools/preflight.sh` (scoped to skill markdown plus
   the linter itself) and unscoped as test.yml's "Lint skill files" step. Its
   own tests are `tools/lib/skill-lint_test.sh`, over the fixture corpus under
