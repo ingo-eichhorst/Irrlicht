@@ -7,6 +7,6 @@
   },
   "devDependencies": {
     "vitest": "^4.1.10",
-    "jsdom": "^25.0.0"
+    "jsdom": "^30.0.0"
   }
 }
