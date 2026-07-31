@@ -119,7 +119,11 @@ worktree name. `close` additionally resolves it from `pwd` / `git status -sb` /
    frequently changed in the repo — so from here on you would be editing current
    code while following superseded instructions.
    ```bash
-   diff -q .claude/skills/ir:exec/SKILL.md <main-repo>/.claude/skills/ir:exec/SKILL.md
+   # Both paths absolute on purpose: written relative to cwd, a run from the
+   # main checkout compares the file to itself and always reports "current" —
+   # a false negative in the one check whose job is catching a silent pass.
+   diff -q <worktree>/.claude/skills/ir:exec/SKILL.md \
+           <main-repo>/.claude/skills/ir:exec/SKILL.md
    ```
    On a difference, **re-read the worktree's copy and follow that**, and say so in
    one line of response text. Don't reconcile the two by judgment: the worktree
