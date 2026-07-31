@@ -70,6 +70,55 @@ A **dismissal** is any claim whose function is *"you don't need to look here"* �
 
 Real incident: #1088's one real bug sat in an unmarked aside asserting a sweep "self-heals" a field. It does not — the sweep deliberately preserves exactly the names that pinned the session to `waiting` forever. Meanwhile that same issue's three *explicitly labelled* "unverified" claims were all investigated and all came back not real. Confidence ran inversely to correctness, and only the marking told them apart. #1089's dismissal (*"the consequence is fixed in #1078"*) was the stated basis for treating it as documentation-only; it was wrong, and became #1104.
 
+## Spec assessment
+
+Specification is not scored by eye. A spec is not clear because it *sounds* clear — it is clear when its statements bind decisions, and bind them in the same direction. Three moves, in order.
+
+**1. Lint the statements.** Split the issue body and its comments into statements, and ask one question of each: *which decision would the implementing agent make differently, or inconsistently, without this sentence?*
+
+- **Load-bearing** — binds a decision, or rules out a plausible implementation.
+- **Open** — names a decision without making it.
+- **Filler** — removing it changes nothing about the outcome.
+
+Length is not evidence. A long issue of filler transmits less than two load-bearing sentences.
+
+A **dismissal** is load-bearing whenever an axis leans on it, but an unverified one is an *assumption* rather than a statement — check it first ("Dismissals carry evidence" above). One that doesn't hold becomes a `BLOCKED` decision in move 3.
+
+**2. Name the quadrant.** Two axes: what share of statements are load-bearing, and whether independent attempts would still scatter.
+
+| | Attempts would converge | Attempts would scatter |
+|---|---|---|
+| **Many load-bearing** | **Effective** — decisions bound and stable. `+0` | **Contradiction** — statements bind, but pull against each other or against the repo's conventions. `+2` |
+| **Few load-bearing** | **Redundant** — thin, but the model prior already lands it. `+0` | **Theater** — a lot of text, nothing bound. `+2` |
+
+Two of these are counter-intuitive, and are why the quadrant exists at all:
+
+- **Redundant is not a failure.** A conventional task in a well-patterned area needs no spec to land correctly — the prior carries it. Never bounce a thin-but-ordinary issue to `needs-info` for being short.
+- **Contradiction reads as well-specified.** Its statements *do* bind decisions, so it passes any "is this detailed enough" check. It is the most expensive quadrant to miss.
+
+**3. Gate the open decisions.** Every `open` statement is one or the other:
+
+- **`BLOCKED`** — external or hard-to-reverse effect: a public interface, data loss, money, permissions, compliance, any one-way door. **Any `BLOCKED` decision is the Specification ✗ → `needs-info`**, listed under "Blocked on" with its owner.
+- **`DELEGABLE`** — latitude the spec releases on purpose. Costs `+1` each, and the brief names the *bound*, not the answer: "validation may sit in the adapter or the service, as long as the domain rule is tested centrally."
+
+Never raise a locally reversible detail as blocking. If getting it wrong costs one commit to undo, it is delegable by definition.
+
+### What this assessment is not
+
+- **Convergence is not correctness.** A spec can drive every attempt to the same wrong answer. `Effective` says the intent transmits, not that the intent is right — that judgment belongs to the reviewer at PR time.
+- **An estimate, not a measurement.** The real method ablates each statement and observes dispersion over ~20 generations; triage does one read. Benchmarked at this tier, the lint ranked load-bearing statements at ROC-AUC 0.74 but estimated their *share* at only ρ = 0.41 — it finds suspicious statements, it does not measure their effect. Write the quadrant as a reading, never as a finding.
+- **Model-relative.** What a spec must say depends on the prior of the model that will implement it. A rule that is redundant for one model is load-bearing for another.
+
+### Assessment escalation (priced, not performed)
+
+The method escalates: lint → observe dispersion across ~12 runs → subset ablation → per-span ablation. Triage sweeps every open issue, so **it only ever runs the lint** — anything past tier 1 is unaffordable by construction.
+
+When an issue is high-stakes **and** lands in `Contradiction` or `Theater`, name the next tier in the brief as a step the implementing agent takes *before* the fix — the same move the Observability cost rule makes for an instrument triage cannot build:
+
+> **Spec probe:** run the intended prompt ~12× against the target model before implementing; if the design decisions scatter, the contradiction is real and needs an answer, not a retry.
+
+Do not run it during triage.
+
 ## Readiness Rubric (7 axes)
 
 Each axis scores ✓ (pass) or ✗ (fail) with a one-line justification grounded in the issue body. Any ✗ **on the first six axes** → `needs-info`. All ✓ → `ready-for-agent`. **Observability is the exception** — a ✗ there is priced, not fatal; see its cost rule below.
@@ -130,55 +179,6 @@ When Observability is ✗, name the cheapest surface from this table. Reach for 
 | Effect invisible in metrics | a new `session.SessionMetrics` field, asserted via the spec's `observations` block | Medium |
 | macOS view rendering | a scene in `platforms/macos/Tests/*SnapshotTests.swift` (`swift test`; **not CI-gated**) | Medium |
 | Nothing above fits | the rig doesn't exist — file it as its own issue and block this one | High |
-
-## Spec assessment
-
-Specification is not scored by eye. A spec is not clear because it *sounds* clear — it is clear when its statements bind decisions, and bind them in the same direction. Three moves, in order.
-
-**1. Lint the statements.** Split the issue body and its comments into statements, and ask one question of each: *which decision would the implementing agent make differently, or inconsistently, without this sentence?*
-
-- **Load-bearing** — binds a decision, or rules out a plausible implementation.
-- **Open** — names a decision without making it.
-- **Filler** — removing it changes nothing about the outcome.
-
-Length is not evidence. A long issue of filler transmits less than two load-bearing sentences.
-
-A **dismissal** is load-bearing whenever an axis leans on it, but an unverified one is an *assumption* rather than a statement — check it first ("Dismissals carry evidence" above). One that doesn't hold becomes a `BLOCKED` decision in move 3.
-
-**2. Name the quadrant.** Two axes: what share of statements are load-bearing, and whether independent attempts would still scatter.
-
-| | Attempts would converge | Attempts would scatter |
-|---|---|---|
-| **Many load-bearing** | **Effective** — decisions bound and stable. `+0` | **Contradiction** — statements bind, but pull against each other or against the repo's conventions. `+2` |
-| **Few load-bearing** | **Redundant** — thin, but the model prior already lands it. `+0` | **Theater** — a lot of text, nothing bound. `+2` |
-
-Two of these are counter-intuitive, and are why the quadrant exists at all:
-
-- **Redundant is not a failure.** A conventional task in a well-patterned area needs no spec to land correctly — the prior carries it. Never bounce a thin-but-ordinary issue to `needs-info` for being short.
-- **Contradiction reads as well-specified.** Its statements *do* bind decisions, so it passes any "is this detailed enough" check. It is the most expensive quadrant to miss.
-
-**3. Gate the open decisions.** Every `open` statement is one or the other:
-
-- **`BLOCKED`** — external or hard-to-reverse effect: a public interface, data loss, money, permissions, compliance, any one-way door. **Any `BLOCKED` decision is the Specification ✗ → `needs-info`**, listed under "Blocked on" with its owner.
-- **`DELEGABLE`** — latitude the spec releases on purpose. Costs `+1` each, and the brief names the *bound*, not the answer: "validation may sit in the adapter or the service, as long as the domain rule is tested centrally."
-
-Never raise a locally reversible detail as blocking. If getting it wrong costs one commit to undo, it is delegable by definition.
-
-### What this assessment is not
-
-- **Convergence is not correctness.** A spec can drive every attempt to the same wrong answer. `Effective` says the intent transmits, not that the intent is right — that judgment belongs to the reviewer at PR time.
-- **An estimate, not a measurement.** The real method ablates each statement and observes dispersion over ~20 generations; triage does one read. Benchmarked at this tier, the lint ranked load-bearing statements at ROC-AUC 0.74 but estimated their *share* at only ρ = 0.41 — it finds suspicious statements, it does not measure their effect. Write the quadrant as a reading, never as a finding.
-- **Model-relative.** What a spec must say depends on the prior of the model that will implement it. A rule that is redundant for one model is load-bearing for another.
-
-### Assessment escalation (priced, not performed)
-
-The method escalates: lint → observe dispersion across ~12 runs → subset ablation → per-span ablation. Triage sweeps every open issue, so **it only ever runs the lint** — anything past tier 1 is unaffordable by construction.
-
-When an issue is high-stakes **and** lands in `Contradiction` or `Theater`, name the next tier in the brief as a step the implementing agent takes *before* the fix — the same move the Observability cost rule makes for an instrument triage cannot build:
-
-> **Spec probe:** run the intended prompt ~12× against the target model before implementing; if the design decisions scatter, the contradiction is real and needs an answer, not a retry.
-
-Do not run it during triage.
 
 ## Complexity (effective level 1–10)
 
