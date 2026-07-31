@@ -42,3 +42,32 @@ enum NotificationEvent: String, CaseIterable {
         }
     }
 }
+
+/// The master "Enable notifications" gate (#940), made authoritative over the
+/// firing path in #1183. Owns the key and the single rule for reading it, so
+/// the Settings toggle and the code that decides whether to fire can't drift.
+enum NotificationSettings {
+    /// Deliberately NOT part of `SessionManager`'s `register(defaults:)` seed:
+    /// a registered value would make `object(forKey:)` non-nil forever, which
+    /// silently disables the upgrade fallback below.
+    static let masterEnabledKey = "notificationsEnabled"
+
+    /// Pure decision: is the master gate on? `master` is `nil` when the key has
+    /// never been written — an install that predates the toggle and hasn't
+    /// opened Settings since. That case falls back to the per-event OR, so an
+    /// already-configured setup keeps firing instead of going quiet on upgrade.
+    static func masterEnabled(master: Bool?, anyEventEnabled: Bool) -> Bool {
+        master ?? anyEventEnabled
+    }
+
+    /// `UserDefaults`-reading wrapper, used by the firing path and by
+    /// `SettingsView`'s one-time reconcile. Reads through `object(forKey:)`
+    /// rather than `bool(forKey:)` — the latter flattens "absent" to `false`
+    /// and would silence exactly the installs the fallback exists for.
+    static func masterEnabled(defaults: UserDefaults = .standard) -> Bool {
+        masterEnabled(
+            master: defaults.object(forKey: masterEnabledKey) as? Bool,
+            anyEventEnabled: NotificationEvent.allCases.contains { defaults.bool(forKey: $0.enabledKey) }
+        )
+    }
+}

@@ -140,6 +140,12 @@ extension SessionManager {
         sessionID: String,
         event: NotificationEvent
     ) {
+        // Master gate (#1183). Every notification — banner, sound and the TTS
+        // below — leaves through here, so one guard silences all of them and no
+        // future caller can route around it. Gating here rather than at the two
+        // call sites is also why the spoken voice, which bypasses
+        // UNNotificationContent entirely, is covered.
+        guard NotificationSettings.masterEnabled() else { return }
         guard canUseUserNotifications else { return }
         let choice = Self.choice(for: event)
         let content = UNMutableNotificationContent()
@@ -158,8 +164,9 @@ extension SessionManager {
         // willPresent is unreliable for LSUIElement menubar-only apps — macOS
         // skips it when it considers the app not-in-foreground, and Irrlicht
         // sits in that grey zone. Drive speech from here (on @MainActor) so
-        // it actually fires for real state transitions. The per-event toggle
-        // is the off switch; users who pick a Speak aloud variant have opted in.
+        // it actually fires for real state transitions. The master gate above
+        // plus the per-event toggle are the off switches; users who pick a
+        // Speak aloud variant have opted in.
         // TTS bypasses UNNotificationContent entirely, so we must also gate on
         // Focus here — otherwise the loudest sound option leaks through DND.
         if let voice = Self.voiceForSpeak(choice: choice, focusActive: focusMonitor.isFocusActive) {
