@@ -35,6 +35,17 @@ func (r *focusRecorder) addr() string {
 	return strings.TrimPrefix(r.srv.URL, "http://")
 }
 
+// publish plants the recorder's address in an isolated state tree the way a
+// running daemon publishes its own, and points the environment at that tree.
+func (r *focusRecorder) publish(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "irrlichd.addr"), []byte(r.addr()+"\n"), 0o600); err != nil {
+		t.Fatalf("write addr file: %v", err)
+	}
+	t.Setenv("IRRLICHT_HOME", home)
+}
+
 // TestFocusTargetsBindAddrFromEnv is the defect test for #1215: a session
 // monitored by a daemon on an alternate port must receive the focus request,
 // instead of it going to whatever owns the default :7837.
@@ -57,12 +68,8 @@ func TestFocusTargetsBindAddrFromEnv(t *testing.T) {
 // inherit). The running daemon's published addr file is the fallback.
 func TestFocusFallsBackToAddrFile(t *testing.T) {
 	rec := newFocusRecorder(t)
-	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "irrlichd.addr"), []byte(rec.addr()+"\n"), 0o600); err != nil {
-		t.Fatalf("write addr file: %v", err)
-	}
+	rec.publish(t)
 	t.Setenv("IRRLICHT_BIND_ADDR", "")
-	t.Setenv("IRRLICHT_HOME", home)
 
 	if code := run([]string{"sess-addrfile"}, io.Discard); code != 0 {
 		t.Fatalf("run exit code = %d, want 0 (focus ignored the daemon's published addr file)", code)
@@ -76,12 +83,8 @@ func TestFocusFallsBackToAddrFile(t *testing.T) {
 // not silently route the request to whichever daemon owns the default port.
 func TestRunWarnsWhenItIgnoresTheEnvironment(t *testing.T) {
 	rec := newFocusRecorder(t)
-	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "irrlichd.addr"), []byte(rec.addr()+"\n"), 0o600); err != nil {
-		t.Fatalf("write addr file: %v", err)
-	}
+	rec.publish(t)
 	t.Setenv("IRRLICHT_BIND_ADDR", "7838") // missing host — unusable
-	t.Setenv("IRRLICHT_HOME", home)
 
 	var stderr strings.Builder
 	if code := run([]string{"sess-warn"}, &stderr); code != 0 {

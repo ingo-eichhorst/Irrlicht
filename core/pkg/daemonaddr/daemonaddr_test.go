@@ -184,11 +184,12 @@ func TestClientURLIgnoresMalformedBindAddrInFavorOfFile(t *testing.T) {
 func TestClientConfigWarning(t *testing.T) {
 	tests := []struct {
 		name, bindAddr, published string
+		unnamedTree               bool   // no IRRLICHT_HOME at all
 		wantSubstr                string // "" means: no warning at all
 	}{
-		{name: "unambiguous env", bindAddr: "127.0.0.1:7838", wantSubstr: ""},
-		{name: "unambiguous addr file", published: "127.0.0.1:7838\n", wantSubstr: ""},
-		{name: "nothing configured anywhere", wantSubstr: ""},
+		{name: "unambiguous env", bindAddr: "127.0.0.1:7838"},
+		{name: "unambiguous addr file", published: "127.0.0.1:7838\n"},
+		{name: "nothing configured anywhere", unnamedTree: true},
 		{
 			name:       "malformed bind addr",
 			bindAddr:   "7838",
@@ -207,30 +208,41 @@ func TestClientConfigWarning(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.published == "" {
-				isolateStateTree(t)
-			} else {
-				publishAddr(t, tt.published)
-			}
-			// "nothing configured anywhere" means no named tree either —
-			// point HOME at an empty one so the run stays hermetic.
-			if tt.name == "nothing configured anywhere" {
-				t.Setenv(envHome, "")
-				t.Setenv("HOME", t.TempDir())
-			}
+			setupStateTree(t, tt.published, tt.unnamedTree)
 			t.Setenv(EnvBindAddr, tt.bindAddr)
 
-			got := ClientConfigWarning()
-			if tt.wantSubstr == "" {
-				if got != "" {
-					t.Errorf("ClientConfigWarning() = %q, want no warning", got)
-				}
-				return
-			}
-			if !strings.Contains(got, tt.wantSubstr) {
-				t.Errorf("ClientConfigWarning() = %q, want it to contain %q", got, tt.wantSubstr)
-			}
+			assertWarning(t, ClientConfigWarning(), tt.wantSubstr)
 		})
+	}
+}
+
+// setupStateTree puts the addr-file lookup in the state one case wants:
+// unnamed (no IRRLICHT_HOME, HOME pointed somewhere empty so the run stays
+// hermetic), named but empty, or named with an address published.
+func setupStateTree(t *testing.T, published string, unnamedTree bool) {
+	t.Helper()
+	switch {
+	case unnamedTree:
+		t.Setenv(envHome, "")
+		t.Setenv("HOME", t.TempDir())
+	case published == "":
+		isolateStateTree(t)
+	default:
+		publishAddr(t, published)
+	}
+}
+
+// assertWarning checks a warning against want, where "" means "none at all".
+func assertWarning(t *testing.T, got, want string) {
+	t.Helper()
+	if want == "" {
+		if got != "" {
+			t.Errorf("ClientConfigWarning() = %q, want no warning", got)
+		}
+		return
+	}
+	if !strings.Contains(got, want) {
+		t.Errorf("ClientConfigWarning() = %q, want it to contain %q", got, want)
 	}
 }
 
