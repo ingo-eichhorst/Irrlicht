@@ -77,7 +77,29 @@ done
 # narrower go-test set: only core, onboarding-factory, and starhistory have
 # test suites today, but a vuln/SAST scan doesn't need tests to pass, so all
 # six run).
-GO_MODULES=(core tools/onboarding-factory tools/wsload tools/seed-demo-sessions tools/eta-research tools/starhistory)
+#
+# Read from go.work rather than restated here (#1291). A hand-maintained copy
+# drifts silently in the one direction that matters: add a seventh module and
+# forget this line, and that module is never scanned — it builds, it tests, and
+# nothing says otherwise. `go work edit -json` is Go's own parse of the file,
+# so this cannot disagree with what the toolchain builds.
+GO_MODULES=()
+while IFS= read -r mod; do
+  [[ -n "$mod" ]] && GO_MODULES+=("$mod")
+done < <(go work edit -json 2>/dev/null | jq -r '.Use[].DiskPath | sub("^\\./"; "")')
+# An empty list here would sail through every loop below and report a pass
+# having scanned nothing — the "silently-skipped scan is indistinguishable from
+# a clean one" failure this file's header rules out. A parse that yields no
+# modules means go/jq/go.work is broken, not that the repo has no Go code.
+if [[ ${#GO_MODULES[@]} -eq 0 ]]; then
+  echo "FAIL: could not read the module list from go.work (go work edit -json | jq) — refusing to report a pass for a scan that would cover nothing" >&2
+  exit 2
+fi
+
+# No equivalent source of truth exists for the npm trees — nothing in the repo
+# enumerates them the way go.work enumerates modules — so this list stays
+# hand-maintained. tools/lib/module-list_test.sh holds both it and GO_MODULES
+# against .github/dependabot.yml.
 WEB_TREES=(platforms/web tools/onboarding-factory/internal/viewer/web)
 
 FAILED=0

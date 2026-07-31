@@ -256,7 +256,11 @@ shell_lib_tests() {
 }
 
 if want tools; then
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$' \
+  # go.work and .github/dependabot.yml are in scope because module-list_test.sh
+  # asserts they agree — and a commit touching only one of those two is exactly
+  # the commit that breaks the invariant, so leaving them out would skip the
+  # test precisely when it matters (#1291).
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^go\.work$|^\.github/dependabot\.yml$' \
                   "tools/lib shell-lib tests" shell_lib_tests
 fi
 
