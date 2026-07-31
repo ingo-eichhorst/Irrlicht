@@ -24,10 +24,11 @@
 # more valuable as a pre-push gate than on every PR push; a GH Actions
 # equivalent can be added later without changing tools/security-scan.sh.
 #
-# The `tools` group is local-only for the same reason: it runs the unit tests
-# for the shared shell libs under tools/lib/, which nothing else exercises
-# (tools/onboarding-factory/scripts/smoke-test.sh is scoped to the recording
-# rig's own scripts and never reaches top-level tools/).
+# The `tools` group runs the unit tests for the shared shell libs under
+# tools/lib/. Unlike `security` it does have a CI counterpart (test.yml's
+# "Test the shared shell libs" step) — deliberately, because these are the
+# tests of the pre-push gate's own scoping logic, and a gate whose only runner
+# is itself is one `--no-verify` away from never running at all.
 #
 # Usage:
 #   tools/preflight.sh                 # everything except the Linux gate
@@ -96,14 +97,15 @@ CHANGED_FILES=""
 if [[ "$CHANGED" == 1 ]]; then
   # Fatal, not a silent full-skip: without the lib the changed set would stay
   # empty, every scoped gate would record SKIP, and the run would exit 0 — a
-  # green pre-push hook that ran nothing at all.
-  if [[ ! -r "$SCRIPT_DIR/lib/changed-files.sh" ]]; then
-    echo "cannot read $SCRIPT_DIR/lib/changed-files.sh — refusing to pass a run that would skip every gate" >&2
-    exit 2
-  fi
+  # green pre-push hook that ran nothing at all. Sourcing and checking in one
+  # step also covers a lib that exists but is malformed, which a readability
+  # test would wave through.
   # shellcheck source=lib/changed-files.sh
-  . "$SCRIPT_DIR/lib/changed-files.sh"
-  CHANGED_FILES=$(changed_files_vs_origin_main)
+  . "$SCRIPT_DIR/lib/changed-files.sh" || {
+    echo "cannot load $SCRIPT_DIR/lib/changed-files.sh — refusing to pass a run that would skip every gate" >&2
+    exit 2
+  }
+  CHANGED_FILES=$(changed_files_vs_origin_main) || exit 2
 fi
 
 # changed_matches <extended-regex> — true when NOT scoping (full run) or when
@@ -228,9 +230,10 @@ if want arch; then
   run_gate_scoped '^core/' "ARS architecture gate" tools/ars-gate.sh
 fi
 
-# ---- tools group (shared shell libs; no matching workflow — see header) ----
-# Scoped to the scripts that consume tools/lib/, so the scoping rules are
-# re-checked exactly when someone edits them or one of their two callers.
+# ---- tools group (mirrors test.yml's "Test the shared shell libs" step) ----
+# Scoped to tools/lib/ plus every top-level tools/*.sh rather than naming the
+# two current callers: a third script sourcing the lib would otherwise stop
+# running these tests without anyone noticing.
 shell_lib_tests() {
   local rc=0 t
   for t in tools/lib/*_test.sh; do
@@ -241,7 +244,7 @@ shell_lib_tests() {
 }
 
 if want tools; then
-  run_gate_scoped '^tools/lib/|^tools/preflight\.sh$|^tools/security-scan\.sh$' \
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$' \
                   "tools/lib shell-lib tests" shell_lib_tests
 fi
 
