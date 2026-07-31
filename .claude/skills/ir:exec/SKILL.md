@@ -18,7 +18,7 @@ argument.
 
 ```
 /ir:exec [mode] <N>
-  → worktree → investigate → (auto resolves to plan or full here)
+  → not-already-claimed? → worktree → investigate → (auto resolves to plan or full here)
     → plan: HTML + ⛔ approval, or full: inline summary → assign issue
     → implement → verify
     → PR → /code-review (effort scaled to diff) → fix → /simplify (or inline) → recommendation [plan / full stop here]
@@ -86,6 +86,27 @@ worktree name. `close` additionally resolves it from `pwd` / `git status -sb` /
 ## Phase 1 — Worktree
 
 1. **Resolve the issue number** and a short kebab slug from its title.
+1a. **Confirm nobody is already on it** — a precondition of `worktree add`, not a
+   courtesy. Concurrent `ir:exec` agents are the normal mode of operation here,
+   and a collision is invisible from both sides: an issue number on its own says
+   nothing about work already in flight.
+   ```bash
+   gh pr list --state open --search "<N>" --json number,headRefName,title
+   git worktree list | grep -w "<N>"
+   git ls-remote --heads origin | grep -w "<N>"
+   ```
+   Step 2's own "skip if already in a clean, issue-matching worktree" guard does
+   not cover this: it inspects `pwd`, so it only ever sees the worktree this
+   session is standing in — never one another agent opened.
+
+   On any hit, **surface it and pause before creating anything** — the same idiom
+   step 9 and Phase 7 step 18 use. Report what you found and let the human choose:
+   continue the existing branch, review the open PR, or open a second one
+   deliberately. Never silently reimplement. (Real incident: #1178 had an open,
+   CI-green PR — #1207 — *and* a live worktree with uncommitted WIP. `ir:exec`
+   opened a second branch anyway, ran a complete independent implementation that
+   converged on the same design, and only tripped over the duplicate at Phase 5
+   while grepping for something unrelated. The entire branch was discarded.)
 2. **Open a dedicated worktree** off the latest `main` (skip if already in a clean,
    issue-matching worktree — run `pwd` + `git status -sb` to check):
    ```bash
@@ -212,12 +233,24 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
 9. **Assign the issue** — a gated precondition of starting Phase 4, not a step to
    fire-and-forget:
    ```bash
+   ME="$(gh api user -q .login)"
+   gh issue view <N> --json assignees -q '[.assignees[].login]'   # before: did @me already own it?
    gh issue edit <N> --add-assignee @me   # add --repo <owner/repo> for cross-repo
-   gh issue view <N> --json assignees -q '.assignees | length'
+   gh issue view <N> --json assignees -q "[.assignees[].login] | index(\"$ME\") != null"
    ```
-   If the count comes back `0`, retry the `edit` once and re-check; if it's still
-   `0`, **surface that and pause** rather than silently proceeding unassigned — the
-   same idiom Phase 7 uses for an unmergeable PR.
+   Verify by **login, not by count**. `.assignees | length` is `>= 1` whenever
+   *anyone* is assigned, so it reports success even when the `--add-assignee` did
+   nothing at all — which is exactly what happens when `@me` resolves to an account
+   that already owned the issue. If the check comes back `false`, retry the `edit`
+   once and re-check; if it's still `false`, **surface that and pause** rather than
+   silently proceeding unassigned — the same idiom Phase 7 uses for an unmergeable
+   PR.
+
+   The "before" read is what makes an abort safe. If the run is later abandoned,
+   **do not blanket-`gh issue edit <N> --remove-assignee @me`** on the way out:
+   when `@me` was already in that list, the removal strips a pre-existing human
+   assignment that was never yours to clear. Remove only what this step actually
+   added.
 10. **Push through the implementation** in the worktree.
     - If the work is complex/multi-part, break it into tasks with `TaskCreate` and work
       them in order (as you naturally would). For a small change, just implement it.
@@ -355,7 +388,9 @@ Phase 6.
 - Keep the plan tight: if Steps run past ~8–10 entries, you're over-planning; collapse.
 - If the issue is ambiguous, surface it under Risks/unknowns in the plan rather than
   guessing — that's what the approval gate is for.
-- One worktree + one branch + one PR per issue.
+- One worktree + one branch + one PR per issue. Phase 1 step 1a is what enforces
+  that against *other* agents' work, not just your own — run it before
+  `worktree add`, every time.
 - Scale Phase 5 to the diff (the tier table there): trivial changes get a `low`
   review and an inline simplify glance, not a `high` review and a four-agent
   fan-out. Depth follows the change, and never auto-escalates to `ultra`/Workflow.
