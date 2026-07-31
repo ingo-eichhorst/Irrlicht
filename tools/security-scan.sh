@@ -88,24 +88,7 @@ ok()   { local msg="$1"; echo "OK: $msg"; return 0; }
 # ---- --changed scoping -----------------------------------------------------
 # CHANGED_FILES stays empty without --changed, and the in_scope helpers below
 # short-circuit to true — so the unscoped run is byte-for-byte what it was.
-CHANGED_FILES=""
 SKIPPED=0
-if [[ "$CHANGED" -eq 1 ]]; then
-  # A missing lib has to be fatal rather than a silent full-skip. This script
-  # runs under `set -u` without `-e`, so a failed source would leave the
-  # predicates undefined; every in-scope test would then return 127, every
-  # scanner would fall out of scope, and the run would exit 0 reporting
-  # "passed" — a clean bill of health from a scan that never happened, which
-  # is the one outcome the policy at the top of this file rules out.
-  if [[ ! -r "$SCRIPT_DIR/lib/changed-files.sh" ]]; then
-    echo "FAIL: --changed: cannot read $SCRIPT_DIR/lib/changed-files.sh — refusing to report a pass for a scan that never ran" >&2
-    exit 2
-  fi
-  # shellcheck source=lib/changed-files.sh
-  . "$SCRIPT_DIR/lib/changed-files.sh"
-  CHANGED_FILES=$(changed_files_vs_origin_main)
-fi
-
 # skip <what> <why> — a skipped scan must be as loud as a failed one. A
 # silently-skipped scan is indistinguishable from a clean one, which is the
 # same reasoning that makes a can't-run check a hard failure above; the
@@ -113,19 +96,43 @@ fi
 # an unknown.
 skip() { echo "SKIP: $1 — $2"; SKIPPED=$((SKIPPED + 1)); return 0; }
 
-# go_in_scope / web_in_scope — true when not scoping at all, else delegate to
-# the shared predicates in lib/changed-files.sh.
-go_in_scope() {
-  [[ "$CHANGED" -eq 1 ]] || return 0
-  go_module_touched "$1" "$CHANGED_FILES"
-}
-web_in_scope() {
-  [[ "$CHANGED" -eq 1 ]] || return 0
-  web_tree_touched "$1" "$CHANGED_FILES"
-}
-
+# Narrow GO_MODULES/WEB_TREES in place, once, before anything reads them.
+# Doing it here rather than inside each scanner loop matters: the scanners'
+# shared preconditions below — installing govulncheck, hard-failing when gosec
+# is absent — would otherwise still run with nothing in scope, so a push
+# touching no Go file could be rejected for a missing gosec. That is #1213's
+# exact shape (a push blocked by a pre-existing condition it cannot have
+# caused), and guarding only the loop bodies would have left it alive.
 if [[ "$CHANGED" -eq 1 ]]; then
+  # One `source` covers missing, unreadable and malformed: under `set -u`
+  # without `-e` a failed source would otherwise leave the predicates
+  # undefined, every module and tree would fall out of scope, and the run
+  # would exit 0 reporting "passed" — a clean bill of health from a scan that
+  # never happened, the one outcome this file's header rules out.
+  # shellcheck source=lib/changed-files.sh
+  . "$SCRIPT_DIR/lib/changed-files.sh" || {
+    echo "FAIL: --changed: cannot load $SCRIPT_DIR/lib/changed-files.sh — refusing to report a pass for a scan that never ran" >&2
+    exit 2
+  }
+  CHANGED_FILES=$(changed_files_vs_origin_main) || exit 2
+
   echo "-- scope: --changed — scanning only what this branch's diff vs origin/main feeds --"
+  all_modules=("${GO_MODULES[@]}"); GO_MODULES=()
+  for mod in "${all_modules[@]}"; do
+    if go_module_touched "$mod" "$CHANGED_FILES"; then
+      GO_MODULES+=("$mod")
+    else
+      skip "govulncheck + gosec: $mod" "no .go/go.mod/go.sum change under it"
+    fi
+  done
+  all_trees=("${WEB_TREES[@]}"); WEB_TREES=()
+  for tree in "${all_trees[@]}"; do
+    if web_tree_touched "$tree" "$CHANGED_FILES"; then
+      WEB_TREES+=("$tree")
+    else
+      skip "npm audit: $tree" "no package.json/package-lock.json change under it"
+    fi
+  done
 fi
 
 # ---- GitHub-native alerts (full mode only) --------------------------------
@@ -167,14 +174,13 @@ if [[ "$LOCAL_ONLY" -eq 0 ]]; then
 fi
 
 # ---- govulncheck (all modes) ----------------------------------------------
+# The toolchain check lives inside the loop, matching the npm block below: with
+# no module in scope it must not run at all, or a push touching no Go file pays
+# a network install (and fails outright when `go` isn't on PATH) for a scan
+# with nothing to scan — #1213's shape exactly.
 
-command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@latest
-
-for mod in "${GO_MODULES[@]}"; do
-  if ! go_in_scope "$mod"; then
-    skip "govulncheck: $mod" "--changed: no .go/go.mod/go.sum change under it"
-    continue
-  fi
+for mod in "${GO_MODULES[@]+"${GO_MODULES[@]}"}"; do
+  command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@latest
   echo "-- govulncheck: $mod --"
   gv_json=$(mktemp)
   gv_err=$(mktemp)
@@ -209,34 +215,28 @@ for mod in "${GO_MODULES[@]}"; do
 done
 
 # ---- gosec (all modes) -----------------------------------------------------
+# Same placement, and for a sharper reason: "gosec not found" is a hard
+# failure, so hoisting it out of the loop would reject a push that had no Go
+# module to scan — again #1213's shape.
 
-command -v gosec >/dev/null 2>&1 || fail "gosec not found — install: go install github.com/securego/gosec/v2/cmd/gosec@latest"
+for mod in "${GO_MODULES[@]+"${GO_MODULES[@]}"}"; do
+  command -v gosec >/dev/null 2>&1 || { fail "gosec not found — install: go install github.com/securego/gosec/v2/cmd/gosec@latest"; continue; }
+  echo "-- gosec: $mod (informational, all severities) --"
+  ( cd "$mod" && gosec -no-fail -quiet ./... ) || true
 
-if command -v gosec >/dev/null 2>&1; then
-  for mod in "${GO_MODULES[@]}"; do
-    if ! go_in_scope "$mod"; then
-      skip "gosec: $mod" "--changed: no .go/go.mod/go.sum change under it"
-      continue
-    fi
-    echo "-- gosec: $mod (informational, all severities) --"
-    ( cd "$mod" && gosec -no-fail -quiet ./... ) || true
-
-    echo "-- gosec: $mod (gate: High severity + High confidence) --"
-    if ( cd "$mod" && gosec -quiet -severity high -confidence high ./... ); then
-      ok "gosec: $mod — no High/High findings"
-    else
-      fail "gosec: $mod — High-severity/High-confidence finding(s) — see output above"
-    fi
-  done
-fi
+  echo "-- gosec: $mod (gate: High severity + High confidence) --"
+  if ( cd "$mod" && gosec -quiet -severity high -confidence high ./... ); then
+    ok "gosec: $mod — no High/High findings"
+  else
+    fail "gosec: $mod — High-severity/High-confidence finding(s) — see output above"
+  fi
+done
 
 # ---- npm audit (all modes) -------------------------------------------------
+# `command -v npm` already sits inside the loop, so an out-of-scope tree never
+# reaches it — the shape the two Go blocks above were corrected to match.
 
-for tree in "${WEB_TREES[@]}"; do
-  if ! web_in_scope "$tree"; then
-    skip "npm audit: $tree" "--changed: no package.json/package-lock.json change under it"
-    continue
-  fi
+for tree in "${WEB_TREES[@]+"${WEB_TREES[@]}"}"; do
   echo "-- npm audit: $tree --"
   command -v npm >/dev/null 2>&1 || { fail "npm audit: $tree — npm not found"; continue; }
   # npm audit exits non-zero both when it finds advisories AND when the audit

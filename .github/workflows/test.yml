@@ -76,3 +76,14 @@ jobs:
       # smoke-test is their only automated coverage: bash -n + the lib unit tests.
       - name: Smoke-test the recording rig
         run: bash tools/onboarding-factory/scripts/smoke-test.sh
+
+      # tools/lib/ holds the scoping rules for tools/preflight.sh --changed,
+      # the pre-push hook. Their local gate is that same hook, which
+      # `git push --no-verify` disables — so CI has to run them independently,
+      # or the checks guarding the gate ride on the gate they guard.
+      - name: Test the shared shell libs
+        run: |
+          for t in tools/lib/*_test.sh; do
+            echo "== $t =="
+            bash "$t"
+          done
