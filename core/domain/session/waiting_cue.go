@@ -52,9 +52,9 @@ const markdownWrapper = "*_~`\"')]"
 // "verify locally and reply with …") — both indicate the agent is gated on
 // the user even though no user-blocking tool is open.
 //
-// Two detectors are OR'd: ExtractQuestionSnippet (literal `?`, fired
-// anywhere in the text) and ExtractWaitingCue (cue regexes against the
-// trailing 1–2 sentences). See issue #381 for the cue coverage matrix.
+// The prose rule itself is ProseIndicatesWaiting above — ExtractQuestionSnippet
+// OR ExtractWaitingCue. See issue #381 for the cue coverage matrix it was built
+// against.
 func (m *SessionMetrics) IsWaitingForUserInput() bool {
 	if m == nil {
 		return false

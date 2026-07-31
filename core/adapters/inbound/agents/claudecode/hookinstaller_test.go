@@ -55,7 +55,7 @@ func makeHookGroup(matcher, command string) map[string]interface{} {
 }
 
 // ourHookGroup builds a settings.json group in our current native-http form
-// (matcher key omitted when empty), mirroring addOurHook. Used to seed fixtures
+// (matcher key omitted when empty), mirroring hookjson's. Used to seed fixtures
 // that simulate an already-migrated install.
 func ourHookGroup(matcher string) map[string]interface{} {
 	group := map[string]interface{}{"hooks": []interface{}{ourHookEntry()}}

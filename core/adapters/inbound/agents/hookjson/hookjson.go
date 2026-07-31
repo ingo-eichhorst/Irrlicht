@@ -134,9 +134,15 @@ func Uninstall(cfg Config) (bool, error) {
 
 // ReadSettings decodes a hook-settings JSON file into a generic map. A missing
 // or empty file is not an error — there is simply nothing to merge onto yet, so
-// both yield an empty map and the caller goes on to create the file. Exported
-// because claudecode's statusline installer merges into the same settings.json
-// and must read it exactly the same way.
+// both yield an empty map and the caller goes on to create the file. Malformed
+// JSON does error: overwriting it would destroy content the user meant to keep.
+// Exported because claudecode's statusline installer merges into the same
+// settings.json and must read it exactly the same way.
+//
+// A file holding a bare `null` decodes to a nil map with no error, which every
+// later write would panic on ("assignment to entry in nil map"), so it is
+// normalized to an empty map here — the one place that can catch it for all
+// callers.
 func ReadSettings(path string) (map[string]interface{}, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -151,6 +157,9 @@ func ReadSettings(path string) (map[string]interface{}, error) {
 	var settings map[string]interface{}
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return nil, err
+	}
+	if settings == nil {
+		return map[string]interface{}{}, nil
 	}
 	return settings, nil
 }
@@ -171,7 +180,7 @@ func WriteSettings(path string, settings map[string]interface{}, writeFile func(
 // in the event's hook array. Matcher-agnostic: a group with our sentinel is
 // "ours" regardless of which matcher string it happens to carry.
 func HasOurHook(hooksMap map[string]interface{}, event, sentinel string) bool {
-	arr, ok := hooksMap[event].([]interface{})
+	arr, ok := eventGroups(hooksMap, event)
 	if !ok {
 		return false
 	}
@@ -201,7 +210,7 @@ func ensureHooksMap(settings map[string]interface{}) map[string]interface{} {
 // that is not cfg.IsCanonical to a fresh cfg.Entry(). Returns true if any entry
 // was rewritten.
 func upgradeStaleEntries(hooksMap map[string]interface{}, event string, cfg Config) bool {
-	arr, ok := hooksMap[event].([]interface{})
+	arr, ok := eventGroups(hooksMap, event)
 	if !ok {
 		return false
 	}
@@ -240,7 +249,7 @@ func upgradeGroupEntries(g interface{}, cfg Config) bool {
 // matcher is widened or changed; for an expected of "" it strips the key
 // entirely, since a Stop hook must carry no matcher.
 func upgradeStaleMatchers(hooksMap map[string]interface{}, event, expected, sentinel string) bool {
-	arr, ok := hooksMap[event].([]interface{})
+	arr, ok := eventGroups(hooksMap, event)
 	if !ok {
 		return false
 	}
@@ -297,7 +306,7 @@ func addOurHook(hooksMap map[string]interface{}, event, matcher string, entry ma
 // array, deleting the event key outright once nothing is left. Returns true if
 // any group was removed.
 func removeOurHook(hooksMap map[string]interface{}, event, sentinel string) bool {
-	arr, ok := hooksMap[event].([]interface{})
+	arr, ok := eventGroups(hooksMap, event)
 	if !ok {
 		return false
 	}
@@ -342,9 +351,20 @@ func containsSentinel(g interface{}, sentinel string) bool {
 	return false
 }
 
+// eventGroups returns an event's matcher-group array, or ok=false when the
+// event is absent or holds something that isn't an array.
+//
+// It and groupEntries are the two places that tolerate a settings file holding
+// a shape we don't expect. These are hand-editable configs, so every traversal
+// goes through one of them rather than asserting inline and repeating the
+// judgement about what a malformed value means.
+func eventGroups(hooksMap map[string]interface{}, event string) ([]interface{}, bool) {
+	arr, ok := hooksMap[event].([]interface{})
+	return arr, ok
+}
+
 // groupEntries returns a matcher group's inner hook array, or ok=false when the
-// value isn't a group in the expected shape (a hand-edited config can hold
-// anything).
+// value isn't a group in the expected shape.
 func groupEntries(g interface{}) ([]interface{}, bool) {
 	group, ok := g.(map[string]interface{})
 	if !ok {

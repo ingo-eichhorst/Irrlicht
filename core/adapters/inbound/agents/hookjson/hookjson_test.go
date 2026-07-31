@@ -432,6 +432,30 @@ func TestReadSettings(t *testing.T) {
 		}
 	})
 
+	// A bare `null` decodes to a nil map with no error — and every later write
+	// would panic on it. Regression guard for that crash.
+	t.Run("null document is empty, not a nil map", func(t *testing.T) {
+		path := filepath.Join(dir, "null.json")
+		if err := os.WriteFile(path, []byte("null\n"), 0o600); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		got, err := ReadSettings(path)
+		if err != nil {
+			t.Fatalf("ReadSettings: %v", err)
+		}
+		if got == nil {
+			t.Fatal("got a nil map; a later write would panic on it")
+		}
+		// The whole install must survive it, not just the read.
+		cfg := httpConfig(path)
+		if _, err := EnsureInstalled(cfg); err != nil {
+			t.Fatalf("EnsureInstalled over a null document: %v", err)
+		}
+		if !HasOurHook(readHooks(t, path), eventNoMatcher, cfg.Sentinel) {
+			t.Error("install did not recover from a null document")
+		}
+	})
+
 	// Malformed is different from blank: overwriting it would destroy content
 	// the user meant to keep, so it must surface as an error.
 	t.Run("malformed JSON errors", func(t *testing.T) {
