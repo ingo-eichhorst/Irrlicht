@@ -100,6 +100,13 @@ Before marking a ticket done, run the full suite — every layer must pass:
   kitty remote-control (install-type `Apply`/`Remove`), and `InputService`'s
   backchannel forwarding (the shared "control" gate) for the three call-site
   shapes it covers.
+- Hook endpoints: `contracttesting.AssertHookEndpointFollowsBindAddr`
+  (`core/internal/contracttesting/hook_endpoint.go`) is the same kind of
+  runtime obligation for adapters that install hooks into a JSON config —
+  an install writes the resolved port not `:7837`, an entry left by a daemon
+  on another port is rewritten in place rather than duplicated, and uninstall
+  is not port-scoped (#1178). A new hook-installing adapter wires one call
+  (see `claudecode`/`codex` `hookport_test.go`) instead of porting a test file.
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh`
 - Replay goldens (when a recording or replay-output change is in play):
