@@ -280,6 +280,25 @@ anchors, not hard gates — use judgment at the boundaries:
 | **Medium** | 2–5 files / one slice / some new logic | `medium` | run `/simplify` (fan-out is fine) |
 | **Large / risky** | multi-package, schema, cross-adapter, logic-heavy, >~400 lines | `high` | run `/simplify` (fan-out) |
 
+**The two columns are read independently.** A diff can legitimately land on
+different rows for review and for simplify, and forcing one row on both is a
+misread, not consistency. Take each column from whichever row describes that
+axis best:
+
+- **Review effort** follows how much *new behaviour or procedure* the diff
+  introduces — how much there is to get wrong.
+- **Simplify depth** follows what *kind of material* changed — a 4-agent
+  code-simplification fan-out returns nothing on prose, config, or fixtures
+  no matter how long the diff is.
+
+Worked example (this skill's own #1205 PR): docs-only markdown, which is the
+**Trivial** row's decisive clause for simplify — but two files of substantive
+new procedure, so **Medium** for review. Split that way, the `medium` review
+found a real defect that a `low` pass would have missed, while a `/simplify`
+fan-out would have had nothing to chew on. **Say which row you took each
+column from** whenever they differ, so the split is a visible decision rather
+than a silent inconsistency.
+
 **These tiers are the post-hoc correction.** Triage's run plan set a *predicted*
 review effort before any code existed; this table measures what the change
 actually turned out to be. When the two disagree, **this table wins** — a
@@ -302,9 +321,22 @@ either step.
     End the PR body with the `🤖 Generated with [Claude Code]` line.
 13. **Review the diff** at the **calibrated effort** — by delegating to a
     single review subagent, not by reviewing it yourself (the mind that just
-    wrote the code is the weakest available reviewer of it). Spawn one `Agent`
-    (`subagent_type: general-purpose`, `run_in_background: false` so Phase 5
-    can't race past its own gate) whose prompt names:
+    wrote the code is the weakest available reviewer of it).
+
+    **Confirm the reviewer exists first.** This step's entire substance lives
+    in another file, so a moved or renamed skill leaves the subagent pointed at
+    a dead path, reviewing from nothing — the same silent degradation #1205 was
+    about, wearing a different mask:
+    ```bash
+    test -f .claude/skills/ir:code-review/SKILL.md && echo OK || echo MISSING
+    ```
+    On `MISSING`, **surface it and pause** — don't improvise a review, don't
+    fall through to step 14 — the idiom step 9 uses for a failed self-assign
+    and step 18 for an unmergeable PR.
+
+    Then spawn one `Agent` (`subagent_type: general-purpose`,
+    `run_in_background: false` so Phase 5 can't race past its own gate) whose
+    prompt names:
     - the worktree path, the issue number, and one line of intent — a fresh
       reviewer knows nothing about the plan, so a deliberate decision left
       unstated comes back as a finding;
