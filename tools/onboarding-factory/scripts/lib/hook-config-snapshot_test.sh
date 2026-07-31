@@ -17,6 +17,18 @@ source "$DIR/hook-config-snapshot.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Floor under every case: point $HOME and $CODEX_HOME somewhere harmless before
+# the first one runs. fresh_env overrides both per-case, so this changes nothing
+# about what the tests exercise — it exists so a case that is added above the
+# first fresh_env call, or forgets it, cannot reach the developer's real
+# ~/.claude/settings.json. That is not hypothetical: a draft of this file did
+# exactly that and wiped a live config's statusLine and all seven irrlicht hook
+# entries (#1212). These paths are deliberately NOT created — an omitted
+# fresh_env then fails loudly on a missing directory instead of silently
+# writing somewhere plausible.
+HOME="$TMP/nohome"
+CODEX_HOME="$TMP/nocodex"
+
 fails=0
 pass() { echo "  PASS: $1"; return 0; }
 fail() { echo "  FAIL: $1 — expected [$2] got [$3]"; fails=$((fails + 1)); return 0; }
