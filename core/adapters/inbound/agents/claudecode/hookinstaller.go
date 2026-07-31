@@ -14,11 +14,16 @@ import (
 	"irrlicht/core/pkg/daemonaddr"
 )
 
-// hookEndpointPath is the daemon's Claude Code hook path. Host and port are
+// HookEndpointPath is the daemon's Claude Code hook path. Host and port are
 // resolved at install time from the daemon's own bind address, so a daemon on
 // an alternate port installs hooks that reach it rather than whatever owns
 // :7837 (issue #1178).
-const hookEndpointPath = "/api/v1/hooks/claudecode"
+//
+// Exported so the daemon registers its route from the same constant the
+// installer writes and matches on. Since #1178 this path *is* the sentinel, so
+// drift between route and installer would not 404 — it would stop recognizing
+// every existing entry as ours.
+const HookEndpointPath = "/api/v1/hooks/claudecode"
 
 // hookSentinel is the substring in the hook entry (curl command or http url)
 // that identifies irrlicht-managed entries. Used by both install (idempotency
@@ -32,7 +37,7 @@ const hookEndpointPath = "/api/v1/hooks/claudecode"
 // It is also a prefix of statuslineSentinel, which is harmless: hook entries
 // and statusLine.command live under disjoint keys of settings.json and are
 // never matched against each other.
-const hookSentinel = hookEndpointPath
+const hookSentinel = HookEndpointPath
 
 // hookEndpointURL is the daemon endpoint the installed hook posts to. Claude
 // Code delivers the hook payload as a JSON POST body directly to this URL via
@@ -42,7 +47,7 @@ const hookSentinel = hookEndpointPath
 // fallback (#488) exists to cover; that fallback is retained (it still covers a
 // down/unreachable daemon), but its primary trigger is now gone.
 func hookEndpointURL() string {
-	return daemonaddr.LocalURL(hookEndpointPath)
+	return daemonaddr.LocalURL(HookEndpointPath)
 }
 
 // hookTimeoutSeconds bounds how long Claude Code waits on the daemon before

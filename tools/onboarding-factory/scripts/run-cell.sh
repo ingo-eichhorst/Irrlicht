@@ -38,6 +38,8 @@ JSONL_GLOB='*.jsonl'
 
 # shellcheck source=lib/shard-lib.sh
 source "$SCRIPT_DIR/lib/shard-lib.sh"   # per-scenario shard reader (#511)
+# shellcheck source=lib/hook-config-snapshot.sh
+source "$SCRIPT_DIR/lib/hook-config-snapshot.sh"   # save/restore shared agent config (#1178)
 
 RECORDER="off"
 ATTACH=0
@@ -253,37 +255,9 @@ else
   # grant-all: the consent-first permission gate (#570) would otherwise
   # leave a fresh recording daemon monitoring nothing until a wizard is
   # answered — fixtures must never hang on consent.
-  # The recording daemon installs its hooks into the user's REAL agent config
-  # (~/.claude/settings.json, $CODEX_HOME/hooks.json) — those paths follow
-  # $HOME, not IRRLICHT_HOME, so IRRLICHT_ONBOARD_HOME does not isolate them —
-  # and since #1178 the endpoint it writes carries $ONBOARD_BIND's port. On an
-  # alternate port that repoints a running production daemon's hooks at the
-  # recorder, and grant-all can install entries the user had denied. Snapshot
-  # before the daemon starts, restore on cleanup, so a recording never outlives
-  # its own edits to config it does not own.
-  HOOK_BACKUP_DIR="$STAGING/hook-config-backup"
-  HOOK_CONFIG_FILES=("$HOME/.claude/settings.json" "${CODEX_HOME:-$HOME/.codex}/hooks.json")
-  mkdir -p "$HOOK_BACKUP_DIR"
-  for i in "${!HOOK_CONFIG_FILES[@]}"; do
-    if [[ -f "${HOOK_CONFIG_FILES[$i]}" ]]; then
-      cp "${HOOK_CONFIG_FILES[$i]}" "$HOOK_BACKUP_DIR/$i"
-    else
-      : > "$HOOK_BACKUP_DIR/$i.absent"
-    fi
-  done
-
-  # restore_hook_configs puts each snapshotted file back exactly as it was —
-  # including removing one the daemon created from nothing.
-  restore_hook_configs() {
-    local i
-    for i in "${!HOOK_CONFIG_FILES[@]}"; do
-      if [[ -f "$HOOK_BACKUP_DIR/$i" ]]; then
-        cp "$HOOK_BACKUP_DIR/$i" "${HOOK_CONFIG_FILES[$i]}"
-      elif [[ -f "$HOOK_BACKUP_DIR/$i.absent" ]]; then
-        rm -f "${HOOK_CONFIG_FILES[$i]}"
-      fi
-    done
-  }
+  # Save the shared agent config the daemon is about to rewrite (see
+  # lib/hook-config-snapshot.sh); cleanup hands it back.
+  snapshot_hook_configs "$STAGING/hook-config-backup"
 
   DAEMON_ENV=(IRRLICHT_RECORDINGS_DIR="$STAGING/recordings"
               IRRLICHT_BIND_ADDR="$ONBOARD_BIND"

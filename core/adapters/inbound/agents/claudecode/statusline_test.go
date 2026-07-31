@@ -256,7 +256,7 @@ func TestChainStatuslineCommand_MigratesOldWrapsToV3(t *testing.T) {
 		`http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true'`
 	for _, old := range []string{v1, v2} {
 		got := chainStatuslineCommand(old)
-		if !strings.HasPrefix(got, v3WrapOpen+installedStatuslineCommand()+v3WrapPipe) {
+		if !strings.HasPrefix(got, bashEnvelopeOpen+teeSubOpen+installedStatuslineCommand()+wrapPipe) {
 			t.Errorf("expected v3 form after migration, got %q", got)
 		}
 		if !strings.Contains(got, userCmd) {
