@@ -821,13 +821,54 @@ func (l *recordingLogger) matching(substr string) []string {
 	return out
 }
 
+// closedWatcher returns an fsnotify watcher that rejects every Add with
+// ErrClosed. That is the one registration failure reproducible on every
+// backend regardless of the caller's privileges — unlike the mode-0000
+// directory the end-to-end tests need, which root defeats — and unlike a
+// missing path it is not ENOENT, so it exercises the reporting branch rather
+// than addWatch's vanished-directory shortcut.
+func closedWatcher(t *testing.T) *fsnotify.Watcher {
+	t.Helper()
+	fsw, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fsw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return fsw
+}
+
 // TestAddWatch_LogsFailure is the platform-independent half of the #1255
 // regression: addWatch is the sole place either tree scan arms a directory,
 // and a rejected registration must leave a trace naming the directory rather
-// than being discarded. An unreachable path fails on every backend (kqueue
-// lstats, inotify stats) regardless of the caller's privileges, which the
-// chmod-based test below cannot promise.
+// than being discarded.
 func TestAddWatch_LogsFailure(t *testing.T) {
+	log := &recordingLogger{}
+	dir := t.TempDir()
+	w := NewWithRoot(dir, testAdapter, 0).WithLogger(log)
+
+	w.addWatch(closedWatcher(t), dir)
+
+	got := log.matching(dir)
+	if len(got) != 1 {
+		t.Fatalf("addWatch on a rejected registration logged %d errors naming %q, want 1 (all: %v)",
+			len(got), dir, log.matching(""))
+	}
+	if !strings.Contains(got[0], testAdapter) {
+		t.Errorf("logged error %q does not name the adapter %q", got[0], testAdapter)
+	}
+	if w.watchFailures != 1 {
+		t.Errorf("watchFailures = %d, want 1", w.watchFailures)
+	}
+}
+
+// TestAddWatch_VanishedDirIsNotReported pins the ENOENT shortcut: a directory
+// removed between being enumerated and being armed — a real TOCTOU window on
+// both scan paths — is not a monitoring blind spot, because nothing is left
+// under it to observe. Reporting it would send whoever reads the log after a
+// real incident chasing a path that no longer exists.
+func TestAddWatch_VanishedDirIsNotReported(t *testing.T) {
 	log := &recordingLogger{}
 	w := NewWithRoot(t.TempDir(), testAdapter, 0).WithLogger(log)
 
@@ -837,16 +878,76 @@ func TestAddWatch_LogsFailure(t *testing.T) {
 	}
 	defer fsw.Close()
 
-	missing := filepath.Join(t.TempDir(), "does-not-exist")
-	w.addWatch(fsw, missing)
+	w.addWatch(fsw, filepath.Join(t.TempDir(), "already-gone"))
 
-	got := log.matching(missing)
-	if len(got) != 1 {
-		t.Fatalf("addWatch on an unwatchable path logged %d errors naming %q, want 1 (all: %v)",
-			len(got), missing, log.errors)
+	if got := log.matching(""); len(got) != 0 {
+		t.Errorf("addWatch on a vanished dir logged %v, want nothing", got)
 	}
-	if !strings.Contains(got[0], testAdapter) {
-		t.Errorf("logged error %q does not name the adapter %q", got[0], testAdapter)
+	if w.watchFailures != 0 {
+		t.Errorf("watchFailures = %d, want 0 — a vanished dir is not a blind spot", w.watchFailures)
+	}
+}
+
+// TestAddExistingDirs_CapsFailureLogging covers the flood the failure modes
+// this reporting targets actually produce: EMFILE and inotify's watch limit
+// are process-global, so once one trips every remaining Add in the scan
+// fails. Reporting each one would rotate the log out from under the first
+// lines — the ones naming where the budget ran out — so the scan reports the
+// first maxLoggedWatchFailures individually and then one summary carrying
+// the true total.
+func TestAddExistingDirs_CapsFailureLogging(t *testing.T) {
+	const dirs = maxLoggedWatchFailures + 5
+
+	root := t.TempDir()
+	for i := 0; i < dirs; i++ {
+		if err := os.MkdirAll(filepath.Join(root, fmt.Sprintf("proj-%02d", i)), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	log := &recordingLogger{}
+	w := NewWithRoot(root, testAdapter, 0).WithLogger(log)
+
+	// A closed watcher fails every Add, standing in for the global
+	// exhaustion without having to actually exhaust the host's FDs.
+	if err := w.addExistingDirs(context.Background(), closedWatcher(t)); err != nil {
+		t.Fatalf("addExistingDirs returned %v, want nil — a failed Add must not abort the scan", err)
+	}
+
+	perDir := log.matching("failed to watch")
+	if len(perDir) != maxLoggedWatchFailures {
+		t.Errorf("logged %d individual failures, want the cap of %d", len(perDir), maxLoggedWatchFailures)
+	}
+	summary := log.matching("could not be watched")
+	if len(summary) != 1 {
+		t.Fatalf("logged %d summary lines, want 1 (all: %v)", len(summary), log.matching(""))
+	}
+	if !strings.Contains(summary[0], fmt.Sprintf("%d directories", dirs)) {
+		t.Errorf("summary %q does not carry the true total of %d", summary[0], dirs)
+	}
+}
+
+// TestAddExistingDirs_NoSummaryWhenUncapped is the counterpart lock: below
+// the cap the individual lines already say everything, so a redundant
+// summary would just be noise.
+func TestAddExistingDirs_NoSummaryWhenUncapped(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "only-project"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	log := &recordingLogger{}
+	w := NewWithRoot(root, testAdapter, 0).WithLogger(log)
+
+	if err := w.addExistingDirs(context.Background(), closedWatcher(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := log.matching("could not be watched"); len(got) != 0 {
+		t.Errorf("logged a summary %v below the cap, want none", got)
+	}
+	if got := log.matching("failed to watch"); len(got) != 1 {
+		t.Errorf("logged %d individual failures, want 1", len(got))
 	}
 }
 
@@ -873,17 +974,17 @@ func TestAddWatch_SucceedsSilently(t *testing.T) {
 
 // TestAddWatch_NilLoggerDoesNotPanic covers the e2e and test callers that
 // never call WithLogger: a failure there stays unreported, but must not take
-// the watcher down.
+// the watcher down — and must still be counted.
 func TestAddWatch_NilLoggerDoesNotPanic(t *testing.T) {
-	w := NewWithRoot(t.TempDir(), testAdapter, 0)
+	dir := t.TempDir()
+	w := NewWithRoot(dir, testAdapter, 0)
 
-	fsw, err := fsnotify.NewWatcher()
-	if err != nil {
-		t.Fatal(err)
+	w.addWatch(closedWatcher(t), dir)
+	w.reportWatchFailureTotal()
+
+	if w.watchFailures != 1 {
+		t.Errorf("watchFailures = %d, want 1", w.watchFailures)
 	}
-	defer fsw.Close()
-
-	w.addWatch(fsw, filepath.Join(t.TempDir(), "does-not-exist"))
 }
 
 // TestWatch_UnwatchableSubdir_IsReportedNotSwallowed is the end-to-end half:
@@ -927,7 +1028,7 @@ func TestWatch_UnwatchableSubdir_IsReportedNotSwallowed(t *testing.T) {
 
 	if got := log.matching(locked); len(got) != 1 {
 		t.Fatalf("startup scan logged %d errors naming the unwatchable dir %q, want 1 (all: %v)",
-			len(got), locked, log.errors)
+			len(got), locked, log.matching(""))
 	}
 
 	// The watch is still live for the rest of the tree.
