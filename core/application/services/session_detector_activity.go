@@ -771,22 +771,18 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// Ready→working (if applicable) already ran in processActivityLocked,
 	// before applyBackgroundLiveness — see that call site.
 
-	// Overlay hook-based permission-pending signal onto metrics. Must happen
-	// after RefreshOnActivity (which recomputes metrics from the transcript)
-	// and before ClassifyState (which reads the flag). The flag persists in
-	// the map until PostToolUse/PostToolUseFailure clears it, so it survives
-	// fswatcher re-evaluations while the permission prompt is shown.
-	d.overlayPermissionPending(state)
-
-	// Overlay the authoritative Stop-hook turn-done signal (#1161). Consume-once:
-	// makes IsAgentDone authoritative for this pass and refreshes the
-	// waiting-vs-ready inputs from the hook's final assistant message.
-	d.overlayHookTurnDone(state)
-
-	// Overlay the Notification/idle_prompt hook's idle-waiting signal (#1173).
-	// Persistent (held while the turn stays idle), so ClassifyState rule 1c can
-	// correct a turn that ended with no prose cue from ready to waiting.
-	d.overlayIdlePrompt(state)
+	// Overlay every held out-of-band signal — the permission prompt (#108),
+	// the Stop hook's authoritative turn-done (#1161) and the idle_prompt
+	// correction (#1173) — onto the metrics ClassifyState is about to read.
+	// Each signal's own lifecycle rule (persistent vs consume-once, and when
+	// it goes stale) is declared in session.signalPolicies rather than spelled
+	// out here; see SignalHolds.Overlay for why their application order is
+	// load-bearing.
+	//
+	// Must happen after RefreshOnActivity, which rebuilds metrics from the
+	// transcript and so zeroes every transient field these signals set, and
+	// before ClassifyState, which reads them.
+	d.signals.Overlay(state.SessionID, state.Metrics)
 
 	// Overlay the PreCompact force-working hold (#657).
 	d.applyCompactHold(ev.SessionID, state.Metrics, time.Now().Unix())
@@ -794,9 +790,12 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// Overlay the transcript-based stalled-edit-tool fallback (#488).
 	d.markStalledEditTool(ev.SessionID, state.Metrics, time.Now().Unix())
 
-	// Content-based state detection.
+	// Content-based state detection. The tiered form is used here (and only
+	// here) so the deciding rule and its authority tier reach the recorded
+	// lifecycle event as provenance (#1288).
 	now := time.Now().Unix()
-	newState, reason := ClassifyState(state.State, state.Metrics)
+	verdict := ClassifyStateTiered(state.State, state.Metrics)
+	newState, reason := verdict.State, verdict.Reason
 	newState, reason, parentHeldWorking := d.holdParentForActiveChildren(state, ev, newState, reason)
 	newState, reason = d.synthesizeCollapsedTurnBoundaryIfNeeded(state, ev, classifierCandidate{
 		NewState:          newState,
@@ -810,11 +809,16 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	})
 
 	if newState != state.State {
-		d.applyStateTransition(state, ev, stateTransitionUpdate{
-			NewState: newState,
-			Reason:   reason,
-			Now:      now,
-		})
+		// Attach provenance only when the ladder's verdict is still what is
+		// being applied. The parent-hold and the two synthesizers above can
+		// each override it, and a transition they authored was not decided by
+		// the rule that fired — stamping its tier anyway would put a
+		// confident, wrong attribution into the permanent trace.
+		applied := stateTransitionUpdate{NewState: newState, Reason: reason, Now: now}
+		if newState == verdict.State && reason == verdict.Reason {
+			applied.Verdict = verdict
+		}
+		d.applyStateTransition(state, ev, applied)
 	}
 
 	// Cache-creation regression detection (#374). Driven every substantive
@@ -851,9 +855,10 @@ func (d *SessionDetector) forceReadyToWorkingIfActive(state *session.SessionStat
 	// while that signal is pending: without this, the synthetic event would
 	// force ready→working here and then classify working→waiting, recording a
 	// spurious working blip between the two (the flap this reconcile must avoid).
-	// ClassifyState still routes correctly on its own — to waiting via rule 1c
-	// (idle case), or to working via rule 4 should real activity have arrived in
-	// the same pass (overlayIdlePrompt clears the flag when IsAgentDone flips).
+	// ClassifyState still routes correctly on its own — to waiting via the
+	// idle_prompt rule (idle case), or to working via transcript_activity should
+	// real activity have arrived in
+	// the same pass (the SignalIdlePrompt policy goes stale when IsAgentDone flips).
 	if d.hasPendingIdlePrompt(state.SessionID) {
 		return
 	}
@@ -862,103 +867,11 @@ func (d *SessionDetector) forceReadyToWorkingIfActive(state *session.SessionStat
 	state.State = session.StateWorking
 }
 
-// overlayPermissionPending folds the hook-based permission-pending signal
-// onto metrics. See classifyAndTransition's call site for the ordering
-// requirement relative to RefreshOnActivity and ClassifyState.
-func (d *SessionDetector) overlayPermissionPending(state *session.SessionState) {
-	d.permMu.Lock()
-	defer d.permMu.Unlock()
-
-	if !d.permissionPending[state.SessionID] || state.Metrics == nil {
-		return
-	}
-	if state.Metrics.LastWasToolDenial {
-		// Permission was denied — Claude Code doesn't fire PostToolUseFailure
-		// on denial, so clear from transcript evidence. The denial text
-		// "[Request interrupted by user for tool use]" sets LastWasToolDenial
-		// in the parser.
-		delete(d.permissionPending, state.SessionID)
-		return
-	}
-	state.Metrics.PermissionPending = true
-}
-
-// overlayHookTurnDone folds the Claude Code Stop-hook turn-done signal (#1161)
-// onto metrics for one classify pass. It is consume-once: the entry is deleted
-// as it is read, so the authoritative done-signal applies to exactly the pass
-// the Stop hook triggered and never bleeds into the next turn (a later real
-// turn's first activity re-opens the session normally via
-// forceReadyToWorkingIfActive). Must run after RefreshOnActivity (which rebuilds
-// metrics from the transcript, zeroing this transient field) and before
-// ClassifyState / IsAgentDone, which read it.
-//
-// The final assistant text overwrites LastAssistantText for display; the
-// waiting-cue verdict — computed by the adapter from the message's full text —
-// only ever adds to PendingWaitingCue, never clears the parser's own verdict,
-// so the hook can push a turn to waiting but never mask a cue the transcript
-// already found.
-func (d *SessionDetector) overlayHookTurnDone(state *session.SessionState) {
-	if state.Metrics == nil {
-		return
-	}
-	d.permMu.Lock()
-	defer d.permMu.Unlock()
-
-	sig, ok := d.hookTurnDone[state.SessionID]
-	if !ok {
-		return
-	}
-	delete(d.hookTurnDone, state.SessionID)
-
-	state.Metrics.HookTurnDone = true
-	if sig.lastAssistantText != "" {
-		state.Metrics.LastAssistantText = sig.lastAssistantText
-	}
-	if sig.waitingCue {
-		state.Metrics.PendingWaitingCue = true
-	}
-}
-
-// overlayIdlePrompt folds the Claude Code Notification/idle_prompt hook signal
-// (#1173) onto metrics for the classify pass. Unlike overlayHookTurnDone it is
-// persistent, not consume-once: the flag is re-applied every pass so a stray
-// lower-tier reclassify (e.g. an fswatcher touch that re-runs ClassifyState)
-// can't flip the corrected waiting back to ready via rule 2.
-//
-// The signal holds only while the finished turn is still the last thing on the
-// transcript. IsAgentDone is the gate: while it is true the turn is genuinely
-// idle, so keep the entry and overlay IdlePromptPending (rule 1c → waiting). The
-// moment new activity arrives — the user replied, a new turn began — IsAgentDone
-// flips false; the idle window is over, so drop the backing entry and overlay
-// nothing, letting the session transition out of waiting normally. An open tool
-// (IsAgentDone false via HasOpenToolCall) likewise clears it: the open-tool
-// rules own that case, not idle-prompt. Must run after RefreshOnActivity (which
-// rebuilds metrics from the transcript, zeroing this transient field) and before
-// ClassifyState, which reads it.
-func (d *SessionDetector) overlayIdlePrompt(state *session.SessionState) {
-	if state.Metrics == nil {
-		return
-	}
-	d.permMu.Lock()
-	defer d.permMu.Unlock()
-
-	if !d.idlePromptPending[state.SessionID] {
-		return
-	}
-	if !state.Metrics.IsAgentDone() {
-		delete(d.idlePromptPending, state.SessionID)
-		return
-	}
-	state.Metrics.IdlePromptPending = true
-}
-
-// hasPendingIdlePrompt reports whether an idle_prompt hook signal is pending for
-// the session (#1173). Read by forceReadyToWorkingIfActive to skip the
-// ready→working bounce on the hook's synthetic reclassify. Guarded by permMu.
+// hasPendingIdlePrompt reports whether an idle_prompt hook signal is being held
+// for the session (#1173). Read by forceReadyToWorkingIfActive to skip the
+// ready→working bounce on the hook's synthetic reclassify.
 func (d *SessionDetector) hasPendingIdlePrompt(sessionID string) bool {
-	d.permMu.Lock()
-	defer d.permMu.Unlock()
-	return d.idlePromptPending[sessionID]
+	return d.signals.Held(sessionID, session.SignalIdlePrompt)
 }
 
 // holdParentForActiveChildren fast-forwards a parent's own transition when
@@ -1055,7 +968,7 @@ func (d *SessionDetector) synthesizeCollapsedTurnBoundaryIfNeeded(state *session
 // correct "while waiting" phrasing. Skipped when
 // holdParentForActiveChildren already rewrote newState: that parent has
 // active children and must stay working, and reclassifying from waiting
-// would let rule 3 fire and transition it to ready despite children still
+// would let the user_interrupt rule fire and transition it to ready despite children still
 // running — undoing the hold.
 func (d *SessionDetector) synthesizeCollapsedWaitingIfNeeded(state *session.SessionState, ev agent.Event, candidate classifierCandidate) (string, string) {
 	newState, reason := candidate.NewState, candidate.Reason
@@ -1083,6 +996,11 @@ type stateTransitionUpdate struct {
 	NewState string
 	Reason   string
 	Now      int64
+	// Verdict is the classifier result this transition came from, carried
+	// only so its provenance (deciding rule + tier) reaches the recorded
+	// lifecycle event. Zero when the transition was synthesized rather than
+	// classified, which records no tier — see withProvenance.
+	Verdict StateVerdict
 }
 
 // applyStateTransition records and applies a state transition already
@@ -1094,7 +1012,7 @@ func (d *SessionDetector) applyStateTransition(state *session.SessionState, ev a
 	if reason != "" {
 		d.log.LogInfo(logComponentSessionDetector, ev.SessionID, reason)
 	}
-	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: state.State, NewState: newState, Reason: reason, Inputs: classifierInputs(state.Metrics)})
+	d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: ev.SessionID, PrevState: state.State, NewState: newState, Reason: reason, Inputs: withProvenance(classifierInputs(state.Metrics), update.Verdict)})
 	state.State = newState
 	state.UpdatedAt = now
 
@@ -1311,7 +1229,7 @@ func (d *SessionDetector) purgeDeadBackgroundProcesses(result backgroundProbeRes
 // applyCompactHold maintains the PreCompact force-working hold (#657) for one
 // session. While a manual /compact is in flight the transcript receives no
 // writes, so this overlays CompactInProgress to keep the session in working
-// (ClassifyState rule 0b) through that silent window.
+// (ClassifyState's compact_in_progress rule) through that silent window.
 //
 // The hold clears on the first of:
 //   - the manual compact_boundary landing (SawManualCompactBoundary): the

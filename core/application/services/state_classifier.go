@@ -9,100 +9,250 @@ import (
 	"irrlicht/core/domain/session"
 )
 
-// ClassifyState applies the decision tree to determine what state a session
+// StateVerdict is the full result of a classification pass: the state to move
+// to, the human-readable reason, and — the part #1288 adds — which rule
+// decided and on what tier of the authority ladder its evidence arrived.
+//
+// The tier is provenance, not prose. It is recorded as structured data on the
+// lifecycle event rather than folded into Reason, because Reason strings are
+// pinned byte-for-byte by 338 committed replay goldens: putting the tier there
+// would rewrite every one of them and destroy their value as a regression net
+// for this very refactor.
+type StateVerdict struct {
+	State  string
+	Reason string
+	// Tier is where the deciding evidence came from. TierNone when no rule
+	// fired at all.
+	Tier session.SignalTier
+	// Rule is the deciding rule's stable id, for logs and traces.
+	Rule string
+}
+
+// stateRule is one rung of the classifier's authority ladder.
+//
+// Before #1288 these were bare if-statements in a fixed sequence, and the fact
+// that a hook's verdict outranked a transcript guess was encoded as nothing
+// more than which if-statement was written first. Declaring each rule's tier
+// makes that arbitration checkable — see TestStateRules_OrderIsTierConsistent,
+// which fails if a future edit reorders the ladder so a lower tier preempts a
+// higher one for signals that can be true at the same time.
+type stateRule struct {
+	// id is a stable identifier for logs and traces.
+	id string
+
+	// tier reports the authority of this rule's evidence. It is a function
+	// because one rule genuinely has two tiers: agent-done is TierHook when a
+	// Stop hook delivered it and TierTranscript when it was inferred from the
+	// transcript tail — the exact distinction AC3 asks to be able to see.
+	tier func(m *session.SessionMetrics) session.SignalTier
+
+	// eval reports whether this rule claims the decision, and if so what it
+	// decides. fired=true with an empty reason is normal and meaningful: the
+	// rule owns the outcome but the session is already in the target state,
+	// so no transition is emitted and no lower rule may run.
+	eval func(currentState string, m *session.SessionMetrics) (state, reason string, fired bool)
+}
+
+// tierAlways returns a tier function for a rule whose evidence always arrives
+// on the same tier.
+func tierAlways(t session.SignalTier) func(*session.SessionMetrics) session.SignalTier {
+	return func(*session.SessionMetrics) session.SignalTier { return t }
+}
+
+// stateRules is the classifier's decision ladder, most authoritative first.
+//
+// Order is still significant — the first rule to fire decides — but it is no
+// longer the *only* record of the intended arbitration: each rule now carries
+// the tier its evidence arrives on, so the ordering can be asserted rather
+// than merely commented.
+//
+// Two transcript-tier rules (user_blocking_tool, open_tool_stalled) sit above
+// the hook-tier idle_prompt rule, which looks like an inversion and is not:
+// both require an open tool call, an open tool call makes IsAgentDone false,
+// and the idle_prompt hold is dropped as stale the moment IsAgentDone goes
+// false. The three can never contend for the same pass. That claim is not left
+// to inspection — TestStateRules_OrderIsTierConsistent enforces it by finding
+// metrics where a pair does contend, and would fail if a future change made
+// these reachable together.
+var stateRules = []stateRule{
+	{
+		// Permission prompt is open (hook-based signal) → waiting.
+		// The most authoritative signal available, and the only instant one.
+		// Checked before NeedsUserAttention because it doesn't depend on
+		// HasOpenToolCall (avoids the race where the hook fires before
+		// fswatcher processes the tool_use JSONL event).
+		id:   "permission_prompt",
+		tier: tierAlways(session.TierHook),
+		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
+			if !m.PermissionPending {
+				return "", "", false
+			}
+			s, r := transitionTo(cur, session.StateWaiting, "permission prompt open → waiting")
+			return s, r, true
+		},
+	},
+	{
+		// Manual /compact in progress (PreCompact hook) → working, regardless
+		// of the stale pre-compact turn_done that IsAgentDone() would
+		// otherwise read as ready. Compaction writes nothing to the transcript
+		// for tens of seconds to minutes; this overlay holds the session busy
+		// for that window (#657). The detector clears it the pass the manual
+		// compact_boundary lands, which then routes to ready via agent_done
+		// (#656).
+		id:   "compact_in_progress",
+		tier: tierAlways(session.TierHook),
+		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
+			if !m.CompactInProgress {
+				return "", "", false
+			}
+			s, r := transitionTo(cur, session.StateWorking, "manual /compact in progress → working")
+			return s, r, true
+		},
+	},
+	{
+		// User-blocking tool open → waiting.
+		id:   "user_blocking_tool",
+		tier: tierAlways(session.TierTranscript),
+		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
+			if !m.NeedsUserAttention() {
+				return "", "", false
+			}
+			s, r := transitionTo(cur, session.StateWaiting, "user-blocking tool open → waiting")
+			return s, r, true
+		},
+	},
+	{
+		// A permission-gated file-edit tool has been open and idle long enough
+		// that the agent is almost certainly blocked on a permission prompt →
+		// waiting. Transcript-based fallback for when the curl-delivered
+		// PermissionRequest hook can't reach the daemon (#488). The detector
+		// sets OpenToolStalled only after the open tool has lingered with no
+		// transcript progress, so this never fires on a tool that is actively
+		// executing.
+		id:   "open_tool_stalled",
+		tier: tierAlways(session.TierTranscript),
+		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
+			if !m.OpenToolStalled {
+				return "", "", false
+			}
+			s, r := transitionTo(cur, session.StateWaiting, "stalled edit tool → likely permission prompt → waiting")
+			return s, r, true
+		},
+	},
+	{
+		// Claude Code's Notification/idle_prompt hook reported the agent is
+		// idle at the prompt waiting for the user (#1173) → waiting.
+		// Authoritative tier above the turn-done → ready verdict below: it
+		// corrects the case where the turn ended on a plain statement with no
+		// trailing question/cue, which agent_done would otherwise route to
+		// ready. Live-only — the hold is only ever placed while the finished
+		// turn is still idle (and never under replay), so this rule is inert
+		// for every non-hook path.
+		id:   "idle_prompt",
+		tier: tierAlways(session.TierHook),
+		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
+			if !m.IdlePromptPending {
+				return "", "", false
+			}
+			s, r := transitionTo(cur, session.StateWaiting, "idle prompt hook → waiting")
+			return s, r, true
+		},
+	},
+	{
+		// Agent finished turn — check if waiting for user input first. A
+		// hook-delivered Stop (#1161, #1171) is authoritative here: IsAgentDone
+		// consults metrics.HookTurnDone ahead of the transcript-tail heuristic,
+		// so a Stop routes through the same classifyAgentDone path (a turn that
+		// ended on a question/cue still lands in waiting, not ready).
+		//
+		// This is the one rule whose tier is genuinely dynamic — the same
+		// verdict is authoritative when a hook delivered it and inferred when
+		// the transcript tail did.
+		id:   "agent_done",
+		tier: tierAgentDone,
+		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
+			if !m.IsAgentDone() {
+				return "", "", false
+			}
+			s, r := classifyAgentDone(cur, m)
+			return s, r, true
+		},
+	},
+	{
+		// User interruption: ESC or tool-permission denial while
+		// working/waiting with no open tool calls → ready.
+		//
+		// ESC signal: "[Request interrupted by user]" (LastWasUserInterrupt).
+		// Denial signal: "[Request interrupted by user for tool use]"
+		// (LastWasToolDenial). After denial, Claude Code typically returns to
+		// the prompt — the agent's turn is over. If the agent does continue
+		// (writes a new assistant message), the next activity will transition
+		// back to working.
+		id:   "user_interrupt",
+		tier: tierAlways(session.TierTranscript),
+		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
+			if !isUserInterruptReady(cur, m) {
+				return "", "", false
+			}
+			reason := "user ESC interrupt"
+			if m.LastWasToolDenial {
+				reason = "tool permission denied"
+			}
+			return session.StateReady, fmt.Sprintf("%s while %s → ready", reason, cur), true
+		},
+	},
+	{
+		// Default: transcript activity → working. Always fires, so the ladder
+		// is total and every pass has a decision.
+		id:   "transcript_activity",
+		tier: tierAlways(session.TierTranscript),
+		eval: func(cur string, m *session.SessionMetrics) (string, string, bool) {
+			s, r := transitionTo(cur, session.StateWorking,
+				fmt.Sprintf("transcript activity (%s → working)", cur))
+			return s, r, true
+		},
+	},
+}
+
+// tierAgentDone reports the tier the agent-done verdict rests on: TierHook
+// when a Stop hook delivered it, TierTranscript when it was inferred from the
+// transcript tail. This is the distinction that makes a hook-delivered ready
+// distinguishable from a guessed one in a recorded trace.
+func tierAgentDone(m *session.SessionMetrics) session.SignalTier {
+	if m.HookTurnDone {
+		return session.TierHook
+	}
+	return session.TierTranscript
+}
+
+// ClassifyState applies the decision ladder to determine what state a session
 // should be in based on its current state and latest metrics.
 //
-// Decision order (the body's rule numbering in parentheses):
-//   - PermissionPending → waiting (0)
-//   - CompactInProgress → working (0b)
-//   - NeedsUserAttention → waiting (1)
-//   - OpenToolStalled → waiting (1b)
-//   - IdlePromptPending → waiting (1c)
-//   - IsAgentDone → ready, from working/waiting only (2)
-//   - ESC cancellation / tool denial (user + error + no open tools) → ready (3)
-//   - Default → working (4)
-//
 // Returns (newState, reason). An empty reason means no transition occurred.
+// This is the ubiquitous entry point; use ClassifyStateTiered where the
+// deciding tier is wanted too.
 func ClassifyState(currentState string, metrics *session.SessionMetrics) (string, string) {
+	v := ClassifyStateTiered(currentState, metrics)
+	return v.State, v.Reason
+}
+
+// ClassifyStateTiered is ClassifyState with provenance: it reports which rule
+// decided and which tier of the authority ladder its evidence arrived on.
+func ClassifyStateTiered(currentState string, metrics *session.SessionMetrics) StateVerdict {
 	if metrics == nil {
-		return currentState, ""
+		return StateVerdict{State: currentState}
 	}
-
-	// 0. Permission prompt is open (hook-based signal) → waiting.
-	// This is the most authoritative signal — deterministic from Claude Code's
-	// own hook system. Checked before NeedsUserAttention because it doesn't
-	// depend on HasOpenToolCall (avoids race where hook fires before fswatcher
-	// processes the tool_use JSONL event).
-	if metrics.PermissionPending {
-		return transitionTo(currentState, session.StateWaiting, "permission prompt open → waiting")
-	}
-
-	// 0b. Manual /compact in progress (PreCompact hook) → working, regardless
-	// of the stale pre-compact turn_done that IsAgentDone() would otherwise read
-	// as ready. Compaction writes nothing to the transcript for tens of seconds
-	// to minutes; this overlay holds the session busy for that window (#657).
-	// The detector clears it the pass the manual compact_boundary lands, which
-	// then routes to ready via rule 2 (#656).
-	if metrics.CompactInProgress {
-		return transitionTo(currentState, session.StateWorking, "manual /compact in progress → working")
-	}
-
-	// 1. User-blocking tool open → waiting.
-	if metrics.NeedsUserAttention() {
-		return transitionTo(currentState, session.StateWaiting, "user-blocking tool open → waiting")
-	}
-
-	// 1b. A permission-gated file-edit tool has been open and idle long enough
-	// that the agent is almost certainly blocked on a permission prompt →
-	// waiting. Transcript-based fallback for when the curl-delivered
-	// PermissionRequest hook can't reach the daemon (#488). The detector sets
-	// OpenToolStalled only after the open tool has lingered with no transcript
-	// progress, so this never fires on a tool that is actively executing.
-	if metrics.OpenToolStalled {
-		return transitionTo(currentState, session.StateWaiting, "stalled edit tool → likely permission prompt → waiting")
-	}
-
-	// 1c. Claude Code's Notification/idle_prompt hook reported the agent is idle
-	// at the prompt waiting for the user (#1173) → waiting. Authoritative tier
-	// above the turn-done → ready verdict below: it corrects the case where the
-	// turn ended on a plain statement with no trailing question/cue, which rule 2
-	// would otherwise route to ready. Live-only — the detector's overlayIdlePrompt
-	// only sets this while the finished turn is still idle (and never under
-	// replay), so this rule is inert for every non-hook path.
-	if metrics.IdlePromptPending {
-		return transitionTo(currentState, session.StateWaiting, "idle prompt hook → waiting")
-	}
-
-	// 2. Agent finished turn — check if waiting for user input first. A
-	// hook-delivered Stop (claudecode, #1161) is authoritative here: IsAgentDone
-	// consults metrics.HookTurnDone ahead of the transcript-tail heuristic, so a
-	// Stop routes through the same classifyAgentDone path (a turn that ended on a
-	// question/cue still lands in waiting, not ready).
-	if metrics.IsAgentDone() {
-		return classifyAgentDone(currentState, metrics)
-	}
-
-	// 3. User interruption: ESC or tool-permission denial while
-	// working/waiting with no open tool calls → ready.
-	//
-	// ESC signal: "[Request interrupted by user]" (LastWasUserInterrupt).
-	// Denial signal: "[Request interrupted by user for tool use]"
-	// (LastWasToolDenial). After denial, Claude Code typically returns to
-	// the prompt — the agent's turn is over. If the agent does continue
-	// (writes a new assistant message), the next activity will transition
-	// back to working.
-	if isUserInterruptReady(currentState, metrics) {
-		reason := "user ESC interrupt"
-		if metrics.LastWasToolDenial {
-			reason = "tool permission denied"
+	for _, rule := range stateRules {
+		state, reason, fired := rule.eval(currentState, metrics)
+		if !fired {
+			continue
 		}
-		return session.StateReady,
-			fmt.Sprintf("%s while %s → ready", reason, currentState)
+		return StateVerdict{State: state, Reason: reason, Tier: rule.tier(metrics), Rule: rule.id}
 	}
-
-	// 4. Default: transcript activity → working.
-	return transitionTo(currentState, session.StateWorking,
-		fmt.Sprintf("transcript activity (%s → working)", currentState))
+	// Unreachable while the ladder ends in an always-firing rule; kept so a
+	// future edit that removes it degrades to "no transition" rather than to
+	// an out-of-range panic.
+	return StateVerdict{State: currentState}
 }
 
 // transitionTo returns (target, reason) when currentState differs from
@@ -115,7 +265,7 @@ func transitionTo(currentState, target, reason string) (string, string) {
 	return currentState, ""
 }
 
-// classifyAgentDone handles rule 2 of ClassifyState: the agent has finished
+// classifyAgentDone handles the agent_done rule of ClassifyState: the agent has finished
 // its turn. It routes to waiting first when the turn ended with a question
 // or imperative cue (issue #381), otherwise to ready.
 func classifyAgentDone(currentState string, metrics *session.SessionMetrics) (string, string) {
@@ -128,7 +278,7 @@ func classifyAgentDone(currentState string, metrics *session.SessionMetrics) (st
 	return currentState, ""
 }
 
-// isUserInterruptReady reports whether rule 3 of ClassifyState applies: the
+// isUserInterruptReady reports whether the user_interrupt rule of ClassifyState applies: the
 // session was working/waiting with no open tool call, the last transcript
 // event was from the user, and that event was an ESC interrupt or
 // tool-permission denial — meaning the agent's turn is effectively over.
@@ -163,10 +313,10 @@ const ForceReadyToWorkingReason = "force ready→working on first activity"
 //
 //   - Case A: tool_result carries is_error=true AND a trailing user text
 //     "[Request interrupted by user for tool use]" sets LastWasToolDenial.
-//     Classifier returns ready via rule 3.
+//     Classifier returns ready via the user_interrupt rule.
 //   - Case B: the denial user text is followed by another user event in
 //     the same pass, which clears LastWasToolDenial. Classifier then
-//     returns working via rule 4 default. Without this helper the user
+//     returns working via the transcript_activity default. Without this helper the user
 //     never sees the waiting episode at all.
 //
 // Callers (SessionDetector.processActivity and the replay harness) should,

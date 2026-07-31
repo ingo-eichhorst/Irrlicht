@@ -39,14 +39,13 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	delete(d.projectSessions, ev.SessionID)
 	d.mu.Unlock()
 
-	// Drop any leftover permission-pending flag — otherwise a hook that
-	// fired without a clearing partner (e.g. agent crash mid-overlay) would
-	// keep the entry forever, and a recycled session ID would inherit it.
+	// Drop any leftover held signal — otherwise a hook that fired without a
+	// clearing partner (e.g. agent crash mid-overlay) would keep the entry
+	// forever, and a recycled session ID would inherit it.
+	d.signals.DropSession(ev.SessionID)
+
 	d.permMu.Lock()
-	delete(d.permissionPending, ev.SessionID)
 	delete(d.compactPending, ev.SessionID)
-	delete(d.hookTurnDone, ev.SessionID)
-	delete(d.idlePromptPending, ev.SessionID)
 	delete(d.editToolOpenSince, ev.SessionID)
 	delete(d.idleProjectRetryAttempts, ev.SessionID)
 	d.permMu.Unlock()
@@ -281,14 +280,12 @@ func (d *SessionDetector) ReconcilePreSessionBackchannel(oldID, newID string) {
 //
 // Safe to call from any goroutine (e.g. HTTP handler).
 func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEventName string) {
-	d.permMu.Lock()
 	switch hookEventName {
 	case "PermissionRequest", "PreToolUse":
-		d.permissionPending[sessionID] = true
+		d.signals.Hold(sessionID, session.SignalPermissionPrompt, session.SignalPayload{})
 	case "PostToolUse", "PostToolUseFailure":
-		delete(d.permissionPending, sessionID)
+		d.signals.Release(sessionID, session.SignalPermissionPrompt)
 	}
-	d.permMu.Unlock()
 
 	// processActivity overlays PermissionPending onto the metrics before
 	// calling ClassifyState.
@@ -326,32 +323,21 @@ func (d *SessionDetector) dispatchHookActivity(sessionID, transcriptPath, hookNa
 	}
 }
 
-// hookStopSignal carries what Claude Code's Stop hook (#1161) delivers for one
-// turn: the turn's final assistant text (already display-truncated by the
-// adapter) and whether that message carried a question / imperative waiting cue
-// (computed by the adapter from the full text). Stored per session until the
-// next classify pass consumes it.
-type hookStopSignal struct {
-	lastAssistantText string
-	waitingCue        bool
-}
-
 // HandleStopHook records the authoritative turn-done signal from Claude Code's
 // Stop hook (issue #1161), which fires once at true turn end and carries the
-// turn's final assistant text. Marking hookTurnDone makes the next classify
+// turn's final assistant text. Holding SignalTurnDone makes the next classify
 // pass overlay SessionMetrics.HookTurnDone (so IsAgentDone is authoritative,
 // not inferred from the transcript tail) and overwrite LastAssistantText /
 // PendingWaitingCue from the hook's message — so a turn that ended on a
-// question still routes to waiting, not ready.
+// question still routes to waiting, not ready. The hold is consume-once (see
+// session.signalPolicies), so it never bleeds into the following turn.
 //
 // Safe to call from any goroutine (e.g. the HTTP handler).
 func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistantText string, waitingCue bool) {
-	d.permMu.Lock()
-	d.hookTurnDone[sessionID] = hookStopSignal{
-		lastAssistantText: lastAssistantText,
-		waitingCue:        waitingCue,
-	}
-	d.permMu.Unlock()
+	d.signals.Hold(sessionID, session.SignalTurnDone, session.SignalPayload{
+		LastAssistantText: lastAssistantText,
+		WaitingCue:        waitingCue,
+	})
 
 	// classifyAndTransition overlays HookTurnDone onto the metrics before
 	// calling ClassifyState. The Stop hook fires at true turn end (after the
@@ -364,13 +350,14 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 
 // HandleIdlePromptHook records Claude Code's Notification/idle_prompt hook
 // (issue #1173): the agent has finished its turn and is now idle at the prompt
-// waiting for the user. Marking idlePromptPending makes every subsequent
-// classify pass overlay SessionMetrics.IdlePromptPending (ClassifyState rule 1c)
+// waiting for the user. Holding SignalIdlePrompt makes every subsequent
+// classify pass overlay SessionMetrics.IdlePromptPending (the idle_prompt rule)
 // so the session shows waiting even when the turn ended on a plain statement
-// that PendingWaitingCue's prose heuristic can't detect. The flag is held until
-// the next turn begins (overlayIdlePrompt clears it once IsAgentDone flips
-// false), not consumed once — a lower-tier reclassify must not revert the
-// corrected waiting back to ready.
+// that PendingWaitingCue's prose heuristic can't detect. The hold is persistent
+// rather than consume-once (see session.signalPolicies) and lasts until the
+// next turn begins, when its staleness rule drops it as IsAgentDone flips
+// false — a lower-tier reclassify must not revert the corrected waiting back to
+// ready.
 //
 // The idle_prompt hook fires after the turn goes idle (the session is typically
 // already ready by then), so this is a reconcile-and-correct: the synthetic
@@ -382,9 +369,7 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 //
 // Safe to call from any goroutine (e.g. the HTTP handler).
 func (d *SessionDetector) HandleIdlePromptHook(sessionID, transcriptPath string) {
-	d.permMu.Lock()
-	d.idlePromptPending[sessionID] = true
-	d.permMu.Unlock()
+	d.signals.Hold(sessionID, session.SignalIdlePrompt, session.SignalPayload{})
 
 	d.dispatchHookActivity(sessionID, transcriptPath, "Notification")
 }

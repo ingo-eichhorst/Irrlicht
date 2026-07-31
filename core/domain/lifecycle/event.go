@@ -151,4 +151,25 @@ type ClassifierInputs struct {
 	LastEventType                     string   `json:"last_event_type,omitempty"`
 	LastWasUserInterrupt              bool     `json:"last_was_user_interrupt,omitempty"`
 	LastWasToolDenial                 bool     `json:"last_was_tool_denial,omitempty"`
+
+	// HookTurnDone and IdlePromptPending are the two hook-delivered signals
+	// (#1161, #1173) that were missing from this snapshot: a trace could show
+	// that a session went ready but not whether a Stop hook said so or a
+	// transcript-tail heuristic guessed it — the exact question a tiered state
+	// layer has to be able to answer about its own history (#1288).
+	HookTurnDone      bool `json:"hook_turn_done,omitempty"`
+	IdlePromptPending bool `json:"idle_prompt_pending,omitempty"`
+
+	// DecidedByTier is the authority tier of the evidence that decided this
+	// transition ("hook", "transcript", …) and DecidedByRule the id of the
+	// rule that claimed it. Together they are the provenance half of #1288:
+	// two transitions with identical Reason prose ("agent finished turn →
+	// ready") are no longer indistinguishable when one came from a Stop hook
+	// and the other from a guess at the transcript tail.
+	//
+	// Empty on synthetic transitions, which are emitted by the collapse/
+	// catch-up synthesizers rather than decided by the ladder — an absent
+	// tier means "not a classifier verdict", never "unknown tier".
+	DecidedByTier string `json:"decided_by_tier,omitempty"`
+	DecidedByRule string `json:"decided_by_rule,omitempty"`
 }

@@ -214,11 +214,17 @@ type sidecarReplayer struct {
 	stateDurations   map[string]time.Duration
 	lastMetrics      *tailer.SessionMetrics
 
-	// permissionPending mirrors SessionDetector.permissionPending for the
-	// primary session. Set by PermissionRequest hooks and cleared by
-	// PostToolUse / PostToolUseFailure hooks, then overlaid onto metrics
-	// before ClassifyState so rule 0 can fire.
-	permissionPending bool
+	// signals holds out-of-band hook signals for the primary session, using
+	// the same session.SignalHolds mechanism and the same declared policies
+	// as the live SessionDetector.
+	//
+	// It used to be a local bool plus a hand-written overlay method that
+	// "mirrored" the detector's — a fourth copy of a lifecycle rule that no
+	// test compared against the original, so the harness whose entire job is
+	// catching classifier regressions could itself drift out of agreement
+	// with the classifier (#1288). Sharing the mechanism makes that class of
+	// drift unrepresentable.
+	signals *session.SignalHolds
 
 	// children carries the subagents discovered via parent_linked. Each
 	// entry's state is updated as child transitions fire on the timeline;
@@ -283,6 +289,7 @@ func newSidecarReplayer(transcriptPath string, srcBytes []byte, cfg reportSettin
 		prevTransitionAt: fswatches[0].Timestamp,
 		stateDurations:   map[string]time.Duration{},
 		children:         children,
+		signals:          session.NewSignalHolds(),
 	}
 	r.emit(transition{
 		EventIndex:  -1,
@@ -313,19 +320,17 @@ func (r *sidecarReplayer) addDuration(s string, d time.Duration) {
 	}
 }
 
-// overlayPermissionPending mirrors SessionDetector's overlay step: set the
-// flag on metrics so ClassifyState's rule 0 fires. Tool-denial short-
-// circuits the flag — Claude Code doesn't emit PostToolUseFailure on
-// denial, so the denial text in the transcript is what clears it.
-func (r *sidecarReplayer) overlayPermissionPending(m *session.SessionMetrics) {
-	if m == nil || !r.permissionPending {
-		return
-	}
-	if m.LastWasToolDenial {
-		r.permissionPending = false
-		return
-	}
-	m.PermissionPending = true
+// replaySessionKey is the SignalHolds key for the session under replay. The
+// replayer is single-session by construction, so one fixed key stands in for
+// the live detector's per-session map.
+const replaySessionKey = "primary"
+
+// overlayHeldSignals folds every held hook signal onto the metrics about to be
+// classified, exactly as the live detector's classify pass does — including
+// the tool-denial staleness rule (Claude Code emits no PostToolUseFailure on
+// denial, so the transcript's denial marker is what ends the hold).
+func (r *sidecarReplayer) overlayHeldSignals(m *session.SessionMetrics) {
+	r.signals.Overlay(replaySessionKey, m)
 }
 
 // anyChildActive reports whether any subagent discovered via parent_linked
@@ -428,7 +433,7 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 	}
 	r.lastMetrics = metrics
 	domainMetrics := replayengine.TailerToDomain(metrics)
-	r.overlayPermissionPending(domainMetrics)
+	r.overlayHeldSignals(domainMetrics)
 	r.runClassifier(domainMetrics, ctx, grew)
 	return nil
 }
@@ -440,9 +445,9 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 	switch hookEv.HookName {
 	case claudecode.HookPermissionRequest:
-		r.permissionPending = true
+		r.signals.Hold(replaySessionKey, session.SignalPermissionPrompt, session.SignalPayload{})
 	case claudecode.HookPostToolUse, claudecode.HookPostToolUseFailure:
-		r.permissionPending = false
+		r.signals.Release(replaySessionKey, session.SignalPermissionPrompt)
 	default:
 		return
 	}
@@ -450,7 +455,7 @@ func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 		return
 	}
 	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
-	r.overlayPermissionPending(domainMetrics)
+	r.overlayHeldSignals(domainMetrics)
 	r.runClassifier(domainMetrics, transitionCtx{eventIdx: -1, virtTime: hookEv.Timestamp, cause: causeHook}, true)
 }
 
@@ -651,7 +656,7 @@ func (r *sidecarReplayer) applyChildOrphan(orphan orphanTrigger, d *debounceStat
 		return nil
 	}
 	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
-	r.overlayPermissionPending(domainMetrics)
+	r.overlayHeldSignals(domainMetrics)
 	// grew=false: r.state != StateReady is already guaranteed by the check
 	// above, so the force-bounce branch never evaluates this value here.
 	r.runClassifier(domainMetrics, transitionCtx{eventIdx: -1, virtTime: orphan.at, cause: causeEvent}, false)

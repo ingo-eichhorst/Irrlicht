@@ -66,7 +66,7 @@ const hookMatcher = "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|Ask
 
 // hookMatcherPreToolUse is the narrow matcher for the PreToolUse event. We
 // only want to flip working→waiting on the user-input tools — matching every
-// Bash/Write/… would set permissionPending on every tool call. (Issue #307.)
+// Bash/Write/… would hold SignalPermissionPrompt on every tool call. (Issue #307.)
 const hookMatcherPreToolUse = "AskUserQuestion|ExitPlanMode"
 
 // hookMatcherPreCompact is the matcher for the PreCompact event. Unlike the
