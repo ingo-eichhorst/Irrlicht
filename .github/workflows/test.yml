@@ -16,6 +16,11 @@ on:
   push:
     branches: [main]
 
+# Checkout is the only thing the default token is used for here — no job
+# writes back to the repo, comments on a PR, or publishes anything.
+permissions:
+  contents: read
+
 jobs:
   go-test:
     # macOS gate — the platform developers build and run on, and where the

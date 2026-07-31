@@ -62,6 +62,32 @@ func TestSessionIDFromPath_FallsBackToRolloutThreadID(t *testing.T) {
 	}
 }
 
+// TestSessionMetaPayload_RejectsParentTraversal pins the sink-local traversal
+// guard: a path that resolves to a real, readable session_meta file is still
+// refused when a literal ".." got into it, so neither extractor opens it.
+func TestSessionMetaPayload_RejectsParentTraversal(t *testing.T) {
+	real := writeSessionMeta(t, `{"type":"session_meta","payload":{"id":"`+childThreadID+`","thread_source":"subagent","parent_thread_id":"`+parentThreadID+`"}}`)
+	dir := filepath.Dir(real)
+	// dir/../<dir base>/<file> resolves to the same file, so only the guard —
+	// not a failing open — can make the extractors return empty. Assembled by
+	// hand because filepath.Join would Clean the ".." straight back out.
+	sep := string(filepath.Separator)
+	traversal := dir + sep + ".." + sep + filepath.Base(dir) + sep + filepath.Base(real)
+	if _, err := os.Stat(traversal); err != nil {
+		t.Fatalf("setup: traversal path should resolve to the real file: %v", err)
+	}
+	if got := sessionMetaPayload(traversal); got != nil {
+		t.Errorf("sessionMetaPayload(%q) = %v; want nil (traversal rejected)", traversal, got)
+	}
+	if got := sessionIDFromPath(traversal); got != childThreadID {
+		// The filename fallback still applies — it parses the string only.
+		t.Errorf("sessionIDFromPath(%q) = %q, want the filename fallback %q", traversal, got, childThreadID)
+	}
+	if got := parentSessionIDFromPath(traversal); got != "" {
+		t.Errorf("parentSessionIDFromPath(%q) = %q, want empty (traversal rejected)", traversal, got)
+	}
+}
+
 func TestAgent_DeclaresCodexMetadataExtractors(t *testing.T) {
 	source, ok := Agent().Source.(agent.FilesUnderRoot)
 	if !ok {

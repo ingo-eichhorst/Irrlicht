@@ -5,6 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# The badge is published by PATCHing a gist with a separate GIST_SECRET PAT,
+# not the workflow token — so the default token needs checkout and nothing more.
+permissions:
+  contents: read
+
 jobs:
   badge:
     runs-on: ubuntu-latest
