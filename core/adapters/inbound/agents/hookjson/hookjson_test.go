@@ -2,6 +2,7 @@ package hookjson
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -207,11 +208,12 @@ func TestEnsureInstalled_MatcherKeyOmittedWhenEmpty(t *testing.T) {
 			cfg := build(filepath.Join(t.TempDir(), "settings.json"))
 			mustEnsure(t, cfg, "install", true)
 
-			if group := firstGroup(t, cfg.Path, eventNoMatcher); group["matcher"] != nil {
+			group := firstGroup(t, cfg.Path, eventNoMatcher)
+			if _, present := group["matcher"]; present {
 				t.Errorf("%s group carries a matcher key: %#v", eventNoMatcher, group)
 			}
-			group := firstGroup(t, cfg.Path, eventWithMatcher)
-			if m, _ := group["matcher"].(string); m != matcher {
+			withMatcher := firstGroup(t, cfg.Path, eventWithMatcher)
+			if m, _ := withMatcher["matcher"].(string); m != matcher {
 				t.Errorf("%s matcher = %q, want %q", eventWithMatcher, m, matcher)
 			}
 		})
@@ -334,8 +336,38 @@ func TestEnsureInstalled_StripsMatcherFromStaleTurnEndGroup(t *testing.T) {
 
 	mustEnsure(t, cfg, "install over a stale turn-end matcher", true)
 
-	if group := firstGroup(t, cfg.Path, eventNoMatcher); group["matcher"] != nil {
+	group := firstGroup(t, cfg.Path, eventNoMatcher)
+	if _, present := group["matcher"]; present {
 		t.Errorf("matcher key survived on the turn-end group: %#v", group)
+	}
+}
+
+// TestEnsureInstalled_StripsNonStringMatcherFromTurnEndGroup is the same strip,
+// against the shapes a hand-edited file can hold. A `"matcher": null` or a
+// numeric one must be deleted just like a string: a type-assertion check would
+// miss them, leaving a turn-end group carrying a key both upstreams reject —
+// and, because the install would then report no change, never revisiting it.
+func TestEnsureInstalled_StripsNonStringMatcherFromTurnEndGroup(t *testing.T) {
+	for _, bad := range []interface{}{nil, float64(5), []interface{}{"a"}} {
+		t.Run(fmt.Sprintf("%T", bad), func(t *testing.T) {
+			cfg := httpConfig(filepath.Join(t.TempDir(), "settings.json"))
+			seedSettings(t, cfg.Path, map[string]interface{}{
+				"hooks": map[string]interface{}{
+					eventNoMatcher: []interface{}{
+						map[string]interface{}{"matcher": bad, "hooks": []interface{}{cfg.Entry()}},
+					},
+				},
+			})
+
+			mustEnsure(t, cfg, "install over a non-string turn-end matcher", true)
+
+			group := firstGroup(t, cfg.Path, eventNoMatcher)
+			if _, present := group["matcher"]; present {
+				t.Errorf("matcher key survived on the turn-end group: %#v", group)
+			}
+			// It must also converge — not re-report a change on every run.
+			mustEnsure(t, cfg, "re-install after the strip", false)
+		})
 	}
 }
 

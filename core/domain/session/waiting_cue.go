@@ -19,13 +19,17 @@ import (
 // scan, both adapters' Stop-hook handlers, and both adapters' transcript
 // parsers.
 //
-// A caller judging a turn's FINAL message must pass a BOUNDED tail window
-// (tailer.WaitingScanWindow), never the whole turn — ExtractWaitingCue
-// over-fires on very long text — and never the display-truncated
-// LastAssistantText alone, which hides a cue sitting before the trailing 200
-// runes (issue #1150). The windowing stays at the call site rather than moving
-// in here because core/pkg/tailer, which owns the window, deliberately does not
-// import this package (see userblocking_contract_test.go).
+// A caller that HAS the turn's full final message should pass a bounded tail
+// window of it (tailer.WaitingScanWindow), not the whole turn — ExtractWaitingCue
+// over-fires on very long text — and not the display-truncated LastAssistantText,
+// which hides a cue sitting before the trailing 200 runes (issue #1150). That is
+// what both adapters' parsers and Stop-hook handlers do. IsWaitingForUserInput
+// below passes LastAssistantText deliberately: it is the fallback for passes that
+// never populated PendingWaitingCue, where the truncated text is all there is.
+//
+// The windowing stays at the call site rather than moving in here because
+// core/pkg/tailer, which owns the window, deliberately does not import this
+// package (see userblocking_contract_test.go).
 func ProseIndicatesWaiting(text string) bool {
 	if text == "" {
 		return false

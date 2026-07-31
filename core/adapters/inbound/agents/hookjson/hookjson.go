@@ -269,16 +269,21 @@ func upgradeStaleMatchers(hooksMap map[string]interface{}, event string, cfg Con
 // reconcileGroupMatcher brings one sentinel-bearing group's matcher into line
 // with expected: sets it when it differs, or deletes the key when expected is
 // empty. Returns true if it changed the group.
+//
+// The delete branch keys off PRESENCE, not "is a string". A hand-edited file
+// can hold `"matcher": null` or `"matcher": 5`, and a type assertion would miss
+// those and leave a turn-end group carrying a matcher key that both upstreams
+// reject — permanently, since EnsureInstalled would then report no change and
+// never revisit it.
 func reconcileGroupMatcher(group map[string]interface{}, expected string) bool {
-	m, has := group["matcher"].(string)
 	if expected == "" {
-		if has {
+		if _, present := group["matcher"]; present {
 			delete(group, "matcher")
 			return true
 		}
 		return false
 	}
-	if m != expected {
+	if m, _ := group["matcher"].(string); m != expected {
 		group["matcher"] = expected
 		return true
 	}
