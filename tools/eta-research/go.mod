@@ -1,6 +1,6 @@
 module irrlicht/tools/eta-research
 
-go 1.25.0
+go 1.25.12
 
 require irrlicht/core v0.0.0
 
