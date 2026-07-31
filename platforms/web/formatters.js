@@ -122,11 +122,12 @@ const ETA_STALE_AGE_SEC = 180;
 // Each branch then contributes only its own `text` and any title suffix.
 //
 // `completed` is passed in rather than read off `est` on purpose: the
-// zero-rounds branch is also taken when completed_rounds is null/undefined
-// (see taskEtaPresentation's guard), and that path must still label the
-// tooltip "0/N rounds" — reading est.completed_rounds there would render
-// "undefined/N rounds". Mirrored in SessionRowView.swift's etaChipHeader.
-function etaChipHeader(est, nowSec, sourceLabel, completed) {
+// zero-rounds branch is taken for any non-positive completed_rounds AND for
+// a missing one (null/undefined — see taskEtaPresentation's guard), and that
+// path must still label the tooltip "0/N rounds"; reading est.completed_rounds
+// there would render "undefined/N rounds". Argument order mirrors
+// SessionRowView.swift's etaChipHeader.
+function etaChipHeader(est, sourceLabel, completed, nowSec) {
   const title = 'Task ETA — ' + sourceLabel + ' ' + completed + '/' + est.total_rounds + ' rounds';
   if (est.updated_at > 0) {
     const age = Math.max(0, Math.floor(nowSec - est.updated_at));
@@ -151,7 +152,7 @@ function etaChipHeader(est, nowSec, sourceLabel, completed) {
 // At/above half the rounds low == high right at a marker, so the range
 // collapses to a point ("~5m left") and widens as wall clock passes
 // without fresh progress — never a bare countdown (#616). Mirrored in
-// SessionListView.swift's taskEtaPresentation.
+// SessionRowView.swift's taskEtaPresentation.
 // Zero completed rounds: no MEASURED rate yet, but the daemon projects from
 // a corpus prior (#753) so a real number appears at the very first marker
 // instead of "estimating…" (the agent has committed to a plan, #604/#602).
@@ -165,7 +166,7 @@ function zeroRoundsEtaPresentation(est, eta, nowSec, sourceLabel) {
   if (est.total_rounds == null || est.total_rounds <= 0) return null;
   // Literal 0, not est.completed_rounds — this branch also takes a missing
   // completed_rounds, which must still read "0/N" (see etaChipHeader).
-  const head = etaChipHeader(est, nowSec, sourceLabel, 0);
+  const head = etaChipHeader(est, sourceLabel, 0, nowSec);
   if (!eta) return { text: 'estimating…', stale: head.stale, title: head.title };
   const rem0 = Math.max(0, Math.floor(eta - nowSec));
   const high0 = est.updated_at > 0
@@ -178,7 +179,7 @@ function zeroRoundsEtaPresentation(est, eta, nowSec, sourceLabel) {
 // carry no etas yet, #626): show a rounds-only chip rather than hiding one
 // that was visible moments ago.
 function roundsOnlyEtaPresentation(est, nowSec, sourceLabel) {
-  const head = etaChipHeader(est, nowSec, sourceLabel, est.completed_rounds);
+  const head = etaChipHeader(est, sourceLabel, est.completed_rounds, nowSec);
   return {
     text: est.completed_rounds + '/' + est.total_rounds,
     stale: head.stale,
@@ -202,7 +203,7 @@ function projectedEtaPresentation(est, eta, nowSec, sourceLabel) {
     highSecs = Math.floor(remaining * 1.5);
   }
   const text = fmtEtaText(remaining, highSecs);
-  const head = etaChipHeader(est, nowSec, sourceLabel, est.completed_rounds);
+  const head = etaChipHeader(est, sourceLabel, est.completed_rounds, nowSec);
   return { text: text, stale: head.stale, title: head.title };
 }
 
