@@ -112,6 +112,36 @@ worktree name. `close` additionally resolves it from `pwd` / `git status -sb` /
    ```
    `.claude/worktrees/` is gitignored. **Do all work via the worktree path** — editing
    the main checkout's files by absolute path touches the wrong tree.
+2a. **Confirm you are running the current playbook.** The skill text you are
+   executing was loaded into this session from the **main checkout** at startup;
+   the worktree you just created is off fresh `origin/main`. Those disagree
+   whenever the main checkout is behind, and this file is among the most
+   frequently changed in the repo — so from here on you would be editing current
+   code while following superseded instructions.
+   ```bash
+   # Both paths absolute on purpose: written relative to cwd, a run from the
+   # main checkout compares the file to itself and always reports "current" —
+   # a false negative in the one check whose job is catching a silent pass.
+   diff -q <worktree>/.claude/skills/ir:exec/SKILL.md \
+           <main-repo>/.claude/skills/ir:exec/SKILL.md
+   ```
+   On a difference, **re-read the worktree's copy and follow that**, and say so in
+   one line of response text. Don't reconcile the two by judgment: the worktree
+   copy is authoritative because it is what every agent working from current
+   `main` is running.
+
+   Unlike the other Phase 1 checks this one does **not** pause — it is a
+   correction, not a conflict, and the corrected instructions are right there.
+
+   (Real incident, #1275: a run started from a checkout 59 commits behind
+   followed a step 13 that said to invoke `/code-review` — which is
+   `disable-model-invocation` and unreachable. #1217 had already replaced it
+   with the subagent delegation below. The review gate degraded to an improvised
+   inline pass, and the run's final report proposed, as its top improvement, a
+   fix that had shipped days earlier. Note which guards did *not* catch this:
+   step 13's `test -f` confirms the **reviewer** exists, never that the
+   **instructions** are current — a stale playbook passes every check it
+   contains, because those checks are stale too.)
 
 ## Phase 2 — Investigate & plan
 
