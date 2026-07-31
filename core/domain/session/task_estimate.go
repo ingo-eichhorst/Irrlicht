@@ -43,13 +43,39 @@ const (
 // beats a dimmed one.
 const TaskEstimateGraceAge = 180 * time.Second
 
-// taskRoundPriorSeconds is the corpus-derived median wall-clock duration of one
+// TaskRoundPriorSeconds is the corpus-derived median wall-clock duration of one
 // agent round (issue #753, measured by tools/eta-research over the local
 // transcript corpus). It seeds the projection before any round has completed so
 // the ETA chip shows a real number at the very first marker (completed_rounds:0)
-// instead of "estimating…"; the measured rate takes over the moment a round
-// lands. Recompute with the eta-research harness if agent/model pacing drifts.
-const taskRoundPriorSeconds = 70.0
+// instead of "estimating…", and it is the shrinkage target once rounds land
+// (see TaskRoundPriorWeight).
+//
+// Re-measured for #977 at 240s, up from #753's 70s: agent rounds have gotten
+// substantially longer. A stale prior is not cosmetic now that it is also the
+// shrinkage target — the harness's `production` row scored ~10m worse at the
+// median while this still read 70s. REPORT.md prints the live drift between
+// this constant and the corpus median on every run; re-read it when that grows.
+const TaskRoundPriorSeconds = 240.0
+
+// TaskRoundPriorWeight is the prior's strength in pseudo-rounds when shrinking
+// an observed per-round rate toward it (issue #977). The observed rate from a
+// single round is a one-sample estimate and was the biggest source of blown
+// forecasts: one unrepresentative first round anchored hours of projection in
+// either direction (a fast round projecting two days short, a slow setup-heavy
+// round projecting 6h for 15min of work). Blending at weight w means the prior
+// dominates until roughly w rounds have been observed, then the measurement
+// takes over — swept over the corpus by tools/eta-research.
+const TaskRoundPriorWeight = 2.0
+
+// Deliberately absent: a wrap-up allowance at completed==total. #977 proposed
+// padding the forecast there, on the theory that most tasks keep verifying and
+// opening PRs after reporting their last round. tools/eta-research's last-mile
+// section measured it and the padding lost at every idle cutoff tried: the tail
+// is bimodal, not centred — most completed episodes stop dead, a minority run
+// for the better part of an hour — so zero is the median-optimal prediction and
+// any blanket floor is a regression for the majority. What was actually wrong
+// at the finish line is presentational, and is fixed there: the UIs render
+// "wrapping up" rather than a confident "<1m left" once every round is done.
 
 // FresherTaskEstimate picks the estimate to display when two sources are
 // available. preferred is the more holistic signal (the agent's own marker
@@ -125,48 +151,32 @@ func TaskEstimateFromTasks(tasks []Task) (est, base *TaskEstimate) {
 	return est, base
 }
 
-// ForecastTaskCompletion projects the wall-clock completion time from the
-// agent's self-reported progress. The projection is ANCHORED AT THE MARKER,
-// not at the computing pass, so the eta is stable between markers and UIs
-// can count the remaining time down in real time (eta drifting into the
-// past is fine — clients clamp and present an upper bound).
+// ObservedRoundRate measures the per-round wall-clock rate from the agent's own
+// markers, best source first. It returns the seconds-per-round and the number
+// of round observations behind it; (0, 0) means no rate is measurable yet.
+// The observation count is what lets callers weigh a one-round measurement
+// differently from a ten-round one (see BlendRoundRate).
 //
-// Per-round rate, best first:
-//
-//  1. Marker deltas within the current task (base = the task's first
-//     marker): perRound = (est.UpdatedAt − base.UpdatedAt) /
-//     (est.CompletedRounds − base.CompletedRounds). Session elapsed
-//     includes previous tasks and idle gaps in multi-task sessions and
-//     inflated projections ~2× (and pre-marker time skewed even
-//     single-task ETAs long).
+//  1. Marker deltas within the current task (base = the task's first marker):
+//     perRound = (est.UpdatedAt − base.UpdatedAt) / (est.CompletedRounds −
+//     base.CompletedRounds). Session elapsed includes previous tasks and idle
+//     gaps in multi-task sessions and inflated projections ~2× (and pre-marker
+//     time skewed even single-task ETAs long).
 //  2. Fallback when no usable base exists (single marker so far):
 //     perRound = elapsedAtMarker / CompletedRounds, with the gap since the
 //     marker subtracted from elapsedSeconds.
-//  3. Corpus prior (taskRoundPriorSeconds) ONLY when no round has completed
-//     yet (#753): a real eta appears at the very first marker — total_rounds ×
-//     prior — instead of "estimating…". The prior is confined to the
-//     zero-round case, so the instant a round lands the measured rate (1 or 2)
-//     takes over and every post-first-round projection is byte-identical to
-//     the pre-#753 model. The earlier number is shown with a deliberately wide
-//     range (UI side) to signal a population prior rather than a measured rate.
 //
-// This function is the single seam to swap when the estimation approach
-// evolves. Returns nil when there is no estimate, or when progress is reported
-// but no rate is measurable (no usable base and no elapsed).
-func ForecastTaskCompletion(est, base *TaskEstimate, elapsedSeconds int64, now time.Time) *time.Time {
+// tools/eta-research scores the production forecast through this exact
+// function rather than a copy of it, so the harness cannot drift from what
+// ships.
+func ObservedRoundRate(est, base *TaskEstimate, elapsedSeconds int64, now time.Time) (perRound float64, observations int) {
 	if est == nil {
-		return nil
+		return 0, 0
 	}
-	remaining := max(est.TotalRounds-est.CompletedRounds, 0)
-
-	anchor := now
-	if est.UpdatedAt > 0 {
-		anchor = time.Unix(est.UpdatedAt, 0)
-	}
-	var perRound float64
 	switch {
 	case base != nil && est.CompletedRounds > base.CompletedRounds && est.UpdatedAt > base.UpdatedAt:
-		perRound = float64(est.UpdatedAt-base.UpdatedAt) / float64(est.CompletedRounds-base.CompletedRounds)
+		n := est.CompletedRounds - base.CompletedRounds
+		return float64(est.UpdatedAt-base.UpdatedAt) / float64(n), n
 	case elapsedSeconds > 0 && est.CompletedRounds > 0:
 		elapsedAtMarker := elapsedSeconds
 		if est.UpdatedAt > 0 {
@@ -174,13 +184,89 @@ func ForecastTaskCompletion(est, base *TaskEstimate, elapsedSeconds int64, now t
 				elapsedAtMarker = elapsedSeconds - gap
 			}
 		}
-		perRound = float64(elapsedAtMarker) / float64(est.CompletedRounds)
+		return float64(elapsedAtMarker) / float64(est.CompletedRounds), est.CompletedRounds
+	}
+	return 0, 0
+}
+
+// BlendRoundRate shrinks an observed per-round rate toward the population prior
+// in proportion to how little evidence backs it: (w·prior + n·observed)/(w+n),
+// with n the observation count from ObservedRoundRate and w the prior's
+// strength in pseudo-rounds. At n=0 it is the prior; by n≫w it is the
+// measurement. This is what stops one unrepresentative round from anchoring an
+// entire forecast (issue #977, failure mode #2). weight is a parameter rather
+// than the constant so tools/eta-research can sweep it over the corpus.
+func BlendRoundRate(observed float64, observations int, prior, weight float64) float64 {
+	if observations <= 0 || observed <= 0 {
+		return prior
+	}
+	n := float64(observations)
+	return (weight*prior + n*observed) / (weight + n)
+}
+
+// ForecastTaskCompletion projects the wall-clock completion time from the
+// agent's self-reported progress. The projection is ANCHORED AT THE MARKER,
+// not at the computing pass, so the eta is stable between markers and UIs
+// can count the remaining time down in real time (eta drifting into the
+// past is fine — clients clamp and present an upper bound).
+//
+// eta = marker + remainingRounds × perRound, where perRound is the observed
+// rate (ObservedRoundRate) shrunk toward the corpus prior (BlendRoundRate), or
+// the bare prior when no round has completed yet.
+//
+//   - The prior seeds the zero-round case (#753) so a real eta appears at the
+//     very first marker — total_rounds × prior — instead of "estimating…". The
+//     UI widens that range (2×) to signal a population prior, not a measurement.
+//   - Shrinking toward the prior afterwards (#977) makes the estimate converge:
+//     the first measured round moves the number a little, the fifth moves it a
+//     lot, so more information can no longer make the forecast dramatically
+//     worse than the round before it.
+//   - remaining clamps at 0, so completed==total projects the marker itself.
+//     That is the median-optimal prediction (see the "Deliberately absent" note
+//     above for why padding it lost); the UIs relabel it rather than pad it.
+//
+// This function is the single seam to swap when the estimation approach
+// evolves, and tools/eta-research scores it directly. Returns nil when there is
+// no estimate, or when progress is reported but no rate is measurable (no
+// usable base and no elapsed) — the prior stays confined to the zero-round case
+// rather than papering over a missing measurement.
+func ForecastTaskCompletion(est, base *TaskEstimate, elapsedSeconds int64, now time.Time) *time.Time {
+	if est == nil {
+		return nil
+	}
+	observed, observations := ObservedRoundRate(est, base, elapsedSeconds, now)
+	var perRound float64
+	switch {
+	case observations > 0:
+		perRound = BlendRoundRate(observed, observations, TaskRoundPriorSeconds, TaskRoundPriorWeight)
 	case est.CompletedRounds == 0:
-		perRound = taskRoundPriorSeconds
+		perRound = TaskRoundPriorSeconds
 	default:
 		return nil
 	}
+	return ProjectCompletion(est, perRound, now)
+}
 
+// ProjectCompletion turns a per-round rate into a completion time: the marker
+// anchor plus the remaining rounds at that rate. Remaining clamps at 0, so an
+// agent reporting more rounds than it planned (a re-scoped task) projects the
+// marker rather than a time in the past.
+//
+// Split out of ForecastTaskCompletion so tools/eta-research's candidate
+// estimators project exactly the way production does. They previously kept
+// their own copy of this arithmetic, which meant a change to the anchoring or
+// clamping rule would move the shipped model while leaving every research
+// baseline on the old one — the drift #977 removed from the rate half of the
+// calculation, and this closes for the projection half.
+func ProjectCompletion(est *TaskEstimate, perRound float64, now time.Time) *time.Time {
+	if est == nil || perRound <= 0 {
+		return nil
+	}
+	remaining := max(est.TotalRounds-est.CompletedRounds, 0)
+	anchor := now
+	if est.UpdatedAt > 0 {
+		anchor = time.Unix(est.UpdatedAt, 0)
+	}
 	eta := anchor.Add(time.Duration(float64(remaining) * perRound * float64(time.Second)))
 	return &eta
 }

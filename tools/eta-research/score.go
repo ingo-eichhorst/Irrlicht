@@ -2,6 +2,7 @@ package etaresearch
 
 import (
 	"math"
+	"slices"
 
 	"irrlicht/core/domain/stats"
 )
@@ -119,6 +120,78 @@ func ScoreEstimator(est Estimator, eps []Episode, reachedOnly bool) Score {
 	sc.MeanFirstAbsErr = mean(firstAbs)
 	sc.MeanJitter = mean(jitter)
 	return sc
+}
+
+// LastMileStats measures how long the agent keeps working AFTER reporting
+// completed==total — failure mode #1 of issue #977, and the one thing the
+// accuracy table above is structurally blind to (its ground truth IS that final
+// marker, so every such turn scores an actual-remaining of 0 and is skipped).
+//
+// Predicting "done now" there is wrong by exactly the tail, so MedianSeconds is
+// also the median error of the shipped model. ErrPaddedSeconds is what a
+// wrap-up floor of WrapUpRounds × the episode's own round rate would be wrong
+// by instead; #977 proposed exactly that padding, and comparing the two is how
+// it was rejected. Both are medians over episodes that reached completed==total.
+type LastMileStats struct {
+	CutoffSeconds int64   // how long a pause still counts as "still working"
+	WrapUpRounds  float64 // the padding evaluated against the hard zero
+
+	Episodes int // reached episodes with a measurable round rate
+	WithTail int // ...of which kept working after the final marker
+
+	MedianSeconds float64
+	P90Seconds    float64
+	MaxSeconds    float64
+
+	// MedianRounds and P90Rounds are the tail divided by the episode's own
+	// seconds-per-round — the unit a wrap-up floor would be expressed in, and
+	// the clearest view of how far apart the two halves of the distribution sit.
+	MedianRounds float64
+	P90Rounds    float64
+
+	ErrPaddedSeconds float64
+}
+
+// CandidateWrapUpRounds is the wrap-up floor #977 proposed and this harness
+// rejected — kept as the value the last-mile table scores, so the report shows
+// what the rejected option would have cost rather than merely asserting it lost.
+const CandidateWrapUpRounds = 0.4
+
+// LastMile computes the tail distribution over episodes that reached
+// completed==total, evaluating wrapUpRounds as the replacement for the old
+// hard-zero. cutoff is how long a pause still counts as the agent working;
+// vary it to see how much of the answer that judgment call is carrying.
+// Episodes whose round rate is unmeasurable are excluded: the tail cannot be
+// expressed in rounds and the forecast would not have projected there either.
+func LastMile(eps []Episode, wrapUpRounds float64, cutoff int64) LastMileStats {
+	st := LastMileStats{CutoffSeconds: cutoff, WrapUpRounds: wrapUpRounds}
+	var secs, rounds, errPadded []float64
+	for _, ep := range eps {
+		if !ep.Reached || len(ep.Turns) < 2 {
+			continue
+		}
+		rate := ep.RoundRateSeconds()
+		if rate <= 0 {
+			continue
+		}
+		st.Episodes++
+		tail := float64(ep.TailSecondsAt(cutoff))
+		if tail > 0 {
+			st.WithTail++
+		}
+		secs = append(secs, tail)
+		rounds = append(rounds, tail/rate)
+		errPadded = append(errPadded, math.Abs(wrapUpRounds*rate-tail))
+	}
+	st.MedianSeconds, _ = stats.Median(secs)
+	st.P90Seconds, _ = stats.Percentile(secs, 0.90)
+	if len(secs) > 0 {
+		st.MaxSeconds = slices.Max(secs)
+	}
+	st.MedianRounds, _ = stats.Median(rounds)
+	st.P90Rounds, _ = stats.Percentile(rounds, 0.90)
+	st.ErrPaddedSeconds, _ = stats.Median(errPadded)
+	return st
 }
 
 func mean(xs []float64) float64 {

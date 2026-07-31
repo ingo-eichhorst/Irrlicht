@@ -9,9 +9,23 @@ projected remaining time against the ground-truth completion.
 ## What it measures
 
 For each estimator: accuracy (MAE / median / relative error / bias),
-**time-to-first-estimate** (the issue's headline — when a real number first
+**time-to-first-estimate** (#753's headline — when a real number first
 appears), and stability (turn-to-turn jitter). See `REPORT.md` for the latest
 run.
+
+The `production` row is not a candidate model but the **shipped seam itself** —
+`session.ForecastTaskCompletion` called directly, with production's own
+constants. Adding it (#977) also let the other estimators drop their verbatim
+copy of the forecaster's rate measurement, which previously had to be kept in
+sync by hand. If a change to the daemon's model doesn't move that row, the
+change isn't reaching users.
+
+The **last-mile** section (#977) is measured against a *different* ground truth
+from everything above it: the accuracy table ends at the final marker, so it is
+structurally blind to work that happens after the agent stops reporting rounds.
+That section follows the transcript past the marker instead, and sweeps the
+"how long a pause still counts as working" cutoff rather than assuming one —
+the answer moves a lot with it.
 
 ## Methodology notes
 
@@ -26,8 +40,12 @@ run.
   the agent's final progress report and lands when the work stops.
 - **Prior** = the median *per-episode* average round duration. Per episode, not
   per consecutive marker delta: markers are emitted in bursts, so a per-delta
-  median collapses to the emission cadence (~4 s) rather than a true round
-  (~70 s).
+  median collapses to the emission cadence (~4 s) rather than a true round.
+  The corpus prior **drifts** — #753 measured ~70 s, #977 re-measured ~240 s on
+  a rotated corpus — so the report prints the live gap between it and the
+  shipped `session.TaskRoundPriorSeconds` on every run. That gap is not
+  cosmetic: since #977 the prior is also the shrinkage target, so a stale one
+  drags every estimate, not just the zero-round bootstrap.
 - Accuracy is scored only on episodes that reached `completed==total` (where the
   last marker is genuinely the completion).
 

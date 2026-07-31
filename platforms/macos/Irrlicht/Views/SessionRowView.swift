@@ -532,11 +532,11 @@ struct SessionRowView: View {
     /// Decides the task-completion ETA chip (issue #558) — mirrors the web's
     /// taskEtaPresentation. Nil hides the chip: session not working or no
     /// estimate. Zero completed rounds renders a progress-only "estimating…"
-    /// chip (#602); with progress, a range whose high bound stays pinned at
-    /// the last marker — 1.5× padded below half the rounds, bare at/above
-    /// half so it collapses to a point right at a marker and widens instead
-    /// of counting down (#616) — and stale dimming when the last marker is
-    /// older than 3 minutes.
+    /// chip (#602); all rounds done renders "wrapping up" (#977); with
+    /// progress, a range whose high bound stays pinned at the last marker —
+    /// 1.5× padded below half the rounds, bare at/above half so it collapses
+    /// to a point right at a marker and widens instead of counting down
+    /// (#616) — and stale dimming when the last marker is older than 3 minutes.
     private func taskEtaPresentation(now: Date = Date()) -> TaskEtaPresentation? {
         guard session.state == .working,
               let metrics = session.metrics,
@@ -572,6 +572,37 @@ struct SessionRowView: View {
             }
             let text0 = etaText(remaining: rem0, highSecs: high0)
             return TaskEtaPresentation(text: text0, stale: stale, title: title + " · rough prior")
+        }
+        let allRoundsDone = est.totalRounds > 0 && est.completedRounds >= est.totalRounds
+        let etaIsTheMarker = metrics.taskCompletionEta.map { eta in
+            est.updatedAt.map { eta <= $0 } ?? false
+        } ?? true
+        if allRoundsDone && etaIsTheMarker {
+            // Every round reported done, but the session is still working
+            // (#977). The daemon projects the marker itself here — the measured
+            // post-completion tail is bimodal, so any padded number would be
+            // wrong for most sessions (see tools/eta-research's last-mile
+            // section). What was wrong was rendering that as a confident
+            // "<1m left" when the truth is "usually seconds, sometimes another
+            // hour". Checked before the eta guard so it also covers an
+            // aggregate with no projection.
+            //
+            // The eta test is not redundant with the round counts: a subagent
+            // aggregate SUMS rounds across children and takes the LATEST child
+            // eta, so one child overshooting its own plan (5/2) can push the sum
+            // to "done" while a sibling still has real work and a real future
+            // eta. Deferring to the daemon's projection keeps that countdown.
+            // Mirrors the web's wrappingUpEtaPresentation.
+            var stale = false
+            var title = "Task ETA — \(sourceLabel) \(est.completedRounds)/\(est.totalRounds) rounds, all reported done"
+            if let updated = est.updatedAt {
+                let age = max(0, now.timeIntervalSince(updated))
+                stale = age > 180
+                title += ", updated \(Int(age))s ago"
+            }
+            return TaskEtaPresentation(
+                text: "wrapping up", stale: stale,
+                title: title + " · verification and wrap-up may still be running")
         }
         guard let eta = metrics.taskCompletionEta else {
             // Progress without a projection (e.g. a subagent aggregate whose

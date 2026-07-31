@@ -14,15 +14,33 @@ type SweepPoint struct {
 // ReportInput is everything RenderReport needs; the caller computes the scores
 // and the recommendation so rendering stays pure (no I/O, no wall-clock).
 type ReportInput struct {
-	Transcripts    int
-	Episodes       int
-	CleanEpisodes  int
-	PriorSeconds   float64
-	CorpusNote     string // describes where the corpus came from (fixtures only vs +local)
-	Scores         []Score
-	BlendSweep     []SweepPoint
-	EWMASweep      []SweepPoint
+	Transcripts   int
+	Episodes      int
+	CleanEpisodes int
+	PriorSeconds  float64
+	CorpusNote    string // describes where the corpus came from (fixtures only vs +local)
+	Scores        []Score
+	BlendSweep    []SweepPoint
+	EWMASweep     []SweepPoint
+
+	// LastMileSweep and the Shipped* constants describe the production model
+	// the `production` row scores, so the report states which constants
+	// produced its own numbers rather than leaving them to be looked up in Go
+	// source.
+	LastMileSweep []LastMileStats
+	ShippedPrior  float64
+	ShippedWeight float64
+
 	Recommendation string
+}
+
+// lastMileWrapUp is the padding the sweep was scored against — carried on the
+// rows themselves, so the table header can't disagree with the numbers under it.
+func lastMileWrapUp(in ReportInput) float64 {
+	if len(in.LastMileSweep) == 0 {
+		return 0
+	}
+	return in.LastMileSweep[0].WrapUpRounds
 }
 
 // RenderReport produces the committed Markdown comparison. Pure: same input →
@@ -39,15 +57,25 @@ func RenderReport(in ReportInput) string {
 	fmt.Fprintf(&b, "- Transcripts scanned: **%d**\n", in.Transcripts)
 	fmt.Fprintf(&b, "- Task episodes segmented: **%d**\n", in.Episodes)
 	fmt.Fprintf(&b, "- Episodes that reached completed==total (clean accuracy subset): **%d**\n", in.CleanEpisodes)
-	fmt.Fprintf(&b, "- Corpus per-round prior (median seconds/round): **%s**\n\n", fmtDur(in.PriorSeconds))
+	fmt.Fprintf(&b, "- Corpus per-round prior (median seconds/round): **%s**\n", fmtDur(in.PriorSeconds))
+	fmt.Fprintf(&b, "- Shipped `session.TaskRoundPriorSeconds`: **%s** (drift vs corpus: **%s** — "+
+		"recompute the constant when this grows)\n\n",
+		fmtDur(in.ShippedPrior), fmtSigned(in.PriorSeconds-in.ShippedPrior))
 
 	b.WriteString("## Approaches\n\n")
-	b.WriteString("- **baseline** — current production model: pure observed round-rate, no\n")
-	b.WriteString("  estimate until the first round completes (the control).\n")
+	b.WriteString("- **baseline** — the pre-#753 model: pure observed round-rate, no estimate\n")
+	b.WriteString("  until the first round completes (the control).\n")
 	b.WriteString("- **prior-bootstrap** — show `total_rounds × prior` at zero rounds, then the\n")
 	b.WriteString("  pure observed rate once a round lands (identical to baseline thereafter).\n")
+	b.WriteString("  Shipped by #753; superseded by `production` below.\n")
 	b.WriteString("- **prior-blend** — Bayesian shrinkage toward the prior at every turn,\n")
 	b.WriteString("  `(w·prior + n·observed)/(w+n)`.\n")
+	fmt.Fprintf(&b, "- **production** — the SHIPPED seam itself, `session.ForecastTaskCompletion`\n"+
+		"  called directly (not reimplemented), so this row cannot drift from what\n"+
+		"  users see. Currently prior-blend at `w=%.1f` over a `%s` prior (#977). It\n"+
+		"  tracks the `prior-blend` row exactly when that prior matches the corpus\n"+
+		"  median; a gap between the two rows IS the drift called out under Corpus.\n",
+		in.ShippedWeight, fmtDur(in.ShippedPrior))
 	b.WriteString("- **ewma** — exponentially-weighted per-round duration over the marker\n")
 	b.WriteString("  history (stateful; shippable only by widening the forecast seam).\n")
 	b.WriteString("- **token-aware** — considered and rejected: with no token *budget* target,\n")
@@ -88,8 +116,62 @@ func RenderReport(in ReportInput) string {
 		b.WriteString("\n")
 	}
 
+	b.WriteString(renderLastMile(in))
+
 	b.WriteString("## Recommendation\n\n")
 	b.WriteString(in.Recommendation + "\n")
+	return b.String()
+}
+
+// renderLastMile reports the post-completion tail. It is a separate section
+// rather than a column in the results table because it is measured against a
+// DIFFERENT ground truth: the accuracy table ends at the final marker, which is
+// precisely where this measurement begins.
+func renderLastMile(in ReportInput) string {
+	if len(in.LastMileSweep) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Last mile — work after `completed == total` (#977)\n\n")
+	b.WriteString("The accuracy table above is blind to this by construction: its ground truth\n")
+	b.WriteString("is the episode's last marker, so every turn at `completed == total` has an\n")
+	b.WriteString("actual-remaining of 0 and is skipped. Measured here instead by following the\n")
+	b.WriteString("transcript past that marker.\n\n")
+	b.WriteString("How much work \"follows the last marker\" depends entirely on how long a pause\n")
+	b.WriteString("still counts as the agent working, so that cutoff is swept rather than\n")
+	b.WriteString("assumed. `has tail` is the fraction of completed episodes with ANY activity\n")
+	b.WriteString("after the final marker.\n\n")
+	b.WriteString("Predicting \"done now\" is wrong by exactly the tail, so the `median` column\n")
+	b.WriteString("**is** the shipped model's median error here — it is not a separate\n")
+	b.WriteString("measurement. The last column is what a wrap-up allowance scaled to the\n")
+	b.WriteString("episode's own round rate would be wrong by instead; lower would be better.\n\n")
+
+	fmt.Fprintf(&b, "| idle cutoff | episodes | has tail | median (= err @0) | p90 | max | rounds: median | rounds: p90 | err @%.2f rounds |\n",
+		lastMileWrapUp(in))
+	b.WriteString("|---|--:|--:|--:|--:|--:|--:|--:|--:|\n")
+	for _, lm := range in.LastMileSweep {
+		pct := 0.0
+		if lm.Episodes > 0 {
+			pct = float64(lm.WithTail) / float64(lm.Episodes) * 100
+		}
+		fmt.Fprintf(&b, "| %s | %d | %.0f%% | %s | %s | %s | %.2f | %.2f | %s |\n",
+			fmtDur(float64(lm.CutoffSeconds)), lm.Episodes, pct,
+			fmtDur(lm.MedianSeconds), fmtDur(lm.P90Seconds), fmtDur(lm.MaxSeconds),
+			lm.MedianRounds, lm.P90Rounds, fmtDur(lm.ErrPaddedSeconds))
+	}
+	b.WriteString("\n")
+	b.WriteString("**The padding was rejected.** Predicting zero wins at every cutoff, because\n")
+	b.WriteString("the tail is bimodal rather than centred — compare the median and p90 rounds\n")
+	b.WriteString("columns: most completed episodes stop dead, and the\n")
+	b.WriteString("minority that keep going run far longer than any constant would cover. Zero\n")
+	b.WriteString("is the median-optimal prediction, so a blanket floor buys the minority a\n")
+	b.WriteString("little accuracy by making the majority worse. Note also how much of the\n")
+	b.WriteString("apparent tail is the cutoff's doing — a generous cutoff mostly measures a\n")
+	b.WriteString("human's absence, which is why #977's own ad-hoc figures (58% of episodes,\n")
+	b.WriteString("median 3.1m) resemble the widest row here rather than the narrow ones.\n\n")
+	b.WriteString("What remains wrong at the finish line is presentation, not arithmetic: the\n")
+	b.WriteString("UIs render \"wrapping up\" instead of a confident `<1m left` once every round\n")
+	b.WriteString("is reported done — true whether the tail is 0s or 40 minutes.\n\n")
 	return b.String()
 }
 
