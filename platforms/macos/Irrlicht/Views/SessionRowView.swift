@@ -491,6 +491,30 @@ struct SessionRowView: View {
         let title: String
     }
 
+    /// How old the last progress marker may get before the ETA chip dims
+    /// rather than letting the projection drift. Mirrors the daemon's
+    /// `session.TaskEstimateGraceAge` (core/domain/session/task_estimate.go)
+    /// — restated rather than imported because this is the Swift side of the
+    /// same product decision.
+    private static let etaStaleAge: TimeInterval = 180
+
+    /// The parts every ETA-chip branch shares (#1223): the stale flag and the
+    /// tooltip title, both derived from the marker's age. Each branch then
+    /// contributes only its own `text` and any title suffix.
+    ///
+    /// `completed` is passed in rather than read off `est` on purpose: the
+    /// zero-rounds branch is also taken for a non-positive `completedRounds`
+    /// and must still label the tooltip "0/N rounds". Mirrors the web's
+    /// `etaChipHeader` in formatters.js.
+    private func etaChipHeader(
+        _ est: TaskEstimateInfo, sourceLabel: String, completed: Int, now: Date
+    ) -> (stale: Bool, title: String) {
+        let title = "Task ETA — \(sourceLabel) \(completed)/\(est.totalRounds) rounds"
+        guard let updated = est.updatedAt else { return (false, title) }
+        let age = max(0, now.timeIntervalSince(updated))
+        return (age > Self.etaStaleAge, title + ", updated \(Int(age))s ago")
+    }
+
     /// One sub-row: task dots left, completion ETA right (issue #558). It's a
     /// sub-row rather than part of the main HStack because the ETA, placed
     /// inline next to the cost, truncated to "…" at menu-bar width (the model
@@ -553,15 +577,11 @@ struct SessionRowView: View {
             // "estimating…" (#602). Widen the range (2×) to signal a population
             // prior, not a measured rate; no projection → "estimating…".
             guard est.totalRounds > 0 else { return nil }
-            var stale = false
-            var title = "Task ETA — \(sourceLabel) 0/\(est.totalRounds) rounds"
-            if let updated = est.updatedAt {
-                let age = max(0, now.timeIntervalSince(updated))
-                stale = age > 180
-                title += ", updated \(Int(age))s ago"
-            }
+            // Literal 0, not est.completedRounds — this branch also takes a
+            // non-positive count, which must still read "0/N".
+            let head = etaChipHeader(est, sourceLabel: sourceLabel, completed: 0, now: now)
             guard let eta = metrics.taskCompletionEta else {
-                return TaskEtaPresentation(text: "estimating…", stale: stale, title: title)
+                return TaskEtaPresentation(text: "estimating…", stale: head.stale, title: head.title)
             }
             let rem0 = max(0, eta.timeIntervalSince(now))
             let high0: TimeInterval
@@ -571,7 +591,8 @@ struct SessionRowView: View {
                 high0 = rem0 * 2
             }
             let text0 = etaText(remaining: rem0, highSecs: high0)
-            return TaskEtaPresentation(text: text0, stale: stale, title: title + " · rough prior")
+            return TaskEtaPresentation(
+                text: text0, stale: head.stale, title: head.title + " · rough prior")
         }
         let allRoundsDone = est.totalRounds > 0 && est.completedRounds >= est.totalRounds
         let etaIsTheMarker = metrics.taskCompletionEta.map { eta in
@@ -608,15 +629,11 @@ struct SessionRowView: View {
             // Progress without a projection (e.g. a subagent aggregate whose
             // children carry no etas yet, #626): show a rounds-only chip
             // rather than hiding one that was visible moments ago.
-            var stale = false
-            var title = "Task ETA — \(sourceLabel) \(est.completedRounds)/\(est.totalRounds) rounds"
-            if let updated = est.updatedAt {
-                let age = max(0, now.timeIntervalSince(updated))
-                stale = age > 180
-                title += ", updated \(Int(age))s ago"
-            }
+            let head = etaChipHeader(
+                est, sourceLabel: sourceLabel, completed: est.completedRounds, now: now)
             return TaskEtaPresentation(
-                text: "\(est.completedRounds)/\(est.totalRounds)", stale: stale, title: title)
+                text: "\(est.completedRounds)/\(est.totalRounds)",
+                stale: head.stale, title: head.title)
         }
         let remaining = max(0, eta.timeIntervalSince(now))
         let frac = est.totalRounds > 0 ? Double(est.completedRounds) / Double(est.totalRounds) : 0
@@ -636,14 +653,9 @@ struct SessionRowView: View {
             highSecs = remaining * 1.5
         }
         let text = etaText(remaining: remaining, highSecs: highSecs)
-        var stale = false
-        var title = "Task ETA — \(sourceLabel) \(est.completedRounds)/\(est.totalRounds) rounds"
-        if let updated = est.updatedAt {
-            let age = max(0, now.timeIntervalSince(updated))
-            stale = age > 180
-            title += ", updated \(Int(age))s ago"
-        }
-        return TaskEtaPresentation(text: text, stale: stale, title: title)
+        let head = etaChipHeader(
+            est, sourceLabel: sourceLabel, completed: est.completedRounds, now: now)
+        return TaskEtaPresentation(text: text, stale: head.stale, title: head.title)
     }
 
     /// Renders the remaining-time text with exactly ONE sign — "~"

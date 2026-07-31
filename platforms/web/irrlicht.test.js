@@ -457,6 +457,16 @@ describe('taskEtaPresentation', () => {
     expect(info.text).toBe('estimating…')
   })
 
+  test('missing completed_rounds still labels the tooltip "0/N", never "undefined/N"', () => {
+    // Lock for the shared etaChipHeader (#1223): the zero-rounds branch is
+    // reached with completed_rounds undefined, so the header must be handed a
+    // literal 0 — reading est.completed_rounds there renders "undefined/10".
+    // The test above pins the same input's `text`, not its title.
+    const info = taskEtaPresentation(metricsFor({ est: { completed_rounds: undefined, updated_at: undefined }, metrics: { task_completion_eta: undefined } }), 'working', now)
+    expect(info.title).toContain('0/10 rounds')
+    expect(info.title).not.toContain('undefined')
+  })
+
   test('missing total_rounds (alongside zero completed_rounds) returns null instead of a broken 0/undefined label', () => {
     // Same regression class as the completed_rounds case above, in
     // zeroRoundsEtaPresentation's own total_rounds guard.

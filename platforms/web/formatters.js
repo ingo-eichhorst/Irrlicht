@@ -110,6 +110,32 @@ export function fmtEtaText(remaining, highSecs) {
   return '~' + low + ' left';
 }
 
+// How old the last progress marker may get before the ETA chip dims rather
+// than letting the projection drift. Mirrors the daemon's
+// session.TaskEstimateGraceAge (core/domain/session/task_estimate.go) —
+// restated rather than imported because this is the JS side of the same
+// product decision.
+const ETA_STALE_AGE_SEC = 180;
+
+// etaChipHeader builds the parts every ETA-chip branch shares (#1223): the
+// stale flag and the tooltip title, both derived from the marker's age.
+// Each branch then contributes only its own `text` and any title suffix.
+//
+// `completed` is passed in rather than read off `est` on purpose: the
+// zero-rounds branch is taken for any non-positive completed_rounds AND for
+// a missing one (null/undefined — see taskEtaPresentation's guard), and that
+// path must still label the tooltip "0/N rounds"; reading est.completed_rounds
+// there would render "undefined/N rounds". Argument order mirrors
+// SessionRowView.swift's etaChipHeader.
+function etaChipHeader(est, sourceLabel, completed, nowSec) {
+  const title = 'Task ETA — ' + sourceLabel + ' ' + completed + '/' + est.total_rounds + ' rounds';
+  if (est.updated_at > 0) {
+    const age = Math.max(0, Math.floor(nowSec - est.updated_at));
+    return { stale: age > ETA_STALE_AGE_SEC, title: title + ', updated ' + fmtDuration(age) + ' ago' };
+  }
+  return { stale: false, title: title };
+}
+
 // taskEtaPresentation decides the task-completion ETA chip for a session
 // (issue #558, agent-authored estimate). Returns null when the chip must
 // be hidden: session not `working`, no estimate, no reported progress, or
@@ -126,7 +152,7 @@ export function fmtEtaText(remaining, highSecs) {
 // At/above half the rounds low == high right at a marker, so the range
 // collapses to a point ("~5m left") and widens as wall clock passes
 // without fresh progress — never a bare countdown (#616). Mirrored in
-// SessionListView.swift's taskEtaPresentation.
+// SessionRowView.swift's taskEtaPresentation.
 // Zero completed rounds: no MEASURED rate yet, but the daemon projects from
 // a corpus prior (#753) so a real number appears at the very first marker
 // instead of "estimating…" (the agent has committed to a plan, #604/#602).
@@ -138,29 +164,26 @@ function zeroRoundsEtaPresentation(est, eta, nowSec, sourceLabel) {
   // check above: `undefined <= 0` is false, so a missing total_rounds must
   // be checked explicitly or this falls through to render "0/undefined".
   if (est.total_rounds == null || est.total_rounds <= 0) return null;
-  const age = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
-  const zeroStale = est.updated_at > 0 && age > 180;
-  let zeroTitle = 'Task ETA — ' + sourceLabel + ' 0/' + est.total_rounds + ' rounds';
-  if (est.updated_at > 0) zeroTitle += ', updated ' + fmtDuration(age) + ' ago';
-  if (!eta) return { text: 'estimating…', stale: zeroStale, title: zeroTitle };
+  // Literal 0, not est.completed_rounds — this branch also takes a missing
+  // completed_rounds, which must still read "0/N" (see etaChipHeader).
+  const head = etaChipHeader(est, sourceLabel, 0, nowSec);
+  if (!eta) return { text: 'estimating…', stale: head.stale, title: head.title };
   const rem0 = Math.max(0, Math.floor(eta - nowSec));
   const high0 = est.updated_at > 0
     ? Math.max(rem0, Math.floor((eta - est.updated_at) * 2))
     : Math.floor(rem0 * 2);
-  return { text: fmtEtaText(rem0, high0), stale: zeroStale, title: zeroTitle + ' · rough prior' };
+  return { text: fmtEtaText(rem0, high0), stale: head.stale, title: head.title + ' · rough prior' };
 }
 
 // Progress without a projection (e.g. a subagent aggregate whose children
 // carry no etas yet, #626): show a rounds-only chip rather than hiding one
 // that was visible moments ago.
 function roundsOnlyEtaPresentation(est, nowSec, sourceLabel) {
-  const age = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
-  let roundsTitle = 'Task ETA — ' + sourceLabel + ' ' + est.completed_rounds + '/' + est.total_rounds + ' rounds';
-  if (est.updated_at > 0) roundsTitle += ', updated ' + fmtDuration(age) + ' ago';
+  const head = etaChipHeader(est, sourceLabel, est.completed_rounds, nowSec);
   return {
     text: est.completed_rounds + '/' + est.total_rounds,
-    stale: est.updated_at > 0 && age > 180,
-    title: roundsTitle,
+    stale: head.stale,
+    title: head.title,
   };
 }
 
@@ -199,11 +222,8 @@ function projectedEtaPresentation(est, eta, nowSec, sourceLabel) {
     highSecs = Math.floor(remaining * 1.5);
   }
   const text = fmtEtaText(remaining, highSecs);
-  const ageSec = est.updated_at > 0 ? Math.max(0, Math.floor(nowSec - est.updated_at)) : 0;
-  const stale = est.updated_at > 0 && ageSec > 180;
-  let title = 'Task ETA — ' + sourceLabel + ' ' + est.completed_rounds + '/' + est.total_rounds + ' rounds';
-  if (est.updated_at > 0) title += ', updated ' + fmtDuration(ageSec) + ' ago';
-  return { text: text, stale: stale, title: title };
+  const head = etaChipHeader(est, sourceLabel, est.completed_rounds, nowSec);
+  return { text: text, stale: head.stale, title: head.title };
 }
 
 export function taskEtaPresentation(metrics, state, nowSec) {
