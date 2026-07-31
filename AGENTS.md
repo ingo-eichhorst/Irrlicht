@@ -12,6 +12,15 @@
 Worktrees share the parent repo's `.git` dir, so **`git stash` is not isolated per worktree** — it's a single shared stack. Concurrent agents stashing in different worktrees can pop each other's WIP. Use a local commit as a checkpoint instead (`git commit -m wip`, amend/reset later).
 When encountering suboptimal processes or issues make improvment suggestions in you final answer to the user.
 
+**Dismissals carry evidence.** Any claim whose function is *"you don't need to look
+here"* — *already fixed in #X*, *self-heals*, *likely benign*, *non-issue* — gets the
+same bar as the claim it supports: cite what you ran or read, or mark it assumed. This
+binds wherever a finding is written down (issue bodies, PR descriptions, triage
+comments, final answers), because a wrong dismissal is the one kind of error that stops
+anyone from checking it. Marking works: in #1088 every claim explicitly labelled
+"unverified" was investigated and came back not real, while that issue's one real bug
+hid in an unmarked aside.
+
 ## Build Artifacts
 
 Use `./.build` for build artifacts.
@@ -41,6 +50,13 @@ Use `./.build` for build artifacts.
 - Adapters declare `Permissions` on `agent.Agent` (with Apply/Remove effect closures); every read or modification an adapter performs must be consent-gated behind one of its declared permissions — nothing is exercised while pending or denied
 
 ## Testing
+
+**A defect test proves nothing until it has been seen red.** Run it before the fix
+exists, confirm it fails, paste the failure. A test that passes on `main` means either
+the diagnosis is wrong or the test doesn't reach the defect (a stub blind to the
+asserted field is the classic) — stop and report rather than shipping the green. Locks
+— tests pinning behavior that must *not* change — pass by construction; say which ones
+those are. `ir:exec` enforces this at Phase 4 step 11a; it binds outside `ir:exec` too.
 
 Before marking a ticket done, run the full suite — every layer must pass:
 

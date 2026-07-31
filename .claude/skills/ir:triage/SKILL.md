@@ -57,6 +57,16 @@ Every comment posted during triage **must** start with:
 5. **Post** the assessment using the template below.
 6. **Label and milestone** in a single `gh issue edit` call (one round-trip per issue). Close if `wontfix`.
 
+## Dismissals carry evidence
+
+A **dismissal** is any claim whose function is *"you don't need to look here"* — *already fixed in #X* / *self-heals* / *likely benign* / *non-issue* / *out of scope anyway*. It is the highest-leverage sentence in an issue, because when it is wrong nobody looks. It gets the same evidence bar as the headline claim, in both directions:
+
+**Reading the issue.** An unmarked dismissal in the body is an *assumption*, not a finding — do not inherit it as fact into your scoring, and do not let it shrink Scope or excuse a ✗. Where a dismissal is load-bearing (it's why the issue is documentation-only, or why an axis passes), spend one of step 2's light checks on it — `git grep`, read the function, check whether #X actually touched that path. If it doesn't hold, that's a **Specification** ✗ and a named blocker. If you can't check it cheaply, say so in the one-liner rather than scoring around it.
+
+**Writing the comment.** Mark your own claims. Cite what you ran or read (`[verified]` / `git grep + go list`), or mark the claim assumed — the existing `— exact code paths cited (and verified extant)` phrasing is the model. A one-liner that dismisses an axis's risk without saying what was checked is the same defect one level up.
+
+Real incident: #1088's one real bug sat in an unmarked aside asserting a sweep "self-heals" a field. It does not — the sweep deliberately preserves exactly the names that pinned the session to `waiting` forever. Meanwhile that same issue's three *explicitly labelled* "unverified" claims were all investigated and all came back not real. Confidence ran inversely to correctness, and only the marking told them apart. #1089's dismissal (*"the consequence is fixed in #1078"*) was the stated basis for treating it as documentation-only; it was wrong, and became #1104.
+
 ## Readiness Rubric (7 axes)
 
 Each axis scores ✓ (pass) or ✗ (fail) with a one-line justification grounded in the issue body. Any ✗ **on the first six axes** → `needs-info`. All ✓ → `ready-for-agent`. **Observability is the exception** — a ✗ there is priced, not fatal; see its cost rule below.
@@ -65,7 +75,7 @@ Each axis scores ✓ (pass) or ✗ (fail) with a one-line justification grounded
 |---|---|---|
 | **Scope** | The change is bounded — number of files / packages touched is knowable from the issue, no "and also" creep. | "Refactor the codebase", "improve performance", any wording that fans out unboundedly. |
 | **Specification** | The desired outcome is stated (what, not how). Edge cases either listed or absent because they don't exist. | Outcome is implied or aspirational; "make it better"; multiple plausible interpretations. |
-| **Verifiability** | A concrete signal exists for "done": a unit test, a replay scenario, a CLI command output, a UI behavior, a metric threshold. | No way to mechanically tell if the fix worked; only "looks right" judgment. |
+| **Verifiability** | A concrete signal exists for "done": a unit test, a replay scenario, a CLI command output, a UI behavior, a metric threshold — *and* it would discriminate today, i.e. fail on `main`. Mark it **unproven** when that's asserted but not shown; see the red-first rule below. | No way to mechanically tell if the fix worked; only "looks right" judgment. |
 | **Observability** | The behavior can be reproduced *and* observed with what exists today — a recording, replay scenario, `events.jsonl`, an `of` query, a metric, a CLI output, a snapshot test. | Reproduction is possible but the effect is invisible (no durable artifact to assert on), or reproduction itself needs a rig that doesn't exist. |
 | **Context** | Relevant code paths / docs / prior PRs are cited or trivially findable. The agent has a starting point. | Issue is abstract or implicates code with no obvious entry point. |
 | **Independence** | Not blocked on another issue / PR / external decision. No concurrent work that would conflict. | Depends on #N which is open / unresolved / unmerged; depends on a maintainer decision not yet made. |
@@ -76,6 +86,21 @@ Each axis scores ✓ (pass) or ✗ (fail) with a one-line justification grounded
 These two are adjacent by design and must not be scored as one. **Verifiability names the measurement; Observability asks whether the instrument to take it exists today.**
 
 "A replay scenario asserts `working → ready` within 500ms" is a fine measurement — but if no recording of that adapter × scenario exists, there is nothing to replay. ✓ Verifiability with ✗ Observability is the common and interesting case: everyone agrees what "done" looks like, and nothing can currently show it. If both axes' one-liners say the same thing, you've scored the same concern twice — Verifiability is about the *criterion*, Observability about the *evidence*.
+
+### Verifiability: a pasted test is **unproven** until it has been run red
+
+The axis asks *"would that test fail today?"*, not *"is there a test?"* — a signal that can't discriminate measures nothing, however much test code was pasted.
+
+Test code or ACs in an issue body are a **proposal, not evidence**. They count as proof only when the author says they ran it against `main` and pasted the failure. Otherwise the axis can still pass on the *criterion* — but the one-liner must carry the word **unproven**, so the implementer knows it owes a red-first run (`ir:exec` Phase 4 step 11a) rather than trusting the code block:
+
+- ✓ **Verifiability** — AC3 asserts `pendingBackgroundAgentCount` after a turn-done sweep; **unproven** (test code pasted, no red run shown).
+
+Two failure modes to hold apart:
+
+- Don't ✗ the axis for unprovenness alone — an unproven test is still a stated criterion. ✗ only when no discriminating signal is named at all.
+- Don't upgrade an unproven paste to a verified one by reading the code and judging it plausible. Plausible is exactly what a test aimed at a stub blind to the asserted field looks like — #1076's AC3 shipped as complete, correct-looking test code, and as literally written would have passed on `main` while the bug shipped.
+
+Author-written **lock** tests — pinning behavior that must *not* change — pass on `main` by construction and are not unproven. Say so in the one-liner so nobody mistakes their green for a red-first proof.
 
 ### Observability cost rule
 

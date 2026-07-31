@@ -213,6 +213,29 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
     scoped it to** — open the macOS app (`/ir:test-mac`) and/or the web dashboard and
     look. A passing test suite in the same area is not evidence the specific feature
     exists on a specific platform — name the exact test that covers the claim, or look.
+11a. **Prove red-first.** For every test asserting a claimed defect, run it
+    **before** the fix exists and confirm it **fails**. Paste the failure — in
+    the PR body, or the issue if you're reporting back there. Do this during
+    step 10 (write the test first; or checkpoint the fix with a local commit and
+    revert it to re-run — never `git stash`, per AGENTS.md).
+
+    A test that **passes** on `main` is not a regression test. Either the
+    diagnosis is wrong, or the test doesn't reach the defect — e.g. it exercises
+    a stub that is blind to the field it asserts on. **STOP and report.** Do not
+    proceed on a green that proves nothing.
+
+    **Locks** — tests pinning behavior that must *not* change — pass on `main` by
+    construction. Say which tests those are explicitly, rather than letting their
+    green read as a red-first proof.
+
+    This applies to test code the *issue itself* pasted. A code block in an issue
+    is a proposal, not evidence: `/ir:triage` marks such a test **unproven** on
+    its Verifiability axis, and an untriaged one owes you the same run. (Real
+    incident: #1076 shipped seven ACs with complete test code aimed at
+    `core/pkg/tailer`, whose `handleTestSystemEvent` stub never reads the field
+    under test — the literal AC would have passed on `main` while the bug
+    shipped. Three of six issues in that batch specified tests that pass on
+    `main`; nothing in this skill caught it.)
 
 ## Phase 5 — PR, review, simplify
 
@@ -313,3 +336,6 @@ Phase 6.
 - User-facing features ship on every applicable frontend (macOS + web), or the plan
   says explicitly why not (Phase 2). Verify each one directly rather than trusting an
   adjacent green test suite (Phase 4) — see the Activity Matrix incident above.
+- A defect test proves nothing until it has been seen red (Phase 4 step 11a). This
+  binds regardless of where the test came from — the issue, `/ir:triage`, or your
+  own diagnosis; a green that was never red is the failure mode, not the author.
