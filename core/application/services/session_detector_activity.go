@@ -1154,6 +1154,28 @@ func (d *SessionDetector) noteInconclusiveProbe(sid string, outputs int) bool {
 	return hold
 }
 
+// commitBackgroundVerdict records the probe outcome for sid and releases the
+// in-flight slot, reporting whether the verdict changed (or is the first one)
+// and therefore warrants nudging the event loop. When hold is set the previous
+// answer is kept instead of the probe's, because the probe didn't find out.
+func (d *SessionDetector) commitBackgroundVerdict(sid string, live, hold bool) (changed bool) {
+	d.bgMu.Lock()
+	defer d.bgMu.Unlock()
+
+	prev, had := d.bgLive[sid]
+	if hold {
+		// Optimistically alive on first sight, matching beginBackgroundProbe's
+		// never-declare-an-unprobed-process-dead rule (#445).
+		live = true
+		if had {
+			live = prev
+		}
+	}
+	d.bgLive[sid] = live
+	d.bgProbing[sid] = false
+	return !had || prev != live
+}
+
 // clearInconclusiveProbes resets sid's run of inconclusive verdicts once a
 // probe has actually answered.
 func (d *SessionDetector) clearInconclusiveProbes(sid string) {
@@ -1218,26 +1240,12 @@ func (d *SessionDetector) runBackgroundLivenessProbe(sid, transcriptPath string,
 		LivePID:        livePID,
 	})
 
-	d.bgMu.Lock()
-	prev, had := d.bgLive[sid]
-	if hold {
-		// Optimistically alive on first sight, matching beginBackgroundProbe's
-		// never-declare-an-unprobed-process-dead rule (#445).
-		live = true
-		if had {
-			live = prev
-		}
-	}
-	d.bgLive[sid] = live
-	d.bgProbing[sid] = false
-	d.bgMu.Unlock()
-
 	// On a changed (or first) verdict, nudge the event loop to re-classify
 	// now rather than waiting for the next refresh tick. The send mirrors
 	// the debounce-timer path (single event-loop goroutine owns
 	// processActivity); drop if the buffer is full — the 5s refresh is the
 	// backstop.
-	if had && prev == live {
+	if !d.commitBackgroundVerdict(sid, live, hold) {
 		return
 	}
 	select {

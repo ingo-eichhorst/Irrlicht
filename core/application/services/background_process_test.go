@@ -260,56 +260,25 @@ func TestSessionDetector_ForceReadyToWorking_LogsTransition(t *testing.T) {
 // the persisted entries would otherwise resurrect as phantom open processes
 // on every daemon restart. See issue #649.
 func TestSessionDetector_BackgroundProcess_DeadVerdictPurgesLedger(t *testing.T) {
-	const sid = "bg2"
-	const path = "/home/.claude/projects/-Users-test/bg2.jsonl"
-
-	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
-		return &session.SessionMetrics{
-			LastEventType:            "turn_done",
-			BackgroundProcessCount:   1,
-			BackgroundProcessOutputs: []string{"/tmp/x/tasks/bbw7rzpa0.output"},
-		}, nil
-	}}
-
-	tw := newMockAgentWatcher()
-	pw := newMockProcessWatcher()
-	repo := newMockRepo()
-	repo.states[sid] = &session.SessionState{
-		SessionID:      sid,
-		State:          session.StateWorking,
-		TranscriptPath: path,
-		FirstSeen:      time.Now().Unix(),
-		UpdatedAt:      time.Now().Unix(),
-	}
-
-	det := newDetectorWithMetrics(tw, pw, repo, metrics)
-	det.SetBackgroundProbeForTest(func(paths []string) (bool, bool) { return false, true })
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-
-	tw.ch <- agent.Event{
-		Type:           agent.EventActivity,
-		SessionID:      sid,
-		ProjectDir:     "-Users-test",
-		TranscriptPath: path,
-	}
+	f := newBGOutputFixture(
+		"bg2",
+		"/home/.claude/projects/-Users-test/bg2.jsonl",
+		"/tmp/x/tasks/bbw7rzpa0.output",
+		func() (bool, bool) { return false, true },
+	)
+	f.start(t)
+	f.activity(false)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if purged := metrics.purgedSnapshot(); len(purged) > 0 {
-			if purged[0] != path {
-				t.Errorf("purged transcript = %q, want %q", purged[0], path)
+		if purged := f.metrics.purgedSnapshot(); len(purged) > 0 {
+			if purged[0] != f.path {
+				t.Errorf("purged transcript = %q, want %q", purged[0], f.path)
 			}
-			cancel()
-			<-done
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	cancel()
-	<-done
 	t.Fatal("dead probe verdict did not trigger PurgeDeadBackgroundProcs within deadline")
 }
 
