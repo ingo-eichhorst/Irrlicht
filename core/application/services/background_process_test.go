@@ -60,64 +60,67 @@ func TestClassifyState_HeldByLiveBackgroundProcess(t *testing.T) {
 // open background process stays working while the probe reports it alive, and
 // flips to ready once the probe reports it gone — the path the 5s
 // refreshStaleSessions ticker exercises in production. See issue #445.
-func TestSessionDetector_BackgroundProcess_HoldsWorkingThenReady(t *testing.T) {
-	// probeLive is read from the probe goroutine, so guard it with atomic.
-	var probeLive atomic.Bool
-	probeLive.Store(true)
-	f := newBGOutputFixture(
-		"bg1",
-		"/home/.claude/projects/-Users-test/bg1.jsonl",
-		"/tmp/x/tasks/bc1h56v8v.output",
-		func() (bool, bool) { return probeLive.Load(), true },
-	)
-	f.start(t)
-
-	// Probe reports the process alive → session stays working: no →ready
-	// transition should be recorded even though the turn ended (turn_done).
-	f.activity(false)
-	f.awaitProbe(t)
-	time.Sleep(250 * time.Millisecond) // allow any self-trigger to settle
-	if n := readyTransitions(f.rec, f.sid); n != 0 {
-		t.Fatalf("session flipped to ready %d time(s) while background process is alive", n)
+func TestSessionDetector_BackgroundProcess_HoldsWorkingWhileAliveThenReady(t *testing.T) {
+	tests := []struct {
+		name      string
+		sid       string
+		state     string
+		outPath   string
+		premature string // what a premature →ready would mean, for the message
+	}{
+		{
+			// The plain case (#445): a working session whose turn ended but
+			// whose background process is still running.
+			name:      "already working",
+			sid:       "bg1",
+			state:     session.StateWorking,
+			outPath:   "/tmp/x/tasks/bc1h56v8v.output",
+			premature: "while background process is alive",
+		},
+		{
+			// Issue #937: a session that had already settled `ready` and then
+			// shows a FRESH background spawn on the very next activity event
+			// must be pulled back to working, not skip the liveness probe
+			// because the pass started from `ready`. A retried `git push -u
+			// run_in_background:true` was silently invisible to the gate and
+			// the session bounced ready→working→ready in the same pass.
+			name:      "freshly spawned from ready",
+			sid:       "bg3",
+			state:     session.StateReady,
+			outPath:   "/tmp/x/tasks/retry.output",
+			premature: "while its freshly-spawned background process is alive",
+		},
 	}
 
-	// Background process exits — probe now reports it gone → session goes ready.
-	probeLive.Store(false)
-	f.activity(true)
-	waitForReadyTransition(t, f.rec, f.sid)
-}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// probeLive is read from the probe goroutine, so guard it with atomic.
+			var probeLive atomic.Bool
+			probeLive.Store(true)
+			f := newBGOutputFixtureInState(
+				tc.sid,
+				"/home/.claude/projects/-Users-test/"+tc.sid+".jsonl",
+				tc.outPath,
+				tc.state,
+				func() (bool, bool) { return probeLive.Load(), true },
+			)
+			f.start(t)
 
-// A session already `ready` (e.g. a prior background job just finished and
-// settled it) that then shows a *fresh* background spawn on the very next
-// activity event must be pulled back to working and held there while that new
-// process is alive — not skip the liveness probe because the pass started
-// from `ready`. Reproduces issue #937: a retried `git push -u
-// run_in_background:true` launched right after the session had settled ready
-// was silently invisible to the liveness gate, and the session bounced
-// ready→working→ready in the same pass despite the push still running.
-func TestSessionDetector_BackgroundProcess_FreshSpawnFromReady_HoldsWorking(t *testing.T) {
-	var probeLive atomic.Bool
-	probeLive.Store(true)
-	f := newBGOutputFixtureInState(
-		"bg3",
-		"/home/.claude/projects/-Users-test/bg3.jsonl",
-		"/tmp/x/tasks/retry.output",
-		session.StateReady,
-		func() (bool, bool) { return probeLive.Load(), true },
-	)
-	f.start(t)
+			// Probe reports the process alive → session stays working, even
+			// though the turn ended (turn_done).
+			f.activity(false)
+			f.awaitProbe(t)
+			time.Sleep(250 * time.Millisecond) // allow any self-trigger to settle
+			if n := readyTransitions(f.rec, f.sid); n != 0 {
+				t.Fatalf("session flipped to ready %d time(s) %s", n, tc.premature)
+			}
 
-	f.activity(false)
-	f.awaitProbe(t)
-	time.Sleep(250 * time.Millisecond) // allow any self-trigger to settle
-	if n := readyTransitions(f.rec, f.sid); n != 0 {
-		t.Fatalf("session flipped to ready %d time(s) while its freshly-spawned background process is alive", n)
+			// Background process exits — probe reports it gone → session goes ready.
+			probeLive.Store(false)
+			f.activity(true)
+			waitForReadyTransition(t, f.rec, f.sid)
+		})
 	}
-
-	// Background process exits — probe now reports it gone → session goes ready.
-	probeLive.Store(false)
-	f.activity(true)
-	waitForReadyTransition(t, f.rec, f.sid)
 }
 
 // The ready→working force-bounce (see forceReadyToWorkingIfActive) must be
