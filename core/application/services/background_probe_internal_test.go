@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"syscall"
@@ -31,36 +32,109 @@ func TestAnyLiveOutputWriter_RealProcess(t *testing.T) {
 		_, _ = cmd.Process.Wait()
 	}()
 
-	// Give the shell a moment to open the file before probing.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && !anyLiveOutputWriter([]string{out}) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if !anyLiveOutputWriter([]string{out}) {
-		t.Fatalf("probe reported no live writer while background process is running")
-	}
+	// Alive while the shell holds the fd open, dead once it exits.
+	awaitConclusiveVerdict(t, out, true)
 
 	if err := cmd.Process.Kill(); err != nil {
 		t.Fatalf("kill background process: %v", err)
 	}
 	_, _ = cmd.Process.Wait()
 
-	// After exit the fd is closed; the probe should report dead.
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && anyLiveOutputWriter([]string{out}) {
+	awaitConclusiveVerdict(t, out, false)
+}
+
+// awaitConclusiveVerdict polls the real probe until it CONCLUSIVELY reports
+// want, or the budget runs out.
+//
+// An inconclusive verdict is a retry, not a result — which is both the
+// behavior under test and what keeps this test honest under load. The old
+// version asserted on a single probe against a budget equal to lsofTimeout, so
+// one slow lsof consumed the whole window and failed the test; that is the
+// ~4.25s two-timeouts failure in issue #1299. Retrying instead means a loaded
+// machine costs time rather than a false red.
+//
+// If every probe in the budget times out, the probe did its job (it said "I
+// don't know") and the test simply could not observe the transition, so this
+// skips rather than failing — a machine too loaded to run lsof is not a defect
+// in the code under test.
+func awaitConclusiveVerdict(t *testing.T, path string, want bool) {
+	t.Helper()
+	budget := 4 * lsofTimeout
+	deadline := time.Now().Add(budget)
+	// Seeded to the failing verdict so an impossible zero-iteration loop would
+	// report a failure rather than a false pass.
+	alive, conclusive := !want, true
+	for time.Now().Before(deadline) {
+		alive, conclusive = anyLiveOutputWriter([]string{path})
+		if conclusive && alive == want {
+			return
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if anyLiveOutputWriter([]string{out}) {
-		t.Fatalf("probe still reports a live writer after the background process exited")
+	if !conclusive {
+		t.Skipf("lsof never returned a conclusive verdict within %v; machine too loaded to observe the transition", budget)
+	}
+	t.Fatalf("probe reported alive=%v, want %v", alive, want)
+}
+
+// A timeout must be reported as inconclusive, never as "no live writer": the
+// caller's response to death is a durable purge, so a slow lsof would
+// permanently drop a still-running background process (issue #1299).
+func TestAnyLiveOutputWriter_TimeoutIsInconclusive(t *testing.T) {
+	if _, err := exec.LookPath("lsof"); err != nil {
+		t.Skip("lsof not available")
+	}
+	out := filepath.Join(t.TempDir(), "bc1h56v8v.output")
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("exec sleep 30 > %q", out))
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start background process: %v", err)
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	}()
+
+	// A deadline no real lsof can meet, so the probe always times out.
+	restore := lsofTimeout
+	lsofTimeout = 1 * time.Nanosecond
+	defer func() { lsofTimeout = restore }()
+
+	alive, conclusive := anyLiveOutputWriter([]string{out})
+	if conclusive {
+		t.Error("a timed-out probe reported a conclusive verdict; the caller would purge on it")
+	}
+	if alive {
+		t.Error("a timed-out probe should not claim liveness either")
 	}
 }
 
-func TestAnyLiveOutputWriter_EmptyAndMissing(t *testing.T) {
-	if anyLiveOutputWriter(nil) {
-		t.Error("nil paths should report no live writer")
+// A path nothing holds open is a conclusive "dead" — the ordinary case the
+// purge is designed for, and the one a timeout must stay distinguishable from.
+func TestAnyLiveOutputWriter_UnheldPathIsConclusivelyDead(t *testing.T) {
+	if _, err := exec.LookPath("lsof"); err != nil {
+		t.Skip("lsof not available")
 	}
+	out := filepath.Join(t.TempDir(), "unheld.output")
+	if err := os.WriteFile(out, []byte("done\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Through the same retry/skip helper as the live case: this probe is the
+	// identical full process-table scan, so asserting on a single un-retried
+	// call would reintroduce exactly the load-sensitive flake this PR removes.
+	awaitConclusiveVerdict(t, out, false)
+}
+
+func TestAnyLiveOutputWriter_EmptyAndMissing(t *testing.T) {
+	if alive, conclusive := anyLiveOutputWriter(nil); alive || !conclusive {
+		t.Errorf("nil paths = (%v, %v), want a conclusive no-live-writer", alive, conclusive)
+	}
+	// Only `alive` is asserted for the real invocation. lsof bails on a missing
+	// path before the process scan so a timeout is unlikely, but asserting
+	// `conclusive` off a single un-retried call is the flake shape this PR
+	// exists to remove, and TestAnyLiveOutputWriter_UnheldPathIsConclusivelyDead
+	// already covers conclusiveness with retries.
 	missing := filepath.Join(t.TempDir(), "does-not-exist.output")
-	if anyLiveOutputWriter([]string{missing}) {
+	if alive, _ := anyLiveOutputWriter([]string{missing}); alive {
 		t.Error("a non-existent output file should report no live writer")
 	}
 }

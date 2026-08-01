@@ -15,6 +15,10 @@ import (
 // than trusted PATH, per go:S4036.
 var lsofPath = pathutil.MustResolve("lsof")
 
+// lsofTimeout bounds a single lsof invocation. A package var rather than a
+// const so tests can drive the timeout path without waiting seconds.
+var lsofTimeout = 2 * time.Second
+
 // backgroundProbe answers "does any of these output files still have a live
 // writer?" — the daemon's authoritative liveness check for Claude Code Bash
 // background processes (run_in_background). Claude Code reports a background
@@ -22,7 +26,12 @@ var lsofPath = pathutil.MustResolve("lsof")
 // transcript alone can't tell us when one dies; this probe walks the live
 // process state instead. Modeled as a field so tests can inject a fake.
 // See issue #445.
-type backgroundProbe func(outputPaths []string) bool
+//
+// The second return is "was this conclusive?", not a second liveness bit. It
+// is false only when the probe could not find out — see anyLiveOutputWriter —
+// and a false there must never be read as "dead", because the caller's
+// response to death is a durable purge (issue #1299).
+type backgroundProbe func(outputPaths []string) (alive, conclusive bool)
 
 // anyLiveOutputWriter reports whether any of the given background output files
 // is currently held open by a live process. Each backgrounded command's
@@ -43,14 +52,29 @@ type backgroundProbe func(outputPaths []string) bool
 // flipping the session to `ready` while it's alive (issue #445 review). lsof's
 // diagnostics and usage text go to stderr (dropped by .Output()), and `-t`
 // prints only PIDs to stdout, so we additionally require an all-digit line to
-// guard against any unexpected stdout noise. A timeout or a missing lsof yields
-// empty stdout → "no live writer", which is the safe ("don't pin forever")
-// degradation.
-func anyLiveOutputWriter(outputPaths []string) bool {
+// guard against any unexpected stdout noise.
+//
+// A TIMEOUT is reported as inconclusive rather than as "no live writer". lsof
+// walks every process on the machine, so it is slowest exactly when the machine
+// is busiest — which is also when long-running background work is most likely
+// to be in flight. Reading that silence as death was not the harmless "don't
+// pin forever" degradation this comment used to claim: the caller responds to
+// death by purging the background process from the tailer AND persisting that
+// through saveLedger, so one slow lsof could permanently drop a still-running
+// process and flip a live session to `ready` with no way back — the same
+// false-negative the exit-code handling above exists to prevent, reached by a
+// different route (issue #1299).
+//
+// Any OTHER failure — most plausibly a missing lsof, since MustResolve falls
+// back to the bare name — still degrades to a conclusive "no live writer".
+// Retrying cannot fix those, so treating them as inconclusive would pin every
+// affected session `working` forever, which is the failure the old degradation
+// was protecting against. Only the transient case gets the retry.
+func anyLiveOutputWriter(outputPaths []string) (alive, conclusive bool) {
 	if len(outputPaths) == 0 {
-		return false
+		return false, true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), lsofTimeout)
 	defer cancel()
 	args := append([]string{"-t", "--"}, outputPaths...)
 	out, _ := exec.CommandContext(ctx, lsofPath, args...).Output() //nolint:errcheck — exit 1 (some path unheld) still carries live PIDs on stdout
@@ -60,10 +84,16 @@ func anyLiveOutputWriter(outputPaths []string) bool {
 			continue
 		}
 		if _, err := strconv.Atoi(line); err == nil {
-			return true
+			return true, true
 		}
 	}
-	return false
+	// Checked only once stdout has yielded no PID: lsof can be killed by the
+	// deadline after already printing a holder, and that PID is still proof of
+	// life worth keeping.
+	if ctx.Err() == context.DeadlineExceeded {
+		return false, false
+	}
+	return false, true
 }
 
 // backgroundPIDProbe answers "is any of these PIDs still a live process?" — the

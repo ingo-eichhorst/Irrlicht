@@ -258,6 +258,10 @@ type SessionDetector struct {
 	bgMu      sync.Mutex
 	bgLive    map[string]bool
 	bgProbing map[string]bool
+	// bgInconclusive counts consecutive inconclusive probe verdicts per
+	// session, so holding the previous verdict through a slow lsof stays
+	// bounded (issue #1299). Reset by any conclusive verdict.
+	bgInconclusive map[string]int
 
 	// consentGate (optional) reports whether an adapter's transcripts may
 	// be read (#570). Gates the two paths that read PERSISTED sessions'
@@ -335,6 +339,7 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		bgPIDProbe:               anyLivePID,
 		bgLive:                   make(map[string]bool),
 		bgProbing:                make(map[string]bool),
+		bgInconclusive:           make(map[string]int),
 		uiSignals:                make(chan terminalUISignal, 64),
 	}
 	det.pidMgr = NewPIDManager(PIDManagerDeps{
@@ -372,8 +377,9 @@ func (d *SessionDetector) SetSessionSupersededHandler(fn func(oldID, newID strin
 
 // SetBackgroundProbeForTest overrides the background-process liveness probe so
 // tests can simulate live / dead background processes without real lsof. See
-// issue #445.
-func (d *SessionDetector) SetBackgroundProbeForTest(p func(outputPaths []string) bool) {
+// issue #445. The second return is "was this conclusive?" — pass false to
+// simulate an lsof timeout (issue #1299), not to mean "dead".
+func (d *SessionDetector) SetBackgroundProbeForTest(p func(outputPaths []string) (alive, conclusive bool)) {
 	d.bgLiveProbe = p
 }
 

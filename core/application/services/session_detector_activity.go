@@ -1122,10 +1122,81 @@ func (d *SessionDetector) clearBackgroundTracking(sid string, m *session.Session
 	d.bgMu.Lock()
 	delete(d.bgLive, sid)
 	delete(d.bgProbing, sid)
+	delete(d.bgInconclusive, sid)
 	d.bgMu.Unlock()
 	if m != nil {
 		m.HasLiveBackgroundProcess = false
 	}
+}
+
+// maxInconclusiveBackgroundProbes bounds how many consecutive inconclusive
+// verdicts may hold a session's previous liveness answer before the dead
+// verdict is accepted anyway.
+//
+// Holding is right for a transient slow lsof, but "timed out" is not proof of
+// transience: a permanently large process table, or a hung network mount that
+// lsof blocks on, makes every probe time out forever. Unbounded holding would
+// then pin the session `working` for the daemon's lifetime and — because the
+// purge is skipped too — leave the ledger entry to replay the same loop after
+// a restart. That is exactly the failure the pre-#1299 "always believe the
+// silence" behavior avoided, so the bound preserves it as the floor: at the
+// ~5s re-probe cadence this holds for roughly half a minute, then degrades to
+// the old semantics.
+const maxInconclusiveBackgroundProbes = 5
+
+// noteInconclusiveProbe records another consecutive inconclusive verdict for
+// sid and reports whether the previous verdict should still be held.
+func (d *SessionDetector) noteInconclusiveProbe(sid string, outputs int) bool {
+	d.bgMu.Lock()
+	n := d.bgInconclusive[sid] + 1
+	d.bgInconclusive[sid] = n
+	d.bgMu.Unlock()
+
+	hold := n <= maxInconclusiveBackgroundProbes
+	if d.log == nil {
+		return hold
+	}
+	// Edge-triggered: the first hold and the give-up, not every cycle — a
+	// chronically slow lsof would otherwise emit a line per probe forever.
+	switch {
+	case n == 1:
+		d.log.LogInfo(logComponentSessionDetector, sid, fmt.Sprintf(
+			"background liveness probe inconclusive for %d output path(s); holding the previous verdict rather than purging", outputs))
+	case !hold && n == maxInconclusiveBackgroundProbes+1:
+		d.log.LogError(logComponentSessionDetector, sid, fmt.Sprintf(
+			"background liveness probe inconclusive %d times running; accepting the dead verdict for %d output path(s) — a live background process may be purged", n, outputs))
+	}
+	return hold
+}
+
+// commitBackgroundVerdict records the probe outcome for sid and releases the
+// in-flight slot, reporting whether the verdict changed (or is the first one)
+// and therefore warrants nudging the event loop. When hold is set the previous
+// answer is kept instead of the probe's, because the probe didn't find out.
+func (d *SessionDetector) commitBackgroundVerdict(sid string, live, hold bool) (changed bool) {
+	d.bgMu.Lock()
+	defer d.bgMu.Unlock()
+
+	prev, had := d.bgLive[sid]
+	if hold {
+		// Optimistically alive on first sight, matching beginBackgroundProbe's
+		// never-declare-an-unprobed-process-dead rule (#445).
+		live = true
+		if had {
+			live = prev
+		}
+	}
+	d.bgLive[sid] = live
+	d.bgProbing[sid] = false
+	return !had || prev != live
+}
+
+// clearInconclusiveProbes resets sid's run of inconclusive verdicts once a
+// probe has actually answered.
+func (d *SessionDetector) clearInconclusiveProbes(sid string) {
+	d.bgMu.Lock()
+	delete(d.bgInconclusive, sid)
+	d.bgMu.Unlock()
 }
 
 // beginBackgroundProbe reads the last-known liveness verdict for sid
@@ -1156,32 +1227,65 @@ func (d *SessionDetector) beginBackgroundProbe(sid string) (alive, startProbe bo
 // verdict changed (issues #649, #661). Must not alias state: outputs/pids
 // are copies taken by the caller before this runs on its own goroutine.
 func (d *SessionDetector) runBackgroundLivenessProbe(sid, transcriptPath string, outputs, pids []string) {
-	liveOut := len(outputs) > 0 && d.bgLiveProbe != nil && d.bgLiveProbe(outputs)
-	livePID := len(pids) > 0 && d.bgPIDProbe != nil && d.bgPIDProbe(pids)
-	live := liveOut || livePID
+	probed := d.probeBackgroundLiveness(transcriptPath, outputs, pids)
+	hold := d.holdOnInconclusiveProbe(sid, probed)
 
-	d.purgeDeadBackgroundProcesses(backgroundProbeResult{
+	// A held pass must purge nothing: the purge is durable (issue #1299), so
+	// presenting the outputs as still-live is what suppresses it. PIDs are
+	// unaffected — that probe has no inconclusive state to hold on.
+	toPurge := probed
+	toPurge.LiveOut = toPurge.LiveOut || hold
+	d.purgeDeadBackgroundProcesses(toPurge)
+
+	if d.commitBackgroundVerdict(sid, probed.alive(), hold) {
+		d.nudgeReclassify(sid, transcriptPath)
+	}
+}
+
+// probeBackgroundLiveness runs both liveness probes for one pass. Each kind is
+// skipped when the session carries none of it (or its seam is unwired), and a
+// skipped output probe is a conclusive "nothing here to keep the session
+// alive", not an unknown — only a probe that actually ran can be inconclusive.
+func (d *SessionDetector) probeBackgroundLiveness(transcriptPath string, outputs, pids []string) backgroundProbeResult {
+	r := backgroundProbeResult{
 		TranscriptPath: transcriptPath,
 		Outputs:        outputs,
 		PIDs:           pids,
-		LiveOut:        liveOut,
-		LivePID:        livePID,
-	})
-
-	d.bgMu.Lock()
-	prev, had := d.bgLive[sid]
-	d.bgLive[sid] = live
-	d.bgProbing[sid] = false
-	d.bgMu.Unlock()
-
-	// On a changed (or first) verdict, nudge the event loop to re-classify
-	// now rather than waiting for the next refresh tick. The send mirrors
-	// the debounce-timer path (single event-loop goroutine owns
-	// processActivity); drop if the buffer is full — the 5s refresh is the
-	// backstop.
-	if had && prev == live {
-		return
+		Conclusive:     true,
 	}
+	if len(outputs) > 0 && d.bgLiveProbe != nil {
+		r.LiveOut, r.Conclusive = d.bgLiveProbe(outputs)
+	}
+	if len(pids) > 0 && d.bgPIDProbe != nil {
+		r.LivePID = d.bgPIDProbe(pids)
+	}
+	return r
+}
+
+// holdOnInconclusiveProbe reports whether this pass's verdict must be withheld
+// because the output probe never found out.
+//
+// An inconclusive output probe is not evidence of death, and the purge it would
+// otherwise trigger is durable (issue #1299) — so the caller skips it and keeps
+// whatever the last real verdict was. The guard tests the pass's overall
+// liveness, not just the PID half, so a probe that reports (alive,
+// inconclusive) is believed rather than discarded in favour of a stale cache;
+// anyLiveOutputWriter never returns that pair today, but the backgroundProbe
+// seam permits it.
+func (d *SessionDetector) holdOnInconclusiveProbe(sid string, probed backgroundProbeResult) bool {
+	if probed.Conclusive || probed.alive() {
+		d.clearInconclusiveProbes(sid)
+		return false
+	}
+	return d.noteInconclusiveProbe(sid, len(probed.Outputs))
+}
+
+// nudgeReclassify asks the event loop to re-classify sid now rather than
+// waiting for the next refresh tick — used on a changed (or first) verdict. The
+// send mirrors the debounce-timer path (a single event-loop goroutine owns
+// processActivity); it drops if the buffer is full, because the 5s refresh is
+// the backstop.
+func (d *SessionDetector) nudgeReclassify(sid, transcriptPath string) {
 	select {
 	case d.debouncedEvents <- agent.Event{Type: agent.EventActivity, SessionID: sid, TranscriptPath: transcriptPath}:
 	default:
@@ -1192,13 +1296,22 @@ func (d *SessionDetector) runBackgroundLivenessProbe(sid, transcriptPath string,
 // outputs/PIDs and their liveness verdicts — keeping
 // purgeDeadBackgroundProcesses's parameter list small (go:S107) instead of
 // threading each field through individually.
+//
+// Conclusive is the output probe's "did I find out?" bit (see backgroundProbe),
+// not a second liveness bit: false means the probe timed out, which must never
+// be read as death.
 type backgroundProbeResult struct {
 	TranscriptPath string
 	Outputs        []string
 	PIDs           []string
 	LiveOut        bool
 	LivePID        bool
+	Conclusive     bool
 }
+
+// alive reports whether EITHER kind of background process is still running — a
+// session is held `working` while any one of them is (issue #661).
+func (r backgroundProbeResult) alive() bool { return r.LiveOut || r.LivePID }
 
 // purgeDeadBackgroundProcesses drops probed-dead outputs/PIDs from the
 // tailer's open set and the metrics ledger. A dead process died without a
