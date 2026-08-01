@@ -28,8 +28,8 @@ func TestClassify_HookOutranksTranscript(t *testing.T) {
 	if v.Tier != session.TierHook {
 		t.Errorf("tier = %v, want TierHook", v.Tier)
 	}
-	if v.Rule != "idle_prompt" {
-		t.Errorf("rule = %q, want idle_prompt", v.Rule)
+	if v.Rule != string(session.SignalIdlePrompt) {
+		t.Errorf("rule = %q, want %q", v.Rule, session.SignalIdlePrompt)
 	}
 }
 
@@ -54,34 +54,37 @@ func TestClassify_HookOutranksTranscript(t *testing.T) {
 func TestStateRules_LadderIsTierConsistent(t *testing.T) {
 	for _, base := range reachableMetricFixtures(t) {
 		for _, cur := range []string{session.StateWorking, session.StateWaiting, session.StateReady} {
-			winner, winnerIdx := firstFiringRule(cur, base.metrics)
+			// Ask the real classifier who won, rather than re-walking the
+			// ladder here: a private copy of the walk would keep passing if
+			// ClassifyStateTiered ever gained a guard the copy didn't, and the
+			// invariant test would silently stop guarding the invariant.
+			winner := ClassifyStateTiered(cur, base.metrics)
+			winnerIdx := ruleIndex(winner.Rule)
 			if winnerIdx < 0 {
 				t.Fatalf("%s: no rule fired — the ladder must be total", base.name)
 			}
-			winnerTier := stateRules[winnerIdx].tier(base.metrics)
 
 			for i := winnerIdx + 1; i < len(stateRules); i++ {
-				if _, _, fired := stateRules[i].eval(cur, base.metrics); !fired {
+				if stateRules[i].when != nil && !stateRules[i].when(cur, base.metrics) {
 					continue
 				}
-				if lower := stateRules[i].tier(base.metrics); lower.Outranks(winnerTier) {
+				if lower := stateRules[i].tierFor(base.metrics); lower.Outranks(winner.Tier) {
 					t.Errorf("%s (current=%s): rule %q (tier %v) decided, but lower rule %q (tier %v) outranks it",
-						base.name, cur, winner, winnerTier, stateRules[i].id, lower)
+						base.name, cur, winner.Rule, winner.Tier, stateRules[i].id, lower)
 				}
 			}
 		}
 	}
 }
 
-// firstFiringRule returns the id and index of the rule that claims the
-// decision, mirroring ClassifyStateTiered's own walk.
-func firstFiringRule(cur string, m *session.SessionMetrics) (string, int) {
+// ruleIndex maps a rule id back to its position in the ladder.
+func ruleIndex(id string) int {
 	for i, r := range stateRules {
-		if _, _, fired := r.eval(cur, m); fired {
-			return r.id, i
+		if r.id == id {
+			return i
 		}
 	}
-	return "", -1
+	return -1
 }
 
 type metricFixture struct {

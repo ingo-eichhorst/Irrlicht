@@ -325,14 +325,6 @@ func (r *sidecarReplayer) addDuration(s string, d time.Duration) {
 // the live detector's per-session map.
 const replaySessionKey = "primary"
 
-// overlayHeldSignals folds every held hook signal onto the metrics about to be
-// classified, exactly as the live detector's classify pass does — including
-// the tool-denial staleness rule (Claude Code emits no PostToolUseFailure on
-// denial, so the transcript's denial marker is what ends the hold).
-func (r *sidecarReplayer) overlayHeldSignals(m *session.SessionMetrics) {
-	r.signals.Overlay(replaySessionKey, m)
-}
-
 // anyChildActive reports whether any subagent discovered via parent_linked
 // is still working or waiting. Used by runClassifier to hold the parent
 // in its current state when the classifier would otherwise return ready.
@@ -433,7 +425,7 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 	}
 	r.lastMetrics = metrics
 	domainMetrics := replayengine.TailerToDomain(metrics)
-	r.overlayHeldSignals(domainMetrics)
+	r.signals.Overlay(replaySessionKey, domainMetrics)
 	r.runClassifier(domainMetrics, ctx, grew)
 	return nil
 }
@@ -455,7 +447,7 @@ func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 		return
 	}
 	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
-	r.overlayHeldSignals(domainMetrics)
+	r.signals.Overlay(replaySessionKey, domainMetrics)
 	r.runClassifier(domainMetrics, transitionCtx{eventIdx: -1, virtTime: hookEv.Timestamp, cause: causeHook}, true)
 }
 
@@ -656,7 +648,7 @@ func (r *sidecarReplayer) applyChildOrphan(orphan orphanTrigger, d *debounceStat
 		return nil
 	}
 	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
-	r.overlayHeldSignals(domainMetrics)
+	r.signals.Overlay(replaySessionKey, domainMetrics)
 	// grew=false: r.state != StateReady is already guaranteed by the check
 	// above, so the force-bounce branch never evaluates this value here.
 	r.runClassifier(domainMetrics, transitionCtx{eventIdx: -1, virtTime: orphan.at, cause: causeEvent}, false)
