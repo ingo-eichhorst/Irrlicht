@@ -61,74 +61,30 @@ func TestClassifyState_HeldByLiveBackgroundProcess(t *testing.T) {
 // flips to ready once the probe reports it gone — the path the 5s
 // refreshStaleSessions ticker exercises in production. See issue #445.
 func TestSessionDetector_BackgroundProcess_HoldsWorkingThenReady(t *testing.T) {
-	const sid = "bg1"
-	const path = "/home/.claude/projects/-Users-test/bg1.jsonl"
-
-	// Metrics always show a finished turn with one open background process.
-	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
-		return &session.SessionMetrics{
-			LastEventType:            "turn_done",
-			BackgroundProcessCount:   1,
-			BackgroundProcessOutputs: []string{"/tmp/x/tasks/bc1h56v8v.output"},
-		}, nil
-	}}
-
-	tw := newMockAgentWatcher()
-	pw := newMockProcessWatcher()
-	repo := newMockRepo()
-	repo.states[sid] = &session.SessionState{
-		SessionID:      sid,
-		State:          session.StateWorking,
-		TranscriptPath: path,
-		FirstSeen:      time.Now().Unix(),
-		UpdatedAt:      time.Now().Unix(),
-	}
-
-	det := newDetectorWithMetrics(tw, pw, repo, metrics)
-	rec := &mockRecorder{}
-	det.SetRecorder(rec)
-
 	// probeLive is read from the probe goroutine, so guard it with atomic.
 	var probeLive atomic.Bool
 	probeLive.Store(true)
-	det.SetBackgroundProbeForTest(func(paths []string) (bool, bool) {
-		return probeLive.Load(), true
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-
-	// activity drives one re-evaluation. The first event for a session fires
-	// processActivity immediately; later events within the 2s debounce window
-	// coalesce, so we mark the follow-up Terminal to short-circuit the
-	// debounce (production's periodic re-probe bypasses debounce the same way
-	// via processActivityWithoutIdentity).
-	activity := func(terminal bool) {
-		tw.ch <- agent.Event{
-			Type:           agent.EventActivity,
-			SessionID:      sid,
-			ProjectDir:     "-Users-test",
-			TranscriptPath: path,
-			Terminal:       terminal,
-		}
-	}
+	f := newBGOutputFixture(
+		"bg1",
+		"/home/.claude/projects/-Users-test/bg1.jsonl",
+		"/tmp/x/tasks/bc1h56v8v.output",
+		func() (bool, bool) { return probeLive.Load(), true },
+	)
+	f.start(t)
 
 	// Probe reports the process alive → session stays working: no →ready
 	// transition should be recorded even though the turn ended (turn_done).
-	activity(false)
-	time.Sleep(250 * time.Millisecond) // allow the async probe + any self-trigger to settle
-	if n := readyTransitions(rec, sid); n != 0 {
+	f.activity(false)
+	f.awaitProbe(t)
+	time.Sleep(250 * time.Millisecond) // allow any self-trigger to settle
+	if n := readyTransitions(f.rec, f.sid); n != 0 {
 		t.Fatalf("session flipped to ready %d time(s) while background process is alive", n)
 	}
 
 	// Background process exits — probe now reports it gone → session goes ready.
 	probeLive.Store(false)
-	activity(true)
-	waitForReadyTransition(t, rec, sid)
-
-	cancel()
-	<-done
+	f.activity(true)
+	waitForReadyTransition(t, f.rec, f.sid)
 }
 
 // A session already `ready` (e.g. a prior background job just finished and
@@ -140,67 +96,28 @@ func TestSessionDetector_BackgroundProcess_HoldsWorkingThenReady(t *testing.T) {
 // was silently invisible to the liveness gate, and the session bounced
 // ready→working→ready in the same pass despite the push still running.
 func TestSessionDetector_BackgroundProcess_FreshSpawnFromReady_HoldsWorking(t *testing.T) {
-	const sid = "bg3"
-	const path = "/home/.claude/projects/-Users-test/bg3.jsonl"
-
-	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
-		return &session.SessionMetrics{
-			LastEventType:            "turn_done",
-			BackgroundProcessCount:   1,
-			BackgroundProcessOutputs: []string{"/tmp/x/tasks/retry.output"},
-		}, nil
-	}}
-
-	tw := newMockAgentWatcher()
-	pw := newMockProcessWatcher()
-	repo := newMockRepo()
-	repo.states[sid] = &session.SessionState{
-		SessionID:      sid,
-		State:          session.StateReady,
-		TranscriptPath: path,
-		FirstSeen:      time.Now().Unix(),
-		UpdatedAt:      time.Now().Unix(),
-	}
-
-	det := newDetectorWithMetrics(tw, pw, repo, metrics)
-	rec := &mockRecorder{}
-	det.SetRecorder(rec)
-
 	var probeLive atomic.Bool
 	probeLive.Store(true)
-	det.SetBackgroundProbeForTest(func(paths []string) (bool, bool) {
-		return probeLive.Load(), true
-	})
+	f := newBGOutputFixtureInState(
+		"bg3",
+		"/home/.claude/projects/-Users-test/bg3.jsonl",
+		"/tmp/x/tasks/retry.output",
+		session.StateReady,
+		func() (bool, bool) { return probeLive.Load(), true },
+	)
+	f.start(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-
-	tw.ch <- agent.Event{
-		Type:           agent.EventActivity,
-		SessionID:      sid,
-		ProjectDir:     "-Users-test",
-		TranscriptPath: path,
-		Terminal:       false,
-	}
-	time.Sleep(250 * time.Millisecond) // allow the async probe + any self-trigger to settle
-	if n := readyTransitions(rec, sid); n != 0 {
+	f.activity(false)
+	f.awaitProbe(t)
+	time.Sleep(250 * time.Millisecond) // allow any self-trigger to settle
+	if n := readyTransitions(f.rec, f.sid); n != 0 {
 		t.Fatalf("session flipped to ready %d time(s) while its freshly-spawned background process is alive", n)
 	}
 
 	// Background process exits — probe now reports it gone → session goes ready.
 	probeLive.Store(false)
-	tw.ch <- agent.Event{
-		Type:           agent.EventActivity,
-		SessionID:      sid,
-		ProjectDir:     "-Users-test",
-		TranscriptPath: path,
-		Terminal:       true,
-	}
-	waitForReadyTransition(t, rec, sid)
-
-	cancel()
-	<-done
+	f.activity(true)
+	waitForReadyTransition(t, f.rec, f.sid)
 }
 
 // The ready→working force-bounce (see forceReadyToWorkingIfActive) must be
@@ -280,85 +197,6 @@ func TestSessionDetector_BackgroundProcess_DeadVerdictPurgesLedger(t *testing.T)
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("dead probe verdict did not trigger PurgeDeadBackgroundProcs within deadline")
-}
-
-// bgOutputFixture is the setup every background-output liveness test shares: a
-// `working` session whose turn has ended and whose only open background process
-// is an output file, wired to a detector with an injectable probe.
-type bgOutputFixture struct {
-	det     *services.SessionDetector
-	tw      *mockAgentWatcher
-	metrics *funcMetrics
-	rec     *mockRecorder
-	probes  atomic.Int32
-	sid     string
-	path    string
-}
-
-// newBGOutputFixture builds the fixture with probe as the injected liveness
-// verdict; every call is counted so a test can require positive evidence the
-// probe actually ran rather than passing on the mere absence of an effect.
-func newBGOutputFixture(sid, path, outPath string, probe func() (alive, conclusive bool)) *bgOutputFixture {
-	f := &bgOutputFixture{sid: sid, path: path}
-	f.metrics = &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
-		return &session.SessionMetrics{
-			LastEventType:            "turn_done",
-			BackgroundProcessCount:   1,
-			BackgroundProcessOutputs: []string{outPath},
-		}, nil
-	}}
-	f.tw = newMockAgentWatcher()
-	repo := newMockRepo()
-	repo.states[sid] = &session.SessionState{
-		SessionID:      sid,
-		State:          session.StateWorking,
-		TranscriptPath: path,
-		FirstSeen:      time.Now().Unix(),
-		UpdatedAt:      time.Now().Unix(),
-	}
-	f.det = newDetectorWithMetrics(f.tw, newMockProcessWatcher(), repo, f.metrics)
-	f.rec = &mockRecorder{}
-	f.det.SetRecorder(f.rec)
-	f.det.SetBackgroundProbeForTest(func([]string) (bool, bool) {
-		f.probes.Add(1)
-		return probe()
-	})
-	return f
-}
-
-// start runs the detector and stops it when the test ends.
-func (f *bgOutputFixture) start(t *testing.T) {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- f.det.Run(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
-}
-
-// activity drives one re-evaluation. terminal short-circuits the 2s debounce,
-// the way production's periodic re-probe does.
-func (f *bgOutputFixture) activity(terminal bool) {
-	f.tw.ch <- agent.Event{
-		Type:           agent.EventActivity,
-		SessionID:      f.sid,
-		ProjectDir:     "-Users-test",
-		TranscriptPath: f.path,
-		Terminal:       terminal,
-	}
-}
-
-// awaitProbe blocks until the injected probe has run at least once, failing if
-// it never does — without it a test asserting only that nothing happened would
-// pass just as happily when the probe was never launched.
-func (f *bgOutputFixture) awaitProbe(t *testing.T) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for f.probes.Load() == 0 {
-		if !time.Now().Before(deadline) {
-			t.Fatal("background liveness probe was never invoked; the test would prove nothing")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 }
 
 // An INCONCLUSIVE probe verdict must not purge. lsof walks every process on

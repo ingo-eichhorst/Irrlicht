@@ -61,19 +61,20 @@ func awaitConclusiveVerdict(t *testing.T, path string, want bool) {
 	t.Helper()
 	budget := 4 * lsofTimeout
 	deadline := time.Now().Add(budget)
-	for {
-		alive, conclusive := anyLiveOutputWriter([]string{path})
+	// Seeded to the failing verdict so an impossible zero-iteration loop would
+	// report a failure rather than a false pass.
+	alive, conclusive := !want, true
+	for time.Now().Before(deadline) {
+		alive, conclusive = anyLiveOutputWriter([]string{path})
 		if conclusive && alive == want {
 			return
 		}
-		if !time.Now().Before(deadline) {
-			if !conclusive {
-				t.Skipf("lsof never returned a conclusive verdict within %v; machine too loaded to observe the transition", budget)
-			}
-			t.Fatalf("probe reported alive=%v, want %v", alive, want)
-		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	if !conclusive {
+		t.Skipf("lsof never returned a conclusive verdict within %v; machine too loaded to observe the transition", budget)
+	}
+	t.Fatalf("probe reported alive=%v, want %v", alive, want)
 }
 
 // A timeout must be reported as inconclusive, never as "no live writer": the

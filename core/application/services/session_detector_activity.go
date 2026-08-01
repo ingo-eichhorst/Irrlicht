@@ -1212,42 +1212,65 @@ func (d *SessionDetector) beginBackgroundProbe(sid string) (alive, startProbe bo
 // verdict changed (issues #649, #661). Must not alias state: outputs/pids
 // are copies taken by the caller before this runs on its own goroutine.
 func (d *SessionDetector) runBackgroundLivenessProbe(sid, transcriptPath string, outputs, pids []string) {
-	liveOut, outConclusive := false, true
-	if len(outputs) > 0 && d.bgLiveProbe != nil {
-		liveOut, outConclusive = d.bgLiveProbe(outputs)
-	}
-	livePID := len(pids) > 0 && d.bgPIDProbe != nil && d.bgPIDProbe(pids)
-	live := liveOut || livePID
+	probed := d.probeBackgroundLiveness(transcriptPath, outputs, pids)
+	hold := d.holdOnInconclusiveProbe(sid, probed)
 
-	// An inconclusive output probe is not evidence of death, and the purge it
-	// would otherwise trigger is durable (issue #1299) — so skip it and keep
-	// whatever the last real verdict was. The guard tests `live`, not just
-	// `livePID`, so a probe that reports (alive, inconclusive) is believed
-	// rather than discarded in favour of a stale cache; anyLiveOutputWriter
-	// never returns that pair today, but the backgroundProbe seam permits it.
-	hold := false
-	if !outConclusive && !live {
-		hold = d.noteInconclusiveProbe(sid, len(outputs))
-	} else {
-		d.clearInconclusiveProbes(sid)
-	}
+	// A held pass must purge nothing: the purge is durable (issue #1299), so
+	// presenting the outputs as still-live is what suppresses it. PIDs are
+	// unaffected — that probe has no inconclusive state to hold on.
+	toPurge := probed
+	toPurge.LiveOut = toPurge.LiveOut || hold
+	d.purgeDeadBackgroundProcesses(toPurge)
 
-	d.purgeDeadBackgroundProcesses(backgroundProbeResult{
+	if d.commitBackgroundVerdict(sid, probed.alive(), hold) {
+		d.nudgeReclassify(sid, transcriptPath)
+	}
+}
+
+// probeBackgroundLiveness runs both liveness probes for one pass. Each kind is
+// skipped when the session carries none of it (or its seam is unwired), and a
+// skipped output probe is a conclusive "nothing here to keep the session
+// alive", not an unknown — only a probe that actually ran can be inconclusive.
+func (d *SessionDetector) probeBackgroundLiveness(transcriptPath string, outputs, pids []string) backgroundProbeResult {
+	r := backgroundProbeResult{
 		TranscriptPath: transcriptPath,
 		Outputs:        outputs,
 		PIDs:           pids,
-		LiveOut:        liveOut || hold,
-		LivePID:        livePID,
-	})
-
-	// On a changed (or first) verdict, nudge the event loop to re-classify
-	// now rather than waiting for the next refresh tick. The send mirrors
-	// the debounce-timer path (single event-loop goroutine owns
-	// processActivity); drop if the buffer is full — the 5s refresh is the
-	// backstop.
-	if !d.commitBackgroundVerdict(sid, live, hold) {
-		return
+		Conclusive:     true,
 	}
+	if len(outputs) > 0 && d.bgLiveProbe != nil {
+		r.LiveOut, r.Conclusive = d.bgLiveProbe(outputs)
+	}
+	if len(pids) > 0 && d.bgPIDProbe != nil {
+		r.LivePID = d.bgPIDProbe(pids)
+	}
+	return r
+}
+
+// holdOnInconclusiveProbe reports whether this pass's verdict must be withheld
+// because the output probe never found out.
+//
+// An inconclusive output probe is not evidence of death, and the purge it would
+// otherwise trigger is durable (issue #1299) — so the caller skips it and keeps
+// whatever the last real verdict was. The guard tests the pass's overall
+// liveness, not just the PID half, so a probe that reports (alive,
+// inconclusive) is believed rather than discarded in favour of a stale cache;
+// anyLiveOutputWriter never returns that pair today, but the backgroundProbe
+// seam permits it.
+func (d *SessionDetector) holdOnInconclusiveProbe(sid string, probed backgroundProbeResult) bool {
+	if probed.Conclusive || probed.alive() {
+		d.clearInconclusiveProbes(sid)
+		return false
+	}
+	return d.noteInconclusiveProbe(sid, len(probed.Outputs))
+}
+
+// nudgeReclassify asks the event loop to re-classify sid now rather than
+// waiting for the next refresh tick — used on a changed (or first) verdict. The
+// send mirrors the debounce-timer path (a single event-loop goroutine owns
+// processActivity); it drops if the buffer is full, because the 5s refresh is
+// the backstop.
+func (d *SessionDetector) nudgeReclassify(sid, transcriptPath string) {
 	select {
 	case d.debouncedEvents <- agent.Event{Type: agent.EventActivity, SessionID: sid, TranscriptPath: transcriptPath}:
 	default:
@@ -1258,13 +1281,22 @@ func (d *SessionDetector) runBackgroundLivenessProbe(sid, transcriptPath string,
 // outputs/PIDs and their liveness verdicts — keeping
 // purgeDeadBackgroundProcesses's parameter list small (go:S107) instead of
 // threading each field through individually.
+//
+// Conclusive is the output probe's "did I find out?" bit (see backgroundProbe),
+// not a second liveness bit: false means the probe timed out, which must never
+// be read as death.
 type backgroundProbeResult struct {
 	TranscriptPath string
 	Outputs        []string
 	PIDs           []string
 	LiveOut        bool
 	LivePID        bool
+	Conclusive     bool
 }
+
+// alive reports whether EITHER kind of background process is still running — a
+// session is held `working` while any one of them is (issue #661).
+func (r backgroundProbeResult) alive() bool { return r.LiveOut || r.LivePID }
 
 // purgeDeadBackgroundProcesses drops probed-dead outputs/PIDs from the
 // tailer's open set and the metrics ledger. A dead process died without a
