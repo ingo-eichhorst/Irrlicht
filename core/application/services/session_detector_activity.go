@@ -1107,10 +1107,59 @@ func (d *SessionDetector) clearBackgroundTracking(sid string, m *session.Session
 	d.bgMu.Lock()
 	delete(d.bgLive, sid)
 	delete(d.bgProbing, sid)
+	delete(d.bgInconclusive, sid)
 	d.bgMu.Unlock()
 	if m != nil {
 		m.HasLiveBackgroundProcess = false
 	}
+}
+
+// maxInconclusiveBackgroundProbes bounds how many consecutive inconclusive
+// verdicts may hold a session's previous liveness answer before the dead
+// verdict is accepted anyway.
+//
+// Holding is right for a transient slow lsof, but "timed out" is not proof of
+// transience: a permanently large process table, or a hung network mount that
+// lsof blocks on, makes every probe time out forever. Unbounded holding would
+// then pin the session `working` for the daemon's lifetime and — because the
+// purge is skipped too — leave the ledger entry to replay the same loop after
+// a restart. That is exactly the failure the pre-#1299 "always believe the
+// silence" behavior avoided, so the bound preserves it as the floor: at the
+// ~5s re-probe cadence this holds for roughly half a minute, then degrades to
+// the old semantics.
+const maxInconclusiveBackgroundProbes = 5
+
+// noteInconclusiveProbe records another consecutive inconclusive verdict for
+// sid and reports whether the previous verdict should still be held.
+func (d *SessionDetector) noteInconclusiveProbe(sid string, outputs int) bool {
+	d.bgMu.Lock()
+	n := d.bgInconclusive[sid] + 1
+	d.bgInconclusive[sid] = n
+	d.bgMu.Unlock()
+
+	hold := n <= maxInconclusiveBackgroundProbes
+	if d.log == nil {
+		return hold
+	}
+	// Edge-triggered: the first hold and the give-up, not every cycle — a
+	// chronically slow lsof would otherwise emit a line per probe forever.
+	switch {
+	case n == 1:
+		d.log.LogInfo(logComponentSessionDetector, sid, fmt.Sprintf(
+			"background liveness probe inconclusive for %d output path(s); holding the previous verdict rather than purging", outputs))
+	case !hold && n == maxInconclusiveBackgroundProbes+1:
+		d.log.LogError(logComponentSessionDetector, sid, fmt.Sprintf(
+			"background liveness probe inconclusive %d times running; accepting the dead verdict for %d output path(s) — a live background process may be purged", n, outputs))
+	}
+	return hold
+}
+
+// clearInconclusiveProbes resets sid's run of inconclusive verdicts once a
+// probe has actually answered.
+func (d *SessionDetector) clearInconclusiveProbes(sid string) {
+	d.bgMu.Lock()
+	delete(d.bgInconclusive, sid)
+	d.bgMu.Unlock()
 }
 
 // beginBackgroundProbe reads the last-known liveness verdict for sid
@@ -1148,26 +1197,30 @@ func (d *SessionDetector) runBackgroundLivenessProbe(sid, transcriptPath string,
 	livePID := len(pids) > 0 && d.bgPIDProbe != nil && d.bgPIDProbe(pids)
 	live := liveOut || livePID
 
-	if !outConclusive && d.log != nil {
-		d.log.LogError(logComponentSessionDetector, sid, fmt.Sprintf(
-			"background liveness probe was inconclusive for %d output path(s); holding the previous verdict rather than purging", len(outputs)))
-	}
-
 	// An inconclusive output probe is not evidence of death, and the purge it
 	// would otherwise trigger is durable (issue #1299) — so skip it and keep
-	// whatever the last real verdict was. A live PID still counts: it is
-	// positive proof from the other probe, independent of lsof.
+	// whatever the last real verdict was. The guard tests `live`, not just
+	// `livePID`, so a probe that reports (alive, inconclusive) is believed
+	// rather than discarded in favour of a stale cache; anyLiveOutputWriter
+	// never returns that pair today, but the backgroundProbe seam permits it.
+	hold := false
+	if !outConclusive && !live {
+		hold = d.noteInconclusiveProbe(sid, len(outputs))
+	} else {
+		d.clearInconclusiveProbes(sid)
+	}
+
 	d.purgeDeadBackgroundProcesses(backgroundProbeResult{
 		TranscriptPath: transcriptPath,
 		Outputs:        outputs,
 		PIDs:           pids,
-		LiveOut:        liveOut || !outConclusive,
+		LiveOut:        liveOut || hold,
 		LivePID:        livePID,
 	})
 
 	d.bgMu.Lock()
 	prev, had := d.bgLive[sid]
-	if !outConclusive && !livePID {
+	if hold {
 		// Optimistically alive on first sight, matching beginBackgroundProbe's
 		// never-declare-an-unprobed-process-dead rule (#445).
 		live = true

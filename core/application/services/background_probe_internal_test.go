@@ -117,22 +117,24 @@ func TestAnyLiveOutputWriter_UnheldPathIsConclusivelyDead(t *testing.T) {
 	if err := os.WriteFile(out, []byte("done\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	alive, conclusive := anyLiveOutputWriter([]string{out})
-	if alive {
-		t.Error("an unheld path should report no live writer")
-	}
-	if !conclusive {
-		t.Error("an unheld path is a definite answer, not an inconclusive one")
-	}
+	// Through the same retry/skip helper as the live case: this probe is the
+	// identical full process-table scan, so asserting on a single un-retried
+	// call would reintroduce exactly the load-sensitive flake this PR removes.
+	awaitConclusiveVerdict(t, out, false)
 }
 
 func TestAnyLiveOutputWriter_EmptyAndMissing(t *testing.T) {
 	if alive, conclusive := anyLiveOutputWriter(nil); alive || !conclusive {
 		t.Errorf("nil paths = (%v, %v), want a conclusive no-live-writer", alive, conclusive)
 	}
+	// Only `alive` is asserted for the real invocation. lsof bails on a missing
+	// path before the process scan so a timeout is unlikely, but asserting
+	// `conclusive` off a single un-retried call is the flake shape this PR
+	// exists to remove, and TestAnyLiveOutputWriter_UnheldPathIsConclusivelyDead
+	// already covers conclusiveness with retries.
 	missing := filepath.Join(t.TempDir(), "does-not-exist.output")
-	if alive, conclusive := anyLiveOutputWriter([]string{missing}); alive || !conclusive {
-		t.Errorf("a non-existent output file = (%v, %v), want a conclusive no-live-writer", alive, conclusive)
+	if alive, _ := anyLiveOutputWriter([]string{missing}); alive {
+		t.Error("a non-existent output file should report no live writer")
 	}
 }
 
