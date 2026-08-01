@@ -313,28 +313,32 @@ func TestSessionDetector_BackgroundProcess_DeadVerdictPurgesLedger(t *testing.T)
 	t.Fatal("dead probe verdict did not trigger PurgeDeadBackgroundProcs within deadline")
 }
 
-// An INCONCLUSIVE probe verdict must not purge. lsof walks every process on
-// the machine, so it is slowest exactly when the machine is busiest — which is
-// when long-running background work is most likely to be in flight. Because
-// the purge writes through to the ledger, reading one slow lsof as death would
-// permanently drop a still-running process and flip a live session to ready
-// with no way back. The probe says "I don't know"; the detector must wait for
-// the next one rather than act. See issue #1299.
-func TestSessionDetector_BackgroundProcess_InconclusiveVerdictDoesNotPurge(t *testing.T) {
-	const sid = "bg-inconclusive"
-	const path = "/home/.claude/projects/-Users-test/bg-inconclusive.jsonl"
-	const outPath = "/tmp/x/tasks/inconclusive.output"
+// bgOutputFixture is the setup every background-output liveness test shares: a
+// `working` session whose turn has ended and whose only open background process
+// is an output file, wired to a detector with an injectable probe.
+type bgOutputFixture struct {
+	det     *services.SessionDetector
+	tw      *mockAgentWatcher
+	metrics *funcMetrics
+	rec     *mockRecorder
+	probes  atomic.Int32
+	sid     string
+	path    string
+}
 
-	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
+// newBGOutputFixture builds the fixture with probe as the injected liveness
+// verdict; every call is counted so a test can require positive evidence the
+// probe actually ran rather than passing on the mere absence of an effect.
+func newBGOutputFixture(sid, path, outPath string, probe func() (alive, conclusive bool)) *bgOutputFixture {
+	f := &bgOutputFixture{sid: sid, path: path}
+	f.metrics = &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
 		return &session.SessionMetrics{
 			LastEventType:            "turn_done",
 			BackgroundProcessCount:   1,
 			BackgroundProcessOutputs: []string{outPath},
 		}, nil
 	}}
-
-	tw := newMockAgentWatcher()
-	pw := newMockProcessWatcher()
+	f.tw = newMockAgentWatcher()
 	repo := newMockRepo()
 	repo.states[sid] = &session.SessionState{
 		SessionID:      sid,
@@ -343,42 +347,74 @@ func TestSessionDetector_BackgroundProcess_InconclusiveVerdictDoesNotPurge(t *te
 		FirstSeen:      time.Now().Unix(),
 		UpdatedAt:      time.Now().Unix(),
 	}
-
-	det := newDetectorWithMetrics(tw, pw, repo, metrics)
-	// Not alive, and not conclusive — an lsof that timed out.
-	var probes atomic.Int32
-	det.SetBackgroundProbeForTest(func([]string) (bool, bool) {
-		probes.Add(1)
-		return false, false
+	f.det = newDetectorWithMetrics(f.tw, newMockProcessWatcher(), repo, f.metrics)
+	f.rec = &mockRecorder{}
+	f.det.SetRecorder(f.rec)
+	f.det.SetBackgroundProbeForTest(func([]string) (bool, bool) {
+		f.probes.Add(1)
+		return probe()
 	})
+	return f
+}
 
+// start runs the detector and stops it when the test ends.
+func (f *bgOutputFixture) start(t *testing.T) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-	defer func() { cancel(); <-done }()
+	go func() { done <- f.det.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+}
 
-	tw.ch <- agent.Event{
+// activity drives one re-evaluation. terminal short-circuits the 2s debounce,
+// the way production's periodic re-probe does.
+func (f *bgOutputFixture) activity(terminal bool) {
+	f.tw.ch <- agent.Event{
 		Type:           agent.EventActivity,
-		SessionID:      sid,
+		SessionID:      f.sid,
 		ProjectDir:     "-Users-test",
-		TranscriptPath: path,
+		TranscriptPath: f.path,
+		Terminal:       terminal,
 	}
+}
 
-	// Wait for positive evidence the probe ran before concluding anything —
-	// otherwise this passes just as happily if the probe is never launched at
-	// all, since "nothing purged" is also true then.
+// awaitProbe blocks until the injected probe has run at least once, failing if
+// it never does — without it a test asserting only that nothing happened would
+// pass just as happily when the probe was never launched.
+func (f *bgOutputFixture) awaitProbe(t *testing.T) {
+	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
-	for probes.Load() == 0 && time.Now().Before(deadline) {
+	for f.probes.Load() == 0 {
+		if !time.Now().Before(deadline) {
+			t.Fatal("background liveness probe was never invoked; the test would prove nothing")
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if probes.Load() == 0 {
-		t.Fatal("background liveness probe was never invoked; the test would prove nothing")
-	}
+}
+
+// An INCONCLUSIVE probe verdict must not purge. lsof walks every process on
+// the machine, so it is slowest exactly when the machine is busiest — which is
+// when long-running background work is most likely to be in flight. Because
+// the purge writes through to the ledger, reading one slow lsof as death would
+// permanently drop a still-running process and flip a live session to ready
+// with no way back. The probe says "I don't know"; the detector must wait for
+// the next one rather than act. See issue #1299.
+func TestSessionDetector_BackgroundProcess_InconclusiveVerdictDoesNotPurge(t *testing.T) {
+	// Not alive, and not conclusive — an lsof that timed out.
+	f := newBGOutputFixture(
+		"bg-inconclusive",
+		"/home/.claude/projects/-Users-test/bg-inconclusive.jsonl",
+		"/tmp/x/tasks/inconclusive.output",
+		func() (bool, bool) { return false, false },
+	)
+	f.start(t)
+	f.activity(false)
+	f.awaitProbe(t)
 
 	// The dead-verdict path purges within ~50ms of the probe returning, so a
 	// short tail is enough to catch a regression here.
 	time.Sleep(300 * time.Millisecond)
-	if purged := metrics.purgedSnapshot(); len(purged) > 0 {
+	if purged := f.metrics.purgedSnapshot(); len(purged) > 0 {
 		t.Fatalf("an inconclusive probe purged %v — a timeout is not evidence of death", purged)
 	}
 }
@@ -388,64 +424,23 @@ func TestSessionDetector_BackgroundProcess_InconclusiveVerdictDoesNotPurge(t *te
 // session to ready anyway — the user-visible half of the same bug — so the last
 // real verdict is held until a probe actually finds out. See issue #1299.
 func TestSessionDetector_BackgroundProcess_InconclusiveVerdictHoldsWorking(t *testing.T) {
-	const sid = "bg-inconclusive-hold"
-	const path = "/home/.claude/projects/-Users-test/bg-inconclusive-hold.jsonl"
-
-	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
-		return &session.SessionMetrics{
-			LastEventType:            "turn_done",
-			BackgroundProcessCount:   1,
-			BackgroundProcessOutputs: []string{"/tmp/x/tasks/hold.output"},
-		}, nil
-	}}
-
-	tw := newMockAgentWatcher()
-	pw := newMockProcessWatcher()
-	repo := newMockRepo()
-	repo.states[sid] = &session.SessionState{
-		SessionID:      sid,
-		State:          session.StateWorking,
-		TranscriptPath: path,
-		FirstSeen:      time.Now().Unix(),
-		UpdatedAt:      time.Now().Unix(),
-	}
-
-	det := newDetectorWithMetrics(tw, pw, repo, metrics)
-	rec := &mockRecorder{}
-	det.SetRecorder(rec)
-
-	// conclusive=false throughout: every probe times out. Stays within
-	// maxInconclusiveBackgroundProbes for this test's handful of probes, so the
-	// hold is still in force when the assertion runs.
-	var probes atomic.Int32
-	det.SetBackgroundProbeForTest(func([]string) (bool, bool) {
-		probes.Add(1)
-		return false, false
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-	defer func() { cancel(); <-done }()
-
-	activity := func(terminal bool) {
-		tw.ch <- agent.Event{
-			Type:           agent.EventActivity,
-			SessionID:      sid,
-			ProjectDir:     "-Users-test",
-			TranscriptPath: path,
-			Terminal:       terminal,
-		}
-	}
-	activity(false)
-	time.Sleep(250 * time.Millisecond) // let the async probe settle
-	activity(true)
+	// conclusive=false throughout: every probe times out. This test drives
+	// fewer probes than maxInconclusiveBackgroundProbes, so the hold is still
+	// in force when the assertion runs.
+	f := newBGOutputFixture(
+		"bg-inconclusive-hold",
+		"/home/.claude/projects/-Users-test/bg-inconclusive-hold.jsonl",
+		"/tmp/x/tasks/hold.output",
+		func() (bool, bool) { return false, false },
+	)
+	f.start(t)
+	f.activity(false)
+	f.awaitProbe(t)
+	time.Sleep(250 * time.Millisecond)
+	f.activity(true)
 	time.Sleep(250 * time.Millisecond)
 
-	if probes.Load() == 0 {
-		t.Fatal("background liveness probe was never invoked; the test would prove nothing")
-	}
-	if n := readyTransitions(rec, sid); n != 0 {
+	if n := readyTransitions(f.rec, f.sid); n != 0 {
 		t.Fatalf("session flipped to ready %d time(s) on an inconclusive probe; a timeout is not evidence the background process died", n)
 	}
 }
@@ -458,49 +453,20 @@ func TestSessionDetector_BackgroundProcess_InconclusiveVerdictHoldsWorking(t *te
 // maxInconclusiveBackgroundProbes the dead verdict is accepted and the purge
 // runs. See issue #1299.
 func TestSessionDetector_BackgroundProcess_InconclusiveHoldIsBounded(t *testing.T) {
-	const sid = "bg-inconclusive-bound"
-	const path = "/home/.claude/projects/-Users-test/bg-inconclusive-bound.jsonl"
+	f := newBGOutputFixture(
+		"bg-inconclusive-bound",
+		"/home/.claude/projects/-Users-test/bg-inconclusive-bound.jsonl",
+		"/tmp/x/tasks/bounded.output",
+		func() (bool, bool) { return false, false },
+	)
+	f.start(t)
 
-	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
-		return &session.SessionMetrics{
-			LastEventType:            "turn_done",
-			BackgroundProcessCount:   1,
-			BackgroundProcessOutputs: []string{"/tmp/x/tasks/bounded.output"},
-		}, nil
-	}}
-
-	tw := newMockAgentWatcher()
-	pw := newMockProcessWatcher()
-	repo := newMockRepo()
-	repo.states[sid] = &session.SessionState{
-		SessionID:      sid,
-		State:          session.StateWorking,
-		TranscriptPath: path,
-		FirstSeen:      time.Now().Unix(),
-		UpdatedAt:      time.Now().Unix(),
-	}
-
-	det := newDetectorWithMetrics(tw, pw, repo, metrics)
-	det.SetBackgroundProbeForTest(func([]string) (bool, bool) { return false, false })
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-	defer func() { cancel(); <-done }()
-
-	// Drive more probes than the bound allows. Terminal short-circuits the
-	// debounce so each event yields its own probe, as the periodic re-probe
-	// does in production.
+	// Drive more probes than the bound allows; Terminal short-circuits the
+	// debounce so each event yields its own probe.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		tw.ch <- agent.Event{
-			Type:           agent.EventActivity,
-			SessionID:      sid,
-			ProjectDir:     "-Users-test",
-			TranscriptPath: path,
-			Terminal:       true,
-		}
-		if purged := metrics.purgedSnapshot(); len(purged) > 0 {
+		f.activity(true)
+		if purged := f.metrics.purgedSnapshot(); len(purged) > 0 {
 			return // the bound released the hold, as it must
 		}
 		time.Sleep(50 * time.Millisecond)
