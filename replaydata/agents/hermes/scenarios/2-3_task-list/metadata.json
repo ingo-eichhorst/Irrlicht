@@ -1,0 +1,103 @@
+{
+  "scenario_id": "task-list",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+fe95020.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (the `todo` tool — full-list replace, statuses pending|in_progress|completed|cancelled, in the default CLI toolset)\ndaemon_capability: bug (the store persists the todo call's arguments verbatim, but the hermes parser drops function.arguments and neither SessionMetrics.Tasks nor AppliedTaskDeltas is ever populated — the tasks field stays empty)\ndriver_capability: ready (send / wait_turn / sleep are all real seams in driver-interactive.sh)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-list",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: ready\n\n## Reasoning\n\n### agent_supports: yes\n\nHermes Agent's single-session task-list primitive is the **`todo`** tool (Claude Code uses TaskCreate/TaskUpdate; OpenCode `todowrite`; gemini-cli `write_todos`; codex `update_plan`). The shipped source is authoritative: `tools/todo_tool.py` declares `TODO_SCHEMA = {\"name\": \"todo\", ...}` with a `todos` array whose items are `{id: string, content: string, status: string}` and `VALID_STATUSES = {\"pending\", \"in_progress\", \"completed\", \"cancelled\"}`, and registers it with `registry.register(name=\"todo\", toolset=\"todo\", ...)`. The module docstring states the semantics the scenario needs: \"Provides an in-memory task list the agent uses to decompose complex tasks, track progress\", \"Single `todo` tool: provide `todos` param to write, omit to read\", \"Every call returns the full current list\". `merge=false` (the default) is a FULL-LIST REPLACE — structurally identical to opencode's `todowrite` — and `merge=true` updates existing items by id. The schema description pins the walk the scenario asserts: \"Only ONE item in_progress at a time. Mark items completed immediately when done.\"\n\nThe tool runs inside the agent's own turn loop (an in-memory `TodoStore` on the AIAgent instance, one per session) — it spawns no child session and writes no `parent_session_id`, so `SubagentCount` stays 0. Hermes' subagent primitive is a different tool (`delegate_task`, `tools/delegate_tool.py`), which the recipe explicitly forbids.\n\nIt is enabled by default on the surfaces this cell records: `toolsets.py:54` lists `\"todo\"` under \"# Planning & memory\" in the default CLI/messaging tool set, and again in the `coding` (`toolsets.py:362`) and `hermes-acp` (`toolsets.py:394`) toolsets. `check_todo_requirements()` returns `True` unconditionally (\"Todo tool has no external requirements -- always available\"), so there is no provider or model gate of the kind that constrains gemini-cli's `write_todos`.\n\n### daemon_capability: bug\n\nA trace EXISTS in the source the daemon already reads, but the hermes adapter discards it, so the load-bearing observable — three items in the session API `tasks` field with matching subjects and status — is never produced.\n\nWhat the store holds: a completed `todo` invocation lands as two rows in `$HERMES_HOME/state.db`'s `messages` table — an `assistant` row whose `tool_calls` column carries the OpenAI-shaped call INCLUDING `function.arguments` (the `todos[]` snapshot), and a `tool` row whose `content` is `todo_tool`'s return value, `{\"todos\": [...], \"summary\": {...}}` — the full current list. Verified against a live store (11 sessions / 117 message rows at `/Users/ingo/hermes-local/.hermes/state.db`): every `tool_calls` row persists arguments verbatim, e.g. `[{\"id\": \"888148639\", \"call_id\": \"888148639\", \"type\": \"function\", \"function\": {\"name\": \"terminal\", \"arguments\": \"{\\\"command\\\":\\\"ls ...\\\"}\"}}]`, and the paired `role='tool'` row carries the result payload.\n\nWhat the adapter does with it: `core/adapters/inbound/agents/hermes/parser.go`'s `parseToolCalls` (lines 118–145) unmarshals each call into a struct with only `ID`, `CallID` and `Function.Name` and emits `tailer.ToolUse{ID, Name}` — `function.arguments` is not in the struct at all, so the `todos[]` snapshot is dropped at parse time. `ParseLine` never sets `TaskDeltas` or `TaskSnapshot`. Downstream, `metrics.go`'s `querySessionMetrics` (lines 124–173) and `messageFold.apply` (lines 227–249) fold only `openTools`, `lastAssistantText` and the waiting cue — neither `metrics.Tasks` nor `metrics.AppliedTaskDeltas` is ever assigned (`grep -rn Tasks core/adapters/inbound/agents/hermes/` returns nothing). So the session API's `tasks` field stays nil for every hermes session, and `SessionDetector.recordTaskDeltas` (`core/application/services/session_detector_activity.go:746`, which iterates `state.Metrics.AppliedTaskDeltas`) records ZERO `task_delta` lifecycle events.\n\nThis is a parser/metrics gap, not architectural incapability: the same signal, on the same `agent.ProcessOwnedStore` transport, is already handled for opencode — `core/adapters/inbound/agents/opencode/parser.go:276` (`appendTodowriteDeltas`) turns each full-list snapshot into TaskDeltas plus a `TaskSnapshot`, and `metrics.go:159` assigns `metrics.Tasks = tasks`. Hermes' `todo` has the same full-list-replace shape AND, unlike gemini-cli's `write_todos`, carries a stable per-item `id`, so the reconciliation is id-keyed rather than content-keyed — strictly simpler than the opencode port it would copy.\n\nThe rest of the scenario IS observable today. `finish_reason` is an explicit turn boundary (`parser.go:93` maps `assistant`/`stop` to `turn_done`; the watcher's `turnIsDone`, `watcher.go:426`, marks the activity event Terminal), so ready → working → ready settles without an idle heuristic, and the intervening `todo` calls hold the session in `working` via the open-tool-call set. No child session is created, so `SubagentCount` stays 0.\n\n### driver_capability: ready\n\nThe recipe needs `send`, `wait_turn` and `sleep`. All three are genuinely ported in `replaydata/agents/hermes/driver-interactive.sh`: `DRIVE_ELICITS=\"send slash sleep wait_turn\"`, `send_text` types the literal text then Enter after a 0.4s beat, and `wait_turn` (SEAM 2) polls the store for `COUNT(*) FROM messages WHERE session_id=... AND role='assistant' AND finish_reason='stop'` exceeding `EXPECTED_TURNS_SEEN` — a real signal poll on Hermes' explicit turn marker, not an idle guess. Launch is `hermes chat` under tmux with `wait_for_prompt` polling for the ready banner. No stubbed arm (`interrupt`, `keys`, `reset_session`, `restart`, `resume`, `sigkill`, `exit_clean`, `start_session`, `session`) is required by this recipe.\n\nInteractive rather than headless deliberately: Hermes' one-shot `-z` mode exits at turn completion, so the process would not outlive the daemon's observation window and the settle phase would validate as missing.\n\n## Recording notes\n\nHermes is a presession adapter for spec-anchoring purposes: it declares a `ProcessMatcher` (`agent.go:32-36`), so `processlifecycle`'s scanner mints a transient `proc-<PID>` row at launch, while the real `sessions` row — and therefore the real session id, shaped `YYYYMMDD_HHMMSS_<hex6>` — is INSERTed only on the first user message, ~2s later (`adapter.go` package doc). The spec therefore models the birth as two phases and anchors every later phase to the real session, per the presession template.",
+      "caveats": [
+        "The 117-row sample store carries no `todo` call yet (`SELECT COUNT(*) FROM messages WHERE tool_calls LIKE '%\"todo\"%'` → 0), so the exact persisted shape of a todo call is INFERRED from the terminal/kanban/read_file calls in that store, which do carry function.arguments verbatim, plus todo_tool.py's return value. `record` promotes this from provisional to settled.",
+        "A fix that mirrors opencode exactly would close the API-surface half but NOT the `task_tracked` phase: opencode's ProcessOwnedStore path assigns `metrics.Tasks` but never `metrics.AppliedTaskDeltas` (grep: the only writers of AppliedTaskDeltas are core/pkg/tailer/tailer.go:977,1024), so opencode records no `task_delta` events either. The hermes fix should populate both — Tasks for the API field, AppliedTaskDeltas so the observable is assertable in events.jsonl (#662).",
+        "`model` and `cost` are deliberately left unpinned in observations. The recording home's model is a human choice, and irrlicht prices hermes via its own alias table rather than the store's `estimated_cost_usd` (which the local store reports as 0.0 under subscription billing): the locally configured `gpt-5.6-luna` has no entry in core/pkg/capacity/aliases.go, and EstimateCostUSD returns 0 for an unpriced model (core/pkg/capacity/capacity.go:159-162), so a `cost_nonzero` assertion would fail for reasons unrelated to this scenario. `tokens_nonzero` is safe — the sessions row carries input/output token aggregates (observed 16269/5 on a live row).",
+        "`hermes chat` records `source='cli'`, and Hermes populates `sessions.cwd` only from its TUI gateway, so the session's project binding comes from the live-process CWD fallback (watcher.go:115-124 / metrics.go:120-122), which returns \"\" when zero or more than one hermes session process is alive. A concurrent hermes session during recording would leave the cell's cwd unbound; not asserted by this spec, but it affects project-dir attribution."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/todo_tool.py",
+          "note": "TODO_SCHEMA name=\"todo\", items {id, content, status}, VALID_STATUSES pending|in_progress|completed|cancelled, merge=false is a full-list replace, registry.register(name=\"todo\", toolset=\"todo\"), check_todo_requirements() always True."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/toolsets.py:54,206,362,394",
+          "note": "\"todo\" is in the default CLI tool list (\"# Planning & memory\"), its own `todo` toolset, and the `coding` + `hermes-acp` toolsets — enabled by default on the surfaces this cell records."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go:118-145",
+          "note": "parseToolCalls unmarshals only {id, call_id, function.name} — function.arguments (the todos[] snapshot) is not in the struct, so it is dropped at parse time. ParseLine sets no TaskDeltas/TaskSnapshot."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go:124-173,227-249",
+          "note": "querySessionMetrics and messageFold.apply never assign metrics.Tasks or metrics.AppliedTaskDeltas; `grep -rn Tasks core/adapters/inbound/agents/hermes/` returns no matches at all."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go:746",
+          "note": "recordTaskDeltas emits one task_delta lifecycle event per state.Metrics.AppliedTaskDeltas entry — with the slice never populated for hermes, events.jsonl carries zero task_delta events."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/parser.go:276 + metrics.go:110-159",
+          "note": "The reference fix on the SAME ProcessOwnedStore transport: appendTodowriteDeltas converts a full-list snapshot into TaskDeltas + TaskSnapshot, metrics.go assigns metrics.Tasks. Hermes' todo carries a stable per-item id, so its port is id-keyed rather than content-keyed."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Live store, 11 sessions / 117 message rows. `SELECT tool_calls FROM messages WHERE tool_calls IS NOT NULL LIMIT 1` shows function.arguments persisted verbatim; `SELECT role, tool_name, content FROM messages WHERE role='tool'` shows the tool result payload persisted. `SELECT COUNT(*) ... LIKE '%\"todo\"%'` → 0 (no todo call recorded yet)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\"; send_text, wait_turn (store poll on finish_reason='stop') and the launch/wait_for_prompt seams are ported — the stubbed arms this recipe never reaches are interrupt/keys/reset_session/restart/resume/sigkill/exit_clean/start_session/session."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go:32-43 + adapter.go package doc",
+          "note": "ProcessMatcher declared (so processlifecycle mints a transient proc-<PID> presession), while the real sessions row is INSERTed ~2s after launch on the first user message — the presession/real-session split the spec's two-phase birth is anchored to."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 240,
+      "settings": {},
+      "prompt": "Use your todo tool to create exactly three todo items, in this order: 'read README', 'summarize README', 'reply done'. Then work them one at a time: for each item call todo again to set that item's status to in_progress, then call todo again to set it to completed, before moving on to the next one. Keep everything in this one session - do NOT use delegate_task or spawn any subagent. When all three items are completed, reply with exactly the word: done",
+      "verify": [
+        "state.db messages contains assistant rows whose tool_calls carry function.name='todo' with a todos[] snapshot walking the three items 'read README' / 'summarize README' / 'reply done' from pending through in_progress to completed",
+        "no delegate_task call and no child session row (parent_session_id stays NULL); SubagentCount stays 0",
+        "the session API tasks field lists the three items with matching subjects, all ending completed (KNOWN FAILING - the hermes parser drops function.arguments and populates neither Tasks nor AppliedTaskDeltas)",
+        "state follows ready -> working -> ready; final session state is ready"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use your todo tool to create exactly three todo items, in this order: 'read README', 'summarize README', 'reply done'. Then work them one at a time: for each item call todo again to set that item's status to in_progress, then call todo again to set it to completed, before moving on to the next one. Keep everything in this one session - do NOT use delegate_task or spawn any subagent. When all three items are completed, reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ]
+    }
+  }
+}
