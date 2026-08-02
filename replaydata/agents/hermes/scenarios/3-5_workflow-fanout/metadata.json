@@ -1,0 +1,166 @@
+{
+  "scenario_id": "workflow-fanout",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+5797bff.dirty",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes (delegate_task batch `tasks` array, default max_concurrent_children=3)\ndaemon_capability: full (RE-ASSESSED on current code: commit 6ad7c28a widened BOTH source predicates to IN ('cli','tui','subagent'), so delegate children surface carrying ParentSessionID and parent_linked fires)\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "workflow-fanout",
+      "agent": "hermes",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full  (RE-ASSESSED — was `bug`; the cited defect is fixed in this worktree)\ndriver_capability: ready\nroute: record\n\n## Reasoning\n\n### agent (yes)\n\nHermes' one multi-agent orchestration primitive is `delegate_task`, and it ships a first-class batch (fan-out) mode. `tools/delegate_tool.py`'s `_build_top_level_description` renders the tool description as \"TWO MODES (one of 'goal' or 'tasks' is required): 1. Single task: provide 'goal' … 2. Batch (parallel): provide 'tasks' array with up to {max_children} items concurrently\", and the argument validator (delegate_tool.py:2416, 2543) rejects a call with neither (\"Provide either 'goal' (single task) or 'tasks' (batch).\"). So the batch array IS drivable from a single prompt — it is a plain tool argument the model fills, not a CLI flag or a REPL mode, and the tool description itself instructs the model how to use it.\n\nThe concurrency default matches the scenario's ≈3-child fan-out exactly: `_DEFAULT_MAX_CONCURRENT_CHILDREN = 3` (delegate_tool.py:118), read by `_get_max_concurrent_children()` with priority config.yaml > `DELEGATION_MAX_CONCURRENT_CHILDREN` env > default. The maintainer's `<HERMES_HOME>/config.yaml` sets only `delegation.max_iterations: 50` under the `delegation:` key — `max_concurrent_children` is absent, so 3 stands and a 3-entry `tasks` array runs all three concurrently with none queued.\n\n`delegate_task` is a CORE tool (listed in `toolsets._HERMES_CORE_TOOLS`, the tool set of the default `hermes-cli` toolset) and `tools/tool_search.py` never defers core tools, so it is model-visible in a plain `hermes chat` with no config change; `check_delegate_requirements()` returns True unconditionally.\n\nEach child is a real, separately-identified session: `_build_child_agent` constructs `AIAgent(platform=\"subagent\", session_db=<parent's SessionDB>, parent_session_id=<parent.session_id>)`, and the child's own `_ensure_db_session()` INSERTs a `sessions` row via `create_session(session_id=…, source=_session_source_for_agent(self.platform), parent_session_id=self._parent_session_id, cwd=_launch_cwd_for_session(source))` (run_agent.py:607-640). Row creation happens at turn SETUP, not at completion (`agent/turn_context.py:601-616`, \"Idempotent: _ensure_db_session() no-ops once the row exists\"), so each child is discoverable while it is still running.\n\nUnchanged agent-shape caveat from the first pass: a top-level delegation is ALWAYS background (`background = not _is_subagent`), so the parent's own turn ends seconds after dispatch and the consolidated result re-enters as a fresh turn later. That is a shape irrlicht already models (see below), not a blocker.\n\n### daemon (full) — the previous `bug` is fixed; re-judged on current code\n\nThe first pass returned `daemon=bug` on one predicate, and it read the code before the fix landed. Both cited query sites now read `source IN ('cli','tui','subagent')`:\n\n- `core/adapters/inbound/agents/hermes/watcher.go:284` — `scanSessions`' discovery query.\n- `core/adapters/inbound/agents/hermes/metrics.go:103` — `querySessionMetrics`, which the first pass correctly flagged would otherwise return nil metrics for an admitted child.\n\nCommit 6ad7c28a (\"fix(hermes): surface delegated subagent sessions, dropped by the source filter\") is the change, and it carries the red-first defect test `TestWatcher_DelegatedSubagentSessionsSurfaceWithParent` (watcher_test.go:489) — a `source='subagent'` row with `parent: \"parent1\"` must surface AND arrive carrying `ParentSessionID == \"parent1\"` — plus the lock `TestWatcher_SkipsGatewaySessions` (watcher_test.go:197) proving a `source='whatsapp'` row stays excluded. Both run green here: `go test ./core/adapters/inbound/agents/hermes/... -run 'TestWatcher_DelegatedSubagentSessionsSurfaceWithParent|TestWatcher_SkipsGatewaySessions' -count=1` → ok, 0.342s.\n\nI walked the whole fan-out chain on current code looking for a SECOND blocker, and found none:\n\n1. **Discovery** — the child row is admitted by `scanSessions` (source now allowed; `started_at` is fresh so the maxAge cutoff passes; the LIMIT 200 ceiling is not near).\n2. **Link carried** — `reconcile` (watcher.go:373-379) sets `agent.Event.ParentSessionID = r.parentID` from the row's `COALESCE(parent_session_id,'')`.\n3. **parent_linked emitted** — `buildNewSessionState` (session_detector_activity.go:231-254) takes `parentID` STRAIGHT from `ev.ParentSessionID` with no path derivation (the `deriveParentSession(ev.TranscriptPath)` fallback is only for file-transcript adapters), and records `lifecycle.KindParentLinked`. Nothing on this path is claudecode-specific or file-shaped.\n4. **SubagentCount** — `refreshSubagentSummary` → `session.ComputeSubagentSummary` (grouped.go:266-299) matches children purely on `c.ParentSessionID == parent.SessionID` over `repo.ListAll()`, and buckets them Working/Waiting/Ready. Three linked children give Total=3 and the buckets track the live count as each finishes.\n5. **Parent held working** — `finalizeNewSession` calls `holdParentWorkingForNewChild(state.ParentSessionID)` (session_detector_activity.go:334-336), which is what absorbs Hermes' always-background parent: the parent may briefly reach ready between dispatch and child discovery (store poll cadence 2s), and the first child discovered flips it back to working with reason \"new child discovered while ready — holding working\" (#889). `reevaluateParent` then returns it to ready only once `hasActiveChildren` finds no working/waiting child.\n6. **Children observably working** — the child's row is created at turn setup, and Hermes performs an early crash-resilience persist of the user message BEFORE the API call is built (run_agent.py:1908-1920 comments), with `append_message` bumping `sessions.message_count` per message (hermes_state.py:6543). So the watcher sees message_count 0→1 while the newest row is `role='user'`, `turnIsDone` false → a non-terminal activity → child classified working; the child's final assistant row with `finish_reason='stop'` then makes `turnIsDone` true → child ready. The scenario's \"children transition working → ready as they finish\" is producible.\n\nNone of the alternatives this re-assessment was asked to rule out actually blocks:\n\n- **\"the children have no cwd\"** — true (`_launch_cwd_for_session` returns None for any source but 'cli'), and I confirmed empirically against the live store that even `cli` rows are almost always cwd-less (`SELECT source, count(*), sum(cwd IS NOT NULL AND cwd != '')` → cli|22|1, tui|3|3). But an empty cwd does NOT block discovery, the parent link, or SubagentCount — the watcher falls back to `defaultLiveCWD()` and, failing that, emits with `CWD=\"\"`/`ProjectDir=\"\"`. It is a project-attribution weakness, kept as a caveat.\n- **\"max_concurrent_children default 3\"** — a match, not a blocker: 3 is exactly the fan-out the scenario asks for, and the config does not override it.\n- **\"is the batch `tasks` array drivable from a single prompt\"** — yes; it is a tool argument whose schema and description the model reads, with a hard \"one of 'goal' or 'tasks' is required\" validator.\n\nOne genuine narrow gap remains, kept as a CAVEAT rather than a downgrade (spec met, narrow detail gappy): the scenario's last acceptance line, \"after the children are swept, SubagentCount(parent) returns to 0\". `ComputeSubagentSummary.Total` (grouped.go:286) counts every child still in the repo regardless of state, so the count returns to 0 only when the child SessionStates are removed. Hermes writes no transcript file (no `transcript_removed` is structurally possible for a `ProcessOwnedStore` adapter) and `delegate_tool`/`async_delegation` never call `end_session` on a child, so `ended_at` stays NULL and the children linger as ready children of a live parent. That is an architectural difference in the sweep SIGNAL, not a mishandled observable — the daemon is displaying children that genuinely still exist — so the spec covers the criterion indirectly via the parent returning to ready with no active child, exactly as the claudecode sibling's `children_swept` (transcript_removed) phase cannot be ported.\n\nRelatedly (code-read, not a blocker): `isOrphanedChild` (session_detector_subagent.go:61-84) ends with `os.Stat(s.TranscriptPath)` and returns false on error. A hermes child's TranscriptPath is `<store>?session=<id>`, which never stats, so `finishOrphanedChildren` can never fast-forward a hermes child to ready. Here that is the CORRECT outcome — it means the parent's early background turn-done cannot prematurely promote three still-running children and collapse the fan-out — but it also means a child that dies without a `finish_reason='stop'` would hold the parent working until the 2-minute stale sweep.\n\nThe bookkeeping/phantom-session criterion passes structurally, and for a better-cited reason than the first pass gave: Hermes' per-run bookkeeping is (a) the `async_delegations` TABLE inside state.db and (b) the per-task human-readable live transcripts under `cache/delegation/live/<delegation_id>/` that the dispatch response advertises. Neither is a row in `sessions`, and the watcher reads only `sessions` (and ignores any fsnotify path whose basename is not the store's), so no 'journal' session and no 'unknown'-project session can arise from them.\n\n### driver (ready)\n\nThe recipe is one `send`, one `wait_turn`, one `sleep`. `driver_step_types_from_file replaydata/agents/hermes/driver-interactive.sh` reports `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn` — every needed primitive is present, nothing to port. Interactive rather than headless is load-bearing twice over: the process must outlive the observation window, and `hermes -z` is precisely the runtime `gateway.session_context.async_delivery_supported()` returns False for, which would silently degrade the background fan-out into a synchronous one.\n\n## Provisionality\n\nThe daemon verdict's DAEMON half is now settled by code + green tests. Its AGENT half — that a live delegate child really lands as `source='subagent'` with `parent_session_id` set — is still code-derived: re-queried just now, the maintainer's store (/Users/ingo/hermes-local/.hermes/state.db) holds cli=22, tui=3, ZERO 'subagent' rows and ZERO rows with parent_session_id set, because no delegation has ever run there. Per the observation-vs-emission rule that keeps confidence at 0.75; `record` is what promotes it from provisional to settled.",
+      "caveats": [
+        "PROVISIONAL (emission, not parsing): no delegation has ever run in the observed store — `SELECT source, count(*), sum(cwd IS NOT NULL AND cwd != ''), sum(parent_session_id IS NOT NULL) FROM sessions GROUP BY source` on /Users/ingo/hermes-local/.hermes/state.db returns cli|22|1|0 and tui|3|3|0. That a live delegate child lands as source='subagent' with parent_session_id set is derived from Hermes' source (_build_child_agent platform=\"subagent\" -> run_agent._session_source_for_agent's platform fallback), not from an observed row. record settles it; if the live row carries some other source value the fix's allow-list needs that value too.",
+        "'After the children are swept, SubagentCount(parent) returns to 0' is NOT directly assertable for this adapter and is deliberately not a spec phase. ComputeSubagentSummary.Total (grouped.go:286) counts every child in the repo regardless of state, and a hermes child is never removed during the run: there is no transcript file so no transcript_removed is structurally possible, and delegate_tool/async_delegation never call end_session, so ended_at stays NULL while the parent process is alive. The spec covers it indirectly via the parent returning to ready with no active child; a recording should be eyeballed for a lingering subagent badge rather than gated on it.",
+        "finishOrphanedChildren can never fire for hermes: isOrphanedChild (session_detector_subagent.go:79-83) ends with os.Stat(s.TranscriptPath) and a hermes child's path is '<store>?session=<id>', which never stats. Correct outcome here (the parent's early background turn-done cannot prematurely promote three still-running children), but a child that dies without a finish_reason='stop' will hold the parent working until the 2-minute stale sweep instead of being fast-forwarded.",
+        "Asynchronous parent: top-level delegations are forced background (background = not _is_subagent), so the parent's own turn ends seconds after dispatch and a BRIEF parent-ready window before the first child is discovered (store poll cadence 2s) is expected and correct. The spec therefore deliberately omits claudecode's 'no state_transition to ready for parent' invariant — holdParentWorkingForNewChild (#889) is what re-holds it. Expect a SECOND working->ready arc afterwards too, when the consolidated result re-enters the parent conversation as a new turn; final state is still ready.",
+        "Child project binding is weak: delegate children carry no cwd (_launch_cwd_for_session returns None for anything but source='cli'), so the adapter falls back to defaultLiveCWD, which requires EXACTLY ONE live non-service hermes process. Children are worker threads inside the parent process, so that holds for this recipe — but a second interactive hermes session live during the recording leaves the children (and the parent) unbound to a project. Not asserted by the spec.",
+        "Elicitation risk: the prompt names delegate_task and its `tasks` array explicitly, but a weaker model may still do the writing itself or dispatch a single 'goal' instead of a 3-entry batch. Before verifying, record should confirm the store actually has 3 rows with parent_session_id = the parent's id.",
+        "The onboarding rig has no hermes-specific env wiring (no HERMES_HOME under tools/onboarding-factory/scripts), so the driver and the recording daemon must be handed the same HERMES_HOME out of band — the same prerequisite every hermes cell carries.",
+        "model/cost are left unpinned in observations: the recorded model depends on whichever config.yaml the recording HERMES_HOME carries, and irrlicht prices hermes from core/pkg/capacity/aliases.go (an unpriced local model yields EstimatedCostUSD 0 while Hermes itself reports estimated_cost_usd=0.0 under subscription billing). tokens_nonzero is safe — the sessions row carries the input/output aggregates."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "RE-READ on current code: scanSessions' query is now `WHERE source IN ('cli','tui','subagent')` (line 284), so delegate children are admitted; reconcile (373-379) sets agent.Event.ParentSessionID from the row's COALESCE(parent_session_id,''). turnIsDone (431-441) reads the newest active message's role+finish_reason, which is what moves an admitted child working -> ready."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go",
+          "note": "RE-READ on current code: querySessionMetrics is now `WHERE id = ? AND source IN ('cli','tui','subagent')` (line 103), so an admitted child returns real metrics instead of nil. The first pass's 'fixing only watcher.go is not enough' caveat is discharged."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher_test.go",
+          "note": "TestWatcher_DelegatedSubagentSessionsSurfaceWithParent (line 489) inserts a source='subagent' row with parent='parent1' and asserts BOTH that it surfaces and that the emitted event carries ParentSessionID='parent1'. TestWatcher_SkipsGatewaySessions (line 197) is the companion lock keeping a source='whatsapp' row excluded. Ran both: `go test ./core/adapters/inbound/agents/hermes/... -run 'TestWatcher_DelegatedSubagentSessionsSurfaceWithParent|TestWatcher_SkipsGatewaySessions' -count=1` -> ok 0.342s."
+        },
+        {
+          "kind": "file",
+          "ref": "git commit 6ad7c28a (feat/1325-hermes-adapter)",
+          "note": "'fix(hermes): surface delegated subagent sessions, dropped by the source filter' — widens both query sites and records the red-first failure of the defect test. This is the commit that invalidates the previous pass's daemon=bug verdict."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "buildNewSessionState (231-254) takes parentID straight from ev.ParentSessionID — the deriveParentSession(TranscriptPath) fallback is only for file-transcript adapters — and records lifecycle.KindParentLinked; it then classifies a child against its own metrics rather than leaving it at the ready bootstrap (269-273). finalizeNewSession (334-336) calls holdParentWorkingForNewChild. Nothing on this path is file-shaped, so a ProcessOwnedStore child links exactly like a file-based one."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/grouped.go",
+          "note": "ComputeSubagentSummary (266-299) matches children solely on c.ParentSessionID == parent.SessionID and buckets them Working/Waiting/Ready — so SubagentCount tracks the live fan-out once the children surface. Total (286) counts every child in the repo regardless of state, which is why the 'returns to 0 after the sweep' line is a caveat for an adapter with no removal signal."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_subagent.go",
+          "note": "hasActiveChildren (206-221) holds a parent while any child is working/waiting; reevaluateParent (282-308) returns it to ready only once none remain. isOrphanedChild (61-84) ends with os.Stat(s.TranscriptPath), which for '<store>?session=<id>' always errors -> hermes children are never fast-forwarded by finishOrphanedChildren."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/delegate_tool.py",
+          "note": "_DEFAULT_MAX_CONCURRENT_CHILDREN = 3 (line 118); _get_max_concurrent_children reads delegation.max_concurrent_children with priority config.yaml > env > default (354-380). _build_top_level_description renders 'TWO MODES (one of goal or tasks is required) ... 2. Batch (parallel): provide tasks array with up to {max_children} items concurrently' (3423-3427) and the validator rejects neither-given (2416, 2543) — the batch array is a plain tool argument, drivable from one prompt. _build_child_agent constructs the child as AIAgent(platform=\"subagent\", session_db=<parent's>, parent_session_id=<parent's>)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/config.yaml",
+          "note": "The delegation: block sets only max_iterations: 50 — max_concurrent_children is absent, so the default 3 stands and a 3-entry tasks batch runs fully concurrent with none queued."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/run_agent.py",
+          "note": "_session_source_for_agent (92-102) returns HERMES_SESSION_SOURCE when set else `platform or 'cli'` -> a delegate child's row is source='subagent'. _ensure_db_session (607-640) INSERTs that row with parent_session_id and cwd=_launch_cwd_for_session(source); _launch_cwd_for_session (68-88) returns None for anything but source='cli'. Comments at 1908-1920 describe the early crash-resilience persist of the user message that runs BEFORE the API call is built, plus the mid-loop flush — which is why a child is observably working before its final finish_reason."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/turn_context.py",
+          "note": "Lines 601-616: _ensure_db_session() is invoked during turn SETUP and is idempotent — so a delegate child's sessions row exists while it is still running, not only at completion. This is what makes live discovery of the fan-out possible."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_state.py",
+          "note": "append_message (6420+) bumps `UPDATE sessions SET message_count = message_count + 1` per persisted message (6543) — the delta the watcher's reconcile turns into activity events for a child."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Queried read-only (on a copy): SELECT source, count(*), sum(cwd IS NOT NULL AND cwd != ''), sum(parent_session_id IS NOT NULL) FROM sessions GROUP BY source -> cli|22|1|0, tui|3|3|0. No delegation has ever run in this store (zero 'subagent' rows, zero parent links), and cli rows are effectively cwd-less — the two facts behind the provisionality and project-binding caveats."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "driver_step_types_from_file reports exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn — the recipe's send/wait_turn/sleep are all present, so no primitive has to be ported."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/3-5_workflow-fanout/expected.jsonl",
+          "note": "Reference spec for this row. Reused phase ordering minus the children_swept (transcript_removed) phase and the 'no state_transition to ready for parent' invariant — neither is producible by a ProcessOwnedStore adapter whose parent dispatches in the background."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/docs/KNOWN_SEAMS.md",
+          "note": "Re-checked before re-judging: this cell is not the presession-identity-rekey shape — no presession is involved in the child rows and nothing goes stale on reconciliation."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes v0.19.0+ on PATH with a provider configured in <HERMES_HOME>/config.yaml and credentials present, so a turn completes without an auth prompt",
+        "delegation left at its defaults — delegation.max_concurrent_children unset (=3) and delegation.subagent_auto_approve false; delegate_task is a core tool and needs no toolset change",
+        "HERMES_HOME exported to the SAME recording home for both the driver and the recording daemon (the rig has no hermes env wiring), so the daemon polls the store the run actually writes",
+        "sqlite3 on PATH — the driver's wait_turn reads the store directly",
+        "no OTHER interactive hermes session live during the run: delegate children carry no cwd, so the adapter's live-process CWD fallback needs exactly one non-service hermes process",
+        "irrlichd built from this branch at commit 6ad7c28a or later — the fix that admits source='subagent' rows in BOTH watcher.go and metrics.go is what makes this cell recordable at all",
+        "irrlichd recording with the hermes store watcher enabled and the 'store' permission granted (IRRLICHT_PERMISSION_MODE=grant-all on a fresh home)"
+      ],
+      "setup": [
+        "The interactive driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for the REPL prompt before typing — the TUI swallows keystrokes sent during boot",
+        "Interactive, never `hermes -z`: gateway.session_context.async_delivery_supported() returns False for the headless one-shot path, which would silently run the fan-out synchronously and record a different scenario",
+        "Hermes writes no transcript file: the slot's transcript path is '<store>?session=<id>' and the session id is resolved from the sessions table after the first send",
+        "Every child task is prose-only (no shell, no file tools) so no child can hit the dangerous-command approval path, which defaults to auto-DENY for subagents and would end a child early",
+        "The three children run concurrently under the default max_concurrent_children=3 and take ~15-40s each, which is the window the observer needs to catch them working",
+        "timeout_seconds is 300: the driver's deadline starts before the REPL boot poll and the parent turn itself runs against a remote model"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use the delegate_task tool with a `tasks` array of exactly 3 entries to fan out three subagents in parallel. Task 1: write about 150 words explaining why the sky is blue. Task 2: write about 150 words explaining how a bicycle stays upright. Task 3: write about 150 words explaining why bread rises. Do not do any of the writing yourself and do not use shell or file tools. Reply with exactly 'fanout started' as soon as the three subagents are dispatched."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 90
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a session born in ready shortly after launch (the transient proc-<PID> pre-session; the store row does not exist until the first user message)",
+        "events.jsonl contains a pid_discovered event",
+        "events.jsonl contains a state_transition to working on the parent when the prompt is sent",
+        "the store carries exactly 3 child rows with parent_session_id = the parent session id, and their `source` value is recorded (expected 'subagent') — this is the provisional emission claim the assessment could not confirm offline",
+        "events.jsonl contains >= 1 transcript_new for a delegate child session",
+        "events.jsonl contains >= 1 parent_linked binding child.session_id -> parent.session_id",
+        "each child is seen working at least once and then ready (its final assistant row carries finish_reason='stop')",
+        "the parent is working while the children are alive — either from its own turn or from the 'new child discovered while ready — holding working' transition",
+        "the parent's final transition to ready comes only after the last child has finished",
+        "no session named after the bookkeeping surfaces and no 'unknown'-project session appears (async_delegations is a table inside state.db and the live transcripts live under cache/delegation/live/, never a session row)",
+        "eyeball only, not gated: whether the parent's subagent badge still shows the finished children after the run — hermes never writes ended_at for a delegate child and there is no transcript_removed for a store adapter",
+        "the parent's recorded metrics carry non-zero cum_input+output tokens",
+        "the parent's final live state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}
