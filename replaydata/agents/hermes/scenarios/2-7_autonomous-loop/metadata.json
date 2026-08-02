@@ -108,12 +108,13 @@
       ],
       "setup": [
         "Driver launches `hermes chat` under tmux in RUN_CWD and polls for the 'Type your message or /help' prompt (the REPL loads ~35 tools + ~68 skills, so boot is tens of seconds).",
-        "The sessions row does not exist until the first user message, so the driver resolves the session id lazily after the first send — the daemon sees a proc-<PID> presession first."
+        "The sessions row does not exist until the first user message, so the driver resolves the session id lazily after the first send — the daemon sees a proc-<PID> presession first.",
+        "WIDENED BEFORE RECORDING (2026-08-03), per the hermes column's committed TIMING prerequisite: the assessed goal text said \"say exactly one number ... and nothing else\", which is the narrowest possible generation. The store watcher polls every 2s with a 500ms debounce, so a ~1s turn commits its inbound user row and its assistant finish_reason='stop' row inside a SINGLE scan and the ready->working edge never exists - which would fail iter1_start and iter2_start for a reason that has nothing to do with autonomy. Each iteration now also writes ~200 words of prose about the number it just said. The counting contract (one number per reply, done after 3) is unchanged, so the judge still terminates the loop on the same condition."
       ],
       "script": [
         {
           "type": "slash",
-          "text": "/goal Count to three, one number per reply. In each reply say exactly one number - the next one after the number in your previous reply - and nothing else, then stop. Do not use any tools. The goal is complete only after you have said the number 3."
+          "text": "/goal Count to three, one number per reply. In each reply, first say exactly one number - the next one after the number in your previous reply - and then write two or three full paragraphs, about 200 words in total, of prose about that number: what it means in arithmetic, where it turns up in nature or in culture, and one thing about it that most people find surprising. Then stop and wait. Do not use any tools and do not ask me any questions. The goal is complete only after you have said the number 3."
         },
         {
           "type": "wait_turn"
