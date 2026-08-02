@@ -1,0 +1,184 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:seed_instruction",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+21d50ec",
+    "confidence": 0.8,
+    "notes": "Copilot loads AGENTS.md/CLAUDE.md from git root & cwd (plus $COPILOT_HOME/copilot-instructions.md and COPILOT_CUSTOM_INSTRUCTIONS_DIRS) and injects it VERBATIM inside <custom_instruction> tags with renderMode:'raw', so the fenced HTML-comment marker rule reaches the model (agent=yes, provisional on emission). The copilot parser already wires the scan: parseAssistantMessage calls tailer.ScanTaskEstimate/ScanTaskSummary over the full data.content before truncation (parser.go:202-207), and the projection/serialisation is shared -> daemon=full. Sole blocker is tooling: the rule must be written to a file and no driver has a seed_instruction step -> driver=gap:seed_instruction, same as codex/opencode/pi. Route: driver_gap."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "copilot",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:seed_instruction",
+      "confidence": 0.8,
+      "body": "## Verdict\n\n**agent = yes (PROVISIONAL on emission, confidence 0.75).** This scenario is not a CLI feature \u2014 it is the model following a persistent instruction-file rule \u2014 so the bar is \"does Copilot load such a file, and does the HTML-comment example survive injection.\" Both resolve in our favour on CLI 1.0.77. Copilot's own `/help` dialog enumerates the instruction surfaces it reads (app.js, `customInstructions:[{location:\"CLAUDE.md\",note:\"in git root & cwd\"},{location:\"GEMINI.md\"...},{location:\"AGENTS.md\"...},{location:\".github/instructions/**/*.instructions.md\"},{location:\".github/copilot-instructions.md\"},{location:\"$HOME/.copilot/copilot-instructions.md\"},{location:\"$HOME/.copilot/instructions/**/*.instructions.md\"},{location:\"COPILOT_CUSTOM_INSTRUCTIONS_DIRS\"}]`), and the CLI option help corroborates it independently: `--no-custom-instructions` is documented as \"Disable loading of custom instructions from AGENTS.md and related files\". The native runtime carries the discovery implementation itself \u2014 `runtime.node` strings name `src/runtime/src/prompts/repo_instruction_discovery.rs` alongside the source kinds `cwd-copilot`, `repo-copilot`, `home-copilot` (\"Home copilot-instructions.md\"), `.copilot/instructions`, `child-instructions`, `nested-agents` and `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` \u2014 so an `AGENTS.md` in the run cwd is discovered by the `cwd-copilot` source with no git repo required.\n\nThe HTML-comment-survival question (the claudecode trap: bare `<!-- -->` is STRIPPED from CLAUDE.md at injection, verified live on claude 2.1.161, so the rule must be FENCED) resolves the same way it did for codex: Copilot injects instruction text VERBATIM inside XML wrapper tags. `runtime.node` carries the literal wrapper strings `<custom_instruction>` / `</custom_instruction>` and `<imported_custom_instruction>` / `</imported_custom_instruction>` (with only the wrapper tag itself escaped as `&lt;/imported_custom_instruction` inside content), and app.js's system-prompt template renders that slot raw \u2014 `custom_instructions:{path:[\"customInstructions\"],renderMode:\"raw\"}` in the `renderAs` map, i.e. no markdown pass and no HTML sanitisation between the file bytes and the model. A fenced `<!-- {...} -->` example therefore reaches the model intact.\n\nWhat is NOT verified is EMISSION: whether Copilot's model actually re-emits the marker turn-over-turn with `completed_rounds` climbing. That is a model-behaviour question and this account routes to small models (`gpt-5-mini` / `claude-haiku-4.5`; `--model` accepts only `auto`) \u2014 and the sibling evidence is that emission is discretionary even on frontier models (claudecode: sonnet emitted 9 markers 0/7 -> 7/7; opus 4.8 skipped emission entirely on a SHORT task). Hence yes-but-provisional at 0.75; a live recording is the only thing that can settle it, and the recipe compensates by pinning an explicit per-turn instruction in every prompt.\n\n**daemon = full (confidence 0.85).** Every user-observable signal the scenario asserts has a correct producing path today, and the copilot-specific piece is already wired. `parseAssistantMessage` (parser.go:189-208) reads `data.content` off each `assistant.message` and \u2014 BEFORE the 200-rune `TruncateAssistantText` narrowing, over the FULL content string \u2014 calls the shared `tailer.ScanTaskEstimate(content, ev.Timestamp)` and `tailer.ScanTaskSummary(...)`, setting `ev.TaskEstimate` / `ev.TaskSummary` (parser.go:202-207). Only the assistant branch does this, so a user pasting a marker cannot feed the ETA. Copilot emits `assistant.message` SEVERAL times per turn and the parser scans each, so the latest valid marker wins exactly as the shared contract intends. From there the path is entirely shared and adapter-agnostic: `tailer.ScanTaskEstimate` (core/pkg/tailer/taskestimate_scan.go) applies the tolerant parse + clamps, the tailer carries the last-seen marker across empty passes (tailer_metrics.go), `metrics/adapter.go` converts it to the domain type and calls `session.ForecastTaskCompletion` to project `task_completion_eta` at the measured rate, and `SessionMetrics` serialises `task_estimate` {total_rounds, completed_rounds, updated_at} + `task_completion_eta` onto the API. Suppression-by-state is the client presentation gate (`taskEtaPresentation` in platforms/web/irrlicht.js returns null unless `state === 'working'`; macOS mirrors it) \u2014 identical to claudecode, not a copilot gap. Turn boundaries are EXPLICIT for copilot (`user.message` -> working, `assistant.turn_end` -> ready), so the ready->working->ready arc the spec asserts is read, not inferred. Nothing here is missing or mis-handled -> `full`, not `bug`.\n\n**driver = gap:seed_instruction (confidence 0.9).** The recipe requires the marker rule to reach the model through a PERSISTENT INSTRUCTION FILE (the scenario says so explicitly: \"driven by a persistent instruction-file rule (CLAUDE.md / AGENTS.md equivalent; NO hook)\"), and no driver in the fleet has a step type that writes a file. Verified by lint against the copilot driver: `driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` yields exactly `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn` \u2014 no `seed_instruction` / `file` / `write`. This is the SAME gap already recorded on the codex, opencode and pi siblings, so `record` ports ONE primitive that unblocks four cells.\n\nCopilot is the CHEAPEST agent in the fleet to port it to, which is worth recording: the driver already writes into an isolated config dir before launch. `seed_copilot_home()` (driver-interactive.sh:232-247) exports `COPILOT_HOME=\"$STAGING/copilot-home\"` and writes `$COPILOT_HOME/config.json` on every launch, and `resolveCopilotHome(configDir, process.env.COPILOT_HOME, homedir)` (app.js) makes that dir the config root \u2014 the XDG-migration manifest in app.js lists `copilot-instructions.md` among the config-dir files (`vci=[\"config.json\",\"config\",\"mcp-config\",\"lsp-config\",\"permissions-config\",\"copilot-instructions.md\",\"mcp-oauth-config\",\"hooks\"]`), which is the `home-copilot` discovery source. So copilot offers THREE viable seed sites where codex offered one: `$RUN_CWD/AGENTS.md` (`cwd-copilot`), `$COPILOT_HOME/copilot-instructions.md` (`home-copilot`, a two-line extension of the existing seed function), or `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` (documented as \"comma-separated list of additional directories to search for custom instructions files\"). The recipe below uses `$RUN_CWD/AGENTS.md` so the ported primitive is identical in shape to the codex sibling's; `record` may prefer folding it into `seed_copilot_home` instead, which needs no new step type at all. Either way this is TOOLING work, not an observability limit -> `gap:seed_instruction`, route driver_gap.",
+      "caveats": [
+        "agent=yes is PROVISIONAL on EMISSION, and this is the cell's real risk. Instruction-file loading and verbatim HTML-comment injection are both anchored in the shipped binary (repo_instruction_discovery.rs source kinds; <custom_instruction> wrapper; renderMode:'raw'), but whether the model re-emits the marker turn-over-turn with climbing completed_rounds is unverified. This account routes to small models only (gpt-5-mini / claude-haiku-4.5; --model accepts only 'auto') and the claudecode sibling showed emission is discretionary even on frontier models (opus 4.8 skipped it on a short task). If record sees 0 or 1 markers, the honest correction is agent=partial with the recording cited \u2014 NOT daemon=bug.",
+        "driver=gap:seed_instruction is the SAME gap already on the codex, opencode and pi siblings \u2014 one ported primitive unblocks four cells. Copilot is the cheapest place to port it: seed_copilot_home() (driver-interactive.sh:232-247) already writes $COPILOT_HOME/config.json before every launch, and copilot-instructions.md is a config-dir file per app.js's XDG-migration manifest, so a HOME-level seed needs no new step type at all. The recipe uses $RUN_CWD/AGENTS.md only to keep the ported step shape identical to the codex sibling.",
+        "PORTING TRAP: the codex sibling's seed_instruction step stores its text with LITERAL backslash-n sequences (the decoded JSON string contains '\\\\n', not newlines), which would collapse the fenced code block into one line and re-open the claudecode stripping trap. THIS cell's recipe stores REAL newlines. Whoever ports the primitive must normalise codex's text (or write it through a heredoc that interprets the escapes) \u2014 otherwise the codex cell seeds an unfenced, single-line rule.",
+        "NO UNIT-TEST COVERAGE for the copilot marker scan: parser.go:202-207 wires tailer.ScanTaskEstimate/ScanTaskSummary, but `grep -n 'TaskEstimate|TaskSummary' core/adapters/inbound/agents/copilot/*_test.go` returns NOTHING \u2014 where codex has four (TopLevelContent / NestedMessageContent / SurvivesLongMessage truncation-trap / UserMessageIgnored). The wiring is read directly from source so daemon=full stands, but the truncation-trap regression (a marker lost to TruncateAssistantText) is currently unguarded for copilot. Worth a small test alongside the recording.",
+        "Suppression-by-state is a CLIENT presentation gate (platforms/web/irrlicht.js taskEtaPresentation, macOS SessionListView), not a daemon drop \u2014 the daemon keeps the fields on metrics across passes. Same as claudecode: the verify engine asserts the working-window values; ready-suppression is a client-observed fact.",
+        "ELAPSED skew (shared v1 decision, not copilot-specific): ForecastTaskCompletion measures elapsed since SESSION START, so early ETAs skew long if the session idled before the first marker. Burn-down monotonicity (later ETA <= earlier) still holds.",
+        "observations.model is deliberately NOT pinned \u2014 this account offers only gpt-5-mini and claude-haiku-4.5, --model accepts only 'auto', and the router can switch mid-session (same reasoning as the copilot token-accounting sibling). record fills it from the recording.",
+        "UNVERIFIED (low risk): whether an instruction-file trust prompt gates a freshly seeded AGENTS.md. runtime.node carries InstructionTrustInput / trust_metadata_derive_instruction, and the driver's wait_ready() already answers the folder-trust modal with a bare Enter for $RUN_CWD. If a separate instruction-trust modal appears, record must answer it the same way; this was not exercised live during assess (no API spend)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go:189-208",
+          "note": "parseAssistantMessage reads data.content and calls tailer.ScanTaskEstimate + tailer.ScanTaskSummary over the FULL content (before TruncateAssistantText narrows it to 200 runes), setting ev.TaskEstimate / ev.TaskSummary. Assistant branch only, so a user-pasted marker cannot feed the ETA. This is the copilot-specific half of daemon=full."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/taskestimate_scan.go",
+          "note": "ScanTaskEstimate \u2014 the shared, adapter-agnostic marker parser (tolerant key drift, clamps, latest-valid-wins) that copilot consumes. Plain-text contract, no per-adapter logic."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/metrics/adapter.go:176-181",
+          "note": "Shared projection: a non-nil TaskEstimate drives session.ForecastTaskCompletion -> TaskCompletionEta. Fires for any adapter that populates ev.TaskEstimate, copilot included."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/task_estimate.go:39-47",
+          "note": "ForecastTaskCompletion: eta = now + (total-completed) * (elapsed/completed). Shared burn-down math; nil until >=1 round is reported."
+        },
+        {
+          "kind": "file",
+          "ref": "platforms/web/irrlicht.js",
+          "note": "taskEtaPresentation returns null unless state === 'working' \u2014 the suppressed-by-state gate is CLIENT-side (macOS SessionListView mirrors it), identical to claudecode."
+        },
+        {
+          "kind": "binary",
+          "ref": "@github/copilot-darwin-arm64 app.js (GitHub Copilot CLI 1.0.77), /help dialog content",
+          "note": "customInstructions:[{location:\"CLAUDE.md\",note:\"in git root & cwd\"},{location:\"GEMINI.md\"},{location:\"AGENTS.md\"},{location:\".github/instructions/**/*.instructions.md\"},{location:\".github/copilot-instructions.md\"},{location:\"$HOME/.copilot/copilot-instructions.md\"},{location:\"$HOME/.copilot/instructions/**/*.instructions.md\"},{location:\"COPILOT_CUSTOM_INSTRUCTIONS_DIRS\",note:\"additional directories via env var\"}] \u2014 the shipped, authoritative list of instruction surfaces. Anchors agent=yes on the loading half."
+        },
+        {
+          "kind": "binary",
+          "ref": "@github/copilot-darwin-arm64 app.js, CLI option help",
+          "note": "--no-custom-instructions: \"Disable loading of custom instructions from AGENTS.md and related files\" \u2014 independent corroboration that AGENTS.md is loaded by default."
+        },
+        {
+          "kind": "binary",
+          "ref": "@github/copilot-darwin-arm64 app.js, system-prompt template renderAs map",
+          "note": "custom_instructions:{path:[\"customInstructions\"],renderMode:\"raw\"} \u2014 the instruction slot is rendered RAW into the system prompt (no markdown pass, no HTML sanitisation), so a fenced <!-- ... --> example survives injection. This is the claudecode-stripping trap resolving in our favour."
+        },
+        {
+          "kind": "binary",
+          "ref": "@github/copilot-darwin-arm64 prebuilds/darwin-arm64/runtime.node, strings",
+          "note": "Carries the discovery implementation path src/runtime/src/prompts/repo_instruction_discovery.rs and the source kinds cwd-copilot / repo-copilot / home-copilot (\"Home copilot-instructions.md\") / .copilot/instructions / child-instructions / nested-agents / COPILOT_CUSTOM_INSTRUCTIONS_DIRS, plus the verbatim injection wrappers <custom_instruction></custom_instruction> and <imported_custom_instruction>. Confirms a run-cwd AGENTS.md is discovered without a git repo and injected verbatim."
+        },
+        {
+          "kind": "binary",
+          "ref": "@github/copilot-darwin-arm64 app.js, resolveCopilotHome + XDG migration manifest",
+          "note": "ei(t)=h.resolveCopilotHome(t?.configDir??null, process.env.COPILOT_HOME??null, homedir()) and vci=[\"config.json\",\"config\",\"mcp-config\",\"lsp-config\",\"permissions-config\",\"copilot-instructions.md\",\"mcp-oauth-config\",\"hooks\"] \u2014 copilot-instructions.md is a CONFIG-DIR file, so $COPILOT_HOME relocates it and the existing seed_copilot_home() can seed it. The cheap alternative seed site."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "recipe-lint driver_step_types: exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn \u2014 NO seed_instruction/file/write step. Anchors driver=gap:seed_instruction."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh:232-247",
+          "note": "seed_copilot_home() exports COPILOT_HOME=$STAGING/copilot-home and writes config.json there on every launch \u2014 the existing hook a HOME-level instruction seed would extend without a new step type."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/5-8_task-estimate-marker/metadata.json",
+          "note": "Sibling cell carrying the identical driver=gap:seed_instruction verdict (opencode and pi match). One ported primitive unblocks four cells. Also the source of the literal-backslash-n text trap flagged in caveats."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/*_test.go",
+          "note": "grep -n 'TaskEstimate|TaskSummary' returns NOTHING \u2014 the copilot marker scan has no unit-test coverage, where codex has four cases including the truncation trap. Anchors the coverage caveat (does not change daemon=full, which is read from parser.go directly)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (auth lives in the OS keychain and survives COPILOT_HOME isolation)",
+        "An active Copilot plan with AI credits \u2014 this cell drives 4 real turns",
+        "irrlichd recording in isolated mode (dev irrlichd --record; the prod daemon runs without --record)",
+        "tmux installed (the copilot interactive driver drives the REPL through a tmux pane)",
+        "DRIVER PREREQ: the seed_instruction step type must be ported into replaydata/agents/copilot/driver-interactive.sh before this recipe can run. Cheapest shape for copilot: write the text to $RUN_CWD/<path> before the first send (matches the codex/opencode/pi siblings), or fold a $COPILOT_HOME/copilot-instructions.md write into the existing seed_copilot_home(). The step MUST write REAL newlines so the fenced code block survives."
+      ],
+      "setup": [
+        "The driver launches copilot in a fresh per-run cwd; the seeded AGENTS.md is picked up by the cwd-copilot discovery source (no git repo required)",
+        "Do NOT pin --model: this account offers only auto-routed gpt-5-mini / claude-haiku-4.5",
+        "Every prompt restates the marker instruction inline as well, because emission is model discretion and the routed models are small"
+      ],
+      "script": [
+        {
+          "type": "seed_instruction",
+          "path": "AGENTS.md",
+          "text": "## Task progress marker (irrlicht)\n\nWhile working a multi-phase task, emit a hidden progress marker in your own\nreply text on EVERY turn, exactly in this form (keep it as an HTML comment so\nit stays out of the rendered answer):\n\n```\n<!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":N,\"completed_rounds\":M} -->\n```\n\nSet `total_rounds` to the number of phases you plan. Emit it with\n`completed_rounds` = 0 on your first reply, then INCREASE `completed_rounds`\nby 1 each turn as you finish a phase, until `completed_rounds` ==\n`total_rounds` on the final turn. Always emit the marker as literal text in\nyour reply \u2014 never describe it, never put it in a tool call.\n"
+        },
+        {
+          "type": "send",
+          "text": "Do a 4-phase writing task and report progress each turn using the task-progress marker from AGENTS.md. Plan exactly 4 phases (total_rounds:4). On THIS turn first emit the marker at 0/4, then do phase 1 \u2014 write a one-paragraph outline of a short essay about tides \u2014 and end your turn with the marker updated to 1/4. Emit the marker as literal text in your reply."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Continue: do phase 2 (draft the introduction), then end your turn with the marker updated to 2/4. Do not ask a question and do not offer to continue \u2014 end immediately after the marker."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Continue: do phase 3 (draft the body), then end your turn with the marker updated to 3/4. Do not ask a question and do not offer to continue \u2014 end immediately after the marker."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Finish: do phase 4 (write the conclusion), then end your turn with the marker updated to 4/4 followed by exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 15
+        }
+      ],
+      "verify": [
+        "The recording's assistant.message content carries the irrlicht-eta marker on >=2 turns with completed_rounds climbing (1/4 -> ... -> 4/4).",
+        "While working, session metrics carry task_estimate {total_rounds:4, completed_rounds:M} matching the values copilot reported (completed_rounds <= total_rounds).",
+        "task_estimate.updated_at advances each time a fresher marker is observed (not pinned to a stale snapshot).",
+        "task_estimate.completed_rounds is non-decreasing across turns and reaches 4 on the final working turn.",
+        "task_completion_eta is present once completed_rounds >= 1 and a later projection is <= an earlier one (burns down).",
+        "task_estimate / task_completion_eta are present on metrics while working; the client suppresses them at ready (presentation gate, not a daemon drop).",
+        "State topology ready -> working -> ready per turn; final state ready (the 15s trailing idle captures the post-turn settle).",
+        "If copilot emits 0 or 1 markers, the honest correction is agent=partial citing the recording \u2014 NOT daemon=bug: the parser wiring is read directly from parser.go:202-207."
+      ],
+      "settings": {},
+      "timeout_seconds": 600
+    }
+  }
+}
