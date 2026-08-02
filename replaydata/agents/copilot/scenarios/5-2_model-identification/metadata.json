@@ -1,0 +1,114 @@
+{
+  "scenario_id": "model-identification",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+a21849f",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (model identity is explicit on three event types); daemon_capability: full; driver_capability: ready. Caveat: this account cannot PIN a model — --model accepts only \"auto\" and the hydra router picks per turn."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-identification",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes; daemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nGitHub Copilot CLI reports the active model EXPLICITLY, on three distinct event types in `$COPILOT_HOME/session-state/<session-id>/events.jsonl`, all three of which the adapter's parser reads:\n\n1. `session.model_change` → `data.newModel` (parser.go `setModel`) — carries the literal string `\"auto\"` before routing.\n2. `session.auto_mode_resolved` → `data.chosenModel` — the concrete model the hydra router picked, alongside `candidateModels`, `availableModels`, `routingMethod` and `confidence`.\n3. `assistant.message` → `data.model` — the model that actually served that message (parser.go `parseAssistantMessage`).\n\nA local store read of a real 1.0.77 session (35 events) shows the ordering: `session.start` → `session.model_change{newModel:\"auto\"}` → `session.auto_mode_resolved{chosenModel:\"claude-haiku-4.5\", routingMethod:\"hydra\", candidateModels:[claude-haiku-4.5,gpt-5-mini], confidence:0.79}` → `user.message` → `assistant.turn_start` → `assistant.message{model:\"claude-haiku-4.5\", outputTokens:46}` → `assistant.turn_end`. The concrete model therefore lands BEFORE the first turn completes, and is re-stamped on every assistant message thereafter. `ParseLine` stamps `ev.ModelName` on every event (skipped ones included) once `p.model` is lit, and the tailer applies metadata from skipped events, so `SessionMetrics.ModelName` is populated from the first turn onward and never reads `\"unknown\"` after `turn_end`.\n\n`tailer.NormalizeModelName` leaves Copilot's dotted labels intact (none of its `Contains` patterns match `claude-haiku-4.5`, and `gpt-5-mini` has no rule), so the value the dashboard shows is Copilot's own label verbatim — `claude-haiku-4.5` or `gpt-5-mini`.\n\n**ContextWindow.** It is not carried in the transcript; it falls out of the shared capacity table for the resolved model. Both models this account can route to are present in the hermetic replay snapshot with real windows and pricing: `gpt-5-mini` → 272000 ctx, $0.25/$2.00 per Mtok; `claude-haiku-4-5` → 200000 ctx, $1.00/$5.00. The dotted `claude-haiku-4.5` reaches the dashed canonical key through the alias added to `core/pkg/capacity/aliases.go` (L102-109) as part of this issue — before that alias it matched neither the normalizer's dashed patterns nor the version-first Cursor entries and priced at $0. So both acceptance criteria (`ModelName != \"unknown\"`, `ContextWindow` = published window) hold for whichever model the router picks.\n\n**Cost/tokens are live, not shutdown-only.** `assistant.message.outputTokens` is queued as a per-message increment (`queueOutputIncrement`), so `cum_output_tokens > 0` and `estimated_cost_usd > 0` are true after the first turn without waiting for `session.shutdown` — which is what makes the `cost_nonzero` / `tokens_nonzero` observations assertable on a one-turn recording.\n\n## What the recipe CANNOT do (account limit, not an agent limit)\n\nThe scenario's process step 1 (\"launched with a specific non-default model\") is NOT reproducible on this machine. The account exposes exactly two models — `gpt-5-mini` and `claude-haiku-4.5` — and `--model` REJECTS both by name, accepting only `auto` (verified live on CLI 1.0.77 by the maintainer). The hydra router therefore chooses per turn and can switch mid-session (a session observed live resolved to `gpt-5-mini` and later served turns with `claude-haiku-4.5`). The recipe launches with the driver's default args (`--allow-all --no-color`, no `--model`) and the cell asserts the model IDENTITY property the scenario is really about — `ModelName` is a concrete model string, not `\"unknown\"` and not the placeholder `\"auto\"` — rather than equality with a pinned launch model. `observations.model` is left PROVISIONAL for `record` to fill from whichever model the recording resolved.\n\n## Birth topology\n\nThe session directory is created at launch (it holds `workspace.yaml` immediately) but `events.jsonl` does not exist until the first prompt is sent (driver comment L243-245, live-verified when the driver was built). The daemon's `FilesUnderRoot` watcher therefore cannot see the session before the first turn, while the process scanner (`ExactName{copilot}`, 1s poll) mints a transient `proc-<PID>` pre-session for the running process meanwhile. Which row is born first is timing-dependent, so — per the assess playbook — the spec anchors its first phase to `start` UNPINNED and pins no later phase to a session id, which validates under both orderings. `record` may re-template it to the two-phase presession shape if the recording shows the reconciliation, the same backflow mistral-vibe went through.",
+      "caveats": [
+        "MODEL CANNOT BE PINNED on this account: --model accepts only \"auto\" (both gpt-5-mini and claude-haiku-4.5 are rejected by name), so the recipe cannot satisfy the scenario's 'launched with a non-default model' literally. The hydra router picks per turn and can switch mid-session, so the recorded model is whatever it resolved — observations.model is left provisional for record and is only stable for the frozen recording, not across re-records.",
+        "ModelName reads the literal placeholder \"auto\" between session.model_change and session.auto_mode_resolved. Assert the model only AFTER turn_end (the resolution always precedes the first assistant.message).",
+        "ContextWindow is NOT assertable via the observation vector: the replay golden's context_window/total_tokens/context_utilization fields are scoped to antigravity (cmd/replay/metrics.go L59-63). It is evidenced in prose from the capacity table instead (200000 for claude-haiku-4-5, 272000 for gpt-5-mini in the pinned snapshot).",
+        "Context-window UTILISATION is unavailable mid-session — currentTokens is only written on session.shutdown (session.usage_checkpoint carries only totalNanoAiu/totalPremiumRequests/modelCacheState), so no live utilisation assertion is possible for a one-turn recipe.",
+        "Cost is derived from general token pricing via the capacity map, not from Copilot's own billing units (totalNanoAiu AI credits are deliberately not converted to dollars — the #1256 maintainer decision)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go L85-97, L166-172, L189-208",
+          "note": "ParseLine dispatches session.model_change (data.newModel), session.auto_mode_resolved (data.chosenModel) and assistant.message (data.model) into setModel; ModelName is stamped on every event including skipped ones (L124-129)."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.copilot/session-state/51ffced3-5bba-416f-b898-7338f39e69e8/events.jsonl (live local store, CLI 1.0.77, read-only)",
+          "note": "Real 35-event session: session.model_change{newModel:auto} → session.auto_mode_resolved{chosenModel:claude-haiku-4.5,routingMethod:hydra,candidateModels:[claude-haiku-4.5,gpt-5-mini],availableModels:[...],confidence:0.79} → assistant.message{model:claude-haiku-4.5,outputTokens:46} → assistant.turn_end. Also confirms usage_checkpoint carries no token counts and shutdown carries currentTokens/modelMetrics."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go L677-721",
+          "note": "NormalizeModelName strips [1m] and date suffixes and matches dashed Claude patterns only — Copilot's dotted claude-haiku-4.5 and gpt-5-mini pass through verbatim, so SessionMetrics.ModelName is Copilot's own label."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/aliases.go L102-109",
+          "note": "The family-first dotted alias claude-haiku-4.5 → claude-haiku-4-5 added for #1256; without it this model priced at $0 and had no context window."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/testdata/model-capacity-cache.json",
+          "note": "Hermetic snapshot the replay goldens pin (cmd/replay/testmain_test.go) contains gpt-5-mini (context_window 272000, $0.25/$2.00 per Mtok) and claude-haiku-4-5 (200000, $1.00/$5.00) — so ContextWindow is nonzero and cost is nonzero for either routed model."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/metrics.go L45-63",
+          "note": "The golden summary's model_name/cost/cum tokens are populated for every adapter, but total_tokens/context_window/context_utilization are gated on adapter == antigravity — so no context-window observation is assertable for copilot."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh L128, L243-301",
+          "note": "DRIVE_ELICITS lists send/slash/sleep/wait_turn/…; wait_turn is a real implementation polling assistant.turn_end counts (not a stub), and launch_repl passes --allow-all --no-color with no --model. L243-245 records that events.jsonl only appears once the first turn starts."
+        },
+        {
+          "kind": "cli",
+          "ref": "copilot --model <name> (CLI 1.0.77, maintainer's account)",
+          "note": "Live-verified: --model rejects both gpt-5-mini and claude-haiku-4.5 by name and accepts only \"auto\"; a live session resolved to gpt-5-mini and later served turns with claude-haiku-4.5, so the router can switch mid-session."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "copilot CLI 1.0.77+ on PATH and authenticated (credentials live in the OS keychain, so the driver's scratch COPILOT_HOME needs no re-login)",
+        "irrlichd is recording (--record) with the copilot adapter's transcripts permission granted",
+        "the capacity cache resolves the routed model (gpt-5-mini or claude-haiku-4.5) — both are in the pinned replay snapshot"
+      ],
+      "setup": [
+        "Driver seeds a scratch COPILOT_HOME under staging (trustedFolders + askedSetupTerminals pre-answered) and launches `copilot --allow-all --no-color` in a fresh cwd",
+        "NO --model flag: this account rejects both routable model names and accepts only 'auto', so the hydra router picks the model at the first turn (session.auto_mode_resolved)",
+        "The leading sleep gives the 1s process scanner a poll before the first prompt, so PID binding and any proc-<PID> pre-session settle deterministically",
+        "Model/context assertions are read AFTER turn_end — before session.auto_mode_resolved the model reads the literal placeholder 'auto'"
+      ],
+      "script": [
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows one ready→working→ready cycle for the copilot session",
+        "the recording's replay summary carries model_name = a concrete Copilot model label (gpt-5-mini or claude-haiku-4.5) — NOT 'unknown' and NOT the placeholder 'auto'",
+        "SessionMetrics.ContextWindow after turn_end matches the routed model's published window (272000 for gpt-5-mini, 200000 for claude-haiku-4.5, from the capacity table)",
+        "cum_input+cum_output tokens > 0 (live, from assistant.message.outputTokens) and estimated_cost_usd > 0",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
