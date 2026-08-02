@@ -148,16 +148,17 @@
         "events.jsonl contains a session born in ready shortly after launch (the transient proc-<PID> pre-session; the store row does not exist until the first user message)",
         "events.jsonl contains a pid_discovered event",
         "events.jsonl contains a state_transition to working on the parent when the prompt is sent",
-        "the store carries exactly 3 child rows with parent_session_id = the parent session id, and their `source` value is recorded (expected 'subagent') — this is the provisional emission claim the assessment could not confirm offline",
+        "CONFIRMED 2026-08-03: the store carries exactly 3 child rows with parent_session_id = the parent id and source='subagent' (20260803_005234_e054d5/_06734a/_18f4f8 -> 20260803_005227_8fe908). This was the provisional emission claim the assessment could not confirm offline; it is now observed, twice (the 3.2 sibling recorded it independently).",
         "events.jsonl contains >= 1 transcript_new for a delegate child session",
         "events.jsonl contains >= 1 parent_linked binding child.session_id -> parent.session_id",
         "each child is seen working at least once and then ready (its final assistant row carries finish_reason='stop')",
         "the parent is working while the children are alive — either from its own turn or from the 'new child discovered while ready — holding working' transition",
         "the parent's final transition to ready comes only after the last child has finished",
         "no session named after the bookkeeping surfaces and no 'unknown'-project session appears (async_delegations is a table inside state.db and the live transcripts live under cache/delegation/live/, never a session row)",
-        "eyeball only, not gated: whether the parent's subagent badge still shows the finished children after the run — hermes never writes ended_at for a delegate child and there is no transcript_removed for a store adapter",
-        "the parent's recorded metrics carry non-zero cum_input+output tokens",
-        "the parent's final live state is ready"
+        "CORRECTED 2026-08-03: hermes DOES write ended_at for a delegate child (e.g. 1785711159.53739, ~5s after start), so the badge worry does not rest on a missing store field. Any stale badge would be the daemon holding a drained child whose PID (shared with the parent) is still alive. Still eyeball only, not gated.",
+        "METRIC TIER ONLY, not assertable in observations: the parent's cum_input+cum_output tokens. `of verify` reads the replay-golden summary, and the hermes replay path runs Parser (ModelName only) rather than ComputeMetrics over the store, so a hermes golden always reports 0. Seen red on this recording before the pin was moved to `model`.",
+        "the parent's final live state is ready",
+        "all three children were born WORKING and overlapped in time (born 00:52:35.53/.64/.75, drained 00:52:40.44/.50/00:52:41.53) - the concurrent fan-out this cell exists to capture"
       ],
       "settings": {},
       "timeout_seconds": 300
