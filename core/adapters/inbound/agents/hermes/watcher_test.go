@@ -44,8 +44,8 @@ func agentEventFor(t *testing.T, w *Watcher, _ *sql.DB) agent.Event {
 
 func TestWatcher_EmitsNewSessionOnce(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "tui", "gpt-5.6-luna", "/work/proj", 1000, 0, 1)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "s1", source: "tui", model: "gpt-5.6-luna", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 	w := NewWithStorePath(path, 0)
 	w.liveCWD = func() string { return "" }
@@ -78,8 +78,8 @@ func TestWatcher_EmitsNewSessionOnce(t *testing.T) {
 
 func TestWatcher_EmitsActivityWhenConversationGrows(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "tui", "m", "/work/proj", 1000, 0, 1)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "s1", source: "tui", model: "m", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 	w := NewWithStorePath(path, 0)
 	w.liveCWD = func() string { return "" }
@@ -88,7 +88,7 @@ func TestWatcher_EmitsActivityWhenConversationGrows(t *testing.T) {
 	drain(ch)
 
 	// The agent replies and ends its turn.
-	insertMessage(t, db, "s1", "assistant", "done", "", "", "stop", 1002)
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "assistant", content: "done", toolCalls: "", toolCallID: "", finish: "stop", ts: 1002})
 	if _, err := db.Exec(`UPDATE sessions SET message_count = 2 WHERE id = 's1'`); err != nil {
 		t.Fatal(err)
 	}
@@ -107,8 +107,8 @@ func TestWatcher_EmitsActivityWhenConversationGrows(t *testing.T) {
 // settles to ready while the agent is mid-tool-call.
 func TestWatcher_ToolCallTurnIsNotTerminal(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "tui", "m", "/work/proj", 1000, 0, 1)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "s1", source: "tui", model: "m", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 	w := NewWithStorePath(path, 0)
 	w.liveCWD = func() string { return "" }
@@ -116,7 +116,7 @@ func TestWatcher_ToolCallTurnIsNotTerminal(t *testing.T) {
 	scanNow(w)
 	drain(ch)
 
-	insertMessage(t, db, "s1", "assistant", "", realToolCallsJSON, "", "tool_calls", 1002)
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "assistant", content: "", toolCalls: realToolCallsJSON, toolCallID: "", finish: "tool_calls", ts: 1002})
 	if _, err := db.Exec(`UPDATE sessions SET message_count = 2 WHERE id = 's1'`); err != nil {
 		t.Fatal(err)
 	}
@@ -134,8 +134,8 @@ func TestWatcher_ToolCallTurnIsNotTerminal(t *testing.T) {
 // write adds no message.
 func TestWatcher_SessionEndEmitsTerminalActivity(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "cli", "m", "", 1000, 0, 2)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "s1", source: "cli", model: "m", cwd: "", started: 1000, ended: 0, msgs: 2})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 	w := NewWithStorePath(path, 0)
 	w.liveCWD = func() string { return "" }
@@ -158,8 +158,8 @@ func TestWatcher_SessionEndEmitsTerminalActivity(t *testing.T) {
 // the live process.
 func TestWatcher_CLISessionBorrowsCWDFromProcess(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "cli", "m", "", 1000, 0, 1)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "s1", source: "cli", model: "m", cwd: "", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 	w := NewWithStorePath(path, 0)
 	w.liveCWD = func() string { return "/live/cwd" }
@@ -178,8 +178,8 @@ func TestWatcher_CLISessionBorrowsCWDFromProcess(t *testing.T) {
 // cannot see.
 func TestWatcher_AmbiguousProcessYieldsNoCWD(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "cli", "m", "", 1000, 0, 1)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "s1", source: "cli", model: "m", cwd: "", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 	w := NewWithStorePath(path, 0)
 	w.liveCWD = func() string { return "" } // defaultLiveCWD returns "" when len != 1
@@ -196,10 +196,10 @@ func TestWatcher_AmbiguousProcessYieldsNoCWD(t *testing.T) {
 // The gateway filter applies to discovery too, not just metrics.
 func TestWatcher_SkipsGatewaySessions(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "wa", "whatsapp", "m", "/work/proj", 1000, 0, 1)
-	insertMessage(t, db, "wa", "user", "hi", "", "", "", 1001)
-	insertSession(t, db, "cli1", "cli", "m", "", 1000, 0, 1)
-	insertMessage(t, db, "cli1", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "wa", source: "whatsapp", model: "m", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "wa", role: "user", content: "hi", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
+	insertSession(t, db, sessionRow{id: "cli1", source: "cli", model: "m", cwd: "", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "cli1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 	w := NewWithStorePath(path, 0)
 	w.liveCWD = func() string { return "" }
@@ -216,10 +216,10 @@ func TestWatcher_SkipsGatewaySessions(t *testing.T) {
 func TestWatcher_MaxAgeExcludesOldSessions(t *testing.T) {
 	path, db := newTestStore(t)
 	now := float64(time.Now().Unix())
-	insertSession(t, db, "old", "tui", "m", "/work/proj", now-7200, 0, 1)
-	insertMessage(t, db, "old", "user", "go", "", "", "", now-7200)
-	insertSession(t, db, "new", "tui", "m", "/work/proj", now-10, 0, 1)
-	insertMessage(t, db, "new", "user", "go", "", "", "", now-10)
+	insertSession(t, db, sessionRow{id: "old", source: "tui", model: "m", cwd: "/work/proj", started: now - 7200, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "old", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: now - 7200})
+	insertSession(t, db, sessionRow{id: "new", source: "tui", model: "m", cwd: "/work/proj", started: now - 10, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "new", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: now - 10})
 
 	w := NewWithStorePath(path, time.Hour)
 	w.liveCWD = func() string { return "" }
@@ -239,8 +239,8 @@ func TestWatcher_MaxAgeExcludesOldSessions(t *testing.T) {
 
 func TestWatcher_ParentSessionIDIsCarried(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "child", "cli", "m", "", 1000, 0, 1)
-	insertMessage(t, db, "child", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "child", source: "cli", model: "m", cwd: "", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "child", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 	if _, err := db.Exec(`UPDATE sessions SET parent_session_id='parent' WHERE id='child'`); err != nil {
 		t.Fatal(err)
 	}
@@ -279,8 +279,8 @@ func TestWatcher_UnsubscribeClosesChannel(t *testing.T) {
 // can trigger a further fsnotify Write and loop.
 func TestWatcher_ScanIsDebounced(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "tui", "m", "/work/proj", 1000, 0, 1)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "s1", source: "tui", model: "m", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 	w := NewWithStorePath(path, 0)
 	w.liveCWD = func() string { return "" }
@@ -291,8 +291,8 @@ func TestWatcher_ScanIsDebounced(t *testing.T) {
 		t.Fatalf("first scan emitted %d events, want 2 (new_session + activity)", len(evs))
 	}
 	// Immediately after, the debounce should suppress the work entirely.
-	insertSession(t, db, "s2", "tui", "m", "/work/proj", 1000, 0, 1)
-	insertMessage(t, db, "s2", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "s2", source: "tui", model: "m", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s2", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 	w.scan()
 	if evs := drain(ch); len(evs) != 0 {
 		t.Errorf("debounced scan emitted %+v, want nothing", evs)
@@ -306,8 +306,8 @@ func TestWatcher_ScanIsDebounced(t *testing.T) {
 func TestWatcher_PrunesCursorsForVanishedSessions(t *testing.T) {
 	path, db := newTestStore(t)
 	now := float64(time.Now().Unix())
-	insertSession(t, db, "s1", "tui", "m", "/work/proj", now-10, 0, 1)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", now-10)
+	insertSession(t, db, sessionRow{id: "s1", source: "tui", model: "m", cwd: "/work/proj", started: now - 10, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: now - 10})
 
 	w := NewWithStorePath(path, time.Hour)
 	w.liveCWD = func() string { return "" }
@@ -343,8 +343,8 @@ func TestWatcher_PrunesCursorsForVanishedSessions(t *testing.T) {
 func TestWatcher_ResolvesLiveCWDAtMostOncePerScan(t *testing.T) {
 	path, db := newTestStore(t)
 	for _, id := range []string{"a", "b", "c", "d"} {
-		insertSession(t, db, id, "cli", "m", "", 1000, 0, 1)
-		insertMessage(t, db, id, "user", "go", "", "", "", 1001)
+		insertSession(t, db, sessionRow{id: id, source: "cli", model: "m", started: 1000, msgs: 1})
+		insertMessage(t, db, messageRow{sessionID: id, role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 	}
 
 	calls := 0
@@ -364,8 +364,8 @@ func TestWatcher_ResolvesLiveCWDAtMostOncePerScan(t *testing.T) {
 // the probe must not run at all.
 func TestWatcher_SkipsLiveCWDProbeWhenAllRowsHaveCWD(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "tui", "m", "/work/proj", 1000, 0, 1)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "s1", source: "tui", model: "m", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 	calls := 0
 	w := NewWithStorePath(path, 0)

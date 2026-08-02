@@ -31,8 +31,8 @@
 //     initially-unbound session backfills on later activity).
 //
 // The gateway platforms (whatsapp, slack, discord, …) share this table.
-// They are not coding sessions, so the adapter filters on `source` — see
-// sessionSourceFilter.
+// They are not coding sessions, so every query filters on `source` — see
+// the note above querySessionMetrics in metrics.go.
 package hermes
 
 import (

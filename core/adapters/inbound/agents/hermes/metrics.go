@@ -16,13 +16,15 @@ import (
 // ComputeMetrics can recover the session ID from agent.Event.TranscriptPath.
 const sessionQueryParam = "?session="
 
-// sessionSourceFilter restricts every query to the surfaces that are actually
-// coding sessions. Hermes' messaging gateway (WhatsApp, Slack, Discord, …)
-// writes into the SAME sessions table, and without this filter a WhatsApp
-// conversation would surface in irrlicht as a coding session.
+// Every query filters `source IN ('cli','tui')` — the surfaces that are
+// actually coding sessions. Hermes' messaging gateway (WhatsApp, Slack,
+// Discord, …) writes into the SAME sessions table, and without the filter a
+// WhatsApp conversation would surface in irrlicht as a coding session.
 //
-// 'cli' covers one-shot (-z) and piped runs; 'tui' is the interactive REPL.
-const sessionSourceFilter = `source IN ('cli','tui')`
+// 'cli' covers one-shot (-z), piped runs AND the interactive `hermes chat`
+// REPL; 'tui' is the separate TUI-gateway surface. The pair is spelled out
+// as a literal inside each query rather than concatenated in from a
+// constant, so no statement is assembled from a variable.
 
 // liveCWDForSession resolves the working directory of the single live Hermes
 // session process, for rows that carry none. Package-level so tests can stub
@@ -98,7 +100,7 @@ func querySessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetrics,
 		SELECT model, cwd, end_reason, started_at, ended_at,
 		       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
 		FROM sessions
-		WHERE id = ? AND `+sessionSourceFilter, sessionID).
+		WHERE id = ? AND source IN ('cli','tui')`, sessionID).
 		Scan(&model, &cwd, &endReason, &startedAt, &endedAt,
 			&inTok, &outTok, &cacheRead, &cacheWri)
 	if err != nil {
@@ -125,91 +127,17 @@ func querySessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetrics,
 		LastCWD:       lastCWD,
 	}
 
-	rows, err := db.Query(`
-		SELECT role, content, tool_calls, tool_call_id, tool_name,
-		       finish_reason, display_kind, timestamp
-		FROM messages
-		WHERE session_id = ? AND active = 1
-		ORDER BY timestamp ASC, id ASC`, sessionID)
-	if err != nil {
-		log.Printf("hermes: query messages for %s: %v", sessionID, err)
-		return nil, nil
-	}
-	defer rows.Close()
-
-	parser := &Parser{}
-	openTools := make(map[string]string) // tool-call id → tool name
-	var lastEventType, lastAssistantText string
-	pendingWaitingCue := false
-	hasData := false
-
-	for rows.Next() {
-		var (
-			role                                     string
-			content, toolCalls, toolCallID, toolName sql.NullString
-			finishReason, displayKind                sql.NullString
-			timestamp                                sql.NullFloat64
-		)
-		if err := rows.Scan(&role, &content, &toolCalls, &toolCallID, &toolName,
-			&finishReason, &displayKind, &timestamp); err != nil {
-			log.Printf("hermes: scan message row: %v", err)
-			continue
-		}
-		hasData = true
-
-		raw := map[string]interface{}{
-			keyRole:        role,
-			keyContent:     content.String,
-			keyToolCalls:   toolCalls.String,
-			keyToolCallID:  toolCallID.String,
-			keyToolName:    toolName.String,
-			keyFinish:      finishReason.String,
-			keyDisplayKind: displayKind.String,
-			keyTimestamp:   timestamp.Float64,
-			keyModel:       model.String,
-			keyCWD:         cwd.String,
-		}
-
-		ev := parser.ParseLine(raw)
-		if ev == nil || ev.Skip {
-			continue
-		}
-		lastEventType = ev.EventType
-
-		for _, tu := range ev.ToolUses {
-			openTools[tu.ID] = tu.Name
-		}
-		for _, id := range ev.ToolResultIDs {
-			delete(openTools, id)
-		}
-		if ev.ClearToolNames {
-			openTools = make(map[string]string)
-		}
-		if ev.AssistantText != "" {
-			lastAssistantText = ev.AssistantText
-			pendingWaitingCue = ev.PendingWaitingCue
-		}
-		// A new user message answers whatever the agent was waiting on, so
-		// the cue does not survive it. The ProcessOwnedStore path bypasses
-		// the tailer, which is where that reset normally lives.
-		if ev.EventType == "user_message" {
-			pendingWaitingCue = false
-		}
-	}
-	if err := rows.Err(); err != nil {
-		log.Printf("hermes: iterate messages for %s: %v", sessionID, err)
-	}
-
-	if !hasData {
+	fold, ok := foldMessages(db, sessionID, model.String, cwd.String)
+	if !ok {
 		return nil, nil
 	}
 
-	metrics.LastEventType = lastEventType
-	metrics.LastAssistantText = lastAssistantText
-	metrics.PendingWaitingCue = pendingWaitingCue
-	metrics.HasOpenToolCall = len(openTools) > 0
-	metrics.OpenToolCallCount = len(openTools)
-	metrics.LastOpenToolNames = openToolNames(openTools)
+	metrics.LastEventType = fold.lastEventType
+	metrics.LastAssistantText = fold.lastAssistantText
+	metrics.PendingWaitingCue = fold.pendingWaitingCue
+	metrics.HasOpenToolCall = len(fold.openTools) > 0
+	metrics.OpenToolCallCount = len(fold.openTools)
+	metrics.LastOpenToolNames = openToolNames(fold.openTools)
 
 	metrics.CumInputTokens = inTok.Int64
 	metrics.CumOutputTokens = outTok.Int64
@@ -243,6 +171,109 @@ func querySessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetrics,
 		tailer.ComputeContextUtilization(metrics.ModelName, metrics.TotalTokens, cm, 0)
 
 	return metrics, nil
+}
+
+// messageFold is the running state derived from replaying a session's
+// messages through Parser — the signal the `sessions` aggregate cannot
+// express.
+type messageFold struct {
+	lastEventType     string
+	lastAssistantText string
+	pendingWaitingCue bool
+	openTools         map[string]string // tool-call id → tool name
+}
+
+// foldMessages replays one session's message rows through Parser. ok is
+// false when the session has no rows at all, which is not an error: the
+// sessions row is INSERTed ~2s after launch, before the first reply.
+func foldMessages(db *sql.DB, sessionID, model, cwd string) (messageFold, bool) {
+	fold := messageFold{openTools: map[string]string{}}
+
+	rows, err := db.Query(`
+		SELECT role, content, tool_calls, tool_call_id, tool_name,
+		       finish_reason, display_kind, timestamp
+		FROM messages
+		WHERE session_id = ? AND active = 1
+		ORDER BY timestamp ASC, id ASC`, sessionID)
+	if err != nil {
+		log.Printf("hermes: query messages for %s: %v", sessionID, err)
+		return fold, false
+	}
+	defer rows.Close()
+
+	parser := &Parser{}
+	hasData := false
+
+	for rows.Next() {
+		raw, ok := scanMessageRow(rows, model, cwd)
+		if !ok {
+			continue
+		}
+		hasData = true
+
+		ev := parser.ParseLine(raw)
+		if ev == nil || ev.Skip {
+			continue
+		}
+		fold.apply(ev)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("hermes: iterate messages for %s: %v", sessionID, err)
+	}
+	return fold, hasData
+}
+
+// apply folds one parsed event into the running state.
+func (f *messageFold) apply(ev *tailer.ParsedEvent) {
+	f.lastEventType = ev.EventType
+
+	for _, tu := range ev.ToolUses {
+		f.openTools[tu.ID] = tu.Name
+	}
+	for _, id := range ev.ToolResultIDs {
+		delete(f.openTools, id)
+	}
+	if ev.ClearToolNames {
+		f.openTools = map[string]string{}
+	}
+	if ev.AssistantText != "" {
+		f.lastAssistantText = ev.AssistantText
+		f.pendingWaitingCue = ev.PendingWaitingCue
+	}
+	// A new user message answers whatever the agent was waiting on, so the
+	// cue does not survive it. The ProcessOwnedStore path bypasses the
+	// tailer, which is where that reset normally lives.
+	if ev.EventType == "user_message" {
+		f.pendingWaitingCue = false
+	}
+}
+
+// scanMessageRow reads one row into the raw map Parser consumes, injecting
+// the per-session context that lives on the `sessions` row.
+func scanMessageRow(rows *sql.Rows, model, cwd string) (map[string]interface{}, bool) {
+	var (
+		role                                     string
+		content, toolCalls, toolCallID, toolName sql.NullString
+		finishReason, displayKind                sql.NullString
+		timestamp                                sql.NullFloat64
+	)
+	if err := rows.Scan(&role, &content, &toolCalls, &toolCallID, &toolName,
+		&finishReason, &displayKind, &timestamp); err != nil {
+		log.Printf("hermes: scan message row: %v", err)
+		return nil, false
+	}
+	return map[string]interface{}{
+		keyRole:        role,
+		keyContent:     content.String,
+		keyToolCalls:   toolCalls.String,
+		keyToolCallID:  toolCallID.String,
+		keyToolName:    toolName.String,
+		keyFinish:      finishReason.String,
+		keyDisplayKind: displayKind.String,
+		keyTimestamp:   timestamp.Float64,
+		keyModel:       model,
+		keyCWD:         cwd,
+	}, true
 }
 
 func openToolNames(open map[string]string) []string {

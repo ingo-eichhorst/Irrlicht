@@ -281,7 +281,7 @@ func (w *Watcher) scanSessions(db *sql.DB) {
 		SELECT id, COALESCE(cwd,''), COALESCE(parent_session_id,''),
 		       COALESCE(message_count,0), ended_at IS NOT NULL
 		FROM sessions
-		WHERE ` + sessionSourceFilter
+		WHERE source IN ('cli','tui')`
 	if w.maxAge > 0 {
 		query += ` AND started_at > ?`
 		args = append(args, float64(time.Now().Add(-w.maxAge).UnixNano())/1e9)

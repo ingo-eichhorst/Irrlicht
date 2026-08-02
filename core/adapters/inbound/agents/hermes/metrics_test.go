@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	// Registers the "sqlite" driver for the database/sql handles these tests
+	// open directly to seed fixtures.
 	_ "modernc.org/sqlite"
 )
 
@@ -61,38 +63,57 @@ func newTestStore(t *testing.T) (path string, db *sql.DB) {
 	return path, db
 }
 
-func insertSession(t *testing.T, db *sql.DB, id, source, model, cwd string, started, ended float64, msgs int) {
+// sessionRow / messageRow keep the fixture helpers to two parameters each.
+// Named fields also make a call site readable — a positional
+// insertSession(t, db, sessionRow{id: "s1", source: "cli", model: "m", cwd: "", started: 1000, ended: 0, msgs: 1}) said nothing about
+// which number was which.
+type sessionRow struct {
+	id, source, model, cwd string
+	started, ended         float64
+	msgs                   int
+}
+
+type messageRow struct {
+	sessionID, role, content string
+	toolCalls, toolCallID    string
+	finish                   string
+	ts                       float64
+}
+
+func insertSession(t *testing.T, db *sql.DB, r sessionRow) {
 	t.Helper()
 	var endedVal interface{}
-	if ended > 0 {
-		endedVal = ended
+	if r.ended > 0 {
+		endedVal = r.ended
 	}
 	if _, err := db.Exec(`INSERT INTO sessions
 		(id, source, model, cwd, started_at, ended_at, message_count,
 		 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		id, source, model, cwd, started, endedVal, msgs, 16272, 5, 0, 0); err != nil {
+		r.id, r.source, r.model, r.cwd, r.started, endedVal, r.msgs,
+		16272, 5, 0, 0); err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
 }
 
-func insertMessage(t *testing.T, db *sql.DB, sessionID, role, content, toolCalls, toolCallID, finish string, ts float64) {
+func insertMessage(t *testing.T, db *sql.DB, r messageRow) {
 	t.Helper()
 	if _, err := db.Exec(`INSERT INTO messages
 		(session_id, role, content, tool_calls, tool_call_id, finish_reason, timestamp)
 		VALUES (?,?,?,?,?,?,?)`,
-		sessionID, role, content, toolCalls, toolCallID, finish, ts); err != nil {
+		r.sessionID, r.role, r.content, r.toolCalls, r.toolCallID,
+		r.finish, r.ts); err != nil {
 		t.Fatalf("insert message: %v", err)
 	}
 }
 
 func TestComputeMetrics_AggregatesFromSessionRow(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "tui", "gpt-5.6-luna", "/work/proj", 1000, 1042, 4)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
-	insertMessage(t, db, "s1", "assistant", "", realToolCallsJSON, "", "tool_calls", 1002)
-	insertMessage(t, db, "s1", "tool", `{"output":"ok"}`, "", "888148639", "", 1003)
-	insertMessage(t, db, "s1", "assistant", "done", "", "", "stop", 1004)
+	insertSession(t, db, sessionRow{id: "s1", source: "tui", model: "gpt-5.6-luna", cwd: "/work/proj", started: 1000, ended: 1042, msgs: 4})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "assistant", content: "", toolCalls: realToolCallsJSON, toolCallID: "", finish: "tool_calls", ts: 1002})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "tool", content: `{"output":"ok"}`, toolCalls: "", toolCallID: "888148639", finish: "", ts: 1003})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "assistant", content: "done", toolCalls: "", toolCallID: "", finish: "stop", ts: 1004})
 
 	m, err := ComputeMetrics(path, "s1")
 	if err != nil {
@@ -135,9 +156,9 @@ func TestComputeMetrics_AggregatesFromSessionRow(t *testing.T) {
 // `working` while a tool is still running.
 func TestComputeMetrics_UnclosedToolCallStaysOpen(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "cli", "gpt-5.6-luna", "", 1000, 0, 2)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
-	insertMessage(t, db, "s1", "assistant", "", realToolCallsJSON, "", "tool_calls", 1002)
+	insertSession(t, db, sessionRow{id: "s1", source: "cli", model: "gpt-5.6-luna", cwd: "", started: 1000, ended: 0, msgs: 2})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "assistant", content: "", toolCalls: realToolCallsJSON, toolCallID: "", finish: "tool_calls", ts: 1002})
 
 	m, err := ComputeMetrics(path, "s1")
 	if err != nil || m == nil {
@@ -158,8 +179,8 @@ func TestComputeMetrics_GatewaySessionsAreNotCodingSessions(t *testing.T) {
 	path, db := newTestStore(t)
 	for _, src := range []string{"whatsapp", "slack", "discord", "cron"} {
 		id := "gw-" + src
-		insertSession(t, db, id, src, "gpt-5.6-luna", "/work/proj", 1000, 0, 2)
-		insertMessage(t, db, id, "user", "hi", "", "", "", 1001)
+		insertSession(t, db, sessionRow{id: id, source: src, model: "gpt-5.6-luna", cwd: "/work/proj", started: 1000, msgs: 2})
+		insertMessage(t, db, messageRow{sessionID: id, role: "user", content: "hi", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 		m, err := ComputeMetrics(path, id)
 		if err != nil {
@@ -179,7 +200,7 @@ func TestComputeMetrics_MissingOrEmpty(t *testing.T) {
 	}
 	// A session row with no messages yet is not an error — the row is
 	// inserted ~2s after launch, before the first assistant reply.
-	insertSession(t, db, "empty", "cli", "m", "", 1000, 0, 0)
+	insertSession(t, db, sessionRow{id: "empty", source: "cli", model: "m", cwd: "", started: 1000, ended: 0, msgs: 0})
 	if m, _ := ComputeMetrics(path, "empty"); m != nil {
 		t.Errorf("session with no messages must yield nil, got %+v", m)
 	}
@@ -214,8 +235,8 @@ func TestParseStorePath(t *testing.T) {
 // Round-trip: what the watcher builds is what ComputeMetrics can read.
 func TestComputeMetrics_ReadsWatcherTranscriptPath(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "tui", "gpt-5.6-luna", "/work/proj", 1000, 0, 1)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "s1", source: "tui", model: "gpt-5.6-luna", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 	w := NewWithStorePath(path, 0)
 	w.liveCWD = func() string { return "" }
@@ -256,7 +277,7 @@ func TestOpenReadOnly_CannotWriteOrCreate(t *testing.T) {
 
 	// A real store must still be readable through the same helper.
 	path, seed := newTestStore(t)
-	insertSession(t, seed, "s1", "tui", "m", "/work/proj", 1000, 0, 1)
+	insertSession(t, seed, sessionRow{id: "s1", source: "tui", model: "m", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1})
 	ro, err := openReadOnly(path)
 	if err != nil {
 		t.Fatalf("openReadOnly(existing): %v", err)
@@ -278,8 +299,8 @@ func TestOpenReadOnly_CannotWriteOrCreate(t *testing.T) {
 // two concurrent sessions made the discovery-time probe ambiguous.
 func TestComputeMetrics_UnboundCLISessionBackfillsCWD(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "cli", "m", "", 1000, 0, 1)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "s1", source: "cli", model: "m", cwd: "", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 	prev := liveCWDForSession
 	liveCWDForSession = func() string { return "/live/cwd" }
@@ -298,8 +319,8 @@ func TestComputeMetrics_UnboundCLISessionBackfillsCWD(t *testing.T) {
 // recorded directory.
 func TestComputeMetrics_StoredCWDWinsOverProbe(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "tui", "m", "/work/proj", 1000, 0, 1)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+	insertSession(t, db, sessionRow{id: "s1", source: "tui", model: "m", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 	prev := liveCWDForSession
 	liveCWDForSession = func() string { t.Error("probe must not run when cwd is stored"); return "/wrong" }
@@ -317,9 +338,9 @@ func TestComputeMetrics_StoredCWDWinsOverProbe(t *testing.T) {
 // ended on a question settles to `ready` instead of `waiting`.
 func TestComputeMetrics_CarriesPendingWaitingCue(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, "s1", "tui", "m", "/work/proj", 1000, 0, 2)
-	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
-	insertMessage(t, db, "s1", "assistant", "Which approach would you prefer?", "", "", "stop", 1002)
+	insertSession(t, db, sessionRow{id: "s1", source: "tui", model: "m", cwd: "/work/proj", started: 1000, ended: 0, msgs: 2})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "assistant", content: "Which approach would you prefer?", toolCalls: "", toolCallID: "", finish: "stop", ts: 1002})
 
 	m, err := ComputeMetrics(path, "s1")
 	if err != nil || m == nil {
@@ -330,7 +351,7 @@ func TestComputeMetrics_CarriesPendingWaitingCue(t *testing.T) {
 	}
 
 	// A later user message answers it — the cue must not persist.
-	insertMessage(t, db, "s1", "user", "the second one", "", "", "", 1003)
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "the second one", toolCalls: "", toolCallID: "", finish: "", ts: 1003})
 	m2, _ := ComputeMetrics(path, "s1")
 	if m2.PendingWaitingCue {
 		t.Error("a following user message must clear PendingWaitingCue")

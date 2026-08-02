@@ -217,7 +217,8 @@ hermes_store() { echo "${HERMES_HOME:-$HOME/.hermes}/state.db"; }
 # hermes_sql runs one read-only query against the store. Returns empty on any
 # error (store not created yet, writer holding the lock).
 hermes_sql() { # <sql>
-  sqlite3 "file:$(hermes_store)?mode=ro" "$1" 2>/dev/null || true
+  local query="$1"
+  sqlite3 "file:$(hermes_store)?mode=ro" "$query" 2>/dev/null || true
 }
 
 # The store is the ONLY session signal hermes exposes, so a missing sqlite3
