@@ -1,0 +1,98 @@
+{
+  "scenario_id": "oversized-transcript-line",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+97ac09e.dirty",
+    "confidence": 0.85,
+    "notes": "N/A for hermes: 2.16 is a line-based-transport scenario and hermes has no transcript file at all — the same structured_store rationale that landed opencode at no/n-a/n-a."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "oversized-transcript-line",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: n/a\nroute: frozen\n\n`no` here is an APPLICABILITY verdict about the transport, not a claim that Hermes writes small outputs or that irrlicht handles them badly. The read path is in fact structurally immune — see \"For the record\" below. What is missing is the thing the scenario asserts: a transcript LINE.\n\n## agent — no: there is no line to oversize\n\nScenario 2.16's primitive is line-based transport robustness. Its `process` step 4 is literally \"The oversized transcript line is buffered and parsed without stalling\", and its `description` frames the whole cell against `bufio.Scanner`'s old 2 MB cap and irrlicht's 64 MB tailer cap (#270). Every term in it — line, buffer, flush — presupposes an append-only newline-delimited transcript file.\n\nHermes has none. `agent.go` declares `Source: agent.ProcessOwnedStore` with the comment \"Hermes persists no transcript files, only the shared SQLite store\", and `PathForPID` ignores the pid and returns the one constant `$HERMES_HOME/state.db`. The adapter's own driver says the same at SEAM 3: \"Hermes writes no transcript file — the 'transcript' IS the shared store\", which is why the slot path is `<store>?session=<id>` and why `daemon_sid()` has to be overridden to strip the query rather than take a filename stem. A message is a `messages` row; its payload is a TEXT column. There is no delimiter, no flush boundary, and no line whose length could exceed a reader's buffer.\n\nThis is the same call the matrix already made for the only other `ProcessOwnedStore` adapter: opencode's 2.16 cell is landed `agent=no / daemon=n/a / driver=n/a` on the rationale \"requires_transport=line_based, but opencode is structured_store (SQLite ProcessOwnedStore) — there is no append-only transcript LINE to oversize, so the scenario does not apply. The prior yes/full/ready verdict was a stale mislabel.\" Hermes' case is strictly stronger than opencode's: opencode's driver at least exports one JSONL line per part into the committed transcript, so an oversized part becomes an oversized line somewhere; hermes exports no transcript file at any stage.\n\n## daemon / driver — n/a\n\nWith no line to oversize there is no observable to route: `n/a` follows the routing table's `no | n/a | n/a → frozen` row. Recording this cell would produce a state arc byte-identical in meaning to `2-1 basic-turn` and would assert nothing that cell does not already assert (see the next section for why — the arc is derived from columns that are never the large one), so a recording would spend a live agent run to buy zero coverage.\n\n## For the record: the SQL read path IS robust, and cannot stall on payload size\n\nSo that `n/a` is never misread as a gap, the daemon side was checked directly and it is immune by construction, on two independent levels:\n\n1. **The state arc never reads the large column.** `Watcher.scanSessions` SELECTs `id, cwd, parent_session_id, message_count, ended_at IS NOT NULL` — no `content`. `Watcher.turnIsDone` SELECTs `role, finish_reason` on the newest active row — no `content`. So `ready → working → ready` is driven entirely by `message_count` growth and Hermes' explicit `finish_reason='stop'` boundary. A payload of any size cannot delay, truncate or wedge the transition, because the transition is decided without looking at it.\n2. **The payload read has no line-buffer ceiling, and degrades by skipping.** `foldMessages` reads content via `db.Query(...)` → `scanMessageRow`'s `rows.Scan(..., &content sql.NullString, ...)`: the TEXT column is materialized whole into a Go string with no `bufio`, no `readLineCapped`, and no cap short of SQLite's own `SQLITE_MAX_LENGTH` (~1 GB), which Hermes could not exceed on write either. If a scan ever did fail, `scanMessageRow` logs and returns `false` and the row loop `continue`s — the same skip-and-proceed degradation the JSONL tailer's oversized-line path provides, not a stall. And the string is bounded immediately at parse time: `Parser.ParseLine` runs assistant content through `tailer.WaitingScanWindow` (`MaxWaitingScanRunes` = 400) and `tailer.TruncateAssistantText` (`MaxAssistantTextRunes` = 200), so nothing unbounded reaches `SessionMetrics`.\n\nVerified, not merely reasoned: an assessment-time throwaway unit probe (written, run, deleted — NOT committed) inserted an 8,388,603-byte `messages.content` value (4× `bufio.Scanner`'s old 2 MB cap) into the package's own test-store schema and called the real `ComputeMetrics`. It returned in 0.06s with `LastEventType=\"turn_done\"`, `LastAssistantText` bounded to 203 bytes, tokens intact, and `Watcher.turnIsDone` true.\n\nThe shared tailer this scenario exists to guard — `core/pkg/tailer/line_reader.go`'s `readLineCapped` and `maxTranscriptLineSize = 64 MB` — is never on hermes' live path at all: `buildAgentWatchers` dispatches `agent.ProcessOwnedStore` to `hermes.New(...)`'s store watcher, not to the fswatcher/tailer. The authoritative coverage of that cap is the agent-agnostic `core/pkg/tailer/large_line_test.go` (#270), which no hermes recording would exercise.\n\n## What would unblock this cell\n\nOnly a transport change: if Hermes ever gained a newline-delimited transcript file that the adapter tailed through `core/pkg/tailer` (i.e. the adapter moved off `ProcessOwnedStore`), 2.16 would become a real cell and should be re-assessed. Short of that, the honest coverage of \"large payload does not stall the store read\" is a unit test in the hermes package — cheap, deterministic, and not dependent on coaxing a model into emitting megabytes — not a matrix recording.",
+      "caveats": [
+        "The `agent=no` enum is an APPLICABILITY encoding, not a capability claim. Hermes can emit a large reply, and irrlicht reads it fine (verified: 8 MB content column → turn_done in 0.06s). `no/n-a/n-a` is simply the matrix's established encoding for scenario-does-not-apply, taken verbatim from the sibling ProcessOwnedStore cell (opencode 2.16) so the two structured_store adapters agree.",
+        "The 8 MB probe was a throwaway test file created, run and deleted during this assessment — it is NOT committed, so this specific number is not pinned by CI. If someone wants the property locked, the right home is a committed unit test in core/adapters/inbound/agents/hermes/metrics_test.go, not a matrix recording. Flagging this so the claim is not later mistaken for standing coverage.",
+        "Nothing here was observed through the websocket: no hermes recording exists for this cell and none is expected. Every daemon-side statement is from adapter source plus the local unit probe.",
+        "Not a true cap-stress in any case: the genuine >64 MB guard is `core/pkg/tailer/line_reader.go`'s readLineCapped (#270), pinned agent-agnostically by core/pkg/tailer/large_line_test.go on a code path hermes' ProcessOwnedStore wiring never enters.",
+        "Should Hermes ever ship a newline-delimited transcript file and the adapter move off ProcessOwnedStore, this verdict is stale by construction and must be re-assessed — that is the one and only unblock condition."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go",
+          "note": "Source = agent.ProcessOwnedStore, comment: 'Hermes persists no transcript files, only the shared SQLite store'; PathForPID ignores the pid and returns the single StorePath(). This is the load-bearing fact for agent=no — there is no line-delimited transcript to oversize."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "SEAM 3 (~line 165): 'Hermes writes no transcript file — the \"transcript\" IS the shared store', so the slot path is '<store>?session=<id>'; daemon_sid() (~line 201) exists solely to strip that query because there is no .jsonl basename to stem. The driver corroborates the adapter: no transcript artifact is produced at any stage."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "scanSessions SELECTs id/cwd/parent_session_id/message_count/ended_at only; turnIsDone SELECTs role/finish_reason on the newest active=1 row only. Neither reads `content`, so the ready→working→ready arc is decided without touching the payload — payload size cannot stall it."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go",
+          "note": "foldMessages → scanMessageRow: rows.Scan(..., &content sql.NullString, ...) materializes the whole TEXT column with no bufio/line cap (SQLite's own SQLITE_MAX_LENGTH ~1 GB is the only ceiling); a scan failure logs and returns false so the row loop continues rather than stalling."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go",
+          "note": "ParseLine bounds assistant content at parse time: tailer.WaitingScanWindow (MaxWaitingScanRunes=400) then tailer.TruncateAssistantText (MaxAssistantTextRunes=200), so no unbounded string reaches SessionMetrics regardless of column size."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go",
+          "note": "MaxAssistantTextRunes = 200 (line 798) and MaxWaitingScanRunes = 2 * MaxAssistantTextRunes (line 810) — the concrete bounds the hermes parser applies."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go",
+          "note": "buildAgentWatchers case agent.ProcessOwnedStore (line 78) dispatches hermes to hermes.New(maxSessionAge)'s store watcher (line 90-91) — the shared tailer/fswatcher path is never constructed for this adapter, so readLineCapped never runs on hermes data."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/line_reader.go",
+          "note": "maxTranscriptLineSize = 64 * 1024 * 1024 (line 12) with readLineCapped — the guard this scenario exists to exercise. Cited to show what hermes' path does NOT go through."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/large_line_test.go",
+          "note": "Agent-agnostic authoritative coverage of the 64 MB cap (issue #270). It pins the shared tailer, which is the real subject of scenario 2.16 — and which no hermes recording would exercise."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-16_oversized-transcript-line/metadata.json",
+          "note": "Sibling ProcessOwnedStore precedent, landed agent=no / daemon=n/a / driver=n/a with the caveat 'requires_transport=line_based, but opencode is structured_store … there is no append-only transcript LINE to oversize … The prior yes/full/ready verdict was a stale mislabel.' Hermes is the same shape with no transcript export at all."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics_test.go",
+          "note": "Assessment-time probe, THROWAWAY and NOT committed: using this file's newTestStore/insertSession/insertMessage helpers, an 8,388,603-byte messages.content value (4× bufio.Scanner's old 2 MB cap) was fed to the real ComputeMetrics. Result: returns in 0.06s, LastEventType='turn_done', LastAssistantText bounded to 203 bytes, TotalTokens=16277, Watcher.turnIsDone=true. The probe file was deleted after the run."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/hermes",
+          "note": "`hermes --version` → Hermes Agent v0.19.0 (2026.7.20) · upstream d0b87dad · local e289e561; install dir /Users/ingo/hermes-local/.hermes/hermes-agent."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "applicable:false — scenario 2.16 does not apply to hermes. It asserts line-based transport robustness ('the oversized transcript LINE is buffered and parsed without stalling'), and hermes has no transcript file: Source=ProcessOwnedStore over the single shared $HERMES_HOME/state.db, with the driver's own SEAM 3 noting 'Hermes writes no transcript file — the \"transcript\" IS the shared store'. There is no delimiter, no flush boundary, and no line whose length could exceed a reader's buffer. A recipe could trivially make Hermes emit a 5000-word reply, but the resulting arc would be decided by `message_count` and `finish_reason='stop'` — columns the watcher reads WITHOUT ever selecting `content` — so the recording would be indistinguishable in meaning from 2-1 basic-turn and would prove nothing extra. Same rationale, same enums as the sibling ProcessOwnedStore cell (opencode 2.16). The daemon-side property is nonetheless sound and was verified locally (8 MB content column → turn_done in 0.06s, assistant text bounded to 203 bytes); if it should be locked, the home is a committed unit test in the hermes package, not a matrix recording."
+    }
+  }
+}
