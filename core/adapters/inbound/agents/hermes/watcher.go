@@ -420,9 +420,14 @@ func (w *Watcher) reconcile(db *sql.DB, r storeSessionRow, fallbackCWD string) {
 
 // turnIsDone reports whether the newest message closes the turn.
 //
-// finish_reason='stop' on the newest assistant row is Hermes' explicit
-// end-of-turn marker; 'tool_calls' means the agent is still working. This is
-// what lets the adapter settle a session without an idle-timeout heuristic.
+// A finish_reason on the newest assistant row is Hermes' explicit end-of-turn
+// marker; only 'tool_calls' means the agent is still working. This is what
+// lets the adapter settle a session without an idle-timeout heuristic.
+//
+// Shares finishReasonEndsTurn with Parser on purpose: these two decide the
+// same thing on two paths (this one sets Terminal on the emitted event, the
+// parser sets turn_done in the metrics fold), and a disagreement would settle
+// the metrics while stranding the session state.
 func (w *Watcher) turnIsDone(db *sql.DB, sessionID string) bool {
 	var role, finish sql.NullString
 	err := db.QueryRow(`
@@ -432,5 +437,5 @@ func (w *Watcher) turnIsDone(db *sql.DB, sessionID string) bool {
 	if err != nil {
 		return false
 	}
-	return role.String == "assistant" && finish.String == "stop"
+	return role.String == "assistant" && finishReasonEndsTurn(finish.String)
 }

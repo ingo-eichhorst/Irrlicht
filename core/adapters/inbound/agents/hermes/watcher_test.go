@@ -448,3 +448,32 @@ func TestWatcher_ColdStartLiveSessionKeepsActivityPairing(t *testing.T) {
 		t.Fatalf("got %+v, want new_session then activity for a live session", evs)
 	}
 }
+
+// The watcher's own copy of the turn-boundary rule must agree with the
+// parser's. It is the one that decides Terminal on the emitted event, so a
+// disagreement would settle metrics while leaving the session state working.
+func TestTurnIsDone_AbnormalFinishReasons(t *testing.T) {
+	cases := []struct {
+		finish string
+		want   bool
+	}{
+		{"stop", true},
+		{"length", true},         // model hit max output tokens
+		{"content_filter", true}, // model declined to respond
+		{"incomplete", true},     // provider-mapped truncation
+		{"tool_calls", false},    // still working
+		{"", false},              // row still in flight
+	}
+	for _, tc := range cases {
+		path, db := newTestStore(t)
+		insertSession(t, db, sessionRow{id: "s1", source: "cli", model: "m", started: 1000, msgs: 2})
+		insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", ts: 1001})
+		insertMessage(t, db, messageRow{sessionID: "s1", role: "assistant", content: "x", finish: tc.finish, ts: 1002})
+		_ = path
+
+		w := &Watcher{}
+		if got := w.turnIsDone(db, "s1"); got != tc.want {
+			t.Errorf("turnIsDone(finish=%q) = %v, want %v", tc.finish, got, tc.want)
+		}
+	}
+}

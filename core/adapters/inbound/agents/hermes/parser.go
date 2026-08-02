@@ -105,7 +105,7 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		// The todo call is reported as a tool use AND mined for the plan it
 		// carries: dropping the use would leave a tool open that never closes.
 		p.todos.Reconcile(todosFromCalls(calls), ev)
-		if finish, _ := raw[keyFinish].(string); finish == "stop" {
+		if finish, _ := raw[keyFinish].(string); finishReasonEndsTurn(finish) {
 			ev.EventType = "turn_done"
 		}
 	case "tool":
@@ -130,6 +130,28 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 // Both `id` and `call_id` were identical in every observed row; `id` is
 // preferred and `call_id` is the fallback, because the matching `tool` row
 // closes the call by `tool_call_id`.
+// finishReasonContinues is the ONE finish_reason that means the agent is still
+// working. Hermes v0.19.0's agent/conversation_loop.py assigns 'stop',
+// 'length' (hit max output tokens), 'content_filter' (model declined),
+// 'incomplete' (provider-mapped truncation) and 'tool_calls'.
+const finishReasonContinues = "tool_calls"
+
+// finishReasonEndsTurn reports whether a finish_reason closes the turn.
+//
+// Deliberately a DENYLIST, not an allowlist of terminal values, because the
+// two failure modes are wildly asymmetric. This adapter declares no IdleFlush
+// and there is no working sweep (removed in PR #106), so the store's
+// finish_reason is the only thing that can ever settle a Hermes session: an
+// allowlist missing a terminal value strands the session in `working`
+// permanently, with no recovery path. Mistaking a future continuing value for
+// a terminal one merely settles a beat early and is corrected by the next row.
+//
+// An empty reason is the in-flight row hermes writes before the turn closes,
+// so it continues.
+func finishReasonEndsTurn(finish string) bool {
+	return finish != "" && finish != finishReasonContinues
+}
+
 // toolCall is one decoded entry of the `tool_calls` column. Arguments is a
 // JSON *string* (the column double-encodes it), so it is decoded lazily and
 // only for the calls that carry a payload we read.

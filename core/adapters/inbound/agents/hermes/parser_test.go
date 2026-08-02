@@ -286,3 +286,34 @@ func TestParseLine_PendingWaitingCue(t *testing.T) {
 		t.Error("a plain completion report must NOT set PendingWaitingCue")
 	}
 }
+
+// Hermes persists abnormal finish_reasons verbatim. Verified in the installed
+// v0.19.0 source (agent/conversation_loop.py): besides 'stop' and 'tool_calls'
+// it assigns 'length' (max output tokens), 'content_filter' (model declined)
+// and 'incomplete'. Only 'tool_calls' means the agent is still working.
+//
+// Treating just 'stop' as terminal left a truncated or filtered turn stuck in
+// `working` FOREVER — this adapter declares no IdleFlush and there is no
+// working sweep, so nothing else would ever settle it.
+func TestParseLine_AbnormalFinishReasonsEndTheTurn(t *testing.T) {
+	terminal := []string{"stop", "length", "content_filter", "incomplete"}
+	for _, fr := range terminal {
+		p := &Parser{}
+		ev := p.ParseLine(map[string]interface{}{
+			keyRole: "assistant", keyContent: "partial…", keyFinish: fr,
+		})
+		if ev == nil || ev.EventType != "turn_done" {
+			t.Errorf("finish_reason=%q must end the turn, got EventType=%q", fr, ev.EventType)
+		}
+	}
+	// The one continuing reason, and the in-flight row that carries none.
+	for _, fr := range []string{"tool_calls", ""} {
+		p := &Parser{}
+		ev := p.ParseLine(map[string]interface{}{
+			keyRole: "assistant", keyFinish: fr, keyToolCalls: realToolCallsJSON,
+		})
+		if ev != nil && ev.EventType == "turn_done" {
+			t.Errorf("finish_reason=%q must NOT end the turn", fr)
+		}
+	}
+}
