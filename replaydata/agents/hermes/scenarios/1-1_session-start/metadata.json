@@ -1,0 +1,123 @@
+{
+  "scenario_id": "session-start",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+fe95020",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes — `hermes chat` is an interactive REPL that launches in a cwd and idles. daemon_capability: full — the proc-<PID> pre-session covers the <1s birth+PID budget; the store session lands ~2s later. driver_capability: ready."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-start",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts two user-observable signals: (1) a session row appears in `ready` within 1s of agent launch and (2) the PID is bound within 1s.\n\n**agent = yes.** Hermes Agent v0.19.0 is installed and `hermes chat` is its interactive REPL — the driver launches exactly that under tmux, and the shipped store shows `source='cli'` session rows with `started_at`/`ended_at`/`end_reason` for such runs. Launching in a fresh cwd and idling needs no feature beyond the REPL existing.\n\n**daemon = full.** Hermes is the second `agent.ProcessOwnedStore` adapter after opencode, and opencode's 1.1 cell is recorded and verified 2/2 on the identical transport shape. Both signals are carried by the process scanner, not the store:\n\n- `buildAgentWatchers` gives every ProcessOwnedStore adapter a `processlifecycle.Scanner` alongside its store watcher (wiring.go). Because Hermes' matcher is a `CommandPattern` (a Python console script — `ExactName{\"hermes\"}` would never fire), the scanner runs `pgrep -f '(^|/)hermes( |$)|hermes_cli\\.main'` with the adapter's `ExcludeArgv` filter, which drops the long-lived gateway/serve services but not `chat`.\n- On first sight of the PID the scanner mints `proc-<PID>` and emits `EventNewSession` (scanner.go:347) — a `ready` row within one 1s poll tick of launch. `PIDManager` parses the PID straight out of the `proc-<PID>` id (pid_manager.go:719), so PID binding needs no discovery round-trip. This is precisely the path opencode's recording measured at +72ms (birth) / +74ms (pid_discovered).\n- The store-backed session follows: Hermes INSERTs the `sessions` row while the session is live, ~2s after launch on the first user message, and the watcher's `scanSessions` (filtered to `source IN ('cli','tui')`, so the messaging-gateway rows are excluded) emits `new_session` + an activity event whose `Terminal` flag comes from `finish_reason='stop'` on the newest assistant row. `findSupersedingSession` then retires the pre-session by PID or adapter+CWD match.\n\nNo spec-required observable for this cell is mis-handled, so the verdict stays `full`; the timing and CWD-binding gaps below are caveats, per the caveats-over-downgrades rule.\n\n**driver = ready.** The recipe needs `send`, `wait_turn` and `sleep`; `driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"` and its SEAM 2 polls the store for `finish_reason='stop'` — a real turn-done signal, not an idle heuristic. No primitive is missing.\n\n**Provisional, per the observation-vs-emission rule.** Everything above is read off the adapter, the daemon wiring and the maintainer's live store — no recording exists yet. The two things only a recording can settle are whether pre-session birth actually lands inside the 1000 ms budget for this adapter, and whether the pre-session→store-session supersession completes cleanly when the store row carries no cwd. Hence confidence 0.8 rather than higher.",
+      "caveats": [
+        "The <1s birth is satisfied by the `proc-<PID>` pre-session, NOT by Hermes' own store row: the `sessions` row is INSERTed ~2s after launch, on the first user message (adapter.go package doc; foldMessages comment). Same shape as opencode, whose store row landed at +528ms while the pre-session covered the budget.",
+        "`sessions.cwd` is populated only by Hermes' tui_gateway, so an interactive `hermes chat` session (source='cli') carries NO cwd — verified: every row in the maintainer's store has an empty cwd. Both the watcher and querySessionMetrics fall back to `defaultLiveCWD`, which deliberately returns \"\" when zero or more than one live Hermes session process is found. If a second Hermes session is running on the machine during the recording, the store session gets no project binding and the pre-session retirement falls back to the PID match alone.",
+        "The process scanner backs off from a 1s to a 5s poll after 5 stable polls (scanner.go:19-20,198-207). On a recording daemon that has been idle before the launch, pre-session birth can therefore exceed the 1000 ms budget. Not Hermes-specific — it is shared by every scanner-backed adapter, including the siblings whose 1.1 recordings pass — but it is the most likely cause if this cell's birth phase verifies late.",
+        "Cost is priced through irrlicht's capacity table, not read from the store: Hermes reports `estimated_cost_usd=0.0` with `billing_mode='subscription_included'` (verified in the live store). Probed `DefaultCapacityManager().EstimateCostUSD(\"gpt-5.6-luna\", 16269, 5, 0, 0)` = $0.00326 — it resolves via the gpt-5 family — so `cost_nonzero` holds for the pinned model but would fail for a model with no pricing entry."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go",
+          "note": "Source = agent.ProcessOwnedStore{PathForPID: StorePath(), Reader: metricsReader{}}; Process.Match = CommandPattern; ExcludeArgv = isServiceArgv; single observe-kind permission \"store\"."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/adapter.go",
+          "note": "Package doc: no transcript files, one shared state.db; the sessions row is INSERTed ~2s after launch with ended_at NULL; sessions.cwd only for TUI. processCmdPattern + serviceSubcommands exclusion; HERMES_HOME resolution."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "scanSessions filters source IN ('cli','tui'), emits new_session then activity; turnIsDone reads finish_reason='stop' on the newest assistant row; TranscriptPath = <store>?session=<id>."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go:80-112",
+          "note": "ProcessOwnedStore adapters get their store watcher PLUS a processlifecycle.Scanner; a CommandPattern matcher switches the scanner to pgrep -f and the adapter's ExcludeArgv becomes the scanner's argv filter."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/scanner.go:16-20,336-347",
+          "note": "1s default poll (5s after 5 stable polls); maybeTrackNewPID mints proc-<PID> and emits EventNewSession — the row that satisfies the <1s birth."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go:719-721,1476-1494",
+          "note": "PID is parsed directly from the proc-<PID> id (no discovery latency); findSupersedingSession retires the pre-session on a PID match, or on adapter+CWD as the fallback."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/1-1_session-start/expected.jsonl",
+          "note": "Sibling ProcessOwnedStore cell, recorded and verified 2/2: pre-session birth +72ms, pid_discovered +74ms, store session +528ms — the same two-phase shape this spec asserts."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh:113,143-260",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\"; launch seam runs `hermes chat` under tmux and polls for the \"Type your message or /help\" prompt; wait_turn polls the store for finish_reason='stop'; sqlite3 is a hard prerequisite."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/lib/spawn-record-daemon.sh:74-116",
+          "note": "The recording daemon is started via `env <vars> irrlichd --record` without -i, so it inherits HERMES_HOME from the invoking shell — which is what makes daemon and driver agree on which state.db to read."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/NousResearch/hermes-agent",
+          "note": "Upstream project for Hermes Agent; local CLI reports \"Hermes Agent v0.19.0 (2026.7.20) · upstream 177f1d7c\"."
+        },
+        {
+          "kind": "file",
+          "ref": "$HERMES_HOME/state.db (live query, 2026-08-02)",
+          "note": "12 most recent sessions: all source='cli', cwd empty, model='gpt-5.6-luna', input/output tokens non-zero (e.g. 16269/5), estimated_cost_usd=0.0 with billing_mode='subscription_included', end_reason cli_close/agent_close. The same-second row pairs are two concurrent one-shot runs (distinct prompts 'Say only: alpha' / 'Say only: beta'), not duplicate rows for one launch."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH and an inference provider configured in <HERMES_HOME>/config.yaml (model.default + model.provider) with working credentials",
+        "HERMES_HOME exported in the shell that runs run-cell.sh, so BOTH the recording daemon (which inherits it, spawn-record-daemon.sh) and the driver read the same state.db",
+        "sqlite3 on PATH — the store is the only session signal hermes exposes; the driver exits nonzero(2) without it",
+        "no other hermes session process running: sessions.cwd is empty for source='cli', so the live-process CWD fallback only binds a project when exactly one session process is alive",
+        "irrlichd is recording with the hermes store watcher enabled (grant-all permission mode, so the observe-kind \"store\" permission is not left pending)"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a hermes session birth (proc-<PID> pre-session or store session) within 1000 ms of agent launch",
+        "events.jsonl contains a pid_discovered event within 1000 ms of agent launch",
+        "the store-backed session (id <YYYYMMDD>_<HHMMSS>_<hex>) appears and supersedes the pre-session",
+        "final session state is ready",
+        "no tool calls are recorded"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
