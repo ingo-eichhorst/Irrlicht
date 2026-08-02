@@ -130,10 +130,12 @@
         }
       ],
       "verify": [
-        "events.jsonl contains TWO distinct session_ids from two different adapters (hermes and claude-code), both keyed to the same cwd slug",
+        "CORRECTED BY THE RECORDING (2026-08-03): events.jsonl contains TWO distinct session_ids from two different adapters (hermes 20260803_011105_d40f63, claude-code 8b9025f8-...), each with its correct adapter label. They are NOT both keyed to the same cwd slug, which is what this line originally claimed: the hermes session's transcript_new carries project_dir=null and cwd=null while the claudecode one carries the shared-cwd slug. Cross-adapter-specific - the single-agent hermes recordings (3-2, 2-7, 2-10) all bind project_dir=\"cwd\". See the expected.jsonl notes for the (unverified) mechanism; the scenario's acceptance criteria do not mention the workspace slug, so the pillar verdicts are unchanged.",
         "each session has its own independent working->ready arc; no transition on one is attributed to the other",
         "no cross-contamination: the daemon never merges or flaps the hermes row into the claudecode row, and any pid_discovered for hermes lands on the hermes session (its PID discovery intersects cwd with the hermes command-line pattern, so the co-resident claude process cannot be bound to it)",
-        "the hermes session's final live state is ready"
+        "the hermes session's final live state is ready",
+        "no hermes proc-<PID> presession was minted in the cross-adapter run - the only presession, proc-45836, is labeled claude-code and reconciles into the claudecode session. Every single-agent hermes recording has its own hermes presession. Recorded as an observation; not asserted by expected.jsonl.",
+        "CONFIRMED: independent arcs, no cross-contamination - hermes working 01:11:10.91 -> ready 01:11:18.93, claude-code working 01:11:53.83 -> ready 01:11:57.59, no transition attributed across, final hermes state ready."
       ],
       "settings": {},
       "timeout_seconds": 300
