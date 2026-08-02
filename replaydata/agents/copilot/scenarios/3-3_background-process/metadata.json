@@ -1,0 +1,124 @@
+{
+  "scenario_id": "background-process",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+7894002",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (bash tool ships a `detach` boolean + read_bash/stop_bash/list_bash)\ndaemon_capability: bug (persisted trace exists; the copilot parser tracks no background processes); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-process",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: ready\n\n## agent — yes, settled from the live tool schema (not from --help)\n\nCopilot CLI 1.0.77 exposes an agent-driven background primitive on its own `bash` tool. The account's actual `input_schema`, captured verbatim in a local runtime log (`~/.copilot/logs/process-1785691060764-31353.log`), is `{command, description, shellId, detach, initial_wait}`, and the `detach` property's own description is the load-bearing citation:\n\n> \"(Optional) Temporary, candidate, probe, debug, and retry launches MUST omit this. After selecting a launch as the final service needed after your final answer, you MUST start or restart its foreground command alone with this set to `true`. Without `detach`, a command remains attached and keeps running after `initial_wait` and across turns until it completes, is stopped, or the CLI exits.\"\n\nThe same log carries the three companion tools — `read_bash` (shellId + delay: \"You will be automatically notified when background commands complete\"), `stop_bash` (\"Stops a running Bash command by terminating its process tree… For detached commands, use the same shellId returned by the bash tool\"), and `list_bash` (\"Shows shellId, command, mode, PID, status, and whether there is unread output\"). That is a direct structural analogue of Claude Code's `Bash(run_in_background)` + `BashOutput` + `KillShell`, so the scenario's `process` step 2 (\"agent calls a tool with run_in_background: true (or equivalent)\") is satisfied by the agent itself, not by a user keybinding.\n\nTwo background flavours exist, both model-driven:\n\n1. **attached background** — any command still running when `initial_wait` expires \"moves to the background\" and keeps running across turns; the runtime notifies on completion.\n2. **detached** (`detach: true`) — the runtime's own guidance (embedded in `prebuilds/darwin-arm64/runtime.node`) says \"Detached processes survive session shutdown and run independently\" and \"On Unix-like systems, commands are automatically wrapped with setsid to fully detach from the parent process.\"\n\nThere is additionally a *user*-driven path (ctrl+x → b / `/tasks`, `tasks.promoteToBackground` in the SDK RPC surface), but the recipe deliberately uses the agent-driven `detach: true` path so the cell asserts the scenario as written.\n\n## daemon — bug, not incapable: a persisted trace exists at every point of the arc\n\nThe spawn is **verified persisted** on a real 1.0.77 transcript on this machine. Every `tool.execution_complete` line carries a structured `data.toolTelemetry.properties` block that includes `executionMode` and `detached`:\n\n```\n\"toolTelemetry\": {\"properties\": {\"customTimeout\":\"true\",\"executionMode\":\"async\",\n  \"detached\":\"false\",\"sandboxApplied\":\"false\",\"asyncOnlyShell\":\"true\"}, …}\n```\n\nand the paired `tool.execution_start` persists the full `data.arguments` (observed: `{command, description, shellId, initial_wait}`) — so a `detach: true` call lands on disk as `arguments.detach = true` **and** `toolTelemetry.properties.detached = \"true\"`. The result body is persisted too (`result.content`), and the runtime's templates for it are `<command started in detached background with shellId: X. You will be automatically notified when it completes.>` on spawn and `<detached command with shellId: X completed with exit code N>` / `… completed` / `… failed` / `… cancelled` on exit.\n\nThe asynchronous completion signal is a first-class event kind: `system.notification`, whose `kind` is the tagged union `SystemNotificationShellCompleted` / `SystemNotificationShellDetachedCompleted` (`{type: \"shell_detached_completed\", shellId, description}`) per `copilot-sdk/generated/session-events.d.ts`, and which app.js raises through the ordinary non-ephemeral `this.emit(...)` path (unlike `session.background_tasks_changed`, which goes through `emitEphemeral`).\n\nWhat the daemon does with all of that today: nothing. `core/adapters/inbound/agents/copilot/parser.go` dispatches thirteen envelope kinds and sets NONE of `ParsedEvent.BackgroundSpawns` / `BashOutputPolls` / `TerminatedBashOutputIDs` / `KilledShellIDs`, and has no `system.notification` case at all. `BackgroundProcessCount` therefore stays 0, `HasLiveBackgroundProcess` is never set, and `assistant.turn_end` settles the session to `ready` while the detached process is still alive. That is a spec-required observable mis-handled over an existing trace → `bug`, the exact shape of the gemini-cli sibling on this same row.\n\n## What the unlock actually costs (two parts, not one)\n\nA parser mapping alone is NOT sufficient. `SessionDetector.applyBackgroundLiveness` only holds a session `working` when `hasBackgroundProbe` is true, and that requires either `BackgroundProcessOutputs` (Claude Code's `tasks/<id>.output`, probed with `lsof`) or `BackgroundProcessPIDs` (Gemini CLI's reported PID, probed with `kill -0`) — see `core/application/services/session_detector_activity.go:1114`. Copilot's shell tool *result text* carries neither. Two anchors are available and the recipe is written to put both within reach: `list_bash` reports the PID (its result text is persisted like any other tool result), and the runtime writes detached-shell output to a `shell-logs/` directory (`shell_logs_path` in the runtime's tool-registry config; `failed to read detached shell log:` is one of its error strings). Whichever is chosen, it is adapter/product work, not an architectural limit.\n\n## driver — ready\n\n`replaydata/agents/copilot/driver-interactive.sh` implements `send`, `wait_turn` and `sleep` (full set: exit_clean, interrupt, keys, reset_session, restart, resume, send, session, sigkill, slash, sleep, start_session, wait_turn). The recipe needs only the first three.",
+      "caveats": [
+        "VERIFIED on disk: the spawn side. Real 1.0.77 transcripts under ~/.copilot/session-state/*/events.jsonl show tool.execution_start persisting the complete data.arguments for every bash call, and tool.execution_complete persisting data.toolTelemetry.properties with executionMode and detached. No hand-waving: those exact keys were read from four real bash calls.",
+        "DISCRIMINATOR WARNING for whoever writes the parser mapping: on this build executionMode is \"async\" even for ordinary foreground calls (the same telemetry block carries asyncOnlyShell:\"true\"), so executionMode alone is NOT a background marker. The correct spawn discriminators are toolTelemetry.properties.detached == \"true\" / arguments.detach == true, or the result text `<command started in detached background with shellId: …>` / `is still running after N seconds`.",
+        "UNVERIFIED (assumed, to be settled by `record`): no session on this machine has ever actually run a detached command, so the detached spawn/exit result strings and the system.notification completion line are read from the shipped binary (prebuilds/darwin-arm64/runtime.node) and the generated SDK types — NOT from a recording. That `system.notification` is persisted rather than ephemeral is inferred from app.js using this.emit (not emitEphemeral) for it, corroborated by the fact that no event carrying ephemeral:true appears in any of the five real transcripts inspected. Confidence is held at 0.8 for exactly this reason.",
+        "The unlock is two-part: even after the copilot parser sets BackgroundSpawns, SessionDetector.hasBackgroundProbe (session_detector_activity.go:1114) needs a liveness anchor — BackgroundProcessOutputs (lsof) or BackgroundProcessPIDs (kill -0) — and copilot's bash result text supplies neither. The recipe issues one list_bash call so the shell's PID is on the recorded transcript for the fix to key on; the runtime's shell-logs/ directory is the alternative anchor.",
+        "Detached commands cannot run inside copilot's sandbox (\"Detached commands cannot run inside the sandbox.\" is a runtime error string). The driver launches with --allow-all and no sandbox config, so this does not bite, but a sandboxed launch would make the cell unrecordable.",
+        "Recording this cell spends the maintainer's AI credits (one interactive turn with two tool calls, ~55s of driver dwell).",
+        "Re-record variance: the exact turn length and the number of tool calls vary with model pacing. bg_alive_working asserts a 30s lower bound, comfortably between the ~15s turn and the 45s sleep, so jitter never trips it.",
+        "model is deliberately unpinned in the spec: --model accepts only \"auto\" on this account and the router picks per turn between gpt-5-mini and claude-haiku-4.5 (both observed in one live 1.0.77 session). `record` fills it from the recording."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.copilot/logs/process-1785690377629-47055.log (copilot 1.0.77 runtime log)",
+          "note": "The account's LIVE bash tool input_schema: properties command / description / shellId / detach (boolean) / initial_wait, with detach documented as \"Without `detach`, a command remains attached and keeps running after `initial_wait` and across turns until it completes, is stopped, or the CLI exits\". Same log carries the read_bash, stop_bash and list_bash tool definitions (list_bash: \"Shows shellId, command, mode, PID, status, and whether there is unread output\"). This is the primary agent=yes citation."
+        },
+        {
+          "kind": "file",
+          "ref": "$(npm root -g)/@github/copilot/node_modules/@github/copilot-darwin-arm64/prebuilds/darwin-arm64/runtime.node (strings)",
+          "note": "Shell-tool guidance and result templates: \"Use with `mode=\\\"async\\\", detach: true` when… Detached processes survive session shutdown and run independently\", \"commands are automatically wrapped with setsid\", `<command started in detached background with shellId: >`, `<detached command with shellId: … completed with exit code >`, `<command with shellId: … is still running in detached background after >`, plus `shell-logs/` and `shell_logs_path`. Note the CLI binary itself is a compressed Node SEA and yields nothing to strings — runtime.node is the readable surface."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.copilot/session-state/*/events.jsonl (four real bash tool calls, copilot 1.0.77)",
+          "note": "Proves the transcript trace is persisted and structured: tool.execution_start.data.arguments carries the full bash argument object; tool.execution_complete.data.toolTelemetry.properties carries executionMode and detached (both observed as \"async\"/\"false\" for foreground calls, with asyncOnlyShell:\"true\"); result.content carries the `<shellId: X completed with exit code 0>` trailer. No event in any of these transcripts carries ephemeral:true."
+        },
+        {
+          "kind": "file",
+          "ref": "$(npm root -g)/@github/copilot/node_modules/@github/copilot-darwin-arm64/copilot-sdk/generated/session-events.d.ts",
+          "note": "SystemNotificationShellDetachedCompleted { type: \"shell_detached_completed\", shellId, description } and SystemNotificationShellCompleted { …, exitCode } are members of the SystemNotification union carried by the `system.notification` event — the asynchronous completion signal that would close the background process. session.background_tasks_changed is the ephemeral (non-persisted) counterpart."
+        },
+        {
+          "kind": "file",
+          "ref": "$(npm root -g)/@github/copilot/node_modules/@github/copilot-darwin-arm64/copilot-sdk/generated/rpc.d.ts",
+          "note": "TaskShellInfo carries attachmentMode (\"attached\" | \"detached\"), executionMode (\"sync\" | \"background\"), logPath (\"Path to the detached shell log, when available\") and pid — the runtime's own model of a live background shell, and the shape of the liveness data a probe would need."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "The daemon-side gap: thirteen envelope kinds dispatched (session.start, model_change, auto_mode_resolved, user.message, assistant.message, assistant.turn_end, tool.execution_start/complete, permission.requested/completed, usage_checkpoint, shutdown, subagent started/completed) and NO handling of background spawns, detach arguments, toolTelemetry, or system.notification. None of ParsedEvent.BackgroundSpawns / BashOutputPolls / TerminatedBashOutputIDs / KilledShellIDs is ever set."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go:1114 (hasBackgroundProbe)",
+          "note": "Why the unlock is two-part: the working-hold fires only when BackgroundProcessOutputs (lsof) or BackgroundProcessPIDs (kill -0) is populated. A copilot mapping must supply one of them — list_bash's PID or the runtime's shell-logs/ file — not just a non-zero BackgroundProcessCount."
+        },
+        {
+          "kind": "file",
+          "ref": "$(npm root -g)/@github/copilot/node_modules/@github/copilot-darwin-arm64/changelog.json",
+          "note": "Ships the feature history: 1.0.66 \"Let Copilot read output from and stop detached background shell commands\"; 1.0.62 \"Shells promoted to background from /tasks keep running after the turn ends\"; 0.0.422 \"Automatic notifications when background shell commands and agents complete\"; 0.0.403 \"Detached shell processes work on vanilla macOS installations\"."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/3-3_background-process/expected.jsonl",
+          "note": "The sibling precedent this cell is modelled on: agent supports background shells, the adapter has no tracking, cell recorded known_failing with the spec asserting the CORRECT arc."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 240,
+      "settings": {},
+      "preconditions": [
+        "copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits — this recording spends them",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a --record daemon)",
+        "tmux available (the interactive driver drives the REPL through it)",
+        "No sandbox configured for the launch: the runtime refuses detached commands inside its sandbox (\"Detached commands cannot run inside the sandbox.\")"
+      ],
+      "setup": [
+        "The driver isolates state under $STAGING/copilot-home via COPILOT_HOME (the supported lever; --config-dir is deprecated) and seeds trustedFolders + askedSetupTerminals so neither first-run prompt blocks the input box",
+        "Launch is `copilot --allow-all --no-color` in a fresh per-run cwd under <staging>/cwd/, so the bash and list_bash calls auto-execute and no permission.requested is written",
+        "Recommended: export COPILOT_AVAILABLE_TOOLS=bash,list_bash before driving — the driver forwards it as --available-tools, dropping unused tool definitions and roughly halving the credits this cell costs. Do NOT drop read_bash/stop_bash from the allowed set if the model is expected to reason about them; the recipe does not call them.",
+        "Interactive, not headless: the REPL must outlive the turn — the whole point is that the detached process is still alive after assistant.turn_end",
+        "wait_turn counts assistant.turn_end lines — Copilot writes an explicit turn boundary, so the wait is exact",
+        "The final `sleep 55` must outlast the 45s detached command, so the recording captures the CORRECT working→ready settle point as well as the (currently premature) actual one"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do exactly this and nothing else. (1) Call the bash tool ONCE with command `sleep 45 && echo BG_DONE`, shellId `bg-sleep`, and detach set to true — it will return immediately saying the command started in detached background. (2) Then call list_bash ONCE so the running shell and its PID are on record. (3) Then reply with exactly the word: done. Do NOT call read_bash, do NOT call stop_bash, do NOT poll or wait for the command to finish, and do NOT run any other command."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 55
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a transient proc-<PID> presession born ready, then the real <session-id> session (a DIFFERENT id, the session-state directory name) born ready when the transcript appears",
+        "the copilot transcript ($COPILOT_HOME/session-state/<id>/events.jsonl) shows a tool.execution_start for `bash` whose data.arguments carries detach:true, and the paired tool.execution_complete whose data.toolTelemetry.properties.detached is \"true\"",
+        "that tool.execution_complete's result.content contains `<command started in detached background with shellId: bg-sleep`",
+        "the list_bash tool result records the detached shell's PID (the liveness anchor a fix would key on)",
+        "EXPECTED TO FAIL (known_failing): the daemon's events.jsonl shows working→ready at assistant.turn_end (~15s), NOT the required 30s+ working hold — BackgroundProcessCount is 0 because the copilot parser tracks no background processes",
+        "record whether the copilot transcript later carries a `system.notification` line whose data.kind.type is `shell_detached_completed` with shellId bg-sleep — this is the assumed-but-unobserved completion signal the fix would close on, and this recording is what settles it",
+        "the newest recording's replay summary shows cum_output_tokens > 0 and estimated_cost_usd > 0, with model_name one of gpt-5-mini / claude-haiku-4.5 (router's choice — not pinned)"
+      ]
+    }
+  }
+}
