@@ -1,0 +1,110 @@
+{
+  "scenario_id": "user-blocking-question",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+00af800",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (Copilot ends a turn on a plain-prose clarifying question, and also ships a builtin `ask_user` tool); daemon_capability: full for the PROSE path the scenario actually specifies — PROVEN by probe: LastEventType=turn_done + LastAssistantText=\"Which file should I modify first?\" → IsAgentDone=true, IsWaitingForUserInput=true → agent_done → classifyAgentDone → waiting; driver_capability: ready (send + wait_turn + sleep, all in DRIVE_ELICITS). Two narrow gaps kept as caveats, both cheap adapter unlocks, neither touching this cell's arc: the parser never sets PendingWaitingCue (so a question sitting >200 runes before the end is missed — #1150 shape, probed red), and `ask_user` is absent from isUserBlockingTool's exact-match list."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-blocking-question",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: **yes** — a Copilot turn can end on a plain-prose clarifying question (the trailing-`?` shape this scenario specifies), and the CLI additionally ships a builtin `ask_user` tool for structured asks.\ndaemon_capability: **full** — for the prose path, PROVEN end-to-end through the production tailer, not inferred.\ndriver_capability: **ready** — the recipe needs `send` + `wait_turn` + `sleep`, all three in `replaydata/agents/copilot/driver-interactive.sh`'s `DRIVE_ELICITS`.\n\n## What the scenario asks for\n\n2.17's own description pins the mechanism: *\"Agent's reply ends in a question mark … Validates the trailing-`?` path through the state classifier (`session.IsWaitingForUserInput` → state_classifier.go decision 2a)\"*. The claudecode and codex siblings both stop at the waiting episode without answering, and the acceptance criteria end at `Final state: waiting`. So the load-bearing question for Copilot is: does a turn that ends on a prose question reach `waiting`?\n\n## The prose path — proven, not read\n\nA throwaway probe (written into the copilot package, run, and deleted — no repo change) drove a synthetic 1.0.77 event sequence through the PRODUCTION tailer (`tailer.NewTranscriptTailer(path, &Parser{}, AdapterName)`) and then through the domain predicates the `agent_done` rule calls:\n\n```\nLastEventType=\"turn_done\" LastAssistantText=\"Which file should I modify first?\" PendingWaitingCue=false\nIsAgentDone=true IsWaitingForUserInput=true\n```\n\nThe chain, each seam read:\n\n1. **Parse.** `parseAssistantMessage` sets `ev.AssistantText = tailer.TruncateAssistantText(content)` (parser.go:201) from `assistant.message.data.content`; `assistant.turn_end` maps to `ev.EventType = \"turn_done\"` (parser.go:99).\n2. **Fold.** `applyAssistantTextAndMarkers` (tailer.go:1159) latches `lastAssistantText`; `assistant.turn_end` carries no text and no `ClearToolNames`, so the question survives the turn boundary. `tailer_metrics.go:234/374` publish `LastEventType` / `LastAssistantText`.\n3. **Derive.** `SessionMetrics.IsAgentDone()` returns true on `LastEventType == \"turn_done\"` (metrics.go:542) — Copilot's turn boundary is EXPLICIT, so this is read rather than inferred from a quiet tail.\n4. **Classify.** `state_classifier.go` rule `agent_done` → `classifyAgentDone` (line 292) → `IsWaitingForUserInput()`. With `PendingWaitingCue` false it falls through to `ProseIndicatesWaiting(m.LastAssistantText)` (waiting_cue.go:84) — the fallback that exists precisely *\"for passes that never populated PendingWaitingCue, where the truncated text is all there is\"* — which fires on the trailing `?` via `ExtractQuestionSnippet`. Verdict: `working → waiting`, reason *\"turn ended with question or cue → waiting\"*.\n\nSo the premise that Copilot routes a question-ending turn to `ready` does not hold: the `LastAssistantText` fallback carries this cell on its own. What is genuinely missing is the #1150 *widened-window* upgrade, which only changes the outcome for long messages — see caveats.\n\n## Why the recipe forces plain prose\n\nThe shipped bundle registers a builtin tool named **`ask_user`** (and an elicitation-backed `ask_user_2` behind the `ASK_USER_ELICITATION` flag) whenever the `ask-user` capability and `requestUserInput` are both present, which is the interactive-TUI configuration. Its request payload is `{requestId, question, choices, allowFreeform}` — a genuine AskUserQuestion equivalent. If the model reaches for that tool instead of answering in prose, this cell's arc changes (see caveat 2), so the recipe's prompt explicitly forbids tool use. That is a prompt-shaping precaution, not a driver gap.\n\n## Driver\n\n`DRIVE_ELICITS=\"send slash sleep wait_turn exit_clean sigkill interrupt keys restart start_session session\"` covers every step the recipe uses. Unlike the 2.19 sibling this cell needs NO launch-configuration change: no permission prompt is involved, so the driver's default `--allow-all` is harmless, and `wait_turn` is safe here (there is no held prompt for a keypress to dismiss).",
+      "caveats": [
+        "PROBED RED — the #1150 widened-window gap is REAL for copilot, and it is a one-line adapter unlock. Unlike claudecode (parser.go:789) and codex (parser.go:307), copilot's parseAssistantMessage never computes `ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(full))`, so detection runs against the 200-rune display truncation instead of the 400-rune scan window. A second probe with the question placed >200 runes before the end of the message returned `PendingWaitingCue=false IsWaitingForUserInput=false` — a false ready. It does NOT affect this cell (the recipe asks for a one-sentence reply, and the probe of that exact shape came back waiting), so per the skill's caveats-over-downgrades rule the pillar stays `full`. The fix belongs with the adapter, not with this cell.",
+        "`ask_user` IS NOT in the user-blocking tool list, and that is the second cheap unlock. `isUserBlockingTool` (core/domain/session/metrics.go:450) exact-matches only AskUserQuestion / ExitPlanMode / question / ask_user_question, and its twin `tailer.isUserBlockingToolName` mirrors it. Copilot's builtin is spelled `ask_user` (bundle: `n2=\"ask_user\"`, plus `ask_user_2`), so a session blocked in that tool would show `HasOpenToolCall=true` → `IsAgentDone()=false` → stuck in `working`, never `waiting`. UNVERIFIED whether `ask_user` emits an ordinary `tool.execution_start` line (it is registered through the same `Wo(descriptor, execute)` path as every other builtin, so it very likely does, but no live capture of an ask_user call exists). If it does, adding the two spellings to the twin lists is the whole fix; if it does not, the tool's own signal is unobservable and only the prose path remains.",
+        "The structured request events are EPHEMERAL and therefore invisible on disk. `requestUserInput` publishes via `mg(this.emitEphemeral, n.event)` (contrast `requestPermission`, which uses `this.emit`), and `emitEphemeral` → `emitInternal(..., ephemeral=true, ...)`. Empirically confirmed: two real transcripts under ~/.copilot/session-state/ contain only session.*/user.message/assistant.turn_start/assistant.message/assistant.turn_end/tool.execution_*/session.usage_checkpoint/session.shutdown — no `assistant.message_delta`, `message_start` or `streaming_delta`, all of which are emitEphemeral. So `user_input.requested` / `elicitation.requested` (and their `.completed` twins) must be assumed absent from events.jsonl, unlike permission.requested which is emitted non-ephemerally and is what makes 2.19 observable.",
+        "PROVISIONAL — BIRTH SHAPE (emission, not parsing). Modeled as a PRESESSION adapter, matching the 2-1 and 2-19 copilot siblings: the driver's SEAM-3 comment records that Copilot creates the session directory at launch but writes events.jsonl only once the first turn starts, so the `copilot` process (ExactName matcher) is discoverable before any transcript exists and a transient proc-<PID> row precedes the real session (whose id is the DIRECTORY name via sessionIDFromPath). Note the 5-1_token-accounting sibling asserts the opposite (\"single-birth\") in its notes while still shipping presession phases — the column is not self-consistent here, and only a live capture settles it. If the recording shows a single birth, `record` must re-anchor; this is why confidence is 0.8 rather than 0.9.",
+        "MODEL left unpinned deliberately: the account backing these recordings exposes only gpt-5-mini and claude-haiku-4.5 and `--model` accepts only \"auto\", so the effective model is resolved at runtime and announced by session.auto_mode_resolved. cost_nonzero is safe to assert because BOTH reachable models price through the shared map (gpt-5-mini natively; claude-haiku-4.5 via the alias added in #1256 — core/pkg/capacity/aliases_test.go TestCopilotAlias_ResolvesToRealCostEstimate).",
+        "The recipe deliberately never answers the question, so the `waiting → working → ready` return leg of the scenario's process is NOT exercised here — same as the claudecode and codex siblings, whose acceptance criteria also terminate at `Final state: waiting`."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "parseAssistantMessage (line 189-208) sets ev.AssistantText from data.content and does NOT set PendingWaitingCue; evTurnEnd → ev.EventType=\"turn_done\" (line 99). The two facts that make this cell work via the fallback and expose the #1150 gap."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "applyAssistantTextAndMarkers (line 1159): lastAssistantText is latched only when AssistantText is non-empty and cleared only on ClearToolNames, so assistant.turn_end preserves the question across the turn boundary."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/waiting_cue.go",
+          "note": "IsWaitingForUserInput line 84 — `return ProseIndicatesWaiting(m.LastAssistantText)`, the documented fallback for adapters that never populate PendingWaitingCue. This is the line that carries the copilot cell."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Rule `agent_done` (tierOf tierAgentDone) → classifyAgentDone (line 292): IsWaitingForUserInput() → waiting with reason \"turn ended with question or cue → waiting\"."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "IsAgentDone line 542 (LastEventType==\"turn_done\" → done) and isUserBlockingTool line 450 (exact-match list that does NOT contain ask_user)."
+        },
+        {
+          "kind": "url",
+          "ref": "file:///Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "Shipped CLI 1.0.77 bundle. `n2=\"ask_user\"` / `\"ask_user_2\"` builtin tool factory (Hst/Ldt), registered when qP(s,\"ask-user\") && requestUserInput; requestUserInput publishes via mg(this.emitEphemeral, n.event) while requestPermission uses this.emit; the events.jsonl writer subscribes session.on(\"*\") → recordEventJson."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS line 128 (send/slash/sleep/wait_turn/… — every step this recipe needs) and the SEAM-3 resolve_transcript comment (line 245-250) recording that the session directory is created at launch but events.jsonl only once the first turn starts — the basis for the presession birth shape."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77+ on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits — this recipe spends one turn's worth",
+        "irrlicht's copilot `transcripts` permission is granted so the daemon tails ~/.copilot/session-state (a fresh IRRLICHT_HOME leaves every permission pending → zero monitoring; use IRRLICHT_PERMISSION_MODE=grant-all for the recorder)",
+        "No hook install and no :7837 pinning needed — the whole signal is transcript-borne, so the :7838 coexist recorder captures it",
+        "The driver's default --allow-all is fine for this cell (no permission prompt is involved), unlike the 2-19 sibling"
+      ],
+      "setup": [
+        "The driver seeds COPILOT_HOME under <staging>/copilot-home with trustedFolders + askedSetupTerminals so the folder-trust modal does not block the input box, then waits for the '/ commands' footer before typing",
+        "A fresh empty cwd under <staging>/cwd/",
+        "The recipe never answers the question: the session holds in waiting until teardown (mirrors the claudecode and codex siblings)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly one short clarifying question about what I want you to build, ending in a question mark. Answer in plain text only: do not call any tool, and do not use ask_user. No other text."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created (proc-<PID>) event in ready shortly after the copilot process launches",
+        "events.jsonl contains a transcript_new for the real session (session_id = the ~/.copilot/session-state/<dir> name, distinct from proc-<PID>) once the first prompt creates events.jsonl, born ready",
+        "events.jsonl contains a pid_discovered event bound to the real session_id",
+        "events.jsonl contains a state_transition to working on the real session_id when the prompt is sent (user.message)",
+        "events.jsonl contains exactly one state_transition to waiting on the SAME real session_id after the assistant's question-mark reply and its assistant.turn_end",
+        "events.jsonl contains NO state_transition to ready on the real session_id after the waiting transition (the recipe never replies)",
+        "the recorded transcript's assistant.message content ends in a question mark and carries no toolRequests — if the model called ask_user instead, re-run with a sharper prompt rather than accepting the arc",
+        "final session state is waiting"
+      ],
+      "timeout_seconds": 180,
+      "settings": {}
+    }
+  }
+}
