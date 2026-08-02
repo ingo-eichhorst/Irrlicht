@@ -345,3 +345,44 @@ func TestParseLine_TaskEstimateMarkerSurvivesTruncation(t *testing.T) {
 		t.Errorf("TaskEstimate = %+v, want total=5 completed=2", ev.TaskEstimate)
 	}
 }
+
+// hermes' todo tool takes a second argument, `merge` (tools/todo_tool.py):
+// merge=false (the default) REPLACES the whole list; merge=true updates
+// existing items BY ID and appends new ones, so the call carries only the
+// items that changed.
+//
+// Treating a merge call as a whole-list snapshot is destructive: the snapshot
+// is authoritative for PRUNING, so a one-item merge would delete every other
+// task. Found by recording scenario 2.3 against a live store — the observed
+// calls all carried merge absent/false, so the replace path was right, but
+// nothing stopped the merge path from corrupting the list.
+func TestParseLine_TodoMergeDoesNotPruneTheList(t *testing.T) {
+	p := &Parser{}
+	// Establish a three-item list the normal (replace) way.
+	first := p.ParseLine(map[string]interface{}{
+		keyRole: "assistant", keyFinish: "tool_calls", keyToolCalls: realTodoToolCallsJSON,
+	})
+	if first.TaskSnapshot == nil || len(*first.TaskSnapshot) != 3 {
+		t.Fatalf("precondition: replace call must snapshot 3 todos, got %v", first.TaskSnapshot)
+	}
+
+	// Now a merge call carrying ONLY the item that advanced.
+	mergeCall := `[{"id":"call_todo_2","type":"function","function":{"name":"todo",` +
+		`"arguments":"{\"todos\":[{\"id\":\"t3\",\"content\":\"Run the suite\",` +
+		`\"status\":\"completed\"}],\"merge\":true}"}}]`
+	ev := p.ParseLine(map[string]interface{}{
+		keyRole: "assistant", keyFinish: "tool_calls", keyToolCalls: mergeCall,
+	})
+	if ev == nil {
+		t.Fatal("expected an event")
+	}
+	// The update must still be reported...
+	if len(ev.TaskDeltas) == 0 {
+		t.Error("a merge call must still emit the delta for the item it carries")
+	}
+	// ...but it must NOT claim the list is now one item, or the other two are pruned.
+	if ev.TaskSnapshot != nil {
+		t.Errorf("a merge call must NOT emit a whole-list snapshot (it would prune the "+
+			"items it omits); got %d entries", len(*ev.TaskSnapshot))
+	}
+}

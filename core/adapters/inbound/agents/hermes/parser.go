@@ -113,7 +113,16 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 		ev.ToolUses = toolUses(calls)
 		// The todo call is reported as a tool use AND mined for the plan it
 		// carries: dropping the use would leave a tool open that never closes.
-		p.todos.Reconcile(todosFromCalls(calls), ev)
+		todos, merged := todosFromCalls(calls)
+		p.todos.Reconcile(todos, ev)
+		if merged {
+			// merge=true carries only the items that CHANGED, so the call is
+			// not a whole-list snapshot. TaskSnapshot is authoritative for
+			// pruning, so publishing a partial one would delete every task the
+			// call omits. Drop it and keep the Create/Update deltas, which are
+			// exactly what a merge means.
+			ev.TaskSnapshot = nil
+		}
 		if finish, _ := raw[keyFinish].(string); finishReasonEndsTurn(finish) {
 			ev.EventType = "turn_done"
 		}
@@ -220,8 +229,9 @@ func toolUses(calls []toolCall) []tailer.ToolUse {
 //
 // A read-mode call (no `todos` param) and unparseable arguments both yield
 // nil, which Reconcile treats as a no-op.
-func todosFromCalls(calls []toolCall) []tailer.Todo {
-	var todos []tailer.Todo
+// merged reports whether any decoded call used merge mode, in which case the
+// todos are a PARTIAL list and must not be treated as a whole-list snapshot.
+func todosFromCalls(calls []toolCall) (todos []tailer.Todo, merged bool) {
 	for _, c := range calls {
 		if c.Function.Name != todoToolName || c.Function.Arguments == "" {
 			continue
@@ -231,13 +241,19 @@ func todosFromCalls(calls []toolCall) []tailer.Todo {
 				Content string `json:"content"`
 				Status  string `json:"status"`
 			} `json:"todos"`
+			// merge defaults to false — the replace mode every observed call
+			// used. Absent means replace, matching todo_tool.py's signature.
+			Merge bool `json:"merge"`
 		}
 		if err := json.Unmarshal([]byte(c.Function.Arguments), &args); err != nil {
 			continue
+		}
+		if args.Merge {
+			merged = true
 		}
 		for _, t := range args.Todos {
 			todos = append(todos, tailer.Todo{Key: t.Content, Status: t.Status})
 		}
 	}
-	return todos
+	return todos, merged
 }
