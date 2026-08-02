@@ -109,12 +109,13 @@
       "setup": [
         "The driver launches `hermes chat` under tmux in a fresh per-run cwd under <staging>/cwd/ and polls for the 'Type your message or /help' banner before sending (the TUI takes seconds to load tools + skills; keystrokes sent early are swallowed silently)",
         "No session id is passed: hermes mints its own YYYYMMDD_HHMMSS_<hex6> id, and the row is INSERTed lazily at the first prompt. resolve_session_id binds the slot to the newest cli/tui row started AFTER this slot launched, so a leftover session in the shared store cannot be adopted",
-        "No auto-mode / permission step is needed: the recipe is 4 plain prompts with no tool calls, so nothing reaches an approval gate"
+        "No auto-mode / permission step is needed: the recipe is 4 plain prompts with no tool calls, so nothing reaches an approval gate",
+        "Every one of the four generations is deliberately WIDE (a 30-line count plus two sentences of prose) rather than the one-word \"Reply with exactly the word: alpha|beta|gamma|delta\" an earlier draft carried. The watcher polls every 2s with a 500ms debounce, so a ~1s turn can commit its user row and its assistant finish_reason=stop row inside a SINGLE scan — that turn's ready→working edge then never exists to be observed and its tN_start phase fails. With EIGHT such edges pinned, this cell is the one most exposed to that collapse. Widening the generation is the fix; weakening the spec is not. The four prompts stay DISTINCT (different ranges, different topics) so the turns remain individually identifiable in the store."
       ],
       "script": [
         {
           "type": "send",
-          "text": "Reply with exactly the word: alpha"
+          "text": "Without using any tools, count from 1 to 30, one number per line. Then, without using any tools, write two sentences explaining what addition is."
         },
         {
           "type": "wait_turn"
@@ -125,7 +126,7 @@
         },
         {
           "type": "send",
-          "text": "Reply with exactly the word: beta"
+          "text": "Without using any tools, count from 31 to 60, one number per line. Then, without using any tools, write two sentences explaining what subtraction is."
         },
         {
           "type": "wait_turn"
@@ -136,7 +137,7 @@
         },
         {
           "type": "send",
-          "text": "Reply with exactly the word: gamma"
+          "text": "Without using any tools, count from 61 to 90, one number per line. Then, without using any tools, write two sentences explaining what multiplication is."
         },
         {
           "type": "wait_turn"
@@ -147,7 +148,7 @@
         },
         {
           "type": "send",
-          "text": "Reply with exactly the word: delta"
+          "text": "Without using any tools, count from 91 to 120, one number per line. Then, without using any tools, write two sentences explaining what division is."
         },
         {
           "type": "wait_turn"
