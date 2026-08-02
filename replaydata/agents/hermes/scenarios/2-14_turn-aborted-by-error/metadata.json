@@ -1,0 +1,155 @@
+{
+  "scenario_id": "turn-aborted-by-error",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+fe95020",
+    "confidence": 0.7,
+    "notes": "Hermes' turn boundary is a single equality — Watcher.turnIsDone returns true ONLY for role='assistant' AND finish_reason='stop' — so every ABNORMAL turn end is discarded and the session sticks in `working` forever. Hermes' own vocabulary already carries the abnormal values ('length', 'content_filter') and persists them verbatim into messages.finish_reason, so a trace EXISTS and the daemon mis-handles it: daemon=bug, record known_failing. (The scenario's literally-named trigger — network/5xx/timeout — is additionally Bucket B for hermes: nothing at all is written, see caveats.)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-aborted-by-error",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.7,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\nRoute: record-known-failing — drive the abort, record it sticking in `working`, file the adapter issue, keep the spec asserting the CORRECT arc.\n\n## Scenario\n\nturn-aborted-by-error asserts the user-observable arc `ready → working → ready`: the model call ends abnormally with NO normal turn-end signal, the agent gives up, and the daemon must settle the still-`working` session back to `ready` rather than let it stick. It is explicitly NOT a user-driven cancel (that is `user-esc-interrupt`).\n\n## agent_supports: yes\n\nHermes 0.19.0 has an elaborate abnormal-turn-end apparatus — this is not inferred, it is the bulk of `agent/conversation_loop.py`. A turn can end without a normal completion via, at minimum: max-retries-exhausted on a provider error (`conversation_loop.py:4959-4998`, returns `completed:False, failed:True`), invalid-API-response exhaustion (:2317-2325), content-policy refusal (:2507 → `_content_policy_blocked_result`, :703-724), output-length exhaustion after 4 continuation attempts (:2709-2718, `partial:True, error:\"Response remained truncated after 4 continuation attempts\"`), truncated-tool-call exhaustion (:2762-2789), context-length-exceeded compression exhaustion (:4339-4516) and 413 payload-too-large (:4197-4274). The typed finish-reason vocabulary is declared at `agent/transports/types.py:106` — `\"stop\", \"tool_calls\", \"length\", \"content_filter\"` — plus the internal `\"incomplete\"` used on the codex_responses path (:2384). So the feature exists in force.\n\n## daemon_capability: bug\n\n### The defect (one equality)\n\n`core/adapters/inbound/agents/hermes/watcher.go:426-436`:\n\n```go\nfunc (w *Watcher) turnIsDone(db *sql.DB, sessionID string) bool {\n\t… SELECT role, finish_reason FROM messages WHERE session_id = ? AND active = 1\n\t   ORDER BY timestamp DESC, id DESC LIMIT 1 …\n\treturn role.String == \"assistant\" && finish.String == \"stop\"\n}\n```\n\nand the mirror in `parser.go:93-95` (`if finish == \"stop\" { ev.EventType = \"turn_done\" }`). That equality is the adapter's ONLY turn-end signal (`justEnded` on `ended_at` is the other terminal, and it fires only at session close). Consequences:\n\n- Newest row `assistant`/`finish_reason='length'` → `Terminal=false`, parser emits `assistant_message`, not `turn_done`.\n- Newest row `assistant`/`finish_reason='content_filter'` → same.\n- Newest row `assistant`/`finish_reason` NULL (the `close_interrupted_tool_sequence` and runtime-context-error epilogues, `conversation_loop.py:2780`, :1584, :3097) → same.\n\nThe session therefore stays `working` for the rest of the process's life. Nothing else rescues it: the daemon has no inactivity sweep on `working` (PR #106 removed the stale-tool timer — this is the scenario's own stated Bucket-B premise), the hermes adapter declares no IdleFlush seam (deliberately — `parser.go:23-25` states the explicit boundary is why none is needed), and the 5s working-refresh poll only re-derives state from the same metrics, which still say `assistant_message`.\n\n### Why this is `bug` and not `incapable`: the trace EXISTS\n\nHermes persists `finish_reason` verbatim, per assistant message, on the abnormal path:\n\n1. On a `length` finish the loop appends the truncated assistant turn to the live message list BEFORE deciding whether to continue: `interim_msg = agent._build_assistant_message(assistant_message, finish_reason); messages.append(interim_msg)` (`conversation_loop.py:2663-2665`).\n2. `build_assistant_message` puts the value on the dict: `msg = {\"role\": \"assistant\", \"content\": …, \"reasoning\": …, \"finish_reason\": finish_reason}` (`agent/chat_completion_helpers.py:1315-1320`).\n3. `_flush_messages_to_session_db_unlocked` writes every not-yet-marked message as a row, taking `msg.get(\"finish_reason\")` straight into the `messages.finish_reason` column (`run_agent.py:1877-1990`, `hermes_state.py:6651-6665`).\n4. After the 4th continuation the `< 4` guard fails and the turn returns `partial` (`conversation_loop.py:2709-2718`) — so the LAST row the turn leaves behind is an `assistant` row carrying `finish_reason='length'`, and the turn is over.\n\nSo the store holds an explicit, machine-readable \"this turn ended abnormally\" marker and the adapter throws it away. That is a spec-required observable the daemon mis-handles — the definition of `bug`, with a named owner (irrlicht's hermes adapter) and a one-line fix shape: treat a newest `assistant` row whose `finish_reason` is anything other than `tool_calls` as terminal (or enumerate `stop|length|content_filter|incomplete`), exactly as the sibling opencode adapter already does (its terminal predicate accepts `stop/interrupted/length/error/content-filter`, and its watcher additionally treats a message-level `error` as terminal — `opencode/watcher.go` `isErrorMessage`, `TestScanSessions_ErrorMessageTerminal`).\n\n### What is genuinely NOT observable (documented, not the cell's verdict)\n\nThe scenario's literally-named trigger — network error / provider 5xx / timeout — is Bucket B for hermes, the same shape mistral-vibe was frozen on. On max-retries exhaustion the error text is built only into the RETURNED dict; it is never appended to `messages` (`conversation_loop.py:4959-4998` — `_persist_session(messages, conversation_history)` runs on the unchanged list), and the CLI renders it without persisting (`cli.py:12971-12976` sets `response = f\"Error: {error_detail}\"` for display only; the REPL's own post-turn path never calls `add_message`). `ended_at` stays NULL (the REPL continues), so `justEnded` never fires either. Net: message_count does not even grow, the watcher emits no further activity, and the session is invisible-stuck. That bucket is architecturally unobservable for hermes and is recorded as a caveat — it does not change the cell's verdict, because a DIFFERENT in-scope trigger for this same scenario does leave a trace, and the sibling opencode cell for this exact scenario is recorded off precisely that trigger (context/output overflow → `reason=length`).\n\n## driver_capability: ready\n\nThe recipe needs `send`, `wait_turn`, `sleep`. `replaydata/agents/hermes/driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"` — all three genuinely ported. No new primitive.\n\nOne real driver constraint shapes the recipe rather than gapping it: `wait_turn` polls `SELECT COUNT(*) … role='assistant' AND finish_reason='stop'` (driver-interactive.sh:258-274), so it can NEVER see the aborted turn, and `resolve_session_id` — the only writer of `SES_UUID`/`SES_TRANSCRIPT`, and hence of the staging contract's `session.uuid` — is called ONLY from inside `wait_turn` (:240-249, :262). A `send`+`sleep`-only recipe would therefore emit an EMPTY session contract and the recording would be unverifiable. The recipe routes around both by opening with one trivial baseline turn that DOES reach `finish_reason='stop'`: that resolves the session id, banks `EXPECTED_TURNS_SEEN=1`, and only then does the second send trigger the abort, covered by a trailing `sleep` instead of a `wait_turn` that would spin to the deadline and set `EXIT_REASON=timeout`.\n\n## The trigger (deterministic, no mock, no proxy)\n\nCap the model's output so every long answer terminates with `finish_reason='length'`. Hermes exposes this as a first-class knob at two levels: the documented global `model.max_tokens` in config.yaml (resolved onto `agent.max_tokens` at `agent/agent_init.py:1996-2019`, forwarded at :2386) and the env override `HERMES_MAX_TOKENS` read by the CLI at `cli.py:4206-4217`. Setting it small makes the abort deterministic and nearly free: 1 + 4 continuation calls with a tiny output cap each.\n\nThe recipe is robust to which sub-path the truncation takes. If the truncated assistant chunk carries no partial tool call, the length-continuation path runs (:2657-2718) and the last row is `assistant`/`finish_reason='length'`. If it does carry one, the truncated-tool-call path runs (:2727-2789) and the last row is the `close_interrupted_tool_sequence` epilogue with a NULL finish_reason. Either way the newest active row is an `assistant` row that is not `stop`, the turn is over, and the daemon holds the session in `working` — which is exactly the observable this cell records.\n\n## Session model\n\nHermes carries a Process matcher (`processCmdRegex`), so processlifecycle mints a transient `proc-<PID>` presession at launch while the real `sessions` row is INSERTed only on the first user message (~2s later). `session_birth` is therefore anchored to `start` UNPINNED, the real session identity is established at `baseline_turn_start`, and every later phase chains off it via `same_session_as` — the same shape as the committed hermes 2.2 cell and the opencode ProcessOwnedStore sibling.",
+      "caveats": [
+        "PROVISIONAL on emission, settled only by recording: the live store this column was built from (/Users/ingo/hermes-local/.hermes/state.db, 116 message rows) contains ZERO rows with finish_reason other than 'stop'/'tool_calls'/NULL. That hermes writes a 'length' row is read off the code path (conversation_loop.py:2663-2665 → chat_completion_helpers.py:1315-1320 → hermes_state.py:6651-6665), not observed. If record finds the abort leaves NO row at all under the recording home's provider, the honest correction is daemon=incapable (Bucket B) and route frozen — file the observability_correction.",
+        "Provider-dependent finish_reason on the codex_responses path: the maintainer's default provider is openai-codex, where an output-exhausted response is mapped to finish_reason='incomplete', not 'length' (conversation_loop.py:2363-2386), and is handled by a separate Codex continuation path. 'incomplete' is likewise != 'stop', so the daemon-side observable is unchanged, but the exact persisted value and the number of continuation rounds differ. Prefer a chat_completions provider in the recording home for the canonical 'length' shape; record should note which value actually landed.",
+        "The baseline turn depends on the output cap being large enough for a one-word reply INCLUDING reasoning tokens. The default config sets agent.reasoning_effort: medium and reasoning tokens count against the output cap, so a cap that is too tight truncates turn 1 as well — wait_turn then never sees a 'stop' row, spins to the deadline and aborts the run with EXIT_REASON=timeout. Mitigation, in order: raise HERMES_MAX_TOKENS (256 is the recipe's starting point), or set agent.reasoning_effort low/minimal in the recording home. If neither holds, the fallback is a genuine driver port — extend wait_turn to count terminal finish_reasons (stop|length|content_filter|incomplete) the way opencode's oc_turn_total does — which would make this cell driver=gap:aborted-turn-detection instead.",
+        "The final ready is bounded on purpose. Tearing the tmux session down at the end of the run can close the hermes session (end_reason 'cli_close' exists in the live store), which sets ended_at and fires the watcher's justEnded terminal — a ready that arrives at teardown, NOT a settle after the abort. The turn_aborted_settle phase therefore carries max_delay_ms so a teardown-induced ready cannot satisfy it and mask the bug.",
+        "A waiting misfire is possible instead of the asserted ready-after-abort: the truncated assistant text is stored and folded into PendingWaitingCue/LastAssistantText (metrics.go apply()), so a chunk cut mid-sentence on a question could trip ProseIndicatesWaiting and route the stuck session to `waiting` rather than `working`. Either way the scenario's assertion fails (the session does not settle to ready), so the cell stays known_failing; record should report which of the two the recording shows.",
+        "`model` is deliberately NOT pinned in observations — the recording home's config.yaml is provisioned at record time (same reasoning as the committed hermes 2.2 cell). cost_nonzero additionally depends on that model being priced by core/pkg/capacity/aliases.go; gpt-5.6-luna is priced, google/gemma-4-26b-a4b is not. With a tiny output cap the cost is dominated by input tokens, which stay large (~16k/call), so it prices non-zero for a priced model.",
+        "`sessions.cwd` is empty for source='cli' rows and `hermes chat` records source='cli', so the project binding comes from the live-process CWD fallback, which returns \"\" when more than one hermes SESSION process is alive. Do not run a second hermes session concurrently with the recording (a running gateway is fine — isServiceArgv excludes it)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "turnIsDone (lines 426-436): `return role.String == \"assistant\" && finish.String == \"stop\"` over the newest active message — the adapter's ONLY turn-end signal besides justEnded on ended_at. Any abnormal finish_reason yields Terminal=false, so reconcile() emits a non-terminal activity and the session stays working."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go",
+          "note": "Lines 93-95: role=assistant is rewritten to turn_done ONLY when finish_reason == \"stop\"; every other value stays assistant_message. Lines 23-25 state that the explicit boundary is why this adapter deliberately has no IdleFlush seam — which is exactly why an abnormal end has nothing to fall back on."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/conversation_loop.py",
+          "note": "Lines 2663-2665: on a length finish the truncated assistant turn is appended to `messages` WITH its finish_reason before the continuation decision; lines 2709-2718: after the 4th continuation the turn returns partial — so the last persisted row is assistant/finish_reason='length'. Lines 4959-4998 (max-retries exhausted) and 2317-2325 (invalid response): the error text goes only into the RETURNED dict, `_persist_session` runs on the unchanged list, nothing new is written. Lines 2363-2386: the codex_responses path maps output exhaustion to 'incomplete'."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/chat_completion_helpers.py",
+          "note": "build_assistant_message (1245, dict built at 1315-1320) stores finish_reason on the persisted assistant message dict — the carrier that puts 'length'/'content_filter' into the store."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/run_agent.py",
+          "note": "_persist_session (1772-1805) → _flush_messages_to_session_db_unlocked (1877-1990): append-only flush of messages not yet marked _DB_PERSISTED_MARKER. It writes exactly what is IN the list — which is why the truncation epilogue lands in state.db and the provider-error text does not."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_state.py",
+          "note": "Lines 6651-6665: the INSERT into messages takes msg.get(\"finish_reason\") straight into the finish_reason column; schema at 1193. Confirms the abnormal value is persisted verbatim, not normalized to 'stop'."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/transports/types.py",
+          "note": "Line 106: the declared finish_reason vocabulary — \"stop\", \"tool_calls\", \"length\", \"content_filter\". The adapter recognizes exactly one of the four as terminal."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py",
+          "note": "Lines 4206-4217: HERMES_MAX_TOKENS / model.max_tokens resolve the CLI's output cap (the deterministic trigger lever). Lines 12971-12976: on a failed/partial turn the REPL only builds a display string `Error: <detail>` — no store write, which is what makes the provider-error bucket invisible."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/agent_init.py",
+          "note": "Lines 1996-2019 resolve model.max_tokens from config.yaml onto agent.max_tokens; line 2386 forwards it into the API call. Confirms the cap is a supported, documented knob rather than a hack."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Live store, hermes 0.19.0: SELECT finish_reason, COUNT(*) FROM messages GROUP BY finish_reason → NULL 59, stop 29, tool_calls 29. No abnormal finish_reason has been observed in the wild yet — the basis for this cell's PROVISIONAL caveat and its 0.7 confidence. sessions.end_reason values present: agent_close 17, cli_close 4, ws_orphan_reap 3."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\"; wait_turn (258-274) counts ONLY role='assistant' AND finish_reason='stop', and resolve_session_id (240-249) — the only writer of the staging contract's session.uuid — is called exclusively from inside wait_turn (262). Hence the two-turn recipe shape."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-14_turn-aborted-by-error/metadata.json",
+          "note": "Sibling ProcessOwnedStore cell for this same scenario, recorded off a context/output-overflow trigger (reason=length) rather than a network error — the precedent that a truncation-family abort is in scope for 2.14. Its daemon pillar is full because the opencode watcher's terminal predicate accepts stop/interrupted/length/error/content-filter AND treats a message-level error as terminal (isErrorMessage, TestScanSessions_ErrorMessageTerminal). The hermes adapter has no equivalent — that delta is this cell's bug."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/2-14_turn-aborted-by-error/metadata.json",
+          "note": "The incapable precedent for this scenario: vibe appends the assistant message to the conversation only AFTER the stream drains, so a mid-stream provider failure persists nothing. Hermes' max-retries path has the identical shape — which is why the provider-error bucket is carried as a caveat here rather than being claimed observable."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "Checked for a rescue path: there is no inactivity sweep that settles a `working` session. ForceReadyToWorkingReason drives ready→working; the 5s working-refresh poll only re-derives state from ComputeMetrics, which keeps reporting LastEventType=assistant_message for the aborted turn. Consistent with the scenario's own premise that PR #106 removed the stale-tool timer."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH (Python console script shim into <HERMES_HOME>/hermes-agent/venv/bin/hermes)",
+        "HERMES_HOME exported to the recording home, with config.yaml carrying model.default + model.provider and credentials in .env/auth.json — so the run writes to an isolated state.db instead of the maintainer's real store",
+        "TRIGGER (deterministic, no mock/proxy/remote provider): export HERMES_MAX_TOKENS=256 for the run — or set model.max_tokens: 256 in the recording home's config.yaml. The CLI reads the env var first (cli.py:4206-4217) and it resolves onto agent.max_tokens (agent_init.py:1996-2019, forwarded at :2386), so every response is capped. A one-word baseline reply fits; the second prompt's long answer does not, and terminates with finish_reason='length' after hermes' 4 continuation attempts give up.",
+        "PREFER a chat_completions provider in the recording home. On the openai-codex provider (api_mode codex_responses) output exhaustion maps to finish_reason='incomplete' via a separate continuation path (conversation_loop.py:2363-2386) — still non-'stop', so the observable holds, but the persisted value differs from the canonical 'length'.",
+        "agent.reasoning_effort must not be so high that a one-word baseline reply exhausts the cap — reasoning tokens count against it. Lower it in the recording home if the baseline turn truncates.",
+        "sqlite3 on PATH — hermes persists no transcript file, so the driver reads the session id and turn completion straight out of state.db (the driver hard-fails without it)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no second hermes SESSION process running concurrently — source='cli' rows carry no stored cwd and the live-process CWD fallback returns nothing when more than one session process is alive (a running gateway is fine; isServiceArgv excludes it)"
+      ],
+      "setup": [
+        "The driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for 'Type your message or /help' before typing — the TUI loads tools and skills for several seconds and swallows keystrokes sent before it is ready",
+        "WHY the recipe opens with a throwaway baseline turn: the driver's wait_turn counts only assistant rows with finish_reason='stop', and resolve_session_id — the ONLY writer of the staging contract's session.uuid — runs exclusively inside wait_turn. A send+sleep-only recipe would emit an empty contract and the recording could not be verified. The baseline turn resolves the session id and banks EXPECTED_TURNS_SEEN=1 before the abort is triggered.",
+        "WHY the aborted turn is followed by `sleep` and NOT `wait_turn`: no 'stop' row will ever be written for it, so wait_turn would spin to the deadline, set EXIT_REASON=timeout and break out of the step loop before the contract is emitted.",
+        "The trailing sleep is sized for 1 + 4 capped API round-trips plus several of the watcher's 2s poll ticks, so the recording contains the daemon's full (non-)response to the abort rather than cutting off mid-retry.",
+        "The prompt tells hermes not to use tools: with a tight output cap a truncated chunk can carry a partial tool call, which routes to the truncated-tool-call path instead of the length-continuation path. Both leave a non-'stop' newest assistant row, so the cell records either way — this just keeps the common case canonical.",
+        "The session row is INSERTed on the first user message (~2s after it), not at launch, so the driver resolves the session id lazily after the first send and binds only to a row whose started_at is after this slot's launch"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Write a 3000-word essay on the history of the printing press. Do not use any tools; answer directly in prose."
+        },
+        {
+          "type": "sleep",
+          "seconds": 120
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the hermes session (id shaped YYYYMMDD_HHMMSS_xxxxxx) born ready; a transient proc-<PID> presession may also appear and is not the session the arc lands on",
+        "events.jsonl shows the baseline turn's ready→working→ready pair on that session id",
+        "events.jsonl shows a second ready→working for that session when the essay prompt lands",
+        "KNOWN FAILING: events.jsonl shows NO working→ready after the abort within 30s — the session sticks in working until teardown. When the adapter bug is fixed this flips to a settle and the known_failing flag comes off.",
+        "state.db confirms the abort left a trace: the newest active message row for that session is role='assistant' with finish_reason NOT IN ('stop') — 'length' on a chat_completions provider, 'incomplete' on codex_responses, or NULL if the truncated-tool-call epilogue path ran. Record which value landed.",
+        "state.db shows ended_at still NULL for that session at the moment the abort completes (the REPL is still alive) — proving the stuck state is not a session-close artifact",
+        "the session's websocket metrics show non-zero cumulative input+output tokens and a non-zero estimated cost when the configured model is priced by irrlicht's alias table"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}
