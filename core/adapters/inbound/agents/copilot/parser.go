@@ -28,7 +28,11 @@ const (
 	evSubagentDone     = "subagent.completed"
 	evUserRequestedRun = "tool.user_requested"
 	evCompactionStart  = "session.compaction_start"
-	evCompactionDone   = "session.compaction_complete"
+	// autoModelPlaceholder is what session.model_change reports while the
+	// hydra router has not yet chosen; the real model arrives on
+	// session.auto_mode_resolved.
+	autoModelPlaceholder = "auto"
+	evCompactionDone     = "session.compaction_complete"
 )
 
 // Parser implements tailer.TranscriptParser for GitHub Copilot CLI
@@ -190,7 +194,12 @@ func (p *Parser) parseSessionStart(data map[string]any, ev *tailer.ParsedEvent) 
 // arrive as ordinary events, so a mid-session /model switch is picked up the
 // same way the initial selection is.
 func (p *Parser) setModel(model string, ev *tailer.ParsedEvent) {
-	if model == "" {
+	// "auto" is the router's placeholder, not a model: session.model_change
+	// reports it before session.auto_mode_resolved names the concrete choice.
+	// Accepting it surfaces "auto" as the session's model in the UI for the
+	// gap between the two events, and drives a pricing lookup that can only
+	// miss ("no pricing for model \"auto\"" in a real recording).
+	if model == "" || model == autoModelPlaceholder {
 		return
 	}
 	p.model = model

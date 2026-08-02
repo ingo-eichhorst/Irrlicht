@@ -146,3 +146,29 @@ func TestCompactionHoldsSessionWorking(t *testing.T) {
 		})
 	}
 }
+
+// TestAutoPlaceholderIsNotAModel pins the "auto" placeholder fix. Copilot's
+// session.model_change reports the literal "auto" before
+// session.auto_mode_resolved names the concrete model. Accepting it surfaces
+// "auto" as the session's model in the UI for the gap between the two events,
+// and drives a pricing lookup that can only miss — a real recording logged
+// `no pricing for model "auto"`.
+func TestAutoPlaceholderIsNotAModel(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]any{
+		"type": "session.model_change",
+		"data": map[string]any{"newModel": "auto"},
+	})
+	if ev.ModelName != "" {
+		t.Errorf("ModelName = %q after model_change:auto, want empty — "+
+			"\"auto\" is the router's placeholder, not a model", ev.ModelName)
+	}
+
+	ev = p.ParseLine(map[string]any{
+		"type": "session.auto_mode_resolved",
+		"data": map[string]any{"chosenModel": "gpt-5-mini"},
+	})
+	if ev.ModelName != "gpt-5-mini" {
+		t.Errorf("ModelName = %q after auto_mode_resolved, want gpt-5-mini", ev.ModelName)
+	}
+}

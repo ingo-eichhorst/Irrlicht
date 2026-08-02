@@ -283,7 +283,10 @@ resolve_transcript() {
 turn_count() {
   local t="${TRANSCRIPT:-}"
   [[ -n "$t" && -f "$t" ]] || { echo 0; return; }
-  grep -c '"type":"assistant\.turn_end"' "$t" 2>/dev/null || echo 0
+  # grep -c PRINTS 0 and EXITS 1 when there is no match, so a `|| echo 0`
+  # fallback emitted two lines ("0\n0") and every (( )) comparison downstream
+  # died with a syntax error. Count with awk instead: one line, always.
+  awk '/"type":"assistant\.turn_end"/ { n++ } END { print n+0 }' "$t"
 }
 
 wait_turn() {
