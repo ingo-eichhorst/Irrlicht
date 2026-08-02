@@ -92,9 +92,9 @@
 
       <p>Irrlicht works out of the box, so it is entirely possible to run it for months on defaults. These are the things people tend to discover by accident. Each tip says where the control lives; where a full walkthrough already exists elsewhere in these docs, the tip links to it rather than repeating it.</p>
 
-      <div class="callout">
+      <div class="callout callout-info">
         <strong>Where "Settings" is</strong>
-        Click the flame in the menu bar to open the session list, then the gear icon. Everything below labelled <em>Settings &rarr; …</em> lives in that panel. The web dashboard at <code>http://127.0.0.1:7837</code> has its own settings panel with a subset of the same controls &mdash; each tip notes which surfaces it applies to.
+        Click the flame in the menu bar to open the session list, then the <em>Settings…</em> button in the row along the bottom. Everything below labelled <em>Settings &rarr; …</em> lives in that panel. The web dashboard at <code>http://127.0.0.1:7837</code> has its own settings panel &mdash; the ⚙ button in its header &mdash; with a subset of the same controls, so each tip notes which surfaces it applies to.
       </div>
 
       <!-- ── Menu bar visibility ── -->
@@ -127,13 +127,13 @@
       <!-- ── Quota forecast ── -->
       <h2>Watch Your Subscription Burn Rate</h2>
 
-      <p><strong>macOS and web.</strong> Turn on <strong>Settings &rarr; Show Quota Forecast</strong> and the app version in the popover header is replaced by a live burn-rate forecast against your Pro/Max or ChatGPT subscription cap. It only appears while a subscription session is actually running. Turning it on also reveals a <strong>Provider</strong> group where you set the mode per provider (Anthropic, OpenAI) &mdash; useful if only one of your accounts is a subscription.</p>
+      <p><strong>macOS and web.</strong> <strong>Settings &rarr; Show Quota Forecast</strong> puts a live burn-rate forecast against your plan's cap in the popover header, in place of the app name (on the web dashboard, in place of the version chip). It is <em>on by default</em> on both surfaces, and the chips appear as soon as a session reports quota data &mdash; so if your header only ever shows the app name, no monitored session is reporting any.</p>
 
-      <p>On the web dashboard the same toggle is called <strong>"Show quota forecast in header"</strong>, under <strong>Provider quota</strong>.</p>
+      <p>What is worth changing is the <strong>Provider</strong> group underneath it, where you set the mode per provider (Anthropic, OpenAI): pin the one that is a subscription rather than leaving both on Auto, and the forecast stops guessing. On the web dashboard the toggle is called <strong>"Show quota forecast in header"</strong>, under <strong>Provider quota</strong>.</p>
 
       <div class="callout callout-tip">
         <strong>Also worth knowing</strong>
-        The <em>Quota</em> tab in the History window shows the same per-provider rate-limit forecast in full, and is always available &mdash; it is <em>not</em> gated by this toggle. The toggle only controls the compact header readout.
+        On macOS the History panel has a <em>Quota</em> tab showing the same per-provider rate-limit forecast in full, and it is always available &mdash; it is <em>not</em> gated by this toggle, which only controls the compact header readout. The web dashboard has no equivalent view.
       </div>
 
       <!-- ── Cost display ── -->
@@ -141,7 +141,7 @@
 
       <p><strong>macOS and web.</strong> <strong>Settings &rarr; Show Estimated Cost</strong> puts a running USD estimate on each session and each project group. Estimates are approximate &mdash; they are derived from reported token counts and published prices, not from your provider invoice.</p>
 
-      <p>On the web dashboard the toggle is called <strong>"Show cost"</strong>, and it has an extra trick: <strong>click the cost figure in a row</strong> to switch that display to an estimated CO<sub>2</sub> footprint instead. Clicking a group header's cost cycles the time frame it is summed over. See <a href="co2-methodology.html">CO2 Methodology</a> for how the footprint is derived.</p>
+      <p>On the web dashboard the toggle is called <strong>"Show cost"</strong>, and the figures themselves are buttons: <strong>click any row's cost</strong> and every row switches to an estimated CO<sub>2</sub> footprint instead; <strong>click any group header's cost</strong> and every group cycles the time frame it is summed over (day &rarr; week &rarr; month &rarr; year). Both are global and both are remembered across reloads. See <a href="co2-methodology.html">CO2 Methodology</a> for how the footprint is derived.</p>
 
       <!-- ── Notifications ── -->
       <h2>Let Irrlicht Tell You, So You Can Look Away</h2>
@@ -154,7 +154,7 @@
         <li><strong>Context pressure alert</strong> &mdash; the session is approaching its context limit.</li>
       </ul>
 
-      <p>Each event gets its own sound: one of the built-ins (Ping, Chime, Funk, Whoosh, Sosumi), <strong>None</strong>, a <strong>Custom audio file…</strong>, or &mdash; the part people miss &mdash; <strong>Speak aloud</strong>, which reads the message out with the system voice (a premium voice can be picked instead of the default). Spoken alerts mean you can leave the screen entirely and still know which agent needs you. There is a ▶ preview button next to each picker so you can audition a sound without waiting for the event.</p>
+      <p>Each event gets its own sound from a single picker: one of the built-ins (Ping, Chime, Funk, Whoosh, Sosumi), <strong>None</strong>, a <strong>Custom audio file…</strong>, or &mdash; the part people miss &mdash; one of the three spoken options, <strong>Speak aloud (Default)</strong>, <strong>Speak aloud (Zoe, Premium)</strong> and <strong>Speak aloud (Jamie, Premium)</strong>, which read the message out instead of chiming. Spoken alerts mean you can leave the screen entirely and still know which agent needs you. There is a ▶ preview button next to each picker so you can audition a sound without waiting for the event.</p>
 
       <p><strong>Context pressure alert</strong> adds an <strong>Alert at</strong> threshold you set in either <strong>%</strong> or raw <strong>tokens</strong> &mdash; so you can be warned at 80% and still have room to wrap up or compact deliberately, instead of being surprised.</p>
 
@@ -165,31 +165,31 @@
         </picture>
       </figure>
 
-      <p>The web dashboard has the three notification toggles too, but no per-event sounds and no spoken alerts &mdash; those are macOS-only. If macOS never asks for notification permission, or you denied it once, see <a href="macos-setup.html">macOS Setup &rarr; Notification Permissions</a>.</p>
+      <p>The web dashboard has the three notification toggles too, but no per-event sounds and no spoken alerts &mdash; those are macOS-only. If macOS never asks for notification permission, or you denied it once, see <a href="macos-setup.html#notification-permissions">macOS Setup &rarr; Notification Permissions</a>.</p>
 
       <!-- ── Click to jump ── -->
       <h2>Click a Session to Jump Straight to It</h2>
 
       <p><strong>macOS.</strong> Session rows in the popover are not just readouts &mdash; clicking one brings the terminal or editor window that owns that session to the front. With several agents running across several windows, this replaces the entire "which window was that in" hunt.</p>
 
-      <p>It needs the macOS <strong>Accessibility</strong> permission granted once (<a href="macos-setup.html">macOS Setup &rarr; Accessibility Permission</a>); without it, focusing works for some terminals and silently fails for others. If you use Kitty, two lines in <code>kitty.conf</code> let Irrlicht land on the exact <em>tab</em> rather than just the window &mdash; see <a href="macos-setup.html#kitty">Kitty Terminal &mdash; Precise Tab Focus</a>.</p>
+      <p>It needs the macOS <strong>Accessibility</strong> permission granted once (<a href="macos-setup.html#accessibility-permission">macOS Setup &rarr; Accessibility Permission (Window Focus)</a>); without it, focusing works for some terminals and silently fails for others. If you use Kitty, two lines in <code>kitty.conf</code> let Irrlicht land on the exact <em>tab</em> rather than just the window &mdash; see <a href="macos-setup.html#kitty">Kitty Terminal &mdash; Precise Tab Focus</a>.</p>
 
-      <div class="callout">
+      <div class="callout callout-info">
         <strong>macOS only</strong>
-        Click-to-jump has no web equivalent &mdash; a browser tab cannot raise another application's window. The web dashboard's row clicks toggle cost display and group collapse instead.
+        Click-to-jump has no web equivalent &mdash; a browser tab cannot raise another application's window. On the web dashboard, clicking a row does nothing; it is the cost figures and group headers that are clickable.
       </div>
 
       <!-- ── History ── -->
       <h2>Dig Into Usage History &mdash; and Export It</h2>
 
-      <p><strong>macOS and web.</strong> The History window's <strong>Usage</strong> tab is a full analytics surface, not just a chart. Three pickers drive it: <strong>Range</strong> (the time window), <strong>Chart</strong> (cost, tokens, CO<sub>2</sub>, and more), and <strong>Group</strong> &mdash; project, branch, provider, model, session, or token type.</p>
+      <p><strong>macOS and web.</strong> On macOS, the History panel's <strong>Usage</strong> tab is a full analytics surface, not just a chart. Three compact pickers along the top drive it: a time range, the metric to chart (cost, tokens, CO<sub>2</sub>, and more), and what to group by &mdash; project, branch, provider, model, session, or token type. They carry no labels on macOS and the group names are abbreviated (<code>Proj</code>, <code>Branch</code>, <code>Prov</code>, <code>Model</code>, <code>Sess</code>, <code>Type</code>), which is why they are easy to overlook; the web dashboard spells the same three out as <strong>Range</strong>, <strong>Chart</strong> and <strong>Group</strong>.</p>
 
       <p>Click a segment to drill into it: project &rarr; branch &rarr; session answers "what did this feature actually cost me", and provider &rarr; model &rarr; session answers "which model is eating the budget". <strong>Export CSV</strong> and <strong>Export JSON</strong> buttons sit under the chart, so any view you can build you can also hand to a spreadsheet or a script.</p>
 
       <figure style="margin: 0.5rem 0 1rem; max-width: 420px;">
         <picture>
           <source srcset="../assets/releases/v0.5.4/history-analytics.webp" type="image/webp">
-          <img src="../assets/releases/v0.5.4/history-analytics.png" alt="The History window's Usage tab: a stacked cumulative cost chart broken down by project with a dashed projection, a month-to-date total of $18.35 with a projected $20.64, a per-project legend, and Export CSV and Export JSON buttons." style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
+          <img src="../assets/releases/v0.5.4/history-analytics.png" alt="The History panel's Usage tab: a stacked cumulative cost chart broken down by project with a dashed projection, a month-to-date total of $18.35 with a projected $20.64, a per-project legend, and Export CSV and Export JSON buttons." style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
         </picture>
       </figure>
 
@@ -224,9 +224,9 @@
       <!-- ── Scripting ── -->
       <h2>Script It</h2>
 
-      <p><strong>Any platform.</strong> Everything the UIs show comes from the daemon's HTTP API on <code>http://127.0.0.1:7837</code>, and it is yours to query. <code>irrlicht-ls</code> prints the same hierarchical session view from the shell (handy in a status line, a tmux bar, or a cron check), and <code>irrlicht-focus &lt;sessionID&gt;</code> raises a session's window from a script or a hotkey.</p>
+      <p>Everything the UIs show comes from the daemon's HTTP API on <code>http://127.0.0.1:7837</code>, and it is yours to query. <code>irrlicht-ls</code> prints the same hierarchical session view from the shell &mdash; handy in a status line, a tmux bar, or a cron check &mdash; and works anywhere the daemon does. <code>irrlicht-focus &lt;sessionID&gt;</code> raises a session's window from a script or a hotkey; it asks the daemon to broadcast the request, and the macOS app is what actually performs the raise, so it is a no-op without that app running.</p>
 
-      <p>If <code>irrlicht-ls</code> is not on your <code>PATH</code> &mdash; DMG installs do not symlink it &mdash; use <strong>Settings &rarr; Install Command-Line Tool</strong>. See <a href="cli-tools.html">CLI Tools</a> for every binary and <a href="api-reference.html">API Reference</a> for the endpoints behind them.</p>
+      <p>If <code>irrlicht-ls</code> is not on your <code>PATH</code> &mdash; DMG installs do not symlink it &mdash; use <strong>Settings &rarr; Advanced Settings &rarr; Command-Line Tool &rarr; Install Command-Line Tool</strong> (the button only appears while it is not installed). See <a href="cli-tools.html">CLI Tools</a> for every binary and <a href="api-reference.html">API Reference</a> for the endpoints behind them.</p>
 
       <!-- ── Bottom nav ── -->
       <nav class="docs-nav-bottom" aria-label="Previous and next page">
