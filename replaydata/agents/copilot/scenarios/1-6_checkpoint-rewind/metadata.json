@@ -1,0 +1,183 @@
+{
+  "scenario_id": "checkpoint-rewind",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:rewind",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+7894002.dirty",
+    "confidence": 0.65,
+    "notes": "agent_supports: yes (/undo, alias /rewind — 'Rewind the last turn and revert file changes'); daemon_capability: full (rewind is IN PLACE on the SAME session id — sessionTruncateEventsBeforeEventId, no clearHistory/no new session dir — so the post-rewind arc lands on the original row); driver_capability: gap:rewind (no step re-baselines the completed-turn count after a truncating rewind, so the post-rewind wait_turn would hang)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "checkpoint-rewind",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:rewind",
+      "confidence": 0.65,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full (PROVISIONAL — see \"What record must settle\")\ndriver_capability: gap:rewind\n\n## Agent — yes\n\nCopilot CLI 1.0.77 ships rewind as a first-class REPL command. The bundled `app.js` registers `{name:\"/undo\",aliases:[\"/rewind\"],help:\"Rewind the last turn and revert file changes\",execute:…({kind:\"show-dialog\",dialog:{kind:\"undo-confirmation\"}})}`, and the keybinding help lists `esc esc` as \"clear input, interrupt, stop agents, or rewind\". So both the slash surface and the shortcut exist, exactly the two affordances the scenario describes for the in-place variant.\n\nThere are TWO implementations behind the same dialog, selected by the server-delivered `REWIND_V2` feature flag:\n\n- **REWIND_V2 on** — `history.listRewindPoints()` returns the session's root user turns; the TUI shows a rewind-point picker, then a mode menu whose options are `Conversation only` (\"Files left untouched\", always enabled), `Conversation + files` (enabled only when `canRestoreFiles`) and `Cancel`.\n- **REWIND_V2 off** — a git-snapshot manager (`ooe.create(sessionId, workingDirectory, {onTruncateSession: eventId => history.truncate({eventId})})`) that reports `no-git-repo` and disables rewind when the cwd is not a git repository.\n\nBoth paths terminate in the SAME primitive: `history.truncate({eventId})`.\n\n## Rewind is IN PLACE, not a fork — the question the column carried as UNVERIFIED\n\n`truncate` → `truncateToEvent(eventId)`, which calls `h.sessionTruncateEventsBeforeEventId(nativeSessionId, eventId)`, clears the chat-message/handoff/compaction-checkpoint projections, `rebuildStateFromNativeProjection()`, `hydrateIfcEngineFromPersistedToolEvents(true)`, and finally `emitEphemeral(\"session.snapshot_rewind\", {upToEventId, eventsRemoved})`. It does NOT call `clearHistory` — the function `/clear` and `/new` use to mint a new session and switch to it (see this column's 1-5 session-reset cell). No new `session-state/<id>/` directory is created and `nativeSessionId` is unchanged. **Copilot therefore rewinds in place on the SAME session id, like claudecode, and unlike codex's `/fork` or mistral-vibe's TUI fork.** Files are restored by a separate snapshot/rollback step before the truncation, and workspace checkpoints under `session-state/<id>/checkpoints/` are pruned afterwards (`truncateWorkspaceCheckpoints`, `s.prune(pruneEventIds)`).\n\n## Daemon — full (for what the scenario asserts)\n\nThe scenario asserts three user-observable things, all of which fall out of the in-place shape:\n\n1. **State `ready` after the rewind.** The rewind is not a turn: `session.snapshot_rewind` is `emitEphemeral`, and ephemeral events are not persisted (the writer subscribes to the session event bus and appends via `h.sessionEventsAppendLocal(<dir>/events.jsonl, …)`; the ephemeral stream — `assistant.message_delta`, `assistant.usage`, `assistant.turn_start` deltas, etc. — is the streaming/UI channel). So the daemon sees no state-changing event and the session stays in the `ready` it settled into at the previous `assistant.turn_end`.\n2. **Same `session_id`.** The copilot adapter keys the session on the DIRECTORY name under `$COPILOT_HOME/session-state/` (`agent.go` / `adapter.go`); the directory is untouched by a rewind, so the row survives with its id.\n3. **A clean subsequent arc.** The post-rewind prompt appends a fresh `user.message` (→ `working`) and the reply closes with `assistant.turn_end` (→ `ready`) — the same explicit boundary every other copilot cell records.\n\nThe interesting sub-case — a truncating rewind that SHRINKS or REWRITES `events.jsonl` under an append-oriented tailer — is handled by the tailer, not by luck: `resolveStartPos` resets and replays from byte 0 when `fileSize < lastOffset` OR when `resumePrefixChanged` sees the 512-byte window ending at `lastOffset` change (`core/pkg/tailer/rotation_detect.go`, issues #1088/#1104). The copilot parser does NOT implement the `rotationResetter` (`ResetForRotation`) opt-in that mistral-vibe added for #1063, so its per-model high-water mark `lastUsage` survives the reset — but that composition is benign HERE rather than a flatline, because copilot's live token signal is an INCREMENT (`queueOutputIncrement` on `assistant.message.outputTokens`, added onto the mark) while the only cumulative source (`session.shutdown` `modelMetrics`) is diffed against the mark through a `nonNegative` clamp (`parser.go:263-380`). A replay after truncation re-contributes the surviving messages' output tokens onto a tailer total that was just zeroed — rebuilding the total for the surviving transcript — and the final shutdown delta clamps to zero on output while input still lands. That is why this is `full` + caveat rather than `bug`.\n\n## Driver — gap:rewind\n\nEvery KEYSTROKE the recipe needs already exists (`driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` → `send slash keys sleep wait_turn …`), so this is not a `keys` gap. The gap is TURN ACCOUNTING. `turn_count()` is `grep -c '\"type\":\"assistant.turn_end\"' \"$TRANSCRIPT\"` and `wait_turn` loops until `turn_count >= EXPECTED_TURNS` (driver-interactive.sh:283-309). If the rewind removes a completed turn from `events.jsonl`, the count goes BACKWARDS while `EXPECTED_TURNS` keeps climbing, so the post-rewind `wait_turn` can never be satisfied and the recording dies on the cell timeout — passing recipe-lint while proving nothing. The driver already models exactly this class of bookkeeping as a step's responsibility: `interrupt` decrements `EXPECTED_TURNS` because the cancelled turn never lands. A `rewind` step is the same one-line shape: drive `/undo` + the two picker Enters, then re-baseline `EXPECTED_TURNS` from the post-truncation `turn_count()`. Porting it is tooling work — the cell keeps a real recipe and a real spec and records the moment the step exists.\n\n## What `record` must settle\n\nThe load-bearing unverified premise is whether `sessionTruncateEventsBeforeEventId` physically rewrites `events.jsonl` on disk. It is implemented in the compressed Node-SEA native addon, which cannot be read (the binary yields nothing to `strings`), and the JS side only ever exposes an APPEND primitive for the local file. A rewind that did not persist would be undone by resume, so persistence is the strongly-implied behavior — but it is inference, not a citation, and it is what decides both the driver gap's severity and whether the recording shows an extra replay-driven `working`→`ready` blip. Confidence is held at 0.65 for that reason. This cell was assessed WITHOUT driving the CLI (each turn spends the maintainer's AI credits); the live run belongs to `record`.\n",
+      "caveats": [
+        "PROVISIONAL — emission not observation: whether copilot's truncate physically shrinks/rewrites session-state/<id>/events.jsonl is UNVERIFIED. sessionTruncateEventsBeforeEventId lives in the compressed Node-SEA native addon (unreadable; `strings` yields nothing even for known-present text) and the JS layer exposes only h.sessionEventsAppendLocal for the local file. If it does NOT persist, the rewind is entirely invisible to irrlicht and the driver gap below evaporates; if it does, the tailer's rotation/rewrite detection fires and the recording may show one extra replay-driven working→ready blip between v2_turn_end and v3_turn_start. record settles this; the spec deliberately asserts only the arc the scenario requires, not the blip.",
+        "The copilot parser implements no ResetForRotation (the rotationResetter opt-in mistral-vibe added for #1063/#1078), so its per-model lastUsage high-water survives a tailer rotation reset. Analysed as benign for this cell — live tokens are an INCREMENT added onto the mark (queueOutputIncrement) and the only cumulative source is clamped by nonNegative (queueContribution) — so a post-truncation replay rebuilds rather than flatlines. This is code analysis, not a recorded fact: if record shows tokens or cost collapsing to zero after the rewind, the correct fix is to wire ResetForRotation on the copilot parser (a feasible unlock, not a freeze) and re-record.",
+        "REWIND_V2 is a SERVER-DELIVERED feature flag, so which of the two rewind implementations the live CLI takes is not knowable from the bundle. The recipe targets the REWIND_V2 picker shape (rewind-point list, then a Conversation only / Conversation + files / Cancel menu). If the account lands on the legacy path instead, rewind is git-snapshot based and reports no-git-repo for a non-git cwd — hence the `git init` in setup, which makes BOTH paths available and costs nothing under either.",
+        "`Conversation + files` is disabled unless canRestoreFiles is true, and file-change tracking is itself gated on REWIND_V2||DIFF_V2 at session creation. The recipe therefore selects `Conversation only` (first option, always enabled), which exercises the history.truncate path the scenario's in-place variant is about. The file-restoration half of /undo's help text is out of scope for this cell.",
+        "After a successful rewind the TUI PRE-FILLS the input box with the rewound user message (`Tn.setText(O.userMessage)`), so the recipe clears it with ctrl+e then ctrl+u before sending the third prompt — otherwise the post-rewind send is concatenated onto the restored text. Same hazard mistral-vibe's cell hit and solved with C-c; copilot binds ctrl+c to `cancel` (twice exits the REPL), so C-e/C-u is the correct clear here.",
+        "Model is deliberately NOT pinned in the observation vector: --model accepts only \"auto\" on this account and session.auto_mode_resolved routes per turn between gpt-5-mini and claude-haiku-4.5, so an exact match would be nondeterministic — same convention as the 2-1 and 1-5 copilot cells."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js (CLI 1.0.77; byte-identical to ~/Library/Caches/copilot/pkg/darwin-arm64/1.0.77/app.js)",
+          "note": "Command registration: {name:\"/undo\",aliases:[\"/rewind\"],help:\"Rewind the last turn and revert file changes\",execute:…({kind:\"show-dialog\",dialog:{kind:\"undo-confirmation\"}})}. Keybinding table: {cmd:\"esc esc\",description:\"clear input, interrupt, stop agents, or rewind\"}. Grounds agent_supports=yes."
+        },
+        {
+          "kind": "file",
+          "ref": "app.js — truncateToEvent / sessionTruncateEventsBeforeEventId (CLI 1.0.77)",
+          "note": "async truncateToEvent(e){ h.sessionTruncateEventsBeforeEventId(this.nativeSessionId,e); … rebuildStateFromNativeProjection(); hydrateIfcEngineFromPersistedToolEvents(true); this.emitEphemeral(\"session.snapshot_rewind\",{upToEventId:e,eventsRemoved:n}) }. No clearHistory, no new session directory, nativeSessionId unchanged → the rewind is IN PLACE on the SAME session id. This is the citation that settles the column's UNVERIFIED fork-vs-in-place question."
+        },
+        {
+          "kind": "file",
+          "ref": "app.js — rewindForApi / runHistoryTruncateForRewind / listRewindPointsForApi (CLI 1.0.77)",
+          "note": "mode is \"conversation\" or \"conversation-and-files\"; the files arm rolls back snapshots first, then truncates, then prunes. projectRewindUserTurns() filters events to type===\"user.message\" with no agentId and no data.source — i.e. the rewind points are the root user turns. Outcomes include success / truncation-failed / checkpoint-cleanup-failed / session-busy / unsupported-remote-session."
+        },
+        {
+          "kind": "file",
+          "ref": "app.js — ZXe (showUndoConfirmation) + the rewind mode menu (CLI 1.0.77)",
+          "note": "With REWIND_V2 the dialog lists history.listRewindPoints() and then offers [{label:\"Conversation only\",description:\"Files left untouched\"},{label:\"Conversation + files\",disabled:!canRestoreFiles},{label:\"Cancel\"}]. Without it, ooe.create(sessionId,workingDirectory,{onTruncateSession:eventId=>history.truncate({eventId})}) with reason \"no-git-repo\" when the cwd is not a git repo. Grounds both the recipe key sequence and the `git init` precondition."
+        },
+        {
+          "kind": "file",
+          "ref": "app.js — Wfe session event writer (CLI 1.0.77)",
+          "note": "localEventsPath = <sessionStatePath>/events.jsonl; flush() calls h.sessionEventsAppendLocal(localEventsPath, json). The only local-file primitive the JS layer exposes is APPEND — the truncate path is native-only, which is why persistence of the truncation to events.jsonl is marked UNVERIFIED rather than asserted. Also grounds `session.snapshot_rewind` being ephemeral (emitEphemeral bypasses the persisted stream)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/rotation_detect.go:20-105",
+          "note": "resolveStartPos resets accumulators and replays from byte 0 when fileSize < lastOffset OR resumePrefixChanged (512-byte fingerprint at lastOffset) — so BOTH a shrinking truncation and a same-or-larger in-place rewrite are detected (#1104, #1088). resetAccumulatorsForRotation calls ResetForRotation only on parsers implementing the rotationResetter opt-in."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go:56-62,263-380",
+          "note": "lastUsage is the per-model cumulative high-water mark; queueOutputIncrement ADDS the live per-message assistant.message.outputTokens onto it, queueContribution diffs session.shutdown modelMetrics against it with a nonNegative clamp. The parser implements NO ResetForRotation. Grounds the analysis that a post-truncation replay rebuilds the total rather than flatlining — and the caveat that record must confirm it."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh:283-309,349,364",
+          "note": "turn_count() = grep -c '\"type\":\"assistant.turn_end\"' on the transcript; wait_turn loops until turn_count >= EXPECTED_TURNS and otherwise times out. slash and keys both read the step's .text field. A truncating rewind drives turn_count BACKWARDS, so the post-rewind wait_turn can never be satisfied — the concrete anchor for driver=gap:rewind. The existing `interrupt` step (line 361-363) is the precedent: it decrements EXPECTED_TURNS for the turn that never lands."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/1-6_checkpoint-rewind/",
+          "note": "Template: the in-place sibling (same session_id retained, rewind itself invisible to the file-watching surface, post_rewind_ready + v3 arc). Copilot mirrors its phase shape, re-anchored onto this column's two-phase presession birth."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/2-1_basic-turn/ and 1-5_session-reset/",
+          "note": "Column conventions reused verbatim: the proc-<PID> presession + real-session two-phase birth, the observation vector (agent/tokens_nonzero/cost_nonzero with model left unpinned), and the COPILOT_HOME staging setup. 1-5 also grounds the contrast that /clear and /new call clearHistory and DO rotate the id, which truncateToEvent does not."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 300,
+      "settings": {},
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation does not require a re-login)",
+        "An active Copilot plan with AI credits — this cell spends THREE turns",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other copilot session shares the same cwd (the PID is bound by cwd)",
+        "the driver implements a rewind step that re-baselines EXPECTED_TURNS after the truncation (see driver_capability: gap:rewind) — without it the post-rewind wait_turn cannot be satisfied"
+      ],
+      "setup": [
+        "Driver exports COPILOT_HOME=<staging>/copilot-home and seeds config.json with trustedFolders + askedSetupTerminals so the first-run modals cannot block the REPL",
+        "git init the cwd before launching: the legacy (REWIND_V2-off) rewind path is git-snapshot based and refuses with no-git-repo in a non-git directory. Harmless under REWIND_V2, so do it unconditionally",
+        "Key sequence targets the REWIND_V2 picker: the first Enter selects the highlighted rewind point (the most recent root user turn), the second selects 'Conversation only' — the first and always-enabled option, since 'Conversation + files' is disabled without tracked file changes. If record finds the highlight elsewhere, insert Up/Down keys steps rather than changing the phases",
+        "After the rewind the TUI pre-fills the input with the rewound user message, so ctrl+e then ctrl+u clear it before the third prompt (ctrl+c is 'cancel' in copilot and twice exits the REPL)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: one"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: two"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "slash",
+          "text": "/undo"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "keys",
+          "text": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "keys",
+          "text": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "keys",
+          "text": "C-e"
+        },
+        {
+          "type": "keys",
+          "text": "C-u"
+        },
+        {
+          "type": "sleep",
+          "seconds": 1
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: three"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl mints a proc-<PID> pre-session in ready shortly after launch, then the real <session-id> session under a DIFFERENT id once events.jsonl appears on the first prompt",
+        "two pre-rewind turns each drive the real session ready → working → ready",
+        "after /undo the session stays in ready and KEEPS its session id — copilot rewinds in place, so there must be no new_session and no transcript_removed for it",
+        "the post-rewind turn drives a clean ready → working → ready arc on that SAME session",
+        "final state of the real session is ready",
+        "observation vector: tokens_nonzero=true, cost_nonzero=true; model left unasserted (auto-router picks per turn)",
+        "SETTLE THE PROVISIONAL: record whether session-state/<id>/events.jsonl shrank across the rewind (size before vs after) and whether any extra working→ready blip appears between the second and third turn — write the answer back into the cell via of cell write"
+      ]
+    }
+  }
+}
