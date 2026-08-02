@@ -1,0 +1,157 @@
+{
+  "scenario_id": "session-end",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+a21849f.dirty",
+    "confidence": 0.7,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-end",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.7,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready (confidence 0.7 — the teardown observables are all present in the adapter, but no copilot recording exists yet, so the exact birth shape and the process_exited timing are provisional until `record` runs).\n\n## Reasoning\n\n### agent_supports = yes\n\nAll three session-end variants are reachable on GitHub Copilot CLI 1.0.77:\n\n- **Variant 1 — clean exit.** `/exit` quits the REPL and the CLI writes a `session.shutdown` record (with `shutdownType`) before the process dies. Verified live on 1.0.77 while building this adapter; the driver's `exit_clean` arm is wired to `/exit` for exactly that reason (Ctrl-D is not a documented quit path for copilot, unlike claudecode).\n- **Variant 2 — SIGKILL while idle.** OS-level; no agent cooperation required.\n- **Variant 3 — SIGKILL mid-turn.** Same; the turn simply never reaches `assistant.turn_end`.\n\n### daemon_capability = full\n\nEvery user-observable signal the scenario asserts has a transport in the committed adapter:\n\n| Scenario assertion | Adapter mechanism |\n|---|---|\n| `ready → working` | `user.message` → `EventType: \"user_message\"` (parser.go `parseUserMessage`) |\n| `working → ready` (state is ready at exit) | `assistant.turn_end` → `EventType: \"turn_done\"` — an EXPLICIT boundary, so unlike gemini-cli no quiet-tail heuristic is involved |\n| `process_exited` / row disappears | `agent.ExactName{Name: \"copilot\"}` in agent.go, matched by processlifecycle's scanner (1 s poll, backing off to 5 s when the PID set is stable) |\n| \"state never entered working post-exit\" | `session.shutdown` and `session.usage_checkpoint` are BOTH `Skip: true` in `parseUsage` — deliberately, so a shutdown record cannot trip the classifier's default \"transcript activity → working\" rule and flip a finished session back to working |\n\nThe last row is the one that would most plausibly have been a `bug` and is not: the parser comment at parser.go:44-50 records the decision explicitly.\n\n### The presession shape (why the spec does not pin the birth session)\n\nCopilot creates `$COPILOT_HOME/session-state/<id>/` at LAUNCH holding only `workspace.yaml`; `events.jsonl` does not exist until the first prompt is submitted (verified live on 1.0.77; the driver's `resolve_transcript` seam is written around exactly this and resolves on the DIRECTORY, not the file). `sessionIDFromPath` accepts only the constant `events.jsonl`, so no real session exists during that window — meaning the process scanner sees a matched `copilot` process with no active session and mints a `proc-<PID>` pre-session (scanner.go:347). The driver's `wait_ready` loop (trust modal + footer-hint poll) keeps that window open for seconds, so a pre-session is very likely — but with the scanner's 1 s/5 s adaptive interval it is not guaranteed to be sampled before the first prompt.\n\nWorse for a pinned spec: when `events.jsonl` finally appears it already contains `session.start` … `user.message`, so whether the REAL session is first observed `ready` (watcher fires between the two writes) or straight into `working` (both lines inside one debounced read) is a race that cannot be settled from the source. Both facts push the same way: this spec anchors each variant's birth UNPINNED (`expected_state: ready`, no `same_session_as`) and does NOT assert whether the working session is the same row as the birth row. The load-bearing assertions the scenario actually cares about — the working→ready settle, `process_exited`, and \"never re-enters working while idle\" — are all pinned to the real session via `same_session_as` on `vN_turn_start`. This is the shape gemini-cli's spec converged on after its recording backflowed.\n\n### driver_capability = ready\n\nThe recipe needs `send`, `wait_turn`, `sleep`, `exit_clean`, `restart`, `sigkill`. All six are in the copilot driver's `DRIVE_ELICITS` and all six have real (non-`not_implemented`) arms. Only `reset_session` and `resume` are stubbed, and this recipe needs neither.\n\n## Timing choices in the recipe\n\n- **8 s after each teardown, before the next `restart`.** gemini-cli's recording showed a clean exit emitting NO `process_exited` because the dying launcher raced the next session's cwd-keyed PID rebind. Copilot binds PIDs by cwd too (`DiscoverPIDByCWD`, pid.go) and its `restart` arm reuses the same `$RUN_CWD` for every slot, so the same hazard applies. 8 s comfortably exceeds the scanner's worst-case 5 s backed-off tick, so the death is observed before a new `copilot` process exists in that cwd.\n- **6 s (not 2 s) between the variant-3 prompt and its SIGKILL.** The transcript file itself is created by that prompt, so the daemon must notice a new file, read it, classify to working, and broadcast — strictly more work than codex's ready→working promotion, which already needed 5 s.\n- **12 s tail after the final SIGKILL.** gemini-cli's 8 s tail was too short for the process sweep to fire before the recording daemon shut down, which is why its v3 has no `process_exited` phase at all.",
+      "caveats": [
+        "PROVISIONAL until recorded: no copilot recording exists yet, so the birth shape is reasoned from source, not observed. If `record` finds the pre-session is never sampled AND the real session is born straight into `working`, the `vN_session_birth` ready phases will not match and record must re-anchor (most likely by splitting the birth in two, codex-style, or by dropping the birth phase for that variant).",
+        "`model` is deliberately NOT pinned in the observations block. This account can only reach gpt-5-mini and claude-haiku-4.5, and `--model` accepts only `auto`, so the concrete model is chosen at runtime by the router and reported on `session.auto_mode_resolved`. Pinning a guess would fail every recording; record fills it from the recording.",
+        "Driver defect (cosmetic, not blocking): the `restart` and `start_session` arms call `alloc_slot` and then `launch_repl`, which calls `alloc_slot` again — so each restart burns two slots and leaves an orphan with an empty transcript path. This recipe launches 3 REPLs and will therefore emit 5 lines in `session.uuids`/`transcript.paths`, two of them blank. run-cell.sh skips blank uuids (`[[ -z \"$u\" ]] && continue`), so the recording is not corrupted, but record should drop the redundant `alloc_slot` from both arms.",
+        "Copilot's `restart` reuses one cwd for all three variants (claudecode mints a fresh cwd per restart to dodge its per-directory trust cache). Copilot needs no fresh cwd — `wait_ready` answers the trust modal with Enter — but the shared cwd is what makes the 8 s teardown gaps load-bearing rather than merely tidy.",
+        "Variant 3's post-kill sweep-to-ready may still fall outside the 12 s tail. The spec therefore asserts only that `process_exited` fires while the session is working; 'state does not stick in working' is a live-dashboard property of the ongoing sweep, not something a bounded recording can be required to show."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Source is FilesUnderRoot over $COPILOT_HOME/session-state with SessionIDFromPath; Process.Match is agent.ExactName{Name: \"copilot\"} — the matcher whose disappearance produces process_exited."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "user.message → working (parseUserMessage); assistant.turn_end → turn_done (explicit boundary); session.shutdown and session.usage_checkpoint are Skip:true in parseUsage so a shutdown cannot flip a finished session back to working."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/adapter.go",
+          "note": "sessionIDFromPath accepts only the constant events.jsonl, so the launch-time session directory (workspace.yaml only) mints no session — which is what leaves room for a proc-<PID> pre-session."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/scanner.go",
+          "note": "Line 347 mints sessionID = fmt.Sprintf(\"proc-%d\", pid) for any matched process with no active session; defaultInterval 1s, backoffInterval 5s (lines 17-20) bound how fast a birth or a death is observed."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/pid.go",
+          "note": "DiscoverPIDByCWD — PID binding is cwd-keyed, which is the mechanism behind gemini-cli's lost clean-exit process_exited and the reason this recipe leaves 8 s between a teardown and the next launch in the same cwd."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS (line 128) contains send/slash/sleep/wait_turn/exit_clean/sigkill/interrupt/keys/restart/start_session/session; exit_clean sends /exit; turn_count greps '\"type\":\"assistant.turn_end\"'; only reset_session and resume are not_implemented stubs."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/1-2_session-end/expected.jsonl",
+          "note": "Backflowed precedent: a clean exit can emit NO process_exited when the dying process races the next session's cwd-keyed rebind, and an 8 s tail was too short for the process sweep after a mid-turn kill."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/aliases.go",
+          "note": "claude-haiku-4.5 → claude-haiku-4-5 alias (line 109) — both models this account can reach are priced, so cost_nonzero is a safe assertion."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "copilot CLI 1.0.77+ on PATH and signed in (credentials live in the OS keychain, so COPILOT_HOME isolation does not require a re-login)",
+        "An active Copilot plan with AI credits — three turns are spent",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a daemon started with --record)",
+        "No other copilot session is writing under the staging COPILOT_HOME (resolve_transcript takes a set difference against the pre-launch directory listing)"
+      ],
+      "setup": [
+        "Driver exports COPILOT_HOME=<staging>/copilot-home and seeds config.json with trustedFolders + askedSetupTerminals so the first-run modals do not block the REPL",
+        "Driver snapshots session-state/ before each launch so the new session directory is resolved by set difference rather than newest-mtime",
+        "All three variants run in the same RUN_CWD; the 8 s gaps between a teardown and the next launch are what keep the cwd-keyed PID binding from masking a process_exited"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Write a 200 word essay about the history of coffee."
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "events.jsonl contains three distinct copilot session ids (one directory per variant) plus any proc-<PID> pre-session rows",
+        "variant 1: the session settles to ready after assistant.turn_end, and its process_exited follows that settle (proves 'State is ready at exit')",
+        "variant 2: the session is in ready when the SIGKILL lands, with no transition to working or waiting between turn-done and process_exited",
+        "variant 3: the session is in working when the SIGKILL lands; a post-kill sweep-to-ready may or may not fall inside the 12 s tail — accept either shape",
+        "the viewer's state band shows three arcs separated by grey gaps where no copilot session is alive",
+        "cost and token totals are non-zero: variants 1 and 2 complete turns, contributing assistant.message.outputTokens live and the full cumulative block at session.shutdown for variant 1"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
