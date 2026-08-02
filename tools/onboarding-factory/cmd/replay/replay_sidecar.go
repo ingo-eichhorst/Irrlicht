@@ -434,25 +434,32 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 	return nil
 }
 
-// applyHookEvent mirrors SessionDetector.HandlePermissionHook: update the
-// permission-pending flag based on hook type, then trigger a re-
-// classification using the last-known metrics. Hook events other than the
-// three recognized Claude Code hooks are ignored.
+// applyHookEvent mirrors SessionDetector.HandlePermissionHook: apply the hook's
+// signal effect, then trigger a re-classification using the last-known metrics.
 //
-// PreCompact is deliberately not among them, even though #1297 made it a
-// signalPolicies row the harness could now hold like any other. No recording
-// in replaydata/ carries one: a grep for hook_name across the whole catalog
-// returns only PermissionRequest, PreToolUse, PostToolUse and
-// PostToolUseFailure. Wiring it would therefore add a branch no golden
-// exercises. Add it together with the first recording that fires one.
+// Both sides read the same session.HookSignal table, so a hook the daemon
+// honours can no longer be silently dropped here. That divergence was real:
+// this function used to carry its own switch, which recognized
+// PermissionRequest but fell through to default on PreToolUse — a hook the
+// daemon holds SignalPermissionPrompt on, and one that replaydata/ carries two
+// of. Nothing was visibly wrong only because both recordings follow the
+// PreToolUse with a PermissionRequest within ~100ms that produces the same
+// hold; the two paths agreed by luck rather than by construction (issue #1320).
+//
+// Hooks whose effect needs more than their name — Stop, Notification and
+// PreCompact — are absent from that table and so are still ignored here. That
+// remains deliberate: no recording in replaydata/ fires one, so wiring them
+// would add branches no golden exercises. Add each together with the first
+// recording that fires it.
 func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
-	switch hookEv.HookName {
-	case claudecode.HookPermissionRequest:
-		r.signals.Hold(replaySessionKey, session.SignalPermissionPrompt, session.SignalPayload{}, hookEv.Timestamp)
-	case claudecode.HookPostToolUse, claudecode.HookPostToolUseFailure:
-		r.signals.Release(replaySessionKey, session.SignalPermissionPrompt)
-	default:
+	effect, ok := session.HookSignal(hookEv.HookName)
+	if !ok {
 		return
+	}
+	if effect.Release {
+		r.signals.Release(replaySessionKey, effect.Signal)
+	} else {
+		r.signals.Hold(replaySessionKey, effect.Signal, session.SignalPayload{}, hookEv.Timestamp)
 	}
 	if r.lastMetrics == nil {
 		return

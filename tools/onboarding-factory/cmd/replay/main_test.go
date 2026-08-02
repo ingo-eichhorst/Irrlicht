@@ -775,6 +775,66 @@ func TestReplayWithSidecar_HookEvents(t *testing.T) {
 	}
 }
 
+// TestReplayWithSidecar_Issue1320_PreToolUseHold is the defect test for #1320:
+// the hook-name → session.SignalKind mapping used to be written twice, and the
+// two copies had drifted. SessionDetector.HandlePermissionHook holds
+// SignalPermissionPrompt on PermissionRequest *and* PreToolUse, while the
+// replay harness's applyHookEvent recognized only PermissionRequest and fell
+// through its default: return on PreToolUse.
+//
+// PreToolUse is not hypothetical — replaydata/ carries two of them today. Both
+// happen to be followed within ~100ms by a PermissionRequest that produces the
+// same hold, so no golden is currently wrong: the two paths agreed by luck, and
+// the harness whose job is catching classifier regressions was silently blind
+// to a hook the daemon honours.
+//
+// This is the same fixture as TestReplayWithSidecar_HookEvents with the hook
+// name swapped, so a failure here isolates the hook-name mapping rather than
+// anything about the surrounding replay machinery.
+func TestReplayWithSidecar_Issue1320_PreToolUseHold(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "session.jsonl")
+	sidecar := filepath.Join(dir, "session.events.jsonl")
+
+	transcriptBody := `{"type":"user","timestamp":"2026-04-11T10:00:00Z","message":{"role":"user","content":"hello"}}
+{"type":"assistant","timestamp":"2026-04-11T10:00:01Z","message":{"role":"assistant","content":"Let me check."}}
+`
+	if err := os.WriteFile(transcript, []byte(transcriptBody), 0644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	sidecarBody := `{"seq":1,"ts":"2026-04-11T10:00:00Z","kind":"transcript_new","session_id":"sess-1","adapter":"claude-code"}
+{"seq":2,"ts":"2026-04-11T10:00:00.500Z","kind":"transcript_activity","session_id":"sess-1","file_size":93}
+{"seq":3,"ts":"2026-04-11T10:00:01Z","kind":"transcript_activity","session_id":"sess-1","file_size":192}
+{"seq":4,"ts":"2026-04-11T10:00:01.500Z","kind":"hook_received","session_id":"sess-1","hook_name":"PreToolUse"}
+`
+	if err := os.WriteFile(sidecar, []byte(sidecarBody), 0644); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+
+	report, err := replayWithSidecar(transcript, sidecar, reportSettings{
+		Adapter:            claudecode.AdapterName,
+		DebounceWindow:     2 * time.Second,
+		FlickerMaxDuration: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("replayWithSidecar: %v", err)
+	}
+
+	var foundHookWaiting bool
+	for _, tr := range report.Transitions {
+		if tr.Cause == causeHook && tr.NewState == "waiting" {
+			foundHookWaiting = true
+			break
+		}
+	}
+	if !foundHookWaiting {
+		t.Errorf("PreToolUse hook produced no hook-caused waiting transition — the replay harness "+
+			"dropped a hook the daemon holds SignalPermissionPrompt on (#1320); transitions: %+v",
+			report.Transitions)
+	}
+}
+
 // TestSessionFilter verifies that SessionFilter in reportSettings filters
 // sidecar events to the specified session ID.
 func TestSessionFilter(t *testing.T) {

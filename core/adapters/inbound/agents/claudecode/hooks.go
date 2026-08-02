@@ -25,21 +25,26 @@ import (
 )
 
 // Hook event names. Claude Code fires these; the daemon recognizes only
-// these six and ignores everything else.
+// these seven and ignores everything else.
+//
+// The names themselves live in core/domain/session, next to the hook-name →
+// SignalKind table that the detector and the replay harness share — neither of
+// which may import this package (issue #1320). These are re-exports so
+// adapter-side call sites read in adapter terms.
 const (
-	HookPermissionRequest  = "PermissionRequest"
-	HookPreToolUse         = "PreToolUse"
-	HookPostToolUse        = "PostToolUse"
-	HookPostToolUseFailure = "PostToolUseFailure"
-	HookPreCompact         = "PreCompact"
+	HookPermissionRequest  = session.HookPermissionRequest
+	HookPreToolUse         = session.HookPreToolUse
+	HookPostToolUse        = session.HookPostToolUse
+	HookPostToolUseFailure = session.HookPostToolUseFailure
+	HookPreCompact         = session.HookPreCompact
 	// HookStop fires once at true turn end, carrying last_assistant_message.
 	// It is the authoritative turn-done signal for claudecode (issue #1161).
-	HookStop = "Stop"
+	HookStop = session.HookStop
 	// HookNotification fires for Claude Code UI notifications, carrying a
 	// notification_type discriminator. The daemon acts only on the idle_prompt
 	// type — the agent finished its turn and is idle at the prompt waiting for
 	// the user — as an authoritative waiting signal (issue #1173).
-	HookNotification = "Notification"
+	HookNotification = session.HookNotification
 )
 
 // notificationTypeIdlePrompt is the Notification hook's notification_type value
