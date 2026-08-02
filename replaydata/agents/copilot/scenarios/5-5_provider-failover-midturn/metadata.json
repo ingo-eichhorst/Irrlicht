@@ -1,0 +1,139 @@
+{
+  "scenario_id": "provider-failover-midturn",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+21d50ec.dirty",
+    "confidence": 0.78,
+    "notes": "agent_supports: yes (Copilot 1.0.77 ships a real, non-user-initiated mid-turn model failover: handleNativeRateLimitedTurn -> action \"switch_auto\" -> applyModelChange(\"auto\", {cause:\"rate_limit_auto_switch\"}) -> returns {action:\"continue\"}, so the SAME turn continues under the fallback); daemon_capability: full (the failover's model change lands on the PERSISTED session.model_change event, which the copilot parser already reads into ModelName as Skip=true -> no state flicker; assistant.turn_end still settles the turn to ready); driver_capability: ready (all step types present). NOT RECORDABLE ON THIS ACCOUNT: the switch target is the literal \"auto\" and this plan can ONLY be on auto (live-verified in the 5-3 cell), so there is no pinned premium model to be rate-limited off of and the switch_auto branch is structurally unreachable -- record_blocked: upstream."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "provider-failover-midturn",
+      "agent": "copilot",
+      "assessed_at": "2026-08-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "record_blocked": "upstream",
+      "confidence": 0.78,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\nrecord_blocked: upstream (plan entitlement -- see \"Why this cannot be recorded here\")\n\nThis cell breaks with every sibling in row 5.5. claudecode, codex, gemini-cli, kiro-cli and pi all landed `daemon=incapable` on the same reasoning: one provider is chosen at startup, provider identity never reaches the transcript, so a failover leaves no trace. Copilot is different on BOTH halves of that sentence, and the difference is legible in the shipped 1.0.77 bundle rather than inferred.\n\n## agent_supports: yes -- the failover exists, is automatic, and continues the same turn\n\n`app.js` defines `handleNativeRateLimitedTurn(e)`. On a rate-limited turn the native side hands back a plan (`sessionPlanRateLimitedTurnJson`) computed from `{selectedModel, hasByokProvider, errorCode, continueOnAutoMode, continueOnAutoModeSettingsLoaded, hasAutoModeSwitchListeners, remainingCount, retryAfterSeconds}`. Three branches follow, and the FIRST is the scenario:\n\n```js\nif(a.action===\"switch_auto\")\n  return this.emit(\"session.info\",{infoType:\"auto_mode_switch\",\n                                   message:\"Rate limited. Switching to auto mode to continue.\"}),\n         await this.applyModelChange(cC,{cause:\"rate_limit_auto_switch\"}),\n         await this.getSelectedModel(),\n         {action:\"continue\"};\n```\n\nEvery bullet of the scenario's `process` is in that one expression:\n\n- **step 2 (primary errors)** -- the branch is reached only from a rate-limited turn (`errorCode`, `retryAfterSeconds`, `remainingCount`).\n- **step 3 (switches automatically)** -- `switch_auto` runs with NO user interaction. The user-gated variant is a DIFFERENT branch, `action===\"prompt_auto\"`, which raises `auto_mode_switch.requested` and waits for yes / yes_always / no. `switch_auto` is selected instead when the persisted `continueOnAutoMode` setting is true (the plan input `continueOnAutoMode`; the setting is a first-class canonical settings key, and answering `yes_always` writes it via `Yt.writeKey(\"continueOnAutoMode\",!0,...)`). So the \"without user action\" clause of the acceptance criteria is satisfied by a real, shipped code path -- not by a charitable reading.\n- **step 5 (completes the turn with the fallback)** -- the function returns `{action:\"continue\"}`. The turn is not aborted and re-issued; the agentic loop resumes under the new selection. This is the single fact that separates copilot from every frozen sibling in this row.\n- **cause** -- `applyModelChange(cC,{cause:\"rate_limit_auto_switch\"})`, and `ModelChangeData.cause`'s own schema text reads: *\"Reason the change happened, when not user-initiated. Currently `\\\"rate_limit_auto_switch\\\"` for changes triggered by the auto-mode-switch rate-limit recovery path.\"* The vendor's schema explicitly classifies this as a non-user-initiated model change.\n\nHeld at `yes`, not `partial`, because the scenario's own `process` and `acceptance_criteria` are written in terms of MODELS (\"falls back to a secondary model\", \"`ModelName` updates to the fallback\"), and copilot satisfies all six process steps literally. The row's TITLE says \"provider\"; see the first caveat for the one respect in which copilot's failover is narrower than the title.\n\n## daemon_capability: full -- the failover is persisted and the parser already reads it\n\nThe load-bearing question for this row has always been whether the swap leaves an on-disk trace. For copilot it does, and the schema is unusually explicit about which events do and do not.\n\n`session-events.schema.json` marks the obvious failover-telemetry events as **`ephemeral: {\"const\": true}`** with `ephemeral` in `required` -- \"Always true for events that are transient and not persisted to the session event log on disk\". That is the case for `assistant.turn_retry` (whose `AssistantTurnRetryData` carries exactly the `turnId` / `model` / `reason` triple one would want), `model.call_failure`, `auto_mode_switch.requested` and `auto_mode_switch.completed`. `app.js` honours it: `eventLog.read({...,includeEphemeral:!1})` and `for(let s of this.api.getEvents()) s.ephemeral || ... push(...)`. A census of the six local session directories (13 turns) finds ZERO of those four types on disk, corroborating the schema.\n\nHad the failover ONLY been witnessed by those events, the honest verdict would be `incapable` -- unobservable by the vendor's own design. It is not. The switch is applied through `applyModelChange`, which emits:\n\n```js\nthis.emit(\"session.model_change\",{previousModel:r,newModel:e,...,cause:n?.cause})\n```\n\n`ModelChangeEvent` has a plain optional `ephemeral` (no `const:true`) and is NOT in the ephemeral filter list -- and the local store settles it empirically: **5 `session.model_change` lines are on disk** across the local sessions. Same for `session.info`, which carries the human-readable `\"Rate limited. Switching to auto mode to continue.\"` banner (1 on disk).\n\nAgainst the three acceptance bullets, using the parser as it stands today (`core/adapters/inbound/agents/copilot/parser.go`):\n\n1. **`ModelName` changes mid-turn without user action** -- `case evModelChange: p.setModel(str(data,\"newModel\"), ev)` (L88-90). The failover's `newModel` becomes `ev.ModelName`, and L127-129 stamps the sticky `p.model` onto every subsequent event. Observed.\n2. **State stays `working`, no flicker to `ready`** -- that same arm sets `ev.Skip = true`. No state machinery fires on a model change, so a failover in the middle of a turn cannot flicker the session. The turn stays `working` because the only event that settles it is `assistant.turn_end`. Observed, and observed *correctly*.\n3. **After the turn completes, `-> ready` with the fallback model's name** -- `case evTurnEnd: ev.EventType = \"turn_done\"` (L98-99) settles working->ready, and the fallback label is re-stamped by the very next `assistant.message` (`parseAssistantMessage` -> `setModel(str(data,\"model\"))`, L189-196) -- persisted, and confirmed model-bearing in the local store (13 `assistant.message` lines, every one carrying `model`). Observed.\n\nAll three user-observable assertions are reachable from persisted events through parser arms that already exist. No adapter change is required, so this is `full`, not `bug`.\n\n## driver_capability: ready\n\nThe recipe below needs `send` / `wait_turn` / `sleep` / `exit_clean` only. `driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` reports all thirteen of `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn`. No missing primitive; this is not a driver gap.\n\n## Why this cannot be recorded here (record_blocked: upstream)\n\nThe pillars are green and the route is therefore record-now, but the recipe is `applicable:false` with a documented block, because the trigger is unreachable on the maintainer's account. The switch target is the literal string `auto` -- `cC=\"auto\"` in the bundle, so `applyModelChange(cC,...)` means \"fall back ONTO the Copilot auto-router\". The failover is therefore only defined for a session that is pinned to a concrete model and gets rate-limited off it.\n\nThis account cannot be in that state. The 5-3 cell live-verified (at zero AI-credit cost) that `/model gpt-5-mini` returns *\"Model \\\"gpt-5-mini\\\" can't be selected -- only Auto mode is available on your plan\"*; the CAPI model list is empty for this plan and only the literal `auto` passes the availability check. A session that is ALREADY on auto has nothing to switch to, so the `switch_auto` branch cannot be selected for it. Unblocking is a billing action (a Copilot plan with individual model access), plus exhausting that model's premium-request quota, plus `continueOnAutoMode:true` in settings.\n\nThe BYOK lever that unlocked the 2-9 quota cell does not substitute here -- see the third caveat.",
+      "caveats": [
+        "SCOPE: THIS IS A MODEL FAILOVER WITHIN ONE PROVIDER, NOT A CROSS-PROVIDER SWAP. Copilot falls back from a rate-limited pinned model onto the Copilot auto-router (`cC=\"auto\"`), all inside GitHub's own CAPI. It never switches to a second vendor the way the row title's canonical examples (Aider auto-fallback, Crush, Goose) do. This is recorded as a caveat rather than an agent_supports downgrade because the scenario's own `process` and `acceptance_criteria` are written entirely in terms of models and `ModelName` -- \"falls back to a secondary model\", \"ModelName updates to the fallback\" -- and every one of those six steps is satisfied literally. A reader who reads the row title as strictly cross-vendor should read this cell as `partial`; nothing else in the verdict changes, because the daemon-side observability argument is about `session.model_change` either way.",
+        "TRANSIENT `ModelName == \"auto\"` BETWEEN THE SWITCH AND THE NEXT MESSAGE. `session.model_change` on this path carries `newModel:\"auto\"` (the literal, not a resolved id), and `setModel` stamps it verbatim, so `SessionMetrics.ModelName` reads the placeholder `\"auto\"` from the failover until the next persisted `assistant.message` re-stamps the concrete fallback label. The scenario's bullet (c) -- fallback model NAME visible after the turn ends -- is still satisfied, because a turn that CONTINUES necessarily emits at least one more assistant.message before `assistant.turn_end`. But a spec for this cell must assert the model only AFTER turn_end, never inside the failover window. Identical placeholder window to the one 5-2 and 5-3 already record for `/model auto`.",
+        "BYOK CANNOT INDUCE THIS, AND THE 2-9 PRECEDENT DOES NOT TRANSFER -- PART VERIFIED, PART REASONED. Verified: the plan input set is `{selectedModel, hasByokProvider, errorCode, continueOnAutoMode, ...}`, i.e. the bundle passes `hasByokProvider` into the very decision that picks `switch_auto`, so BYOK is explicitly material to it. Reasoned, NOT verified (the decision function `sessionPlanRateLimitedTurnJson` lives in the compiled `prebuilds/darwin-arm64/runtime.node`; a strings scan for `switch_auto` / `prompt_auto` / `rate_limit_auto` returned nothing extractable, so the branch conditions could not be read): a BYOK session is pinned to ONE user-supplied endpoint by construction and `applyModelChange(\"auto\")` would hand it to the Copilot router, contradicting the pin -- so `switch_auto` is very unlikely to be offered for `hasByokProvider:true`. Independently of how that resolves, the plan-entitlement wall in the body is sufficient on its own and IS live-verified. Treat \"point mock-openai-429 at it and watch it fail over\" as unsupported until someone reads the native branch or observes it.",
+        "THE RETRY ITSELF STAYS INVISIBLE, BY THE VENDOR'S DESIGN -- AND THAT IS A CAVEAT, NOT A BUG. `assistant.turn_retry`, `model.call_failure`, `auto_mode_switch.requested` and `auto_mode_switch.completed` are all `ephemeral:{\"const\":true}` with `ephemeral` in `required`, and `app.js` filters them out of both the persisted log and the external consumer stream (`includeEphemeral:!1`). So irrlicht can never count the failed attempts, see the provider status code that triggered the failover, or observe the user-prompted variant of the switch. None of that is in the scenario's acceptance criteria, which ask only about ModelName and state -- hence a caveat, per the caveats-over-downgrades rule.",
+        "IRRLICHT SEES THE MODEL CHANGE BUT DROPS THE `cause`, SO A FAILOVER IS INDISTINGUISHABLE FROM A `/model` SWITCH. The parser's `evModelChange` arm reads `newModel` only; `cause:\"rate_limit_auto_switch\"` and `previousModel` are discarded. Observationally this cell's transcript signature is identical to 5-3 model-switch-midsession. Not a downgrade -- no acceptance bullet mentions the cause -- but it is the one field that would let a dashboard say \"failed over\" rather than \"model changed\", and it is a cheap one-line unlock in `setModel`'s caller if that is ever wanted.",
+        "CONFIDENCE 0.78, AND WHAT WOULD MOVE IT. The mechanism and the persistence boundary are read directly from the shipped 1.0.77 bundle and its schema, and `session.model_change` persistence is confirmed empirically (5 lines on disk). What is NOT confirmed live is the emission itself: nobody has observed a `session.model_change{cause:\"rate_limit_auto_switch\"}` line, because nobody on this account can reach the branch. Per the observation-vs-emission rule the `daemon=full` here is PROVISIONAL on that one point; a single recording on an entitled plan would settle it.",
+        "THE PER-SESSION-STICKY ROUTER FINDING FROM 5-3 DOES NOT CONTRADICT THIS CELL. `session.auto_mode_resolved` fires exactly once per session (5 sessions / 13 turns locally, `fallback:false`, `routingMethod:\"hydra\"` in all five) -- that is what makes a SPONTANEOUS mid-turn model change impossible here. This cell does not depend on it. The failover is an explicit `applyModelChange` call on the rate-limit path, not a router re-resolution. Note also that `AutoModeResolvedData.fallback` is NOT the failover signal despite the name: its schema text is \"Whether the router fell back to the standard Auto selection\", i.e. the Auto-Intent classifier service degrading to the default pick at resolution time. It is orthogonal to this scenario and observed `false` in every local session."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "@github/copilot-darwin-arm64/app.js (CLI 1.0.77 shipped bundle) -- `async handleNativeRateLimitedTurn(e)`",
+          "note": "The whole verdict. Plan input `sessionPlanRateLimitedTurnJson(JSON.stringify({selectedModel, hasByokProvider, errorCode, continueOnAutoMode, continueOnAutoModeSettingsLoaded, hasAutoModeSwitchListeners, remainingCount, retryAfterSeconds}))`, then three branches: `action===\"switch_auto\"` (automatic, no prompt) and `action===\"prompt_auto\"` (raises auto_mode_switch.requested, awaits yes/yes_always/no) both do `emit(\"session.info\",{infoType:\"auto_mode_switch\",message:\"Rate limited. Switching to auto mode to continue.\"})` + `applyModelChange(cC,{cause:\"rate_limit_auto_switch\"})` and RETURN `{action:\"continue\"}` -- the same turn continues; the third branch is the `pauseMessage` / `rate_limit_pause` wait. `yes_always` persists the setting via `Yt.writeKey(\"continueOnAutoMode\",!0,...)`, which is what makes subsequent failovers take the promptless switch_auto branch."
+        },
+        {
+          "kind": "file",
+          "ref": "@github/copilot-darwin-arm64/app.js -- `async applyModelChange(e,n)` and the constant `cC=\"auto\"`",
+          "note": "applyModelChange ends in `this.emit(\"session.model_change\",{previousModel:r,newModel:e,...,cause:n?.cause})`. `cC=\"auto\"` is the switch TARGET, which is both why the fallback label arrives as the placeholder \"auto\" (caveat 2) and why a session already on auto has nothing to switch to (the record_blocked wall)."
+        },
+        {
+          "kind": "file",
+          "ref": "@github/copilot-darwin-arm64/schemas/session-events.schema.json -- ModelChangeData.cause",
+          "note": "\"Reason the change happened, when not user-initiated. Currently `\\\"rate_limit_auto_switch\\\"` for changes triggered by the auto-mode-switch rate-limit recovery path. UI clients can use this to render contextual copy.\" The vendor's own schema classifies this failover as non-user-initiated -- the acceptance criteria's \"without user action\" clause, sourced rather than argued. ModelChangeEvent's `ephemeral` is a plain optional boolean with NO `const:true`, so the event is persisted."
+        },
+        {
+          "kind": "file",
+          "ref": "@github/copilot-darwin-arm64/schemas/session-events.schema.json -- AssistantTurnRetryEvent, ModelCallFailureEvent, AutoModeSwitchRequestedEvent, AutoModeSwitchCompletedEvent",
+          "note": "All four carry `ephemeral: {\"type\":\"boolean\",\"const\":true,\"description\":\"Always true for events that are transient and not persisted to the session event log on disk.\"}` with `ephemeral` in `required` -- the vendor stating that the retry/failure telemetry NEVER reaches events.jsonl. AssistantTurnRetryData would have carried exactly `{turnId, model, reason}`. This is the evidence for caveat 4, and it is why the failover had to be observed via session.model_change instead."
+        },
+        {
+          "kind": "file",
+          "ref": "@github/copilot-darwin-arm64/app.js -- the ephemeral persistence filter",
+          "note": "`this.api.eventLog.read({cursor:n,waitMs:0,includeEphemeral:!1})` and `for(let s of this.api.getEvents()) s.ephemeral || s.type!==\"session.binary_asset\" && o.push(...)`. The runtime honours the schema's ephemeral flag on both the persisted log and the external consumer stream."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.copilot/session-state/*/events.jsonl -- census over all 6 local session dirs, 13 completed turns, read-only",
+          "note": "Empirical persistence boundary. PRESENT on disk: assistant.turn_start 13, assistant.message 13 (every one model-bearing: 8 gpt-5-mini, 5 claude-haiku-4.5), assistant.turn_end 13, session.model_change 5, session.auto_mode_resolved 5, session.info 1, session.usage_checkpoint 7, session.shutdown 5. ABSENT entirely: assistant.turn_retry, model.call_failure, auto_mode_switch.requested, auto_mode_switch.completed -- corroborating the const:true ephemeral marks. All 5 auto_mode_resolved lines carry fallback:false, fallbackReason:null, routingMethod:\"hydra\", stickyOverride:false."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go L85-99, L124-132, L166-172, L189-196",
+          "note": "The three acceptance bullets against existing parser arms: `case evModelChange: p.setModel(str(data,\"newModel\"), ev); ev.Skip = true` gives bullet (a) ModelName change and bullet (b) no state flicker in the same two lines; `case evTurnEnd: ev.EventType = \"turn_done\"` settles working->ready for bullet (c); `parseAssistantMessage` -> `setModel(str(data,\"model\"))` re-stamps the concrete fallback after the \"auto\" placeholder; L127-129 stamps the sticky model onto every event including skipped ones. No adapter change needed -- hence full, not bug."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/5-3_model-switch-midsession/metadata.json",
+          "note": "The record_blocked wall, live-verified there at zero credit cost: `/model gpt-5-mini` returns 'Model \"gpt-5-mini\" can\\'t be selected -- only Auto mode is available on your plan', because the CAPI model list is empty for this plan and only the literal 'auto' bypasses the availability check. A session that can only ever be on auto has no pinned model to be rate-limited off, so the switch_auto branch is unreachable here. Same cell establishes the per-session-sticky router (caveat 7)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh via driver_step_types_from_file (tools/onboarding-factory/scripts/lib/recipe-lint.sh)",
+          "note": "Reports exit_clean, interrupt, keys, reset_session, restart, resume, send, session, sigkill, slash, sleep, start_session, wait_turn. The recipe needs only send/wait_turn/sleep/exit_clean -- driver_capability: ready, no gap."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/{claudecode,codex,kiro-cli}/scenarios/5-5_provider-failover-midturn/metadata.json",
+          "note": "The siblings this cell deliberately departs from. All three reason 'single provider selected at startup; provider identity never reaches the transcript; even a swap would leave no observable trace' -> daemon=incapable -> frozen. Both halves fail for copilot: the swap is an explicit in-turn applyModelChange that returns {action:\"continue\"}, and it is witnessed by a persisted session.model_change the parser already reads. Recorded here so a future audit sees the divergence was deliberate and evidenced, not an oversight."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "timeout_seconds": 300,
+      "settings": {
+        "continueOnAutoMode": true
+      },
+      "preconditions": [
+        "BLOCKING (billing/human, not tooling): a GitHub Copilot plan with INDIVIDUAL MODEL ACCESS. This account's CAPI model list is empty, so the session can only ever be on 'auto' -- and 'auto' is the failover TARGET (cC=\"auto\"), so there is nothing to fall back onto. Live-verified in the 5-3 cell.",
+        "BLOCKING: the pinned premium model must actually be rate-limited (a real CAPI errorCode with remainingCount/retryAfterSeconds). This is quota exhaustion on a real account, not a mock -- and see the BYOK caveat: the rig's mock-openai-429 is not a substitute, because hasByokProvider is an explicit input to the branch decision.",
+        "settings.continueOnAutoMode = true, so the plan selects the promptless `switch_auto` branch rather than `prompt_auto`. Without it the CLI raises auto_mode_switch.requested and waits for the user -- which still produces the same persisted events on 'yes', but violates the scenario's 'without user action' criterion.",
+        "copilot CLI 1.0.77+ on PATH and authenticated; irrlichd recording with the copilot adapter's transcripts permission granted."
+      ],
+      "setup": [
+        "Marked applicable:false and record_blocked:upstream. The script below is the target recipe, written out so the cell can be driven the day the plan is upgraded -- it is NOT driven now.",
+        "The session must be pinned to a concrete premium model (`/model <id>` at launch, or the --model flag) -- NOT auto. Pinning is exactly what this account cannot do.",
+        "A long single turn is wanted so the rate limit lands MID-turn rather than between turns: the prompt asks for sustained multi-step work, and the failover is expected to arrive inside it with no user input in between.",
+        "The trailing exit_clean is load-bearing for the same reason as 5-1/5-3: input tokens have no live signal and land in one delta at session.shutdown."
+      ],
+      "script": [
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Work through this steadily and without stopping to ask me anything: list the files in this directory, then for each one summarise what it does in a sentence, then write a short combined summary."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl contains session.model_change with cause=\"rate_limit_auto_switch\", newModel=\"auto\" and previousModel=<the pinned premium model>",
+        "that line falls BETWEEN the turn's user.message and its assistant.turn_end -- i.e. genuinely mid-turn",
+        "the recording shows NO state_transition at the model_change line: the session stays working across it, with no flicker to ready and none to waiting",
+        "at least one assistant.message follows the model_change within the SAME turn (the turn continued rather than aborting), and it carries the concrete fallback model id",
+        "after assistant.turn_end the session is ready and model_name is that concrete fallback label -- NOT 'unknown' and NOT the placeholder 'auto'",
+        "estimated_cost_usd > 0 and TotalTokens > 0",
+        "EXPECTED TO BE ABSENT: assistant.turn_retry, model.call_failure, auto_mode_switch.requested, auto_mode_switch.completed -- all four are const:true ephemeral. If ANY of them appears on disk, the schema's persistence contract changed and this assessment's caveat 4 must be re-opened."
+      ]
+    }
+  }
+}
