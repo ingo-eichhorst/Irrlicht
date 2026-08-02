@@ -1,0 +1,117 @@
+{
+  "scenario_id": "self-correction-iteration",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+a21849f",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "self-correction-iteration",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts a single user-observable invariant: one contiguous `working` span across a failing tool call and its correction inside ONE turn — `ready → working`, no flicker to `ready` or `waiting` between attempts, then `working → ready`. It is a lock on the parser's turn-boundary gate, not a feature test.\n\n**agent_supports: yes.** GitHub Copilot CLI 1.0.77 runs multiple shell tool calls within one turn and reacts to a failed one. Each invocation is a `tool.execution_start` / `tool.execution_complete` pair keyed on `data.toolCallId` in `$COPILOT_HOME/session-state/<session-id>/events.jsonl`; a FAILED execution presents as `data.success:false` on the completion, which `parseToolComplete` maps to `ParsedEvent.IsError` (parser.go:229-231). Several such pairs inside one turn, closed by a single `assistant.turn_end`, is exactly the shape this scenario needs. Under `--allow-all` (the driver's launch flag) both attempts auto-execute, so no retry cycle is interrupted by an approval gate.\n\n**daemon_capability: full.** The no-flicker invariant holds STRUCTURALLY for this adapter rather than by timing luck, because copilot's turn boundary is explicit and the parser's dispatch is a closed switch (parser.go:85-119):\n\n| observable | events.jsonl event | parser output | state effect |\n|---|---|---|---|\n| turn opens (`ready→working`) | `user.message` | `user_message` | → working |\n| failing attempt | `tool.execution_start` + `tool.execution_complete` (`success:false`) | `function_call` + `function_call_output` with `IsError` | none — continued activity |\n| the agent's between-attempts commentary | `assistant.message` | `assistant_message` | none — `parseAssistantMessage` deliberately never settles the turn (parser.go:187-188) |\n| corrective attempt | second `tool.execution_start` / `tool.execution_complete` pair | `function_call` / `function_call_output` | none |\n| turn ends (`working→ready`) | `assistant.turn_end` | `turn_done` | → ready |\n\nOnly `user.message` and `assistant.turn_end` move state; `waiting` is reachable ONLY via `permission_requested` (`permission.requested`), which `--allow-all` prevents. `session.start`, `assistant.turn_start`, model-change, usage-checkpoint, shutdown and subagent events are all `Skip=true`, and the `default` arm skips every event type a future CLI adds — so there is no bookkeeping line that could settle a mid-turn session to `ready`. Crucially, because the boundary is an explicit `assistant.turn_end` marker, the daemon runs NO idle/settle heuristic here: a long pause between the failing attempt and the recovery cannot be mistaken for turn completion, which is the failure mode this scenario exists to catch on heuristic adapters.\n\nThe `IsError` flag itself is timeline decoration, not a state input — asserting it is out of scope for a spec restricted to user-observable state.\n\nBirth is the PRESESSION shape, not single-birth: copilot creates the session-state directory at launch but writes `events.jsonl` only when the first prompt is sent (driver SEAM 3), so `processlifecycle`'s scanner emits a transient `proc-<PID>` row first (scanner.go:347) and the real dir-keyed session id (`sessionIDFromPath`) arrives later. The spec models two birth phases and anchors every later phase to `session_birth`, templated from the mistral-vibe sibling for the same scenario. PID binding is by cwd (`DiscoverPIDByCWD(\"copilot\", …)`, pid.go) against the `ExactName{copilot}` matcher.\n\n**driver_capability: ready.** The recipe needs `send` / `wait_turn` / `sleep` only; all three are in `DRIVE_ELICITS` and genuinely ported. `wait_turn` counts `\"type\":\"assistant.turn_end\"` occurrences — an EXACT completed-turn count, so the driver does not return early between the failing and corrective attempts the way a tail-quietness heuristic could.\n\n## Observations\n\n`cost_nonzero` + `tokens_nonzero` are asserted and derivable OFFLINE from the staged transcript: output tokens land per `assistant.message.outputTokens` while the session runs, and both models this account can reach are priced in the committed replay capacity snapshot (`gpt-5-mini` directly; `claude-haiku-4-5` via the alias added for #1256).\n\n`model` is deliberately NOT pinned: `--model` accepts only `auto` on this account and the router picks per turn between `gpt-5-mini` and `claude-haiku-4.5` (both seen in ONE live 1.0.77 session), so an exact match would fail on router choice rather than on a regression. `record` fills it from the recording.",
+      "caveats": [
+        "Whether copilot's bash tool reports a non-zero shell exit as `data.success:false` (→ `IsError`) or wraps it as a success with a non-zero exit code in `result` is NOT verified for 1.0.77 — kiro-cli does the latter. It does not affect this spec: neither shape produces a state transition, so the contiguous working span holds either way. The recipe's prompt asks for a command that fails AND for a retry, so the retry cycle happens regardless of how the failure is encoded.",
+        "The number of retry cycles is model-dependent. gpt-5-mini may run `false`, see it fail, and go straight to `echo recovered` (two tool calls), or interleave extra diagnostic calls. The spec asserts the SPAN, not a tool-call count, so a varying cycle count cannot fail it — but a run where the model refuses to execute a knowingly-failing command would produce a single tool call and should be re-driven with a sharper prompt, not accommodated by weakening the spec.",
+        "The no-waiting half of the invariant rests on the driver's `--allow-all` flag. Without it copilot raises `permission.requested`, the parser emits `permission_requested`, and the session correctly enters `waiting` — which is the sibling gated-tool scenario, not a failure of this one. If a recording flips to waiting here, tighten the launch flags rather than the spec.",
+        "PROVISIONAL on emission: daemon=full is composed from reading the parser plus the live-captured 1.0.77 envelope fixtures in metrics_test.go, not from a recording of THIS scenario. The tool-pair and turn-boundary events were confirmed live; that two failing-then-corrective pairs land inside ONE `assistant.turn_end` bracket (rather than copilot closing the turn after the failure and opening a new one) is the part only `record` can settle.",
+        "`events.jsonl` does not exist until the first prompt is sent (driver SEAM 3, live-verified on 1.0.77), so the real session is born `ready` and moves to `working` within roughly the same second; the `session_birth` ready observation is tight and could be coalesced with `turn_start` by the tailer's debounce. If `record` sees it collapsed, re-anchor the phases rather than dropping the ready birth.",
+        "Input tokens are only reported at `session.shutdown` (a `session.usage_checkpoint` carries `totalNanoAiu` but NO token counts — verified live on 1.0.77). This recipe has no `exit_clean` step, so the recording carries output tokens only. That still satisfies tokens_nonzero/cost_nonzero, but the input half of the summary reads 0.",
+        "Recording spends real Copilot AI credits, and this cell is a MULTI-tool-call turn so it costs more than the single-call siblings. Export `COPILOT_AVAILABLE_TOOLS=bash` before driving (the driver forwards it as `--available-tools=bash`): tool definitions are ~8.3k of ~12k input tokens per turn, so restricting to the one tool this scenario needs roughly halves per-turn cost."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "ParseLine dispatch (85-119): only user.message and assistant.turn_end carry state; every other type incl. the default arm is Skip. parseToolComplete (224-232) maps data.success:false → IsError with NO state effect. parseAssistantMessage (183-208) documents that an assistant reply never settles the turn."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Source is FilesUnderRoot over ~/.copilot/session-state with sessionIDFromPath = the <session-id> directory (transcript basename is the constant events.jsonl); ExactName{copilot} matcher"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/pid.go",
+          "note": "DiscoverPIDByCWD(\"copilot\", cwd, …) — cwd-only binding, no sidecar fallback; grounds the pid_bind phase"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/scanner.go",
+          "note": "maybeTrackNewPID emits sessionID proc-<pid> (line 347) when no active transcript covers the PID, superseded once the real transcript appears — the presession two-phase birth this spec models"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS (line 128) carries send/wait_turn/sleep; launch adds --allow-all (line 180) and honours COPILOT_AVAILABLE_TOOLS (line 181); wait_turn counts assistant.turn_end for an exact turn count so it cannot return between retry cycles; SEAM 3 records that events.jsonl appears only at the first prompt"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/metrics_test.go",
+          "note": "live-captured 1.0.77 envelope fixtures: assistant.message.outputTokens is the live token signal; modelMetrics/currentTokens exist only on session.shutdown; both gpt-5-mini and claude-haiku-4.5 appear in one session"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/2-4_self-correction-iteration/expected.jsonl",
+          "note": "presession-shaped sibling spec for the SAME scenario (FilesUnderRoot + dir-keyed session id) — the two-phase birth + intermediate_working shape templated here"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/2-2_auto-executed-tool-call/metadata.json",
+          "note": "copilot sibling establishing the presession birth, --allow-all no-waiting invariant and the unpinned-model observation policy this cell reuses"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 240,
+      "settings": {},
+      "preconditions": [
+        "copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits — this recording spends them, and a multi-tool-call turn costs more than the single-call siblings",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a --record daemon)",
+        "tmux available (the interactive driver drives the REPL through it)"
+      ],
+      "setup": [
+        "The driver isolates state under $STAGING/copilot-home via COPILOT_HOME (the supported lever; --config-dir is deprecated) and seeds trustedFolders + askedSetupTerminals so neither first-run prompt blocks the input box",
+        "Launch is `copilot --allow-all --no-color` in a fresh per-run cwd under <staging>/cwd/, so BOTH the failing and the corrective bash call auto-execute and no permission.requested is ever written — that is what makes the no-waiting half of the invariant structural rather than incidental",
+        "Recommended: export COPILOT_AVAILABLE_TOOLS=bash before driving. The driver forwards it as --available-tools=bash, which drops the unused tool definitions (~8.3k of ~12k input tokens) and roughly halves the credits this cell costs",
+        "Interactive, not headless: the REPL must outlive the turn so the daemon observes the working→ready settle rather than a process exit",
+        "wait_turn counts assistant.turn_end lines — copilot writes an explicit turn boundary, so the wait is exact and cannot return in the gap between the failing attempt and the recovery"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Using the bash tool, run the shell command `false` — it will fail. Then, in this same turn, retry with the bash tool running `echo recovered`. Then reply with just: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a transient proc-<PID> presession born ready, then the real <session-id> session (a DIFFERENT id, the session-state directory name) born ready when the transcript appears",
+        "events.jsonl shows exactly one ready→working transition for the real session",
+        "at least 2 tool_use events for the bash tool fall inside that working span (tool.execution_start / tool.execution_complete pairs on distinct toolCallIds — the failing attempt and the recovery)",
+        "events.jsonl contains NO state_transition to ready between the failing tool result and the corrective tool call",
+        "events.jsonl contains NO state_transition to waiting at any point during the working span (--allow-all → no permission.requested)",
+        "events.jsonl shows exactly one working→ready transition, at the assistant.turn_end that closes the turn",
+        "final session state is ready",
+        "the newest recording's replay summary shows cum_output_tokens > 0 and estimated_cost_usd > 0, with model_name one of gpt-5-mini / claude-haiku-4.5 (router's choice — not pinned)"
+      ]
+    }
+  }
+}
