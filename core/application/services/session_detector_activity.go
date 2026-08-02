@@ -771,10 +771,11 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// Ready→working (if applicable) already ran in processActivityLocked,
 	// before applyBackgroundLiveness — see that call site.
 
-	// Overlay every held out-of-band signal — the permission prompt (#108),
-	// the Stop hook's authoritative turn-done (#1161), the idle_prompt
-	// correction (#1173) and the PreCompact force-working hold (#657) — onto
-	// the metrics ClassifyState is about to read. Each signal's own lifecycle
+	// Overlay every held signal — the permission prompt (#108), the Stop hook's
+	// authoritative turn-done (#1161), the idle_prompt correction (#1173), the
+	// PreCompact force-working hold (#657) and the transcript-based
+	// stalled-edit-tool fallback (#488) — onto the metrics ClassifyState is
+	// about to read. Each signal's own lifecycle
 	// rule (persistent vs consume-once, and when it goes stale) is declared in
 	// session.signalPolicies rather than spelled out here; see
 	// SignalHolds.Overlay for why their application order is load-bearing.

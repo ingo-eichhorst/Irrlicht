@@ -251,6 +251,48 @@ func TestSignalHolds_StaleIsCheckedOnTheFirstPass(t *testing.T) {
 	}
 }
 
+// TestSignalPolicies_OrderIsPinned turns signalPolicies' load-bearing order
+// from prose into an assertion. The table's own header says THE ORDER IS
+// LOAD-BEARING, but until #1319 the only thing enforcing it was a reviewer
+// noticing — and a row inserted in the wrong place still compiles, still
+// applies, and fails nothing.
+//
+// Two orderings actually carry weight, and both are one-directional reads of a
+// field an earlier row writes on the same pass:
+//
+//   - SignalTurnDone before SignalIdlePrompt: idle_prompt's staleness calls
+//     IsAgentDone, which reads the HookTurnDone that turn_done's apply just
+//     set. Reversed, a hook-corrected waiting is discarded as stale one
+//     instruction before it would have been applied.
+//   - SignalPermissionPrompt before SignalOpenToolStalled: the stalled row's
+//     ripe rule reads PermissionPending, which the permission row's apply
+//     sets. Reversed, the transcript fallback fires alongside the hook it is
+//     supposed to defer to.
+//
+// Pinned as the exact full sequence rather than as two pairwise checks so that
+// adding a row is a deliberate act — the test names the position, and whoever
+// changes it has to say why in the diff.
+func TestSignalPolicies_OrderIsPinned(t *testing.T) {
+	want := []SignalKind{
+		SignalPermissionPrompt,
+		SignalTurnDone,
+		SignalIdlePrompt,
+		SignalCompactInProgress,
+		SignalOpenToolStalled,
+	}
+
+	if len(signalPolicies) != len(want) {
+		t.Fatalf("signalPolicies has %d rows, want %d — a row was added or removed; "+
+			"confirm the ordering invariants in this test's doc comment still hold, then update want",
+			len(signalPolicies), len(want))
+	}
+	for i, kind := range want {
+		if got := signalPolicies[i].kind; got != kind {
+			t.Errorf("signalPolicies[%d] = %q, want %q", i, got, kind)
+		}
+	}
+}
+
 // TestSignalHolds_RipeGatesTheFirstApply covers the arming predicate #1319
 // added, at the mechanism level rather than through any one row: an unripe hold
 // is neither applied nor dropped nor consumed, and it applies on the first pass

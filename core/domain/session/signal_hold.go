@@ -305,10 +305,13 @@ var signalPolicies = []signalPolicy{
 		//   - compactHoldTimeout elapsing — see that constant for why the
 		//     ceiling is there and why five minutes.
 		//
-		// Last in the table, which is where the hand-rolled overlay it
-		// replaced ran. Nothing depends on that position: its staleness reads
-		// only transcript-derived state and the clock, and the field it
-		// applies is read by no other policy.
+		// Position-independent: its staleness reads only transcript-derived
+		// state and the clock, and the field it applies is read by no other
+		// policy. It was last in the table when #1297 added it — where the
+		// hand-rolled overlay it replaced ran — and #1319 appended
+		// SignalOpenToolStalled after it, which is fine precisely because
+		// nothing here depends on being last. The row that genuinely does is
+		// SignalOpenToolStalled; see TestSignalPolicies_OrderIsPinned.
 		stale: func(c holdContext) bool {
 			return c.Metrics.SawManualCompactBoundary || c.Now.Sub(c.HeldSince) >= compactHoldTimeout
 		},
@@ -405,8 +408,8 @@ func (h *SignalHolds) Hold(sessionID string, kind SignalKind, p SignalPayload, a
 	h.held[sessionID][kind] = heldSignal{payload: p, heldAt: at}
 }
 
-// HoldIfAbsent records kind for sessionID at time at only if no hold of that
-// kind is already in place, and reports whether it placed one.
+// HoldIfAbsent records kind for sessionID at time at, only if no hold of that
+// kind is already in place.
 //
 // It is Hold's arm-once counterpart, and the producer-side half of an
 // arm-then-fire policy. Hold deliberately *resets* HeldSince, which is correct
@@ -416,17 +419,16 @@ func (h *SignalHolds) Hold(sessionID string, kind SignalKind, p SignalPayload, a
 // poll, so a ripe rule measured from HeldSince could never come due. The
 // SignalOpenToolStalled producer re-observes the same open tool on every
 // classify pass, which is exactly that shape.
-func (h *SignalHolds) HoldIfAbsent(sessionID string, kind SignalKind, p SignalPayload, at time.Time) bool {
+func (h *SignalHolds) HoldIfAbsent(sessionID string, kind SignalKind, p SignalPayload, at time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, ok := h.held[sessionID][kind]; ok {
-		return false
+		return
 	}
 	if h.held[sessionID] == nil {
 		h.held[sessionID] = map[SignalKind]heldSignal{}
 	}
 	h.held[sessionID][kind] = heldSignal{payload: p, heldAt: at}
-	return true
 }
 
 // Release drops one held signal — the explicit end-of-life path, used when
