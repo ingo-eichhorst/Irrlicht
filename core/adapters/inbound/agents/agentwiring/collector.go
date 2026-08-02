@@ -13,6 +13,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/aider"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/hermes"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/outbound/compaction"
 	"irrlicht/core/adapters/outbound/metrics"
@@ -36,6 +37,7 @@ func ParserFactories(adapters []agent.Agent) map[string]agents.ParserFactory {
 	parserFactories := agents.Parsers(adapters)
 	parserFactories[aider.AdapterName] = func() tailer.TranscriptParser { return &aider.Parser{} }
 	parserFactories[opencode.AdapterName] = func() tailer.TranscriptParser { return &opencode.Parser{} }
+	parserFactories[hermes.AdapterName] = func() tailer.TranscriptParser { return &hermes.Parser{} }
 	return parserFactories
 }
 

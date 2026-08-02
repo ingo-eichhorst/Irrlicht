@@ -2,7 +2,7 @@
 
 Irrlicht is a daemon that monitors coding agent sessions. It watches transcript files and processes to classify sessions into 3 states: **working**, **waiting**, **ready**. Any upstream agent change that alters the items below can break detection.
 
-This file exists to brief a release-sweep analysis (`/ir:agent-releases`) on what it should actually look for. It covers all ten sections irrlicht ships: the **nine agent adapters** in `core/adapters/inbound/agents/` (`all.go`'s `All()` — claude-code, codex, pi, aider, opencode, kiro-cli, gemini-cli, antigravity, mistral-vibe) **plus the Gas Town orchestrator**, which is a different layer entirely (`core/adapters/inbound/orchestrators/gastown` — it polls a CLI, has no `Source` variant, and so is absent from the discovery table below).
+This file exists to brief a release-sweep analysis (`/ir:agent-releases`) on what it should actually look for. It covers all ten sections irrlicht ships: the **ten agent adapters** in `core/adapters/inbound/agents/` (`all.go`'s `All()` — claude-code, codex, pi, aider, opencode, kiro-cli, gemini-cli, antigravity, mistral-vibe, hermes) **plus the Gas Town orchestrator**, which is a different layer entirely (`core/adapters/inbound/orchestrators/gastown` — it polls a CLI, has no `Source` variant, and so is absent from the discovery table below).
 
 *(#1090's title says "4 of 10 agent adapters" and its body lists nine names "+ the gastown orchestrator". Nine + one orchestrator = ten sections; there are not ten agent adapters. Noted because the miscount is exactly the kind of thing this file is supposed to stop.)*
 
@@ -31,9 +31,9 @@ An adapter's `Source` variant determines how sessions are found at all. This is 
 |---|---|---|
 | `agent.FilesUnderRoot` | claude-code, codex, pi, gemini-cli, mistral-vibe, kiro-cli, antigravity | fswatcher over a `$HOME`-relative root |
 | `agent.FilesUnderCWD` | aider | **No watcher at all** — the process scanner stat-polls `<pid's CWD>/<filename>` |
-| `agent.ProcessOwnedStore` | opencode | Dedicated SQLite watcher; full tailer bypass |
+| `agent.ProcessOwnedStore` | opencode, hermes | Dedicated SQLite watcher; full tailer bypass |
 
-`core/domain/agent/source.go`; wired in `core/cmd/irrlichd/wiring.go:53-86` (which **panics** for any `ProcessOwnedStore` adapter other than opencode, `wiring.go:66`).
+`core/domain/agent/source.go`; wired in `core/cmd/irrlichd/wiring.go` (whose `ProcessOwnedStore` arm dispatches on adapter name — opencode and hermes each bring their own store watcher — and **panics** for any store adapter not listed there).
 
 > **This table is enforced, not asserted.** `TestSourceCensus`
 > (`core/adapters/inbound/agents/maps_test.go`) runs the same type-switch over

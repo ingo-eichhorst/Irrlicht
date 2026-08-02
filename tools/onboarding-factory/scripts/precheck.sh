@@ -34,7 +34,7 @@ fail() {
 
 # 1. Adapter is supported by a driver.
 case "$ADAPTER" in
-  claudecode|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe) ;;
+  claudecode|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|hermes) ;;
   *)
     fail "unknown adapter: $ADAPTER"
     ;;
@@ -112,12 +112,19 @@ case "$ADAPTER" in
   gemini-cli)  CLI_BIN="gemini";   VER_FIELD=1 ;;
   antigravity) CLI_BIN="agy";      VER_FIELD=1 ;;
   mistral-vibe) CLI_BIN="vibe";    VER_FIELD=2 ;;
+  hermes)      CLI_BIN="hermes";  VER_FIELD=3 ;;
   *) fail "unknown adapter: $ADAPTER" ;;
 esac
 
 command -v "$CLI_BIN" >/dev/null 2>&1 || fail "$CLI_BIN CLI not on PATH"
 # Merge stderr — `pi --version` writes to stderr, others to stdout.
 CLI_VER="$("$CLI_BIN" --version 2>&1 | awk -v f="$VER_FIELD" '{print $f}' | head -n1)"
+# Strip a leading "v" (hermes prints "Hermes Agent v0.19.0 ..."). Without
+# this the floor check below silently passes ANY version: `sort -V` orders
+# a bare "0.19.0" ahead of a "v"-prefixed string whatever the numbers say,
+# so LOWEST always equals MIN_VERSION and the comparison proves nothing.
+# A no-op for the adapters whose --version has no prefix.
+CLI_VER="${CLI_VER#v}"
 [[ -n "$CLI_VER" ]] || fail "could not parse '$CLI_BIN --version' output"
 
 if [[ -n "$MIN_VERSION" ]]; then

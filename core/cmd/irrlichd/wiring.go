@@ -6,12 +6,21 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/fswatcher"
+	"irrlicht/core/adapters/inbound/agents/hermes"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
+
+// storeWatcher is the shared shape of a ProcessOwnedStore adapter's
+// dedicated watcher: an inbound.Watcher that also names the store it
+// reads, for the startup log line.
+type storeWatcher interface {
+	inbound.Watcher
+	Root() string
+}
 
 // buildAgentWatchers dispatches on the Agent's Source variant and
 // constructs the appropriate transcript watchers + process scanners.
@@ -20,10 +29,11 @@ import (
 // Dir and a process scanner keyed on the matcher. FilesUnderCWD adapters
 // get only a scanner, configured with the variant's Filename so it emits
 // transcript_new events on first appearance of the per-process file
-// inside CWD. ProcessOwnedStore adapters get a scanner plus their
-// dedicated store watcher (OpenCode's SQLite poller — panics loudly for
-// any other ProcessOwnedStore adapter, which must wire its watcher here;
-// grant-all daemons exercise every factory at boot, so CI catches it).
+// inside CWD. ProcessOwnedStore adapters get a scanner plus their own
+// dedicated store watcher, selected by adapter name (OpenCode's and
+// Hermes' SQLite pollers) — an unlisted store adapter panics loudly
+// rather than running scanner-only; grant-all daemons exercise every
+// factory at boot, so CI catches it.
 //
 // Returns the list of watchers and a human-readable label for the
 // startup log line ("<adapter> (<root>)").
@@ -66,10 +76,22 @@ func buildAgentWatchers(
 			labels = append(labels, fmt.Sprintf("%s (%s)", a.Identity.Name, w.Root()))
 		}
 	case agent.ProcessOwnedStore:
-		if a.Identity.Name != opencode.AdapterName {
+		// Each ProcessOwnedStore adapter brings its own store watcher: the
+		// stores are different databases with different schemas, so there is
+		// nothing generic to construct from the variant alone. Dispatch on
+		// the adapter name and keep the default loud — a new store adapter
+		// that forgets this line fails at boot rather than running
+		// scanner-only (grant-all daemons exercise every factory at boot,
+		// so CI catches it).
+		var w storeWatcher
+		switch a.Identity.Name {
+		case opencode.AdapterName:
+			w = opencode.New(maxSessionAge).WithIdentity(a.Identity)
+		case hermes.AdapterName:
+			w = hermes.New(maxSessionAge).WithIdentity(a.Identity)
+		default:
 			panic(fmt.Sprintf("buildAgentWatchers: no store watcher wired for ProcessOwnedStore adapter %q — add its construction here", a.Identity.Name))
 		}
-		w := opencode.New(maxSessionAge).WithIdentity(a.Identity)
 		watchers = append(watchers, w)
 		labels = append(labels, fmt.Sprintf("%s-db (%s)", a.Identity.Name, w.Root()))
 	case agent.FilesUnderCWD:

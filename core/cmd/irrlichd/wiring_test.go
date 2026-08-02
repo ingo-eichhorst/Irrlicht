@@ -6,6 +6,7 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/fswatcher"
+	"irrlicht/core/adapters/inbound/agents/hermes"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/domain/agent"
@@ -13,8 +14,9 @@ import (
 )
 
 // countWatcherKinds classifies watchers by concrete type — a process scanner,
-// an fswatcher (FilesUnderRoot), or an opencode store watcher
-// (ProcessOwnedStore) — failing the test on any unexpected type.
+// an fswatcher (FilesUnderRoot), or a per-adapter store watcher
+// (ProcessOwnedStore: opencode, hermes) — failing the test on any unexpected
+// type.
 func countWatcherKinds(t *testing.T, name string, watchers []inbound.Watcher) (scanners, fswatchers, stores int) {
 	t.Helper()
 	for _, w := range watchers {
@@ -32,6 +34,8 @@ func countWatcherKinds(t *testing.T, name string, watchers []inbound.Watcher) (s
 				t.Errorf("%s: fswatcher for %s has no logger — wiring.go must pass one via WithLogger", name, fsw.Root())
 			}
 		case *opencode.Watcher:
+			stores++
+		case *hermes.Watcher:
 			stores++
 		default:
 			t.Errorf("%s: unexpected watcher type %T", name, w)
@@ -91,7 +95,7 @@ func assertAgentWatcherSet(t *testing.T, a agent.Agent, noCheck func(string, int
 // buildAgentWatchers must dispatch every registered adapter's Source variant
 // without panicking and build the right watcher set: exactly one process
 // scanner for every adapter, plus the variant's dedicated watcher — an
-// fswatcher for FilesUnderRoot, the opencode store watcher for
+// fswatcher for FilesUnderRoot, the adapter's own store watcher for
 // ProcessOwnedStore, and none for FilesUnderCWD (scanner-only). The set is
 // checked by concrete type, not just count, so wiring the wrong watcher is
 // caught.
