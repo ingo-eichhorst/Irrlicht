@@ -27,7 +27,18 @@ import (
 // Distribution of the four shapes across the sample store used to build this
 // (11 sessions, 91 message rows): assistant/tool_calls 28, tool 28,
 // assistant/stop 17, user 17, user/model_switch 1.
-type Parser struct{}
+type Parser struct {
+	// todos reconciles the `todo` tool's whole-list snapshots into task
+	// deltas. Hermes rewrites the entire list on every call (todo_tool.py's
+	// replace mode), which is exactly the shape TodoReconciler exists for.
+	// Stateful, so one Parser per session — ComputeMetrics builds a fresh one
+	// and replays every row, so the reconciler is rebuilt deterministically.
+	todos tailer.TodoReconciler
+}
+
+// todoToolName is hermes' single task-management tool. It ships in the default
+// CLI toolset, so a task list is ordinary traffic rather than an opt-in.
+const todoToolName = "todo"
 
 // Synthetic keys injected by ComputeMetrics onto each row map. They carry
 // per-session context that lives on the `sessions` row rather than the
@@ -89,7 +100,11 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 			ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text))
 			ev.AssistantText = tailer.TruncateAssistantText(text)
 		}
-		ev.ToolUses = parseToolCalls(raw[keyToolCalls])
+		calls := decodeToolCalls(raw[keyToolCalls])
+		ev.ToolUses = toolUses(calls)
+		// The todo call is reported as a tool use AND mined for the plan it
+		// carries: dropping the use would leave a tool open that never closes.
+		p.todos.Reconcile(todosFromCalls(calls), ev)
 		if finish, _ := raw[keyFinish].(string); finish == "stop" {
 			ev.EventType = "turn_done"
 		}
@@ -115,21 +130,37 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 // Both `id` and `call_id` were identical in every observed row; `id` is
 // preferred and `call_id` is the fallback, because the matching `tool` row
 // closes the call by `tool_call_id`.
-func parseToolCalls(v interface{}) []tailer.ToolUse {
+// toolCall is one decoded entry of the `tool_calls` column. Arguments is a
+// JSON *string* (the column double-encodes it), so it is decoded lazily and
+// only for the calls that carry a payload we read.
+type toolCall struct {
+	ID       string `json:"id"`
+	CallID   string `json:"call_id"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// decodeToolCalls unmarshals the column into calls. A malformed value yields
+// nil rather than an error: a row we cannot read must not stall the session.
+func decodeToolCalls(v interface{}) []toolCall {
 	s, ok := v.(string)
 	if !ok || s == "" {
 		return nil
 	}
-	var calls []struct {
-		ID       string `json:"id"`
-		CallID   string `json:"call_id"`
-		Function struct {
-			Name string `json:"name"`
-		} `json:"function"`
-	}
+	var calls []toolCall
 	if err := json.Unmarshal([]byte(s), &calls); err != nil {
 		return nil
 	}
+	return calls
+}
+
+func parseToolCalls(v interface{}) []tailer.ToolUse {
+	return toolUses(decodeToolCalls(v))
+}
+
+func toolUses(calls []toolCall) []tailer.ToolUse {
 	var uses []tailer.ToolUse
 	for _, c := range calls {
 		id := c.ID
@@ -142,4 +173,37 @@ func parseToolCalls(v interface{}) []tailer.ToolUse {
 		uses = append(uses, tailer.ToolUse{ID: id, Name: c.Function.Name})
 	}
 	return uses
+}
+
+// todosFromCalls extracts the todo-list snapshot carried by a `todo` call.
+//
+// Hermes' todo tool takes `todos: [{id, content, status}]` (tools/todo_tool.py,
+// statuses pending|in_progress|completed|cancelled). The per-todo `id` is
+// stable, unlike opencode's, but the todos are keyed here by `content` anyway:
+// Key doubles as TaskDelta.Subject, and an agent-chosen id like "t2" is not
+// something to show a user. Two todos sharing content collapse — the same
+// documented trade-off every other TodoReconciler caller makes.
+//
+// A read-mode call (no `todos` param) and unparseable arguments both yield
+// nil, which Reconcile treats as a no-op.
+func todosFromCalls(calls []toolCall) []tailer.Todo {
+	var todos []tailer.Todo
+	for _, c := range calls {
+		if c.Function.Name != todoToolName || c.Function.Arguments == "" {
+			continue
+		}
+		var args struct {
+			Todos []struct {
+				Content string `json:"content"`
+				Status  string `json:"status"`
+			} `json:"todos"`
+		}
+		if err := json.Unmarshal([]byte(c.Function.Arguments), &args); err != nil {
+			continue
+		}
+		for _, t := range args.Todos {
+			todos = append(todos, tailer.Todo{Key: t.Content, Status: t.Status})
+		}
+	}
+	return todos
 }

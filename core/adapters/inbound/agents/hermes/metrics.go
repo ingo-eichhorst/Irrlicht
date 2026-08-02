@@ -138,6 +138,7 @@ func querySessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetrics,
 	metrics.HasOpenToolCall = len(fold.openTools) > 0
 	metrics.OpenToolCallCount = len(fold.openTools)
 	metrics.LastOpenToolNames = openToolNames(fold.openTools)
+	metrics.Tasks = fold.tasks
 
 	metrics.CumInputTokens = inTok.Int64
 	metrics.CumOutputTokens = outTok.Int64
@@ -181,13 +182,18 @@ type messageFold struct {
 	lastAssistantText string
 	pendingWaitingCue bool
 	openTools         map[string]string // tool-call id → tool name
+
+	// Task accumulator. The store path bypasses the tailer, so the same fold
+	// it performs is applied here via the shared helpers (see #277).
+	tasks    []session.Task
+	taskByID map[string]int
 }
 
 // foldMessages replays one session's message rows through Parser. ok is
 // false when the session has no rows at all, which is not an error: the
 // sessions row is INSERTed ~2s after launch, before the first reply.
 func foldMessages(db *sql.DB, sessionID, model, cwd string) (messageFold, bool) {
-	fold := messageFold{openTools: map[string]string{}}
+	fold := messageFold{openTools: map[string]string{}, taskByID: map[string]int{}}
 
 	rows, err := db.Query(`
 		SELECT role, content, tool_calls, tool_call_id, tool_name,
@@ -236,6 +242,10 @@ func (f *messageFold) apply(ev *tailer.ParsedEvent) {
 	if ev.ClearToolNames {
 		f.openTools = map[string]string{}
 	}
+	// The `todo` tool rewrites the whole list on every call, so the deltas
+	// advance it and the snapshot is authoritative for pruning + reversions.
+	tailer.ApplyTaskDeltas(ev.TaskDeltas, &f.tasks, f.taskByID)
+	tailer.ReconcileTaskSnapshot(ev.TaskSnapshot, &f.tasks, &f.taskByID)
 	if ev.AssistantText != "" {
 		f.lastAssistantText = ev.AssistantText
 		f.pendingWaitingCue = ev.PendingWaitingCue

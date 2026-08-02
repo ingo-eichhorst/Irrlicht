@@ -131,6 +131,103 @@ func TestParseLine_UnknownRoleIsSkipped(t *testing.T) {
 	}
 }
 
+// realTodoToolCallsJSON is a `messages.tool_calls` value in the shape hermes'
+// own tools/todo_tool.py defines: `todos` is a list of {id, content, status}
+// with status ∈ pending|in_progress|completed|cancelled, and a `merge` flag.
+// The arguments column is a JSON *string*, exactly like the terminal call
+// above — that double encoding is the part the adapter has to get right.
+const realTodoToolCallsJSON = `[{"id": "call_todo_1", "call_id": "call_todo_1", ` +
+	`"type": "function", "function": {"name": "todo", "arguments": ` +
+	`"{\"todos\":[{\"id\":\"t1\",\"content\":\"Read the failing test\",\"status\":\"completed\"},` +
+	`{\"id\":\"t2\",\"content\":\"Fix the parser\",\"status\":\"in_progress\"},` +
+	`{\"id\":\"t3\",\"content\":\"Run the suite\",\"status\":\"pending\"}],\"merge\":false}"}}]`
+
+// The todo tool is in hermes' default CLI toolset, so a task list is ordinary
+// traffic — but the adapter unmarshalled only {id, call_id, function.name} and
+// dropped function.arguments, so Tasks stayed empty and zero task_delta events
+// were emitted for a session that plainly had a plan.
+func TestParseLine_TodoToolCallProducesTaskDeltas(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		keyRole:      "assistant",
+		keyFinish:    "tool_calls",
+		keyToolCalls: realTodoToolCallsJSON,
+	})
+	if ev == nil || ev.Skip {
+		t.Fatal("assistant row must produce an event")
+	}
+	if len(ev.TaskDeltas) == 0 {
+		t.Fatal("a todo tool call must produce task deltas — the plan is otherwise invisible")
+	}
+	if ev.TaskSnapshot == nil || len(*ev.TaskSnapshot) != 3 {
+		t.Fatalf("TaskSnapshot must list all three todos, got %v", ev.TaskSnapshot)
+	}
+	// Subject is the user-visible label, matching every other todo adapter —
+	// hermes' stable per-todo id would render as an opaque token.
+	var subjects []string
+	for _, d := range ev.TaskDeltas {
+		if d.Op == tailer.TaskOpCreate {
+			subjects = append(subjects, d.Subject)
+		}
+	}
+	if len(subjects) != 3 || subjects[0] != "Read the failing test" {
+		t.Errorf("Create subjects = %v, want the three todo contents", subjects)
+	}
+	// The tool call itself must still be reported: dropping it would trade one
+	// gap for another (an unclosed tool would never settle).
+	if len(ev.ToolUses) != 1 || ev.ToolUses[0].Name != "todo" {
+		t.Errorf("ToolUses = %+v, want the todo call preserved", ev.ToolUses)
+	}
+}
+
+// A second snapshot must emit only the delta, not re-create the whole list —
+// that is what makes successive todo calls readable as progress.
+func TestParseLine_TodoToolCallSecondSnapshotIsDeltaOnly(t *testing.T) {
+	p := &Parser{}
+	p.ParseLine(map[string]interface{}{
+		keyRole: "assistant", keyFinish: "tool_calls", keyToolCalls: realTodoToolCallsJSON,
+	})
+	advanced := strings.Replace(realTodoToolCallsJSON,
+		`\"content\":\"Fix the parser\",\"status\":\"in_progress\"`,
+		`\"content\":\"Fix the parser\",\"status\":\"completed\"`, 1)
+	ev := p.ParseLine(map[string]interface{}{
+		keyRole: "assistant", keyFinish: "tool_calls", keyToolCalls: advanced,
+	})
+	for _, d := range ev.TaskDeltas {
+		if d.Op == tailer.TaskOpCreate {
+			t.Errorf("second snapshot must not re-Create %q", d.Subject)
+		}
+	}
+	if len(ev.TaskDeltas) == 0 {
+		t.Error("advancing a todo to completed must emit an Update")
+	}
+}
+
+// A non-todo tool call must not be mined for todos, and a todo call with
+// unparseable arguments must degrade to "no deltas" rather than panic.
+func TestParseLine_TodoExtractionIsNarrowAndSafe(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		keyRole: "assistant", keyFinish: "tool_calls", keyToolCalls: realToolCallsJSON,
+	})
+	if len(ev.TaskDeltas) != 0 || ev.TaskSnapshot != nil {
+		t.Errorf("a terminal call must not produce task deltas: %+v", ev.TaskDeltas)
+	}
+
+	for _, bad := range []string{`"not json"`, `"{}"`, `"{\"todos\":\"nope\"}"`, `""`} {
+		raw := `[{"id":"c1","type":"function","function":{"name":"todo","arguments":` + bad + `}}]`
+		ev := p.ParseLine(map[string]interface{}{
+			keyRole: "assistant", keyFinish: "tool_calls", keyToolCalls: raw,
+		})
+		if ev == nil {
+			t.Fatalf("malformed todo arguments must still yield an event: %s", bad)
+		}
+		if len(ev.TaskDeltas) != 0 {
+			t.Errorf("malformed todo arguments %s must yield no deltas, got %+v", bad, ev.TaskDeltas)
+		}
+	}
+}
+
 func TestParseToolCalls_Malformed(t *testing.T) {
 	for _, in := range []interface{}{nil, "", "not json", `{"not":"an array"}`, `[]`} {
 		if got := parseToolCalls(in); got != nil {

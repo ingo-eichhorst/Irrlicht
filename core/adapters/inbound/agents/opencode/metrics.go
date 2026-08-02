@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
-	"strconv"
 	"strings"
 	"time"
 
@@ -123,14 +122,14 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 		lastEventType = ev.EventType
 
 		applyToolTracking(ev, &openTools)
-		applyTaskDeltas(ev.TaskDeltas, &tasks, taskByID)
+		tailer.ApplyTaskDeltas(ev.TaskDeltas, &tasks, taskByID)
 		// Snapshot reconcile — mirrors tailer.go:reconcileTaskSnapshot.
 		// `todowrite` is a full-list replace by OpenCode semantics, so a
 		// snapshot is authoritative for both pruning (todos removed from
 		// the call vanish from metrics.Tasks) and status reversions the
 		// delta path skips by design. reconcileTaskSnapshot no-ops when
 		// there is no snapshot or no tasks yet.
-		reconcileTaskSnapshot(ev.TaskSnapshot, &tasks, &taskByID)
+		tailer.ReconcileTaskSnapshot(ev.TaskSnapshot, &tasks, &taskByID)
 		applyContribution(ev.Contribution, &cumInput, &cumOutput, &cumCacheRead, &cumCost)
 		trackTokensAndText(ev, metrics, &lastAssistantText)
 
@@ -239,63 +238,6 @@ func openToolNamesFrom(openTools map[string]string) []string {
 		names = append(names, name)
 	}
 	return names
-}
-
-// applyTaskDeltas folds TaskCreate/TaskUpdate deltas into tasks and
-// taskByID, mirroring the tailer's TaskDelta fold (tailer.go:708-728)
-// because OpenCode's metrics path bypasses the tailer. See issue #277.
-func applyTaskDeltas(deltas []tailer.TaskDelta, tasks *[]session.Task, taskByID map[string]int) {
-	for _, d := range deltas {
-		switch d.Op {
-		case tailer.TaskOpCreate:
-			id := strconv.Itoa(len(*tasks) + 1)
-			*tasks = append(*tasks, session.Task{
-				ID:          id,
-				Subject:     d.Subject,
-				Description: d.Description,
-				ActiveForm:  d.ActiveForm,
-				Status:      tailer.TaskStatusPending,
-			})
-			taskByID[id] = len(*tasks) - 1
-		case tailer.TaskOpUpdate:
-			if idx, ok := taskByID[d.ID]; ok && d.Status != "" {
-				(*tasks)[idx].Status = d.Status
-			}
-		}
-	}
-}
-
-// reconcileTaskSnapshot applies a todowrite snapshot to tasks and taskByID,
-// mirroring tailer.go:reconcileTaskSnapshot. `todowrite` is a full-list
-// replace by OpenCode semantics, so a snapshot is authoritative for both
-// pruning (todos removed from the call vanish from metrics.Tasks) and status
-// reversions the delta path skips by design. A nil snapshot or an empty task
-// list is a no-op.
-func reconcileTaskSnapshot(snapshot *[]tailer.TaskSnapshotEntry, tasks *[]session.Task, taskByID *map[string]int) {
-	if snapshot == nil || len(*tasks) == 0 {
-		return
-	}
-	snapByID := make(map[string]tailer.TaskSnapshotEntry, len(*snapshot))
-	for _, entry := range *snapshot {
-		snapByID[entry.ID] = entry
-	}
-	kept := make([]session.Task, 0, len(*tasks))
-	for i := range *tasks {
-		entry, present := snapByID[(*tasks)[i].ID]
-		if !present {
-			continue
-		}
-		if entry.Status != "" && entry.Status != (*tasks)[i].Status {
-			(*tasks)[i].Status = entry.Status
-		}
-		kept = append(kept, (*tasks)[i])
-	}
-	*tasks = kept
-	newByID := make(map[string]int, len(*tasks))
-	for i := range *tasks {
-		newByID[(*tasks)[i].ID] = i
-	}
-	*taskByID = newByID
 }
 
 // applyContribution accumulates per-turn usage and cost from a

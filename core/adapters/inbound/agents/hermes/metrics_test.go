@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	// Registers the "sqlite" driver for the database/sql handles these tests
@@ -355,5 +356,39 @@ func TestComputeMetrics_CarriesPendingWaitingCue(t *testing.T) {
 	m2, _ := ComputeMetrics(path, "s1")
 	if m2.PendingWaitingCue {
 		t.Error("a following user message must clear PendingWaitingCue")
+	}
+}
+
+// The end-to-end proof for the todo gap: a store carrying two successive
+// `todo` calls must surface as a task list on SessionMetrics. The parser test
+// covers the delta extraction; this covers the wiring through foldMessages,
+// which is what was actually missing — Tasks was never assigned at all.
+func TestComputeMetrics_TodoToolCallsPopulateTasks(t *testing.T) {
+	path, db := newTestStore(t)
+	insertSession(t, db, sessionRow{id: "s1", source: "cli", model: "gpt-5.6-luna", cwd: "/work/proj", started: 1000, ended: 0, msgs: 3})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "plan it", ts: 1001})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "assistant", toolCalls: realTodoToolCallsJSON, finish: "tool_calls", ts: 1002})
+	// Second snapshot advances t2 to completed — the status must follow.
+	advanced := strings.Replace(realTodoToolCallsJSON,
+		`\"content\":\"Fix the parser\",\"status\":\"in_progress\"`,
+		`\"content\":\"Fix the parser\",\"status\":\"completed\"`, 1)
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "assistant", toolCalls: advanced, finish: "tool_calls", ts: 1003})
+
+	m, err := ComputeMetrics(path, "s1")
+	if err != nil || m == nil {
+		t.Fatalf("ComputeMetrics = %v, %v", m, err)
+	}
+	if len(m.Tasks) != 3 {
+		t.Fatalf("len(Tasks) = %d, want 3 — the todo list must reach SessionMetrics", len(m.Tasks))
+	}
+	bySubject := map[string]string{}
+	for _, task := range m.Tasks {
+		bySubject[task.Subject] = task.Status
+	}
+	if got := bySubject["Fix the parser"]; got != "completed" {
+		t.Errorf("Fix the parser status = %q, want completed (second snapshot advanced it)", got)
+	}
+	if got := bySubject["Run the suite"]; got != "pending" {
+		t.Errorf("Run the suite status = %q, want pending", got)
 	}
 }
