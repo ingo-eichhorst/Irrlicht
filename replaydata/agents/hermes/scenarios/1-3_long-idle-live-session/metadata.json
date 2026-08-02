@@ -87,12 +87,13 @@
       "setup": [
         "Create an empty cwd under <staging>/cwd/; the driver launches `hermes chat` there under tmux and polls for the 'Type your message or /help' banner before the first send (keystrokes typed during boot are swallowed silently)",
         "The daemon's effective readyTTL must be well under the recipe's 20 s post-turn sleep; 15 s gives a 1.33x margin without burning a minute per recording",
-        "The store row does not exist at launch — it is INSERTed on the first user message — so the driver resolves the session id lazily, filtered to started_at > launch_ts (the store is shared machine-wide and a stale row would otherwise satisfy wait_turn instantly)"
+        "The store row does not exist at launch — it is INSERTed on the first user message — so the driver resolves the session id lazily, filtered to started_at > launch_ts (the store is shared machine-wide and a stale row would otherwise satisfy wait_turn instantly)",
+        "Both turns use a THREE-SENTENCE prose prompt, not the one-word reply this cell was first recorded with, and that is load-bearing rather than cosmetic. With `Reply with exactly the word: ok` the whole turn landed inside a SINGLE watcher scan: one transcript_activity carried both the user row and the assistant/stop row, so the daemon emitted `force ready→working` and `agent finished turn → ready` in the same millisecond (23:33:26.931), and then a SECOND, debounced activity 739 ms later (23:33:27.626, preceded by a debounce_terminal event) forced ready→working→ready all over again. idle_window anchors on the FIRST working→ready, so that trailing bounce broke its `no state_transition to working` invariant at +739 ms and cascaded into second_turn_start/second_turn_end via the unknown-anchor rule — 3/6 phases. A wide generation makes the user row and the assistant row land in DIFFERENT scans, which is exactly the shape the passing sibling cells show (2-13_turn-end-terminal-text: activity→working at 23:30:09.221, activity→ready at 23:30:14.106, two activities, one clean pair, no trailing bounce)."
       ],
       "script": [
         {
           "type": "send",
-          "text": "Reply with exactly the word: ok"
+          "text": "Do not use any tools. Write exactly three sentences explaining why the ocean appears blue."
         },
         {
           "type": "wait_turn"
@@ -103,7 +104,7 @@
         },
         {
           "type": "send",
-          "text": "Reply with exactly the word: alive"
+          "text": "Do not use any tools. Write exactly three sentences explaining why sunsets appear red."
         },
         {
           "type": "wait_turn"
