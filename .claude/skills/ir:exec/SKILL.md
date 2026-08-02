@@ -99,7 +99,12 @@ worktree name. `close` additionally resolves it from `pwd` / `git status -sb` /
    On any hit, **surface it and pause before creating anything** — the same idiom
    step 9 and Phase 7 step 18 use. Report what you found and let the human choose:
    continue the existing branch, review the open PR, or open a second one
-   deliberately. Never silently reimplement. (Real incident: #1178 had an open,
+   deliberately. Never silently reimplement. **Report the PR's WIP state with it**
+   — a `WIP:` title or `isDraft: true` (step 12) means an agent is mid-run and the
+   branch is still moving; a cleared marker means the work reached Phase 6 and is
+   waiting on a human. That distinction is the whole of what the human needs to
+   pick between those three options, and it is the one thing an issue number
+   alone never tells you. (Real incident: #1178 had an open,
    CI-green PR — #1207 — *and* a live worktree with uncommitted WIP. `ir:exec`
    opened a second branch anyway, ran a complete independent implementation that
    converged on the same design, and only tripped over the duplicate at Phase 5
@@ -502,12 +507,28 @@ review subagent at **low↔high** effort; `xhigh`/`max` and anything reaching fo
 the built-in stay human-triggered, and the Workflow tool is never used for
 either step.
 
-12. **Open the PR** against `main`:
+12. **Open the PR** against `main`, **marked WIP** — the work is not finished
+    here: review (13), fixes, and simplification (14) all still push onto this
+    branch, and everything the PR says about itself is provisional until Phase 6.
     ```bash
     git push -u origin feat/<N>-<slug>
-    gh pr create --base main --fill   # or a written title/body; reference "Closes #<N>"
+    gh pr create --base main --draft --title "WIP: <type>(<scope>): <what changed>" \
+      --body "..."                    # reference "Closes #<N>"
     ```
     End the PR body with the `🤖 Generated with [Claude Code]` line.
+
+    **Both markers, not one.** The `--draft` flag is what GitHub's UI and
+    `gh pr view --json isDraft` see; the `WIP:` title prefix is what a human
+    scanning `gh pr list` and step 1a's `gh pr list --search "<N>"` see — that
+    search prints `title`, not draft state, so a draft without the prefix reads
+    to the next agent as a finished PR waiting to be reviewed. Marking is the
+    whole point: step 1a's incident (#1178) was a collision with a branch whose
+    state nobody could tell from outside.
+
+    `--fill` is not usable with a WIP title (it takes the title from the commit),
+    so write the title and body. Drafts are not exempt from CI — nothing in
+    `.github/workflows/` filters on draft state, so the checks step 18 reads
+    still run.
 13. **Review the diff** at the **calibrated effort** — by delegating to a
     single review subagent, not by reviewing it yourself (the mind that just
     wrote the code is the weakest available reviewer of it).
@@ -562,6 +583,21 @@ either step.
     reason in step 13); for **Trivial/Small** diffs skip its 4-agent fan-out
     and do the reuse/simplification/efficiency/altitude review inline, stating
     what you checked. Push any cleanup.
+14a. **Clear the WIP marker** — active work on this branch is over, and the PR
+    should stop saying otherwise before you hand it to a human. Do this only
+    once step 13's findings are applied and step 14's cleanup is pushed; a run
+    that pauses earlier (a `MISSING` reviewer, a failing suite, an unanswered
+    question) leaves the PR WIP on purpose, because that is exactly what it is.
+    ```bash
+    gh pr ready <PR>                                  # undraft
+    gh pr edit <PR> --title "<type>(<scope>): <what changed>"   # drop the "WIP: " prefix
+    gh pr view <PR> --json isDraft,title              # isDraft:false, title has no WIP:
+    ```
+    **Step 19's squash takes its commit subject from the PR title**, so a
+    leftover prefix lands `WIP: …` on `main` — the same failure step 11b
+    describes for a leftover `wip` commit, arriving by a different route. The
+    read-back is there because both commands are easy to skip when the run is
+    already narrating "done".
 
 ## Phase 6 — Hand back
 
@@ -591,9 +627,17 @@ Phase 6.
     the same way Phase 1 resolves the issue number.
 17. **Confirm the worktree is clean and pushed**: `git status -sb` shows nothing
     outstanding and the branch is up to date with its remote.
-18. **Confirm the PR is mergeable**: `gh pr view <N> --json mergeable,state`. If
-    checks are pending or failing, **surface that and pause** rather than forcing
+18. **Confirm the PR is mergeable**: `gh pr view <N> --json mergeable,state,isDraft,title`.
+    If checks are pending or failing, **surface that and pause** rather than forcing
     the merge.
+
+    A still-draft or still-`WIP:`-titled PR means step 14a never ran — this
+    phase is self-sufficient and may be entered standalone, so it cannot assume
+    it did. Don't merge past it: either the work is genuinely unfinished
+    (surface and pause), or it finished and the marker was left behind, in which
+    case run step 14a's two commands now. `--squash` would otherwise write the
+    title verbatim as `main`'s commit subject, and GitHub refuses to merge a
+    draft at all.
 19. **Merge**: `gh pr merge --squash` (no `--delete-branch` — keep the remote
     branch, per existing repo convention).
 20. **Clean up the local worktree**: `git -C <main-repo> worktree remove <path>`,
@@ -607,6 +651,11 @@ Phase 6.
 - Keep the plan tight: if Steps run past ~8–10 entries, you're over-planning; collapse.
 - If the issue is ambiguous, surface it under Risks/unknowns in the plan rather than
   guessing — that's what the approval gate is for.
+- A PR is **WIP for as long as this run is still pushing to it** — opened draft
+  with a `WIP:` title (step 12), cleared only after review and simplify are done
+  (step 14a). Concurrent agents share this repo; the marker is how they, and the
+  human reading `gh pr list`, tell a branch that is still moving from one that is
+  waiting on them.
 - One worktree + one branch + one PR per issue. Phase 1 step 1a is what enforces
   that against *other* agents' work, not just your own — run it before
   `worktree add`, every time.
