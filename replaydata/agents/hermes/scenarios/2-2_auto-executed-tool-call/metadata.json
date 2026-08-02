@@ -103,16 +103,16 @@
       "setup": [
         "The driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for 'Type your message or /help' before typing — the TUI loads tools and skills for several seconds and swallows keystrokes sent before it is ready",
         "No auto-mode or permission step is needed: hermes prompts only for DANGEROUS commands (approvals.mode 'smart'), and `echo hello` classifies as neither hardline nor dangerous, so the terminal call auto-executes and the session never enters waiting",
-        "The shell tool is named `terminal`. The prompt deliberately targets it rather than hermes' `write_file`, because an open edit-shaped tool would trip the classifier's 'stalled edit tool → likely permission prompt → waiting' rule and break the scenario's no-waiting invariant",
         "The session row is INSERTed on the first user message (~2s after it), not at launch, so the driver resolves the session id lazily after the first send and binds only to a row whose started_at is after this slot's launch",
         "'reply with exactly: done' keeps the terminal assistant text free of questions and imperative cues, so ProseIndicatesWaiting cannot fire on the turn's last message",
         "The trailing sleep gives the watcher at least three 2s poll ticks to observe finish_reason='stop' → Terminal activity → working→ready before the driver tears the tmux session down",
-        "The prompt names the `terminal` tool explicitly AND forbids `execute_code`: on the first recording attempt the model wrapped the shell call in `execute_code` (`from hermes_tools import terminal`), which runs inside Docker and hard-failed with `[TOOL_ERROR] ... Docker command is available but 'docker version' failed`. The arc was still correct (the call auto-executed with no approval window), but the tool_result was an error, so the prompt now pins the tool the recipe intends."
+        "The auto-executed tool is `skills_list`, NOT a shell call, and that is forced by the environment rather than preferred: this hermes install exposes NO directly-callable `terminal` tool to the model (26 tools loaded; `terminal` is a TOOLSET name in toolsets.py, not one of the exposed function tools). Two live attempts proved it — attempt 1 (prompt: \"Use your terminal tool to run exactly: echo hello\") had the model wrap the call in `execute_code` (`from hermes_tools import terminal`), and attempt 2 (prompt naming `terminal` and forbidding `execute_code`) got the flat refusal \"I can’t do that because the terminal tool is unavailable.\" `execute_code` runs inside Docker and this machine’s Docker daemon is down, so it returns `[TOOL_ERROR] ... 'docker version' failed` — a tool_result that is an error, not an auto-executed call. `skills_list` was verified live in a throwaway TUI session (returns {\"success\": true, ...}), takes no arguments, runs in-process with no Docker and no network, and is a READ, so it cannot trip isPermissionGatedEditTool (core/domain/session/metrics.go:487 matches only edit/write/multiedit/notebookedit/write_file) and the no-waiting invariant is preserved.",
+        "Whenever Docker is running again, this cell can go back to a shell-flavoured prompt via `execute_code`; the scenario only requires \"at least one tool call\" that auto-resolves without user input, which skills_list satisfies exactly."
       ],
       "script": [
         {
           "type": "send",
-          "text": "Call the tool named terminal directly, with the command: echo hello. Do not use the execute_code tool. Then reply with exactly: done"
+          "text": "Use your skills_list tool to list your available skills. Then reply with exactly: done"
         },
         {
           "type": "wait_turn"
@@ -125,7 +125,7 @@
       "verify": [
         "events.jsonl shows the hermes session (id shaped YYYYMMDD_HHMMSS_xxxxxx) born ready; a transient proc-<PID> presession may also appear and is not the session the arc lands on",
         "events.jsonl shows exactly one ready→working transition and one working→ready transition for that session id",
-        "state.db shows the auto-executed call for that session: an assistant row with finish_reason='tool_calls' and function.name='terminal', closed by a tool row with the matching tool_call_id, then an assistant row with finish_reason='stop'",
+        "state.db shows the auto-executed call for that session: an assistant row with finish_reason='tool_calls' and function.name='skills_list', closed by a tool row with the matching tool_call_id carrying {\"success\": true, ...}, then an assistant row with finish_reason='stop'",
         "events.jsonl contains NO state_transition to waiting for that session at any point (echo is not a dangerous command, so no approval prompt exists)",
         "final session state is ready",
         "the session's websocket metrics show non-zero cumulative input+output tokens (sessions.input_tokens/output_tokens) and a non-zero estimated cost when the configured model is priced by irrlicht's alias table"
