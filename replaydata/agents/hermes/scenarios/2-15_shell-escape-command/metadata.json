@@ -1,0 +1,149 @@
+{
+  "scenario_id": "shell-escape-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:tui_launch",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+b6d1c00.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (TUI-only `!cmd`)\ndaemon_capability: full\ndriver_capability: gap:tui_launch"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "shell-escape-command",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:tui_launch",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes (TUI surface only)\ndaemon_capability: full\ndriver_capability: gap:tui_launch\n\n## agent — yes\n\nHermes has a true `!cmd` shell escape, and it is the direct analog of Claude Code's: no LLM round-trip, no tool call, run locally and printed back. It lives on the **TUI** surface only.\n\n`ui-tui/src/app/useSubmission.ts:233` — the submit path — is literally `if (full.startsWith('!')) { composerActions.clearIn(); return shellExec(full.slice(1).trim()) }`, and the queued-send path repeats it at `:141`. `shellExec` (`useSubmission.ts:89-115`) issues one gateway RPC, `gw.request('shell.exec', { command: cmd })`. The composer even repaints its prompt in shell colors while the buffer starts with `!` (`ui-tui/src/components/appLayout.tsx:280`), so this is a first-class affordance, not an accident.\n\nServer side, `tui_gateway/server.py:18025-18067` (`@method(\"shell.exec\")`) screens the command through `tools.approval.detect_hardline_command` / `detect_dangerous_command`, then runs `subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30, cwd=os.getcwd())` and returns `{stdout, stderr, code}`. `echo hello` is neither hardline nor dangerous, so it executes.\n\n### The classic REPL does NOT have it — this is a surface split, not a version question\n\n`hermes chat` defaults to the classic prompt_toolkit REPL (`hermes_cli/main.py:2401-2442`, `_resolve_use_tui`: `--cli` > `--tui` > TTY gate > `HERMES_TUI=1` > `display.interface` config > **default classic**). That REPL routes on `/` only (`cli.py:3902-3918`, `_looks_like_slash_command`); an exhaustive scan of `cli.py` + `hermes_cli/**` for bang-prefix input handling returns nothing but a sentence-boundary tuple at `cli.py:6014`. The 99-entry slash registry (`hermes_cli/commands.py`, dumped from the installed venv) contains no `/shell`, `/bash`, `/run`, `/exec` or `/cmd`. The only other `!`-prefix handling in the tree is the Matrix/Slack gateway alias that rewrites `!command` → `/command` (`plugins/platforms/matrix/adapter.py:195-202`, `plugins/platforms/slack/adapter.py:371`) — a messaging-platform convenience, not a shell escape. So the behavior is reached with `hermes chat --tui` (or `HERMES_TUI=1`), which records `source='tui'` (`hermes_cli/main.py:2464`).\n\n## daemon — full\n\nThe daemon's ONLY signal for Hermes is `$HERMES_HOME/state.db` (`agent.ProcessOwnedStore`, `agent.go:37-43`). **`shell.exec` writes nothing to it.** The handler runs a subprocess and returns the bytes over RPC; there is no `db.` call anywhere in it. The `!cmd` echo the user sees is client-side React state only: `appendMessage({ role: 'user', text: '!'+cmd })` resolves to `setHistoryItems(prev => capHistory(appendTranscriptMessage(prev, msg)))` (`ui-tui/src/app/useMainApp.ts:441`) — an in-memory Ink transcript, never persisted. Confirmed against the live store: `SELECT COUNT(*) FROM messages WHERE content LIKE '!%'` returns **0** across the whole database.\n\nSo no `messages` row is inserted, `sessions.message_count` does not grow, and `Watcher.reconcile` (`watcher.go`) emits no `EventActivity`. The session stays in whatever state it held — `ready`.\n\nThat is exactly the verdict the canonical scenario adopts. Its own description says the wrapper events are deliberately skipped so \"state must stay in ready throughout (no synthesized turn)\" and that the verdict \"adopts the intent reading of the spec (no stuck in working)\". On Hermes the intent reading is not a parser choice at all — it is structural: the escape never reaches the transport, so the guarded failure mode (stuck in `working` after the command exits) is unreachable by construction. Nothing is mis-handled, so this is `full`, not `bug`.\n\nThe second half of the scenario — a normal prompt still drives the arc — is the ordinary Hermes path already assessed for `basic-turn`: `role='user'` → `user_message` and `role='assistant' finish_reason='stop'` → `turn_done` (`parser.go:70-95`), with `Terminal` set from `turnIsDone` in `watcher.go`. `metrics.go:19,103` filters `source IN ('cli','tui')`, so a TUI session is a first-class observed session, and TUI rows carry a populated `sessions.cwd` (verified live: 3/3 `source='tui'` rows have `cwd=/Users/ingo/hermes-local`, vs 21/22 `source='cli'` rows empty) — the TUI path is actually the *less* fragile of the two for project binding.\n\nProcess visibility holds too. `subprocess.call` at `main.py:2325` means the Python `hermes chat --tui` process stays alive as the parent of the node TUI, so `processCmdPattern` `(^|/)hermes( |$)|hermes_cli\\.main` still matches. The gateway the TUI spawns is `python -m tui_gateway.entry` (`ui-tui/src/gatewayClient.ts:356`) — no `hermes` token bounded by space/end and no `hermes_cli.main` — so it is invisible to the matcher and cannot make `defaultLiveCWD` ambiguous.\n\n## driver — gap:tui_launch\n\nNo step-type primitive is missing. The recipe needs `send` + `sleep` + `wait_turn`, all three in `DRIVE_ELICITS` (`driver-interactive.sh:113`), and `send_text` (`:283`) types the literal text then Enter, so `{\"type\":\"send\",\"text\":\"!echo hello\"}` reaches the composer verbatim — no `keys` gap here (the claudecode sibling used `keys` only because its recipe predates that). `resolve_session_id` (`:244`) and `wait_turn` (`:258`) already filter `source IN ('cli','tui')`, so both work unchanged against a TUI session.\n\nThe gap is the **launch surface**. `launch_repl` hardcodes `tmux new-session … \"hermes chat\"` (`driver-interactive.sh:161`) — the classic REPL, where `!` is not a shell escape at all but ordinary prompt text. Driving this recipe as-is would send `!echo hello` to the model, produce a real `ready→working→ready` turn, and record the exact opposite of what the spec asserts — a silently WRONG recording rather than a loud failure, which is why this must not be called `ready`. `wait_for_prompt` (`:186`) compounds it: it greps the pane for the classic banner `\"Type your message or /help\"` (`cli.py:13648`), which the Ink TUI never paints, so a naive `--tui` swap would time out at `nonzero(2)`.\n\n`record` must port a TUI launch mode before driving: launch `hermes chat --tui` (or export `HERMES_TUI=1`) and replace the readiness probe with a TUI-visible marker. This is tooling work in `replaydata/agents/hermes/driver-interactive.sh`, routed to the driver owner — not an observability limit, and not `daemon=incapable`.\n\n## What is NOT proven yet\n\nPer the observation-vs-emission rule, `daemon=full` here is PROVISIONAL. It rests on reading the gateway handler and the TUI client plus the negative store query — strong for \"nothing is written\", but only a recording settles that the arc reaches the websocket. The exact string the Ink TUI paints when it is ready to accept input was not verified live; `record` picks it while porting the launch step.",
+      "caveats": [
+        "TUI-ONLY surface. `!cmd` does not exist in the classic `hermes chat` REPL (cli.py routes on `/` only; the 99-entry slash registry has no /shell|/bash|/run|/exec). The cell is only meaningful with `hermes chat --tui` / HERMES_TUI=1, which records source='tui'. agent_supports is `yes` rather than `partial` on the same reading claudecode's sibling used: the escape is a TUI affordance of the same CLI, reachable by a documented flag.",
+        "PROVISIONAL daemon verdict: derived from the tui_gateway handler + the Ink client + a negative live-store query, not from a recording. No hermes events.jsonl exists yet.",
+        "The `!cmd` echo the user sees is Ink in-memory transcript state only (useMainApp.ts:441 → setHistoryItems). If a future Hermes release persists TUI shell escapes as `messages` rows, this cell flips: an unpaired user row with no assistant `finish_reason='stop'` would open a turn that never closes — the exact stuck-in-working failure the scenario guards. Re-assess on any Hermes release that changes shell.exec or the TUI transcript persistence.",
+        "The driver gap is a SILENT wrong-recording risk, not a loud failure: driving the current `hermes chat` launch would send `!echo hello` to the model and record a real turn that superficially looks like the literal reading of the spec. record must port the TUI launch BEFORE driving, and should assert the recording's session row is source='tui'.",
+        "Ordering choice: the recipe fires the escape twice — once before any prompt (claudecode's canonical ordering) and once after the turn completes. On Hermes the first escape lands before the `sessions` row exists at all (it is INSERTed on the first user message, adapter.go:16-19), so that window is trivially quiet; the SECOND escape is the load-bearing one, asserted against a live store session sitting in ready. Both escapes together still yield exactly one working arc, so the scenario's `ready → working → ready` topology and `tool_calls_max: 0` hold.",
+        "Recording prerequisites beyond the usual hermes HERMES_HOME wiring: Node.js must be on PATH and the TUI bundle must exist. Verified present on this machine (node v22.18.0; /Users/ingo/hermes-local/.hermes/hermes-agent/ui-tui/dist/entry.js). A prebuilt install without ui-tui/ and without hermes_cli/tui_dist/entry.js could not run this cell at all.",
+        "model/cost deliberately unpinned, same as the other hermes cells: the recorded model depends on the config.yaml in whatever HERMES_HOME the run exports (maintainer default gpt-5.6-luna is priced; the local google/gemma-4-26b-a4b default is not). Only tokens_nonzero is asserted; record fills observations.model."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/ui-tui/src/app/useSubmission.ts:233",
+          "note": "The TUI submit path: `if (full.startsWith('!')) { composerActions.clearIn(); return shellExec(full.slice(1).trim()) }`. Repeated for queued sends at :141. shellExec at :89-115 does appendMessage(client-side) + gw.request('shell.exec', {command}). This is the `agent_supports: yes` anchor."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tui_gateway/server.py:18025",
+          "note": "@method(\"shell.exec\"): screens via tools.approval.detect_hardline_command/detect_dangerous_command, then subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30, cwd=os.getcwd()) and returns {stdout,stderr,code}. NO database call in the handler — the load-bearing citation for daemon=full: the escape never touches state.db."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/ui-tui/src/app/useMainApp.ts:441",
+          "note": "appendMessage = useCallback(msg => setHistoryItems(prev => capHistory(appendTranscriptMessage(prev, msg)))) — the `!cmd` echo is Ink in-memory React state, never persisted to the store."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Live store, read-only. `SELECT COUNT(*) FROM messages WHERE content LIKE '!%'` = 0 across the whole database — no shell escape ever produced a message row. Also: 3 source='tui' sessions, all with a populated cwd (/Users/ingo/hermes-local), vs 21/22 source='cli' rows with an empty cwd."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/main.py:2401",
+          "note": "_resolve_use_tui precedence: --cli > --tui > TTY gate > HERMES_TUI=1 > display.interface config > DEFAULT CLASSIC REPL. :2464 sets source = 'tui' if use_tui else 'cli'; :2325 launches the TUI via subprocess.call (not exec), so the matched python `hermes` parent process stays alive."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py:3902",
+          "note": "Classic REPL dispatch is `/`-only (_looks_like_slash_command). Exhaustive scan of cli.py + hermes_cli/**/*.py for bang-prefix input handling found only a sentence-boundary tuple at cli.py:6014 — the classic REPL has NO shell escape. Its ready banner 'Type your message or /help' is at cli.py:13648 (what the driver's wait_for_prompt greps)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/commands.py",
+          "note": "Slash registry dumped from the installed venv (99 commands): no /shell, /bash, /run, /exec, /cmd. The only other `!` handling in the tree is the Matrix/Slack `!command` → `/command` alias (plugins/platforms/matrix/adapter.py:195-202, plugins/platforms/slack/adapter.py:371), a messaging convenience, not a shell escape."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go:19",
+          "note": "Every query filters `source IN ('cli','tui')` (also :103) — TUI sessions are first-class observed sessions, so recording this cell on the TUI surface needs no adapter change."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go",
+          "note": "The final-turn arc: role='user' → user_message (ClearToolNames); role='assistant' + finish_reason='stop' → turn_done. An explicit turn boundary, so no idle-flush seam sits between the agent and the ready settle."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/adapter.go:86",
+          "note": "processCmdPattern `(^|/)hermes( |$)|hermes_cli\\.main` matches the python `hermes chat --tui` parent. The TUI's gateway child is spawned as `python -m tui_gateway.entry` (ui-tui/src/gatewayClient.ts:356), which matches neither alternative, so it cannot make defaultLiveCWD ambiguous."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh:161",
+          "note": "The driver gap: launch_repl hardcodes `tmux new-session … \"hermes chat\"` — the classic REPL, where `!echo hello` is ordinary prompt text. wait_for_prompt (:186) greps the classic banner, which the Ink TUI never paints. Every step type the recipe needs is already present: DRIVE_ELICITS=\"send slash sleep wait_turn\" (:113), send_text types literal text + Enter (:283), resolve_session_id (:244) and wait_turn (:258) already accept source='tui'."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-15_shell-escape-command/expected.jsonl",
+          "note": "The sibling spec whose shell_escape_window shape (expected_state ready + duration_at_least_ms + 'no state_transition to working/waiting' invariants) is reused here, because Hermes lands on the same intent reading by a different mechanism (no store write at all vs a deliberate parser skip)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH and an inference provider configured in <HERMES_HOME>/config.yaml",
+        "HERMES_HOME exported to the recording home for BOTH the driver and the recording daemon",
+        "sqlite3 on PATH (the store is the only session signal hermes exposes)",
+        "Node.js on PATH and a built TUI bundle (ui-tui/dist/entry.js in a git checkout, or hermes_cli/tui_dist/entry.js in a prebuilt install) — the !cmd shell escape exists ONLY on the TUI surface",
+        "irrlichd is recording with the hermes 'store' observe permission granted"
+      ],
+      "setup": [
+        "Driver launches the TUI surface, not the classic REPL: `hermes chat --tui` (or HERMES_TUI=1) under tmux in a fresh cwd. THIS IS THE PORTED STEP the gap:tui_launch verdict names — the current launch_repl runs `hermes chat`, where `!` is ordinary prompt text.",
+        "Readiness probe must match the Ink TUI, not the classic banner 'Type your message or /help' (cli.py:13648)."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "!echo hello"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "!echo hello-again"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "the recording's session row is source='tui' — if it is 'cli' the driver launched the wrong surface and the recording is invalid regardless of which phases pass",
+        "during the ~8s window after the first !echo, NO state_transition to working and NO state_transition to waiting fires",
+        "the normal prompt drives ready→working→ready on the store-backed session",
+        "during the ~10s window after the second !echo (with the session live and in ready), NO state_transition to working and NO state_transition to waiting fires — this is the load-bearing assertion",
+        "final session state is ready",
+        "no messages row was written for either escape: SELECT COUNT(*) FROM messages WHERE session_id=<sid> AND content LIKE '!%' is 0"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
