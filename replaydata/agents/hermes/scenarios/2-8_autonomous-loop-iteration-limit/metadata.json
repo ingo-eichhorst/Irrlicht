@@ -75,19 +75,20 @@
       "preconditions": [
         "hermes >=0.19.0 on PATH and authenticated against a configured inference provider",
         "HERMES_HOME exported to the isolated recording home (the store, config and auth all live under it)",
-        "$HERMES_HOME/config.yaml carries `goals:\\n  max_turns: 2` — this is the iteration cap the scenario asserts. The driver accepts SETTINGS_PATH but does not apply it yet, so the recording setup must write this key before launch; without it the loop runs to the 20-turn default and never reaches the cap inside the timeout.",
-        "$HERMES_HOME/config.yaml points `auxiliary.goal_judge` at a model that reliably returns the strict JSON verdict — otherwise the judge parse-failure auto-pause (3 in a row) terminates the loop before the turn budget does, producing the same arc for the wrong reason",
+        "$HERMES_HOME/config.yaml carries `goals.max_turns: 2` — the iteration cap the scenario asserts. NO LONGER A MANUAL STEP: as of driver commit ac01f1e7 the hermes driver applies the recipe's `settings` blob (this cell's is {\"goals\":{\"max_turns\":2}}) by deep-merging it into <HERMES_HOME>/config.yaml before launch and restoring the original on exit. The earlier wording — that the driver accepts SETTINGS_PATH but does not apply it, so the recording setup must write the key by hand — was true and is now fixed; a re-record no longer depends on an out-of-band edit. Without the cap the loop runs to hermes' 20-turn default (cli.py:9914) and never reaches the budget inside the timeout.",
+        "auxiliary.goal_judge may be left at its shipped default (provider: auto, i.e. the main chat model — hermes_cli/config.py:1799). The assessment feared the judge parse-failure auto-pause (3 consecutive non-JSON verdicts, goals.py:1560) would end the loop for the wrong reason. The sibling 2.7 recording refutes that on this install: with the default judge on gpt-5.6-luna the goal loop produced two clean `continue` verdicts (two \"[Continuing toward your standing goal]\" continuation prompts) and then a `done` verdict, i.e. three usable judge parses in a row and zero parse failures. Re-check if the recording home's model.default changes.",
         "sqlite3 on PATH (the driver reads session id and turn completion straight out of state.db)",
         "irrlichd is recording"
       ],
       "setup": [
         "Driver launches `hermes chat` under tmux in a fresh cwd and waits for the ready prompt",
-        "Session id is resolved lazily from the store after the first send (started_at > launch_ts)"
+        "Session id is resolved lazily from the store after the first send (started_at > launch_ts)",
+        "WIDENED BEFORE RECORDING (2026-08-03), per the column's TIMING prerequisite: the assessed goal was a one-line impossible question whose reply is a sub-second turn, which the 2s store poll can commit whole and erase the ready->working edge that iter1_start/iter2_start assert. Each attempt now also writes ~200 words enumerating candidates and why each failed. The goal stays impossible, so the judge keeps returning `continue` and the loop still ends on the turn budget rather than on completion — the cap is what the cell measures and it is unchanged."
       ],
       "script": [
         {
           "type": "slash",
-          "text": "/goal Reply with one integer that is simultaneously odd and even. Keep searching until you find it."
+          "text": "/goal Find one integer that is simultaneously odd and even. On each attempt, write two or three full paragraphs, about 200 words in total: list the specific candidates you tried this round, show for each one exactly why it failed the odd-and-even test, and then state the next line of attack you will take. Keep searching until you find such an integer. Do not use any tools and do not ask me any questions."
         },
         {
           "type": "wait_turn"
