@@ -1,0 +1,142 @@
+{
+  "scenario_id": "multiple-agents-same-workspace",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+6ad7c28.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-agents-same-workspace",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\nThis cell is a *coexistence* test filed under the hermes column: one `hermes chat` REPL and one DIFFERENT-adapter session (claudecode) live in the same cwd at once, and the daemon must label each independently with no cross-contamination of state, metrics, parent linkage or subagent counts.\n\n## agent — yes\n\nNothing in Hermes couples a session to the directory being exclusively its own. `hermes chat` is an ordinary interactive process launched in a cwd; the store row it writes carries `source='cli'` and is keyed by `sessions.id`, not by directory. A second, unrelated CLI in the same directory is invisible to it. Binary verified live: `hermes --version` → `Hermes Agent v0.19.0 (2026.7.20) · upstream d0b87dad`, install dir `/Users/ingo/hermes-local/.hermes/hermes-agent`; the launcher on PATH is a bash shim that `exec`s the venv entrypoint, so one session is exactly one matchable process.\n\n## daemon — full\n\nThe partner's transport and hermes' transport are disjoint at every layer irrlicht keys on, so no shared reader, parser, table or counter can leak state between the two rows:\n\n1. **Process matching.** hermes declares `Process.Match = agent.CommandPattern{Regex: processCmdRegex}` — `(^|/)hermes( |$)|hermes_cli\\.main` — plus `ExcludeArgv: isServiceArgv` (adapter.go, agent.go). claudecode declares `ExactName{\"claude\"}`. Neither pattern can fire on the other's process: a `claude` command line contains no `hermes` token, and hermes' real process is a venv `python3` whose OS name is never `claude`. The bounding in the regex (`( |$)` after the token) is what keeps the *paths* `…/hermes-agent/…` and `…/.hermes/state.db` from self-tripping the matcher, pinned by `TestProcessCmdRegex`.\n2. **Source variant.** hermes is `agent.ProcessOwnedStore` over `$HERMES_HOME/state.db` with `PathForPID` ignoring the pid (agent.go) — a single shared SQLite store that only ever holds Hermes rows, doubly disjoint from claudecode's `FilesUnderRoot{~/.claude/projects}` JSONL. `Watcher.scanSessions` selects `FROM sessions WHERE source IN ('cli','tui')` and cursors every row under `w.sessions[r.id]` — keyed by session id, never by cwd — so two sessions sharing a directory are independent by construction (watcher.go `scanSessions`/`reconcile`).\n3. **Per-(adapter, session_id) state.** `ComputeMetrics` → `querySessionMetrics` queries `WHERE id = ?` and folds only that session's `messages` rows (metrics.go); the maps.go projections key parsers, PID discoverers and subagent counters by adapter `Identity.Name`. There is no per-cwd aggregation anywhere in the domain.\n4. **PID binding.** `DiscoverPID` is `DiscoverPIDByCWDAndCmdLineExcludingArgv(processCmdPattern, cwd, …)` (pid.go): it intersects *cwd equality* with the *hermes command-line pattern*, so the co-resident `claude` process in the same cwd is filtered out by the pattern and can never be bound to the hermes row. The converse holds for claudecode's name matcher.\n\nThe user-observable assertions therefore map onto events the adapter produces today: `EventNewSession` on first sight of the store row and `EventActivity` with `Terminal = turnIsDone()` (newest `active=1` row is `role='assistant' AND finish_reason='stop'`) give the hermes session its own `working → ready` arc, while claudecode's transcript tailer gives the partner its own — two goroutines, two transports, two session ids.\n\n### The cell-specific fact: hermes' workspace membership is process-derived\n\nEvery other adapter in this scenario learns its cwd from its own transport. hermes cannot: `sessions.cwd` is populated **only** by Hermes' TUI gateway, and `hermes chat` records `source='cli'` (verified live), so the row carries an empty cwd. The adapter borrows the binding from the live process via `defaultLiveCWD` → `processlifecycle.LiveCWDsByCmdline(processCmdPattern, isServiceArgv)`, resolved once per scan in `scanSessions` and again in `querySessionMetrics` so it backfills.\n\nThis scenario is precisely the case where that fallback is *safe*: the partner is a DIFFERENT agent, so exactly one non-service hermes process is live and its cwd is the shared workspace the driver launched it in. Note the fallback keys on the set of **distinct CWDs**, not the process count (`LiveCWDsByCmdline` returns a `map[string]struct{}` of directories) — so it degrades only when a hermes process is live in some *other* directory, not when several share one. That is the axis on which this cell differs from `multiple-sessions-same-cwd`.\n\n## driver — ready\n\n`replaydata/agents/hermes/driver-interactive.sh` sets `DRIVE_ELICITS=\"send slash sleep wait_turn\"`; this recipe needs `send` + `wait_turn` + `sleep` only, so `recipe_lint_gaps`/`recipe_semantic_gaps` (the backstops run-cell-multi.sh applies before spawning anything) both pass. The driver honors `$IRRLICHT_ONBOARD_CWD`, which is how run-cell-multi.sh puts it in the shared workspace, and its `wait_turn` is a real signal poll — `COUNT(*)` of `messages` rows with `role='assistant' AND finish_reason='stop'` for the bound session — not an idle guess. `resolve_session_id` binds only to a session with `started_at >` the slot's launch timestamp, which matters more here than in a solo cell because the store is shared with every Hermes session the machine has ever run.\n\nThe interactive path is required, not preferred: the settle to `ready` must land inside the observation window, and the REPL outlives the turn.\n\n## What is NOT proven\n\nNo hermes recording exists — `find replaydata/agents/hermes -name 'transcript*' -o -name 'events.jsonl'` returns nothing, and no `recordings/` directory exists under any hermes cell. Under the observation-vs-emission rule the `daemon=full` verdict is therefore PROVISIONAL on the arcs actually reaching the websocket; `record` promotes it. Two concrete things `record` must clear first are in the caveats: the driver's non-file transcript path (a hard rig blocker for every hermes cell) and the fact that no token/cost observation is assertable from a hermes replay golden today.",
+      "caveats": [
+        "PROVISIONAL daemon verdict: derived from adapter source + the live store/binary, not from a recording. Zero hermes fixtures exist (no transcript.jsonl, events.jsonl or recordings/ dir anywhere under replaydata/agents/hermes), so nothing about hermes has yet been seen on the websocket.",
+        "RECORDING BLOCKER (rig-level, not a pillar downgrade): the hermes driver writes transcript.path as \"<store>?session=<id>\", which is not a file. run-cell-multi.sh rejects it at its `! -f \"${PRIMARY_TRANSCRIPT[$idx]}\"` guard (\"driver did not resolve a session\") and tools/curate-lifecycle-fixture.sh hard-fails with \"transcript not found\" before curating. opencode — the other ProcessOwnedStore adapter — solves this by EXPORTING the store rows to a real JSONL ($STAGING/opencode-transcript.jsonl) and writing that path; the daemon-side reconcile then falls back to the driver-written id, which for hermes already equals the daemon session_id. This is not a step-type gap so the driver pillar stays `ready`, but it blocks EVERY hermes cell equally until the export is ported.",
+        "No token or cost observation is assertable for a hermes cell today, which is why this spec carries no observations block. replay's summary takes CumInput/CumOutput/EstimatedCostUSD from the parser fold (finalizeSummary in tools/onboarding-factory/cmd/replay/metrics.go), and hermes.Parser emits no usage at all — Hermes keeps token counts on the `sessions` aggregate, read only by querySessionMetrics. Only antigravity has a scoped store-derived opt-in in that function. Same reason applies to the hermes basic-turn cell, whose expected.jsonl asserts tokens_nonzero:true and would fail its observations verify unless a hermes opt-in lands too.",
+        "Cross-adapter pre-session retirement is the one code path where two adapters in one workspace are NOT independent: cleanupPreSessionsForProject's primary branch (session_detector_helpers.go) matches proc-<PID> rows on projectDir ALONE — the adapter is compared only on the realCWD fallback branch — so whichever adapter's real session arrives first retires EVERY pre-session in that projectDir, including the partner's, and fires onSessionSuperseded(oldID,newID) across adapter boundaries. It does not touch this spec's assertions (all four phases anchor on a `working` transition, which the born-ready placeholders never reach), and the recorded claudecode/codex fixture for this same scenario verified 4/4 with the identical shape. Code read, not observed.",
+        "hermes' project binding here is process-derived, so a stray non-service hermes process live in a DIFFERENT directory during the run makes defaultLiveCWD's cwd set ambiguous, it returns \"\", and the hermes row loses both its workspace slug and its PID binding (DiscoverPID needs a cwd). The lifecycle phases would still verify — they assert only state arcs on distinct sessions — but the \"keyed to the same cwd slug\" verify bullet would not hold. Precondition, not a defect.",
+        "The rig has no hermes env wiring: grep for HERMES_HOME across tools/onboarding-factory returns no hits. HERMES_HOME must be exported in the shell that invokes run-cell-multi.sh so the recording daemon and the driver read/write the SAME store — on this machine the real home is already non-default (/Users/ingo/hermes-local/.hermes), so an unset variable points both at ~/.hermes and the run observes nothing.",
+        "Adapter labels are stable wire strings (`hermes`, `claude-code`); the assertion is on the wire-level adapter name, not the macOS display string (\"Hermes Agent\")."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go",
+          "note": "Agent(): Process.Match = CommandPattern{processCmdRegex} + ExcludeArgv=isServiceArgv; Source = ProcessOwnedStore over StorePath() with PathForPID ignoring the pid. Disjoint from claudecode's ExactName{claude} + FilesUnderRoot{~/.claude/projects} at both the matcher and the source-variant layer."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/adapter.go",
+          "note": "processCmdPattern `(^|/)hermes( |$)|hermes_cli\\.main` with the token bounded by / and space/end — the package doc records that this is what keeps the hermes home path and install dir from self-tripping the matcher; pinned by TestProcessCmdRegex. Package doc also states sessions.cwd is populated ONLY for TUI sessions, so source='cli' rows borrow the binding from the live process."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "scanSessions selects `FROM sessions WHERE source IN ('cli','tui')` and reconcile() cursors each row under w.sessions[r.id] — keyed by session id, never by cwd — so co-resident sessions are independent by construction. defaultLiveCWD resolves the fallback cwd via processlifecycle.LiveCWDsByCmdline and returns \"\" unless the resulting CWD SET has exactly one element."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/pid.go",
+          "note": "DiscoverPID = DiscoverPIDByCWDAndCmdLineExcludingArgv(processCmdPattern, cwd, …): cwd equality INTERSECTED with the hermes command-line pattern, so the co-resident claude process in the shared cwd can never be bound to the hermes session."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/discovery.go",
+          "note": "LiveCWDsByCmdline returns a map[string]struct{} of DIRECTORIES, not a pid list — so defaultLiveCWD's one-element requirement is about distinct cwds. Several hermes processes in one directory still resolve; one in another directory does not."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_helpers.go",
+          "note": "cleanupPreSessionsForProject: the primary branch retires proc-<PID> rows on `pdir == projectDir` with NO adapter comparison (adapter is checked only on the realCWD fallback branch), then fires onSessionSuperseded(sid,newSessionID). This is the one shared-workspace path that crosses adapter boundaries; it is skipped by this spec's working-anchored phases."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/metrics.go",
+          "note": "finalizeSummary takes the golden's CumInput/CumOutput/EstimatedCostUSD/ModelName from lastMetrics (the parser fold) and has a per-adapter opt-in for store-derived TotalTokens scoped to antigravity only. hermes.Parser emits no usage, so a hermes golden's token/cost vector is zero and no tokens_nonzero/cost_nonzero assertion can pass."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/run-cell-multi.sh",
+          "note": "Cross-adapter rig: resolves the pair from the primary cell's recipe.partner_adapter, runs recipe_lint_gaps + recipe_semantic_gaps per adapter BEFORE any daemon, launches each driver concurrently with IRRLICHT_ONBOARD_CWD=$SHARED_CWD, then curates one fixture per adapter with the workspace events.jsonl unioned via IRRLICHT_EXTRA_SESSION_IDS. Its per-adapter guard requires PRIMARY_TRANSCRIPT to be an existing FILE, which the hermes driver's \"<store>?session=<id>\" path is not."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/curate-lifecycle-fixture.sh",
+          "note": "Aborts with \"transcript not found: <path>\" when the transcript argument is not a regular file — the second gate the hermes \"<store>?session=<id>\" path fails."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\" covers every step this recipe needs; RUN_CWD honors $IRRLICHT_ONBOARD_CWD so the driver joins the shared workspace; wait_turn polls COUNT(*) of assistant rows with finish_reason='stop' for the bound session, and resolve_session_id binds only to a session started after this slot launched — which is what keeps a foreign row in the shared store from satisfying the wait."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/driver-interactive.sh",
+          "note": "The porting template for the transcript blocker: the other ProcessOwnedStore adapter exports store rows to $STAGING/opencode-transcript.jsonl and writes that real path into transcript.path / transcript.paths."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/4-2_multiple-agents-same-workspace/expected.jsonl",
+          "note": "The adapter-agnostic four-phase template reused verbatim here (agentA/agentB working→ready, every phase anchored on a working transition so both adapters' born-ready proc-<PID> placeholders are skipped). Its cell verified 4/4."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/hermes",
+          "note": "`hermes --version` → Hermes Agent v0.19.0 (2026.7.20) · upstream d0b87dad. The launcher is a bash shim that `exec`s /Users/ingo/hermes-local/.hermes/hermes-agent/venv/bin/hermes, so one REPL is exactly one matchable process (no shim/child pair to make the live-CWD set ambiguous)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "partner_adapter": "claudecode",
+      "preconditions": [
+        "hermes v0.19.0+ AND the claude CLI on PATH and authenticated, each with a provider configured so one short prompt completes without an auth prompt",
+        "HERMES_HOME exported in the shell that invokes run-cell-multi.sh, so the recording daemon and the hermes driver read/write the SAME store (the rig has no hermes env wiring of its own)",
+        "sqlite3 on PATH — hermes persists no transcript file, so the driver reads session id and turn completion straight out of state.db",
+        "no OTHER non-service hermes process live in a DIFFERENT directory during the run: `hermes chat` records source='cli' with no stored cwd, so the workspace binding comes from the live-process CWD set having exactly one element",
+        "no other claudecode session live in the run cwd",
+        "irrlichd recording via run-cell-multi.sh isolated coexist mode (IRRLICHT_ONBOARD_HOME + alternate port, so production keeps running) with the hermes store watcher enabled and the 'store' permission granted (IRRLICHT_PERMISSION_MODE=grant-all on a fresh home)"
+      ],
+      "setup": [
+        "run-cell-multi.sh creates ONE shared cwd and launches the hermes and claudecode interactive drivers concurrently, both pointed at it via IRRLICHT_ONBOARD_CWD; the hermes driver launches `hermes chat` under tmux in that cwd and polls the pane for 'Type your message or /help' before typing (the TUI swallows keystrokes sent during its boot)",
+        "the daemon observes hermes via its ProcessOwnedStore poller over $HERMES_HOME/state.db and claudecode via the ~/.claude/projects fswatcher — disjoint transports, so each session is labeled independently",
+        "the partner is a DIFFERENT agent, so exactly one non-service hermes process is live and defaultLiveCWD binds the hermes session to the shared cwd; this is what puts both rows under the same workspace slug",
+        "this cell stores the hermes transcript for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (both adapters). NOTE for record: the hermes driver currently writes a non-file transcript path (\"<store>?session=<id>\"); port opencode's store-export step so it writes a real JSONL before running the rig",
+        "the prompt is a one-word reply request, so the hermes turn carries no tool call and neither session enters waiting",
+        "timeout_seconds is 300 rather than the sibling 240: the hermes driver's deadline starts BEFORE its up-to-60s REPL boot poll, and the machine is running two agent CLIs concurrently"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: omega"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl contains TWO distinct session_ids from two different adapters (hermes and claude-code), both keyed to the same cwd slug",
+        "each session has its own independent working->ready arc; no transition on one is attributed to the other",
+        "no cross-contamination: the daemon never merges or flaps the hermes row into the claudecode row, and any pid_discovered for hermes lands on the hermes session (its PID discovery intersects cwd with the hermes command-line pattern, so the co-resident claude process cannot be bound to it)",
+        "the hermes session's final live state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}
