@@ -124,8 +124,20 @@ type SignalPayload struct {
 // because expiry alone could not express "apply only once N has passed":
 // Overlay applied on the first pass after Hold, unconditionally, so
 // markStalledEditTool (#488) had to stay a hand-rolled overlay map on
-// SessionDetector and #1129 Phase 6 (buffer byte-identical for N snapshots)
-// could not have landed as a row either.
+// SessionDetector.
+//
+// What the pair delivers is precisely "a condition that has persisted for a
+// wall-clock interval". That is NOT the same as "a condition observed N times",
+// and #1129 Phase 6 (screen buffer byte-identical for N snapshots) wants the
+// latter: elapsed time ripens on the *absence* of evidence, so a stalled or
+// descheduled snapshot poller would ripen a stability rule having observed
+// nothing. SignalOpenToolStalled does not expose that gap only because the
+// classify pass which ripens it is itself the observation; a Phase 6 producer
+// would poll on a different cadence than Overlay. Landing Phase 6 as a row
+// therefore needs an observation counter on heldSignal (surfaced here as, say,
+// Observations int), not just this clock. Deliberately not built here: no row
+// today needs it, and guessing its shape from one hypothetical caller is how
+// the wrong abstraction gets frozen in.
 //
 // Now is injected by the caller rather than read from time.Now here, so
 // staleness stays testable and — for the offline replay harness, which runs on
@@ -192,14 +204,21 @@ type signalPolicy struct {
 	// rule expressible. stale answers "is this over?" and ends the hold; ripe
 	// answers "has this started?" and does not — an unripe hold is neither
 	// applied nor dropped nor consumed, it simply waits for a later pass. A
-	// rule that must observe a condition persist for a while before believing
-	// it (SignalOpenToolStalled's threshold; #1129 Phase 6's byte-identical
-	// screen buffer) is inexpressible without it, because Overlay would
-	// otherwise apply on the first pass after Hold, unconditionally.
+	// rule that must observe a condition persist before believing it
+	// (SignalOpenToolStalled's threshold) is inexpressible without it, because
+	// Overlay would otherwise apply on the first pass after Hold,
+	// unconditionally. See holdContext for what this does and does not reach —
+	// notably that it measures elapsed time, not observation count.
 	//
 	// Evaluated after stale, so a signal that is both over and not yet ripe is
 	// dropped rather than left holding: "this never came due and no longer
 	// describes reality" is an expiry, not a pending arm.
+	//
+	// stale and ripe are both called on the same holdContext each pass, so a
+	// future row whose two predicates share an expensive sub-computation pays
+	// for it twice. Free today (every predicate is a field read or a
+	// subtraction); if that changes, memoise on holdContext rather than
+	// reordering the gate.
 	ripe func(c holdContext) bool
 
 	// apply folds the signal onto the metrics the classifier is about to
@@ -322,12 +341,13 @@ var signalPolicies = []signalPolicy{
 		kind: SignalOpenToolStalled,
 		tier: TierTranscript,
 		// The first arm-then-fire row, and the first non-hook one. The producer
-		// arms it (HoldIfAbsent) the moment it sees a permission-gated edit tool
-		// open; ripe is what keeps it from firing on that same pass.
+		// (SessionDetector.armStalledEditTool) arms it via HoldIfAbsent — see
+		// that method for why arm-once and not Hold — the moment it sees a
+		// permission-gated edit tool open; ripe is what keeps it from firing on
+		// that same pass.
 		//
 		// Persistent: a genuinely held prompt stays open indefinitely, and the
-		// hold has to survive every re-evaluation in between or the window
-		// restarts and the flag can never come due.
+		// hold has to survive every re-evaluation in between.
 		//
 		// Ends when the tool closes — the tool_result arriving is the whole
 		// end-of-life notice, whether the user approved, rejected, or the edit
@@ -339,14 +359,19 @@ var signalPolicies = []signalPolicy{
 		//   - under the threshold: the tool may still be legitimately executing
 		//     (#1130), so believing it stalled now would route an actively
 		//     working session to waiting;
-		//   - PermissionPending: the hook already said the prompt is open and
-		//     the classifier prefers it, so this fallback is redundant. Not
-		//     stale, though — releasing the prompt while the tool stays open
-		//     must leave the fallback armed, with its original clock.
+		//   - PermissionPending: carried over verbatim from the hand-rolled
+		//     overlay this row replaced. It is NOT tier arbitration — the
+		//     classifier ladder already decides that, and its permission_prompt
+		//     rule short-circuits before open_tool_stalled is ever reached, so
+		//     the flag changes no state outcome while a prompt is open. What it
+		//     affects is the open_tool_stalled bit in the recorded
+		//     ClassifierInputs trace. Kept so this migration stays
+		//     behaviour-preserving; do not generalise a supersedes-mechanism
+		//     from it. Not stale either — releasing the prompt while the tool
+		//     stays open must leave the fallback armed, with its original clock.
 		//
-		// PermissionPending is set by the SignalPermissionPrompt row's apply,
-		// which is why this row is last in the table: it reads a field an
-		// earlier row writes on the same pass.
+		// Reading PermissionPending is what pins this row's position; see the
+		// table header.
 		ripe: func(c holdContext) bool {
 			return !c.Metrics.PermissionPending &&
 				c.Now.Sub(c.HeldSince) >= stalledEditToolThreshold
@@ -402,29 +427,37 @@ func NewSignalHolds() *SignalHolds {
 func (h *SignalHolds) Hold(sessionID string, kind SignalKind, p SignalPayload, at time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.held[sessionID] == nil {
-		h.held[sessionID] = map[SignalKind]heldSignal{}
-	}
-	h.held[sessionID][kind] = heldSignal{payload: p, heldAt: at}
+	h.holdLocked(sessionID, kind, p, at)
 }
 
 // HoldIfAbsent records kind for sessionID at time at, only if no hold of that
 // kind is already in place.
 //
-// It is Hold's arm-once counterpart, and the producer-side half of an
-// arm-then-fire policy. Hold deliberately *resets* HeldSince, which is correct
-// for a signal that genuinely re-fires (a second Stop hook describes a new turn
-// ending) but wrong for a condition a producer merely keeps observing: a
-// re-arming poll would push the arming deadline out by one poll interval every
-// poll, so a ripe rule measured from HeldSince could never come due. The
-// SignalOpenToolStalled producer re-observes the same open tool on every
-// classify pass, which is exactly that shape.
+// THE ARM-ONCE RATIONALE, stated here once for everything that depends on it.
+// Hold deliberately *resets* HeldSince, which is right for a signal that
+// genuinely re-fires — a second Stop hook describes a new turn ending — but
+// wrong for a condition a producer merely keeps observing. Such a producer
+// re-arms on every poll, and each re-arm would push a ripe rule's deadline out
+// by one poll interval, so the rule could never come due. Any producer of an
+// arm-then-fire policy therefore calls this, not Hold.
+//
+// It must stay one critical section rather than `if !Held() { Hold() }`: two
+// producers racing through the gap between those two calls would both see
+// "absent", and the second Hold would perform exactly the clock reset this
+// method exists to prevent.
 func (h *SignalHolds) HoldIfAbsent(sessionID string, kind SignalKind, p SignalPayload, at time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, ok := h.held[sessionID][kind]; ok {
 		return
 	}
+	h.holdLocked(sessionID, kind, p, at)
+}
+
+// holdLocked stores a hold, creating the session's inner map if needed. The
+// caller must hold h.mu. Shared by Hold and HoldIfAbsent so heldSignal has one
+// construction site.
+func (h *SignalHolds) holdLocked(sessionID string, kind SignalKind, p SignalPayload, at time.Time) {
 	if h.held[sessionID] == nil {
 		h.held[sessionID] = map[SignalKind]heldSignal{}
 	}

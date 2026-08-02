@@ -32,9 +32,10 @@ func armStalled(h *SignalHolds, at time.Time) {
 // stalledCase is one TestSignalHolds_OpenToolStalled table row.
 type stalledCase struct {
 	name string
-	// armed is the instant the open tool was first observed, relative to
-	// holdT0. A nil armed means the hold was never placed.
-	armed   *time.Duration
+	// unarmed skips placing the hold. The zero value — the case for every row
+	// but one — arms it at holdT0, i.e. the open tool was first observed at
+	// the start of the timeline.
+	unarmed bool
 	metrics *SessionMetrics
 	// at is when the Overlay pass runs, relative to holdT0.
 	at time.Duration
@@ -47,8 +48,6 @@ type stalledCase struct {
 // stalledCases builds TestSignalHolds_OpenToolStalled's table. Split out of the
 // test function so it stays under CodeScene's Large Method line threshold.
 func stalledCases() []stalledCase {
-	zero := time.Duration(0)
-
 	pending := func() *SessionMetrics {
 		m := editOpenMetrics()
 		m.PermissionPending = true
@@ -62,7 +61,6 @@ func stalledCases() []stalledCase {
 			// with an unconditional apply fires here, which is why `ripe` had
 			// to exist before this rule could be a row at all (#1319).
 			name:        "fresh edit tool is not flagged, hold armed",
-			armed:       &zero,
 			metrics:     editOpenMetrics(),
 			at:          0,
 			wantStalled: false,
@@ -70,7 +68,6 @@ func stalledCases() []stalledCase {
 		},
 		{
 			name:        "edit tool open past the threshold is flagged",
-			armed:       &zero,
 			metrics:     editOpenMetrics(),
 			at:          stalledEditToolThreshold,
 			wantStalled: true,
@@ -81,7 +78,6 @@ func stalledCases() []stalledCase {
 			// `write` tool; it must flag stalled just like claudecode's
 			// PascalCase Write (#588).
 			name:        "lowercase write (kiro) open past the threshold is flagged",
-			armed:       &zero,
 			metrics:     &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"write"}},
 			at:          stalledEditToolThreshold,
 			wantStalled: true,
@@ -89,7 +85,6 @@ func stalledCases() []stalledCase {
 		},
 		{
 			name:        "edit tool just under the threshold is not flagged",
-			armed:       &zero,
 			metrics:     editOpenMetrics(),
 			at:          stalledEditToolThreshold - time.Nanosecond,
 			wantStalled: false,
@@ -100,7 +95,6 @@ func stalledCases() []stalledCase {
 			// PermissionPending fired. The hold is kept, not dropped: the
 			// prompt may be released while the tool stays open.
 			name:        "permission-pending edit tool defers to the hook",
-			armed:       &zero,
 			metrics:     pending(),
 			at:          stalledEditToolThreshold + 100*time.Second,
 			wantStalled: false,
@@ -108,7 +102,6 @@ func stalledCases() []stalledCase {
 		},
 		{
 			name:        "non-edit tool is never flagged and drops the hold",
-			armed:       &zero,
 			metrics:     &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}},
 			at:          stalledEditToolThreshold + 100*time.Second,
 			wantStalled: false,
@@ -116,7 +109,6 @@ func stalledCases() []stalledCase {
 		},
 		{
 			name:        "closing the tool drops the hold",
-			armed:       &zero,
 			metrics:     &SessionMetrics{HasOpenToolCall: false},
 			at:          stalledEditToolThreshold + 100*time.Second,
 			wantStalled: false,
@@ -124,7 +116,7 @@ func stalledCases() []stalledCase {
 		},
 		{
 			name:        "no hold means nothing is ever flagged",
-			armed:       nil,
+			unarmed:     true,
 			metrics:     editOpenMetrics(),
 			at:          stalledEditToolThreshold + 100*time.Second,
 			wantStalled: false,
@@ -142,8 +134,8 @@ func TestSignalHolds_OpenToolStalled(t *testing.T) {
 	for _, tt := range stalledCases() {
 		t.Run(tt.name, func(t *testing.T) {
 			h := NewSignalHolds()
-			if tt.armed != nil {
-				armStalled(h, holdT0.Add(*tt.armed))
+			if !tt.unarmed {
+				armStalled(h, holdT0)
 			}
 
 			h.Overlay(holdSID, tt.metrics, holdT0.Add(tt.at))

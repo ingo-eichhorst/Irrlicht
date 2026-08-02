@@ -1351,14 +1351,12 @@ func (d *SessionDetector) purgeDeadBackgroundProcesses(result backgroundProbeRes
 // threshold, the deference to PermissionPending, and dropping the hold when the
 // tool closes. This function only observes.
 //
-// Arm-once (HoldIfAbsent, not Hold) is the load-bearing part. This runs on every
-// classify pass, and a lingering open tool is re-observed on each one; a plain
-// Hold would reset HeldSince every pass, pushing the threshold out by one poll
-// interval per poll so the flag could never come due. The window must be
-// measured from first observation, which is also why a fresh tool_use write is
-// never flagged on the spot — only a later refreshStaleSessions re-evaluation
-// of a lingering open tool is, which lets a held prompt flip without any new
-// transcript write.
+// This runs on every classify pass and re-observes the same lingering tool each
+// time, so it must arm once: see SignalHolds.HoldIfAbsent for why Hold would be
+// wrong here. Measuring from first observation is also why a fresh tool_use
+// write is never flagged on the spot — only a later refreshStaleSessions
+// re-evaluation of a lingering open tool is, which lets a held prompt flip
+// without any new transcript write.
 //
 // A pass with no metrics arms nothing and releases nothing: Overlay returns
 // early on nil metrics, so any existing hold is simply reconsidered on the next
@@ -1448,8 +1446,8 @@ func (d *SessionDetector) retryIdleProjectResolution(state *session.SessionState
 // get another retryIdleProjectResolution pass this tick, and records the
 // attempt. See maxIdleProjectResolveAttempts for the bound and its rationale.
 func (d *SessionDetector) shouldRetryIdleProjectResolution(sessionID string) bool {
-	d.permMu.Lock()
-	defer d.permMu.Unlock()
+	d.idleMu.Lock()
+	defer d.idleMu.Unlock()
 	if d.idleProjectRetryAttempts[sessionID] >= maxIdleProjectResolveAttempts {
 		return false
 	}

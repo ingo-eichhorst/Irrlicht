@@ -44,9 +44,9 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	// forever, and a recycled session ID would inherit it.
 	d.signals.DropSession(ev.SessionID)
 
-	d.permMu.Lock()
+	d.idleMu.Lock()
 	delete(d.idleProjectRetryAttempts, ev.SessionID)
-	d.permMu.Unlock()
+	d.idleMu.Unlock()
 
 	state, err := d.repo.Load(ev.SessionID)
 	if err != nil || state == nil {

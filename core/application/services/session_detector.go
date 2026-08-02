@@ -173,23 +173,22 @@ type SessionDetector struct {
 	// its own lifecycle rule spelled out in its own overlay method. The
 	// per-signal policy now lives in session.signalPolicies.
 	//
-	// editToolOpenSince was the last one that did NOT fold in: its rule fires
-	// only *after* a threshold, and a policy row applied on the first pass
-	// after Hold. #1319 gave signalPolicy an arming predicate and it became
-	// the SignalOpenToolStalled row, armed by armStalledEditTool. No
-	// hand-rolled overlay map is left.
+	// editToolOpenSince, the last holdout — its rule fires only *after* a
+	// threshold, which no policy row could express — folded in too once #1319
+	// gave signalPolicy an arming predicate. No hand-rolled per-signal overlay
+	// map is left on this struct.
 	//
 	// Carries its own lock (hooks arrive on HTTP handler goroutines, the
-	// event loop classifies), so it is deliberately NOT guarded by permMu.
+	// event loop classifies), so it is deliberately NOT guarded by idleMu.
 	signals *session.SignalHolds
 
-	// permMu guards idleProjectRetryAttempts below. Written from HTTP handler
+	// idleMu guards idleProjectRetryAttempts below. Written from HTTP handler
 	// goroutines, read by processActivity (event-loop goroutine).
-	permMu sync.Mutex
+	idleMu sync.Mutex
 
 	// idleProjectRetryAttempts tracks, per session, how many
 	// refreshStaleSessions ticks have retried CWD/project resolution while
-	// idle with an unresolved ProjectName. Guarded by permMu. Capped at
+	// idle with an unresolved ProjectName. Guarded by idleMu. Capped at
 	// maxIdleProjectResolveAttempts (#1021); cleared when the session is
 	// removed (onRemoved).
 	idleProjectRetryAttempts map[string]int // sessionID → attempts so far
