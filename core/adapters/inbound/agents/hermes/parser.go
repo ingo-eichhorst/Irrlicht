@@ -98,6 +98,15 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 			// Both rules are the shared ones every adapter uses, not local
 			// reimplementations.
 			ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text))
+			// Markers are scanned from the FULL text, per
+			// TruncateAssistantText's own contract: the head it drops is
+			// exactly where a mid-prose estimate marker sits.
+			if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
+				ev.TaskEstimate = est
+			}
+			if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
+				ev.TaskSummary = s
+			}
 			ev.AssistantText = tailer.TruncateAssistantText(text)
 		}
 		calls := decodeToolCalls(raw[keyToolCalls])

@@ -317,3 +317,31 @@ func TestParseLine_AbnormalFinishReasonsEndTheTurn(t *testing.T) {
 		}
 	}
 }
+
+// The task-estimate marker is an HTML comment the agent emits mid-prose, so it
+// sits BEFORE the tail that TruncateAssistantText keeps. tailer's own contract
+// says adapters "MUST scan the full text for markers (ScanTaskEstimate) BEFORE
+// calling" the truncation — hermes truncated without scanning, dropping every
+// marker that wasn't in the last 200 runes.
+func TestParseLine_TaskEstimateMarkerSurvivesTruncation(t *testing.T) {
+	marker := `<!-- {"marker":"irrlicht-eta","total_rounds":5,"completed_rounds":2} -->`
+	// Marker up front, then enough prose to push it out of the kept tail.
+	text := marker + " " + strings.Repeat("working on it. ", 60)
+
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		keyRole: "assistant", keyContent: text, keyFinish: "stop",
+	})
+	if ev == nil {
+		t.Fatal("expected an event")
+	}
+	if strings.Contains(ev.AssistantText, "irrlicht-eta") {
+		t.Fatal("precondition: the marker must fall outside the truncated tail for this test to mean anything")
+	}
+	if ev.TaskEstimate == nil {
+		t.Fatal("the estimate marker must be scanned from the FULL text before truncation")
+	}
+	if ev.TaskEstimate.TotalRounds != 5 || ev.TaskEstimate.CompletedRounds != 2 {
+		t.Errorf("TaskEstimate = %+v, want total=5 completed=2", ev.TaskEstimate)
+	}
+}
