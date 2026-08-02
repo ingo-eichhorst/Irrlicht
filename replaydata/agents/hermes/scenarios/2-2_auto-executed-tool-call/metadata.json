@@ -106,12 +106,13 @@
         "The shell tool is named `terminal`. The prompt deliberately targets it rather than hermes' `write_file`, because an open edit-shaped tool would trip the classifier's 'stalled edit tool → likely permission prompt → waiting' rule and break the scenario's no-waiting invariant",
         "The session row is INSERTed on the first user message (~2s after it), not at launch, so the driver resolves the session id lazily after the first send and binds only to a row whose started_at is after this slot's launch",
         "'reply with exactly: done' keeps the terminal assistant text free of questions and imperative cues, so ProseIndicatesWaiting cannot fire on the turn's last message",
-        "The trailing sleep gives the watcher at least three 2s poll ticks to observe finish_reason='stop' → Terminal activity → working→ready before the driver tears the tmux session down"
+        "The trailing sleep gives the watcher at least three 2s poll ticks to observe finish_reason='stop' → Terminal activity → working→ready before the driver tears the tmux session down",
+        "The prompt names the `terminal` tool explicitly AND forbids `execute_code`: on the first recording attempt the model wrapped the shell call in `execute_code` (`from hermes_tools import terminal`), which runs inside Docker and hard-failed with `[TOOL_ERROR] ... Docker command is available but 'docker version' failed`. The arc was still correct (the call auto-executed with no approval window), but the tool_result was an error, so the prompt now pins the tool the recipe intends."
       ],
       "script": [
         {
           "type": "send",
-          "text": "Use your terminal tool to run exactly: echo hello. Then reply with exactly: done"
+          "text": "Call the tool named terminal directly, with the command: echo hello. Do not use the execute_code tool. Then reply with exactly: done"
         },
         {
           "type": "wait_turn"
