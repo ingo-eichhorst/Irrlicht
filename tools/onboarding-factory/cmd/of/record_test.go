@@ -63,6 +63,39 @@ func TestRecordPrereqCheck(t *testing.T) {
 	}
 }
 
+// prereq-check is a PRECHECK: its whole job is to stop a recording that would
+// fail. Reporting "no recording prerequisites declared" and exiting 0 when the
+// agent column doesn't exist is the one answer it must never give — that is a
+// green light derived from having found nothing to read. Two ways to get there:
+// a --repo-root that isn't a repo root (the default "." from any subdirectory,
+// which is how this was found — `of record prereq-check --agent hermes` run
+// from tools/onboarding-factory passed while hermes had four prerequisites),
+// and a misspelled agent id.
+func TestRecordPrereqCheckUnknownAgentIsNotAPass(t *testing.T) {
+	root := recordRepo(t)
+
+	t.Run("repo-root is not a repo root", func(t *testing.T) {
+		notRoot := filepath.Join(root, "tools", "onboarding-factory")
+		code, out, errs := runOf("record", "prereq-check", "--agent", "claudecode", "--repo-root", notRoot)
+		if code == exitOK {
+			t.Fatalf("a non-root --repo-root must not report a clean precheck: exit=%d out=%s", code, out)
+		}
+		if !strings.Contains(errs, "claudecode") {
+			t.Errorf("error must name the agent it could not find: %s", errs)
+		}
+	})
+
+	t.Run("misspelled agent id", func(t *testing.T) {
+		code, out, errs := runOf("record", "prereq-check", "--agent", "claudcode", "--repo-root", root)
+		if code == exitOK {
+			t.Fatalf("an unknown agent must not report a clean precheck: exit=%d out=%s", code, out)
+		}
+		if !strings.Contains(errs, "claudcode") {
+			t.Errorf("error must name the agent it could not find: %s", errs)
+		}
+	})
+}
+
 func TestRecordPrereqBudget(t *testing.T) {
 	root := recordRepo(t)
 	// An assessed-but-unrecorded claudecode cell for basic-turn (2 wait_turns)
