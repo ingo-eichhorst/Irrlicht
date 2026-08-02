@@ -25,7 +25,7 @@ import (
 // ParserFactories returns the complete adapter-name → parser-factory map
 // for the given adapter slice: agents.Parsers (JSONLineParser-shape
 // adapters) plus the FilesUnderCWD (aider) and ProcessOwnedStore
-// (opencode) overrides that agents.Parsers intentionally omits, because
+// (opencode, hermes) overrides that agents.Parsers intentionally omits, because
 // the RawLineParser/ProcessOwnedStore source variants don't carry a
 // factory compatible with agents.ParserFactory.
 //

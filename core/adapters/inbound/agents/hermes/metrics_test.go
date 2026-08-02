@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -226,5 +227,112 @@ func TestComputeMetrics_ReadsWatcherTranscriptPath(t *testing.T) {
 	}
 	if m.ModelName != "gpt-5.6-luna" {
 		t.Errorf("ModelName = %q", m.ModelName)
+	}
+}
+
+// The store permission is observe-kind and its consent copy promises
+// "No row is ever written". modernc.org/sqlite only honors DSN query
+// params for a file: URI — given a bare path it silently opens
+// READWRITE|CREATE — so this pins that openReadOnly actually enforces the
+// mode rather than merely asking for it.
+//
+// Seen red against the pre-fix DSN (dbPath+"?mode=ro"): the missing store
+// was created on disk and the CREATE TABLE succeeded.
+func TestOpenReadOnly_CannotWriteOrCreate(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "state.db")
+
+	db, err := openReadOnly(missing)
+	if err != nil {
+		t.Fatalf("openReadOnly: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("CREATE TABLE probe(x)"); err == nil {
+		t.Error("openReadOnly permitted a write — mode=ro is not being enforced")
+	}
+	if _, err := os.Stat(missing); err == nil {
+		t.Error("openReadOnly CREATED the store file; an observe-kind permission must never write")
+	}
+
+	// A real store must still be readable through the same helper.
+	path, seed := newTestStore(t)
+	insertSession(t, seed, "s1", "tui", "m", "/work/proj", 1000, 0, 1)
+	ro, err := openReadOnly(path)
+	if err != nil {
+		t.Fatalf("openReadOnly(existing): %v", err)
+	}
+	defer ro.Close()
+	var got string
+	if err := ro.QueryRow(`SELECT id FROM sessions WHERE id='s1'`).Scan(&got); err != nil {
+		t.Fatalf("read through read-only handle: %v", err)
+	}
+	if got != "s1" {
+		t.Errorf("read back %q, want s1", got)
+	}
+}
+
+// A source='cli' session has no stored cwd, and the daemon cannot recover
+// one later from a "<store>?session=<id>" path the way it would from a real
+// transcript file. Resolving it here is what lets the binding BACKFILL on a
+// later activity event instead of being frozen at discovery — the case where
+// two concurrent sessions made the discovery-time probe ambiguous.
+func TestComputeMetrics_UnboundCLISessionBackfillsCWD(t *testing.T) {
+	path, db := newTestStore(t)
+	insertSession(t, db, "s1", "cli", "m", "", 1000, 0, 1)
+	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+
+	prev := liveCWDForSession
+	liveCWDForSession = func() string { return "/live/cwd" }
+	defer func() { liveCWDForSession = prev }()
+
+	m, err := ComputeMetrics(path, "s1")
+	if err != nil || m == nil {
+		t.Fatalf("ComputeMetrics: %v, %v", m, err)
+	}
+	if m.LastCWD != "/live/cwd" {
+		t.Errorf("LastCWD = %q, want the live-process cwd so the binding can backfill", m.LastCWD)
+	}
+}
+
+// A stored cwd always wins — the probe must not override a TUI session's own
+// recorded directory.
+func TestComputeMetrics_StoredCWDWinsOverProbe(t *testing.T) {
+	path, db := newTestStore(t)
+	insertSession(t, db, "s1", "tui", "m", "/work/proj", 1000, 0, 1)
+	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+
+	prev := liveCWDForSession
+	liveCWDForSession = func() string { t.Error("probe must not run when cwd is stored"); return "/wrong" }
+	defer func() { liveCWDForSession = prev }()
+
+	m, _ := ComputeMetrics(path, "s1")
+	if m == nil || m.LastCWD != "/work/proj" {
+		t.Errorf("LastCWD = %v, want /work/proj", m)
+	}
+}
+
+// The ProcessOwnedStore path bypasses the tailer, so the waiting cue the
+// parser computes reaches the daemon only if ComputeMetrics carries it.
+// Without this it is calculated and silently dropped, and a session that
+// ended on a question settles to `ready` instead of `waiting`.
+func TestComputeMetrics_CarriesPendingWaitingCue(t *testing.T) {
+	path, db := newTestStore(t)
+	insertSession(t, db, "s1", "tui", "m", "/work/proj", 1000, 0, 2)
+	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+	insertMessage(t, db, "s1", "assistant", "Which approach would you prefer?", "", "", "stop", 1002)
+
+	m, err := ComputeMetrics(path, "s1")
+	if err != nil || m == nil {
+		t.Fatalf("ComputeMetrics: %v, %v", m, err)
+	}
+	if !m.PendingWaitingCue {
+		t.Error("a turn ending on a question must surface PendingWaitingCue")
+	}
+
+	// A later user message answers it — the cue must not persist.
+	insertMessage(t, db, "s1", "user", "the second one", "", "", "", 1003)
+	m2, _ := ComputeMetrics(path, "s1")
+	if m2.PendingWaitingCue {
+		t.Error("a following user message must clear PendingWaitingCue")
 	}
 }

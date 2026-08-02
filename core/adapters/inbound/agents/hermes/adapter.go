@@ -24,9 +24,11 @@
 //
 //   - `sessions.cwd` is populated ONLY for TUI sessions. Every caller of
 //     Hermes' update_session_cwd lives in its tui_gateway/server.py, so
-//     `source='cli'` rows (one-shot `-z`, piped, scripted) carry an empty
-//     cwd and must borrow the project binding from the live process. See
-//     cwdFor in watcher.go.
+//     `source='cli'` rows — including the interactive `hermes chat` REPL,
+//     which records source='cli' — carry an empty cwd and must borrow the
+//     project binding from the live process. Resolved in two places: the
+//     watcher (once per scan, for discovery) and querySessionMetrics (so an
+//     initially-unbound session backfills on later activity).
 //
 // The gateway platforms (whatsapp, slack, discord, …) share this table.
 // They are not coding sessions, so the adapter filters on `source` — see
@@ -157,13 +159,36 @@ func isServiceArgv(argv []string) bool {
 		if !isEntry {
 			continue
 		}
-		// The subcommand is the first following token that is not a flag.
+		// The subcommand is the first following token that is neither a flag
+		// nor a flag's VALUE. Skipping the value matters: `--model gateway`
+		// would otherwise read as the gateway service and exclude a real
+		// session.
+		skipNext := false
 		for _, next := range argv[i+1:] {
+			if skipNext {
+				skipNext = false
+				continue
+			}
 			if strings.HasPrefix(next, "-") {
+				skipNext = valueTakingFlags[next]
 				continue
 			}
 			return serviceSubcommands[next]
 		}
 	}
 	return false
+}
+
+// valueTakingFlags are the global flags whose NEXT argv entry is a value
+// rather than a subcommand, taken from `hermes --help`. Only the global
+// (pre-subcommand) ones matter here.
+var valueTakingFlags = map[string]bool{
+	"-m": true, "--model": true,
+	"--provider": true,
+	"-t":         true, "--toolsets": true,
+	"-s": true, "--skills": true,
+	"-r": true, "--resume": true,
+	"-c": true, "--continue": true,
+	"-p": true, "--profile": true,
+	"--usage-file": true,
 }

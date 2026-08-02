@@ -298,3 +298,87 @@ func TestWatcher_ScanIsDebounced(t *testing.T) {
 		t.Errorf("debounced scan emitted %+v, want nothing", evs)
 	}
 }
+
+// Cursors for sessions that have aged out of the scan window must be
+// dropped, or a long-lived daemon retains one entry per Hermes session ever
+// observed. Safe because the filter is `started_at > cutoff` and started_at
+// is immutable: an aged-out session can never re-enter and be re-emitted.
+func TestWatcher_PrunesCursorsForVanishedSessions(t *testing.T) {
+	path, db := newTestStore(t)
+	now := float64(time.Now().Unix())
+	insertSession(t, db, "s1", "tui", "m", "/work/proj", now-10, 0, 1)
+	insertMessage(t, db, "s1", "user", "go", "", "", "", now-10)
+
+	w := NewWithStorePath(path, time.Hour)
+	w.liveCWD = func() string { return "" }
+	ch := w.Subscribe()
+	scanNow(w)
+	drain(ch)
+
+	w.mu.Lock()
+	n := len(w.sessions)
+	w.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("tracked %d sessions after first scan, want 1", n)
+	}
+
+	// Age the session out of the window; the next scan no longer returns it.
+	if _, err := db.Exec(`UPDATE sessions SET started_at = ? WHERE id='s1'`, now-7200); err != nil {
+		t.Fatal(err)
+	}
+	scanNow(w)
+
+	w.mu.Lock()
+	n = len(w.sessions)
+	w.mu.Unlock()
+	if n != 0 {
+		t.Errorf("tracked %d sessions after the row aged out, want 0 — cursors leak", n)
+	}
+}
+
+// The live-process probe shells out to pgrep + lsof, so it must run at most
+// once per scan rather than once per row. Regression guard for the version
+// that called it from reconcile: with N unbound CLI rows it cost N probes on
+// every 2s tick, even with nothing changed.
+func TestWatcher_ResolvesLiveCWDAtMostOncePerScan(t *testing.T) {
+	path, db := newTestStore(t)
+	for _, id := range []string{"a", "b", "c", "d"} {
+		insertSession(t, db, id, "cli", "m", "", 1000, 0, 1)
+		insertMessage(t, db, id, "user", "go", "", "", "", 1001)
+	}
+
+	calls := 0
+	w := NewWithStorePath(path, 0)
+	w.liveCWD = func() string { calls++; return "/live/cwd" }
+
+	ch := w.Subscribe()
+	scanNow(w)
+	drain(ch)
+
+	if calls != 1 {
+		t.Errorf("liveCWD called %d times for 4 rows in one scan, want 1", calls)
+	}
+}
+
+// When every row carries a stored cwd there is nothing to fall back to, so
+// the probe must not run at all.
+func TestWatcher_SkipsLiveCWDProbeWhenAllRowsHaveCWD(t *testing.T) {
+	path, db := newTestStore(t)
+	insertSession(t, db, "s1", "tui", "m", "/work/proj", 1000, 0, 1)
+	insertMessage(t, db, "s1", "user", "go", "", "", "", 1001)
+
+	calls := 0
+	w := NewWithStorePath(path, 0)
+	w.liveCWD = func() string { calls++; return "/should/not/be/used" }
+
+	ch := w.Subscribe()
+	scanNow(w)
+	evs := drain(ch)
+
+	if calls != 0 {
+		t.Errorf("liveCWD probed %d times though every row had a stored cwd, want 0", calls)
+	}
+	if evs[0].CWD != "/work/proj" {
+		t.Errorf("CWD = %q, want the stored cwd", evs[0].CWD)
+	}
+}

@@ -24,6 +24,11 @@ const sessionQueryParam = "?session="
 // 'cli' covers one-shot (-z) and piped runs; 'tui' is the interactive REPL.
 const sessionSourceFilter = `source IN ('cli','tui')`
 
+// liveCWDForSession resolves the working directory of the single live Hermes
+// session process, for rows that carry none. Package-level so tests can stub
+// out the process probe.
+var liveCWDForSession = defaultLiveCWD
+
 // ComputeMetrics reads the Hermes store for one session and returns
 // normalized SessionMetrics.
 //
@@ -52,8 +57,16 @@ func ComputeMetrics(storePath, sessionID string) (*session.SessionMetrics, error
 // journal_mode` returns "delete", and no -wal file exists next to a live
 // store), so a reader can collide with a writer's exclusive lock. The
 // timeout bounds that wait instead of blocking the watcher's scan loop.
+//
+// The "file:" prefix is load-bearing, not decoration: modernc.org/sqlite
+// only parses DSN query parameters for a file: URI. Given a bare path it
+// strips the query and opens with SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE,
+// so "?mode=ro" is silently ignored — verified against v1.55.0, where a
+// bare-path DSN CREATED a missing database and accepted a CREATE TABLE.
+// This adapter's permission is observe-kind and its consent copy promises
+// "No row is ever written", so the mode has to actually be enforced.
 func openReadOnly(dbPath string) (*sql.DB, error) {
-	return sql.Open("sqlite", dbPath+"?mode=ro&_timeout=500")
+	return sql.Open("sqlite", "file:"+dbPath+"?mode=ro&_timeout=500")
 }
 
 // parseStorePath splits a "<path>?session=<id>" transcript path. When no
@@ -95,10 +108,21 @@ func querySessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetrics,
 		return nil, nil
 	}
 
+	// A source='cli' session has no stored cwd (Hermes records one only from
+	// its TUI gateway), and the daemon cannot recover it later from a
+	// "<store>?session=<id>" path the way it would from a real transcript
+	// file. Resolving it here means the binding BACKFILLS on the next
+	// activity event — RefreshOnActivity applies a non-empty LastCWD —
+	// instead of being frozen at whatever discovery happened to see.
+	lastCWD := cwd.String
+	if lastCWD == "" && liveCWDForSession != nil {
+		lastCWD = liveCWDForSession()
+	}
+
 	metrics := &session.SessionMetrics{
 		ModelName:     firstNonEmpty(model.String, "unknown"),
 		PressureLevel: "unknown",
-		LastCWD:       cwd.String,
+		LastCWD:       lastCWD,
 	}
 
 	rows, err := db.Query(`
@@ -116,6 +140,7 @@ func querySessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetrics,
 	parser := &Parser{}
 	openTools := make(map[string]string) // tool-call id → tool name
 	var lastEventType, lastAssistantText string
+	pendingWaitingCue := false
 	hasData := false
 
 	for rows.Next() {
@@ -162,6 +187,13 @@ func querySessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetrics,
 		}
 		if ev.AssistantText != "" {
 			lastAssistantText = ev.AssistantText
+			pendingWaitingCue = ev.PendingWaitingCue
+		}
+		// A new user message answers whatever the agent was waiting on, so
+		// the cue does not survive it. The ProcessOwnedStore path bypasses
+		// the tailer, which is where that reset normally lives.
+		if ev.EventType == "user_message" {
+			pendingWaitingCue = false
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -174,6 +206,7 @@ func querySessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetrics,
 
 	metrics.LastEventType = lastEventType
 	metrics.LastAssistantText = lastAssistantText
+	metrics.PendingWaitingCue = pendingWaitingCue
 	metrics.HasOpenToolCall = len(openTools) > 0
 	metrics.OpenToolCallCount = len(openTools)
 	metrics.LastOpenToolNames = openToolNames(openTools)

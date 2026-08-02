@@ -179,7 +179,7 @@ func LiveCWDsByCmdline(cmdLinePattern string, excludeArgv func([]string) bool) (
 			}
 		}
 		dir, err := osProc.CWDOf(pid)
-		if err != nil {
+		if err != nil || dir == "" {
 			continue
 		}
 		set[dir] = struct{}{}

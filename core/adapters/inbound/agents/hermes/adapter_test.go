@@ -176,6 +176,13 @@ func TestIsServiceArgv(t *testing.T) {
 			want: false,
 		},
 		{
+			// A flag VALUE that happens to name a service must not be read as
+			// the subcommand.
+			name: "a service name as a flag value is still a session",
+			argv: []string{venv + "/python3", venv + "/hermes", "--model", "gateway", "chat"},
+			want: false,
+		},
+		{
 			// Per the ExcludeArgv contract: an unreadable argv must not exclude.
 			name: "nil argv is not excluded",
 			argv: nil,

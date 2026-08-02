@@ -5,6 +5,7 @@
   "prerequisites": [
     "hermes >=0.19.0 installed and on PATH (git install, pipx, or the install script); the CLI is a Python console script, so the binary is a shim into <HERMES_HOME>/hermes-agent/venv/bin/hermes",
     "an inference provider configured in <HERMES_HOME>/config.yaml (model.default + model.provider) with credentials in <HERMES_HOME>/.env or auth.json — e.g. 'hermes setup' or 'hermes login'",
-    "HERMES_HOME exported to the recording home when recording, so the run writes to an isolated state.db instead of the maintainer's real session store"
+    "HERMES_HOME exported to the recording home, so the run writes to an isolated state.db instead of the maintainer's real session store",
+    "the sqlite3 CLI on PATH — hermes persists no transcript file, so the driver reads session id and turn-completion straight out of state.db"
   ]
 }

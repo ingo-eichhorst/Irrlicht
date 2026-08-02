@@ -82,6 +82,11 @@ type sessionCursor struct {
 	emitted      bool
 	messageCount int64
 	ended        bool
+
+	// lastObserved is the wall-clock time of the most recent scan that saw
+	// this session, used to prune the map. Without it the daemon retains one
+	// entry per Hermes session ever observed, for its whole lifetime.
+	lastObserved time.Time
 }
 
 // New creates a Watcher for the store at $HERMES_HOME/state.db.
@@ -303,13 +308,52 @@ func (w *Watcher) scanSessions(db *sql.DB) {
 		log.Printf("hermes: iterate sessions: %v", err)
 	}
 
+	// Resolve the live-process CWD at most ONCE per scan, and only if some
+	// row actually needs it. Doing it per row shelled out to pgrep + lsof
+	// for every CLI session in the window on every 2s tick — at the LIMIT
+	// 200 ceiling the scan outran the poll interval.
+	fallbackCWD := ""
+	if w.liveCWD != nil && anyRowNeedsCWD(found) {
+		fallbackCWD = w.liveCWD()
+	}
+
 	for _, r := range found {
-		w.reconcile(db, r)
+		w.reconcile(db, r, fallbackCWD)
+	}
+	w.gcExpiredCursors(found)
+}
+
+// anyRowNeedsCWD reports whether some row lacks a stored cwd, which is the
+// only case the live-process fallback is consulted for.
+func anyRowNeedsCWD(rows []storeSessionRow) bool {
+	for _, r := range rows {
+		if r.cwd == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// gcExpiredCursors drops cursors for sessions no longer returned by the
+// scan. Safe because the scan filter is `started_at > cutoff` and
+// started_at is immutable: a session that ages out can never re-enter the
+// window, so a dropped cursor can never cause a duplicate new_session.
+func (w *Watcher) gcExpiredCursors(found []storeSessionRow) {
+	seen := make(map[string]struct{}, len(found))
+	for _, r := range found {
+		seen[r.id] = struct{}{}
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for id := range w.sessions {
+		if _, ok := seen[id]; !ok {
+			delete(w.sessions, id)
+		}
 	}
 }
 
 // reconcile turns the delta between a session row and its cursor into events.
-func (w *Watcher) reconcile(db *sql.DB, r storeSessionRow) {
+func (w *Watcher) reconcile(db *sql.DB, r storeSessionRow, fallbackCWD string) {
 	w.mu.Lock()
 	cur, known := w.sessions[r.id]
 	if !known {
@@ -318,9 +362,13 @@ func (w *Watcher) reconcile(db *sql.DB, r storeSessionRow) {
 	}
 	prevCount, prevEnded, emitted := cur.messageCount, cur.ended, cur.emitted
 	cur.messageCount, cur.ended, cur.emitted = r.messageCount, r.ended, true
+	cur.lastObserved = time.Now()
 	w.mu.Unlock()
 
-	cwd := w.cwdFor(r)
+	cwd := r.cwd
+	if cwd == "" {
+		cwd = fallbackCWD
+	}
 
 	base := agent.Event{
 		SessionID:       r.id,
@@ -376,19 +424,4 @@ func (w *Watcher) turnIsDone(db *sql.DB, sessionID string) bool {
 		return false
 	}
 	return role.String == "assistant" && finish.String == "stop"
-}
-
-// cwdFor resolves the session's working directory.
-//
-// The stored cwd wins when present (TUI sessions). A CLI session has none —
-// Hermes only records cwd from its TUI gateway — so the binding falls back
-// to the live process, and to "" when that is ambiguous.
-func (w *Watcher) cwdFor(r storeSessionRow) string {
-	if r.cwd != "" {
-		return r.cwd
-	}
-	if w.liveCWD == nil {
-		return ""
-	}
-	return w.liveCWD()
 }

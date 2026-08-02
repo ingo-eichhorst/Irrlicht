@@ -3,6 +3,8 @@ package hermes
 import (
 	"strings"
 	"testing"
+
+	"irrlicht/core/pkg/tailer"
 )
 
 // realToolCallsJSON is a verbatim `messages.tool_calls` value captured from a
@@ -142,18 +144,48 @@ func TestParseToolCalls_Malformed(t *testing.T) {
 	}
 }
 
-// AssistantText is tail-truncated because a waiting cue ("...shall I
-// proceed?") sits at the END of the text.
-func TestTruncateRunesKeepsTail(t *testing.T) {
-	long := strings.Repeat("a", 250) + "QUESTION?"
-	got := truncateRunes(long, maxAssistantText)
-	if len([]rune(got)) != maxAssistantText {
-		t.Errorf("len = %d, want %d", len([]rune(got)), maxAssistantText)
+// AssistantText goes through the tailer's shared display-truncation rule —
+// tail-keeping, because a waiting cue ("...shall I proceed?") sits at the END
+// of the text. Asserted through ParseLine rather than against a local helper,
+// so the adapter cannot drift back onto its own copy of the rule.
+func TestParseLine_AssistantTextUsesSharedTruncation(t *testing.T) {
+	p := &Parser{}
+	long := strings.Repeat("a", 500) + " QUESTION?"
+	ev := p.ParseLine(map[string]interface{}{
+		keyRole:    "assistant",
+		keyContent: long,
+		keyFinish:  "stop",
+	})
+	if ev == nil {
+		t.Fatal("expected an event")
 	}
-	if !strings.HasSuffix(got, "QUESTION?") {
-		t.Error("truncation must keep the tail, where waiting cues live")
+	if ev.AssistantText == long {
+		t.Error("long assistant text must be truncated")
 	}
-	if got := truncateRunes("short", maxAssistantText); got != "short" {
-		t.Errorf("short strings must pass through, got %q", got)
+	if !strings.HasSuffix(ev.AssistantText, "QUESTION?") {
+		t.Errorf("truncation must keep the tail, where waiting cues live: %q", ev.AssistantText)
+	}
+	if ev.AssistantText != tailer.TruncateAssistantText(long) {
+		t.Error("must use tailer.TruncateAssistantText, not a local copy of the rule")
+	}
+}
+
+// A trailing question is what puts a finished turn into `waiting` rather than
+// `ready`. Computed from the full text before truncation.
+func TestParseLine_PendingWaitingCue(t *testing.T) {
+	p := &Parser{}
+	cue := p.ParseLine(map[string]interface{}{
+		keyRole: "assistant", keyFinish: "stop",
+		keyContent: "I can take either approach. Which would you prefer?",
+	})
+	if !cue.PendingWaitingCue {
+		t.Error("a trailing question must set PendingWaitingCue")
+	}
+	plain := p.ParseLine(map[string]interface{}{
+		keyRole: "assistant", keyFinish: "stop",
+		keyContent: "Done. I fixed the build and all tests pass.",
+	})
+	if plain.PendingWaitingCue {
+		t.Error("a plain completion report must NOT set PendingWaitingCue")
 	}
 }

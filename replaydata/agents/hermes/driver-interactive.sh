@@ -190,7 +190,7 @@ wait_for_prompt() {
       return 0
     fi
     sleep 1
-    (( waited++ ))
+    waited=$((waited + 1))
   done
   echo "[driver] hermes REPL did not become ready within ${waited}s" >&2
   EXIT_REASON="nonzero(2)"
@@ -218,6 +218,14 @@ hermes_store() { echo "${HERMES_HOME:-$HOME/.hermes}/state.db"; }
 # error (store not created yet, writer holding the lock).
 hermes_sql() { # <sql>
   sqlite3 "file:$(hermes_store)?mode=ro" "$1" 2>/dev/null || true
+}
+
+# The store is the ONLY session signal hermes exposes, so a missing sqlite3
+# would surface as wait_turn silently spinning to the deadline. Fail loudly
+# and immediately instead.
+command -v sqlite3 >/dev/null 2>&1 || {
+  echo "[driver] sqlite3 is required to read hermes' session store" >&2
+  EXIT_REASON="nonzero(2)"; exit 2
 }
 
 # resolve_session_id binds the active slot to the newest TUI session started
@@ -282,7 +290,6 @@ send_text() { # <text>
 
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
 launch_repl
-EXPECTED_TURNS=0
 while IFS= read -r step; do
   type="$(jq -r '.type' <<<"$step")"
   case "$type" in

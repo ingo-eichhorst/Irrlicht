@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -45,10 +46,6 @@ const (
 	keyCWD       = "_cwd"   // sessions.cwd (empty for source='cli')
 )
 
-// maxAssistantText bounds the waiting-state display string, matching the
-// tailer's own truncation budget.
-const maxAssistantText = 200
-
 // ParseLine converts one `messages` row into a normalized ParsedEvent.
 // Returns nil for rows that carry no usable signal.
 func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
@@ -84,7 +81,13 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	case "assistant":
 		ev.EventType = "assistant_message"
 		if text, ok := raw[keyContent].(string); ok && text != "" {
-			ev.AssistantText = truncateRunes(text, maxAssistantText)
+			// Order matters: the waiting cue is computed from the FULL text
+			// before truncation, because TruncateAssistantText keeps only a
+			// bounded tail and a cue sitting further back would be dropped.
+			// Both rules are the shared ones every adapter uses, not local
+			// reimplementations.
+			ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text))
+			ev.AssistantText = tailer.TruncateAssistantText(text)
 		}
 		ev.ToolUses = parseToolCalls(raw[keyToolCalls])
 		if finish, _ := raw[keyFinish].(string); finish == "stop" {
@@ -139,14 +142,4 @@ func parseToolCalls(v interface{}) []tailer.ToolUse {
 		uses = append(uses, tailer.ToolUse{ID: id, Name: c.Function.Name})
 	}
 	return uses
-}
-
-// truncateRunes keeps the LAST n runes, matching the tailer's tail-truncation
-// of assistant text (the trailing prose is what carries a waiting cue).
-func truncateRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[len(r)-n:])
 }
