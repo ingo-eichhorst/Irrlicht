@@ -1,0 +1,137 @@
+{
+  "scenario_id": "architect-editor-pair",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+21d50ec",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes (Copilot CLI 1.0.77 ships a first-class plan mode — `--plan` / `--mode plan` are documented flags — whose exit_plan_mode builtin presents an approve/reject gate and then continues into the implement phase); daemon_capability: bug (the gate DOES leave an on-disk trace — an open tool.execution_start{toolName:\"exit_plan_mode\"} — but the daemon's twin user-blocking name sets know only PascalCase ExitPlanMode, so NeedsUserAttention stays false and the scenario's defining waiting episode never appears; one-line fix in tailer_config.go:44 + metrics.go:450); driver_capability: ready (send+sleep+keys, all elicited; --plan is launch configuration, not a step type)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "architect-editor-pair",
+      "agent": "copilot",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: **yes**\ndaemon_capability: **bug**\ndriver_capability: **ready**\n\nRoute: record-known-failing. This is instantiation (b) of architect-editor-pair — a plan→implement MODE pair (one model) captured across the approval gate, asserting the FULL arc `ready → working → waiting → working → ready` — exactly as the claudecode and codex reference cells instantiate it. Copilot performs it, and UNLIKE the gemini-cli / mistral-vibe / kiro-cli siblings (all `daemon=incapable`) the gate is NOT invisible: it leaves an ordinary, held-open tool call in `events.jsonl`. What is missing is one name in the daemon's user-blocking tool list. That makes this a product defect with a one-line fix, not an architectural limit — so the owner is `bug`, not `incapable`.\n\n## Which instantiation this is, and why not the Aider two-model shape\n\nThe scenario `description` pins the cell to instantiation (b): the architect is the PLAN phase, the editor is the IMPLEMENT phase, one model throughout. Instantiation (a) — two MODELS inside one turn (Aider `--architect`) — is treated by every non-Aider sibling as the shape that does not apply, and the claudecode/codex specs explicitly relax the \"two model contributions\" criterion to \"ModelName is a single consistent value across both phases\". This cell follows them.\n\nFor completeness, because Copilot comes closer to instantiation (a) than any other adapter and the question deserves an explicit answer:\n\n- **Copilot has per-model accounting.** `session.shutdown.data.modelMetrics` is a MAP keyed by model, so the SHAPE could represent an architect/editor pair. But across all 5 sessions in the local 1.0.77 store (13 completed turns) each session has exactly ONE key, and `session.auto_mode_resolved` fires exactly once per session — the hydra auto-router is per-SESSION sticky, not per-turn.\n- **Copilot even ships a distinct PLAN MODEL.** `app.js` (~1495903–1497000) implements a plan-model setting: `planModel` / `planEffortLevel` / `planContextTier`, with the user-facing string *\"Plan model set to X — used while in plan mode\"* and *\"It is used while in plan mode and reverts to the session model when you leave plan mode.\"* That is a literal architect-model / editor-model split. It is NOT producible on this account: setting it to a concrete id runs the same `modelResolverIsValidModel` validation that blocks `/model <id>` and `--model` (\"only Auto mode is available on your plan\"), and only the literal `auto` passes (`Gs(t){return t===cC}`, `cC=\"auto\"`). Unblocking is a billing action, not a tooling one.\n- **Subagents carry their own model** (`subagent.started.data.model`). This is the closest producible two-model signal, but it does NOT satisfy this scenario: a subagent is a CHILD contribution the adapter counts through `OpenSubagents`, not an architect/editor pair inside the parent's own turn, and the scenario's arc (plan → gate → approve → implement) describes a mode pair, not a delegation. Deliberately not used.\n\nSo instantiation (a) is not producible here, and the cell is judged as (b) — which Copilot performs cleanly.\n\n## agent_supports: yes — plan mode is first-class in 1.0.77\n\n- `copilot --help` (1.0.77, run live) documents **`--plan  Start in plan mode`** and **`--mode <mode>  Set the initial agent mode (choices: \"interactive\", \"plan\", \"autopilot\")`**. Plan mode is a launch-time, documented mode — no extension, no hidden flag. The bundle's mode list corroborates: `gli=[\"interactive\",\"plan\",\"autopilot\"]` (app.js @8502129), and the ACP mode descriptor reads *\"Plan mode for creating and executing multi-step plans\"* (@5685370).\n- **Architect = plan phase.** In plan mode the agent analyses and proposes; when the plan is ready it calls the builtin tool `exit_plan_mode` (`iU=\"exit_plan_mode\"`, registered as an ordinary tool by `Sgt` via `AT(iU, async(s,a)=>ci(await h.toolExitPlanModeExecute(...)))`, app.js @577400–578100). Its execution BLOCKS on a registered UI callback that presents the plan for approval: the TUI listener receives `{summary, planContent, actions, recommendedAction}` and enqueues a prompt labelled **\"Plan ready\"** (@8554904). The response carries `approved`, `selectedAction`, `autoApproveEdits`.\n- **Editor = implement phase.** On approval the mode flips to interactive or autopilot (`selectedAction` → `rG=\"interactive\"` / `oU=\"autopilot\"`) and the agent proceeds to apply the edits; `bgt=h.toolExitPlanModeContinuationMessage()` and the `planImplementationGuard` option are the continuation machinery. Copilot's edit primitives are `create` / `edit` (`str_replace`) plus `bash`.\n- One model throughout on this account (the plan model cannot be pinned) — the mode-pair instantiation, exactly what (b) admits.\n\n## daemon_capability: bug — the trace is on disk; the daemon's name set is what's missing\n\nFour links, three of them evidenced directly:\n\n1. **The prompt EVENT is never persisted.** `exit_plan_mode.requested` has exactly ONE emit site in the whole 8.9 MB bundle, and it is `emitEphemeral` (@5517690, `applyInputRequested` when `inputKind===\"exitPlanMode\"`); every other occurrence is a listener registration or a case label. `emitInternal` writes an event to the session store ONLY when it is not ephemeral — `u.ephemeral ? … : (u = bn(h.sessionRecordEventJson(this.nativeSessionId, JSON.stringify(u))))` (@2253205). So the daemon can NOT classify the gate from a dedicated prompt event, and no parser branch on `exit_plan_mode.requested` would ever fire. This is the link that would make a naive assessment call `incapable` — and it is the wrong link to stop at.\n2. **The TOOL CALL is persisted.** `tool.execution_start` is emitted by the native model-stream planner for every tool request, generically and with NO name filter: `case \"emit_tool_execution_start\": … this.emit(\"tool.execution_start\", ms)` (@2466826). `this.emit` is the non-ephemeral path, so it goes through `sessionRecordEventJson`. `exit_plan_mode` is an ordinary registered tool, so its dispatch takes this path like any other.\n3. **The call stays OPEN across the user's think time — measured, not assumed.** In the live 1.0.77 store, session `40dfdd13-11f4-4302-b473-bf0ab5a000d6`, a blocking `bash` call was written to disk at dispatch and its completion landed 35 seconds later, after the human answered: `tool.execution_start{toolName:\"bash\", toolCallId:call_kXL…}` at 17:22:11.182 → `permission.requested` 17:22:11.448 → `permission.completed` 17:22:46.369 → `tool.execution_complete` 17:22:47.017. The start line is written BEFORE the blocking wait, and the open window is on disk for its entire duration. `exit_plan_mode` blocks the same way (its execute awaits the UI callback), so the gate's window is on disk too.\n4. **The daemon then mis-handles it.** The copilot parser opens the call correctly (`parseToolStart`, parser.go:212 — `ToolUses{{ID, Name:\"exit_plan_mode\"}}`). Classification into `waiting` runs through `SessionMetrics.NeedsUserAttention()` (core/domain/session/metrics.go:424), which matches `LastOpenToolNames` against `isUserBlockingTool` (metrics.go:450) — `AskUserQuestion`, `ExitPlanMode`, `question`, `ask_user_question` — an EXACT match, and its twin `tailer.isUserBlockingToolName` (core/pkg/tailer/tailer_config.go:44) carries the identical set. Copilot spells it **`exit_plan_mode`** (snake_case). No match → `NeedsUserAttention()` false → the session sits in `working` for the whole approval gate, and the scenario's load-bearing user-visible `waiting` episode never appears. Everything else in the arc (working on `user.message`, working again after the tool closes, ready on `assistant.turn_end`) is already correct.\n\n**The fix is one name in two lists** — `tailer_config.go:44` and `metrics.go:450`, whose own comments already document that this list is per-adapter spelling (\"claudecode emits PascalCase (AskUserQuestion/ExitPlanMode), while vibe emits snake_case (ask_user_question)\") and that the twins must be kept in sync. This is the same family as the omission the copilot 2-17 sibling already flagged: Copilot's ask-the-user builtin is spelled `ask_user`, also absent from both sets. One issue should cover both names.\n\n## Why `bug` and not `incapable`\n\nThe three frozen siblings are frozen because NOTHING reaches disk during the gate: gemini-cli's awaiting-approval state is in-memory/messageBus only, mistral-vibe holds it in an `asyncio.Future` and flushes only per-turn, kiro-cli's y/n picker is a TUI overlay with no JSONL line. Copilot is categorically different — the gate is an ordinary tool call and the open window is empirically 35 s wide on disk. A trace exists and the daemon mis-handles a spec-required observable: that is the definition of `bug`, and it routes the work to the product owner (a two-line list edit) rather than declaring an architectural limit that does not exist.\n\n## Why `driver=ready`\n\n`driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` yields `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn`. The recipe needs `send` + `sleep` + `keys` — all present. Entering plan mode is the documented `--plan` LAUNCH flag, i.e. launch configuration, not a step type; the driver already has the precedent lever for exactly this (`COPILOT_NO_ALLOW_ALL` gating `--allow-all`, added for the 2-19 sibling), so `--plan` rides in the same way. Per the skill's rule, a launch-argument change is not a `gap:*`.",
+      "caveats": [
+        "PROVISIONAL ON THE EMISSION AXIS (the reason confidence is 0.75, not higher): no `tool.execution_start{toolName:\"exit_plan_mode\"}` line has been OBSERVED — there is no plan-mode session in the local 1.0.77 store. The chain is (i) exit_plan_mode is an ordinary registered tool (app.js Sgt/iU @577400-578100), (ii) the native planner emits tool.execution_start for every toolRequest with no name filter via the non-ephemeral this.emit (@2466826), (iii) non-ephemeral events are persisted by sessionRecordEventJson (@2253205), (iv) a blocking tool's start line is empirically on disk 35s before its completion (live store 40dfdd13, bash call_kXL…). `record` is the only thing that can settle it. IF the recording shows NO on-disk line for the gate, the verdict flips to daemon=incapable and this cell joins the gemini-cli/vibe/kiro freeze — the ephemeral exit_plan_mode.requested channel is definitively NOT persisted, so the open tool call is the only candidate trace.",
+        "KNOWN FAILING BY CONSTRUCTION until `exit_plan_mode` is added to BOTH twin user-blocking sets — tailer.isUserBlockingToolName (core/pkg/tailer/tailer_config.go:44) and session.isUserBlockingTool (core/domain/session/metrics.go:450). Until then the plan_gate and waiting_dwell phases fail and the session reads `working` across the gate; every other phase should pass. The spec deliberately asserts the CORRECT behavior and is not weakened to match the bug. The copilot 2-17 sibling flagged the twin omission for Copilot's `ask_user` builtin — one issue should cover both names, and adding either without the other breaks the documented keep-in-sync invariant.",
+        "RECORDING PRECONDITION — the driver must launch with `--plan`. `replaydata/agents/copilot/driver-interactive.sh` builds `local args=(--no-color)` at line 179; add an env lever (e.g. COPILOT_PLAN_MODE=1 appends --plan) exactly as COPILOT_NO_ALLOW_ALL already gates --allow-all, so every other copilot cell is unaffected. Launch configuration, not a step type — the same call the 2-19 sibling made.",
+        "KEEP --allow-all FOR THIS CELL (the driver default), UNVERIFIED: the plan gate is an INPUT request (pendingInputRequests, inputKind=\"exitPlanMode\") and NOT a permission request, so --allow-all — which is --allow-all-tools/paths/urls, the permission axis — should leave the gate intact while stopping the implement phase from raising a SECOND permission gate that would muddy the arc (the same belt-and-braces call the claudecode sibling made by pre-allowing Edit+Write). This has NOT been confirmed live. If record finds the gate auto-approved, fall back to COPILOT_NO_ALLOW_ALL=1 plus --allow-tool=create --allow-tool=edit --allow-tool=bash. Separately, the AUTO_APPROVAL referenced near the gate listener (@8554904) is a FEATURE FLAG (Je.AUTO_APPROVAL, gating the `/allow-all auto` option), not the --allow-all flag.",
+        "DO NOT USE wait_turn WHILE THE GATE IS HELD: the copilot driver's wait_turn calls dismiss_dialog_if_visible, which would answer the approval picker within ~1s and collapse the waiting episode this cell exists to capture. The script therefore uses send + sleep + an explicit keys approval — the same trap the 2-19 sibling documented.",
+        "THE APPROVE KEYSTROKE IS SETTLED AT RECORD TIME. The gate is a picker carrying `actions` + `recommendedAction` (app.js @8554904), and the driver's `keys` step reads `.text` (tmux send-keys, driver line 376) rather than the `.keys` field other agents' drivers use. The script sends Enter (accept the recommended action); if the live overlay needs a numbered pick first, record adjusts — the same note the claudecode sibling carries for its 1/2/3 overlay.",
+        "OBSERVATIONS: `model` is deliberately left unpinned. The hydra auto-router resolves once per session and this account cannot pin a model (only the literal `auto` is accepted), so the recorded model is whatever the router chose — record fills it from the recording. cost/tokens ARE asserted non-zero: unlike 2-19 (which dies mid-turn in waiting before any usage event), this cell runs through assistant.turn_end and a session.usage_checkpoint, and per-message assistant.message.outputTokens contributes live.",
+        "Cross-phase token accumulation and single-ModelName-across-both-phases are PROSE-asserted, verified at record time — the phase DSL carries no token or model field. Same handling as the claudecode and codex sibling specs."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/bin/copilot",
+          "note": "`copilot --help` run live on 1.0.77: documents `--plan  Start in plan mode` and `--mode <mode>  Set the initial agent mode (choices: \"interactive\", \"plan\", \"autopilot\")`, plus `--allow-tool[=tools...]` (the fallback lever for pre-approving the implement phase). Plan mode is a documented launch-time mode, so agent_supports rests on a primary source, not inference."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "copilot 1.0.77 bundle (the binary is a compressed Node SEA — `strings` yields nothing; this is the readable artifact). @577400-578100: `iU=\"exit_plan_mode\"` registered as an ordinary tool by Sgt via AT(), blocking on toolExitPlanModeRegisterCallbacks; rG=\"interactive\"/oU=\"autopilot\" are its action values; bgt=toolExitPlanModeContinuationMessage. @2253205: emitInternal persists an event via sessionRecordEventJson ONLY when it is not ephemeral. @2466826: `case \"emit_tool_execution_start\"` → this.emit(\"tool.execution_start\", …) for every toolRequest, no name filter. @5517690: the SOLE emit site of exit_plan_mode.requested, and it is emitEphemeral — so the prompt event itself is never on disk. @8554904: the TUI listener showing the plan gate ({summary, planContent, actions, recommendedAction}, notification \"Plan ready\", response {approved, selectedAction, autoApproveEdits}). @8502129: gli=[\"interactive\",\"plan\",\"autopilot\"]. @5685370: ACP mode \"Plan mode for creating and executing multi-step plans\". @1495903-1497000: the plan-MODEL setting (planModel/planEffortLevel/planContextTier, \"used while in plan mode … reverts to the session model when you leave plan mode\") — a literal architect/editor model split, gated by the same model validation that blocks this account to `auto`."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.copilot/session-state/40dfdd13-11f4-4302-b473-bf0ab5a000d6/events.jsonl",
+          "note": "Live 1.0.77 store — the empirical open-window measurement behind daemon=bug rather than incapable: tool.execution_start{toolName:bash, toolCallId:call_kXLFEfh2ZQmL7NL} 17:22:11.182 → permission.requested 17:22:11.448 → permission.completed 17:22:46.369 → tool.execution_complete 17:22:47.017. A blocking tool's start line is written to disk at dispatch and the call stays open there for the full 35s of human think time."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "NeedsUserAttention() (line 424) is the only path from an open tool call to `waiting`; it matches LastOpenToolNames against isUserBlockingTool (line 450) = AskUserQuestion / ExitPlanMode / question / ask_user_question, an EXACT match. Copilot's `exit_plan_mode` is absent, so the gate reads as `working`. The function comment already documents that adapters spell the same tool differently."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_config.go",
+          "note": "isUserBlockingToolName (line 44) is the twin of session.isUserBlockingTool and carries the identical four names; its comment states KEEP THE TWO IN SYNC — a tool added to one must be added to the other. Both need `exit_plan_mode` for this cell to pass; surviveTurnDone (line 20) is not load-bearing here because Copilot's turn does not end while the gate is held."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "parseToolStart (line 212) already opens the call with Name=\"exit_plan_mode\" from tool.execution_start, and parseToolComplete (line 224) closes it — so no parser change is needed, only the shared name sets. The parser's only waiting path today is parsePermissionRequested (line 243), which the plan gate does not use."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/5-4_architect-editor-pair/metadata.json",
+          "note": "The instantiation-(b) reference cell (yes/full/ready, recorded): architect = plan phase gated by ExitPlanMode → waiting, editor = implement phase after approval, one model throughout, with the two-model criterion explicitly relaxed to a single consistent ModelName. This cell's phase chain and prose assertions are templated from it and from the codex sibling."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/2-17_user-blocking-question/metadata.json",
+          "note": "Sibling that already flagged the SAME class of omission: Copilot's ask-the-user builtin is spelled `ask_user` and is likewise absent from both twin user-blocking sets. It stayed daemon=full because its prose path worked; here the missing name is load-bearing, which is what makes this cell daemon=bug. One issue should cover both names."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/5-4_architect-editor-pair/metadata.json",
+          "note": "The contrast case for bug-vs-incapable: gemini-cli (like mistral-vibe and kiro-cli) is frozen because the approval pause produces ZERO on-disk trace. Copilot's does produce one, which is why this cell is a defect with a one-line fix rather than an architectural limit."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77+ on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits — this recipe spends a plan turn plus an implement turn",
+        "DRIVER LAUNCH LEVER: replaydata/agents/copilot/driver-interactive.sh must append `--plan` for this cell. Line 179 builds `local args=(--no-color)`; add an env lever (COPILOT_PLAN_MODE=1 → args+=(--plan)) mirroring the existing COPILOT_NO_ALLOW_ALL lever, so no other copilot cell changes. `--plan` is documented in `copilot --help` (1.0.77). Launch configuration, not a step type — driver stays ready.",
+        "KEEP the driver's default --allow-all for this cell so the implement phase's create/edit/bash calls do not raise a SECOND permission gate (a second waiting episode would muddy the arc). The plan gate is an input request, not a permission request, so --allow-all should not touch it — UNVERIFIED; if record finds the gate auto-approved, rerun with COPILOT_NO_ALLOW_ALL=1 plus --allow-tool=create --allow-tool=edit --allow-tool=bash.",
+        "irrlicht's copilot `transcripts` permission is granted so the daemon tails ~/.copilot/session-state (a fresh IRRLICHT_HOME leaves every permission pending → zero monitoring; use IRRLICHT_PERMISSION_MODE=grant-all for the recorder)",
+        "No hook install and no :7837 pinning needed — the whole signal is transcript-borne, so the :7838 coexist recorder captures it",
+        "KNOWN FAILING until `exit_plan_mode` is added to tailer.isUserBlockingToolName (core/pkg/tailer/tailer_config.go:44) AND session.isUserBlockingTool (core/domain/session/metrics.go:450). The plan_gate and waiting_dwell phases fail without it."
+      ],
+      "setup": [
+        "The driver seeds COPILOT_HOME under <staging>/copilot-home with trustedFolders + askedSetupTerminals so the folder-trust modal does not block the input box, then waits for the '/ commands' footer before typing",
+        "A fresh empty cwd under <staging>/cwd/ so the implement phase's file does not already exist — and so the plan turn stays short (an empty tree gives the planner little to explore)",
+        "Step 1 is the architect/plan turn: a task prompt sent while the session is in plan mode. The agent analyses, then calls exit_plan_mode and BLOCKS on the approval picker — this is the plan_gate.",
+        "Step 3 approves with Enter (the recommended action). The exact keystroke is settled live at record time; if the overlay needs a numbered pick, insert a keys step for the digit first. On approval the mode flips to interactive and the agent applies the edits (create/edit) — the editor/implement phase — then the turn completes.",
+        "No wait_turn anywhere in this script: the driver's wait_turn calls dismiss_dialog_if_visible, which would answer the approval picker and collapse the waiting episode. Fixed sleeps only."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Plan how to add a Python file calc.py in the current directory containing an add(a, b) function and a multiply(a, b) function, each with a one-line docstring. Do not create or edit any files yet — present the plan for my approval first."
+        },
+        {
+          "type": "sleep",
+          "seconds": 60
+        },
+        {
+          "type": "keys",
+          "text": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 90
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created (proc-<PID>) row in ready shortly after the copilot process launches",
+        "events.jsonl contains a transcript_new for the real session (session_id = the ~/.copilot/session-state/<dir> name, distinct from proc-<PID>), born ready",
+        "events.jsonl contains a pid_discovered event bound to the real session_id",
+        "events.jsonl contains a state_transition to working on the real session_id when the plan prompt is sent (user.message) — the architect/plan phase",
+        "the recorded transcript contains tool.execution_start with toolName=exit_plan_mode, and NO tool.execution_complete for that toolCallId until after the approval keystroke (the on-disk open window that is the gate)",
+        "events.jsonl contains a state_transition to waiting on the SAME session_id while that call is open — KNOWN FAILING until exit_plan_mode is in both user-blocking name sets",
+        "events.jsonl contains NO state_transition to ready between the plan gate and the approval (the gate is not skipped over)",
+        "events.jsonl contains a state_transition to working after the approval — the editor/implement phase",
+        "calc.py exists in the run cwd after the implement phase (a REAL edit was applied)",
+        "events.jsonl contains a final state_transition to ready on the same session_id (assistant.turn_end)",
+        "SessionMetrics.TotalTokens after the final ready is greater than at the plan gate (tokens accumulate across the plan and implement phases), and ModelName is a single consistent value across both phases (one model — the mode-pair instantiation, not the Aider two-model shape)"
+      ],
+      "timeout_seconds": 300,
+      "settings": {}
+    }
+  }
+}
