@@ -731,9 +731,15 @@ not json at all
 	}
 }
 
-// TestReplayWithSidecar_HookEvents verifies that hook_received events in
-// the sidecar produce working→waiting transitions during replay.
-func TestReplayWithSidecar_HookEvents(t *testing.T) {
+// replayOneHookForWaiting writes a minimal two-message transcript plus a
+// sidecar whose only hook_received carries hookName, replays them, and reports
+// whether a hook-caused waiting transition came out.
+//
+// Shared by the tests below so the hook name is the single variable between
+// them: a failure for one name and not another isolates the hook-name → signal
+// mapping rather than anything about the surrounding replay machinery.
+func replayOneHookForWaiting(t *testing.T, hookName string) (bool, []transition) {
+	t.Helper()
 	dir := t.TempDir()
 	transcript := filepath.Join(dir, "session.jsonl")
 	sidecar := filepath.Join(dir, "session.events.jsonl")
@@ -748,7 +754,7 @@ func TestReplayWithSidecar_HookEvents(t *testing.T) {
 	sidecarBody := `{"seq":1,"ts":"2026-04-11T10:00:00Z","kind":"transcript_new","session_id":"sess-1","adapter":"claude-code"}
 {"seq":2,"ts":"2026-04-11T10:00:00.500Z","kind":"transcript_activity","session_id":"sess-1","file_size":93}
 {"seq":3,"ts":"2026-04-11T10:00:01Z","kind":"transcript_activity","session_id":"sess-1","file_size":192}
-{"seq":4,"ts":"2026-04-11T10:00:01.500Z","kind":"hook_received","session_id":"sess-1","hook_name":"PermissionRequest"}
+{"seq":4,"ts":"2026-04-11T10:00:01.500Z","kind":"hook_received","session_id":"sess-1","hook_name":"` + hookName + `"}
 `
 	if err := os.WriteFile(sidecar, []byte(sidecarBody), 0644); err != nil {
 		t.Fatalf("write sidecar: %v", err)
@@ -763,15 +769,20 @@ func TestReplayWithSidecar_HookEvents(t *testing.T) {
 		t.Fatalf("replayWithSidecar: %v", err)
 	}
 
-	var foundHookWaiting bool
 	for _, tr := range report.Transitions {
 		if tr.Cause == causeHook && tr.NewState == "waiting" {
-			foundHookWaiting = true
-			break
+			return true, report.Transitions
 		}
 	}
-	if !foundHookWaiting {
-		t.Errorf("expected a hook-caused working→waiting transition; transitions: %+v", report.Transitions)
+	return false, report.Transitions
+}
+
+// TestReplayWithSidecar_HookEvents verifies that hook_received events in
+// the sidecar produce working→waiting transitions during replay.
+func TestReplayWithSidecar_HookEvents(t *testing.T) {
+	found, transitions := replayOneHookForWaiting(t, claudecode.HookPermissionRequest)
+	if !found {
+		t.Errorf("expected a hook-caused working→waiting transition; transitions: %+v", transitions)
 	}
 }
 
@@ -790,51 +801,12 @@ func TestReplayWithSidecar_HookEvents(t *testing.T) {
 // hook_received events, and the recordings that do hold them are only ever
 // replayed transcript-only (issue #1326). This test is therefore the only
 // coverage the hook path has — not a supplement to fixture coverage.
-//
-// This is the same fixture as TestReplayWithSidecar_HookEvents with the hook
-// name swapped, so a failure here isolates the hook-name mapping rather than
-// anything about the surrounding replay machinery.
 func TestReplayWithSidecar_Issue1320_PreToolUseHold(t *testing.T) {
-	dir := t.TempDir()
-	transcript := filepath.Join(dir, "session.jsonl")
-	sidecar := filepath.Join(dir, "session.events.jsonl")
-
-	transcriptBody := `{"type":"user","timestamp":"2026-04-11T10:00:00Z","message":{"role":"user","content":"hello"}}
-{"type":"assistant","timestamp":"2026-04-11T10:00:01Z","message":{"role":"assistant","content":"Let me check."}}
-`
-	if err := os.WriteFile(transcript, []byte(transcriptBody), 0644); err != nil {
-		t.Fatalf("write transcript: %v", err)
-	}
-
-	sidecarBody := `{"seq":1,"ts":"2026-04-11T10:00:00Z","kind":"transcript_new","session_id":"sess-1","adapter":"claude-code"}
-{"seq":2,"ts":"2026-04-11T10:00:00.500Z","kind":"transcript_activity","session_id":"sess-1","file_size":93}
-{"seq":3,"ts":"2026-04-11T10:00:01Z","kind":"transcript_activity","session_id":"sess-1","file_size":192}
-{"seq":4,"ts":"2026-04-11T10:00:01.500Z","kind":"hook_received","session_id":"sess-1","hook_name":"PreToolUse"}
-`
-	if err := os.WriteFile(sidecar, []byte(sidecarBody), 0644); err != nil {
-		t.Fatalf("write sidecar: %v", err)
-	}
-
-	report, err := replayWithSidecar(transcript, sidecar, reportSettings{
-		Adapter:            claudecode.AdapterName,
-		DebounceWindow:     2 * time.Second,
-		FlickerMaxDuration: 10 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("replayWithSidecar: %v", err)
-	}
-
-	var foundHookWaiting bool
-	for _, tr := range report.Transitions {
-		if tr.Cause == causeHook && tr.NewState == "waiting" {
-			foundHookWaiting = true
-			break
-		}
-	}
-	if !foundHookWaiting {
+	found, transitions := replayOneHookForWaiting(t, claudecode.HookPreToolUse)
+	if !found {
 		t.Errorf("PreToolUse hook produced no hook-caused waiting transition — the replay harness "+
 			"dropped a hook the daemon holds SignalPermissionPrompt on (#1320); transitions: %+v",
-			report.Transitions)
+			transitions)
 	}
 }
 
