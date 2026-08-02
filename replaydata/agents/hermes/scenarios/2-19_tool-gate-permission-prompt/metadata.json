@@ -1,0 +1,128 @@
+{
+  "scenario_id": "tool-gate-permission-prompt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:keys",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+4b65f63.dirty",
+    "confidence": 0.85,
+    "notes": "Hermes has a real, default-on human approval gate — but only on the `terminal` tool, and holding it writes NOTHING to $HERMES_HOME/state.db: the assistant/tool_calls row is flushed BEFORE tool execution, so a blocked prompt and a slow-running shell command leave a byte-identical store tail. The adapter's only Source is that store, so no `waiting` episode is derivable. The unlock is hermes' pre_approval_request/post_approval_response plugin hooks (observer-only, surface='cli'), deliberately not implemented in this PR — they need #1178 plus a YAML-safe installer."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "tool-gate-permission-prompt",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:keys",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes (hermes 0.19.0 ships a default-on, blocking human approval gate on its shell tool)\ndaemon_capability: incapable (the held gate leaves NO trace in the only Source this adapter watches — the store tail while blocked is byte-identical to a slow tool)\ndriver_capability: gap:keys (the modal is resolved by a raw keystroke; hermes' driver stubs `keys` with `not_implemented` and omits it from DRIVE_ELICITS)\n\n## What the scenario asserts\n\n2.19 asserts a user-visible `waiting` EPISODE: `ready → working → waiting` when the gate opens, `waiting → working → ready` once the user resolves it, and no bounce back to waiting from a late post-tool signal. The whole cell turns on the `waiting` leg being observable. Everything below is judged against that.\n\n## agent = yes\n\nHermes' gate is genuine, default-on, and blocking — not a config-only capability.\n\n- `tools/approval.py` `check_all_command_guards` → `prompt_dangerous_approval` renders a four-choice modal returning `'once' | 'session' | 'always' | 'deny'`, with a fail-closed timeout (`approvals.timeout`, default 300s, `hermes_cli/config.py:2744`).\n- `approvals.mode` defaults to `smart` (an auxiliary LLM auto-approves low-risk commands); `manual` prompts on every command; `off` / `--yolo` bypasses. So the prompt is reachable out of the box on any Tier-2 dangerous command that is not on the hardline blocklist (hardline commands are BLOCKED, never prompted — `tests/tools/test_hardline_blocklist.py`).\n- In the interactive `hermes chat` REPL the modal is a prompt_toolkit overlay (`cli.py:12011 _approval_callback`) with arrow-key navigation and number-key quick-select; it blocks the agent thread on a `queue.Queue` until answered.\n\nThe binary-scan bar of Step 2 is not the operative question here — the feature is present in shipped source with tests pinning it, which is a stronger source than a strings scan.\n\n**Scope that matters for the daemon pillar:** `check_all_command_guards` is imported by exactly ONE module in the whole tree — `tools/terminal_tool.py:256`. Hermes' human approval gate therefore exists only on the `terminal` (shell) tool. `write_file` (`tools/file_tools.py:2105`) has no approval call at all, and `agent/file_safety.py:377` says so explicitly: its cross-profile guard is a \"Soft guard, NOT a security boundary … the agent is told the boundary exists\" — a refusal handed to the model, never a human prompt. Arbitrary-tool gating does exist (`tools/approval.py:2947 request_tool_approval`) but is documented as \"the entry point for a plugin `pre_tool_call` hook\" — it requires a user-installed plugin rule and is not a default surface.\n\n## daemon = incapable\n\n### 1. The store is the whole Source\n\n`agent.go` declares `Source: agent.ProcessOwnedStore{PathForPID: func(int) string { return StorePath() }}` — the single shared `$HERMES_HOME/state.db`. The adapter declares exactly one permission (`store`, KindObserve) and installs no hooks; nothing else feeds it.\n\n### 2. The store carries no approval state — verified against the live DB\n\n`sqlite3 $HERMES_HOME/state.db` (hermes 0.19.0, schema_version 23) lists every table: `sessions`, `messages`, `session_model_usage`, `state_meta`, `gateway_routing`, `compression_locks`, `async_delegations`, `delivery_obligations`, plus the `messages_fts*` shadow tables. There is no approvals/pending table. `PRAGMA table_info(sessions)` (48 columns) and `table_info(messages)` (23 columns) carry no approval, pending, or blocked column. The one candidate, `messages.effect_disposition`, is a crash-recovery marker written on tool-RESULT rows after the fact (`agent/replay_cleanup.py:91` sets `\"unknown\"`/`\"none\"`) and is NULL in all 117 rows of the live store.\n\n### 3. The store tail while blocked is identical to a slow tool — proven by production ordering\n\n`agent/conversation_loop.py:5767-5772` flushes the assistant tool-call turn to the store immediately BEFORE dispatch, with the comment *\"Persist the assistant tool-call turn before any tool side effects run\"*; `agent._execute_tool_calls(...)` is line 5793. Approval runs INSIDE that call (terminal_tool → check_all_command_guards → prompt_dangerous_approval). That ordering is a pinned contract, not an incidental: `tests/run_agent/test_tool_call_incremental_persistence.py` Contract 1 asserts it (\"run_conversation flushes the assistant tool-call turn to the session DB BEFORE handing control to _execute_tool_calls\").\n\nSo for the entire duration of a held prompt the store's tail is exactly:\n\n```\nrole=assistant  finish_reason='tool_calls'  tool_calls=[{\"function\":{\"name\":\"terminal\"}}]   ← no closing `tool` row\n```\n\nwhich is the same bytes a `terminal` call that is merely executing slowly produces. Nothing distinguishes them.\n\n### 4. What the daemon does with that tail: stays `working`, forever\n\nWalking `core/application/services/state_classifier.go`'s ladder against those metrics:\n\n- `permission_prompt` (rule 0) needs `m.PermissionPending`, a hook-tier signal. Hermes installs no hooks in this PR, so it is never set → does not fire.\n- `compact_in_progress` → not set.\n- `user_blocking_tool` needs `NeedsUserAttention()`, which keys on `isUserBlockingTool` = `AskUserQuestion | ExitPlanMode | question | ask_user_question` (`core/domain/session/metrics.go:440`). The open tool is `terminal` → does not fire.\n- `open_tool_stalled` (the #488 transcript fallback, the one rule designed for exactly \"a held permission prompt the hook can't report\") needs `HasOpenEditPermissionTool()`, which keys on `isPermissionGatedEditTool` = `edit | write | multiedit | notebookedit | write_file` (metrics.go:487). `terminal` is not one — and its exclusion is deliberate, stated in that function's doc: *\"Bash/WebFetch/MCP are deliberately excluded: they can run for minutes, so no fixed duration distinguishes 'blocked' from 'executing' for them (they rely on the hook).\"* Does not fire.\n- `idle_prompt` → hook-tier, never set.\n- `agent_done` → `IsAgentDone()` returns false while `HasOpenToolCall` is true. Does not fire.\n- `user_interrupt` → requires no open tool calls. Does not fire.\n- Default `transcript_activity` → **working**.\n\nAnd `PendingWaitingCue` cannot rescue it: parser.go computes it only from assistant prose (`ProseIndicatesWaiting(WaitingScanWindow(text))`), and the assistant row that opens a tool call carries empty/near-empty content — the gate's text is a terminal overlay, never a message row.\n\n### 5. The one route that could have produced `waiting`, closed\n\nThe tempting workaround is to elicit the gate on an EDIT-shaped tool so `markStalledEditTool` (`session_detector_activity.go:1360`, 30s threshold, re-evaluated by `refreshStaleSessions`) sets `OpenToolStalled` → waiting. `write_file` IS in `isPermissionGatedEditTool`, and hermes DOES have a `write_file` tool, so the mechanism would work. It is unreachable in practice: per §agent above, `check_all_command_guards` is imported only by `tools/terminal_tool.py`, so hermes never opens a human prompt on `write_file` — the tool would run to completion in milliseconds and close its own row. Reaching it would require installing a custom `pre_tool_call` plugin rule that calls `request_tool_approval('write_file', …)`, i.e. fabricating a gate hermes does not ship. That is not the agent's behavior and would not be an honest recording.\n\nSo: a trace of the tool CALL exists, but no trace of the GATE exists, and the two states are indistinguishable in the watched Source. Per the pillar definitions that is `incapable` (architecture — the sensor does not exist), not `bug` (the daemon mis-handling a trace it can see). This matches the sibling `ProcessOwnedStore` verdict for the same scenario: opencode 2.19 is `daemon=incapable` for the same reason (\"the held gate leaves no trace in the watched Source\").\n\n## The unlock path: hermes' approval hooks (deliberately out of scope for this PR)\n\nThis cell is frozen on THIS PR's sensor set, and the unlock is concrete and near.\n\nHermes fires two plugin lifecycle hooks around every approval decision (`hermes_cli/plugins.py:174-190`, dispatched from `tools/approval.py:154/163` via `_fire_approval_hook`):\n\n- `pre_approval_request` — fires when the gate opens, kwargs `command, description, pattern_key, pattern_keys, session_key, surface: \"cli\" | \"gateway\" | \"smart\"`.\n- `post_approval_response` — fires when it resolves, same kwargs plus `choice: \"once\" | \"session\" | \"always\" | \"deny\" | \"timeout\"`.\n\nThey are **observer-only** (\"return values are ignored. Plugins cannot veto or pre-answer an approval\") — which is precisely what irrlicht needs: it observes, it never arbitrates. `pre_approval_request(surface=\"cli\")` sets `PermissionPending`, `post_approval_response` clears it, and rule 0 of the ladder above then produces the exact `working → waiting → working` arc this scenario asserts, on the most authoritative tier. That would flip this cell to `daemon=full`.\n\nTwo real obstacles keep it out of this PR, both named rather than assumed:\n\n1. **#1178 (hook endpoint follows bind addr).** Every irrlicht hook installer to date hardcodes `:7837`, which is what blocks factory recording on a dev daemon (the same blocker recorded for codex in #1171 and for claudecode's hooks). A hermes hook installer must satisfy `contracttesting.AssertHookEndpointFollowsBindAddr` first.\n2. **A YAML-safe installer.** Hermes' declarative shell-hook bridge lives under the `hooks: {}` key of `~/.hermes/config.yaml` (`hermes_cli/config.py:2798-2805`) — YAML, whereas every existing irrlicht hook installer (claudecode, codex) writes JSON. It also carries a first-registration TTY consent prompt with an allowlist at `~/.hermes/shell-hooks-allowlist.json`, bypassable only via `hooks_auto_accept` / `--accept-hooks` / `HERMES_ACCEPT_HOOKS=1` — the same \"trust hooks\" gate codex has, and it must be handled or the hook silently never runs.\n\n## driver = gap:keys\n\nThe modal is answered by a raw keystroke, not by typed text. `cli.py:14249-14262` registers number-key handlers under `Condition(lambda: bool(self._approval_state))`: pressing `1` sets `selected = 0` and calls `_handle_approval_selection()` — one keypress both selects and submits (arrow `up`/`down` at 14198/14204 move the selection).\n\n`replaydata/agents/hermes/driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"` (line 113) and its `keys` arm is `not_implemented keys` (line 301, `# TODO(hermes): tmux send-keys raw sequence`), which exits 3. recipe-lint reads DRIVE_ELICITS straight from the file and would flag a `keys`-bearing recipe as semantic_gap (exit 4) before any recording starts. So the resolve half of the arc has no ported primitive — `gap:keys`, tooling work, not an observability limit.\n\nThis does not change the route (`daemon=incapable` freezes the cell regardless), and it is recorded so that whoever lands the hook tier knows the driver needs the `keys` seam in the same pass.\n\n## Route\n\nagent=yes, daemon=incapable → **frozen**. No recipe, no spec: per the assess contract a frozen cell's metadata documents why it is frozen and what would unblock it, matching the sibling frozen hermes cell 1-7 (metadata.json only).",
+      "caveats": [
+        "The `daemon=incapable` verdict is derived from source + live schema, NOT from a recording — no live hermes approval prompt has been driven under a recording daemon, because the driver has no `keys` primitive to resolve one (it would hang to the 300s fail-closed deny). The claim rests on three independently checkable facts rather than on a plausible mechanism: (1) the live store has no approval table or column, (2) the assistant/tool_calls row is flushed before dispatch by a test-pinned contract, so the blocked and executing tails are identical, (3) `check_all_command_guards` has exactly one importer. If the hook tier lands, this should be re-assessed rather than trusted.",
+        "`agent=yes` is asserted for the INTERACTIVE `hermes chat` surface only. In a non-interactive context that is neither CLI, gateway, nor `HERMES_EXEC_ASK` (`tools/approval.py:3243`), the gate returns `{approved: True}` without prompting — so a headless recipe could never elicit the prompt even after the hook tier lands. Any future recording of this cell must use the interactive driver.",
+        "A `send` step carrying the literal text `1` might incidentally resolve the modal, since `send_text` issues `tmux send-keys -l \"1\"` and the number-key filter is active — which would make this a false gap. It is left as `gap:keys` because the trailing `Enter` that `send_text` unconditionally appends 0.4s later lands in the normal input buffer once the modal has closed (an unmodeled empty submit), and because the path has never been driven live. Verify before relying on it; if it works, the honest fix is still to port `keys` rather than to depend on the side effect.",
+        "The `write_file` → `OpenToolStalled` route is closed on the CURRENT hermes source (`check_all_command_guards` imported only by `tools/terminal_tool.py:256`). If upstream ever routes file writes through the same gate, this cell becomes observable via the #488 transcript fallback at the 30s threshold with no hook work at all — worth re-checking on a hermes version bump.",
+        "No `observations` block is asserted (model / cost / tokens), because a frozen cell is never recorded and a doc-guessed `model` pin would only fail a future recording's verify. The sibling 2.2 cell's guidance applies when this cell is unfrozen: leave `model` provisional for `record` to fill, and assert `cost` non-zero only."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go",
+          "note": "Source is agent.ProcessOwnedStore with PathForPID → StorePath() — the single shared $HERMES_HOME/state.db is the adapter's ONLY Source. One declared permission (`store`, KindObserve, \"read-only polling\"); no hook permission and no hook installer, so PermissionPending can never be set for hermes."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go",
+          "note": "The four row shapes the adapter can emit: user→user_message, assistant+finish_reason='tool_calls'→assistant_message with ToolUses, assistant+finish_reason='stop'→turn_done, tool→tool_result. No permission/approval branch exists. PendingWaitingCue is computed only from assistant prose text, and the tool-call row's content is empty."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "reconcile() emits EventActivity only when sessions.message_count GROWS; turnIsDone() reads the newest active row. A held approval prompt adds no row, so the watcher emits nothing at all for the whole waiting window — the daemon's only re-evaluation path is refreshStaleSessions."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The rule ladder walked in §4. Rule 0 (permission_prompt) requires m.PermissionPending, a hook-tier signal; user_blocking_tool and open_tool_stalled are the only transcript-tier routes to waiting, and neither matches an open `terminal` call; the ladder's total default is transcript_activity → working."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "isUserBlockingTool (line 440) = AskUserQuestion|ExitPlanMode|question|ask_user_question. isPermissionGatedEditTool (line 487) = edit|write|multiedit|notebookedit|write_file, with the explicit doc rationale that \"Bash/WebFetch/MCP are deliberately excluded: they can run for minutes, so no fixed duration distinguishes 'blocked' from 'executing' for them (they rely on the hook).\" `terminal` matches neither set."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "markStalledEditTool (line 1360) sets OpenToolStalled only when HasOpenEditPermissionTool() and the tool has been open past stalledEditToolThreshold (30s, session_detector.go:61); it is overlaid at line 794 before ClassifyState and re-evaluated for stale working sessions by refreshStaleSessions. This is the #488 fallback that would have covered a hookless permission prompt — it cannot fire for `terminal`."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/conversation_loop.py",
+          "note": "Lines 5767-5793: `agent._flush_messages_to_session_db(messages, conversation_history)` — commented \"Persist the assistant tool-call turn before any tool side effects run\" — is called immediately BEFORE `agent._execute_tool_calls(...)`. Approval runs inside that call, so the store tail during a held prompt is an unclosed assistant/tool_calls row, identical to a slow-running tool."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tests/run_agent/test_tool_call_incremental_persistence.py",
+          "note": "Upstream pins that ordering as a behavior contract (#49045): \"run_conversation flushes the assistant tool-call turn to the session DB BEFORE handing control to _execute_tool_calls\". So the indistinguishable-tail claim is not an implementation accident that a hermes patch might quietly reverse."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Live store, hermes 0.19.0, schema_version 23. Full table list — sessions, messages, session_model_usage, state_meta, gateway_routing, compression_locks, async_delegations, delivery_obligations + messages_fts* shadow tables — contains no approvals/pending table. sessions has 48 columns and messages 23; none is an approval/pending/blocked flag. messages.effect_disposition (a post-hoc crash-recovery marker) is NULL in all 117 rows."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/approval.py",
+          "note": "check_all_command_guards / prompt_dangerous_approval implement the blocking four-choice gate (once/session/always/deny) with a fail-closed timeout; line 3243 shows it returns approved without prompting outside CLI/gateway/HERMES_EXEC_ASK. request_tool_approval (line 2947) can gate an arbitrary tool but is documented as \"the entry point for a plugin pre_tool_call hook\" — not a default surface. _fire_approval_hook (lines 154/163) dispatches the two approval hooks."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/terminal_tool.py",
+          "note": "Line 256 is the ONLY import of check_all_command_guards anywhere in the hermes tree (verified by a tree-wide grep). Hermes' human approval gate therefore exists solely on the shell tool — which is exactly the Bash-class tool the daemon's OpenToolStalled fallback deliberately excludes. This is the citation that closes the write_file workaround."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/file_safety.py",
+          "note": "Line 377: the cross-profile write guard is \"a Soft guard, NOT a security boundary … the agent is told the boundary exists\" — a refusal returned to the model, never escalated to a human prompt. Together with the absence of any approval call in _handle_write_file (tools/file_tools.py:2105), this confirms write_file never opens a gate by default."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/plugins.py",
+          "note": "Lines 174-190 define the unlock: pre_approval_request (kwargs command, description, pattern_key, pattern_keys, session_key, surface: cli|gateway|smart) and post_approval_response (same plus choice: once|session|always|deny|timeout). \"Observers only: return values are ignored\" — which is all irrlicht needs to set/clear PermissionPending and drive rule 0."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/config.py",
+          "note": "Lines 2744-2775: approvals.mode defaults to 'smart' (manual = always prompt, off = bypass), timeout 300s fail-closed. Lines 2798-2811: the shell-hook bridge lives under the `hooks: {}` key of config.yaml — YAML, not JSON like every existing irrlicht hook installer — with a first-registration TTY consent prompt and an allowlist at ~/.hermes/shell-hooks-allowlist.json, bypassable only via hooks_auto_accept / --accept-hooks / HERMES_ACCEPT_HOOKS=1."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py",
+          "note": "Line 12011 _approval_callback renders the gate as a blocking prompt_toolkit modal (choices once/session/always/deny) on a queue.Queue. Lines 14198/14204 bind up/down; lines 14249-14262 bind number keys under Condition(bool(self._approval_state)) — pressing `1` sets selected=0 AND calls _handle_approval_selection(), so one raw keystroke resolves it. Grounds the driver verdict."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "Line 113 DRIVE_ELICITS=\"send slash sleep wait_turn\"; line 301 `keys) not_implemented keys` with `# TODO(hermes): tmux send-keys raw sequence`, which exits 3. The file's own header explains that recipe-lint reads DRIVE_ELICITS semantically and flags a stubbed-but-unlisted primitive as semantic_gap (exit 4) before recording — so `keys` is a real, mechanically-enforced gap."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "The sibling ProcessOwnedStore verdict for this same scenario: agent=yes, daemon=incapable — \"the held gate leaves no trace in the watched Source\", re-derived against the opencode SQLite store. Same store-shaped blindness, independently reached, which is why hermes lands on incapable rather than bug."
+        },
+        {
+          "kind": "file",
+          "ref": "AGENTS.md",
+          "note": "The Testing section's \"Hook endpoints\" obligation: contracttesting.AssertHookEndpointFollowsBindAddr (core/internal/contracttesting/hook_endpoint.go) is what a hermes hook installer must satisfy — an install writes the resolved port, not :7837 (#1178). Names the first of the two blockers on the unlock path."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "daemon_capability=incapable — hermes' approval gate exists only on the `terminal` tool, and holding it writes nothing to $HERMES_HOME/state.db (the assistant/tool_calls row is flushed BEFORE dispatch, so blocked and executing tails are identical). No recipe can make the `waiting` leg observable from the store. WHEN UNFROZEN by the hook tier (pre_approval_request/post_approval_response, needs #1178 + a YAML-safe installer for config.yaml's `hooks:` key), the recipe is: interactive `hermes chat` with approvals.mode left at its default and NO --yolo; one `send` of a prompt asking the terminal tool to run a Tier-2 dangerous but non-hardline command; a `sleep` while the modal is held open so the waiting episode is visible; a `keys` step sending the literal `1` to select choice 0 (`once`) and submit; then `wait_turn` and a trailing `sleep` for the settle to ready. That recipe needs the `keys` primitive, which the hermes driver currently stubs (`not_implemented`, absent from DRIVE_ELICITS) — port it in the same pass."
+    }
+  }
+}
