@@ -83,12 +83,13 @@
       "setup": [
         "Driver launches `hermes chat` under tmux in a fresh cwd and waits for the ready prompt",
         "Session id is resolved lazily from the store after the first send (started_at > launch_ts)",
-        "WIDENED BEFORE RECORDING (2026-08-03), per the column's TIMING prerequisite: the assessed goal was a one-line impossible question whose reply is a sub-second turn, which the 2s store poll can commit whole and erase the ready->working edge that iter1_start/iter2_start assert. Each attempt now also writes ~200 words enumerating candidates and why each failed. The goal stays impossible, so the judge keeps returning `continue` and the loop still ends on the turn budget rather than on completion — the cap is what the cell measures and it is unchanged."
+        "WIDENED BEFORE RECORDING (2026-08-03), per the column's TIMING prerequisite: the assessed goal was a one-line impossible question whose reply is a sub-second turn, which the 2s store poll can commit whole and erase the ready->working edge that iter1_start/iter2_start assert. Each attempt now also writes ~200 words enumerating candidates and why each failed. The goal stays impossible, so the judge keeps returning `continue` and the loop still ends on the turn budget rather than on completion — the cap is what the cell measures and it is unchanged.",
+        "GOAL REDESIGNED AFTER A FAILED FIRST TAKE (2026-08-03). The assessed goal was an impossible question (\"reply with one integer that is simultaneously odd and even\"), on the theory that an unsatisfiable goal keeps the judge returning `continue` until the turn budget stops the loop. The live judge does not behave that way: after ONE turn it returned verdict=done with reason \"The agent correctly explains that no integer can be both odd and even under standard definitions, making the requested goal impossible\" (state_meta key goal:20260803_010132_187bae). The loop ended at turns_used=1 of max_turns=2 - i.e. the cell would have recorded goal-completion, not the iteration cap it exists to assert. The goal is now a long, objectively INCOMPLETE task (write 1..2000 in blocks of 100), so the judge has no honest route to `done` inside two turns and the turn budget is necessarily what stops the loop. This also satisfies the column TIMING prerequisite for free: 100 lines per reply is a wide generation."
       ],
       "script": [
         {
           "type": "slash",
-          "text": "/goal Find one integer that is simultaneously odd and even. On each attempt, write two or three full paragraphs, about 200 words in total: list the specific candidates you tried this round, show for each one exactly why it failed the odd-and-even test, and then state the next line of attack you will take. Keep searching until you find such an integer. Do not use any tools and do not ask me any questions."
+          "text": "/goal Write out the whole numbers from 1 to 2000, one number per line, in order. In each reply write ONLY the next 100 numbers of the sequence and then stop - never more than 100 in a single reply, and always continue from where the previous reply ended. Do not summarise, do not skip ahead, do not use any tools and do not ask me any questions. The goal is complete only once the number 2000 has actually been written out."
         },
         {
           "type": "wait_turn"
@@ -105,7 +106,8 @@
         "events.jsonl shows at least 2 working->ready transitions on the same store-keyed session id",
         "the second iteration starts with no driver-sent input between the two wait_turns — the loop self-prompted",
         "final state of the session is ready and dwells there for the whole trailing sleep",
-        "no state_transition to waiting"
+        "no state_transition to waiting",
+        "the persisted goal state (state_meta key goal:<session-id>) must end with status=paused and paused_reason=\"turn budget exhausted (2/2)\" - NOT status=done. A `done` verdict means the loop terminated on judge completion and the recording is of the wrong scenario, however green the state phases look."
       ],
       "settings": {
         "goals": {
