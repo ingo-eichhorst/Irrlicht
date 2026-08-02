@@ -38,9 +38,8 @@ const (
 	// window. Named for the condition rather than the hook, so the string
 	// matches the classifier rule id that reads it.
 	//
-	// The fourth hook signal, and the one that could not migrate in #1288: its
-	// staleness rule is half wall-clock, and signalPolicy carried no clock
-	// until #1297 added HoldContext.
+	// The fourth hook signal, and the one that could not migrate in #1288 —
+	// see holdContext for why its half-wall-clock rule needed a clock first.
 	SignalCompactInProgress SignalKind = "compact_in_progress"
 )
 
@@ -70,32 +69,44 @@ type SignalPayload struct {
 	WaitingCue bool
 }
 
-// HoldContext is everything a staleness rule may read: the metrics the signal
-// is about to be folded onto, and the clock.
+// holdContext is everything a staleness rule may read: the metrics the signal
+// is about to be folded onto, and the clock. Deliberately unexported, like the
+// policy table it serves — no caller outside this package can write a policy,
+// so widening it later (see the arming caveat below) costs nothing.
 //
 // The clock is the part #1297 added, and the reason the fourth hook signal
 // could finally migrate. Before it, stale could only ask "do the metrics
 // contradict me", never "have I been held too long" — so
 // SignalCompactInProgress, whose rule is half wall-clock, was inexpressible as
-// a policy row and stayed a hand-rolled map on SessionDetector. It is also the
-// axis Phases 5 and 6 of #1129 are built on: a process probe ("no model API
-// traffic for N seconds") and a screen tier ("buffer byte-identical for N
-// snapshots") are inherently time-based, and each is now a row rather than
-// another change to this signature.
+// a policy row and stayed a hand-rolled map on SessionDetector.
+//
+// It carries the *expiry* half of a grace timer only, which is what Phase 5 of
+// #1129 needs: a process probe that re-Holds on every poll where it sees model
+// API traffic expresses "no traffic for N seconds" as a stale rule, because a
+// re-Hold resets HeldSince. It is NOT enough for an arm-then-fire rule — "apply
+// only once N has passed" — because Overlay applies on the first pass after
+// Hold, unconditionally. Phase 6 (buffer byte-identical for N snapshots) and
+// the surviving markStalledEditTool overlay are both that shape and both need a
+// second, arming predicate before they can be rows. Tracked separately; the
+// point of leaving it out here is that this migration stays behaviour-preserving.
 //
 // Now is injected by the caller rather than read from time.Now here, so
 // staleness stays testable and — for the offline replay harness, which runs on
 // the transcript's virtual timeline — deterministic.
-type HoldContext struct {
+type holdContext struct {
 	// Metrics is the freshly-rebuilt transcript metrics for this pass. Never
 	// nil: Overlay returns early on nil metrics rather than calling a policy.
 	Metrics *SessionMetrics
 
-	// HeldSince is when Hold recorded this signal. A re-Hold of the same kind
-	// resets it, so a second PreCompact hook restarts its own timeout.
+	// HeldSince is when Hold recorded this signal — arrival, or the most recent
+	// re-Hold, which resets it. One axis, not two: a policy needing "first
+	// armed" and "last refreshed" at once would need a second timestamp here.
 	HeldSince time.Time
 
-	// Now is this pass's wall clock.
+	// Now is this pass's clock, on the same timeline as HeldSince — wall time
+	// in the daemon, the transcript's virtual time under replay. A policy reads
+	// it rather than calling time.Now itself; that is what keeps replay
+	// deterministic.
 	Now time.Time
 }
 
@@ -103,7 +114,7 @@ type HoldContext struct {
 // outranks lower tiers, when it stops being true, and what it folds onto
 // metrics. It is deliberately data rather than code: before #1288 each of
 // these was a hand-written overlay method on SessionDetector with its own
-// lifecycle rule, plus a fourth copy in the replay harness, and the remaining
+// lifecycle rule, plus another copy in the replay harness, and the remaining
 // phases of #1129 would have added six more. Adding a signal should mean
 // adding a row here.
 type signalPolicy struct {
@@ -129,7 +140,7 @@ type signalPolicy struct {
 	// stale reports that the held signal has stopped describing reality and
 	// must be dropped *without* being applied. Nil means "only consumeOnce
 	// or an explicit Release ends this hold".
-	stale func(c HoldContext) bool
+	stale func(c holdContext) bool
 
 	// apply folds the signal onto the metrics the classifier is about to
 	// read.
@@ -170,7 +181,7 @@ var signalPolicies = []signalPolicy{
 		// retiring a higher one reads backwards, but it is sound here — this
 		// is not the transcript overruling the hook's verdict, it is the
 		// transcript supplying the end-of-life notice the hook never sends.
-		stale: func(c HoldContext) bool { return c.Metrics.LastWasToolDenial },
+		stale: func(c holdContext) bool { return c.Metrics.LastWasToolDenial },
 		apply: func(m *SessionMetrics, _ SignalPayload) { m.PermissionPending = true },
 	},
 
@@ -204,7 +215,7 @@ var signalPolicies = []signalPolicy{
 		// thing that happened. IsAgentDone going false means either the user
 		// replied or a tool opened — either way the idle window is over and
 		// the rules that own those cases take it from here.
-		stale: func(c HoldContext) bool { return !c.Metrics.IsAgentDone() },
+		stale: func(c holdContext) bool { return !c.Metrics.IsAgentDone() },
 		apply: func(m *SessionMetrics, _ SignalPayload) { m.IdlePromptPending = true },
 	},
 
@@ -216,22 +227,19 @@ var signalPolicies = []signalPolicy{
 		// re-evaluation in that window or the stale pre-compact turn_done
 		// leaks the session back to ready (#657).
 		//
-		// The only row whose staleness reads the clock, and the reason
-		// HoldContext exists. It clears on the first of:
+		// The first row whose staleness reads the clock, and the reason
+		// holdContext exists. It clears on the first of:
 		//
 		//   - the manual compact_boundary landing: the normal path —
 		//     compaction finished, release working → ready (#656);
-		//   - compactHoldTimeout elapsing: the safety net for a /compact that
-		//     was interrupted or errored with no boundary ever written.
-		//     Without it an orphaned hold would be re-armed on every
-		//     refreshStaleSessions tick and strand the session in working
-		//     forever — the very failure #656 fixed.
+		//   - compactHoldTimeout elapsing — see that constant for why the
+		//     ceiling is there and why five minutes.
 		//
 		// Last in the table, which is where the hand-rolled overlay it
 		// replaced ran. Nothing depends on that position: its staleness reads
 		// only transcript-derived state and the clock, and the field it
 		// applies is read by no other policy.
-		stale: func(c HoldContext) bool {
+		stale: func(c holdContext) bool {
 			return c.Metrics.SawManualCompactBoundary || c.Now.Sub(c.HeldSince) >= compactHoldTimeout
 		},
 		apply: func(m *SessionMetrics, _ SignalPayload) { m.CompactInProgress = true },
@@ -265,7 +273,7 @@ type SignalHolds struct {
 
 // heldSignal is one stored hold: what the signal carried, and when it arrived.
 // The arrival time is what a time-based staleness rule reads through
-// HoldContext.HeldSince.
+// holdContext.HeldSince.
 type heldSignal struct {
 	payload SignalPayload
 	heldAt  time.Time
@@ -358,7 +366,7 @@ func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics, now time.Time
 			continue
 		}
 
-		if policy.stale != nil && policy.stale(HoldContext{Metrics: m, HeldSince: hs.heldAt, Now: now}) {
+		if policy.stale != nil && policy.stale(holdContext{Metrics: m, HeldSince: hs.heldAt, Now: now}) {
 			delete(holds, policy.kind)
 			continue
 		}

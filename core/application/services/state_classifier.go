@@ -119,13 +119,13 @@ var stateRules = []stateRule{
 		// of the stale pre-compact turn_done that IsAgentDone() would
 		// otherwise read as ready. Compaction writes nothing to the transcript
 		// for tens of seconds to minutes; this overlay holds the session busy
-		// for that window (#657). The detector clears it the pass the manual
-		// compact_boundary lands, which then routes to ready via agent_done
-		// (#656).
+		// for that window (#657). The hold's own policy releases it the pass
+		// the manual compact_boundary lands — which then routes to ready via
+		// agent_done (#656) — or drops it once compactHoldTimeout elapses with
+		// no boundary ever written.
 		//
-		// Reads a held signal like the permission rule above — the hold became
-		// a signalPolicies row in #1297, once HoldContext gave staleness a
-		// clock to express its half-wall-clock rule with.
+		// Reads a held signal like the permission rule above, rather than
+		// declaring a bare tier: the hold became a signalPolicies row in #1297.
 		id:     string(session.SignalCompactInProgress),
 		signal: session.SignalCompactInProgress,
 		when:   func(_ string, m *session.SessionMetrics) bool { return m.CompactInProgress },

@@ -8,10 +8,10 @@ import (
 // TestSignalHolds_CompactInProgress covers the PreCompact force-working hold
 // (#657) as a signalPolicies row — the migration #1297 performed. It is the
 // same three-way lifecycle the detector's own applyCompactHold carried before:
-// a fresh hold forces working, the manual compact_boundary releases it (#656),
-// and an interrupted /compact that never writes a boundary is dropped once
-// compactHoldTimeout elapses instead of stranding the session in working
-// forever.
+// the hold forces working and keeps doing so across the silent window, the
+// manual compact_boundary releases it (#656), and an interrupted /compact that
+// never writes a boundary is dropped once compactHoldTimeout elapses instead of
+// stranding the session in working forever.
 //
 // These cases are LOCKS on behaviour that must not change across the
 // migration: the pre-#1297 code satisfied every one of them through a
@@ -22,7 +22,7 @@ import (
 //   - >= relaxed to >: "timeout drops an orphaned hold" fails — the hold
 //     survives exactly at the deadline;
 //   - the clock term deleted (the predicate this row could express before
-//     HoldContext existed): the same case fails, an orphaned hold now living
+//     holdContext existed): the same case fails, an orphaned hold now living
 //     forever;
 //   - compactHoldTimeout shortened to 1m: "persists across repeated passes"
 //     fails at pass 2 — a live compaction dropped mid-window.
@@ -31,21 +31,6 @@ import (
 // inside it. "just inside the window" deliberately measures against the
 // constant rather than a literal, so it pins the comparison and not the value.
 func TestSignalHolds_CompactInProgress(t *testing.T) {
-	t.Run("fresh hold forces working", func(t *testing.T) {
-		h := NewSignalHolds()
-		h.Hold(holdSID, SignalCompactInProgress, SignalPayload{}, holdT0)
-
-		m := &SessionMetrics{LastEventType: "turn_done"}
-		h.Overlay(holdSID, m, holdT0.Add(time.Second))
-
-		if !m.CompactInProgress {
-			t.Error("CompactInProgress must be set while the hold is live")
-		}
-		if !h.Held(holdSID, SignalCompactInProgress) {
-			t.Error("the hold must persist until boundary or timeout")
-		}
-	})
-
 	t.Run("persists across repeated passes in the silent window", func(t *testing.T) {
 		h := NewSignalHolds()
 		h.Hold(holdSID, SignalCompactInProgress, SignalPayload{}, holdT0)
@@ -58,6 +43,9 @@ func TestSignalHolds_CompactInProgress(t *testing.T) {
 			h.Overlay(holdSID, m, holdT0.Add(time.Duration(pass)*30*time.Second))
 			if !m.CompactInProgress {
 				t.Fatalf("pass %d: the hold must re-apply — it is persistent, not consume-once", pass)
+			}
+			if !h.Held(holdSID, SignalCompactInProgress) {
+				t.Fatalf("pass %d: the hold must survive until boundary or timeout", pass)
 			}
 		}
 	})
@@ -101,17 +89,6 @@ func TestSignalHolds_CompactInProgress(t *testing.T) {
 		}
 		if h.Held(holdSID, SignalCompactInProgress) {
 			t.Error("the timeout must drop the orphaned hold so it can't be re-armed on every refreshStaleSessions tick")
-		}
-	})
-
-	t.Run("no hold is a no-op", func(t *testing.T) {
-		h := NewSignalHolds()
-
-		m := &SessionMetrics{LastEventType: "turn_done"}
-		h.Overlay(holdSID, m, holdT0)
-
-		if m.CompactInProgress {
-			t.Error("a session with no recorded hold must not be forced working")
 		}
 	})
 

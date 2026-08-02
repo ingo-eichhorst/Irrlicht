@@ -188,11 +188,13 @@ type SessionDetector struct {
 	// their own goroutine and the classify pass that consumes them. It
 	// replaces the three hand-rolled per-signal overlay maps this struct
 	// carried before #1288 — permissionPending, hookTurnDone and
-	// idlePromptPending — plus compactPending, which #1297 folded in once the
-	// policy shape carried a clock. Each had its own lifecycle rule spelled
-	// out in its own overlay method. The per-signal policy now lives in
-	// session.signalPolicies; adding a Phase 4-7 signal is a row there, not
-	// another map and another overlay here.
+	// idlePromptPending — plus compactPending, which #1297 folded in. Each had
+	// its own lifecycle rule spelled out in its own overlay method. The
+	// per-signal policy now lives in session.signalPolicies.
+	//
+	// editToolOpenSince below is the one that did NOT fold in: its rule fires
+	// only *after* a threshold, and a policy row applies on the first pass
+	// after Hold. See session.holdContext.
 	//
 	// Carries its own lock (hooks arrive on HTTP handler goroutines, the
 	// event loop classifies), so it is deliberately NOT guarded by permMu.

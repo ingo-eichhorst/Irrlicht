@@ -782,15 +782,21 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// Must happen after RefreshOnActivity, which rebuilds metrics from the
 	// transcript and so zeroes every transient field these signals set, and
 	// before ClassifyState, which reads them.
-	d.signals.Overlay(state.SessionID, state.Metrics, time.Now())
+	//
+	// One clock for the whole pass, read once: the overlays and the transition
+	// stamp below must agree about when "now" was, and a held signal whose
+	// staleness is time-based (session.holdContext) is only meaningful against
+	// a single instant.
+	passStart := time.Now()
+	d.signals.Overlay(state.SessionID, state.Metrics, passStart)
 
 	// Overlay the transcript-based stalled-edit-tool fallback (#488).
-	d.markStalledEditTool(ev.SessionID, state.Metrics, time.Now().Unix())
+	d.markStalledEditTool(ev.SessionID, state.Metrics, passStart.Unix())
 
 	// Content-based state detection. The tiered form is used here (and only
 	// here) so the deciding rule and its authority tier reach the recorded
 	// lifecycle event as provenance (#1288).
-	now := time.Now().Unix()
+	now := passStart.Unix()
 	verdict := ClassifyStateTiered(state.State, state.Metrics)
 	newState, reason := verdict.State, verdict.Reason
 	newState, reason, parentHeldWorking := d.holdParentForActiveChildren(state, ev, newState, reason)
