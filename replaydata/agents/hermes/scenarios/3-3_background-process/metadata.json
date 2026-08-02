@@ -1,0 +1,136 @@
+{
+  "scenario_id": "background-process",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+555a143",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (terminal(background=true) spawns a tracked, detached process and returns immediately with session_id + pid; the `process` tool polls it); daemon_capability: bug (the hermes adapter has NO background-process tracking — parser.go emits no BackgroundSpawns and metrics.go's foldMessages bypasses the tailer entirely, so BackgroundProcessCount is never set and the session settles ready at the first finish_reason='stop' while the detached process is still alive); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-process",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: ready\n\nRoute: record-known-failing. Same shape as the gemini-cli sibling cell (agent genuinely backgrounds, adapter cannot observe it) — not the opencode sibling (whose bash tool is synchronous, so `agent_supports: no`).\n\n## Agent supports it (yes)\n\nHermes' shell tool is `terminal`, and it takes a first-class `background` parameter. `tools/terminal_tool.py` documents it at module level (\"Features: … Background task support\", \"result = terminal_tool('python server.py', background=True)\") and exposes it in the model-facing schema (`\"background\": {…\"Run the command in the background…\"}`). On the `background` branch (terminal_tool.py:2456) it calls `process_registry.spawn_local(...)`, which `subprocess.Popen`s the command through the user's login shell with `start_new_session=True` — a genuinely detached child that outlives the tool call — and returns immediately with `{\"output\": \"Background process started\", \"session_id\": \"proc_<hex12>\", \"pid\": <int>, \"exit_code\": 0}`.\n\nThe companion `process` tool (schema `PROCESS_SCHEMA` in tools/process_registry.py:2304) manages them: `action` ∈ {list, poll, log, wait, kill, write, submit, close}. `poll()` returns `{\"status\": \"running\"|\"exited\", \"pid\": …, \"exit_code\": …}` — an explicit, structured termination signal. Both `terminal` and `process` are in `_HERMES_CORE_TOOLS` (toolsets.py:35), the shared list the CLI/TUI toolset is built from, so this is default traffic rather than an opt-in. Hermes also offers `notify_on_complete=true`, an async exit notification, which is a capability neither claudecode nor gemini-cli has here.\n\n## Daemon cannot observe it today (bug)\n\nA trace exists and is fully structured — this is a product gap in the hermes adapter, not an architectural limit:\n\n1. **The trace is in the store.** `messages` rows are read by `foldMessages` with `SELECT role, content, tool_calls, tool_call_id, tool_name, finish_reason, display_kind, timestamp` (metrics.go:199). A background spawn lands as an assistant row with `finish_reason='tool_calls'` carrying `function.name='terminal'` with `\"background\": true` in `function.arguments`, closed by a `role='tool'` row whose `content` is the raw JSON result dict. Verified against the live store (~/hermes-local/.hermes/state.db): every `role='tool'`/`tool_name='terminal'` row stores the tool's JSON dict verbatim, e.g. `{\"output\": \"…\", \"exit_code\": 2, \"error\": null}`. So `session_id` and `pid` of a background spawn — and a later `process`/poll row carrying `\"status\": \"exited\"` — are both readable from the same columns the adapter already selects.\n\n2. **The daemon's generic machinery is already there.** `tailer.BackgroundSpawn` (core/pkg/tailer/parser.go:90) accepts a spawn keyed by a bare id, and `computeBackgroundProcessMetrics` (core/pkg/tailer/tailer_metrics.go:418-442) routes an all-digit id with no output path into `BackgroundProcessPIDs`, which `SessionDetector.hasBackgroundProbe` probes with `bgPIDProbe` (kill -0) — the exact path issue #661 added for gemini-cli, which likewise has no output file. Hermes' spawns are pipe-buffered (`stdout=subprocess.PIPE` in `spawn_local`, no log file on the local backend), so the PID probe is the right and available seam. `session.IsAgentDone` gates on `HasLiveBackgroundProcess` generically (core/domain/session/metrics.go:517), and hermes' `Terminal` flag only short-circuits the activity debounce (session_detector_activity.go:467), never the classification — so nothing adapter-specific blocks the hold.\n\n3. **The adapter drops the signal on the floor — twice.** `hermes/parser.go` ParseLine maps only user / assistant / tool roles onto EventType + ToolUses + todos; it never sets `ev.BackgroundSpawns` or `ev.TerminatedBackgroundTaskIDs`. And because `Source` is `agent.ProcessOwnedStore`, the store path bypasses the `TranscriptTailer` altogether: `foldMessages` (hermes/metrics.go:193) replays rows through a bare `Parser` into a local `messageFold` whose `apply` (metrics.go:232) folds only open tools, task deltas and the waiting cue. `openBackgroundProcs` has no counterpart there, so `SessionMetrics.BackgroundProcessCount` / `BackgroundProcessPIDs` stay zero no matter what the parser emits.\n\nConsequence, and what the recording is expected to show: `watcher.turnIsDone` (hermes/watcher.go:426) marks the turn done as soon as the newest row is an assistant row with `finish_reason='stop'`. With no live-background hold, the session settles `working → ready` at that stop row while the detached `sleep` is still running — violating the scenario's core assertion (\"stays `working` until the last background process exits\"). The fix is the hermes parallel of #450/#661: emit a `BackgroundSpawn{BashID: pid}` from the terminal-background tool result, drop it on a `process` poll reporting `\"status\": \"exited\"`, and teach `messageFold` to carry the open set into `BackgroundProcessCount` + `BackgroundProcessPIDs`.\n\n## Driver is ready\n\n`replaydata/agents/hermes/driver-interactive.sh` advertises `DRIVE_ELICITS=\"send slash sleep wait_turn\"`, and `driver_step_types_from_file` reports `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn`. The recipe needs only `send`, `wait_turn`, `sleep` — all implemented. No `gap:*`.\n\n## Recipe shape (why it is not the claudecode poll-to-completion shape)\n\nThe claudecode recipe polls the background process to completion inside one turn, which works there because a SDK-harnessed claude writes `end_turn` between polls, so the working-hold is genuinely exercised. Hermes has NO intra-turn turn-end marker: assistant rows carry `finish_reason='tool_calls'` for the whole turn and `'stop'` only at the real end. A poll-to-completion recipe on hermes would therefore hold `working` purely because the turn is still open — a vacuous pass that never touches the background-process seam. The recipe instead spawns and replies IMMEDIATELY (no poll, no `notify_on_complete`), so the turn's `stop` row lands ~10 s in while the 40 s process is still alive, and the only thing that could keep the session `working` is background tracking. That is the gemini-cli sibling's shape, and it is what makes the cell a real (currently failing) test.",
+      "caveats": [
+        "known_failing: the recording is EXPECTED to fail the bg_alive_working phase — the session will settle working→ready at the turn's finish_reason='stop' row (~10s) instead of holding until the 40s background process exits. Clear known_failing after the hermes parser + messageFold learn the background-spawn shape and the cell is re-recorded.",
+        "daemon=bug is anchored in code, not in a recording: no background spawn exists in the live store yet (`select count(*) from messages where tool_calls like '%background%'` returns 0 against ~/hermes-local/.hermes/state.db), so the failing arc is predicted from parser.go/metrics.go/watcher.go rather than observed. record settles it.",
+        "PROVISIONAL emission detail: the exact tool-result JSON a background spawn writes into messages.content is read from terminal_tool.py:2487 (`{\"output\": \"Background process started\", \"session_id\": …, \"pid\": …}`), plus the observed fact that terminal results are stored verbatim as JSON. Not yet seen in a store row — record should capture the literal row so the eventual fix keys on the real shape.",
+        "The prompt must not let the model set notify_on_complete=true: hermes then delivers an autonomous notification turn on exit, which writes fresh rows and would add a second working span, muddying the single-transition assertion. The recipe forbids it explicitly, and terminal_tool.py injects a `hint` nudging toward it — record should check the model did not take the bait.",
+        "`sleep 40 && echo BG_DONE` is not a dangerous command: verified live against the installed 0.19.0 — `detect_dangerous_command('sleep 40 && echo BG_DONE')` returns `(False, None, None)`, so hermes' 'smart' approval gate never fires and the session never enters waiting.",
+        "model is deliberately NOT pinned: the recording home's config.yaml is provisioned at record time (model.default + model.provider), so record fills it from the recording."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "<HERMES_HOME>/hermes-agent/tools/terminal_tool.py:2456-2500, 3083-3090 (hermes 0.19.0, install dir /Users/ingo/hermes-local/.hermes/hermes-agent)",
+          "note": "agent=yes: the `background` parameter is in the model-facing terminal schema; the background branch calls process_registry.spawn_local and returns {\"output\":\"Background process started\",\"session_id\":\"proc_<hex12>\",\"pid\":<int>,\"exit_code\":0} immediately."
+        },
+        {
+          "kind": "file",
+          "ref": "<HERMES_HOME>/hermes-agent/tools/process_registry.py:689-800, 1402-1443, 2304-2346",
+          "note": "spawn_local Popens through the login shell with start_new_session=True and stdout=PIPE (detached, NO output file — so the PID probe, not lsof, is the applicable liveness seam). PROCESS_SCHEMA exposes the `process` tool (list/poll/log/wait/kill/…); poll() returns {\"status\":\"running\"|\"exited\",\"pid\":…,\"exit_code\":…}."
+        },
+        {
+          "kind": "file",
+          "ref": "<HERMES_HOME>/hermes-agent/toolsets.py:33-35",
+          "note": "_HERMES_CORE_TOOLS — the shared CLI/TUI tool list — contains both \"terminal\" and \"process\", so background spawning and polling are default traffic, not an opt-in toolset."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go:62-122",
+          "note": "daemon=bug (1/2): ParseLine maps user/assistant/tool rows onto EventType + ToolUses + todo deltas only. It never populates ev.BackgroundSpawns or ev.TerminatedBackgroundTaskIDs, so no background spawn is ever detected from the terminal tool result."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go:193-260",
+          "note": "daemon=bug (2/2): the ProcessOwnedStore path bypasses the TranscriptTailer — foldMessages replays rows into a local messageFold whose apply() folds open tools, task deltas and the waiting cue only. There is no openBackgroundProcs counterpart, so SessionMetrics.BackgroundProcessCount / BackgroundProcessPIDs are never set even if the parser emitted a spawn."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go:412-436",
+          "note": "The failing arc: Terminal = justEnded || turnIsDone(db,id), and turnIsDone is true as soon as the newest row is an assistant row with finish_reason='stop'. With no live-background hold the session settles working→ready at that row, while the detached process is still running."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go:418-442 and core/application/services/session_detector_activity.go:1095-1120 and core/domain/session/metrics.go:517",
+          "note": "The generic machinery already exists and is adapter-agnostic: an all-digit BackgroundSpawn id with no output path routes into BackgroundProcessPIDs, hasBackgroundProbe picks the kill -0 bgPIDProbe (the #661 gemini-cli path), and IsAgentDone returns false while HasLiveBackgroundProcess. Only the hermes adapter's two hops are missing — hence bug, not incapable."
+        },
+        {
+          "kind": "command",
+          "ref": "sqlite3 <copy of /Users/ingo/hermes-local/.hermes/state.db> \"select tool_name,count(*) from messages where role='tool' group by 1\" and \"select substr(content,1,600) from messages where role='tool' and tool_name='terminal' limit 2\"",
+          "note": "Confirms the trace is readable from the columns the adapter already selects: terminal tool results are stored verbatim as the tool's JSON dict, e.g. {\"output\": \"…\", \"exit_code\": 2, \"error\": null}. Also confirms no background spawn exists in the live store yet (count of tool_calls LIKE '%background%' = 0), so the failing arc is predicted from code, not observed."
+        },
+        {
+          "kind": "command",
+          "ref": "<HERMES_HOME>/hermes-agent/venv/bin/python -c \"from tools.approval import detect_dangerous_command; print(detect_dangerous_command('sleep 40 && echo BG_DONE'))\" → (False, None, None)",
+          "note": "The recipe command does not trip hermes' 'smart' approval gate, so the no-waiting invariant holds."
+        },
+        {
+          "kind": "command",
+          "ref": "driver_step_types_from_file replaydata/agents/hermes/driver-interactive.sh",
+          "note": "driver=ready: reports exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn; the recipe needs only send/wait_turn/sleep (all inside the driver's DRIVE_ELICITS=\"send slash sleep wait_turn\")."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/3-3_background-process/metadata.json",
+          "note": "Sibling precedent for this exact route: agent=yes / daemon=bug / driver=ready, known_failing, spawn-and-reply-immediately recipe. The hermes gap is the same shape (adapter has no background tracking) with a different transport."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH (Python console script shim into <HERMES_HOME>/hermes-agent/venv/bin/hermes)",
+        "HERMES_HOME exported to the recording home, with config.yaml carrying model.default + model.provider and credentials in .env/auth.json — so the run writes to an isolated state.db instead of the maintainer's real store",
+        "sqlite3 on PATH — hermes persists no transcript file, so the driver reads the session id and turn completion straight out of state.db (the driver hard-fails without it)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "TERMINAL_ENV is left at its default 'local' so terminal(background=true) takes the spawn_local path (a detached Popen with a real host PID). A docker/modal backend spawns inside a sandbox and the PID would not be probeable from the host",
+        "approvals.mode is left at its default 'smart' — verified that detect_dangerous_command('sleep 40 && echo BG_DONE') is (False, None, None), so the call auto-executes and the session never enters waiting",
+        "no second hermes SESSION process running concurrently — source='cli' rows carry no stored cwd and the live-process CWD fallback returns nothing when more than one session process is alive (a running gateway is fine; isServiceArgv excludes it)",
+        "KNOWN FAILING: the hermes adapter has no background-process tracking, so the recording is expected to fail bg_alive_working until the parser + messageFold learn the spawn shape"
+      ],
+      "setup": [
+        "The driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for 'Type your message or /help' before typing — the TUI loads tools and skills for several seconds and swallows keystrokes sent before it is ready",
+        "No seed files: the background process is a self-contained `sleep && echo`",
+        "The prompt forbids notify_on_complete and any polling. notify_on_complete=true would make hermes deliver an autonomous notification turn when the process exits, writing fresh rows and adding a second working span; polling would keep the turn open, so the working span would be held by the OPEN TURN rather than by background tracking — a vacuous pass. terminal_tool.py injects a `hint` nudging toward notify_on_complete, which the prompt pre-empts",
+        "sleep 40 is sized so the process is still alive long after the turn's finish_reason='stop' row (~10s in): the correct arc holds working to ~t+48s, the buggy arc settles at ~t+10s, and the gap between them is what bg_alive_working's 25s lower bound measures",
+        "The session row is INSERTed on the first user message (~2s after it), not at launch, so the driver resolves the session id lazily after the first send and binds only to a row whose started_at is after this slot's launch",
+        "'reply with exactly: started' keeps the terminal assistant text free of questions and imperative cues, so ProseIndicatesWaiting cannot fire on the turn's last message",
+        "The trailing 60s sleep outlives the background process (exits ~48s after turn start, ~36s after wait_turn returns) so the recording captures whatever the daemon does at and after the real exit, plus slack for a periodic re-probe"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do exactly this and nothing else, in a single turn. Use your terminal tool to run the command `sleep 40 && echo BG_DONE` with the background parameter set to true, so it launches in the background and the tool returns immediately with a session_id and pid. Do NOT set notify_on_complete. Do NOT set watch_patterns. As soon as that tool returns, reply with exactly the word: started. Do NOT use the process tool, do NOT poll it, do NOT check whether it finished, do NOT run any other command — the background process must still be running when you reply."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 60
+        }
+      ],
+      "verify": [
+        "state.db shows the background spawn for that session: an assistant row with finish_reason='tool_calls' whose tool_calls carries function.name='terminal' with \"background\": true in function.arguments, closed by a role='tool' row whose content JSON carries \"output\": \"Background process started\" plus a session_id (proc_<hex12>) and a numeric pid — capture the literal row, the eventual fix keys on this shape",
+        "state.db shows NO `process` tool call for that session (the model did not poll) and no notify_on_complete in the terminal arguments",
+        "state.db shows an assistant row with finish_reason='stop' landing while the 40s background process is still alive (roughly 10s after the prompt)",
+        "events.jsonl shows the hermes session (id shaped YYYYMMDD_HHMMSS_xxxxxx) born ready, then exactly one ready→working transition at the prompt; a transient proc-<PID> presession may also appear and is not the session the arc lands on",
+        "events.jsonl contains NO state_transition to waiting for that session at any point",
+        "KNOWN FAILING: events.jsonl is EXPECTED to show the session settle working→ready at that finish_reason='stop' row (~10s), NOT held working until the detached process exits (~48s) — so bg_alive_working fails its 25s dwell. Clear known_failing once the hermes parser emits a BackgroundSpawn from the terminal-background tool result, drops it on a `process` poll reporting \"status\": \"exited\", and messageFold carries the open set into BackgroundProcessCount + BackgroundProcessPIDs",
+        "the session's websocket metrics show non-zero cumulative input+output tokens and a non-zero estimated cost when the configured model is priced by irrlicht's alias table"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
