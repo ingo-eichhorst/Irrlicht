@@ -8,7 +8,9 @@ package fswatcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -41,6 +43,17 @@ const transcriptExt = ".jsonl"
 // moved, and stat-ing only known paths for growth) is the prerequisite for
 // shortening this.
 const defaultReconcileInterval = 15 * time.Second
+
+// maxLoggedWatchFailures caps how many rejected watch registrations one tree
+// scan reports individually before addWatch falls back to counting them for
+// the summary line. The failure modes worth reporting at all are mostly
+// process-global — FD exhaustion, Linux's fs.inotify.max_user_watches — so
+// once one trips mid-scan every remaining Add fails too. One line per
+// directory would then be tens of thousands of lines per boot across every
+// adapter's watcher, rotating the log out from under the first few lines:
+// exactly the ones naming where the budget ran out. Capping keeps the trace
+// this reporting exists to leave (#1255).
+const maxLoggedWatchFailures = 10
 
 // Watcher watches a directory tree for .jsonl transcript file events.
 // It implements inbound.Watcher.
@@ -90,6 +103,13 @@ type Watcher struct {
 	// goroutine (handleEvent, the backlog scan and reconcile all run on it), so
 	// none of them take a lock.
 	watchFailed map[string]struct{}
+	// watchFailures counts directories fsnotify refused to watch;
+	// loggedWatchFailures is how many of those were reported individually
+	// before maxLoggedWatchFailures capped them. Both are touched only from
+	// the Watch goroutine — addExistingDirs directly, addSubtree via
+	// handleEvent — so, like the maps above, they need no lock.
+	watchFailures       int
+	loggedWatchFailures int
 
 	subMu sync.Mutex
 	subs  []chan agent.Event
@@ -167,6 +187,13 @@ func (w *Watcher) WithLogger(l outbound.Logger) *Watcher {
 	w.logger = l
 	return w
 }
+
+// Logger returns the logger supplied via WithLogger, or nil if it was never
+// called. Exported so cmd/irrlichd's wiring test can assert the daemon
+// actually attaches one: without it, dropping the WithLogger call keeps the
+// whole suite green while production silently reverts to discarding watch
+// failures — the same invisible regression #1255 was filed about.
+func (w *Watcher) Logger() outbound.Logger { return w.logger }
 
 // WithSessionID sets a custom session-ID extractor (see the sessionID field).
 // Returns the watcher for chaining. Callers in cmd/irrlichd/wiring.go invoke
@@ -691,6 +718,7 @@ func (w *Watcher) addExistingDirs(ctx context.Context, watcher *fsnotify.Watcher
 		})
 		w.drainPendingEvents(watcher)
 	}
+	w.reportWatchFailureTotal()
 	return nil
 }
 
@@ -727,6 +755,20 @@ func (w *Watcher) addWatch(watcher *fsnotify.Watcher, dir string) {
 		delete(w.watchFailed, dir)
 		return
 	}
+	// A directory that vanished between being enumerated and being armed is
+	// not a blind spot — there is nothing left under it to observe — so it
+	// is neither counted nor reported, and it is deliberately not recorded in
+	// watchFailed either: should the path come back, the next sweep treats it
+	// as new rather than as an already-reported failure. Both backends surface
+	// the bare errno here (inotify_add_watch's, and kqueue's from os.Open), so
+	// this matches on either platform. The window is real on both scan paths:
+	// the startup walk and handleDirCreate's Stat each precede this call.
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	// Counting and logging are both gated on watchFailed, so a directory that
+	// keeps failing contributes one failure and at most one line for the
+	// daemon's lifetime rather than one per reconcile sweep.
 	if _, reported := w.watchFailed[dir]; reported {
 		return
 	}
@@ -734,12 +776,27 @@ func (w *Watcher) addWatch(watcher *fsnotify.Watcher, dir string) {
 		w.watchFailed = make(map[string]struct{})
 	}
 	w.watchFailed[dir] = struct{}{}
-	if w.logger == nil {
+	w.watchFailures++
+	if w.logger == nil || w.loggedWatchFailures >= maxLoggedWatchFailures {
 		return
 	}
+	w.loggedWatchFailures++
 	w.logger.LogError("fswatcher", "", fmt.Sprintf(
 		"%s: failed to watch %s — transcript changes under it will not be observed: %v",
 		w.adapter, dir, err))
+}
+
+// reportWatchFailureTotal emits one summary line when the tree scan hit more
+// rejections than addWatch reported individually, so the true size of the
+// blind spot stays visible even though the per-directory lines were capped.
+// Silent when nothing was capped — the individual lines already say it all.
+func (w *Watcher) reportWatchFailureTotal() {
+	if w.logger == nil || w.watchFailures <= w.loggedWatchFailures {
+		return
+	}
+	w.logger.LogError("fswatcher", "", fmt.Sprintf(
+		"%s: %d directories under %s could not be watched (%d reported individually above) — transcript changes under them will not be observed",
+		w.adapter, w.watchFailures, w.root, w.loggedWatchFailures))
 }
 
 // drainPendingEvents processes any fsnotify events already queued on
