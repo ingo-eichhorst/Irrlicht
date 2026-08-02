@@ -59,6 +59,7 @@
       <h4>Usage</h4>
       <a href="configuration.html">Configuration</a>
       <a href="macos-setup.html" class="active">macOS Setup</a>
+      <a href="tips-and-tricks.html">Tips &amp; Tricks</a>
       <a href="cli-tools.html">CLI Tools</a>
       <a href="api-reference.html">API Reference</a>
     </div>
@@ -98,7 +99,7 @@
       <p>The wizard appears on whichever surface you're looking at &mdash; the macOS popover or the web dashboard &mdash; and the first answer wins. You can revisit every decision later under <strong>Settings &rarr; Permissions &rarr; Review</strong>; toggling a permission off actively undoes it (hooks uninstall, watchers stop). While permissions are unanswered, monitoring for that agent is paused &mdash; if Irrlicht looks idle right after an upgrade, answer the wizard.</p>
 
       <!-- ── Status line in full screen ── -->
-      <h2>Status Line in Full Screen</h2>
+      <h2 id="status-line-full-screen">Status Line in Full Screen</h2>
 
       <p>By default, macOS hides the menu bar whenever an app goes full screen. That means the Irrlicht flame &mdash; your live indicator of every agent's state &mdash; disappears exactly when you're heads-down in a terminal or editor.</p>
 
@@ -124,14 +125,14 @@
 
       <ol class="steps">
         <li>Click the flame icon in the menu bar to open the session list.</li>
-        <li>Click the gear icon to open <strong>Settings</strong>.</li>
+        <li>Click <strong>Settings…</strong> in the row of buttons along the bottom.</li>
         <li>Check <strong>Open at Login</strong> &mdash; it is on by default, and Irrlicht will start automatically at each login. Toggle it off if you would rather launch the app yourself.</li>
       </ol>
 
       <p>Irrlicht registers itself via <code>SMAppService</code> so macOS manages the lifecycle &mdash; it starts early in the login sequence, before most apps open.</p>
 
       <!-- ── Notification permissions ── -->
-      <h2>Notification Permissions</h2>
+      <h2 id="notification-permissions">Notification Permissions</h2>
 
       <p>Irrlicht can alert you when an agent transitions to <span class="badge badge-waiting">waiting</span> (needs input) or <span class="badge badge-ready">ready</span> (done). On first launch the system asks for permission.</p>
 
@@ -146,7 +147,7 @@
       <p>Notification thresholds (which transitions trigger an alert) are configurable inside Irrlicht's own Settings panel.</p>
 
       <!-- ── Accessibility permission ── -->
-      <h2>Accessibility Permission (Window Focus)</h2>
+      <h2 id="accessibility-permission">Accessibility Permission (Window Focus)</h2>
 
       <p>Clicking a session row in the popover raises the terminal window that owns that session. This uses the macOS Accessibility API, which requires a one-time grant:</p>
 
@@ -183,9 +184,9 @@ listen_on unix:/tmp/kitty-{kitty_pid}</code></pre>
           <span class="label">Previous</span>
           Configuration
         </a>
-        <a href="cli-tools.html" style="text-align:right">
+        <a href="tips-and-tricks.html" style="text-align:right">
           <span class="label">Next</span>
-          CLI Tools &rarr;
+          Tips &amp; Tricks &rarr;
         </a>
       </nav>
 
