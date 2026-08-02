@@ -1,0 +1,145 @@
+{
+  "scenario_id": "session-resume",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:resume",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+fe95020",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (hermes -r/--resume reopens the SAME sessions row); daemon_capability: full; driver_capability: gap:resume"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-resume",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:resume",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:resume\n\n## Reasoning\n\n### agent — yes\n\nHermes Agent 0.19.0 declares `-r/--resume <session_id>` on both the top-level parser and the `chat` subparser (`hermes_cli/_parser.py:157` and `:334`; the usage banner at `:48` reads `hermes --resume <session_id>  Resume a specific session by ID`), plus `-c/--continue` which `cmd_chat` resolves into `--resume` with the most recent session for the matching source (`hermes_cli/main.py:2450-2472`, `_resolve_last_session(source='cli')`).\n\nCrucially for this scenario, resume REUSES the existing session row rather than forking a new one. `_preload_resumed_session` (`hermes_cli/cli_agent_setup_mixin.py:464-548`) loads the target's history, keeps `self.session_id` AS the target id, and then explicitly clears the terminal columns — `UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?` (the same statement `hermes_state.SessionDB.reopen_session` runs, `hermes_state.py:4334-4341`). New messages therefore land under the SAME `messages.session_id`, and the session upsert is `INSERT ... ON CONFLICT(id) DO UPDATE` (`hermes_state.py:3729-3747`) whose SET list does NOT include `started_at` — so the row's identity and birth timestamp survive the relaunch untouched. This is the store-level equivalent of claudecode appending to the same UUID transcript.\n\n### daemon — full\n\nHermes writes no transcript files; the single shared SQLite store IS the transport (`core/adapters/inbound/agents/hermes/adapter.go` package doc, `agent.go` `Source: agent.ProcessOwnedStore`). Every signal this scenario asserts is keyed on `sessions.id`, which resume preserves:\n\n- **\"Same session_id reappears (not a new session row)\"** — `Watcher.scanSessions` selects by `sessions.id` and `reconcile` keeps a per-id cursor (`watcher.go:278-419`). A resumed session is the same row, so `!emitted` is false and NO second `new_session` is emitted; the daemon keeps one session row across both PID lifetimes.\n- **`ready → working` on the first new turn** — the second lifetime's user message grows `message_count`, so `grew` is true and `reconcile` emits an `EventActivity` with `Terminal` computed from `turnIsDone` (`watcher.go:408-419`, `:426-436`). `finish_reason='stop'` on the newest assistant row is Hermes' explicit turn boundary, so the arc settles back to ready without an idle heuristic.\n- **\"correctly attributed to the current PID lifetime\"** — `DiscoverPID` matches on cwd + the full command line (`pid.go`), and the daemon's same-PID cleanup (`core/application/services/pid_manager.go:540`, issue #169) retires the second lifetime's `proc-<PID2>` presession once the store session re-binds to the new PID.\n\nThis is the same shape opencode's cell (the other `ProcessOwnedStore` column) already records green: `proc-<PID>` presession → handoff to the store id → turn cycle → `process_exited` → activity on the SAME store id after the exit.\n\n### driver — gap:resume\n\n`replaydata/agents/hermes/driver-interactive.sh` is the scaffold: its `resume` arm is `not_implemented`, and `DRIVE_ELICITS=\"send slash sleep wait_turn\"`, so recipe-lint flags this recipe as a semantic_gap before recording. The port is mechanical — copy `step_resume` from `replaydata/agents/codex/driver-interactive.sh:410-443`, which already does the whole primitive in one step (Ctrl-D the REPL, wait for the tmux session to die, kill it, relaunch under a rotated tmux name). Only two hermes-specific substitutions are needed: relaunch `hermes chat -r \"$resume_uuid\" --no-restore-cwd` instead of `codex resume <uuid>`, and — the load-bearing part — do NOT re-run `resolve_session_id` afterwards. `resolve_session_id` binds to `started_at > SES_LAUNCH_TS[$ACTIVE]`, and resume leaves `started_at` at the ORIGINAL launch, so a re-resolution after the relaunch would find nothing (or worse, an unrelated newer row). Keep `SES_UUID`/`SES_TRANSCRIPT`/`EXPECTED_TURNS_SEEN` for the slot unchanged, exactly as codex's step_resume keeps its rollout. This is tooling work, not an observability limit — the cell records the moment the step lands.",
+      "caveats": [
+        "PROVISIONAL on emission: daemon=full is derived from reading watcher.go/metrics.go plus the Hermes source that proves the row is reused, NOT from a live recording. What a doc read cannot settle is the exact scan-to-event timing of the reopen — the watcher emits nothing when `ended_at` flips back to NULL (`reconcile` returns early when neither `grew` nor `justEnded`), so the FIRST observable of the second lifetime is the activity event from the resumed turn's user message, not a separate 'session came back' event. The spec is written that way (v2_resume_rebind asserts kind=transcript_activity, not a state re-birth); record must confirm it.",
+        "The watcher's discovery filter is `started_at > now - maxAge` (watcher.go:285-288) and resume does NOT refresh `started_at` (the sessions upsert's ON CONFLICT SET list omits it, hermes_state.py:3737-3747). Resuming a session older than the daemon's maxAge window would therefore never be rediscovered. Out of scope for this scenario (the recipe resumes seconds later), but it is a real limit for a user resuming yesterday's session.",
+        "`sessions.cwd` is populated only for TUI sessions, so a `hermes chat` (source='cli') session borrows the cwd of the single live hermes process (`watcher.go:115-124`, `metrics.go:119-122`). `defaultLiveCWD` deliberately returns \"\" when MORE than one hermes session process is alive, so a recording with a second concurrent hermes session would leave this session unbound (no cwd → no PID discovery → no process_exited phase). Recording prerequisite, not a daemon defect.",
+        "`_preload_resumed_session` calls `resolve_resume_session_id` first: if the target is the empty head of a compression chain, Hermes resumes the DESCENDANT id instead and prints 'was compressed into <id>' (cli_agent_setup_mixin.py:490-503). That path would legitimately surface a different session_id. It cannot fire in this recipe (one short turn, no compaction), but a compaction-adjacent resume is a different cell.",
+        "`observations.cost_nonzero` is deliberately NOT asserted. Hermes reports `estimated_cost_usd = 0.0` under `billing_mode='subscription_included'`, and the adapter re-prices from irrlicht's own alias table instead (metrics.go:155-163) — so cost is nonzero only if the recording home's configured model is in `core/pkg/capacity/aliases.go`. record should promote it once the live model is known.",
+        "`observations.model` is left unpinned per the anti-pattern rule: the model comes from the recording home's `<HERMES_HOME>/config.yaml` (`model.default`), which is not knowable from here. record fills it from the recording."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/_parser.py",
+          "note": "Lines 48, 157, 334 — `-r/--resume <session_id>` declared on both the top-level and `chat` parsers; usage banner documents 'Resume a specific session by ID'. Hermes Agent 0.19.0 (pyproject.toml:5)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/cli_agent_setup_mixin.py",
+          "note": "_preload_resumed_session (464-548): keeps self.session_id AS the resumed id, replays its history, then `UPDATE sessions SET ended_at=NULL, end_reason=NULL WHERE id=?`. This is the proof that resume reuses the SAME row rather than minting a new one."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_state.py",
+          "note": "reopen_session (4334-4341) is the same UPDATE; the sessions upsert (3729-3747) is ON CONFLICT(id) DO UPDATE with started_at absent from the SET list — id and birth timestamp are stable across the relaunch."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/main.py",
+          "note": "cmd_chat (2444-2500): resolves -c/--continue into --resume (by name or most-recent for source='cli'), then resolves --resume by title or direct id."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "scanSessions/reconcile (278-419) key every cursor on sessions.id, so a reopened row emits no second new_session; turnIsDone (426-436) reads finish_reason='stop' as the explicit turn boundary that settles the resumed turn back to ready."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go",
+          "note": "Source is agent.ProcessOwnedStore over $HERMES_HOME/state.db — no transcript files exist, so session identity is the store row, which is exactly what resume preserves."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "Line 540 — HandlePIDAssigned cleans up sessions sharing the same PID (issue #169); this is what retires the second lifetime's proc-<PID2> presession once the store session re-binds."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "The `resume` arm is not_implemented and DRIVE_ELICITS=\"send slash sleep wait_turn\" — the concrete anchor for driver=gap:resume."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/driver-interactive.sh",
+          "note": "step_resume (410-443) is the reference port: Ctrl-D, wait for tmux death, rotate the tmux name, relaunch resuming the SAME id, and deliberately do NOT re-resolve the transcript/uuid."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/1-4_session-resume/expected.jsonl",
+          "note": "The sibling ProcessOwnedStore cell, already green — presession → handoff → turn cycle → process_exited → activity on the SAME store id after the exit. This cell's spec follows its shape."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >= 0.19.0 on PATH and an inference provider configured in <HERMES_HOME>/config.yaml with credentials",
+        "HERMES_HOME exported to the recording home so the run writes to an isolated state.db",
+        "sqlite3 on PATH (the driver reads session id and turn completion straight out of state.db)",
+        "NO other hermes session process alive during the recording — defaultLiveCWD returns \"\" when more than one is running, and a source='cli' session has no stored cwd to fall back on",
+        "drive-hermes-interactive.sh must expose the `resume` step type (currently not_implemented; port step_resume from drive-codex-interactive.sh:410-443)"
+      ],
+      "setup": [
+        "One cwd under <staging>/cwd/, reused across both lifetimes. Hermes only cd's into a session's recorded cwd on resume when `sessions.cwd` is non-empty, which it never is for source='cli' — pass --no-restore-cwd anyway so the behaviour is pinned rather than incidental.",
+        "The `resume` step must do the whole primitive: Ctrl-D the REPL (graceful exit → the process_exited the spec asserts), kill the tmux session, then relaunch `hermes chat -r \"$resume_uuid\" --no-restore-cwd` in the SAME cwd under a rotated tmux session name. Reuse the ACTIVE slot — do not alloc_slot; this is one session with two PID lifetimes.",
+        "Do NOT call resolve_session_id after the relaunch. It binds to `started_at > SES_LAUNCH_TS[$ACTIVE]`, and resume leaves started_at at the ORIGINAL launch (the sessions upsert never updates it), so re-resolution would miss the row or bind a foreign one. Keep SES_UUID/SES_TRANSCRIPT/EXPECTED_TURNS_SEEN for the slot unchanged across the resume — EXPECTED_TURNS_SEEN in particular, so the post-resume wait_turn blocks for the SECOND finish_reason='stop' rather than returning on the first.",
+        "The session id must be captured BEFORE the resume: resolve_session_id already runs inside wait_turn, so the turn-1 wait_turn is what binds it."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "resume"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: again"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a proc-<PID> presession in ready, then the store session id born in ready (a DIFFERENT session_id) once Hermes INSERTs the sessions row on the first user message",
+        "ready → working → ready for turn 1 on the store session id",
+        "a process_exited event on the store session id after turn 1 (the Ctrl-D performed by the resume step)",
+        "the SAME store session id shows transcript_activity AFTER that process_exited — NOT a new session id. This is the spec's 'Same session_id reappears (not a new session row)'",
+        "ready → working → ready for turn 2 on the SAME store session id — each lifetime's arc is independently correct",
+        "exactly ONE hermes session row exists in the dashboard across both lifetimes; the second lifetime's proc-<PID2> presession is retired by the same-PID cleanup",
+        "final session state is ready; no tool calls in either turn",
+        "state.db: `SELECT COUNT(*) FROM messages WHERE session_id='<id>' AND role='user'` is 2 — both turns landed under one session_id"
+      ],
+      "settings": {},
+      "timeout_seconds": 300,
+      "scope_note": "Records the clean-exit-then-resume variant only, matching claudecode's and codex's cells for this scenario. The spec's second variant (repeated kill+resume across many PID lifetimes) shares the same observability surface and can be a follow-up cell. Hermes' resume is explicit (`hermes chat -r <id>`), and unlike claudecode/codex there is no transcript file to reopen — continuity is the SQLite sessions row, whose ended_at/end_reason are cleared on resume."
+    }
+  }
+}
