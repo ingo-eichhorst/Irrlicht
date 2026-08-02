@@ -112,14 +112,14 @@
         "run-cell-multi.sh creates ONE shared cwd and launches the hermes and claudecode interactive drivers concurrently, both pointed at it via IRRLICHT_ONBOARD_CWD; the hermes driver launches `hermes chat` under tmux in that cwd and polls the pane for 'Type your message or /help' before typing (the TUI swallows keystrokes sent during its boot)",
         "the daemon observes hermes via its ProcessOwnedStore poller over $HERMES_HOME/state.db and claudecode via the ~/.claude/projects fswatcher — disjoint transports, so each session is labeled independently",
         "the partner is a DIFFERENT agent, so exactly one non-service hermes process is live and defaultLiveCWD binds the hermes session to the shared cwd; this is what puts both rows under the same workspace slug",
-        "this cell stores the hermes transcript for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (both adapters). NOTE for record: the hermes driver currently writes a non-file transcript path (\"<store>?session=<id>\"); port opencode's store-export step so it writes a real JSONL before running the rig",
-        "the prompt is a one-word reply request, so the hermes turn carries no tool call and neither session enters waiting",
+        "this cell stores the hermes transcript for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (both adapters). The assessment note that the hermes driver still writes a non-file transcript path (\"<store>?session=<id>\") and that opencode's store-export step must be ported before running the rig is STALE — export_transcript/export_all_transcripts are already in replaydata/agents/hermes/driver-interactive.sh and rewrite every slot's path to a real JSONL before the staging contract is emitted. Verified by the 17 committed hermes recordings, each of which carries a transcript.jsonl and a replay golden.",
+        "the prompt asks for a WIDE tool-free generation (120 lines plus two sentences), so the hermes turn still carries no tool call and neither session enters waiting, but the turn is long enough for the store watcher's 2s poll to see a ready->working edge. The assessed one-word prompt (\"Reply with exactly the word: omega\") is a sub-second turn the poll can commit whole, which would fail whichever of agentA/agentB resolves to hermes — the column's TIMING prerequisite. Widened rather than the spec being relaxed.",
         "timeout_seconds is 300 rather than the sibling 240: the hermes driver's deadline starts BEFORE its up-to-60s REPL boot poll, and the machine is running two agent CLIs concurrently"
       ],
       "script": [
         {
           "type": "send",
-          "text": "Reply with exactly the word: omega"
+          "text": "Write out the numbers from 1 to 120, one number per line, in order. Then finish with two full sentences of prose stating which number you ended on and confirming that you wrote every number in between. Do not use any tools and do not ask me any questions."
         },
         {
           "type": "wait_turn"
