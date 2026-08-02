@@ -391,15 +391,24 @@ func (w *Watcher) reconcile(db *sql.DB, r storeSessionRow, fallbackCWD string) {
 	// session just closed (the closing write may not add a message).
 	//
 	// On first discovery prevCount is 0, so a session that already has
-	// messages emits new_session AND one activity. That pairing is
-	// deliberate: new_session only announces the session, while the
-	// activity is what tells the daemon to read the store and derive
-	// state. Without it, a session discovered mid-flight — a daemon
-	// restart, or a permission granted while Hermes is already running —
+	// messages would pair new_session with one activity. That pairing is
+	// deliberate for a session that is still LIVE: new_session only
+	// announces it, while the activity is what tells the daemon to read the
+	// store and derive state — without it a session discovered mid-flight (a
+	// daemon restart, or consent granted while Hermes is already running)
 	// would sit stateless until the user's next message.
+	//
+	// It is NOT warranted for a session that was already finished when we
+	// first saw it. Those are history: new_session alone carries them, and
+	// their state is settled. Pairing them doubled the cold-start burst —
+	// one scan over a store with N sessions in the window emitted 2N events
+	// into a 64-slot channel that drops silently when full, which is the
+	// most likely cause of a concurrent session intermittently never
+	// surfacing (observed once against a store with 23 sessions in window).
 	grew := r.messageCount > prevCount
 	justEnded := r.ended && !prevEnded
-	if !grew && !justEnded {
+	coldStartHistory := !emitted && r.ended
+	if coldStartHistory || (!grew && !justEnded) {
 		return
 	}
 

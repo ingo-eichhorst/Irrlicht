@@ -382,3 +382,69 @@ func TestWatcher_SkipsLiveCWDProbeWhenAllRowsHaveCWD(t *testing.T) {
 		t.Errorf("CWD = %q, want the stored cwd", evs[0].CWD)
 	}
 }
+
+// A session that was ALREADY finished when the watcher first saw it is
+// history: new_session carries it and its state is settled. Pairing it with
+// an activity event doubled the cold-start burst — one scan over a store
+// with N in-window sessions emitted 2N events into a 64-slot channel that
+// drops silently when full, which is the most likely cause of a concurrent
+// session intermittently never surfacing.
+func TestWatcher_ColdStartHistoryEmitsNewSessionOnly(t *testing.T) {
+	path, db := newTestStore(t)
+	insertSession(t, db, sessionRow{id: "done", source: "cli", model: "m", started: 1000, ended: 1042, msgs: 2})
+	insertMessage(t, db, messageRow{sessionID: "done", role: "user", content: "go", ts: 1001})
+	insertMessage(t, db, messageRow{sessionID: "done", role: "assistant", content: "ok", finish: "stop", ts: 1002})
+
+	w := NewWithStorePath(path, 0)
+	w.liveCWD = func() string { return "" }
+	ch := w.Subscribe()
+	scanNow(w)
+
+	evs := drain(ch)
+	if len(evs) != 1 {
+		t.Fatalf("got %d events %+v, want exactly 1 (new_session only)", len(evs), evs)
+	}
+	if evs[0].Type != agent.EventNewSession {
+		t.Errorf("Type = %v, want new_session", evs[0].Type)
+	}
+}
+
+// The burst matters at scale: a cold start over a store of finished sessions
+// must stay at one event each, not two.
+func TestWatcher_ColdStartBurstIsOnePerFinishedSession(t *testing.T) {
+	path, db := newTestStore(t)
+	const n = 20
+	for i := 0; i < n; i++ {
+		id := "s" + string(rune('a'+i))
+		insertSession(t, db, sessionRow{id: id, source: "cli", model: "m", started: 1000, ended: 1042, msgs: 2})
+		insertMessage(t, db, messageRow{sessionID: id, role: "user", content: "go", ts: 1001})
+		insertMessage(t, db, messageRow{sessionID: id, role: "assistant", content: "ok", finish: "stop", ts: 1002})
+	}
+
+	w := NewWithStorePath(path, 0)
+	w.liveCWD = func() string { return "" }
+	ch := w.Subscribe()
+	scanNow(w)
+
+	if got := len(drain(ch)); got != n {
+		t.Errorf("cold start emitted %d events for %d finished sessions, want %d", got, n, n)
+	}
+}
+
+// A session still LIVE at first sight keeps the pairing — that is what lets
+// a mid-flight discovery derive state immediately.
+func TestWatcher_ColdStartLiveSessionKeepsActivityPairing(t *testing.T) {
+	path, db := newTestStore(t)
+	insertSession(t, db, sessionRow{id: "live", source: "cli", model: "m", started: 1000, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "live", role: "user", content: "go", ts: 1001})
+
+	w := NewWithStorePath(path, 0)
+	w.liveCWD = func() string { return "" }
+	ch := w.Subscribe()
+	scanNow(w)
+
+	evs := drain(ch)
+	if len(evs) != 2 || evs[0].Type != agent.EventNewSession || evs[1].Type != agent.EventActivity {
+		t.Fatalf("got %+v, want new_session then activity for a live session", evs)
+	}
+}
