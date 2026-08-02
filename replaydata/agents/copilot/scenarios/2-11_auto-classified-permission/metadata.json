@@ -1,0 +1,140 @@
+{
+  "scenario_id": "auto-classified-permission",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+a21849f",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (Copilot 1.0.77 classifies shell calls itself: a read-only command runs ungated, a write in the SAME session prompts); daemon_capability: full (the auto-approved call writes tool.execution_start/complete and NO permission.requested, and every one of the five ladder rules that can produce `waiting` is structurally unreachable for it); driver_capability: ready (send+wait_turn+sleep, and the COPILOT_NO_ALLOW_ALL lever the cell needs already exists in the driver)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-classified-permission",
+      "agent": "copilot",
+      "assessed_at": "2026-08-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: **yes** — GitHub Copilot CLI 1.0.77 runs its own permission classifier, and it auto-approves read-only shell work with no prompt at all.\ndaemon_capability: **full** — the auto-approved call is ordinary transcript activity (tool.execution_start/complete inside a user.message → assistant.turn_end turn), and NOT ONE of the five classifier rules that can produce `waiting` is reachable for it.\ndriver_capability: **ready** — the recipe needs `send` + `wait_turn` + `sleep`, all in DRIVE_ELICITS, and the launch lever this cell depends on (COPILOT_NO_ALLOW_ALL) is already implemented in the driver.\n\n## The classifier is real, and it is the agent's — proven inside ONE session\n\nThe risk with this scenario on Copilot is that `--allow-all` makes it vacuous: it pre-approves everything, so \"no prompt appeared\" would prove nothing about a classifier. The live evidence separates the two cleanly, because it comes from a session where `--allow-all` was NOT in effect:\n\n`~/.copilot/session-state/40dfdd13-11f4-4302-b473-bf0ab5a000d6/events.jsonl` (CLI 1.0.77, one session, one launch, one model, two prompts):\n\n1. `Run the shell command: cat data.txt` → `tool.execution_start` with `shellToolInfo:{\"possiblePaths\":[\"data.txt\"],\"hasWriteFileRedirection\":false}` → `tool.execution_complete` 0.6 s later, `success:true`. **No `permission.requested` line exists anywhere between them.** The command simply ran.\n2. `Run this shell command exactly: echo written > out.txt` → `tool.execution_start`, then 0.27 s later `permission.requested` with `{\"kind\":\"shell\",\"commands\":[{\"identifier\":\"echo\",\"readOnly\":true}],\"possiblePaths\":[\"out.txt\"],\"hasWriteFileRedirection\":true}`, and the CLI blocked for 35 s until a human answered (`permission.completed`, `result.kind:\"approved\"`).\n\nThat the write DID prompt is what proves `--allow-all` was off for this session (had it been on, nothing would have prompted — `copilot --help`: \"--allow-all: Enable all permissions (equivalent to --allow-all-tools --allow-all-paths --allow-all-urls)\"). So within one launch configuration the agent gated one call and auto-approved the other. That is exactly the scenario: **an in-product classifier decides, and the safe branch never reaches the user.**\n\nThe payload also shows *what* the classifier keys on, and it is not the command identifier: `echo` is itself tagged `readOnly:true`, yet the call was gated — `hasWriteFileRedirection:true` plus a `possiblePaths` entry is what flipped it. `cat data.txt` carried `hasWriteFileRedirection:false` and ran. Same shape in `a030ac38-…` (`cat probe.txt`, ungated, whole turn 6 s).\n\n## Why `waiting` is structurally unreachable for the auto-approved call\n\n`waiting` is produced by exactly five rules in `core/application/services/state_classifier.go`. For a read-only bash call under this adapter, each is dead for a *cited* reason:\n\n| rule | why it cannot fire |\n|---|---|\n| `permission_prompt` (hook tier, `PermissionPending`) | copilot ships **no hooks at all** — `agent.go` declares a single `KindObserve` permission (\"Read session transcripts\") and no hook installer, so nothing can ever set the hook-tier flag |\n| `transcript_permission_prompt` (`TranscriptPermissionPending`) | set only by `applyPermissionDeltas` folding a `permission.requested` id into `openPermissions` (tailer.go:964 → tailer_metrics.go:475). The auto-approved call writes no such line — the live evidence above |\n| `user_blocking_tool` (`NeedsUserAttention`) | requires an OPEN tool whose name is in `isUserBlockingTool` (metrics.go:450: `AskUserQuestion`/`ExitPlanMode`/`question`/`ask_user_question`). Copilot's tool here is `bash` |\n| `open_tool_stalled` (`OpenToolStalled`) | requires `isPermissionGatedEditTool` (metrics.go:497: edit/write/multiedit/notebookedit/write_file). `bash` is deliberately excluded — it can legitimately run for minutes |\n| `idle_prompt` (`IdlePromptPending`) | Claude Code's Notification hook only; inert for every non-hook adapter |\n\nSo the arc is forced: `user.message` → `working`, tool events are continued activity, `assistant.turn_end` → `turn_done` → `agent_done` → `ready`. The scenario's safe-path invariant (\"state never entered waiting\") is not merely observed, it is unreachable — which is the strongest form this assertion can take.\n\n## What `session.permissions_changed` actually carries (checked, not assumed)\n\nThis event type exists live and the parser has no arm for it (it falls to `default: Skip`). It is **not** an auto-classification record and is not this cell's signal. Read from `51ffced3-…/events.jsonl` line 2, immediately after `session.start`:\n\n```json\n{\"type\":\"session.permissions_changed\",\"data\":{\"previousAllowAllPermissions\":false,\"allowAllPermissions\":true,\"previousAllowAllPermissionMode\":\"off\",\"allowAllPermissionMode\":\"on\"}}\n```\n\nIt records the **allow-all mode toggle** — the `--allow-all` / `COPILOT_ALLOW_ALL` blanket switch going on or off. Per-call classifier verdicts are never written; the only trace of a decision is the presence or absence of `permission.requested`. Skipping it is therefore correct for state, and its one latent use is diagnostic: its absence in `40dfdd13-…` is part of the proof that session ran without `--allow-all`. Worth revisiting only if a future cell wants to assert the mode itself (a mid-session toggle would be invisible today) — a caveat, not a bug: nothing this scenario asserts depends on it.\n\n## The launch decision, made deliberately\n\nThe cell is recorded with **`COPILOT_NO_ALLOW_ALL=1`**, i.e. WITHOUT `--allow-all`. With the flag on, every call is pre-approved and the recording would be indistinguishable from `2-2 auto-executed-tool-call` — the same transcript, the same arc, and no evidence that a classifier exists. Dropping it is what makes the fixture assert the thing the scenario is named for. This is not a driver gap: `replaydata/agents/copilot/driver-interactive.sh:179-180` already gates the flag behind that env var (added for the 2-19 sibling), and line 303 gates `dismiss_dialog_if_visible` behind the same var — so under this cell's configuration `wait_turn` will NOT silently answer an unexpected prompt; it would hang to timeout and fail the cell honestly. Both behaviours are what this cell wants.\n\n## Relationship to the neighbouring cells\n\n- `2-2 auto-executed-tool-call` — same arc, but with `--allow-all`; it asserts \"a tool call doesn't disturb the arc\", not \"the agent classified it\".\n- `2-19 tool-gate-permission-prompt` — the risky branch of this same scenario, recorded to `waiting` and left there. This cell deliberately captures ONLY the safe branch, exactly as the claudecode sibling does (its spec says so in as many words), because a single recipe cannot both terminate in `waiting` and settle to `ready`.",
+      "caveats": [
+        "RECORDING PRECONDITION (deliberate, and the whole point of the cell): record with COPILOT_NO_ALLOW_ALL=1 so copilot launches WITHOUT --allow-all. With --allow-all every call is pre-approved and the no-waiting result would be an artifact of the launch flags rather than evidence of the agent's classifier — the recording would be a duplicate of 2-2. The lever already exists (driver-interactive.sh:180); nothing needs porting.",
+        "PROVISIONAL — the exact command's classification (emission, not parsing): the recipe asks for `ls -la`, whereas the live-verified auto-approvals were `cat data.txt` and `cat probe.txt`. The inference is that `ls` shares the shape the classifier cleared (a read-only identifier, hasWriteFileRedirection=false, paths inside the trusted cwd), but Copilot's classifier lives in the native core (app.js only relays `readOnly` through to the permission payload), so no allow-list is readable from the binary. If `ls` unexpectedly prompts, the recording FAILS LOUDLY (a waiting transition, and wait_turn will not dismiss the dialog under COPILOT_NO_ALLOW_ALL) — the fix is then to swap the prompt to `cat` over a file, which requires the driver to seed one in the run cwd (there is no shell step type). This is the main reason confidence is 0.85 and not higher.",
+        "The recipe must end on a DECLARATIVE reply ('reply with just: done'). A turn ending on a prose question routes to waiting through agent_done → classifyAgentDone — proven for this very adapter in the 2-17 user-blocking-question cell — which would violate this cell's invariant for a reason that has nothing to do with permissions.",
+        "PROVISIONAL — BIRTH SHAPE: modelled as a PRESESSION adapter (transient proc-<PID> row reconciling into the real session, whose id is the session-state DIRECTORY name via sessionIDFromPath), templated from the 2-1/2-2/2-19 copilot siblings. Grounded in the driver's SEAM-3 comment (the session directory holds only workspace.yaml until the first prompt writes events.jsonl), read off the driver + adapter and NOT off a recording. If the live capture shows a single birth, record must re-anchor.",
+        "COPILOT WRITES TWO assistant.turn_end EVENTS PER PROMPT when a tool is involved (verified in 40dfdd13 and a030ac38: turn_start → tool → turn_end, then turn_start → text → turn_end), and each maps to turn_done → agent_done → ready. A brief ready blip mid-prompt is therefore expected, and the spec is built to tolerate it: the no-waiting invariant is carried by a `kind`-anchored phase (whose duration_at_least_ms defines only the invariant window — checkDurationAtLeast is skipped when expected_state is empty, expected.go:685) rather than by a `working` phase with a long duration, which a ready blip would fail. It also means wait_turn returns at the FIRST turn_end, before the closing text turn — hence the trailing sleep.",
+        "OBSERVATIONS assert cost/tokens non-zero, mirroring the 2-2 sibling (assistant.message.outputTokens is Copilot's live token signal). A BYOK recording (COPILOT_PROVIDER_BASE_URL/_API_KEY + COPILOT_MODEL) reports totalNanoAiu 0 and a model name outside irrlicht's priced alias map, so cost would land at zero: record this cell against the real Copilot backend, or let record correct the observation. model is deliberately unpinned — --model accepts only 'auto' on this account and the router picks per turn between gpt-5-mini and claude-haiku-4.5."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.copilot/session-state/40dfdd13-11f4-4302-b473-bf0ab5a000d6/events.jsonl",
+          "note": "THE load-bearing evidence, live on CLI 1.0.77: one session, two prompts. `cat data.txt` → tool.execution_start (shellToolInfo.hasWriteFileRedirection=false) → tool.execution_complete with NO permission.requested between them; `echo written > out.txt` → permission.requested {kind:shell, commands:[{identifier:echo, readOnly:true}], possiblePaths:[out.txt], hasWriteFileRedirection:true} and a 35 s block. The write prompting proves --allow-all was off, so the read-only auto-approval is the agent's own classification."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.copilot/session-state/a030ac38-80bf-4206-a3a3-92be97a8e895/events.jsonl",
+          "note": "Second instance of the same shape and the timing basis for the recipe: `cat probe.txt` auto-executed (no permission event), whole prompt user.message → first assistant.turn_end in 4.5 s, closing text turn 1.4 s later, then session.usage_checkpoint."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.copilot/session-state/51ffced3-5bba-416f-b898-7338f39e69e8/events.jsonl",
+          "note": "The session.permissions_changed line (line 2, right after session.start): previousAllowAllPermissions false → allowAllPermissions true, permission MODE off → on. Establishes that this event carries the blanket allow-all toggle, not a per-call classifier verdict — so the parser's default Skip is correct and no auto-classification record exists on disk."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The five rules that can decide `waiting` (permission_prompt:114, transcript_permission_prompt:153, user_blocking_tool:160, open_tool_stalled:173, idle_prompt:187) — the enumeration behind the structural-unreachability argument, plus agent_done:202 which supplies the working→ready settle from assistant.turn_end."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "isUserBlockingTool (line 450: AskUserQuestion/ExitPlanMode/question/ask_user_question) and isPermissionGatedEditTool (line 497: edit/write/multiedit/notebookedit/write_file, with bash deliberately excluded) — why neither the user_blocking_tool nor the open_tool_stalled rule can fire on a Copilot `bash` call."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Permissions = one KindObserve entry ('Read session transcripts'); no hook installer anywhere in the adapter — so the hook-tier PermissionPending rule has no producer for this agent and cannot fire."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "Dispatch table (lines 85-118): tool.execution_start → function_call, tool.execution_complete → function_call_output, assistant.turn_end → turn_done, permission.requested/completed → the permission ids. The default arm's comment lists exactly what is skipped — session.permissions_changed falls there."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "Line 475: TranscriptPermissionPending = len(openPermissions) > 0 — the only producer of the transcript-tier waiting flag, and it stays empty for a turn with no permission.requested."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "Lines 179-181: `local args=(--no-color)` with `[[ -z ${COPILOT_NO_ALLOW_ALL:-} ]] && args+=(--allow-all)` — the lever this cell sets, already implemented. Line 303 gates dismiss_dialog_if_visible behind the same var, so wait_turn cannot silently answer an unexpected prompt in this configuration. DRIVE_ELICITS (line 128) lists send/wait_turn/sleep. turn_count (283) counts assistant.turn_end, so wait_turn returns at the first of the two."
+        },
+        {
+          "kind": "command",
+          "ref": "copilot --help (CLI 1.0.77, read from app.js option table)",
+          "note": "--allow-all: 'Enable all permissions (equivalent to --allow-all-tools --allow-all-paths --allow-all-urls)'; --allow-all-tools: 'Allow all tools to run automatically without confirmation' (env COPILOT_ALLOW_ALL). The documented reason --allow-all would make this cell's assertion vacuous."
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot-darwin-arm64/app.js (CLI 1.0.77)",
+          "note": "Scanned for the classifier's allow-list: the only `readOnly` occurrences are payload plumbing (MCP onPermission, the ACP permission mapper, tool-registry metadata). The decision itself is made in the native core (h.sessionPlan* bindings), so no readable allow-list exists — which is why the safe/gated split is asserted from live transcripts rather than from strings."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-11_auto-classified-permission/expected.jsonl",
+          "note": "The sibling this cell mirrors: it too captures ONLY the safe branch and states that the risky branch belongs to tool-gate-permission-prompt."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/expected.go",
+          "note": "checkDurationAtLeast (685) returns early when ExpectedState is empty, and checkPhaseInvariants (711) uses matched.Ts..+DurationAtLeastMs as the invariant window; findMatchingEvent (623) admits an event AT the anchor timestamp. Together these are why a `kind`-anchored phase can pin the no-waiting invariant across the whole turn without a ready blip failing it."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits — this recording spends them. Do NOT record this cell over BYOK: totalNanoAiu is 0 and the BYOK model name falls outside irrlicht's priced alias map, so the cost observation would land at zero",
+        "COPILOT_NO_ALLOW_ALL=1 MUST be exported for this cell so the driver launches copilot WITHOUT --allow-all. This is the whole point: with --allow-all everything is pre-approved and the recording proves nothing about the agent's classifier (it would duplicate 2-2 auto-executed-tool-call)",
+        "irrlicht's copilot `transcripts` permission granted (IRRLICHT_PERMISSION_MODE=grant-all for the recorder) — a fresh IRRLICHT_HOME leaves it pending and the daemon observes nothing",
+        "tmux available (the interactive driver drives the REPL through it). No hook install and no :7837 pinning — the whole signal is transcript-borne, so the coexist recorder on :7838 captures it"
+      ],
+      "setup": [
+        "The driver isolates state under $STAGING/copilot-home via COPILOT_HOME and seeds trustedFolders + askedSetupTerminals so neither first-run modal blocks the input box, then waits for the '/ commands' footer before typing",
+        "A fresh per-run cwd under <staging>/cwd/. The requested command reads only that directory, so it needs no seeded fixture — deliberate, because no step type can create one",
+        "Recommended: export COPILOT_AVAILABLE_TOOLS=bash. The driver forwards it as --available-tools=bash, dropping ~8.3k of ~12k input tokens and roughly halving what this cell costs",
+        "Under COPILOT_NO_ALLOW_ALL the driver also skips dismiss_dialog_if_visible inside wait_turn, so an unexpected permission prompt would hang to timeout rather than being silently answered — the failure this cell wants to be loud",
+        "Interactive, not headless: the REPL must outlive the turn so the daemon observes the working→ready settle rather than a process exit"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run the shell command `ls -la` with the bash tool, then reply with just: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a transient proc-<PID> presession born ready, then the real session (the session-state directory name — a DIFFERENT id) born ready when the transcript appears",
+        "events.jsonl shows a ready→working transition for the real session when the prompt is sent, and a working→ready settle by the end of the run; final session state is ready",
+        "events.jsonl contains NO state_transition to waiting for any session during the whole run",
+        "THE TRANSCRIPT-LEVEL ASSERTION THAT CANNOT BE FOOLED BY TIMING: the recorded events.jsonl contains at least one tool.execution_start / tool.execution_complete pair for the bash tool AND NO permission.requested line at all. A missing waiting transition alone could in principle be a sampling artifact; an absent permission.requested is the agent's classifier verdict written down",
+        "the recorded transcript shows the run launched without --allow-all — i.e. no session.permissions_changed line turning allowAllPermissions on (its presence means COPILOT_NO_ALLOW_ALL was not honoured and the cell is vacuous, whatever the pass rate says)",
+        "the newest recording's replay summary shows cum_output_tokens > 0 and estimated_cost_usd > 0, with model_name one of gpt-5-mini / claude-haiku-4.5 (router's choice — not pinned)"
+      ],
+      "timeout_seconds": 180,
+      "settings": {}
+    }
+  }
+}
