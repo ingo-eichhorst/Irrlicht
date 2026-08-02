@@ -123,12 +123,11 @@ var stateRules = []stateRule{
 		// compact_boundary lands, which then routes to ready via agent_done
 		// (#656).
 		//
-		// Hook-tier like the rules above, but it names no signal: the
-		// PreCompact hold is still the detector's own map rather than a
-		// signalPolicies row, because its staleness rule is time-based and the
-		// policy shape carries no clock. See #1297.
-		id:     "compact_in_progress",
-		tier:   session.TierHook,
+		// Reads a held signal like the permission rule above — the hold became
+		// a signalPolicies row in #1297, once HoldContext gave staleness a
+		// clock to express its half-wall-clock rule with.
+		id:     string(session.SignalCompactInProgress),
+		signal: session.SignalCompactInProgress,
 		when:   func(_ string, m *session.SessionMetrics) bool { return m.CompactInProgress },
 		decide: toState(session.StateWorking, "manual /compact in progress → working"),
 	},

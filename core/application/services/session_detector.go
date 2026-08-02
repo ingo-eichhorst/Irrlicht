@@ -80,16 +80,6 @@ const (
 	logComponentSessionDetectorSeed = "session-detector-seed"
 )
 
-// compactHoldTimeout bounds the PreCompact force-working hold (#657). Normally
-// the hold clears when the manual compact_boundary lands, but an interrupted or
-// failed /compact may never write one — without a ceiling the session would be
-// re-held working on every refreshStaleSessions tick and stranded forever (the
-// very failure #656 fixed). A real manual compaction runs at most a few minutes
-// (the #656 live evidence was ~161s), so this timeout sits comfortably beyond
-// any genuine window: after it elapses an orphaned hold is dropped and the
-// session re-classifies normally.
-const compactHoldTimeout = 5 * time.Minute
-
 // SubagentQuietWindow is how long a subagent's transcript must have been
 // silent before finishOrphanedChildren will promote it to ready.
 //
@@ -198,31 +188,20 @@ type SessionDetector struct {
 	// their own goroutine and the classify pass that consumes them. It
 	// replaces the three hand-rolled per-signal overlay maps this struct
 	// carried before #1288 — permissionPending, hookTurnDone and
-	// idlePromptPending — each of which had its own lifecycle rule spelled
+	// idlePromptPending — plus compactPending, which #1297 folded in once the
+	// policy shape carried a clock. Each had its own lifecycle rule spelled
 	// out in its own overlay method. The per-signal policy now lives in
-	// session.signalPolicies; adding a Phase 4-7 signal is a row there, not a
-	// fourth map and a fourth overlay here.
+	// session.signalPolicies; adding a Phase 4-7 signal is a row there, not
+	// another map and another overlay here.
 	//
 	// Carries its own lock (hooks arrive on HTTP handler goroutines, the
 	// event loop classifies), so it is deliberately NOT guarded by permMu.
 	signals *session.SignalHolds
 
-	// permMu guards the remaining per-session hook/bookkeeping maps below
-	// (compactPending, editToolOpenSince, idleProjectRetryAttempts). Written
-	// from HTTP handler goroutines, read by processActivity (event-loop
-	// goroutine).
+	// permMu guards the remaining per-session bookkeeping maps below
+	// (editToolOpenSince, idleProjectRetryAttempts). Written from HTTP handler
+	// goroutines, read by processActivity (event-loop goroutine).
 	permMu sync.Mutex
-
-	// compactPending tracks sessions in a manual /compact: sessionID → the Unix
-	// time the PreCompact hook fired. Set by HandleCompactHook; cleared when the
-	// compact_boundary lands (SawManualCompactBoundary) or compactHoldTimeout
-	// elapses (the safety net for an interrupted compaction that never writes a
-	// boundary). While set, processActivity overlays CompactInProgress so
-	// ClassifyState holds the session in working through the silent compaction
-	// window (#657). Guarded by permMu — written from the hook receiver's
-	// goroutine, read by the event loop, the same goroutine-crossing story the
-	// signals store above handles under its own lock.
-	compactPending map[string]int64 // sessionID → unix seconds (hook fire time)
 
 	// editToolOpenSince tracks, per session, the Unix time a permission-gated
 	// file-edit tool first appeared open. Guarded by permMu. Drives the
@@ -332,7 +311,6 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		debouncedEvents:          make(chan agent.Event, 64),
 		deletedCooldown:          10 * time.Second,
 		signals:                  session.NewSignalHolds(),
-		compactPending:           make(map[string]int64),
 		editToolOpenSince:        make(map[string]int64),
 		idleProjectRetryAttempts: make(map[string]int),
 		bgLiveProbe:              anyLiveOutputWriter,
