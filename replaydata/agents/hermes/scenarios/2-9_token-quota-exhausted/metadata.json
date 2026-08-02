@@ -1,0 +1,110 @@
+{
+  "scenario_id": "token-quota-exhausted",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:429-mock",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+2d29b32.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (FailoverReason.rate_limit/billing, backoff + failover, terminal 'Billing or credits exhausted' result); daemon_capability: incapable (the walled turn is never persisted -- no assistant row, no finish_reason='stop', no ended_at, and the messages table has no error column -- so the session sticks in working); driver_capability: gap:429-mock"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-quota-exhausted",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:429-mock",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: gap:429-mock\nroute: frozen\n\n## What the scenario asserts\n\nState-only: the agent is `working`, hits its token/cost budget, emits a turn-end\nsignal, the session goes `working -> ready`, and subsequent prompts keep it\n`ready` until the budget resets (final state `ready`, at least 1 turn). No quota\nMETRIC is asserted -- the acceptance_criteria are a lifecycle arc.\n\n## agent_supports: yes\n\nHermes has a first-class quota/billing wall, not an accidental one.\n`agent/error_classifier.py` defines `FailoverReason.rate_limit` (\"429 or\nquota-based throttling\"), `billing` (\"402 or confirmed credit exhaustion\") and\n`upstream_rate_limit`. `agent/conversation_loop.py` consumes them: adaptive\nbackoff (`adaptive_rate_limit_backoff`, conversation_loop.py:77), credential\nrotation / provider fallback (conversation_loop.py:4005-4063, the user-visible\n\"Rate limited -- switching to fallback provider...\" at :4042 and \"Billing or\ncredits exhausted -- switching to fallback provider...\" at :4035), a Nous-Portal\nguard that records the reset window (`agent/nous_rate_guard.py` ->\n`$HERMES_HOME/rate_limits/nous.json`), and -- when retries and failover are\nexhausted -- a terminal turn result at conversation_loop.py:4959-5010 carrying\n`completed: False`, `failed: True`, `failure_reason: \"rate_limit\"|\"billing\"`,\nand `final_response = \"Billing or credits exhausted: ...\"`. The REPL renders it\nplus a durable billing CTA panel (cli.py:12975, :13063-13110). The behavior is\nreal, deterministic under a stubbed provider, and user-visible. So `yes`.\n\n## daemon_capability: incapable\n\n`Source` is `agent.ProcessOwnedStore` over `$HERMES_HOME/state.db`\n(core/adapters/inbound/agents/hermes/agent.go:37-43) -- Hermes writes no\ntranscript file, so the store is the whole observable surface. The adapter has\nexactly TWO ways to settle a turn:\n\n1. `messages.finish_reason = 'stop'` on the newest assistant row --\n   `Watcher.turnIsDone` (watcher.go:426-436) sets `Terminal` on the activity\n   event, and `Parser.ParseLine` maps that row to `turn_done` (parser.go:93-95).\n2. `sessions.ended_at` going non-NULL -- the `justEnded` branch\n   (watcher.go:408-418) emits one final terminal event.\n\nThe adapter deliberately carries no idle-flush seam because finish_reason is\nsupposed to be an explicit boundary (parser.go:23-25).\n\n**On a quota wall Hermes writes neither.**\n\n- No assistant row. The terminal failure path returns at\n  conversation_loop.py:4959-5010 after calling\n  `agent._persist_session(messages, conversation_history)` (:4959). Nothing in\n  the whole retry/failover region appends an assistant message to that list --\n  `grep -n \"messages.append\" agent/conversation_loop.py` has NO hit between\n  lines 3800 and 5100. `_persist_session` (run_agent.py:1772-1805) delegates to\n  `_flush_messages_to_session_db`, whose `append_message` call takes\n  `finish_reason=msg.get(\"finish_reason\")` straight off each in-memory message\n  (run_agent.py:2079-2095) -- so a row that was never appended is never written.\n  `_drop_trailing_empty_response_scaffolding` (run_agent.py:1807+) goes further\n  and actively STRIPS the retry/failure sentinels before the write.\n- No session close. The REPL survives the failed turn (it returns to the prompt\n  and prints the error), so `ended_at` stays NULL and the `justEnded` branch\n  never fires.\n- No error field to read instead. The `messages` table has no error column at\n  all (hermes_state.py:1182-1204: role/content/tool_calls/tool_call_id/\n  tool_name/finish_reason/display_kind/... and nothing else), unlike opencode's\n  `message.data.error`, which is exactly what irrlicht's opencode watcher was\n  taught to treat as terminal in #493. `sessions.end_reason`\n  (hermes_state.py:1147) only ever holds session-close reasons -- 'compression',\n  'branched', 'agent_close', 'tui_shutdown', 'ws_orphan_reap' -- never a quota\n  reason. And `sessions.billing_mode`, which does exist on the row, is a PRICING\n  route label ('subscription_included' / 'official_models_api' /\n  'official_docs_snapshot' / 'unknown', agent/usage_pricing.py:913-939), not a\n  quota state; it never flips on exhaustion.\n- The error is display-only. cli.py:12975 turns `result[\"error\"]` into\n  \"Error: ...\" for the panel and cli.py:13090 adds the billing CTA; neither\n  persists anything. The only two `conversation_history.append` sites in cli.py\n  (:11073, :12569) are user-side.\n\nConsequence in the daemon: after the wall the newest row for the session is the\nuser prompt (or a tool result), `message_count` does not grow, so\n`reconcile` emits no further activity event at all (watcher.go:408-418); and if\na later scan did emit one, `turnIsDone` is false so `Terminal` stays false. The\nmetrics fold leaves `LastEventType = \"user_message\"` (metrics.go:135 <-\nparser.go:79), `IsAgentDone()` is false, and the classifier falls to its last\nrung `transcript_activity -> working`\n(core/application/services/state_classifier.go:204-212). There is no wall-clock\nor idle rule anywhere in `stateRules` (state_classifier.go:100-212) and no\nidle-to-ready sweeper in services (the only sweeps are dead-PID / superseded\npresession in pid_manager.go). **The session sticks in `working` for as long as\nthe REPL lives**, so both the `working -> ready` transition and the \"subsequent\nprompts stay ready\" criterion are unobservable.\n\nThat is `incapable`, not `bug`: the daemon is not mis-handling a trace, Hermes\npersists no trace of the failed turn into the source the daemon tails. The one\ndurable quota artifact Hermes does write --\n`$HERMES_HOME/rate_limits/nous.json` (agent/nous_rate_guard.py:29-36,106-122) --\nsits OUTSIDE the store (and outside the 'store' permission's declared Touches,\nagent.go:44-59), is Nous-Portal-only, and is a reset-time marker rather than a\nturn boundary. Teaching the adapter to read it could someday give Hermes a\ncodex-style quota METRIC; it still would not produce the state arc this scenario\nasserts.\n\n## driver_capability: gap:429-mock\n\nElicitation is wireable in principle -- Hermes honors `OPENAI_BASE_URL` /\n`OPENAI_API_KEY` from the environment or `$HERMES_HOME/.env`\n(hermes_cli/config.py:264, hermes_cli/runtime_provider.py:1808), so the existing\n`tools/onboarding-factory/recording/mock-openai-429` (built for the opencode\nsibling: 200 + finish_reason stop on request 1, an insufficient_quota error\nafter) could serve the 200-then-wall pair against an OpenAI-compatible provider\nentry in `config.yaml`. What is missing is the harness: the only quota recorder,\n`tools/onboarding-factory/recording/record-token-quota-exhausted.sh`, is\nhard-wired to `claude --bare` + `ANTHROPIC_BASE_URL`, and\n`replaydata/agents/hermes/driver-interactive.sh` has no mock-launch primitive\n(`DRIVE_ELICITS=\"send slash sleep wait_turn\"`), so a gemini-style teardown\nrecipe (`keys` Escape / `sigkill` / `exit_clean`) would additionally land on\nstubbed arms. Primary label `gap:429-mock`, matching the codex and mistral-vibe\nsiblings. Moot for routing: even a perfect harness cannot make the arc\nobservable. A driver-visible symptom of the same missing signal: hermes'\n`wait_turn` polls `messages ... finish_reason='stop'`, so it would spin to its\ndeadline on the walled turn.\n\n## Route\n\n`agent=yes` + `daemon=incapable` -> **frozen**. This unblocks only if upstream\nHermes persists the walled turn (an assistant/system row carrying a terminal\nfinish_reason, or ended_at/end_reason set on the quota wall) AND the adapter\nlearns to settle on it -- an upstream + adapter change, not a tooling task. The\nsame shape as the mistral-vibe sibling, and the mirror image of opencode, whose\nstore DOES carry `message.data.error` and whose watcher settles on it.\n",
+      "caveats": [
+        "Decisive claim is a code read of Hermes 0.19.0, not a live run (assess spends no CLI tokens): no `messages.append` exists anywhere in conversation_loop.py:3800-5100, and _flush_messages_to_session_db (run_agent.py:2079-2095) writes rows only from that in-memory list -- so no assistant row and no finish_reason='stop' can reach the store on a quota wall.",
+        "One-shot nuance, and why it does NOT unfreeze the cell: `hermes -z` exits after the failed turn, the session then gets ended_at/end_reason, and the watcher's justEnded branch (watcher.go:408-418) emits a terminal event -> ready. That arc is teardown, byte-identical to a normal one-shot end, and cannot satisfy the 'subsequent user prompts stay ready' criterion (there is no subsequent prompt).",
+        "Provider failover can mask the wall entirely: with a fallback provider configured, Hermes switches (conversation_loop.py:4035-4063) and the turn completes normally with finish_reason='stop' -- the recording would then show an ordinary basic-turn arc, not quota exhaustion. A recording harness would have to 429 every configured provider.",
+        "sessions.billing_mode / estimated_cost_usd are pricing-route labels (agent/usage_pricing.py:913-939), not quota state; the adapter deliberately re-prices via capacity instead of trusting them (metrics.go:155-163). Neither carries an exhaustion signal.",
+        "$HERMES_HOME/rate_limits/nous.json (agent/nous_rate_guard.py) is the only durable quota artifact Hermes writes. It is outside the tailed store and outside the 'store' permission's Touches, is Nous-Portal-only, and is a reset-time marker -- a possible future quota METRIC, never the lifecycle arc this scenario asserts.",
+        "Hermes retries and backs off hard before giving up (adaptive_rate_limit_backoff, nous_rate_guard), so the stuck-in-working stretch begins well before the wall is final. That is a duration nuance, not the blocker.",
+        "Driver secondary gaps beyond the mock: DRIVE_ELICITS is 'send slash sleep wait_turn', so keys/sigkill/exit_clean are stubbed; and wait_turn polls for finish_reason='stop', which the walled turn never writes, so it would time out."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: agent/conversation_loop.py:4959-5010",
+          "note": "Terminal quota/billing failure: _persist_session(messages, conversation_history) then return {completed:False, failed:True, failure_reason:'rate_limit'|'billing', final_response:'Billing or credits exhausted: ...'}. No assistant message is appended -- grep shows no messages.append between lines 3800 and 5100."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: agent/error_classifier.py:24-80",
+          "note": "FailoverReason taxonomy: rate_limit ('429 or quota-based throttling'), billing ('402 or confirmed credit exhaustion'), upstream_rate_limit. Grounds agent_supports=yes."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: run_agent.py:1772-1805 (_persist_session) and 2079-2095 (append_message)",
+          "note": "The DB write is driven entirely by the in-memory messages list, taking finish_reason per message; _drop_trailing_empty_response_scaffolding strips retry/failure sentinels before the write. A row never appended is never persisted."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: hermes_state.py:1130-1204",
+          "note": "Schema: messages has no error column (only finish_reason as a failure-adjacent field); sessions.end_reason holds close reasons only ('compression','branched','agent_close','tui_shutdown','ws_orphan_reap' -- hermes_state.py:4140,4305). No quota state anywhere in the store."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: agent/usage_pricing.py:913-939",
+          "note": "billing_mode is a pricing-route label ('subscription_included','official_models_api','official_docs_snapshot','unknown'), never an exhaustion flag."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: cli.py:12975,13063-13110",
+          "note": "The quota failure is display-only: result['error'] becomes 'Error: ...' in a Rich panel plus a billing CTA. The two conversation_history.append sites (cli.py:11073,12569) are user-side, so nothing persists the failure."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: agent/nous_rate_guard.py:29-36,106-122",
+          "note": "The only durable quota artifact: $HERMES_HOME/rate_limits/nous.json (reset-time marker, Nous Portal only) -- outside state.db, outside the adapter's Source and its 'store' permission."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go:408-418,426-436",
+          "note": "The adapter's only two settle paths: turnIsDone requires role='assistant' AND finish_reason='stop' on the newest row; justEnded requires ended_at to go non-NULL. An activity event is emitted only when message_count grows or the session just ended."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go:23-25,79,93-95",
+          "note": "finish_reason is the load-bearing turn boundary and the adapter deliberately has NO idle-flush seam; a user row maps to user_message, so LastEventType stays user_message after the wall."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go:100-212",
+          "note": "The stateRules ladder has no wall-clock/idle rule; with IsAgentDone false the last rung transcript_activity holds the session in working. No idle-to-ready sweeper exists in services (pid_manager.go sweeps only dead PIDs)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go:37-43,44-59",
+          "note": "Source = ProcessOwnedStore over $HERMES_HOME/state.db; the 'store' observe permission's Touches is that file only -- so a signal written elsewhere (rate_limits/nous.json, stderr, the TUI) is out of the daemon's reach by construction."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: hermes_cli/config.py:264, hermes_cli/runtime_provider.py:1808",
+          "note": "OPENAI_BASE_URL / OPENAI_API_KEY are honored from env or $HERMES_HOME/.env, so tools/onboarding-factory/recording/mock-openai-429 could in principle be pointed at -- the gap is the missing recorder/driver wiring, not the mock."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/record-token-quota-exhausted.sh + replaydata/agents/hermes/driver-interactive.sh",
+          "note": "The only quota recorder is hard-wired to claude --bare + ANTHROPIC_BASE_URL; the hermes driver has DRIVE_ELICITS='send slash sleep wait_turn' and no mock-launch primitive -> gap:429-mock."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/2-9_token-quota-exhausted/metadata.json and replaydata/agents/opencode/scenarios/2-9_token-quota-exhausted/metadata.json",
+          "note": "Precedent for both sides: vibe is frozen for the identical reason (the 429 turn is never persisted); opencode's store DOES carry message.data.error and its watcher settles on it (#493) -- which is exactly the field hermes' schema lacks."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Not recordable (route: frozen; daemon=incapable). Hermes DOES hit the quota wall (FailoverReason.rate_limit/billing -> the terminal failure result at conversation_loop.py:4959-5010), but nothing about it reaches $HERMES_HOME/state.db: no assistant row is appended in the failure path (no messages.append in conversation_loop.py:3800-5100), _flush_messages_to_session_db writes only from that list (run_agent.py:2079-2095), the REPL survives so ended_at stays NULL, and the messages table has no error column (hermes_state.py:1182-1204). With neither finish_reason='stop' nor ended_at, watcher.turnIsDone/justEnded never fire (watcher.go:408-418,426-436), LastEventType stays user_message, and the classifier's last rung holds the session in working (state_classifier.go:204-212) -- there is no idle->ready path. Secondary: no hermes 429 harness (record-token-quota-exhausted.sh is claude-only) and the driver has no mock-launch primitive, hence gap:429-mock; the existing mock-openai-429 plus OPENAI_BASE_URL would cover elicitation once wired. Becomes recordable only if upstream Hermes persists the walled turn AND the adapter settles on it. See assessment.body."
+    }
+  }
+}
