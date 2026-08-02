@@ -788,10 +788,13 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// staleness is time-based (session.holdContext) is only meaningful against
 	// a single instant.
 	passStart := time.Now()
-	d.signals.Overlay(state.SessionID, state.Metrics, passStart)
 
-	// Overlay the transcript-based stalled-edit-tool fallback (#488).
-	d.markStalledEditTool(ev.SessionID, state.Metrics, passStart.Unix())
+	// Arm the transcript-based stalled-edit-tool fallback (#488) before the
+	// overlay, not after: it is a held signal like the rest now (#1319), and
+	// Overlay is what decides whether it has been open long enough to apply.
+	d.armStalledEditTool(state, passStart)
+
+	d.signals.Overlay(state.SessionID, state.Metrics, passStart)
 
 	// Content-based state detection. The tiered form is used here (and only
 	// here) so the deciding rule and its authority tier reach the recorded
@@ -1337,42 +1340,33 @@ func (d *SessionDetector) purgeDeadBackgroundProcesses(result backgroundProbeRes
 	}
 }
 
-// markStalledEditTool maintains the per-session editToolOpenSince window and
-// sets metrics.OpenToolStalled when a permission-gated edit tool
-// (Edit/Write/MultiEdit/NotebookEdit) has been open past
-// stalledEditToolThreshold — the transcript-based fallback for a held
-// permission prompt when the curl-delivered PermissionRequest hook can't
-// reach the daemon (#488).
+// armStalledEditTool is the producer for the SignalOpenToolStalled hold (#488,
+// #1319): it records that a permission-gated file-edit tool
+// (Edit/Write/MultiEdit/NotebookEdit) is open, so the policy row can decide —
+// stalledEditToolThreshold later — that the agent is blocked on a permission
+// prompt the PermissionRequest hook never delivered.
 //
-// Those tools are usually near-instant, but a real minority run long
-// (observed median ~0.1s, mean ~1.4s, with a tail up to ~16s), and a slow
-// edit that is still executing is not blocked on a prompt — so "open past the
-// 5s poll cadence" is not a safe stalled signal (#1130). The flag therefore
-// fires only after stalledEditToolThreshold, which is decoupled from
-// staleWorkingRefreshInterval and set well past the observed tail; a genuinely
-// held prompt stays open indefinitely and still trips it. The window is
-// tracked from first observation (not state.UpdatedAt), so a fresh tool_use
-// write is never flagged on the spot — only a later refreshStaleSessions
-// re-evaluation of a lingering open tool is, which also lets a held prompt
-// flip without any new transcript write. The flag is redundant once
-// PermissionPending fired (the classifier prefers the hook), so it is skipped
-// then. now is injected for testability.
-func (d *SessionDetector) markStalledEditTool(sessionID string, m *session.SessionMetrics, now int64) {
-	d.permMu.Lock()
-	defer d.permMu.Unlock()
-
-	if m == nil || !m.HasOpenEditPermissionTool() {
-		delete(d.editToolOpenSince, sessionID)
+// The whole rule beyond "is a tool open right now" lives in the policy row: the
+// threshold, the deference to PermissionPending, and dropping the hold when the
+// tool closes. This function only observes.
+//
+// Arm-once (HoldIfAbsent, not Hold) is the load-bearing part. This runs on every
+// classify pass, and a lingering open tool is re-observed on each one; a plain
+// Hold would reset HeldSince every pass, pushing the threshold out by one poll
+// interval per poll so the flag could never come due. The window must be
+// measured from first observation, which is also why a fresh tool_use write is
+// never flagged on the spot — only a later refreshStaleSessions re-evaluation
+// of a lingering open tool is, which lets a held prompt flip without any new
+// transcript write.
+//
+// A pass with no metrics arms nothing and releases nothing: Overlay returns
+// early on nil metrics, so any existing hold is simply reconsidered on the next
+// pass that has some.
+func (d *SessionDetector) armStalledEditTool(state *session.SessionState, now time.Time) {
+	if state.Metrics == nil || !state.Metrics.HasOpenEditPermissionTool() {
 		return
 	}
-	since, ok := d.editToolOpenSince[sessionID]
-	if !ok {
-		since = now
-		d.editToolOpenSince[sessionID] = since
-	}
-	if !m.PermissionPending && now-since >= int64(stalledEditToolThreshold.Seconds()) {
-		m.OpenToolStalled = true
-	}
+	d.signals.HoldIfAbsent(state.SessionID, session.SignalOpenToolStalled, session.SignalPayload{}, now)
 }
 
 // refreshStaleSessions re-reads working sessions that haven't received a

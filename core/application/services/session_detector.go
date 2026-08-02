@@ -41,25 +41,6 @@ const activityDebounceWindow = 2 * time.Second
 // transcript on this interval catches the missed events.
 const staleWorkingRefreshInterval = 5 * time.Second
 
-// stalledEditToolThreshold is how long a permission-gated file-edit tool
-// (Edit/Write/MultiEdit/NotebookEdit) may stay open before the detector treats
-// it as a held permission prompt and sets OpenToolStalled — the transcript
-// -based fallback for when the PermissionRequest hook can't reach the daemon
-// (#488, ClassifyState's open_tool_stalled rule).
-//
-// It is deliberately NOT staleWorkingRefreshInterval. That constant is a
-// polling cadence (how often a lingering working session is re-read); reusing
-// it as the "a human is looking at a prompt" threshold conflated two unrelated
-// quantities. Edit tools are usually near-instant (observed median ~0.1s, mean
-// ~1.4s), but a real minority run long — legitimately-executing, prompt-free
-// edits of 14–16s have been observed — so a 5s gate sat inside that tail and
-// mislabelled slow-but-progressing edits as stalled, flickering
-// working→waiting→working (#1130). 30s clears the observed tail with margin
-// while still catching a genuinely held prompt, which stays open until the
-// user answers. The window is tracked from first observation, so a fresh
-// tool_use is never flagged on the spot.
-const stalledEditToolThreshold = 30 * time.Second
-
 // maxIdleProjectResolveAttempts bounds how many refreshStaleSessions ticks
 // retry CWD/project resolution for an idle (waiting/ready) session whose
 // ProjectName never resolved — e.g. mistral-vibe's meta.json sidecar hadn't
@@ -192,26 +173,19 @@ type SessionDetector struct {
 	// its own lifecycle rule spelled out in its own overlay method. The
 	// per-signal policy now lives in session.signalPolicies.
 	//
-	// editToolOpenSince below is the one that did NOT fold in: its rule fires
-	// only *after* a threshold, and a policy row applies on the first pass
-	// after Hold. See session.holdContext.
+	// editToolOpenSince was the last one that did NOT fold in: its rule fires
+	// only *after* a threshold, and a policy row applied on the first pass
+	// after Hold. #1319 gave signalPolicy an arming predicate and it became
+	// the SignalOpenToolStalled row, armed by armStalledEditTool. No
+	// hand-rolled overlay map is left.
 	//
 	// Carries its own lock (hooks arrive on HTTP handler goroutines, the
 	// event loop classifies), so it is deliberately NOT guarded by permMu.
 	signals *session.SignalHolds
 
-	// permMu guards the remaining per-session bookkeeping maps below
-	// (editToolOpenSince, idleProjectRetryAttempts). Written from HTTP handler
+	// permMu guards idleProjectRetryAttempts below. Written from HTTP handler
 	// goroutines, read by processActivity (event-loop goroutine).
 	permMu sync.Mutex
-
-	// editToolOpenSince tracks, per session, the Unix time a permission-gated
-	// file-edit tool first appeared open. Guarded by permMu. Drives the
-	// OpenToolStalled transcript fallback (#488): an edit tool open past
-	// staleWorkingRefreshInterval means the agent is blocked on a permission
-	// prompt, not executing. Cleared when the tool closes or the session is
-	// removed.
-	editToolOpenSince map[string]int64 // sessionID → unix seconds
 
 	// idleProjectRetryAttempts tracks, per session, how many
 	// refreshStaleSessions ticks have retried CWD/project resolution while
@@ -313,7 +287,6 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		debouncedEvents:          make(chan agent.Event, 64),
 		deletedCooldown:          10 * time.Second,
 		signals:                  session.NewSignalHolds(),
-		editToolOpenSince:        make(map[string]int64),
 		idleProjectRetryAttempts: make(map[string]int),
 		bgLiveProbe:              anyLiveOutputWriter,
 		bgPIDProbe:               anyLivePID,

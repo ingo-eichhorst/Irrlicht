@@ -41,6 +41,19 @@ const (
 	// The fourth hook signal, and the one that could not migrate in #1288 —
 	// see holdContext for why its half-wall-clock rule needed a clock first.
 	SignalCompactInProgress SignalKind = "compact_in_progress"
+
+	// SignalOpenToolStalled is the transcript-based fallback for a held
+	// permission prompt (#488): a permission-gated file-edit tool has been open
+	// and idle long enough that the agent is almost certainly blocked on a
+	// prompt the curl-delivered PermissionRequest hook never managed to
+	// deliver.
+	//
+	// The first non-hook signal, and the first arm-then-fire one — the hold is
+	// placed the moment the tool is seen open, but does not apply until
+	// stalledEditToolThreshold has passed (see the policy's ripe rule). Named
+	// for the condition rather than the producer, so the string matches the
+	// classifier rule id that reads it.
+	SignalOpenToolStalled SignalKind = "open_tool_stalled"
 )
 
 // compactHoldTimeout bounds the SignalCompactInProgress hold (#657). Normally
@@ -52,6 +65,29 @@ const (
 // any genuine window: after it elapses an orphaned hold is dropped and the
 // session re-classifies normally.
 const compactHoldTimeout = 5 * time.Minute
+
+// stalledEditToolThreshold is how long a permission-gated file-edit tool
+// (Edit/Write/MultiEdit/NotebookEdit) may stay open before it is read as a held
+// permission prompt and SignalOpenToolStalled applies — the transcript-based
+// fallback for when the PermissionRequest hook can't reach the daemon (#488,
+// ClassifyState's open_tool_stalled rule).
+//
+// It is deliberately NOT the detector's staleWorkingRefreshInterval. That
+// constant is a polling cadence (how often a lingering working session is
+// re-read); reusing it as the "a human is looking at a prompt" threshold
+// conflated two unrelated quantities. Edit tools are usually near-instant
+// (observed median ~0.1s, mean ~1.4s), but a real minority run long —
+// legitimately-executing, prompt-free edits of 14–16s have been observed — so a
+// 5s gate sat inside that tail and mislabelled slow-but-progressing edits as
+// stalled, flickering working→waiting→working (#1130). 30s clears the observed
+// tail with margin while still catching a genuinely held prompt, which stays
+// open until the user answers.
+//
+// Measured from the hold's HeldSince — first observation, not most recent — so
+// a fresh tool_use is never flagged on the spot. That is what the policy's ripe
+// rule and the arm-once HoldIfAbsent exist to guarantee; #1319 moved this
+// constant here from the detector when the rule became a policy row.
+const stalledEditToolThreshold = 30 * time.Second
 
 // SignalPayload is the data a held signal carries beyond its own existence.
 // Only SignalTurnDone populates it today; the zero value is correct for a
@@ -80,15 +116,16 @@ type SignalPayload struct {
 // SignalCompactInProgress, whose rule is half wall-clock, was inexpressible as
 // a policy row and stayed a hand-rolled map on SessionDetector.
 //
-// It carries the *expiry* half of a grace timer only, which is what Phase 5 of
-// #1129 needs: a process probe that re-Holds on every poll where it sees model
-// API traffic expresses "no traffic for N seconds" as a stale rule, because a
-// re-Hold resets HeldSince. It is NOT enough for an arm-then-fire rule — "apply
-// only once N has passed" — because Overlay applies on the first pass after
-// Hold, unconditionally. Phase 6 (buffer byte-identical for N snapshots) and
-// the surviving markStalledEditTool overlay are both that shape and both need a
-// second, arming predicate before they can be rows. Tracked separately; the
-// point of leaving it out here is that this migration stays behaviour-preserving.
+// The clock serves both halves of a grace timer, which took two changes to
+// get to. #1297 added the *expiry* half, which is what Phase 5 of #1129 needs:
+// a process probe that re-Holds on every poll where it sees model API traffic
+// expresses "no traffic for N seconds" as a stale rule, because a re-Hold
+// resets HeldSince. #1319 added the *arming* half — see signalPolicy.ripe —
+// because expiry alone could not express "apply only once N has passed":
+// Overlay applied on the first pass after Hold, unconditionally, so
+// markStalledEditTool (#488) had to stay a hand-rolled overlay map on
+// SessionDetector and #1129 Phase 6 (buffer byte-identical for N snapshots)
+// could not have landed as a row either.
 //
 // Now is injected by the caller rather than read from time.Now here, so
 // staleness stays testable and — for the offline replay harness, which runs on
@@ -108,6 +145,11 @@ type holdContext struct {
 	// it rather than calling time.Now itself; that is what keeps replay
 	// deterministic.
 	Now time.Time
+
+	// Payload is what the signal carried beyond its own existence. The zero
+	// value is correct for a signal whose whole content is "this happened",
+	// which is every row but SignalTurnDone.
+	Payload SignalPayload
 }
 
 // signalPolicy declares how one kind of held signal behaves — how long it
@@ -142,9 +184,29 @@ type signalPolicy struct {
 	// or an explicit Release ends this hold".
 	stale func(c holdContext) bool
 
+	// ripe reports that the held signal is ready to be applied. Nil means
+	// "ripe on arrival", which is every hook signal: a hook fires because the
+	// condition it names just became true, so there is nothing to wait for.
+	//
+	// It is stale's mirror image, and the pair is what makes an arm-then-fire
+	// rule expressible. stale answers "is this over?" and ends the hold; ripe
+	// answers "has this started?" and does not — an unripe hold is neither
+	// applied nor dropped nor consumed, it simply waits for a later pass. A
+	// rule that must observe a condition persist for a while before believing
+	// it (SignalOpenToolStalled's threshold; #1129 Phase 6's byte-identical
+	// screen buffer) is inexpressible without it, because Overlay would
+	// otherwise apply on the first pass after Hold, unconditionally.
+	//
+	// Evaluated after stale, so a signal that is both over and not yet ripe is
+	// dropped rather than left holding: "this never came due and no longer
+	// describes reality" is an expiry, not a pending arm.
+	ripe func(c holdContext) bool
+
 	// apply folds the signal onto the metrics the classifier is about to
-	// read.
-	apply func(m *SessionMetrics, p SignalPayload)
+	// read. It takes the same holdContext the predicates do — Metrics is the
+	// object it writes to, and the clock and Payload are there for a rule that
+	// wants to fold an elapsed value or hook-delivered text onto metrics.
+	apply func(c holdContext)
 }
 
 // signalPolicies is the declared behaviour of every out-of-band signal, in
@@ -162,10 +224,18 @@ type signalPolicy struct {
 // stale, and the correction the hook exists to deliver is thrown away one
 // instruction before it would have been applied.
 //
-// All rows are TierHook today. That is not a redundancy to factor out — it is
-// the current state of a ladder whose other tiers are filed and unbuilt
+// The order also matters for the last row: SignalOpenToolStalled's ripe rule
+// reads PermissionPending, which SignalPermissionPrompt's apply sets on the
+// same pass. It sits last so it observes the hook's verdict rather than
+// racing it — the same position the hand-rolled overlay it replaced ran in.
+//
+// Every row but the last is TierHook. That is not a redundancy to factor out —
+// it is the current state of a ladder whose other tiers are filed and unbuilt
 // (Phases 4-7 of #1129), and the field is what lets a Phase 4 OTel signal land
-// as a row here rather than as another bespoke overlay.
+// as a row here rather than as another bespoke overlay. SignalOpenToolStalled
+// is the first non-hook row: a transcript-tier inference, held because it must
+// observe a condition persist before it is believed rather than because it
+// arrived on another goroutine.
 var signalPolicies = []signalPolicy{
 	{
 		kind: SignalPermissionPrompt,
@@ -182,23 +252,23 @@ var signalPolicies = []signalPolicy{
 		// is not the transcript overruling the hook's verdict, it is the
 		// transcript supplying the end-of-life notice the hook never sends.
 		stale: func(c holdContext) bool { return c.Metrics.LastWasToolDenial },
-		apply: func(m *SessionMetrics, _ SignalPayload) { m.PermissionPending = true },
+		apply: func(c holdContext) { c.Metrics.PermissionPending = true },
 	},
 
 	{
 		kind:        SignalTurnDone,
 		tier:        TierHook,
 		consumeOnce: true,
-		apply: func(m *SessionMetrics, p SignalPayload) {
-			m.HookTurnDone = true
-			if p.LastAssistantText != "" {
-				m.LastAssistantText = p.LastAssistantText
+		apply: func(c holdContext) {
+			c.Metrics.HookTurnDone = true
+			if c.Payload.LastAssistantText != "" {
+				c.Metrics.LastAssistantText = c.Payload.LastAssistantText
 			}
 			// Only ever adds to the cue verdict, never clears it: the hook
 			// can push a finished turn to waiting, but must not mask a cue
 			// the transcript already found on its own.
-			if p.WaitingCue {
-				m.PendingWaitingCue = true
+			if c.Payload.WaitingCue {
+				c.Metrics.PendingWaitingCue = true
 			}
 		},
 	},
@@ -216,7 +286,7 @@ var signalPolicies = []signalPolicy{
 		// replied or a tool opened — either way the idle window is over and
 		// the rules that own those cases take it from here.
 		stale: func(c holdContext) bool { return !c.Metrics.IsAgentDone() },
-		apply: func(m *SessionMetrics, _ SignalPayload) { m.IdlePromptPending = true },
+		apply: func(c holdContext) { c.Metrics.IdlePromptPending = true },
 	},
 
 	{
@@ -242,7 +312,43 @@ var signalPolicies = []signalPolicy{
 		stale: func(c holdContext) bool {
 			return c.Metrics.SawManualCompactBoundary || c.Now.Sub(c.HeldSince) >= compactHoldTimeout
 		},
-		apply: func(m *SessionMetrics, _ SignalPayload) { m.CompactInProgress = true },
+		apply: func(c holdContext) { c.Metrics.CompactInProgress = true },
+	},
+
+	{
+		kind: SignalOpenToolStalled,
+		tier: TierTranscript,
+		// The first arm-then-fire row, and the first non-hook one. The producer
+		// arms it (HoldIfAbsent) the moment it sees a permission-gated edit tool
+		// open; ripe is what keeps it from firing on that same pass.
+		//
+		// Persistent: a genuinely held prompt stays open indefinitely, and the
+		// hold has to survive every re-evaluation in between or the window
+		// restarts and the flag can never come due.
+		//
+		// Ends when the tool closes — the tool_result arriving is the whole
+		// end-of-life notice, whether the user approved, rejected, or the edit
+		// simply finished executing.
+		stale: func(c holdContext) bool { return !c.Metrics.HasOpenEditPermissionTool() },
+		// Two "not yet" conditions, and neither is an expiry — both leave the
+		// hold in place:
+		//
+		//   - under the threshold: the tool may still be legitimately executing
+		//     (#1130), so believing it stalled now would route an actively
+		//     working session to waiting;
+		//   - PermissionPending: the hook already said the prompt is open and
+		//     the classifier prefers it, so this fallback is redundant. Not
+		//     stale, though — releasing the prompt while the tool stays open
+		//     must leave the fallback armed, with its original clock.
+		//
+		// PermissionPending is set by the SignalPermissionPrompt row's apply,
+		// which is why this row is last in the table: it reads a field an
+		// earlier row writes on the same pass.
+		ripe: func(c holdContext) bool {
+			return !c.Metrics.PermissionPending &&
+				c.Now.Sub(c.HeldSince) >= stalledEditToolThreshold
+		},
+		apply: func(c holdContext) { c.Metrics.OpenToolStalled = true },
 	},
 }
 
@@ -299,6 +405,30 @@ func (h *SignalHolds) Hold(sessionID string, kind SignalKind, p SignalPayload, a
 	h.held[sessionID][kind] = heldSignal{payload: p, heldAt: at}
 }
 
+// HoldIfAbsent records kind for sessionID at time at only if no hold of that
+// kind is already in place, and reports whether it placed one.
+//
+// It is Hold's arm-once counterpart, and the producer-side half of an
+// arm-then-fire policy. Hold deliberately *resets* HeldSince, which is correct
+// for a signal that genuinely re-fires (a second Stop hook describes a new turn
+// ending) but wrong for a condition a producer merely keeps observing: a
+// re-arming poll would push the arming deadline out by one poll interval every
+// poll, so a ripe rule measured from HeldSince could never come due. The
+// SignalOpenToolStalled producer re-observes the same open tool on every
+// classify pass, which is exactly that shape.
+func (h *SignalHolds) HoldIfAbsent(sessionID string, kind SignalKind, p SignalPayload, at time.Time) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.held[sessionID][kind]; ok {
+		return false
+	}
+	if h.held[sessionID] == nil {
+		h.held[sessionID] = map[SignalKind]heldSignal{}
+	}
+	h.held[sessionID][kind] = heldSignal{payload: p, heldAt: at}
+	return true
+}
+
 // Release drops one held signal — the explicit end-of-life path, used when
 // something other than the policy's own staleness rule ends the hold (a
 // PostToolUse closing a permission prompt).
@@ -342,6 +472,10 @@ func (h *SignalHolds) DropSession(sessionID string) {
 // policy (SignalCompactInProgress today; the Phase 5/6 grace timers next) stays
 // testable and replays deterministically on the transcript's virtual timeline.
 //
+// Each hold runs the same three-way gate: stale drops it unapplied, an unripe
+// ripe leaves it untouched for a later pass, and otherwise it is applied (and
+// consumed, if consume-once).
+//
 // Note that staleness is evaluated before apply on every pass, including the
 // first: a signal that is already contradicted when it arrives is discarded
 // rather than applied once. That matters for a late signal (the ~6s
@@ -366,12 +500,23 @@ func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics, now time.Time
 			continue
 		}
 
-		if policy.stale != nil && policy.stale(holdContext{Metrics: m, HeldSince: hs.heldAt, Now: now}) {
+		c := holdContext{Metrics: m, HeldSince: hs.heldAt, Now: now, Payload: hs.payload}
+
+		if policy.stale != nil && policy.stale(c) {
 			delete(holds, policy.kind)
 			continue
 		}
 
-		policy.apply(m, hs.payload)
+		// Not yet due: leave the hold exactly as it is. Deliberately not a
+		// delete and deliberately not a consume — an unripe hold has not
+		// happened yet, so there is nothing to apply and nothing to expire,
+		// and consuming it here would discard the signal one pass before it
+		// came due.
+		if policy.ripe != nil && !policy.ripe(c) {
+			continue
+		}
+
+		policy.apply(c)
 		if policy.consumeOnce {
 			delete(holds, policy.kind)
 		}

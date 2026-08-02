@@ -45,7 +45,6 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	d.signals.DropSession(ev.SessionID)
 
 	d.permMu.Lock()
-	delete(d.editToolOpenSince, ev.SessionID)
 	delete(d.idleProjectRetryAttempts, ev.SessionID)
 	d.permMu.Unlock()
 

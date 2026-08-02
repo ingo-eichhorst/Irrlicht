@@ -198,6 +198,12 @@ func TestTierOf(t *testing.T) {
 			t.Errorf("TierOf(%q) = %v, want TierHook", kind, got)
 		}
 	}
+	// The first non-hook row: a transcript-tier inference, not an out-of-band
+	// push. The classifier's open_tool_stalled rule resolves its tier through
+	// here, so this is the one place that authority is declared.
+	if got := TierOf(SignalOpenToolStalled); got != TierTranscript {
+		t.Errorf("TierOf(%q) = %v, want TierTranscript", SignalOpenToolStalled, got)
+	}
 	if got := TierOf("not-a-signal"); got != TierNone {
 		t.Errorf("TierOf(unknown) = %v, want TierNone", got)
 	}
@@ -242,6 +248,58 @@ func TestSignalHolds_StaleIsCheckedOnTheFirstPass(t *testing.T) {
 	}
 	if h.Held(holdSID, SignalIdlePrompt) {
 		t.Error("it must also be dropped")
+	}
+}
+
+// TestSignalHolds_RipeGatesTheFirstApply covers the arming predicate #1319
+// added, at the mechanism level rather than through any one row: an unripe hold
+// is neither applied nor dropped nor consumed, and it applies on the first pass
+// where ripe comes back true.
+//
+// The three-way distinction is the whole point. Before ripe existed the only
+// way to say "not now" was stale, which *ends* the hold — so a rule that wanted
+// to wait had no way to say so, and Overlay applied on the first pass after
+// Hold unconditionally.
+func TestSignalHolds_RipeGatesTheFirstApply(t *testing.T) {
+	h := NewSignalHolds()
+	h.Hold(holdSID, SignalOpenToolStalled, SignalPayload{}, holdT0)
+
+	// Unripe: not applied, and — the part stale would have gotten wrong — the
+	// hold survives to be reconsidered later.
+	early := editOpenMetrics()
+	h.Overlay(holdSID, early, holdT0.Add(stalledEditToolThreshold-time.Nanosecond))
+	if early.OpenToolStalled {
+		t.Error("an unripe hold must not be applied")
+	}
+	if !h.Held(holdSID, SignalOpenToolStalled) {
+		t.Fatal("an unripe hold must be kept, not dropped: it has not happened yet")
+	}
+
+	// Ripe: applied, on a hold that was armed long before.
+	due := editOpenMetrics()
+	h.Overlay(holdSID, due, holdT0.Add(stalledEditToolThreshold))
+	if !due.OpenToolStalled {
+		t.Error("a ripe hold must be applied")
+	}
+}
+
+// TestSignalHolds_StaleBeatsRipe pins the evaluation order: a hold that is both
+// over and not yet ripe is dropped, not left waiting for a due date that can
+// never arrive. Without it an arm-then-fire hold whose condition ended early
+// would leak until the session went away.
+func TestSignalHolds_StaleBeatsRipe(t *testing.T) {
+	h := NewSignalHolds()
+	h.Hold(holdSID, SignalOpenToolStalled, SignalPayload{}, holdT0)
+
+	// The tool closed well before the threshold: stale, and unripe.
+	m := &SessionMetrics{HasOpenToolCall: false}
+	h.Overlay(holdSID, m, holdT0.Add(time.Second))
+
+	if m.OpenToolStalled {
+		t.Error("a stale hold must not be applied")
+	}
+	if h.Held(holdSID, SignalOpenToolStalled) {
+		t.Error("stale must win over unripe, or the hold leaks forever")
 	}
 }
 
