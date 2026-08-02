@@ -1,5 +1,7 @@
 package session
 
+import "time"
+
 // Hook event names, as the agent CLIs put them on the wire. Claude Code fires
 // all seven; Codex fires the PermissionRequest / PostToolUse / Stop subset.
 //
@@ -38,17 +40,29 @@ type HookSignalEffect struct {
 	Release bool
 }
 
-// hookSignalEffects is the single source of truth for hook-name → SignalKind,
-// covering every hook whose effect is *fully determined by its name*.
+// hookSignalEffects is the single source of truth for hook-name → SignalKind
+// for the hooks a caller may act on knowing only the name.
 //
-// It deliberately stops there. HookStop, HookNotification and HookPreCompact
-// are name-plus-payload: Stop carries the turn's final assistant text into
-// SignalPayload, Notification is only acted on for notification_type
-// "idle_prompt", and PreCompact only for trigger "manual". Their handlers must
-// read the payload, so a name-keyed lookup could not express them without
-// lying about what the name alone determines — they keep their own dedicated
-// entry points and are absent here on purpose. A caller that gets ok==false
-// has learned "this hook needs more than its name", not "this hook is unknown".
+// Three hooks are absent, for two different reasons — worth keeping apart,
+// because they imply different things about whether a future row belongs here:
+//
+//   - HookStop genuinely cannot be a row. Its effect carries a payload (the
+//     turn's final assistant text and the waiting-cue verdict computed from it)
+//     into SignalPayload, and a name-keyed lookup has no way to supply that.
+//     HandleStopHook stays a dedicated entry point.
+//   - HookNotification and HookPreCompact are excluded only because their
+//     *gate* is adapter-side: the claudecode HTTP handler forwards Notification
+//     solely for notification_type "idle_prompt" and PreCompact solely for
+//     trigger "manual", so the decision is already made before the detector is
+//     called. Both holds themselves are payload-free. A consumer reading
+//     post-gate events (the replay harness — dispatchHookActivity is the only
+//     writer of lifecycle.KindHookReceived, and it runs downstream of those
+//     gates, so a recorded PreCompact means manual by construction) could act
+//     on the name alone. They are absent because no recording fires one yet;
+//     when one does, a row here is the right fix, not a bespoke branch.
+//
+// A caller that gets ok==false has learned "I may not act on this name alone",
+// not "this hook is unknown".
 //
 // The rows below were previously written twice — once as a switch in
 // SessionDetector.HandlePermissionHook and once as a switch in the replay
@@ -75,4 +89,20 @@ var hookSignalEffects = map[string]HookSignalEffect{
 func HookSignal(hookName string) (HookSignalEffect, bool) {
 	effect, ok := hookSignalEffects[hookName]
 	return effect, ok
+}
+
+// ApplyHook applies a hook's effect to sessionID's holds — the assert/retract
+// branch that the detector and the replay harness would otherwise each write
+// out. Keeping it here means the two consumers of HookSignal share not just
+// the mapping but what they do with it, so a new row cannot be honoured by one
+// and half-honoured by the other (issue #1320).
+//
+// at is the observation time — wall-clock in the daemon, virtual time in
+// replay. Only the hold direction reads it; Release is time-independent.
+func (h *SignalHolds) ApplyHook(sessionID string, effect HookSignalEffect, at time.Time) {
+	if effect.Release {
+		h.Release(sessionID, effect.Signal)
+		return
+	}
+	h.Hold(sessionID, effect.Signal, SignalPayload{}, at)
 }

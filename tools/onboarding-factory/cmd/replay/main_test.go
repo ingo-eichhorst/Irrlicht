@@ -782,11 +782,14 @@ func TestReplayWithSidecar_HookEvents(t *testing.T) {
 // replay harness's applyHookEvent recognized only PermissionRequest and fell
 // through its default: return on PreToolUse.
 //
-// PreToolUse is not hypothetical — replaydata/ carries two of them today. Both
-// happen to be followed within ~100ms by a PermissionRequest that produces the
-// same hold, so no golden is currently wrong: the two paths agreed by luck, and
-// the harness whose job is catching classifier regressions was silently blind
-// to a hook the daemon honours.
+// PreToolUse is not hypothetical — replaydata/ carries two of them today, and
+// replaying those recordings with their sidecars does show the drift changing
+// the output (the transition moves ~19ms and ~136ms earlier). It went unnoticed
+// because no committed gate replays a hook-carrying recording through
+// applyHookEvent: the two fixtures the sidecar tests above use hold zero
+// hook_received events, and the recordings that do hold them are only ever
+// replayed transcript-only (issue #1326). This test is therefore the only
+// coverage the hook path has — not a supplement to fixture coverage.
 //
 // This is the same fixture as TestReplayWithSidecar_HookEvents with the hook
 // name swapped, so a failure here isolates the hook-name mapping rather than

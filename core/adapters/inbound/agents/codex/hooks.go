@@ -38,11 +38,17 @@ import (
 
 // Hook event names. Codex fires these (among others); the daemon installs and
 // recognizes only these three and ignores everything else.
+//
+// Re-exports of the domain constants, like claudecode's: PermissionRequest and
+// PostToolUse route into the same SessionDetector.HandlePermissionHook, which
+// resolves them through session.HookSignal. Declaring them as independent
+// literals here would let a rename on this side silently stop matching the
+// shared table — the exact drift #1320 removed, one adapter over.
 const (
-	HookPermissionRequest = "PermissionRequest"
-	HookPostToolUse       = "PostToolUse"
+	HookPermissionRequest = session.HookPermissionRequest
+	HookPostToolUse       = session.HookPostToolUse
 	// HookStop fires once at true turn end, carrying last_assistant_message.
-	HookStop = "Stop"
+	HookStop = session.HookStop
 )
 
 // logComponentHookReceiver is the Logger component tag for every log line

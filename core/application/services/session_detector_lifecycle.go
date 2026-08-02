@@ -283,11 +283,7 @@ func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEv
 	// by the replay harness's applyHookEvent. It used to be a switch here and a
 	// second switch there, and they had drifted (issue #1320).
 	if effect, ok := session.HookSignal(hookEventName); ok {
-		if effect.Release {
-			d.signals.Release(sessionID, effect.Signal)
-		} else {
-			d.signals.Hold(sessionID, effect.Signal, session.SignalPayload{}, time.Now())
-		}
+		d.signals.ApplyHook(sessionID, effect, time.Now())
 	}
 
 	// processActivity overlays PermissionPending onto the metrics before
