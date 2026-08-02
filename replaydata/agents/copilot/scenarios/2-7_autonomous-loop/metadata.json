@@ -1,0 +1,138 @@
+{
+  "scenario_id": "autonomous-loop",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+a21849f",
+    "confidence": 0.8,
+    "notes": "Copilot ships a NATIVE autonomous loop: --autopilot / --mode autopilot / the /autopilot on|off slash command, with automatic continuation messages after every idle turn (--max-autopilot-continues, default 5). Each continuation is emitted into events.jsonl as a real user.message, so the daemon sees per-iteration ready→working→ready arcs with no user input in between."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Agent — a real self-prompting loop, not an externally-driven one\n\nCopilot CLI 1.0.77 ships **autopilot mode**, which is a genuine autonomous self-prompting loop and puts copilot in the `yes` band alongside claudecode's `/goal` rather than the `partial` band the codex / gemini-cli / kiro-cli siblings sit in (those model an externally-driven loop because the agent cannot re-prompt itself).\n\nThree surfaces, all confirmed against the shipped binary:\n\n- `copilot --help` lists `--autopilot` (\"Start in autopilot mode\"), `--mode <interactive|plan|autopilot>` and `--max-autopilot-continues <count>` (\"Maximum number of continuation messages in autopilot mode\", **default 5**).\n- The slash command constant is literally `tZ=\"/autopilot\"` with `args` `on|off` and help \"Toggle autopilot mode\"; when the `AUTOPILOT_OBJECTIVES` feature flag is on it additionally takes an objective and carries the alias `/goal` (marked `experimental:!0`). The recipe uses the flag-independent `/autopilot on` form.\n- The loop body is `tryAutopilotContinuation(e)`: on every `session.idle`, while `currentMode===\"autopilot\"`, it consults `autopilotPlanContinuation(status, shouldContinue, continuationCount, maxContinues)` and, when the plan says continue, calls `this.send({prompt: c.prompt, displayPrompt:\"\", billable:d, requiredTool: toolTaskCompleteName(), source:\"system\"})`. It STOPS on `task_complete` (`reason:\"task_complete\"`), on an error, on abort, on `autopilotShouldStopForNoProgress`, and on the `maxContinues` cap. On task completion `onTaskComplete` flips the mode back to `interactive`.\n\nSo copilot generates and dispatches its own next prompt with no user in the loop — exactly the scenario's bullet 3.\n\n## Daemon — the continuation IS a user.message, so the session cannot get stuck in ready\n\nThe one thing that could have made this cell a `bug` is an autonomous iteration that starts WITHOUT any transcript event the parser maps to activity: copilot's states are transcript-derived, `working` comes from `user.message` and `ready` from the explicit `assistant.turn_end` marker, so an iteration that only emitted `assistant.turn_start` would leave the session sitting in `ready` for the whole autonomous run. That is not what happens.\n\nThe continuation goes through the SAME prompt path as a typed prompt. That path ends in\n`if(oo.event.type===\"system.notification\"){…}else{let $r=this.emit(\"user.message\",oo.event.data); await this.beginRewindTurn(…)}`, and the `system.notification` branch is only taken when a `notificationKind` was supplied (`let Eo=a===\"system\"&&c!==void 0`, `c` = `notificationKind`). `tryAutopilotContinuation`'s `send` supplies **no** `notificationKind` — only `source:\"system\"` — so the emitted event type is `user.message`.\n\nIndependent corroboration from the rewind projector, which has to EXCLUDE continuations from the list of user turns precisely because they are in the event log as `user.message`:\n\n```js\nprojectRewindUserTurns(){return this.getEvents().filter(e=>e.type===\"user.message\"&&e.agentId===void 0&&e.data.source===void 0)\n  .map(e=>({…,isAutopilotContinuation:e.data.isAutopilotContinuation===!0||e.data.agentMode===\"autopilot\"&&e.data.content.trim().length===0}))}\n```\n\nThat also pins the payload shape: a continuation carries `agentMode:\"autopilot\"` and **empty** `content` (the send passes `displayPrompt:\"\"`, and the emit sets `content: displayPrompt ?? finalPrompt`, where `\"\" ?? x` is `\"\"`).\n\nMapped through `core/adapters/inbound/agents/copilot/parser.go`: `evUserMessage` → `EventType \"user_message\"` (parser.go:175-181) regardless of empty content → `working`; `evTurnEnd` → `\"turn_done\"` (parser.go:98-99) → `ready`. Every autopilot iteration is therefore a full `ready→working→ready` arc on the SAME session id, which is exactly the observable the claudecode and codex siblings already assert. Nothing in the arc needs a parser change, so `daemon=full`.\n\n## Why the spec's strict 'stays working' bullet is relaxed here\n\nSame relaxation the claudecode sibling already took and the codex sibling inherited: copilot's continuations are dispatched ON `session.idle`, i.e. after `assistant.turn_end` has already settled the turn, so the session flickers back to `ready` between iterations rather than holding one continuous `working` span. The spec asserts the per-iteration arc, the fact that iteration 2 starts with NO driver input, and the negative invariant that the session never enters `waiting`.\n\n## Driver\n\n`ready`. The recipe needs `slash`, `send`, `wait_turn`, `sleep` — all present in `replaydata/agents/copilot/driver-interactive.sh` (which implements 13 step types). No `keys` step is needed to clear the \"Enable autopilot mode\" confirmation dialog: `showAutopilotConfirmation:()=>BE||Lh.current||tg.current!==null?!1:(…)` returns `false` (no dialog) when `BE` is true, `BE=j$&&oD||Rx` with `Rx=nT||Ov&&kc&&sb` and `Ov` bound to `allowAllTools` (`Y$.current={allowAllTools:Ov}`) — and the driver launches with `--allow-all` (= `--allow-all-tools --allow-all-paths --allow-all-urls`) by default. The mode switch is then immediate (`setAgentMode` + an info line \"Switched to autopilot mode.\").",
+      "caveats": [
+        "PROVISIONAL ON EMISSION. daemon=full is derived from the shipped app.js prompt path plus the rewind projector's isAutopilotContinuation filter, NOT from a recording — no autopilot session exists in the local store yet (checked all 6 dirs under ~/.copilot/session-state: none contains the string 'autopilot'). record is what promotes this from provisional to settled. If a continuation turns out to land as something other than user.message, this cell is daemon=bug (the session would sit in ready for the whole autonomous run), not daemon=full.",
+        "Continuation user.message events carry EMPTY content (displayPrompt:\"\"), so ev.UserText is blank for every iteration after the first. Cosmetic only — EventType is still user_message, so the working transition is unaffected — and copilot's own TUI hides them too (its timeline projector skips user.message with falsy content).",
+        "Copilot exits the loop on the model's task_complete tool, so the recipe's objective must be shaped to need several turns; --max-autopilot-continues defaults to 5, which caps the run at ~6 turns even if the model never self-terminates.",
+        "wait_turn counts assistant.turn_end lines against EXPECTED_TURNS, which only a `send` step bumps. Under autopilot ONE send produces N turns, so the first wait_turn returns after iteration 1 and the remaining iterations are covered by a sized sleep rather than a turn-count wait. A `wait_turns <n>` driver primitive would make this deterministic; it is a robustness nicety, not a blocker, so this is NOT scored as driver=gap.",
+        "The AUTOPILOT_OBJECTIVES feature flag changes /autopilot's argument grammar (objective + the /goal alias) but not the on|off choice the recipe uses, so the recipe is flag-independent."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js:5597",
+          "note": "CLI surface: .addOption(new yi(\"--max-autopilot-continues <count>\",\"Maximum number of continuation messages in autopilot mode\").default(5)), --mode with choices incl. autopilot, and --autopilot \"Start in autopilot mode\". Confirmed against `copilot --help` on 1.0.77."
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js:2227",
+          "note": "tZ=\"/autopilot\"; h3e={name:tZ,…help:\"Toggle autopilot mode…\"}; dYn={...h3e,aliases:[\"/goal\"],experimental:!0}; execute returns {kind:\"set-autopilot\",mode:s}. Y0e (line 239) strips the /goal alias and the objective arg when the AUTOPILOT_OBJECTIVES flag is off, leaving /autopilot [on|off]."
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js:2398",
+          "note": "tryAutopilotContinuation: on session.idle, while currentMode===\"autopilot\", plans a continuation and calls this.send({prompt:c.prompt,displayPrompt:\"\",billable:d,requiredTool:toolTaskCompleteName(),source:\"system\"}) — the self-prompt. Stop reasons: task_complete, error, aborted, no_progress, maxAutopilotContinues."
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js:2421",
+          "note": "THE LOAD-BEARING LINE for daemon=full: the shared prompt path emits user.message unless the built event is a system.notification, and that branch needs a notificationKind (let Eo=a===\"system\"&&c!==void 0). The autopilot send passes no notificationKind, so the continuation is emitted as user.message and lands in events.jsonl."
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js:2398",
+          "note": "projectRewindUserTurns filters e.type===\"user.message\" && e.data.source===void 0 and flags isAutopilotContinuation via data.isAutopilotContinuation===true || (data.agentMode===\"autopilot\" && data.content.trim().length===0) — corroborates that continuations ARE persisted user.message events, with agentMode autopilot and empty content."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go:94-99,175-181",
+          "note": "evUserMessage → EventType user_message (empty content still yields the event, only UserText is blank) → working; evTurnEnd → turn_done → ready. So each autopilot iteration produces a full ready→working→ready arc with no parser change."
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js:4086,4089",
+          "note": "showAutopilotConfirmation()=>BE||…?false:(…); BE=j$&&oD||Rx, Rx=nT||Ov&&kc&&sb, Ov bound to allowAllTools (Y$.current={allowAllTools:Ov}). With --allow-all the confirmation dialog is suppressed, so /autopilot on needs no keys step."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh:283-335,343-376",
+          "note": "Driver implements send|slash|wait_turn|sleep|interrupt|keys|restart|sigkill|reset_session|resume|start_session|session|exit_clean; launches with --allow-all by default; wait_turn counts \"type\":\"assistant.turn_end\" against EXPECTED_TURNS, which only `send` bumps."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-7_autonomous-loop/expected.jsonl",
+          "note": "Sibling precedent for relaxing the scenario's strict 'stays continuously working' bullet: claudecode's /goal also flickers ready↔working per Stop-hook iteration, and the spec asserts per-iteration arcs plus a no-waiting invariant."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.copilot/session-state/*/events.jsonl (6 dirs, 2026-08-02)",
+          "note": "Negative check backing the PROVISIONAL caveat: no local copilot session contains the string 'autopilot', and every user.message payload observed carries content/transformedContent/attachments/… with no agentMode key — i.e. no continuation has ever been captured here, so emission is code-evidenced only."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 600,
+      "settings": {},
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits, OR a BYOK provider via COPILOT_PROVIDER_BASE_URL/_TYPE/_WIRE_API/_API_KEY + COPILOT_MODEL — an autopilot run is several billable turns, so BYOK is the credit-free lever",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other copilot session shares the same cwd (the PID is bound by cwd)",
+        "autopilot mode must remain a shipped surface: --autopilot / --mode autopilot / the /autopilot on|off slash command, with automatic continuations on session.idle (app.js tryAutopilotContinuation). If a future release removes it, the scenario premise breaks."
+      ],
+      "setup": [
+        "The driver seeds a scratch COPILOT_HOME under the staging dir with trustedFolders + askedSetupTerminals pre-answered, so the trust modal cannot block the input box; the session directory is minted under $COPILOT_HOME/session-state/<session-id>/",
+        "The driver launches with --allow-all, which both pre-approves every tool (so no permission.requested is ever written and `waiting` is structurally unreachable) and suppresses the 'Enable autopilot mode' confirmation dialog — /autopilot on therefore switches mode with no keypress",
+        "/autopilot on is sent BEFORE the objective so the very first turn already runs under autopilot and its idle triggers the first continuation; the slash renders locally and writes nothing to the transcript, so it does not bump the driver's expected-turn count",
+        "The objective is deliberately shaped to need three turns and to withhold task_complete until the last one — copilot ends the loop as soon as the model calls the task_complete tool, and --max-autopilot-continues caps it at 5 continuations regardless"
+      ],
+      "script": [
+        {
+          "type": "slash",
+          "text": "/autopilot on"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Objective: create three files in the current directory, loop1.txt containing step1, loop2.txt containing step2, and loop3.txt containing step3. Work on EXACTLY ONE file per turn using a shell command, then end your turn and report which file you just created and which one is next. Do not create two files in the same turn. Do not report the objective as complete until all three files exist; after creating loop3.txt, and only then, report the objective complete."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 150
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "events.jsonl mints a proc-<PID> pre-session in ready shortly after launch, then the real <session-id> session under a DIFFERENT id once events.jsonl appears on the first prompt",
+        "the /autopilot on slash writes nothing to events.jsonl — no user.message, no assistant.turn_start/turn_end for it",
+        "the objective prompt drives ready → working on the real session (loop start)",
+        "at least 2 complete ready→working→ready cycles land on the SAME real session id, and every cycle after the first is opened by an autopilot continuation, NOT by a driver step — the driver sends exactly one prompt for the whole run",
+        "the continuation user.message events carry source:\"system\", agentMode:\"autopilot\" and empty content (this is the emission fact daemon=full rests on — if they are absent, or arrive as system.notification, the cell is daemon=bug and the session sat in ready for the entire autonomous run)",
+        "events.jsonl contains NO state_transition to waiting at any point (--allow-all pre-approves every tool)",
+        "the loop terminates on its own (model calls task_complete, or the maxAutopilotContinues cap) and the final state of the real session is ready",
+        "the recording carries non-zero tokens and non-zero estimated cost (assistant.message.outputTokens is copilot's live token signal)"
+      ],
+      "notes": "Unlike the codex / gemini-cli / kiro-cli siblings, this is NOT an externally-driven loop: the driver sends ONE prompt and copilot re-prompts itself for every later iteration. That is why the script has a single send followed by a long sleep instead of a send/wait_turn chain — wait_turn counts assistant.turn_end against EXPECTED_TURNS and only `send` bumps that counter, so the first wait_turn returns after iteration 1 while autopilot is still looping. The 150s sleep is sized for two further copilot iterations at typical 1.0.77 latency and the trailing 20s is the settle window. What differs between runs: iteration count (2-4 before task_complete, hard-capped at 6 turns by --max-autopilot-continues 5), wording, token counts, session id, PID, timestamps. What must NOT differ: at least two working arcs on ONE session id from ONE driver prompt, no waiting, final ready."
+    }
+  }
+}
