@@ -123,12 +123,13 @@
         "Hermes writes no transcript file: the slot's transcript path is the pseudo-path '<store>?session=<id>', and the session id (<YYYYMMDD>_<HHMMSS>_<hex>) is resolved after the first send, binding only to a row with started_at > the slot's launch timestamp so a stale CLI session cannot be adopted.",
         "THREE identical one-word prompts in ONE long-lived REPL session: turn 1 is the uncached baseline, turns 2 and 3 replay the same system+history prefix so the provider serves them from cache. No tool call is possible (tool_calls_max 0), so the session never enters waiting.",
         "8s sleeps after each turn keep the three store-write bursts far apart relative to the watcher's 500ms debounce / 2s poll, so the three ready->working->ready arcs stay separable in events.jsonl.",
-        "No model flag is passed - this cell asserts DEFAULT-launch accounting, and which model appears is whatever model.default the run's HERMES_HOME carries."
+        "No model flag is passed - this cell asserts DEFAULT-launch accounting, and which model appears is whatever model.default the run's HERMES_HOME carries.",
+        "All three generations are deliberately WIDE (a 30-line count plus two sentences of prose) rather than the one-token \"Reply with exactly the word: ok\" an earlier draft carried. The watcher polls every 2s with a 500ms debounce, so a ~1s turn can commit its user row and its assistant finish_reason=stop row inside a SINGLE scan — that turn's ready→working edge then never exists to be observed and its tN_start phase fails. Widening the generation is the fix; weakening the spec is not. The three prompts remain IDENTICAL to each other, preserving the cell's cache intent (turns 2 and 3 replay the same system+history prefix)."
       ],
       "script": [
         {
           "type": "send",
-          "text": "Reply with exactly the word: ok"
+          "text": "Without using any tools, count from 1 to 30, one number per line. Then, without using any tools, write two sentences explaining what addition is."
         },
         {
           "type": "wait_turn"
@@ -139,7 +140,7 @@
         },
         {
           "type": "send",
-          "text": "Reply with exactly the word: ok"
+          "text": "Without using any tools, count from 1 to 30, one number per line. Then, without using any tools, write two sentences explaining what addition is."
         },
         {
           "type": "wait_turn"
@@ -150,7 +151,7 @@
         },
         {
           "type": "send",
-          "text": "Reply with exactly the word: ok"
+          "text": "Without using any tools, count from 1 to 30, one number per line. Then, without using any tools, write two sentences explaining what addition is."
         },
         {
           "type": "wait_turn"
