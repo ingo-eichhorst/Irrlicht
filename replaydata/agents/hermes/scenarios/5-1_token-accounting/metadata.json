@@ -1,0 +1,177 @@
+{
+  "scenario_id": "token-accounting",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+555a143.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-accounting",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## The primitive\n\nToken reporting across MULTIPLE turns: after turn 1 `TotalTokens > 0`; after turn 2 the total is non-decreasing; on a turn served from the prompt cache `CacheReadTokens > 0` with fresh input tokens = 0. The three ready->working->ready cycles are the unremarkable carrier (tool calls 0, final state ready); the token vector is the thing under test. Single-turn token/cost extraction is already covered by 2.1 basic-turn.\n\n## agent_supports - yes\n\nHermes meters EVERY API call and folds it into the `sessions` row while the session is live.\n\n1. `agent/conversation_loop.py:3001` calls `agent._session_db.update_token_counts(agent.session_id, input_tokens=canonical_usage.input_tokens, output_tokens=..., cache_read_tokens=..., cache_write_tokens=..., reasoning_tokens=..., estimated_cost_usd=_cost_delta, model=agent.model, api_call_count=1)` per completed API call - not at teardown.\n2. The CLI path takes the INCREMENT branch of `update_token_counts` (`hermes_state.py:5008-5013`: `input_tokens = input_tokens + ?`, same for output/cache_read/cache_write). `absolute=True` (set-directly) is documented as the GATEWAY path only (docstring L4975-4980). So for a `hermes chat` session the aggregate is strictly non-decreasing by construction.\n3. The buckets are EXCLUSIVE, i.e. `input_tokens` means FRESH (uncached) input - `CanonicalUsage.prompt_tokens = input_tokens + cache_read_tokens + cache_write_tokens` (`agent/usage_pricing.py:41-42`). That is the same semantic claudecode's scenario assumes, so the cache clause maps onto hermes rather than being a shape mismatch (contrast aider, whose `sent` stays non-zero on a cached turn).\n\nLive proof, read-only from the maintainer's store (`/Users/ingo/hermes-local/.hermes/state.db`, `source IN ('cli','tui')`, model `gpt-5.6-luna` on provider `openai-codex`):\n\n| session | message_count | input | output | cache_read |\n|---|---|---|---|---|\n| 20260802_212608_1dc71a | 2 | 16269 | 5 | 0 |\n| 20260802_212408_63a639 | 4 (two turns) | 16802 | 211 | 15872 |\n| 20260802_195942_4e07a5 | 2 | 406 | 116 | 15872 |\n\nThe two-turn row is the whole scenario in one line: turn 1 costs ~16269 fresh input, turn 2's fresh delta is 533 while 15872 tokens came from cache, and the totals only grew. A cache hit on turn >= 2 is ORDINARY traffic on this provider - the recipe does not have to engineer it.\n\n## daemon_capability - full\n\n`querySessionMetrics` (metrics.go:99-105) selects `input_tokens, output_tokens, cache_read_tokens, cache_write_tokens` off the `sessions` row (filtered `source IN ('cli','tui')`) and L143-147 sets `CumInputTokens` / `CumOutputTokens` / `CumCacheReadTokens` / `CumCacheCreationTokens` and `TotalTokens = input + output`. The store watcher re-derives the vector on every scan (fsnotify on `state.db` plus a 2s poll backstop, 500ms debounce - watcher.go:20-34), so the numbers advance turn-over-turn while the session is live, and the state arc rides on the EXPLICIT turn boundary (`role='assistant'` + `finish_reason='stop'` -> `turn_done`, parser.go:108-110), not on idle timing. Against the scenario's acceptance criteria:\n\n- `TotalTokens > 0` after turn 1 - YES (live: 16269+5 after one trivial turn).\n- `TotalTokens` non-decreasing after turn 2 - YES, monotone at BOTH layers: hermes' UPDATE is `+=`, and `session.MergeMetrics` never lowers a token total.\n- `CacheReadTokens > 0` for a cached turn - YES, `CumCacheReadTokens` is the raw `sessions.cache_read_tokens` (live: 15872).\n\nCost rides along as a by-product rather than an assertion: hermes writes `estimated_cost_usd=0.0` with `billing_mode='subscription_included'` on this provider (the `cost_result.status == \"included\"` branch at conversation_loop.py:3013-3014), so metrics.go:159-163 prices the turn from irrlicht's own capacity table instead - the repo convention that cost is general pricing and only quota counters are taken verbatim. `gpt-5.6-luna` IS priced (capacity cache, input 0.2 / output 1.2 per Mtok), so the live surface shows a non-zero cost.\n\n## The one gap - a caveat, not a downgrade\n\n\"Fresh input tokens for THAT turn = 0\" is a PER-TURN assertion and hermes has no per-turn surface in irrlicht: the hermes Parser emits no token fields at all (no `UsageBreakdown`, no `PerTurnContribution`, no `TokenSnapshot` - parser.go carries only role/text/tool/finish_reason), and everything irrlicht reads is the CUMULATIVE session aggregate. `CumInputTokens` is monotone, so once turn 1 lands it is > 0 forever; a per-turn \"fresh input = 0\" reading exists only as a delta between two polls, and nothing computes that. The scenario's load-bearing observable (`TotalTokens > 0`, non-decreasing across three turns) and the cache-read clause ARE observed, so per caveats-over-downgrades the daemon pillar stays `full` and the per-turn attribution is recorded as a caveat.\n\nCalibration against the two `incapable` siblings, so this is not read as the same shape: aider x 5.1 is incapable because the cache buckets are printed to the terminal and NEVER written to the watched `.aider.chat.history.md` - no trace in the Source; kiro-cli x 5.1 is incapable because no token figure reaches any watched file (the sidecar carries CREDITS with token counters present-but-zero). Hermes' cache and token figures are both IN the watched Source and both read by the adapter; only the per-turn split is missing.\n\n## driver_capability - ready\n\nThe recipe needs `send`, `wait_turn`, `sleep`. `DRIVE_ELICITS=\"send slash sleep wait_turn\"` (driver-interactive.sh:113) and all three arms are implemented. `wait_turn` is multi-turn safe BY CONSTRUCTION, which is what this cell needs above every other hermes cell: it polls `SELECT COUNT(*) FROM messages WHERE session_id=... AND role='assistant' AND finish_reason='stop'` and returns only when the count EXCEEDS `EXPECTED_TURNS_SEEN` (driver-interactive.sh:258-275), so turns 2 and 3 block on a NEW completion instead of returning instantly on turn 1's. No new step type -> no driver gap.\n\n## Verify surface - why NO metric assertion is pinned (load-bearing)\n\n`of verify`'s observations hard-assert ONLY against the newest recording's replay golden `summary` block (`internal/validate/observations.go:135-189` reads `readGoldenSummary`), and for hermes that summary can carry none of this cell's numbers:\n\n- `tokens_nonzero` reads `cum_input_tokens + cum_output_tokens` from the golden, which comes from the offline TRANSCRIPT replay through `hermes.Parser` - a parser that sets no token fields. It would read 0 and the assertion would HARD-FAIL.\n- `total_tokens_nonzero` reads the #766 store-derived vector, which `finalizeSummary` surfaces only when `adapter == antigravity.AdapterName` (cmd/replay/metrics.go:59). For hermes it stays 0 - also a hard fail.\n- `cost_nonzero` is downstream of the same zero cum tokens -> 0.\n- `events.jsonl` is lifecycle-only (verified against a sibling ProcessOwnedStore recording: opencode 5.1's events.jsonl top-level keys are adapter/cwd/kind/new_state/pid/prev_state/project_dir/reason/seq/session_id/transcript_path/ts - zero lines carry any metric field).\n\nHermes' tokens and cost are computed by `ComputeMetrics` over the SQLite store, a path the replay never runs. So the observations block pins NO metric, exactly as the hermes 1.8 sibling concluded, and the token evidence is checked on the LIVE metrics surface at record time via the recipe's `verify[]`. The unlock is mechanical and already has a worked example: extend the #766 `finalizeSummary` lift plus `StageReplayStore` staging to hermes the way #775/#776 did for antigravity, after which `total_tokens_nonzero` becomes assertable here.\n\nDRIFT FLAGGED (not this cell): the hermes 2.1 basic-turn spec currently pins `observations.tokens_nonzero: true`. By the analysis above that assertion cannot pass for hermes - it reads 0 from the golden - and is only latent today because hermes has no recordings yet (an absent golden makes `ValidateObservations` Skip). It should be dropped when 2.1 is recorded.",
+      "caveats": [
+        "PER-TURN BLINDNESS (the scenario's fourth acceptance bullet): 'fresh input tokens for that turn = 0' is not expressible for hermes. The adapter reads only the CUMULATIVE sessions aggregate (metrics.go:99-105/143-147) and the hermes Parser emits no UsageBreakdown/PerTurnContribution, so CumInputTokens is monotone and stays > 0 after turn 1. The other three bullets (TotalTokens > 0, non-decreasing, CacheReadTokens > 0) are fully observed, which is why the verdict is full-with-caveat and not the incapable of aider/kiro-cli x 5.1.",
+        "LOAD-BEARING (verify surface, not the daemon): of verify hard-asserts only against the replay golden summary (validate/observations.go:135-189), and hermes' tokens/cost are produced by ComputeMetrics over the SQLite store - a path replay never runs. tokens_nonzero would read cum_input+cum_output = 0 from a hermes golden and FAIL; total_tokens_nonzero is gated to antigravity at cmd/replay/metrics.go:59 and would also read 0. Hence NO metric assertion is pinned; the token vector is checked on the live metrics surface at record time (recipe verify[]). Unlock: extend the #766 lift + StageReplayStore to hermes as #775/#776 did for antigravity.",
+        "DRIFT in a sibling cell: replaydata/agents/hermes/scenarios/2-1_basic-turn/expected.jsonl pins observations.tokens_nonzero:true, which by the same mechanism cannot pass for hermes. It is currently latent because hermes has no recordings (no golden -> ValidateObservations Skips). Drop it when 2.1 is recorded.",
+        "The cache clause is empirically ordinary, not engineered: the live store's two-turn session 20260802_212408_63a639 (message_count=4) already carries cache_read_tokens=15872 with only a 533-token fresh-input delta on turn 2. It is still a PROVIDER-side property - a recording home pointed at a provider or model without prompt caching would show cache_read_tokens=0, and that clause would go unmet while the monotonic-accumulation half still passes.",
+        "PROVISIONAL (emission vs observation): the whole verdict is derived from adapter source + hermes source + live store rows, not from a hermes recording - no hermes events.jsonl exists yet for any cell. record settles whether three separable ready->working->ready arcs actually reach the websocket.",
+        "Turn-arc separability risk (why the recipe sleeps 8s between turns): the store watcher debounces at 500ms with a 2s poll backstop (watcher.go:20-34). Unlike opencode - whose per-run processes coalesced turn 3's arc into turn 2's - hermes is ONE long-lived `hermes chat` process whose turns are seconds apart and whose driver blocks per-turn on a new finish_reason='stop' row, so all three arcs should be separable. If the recording shows t3 collapsing to zero width, de-pin t3 the way opencode 5.1 did rather than treating it as a defect.",
+        "model/cost deliberately unpinned (#440): the recorded model is whatever model.default the run's HERMES_HOME config.yaml carries (live: gpt-5.6-luna, priced in the capacity table). record fills observations.model once it sees the recording - and even then only if a hermes golden exists at all.",
+        "Rig prerequisite unchanged from the sibling cells: there is no HERMES_HOME wiring in tools/onboarding-factory/scripts, and hermes writes no transcript file (the slot path is the pseudo-path '<store>?session=<id>'), so record may have to port a store->JSONL exporter before a transcript.jsonl + golden exist for this column at all.",
+        "cwd fragility (inherited): `hermes chat` rows are source='cli' and carry no cwd, so the project binding and DiscoverPID both depend on defaultLiveCWD resolving EXACTLY ONE live non-service hermes process. A second interactive hermes session during the run makes it ambiguous and the pid_bind phase would go missing."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go L99-105, L143-147, L159-163",
+          "note": "querySessionMetrics selects input_tokens/output_tokens/cache_read_tokens/cache_write_tokens off the sessions row (source IN ('cli','tui')) and sets CumInput/CumOutput/CumCacheRead/CumCacheCreation + TotalTokens = input+output; cost is priced via capacity.DefaultCapacityManager because hermes reports 0.0 under billing_mode='subscription_included'."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go L60-122",
+          "note": "The Parser emits role/text/tool/finish_reason signals ONLY - no UsageBreakdown, no PerTurnContribution, no TokenSnapshot. This is why there is no per-turn token surface and why a transcript replay golden carries zero cum tokens for hermes."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go L20-34",
+          "note": "defaultMinScanGap 500ms, defaultPollInterval 2s, fsnotify on state.db - the metric vector is re-derived per scan, so token totals advance turn-over-turn while the session is live."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent v0.19.0 agent/conversation_loop.py L3001-3016",
+          "note": "update_token_counts is called PER completed API call with canonical_usage.input/output/cache_read/cache_write and api_call_count=1, plus billing_mode='subscription_included' when cost_result.status == 'included' - the reason irrlicht prices cost itself."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent v0.19.0 hermes_state.py L4972-4986, L5008-5013",
+          "note": "update_token_counts docstring: absolute=False (default, CLI path) INCREMENTS - `input_tokens = input_tokens + ?`, same for output/cache_read/cache_write; absolute=True (set-directly) is the gateway path. Establishes that the CLI aggregate is monotone non-decreasing and updated mid-session."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent v0.19.0 agent/usage_pricing.py L30-46",
+          "note": "CanonicalUsage.prompt_tokens = input_tokens + cache_read_tokens + cache_write_tokens - so input_tokens is FRESH (uncached) input, exclusive of cache reads. The scenario's cache clause maps onto hermes' reporting shape."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db (live store, read-only query)",
+          "note": "12 newest source='cli' rows, model gpt-5.6-luna: uncached first turns land at input 16269-17899 / cache_read 0; the two-turn row 20260802_212408_63a639 (message_count=4) shows input=16802 output=211 cache_read=15872 (turn-2 fresh delta 533); 20260802_195942_4e07a5 shows input=406 / cache_read=15872. Empirical proof of all three observable clauses."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/observations.go L21-35, L88-107, L135-189",
+          "note": "ValidateObservations hard-asserts ONLY against the newest recording's *.replay.json.golden summary; tokens_nonzero = cum_input+cum_output > 0, total_tokens_nonzero = summary.total_tokens > 0. No golden -> Skipped. Basis for pinning no metric assertion here."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/metrics.go L45-63",
+          "note": "finalizeSummary copies cum tokens/cost/model from the transcript replay's lastMetrics, and surfaces the store-derived TotalTokens/ContextWindow/ContextUtilization ONLY when adapter == antigravity.AdapterName - so hermes' store-computed vector never reaches its golden."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/5-1_token-accounting/recordings/2026-05-27-00-00-05_irrlichd-0.4.7+094218b/events.jsonl",
+          "note": "Sibling ProcessOwnedStore recording: events.jsonl top-level keys are adapter/cwd/kind/new_state/pid/prev_state/project_dir/reason/seq/session_id/transcript_path/ts and ZERO lines carry a metric field - confirms the daemon event stream is lifecycle-only, so the golden is the only verify surface."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh L113, L184-198, L258-278",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\"; wait_for_prompt polls up to 60s for the 'Type your message or /help' banner; wait_turn counts assistant rows with finish_reason='stop' and returns only when the count exceeds EXPECTED_TURNS_SEEN - multi-turn safe, which this three-turn recipe depends on."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/scenarios/5-1_token-accounting/metadata.json + replaydata/agents/kiro-cli/scenarios/5-1_token-accounting/metadata.json",
+          "note": "The two incapable siblings, cited for calibration: aider's cache buckets never reach the watched markdown (no trace); kiro's sidecar carries CREDITS with token counters present-but-zero. Hermes' figures are IN the watched store and ARE read, so full-with-caveat is the honest verdict."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/scenarios/1-8_model-context-display/metadata.json",
+          "note": "Sibling hermes cell that first established the verify-surface limitation (no metric hard-assertion pinnable for hermes) and the birth/anchoring shape reused here."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#766",
+          "note": "Added the store-derived vector to the golden + StageReplayStore for antigravity - the exact mechanism hermes needs before any token assertion here becomes machine-verifiable."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#440",
+          "note": "replay-summary model_name is environment-dependent - assert presence, not a hardcoded string; leave model for record to fill."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes v0.19.0+ on PATH (verified: `hermes --version` -> Hermes Agent v0.19.0 (2026.7.20)) and sqlite3 on PATH - the driver reads session id and turn completion straight out of state.db.",
+        "HERMES_HOME exported to the SAME recording home for both the driver and the recording daemon (the rig has no hermes env wiring today), so the daemon polls the store the run actually writes and the maintainer's real store is untouched.",
+        "That home's config.yaml carries a working model.default + provider with credentials AND a provider that does prompt caching, so turn 2/3 produce cache_read_tokens > 0 (live default gpt-5.6-luna on openai-codex does - session 20260802_212408_63a639 shows cache_read=15872 on its second turn).",
+        "no OTHER interactive hermes session live during the run: source='cli' rows carry no cwd, so the adapter's live-process CWD fallback needs exactly one non-service hermes process to bind the project and discover the PID.",
+        "irrlichd recording with the hermes store watcher enabled and the 'store' observe permission granted (IRRLICHT_PERMISSION_MODE=grant-all on a fresh home; a pending permission means zero monitoring)."
+      ],
+      "setup": [
+        "The interactive driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for 'Type your message or /help' before typing - the TUI swallows keystrokes sent during its seconds-long boot (up to 60s budget).",
+        "Hermes writes no transcript file: the slot's transcript path is the pseudo-path '<store>?session=<id>', and the session id (<YYYYMMDD>_<HHMMSS>_<hex>) is resolved after the first send, binding only to a row with started_at > the slot's launch timestamp so a stale CLI session cannot be adopted.",
+        "THREE identical one-word prompts in ONE long-lived REPL session: turn 1 is the uncached baseline, turns 2 and 3 replay the same system+history prefix so the provider serves them from cache. No tool call is possible (tool_calls_max 0), so the session never enters waiting.",
+        "8s sleeps after each turn keep the three store-write bursts far apart relative to the watcher's 500ms debounce / 2s poll, so the three ready->working->ready arcs stay separable in events.jsonl.",
+        "No model flag is passed - this cell asserts DEFAULT-launch accounting, and which model appears is whatever model.default the run's HERMES_HOME carries."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a session born in ready shortly after launch (expected to be the transient proc-<PID> pre-session; the store row does not exist until the first user message)",
+        "events.jsonl contains a pid_discovered event",
+        "events.jsonl contains THREE state_transition -> working / -> ready pairs on the SAME store-backed session, in order, with no state_transition to waiting anywhere",
+        "the session's final live state is ready",
+        "METRIC TIER (not assertable in the golden - check the live metrics surface / daemon API at record time): after turn 1 total_tokens > 0; after turn 2 and turn 3 total_tokens is >= the previous reading (non-decreasing)",
+        "METRIC TIER: cum_cache_read_tokens > 0 by the end of the run (turn 2/3 served from the provider's prompt cache). If it reads 0, record the provider/model in the notes - it is a provider property, not a daemon defect",
+        "METRIC TIER: estimated_cost_usd > 0 when the recorded model is priced in the capacity table (gpt-5.6-luna is); hermes itself reports 0.0 under billing_mode='subscription_included', so a non-zero value proves irrlicht priced it",
+        "NOT verifiable and deliberately not asserted: fresh input tokens = 0 for the cached turn - hermes exposes only the cumulative aggregate, so no per-turn split exists"
+      ],
+      "settings": {},
+      "timeout_seconds": 420
+    }
+  }
+}
