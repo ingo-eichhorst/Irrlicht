@@ -91,41 +91,6 @@ func parseStorePath(storePath, sessionID string) (dbPath, sid string) {
 // boundaries, open tool calls, last assistant text — that the aggregate
 // cannot express.
 func querySessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetrics, error) {
-	row, ok := scanSessionRow(db, sessionID)
-	if !ok {
-		return nil, nil
-	}
-
-	metrics := &session.SessionMetrics{
-		ModelName:     firstNonEmpty(row.model, "unknown"),
-		PressureLevel: "unknown",
-		LastCWD:       resolveLastCWD(row.cwd),
-	}
-
-	fold, ok := foldMessages(db, sessionID, row.model, row.cwd)
-	if !ok {
-		return nil, nil
-	}
-	applyFold(metrics, fold)
-	applyAggregates(metrics, row)
-	applyPricingAndContext(metrics)
-
-	return metrics, nil
-}
-
-// storeMetricsRow is the `sessions` row querySessionMetrics reads. Hermes
-// maintains the token aggregates itself, so they are taken from here rather
-// than summed over messages.
-type storeMetricsRow struct {
-	model, cwd          string
-	startedAt, endedAt  sql.NullFloat64
-	inTok, outTok       int64
-	cacheRead, cacheWri int64
-}
-
-// scanSessionRow reads one coding-surface session row. ok is false when the
-// session does not exist or is not a coding surface — neither is an error.
-func scanSessionRow(db *sql.DB, sessionID string) (storeMetricsRow, bool) {
 	var (
 		model, cwd, endReason              sql.NullString
 		startedAt, endedAt                 sql.NullFloat64
@@ -142,37 +107,31 @@ func scanSessionRow(db *sql.DB, sessionID string) (storeMetricsRow, bool) {
 		if err != sql.ErrNoRows {
 			log.Printf("hermes: query sessions row %s: %v", sessionID, err)
 		}
-		return storeMetricsRow{}, false
+		return nil, nil
 	}
-	return storeMetricsRow{
-		model:     model.String,
-		cwd:       cwd.String,
-		startedAt: startedAt,
-		endedAt:   endedAt,
-		inTok:     inTok.Int64,
-		outTok:    outTok.Int64,
-		cacheRead: cacheRead.Int64,
-		cacheWri:  cacheWri.Int64,
-	}, true
-}
 
-// resolveLastCWD falls back to the live process for a row that carries no cwd.
-//
-// A source='cli' session has no stored cwd (Hermes records one only from its
-// TUI gateway), and the daemon cannot recover it later from a
-// "<store>?session=<id>" path the way it would from a real transcript file.
-// Resolving it here means the binding BACKFILLS on the next activity event —
-// RefreshOnActivity applies a non-empty LastCWD — instead of being frozen at
-// whatever discovery happened to see.
-func resolveLastCWD(storedCWD string) string {
-	if storedCWD != "" || liveCWDForSession == nil {
-		return storedCWD
+	// A source='cli' session has no stored cwd (Hermes records one only from
+	// its TUI gateway), and the daemon cannot recover it later from a
+	// "<store>?session=<id>" path the way it would from a real transcript
+	// file. Resolving it here means the binding BACKFILLS on the next
+	// activity event — RefreshOnActivity applies a non-empty LastCWD —
+	// instead of being frozen at whatever discovery happened to see.
+	lastCWD := cwd.String
+	if lastCWD == "" && liveCWDForSession != nil {
+		lastCWD = liveCWDForSession()
 	}
-	return liveCWDForSession()
-}
 
-// applyFold copies the state signal derived from replaying the messages.
-func applyFold(metrics *session.SessionMetrics, fold messageFold) {
+	metrics := &session.SessionMetrics{
+		ModelName:     firstNonEmpty(model.String, "unknown"),
+		PressureLevel: "unknown",
+		LastCWD:       lastCWD,
+	}
+
+	fold, ok := foldMessages(db, sessionID, model.String, cwd.String)
+	if !ok {
+		return nil, nil
+	}
+
 	metrics.LastEventType = fold.lastEventType
 	metrics.LastAssistantText = fold.lastAssistantText
 	metrics.PendingWaitingCue = fold.pendingWaitingCue
@@ -180,40 +139,23 @@ func applyFold(metrics *session.SessionMetrics, fold messageFold) {
 	metrics.OpenToolCallCount = len(fold.openTools)
 	metrics.LastOpenToolNames = openToolNames(fold.openTools)
 	metrics.Tasks = fold.tasks
-}
 
-// applyAggregates copies the token counters and elapsed time off the row.
-func applyAggregates(metrics *session.SessionMetrics, row storeMetricsRow) {
-	metrics.CumInputTokens = row.inTok
-	metrics.CumOutputTokens = row.outTok
-	metrics.CumCacheReadTokens = row.cacheRead
-	metrics.CumCacheCreationTokens = row.cacheWri
-	metrics.TotalTokens = row.inTok + row.outTok
-	metrics.ElapsedSeconds = elapsedSeconds(row.startedAt, row.endedAt)
-}
+	metrics.CumInputTokens = inTok.Int64
+	metrics.CumOutputTokens = outTok.Int64
+	metrics.CumCacheReadTokens = cacheRead.Int64
+	metrics.CumCacheCreationTokens = cacheWri.Int64
+	metrics.TotalTokens = inTok.Int64 + outTok.Int64
 
-// elapsedSeconds is the session's wall-clock duration, or 0 while it is still
-// live (ended_at NULL) or if the two stamps do not order sensibly.
-func elapsedSeconds(startedAt, endedAt sql.NullFloat64) int64 {
-	if !startedAt.Valid || !endedAt.Valid {
-		return 0
+	if endedAt.Valid && startedAt.Valid && endedAt.Float64 > startedAt.Float64 {
+		metrics.ElapsedSeconds = int64(endedAt.Float64 - startedAt.Float64)
 	}
-	if endedAt.Float64 <= startedAt.Float64 {
-		return 0
-	}
-	return int64(endedAt.Float64 - startedAt.Float64)
-}
 
-// applyPricingAndContext derives cost, CO2 and context pressure from the
-// token counters already on metrics.
-//
-// Cost is priced by irrlicht's own model-alias table rather than read from
-// sessions.estimated_cost_usd. Hermes reports 0.0 with
-// billing_mode='subscription_included' on a subscription provider, which is a
-// statement about the user's plan, not about what the turn was worth — the
-// repo convention is that cost is general pricing and only quota counters are
-// taken from the agent verbatim.
-func applyPricingAndContext(metrics *session.SessionMetrics) {
+	// Cost is priced by irrlicht's own model-alias table rather than read
+	// from sessions.estimated_cost_usd. Hermes reports 0.0 with
+	// billing_mode='subscription_included' on a subscription provider, which
+	// is a statement about the user's plan, not about what the turn was
+	// worth — the repo convention is that cost is general pricing and only
+	// quota counters are taken from the agent verbatim.
 	cm := capacity.DefaultCapacityManager()
 	if cm != nil && metrics.ModelName != "" {
 		metrics.EstimatedCostUSD = cm.EstimateCostUSD(
@@ -228,6 +170,8 @@ func applyPricingAndContext(metrics *session.SessionMetrics) {
 
 	metrics.ContextWindow, metrics.ContextUtilization, metrics.PressureLevel, metrics.ContextWindowUnknown =
 		tailer.ComputeContextUtilization(metrics.ModelName, metrics.TotalTokens, cm, 0)
+
+	return metrics, nil
 }
 
 // messageFold is the running state derived from replaying a session's

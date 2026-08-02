@@ -66,27 +66,6 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	}
 
 	ev := &tailer.ParsedEvent{}
-	applyRowContext(ev, raw)
-
-	switch role {
-	case "user":
-		applyUserRow(ev, raw)
-	case "assistant":
-		p.applyAssistantRow(ev, raw)
-	case "tool":
-		applyToolRow(ev, raw)
-	default:
-		// "system" and any future role: no state signal to contribute.
-		ev.Skip = true
-	}
-
-	return ev
-}
-
-// applyRowContext copies the per-row and per-session context every role
-// carries: the message timestamp plus the model and cwd injected from the
-// `sessions` row.
-func applyRowContext(ev *tailer.ParsedEvent, raw map[string]interface{}) {
 	if ts, ok := raw[keyTimestamp].(float64); ok && ts > 0 {
 		sec := int64(ts)
 		nsec := int64((ts - float64(sec)) * float64(time.Second))
@@ -98,64 +77,57 @@ func applyRowContext(ev *tailer.ParsedEvent, raw map[string]interface{}) {
 	if model, ok := raw[keyModel].(string); ok {
 		ev.ModelName = model
 	}
-}
 
-// applyUserRow handles role="user".
-func applyUserRow(ev *tailer.ParsedEvent, raw map[string]interface{}) {
-	// A model_switch row is bookkeeping Hermes writes when the user changes
-	// model mid-session, not a prompt. Treating it as a user message would
-	// reset the open-tool set and restart the turn.
-	if kind, _ := raw[keyDisplayKind].(string); kind == "model_switch" {
+	switch role {
+	case "user":
+		// A model_switch row is bookkeeping Hermes writes when the user
+		// changes model mid-session, not a prompt. Treating it as a user
+		// message would reset the open-tool set and restart the turn.
+		if kind, _ := raw[keyDisplayKind].(string); kind == "model_switch" {
+			ev.Skip = true
+			return ev
+		}
+		ev.EventType = "user_message"
+		ev.ClearToolNames = true
+	case "assistant":
+		ev.EventType = "assistant_message"
+		if text, ok := raw[keyContent].(string); ok && text != "" {
+			// Order matters: the waiting cue is computed from the FULL text
+			// before truncation, because TruncateAssistantText keeps only a
+			// bounded tail and a cue sitting further back would be dropped.
+			// Both rules are the shared ones every adapter uses, not local
+			// reimplementations.
+			ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text))
+			// Markers are scanned from the FULL text, per
+			// TruncateAssistantText's own contract: the head it drops is
+			// exactly where a mid-prose estimate marker sits.
+			if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
+				ev.TaskEstimate = est
+			}
+			if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
+				ev.TaskSummary = s
+			}
+			ev.AssistantText = tailer.TruncateAssistantText(text)
+		}
+		calls := decodeToolCalls(raw[keyToolCalls])
+		ev.ToolUses = toolUses(calls)
+		// The todo call is reported as a tool use AND mined for the plan it
+		// carries: dropping the use would leave a tool open that never closes.
+		p.todos.Reconcile(todosFromCalls(calls), ev)
+		if finish, _ := raw[keyFinish].(string); finishReasonEndsTurn(finish) {
+			ev.EventType = "turn_done"
+		}
+	case "tool":
+		ev.EventType = "tool_result"
+		if id, ok := raw[keyToolCallID].(string); ok && id != "" {
+			ev.ToolResultIDs = []string{id}
+		}
+	default:
+		// "system" and any future role: no state signal to contribute.
 		ev.Skip = true
-		return
 	}
-	ev.EventType = "user_message"
-	ev.ClearToolNames = true
-}
 
-// applyAssistantRow handles role="assistant": the prose signal, the tool
-// calls it opens, and the finish_reason that may close the turn.
-func (p *Parser) applyAssistantRow(ev *tailer.ParsedEvent, raw map[string]interface{}) {
-	ev.EventType = "assistant_message"
-	if text, ok := raw[keyContent].(string); ok && text != "" {
-		applyAssistantText(ev, text)
-	}
-	calls := decodeToolCalls(raw[keyToolCalls])
-	ev.ToolUses = toolUses(calls)
-	// The todo call is reported as a tool use AND mined for the plan it
-	// carries: dropping the use would leave a tool open that never closes.
-	p.todos.Reconcile(todosFromCalls(calls), ev)
-	if finish, _ := raw[keyFinish].(string); finishReasonEndsTurn(finish) {
-		ev.EventType = "turn_done"
-	}
-}
-
-// applyAssistantText derives the waiting cue, the task markers and the
-// display text from one assistant message's content.
-//
-// Order matters: the waiting cue and the markers are computed from the FULL
-// text before truncation, because TruncateAssistantText keeps only a bounded
-// tail — a cue sitting further back would be dropped, and the head it drops
-// is exactly where a mid-prose estimate marker sits (its own contract says so).
-// All three rules are the shared ones every adapter uses, not local
-// reimplementations.
-func applyAssistantText(ev *tailer.ParsedEvent, text string) {
-	ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text))
-	if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
-		ev.TaskEstimate = est
-	}
-	if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
-		ev.TaskSummary = s
-	}
-	ev.AssistantText = tailer.TruncateAssistantText(text)
-}
-
-// applyToolRow handles role="tool", which closes a call by tool_call_id.
-func applyToolRow(ev *tailer.ParsedEvent, raw map[string]interface{}) {
-	ev.EventType = "tool_result"
-	if id, ok := raw[keyToolCallID].(string); ok && id != "" {
-		ev.ToolResultIDs = []string{id}
-	}
+	return ev
 }
 
 // parseToolCalls extracts tool invocations from a `messages.tool_calls`

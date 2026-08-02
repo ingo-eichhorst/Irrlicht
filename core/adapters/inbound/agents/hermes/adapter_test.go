@@ -42,50 +42,38 @@ func TestStorePath(t *testing.T) {
 	}
 }
 
-// The declaration's four axes are pinned by the four tests below — one each,
-// so a failure names the axis that broke instead of one omnibus assertion.
-
-// TestAgentRegistration pins the identity axis.
+// TestAgentRegistration pins the declaration's four axes.
 func TestAgentRegistration(t *testing.T) {
-	id := Agent().Identity
+	a := Agent()
 
-	if id.Name != AdapterName {
-		t.Errorf("Identity.Name = %q, want %q", id.Name, AdapterName)
+	if a.Identity.Name != AdapterName {
+		t.Errorf("Identity.Name = %q, want %q", a.Identity.Name, AdapterName)
 	}
-	if id.DisplayName != "Hermes Agent" {
-		t.Errorf("Identity.DisplayName = %q", id.DisplayName)
+	if a.Identity.DisplayName != "Hermes Agent" {
+		t.Errorf("Identity.DisplayName = %q", a.Identity.DisplayName)
 	}
-	if id.IconSVGLight == "" || id.IconSVGDark == "" {
+	if a.Identity.IconSVGLight == "" || a.Identity.IconSVGDark == "" {
 		t.Error("both icon variants must be set")
 	}
-}
 
-// TestAgentRegistration_Process pins the process axis. Hermes ships as a Python
-// console script: the OS process is the venv interpreter, so an ExactName
-// matcher would never fire.
-func TestAgentRegistration_Process(t *testing.T) {
-	p := Agent().Process
-
-	if _, ok := p.Match.(agent.CommandPattern); !ok {
-		t.Errorf("Process.Match = %T, want agent.CommandPattern", p.Match)
+	// Hermes ships as a Python console script: the OS process is the venv
+	// interpreter, so an ExactName matcher would never fire.
+	if _, ok := a.Process.Match.(agent.CommandPattern); !ok {
+		t.Errorf("Process.Match = %T, want agent.CommandPattern", a.Process.Match)
 	}
-	if p.PIDForSession == nil {
+	if a.Process.PIDForSession == nil {
 		t.Error("Process.PIDForSession must be set")
 	}
-	if p.ExcludeArgv == nil {
+	if a.Process.ExcludeArgv == nil {
 		t.Error("Process.ExcludeArgv must be set to drop the long-lived gateway")
 	}
-}
 
-// TestAgentRegistration_Source pins the source axis: one shared store, not a per-process
-// transcript.
-func TestAgentRegistration_Source(t *testing.T) {
-	src, ok := Agent().Source.(agent.ProcessOwnedStore)
+	src, ok := a.Source.(agent.ProcessOwnedStore)
 	if !ok {
-		t.Fatalf("Source = %T, want agent.ProcessOwnedStore", Agent().Source)
+		t.Fatalf("Source = %T, want agent.ProcessOwnedStore", a.Source)
 	}
 	if src.PathForPID == nil {
-		t.Fatal("Source.PathForPID must be set")
+		t.Error("Source.PathForPID must be set")
 	}
 	if src.Reader == nil {
 		t.Error("Source.Reader must be set")
@@ -94,16 +82,11 @@ func TestAgentRegistration_Source(t *testing.T) {
 	if src.PathForPID(1) != src.PathForPID(2) {
 		t.Error("PathForPID must ignore the pid — the store is shared, not per-process")
 	}
-}
 
-// TestAgentRegistration_Permissions pins the consent axis.
-func TestAgentRegistration_Permissions(t *testing.T) {
-	perms := Agent().Permissions
-
-	if len(perms) != 1 {
-		t.Fatalf("len(Permissions) = %d, want 1", len(perms))
+	if len(a.Permissions) != 1 {
+		t.Fatalf("len(Permissions) = %d, want 1", len(a.Permissions))
 	}
-	p := perms[0]
+	p := a.Permissions[0]
 	if p.Key != PermissionKeyStore {
 		t.Errorf("Permission.Key = %q, want %q", p.Key, PermissionKeyStore)
 	}
@@ -122,47 +105,34 @@ func TestAgentRegistration_Permissions(t *testing.T) {
 // directory both contain the substring "hermes", so a looser pattern would
 // let the daemon's own argv self-trip the matcher.
 func TestProcessCmdRegex(t *testing.T) {
-	tests := []struct {
-		name string
-		cmd  string
-		want bool
-	}{
-		{
-			name: "one-shot via the console script (verified live)",
-			cmd:  "/Users/x/hermes-local/.hermes/hermes-agent/venv/bin/python3 /Users/x/hermes-local/.hermes/hermes-agent/venv/bin/hermes -z Count to 10",
-			want: true,
-		},
-		{
-			name: "the module form (verified live)",
-			cmd:  "/Users/x/hermes-local/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main gateway run --replace",
-			want: true,
-		},
-		{name: "the user-facing shim", cmd: "/Users/x/.local/bin/hermes", want: true},
-		{name: "shim with a subcommand", cmd: "/opt/homebrew/bin/hermes chat", want: true},
-
-		{
-			name: "the daemon watching the store must not look like Hermes",
-			cmd:  "irrlichd --watch /Users/x/.hermes/state.db",
-			want: false,
-		},
-		{name: "the daemon itself", cmd: "/usr/local/bin/irrlichd", want: false},
-		{
-			name: `the install dir: "hermes" followed by "-", not space/end`,
-			cmd:  "/Users/x/hermes-local/.hermes/hermes-agent/venv/bin/python -m something_else",
-			want: false,
-		},
-		{
-			name: "a different binary whose name merely starts with hermes",
-			cmd:  "/usr/bin/hermesd --serve",
-			want: false,
-		},
+	shouldMatch := []string{
+		// Verified live: one-shot session via the console script.
+		"/Users/x/hermes-local/.hermes/hermes-agent/venv/bin/python3 /Users/x/hermes-local/.hermes/hermes-agent/venv/bin/hermes -z Count to 10",
+		// Verified live: the module form.
+		"/Users/x/hermes-local/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main gateway run --replace",
+		// The user-facing shim.
+		"/Users/x/.local/bin/hermes",
+		"/opt/homebrew/bin/hermes chat",
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := processCmdRegex.MatchString(tt.cmd); got != tt.want {
-				t.Errorf("MatchString(%q) = %v, want %v", tt.cmd, got, tt.want)
-			}
-		})
+	for _, cmd := range shouldMatch {
+		if !processCmdRegex.MatchString(cmd) {
+			t.Errorf("expected match: %q", cmd)
+		}
+	}
+
+	shouldNotMatch := []string{
+		// The daemon watching the Hermes store must not look like Hermes.
+		"irrlichd --watch /Users/x/.hermes/state.db",
+		"/usr/local/bin/irrlichd",
+		// The install directory: "hermes" followed by "-", not space/end.
+		"/Users/x/hermes-local/.hermes/hermes-agent/venv/bin/python -m something_else",
+		// A different binary whose name merely starts with hermes.
+		"/usr/bin/hermesd --serve",
+	}
+	for _, cmd := range shouldNotMatch {
+		if processCmdRegex.MatchString(cmd) {
+			t.Errorf("expected NO match: %q", cmd)
+		}
 	}
 }
 

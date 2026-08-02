@@ -42,45 +42,22 @@ func agentEventFor(t *testing.T, w *Watcher, _ *sql.DB) agent.Event {
 	return evs[0]
 }
 
-// newWatcherOverSession seeds a store with one session plus its opening user
-// message and returns a watcher over it, with the live-process probe stubbed
-// to liveCWD. The db is returned so a test can advance the store afterwards.
-func newWatcherOverSession(t *testing.T, s sessionRow, liveCWD string) (*Watcher, *sql.DB) {
-	t.Helper()
+func TestWatcher_EmitsNewSessionOnce(t *testing.T) {
 	path, db := newTestStore(t)
-	insertSession(t, db, s)
-	insertMessage(t, db, messageRow{sessionID: s.id, role: "user", content: "go", ts: s.started + 1})
+	insertSession(t, db, sessionRow{id: "s1", source: "tui", model: "gpt-5.6-luna", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
 
 	w := NewWithStorePath(path, 0)
-	w.liveCWD = func() string { return liveCWD }
-	return w, db
-}
-
-// assertEventTypes fails unless evs is exactly the given sequence of types.
-// Spelled as a helper so the per-test assertion stays one readable line
-// instead of a three-clause conditional.
-func assertEventTypes(t *testing.T, evs []agent.Event, want ...agent.EventType) {
-	t.Helper()
-	if len(evs) != len(want) {
-		t.Fatalf("got %d events %+v, want %d (%v)", len(evs), evs, len(want), want)
-	}
-	for i, wt := range want {
-		if evs[i].Type != wt {
-			t.Fatalf("event %d Type = %v, want %v (full: %+v)", i, evs[i].Type, wt, evs)
-		}
-	}
-}
-
-func TestWatcher_EmitsNewSessionOnce(t *testing.T) {
-	w, _ := newWatcherOverSession(t,
-		sessionRow{id: "s1", source: "tui", model: "gpt-5.6-luna", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1}, "")
+	w.liveCWD = func() string { return "" }
 	ch := w.Subscribe()
 
 	scanNow(w)
 	evs := drain(ch)
 	// Discovery emits new_session (announce) plus one activity (go read the
 	// store) — see reconcile's comment on why the pairing is deliberate.
-	assertEventTypes(t, evs, agent.EventNewSession, agent.EventActivity)
+	if len(evs) != 2 || evs[0].Type != agent.EventNewSession || evs[1].Type != agent.EventActivity {
+		t.Fatalf("first scan: got %+v, want new_session then activity", evs)
+	}
 	if evs[0].SessionID != "s1" {
 		t.Errorf("SessionID = %q", evs[0].SessionID)
 	}
@@ -100,8 +77,12 @@ func TestWatcher_EmitsNewSessionOnce(t *testing.T) {
 }
 
 func TestWatcher_EmitsActivityWhenConversationGrows(t *testing.T) {
-	w, db := newWatcherOverSession(t,
-		sessionRow{id: "s1", source: "tui", model: "m", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1}, "")
+	path, db := newTestStore(t)
+	insertSession(t, db, sessionRow{id: "s1", source: "tui", model: "m", cwd: "/work/proj", started: 1000, ended: 0, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
+
+	w := NewWithStorePath(path, 0)
+	w.liveCWD = func() string { return "" }
 	ch := w.Subscribe()
 	scanNow(w)
 	drain(ch)
@@ -114,7 +95,9 @@ func TestWatcher_EmitsActivityWhenConversationGrows(t *testing.T) {
 
 	scanNow(w)
 	evs := drain(ch)
-	assertEventTypes(t, evs, agent.EventActivity)
+	if len(evs) != 1 || evs[0].Type != agent.EventActivity {
+		t.Fatalf("got %+v, want one activity event", evs)
+	}
 	if !evs[0].Terminal {
 		t.Error("finish_reason=stop on the newest message must mark the activity Terminal")
 	}

@@ -149,54 +149,34 @@ func isServiceArgv(argv []string) bool {
 	// like `-z "the gateway is down"` would otherwise read as the `gateway`
 	// subcommand and exclude a real session. -z IS a session by definition,
 	// so settle it before any subcommand scan.
-	if isOneShotArgv(argv) {
-		return false
-	}
-	for i, a := range argv {
-		if !isEntryToken(a) {
-			continue
-		}
-		if sub, ok := subcommandAfter(argv[i+1:]); ok {
-			return serviceSubcommands[sub]
-		}
-	}
-	return false
-}
-
-// isOneShotArgv reports whether argv runs Hermes in one-shot mode.
-func isOneShotArgv(argv []string) bool {
 	for _, a := range argv {
 		if a == "-z" || a == "--oneshot" {
-			return true
+			return false
+		}
+	}
+	for i, a := range argv {
+		isEntry := a == "hermes_cli.main" || a == "hermes" || strings.HasSuffix(a, "/hermes")
+		if !isEntry {
+			continue
+		}
+		// The subcommand is the first following token that is neither a flag
+		// nor a flag's VALUE. Skipping the value matters: `--model gateway`
+		// would otherwise read as the gateway service and exclude a real
+		// session.
+		skipNext := false
+		for _, next := range argv[i+1:] {
+			if skipNext {
+				skipNext = false
+				continue
+			}
+			if strings.HasPrefix(next, "-") {
+				skipNext = valueTakingFlags[next]
+				continue
+			}
+			return serviceSubcommands[next]
 		}
 	}
 	return false
-}
-
-// isEntryToken reports whether a is the Hermes entry point — the console
-// script (by bare name or path) or the `-m` module form.
-func isEntryToken(a string) bool {
-	return a == "hermes_cli.main" || a == "hermes" || strings.HasSuffix(a, "/hermes")
-}
-
-// subcommandAfter returns the subcommand in the tokens following the entry
-// point: the first one that is neither a flag nor a flag's VALUE. Skipping
-// the value matters — `--model gateway` would otherwise read as the gateway
-// service and exclude a real session. ok is false when the tokens carry no
-// subcommand at all.
-func subcommandAfter(rest []string) (string, bool) {
-	skipNext := false
-	for _, next := range rest {
-		switch {
-		case skipNext:
-			skipNext = false
-		case strings.HasPrefix(next, "-"):
-			skipNext = valueTakingFlags[next]
-		default:
-			return next, true
-		}
-	}
-	return "", false
 }
 
 // valueTakingFlags are the global flags whose NEXT argv entry is a value
