@@ -1,0 +1,76 @@
+{
+  "scenario_id": "cloud-background-agent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+a21849f",
+    "confidence": 0.85,
+    "notes": "Copilot ships two cloud surfaces (/delegate SWE jobs, --cloud/--connect remote sessions), but a remote session is never persisted to the local session-state store the adapter tails."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "cloud-background-agent",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n\n## Reasoning\n\n### The agent has the feature (two distinct cloud surfaces)\n\nGitHub Copilot CLI 1.0.77 exposes cloud/background execution twice over, both confirmed from the shipped bundle rather than vendor docs:\n\n1. **`/delegate` (also the `&<prompt>` shorthand).** `copilot help commands` prints: \"/delegate  Send this session to GitHub and Copilot will create a PR; use --base to choose the PR target branch\". In `app.js` the implementation POSTs to `` `/agents/swe/v1/jobs/${owner}/${repo}` `` with `event_type: \"cli_delegate_command\"` and a PR body suffix reading literally \"Created from Copilot CLI via the copilot delegate command.\" — i.e. it hands the task to the GitHub Copilot coding agent, which runs on GitHub-managed infrastructure and opens a pull request. The local CLI submits the job and returns.\n2. **`--cloud` / `--connect[=sessionId]`.** `--connect` is documented in `copilot --help` (\"Connect directly to a remote session (optionally specify session ID or task ID)\"); `--cloud` is a hidden option in the same option block (`.hideHelp()`) reading \"Create a cloud sandbox session and connect to it\". `app.js` backs these with a remote-session manager (`createCloudTask` / `connectCloudTaskMetadata` / `connect`) speaking to a Mission Control API at `${copilotApiUrl}/agents` (overridable via `COPILOT_MC_BASE_URL`), and logs \"Created remote session in the cloud: <id>\".\n\nSo `agent_supports: yes` — this is not a docs-lag guess; both surfaces are in the 1.0.77 binary bundle.\n\n### irrlicht cannot observe either surface\n\nThe copilot adapter is `Source: FilesUnderRoot{Dir: $COPILOT_HOME/session-state, SessionIDFromPath, Parser: JSONL}` with `Process.Match = ExactName{copilot}` (`core/adapters/inbound/agents/copilot/agent.go`) — it derives every session from a local `session-state/<session-id>/events.jsonl` and binds liveness to a local PID. Neither exists for a cloud run:\n\n- **A delegated SWE job leaves nothing local.** `/delegate` is one HTTPS POST from the already-running local session; the remote job's transcript is written wherever the coding agent runs. No `session-state/<id>/` directory is created locally for it, and no local `copilot` process represents it. (The `github/copilot-cloud-agent` client name that appears in the bundle is the name the CLI reports when it is itself running *inside* that cloud runtime — its only use in `app.js` is the two-line predicate `t===\"code-coverage-ai\" && e===\"github/copilot-cloud-agent\"`, a feature check, not a local-store writer.)\n- **A connected cloud session is deliberately excluded from the local store.** Remote sessions are a distinct class: `tR = class extends Lfe { isRemote = !0 }` (the base of the `RemoteSession` used by `--connect`/`--cloud`) versus the local `LS = class extends Lfe { isRemote = !1 }`. Three separate guards keep remote sessions out of `session-state/`:\n  - the session manager's `saveSession(e) { e.isRemote || await e.flushPendingWrites() }` — a remote session is never flushed;\n  - the JSONL session lister filters `sessions.filter(o => o.isRemote === false)` before returning \"Found N JSONL sessions\";\n  - the event writer computes `localEventsPath = sessionStatePath && getReverseCallHandler() === undefined ? join(sessionStatePath, \"events.jsonl\") : undefined`, and only when that path is set does it call `sessionEventsAppendLocal`; otherwise it appends through `sessionEventsAppendToFsJson` over the session's reverse-call (RPC-proxied) filesystem — the remote side.\n  A connected remote session's events are *polled* from the API (`mcClient.listTaskEvents(taskId)`, reconstructed in memory by `RemoteSession.createFromRemote`), never tailed from disk.\n- **irrlicht has no remote-feed transport.** `agent.Source` is a sealed sum — `FilesUnderRoot` / `FilesUnderCWD` / `ProcessOwnedStore` (`core/domain/agent/source.go`, sealed by `isSource()`); there is no RemoteAPI/webhook/SSE variant an adapter could declare, so even though the Mission Control API could in principle be polled for task state, nothing in the daemon can consume it.\n\nNet: the scenario's user-observable signals — a session appearing with PID = 0 / absent, states mirroring the remote run, the session disappearing when the remote run completes — have no local trace to derive them from. `daemon_capability: incapable` ⇒ frozen, `applicable: false`, no recipe and no recording.\n\n### The one path that does land locally is a different scenario\n\n`handoffSession` (\"Can only handoff RemoteSession instances to local\") converts a remote session into a *local* one, and `prepareCliHandoffSession` builds it via the Mission Control client. After a handoff the session is an ordinary local session with a local PID and a real `session-state/<id>/events.jsonl` — observable, but that is a local session (covered by 1-1/1-4), not the PID-less remote run this scenario asserts.\n\n### What would flip daemon_capability to full\n\nA new `agent.Source` variant (e.g. RemoteAPI) plus a copilot cloud reader over the Mission Control endpoints the CLI already uses (`listTaskEvents(taskId)`, session list with `source: \"remote\"`), emitting PID-less sessions. None of that exists today.",
+      "caveats": [
+        "feature-invisible-but-spec-compliant: both cloud surfaces are real and shipping in CLI 1.0.77; the gap is entirely irrlicht's adapter/transport layer, not the agent.",
+        "This machine's Copilot account has no verified cloud/background-agent access, so the negative was established by reading the shipped app.js bundle (isRemote guards, event-writer path selection) rather than by driving a live cloud task. That is a human prerequisite for any future live confirmation, not an agent incapability — and it does not change the verdict, since the exclusion of remote sessions from the local store is unconditional in the code.",
+        "A remote session that is handed off to local (`handoffSession`) does become observable, but as an ordinary local session with a bound PID — it does not satisfy this scenario's PID = 0 / absent criterion."
+      ],
+      "sources": [
+        {
+          "kind": "cli",
+          "ref": "copilot help commands (GitHub Copilot CLI 1.0.77)",
+          "note": "'/delegate  Send this session to GitHub and Copilot will create a PR' — the cloud coding-agent surface"
+        },
+        {
+          "kind": "cli",
+          "ref": "copilot --help (GitHub Copilot CLI 1.0.77)",
+          "note": "'--connect [sessionId]  Connect directly to a remote session (optionally specify session ID or task ID)'"
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "Hidden option '--cloud  Create a cloud sandbox session and connect to it' (.hideHelp()); delegate POSTs /agents/swe/v1/jobs/${owner}/${repo} with event_type cli_delegate_command"
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "Remote sessions never persist locally: 'saveSession(e){e.isRemote||await e.flushPendingWrites()}'; JSONL lister filters 'o.isRemote===!1'; classes tR{isRemote=!0} vs LS{isRemote=!1}"
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "Event writer: localEventsPath = sessionStatePath && getReverseCallHandler()===undefined ? join(sessionStatePath,'events.jsonl') : undefined — remote sessions append via sessionEventsAppendToFsJson over RPC; remote events are polled with mcClient.listTaskEvents(taskId)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Source = FilesUnderRoot{$COPILOT_HOME/session-state, JSONL, sessionIDFromPath}; Process.Match = ExactName{copilot} — local file + local PID only"
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/agent/source.go",
+          "note": "Source is a sealed sum (isSource marker): FilesUnderRoot / FilesUnderCWD / ProcessOwnedStore — no remote-API/webhook variant"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/1-7_cloud-background-agent/metadata.json",
+          "note": "Sibling anchor with the identical shape: agent has a cloud surface, irrlicht has no transport (yes/incapable)"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "daemon_capability=incapable — a delegated SWE job and a connected cloud session both leave no events.jsonl under $COPILOT_HOME/session-state and bind no local PID, so there is nothing for a recording to capture. No recipe."
+    }
+  }
+}
