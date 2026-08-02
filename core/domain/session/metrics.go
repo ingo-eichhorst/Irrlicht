@@ -247,6 +247,16 @@ type SessionMetrics struct {
 	// set by the hook receiver in processActivity, not derived from transcript.
 	PermissionPending bool `json:"-"`
 
+	// TranscriptPermissionPending is true when the TRANSCRIPT shows a
+	// permission prompt still open — the agent wrote both the request and (on
+	// answer) its resolution, so no hook is involved. Unlike PermissionPending
+	// above this is derived, durable across a daemon restart, and populated
+	// under replay, which is what lets a recorded session's waiting state be
+	// verified offline. GitHub Copilot (#1256) is the first adapter to supply
+	// it; the two are kept separate so a recorded trace still distinguishes a
+	// hook-delivered verdict from a transcript-derived one.
+	TranscriptPermissionPending bool `json:"transcript_permission_pending,omitempty"`
+
 	// HookTurnDone is true when Claude Code's Stop hook fired for this session's
 	// current turn — an authoritative, per-adapter turn-done push delivered at
 	// true turn end (issue #1161). Transient and live-only: the detector's
