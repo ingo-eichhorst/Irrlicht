@@ -1,0 +1,98 @@
+{
+  "scenario_id": "streaming-partial-writes",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+9bee59d.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: incapable — hermes persists ONE complete assistant row at generation end (append_message: single INSERT + message_count bump in one write txn); streamed tokens are terminal-render only and never reach state.db, so the no-flicker invariant has no partial-flush trace to assert over\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "streaming-partial-writes",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: ready\n\nRoute: **frozen**, `applicable: false`. Same shape as the three already-frozen cells on this row (pi, kiro-cli, codex): the agent streams to the terminal, but the surface the daemon observes receives only whole, atomically-committed units, so the scenario's `process` steps 4–5 (\"agent emits the first partial chunk … agent emits additional partial chunks\") have no hermes trace and the `streaming_window` no-flicker invariant has nothing to assert over.\n\n## What the scenario pins\n\nScenario 2.21 (`replaydata/agents/scenarios.json`) defines the behavior by the canonical claudecode mechanism: multiple intermediate assistant lines carrying NON-TERMINAL `stop_reason`, which `resolveAssistantStreaming` downgrades to `assistant_streaming` (excluded from `IsAgentDone()`), locking down the Bug-D streaming-flicker family (#102). The user-observable signal is `ready → working → ready` with `working` sustained across every partial flush and no premature `→ ready`, at `tool calls ≤ 0`.\n\n## agent — yes\n\nHermes streams provider output. `agent/auxiliary_client.py` sends `stream=True` and aggregates the async chunk stream (see the aggregation helpers around :7246–:7511, and the `force_stream=True` path for stream-only providers); `agent/stream_single_writer.py` and `agent/stream_diag.py` exist purely to serialize and instrument that terminal render. So the agent genuinely performs incremental output — this is a transport/persistence limit, not a missing feature.\n\n## daemon — incapable\n\nHermes writes no transcript file; the daemon observes one shared SQLite store (`$HERMES_HOME/state.db`, `journal_mode=delete`) through the `ProcessOwnedStore` source. Four independent facts show no partial write ever reaches it:\n\n1. **One writer, one atomic row.** `HermesState.append_message` (hermes_state.py, the `def append_message` at ~:6397) is the ONLY production writer of `messages` rows. Its `_do(conn)` body performs a single `INSERT INTO messages (…)` and, in the SAME `_execute_write` transaction, `UPDATE sessions SET message_count = message_count + 1`. In `journal_mode=delete` the row and the counter become visible together, at commit. Its only two non-test callers are `run_agent.AIAgent._flush_messages_to_session_db_unlocked` (run_agent.py:2079) and a `/branch` history copy in `hermes_cli/cli_commands_mixin.py:986` — neither is a per-chunk path.\n\n2. **No partial-content update path exists.** Every non-test `UPDATE messages SET …` in the hermes tree touches `active` (compaction/rewind bookkeeping), `display_kind`/`display_metadata`, or the `api_content` sidecar. None writes `content`, and none changes `message_count` — which is precisely the growth signal `Watcher.reconcile` keys on (`grew := r.messageCount > prevCount`). Even a hypothetical in-place content update would therefore emit nothing.\n\n3. **The assistant row is constructed only after the API call returns.** `agent/conversation_loop.py` builds it via `agent._build_assistant_message(assistant_message, finish_reason)` — `finish_reason` is already resolved (`'stop'`, `'tool_calls'`, `'length'`, `'content_filter'`, `'incomplete'`) at construction time — and appends it to the in-memory `messages` list, which only later reaches the store through `_persist_session`. There is no code path that inserts an in-flight assistant row while tokens are still arriving.\n\n4. **The live store agrees.** Read-only over `/Users/ingo/hermes-local/.hermes/state.db`: `SELECT role, COALESCE(finish_reason,'<NULL>'), COUNT(*) … GROUP BY 1,2` returns exactly `user/<NULL> 30`, `assistant/stop 29`, `assistant/tool_calls 29`, `tool/<NULL> 29`. **Zero** assistant rows with a NULL or empty `finish_reason` across 117 rows — i.e. no in-flight assistant row has ever been committed.\n\n### The arc that IS observable (and why it is not this scenario)\n\nA no-tool hermes turn produces exactly two store commits:\n\n- The crash-resilience persist of the inbound user row BEFORE the first LLM call (`agent/turn_context.py`, `_ensure_and_persist` under the comment \"persist the inbound user turn before the first LLM call\"). `message_count` grows, the newest row is `role='user'`, `Watcher.turnIsDone` is false → `EventActivity` with `Terminal=false` → `ready → working`.\n- The single assistant row at generation end with its terminal `finish_reason` → `turnIsDone` true → `working → ready`.\n\nBetween them the store is untouched for the whole generation window. That yields a real, long `working` dwell — but a dwell over *silence*, not over partial flushes. Asserting it would pin \"the daemon does not spontaneously flip to ready while idle\", which is not the Bug-D property this row exists for, and which `2-1_basic-turn` already covers.\n\n### Contrast with the recorded ProcessOwnedStore sibling\n\nopencode (the other `ProcessOwnedStore` adapter) is `daemon=full` and recorded on this row because its store DOES take a mid-turn write: it upserts the assistant *text part* row when streaming starts and updates it when streaming ends, and its `time_updated`-cursor watcher emits on both. Its recording shows the two distinct activities — `transcript_activity` at `23:52:07.859936` and the terminal one at `23:52:11.632798` — bracketing the part's own `time.start=1779745927676` / `time.end=1779745931281`. Hermes has no analogue: the row appears once, already complete. So the difference is not \"SQLite store vs JSONL\", it is whether the store receives an incomplete row at all.\n\n## driver — ready\n\n`replaydata/agents/hermes/driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"` (line 113). A recipe for this scenario needs only `send` + `wait_turn` + `sleep`, all present. The freeze is an observability limit, not a tooling gap — nothing here routes to driver work.\n\n## What would unblock this cell\n\nEither (a) hermes starts persisting incremental assistant content mid-generation — an in-flight `messages` row updated as tokens arrive, with a growth signal the watcher can see (today an in-place `content` update would be invisible because `message_count` would not move); or (b) the row is reframed from \"live streaming flicker\" to \"sustained working dwell across a silent generation window\", which is a different property and would overlap `basic-turn`. Until then no recording can add fidelity.",
+      "caveats": [
+        "The adapter's `finishReasonEndsTurn` doc comment asserts \"An empty reason is the in-flight row hermes writes before the turn closes\" — that premise is NOT corroborated: the live store has zero assistant rows with a NULL/empty finish_reason across 117 rows, and no hermes code path constructs an assistant row before finish_reason is resolved. The denylist BEHAVIOR is correct either way (treating an unknown/empty reason as continuing is the safe direction, and the comment's own asymmetry argument stands), so this is a comment-accuracy note, not a defect. Flagged because a `daemon=full` verdict for THIS cell would rest exactly on that premise.",
+        "Doc + code + live-store evidence; no hermes recording exists for this row. Under the observation-vs-emission rule this is the firmer direction (absence of an emitter in the writer's own source, plus an empty result set over the real store, rather than a parser read inferring presence) — but pi's history on this row is the reminder that only a recording settles it: pi was assessed daemon=full from a parser read and reconciled to incapable after a live recording proved the premise false.",
+        "The torn/partial-LINE robustness the scenario's NAME evokes (bytes flushed without a trailing newline) does not apply to hermes at all: there is no line-oriented file. The daemon reads committed SQLite rows, so a half-written row is unobservable by construction. That shared-tailer property is covered by `core/pkg/tailer` unit tests (TestTailAndProcess_PartialTrailingLine), not by any hermes recording.",
+        "Multi-step hermes turns DO produce intermediate non-terminal store rows (assistant/finish_reason='tool_calls' followed by tool rows — 29 of each in the live store), and the parser deliberately holds `working` across them via the finishReasonContinues carve-out. That is a real no-flicker property with real traces, but it is a TOOL-USE arc: this scenario pins `tool calls ≤ 0`, so it is out of scope here and is exercised by 2.2 / 2.4 instead.",
+        "Store visibility rests on `journal_mode=delete` (stated in watcher.go's package comment as verified). If a future hermes release switched the store to WAL, uncommitted pages could linger in a side file, but that would still not create a partial-row read — SQLite readers never see an uncommitted row — so the verdict is insensitive to it."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_state.py",
+          "note": "`def append_message` (~:6397): the only production writer of `messages`. Its `_do(conn)` runs one `INSERT INTO messages (…)` plus `UPDATE sessions SET message_count = message_count + 1` inside a single `_execute_write` transaction — the row and the counter commit together, so a message becomes observable only when complete. Every other non-test `UPDATE messages SET …` in the tree (:3291 active, :6579 display_kind/display_metadata, :6794 active/compacted, :6832 api_content, :7575/:7618 active) leaves `content` and `message_count` untouched."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/run_agent.py",
+          "note": ":2079 — `self._session_db.append_message(...)` inside `_flush_messages_to_session_db_unlocked` (def at :1877), reached only via `_persist_session` (:1772). One of just two non-test callers of append_message; the other (hermes_cli/cli_commands_mixin.py:986) is a `/branch` history copy. Neither is a per-chunk path — there is no streaming persist."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/turn_context.py",
+          "note": "~:1197-1210 — \"Crash-resilience: persist the inbound user turn before the first LLM call\", calling `agent._ensure_db_session()` then `agent._persist_session(...)`. This is what makes ready→working observable: the user row (and its message_count bump) commits before generation starts. Nothing further commits until the turn ends."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/conversation_loop.py",
+          "note": "The assistant row is built by `agent._build_assistant_message(assistant_message, finish_reason)` (e.g. :5504, :6232, :6325) only AFTER the API call returns, with finish_reason already resolved (:2384-2411 assigns 'incomplete'/'content_filter'/'stop'/'length'/'tool_calls'). No `_persist_session` call sits inside a chunk-consumption loop — every one of them is a turn/step/error boundary."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/auxiliary_client.py",
+          "note": "~:7246-7511 — hermes sends `stream=True` and AGGREGATES the async chunk stream into a complete response (plus a `force_stream=True` path for stream-only providers). Together with agent/stream_single_writer.py and agent/stream_diag.py this establishes agent_supports=yes: streaming is real, but it is a terminal-render/aggregation concern, and only the aggregate is persisted."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Live store, queried read-only (`sqlite3 file:…?mode=ro`). `SELECT role, COALESCE(finish_reason,'<NULL>'), COUNT(*) FROM messages GROUP BY 1,2` → user/<NULL> 30, assistant/stop 29, assistant/tool_calls 29, tool/<NULL> 29. ZERO assistant rows with a NULL or empty finish_reason across 117 rows: no in-flight partial assistant row has ever been committed."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "`Watcher.reconcile` emits `EventActivity` only when `message_count` grows (`grew := r.messageCount > prevCount`) or the session just ended, with `Terminal = turnIsDone(...)`; `turnIsDone` reads the newest active=1 row and is true for role='assistant' with a terminal finish_reason. Since no mid-generation commit changes message_count, the whole streaming window produces no event at all."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go",
+          "note": "`finishReasonEndsTurn` is a denylist: any non-empty finish_reason except 'tool_calls' ends the turn. So the parser WOULD hold `working` across a non-terminal assistant row if one existed — the gap is upstream, in what hermes commits, not in how the adapter reads it. (Its doc comment's claim of an in-flight empty-finish_reason row is the uncorroborated premise recorded in caveats.)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go",
+          "note": "Source is `ProcessOwnedStore` over `$HERMES_HOME/state.db` — one shared store, no transcript file. The package doc in adapter.go records `finish_reason` as an explicit turn boundary and the store as a live discovery source."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-21_streaming-partial-writes/recordings/2026-05-25-23-50-21_irrlichd-0.4.7+0d6720b/events.jsonl",
+          "note": "The recorded ProcessOwnedStore counter-example: opencode's streaming window carries an INTERMEDIATE transcript_activity at 23:52:07.859936 before the terminal one at 23:52:11.632798 (bracketing the text part's own time.start=1779745927676 / time.end=1779745931281) — a genuine incomplete-row write. Hermes commits nothing between its two boundary rows, which is exactly why opencode is `full` here and hermes is not."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/2-21_streaming-partial-writes/metadata.json",
+          "note": "Precedent and cautionary tale: pi was assessed daemon=full from a parser read and RECONCILED to incapable (2026-05-28) after a live recording proved it writes one consolidated assistant line per turn. kiro-cli and codex are frozen on this row for the same 'atomic whole-unit write, streaming is render-only' reason. Hermes matches that shape, established here from the writer's source rather than after a failed recording."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "Line 113: `DRIVE_ELICITS=\"send slash sleep wait_turn\"`. Every step a recipe for this scenario would need is already ported, so driver_capability is ready — the freeze is observability, not tooling."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "applicable:false — the cell is frozen at daemon=incapable, so no recording is driven. NOT a driver gap: the hermes interactive driver already elicits send/wait_turn/sleep (DRIVE_ELICITS line 113), and the recipe would be the trivial pi/kiro shape (one prompt asking for a longer multi-line reply, wait_turn, trailing sleep). Driving it would produce a perfectly valid recording of a `ready → working → ready` arc — it just could not assert this scenario's property, because hermes commits exactly two rows per no-tool turn (the crash-resilience user row before the first LLM call, then one complete assistant row with its terminal finish_reason at generation end) and nothing in between. The generation window is store-silent, so a `streaming_window` phase would be pinning a dwell over silence, not over partial flushes — a property `2-1_basic-turn` already covers. Re-assess if hermes ever persists incremental assistant content mid-generation with a signal the watcher can see (today `message_count` is the only growth trigger, and an in-place content UPDATE would not move it)."
+    }
+  }
+}
