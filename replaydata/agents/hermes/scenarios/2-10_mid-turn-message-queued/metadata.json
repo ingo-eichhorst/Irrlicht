@@ -1,0 +1,141 @@
+{
+  "scenario_id": "mid-turn-message-queued",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+6a36395",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes — Hermes ships mid-turn queueing as a first-class, documented option (`/queue <prompt>`, `/busy queue`, display.busy_input_mode: queue), but the SHIPPED DEFAULT is `interrupt`, so the recipe must flip it. daemon_capability: full — a queued message lives in the CLI's in-process `_pending_input` queue and writes NO `messages` row until it is consumed, so the store shows one contiguous working span. driver_capability: ready — the recipe needs only slash/send/sleep/wait_turn, all in DRIVE_ELICITS."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "mid-turn-message-queued",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes (queueing is first-class, but NOT the default — the recipe must select it)\ndaemon_capability: full\ndriver_capability: ready\n\n## Scenario\n\n2.10 asserts three user-observable things: state stays `working` through the queued message's ARRIVAL, no `→ ready` flicker when the queued input lands, and the cycle still ends at `ready` once everything is consumed. The claudecode and opencode anchors both note that whether the queued text is folded into the running turn or consumed as a NEW turn is legal either way — only the arrival window and the final `ready` are asserted.\n\n## agent_supports = yes (with a required recipe step)\n\nHermes Agent v0.19.0 implements mid-turn queueing explicitly, in three interchangeable surfaces, all read from the installed source tree at `$HERMES_HOME/hermes-agent` (v0.19.0, local git checkout e289e561):\n\n- **`display.busy_input_mode`** (`hermes_cli/config.py:1897`, `cli.py:4129-4138`) takes `interrupt | queue | steer`. In `queue` mode the Enter keybinding's busy branch runs `self._pending_input.put(payload)` and prints `Queued for the next turn: …` (`cli.py` handle_enter, the `_effective_mode == \"queue\"` arm).\n- **`/busy queue`** (`hermes_cli/cli_commands_mixin.py::_handle_busy_command`) flips that mode live and persists it via `save_config_value(\"display.busy_input_mode\", …)`.\n- **`/queue <prompt>`** (alias `/q`, `hermes_cli/commands.py:110`, dispatched at `cli.py:9610`) — \"Queue a prompt for the next turn (doesn't interrupt)\" — puts the payload into the same `_pending_input` queue.\n\nSo the behavior the scenario needs is shipped and documented. The load-bearing caveat is that it is **not the default**: `cli.py:512` and `hermes_cli/config.py:1897` both default `busy_input_mode` to `\"interrupt\"`, and the live install's `config.yaml` on this machine reads `busy_input_mode: interrupt` (verified). In `interrupt` mode the Enter handler calls `self.agent.redirect(text)` — it REDIRECTS the in-flight turn rather than queueing it, which is a different scenario (mid-turn interrupt) and would break this cell's invariants. Hence the recipe opens with a `/busy queue` slash step; `agent_supports` is `yes` (the capability exists and is a supported setting), not `partial`.\n\n## daemon_capability = full\n\nHermes writes NO transcript file: the adapter's Source is `agent.ProcessOwnedStore` over one shared SQLite store at `$HERMES_HOME/state.db` (`core/adapters/inbound/agents/hermes/agent.go`, `adapter.go`). Session state is derived by `querySessionMetrics` → `foldMessages`, which replays the session's `messages` rows through `Parser.ParseLine` and hands the daemon `LastEventType` (`core/adapters/inbound/agents/hermes/metrics.go`).\n\nThe no-flicker-on-arrival invariant holds for a structural reason I could confirm on the EMISSION side, not merely infer from the parser: **both queue paths put the payload into `self._pending_input`, a plain Python `queue.Queue` allocated at `cli.py:4441`/`13765`, and neither touches the database.** Nothing calls `SessionDB.append_message` (`hermes_state.py:6397`, the sole writer of a `messages` row outside the FTS health probe) for a message that has only been queued. The row is written when the conversation loop actually consumes the payload as the next turn's user message. So during the arrival window:\n\n- `messages` gains no `role='user'` row, hence `message_count` does not grow from the injection, hence the watcher emits no extra activity event for it (`watcher.go::reconcile` only emits on `grew || justEnded`).\n- The fold's `LastEventType` stays `assistant_message` (a `finish_reason='tool_calls'` row) or `tool_result`. `session.SessionMetrics`'s ready test (`core/domain/session/metrics.go:520-548`) fires only on `turn_done` or on the `\"assistant\"`/`\"assistant_output\"` fallback — hermes emits neither mid-turn, since `Parser.ParseLine` promotes an assistant row to `turn_done` ONLY when `finish_reason == \"stop\"` (`parser.go:93-95`) and names its non-terminal event `assistant_message`. So no `→ ready`.\n- No `→ waiting` either: the only waiting cue this adapter can raise is `PendingWaitingCue`, computed from the assistant prose by the shared `session.ProseIndicatesWaiting` (`parser.go:89`), and the recipe's prompt asks for expository prose with no question in it.\n\nThe cycle closes at `ready` through hermes' EXPLICIT turn boundary rather than an idle heuristic: `watcher.go::turnIsDone` reads the newest `active=1` row and returns true for `role='assistant' AND finish_reason='stop'`, which is what makes `Terminal` true on the activity event. That is the same signal the sibling `1.1 session-start` cell depends on, and it is why this adapter needs no IdleFlush seam that could otherwise fire inside a long working span.\n\nThe queued message is then consumed as a NEW turn (the process loop drains `_pending_input` after the current turn returns), so the recording will show `working → ready → working → ready`. That inter-turn `ready` is legal per the anchors — the invariant this cell pins is the ARRIVAL window, which sits inside turn 1.\n\n## driver_capability = ready\n\n`replaydata/agents/hermes/driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"` — exactly the four primitives this recipe uses. Two specifics make a mid-turn injection work without a new step type:\n\n- `send_text` is fire-and-forget (`tmux send-keys -l` + a 0.4s beat + `Enter`); it does not block on turn state, so a `send` between a `send` and a `wait_turn` lands mid-turn. This is why hermes needs no `mid_turn_send` primitive of the kind opencode had to port — opencode's gap was that its default path shelled out to a BLOCKING `opencode run` per send.\n- `/busy queue` is an inline-argument slash command, i.e. a `slash` step, not a `keys` gap (the false-gap the assess skill calls out explicitly). `DRIVE_SLASH_REQUIRES_STEP_TYPE=false`, so `slash` and `send` are the same keystrokes.\n\n`wait_turn` counts `assistant` rows with `finish_reason='stop'` against `EXPECTED_TURNS_SEEN`, so two consecutive `wait_turn`s correctly block for turn 1 then turn 2.\n\nThe recipe's `settings` is `{}` on purpose: the hermes driver accepts `SETTINGS_PATH` as `$4` but never reads it (line 81 is the only occurrence in the file), so a settings blob would be silently dropped. The busy-input mode is therefore selected in-REPL, where it is observable in the pane.\n\n## Route\n\nrecord.",
+      "caveats": [
+        "The recipe MUST flip the busy-input mode before the first prompt. Hermes' shipped default is `interrupt` (cli.py:512, hermes_cli/config.py:1897, and the live config.yaml on this machine), under which a mid-turn Enter calls agent.redirect(text) and REDIRECTS the running turn instead of queueing it — a different scenario that would violate this cell's invariants. If the recording shows the pane printing '↪ Redirected current turn' instead of 'Queued for the next turn', the `/busy queue` step did not take.",
+        "Fallback if the `/busy queue` step proves unreliable in the pane: use `/queue <text>` as the injection step instead. A slash command typed while the agent is running bypasses the busy branch entirely (`cli.py` handle_enter: `if self._agent_running and not (text and _looks_like_slash_command(text))`), so `/queue` never interrupts regardless of busy_input_mode. It was not chosen as the primary because a plain `send` is the more faithful rendering of the scenario's step 2 ('User types a follow-up message').",
+        "TUNING LEVER for record: `queued_window` pins `duration_at_least_ms: 10000` and the recipe injects 8s after the first send, so the asserted window genuinely SPANS the arrival (both the claudecode and opencode anchors assert only 3000ms from turn start, which does not reach their own injection point). This is strictly stronger than the anchors and therefore the phase most likely to need re-tuning: it requires turn 1 to stay `working` for at least 10s. If gpt-5.6-luna answers the ~600-word prompt faster than that, lengthen the prompt rather than weakening the window — shortening it back to 3000 would make the cell assert nothing about the arrival.",
+        "`/busy queue` persists `display.busy_input_mode` into `$HERMES_HOME/config.yaml` (save_config_value), so the recording home is mutated. Harmless under the isolated recording HERMES_HOME the rig exports, but it would change the maintainer's real config if HERMES_HOME is not exported — the same precondition the agent column already carries.",
+        "PROVISIONAL until recorded (per the observation-vs-emission rule): the no-store-write claim is a source read of hermes' own CLI, not a live capture. It is a strong read — both queue paths call `self._pending_input.put(payload)` on a plain queue.Queue and SessionDB.append_message is the sole messages-row writer — but only the recording settles whether some other code path (an onboarding hint, a display_kind bookkeeping row) writes during the window. A bookkeeping user row would still not flip the session to ready (user_message is not a turn boundary), so the realistic downside is a caveat, not a verdict change.",
+        "The spec deliberately omits a `pid_bind` phase. The scenario's acceptance criteria say nothing about PID binding, and hermes' pid_discovered timing is still unproven (the sibling 1.1 cell that asserts it has not been recorded yet), so including it would add failure surface unrelated to what this cell locks down.",
+        "Second `wait_turn` assumes consume-as-a-NEW-turn. That is what queue mode does (the process loop drains `_pending_input` as the next prompt), but if hermes ever folded the queued text into the running turn, the second `wait_turn` would burn to the driver deadline and report EXIT_REASON=timeout. Both shapes are legal per the scenario; only the driver contract is opinionated.",
+        "Observations are pinned from the LIVE surface, not from docs: `model: gpt-5.6-luna` matches every recent `source='cli'` row in the live store AND `model.default` in config.yaml. `cost_nonzero` is safe because gpt-5.6-luna carries real pricing in the capacity cache (input 0.20/mtok, output 1.20/mtok), and the adapter prices from irrlicht's capacity table rather than from sessions.estimated_cost_usd, which Hermes reports as 0.0 under billing_mode='subscription_included'."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "hermes-agent@e289e561 (v0.19.0, local git checkout at $HERMES_HOME/hermes-agent): cli.py:512, cli.py:4129-4138, hermes_cli/config.py:1897",
+          "note": "busy_input_mode is `interrupt | queue | steer` and DEFAULTS to `interrupt`. Grounds both agent_supports:yes (queue is a shipped, supported mode) and the recipe's mandatory `/busy queue` step."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent@e289e561: cli.py handle_enter (the `_effective_mode == \"queue\"` / `elif _effective_mode == \"interrupt\"` arms) and cli.py:9610-9620 (/queue dispatch)",
+          "note": "EMISSION EVIDENCE for daemon=full. Both queue paths end at `self._pending_input.put(payload)` — a plain queue.Queue (cli.py:4441, 13765) — with no database call. The interrupt arm instead calls `self.agent.redirect(text)`. This is why a queued-but-unconsumed message writes no `messages` row."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent@e289e561: hermes_state.py:6397 SessionDB.append_message; hermes_cli/commands.py:110 CommandDef(\"queue\", …)",
+          "note": "append_message is the sole writer of a `messages` row (aside from the FTS health probe at hermes_state.py:929, which always ROLLBACKs). `/queue <prompt>` is registered as 'Queue a prompt for the next turn (doesn't interrupt)' with alias /q."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go:70-107",
+          "note": "An assistant row becomes `turn_done` ONLY on finish_reason=='stop'; otherwise it is `assistant_message`. A `user` row is `user_message` (never a turn boundary). This is what makes the mid-turn span contiguous and what closes the cycle at ready."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go:93-174 (querySessionMetrics/foldMessages) and core/domain/session/metrics.go:520-548",
+          "note": "State is derived from the fold's LastEventType over the session's messages rows; the ready test fires on `turn_done` or the \"assistant\"/\"assistant_output\" fallback, neither of which hermes emits mid-turn. No new row during the queued window → no state change → no flicker."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go:356-436 (reconcile, turnIsDone)",
+          "note": "Activity is emitted only when message_count grows or the session just ended; Terminal comes from turnIsDone reading the newest active row for role='assistant' AND finish_reason='stop'. Explicit turn boundary, so no idle-flush heuristic can fire inside a long working span."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh (DRIVE_ELICITS at ~line 110; send_text; wait_turn; SETTINGS_PATH at line 81)",
+          "note": "driver=ready. DRIVE_ELICITS=\"send slash sleep wait_turn\" covers every step this recipe uses; send_text is non-blocking so a mid-turn `send` lands inside the working span; wait_turn counts finish_reason='stop' rows against EXPECTED_TURNS_SEEN. SETTINGS_PATH is accepted but never read, which is why `settings` is {}."
+        },
+        {
+          "kind": "file",
+          "ref": "$HERMES_HOME/state.db (live read-only query, 2026-08-02) and $HERMES_HOME/config.yaml:96",
+          "note": "Live surface for the observations block: every recent source='cli' session row carries model='gpt-5.6-luna' (and cwd=''), matching model.default in config.yaml; config.yaml line 96 reads `busy_input_mode: interrupt`, confirming the default is live on this machine."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-10_mid-turn-message-queued/expected.jsonl (and claudecode's sibling)",
+          "note": "Anchor for the phase shape. opencode is the other ProcessOwnedStore adapter and verified 5/5 with session_birth unpinned to start + turn_start(working) + queued_window(same_session_as turn_start) + turn_end; its notes establish that consume-as-new-turn and the legal inter-turn ready do not violate the arrival-window invariant."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH and an inference provider configured in <HERMES_HOME>/config.yaml (model.default + model.provider) with working credentials",
+        "HERMES_HOME exported in the shell that runs run-cell.sh, so BOTH the recording daemon (which inherits it via spawn-record-daemon.sh) and the driver read the same state.db",
+        "sqlite3 on PATH — the store is the only session signal hermes exposes; the driver exits nonzero(2) without it",
+        "no other hermes session process running: sessions.cwd is empty for source='cli', so the live-process CWD fallback only binds a project when exactly one session process is alive",
+        "irrlichd is recording with the hermes store watcher enabled (grant-all permission mode, so the observe-kind \"store\" permission is not left pending)"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/. The driver launches `hermes chat`, which records source='cli' (not 'tui'), so the project binding comes from the live-process CWD fallback.",
+        "The FIRST step is `/busy queue`, sent at idle before any prompt. Hermes' shipped default busy_input_mode is `interrupt`, under which a mid-turn Enter REDIRECTS the running turn instead of queueing it. The pane should print \"✓ Busy input mode set to 'queue'\" — if it prints anything else, stop: the rest of the recipe is measuring the wrong behavior.",
+        "The first prompt asks for a long expository answer (~600 words, no tools) so the turn stays `working` long enough to inject into and to satisfy the queued_window's 10s hold.",
+        "The injection is a plain `send` 8s into the turn. With busy_input_mode=queue the CLI puts it into the in-process `_pending_input` queue and prints 'Queued for the next turn: …'; NO messages row is written until it is consumed, so the store shows one contiguous working span across the arrival.",
+        "Two `wait_turn`s: the first blocks for turn 1's finish_reason='stop', the second for the queued follow-up's turn. The trailing sleep lets the daemon's 2s store poll settle the final ready before teardown."
+      ],
+      "script": [
+        {
+          "type": "slash",
+          "text": "/busy queue"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Write a detailed explanation, about 600 words, of how a write-ahead log works in a relational database. Cover commit ordering, crash recovery, and checkpointing. Use full paragraphs of prose, no bullet lists, and do not ask me any questions."
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "follow-up: when you are done with that, reply with exactly the word: queued"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "the pane shows \"✓ Busy input mode set to 'queue'\" after the first step, and \"Queued for the next turn:\" (NOT \"↪ Redirected current turn\") when the follow-up is typed",
+        "events.jsonl shows a hermes session reaching ready, then a ready→working transition for the first prompt",
+        "events.jsonl contains NO state_transition to ready and NO state_transition to waiting on that session for at least 10s after the working transition — the window spans the mid-turn injection",
+        "state.db has no role='user' row for the follow-up until turn 1's assistant row with finish_reason='stop' has landed (the queued message is written only at consumption)",
+        "events.jsonl eventually shows a final working→ready transition; final session state is ready",
+        "the session's model is gpt-5.6-luna and its token/cost vector is non-zero"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}
