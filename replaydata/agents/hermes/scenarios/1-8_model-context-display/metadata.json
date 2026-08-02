@@ -125,12 +125,13 @@
         "The store row is INSERTed only on the first user message, so the sub-second ready birth in events.jsonl is carried by the transient proc-<PID> pre-session the scanner mints; the store-backed session appears a few seconds later and carries the turn arc.",
         "No model flag is passed — this cell asserts DEFAULT-launch visibility, so the boot model from config.yaml is what must reach metrics.model_name.",
         "The send is a single no-tool plain-text turn, so the working span carries no tool call and the session never enters waiting.",
-        "The three metric assertions are checked AFTER turn completion: metrics may briefly read 0 between session discovery and the first token-aggregate write."
+        "The three metric assertions are checked AFTER turn completion: metrics may briefly read 0 between session discovery and the first token-aggregate write.",
+        "The generation is deliberately WIDE (a 30-line count plus two sentences of prose) rather than the one-token “What is 6 times 7?” an earlier draft carried. The watcher polls every 2s with a 500ms debounce, so a ~1s turn can commit its user row and its assistant finish_reason=stop row inside a SINGLE scan — the ready→working edge then never exists to be observed and turn_start fails. Widening the generation is the fix; weakening the spec is not."
       ],
       "script": [
         {
           "type": "send",
-          "text": "What is 6 times 7? Reply with just the number."
+          "text": "Without using any tools, count from 1 to 30, one number per line. Then, without using any tools, write two sentences explaining what multiplication is."
         },
         {
           "type": "wait_turn"
