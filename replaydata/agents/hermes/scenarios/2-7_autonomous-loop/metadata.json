@@ -150,7 +150,10 @@
         "events.jsonl shows at least two working→ready arcs on the SAME real (non proc-) session id.",
         "The second working starts from a messages row the driver never sent — the '[Continuing toward your standing goal]' continuation prompt — which is what distinguishes autonomy from an externally-driven loop.",
         "Final state is ready.",
-        "The recording's store shows >=3 assistant rows with finish_reason='stop' in the session (one per iteration)."
+        "The recording's store shows >=3 assistant rows with finish_reason='stop' in the session (one per iteration).",
+        "CONFIRMED 2026-08-03: iterations 2 and 3 each open with a `user` row the driver never typed - \"[Continuing toward your standing goal]\\nGoal: ...\" - so the loop is agent-driven, not driver-driven. Driver inputs were exactly two slash lines (/goal ... and /goal clear).",
+        "CONFIRMED: three assistant rows with finish_reason='stop' (saying 1, 2, 3) and three per-iteration ready<->working arcs on the one store-backed session; final state ready, no transition to waiting.",
+        "METRIC TIER ONLY: token totals. `of verify` reads the replay-golden summary and hermes' replay path runs Parser rather than ComputeMetrics over the store, so the golden always reports 0. observations.tokens_nonzero was seen red on this recording and moved to `model`."
       ],
       "notes": "Deliberately tool-free: approvals.mode defaults to 'smart', so a shell-command goal risks an approval prompt flipping the session to waiting mid-loop for a reason unrelated to this scenario. /goal clear at the end defensively terminates the loop if the judge's done-verdict is slow or non-deterministic; it is dispatched via process_command and writes no store row, so it adds no turn."
     }
