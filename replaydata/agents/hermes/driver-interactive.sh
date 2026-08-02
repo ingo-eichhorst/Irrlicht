@@ -135,9 +135,77 @@ cleanup() {
   for (( i = 1; i <= N_SLOTS; i++ )); do
     [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   done
+  restore_settings
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
 trap cleanup EXIT
+
+# --- Scenario settings → <HERMES_HOME>/config.yaml ---------------------------
+# run-cell.sh writes the recipe's `settings` blob to $STAGING/settings.json and
+# hands it to every driver as $4. Hermes reads no per-run settings file — its
+# only configuration surface is <HERMES_HOME>/config.yaml — so a scenario that
+# needs a config key had no way to get one and the blob was silently dropped.
+# That is not cosmetic: 2.8 autonomous-loop-iteration-limit declares
+# `{"goals":{"max_turns":2}}` and IS the turn cap it asserts; without the merge
+# the loop runs to the 20-turn default (cli.py:9914) and the cap is never
+# reached, so the recording would capture a different scenario.
+#
+# The merge is deep (so a scenario setting one key under `goals` does not drop
+# the rest of the file), the original is copied into the staging dir first, and
+# the cleanup trap restores it on EVERY exit path including a `set -e` abort —
+# a run must never leave the recording home mutated for the next cell.
+#
+# Inert for a settings-less cell: an empty/absent/`{}` blob returns before it
+# touches anything, which is every other hermes cell today.
+HERMES_CONFIG="${HERMES_HOME:-$HOME/.hermes}/config.yaml"
+HERMES_CONFIG_BACKUP=""
+
+apply_settings() {
+  [[ -n "$SETTINGS_PATH" && -f "$SETTINGS_PATH" ]] || return 0
+  local nkeys
+  nkeys="$(jq -r 'if type == "object" then (keys | length) else 0 end' "$SETTINGS_PATH" 2>/dev/null || echo 0)"
+  [[ "$nkeys" == "0" ]] && return 0
+  [[ -f "$HERMES_CONFIG" ]] || {
+    echo "[driver] recipe carries settings but $HERMES_CONFIG does not exist" >&2
+    EXIT_REASON="nonzero(2)"; exit 1
+  }
+  # Back up BEFORE the first write, so restore_settings is armed even if the
+  # merge itself fails halfway.
+  HERMES_CONFIG_BACKUP="$STAGING/config.yaml.orig"
+  cp "$HERMES_CONFIG" "$HERMES_CONFIG_BACKUP"
+  python3 - "$HERMES_CONFIG" "$SETTINGS_PATH" <<'PY' || {
+import json
+import sys
+
+import yaml
+
+cfg_path, overlay_path = sys.argv[1], sys.argv[2]
+with open(cfg_path) as fh:
+    cfg = yaml.safe_load(fh) or {}
+with open(overlay_path) as fh:
+    overlay = json.load(fh)
+
+def deep_merge(dst, src):
+    for key, val in src.items():
+        if isinstance(val, dict) and isinstance(dst.get(key), dict):
+            deep_merge(dst[key], val)
+        else:
+            dst[key] = val
+
+deep_merge(cfg, overlay)
+with open(cfg_path, "w") as fh:
+    yaml.safe_dump(cfg, fh, sort_keys=False, allow_unicode=True)
+PY
+    echo "[driver] failed to merge scenario settings into $HERMES_CONFIG" >&2
+    EXIT_REASON="nonzero(2)"; exit 1
+  }
+  echo "[driver] merged scenario settings into $HERMES_CONFIG (restored on exit)" >&2
+}
+
+restore_settings() {
+  [[ -n "$HERMES_CONFIG_BACKUP" && -f "$HERMES_CONFIG_BACKUP" ]] || return 0
+  cp "$HERMES_CONFIG_BACKUP" "$HERMES_CONFIG" 2>/dev/null || true
+}
 
 # --- AGENT-SPECIFIC SEAM 1: launch the REPL under tmux -----------------------
 # Port from the reference driver. Start the agent in a detached tmux session in
@@ -385,6 +453,9 @@ send_text() { # <text>
 }
 
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
+# Settings must land in config.yaml BEFORE the REPL boots — hermes reads its
+# config once at startup, so a merge after launch_repl would be invisible.
+apply_settings
 launch_repl
 while IFS= read -r step; do
   type="$(jq -r '.type' <<<"$step")"
