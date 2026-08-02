@@ -90,7 +90,7 @@
       "setup": [
         "Create an empty cwd under <staging>/cwd/. The driver launches `hermes chat`, which records source='cli' (not 'tui'), so the project binding comes from the live-process CWD fallback.",
         "The FIRST step is `/busy queue`, sent at idle before any prompt. Hermes' shipped default busy_input_mode is `interrupt`, under which a mid-turn Enter REDIRECTS the running turn instead of queueing it. The pane should print \"✓ Busy input mode set to 'queue'\" — if it prints anything else, stop: the rest of the recipe is measuring the wrong behavior.",
-        "The first prompt asks for a long expository answer (~600 words, no tools) so the turn stays `working` long enough to inject into and to satisfy the queued_window's 10s hold.",
+        "The first prompt asks for a long expository answer (~900 words, no tools) so the turn stays `working` well past the queued_window's 10s hold and past the +8s injection point. The assessment's earlier draft said ~600 words; it was widened at record time because the column's committed timing prerequisite records working spans as short as 1.7s for narrow generations, and this cell is the one that pins the LONGEST window (10000 ms) in the column. Lengthening the prompt is the sanctioned lever here - the caveat is explicit that shortening the window back to the anchors' 3000 ms would make the cell assert nothing about the arrival.",
         "The injection is a plain `send` 8s into the turn. With busy_input_mode=queue the CLI puts it into the in-process `_pending_input` queue and prints 'Queued for the next turn: …'; NO messages row is written until it is consumed, so the store shows one contiguous working span across the arrival.",
         "Two `wait_turn`s: the first blocks for turn 1's finish_reason='stop', the second for the queued follow-up's turn. The trailing sleep lets the daemon's 2s store poll settle the final ready before teardown."
       ],
@@ -105,7 +105,7 @@
         },
         {
           "type": "send",
-          "text": "Write a detailed explanation, about 600 words, of how a write-ahead log works in a relational database. Cover commit ordering, crash recovery, and checkpointing. Use full paragraphs of prose, no bullet lists, and do not ask me any questions."
+          "text": "Write a detailed explanation, about 900 words, of how a write-ahead log works in a relational database. Cover commit ordering, crash recovery, checkpointing, group commit, and the trade-offs against shadow paging. Use full paragraphs of prose, no bullet lists, do not call any tool, and do not ask me any questions."
         },
         {
           "type": "sleep",
@@ -132,7 +132,7 @@
         "events.jsonl contains NO state_transition to ready and NO state_transition to waiting on that session for at least 10s after the working transition — the window spans the mid-turn injection",
         "state.db has no role='user' row for the follow-up until turn 1's assistant row with finish_reason='stop' has landed (the queued message is written only at consumption)",
         "events.jsonl eventually shows a final working→ready transition; final session state is ready",
-        "the session's model is gpt-5.6-luna and its token/cost vector is non-zero"
+        "METRIC TIER, read off the live recording daemon's /api/v1/sessions (NOT assertable in observations - `of verify` reads only the replay golden summary, while hermes' tokens and cost come from ComputeMetrics over the store, a path replay never runs): the session's model is gpt-5.6-luna and its cumulative token and cost vector is non-zero"
       ],
       "settings": {},
       "timeout_seconds": 300
