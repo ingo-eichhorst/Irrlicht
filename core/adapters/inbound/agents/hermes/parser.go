@@ -146,8 +146,11 @@ const finishReasonContinues = "tool_calls"
 // permanently, with no recovery path. Mistaking a future continuing value for
 // a terminal one merely settles a beat early and is corrected by the next row.
 //
-// An empty reason is the in-flight row hermes writes before the turn closes,
-// so it continues.
+// An empty reason continues as a DEFENSIVE DEFAULT, not because such a row
+// was observed: hermes commits an assistant row once, with its finish_reason
+// already resolved, and a live store showed 0 of 117 assistant rows with a
+// NULL/empty reason. Treating the unobserved case as "still working" is the
+// safe side of a rule whose job is deciding when to stop watching.
 func finishReasonEndsTurn(finish string) bool {
 	return finish != "" && finish != finishReasonContinues
 }
