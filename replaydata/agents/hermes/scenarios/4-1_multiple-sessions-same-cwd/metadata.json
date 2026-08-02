@@ -1,0 +1,177 @@
+{
+  "scenario_id": "multiple-sessions-same-cwd",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:start_session",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+80d4670.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes — two `hermes chat` REPLs run concurrently in one cwd (verified live). daemon_capability: full — the cwd fallback's guard is per DISTINCT cwd, not per process, so a same-cwd pair resolves and claim-aware disambiguation gives each session its own PID. driver_capability: gap:start_session — start_session/session are not_implemented stubs and the turn counter is global."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-sessions-same-cwd",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:start_session",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:start_session\n\n## agent \u2014 yes\n\n`hermes chat` is an ordinary interactive REPL with no per-directory or\nper-machine singleton: two of them launch side by side in one cwd. Verified\nlive on v0.19.0 rather than argued: two concurrent hermes session processes ran\nin a single directory at the same time (`pgrep -f` output cited in sources),\nand the maintainer's own store already contains same-second concurrent pairs\nfrom earlier runs (`20260802_212608_1dc71a` / `20260802_212608_feed91`, two\ndistinct ids, `started_at` 0.017 s apart). Each session gets its own\n`sessions` row with its own id, `started_at`, token counters and\n`finish_reason` stream, so \"two distinct session_ids with independent arcs\" is\na property of the store, not something the adapter has to synthesise.\n\n## daemon \u2014 full\n\nThe scenario's four observables are (1) two distinct session rows, (2) distinct\nPIDs, (3) independent state arcs, (4) a stable PID-to-session binding.\n\n**(1) and (3) are free.** The watcher keys its cursor on the store's session id\n(`watcher.go` `sessions map[string]*sessionCursor`), scans\n`source IN ('cli','tui')` rows and emits `new_session` + `activity` per id;\n`turnIsDone` reads `finish_reason='stop'` off *that session's* newest message\nrow. Nothing in that path is shared between two sessions, so a turn in one\ncannot move the other. The messaging-gateway rows that share the table are\nfiltered out by the `source` predicate.\n\n**(2) and (4) hinge on cwd \u2014 and this scenario is the case the cwd fallback\nactually handles.** `sessions.cwd` is NULL for `source='cli'` rows (only\nHermes' `tui_gateway/server.py` ever calls `update_session_cwd` \u2014 grep cited\nbelow), so the adapter falls back to `defaultLiveCWD`. The prerequisite every\nother assessed hermes cell carries \u2014 \"exactly one live hermes session\nprocess\" \u2014 is stricter than the code: `defaultLiveCWD` bails on\n`len(cwds) != 1` where `cwds` comes from\n`processlifecycle.LiveCWDsByCmdline`, which returns a **set of directories**\n(`set[dir] = struct{}{}`), not a list of PIDs. Two session processes sharing\nONE directory collapse to a single set entry, so the guard passes and the\nfallback returns that directory. This cell is same-cwd by definition, so it\nsatisfies the guard *by construction*.\n\nVerified live rather than read off the code: with two `hermes chat --tui`\nprocesses running in `/private/tmp/hermes41probe`, `pgrep -f` with the\nadapter's exact `processCmdPattern` matched exactly three PIDs \u2014 the two\nsession processes (both `cwd=/private/tmp/hermes41probe`) and the long-lived\n`python -m hermes_cli.main gateway run --replace`, which `isServiceArgv`\nexcludes (`gateway` is in `serviceSubcommands`) and which `LiveCWDsByCmdline`\ntherefore never contributes its own `~/.hermes` cwd from. The two child\nprocesses each session spawns \u2014 the Node TUI (`ui-tui/dist/entry.js`) and\n`python3 -m tui_gateway.entry` \u2014 do NOT match the pattern (`/hermes` must be\nfollowed by a space or end-of-string; `hermes-agent/`, `.hermes/` and\n`hermes-local/` all fail that bound), so they cannot pollute the candidate set\neither. Candidate set = exactly the two session processes = exactly what this\nscenario wants.\n\nFrom a non-empty shared cwd the rest follows the claudecode path that is\nalready recorded and verified for this scenario:\n\n- `DiscoverPID` \u2192 `DiscoverPIDByCWDAndCmdLineExcludingArgv` finds both PIDs at\n  that cwd and hands them to `PIDManager.claimAwareDisambiguate`, which prefers\n  the highest **unclaimed** PID \u2014 so the second session cannot be handed the\n  PID the first already claimed. Distinct PIDs, and a claimed PID is never\n  re-disambiguated, which is criterion (4).\n- The mapping is not merely distinct but *correct* under the recipe's\n  sequential order: session 1's store row is INSERTed on its first user\n  message, ~2 s in, while its process is still the only one alive \u2014 an\n  unambiguous bind \u2014 and session 2's row then takes the only remaining\n  unclaimed PID.\n- The two `proc-<PID>` pre-sessions the process scanner mints retire cleanly:\n  `findSupersedingSession` matches on `proc.PID == candidate.PID` once each\n  real session binds its PID, so the row count settles at two, not four.\n\nNo spec-required observable is mis-handled on the recipe this cell specifies,\nso the verdict is `full`.\n\n### What the daemon genuinely cannot do (out of scope here, cited so it is not\nre-litigated)\n\nIf a hermes session process is alive in a *different* directory during the\nrecording, the set has two entries, `defaultLiveCWD` returns \"\", and then:\nboth store sessions get `CWD=\"\"`; `DiscoverPIDByCWDAndCmdLineExcludingArgv`\nshort-circuits on `cwd == \"\"` and binds no PID at all; and the pre-sessions\nnever retire, because `findSupersedingSession` needs either a PID match (the\nreal sessions have PID 0) or `proc.CWD == candidate.CWD` (the real sessions\nhave \"\"), so `cleanupPreSessionsForProject` \u2014 matching on `projectDir`, also\nempty \u2014 misses them too. Four rows, two of them PID-less, forever.\n\nIs that a fixable daemon gap or genuinely unobservable? Both, depending on\nsurface and config, and this is the honest split:\n\n- **TUI surface: fixable today, no daemon change needed.** `hermes chat --tui`\n  writes `source='tui'` with `cwd` POPULATED (dispatcher's live probe;\n  independently consistent with `update_session_cwd` being called only from\n  `tui_gateway/server.py`). Both `scanSessions` (`cwd = r.cwd`, fallback only\n  when empty, `anyRowNeedsCWD` never even consults the live probe) and\n  `querySessionMetrics` (`lastCWD := cwd.String`) prefer the stored value, so\n  two concurrent TUI sessions bind their own cwd from their own row with no\n  ambiguity guard involved at all.\n- **CLI surface: conditionally fixable, not by inference.** The store persists\n  no pid, tty or cwd for `source='cli'` (full `PRAGMA table_info(sessions)`\n  cited below \u2014 48 columns, none process-related), so no query can link a\n  session id to a process. Hermes does keep an explicit\n  pid\u2194session_id registry \u2014 `$HERMES_HOME/runtime/active_sessions.json`,\n  entries `{lease_id, session_id, surface, pid, process_start_time, started_at,\n  updated_at}` \u2014 but `try_acquire_active_session` returns a no-op lease and\n  writes NOTHING when `max_concurrent_sessions` is unset, which is the default:\n  no `runtime/` directory exists in either hermes home on this machine. So a\n  per-PID binding is implementable only for users who opt into a session cap.\n- **Time-correlation is not a fix.** The one remaining discriminator \u2014\n  `sessions.started_at` vs process start time \u2014 is a coin flip in exactly the\n  case that needs it: the store's existing concurrent pair is 0.017 s apart.\n\nNone of that is triggered by this cell's recipe, so it lives here and in\n`caveats`, not in the verdict (caveats-over-downgrades).\n\n## driver \u2014 gap:start_session\n\n`replaydata/agents/hermes/driver-interactive.sh` declares\n`DRIVE_ELICITS=\"send slash sleep wait_turn\"`; `start_session` and `session` are\nboth `not_implemented` stub arms, and the recipe needs both (launch the second\nREPL without tearing the first down, then route the third turn back to slot 1).\nTwo further seams must be made slot-aware in the same port, and neither is\nvisible from the step-type list:\n\n1. `EXPECTED_TURNS_SEEN` is a single **global** counter. With two slots,\n   session 2's `wait_turn` compares session 2's stop-count (1) against the\n   global counter session 1 already advanced to 1 and spins to the deadline.\n   The slot array `SES_EXPECTED[]` is already declared for exactly this \u2014 the\n   port is to use `SES_EXPECTED[$ACTIVE]`.\n2. `resolve_session_id` binds \"newest `cli|tui` row with\n   `started_at > SES_LAUNCH_TS[$ACTIVE]`\". That is correct per slot only if\n   slot 1 is resolved before slot 2's row exists; the recipe's sequential order\n   guarantees it, but the port should keep the per-slot launch timestamp\n   comparison rather than a global \"newest row\".\n\nThis is tooling work, not an observability limit, so the cell keeps its full\nrecipe and spec and routes `driver-gap`.\n\n## Provisional\n\nEverything above is code, live process inspection and live store queries \u2014 no\nhermes recording exists yet for any cell. The two things only a recording can\nsettle: whether the pre-session\u2192store-session supersession really lands\ncleanly for BOTH sessions (the PID-match path is what makes it work, and it has\nnever been exercised with two concurrent hermes rows), and whether the\nclaim-aware bind assigns session 1 the process that actually wrote it \u2014 the\nverify vector cannot see a swapped mapping, so it would pass either way. Hence\nconfidence 0.8.",
+      "caveats": [
+        "The 'exactly one live hermes process' prerequisite copied into every other assessed hermes cell is stricter than the code: defaultLiveCWD guards on the number of DISTINCT cwds (LiveCWDsByCmdline returns map[dir]struct{}), not the number of processes. This cell is safe with two processes precisely because they share one directory. The real prerequisite \u2014 here and, on re-read, in the sibling cells \u2014 is 'no hermes session process alive in a DIFFERENT cwd'.",
+        "A swapped PID-to-session mapping is INVISIBLE to this spec. The verify vector asserts distinct ids and independent arcs, both of which come from the store and are correct regardless of which process each row is bound to. The recipe's sequential order (drive session 1 fully before launching session 2) is what makes the mapping correct by construction; a recipe that launched both up front would still verify green with the two bindings crossed.",
+        "PROVISIONAL daemon verdict: no hermes recording exists for any cell yet. The pre-session\u2192store-session supersession by PID match has never run with two concurrent hermes sessions.",
+        "TUI surface is the hardening fallback, not a requirement: `hermes chat --tui` records source='tui' with sessions.cwd populated, which removes the live-process fallback from the picture entirely. It is NOT used here because it would add gap:tui_launch (already the driver verdict on cell 2-15) plus a Node/TUI-bundle prerequisite, for a cell the CLI surface already covers. If a recording shows cwd binding trouble, switching the launch seam to --tui is the fix \u2014 and the cwd then comes from each session's own row.",
+        "Cost is priced by irrlicht's capacity table, not read from the store: Hermes reports estimated_cost_usd=0.0 under billing_mode='subscription_included'. cost_nonzero therefore holds only while the model resolves in capacity/aliases.go (gpt-5.6-luna does, via the gpt-5 family).",
+        "The store row is INSERTed lazily, ~2s after the first user message, and the REPL itself takes several seconds to boot (the driver polls for 'Type your message or /help' with a 60s ceiling). Phase budgets are sized for that: 60s to the first working transition, 60s from session 1's first turn to session 2's."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go:111-124",
+          "note": "defaultLiveCWD: bails on len(cwds) != 1 where cwds is the SET returned by LiveCWDsByCmdline \u2014 a per-DISTINCT-CWD guard, not per-process. Two sessions in one cwd collapse to one entry and the fallback resolves. Also: per-session-id sessionCursor, scanSessions source filter, turnIsDone finish_reason='stop', per-row cwd preferred over fallbackCWD (reconcile: cwd := r.cwd; if cwd == \"\" { cwd = fallbackCWD })."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/discovery.go:161-188",
+          "note": "LiveCWDsByCmdline builds set := make(map[string]struct{}) keyed by directory, applies ExcludeArgv and skips the daemon's own PID \u2014 the set semantics that make this scenario observable."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/discovery.go:94-114,193-215",
+          "note": "DiscoverPIDByCWDAndCmdLineExcludingArgv returns (0, nil) immediately when cwd == \"\" (the failure mode when two DIFFERENT cwds are live); narrowByCWD hands multiple same-cwd matches to the caller's disambiguator."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go:747-771",
+          "note": "claimAwareDisambiguate prefers the highest UNCLAIMED PID, falling back to the highest claimed \u2014 so two same-cwd sessions cannot be bound to the same PID."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go:1476-1494",
+          "note": "findSupersedingSession: matchPID (real session PID == proc-<PID>) retires the pre-session with no grace; the matchCWD fallback requires proc.CWD != \"\" and an equal candidate.CWD \u2014 which is why a PID-less, cwd-less real session leaves its pre-session stranded."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_helpers.go:63-108",
+          "note": "cleanupPreSessionsForProject matches pre-sessions by projectDir, then by realCWD \u2014 both empty for a cwd-less hermes store session, which is the other half of the stranded-ghost failure mode."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go:78-112",
+          "note": "hermes gets its store watcher PLUS a processlifecycle.Scanner keyed on the CommandPattern, with ExcludeArgv as the scanner's argv filter \u2014 the source of the two proc-<PID> pre-sessions this cell has to see retired."
+        },
+        {
+          "kind": "file",
+          "ref": "live process probe, 2026-08-02 (two `hermes chat --tui` in /private/tmp/hermes41probe)",
+          "note": "pgrep -f '(^|/)hermes( |$)|hermes_cli\\.main' matched exactly 3 PIDs: 75303 and 75894 (the two session processes, both cwd=/private/tmp/hermes41probe) and 11108 (`python -m hermes_cli.main gateway run --replace`, cwd=~/.hermes, excluded by isServiceArgv). The per-session children \u2014 `node --expose-gc .../ui-tui/dist/entry.js` and `python3 -m tui_gateway.entry` \u2014 did NOT match the pattern. Probe sent no prompt; the store's session count was 25 before and after."
+        },
+        {
+          "kind": "file",
+          "ref": "$HERMES_HOME/state.db \u2014 PRAGMA table_info(sessions), live 2026-08-02",
+          "note": "48 columns (id, source, user_id, session_key, chat_id, \u2026, cwd, git_branch, git_repo_root, billing_*, \u2026, archived, pinned). NONE is a pid, tty, or process identifier \u2014 grep for pid|proc|tty|host returns nothing. The store cannot link a session id to a process."
+        },
+        {
+          "kind": "file",
+          "ref": "$HERMES_HOME/state.db \u2014 sessions rows, live 2026-08-02",
+          "note": "Ten most recent cli rows: all source='cli', cwd EMPTY, model='gpt-5.6-luna'. Includes concurrent pairs 0.017s apart (20260802_212608_1dc71a / _feed91, and two more pairs) \u2014 evidence both that concurrent sessions are ordinary for this agent and that started_at cannot discriminate them."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/tui_gateway/server.py (2172, 2230, 2493, 2515, 5069, 5870) + hermes_state.py:4392",
+          "note": "Every caller of update_session_cwd lives in the TUI gateway \u2014 the primary-source confirmation that source='cli' rows carry no cwd and source='tui' rows do."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/hermes_cli/active_sessions.py:234-290",
+          "note": "try_acquire_active_session writes {lease_id, session_id, surface, pid, process_start_time, started_at, updated_at} to $HERMES_HOME/runtime/active_sessions.json \u2014 an explicit pid\u2194session_id map \u2014 but ONLY when max_concurrent_sessions resolves; otherwise it returns an enabled=False no-op lease and writes nothing. Verified: no runtime/ directory exists in either hermes home here, so the registry is absent under default config."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh:113,175-280,300-315",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\"; start_session and session are not_implemented stubs; EXPECTED_TURNS_SEEN is a single global counter (SES_EXPECTED[] is declared but unused); resolve_session_id binds the newest cli|tui row started after SES_LAUNCH_TS[$ACTIVE]."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/4-1_multiple-sessions-same-cwd/",
+          "note": "Recorded and verified sibling for this scenario: the recipe shape (turn \u2192 start_session \u2192 turn \u2192 {\"session\":1} turn) and the working-anchored spec this cell mirrors, including its reason for anchoring on working rather than ready (the proc-<PID> pre-session is born ready and never enters working)."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/NousResearch/hermes-agent",
+          "note": "Upstream project. Local CLI reports 'Hermes Agent v0.19.0 (2026.7.20) \u00b7 upstream d0b87dad'."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH with an inference provider configured in <HERMES_HOME>/config.yaml and working credentials",
+        "HERMES_HOME exported in the shell that runs run-cell.sh, so the recording daemon (which inherits it) and the driver read the same state.db",
+        "sqlite3 on PATH \u2014 the store is the only session signal hermes exposes; the driver exits nonzero(2) without it",
+        "NO hermes session process alive in a DIFFERENT cwd. Two processes in the SAME cwd are fine and are the point of this cell: defaultLiveCWD guards on the number of distinct cwds, not the number of processes. A hermes session running elsewhere makes the set size 2, the fallback returns \"\", and BOTH sessions land with no cwd and no PID. The long-lived `hermes gateway run` service is exempt \u2014 isServiceArgv excludes it before the set is built.",
+        "irrlichd is recording with the hermes 'store' observe permission granted (grant-all permission mode)"
+      ],
+      "setup": [
+        "Driver auto-starts session 1 (slot 1) via launch_repl in <staging>/cwd, waits for the 'Type your message or /help' banner, and resolves its store id after the first send",
+        "PORT REQUIRED (this is the gap:start_session verdict): the start_session arm must save_active, alloc_slot with the SAME RUN_CWD, and launch a second `hermes chat` under tmux while slot 1 stays alive; the session arm must save_active + load_slot N so a step carrying {\"session\":1} routes back to slot 1",
+        "PORT REQUIRED: make the turn counter per-slot \u2014 replace the global EXPECTED_TURNS_SEEN with the already-declared SES_EXPECTED[$ACTIVE], or session 2's wait_turn compares against session 1's count and spins to the deadline",
+        "PORT REQUIRED: keep resolve_session_id's per-slot `started_at > SES_LAUNCH_TS[$ACTIVE]` filter; a global 'newest row' would bind slot 2's id to slot 1 once both sessions exist",
+        "Keep the order sequential \u2014 session 1 completes a turn BEFORE session 2 launches \u2014 so session 1's store row binds its PID while its process is the only one alive; that is what makes the PID mapping correct rather than merely distinct"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "start_session"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: bravo"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha2",
+          "session": 1
+        },
+        {
+          "type": "wait_turn",
+          "session": 1
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl contains 2 distinct store-backed session_ids (<YYYYMMDD>_<HHMMSS>_<hex>), both with the same cwd",
+        "each id has its own working->ready arc; no transition on one id is attributed to the other",
+        "session 1 shows TWO working->ready arcs (turn 1 + the post-start_session re-drive), session 2 shows ONE",
+        "both sessions carry a non-zero PID and the two PIDs differ; neither binding changes after it is first assigned",
+        "both proc-<PID> pre-sessions are retired \u2014 the final row count for this cwd is 2, not 4",
+        "the store rows are source='cli' (the CLI surface this recipe drives), each with its own token counters"
+      ],
+      "settings": {},
+      "timeout_seconds": 360
+    }
+  }
+}
