@@ -1,6 +1,9 @@
 package session
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 // SignalKind identifies one out-of-band state signal that is held for a
 // session between the moment it arrives and the moment it stops describing
@@ -28,7 +31,27 @@ const (
 	// sitting idle at the prompt waiting for the user (#1173). The signal
 	// waiting_cue's prose regex exists to approximate.
 	SignalIdlePrompt SignalKind = "idle_prompt"
+
+	// SignalCompactInProgress is Claude Code's PreCompact hook for a manual
+	// /compact (#657): compaction is running and writing nothing to the
+	// transcript, so the session must be held working through that silent
+	// window. Named for the condition rather than the hook, so the string
+	// matches the classifier rule id that reads it.
+	//
+	// The fourth hook signal, and the one that could not migrate in #1288 —
+	// see holdContext for why its half-wall-clock rule needed a clock first.
+	SignalCompactInProgress SignalKind = "compact_in_progress"
 )
+
+// compactHoldTimeout bounds the SignalCompactInProgress hold (#657). Normally
+// the hold clears when the manual compact_boundary lands, but an interrupted or
+// failed /compact may never write one — without a ceiling the session would be
+// re-held working on every refreshStaleSessions tick and stranded forever (the
+// very failure #656 fixed). A real manual compaction runs at most a few minutes
+// (the #656 live evidence was ~161s), so this timeout sits comfortably beyond
+// any genuine window: after it elapses an orphaned hold is dropped and the
+// session re-classifies normally.
+const compactHoldTimeout = 5 * time.Minute
 
 // SignalPayload is the data a held signal carries beyond its own existence.
 // Only SignalTurnDone populates it today; the zero value is correct for a
@@ -46,13 +69,54 @@ type SignalPayload struct {
 	WaitingCue bool
 }
 
+// holdContext is everything a staleness rule may read: the metrics the signal
+// is about to be folded onto, and the clock. Deliberately unexported, like the
+// policy table it serves — no caller outside this package can write a policy,
+// so widening it later (see the arming caveat below) costs nothing.
+//
+// The clock is the part #1297 added, and the reason the fourth hook signal
+// could finally migrate. Before it, stale could only ask "do the metrics
+// contradict me", never "have I been held too long" — so
+// SignalCompactInProgress, whose rule is half wall-clock, was inexpressible as
+// a policy row and stayed a hand-rolled map on SessionDetector.
+//
+// It carries the *expiry* half of a grace timer only, which is what Phase 5 of
+// #1129 needs: a process probe that re-Holds on every poll where it sees model
+// API traffic expresses "no traffic for N seconds" as a stale rule, because a
+// re-Hold resets HeldSince. It is NOT enough for an arm-then-fire rule — "apply
+// only once N has passed" — because Overlay applies on the first pass after
+// Hold, unconditionally. Phase 6 (buffer byte-identical for N snapshots) and
+// the surviving markStalledEditTool overlay are both that shape and both need a
+// second, arming predicate before they can be rows. Tracked separately; the
+// point of leaving it out here is that this migration stays behaviour-preserving.
+//
+// Now is injected by the caller rather than read from time.Now here, so
+// staleness stays testable and — for the offline replay harness, which runs on
+// the transcript's virtual timeline — deterministic.
+type holdContext struct {
+	// Metrics is the freshly-rebuilt transcript metrics for this pass. Never
+	// nil: Overlay returns early on nil metrics rather than calling a policy.
+	Metrics *SessionMetrics
+
+	// HeldSince is when Hold recorded this signal — arrival, or the most recent
+	// re-Hold, which resets it. One axis, not two: a policy needing "first
+	// armed" and "last refreshed" at once would need a second timestamp here.
+	HeldSince time.Time
+
+	// Now is this pass's clock, on the same timeline as HeldSince — wall time
+	// in the daemon, the transcript's virtual time under replay. A policy reads
+	// it rather than calling time.Now itself; that is what keeps replay
+	// deterministic.
+	Now time.Time
+}
+
 // signalPolicy declares how one kind of held signal behaves — how long it
 // outranks lower tiers, when it stops being true, and what it folds onto
 // metrics. It is deliberately data rather than code: before #1288 each of
-// these three was a hand-written overlay method on SessionDetector with its
-// own lifecycle rule, plus a fourth copy in the replay harness, and the
-// remaining phases of #1129 would have added six more. Adding a signal should
-// mean adding a row here.
+// these was a hand-written overlay method on SessionDetector with its own
+// lifecycle rule, plus another copy in the replay harness, and the remaining
+// phases of #1129 would have added six more. Adding a signal should mean
+// adding a row here.
 type signalPolicy struct {
 	// kind is the signal this policy governs. Carried in the row rather than
 	// used as a map key so the ordered table below is the single declaration
@@ -76,7 +140,7 @@ type signalPolicy struct {
 	// stale reports that the held signal has stopped describing reality and
 	// must be dropped *without* being applied. Nil means "only consumeOnce
 	// or an explicit Release ends this hold".
-	stale func(m *SessionMetrics) bool
+	stale func(c holdContext) bool
 
 	// apply folds the signal onto the metrics the classifier is about to
 	// read.
@@ -117,7 +181,7 @@ var signalPolicies = []signalPolicy{
 		// retiring a higher one reads backwards, but it is sound here — this
 		// is not the transcript overruling the hook's verdict, it is the
 		// transcript supplying the end-of-life notice the hook never sends.
-		stale: func(m *SessionMetrics) bool { return m.LastWasToolDenial },
+		stale: func(c holdContext) bool { return c.Metrics.LastWasToolDenial },
 		apply: func(m *SessionMetrics, _ SignalPayload) { m.PermissionPending = true },
 	},
 
@@ -151,8 +215,34 @@ var signalPolicies = []signalPolicy{
 		// thing that happened. IsAgentDone going false means either the user
 		// replied or a tool opened — either way the idle window is over and
 		// the rules that own those cases take it from here.
-		stale: func(m *SessionMetrics) bool { return !m.IsAgentDone() },
+		stale: func(c holdContext) bool { return !c.Metrics.IsAgentDone() },
 		apply: func(m *SessionMetrics, _ SignalPayload) { m.IdlePromptPending = true },
+	},
+
+	{
+		kind: SignalCompactInProgress,
+		tier: TierHook,
+		// Persistent: a manual /compact writes nothing to the transcript for
+		// tens of seconds to minutes, and the hold has to survive every
+		// re-evaluation in that window or the stale pre-compact turn_done
+		// leaks the session back to ready (#657).
+		//
+		// The first row whose staleness reads the clock, and the reason
+		// holdContext exists. It clears on the first of:
+		//
+		//   - the manual compact_boundary landing: the normal path —
+		//     compaction finished, release working → ready (#656);
+		//   - compactHoldTimeout elapsing — see that constant for why the
+		//     ceiling is there and why five minutes.
+		//
+		// Last in the table, which is where the hand-rolled overlay it
+		// replaced ran. Nothing depends on that position: its staleness reads
+		// only transcript-derived state and the clock, and the field it
+		// applies is read by no other policy.
+		stale: func(c holdContext) bool {
+			return c.Metrics.SawManualCompactBoundary || c.Now.Sub(c.HeldSince) >= compactHoldTimeout
+		},
+		apply: func(m *SessionMetrics, _ SignalPayload) { m.CompactInProgress = true },
 	},
 }
 
@@ -178,24 +268,35 @@ func TierOf(kind SignalKind) SignalTier {
 // event loop classifies.
 type SignalHolds struct {
 	mu   sync.Mutex
-	held map[string]map[SignalKind]SignalPayload
+	held map[string]map[SignalKind]heldSignal
+}
+
+// heldSignal is one stored hold: what the signal carried, and when it arrived.
+// The arrival time is what a time-based staleness rule reads through
+// holdContext.HeldSince.
+type heldSignal struct {
+	payload SignalPayload
+	heldAt  time.Time
 }
 
 // NewSignalHolds returns an empty, ready-to-use store.
 func NewSignalHolds() *SignalHolds {
-	return &SignalHolds{held: map[string]map[SignalKind]SignalPayload{}}
+	return &SignalHolds{held: map[string]map[SignalKind]heldSignal{}}
 }
 
-// Hold records that kind has fired for sessionID, replacing any previous hold
-// of the same kind — a second Stop hook for the same session describes the
-// same turn ending, and its payload is the fresher one.
-func (h *SignalHolds) Hold(sessionID string, kind SignalKind, p SignalPayload) {
+// Hold records that kind has fired for sessionID at time at, replacing any
+// previous hold of the same kind — a second Stop hook for the same session
+// describes the same turn ending, and its payload is the fresher one.
+//
+// Replacing resets the arrival time along with the payload, so a re-fired
+// signal restarts any timeout its policy measures from it.
+func (h *SignalHolds) Hold(sessionID string, kind SignalKind, p SignalPayload, at time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.held[sessionID] == nil {
-		h.held[sessionID] = map[SignalKind]SignalPayload{}
+		h.held[sessionID] = map[SignalKind]heldSignal{}
 	}
-	h.held[sessionID][kind] = p
+	h.held[sessionID][kind] = heldSignal{payload: p, heldAt: at}
 }
 
 // Release drops one held signal — the explicit end-of-life path, used when
@@ -237,12 +338,16 @@ func (h *SignalHolds) DropSession(sessionID string) {
 // zeroes the transient fields these signals set — and before classification,
 // which reads them.
 //
+// now is this pass's clock, injected rather than read here so a time-based
+// policy (SignalCompactInProgress today; the Phase 5/6 grace timers next) stays
+// testable and replays deterministically on the transcript's virtual timeline.
+//
 // Note that staleness is evaluated before apply on every pass, including the
 // first: a signal that is already contradicted when it arrives is discarded
 // rather than applied once. That matters for a late signal (the ~6s
 // idle_prompt, or a retrospective OTel span) that lands after the condition it
 // describes has already ended.
-func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics) {
+func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics, now time.Time) {
 	if m == nil {
 		return
 	}
@@ -256,17 +361,17 @@ func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics) {
 	}
 
 	for _, policy := range signalPolicies {
-		payload, ok := holds[policy.kind]
+		hs, ok := holds[policy.kind]
 		if !ok {
 			continue
 		}
 
-		if policy.stale != nil && policy.stale(m) {
+		if policy.stale != nil && policy.stale(holdContext{Metrics: m, HeldSince: hs.heldAt, Now: now}) {
 			delete(holds, policy.kind)
 			continue
 		}
 
-		policy.apply(m, payload)
+		policy.apply(m, hs.payload)
 		if policy.consumeOnce {
 			delete(holds, policy.kind)
 		}

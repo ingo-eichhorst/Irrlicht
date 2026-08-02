@@ -3,19 +3,26 @@ package session
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 const holdSID = "sess-1"
+
+// holdT0 is the instant these tests hold signals at and classify at. Any fixed
+// instant does: only the time-based compact policy reads the clock at all, and
+// it reads Now-HeldSince, never the wall clock. Passing one value for both is
+// what keeps every clockless policy's test unchanged by #1297.
+var holdT0 = time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 
 // TestSignalHolds_ConsumeOnce pins the Stop-hook policy: the hold applies to
 // exactly the pass it triggered and is gone afterwards, so an authoritative
 // turn-done can never bleed into the following turn.
 func TestSignalHolds_ConsumeOnce(t *testing.T) {
 	h := NewSignalHolds()
-	h.Hold(holdSID, SignalTurnDone, SignalPayload{LastAssistantText: "done", WaitingCue: true})
+	h.Hold(holdSID, SignalTurnDone, SignalPayload{LastAssistantText: "done", WaitingCue: true}, holdT0)
 
 	m := &SessionMetrics{}
-	h.Overlay(holdSID, m)
+	h.Overlay(holdSID, m, holdT0)
 	if !m.HookTurnDone || m.LastAssistantText != "done" || !m.PendingWaitingCue {
 		t.Fatalf("turn-done payload not applied: %+v", m)
 	}
@@ -24,7 +31,7 @@ func TestSignalHolds_ConsumeOnce(t *testing.T) {
 	}
 
 	next := &SessionMetrics{}
-	h.Overlay(holdSID, next)
+	h.Overlay(holdSID, next, holdT0)
 	if next.HookTurnDone {
 		t.Error("a consumed signal must not re-apply on the next pass")
 	}
@@ -36,11 +43,11 @@ func TestSignalHolds_ConsumeOnce(t *testing.T) {
 // longer idle.
 func TestSignalHolds_PersistentUntilStale(t *testing.T) {
 	h := NewSignalHolds()
-	h.Hold(holdSID, SignalIdlePrompt, SignalPayload{})
+	h.Hold(holdSID, SignalIdlePrompt, SignalPayload{}, holdT0)
 
 	for pass := 1; pass <= 3; pass++ {
 		m := &SessionMetrics{LastEventType: "turn_done"}
-		h.Overlay(holdSID, m)
+		h.Overlay(holdSID, m, holdT0)
 		if !m.IdlePromptPending {
 			t.Fatalf("pass %d: IdlePromptPending must re-apply while the turn is idle", pass)
 		}
@@ -51,7 +58,7 @@ func TestSignalHolds_PersistentUntilStale(t *testing.T) {
 
 	// The user replied — IsAgentDone goes false, so the idle window is over.
 	m := &SessionMetrics{LastEventType: "user"}
-	h.Overlay(holdSID, m)
+	h.Overlay(holdSID, m, holdT0)
 	if m.IdlePromptPending {
 		t.Error("IdlePromptPending must not be applied once the turn is no longer idle")
 	}
@@ -65,10 +72,10 @@ func TestSignalHolds_PersistentUntilStale(t *testing.T) {
 // arrive carrying nothing, and the display text must survive it.
 func TestSignalHolds_TurnDonePreservesPriorText(t *testing.T) {
 	h := NewSignalHolds()
-	h.Hold(holdSID, SignalTurnDone, SignalPayload{})
+	h.Hold(holdSID, SignalTurnDone, SignalPayload{}, holdT0)
 
 	m := &SessionMetrics{LastAssistantText: "prior text"}
-	h.Overlay(holdSID, m)
+	h.Overlay(holdSID, m, holdT0)
 	if m.LastAssistantText != "prior text" {
 		t.Errorf("LastAssistantText = %q, want the prior text preserved", m.LastAssistantText)
 	}
@@ -82,10 +89,10 @@ func TestSignalHolds_TurnDonePreservesPriorText(t *testing.T) {
 // found, so a hook that saw no question cannot mask the transcript's own.
 func TestSignalHolds_TurnDoneCueIsAdditive(t *testing.T) {
 	h := NewSignalHolds()
-	h.Hold(holdSID, SignalTurnDone, SignalPayload{LastAssistantText: "done"})
+	h.Hold(holdSID, SignalTurnDone, SignalPayload{LastAssistantText: "done"}, holdT0)
 
 	m := &SessionMetrics{PendingWaitingCue: true} // the parser already found a cue
-	h.Overlay(holdSID, m)
+	h.Overlay(holdSID, m, holdT0)
 	if !m.PendingWaitingCue {
 		t.Error("a false hook cue must not clear a PendingWaitingCue the parser set")
 	}
@@ -96,10 +103,10 @@ func TestSignalHolds_TurnDoneCueIsAdditive(t *testing.T) {
 // rules own that case rather than idle_prompt.
 func TestSignalHolds_IdlePromptClearedByOpenTool(t *testing.T) {
 	h := NewSignalHolds()
-	h.Hold(holdSID, SignalIdlePrompt, SignalPayload{})
+	h.Hold(holdSID, SignalIdlePrompt, SignalPayload{}, holdT0)
 
 	m := &SessionMetrics{LastEventType: "turn_done", HasOpenToolCall: true}
-	h.Overlay(holdSID, m)
+	h.Overlay(holdSID, m, holdT0)
 	if m.IdlePromptPending {
 		t.Error("IdlePromptPending must NOT be set while a tool call is open")
 	}
@@ -114,16 +121,16 @@ func TestSignalHolds_IdlePromptClearedByOpenTool(t *testing.T) {
 // the hold ever gets.
 func TestSignalHolds_PermissionStaleOnDenial(t *testing.T) {
 	h := NewSignalHolds()
-	h.Hold(holdSID, SignalPermissionPrompt, SignalPayload{})
+	h.Hold(holdSID, SignalPermissionPrompt, SignalPayload{}, holdT0)
 
 	open := &SessionMetrics{}
-	h.Overlay(holdSID, open)
+	h.Overlay(holdSID, open, holdT0)
 	if !open.PermissionPending {
 		t.Error("an open permission prompt must be applied")
 	}
 
 	denied := &SessionMetrics{LastWasToolDenial: true}
-	h.Overlay(holdSID, denied)
+	h.Overlay(holdSID, denied, holdT0)
 	if denied.PermissionPending {
 		t.Error("a denied prompt must not be applied")
 	}
@@ -148,11 +155,11 @@ func TestSignalHolds_PermissionStaleOnDenial(t *testing.T) {
 // way and the bug hides.
 func TestSignalHolds_ApplicationOrderIsLoadBearing(t *testing.T) {
 	h := NewSignalHolds()
-	h.Hold(holdSID, SignalTurnDone, SignalPayload{LastAssistantText: "All set."})
-	h.Hold(holdSID, SignalIdlePrompt, SignalPayload{})
+	h.Hold(holdSID, SignalTurnDone, SignalPayload{LastAssistantText: "All set."}, holdT0)
+	h.Hold(holdSID, SignalIdlePrompt, SignalPayload{}, holdT0)
 
 	m := &SessionMetrics{LastEventType: "assistant_message"}
-	h.Overlay(holdSID, m)
+	h.Overlay(holdSID, m, holdT0)
 
 	if !m.HookTurnDone {
 		t.Fatal("turn-done must be applied")
@@ -186,7 +193,7 @@ func TestSignalHolds_PolicyTableIsWellFormed(t *testing.T) {
 // the single-source-of-truth link that stops a signal's authority being
 // declared once in its policy and again in the rule that reads it.
 func TestTierOf(t *testing.T) {
-	for _, kind := range []SignalKind{SignalPermissionPrompt, SignalTurnDone, SignalIdlePrompt} {
+	for _, kind := range []SignalKind{SignalPermissionPrompt, SignalTurnDone, SignalIdlePrompt, SignalCompactInProgress} {
 		if got := TierOf(kind); got != TierHook {
 			t.Errorf("TierOf(%q) = %v, want TierHook", kind, got)
 		}
@@ -223,12 +230,12 @@ func TestSignalHolds_EveryPolicyIsWellFormed(t *testing.T) {
 // dropped rather than applied once and then consumed.
 func TestSignalHolds_StaleIsCheckedOnTheFirstPass(t *testing.T) {
 	h := NewSignalHolds()
-	h.Hold(holdSID, SignalIdlePrompt, SignalPayload{})
+	h.Hold(holdSID, SignalIdlePrompt, SignalPayload{}, holdT0)
 
 	// The user replied before the ~6s-late hook ever landed: the very first
 	// Overlay must discard it, not honour it once.
 	m := &SessionMetrics{LastEventType: "user"}
-	h.Overlay(holdSID, m)
+	h.Overlay(holdSID, m, holdT0)
 
 	if m.IdlePromptPending {
 		t.Error("a signal already contradicted on arrival must not be applied even once")
@@ -241,8 +248,8 @@ func TestSignalHolds_StaleIsCheckedOnTheFirstPass(t *testing.T) {
 // TestSignalHolds_ReleaseAndDropSession covers the explicit end-of-life paths.
 func TestSignalHolds_ReleaseAndDropSession(t *testing.T) {
 	h := NewSignalHolds()
-	h.Hold(holdSID, SignalPermissionPrompt, SignalPayload{})
-	h.Hold(holdSID, SignalIdlePrompt, SignalPayload{})
+	h.Hold(holdSID, SignalPermissionPrompt, SignalPayload{}, holdT0)
+	h.Hold(holdSID, SignalIdlePrompt, SignalPayload{}, holdT0)
 
 	h.Release(holdSID, SignalPermissionPrompt)
 	if h.Held(holdSID, SignalPermissionPrompt) {
@@ -262,10 +269,10 @@ func TestSignalHolds_ReleaseAndDropSession(t *testing.T) {
 // session inheriting another's signal.
 func TestSignalHolds_SessionsAreIsolated(t *testing.T) {
 	h := NewSignalHolds()
-	h.Hold("a", SignalIdlePrompt, SignalPayload{})
+	h.Hold("a", SignalIdlePrompt, SignalPayload{}, holdT0)
 
 	m := &SessionMetrics{LastEventType: "turn_done"}
-	h.Overlay("b", m)
+	h.Overlay("b", m, holdT0)
 	if m.IdlePromptPending {
 		t.Error("session b must not see session a's held signal")
 	}
@@ -275,8 +282,8 @@ func TestSignalHolds_SessionsAreIsolated(t *testing.T) {
 // classify pass with no metrics from silently eating an authoritative signal.
 func TestSignalHolds_NilMetricsPreservesHolds(t *testing.T) {
 	h := NewSignalHolds()
-	h.Hold(holdSID, SignalTurnDone, SignalPayload{})
-	h.Overlay(holdSID, nil)
+	h.Hold(holdSID, SignalTurnDone, SignalPayload{}, holdT0)
+	h.Overlay(holdSID, nil, holdT0)
 	if !h.Held(holdSID, SignalTurnDone) {
 		t.Error("nil metrics must leave the hold intact for a later pass")
 	}
@@ -289,8 +296,8 @@ func TestSignalHolds_ConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 16 {
 		wg.Add(3)
-		go func() { defer wg.Done(); h.Hold(holdSID, SignalPermissionPrompt, SignalPayload{}) }()
-		go func() { defer wg.Done(); h.Overlay(holdSID, &SessionMetrics{}) }()
+		go func() { defer wg.Done(); h.Hold(holdSID, SignalPermissionPrompt, SignalPayload{}, holdT0) }()
+		go func() { defer wg.Done(); h.Overlay(holdSID, &SessionMetrics{}, holdT0) }()
 		go func() { defer wg.Done(); h.Held(holdSID, SignalPermissionPrompt) }()
 	}
 	wg.Wait()

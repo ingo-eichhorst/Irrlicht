@@ -2,9 +2,16 @@ package services
 
 import (
 	"testing"
+	"time"
 
 	"irrlicht/core/domain/session"
 )
+
+// holdT0 is the fixed instant this package's tests hold signals at and
+// classify at. Passing the same value for both keeps every hold well inside
+// the one time-based policy's window, so these tests exercise the ladder
+// rather than the compact timeout (which core/domain/session owns).
+var holdT0 = time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 
 // TestClassify_HookOutranksTranscript is AC2 stated at its simplest: when a
 // hook-tier signal and a transcript-tier signal disagree about the same pass,
@@ -133,7 +140,12 @@ func reachableMetricFixtures(t *testing.T) []metricFixture {
 		{"idle-prompt", []session.SignalKind{session.SignalIdlePrompt}},
 		{"turn-done+idle-prompt", []session.SignalKind{session.SignalTurnDone, session.SignalIdlePrompt}},
 		{"permission+idle-prompt", []session.SignalKind{session.SignalPermissionPrompt, session.SignalIdlePrompt}},
-		{"all", []session.SignalKind{session.SignalPermissionPrompt, session.SignalTurnDone, session.SignalIdlePrompt}},
+		{"compact", []session.SignalKind{session.SignalCompactInProgress}},
+		{"compact+turn-done", []session.SignalKind{session.SignalCompactInProgress, session.SignalTurnDone}},
+		{"all", []session.SignalKind{
+			session.SignalPermissionPrompt, session.SignalTurnDone,
+			session.SignalIdlePrompt, session.SignalCompactInProgress,
+		}},
 	}
 
 	var out []metricFixture
@@ -142,9 +154,9 @@ func reachableMetricFixtures(t *testing.T) []metricFixture {
 			m := *tr.metrics // copy: Overlay mutates
 			holds := session.NewSignalHolds()
 			for _, k := range hs.kinds {
-				holds.Hold("s", k, session.SignalPayload{})
+				holds.Hold("s", k, session.SignalPayload{}, holdT0)
 			}
-			holds.Overlay("s", &m)
+			holds.Overlay("s", &m, holdT0)
 			out = append(out, metricFixture{name: tr.name + "/" + hs.name, metrics: &m})
 		}
 	}
@@ -232,7 +244,7 @@ func TestClassify_LateAuthoritativeSignalDoesNotFlap(t *testing.T) {
 
 	// The turn ends; no hook has landed yet. Transcript tier decides.
 	m := &session.SessionMetrics{LastEventType: "turn_done"}
-	holds.Overlay(sid, m)
+	holds.Overlay(sid, m, holdT0)
 	v := ClassifyStateTiered(session.StateWorking, m)
 	if v.State != session.StateReady {
 		t.Fatalf("before the hook lands, the transcript tier must say ready, got %q", v.State)
@@ -243,10 +255,10 @@ func TestClassify_LateAuthoritativeSignalDoesNotFlap(t *testing.T) {
 	state := v.State
 
 	// ~6s later: the idle_prompt hook lands and corrects the guess.
-	holds.Hold(sid, session.SignalIdlePrompt, session.SignalPayload{})
+	holds.Hold(sid, session.SignalIdlePrompt, session.SignalPayload{}, holdT0)
 
 	corrected := &session.SessionMetrics{LastEventType: "turn_done"}
-	holds.Overlay(sid, corrected)
+	holds.Overlay(sid, corrected, holdT0)
 	v = ClassifyStateTiered(state, corrected)
 	if v.State != session.StateWaiting {
 		t.Fatalf("the hook must correct ready→waiting, got %q", v.State)
@@ -260,7 +272,7 @@ func TestClassify_LateAuthoritativeSignalDoesNotFlap(t *testing.T) {
 	// no oscillation back through ready.
 	for pass := 1; pass <= 3; pass++ {
 		again := &session.SessionMetrics{LastEventType: "turn_done"}
-		holds.Overlay(sid, again)
+		holds.Overlay(sid, again, holdT0)
 		v = ClassifyStateTiered(state, again)
 		if v.State != session.StateWaiting {
 			t.Fatalf("pass %d: state flapped to %q; the held signal must keep it in waiting", pass, v.State)
@@ -272,7 +284,7 @@ func TestClassify_LateAuthoritativeSignalDoesNotFlap(t *testing.T) {
 
 	// The user finally replies: the hold goes stale and the session moves on.
 	replied := &session.SessionMetrics{LastEventType: "user"}
-	holds.Overlay(sid, replied)
+	holds.Overlay(sid, replied, holdT0)
 	v = ClassifyStateTiered(state, replied)
 	if v.State != session.StateWorking {
 		t.Errorf("after the user replies the session must resume working, got %q", v.State)
