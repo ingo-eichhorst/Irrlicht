@@ -10,8 +10,6 @@ import (
 	// Registers the "sqlite" driver for the database/sql handles these tests
 	// open directly to seed fixtures.
 	_ "modernc.org/sqlite"
-
-	"irrlicht/core/domain/session"
 )
 
 // newTestStore creates a SQLite store carrying the subset of Hermes'
@@ -115,13 +113,7 @@ func insertMessage(t *testing.T, db *sql.DB, r messageRow) {
 	}
 }
 
-// completedTurnMetrics seeds one finished session — user prompt, a tool call,
-// its result, then a closing assistant reply — and returns its metrics. The
-// two tests below split the assertions by what they are about: the aggregate
-// the `sessions` row carries, and the state signal only replaying the
-// messages can produce.
-func completedTurnMetrics(t *testing.T) *session.SessionMetrics {
-	t.Helper()
+func TestComputeMetrics_AggregatesFromSessionRow(t *testing.T) {
 	path, db := newTestStore(t)
 	insertSession(t, db, sessionRow{id: "s1", source: "tui", model: "gpt-5.6-luna", cwd: "/work/proj", started: 1000, ended: 1042, msgs: 4})
 	insertMessage(t, db, messageRow{sessionID: "s1", role: "user", content: "go", toolCalls: "", toolCallID: "", finish: "", ts: 1001})
@@ -136,11 +128,6 @@ func completedTurnMetrics(t *testing.T) *session.SessionMetrics {
 	if m == nil {
 		t.Fatal("expected metrics, got nil")
 	}
-	return m
-}
-
-func TestComputeMetrics_AggregatesFromSessionRow(t *testing.T) {
-	m := completedTurnMetrics(t)
 
 	if m.ModelName != "gpt-5.6-luna" {
 		t.Errorf("ModelName = %q", m.ModelName)
@@ -159,13 +146,6 @@ func TestComputeMetrics_AggregatesFromSessionRow(t *testing.T) {
 	if m.ElapsedSeconds != 42 {
 		t.Errorf("ElapsedSeconds = %d, want 42", m.ElapsedSeconds)
 	}
-}
-
-// The state signal the aggregate cannot express: turn boundary, last prose,
-// and whether a tool call is still open.
-func TestComputeMetrics_FoldsMessageStateSignal(t *testing.T) {
-	m := completedTurnMetrics(t)
-
 	if m.LastEventType != "turn_done" {
 		t.Errorf("LastEventType = %q, want turn_done", m.LastEventType)
 	}
