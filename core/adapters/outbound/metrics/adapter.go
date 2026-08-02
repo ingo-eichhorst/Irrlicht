@@ -7,6 +7,7 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/application/replayengine"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/outbound"
@@ -19,6 +20,10 @@ type lockedTailer struct {
 	mu sync.Mutex
 	t  *tailer.TranscriptTailer
 	lp string // path to the session ledger file; empty when ledger dir is unavailable
+	// p is the parser instance this tailer feeds — the ONLY one that has seen
+	// this transcript's lines. Held so per-parser state (e.g. an adapter's
+	// open-subagent set) can be read back; see countOpenSubagents.
+	p tailer.TranscriptParser
 }
 
 // Adapter implements ports/outbound.MetricsCollector using the transcript-tailer package.
@@ -87,7 +92,21 @@ func (a *Adapter) parserFor(name string) tailer.TranscriptParser {
 
 // countOpenSubagents returns the adapter-specific count of in-process child
 // agents currently running, or zero when the adapter did not register a counter.
-func (a *Adapter) countOpenSubagents(name string, m *tailer.SessionMetrics) int {
+//
+// The LIVE parser wins over the registry closure. agents.SubagentCounters
+// builds one parser at wiring time and closes over it, while this Adapter
+// builds a separate parser per transcript path — so the closed-over instance
+// never consumes a line, and an adapter whose count lives in parser state
+// (copilot's open-subagent set, #1256) would read zero forever. Claude Code
+// was immune only by accident: its counter is a pure function of the metrics
+// passed in and ignores the receiver, so it reads identically either way.
+//
+// The registry lookup stays as the fallback for a counter registered without
+// a corresponding parser instance.
+func (a *Adapter) countOpenSubagents(name string, m *tailer.SessionMetrics, p tailer.TranscriptParser) int {
+	if sc, ok := p.(agent.SubagentCounter); ok {
+		return sc.OpenSubagents(m)
+	}
 	if f, ok := a.subagents[name]; ok {
 		return f(m)
 	}
@@ -115,12 +134,13 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 	a.mu.Lock()
 	lt, ok := a.tailers[transcriptPath]
 	if !ok {
-		t := tailer.NewTranscriptTailer(transcriptPath, a.parserFor(adapter), adapter)
+		parser := a.parserFor(adapter)
+		t := tailer.NewTranscriptTailer(transcriptPath, parser, adapter)
 		lp := ledgerPath(transcriptPath)
 		if s := loadLedger(lp); s != nil {
 			t.SetLedgerState(*s)
 		}
-		lt = &lockedTailer{t: t, lp: lp}
+		lt = &lockedTailer{t: t, lp: lp, p: parser}
 		a.tailers[transcriptPath] = lt
 	}
 	a.mu.Unlock()
@@ -140,7 +160,7 @@ func (a *Adapter) ComputeMetrics(transcriptPath, adapter string) (*session.Sessi
 	// MetricsConverter — the single tailer→domain conversion shared with the
 	// replay paths. Everything below is a live-only enrichment.
 	result := a.converter.Convert(m)
-	result.OpenSubagents = a.countOpenSubagents(adapter, m)
+	result.OpenSubagents = a.countOpenSubagents(adapter, m, lt.p)
 	if m.RateLimit != nil {
 		result.RateLimit = tailerRateLimitToDomain(m.RateLimit)
 		history := tailerRateLimitHistoryToDomain(m.RateLimitHistory)

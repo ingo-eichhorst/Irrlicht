@@ -172,7 +172,12 @@ launch_repl() {
   # difference rather than trusting newest-mtime — a concurrent session (or a
   # leftover from an earlier slot) makes "newest" the wrong answer.
   PRE_LAUNCH_DIRS="$(ls "$COPILOT_HOME/session-state" 2>/dev/null | sort || true)"
-  local args=(--allow-all --no-color)
+  # --allow-all is --allow-all-tools + --allow-all-paths + --allow-all-urls, so
+  # it PRE-APPROVES everything and no permission.requested is ever written.
+  # The tool-gate-permission-prompt scenario needs the prompt to actually
+  # appear, so it sets COPILOT_NO_ALLOW_ALL=1 to opt out.
+  local args=(--no-color)
+  [[ -z "${COPILOT_NO_ALLOW_ALL:-}" ]] && args+=(--allow-all)
   [[ -n "${COPILOT_AVAILABLE_TOOLS:-}" ]] && args+=("--available-tools=$COPILOT_AVAILABLE_TOOLS")
   [[ -n "${RESUME_ID:-}" ]] && args+=("--resume=$RESUME_ID")
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" copilot "${args[@]}" \
@@ -293,7 +298,10 @@ wait_turn() {
     fi
     # --allow-all should pre-approve everything, but a subagent's shell can
     # still raise a prompt; dismissing keeps a recording from dying on it.
-    dismiss_dialog_if_visible "$SESSION" 'Allow|Do you want to|trust the files' || true
+    # Skipped when the recipe is deliberately provoking a permission prompt —
+    # dismissing it would collapse the waiting episode the cell exists to observe.
+    [[ -z "${COPILOT_NO_ALLOW_ALL:-}" ]] && \
+      { dismiss_dialog_if_visible "$SESSION" 'Allow|Do you want to|trust the files' || true; }
     sleep 1
   done
   EXIT_REASON="timeout"
@@ -349,10 +357,12 @@ while IFS= read -r step; do
     keys)            tmux send-keys -t "$SESSION" "$(jq -r '.text' <<<"$step")" ;;
     reset_session)   not_implemented reset_session || break ;;   # /clear vs /new rotation is UNVERIFIED for copilot — left stubbed and out of DRIVE_ELICITS so recipe-lint refuses rather than guessing
     resume)          not_implemented resume || break ;;          # --resume=<id> is wired in launch_repl via RESUME_ID but the 1-session/2-PID contract is unverified
+    # launch_repl allocs the slot itself — allocating here too would burn a
+    # second, empty slot per restart and emit blank entries in
+    # session.uuids/transcript.paths.
     restart)         save_active
                      tmux kill-session -t "$SESSION" 2>/dev/null || true
                      wait_tmux_session_gone "$SESSION" 15 || true
-                     alloc_slot "copilotdrv-$$-$(date +%s)-$((N_SLOTS + 1))" "$RUN_CWD"
                      launch_repl ;;
     sigkill)         sigkill_and_wait "$(active_pid)" 15 || true
                      SES_ALIVE[$ACTIVE]=0 ;;
@@ -361,7 +371,6 @@ while IFS= read -r step; do
                      wait_tmux_session_gone "$SESSION" 15 || true
                      SES_ALIVE[$ACTIVE]=0 ;;
     start_session)   save_active
-                     alloc_slot "copilotdrv-$$-$(date +%s)-$((N_SLOTS + 1))" "$RUN_CWD"
                      launch_repl ;;
     session)         save_active; load_slot "$(jq -r '.session // 1' <<<"$step")" ;;
     *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; break ;;
