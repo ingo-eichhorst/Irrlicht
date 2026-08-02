@@ -6,6 +6,8 @@
     "hermes >=0.19.0 installed and on PATH (git install, pipx, or the install script); the CLI is a Python console script, so the binary is a shim into <HERMES_HOME>/hermes-agent/venv/bin/hermes",
     "an inference provider configured in <HERMES_HOME>/config.yaml (model.default + model.provider) with credentials in <HERMES_HOME>/.env or auth.json — e.g. 'hermes setup' or 'hermes login'",
     "HERMES_HOME exported to the recording home, so the run writes to an isolated state.db instead of the maintainer's real session store",
-    "the sqlite3 CLI on PATH — hermes persists no transcript file, so the driver reads session id and turn-completion straight out of state.db"
+    "the sqlite3 CLI on PATH — hermes persists no transcript file, so the driver reads session id and turn-completion straight out of state.db",
+    "LIVE TOOL ROSTER (probed 2026-08-03 against hermes 0.19.0 on this machine, 36 callable functions): read_file, write_file, patch, search_files, terminal and web_search are ALL ABSENT — do NOT write a recipe that assumes them. execute_code exists but is Docker-backed and fails here (\"docker version\" failed). skills_list and skill_view are verified-working tool calls and are the ones to reach for when a cell needs a real tool call. Three recordings were burned rediscovering this; re-probe the roster before trusting it against a different HERMES_HOME or a newer CLI.",
+    "TIMING: prefer WIDE generations (e.g. a 30-line count plus two sentences of prose). The store watcher polls every 2s with a 500ms debounce, so a ~1s turn can commit its inbound user row and its assistant finish_reason='stop' row inside a SINGLE scan — the ready→working edge then never exists and any tN_start phase fails. Observed margins on the 2026-08-03 sweep: widened turns gave 1.7s–5.4s working spans, i.e. barely more than one scan gap at the low end. Widen the generation; never weaken the spec."
   ]
 }

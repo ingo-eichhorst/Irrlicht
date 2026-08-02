@@ -227,3 +227,64 @@ func TestVerifyCommand(t *testing.T) {
 		t.Fatalf("verify must fail on model mismatch, got %d", code)
 	}
 }
+
+// TestAgentUpdate covers the verb a `record` sweep uses to promote a
+// column-level finding (which tools the live CLI actually exposes, which auth
+// mode works) into the column's prerequisites, so later cells inherit it
+// instead of rediscovering it. The three properties that matter are that it
+// refuses an unknown column, that --add-prereq is additive AND idempotent, and
+// that an update naming only prerequisites leaves name/provider alone — a
+// reset there would silently corrupt a column the caller never mentioned.
+func TestAgentUpdate(t *testing.T) {
+	root := validRepo(t)
+	if code, _, errs := runOf("agent", "add", "--id", "newcli", "--name", "New CLI", "--provider", "acme",
+		"--prereq", "install acme", "--repo-root", root); code != exitOK {
+		t.Fatalf("agent add failed: %d %s", code, errs)
+	}
+	// unknown column → fail, and never create one
+	if code, _, _ := runOf("agent", "update", "--id", "ghost", "--add-prereq", "x", "--repo-root", root); code != exitFail {
+		t.Fatal("update of a missing agent must fail")
+	}
+	if fileExists(filepath.Join(root, "replaydata", "agents", "ghost", "metadata.json")) {
+		t.Fatal("a failed update must not create the column")
+	}
+
+	read := func() agentMeta {
+		t.Helper()
+		var am agentMeta
+		b, err := os.ReadFile(filepath.Join(root, "replaydata", "agents", "newcli", "metadata.json"))
+		if err != nil || json.Unmarshal(b, &am) != nil {
+			t.Fatalf("unreadable agent metadata: %v %s", err, b)
+		}
+		return am
+	}
+
+	// --add-prereq appends without disturbing what is already there …
+	if code, _, errs := runOf("agent", "update", "--id", "newcli",
+		"--add-prereq", "roster: only skills_list and skill_view are callable", "--repo-root", root); code != exitOK {
+		t.Fatalf("agent update failed: %d %s", code, errs)
+	}
+	am := read()
+	if len(am.Prerequisites) != 2 || am.Prerequisites[0] != "install acme" {
+		t.Fatalf("add-prereq did not append: %v", am.Prerequisites)
+	}
+	// … leaves the fields it was not given alone …
+	if am.Name != "New CLI" || am.Provider != "acme" {
+		t.Fatalf("update reset an unmentioned field: %+v", am)
+	}
+	// … and is idempotent, so re-running a promotion cannot duplicate it.
+	if code, _, errs := runOf("agent", "update", "--id", "newcli",
+		"--add-prereq", "roster: only skills_list and skill_view are callable", "--repo-root", root); code != exitOK {
+		t.Fatalf("second agent update failed: %d %s", code, errs)
+	}
+	if got := read().Prerequisites; len(got) != 2 {
+		t.Fatalf("add-prereq is not idempotent: %v", got)
+	}
+	// --prereq replaces the whole list.
+	if code, _, errs := runOf("agent", "update", "--id", "newcli", "--prereq", "only this", "--repo-root", root); code != exitOK {
+		t.Fatalf("prereq replace failed: %d %s", code, errs)
+	}
+	if got := read().Prerequisites; len(got) != 1 || got[0] != "only this" {
+		t.Fatalf("--prereq did not replace: %v", got)
+	}
+}
