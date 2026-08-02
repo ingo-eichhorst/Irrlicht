@@ -1,0 +1,136 @@
+{
+  "scenario_id": "auto-executed-tool-call",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+fe95020",
+    "confidence": 0.85,
+    "notes": "Auto-approved terminal tool call: the live store shows the exact 2.2 arc (user → assistant/tool_calls[terminal] → tool → assistant/finish_reason='stop'), and `echo hello` is not a dangerous command so hermes' approval gate never fires."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-executed-tool-call",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\n### agent = yes\n\nauto-executed-tool-call asserts the ungated happy path: one tool call resolves mid-turn with no user input, giving `ready → working → ready` and the invariant that state never enters `waiting`. Hermes calls tools and the trace is not inferred — it is present verbatim in a real store. One session (`20260726_174116_fa4c80`) in `$HERMES_HOME/state.db` carries exactly the canonical four rows in timestamp order:\n\n```\nrole=user      finish_reason=NULL\nrole=assistant finish_reason=tool_calls  tool_calls=[{\"id\":\"888148639\",...,\"function\":{\"name\":\"terminal\",...}}]\nrole=tool      tool_name=terminal        tool_call_id=888148639\nrole=assistant finish_reason=stop\n```\n\nAcross the whole store the shape is uniform: 29 `assistant/tool_calls` rows, 29 closing `tool` rows, 29 `assistant/stop` rows, 30 `user` rows. `terminal` is the shell tool (9 of 29 tool rows).\n\nThe scenario also requires the call to be AUTO-executed. Hermes gates only *dangerous* commands, via `tools/approval.py`; the default `approvals.mode` is `smart` (`hermes_cli/config.py`, \"manual — always prompt / smart — auxiliary LLM auto-approves low-risk (default) / off — skip all\"). Running the shipped classifier against the recipe's command settles it directly: `detect_hardline_command('echo hello') → (False, None)` and `detect_dangerous_command('echo hello') → (False, None, None)`. So no approval prompt exists on this path and no `--yolo`/`HERMES_YOLO_MODE` bypass is needed in the recipe.\n\n### daemon = full\n\nEvery user-observable signal the scenario asserts maps onto an event this adapter emits today.\n\n- **ready → working.** The watcher discovers the session from the `sessions` table (`source IN ('cli','tui')`), emits `new_session` (ready), then emits an `EventActivity` whenever `message_count` grows (watcher.go `reconcile`). The user row plus the `assistant/tool_calls` row grow the count while `turnIsDone` is false (the newest row is not `assistant`+`stop`), so `Terminal=false` and the session is working.\n- **the tool call inside the working span.** parser.go maps `role=assistant`+`tool_calls` to `assistant_message` with `ToolUses` (parsed by `id`, falling back to `call_id`), and `role=tool` to `tool_result` closing by `tool_call_id`. metrics.go's `messageFold` folds those into `HasOpenToolCall` / `OpenToolCallCount` / `LastOpenToolNames`, which is what sustains working across the call.\n- **working → ready.** `finish_reason='stop'` on the newest assistant row is an EXPLICIT turn boundary: `Watcher.turnIsDone` sets `Terminal=true` on the activity event and parser.go rewrites the event type to `turn_done`. No idle-flush heuristic is involved, which is the main reason this cell is `full` rather than timing-dependent.\n- **never waiting.** Three paths could route to waiting and none can fire here. (1) `user-blocking tool open → waiting` keys on question-shaped tool names (AskUserQuestion / ExitPlanMode / question / ask_user_question); `terminal` is not one. (2) `stalled edit tool → likely permission prompt → waiting` keys on edit-shaped names (Edit/Write/MultiEdit/write_file); `terminal` is not one — this is why the recipe uses the shell tool rather than hermes' `write_file`. (3) `IsWaitingForUserInput` fires on `PendingQuestionMarker` (never set by this adapter) or on `PendingWaitingCue` / prose cues in the final assistant text; the recipe's \"reply with exactly: done\" keeps the terminal text cue-free. `PermissionPending` is never set for hermes — the adapter has no hook or permission-prompt sensor — so rule 0 is unreachable.\n- **collapsed turn.** `echo hello` can finish inside one 2s poll gap, which would otherwise let the daemon see a finished turn on first sight and emit a flat birth. That is already handled: `ShouldSynthesizeCatchUpTurn` (#996) emits a synthetic ready→working→ready pair when a brand-new session's first observation is already `IsAgentDone()`, and `ForceReadyToWorkingReason` forces the working leg when a ready session shows fresh activity. Either way the asserted topology holds.\n- **metrics.** `sessions.input_tokens`/`output_tokens` are maintained by hermes and non-zero in every real row inspected (e.g. 16269/5, 16802/211). Cost is priced by irrlicht's own alias table rather than read from `sessions.estimated_cost_usd` (hermes reports 0.0 under a subscription provider); the configured default model `gpt-5.6-luna` DOES resolve in `core/pkg/capacity` (window 1,050,000, pricing 0.20/1.20/0.02/0.25), so a real turn prices non-zero.\n\n### driver = ready\n\nThe recipe needs only `send`, `wait_turn`, `sleep`. `replaydata/agents/hermes/driver-interactive.sh` lists `DRIVE_ELICITS=\"send slash sleep wait_turn\"` — all three are genuinely ported, not stubbed. Its `wait_turn` is a real signal poll (`SELECT COUNT(*) ... role='assistant' AND finish_reason='stop'`, blocking for a NEW completion via `EXPECTED_TURNS_SEEN`), not an idle guess, and `resolve_session_id` binds only to a session whose `started_at` is after this slot's launch so a stale row cannot satisfy the wait instantly. No `keys`/`interrupt`/`reset_session` primitive is needed, so there is no driver gap.\n\n### Session model\n\nHermes carries a Process matcher (`processCmdRegex`), so processlifecycle's scanner mints a transient `proc-<PID>` presession at launch, while the real `sessions` row is INSERTed only on the first user message (~2s later, per adapter.go). The spec therefore anchors `session_birth` to `start` UNPINNED and establishes the real session identity at `turn_start`, chaining `turn_done` off it with `same_session_as` — the shape already proven by the sibling opencode ProcessOwnedStore cell.",
+      "caveats": [
+        "PROVISIONAL on emission timing, not on the trace: the four-row arc and finish_reason='stop' boundary are verified in a real store, but no live recording has yet confirmed that the watcher's 2s poll surfaces a DISTINCT working leg for a sub-second `echo hello` rather than relying on the ShouldSynthesizeCatchUpTurn / ForceReadyToWorking recovery paths. Both produce the asserted topology, so the spec holds either way; record settles which path fires.",
+        "`model` is deliberately NOT pinned in observations. The recording runs under an isolated HERMES_HOME whose config.yaml is provisioned at record time; the maintainer's config.yaml default is `gpt-5.6-luna` (provider openai-codex) and 18 of 25 store sessions used it, but a recording home configured with a local model would report a different id. record should fill it from the recording.",
+        "`cost_nonzero` depends on the recording home's model being priced by irrlicht's alias table. gpt-5.6-luna resolves (verified against core/pkg/capacity: pricing 0.20/1.20/0.02/0.25 per MTok); the other model seen in the store, `google/gemma-4-26b-a4b`, resolves to nil pricing and would price at 0. If the recording home is configured with an unpriced local model, that is a pricing-table gap, not a daemon defect — record should drop cost_nonzero and note the model.",
+        "`sessions.cwd` is empty for `source='cli'` rows (hermes populates cwd only from its TUI gateway), and `hermes chat` records source='cli'. The project binding therefore comes from the live-process CWD fallback, which returns \"\" when more than one hermes session process is alive. The recording must not run a second hermes session concurrently or the session may surface without a project binding. The long-lived gateway process is excluded by isServiceArgv, so a running gateway is harmless.",
+        "The phase DSL has no tool-event form, so the auto-executed tool call is asserted via the single sustained working span plus the no-waiting invariant; the `terminal` tool_calls/tool row pair itself is verified out-of-band in the store at record time."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go",
+          "note": "role=assistant + finish_reason='tool_calls' → assistant_message with ToolUses (parseToolCalls, id then call_id); role=tool → tool_result closing by tool_call_id; role=assistant + finish_reason='stop' → turn_done. Explicit turn boundary, no IdleFlush seam."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "reconcile() emits new_session then EventActivity whenever message_count grows; turnIsDone() reads the newest active message and sets Terminal only for role='assistant' AND finish_reason='stop'. 2s poll backstop plus fsnotify on the store's directory."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go",
+          "note": "querySessionMetrics folds messages through Parser into HasOpenToolCall/OpenToolCallCount/LastOpenToolNames (the sustained working span) and reads token aggregates from the sessions row; cost is priced by capacity.EstimateCostUSD, not from sessions.estimated_cost_usd."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go",
+          "note": "Source variant agent.ProcessOwnedStore over the single shared $HERMES_HOME/state.db (the second such adapter after opencode); Process.Match is a CommandPattern, so processlifecycle mints a transient proc-<PID> presession before the store row exists."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "classifyAgentDone routes turn_done → ready unless IsWaitingForUserInput; the two waiting rules that could fire mid-tool key on user-blocking tool names and edit-tool names, neither of which is 'terminal'. ShouldSynthesizeCatchUpTurn / ForceReadyToWorkingReason recover the working leg if the whole turn lands inside one poll gap."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/waiting_cue.go",
+          "note": "IsWaitingForUserInput: PendingQuestionMarker (never set by the hermes adapter) OR PendingWaitingCue OR ProseIndicatesWaiting(LastAssistantText). The recipe's 'reply with exactly: done' keeps the terminal text free of question/imperative cues, so the no-waiting invariant holds."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Live store, hermes 0.19.0. Session 20260726_174116_fa4c80 carries the exact 2.2 arc: user → assistant/tool_calls with function.name='terminal' (id 888148639) → tool/tool_name='terminal' tool_call_id=888148639 → assistant/finish_reason='stop'. Store-wide: 29 assistant/tool_calls, 29 tool, 29 assistant/stop, 30 user rows; sessions carry non-zero input_tokens/output_tokens and estimated_cost_usd=0.0."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/config.py",
+          "note": "Default approvals block: mode 'smart' (auxiliary LLM auto-approves low-risk commands) — 'manual' always prompts, 'off' equals --yolo. Only DANGEROUS commands ever reach an approval prompt."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/approval.py",
+          "note": "Executed against the recipe's command: detect_hardline_command('echo hello') → (False, None) and detect_dangerous_command('echo hello') → (False, None, None) — so the terminal call auto-executes with no prompt and the session cannot enter waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\" — every step type the recipe needs is genuinely ported. wait_turn polls the store for a NEW assistant/finish_reason='stop' row (EXPECTED_TURNS_SEEN), and resolve_session_id binds only to a session started after this slot's launch."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-2_auto-executed-tool-call/expected.jsonl",
+          "note": "Sibling committed ProcessOwnedStore spec for the same scenario: session_birth anchored UNPINNED to start so a transient proc-<PID> presession cannot steal identity, turn_start establishing the real session, turn_done chained via same_session_as, with the no-waiting invariant. This cell reuses that shape."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/aliases.go",
+          "note": "Checked for the two models present in the hermes store: gpt-5.6-luna resolves to a priced gpt-5-family capacity (window 1,050,000; 0.20/1.20/0.02/0.25 per MTok) so cost prices non-zero; google/gemma-4-26b-a4b resolves to nil pricing and would price at 0."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH (Python console script shim into <HERMES_HOME>/hermes-agent/venv/bin/hermes)",
+        "HERMES_HOME exported to the recording home, with config.yaml carrying model.default + model.provider and credentials in .env/auth.json — so the run writes to an isolated state.db instead of the maintainer's real store",
+        "sqlite3 on PATH — hermes persists no transcript file, so the driver reads the session id and turn completion straight out of state.db (the driver hard-fails without it)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "approvals.mode is left at its default 'smart' and no user deny rule matches `echo` — the recipe must NOT trip hermes' dangerous-command approval prompt (verified: detect_dangerous_command('echo hello') is False)",
+        "no second hermes SESSION process running concurrently — `source='cli'` rows carry no stored cwd and the live-process CWD fallback returns nothing when more than one session process is alive (a running gateway is fine; isServiceArgv excludes it)"
+      ],
+      "setup": [
+        "The driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for 'Type your message or /help' before typing — the TUI loads tools and skills for several seconds and swallows keystrokes sent before it is ready",
+        "No auto-mode or permission step is needed: hermes prompts only for DANGEROUS commands (approvals.mode 'smart'), and `echo hello` classifies as neither hardline nor dangerous, so the terminal call auto-executes and the session never enters waiting",
+        "The shell tool is named `terminal`. The prompt deliberately targets it rather than hermes' `write_file`, because an open edit-shaped tool would trip the classifier's 'stalled edit tool → likely permission prompt → waiting' rule and break the scenario's no-waiting invariant",
+        "The session row is INSERTed on the first user message (~2s after it), not at launch, so the driver resolves the session id lazily after the first send and binds only to a row whose started_at is after this slot's launch",
+        "'reply with exactly: done' keeps the terminal assistant text free of questions and imperative cues, so ProseIndicatesWaiting cannot fire on the turn's last message",
+        "The trailing sleep gives the watcher at least three 2s poll ticks to observe finish_reason='stop' → Terminal activity → working→ready before the driver tears the tmux session down"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use your terminal tool to run exactly: echo hello. Then reply with exactly: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the hermes session (id shaped YYYYMMDD_HHMMSS_xxxxxx) born ready; a transient proc-<PID> presession may also appear and is not the session the arc lands on",
+        "events.jsonl shows exactly one ready→working transition and one working→ready transition for that session id",
+        "state.db shows the auto-executed call for that session: an assistant row with finish_reason='tool_calls' and function.name='terminal', closed by a tool row with the matching tool_call_id, then an assistant row with finish_reason='stop'",
+        "events.jsonl contains NO state_transition to waiting for that session at any point (echo is not a dangerous command, so no approval prompt exists)",
+        "final session state is ready",
+        "the session's websocket metrics show non-zero cumulative input+output tokens (sessions.input_tokens/output_tokens) and a non-zero estimated cost when the configured model is priced by irrlicht's alias table"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
