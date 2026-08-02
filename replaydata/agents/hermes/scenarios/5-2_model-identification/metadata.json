@@ -1,0 +1,163 @@
+{
+  "scenario_id": "model-identification",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+80d4670",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (sessions.model is per-session and demonstrably varies; `hermes chat -m MODEL` exists)\ndaemon_capability: full; driver_capability: ready. NO observations.model pinned — see the load-bearing caveat."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-identification",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready (confidence 0.8)\n\n## What 5.2 asserts here\n\nThe scenario's own description is written in claudecode terms (`--model claude-opus-4-7`, `extractClaudeCodeModel`, `raw.message.model`). Its agent-agnostic acceptance_criteria are the two that bind: `ModelName = <launch model>` (not `\"unknown\"`) and `ContextWindow` matches that model's published window, over the basic-turn arc `ready -> working -> ready` with zero tool calls. For Hermes both live on the metrics tier, not in events.jsonl.\n\n## agent_supports - yes\n\nTwo independent facts, both from the live surface:\n\n1. Hermes accepts an explicit launch model: `hermes chat --help` on v0.19.0 lists `-m MODEL, --model MODEL  Model to use (e.g., anthropic/claude-sonnet-4)` and `--provider PROVIDER`. So a non-default launch is genuinely available (see the recipe caveat on why this cell does not take it).\n2. `sessions.model` is a PER-SESSION column that actually varies, not a config echo. A read-only query over the maintainer's live store groups `source IN ('cli','tui')` rows into TWO distinct models: `gpt-5.6-luna` (18 rows) and `google/gemma-4-26b-a4b` (7 rows). A column that carries two different values across runs is recording the model the session ran on. The boot model comes from `model.default` in `<HERMES_HOME>/config.yaml` (live: `gpt-5.6-luna`, provider `openai-codex`) and lands on the row when it is INSERTed on the first user message.\n\nThere is no way to run a Hermes turn without a resolved model, so a single trivial turn exercises the whole scenario.\n\n## daemon_capability - full\n\nBoth acceptance metrics are derived correctly by the adapter, and the arc is driven by an explicit turn boundary rather than an idle heuristic:\n\n1. ModelName - `querySessionMetrics` (metrics.go) SELECTs `model` off the `sessions` row (filtered `source IN ('cli','tui')`) and sets `ModelName = firstNonEmpty(model, \"unknown\")`. The live rows always carry it, so it is non-empty and not `\"unknown\"` from the first turn. This reaches the daemon's live metrics surface through `agent.go`'s `metricsReader.ComputeMetrics`, wired as the adapter's `agent.MetricsReader` on the `ProcessOwnedStore` Source.\n2. ContextWindow - `querySessionMetrics` ends by calling `tailer.ComputeContextUtilization(metrics.ModelName, metrics.TotalTokens, cm, 0)`. With `contextWindowOverride == 0` the ONLY window source is `capacityMgr.GetModelCapacity(modelName).ContextWindow` (tailer_metrics.go, `ComputeContextUtilization`). VERIFIED against the live capacity cache (`~/.local/share/irrlicht/model-capacity-cache.json`): `gpt-5.6-luna` is present with `context_window: 1050000`, `max_output: 128000`, family `gpt-5`, priced 0.2/1.2 per Mtok. So `ContextWindow == 1050000` == the model's published window, `ContextWindowUnknown == false`, and utilization is ~1.5% at a first-turn ~16k `TotalTokens`.\n   Note the guard at the top of `ComputeContextUtilization`: `totalTokens == 0 || modelName == \"\"` returns `(0, 0, \"unknown\", false)`. The window is therefore lit only AFTER the sessions row's token aggregate is written, which is why the recipe checks the metrics tier after turn completion, not during.\n3. Model-string fidelity - the live path reports the RAW `sessions.model` (no normalization in `ComputeMetrics`). The replay path would report `tailer.NormalizeModelName(ev.ModelName)` (tailer_metrics.go, `applyModelMetadata`). For `gpt-5.6-luna` the two agree: `NormalizeModelName` only strips a `[1m]` suffix / an `-\\d{8}` date suffix and rewrites claude-* aliases, none of which match. So there is no live-vs-golden divergence to reconcile for this model.\n4. Arc - Hermes persists the inbound user row BEFORE the first LLM call and bumps `sessions.message_count` in the same write, so the watcher sees a non-terminal activity first (`ready -> working`); the assistant row with `finish_reason='stop'` makes `turnIsDone` true and the next scan emits a terminal activity (`working -> ready`). `finishReasonEndsTurn` in parser.go is an explicit boundary (a denylist over the one continuing value `tool_calls`), so no IdleFlush is involved. A no-tool prompt never enters `waiting`.\n\nPer \"caveats over downgrades\": the canonical spec is met on the live metrics surface, so daemon stays `full`. The gap is in the FACTORY's verify surface, not the daemon - below.\n\n## LOAD-BEARING CAVEAT - can this cell's model assertion actually be VERIFIED? (checked, not assumed)\n\nThis is the one question 5.2 lives or dies on, so it was traced end to end rather than inherited from the 1.8 sibling:\n\n- `of verify`'s hard assertions run in `validate.applyHardAssertions`, and the ONLY value it compares `observations.model` against is `cur.ModelName`, read by `readGoldenSummary` from the recording's `*.replay.json.golden` `summary` block. events.jsonl is never consulted for metrics.\n- CORRECTION to the hermes 1.8 caveat, which lumped model in with tokens/cost as \"the transcript replay computes nothing for hermes\": that is right for tokens/cost and WRONG for model. `summary.model_name` is set by `finalizeSummary` (cmd/replay/metrics.go) UNGATED - unlike the #766 store-derived context vector on the next lines, which is gated `adapter == antigravity.AdapterName`. hermes IS registered in the replay parser factory (cmd/replay/main.go), hermes' `Parser.ParseLine` DOES set `ev.ModelName` from the injected `_model` key (parser.go `keyModel`), and `tailer` propagates `parsed.ModelName -> metrics.ModelName` (tailer_metrics.go, `applyModelMetadata`). So model is NOT architecturally unverifiable for this column the way tokens and cost are - the hermes Parser emits no usage fields at all, and `total_tokens`/`context_window`/`context_utilization_percentage` are antigravity-gated, so `tokens_nonzero`, `cost_nonzero`, `total_tokens_nonzero` and `context_window_nonzero` WOULD each hard-fail a hermes golden.\n- What blocks model today is a RECORDING-RIG gap, not the daemon and not the validator: Hermes writes no transcript file (the store IS the transcript), the hermes driver reports the pseudo-path `<store>?session=<id>` and has NO store->JSONL exporter the way opencode's driver does, and there are ZERO hermes recordings in replaydata today (no transcript.jsonl, no golden anywhere under replaydata/agents/hermes). With no golden, `ValidateObservations` returns `Skipped: true, Pass: true` - a pinned model would be silently vacuous. With a golden whose exported rows omit `_model`, `cur.ModelName` is `\"\"` and the pin HARD-FAILS while the daemon is perfectly correct.\n- Decision: pin NOTHING in observations. That also matches the direct sibling precedent - opencode, the other ProcessOwnedStore column, has `\"observations\": null` in its 5.2 spec and its recorded golden summary carries no `model_name` key at all (verified on its 2026-05-25 recording, which shows only cum_input/cum_output). The model claim is checked on the LIVE metrics surface at record time via the recipe's `verify[]`.\n- Instruction to `record` (the promotion path): after producing the recording, look at the golden's `summary.model_name`. If it is non-empty, pin `observations.model` to exactly that string in the SAME commit - for this environment that is `gpt-5.6-luna`, which `NormalizeModelName` leaves unchanged. If the export drops `_model` (or no golden is produced at all), leave it unpinned and note it. This is a strictly cheaper unlock than the #766-style lift the token/context half would need.\n\n## driver_capability - ready\n\nThe recipe needs `send` / `wait_turn` / `sleep`. `replaydata/agents/hermes/driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"` and all three seams are genuinely ported: `launch_repl` runs `hermes chat` under tmux in a fresh per-run cwd, `wait_for_prompt` polls the pane for the `Type your message or /help` banner (up to 60s - the TUI loads 35 tools + 68 skills and swallows early keystrokes), and `wait_turn` polls the store for a NEW `role='assistant' AND finish_reason='stop'` row bound to a session with `started_at >` this slot's launch timestamp (so a stale CLI row cannot satisfy it). No new primitive -> `ready`.\n\n## Why the default model, not `-m <non-default>`\n\nThe scenario text says \"launched with a specific non-default model\", but that phrasing is the claudecode illustration; what the acceptance_criteria assert is that the daemon reports the model the session actually ran on with the right window. FIVE of the eight existing 5.2 siblings - codex, pi, opencode, mistral-vibe and (modulo an env var) aider - deliberately record on the agent's configured default for exactly this reason; only gemini-cli pins `-m`. Hermes' daemon path is identical either way (`SELECT model FROM sessions WHERE id = ?`), so a flag would not exercise a different code path. Taking it would cost a driver change (`launch_repl` hardcodes `hermes chat`; `SETTINGS_PATH` is accepted but never wired into the launch) plus a SECOND credentialed model that also resolves in the capacity table - the only other model this machine has ever run is `google/gemma-4-26b-a4b`, a local-provider model that would give `context_window = 0` and sink the cell's second acceptance criterion. Not worth the recording risk. This is a recipe judgement, not a driver gap - no step type is missing, so `driver` stays `ready`.\n\n## Conclusion\n\nA thin cell on the hermes basic-turn arc (one send + wait_turn + trailing sleep), asserting model identity and a correct published context window on the live metrics surface. Route: record. Recordable now with no human action beyond the column's existing prerequisites, provided the recording home's `model.default` stays a capacity-known model.",
+      "caveats": [
+        "LOAD-BEARING (verify surface, not the daemon): observations pins NOTHING. `of verify` hard-asserts `observations.model` only against `summary.model_name` in the recording's *.replay.json.golden (validate.applyHardAssertions <- readGoldenSummary). hermes has ZERO recordings today and no store->JSONL exporter in its driver (it reports the pseudo-path `<store>?session=<id>`), so a pin would be vacuous at best (no golden -> ValidateObservations Skipped/Pass) and a false failure at worst (a golden whose exported rows omit the `_model` key -> model_name \"\" -> hard fail while the daemon is correct). record pins it once it sees a non-empty summary.model_name.",
+        "REFINEMENT of the hermes 1.8 caveat, which said the golden 'can carry none of these metrics': that is correct for tokens and cost and IMPRECISE for model. summary.model_name is set ungated in cmd/replay/metrics.go finalizeSummary (only the #766 total_tokens/context_window/context_utilization lift on the following lines is gated to antigravity), hermes is registered in cmd/replay/main.go's parser factory, and hermes' Parser.ParseLine sets ev.ModelName from the injected `_model` key which tailer propagates into metrics.ModelName. So model is exporter-conditional for hermes, not architecturally blocked - a materially cheaper unlock than the token/context half.",
+        "tokens_nonzero / cost_nonzero / total_tokens_nonzero / context_window_nonzero would each HARD-FAIL a hermes golden and must not be added here: the hermes Parser emits no usage or cost fields at all (its tokens and cost come from ComputeMetrics reading the sessions row, a path replay never runs), and the store-derived context vector is antigravity-gated at cmd/replay/metrics.go.",
+        "The concrete model string is environment-dependent (#440): it is whatever model.default the run's HERMES_HOME config.yaml carries. Live-confirmed here as gpt-5.6-luna (config.yaml model.default, provider openai-codex). NormalizeModelName leaves it unchanged, so the live surface and a future golden would agree on the exact string.",
+        "The ContextWindow criterion hinges on the recording model resolving in irrlicht's capacity table. gpt-5.6-luna DOES (context_window=1050000 in the live model-capacity-cache.json). hermes passes contextWindowOverride=0, so the capacity table is the ONLY window source - a home configured to a local/unlisted model (e.g. the google/gemma-4-26b-a4b this machine has also run) would yield context_window=0, context_utilization=0 and context_window_unknown=true, which is the documented opencode 1.8 failure shape.",
+        "Deliberate recipe choice, not a driver gap: this cell records on the CONFIGURED BOOT model rather than passing `hermes chat -m <non-default>`. `-m/--model` genuinely exists (verified in `hermes chat --help` v0.19.0), but the daemon reads the same `sessions.model` column either way, the driver's launch_repl hardcodes `hermes chat` (SETTINGS_PATH is accepted and never wired), and the only other model available on this machine is a local-provider one with no capacity entry. Five of eight 5.2 siblings record on the default for the same reason.",
+        "PROVISIONAL (emission vs observation): the ready->working edge is asserted from hermes source (the user row is persisted before the first LLM call and bumps message_count in the same write), not yet from a live hermes recording - no hermes cell has been recorded at all. If Hermes ever batched both rows at turn end the edge would collapse and only turn_end would be observable. record settles this.",
+        "Recording-rig note (again, not a step-type gap): because hermes has no transcript file and no exporter, this cell may record with events.jsonl only and no transcript.jsonl/golden. That is enough for the phase assertions (which read events.jsonl) and for the live-surface metric checks; it is exactly what blocks the observations pin."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go (querySessionMetrics)",
+          "note": "SELECT model, cwd, end_reason, started_at, ended_at, input_tokens, ... FROM sessions WHERE id = ? AND source IN ('cli','tui'); ModelName = firstNonEmpty(model, \"unknown\"); then ComputeContextUtilization(metrics.ModelName, metrics.TotalTokens, cm, 0) with a ZERO override, so the capacity table is the only window source."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go (Source: agent.ProcessOwnedStore, metricsReader.ComputeMetrics)",
+          "note": "Hermes persists no transcript files, only the shared store; metricsReader adapts package-level ComputeMetrics to agent.MetricsReader, which is how ModelName/ContextWindow reach the daemon's live metrics surface."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go (ComputeContextUtilization, L549-580)",
+          "note": "totalTokens==0 || modelName==\"\" -> (0,0,\"unknown\",false); override 0 -> effectiveContextWindow = capacityMgr.GetModelCapacity(modelName).ContextWindow; <=0 -> (0,0,\"unknown\",true). So window>0 requires both a token aggregate and a capacity-known model."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go (applyModelMetadata, L109-113)",
+          "note": "if parsed.ModelName != \"\" { t.metrics.ModelName = NormalizeModelName(parsed.ModelName) } — the replay-side propagation that makes a hermes golden's summary.model_name possible at all once an export exists."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go (NormalizeModelName, L656+)",
+          "note": "Strips a trailing [1m], resolves opusplan/sonnet/haiku aliases, strips an -\\d{8} date suffix, then matches claude-* families. 'gpt-5.6-luna' matches none of these and passes through unchanged — live surface and golden would agree exactly."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go (keyModel, ParseLine, finishReasonEndsTurn)",
+          "note": "ParseLine sets ev.ModelName from the injected `_model` key (sessions.model); role='assistant' with a finish_reason other than 'tool_calls' becomes turn_done — the explicit boundary that drives working->ready. The parser carries NO token or cost fields, which is why only the model half is exporter-conditional."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/observations.go (readGoldenSummary, applyHardAssertions, ValidateObservations)",
+          "note": "Hard assertions compare spec.Model against cur.ModelName read exclusively from *.replay.json.golden's summary; no golden -> Skipped:true, Pass:true. This is the mechanism behind the no-pin decision."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/metrics.go (finalizeSummary)",
+          "note": "report.Summary.ModelName = lastMetrics.ModelName is UNGATED; only the following #766 block (TotalTokens/ContextWindow/ContextUtilization) is gated `adapter == antigravity.AdapterName`. The precise basis for 'model is exporter-conditional, tokens/context are architecturally gated'."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/main.go (parserFactories, adapter sniff)",
+          "note": "m[hermes.AdapterName] = func() tailer.TranscriptParser { return &hermes.Parser{} } — hermes IS wired into the replay tool, so a store->JSONL export would actually replay."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/5-2_model-identification/ (expected.jsonl + recordings/2026-05-25-23-33-10_irrlichd-0.4.7+92e5631/transcript.jsonl.replay.json.golden)",
+          "note": "Direct ProcessOwnedStore sibling precedent: observations is null, and the recorded golden summary carries cum_input_tokens/cum_output_tokens but NO model_name key at all."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db (live store, read-only query)",
+          "note": "SELECT model, count(*) FROM sessions WHERE source IN ('cli','tui') GROUP BY model -> gpt-5.6-luna|18, google/gemma-4-26b-a4b|7. Two distinct values prove sessions.model is per-session and tracks the model actually run, not a constant."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/irrlicht/model-capacity-cache.json",
+          "note": "gpt-5.6-luna: context_window 1050000, max_output 128000, family gpt-5, pricing input 0.2 / output 1.2 per Mtok — the published window the acceptance criterion is matched against."
+        },
+        {
+          "kind": "file",
+          "ref": "<HERMES_HOME>/config.yaml (live: /Users/ingo/hermes-local/.hermes/config.yaml)",
+          "note": "model: {default: gpt-5.6-luna, provider: openai-codex, base_url: ''} — the boot model that lands on sessions.model; the driver passes no -m, so this is what a recording reports."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent v0.19.0 `hermes chat --help`",
+          "note": "-m MODEL, --model MODEL  Model to use (e.g., anthropic/claude-sonnet-4); --provider PROVIDER — an explicit non-default launch IS supported by the CLI, which is what makes agent_supports=yes unambiguous."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\"; launch_repl runs `hermes chat` under tmux (no model flag; SETTINGS_PATH is accepted but never wired into the launch); wait_for_prompt polls up to 60s for the 'Type your message or /help' banner; wait_turn polls the store for a new assistant/finish_reason='stop' row on a session started after this slot launched."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#440",
+          "note": "replay-summary model_name is environment-dependent — assert presence, not a hardcoded string, unless the live surface confirms it."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#766",
+          "note": "Added the store-derived context vector to the golden + StageReplayStore for antigravity — the mechanism hermes would need for the token/context half; the model half needs only an exporter."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH (verified: `hermes --version` -> Hermes Agent v0.19.0 (2026.7.20)) and sqlite3 on PATH — the driver reads the session id and turn completion straight out of state.db.",
+        "HERMES_HOME exported to the recording home, and that home's config.yaml carries a working model.default + provider with credentials — the run must not write into the maintainer's real store.",
+        "The recording home's model.default MUST resolve in irrlicht's capacity table, or the ContextWindow acceptance criterion cannot be met: hermes passes contextWindowOverride=0, so GetModelCapacity is the only window source. gpt-5.6-luna resolves (context_window=1050000); the local-provider google/gemma-4-26b-a4b this machine has also run does NOT.",
+        "irrlichd is recording with the hermes store watcher enabled and the 'store' observe permission granted (a fresh IRRLICHT_HOME leaves it pending, which means zero monitoring) — run-cell.sh isolated mode, or --attach against a daemon started with --record."
+      ],
+      "setup": [
+        "The interactive driver launches `hermes chat` under tmux in a fresh per-run cwd and polls for the 'Type your message or /help' banner before typing — the TUI loads 35 tools + 68 skills and swallows early keystrokes, so a fixed sleep is not enough (60s budget).",
+        "NO model flag is passed. `hermes chat -m MODEL` exists, but the daemon reads the same per-session `sessions.model` column either way, launch_repl hardcodes `hermes chat`, and the only other model available on this machine has no capacity entry — so this cell asserts identification of the CONFIGURED BOOT model (gpt-5.6-luna here), matching the codex / pi / opencode / mistral-vibe 5.2 siblings.",
+        "Hermes writes NO transcript file: the slot's transcript path is the pseudo-path '<store>?session=<id>', the same encoding the adapter puts on agent.Event.TranscriptPath. The session id (<YYYYMMDD>_<HHMMSS>_<hex>) is resolved lazily after the first send, binding only to a row with started_at > the slot's launch timestamp so a stale CLI session cannot be adopted.",
+        "The sessions row is INSERTed only on the first user message, so the sub-second ready birth in events.jsonl is carried by the transient proc-<PID> pre-session the process scanner mints; the store-backed session appears a few seconds later and carries the turn arc.",
+        "The send is a single no-tool plain-text turn, so the working span carries no tool call and the session never enters waiting (acceptance: tool calls <= 0).",
+        "Both metric assertions are checked AFTER turn completion: ComputeContextUtilization returns a zero window while TotalTokens is still 0, so metrics read between session discovery and the first token-aggregate write are legitimately empty."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a session born ready shortly after launch (a transient proc-<PID> pre-session carries the sub-second birth; the store-backed <YYYYMMDD>_<HHMMSS>_<hex> session appears once the first user message lands).",
+        "events.jsonl contains a pid_discovered event (hermes is a Python console script, matched on the full command line, so the PID binds to the venv interpreter process).",
+        "events.jsonl shows exactly one ready->working->ready cycle on the store-backed session id; no state_transition to waiting and no tool call.",
+        "LIVE METRICS SURFACE, after the turn completes: metrics.model_name equals the recording home's model.default and is not 'unknown' (gpt-5.6-luna in this environment) — this is the scenario's primary assertion.",
+        "LIVE METRICS SURFACE, after the turn completes: metrics.context_window equals that model's PUBLISHED window from the capacity table (1050000 for gpt-5.6-luna), metrics.context_window_unknown is false, and metrics.context_utilization_percentage > 0.",
+        "PIN-OR-NOT (for the recorder): if the recording produces a *.replay.json.golden whose summary.model_name is non-empty, pin observations.model to exactly that string in expected.jsonl in the SAME commit. If no golden is produced (hermes has no store->JSONL exporter today) or summary.model_name is empty, leave observations unpinned and say so — do NOT add tokens_nonzero / cost_nonzero / context_window_nonzero, which would hard-fail a hermes golden for tooling reasons while the daemon is correct."
+      ],
+      "settings": {},
+      "timeout_seconds": 180,
+      "notes": "Structurally the hermes basic-turn arc (one send + wait_turn + trailing sleep); the extra intent over 2.1 is the model identity + published context window after turn 1, and over 1.8 it is that the model claim is the PRIMARY assertion rather than one of three first-contact metrics. timeout_seconds is 180 because the TUI's banner poll alone budgets up to 60s before the first keystroke; the 10s trailing sleep outlasts the working->ready settle (the watcher's backstop poll is 2s and fsnotify usually fires sooner). What differs between runs: session id, PID, timestamps, token counts, assistant wording. What must NOT differ: one ready->working->ready arc on one store-backed session, model_name equal to the home's model.default and never 'unknown', and context_window equal to that model's published window. KEY RISK for the record sweep: hermes has no transcript file and its driver has no store->JSONL exporter, so this cell may record with events.jsonl only — which is sufficient for the phases and the live-surface checks but is exactly what leaves observations.model unpinned."
+    }
+  }
+}
