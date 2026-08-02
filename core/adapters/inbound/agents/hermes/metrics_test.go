@@ -70,6 +70,7 @@ func newTestStore(t *testing.T) (path string, db *sql.DB) {
 // which number was which.
 type sessionRow struct {
 	id, source, model, cwd string
+	parent                 string // parent_session_id; set for delegated children
 	started, ended         float64
 	msgs                   int
 }
@@ -87,11 +88,15 @@ func insertSession(t *testing.T, db *sql.DB, r sessionRow) {
 	if r.ended > 0 {
 		endedVal = r.ended
 	}
+	var parentVal interface{}
+	if r.parent != "" {
+		parentVal = r.parent
+	}
 	if _, err := db.Exec(`INSERT INTO sessions
-		(id, source, model, cwd, started_at, ended_at, message_count,
+		(id, source, model, cwd, parent_session_id, started_at, ended_at, message_count,
 		 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		r.id, r.source, r.model, r.cwd, r.started, endedVal, r.msgs,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.id, r.source, r.model, r.cwd, parentVal, r.started, endedVal, r.msgs,
 		16272, 5, 0, 0); err != nil {
 		t.Fatalf("insert session: %v", err)
 	}

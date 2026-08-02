@@ -16,7 +16,7 @@ import (
 // ComputeMetrics can recover the session ID from agent.Event.TranscriptPath.
 const sessionQueryParam = "?session="
 
-// Every query filters `source IN ('cli','tui')` — the surfaces that are
+// Every query filters `source IN ('cli','tui','subagent')` — the surfaces that are
 // actually coding sessions. Hermes' messaging gateway (WhatsApp, Slack,
 // Discord, …) writes into the SAME sessions table, and without the filter a
 // WhatsApp conversation would surface in irrlicht as a coding session.
@@ -100,7 +100,7 @@ func querySessionMetrics(db *sql.DB, sessionID string) (*session.SessionMetrics,
 		SELECT model, cwd, end_reason, started_at, ended_at,
 		       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
 		FROM sessions
-		WHERE id = ? AND source IN ('cli','tui')`, sessionID).
+		WHERE id = ? AND source IN ('cli','tui','subagent')`, sessionID).
 		Scan(&model, &cwd, &endReason, &startedAt, &endedAt,
 			&inTok, &outTok, &cacheRead, &cacheWri)
 	if err != nil {

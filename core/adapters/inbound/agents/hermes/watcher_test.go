@@ -477,3 +477,38 @@ func TestTurnIsDone_AbnormalFinishReasons(t *testing.T) {
 		}
 	}
 }
+
+// A delegated subagent is a REAL coding session, unlike a WhatsApp chat.
+//
+// Hermes forces every top-level delegate_task into background and persists the
+// child as its own sessions row with parent_session_id set — but tags it
+// source='subagent' (delegate_tool.py passes platform="subagent", and
+// run_agent._session_source_for_agent returns `platform or "cli"`). The
+// allow-list dropped that row before the parent_session_id read could apply,
+// so no child ever surfaced and the parent went ready while its child ran.
+func TestWatcher_DelegatedSubagentSessionsSurfaceWithParent(t *testing.T) {
+	path, db := newTestStore(t)
+	insertSession(t, db, sessionRow{id: "parent1", source: "cli", model: "m", started: 1000, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "parent1", role: "user", content: "delegate it", ts: 1001})
+	insertSession(t, db, sessionRow{id: "child1", source: "subagent", model: "m", parent: "parent1", started: 1002, msgs: 1})
+	insertMessage(t, db, messageRow{sessionID: "child1", role: "user", content: "do the subtask", ts: 1003})
+
+	w := NewWithStorePath(path, 0)
+	w.liveCWD = func() string { return "" }
+	ch := w.Subscribe()
+	scanNow(w)
+
+	var child *agent.Event
+	for _, ev := range drain(ch) {
+		if ev.SessionID == "child1" {
+			e := ev
+			child = &e
+		}
+	}
+	if child == nil {
+		t.Fatal("a delegated subagent session must surface — it is a real coding session")
+	}
+	if child.ParentSessionID != "parent1" {
+		t.Errorf("ParentSessionID = %q, want parent1 — the link is what keeps the parent working", child.ParentSessionID)
+	}
+}
