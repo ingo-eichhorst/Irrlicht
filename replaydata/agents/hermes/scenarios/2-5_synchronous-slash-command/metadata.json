@@ -124,12 +124,13 @@
       "setup": [
         "Driver creates a fresh cwd under <staging>/cwd/ and launches `hermes chat` under tmux, polling for the \"Type your message or /help\" banner before the first keystroke",
         "Avoid /new, /clear and /branch (mint or copy a session — session-reset), /compress (real model call — context-compaction), /title (force-creates the sessions row) and /model (NOT because it writes a row — on this surface it writes none; the model_switch marker is TUI-gateway-only — but because bare /model opens the picker modal the driver has no keys step to dismiss, and /model <name> is a live mid-session switch, scenario 5-3)",
-        "Avoid /usage and /version: local to the model but network-bound, so they can stall the TUI inside the dwell window"
+        "Avoid /usage and /version: local to the model but network-bound, so they can stall the TUI inside the dwell window",
+        "The warm-up generation is deliberately WIDE (30-line count + two sentences) rather than the one-token \"Reply with exactly the word: ok\" an earlier draft carried. The watcher polls every 2s with a 500ms debounce, so a ~1s warm-up can commit its user row and its assistant finish_reason=stop row inside a SINGLE scan — warm_turn_start (the ready→working edge) then never exists to be observed. Widening the generation is the fix; weakening the spec is not. It also pushes the warm-up cleanly clear of the slash window."
       ],
       "script": [
         {
           "type": "send",
-          "text": "Reply with exactly the word: ok"
+          "text": "Without using any tools, count from 1 to 30, one number per line. Then, without using any tools, write two sentences explaining what addition is."
         },
         {
           "type": "wait_turn"
