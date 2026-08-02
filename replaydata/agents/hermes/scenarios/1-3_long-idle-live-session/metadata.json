@@ -1,0 +1,129 @@
+{
+  "scenario_id": "long-idle-live-session",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+fe95020",
+    "confidence": 0.8,
+    "notes": "hermes chat is a persistent REPL, so the daemon's PID-liveness branch (pid_manager.go:1026) is what holds the session past readyTTL — the same mechanism claudecode/codex rely on, unlike opencode's per-turn process. The load-bearing dependency is the watcher's live-process CWD fallback: sessions.cwd is empty for source='cli', and without a CWD the PID stays 0 and the TTL sweep deletes the session."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-idle-live-session",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts three user-observable things: (1) the session row does NOT disappear past readyTTL, (2) state stays `ready` for the whole idle window, (3) the next user prompt resumes `ready -> working -> ready` on the SAME session.\n\n**agent = yes.** `hermes chat` is a long-lived interactive REPL: the driver launches it under tmux and polls for its \"Type your message or /help\" banner before sending (`replaydata/agents/hermes/driver-interactive.sh:161,203`), and the process sits in its input loop until the user exits — `sessions.ended_at`/`end_reason` are only filled in when the turn loop exits (adapter.go package doc, verified against v0.19.0). Nothing in Hermes ends a session on idle. Sessions in the live store confirm the shape: two-message `source='cli'` rows written by `hermes chat`.\n\n**daemon = full.** Hermes is `agent.ProcessOwnedStore` with `PIDForSession: DiscoverPID` (agent.go:34-43), so a session gets bound to the live `hermes chat` PID exactly like a file-transcript adapter. The readyTTL sweep's live-process guard — `if snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil { return }` (pid_manager.go:1026) — is therefore the branch that protects it, which is precisely what this scenario is written to prove. Three further reads back the other two assertions:\n\n- **State stays ready, no flicker.** The watcher only emits an activity event when `message_count` grew or the session just ended (watcher.go:408-418). An idle session produces neither, so the 2s poll and the fsnotify triggers generate no events at all during the window — no spurious `working`/`waiting` transitions to violate the idle_window invariants.\n- **The 30s unbound-ghost reap cannot fire.** `reapUnboundReadyGhost` (pid_manager.go:1077-1092) requires `isStaleTranscript(transcriptPath)`, and that helper returns false for DB-backed paths (helpers.go:43-46, `?session=` sentinel). Hermes' TranscriptPath is `<store>?session=<id>` (watcher.go:376), so the only sweep that can reach the cell is the TTL branch above — i.e. the PID check really is the single thing standing between the session and deletion.\n- **Resume is the ordinary turn arc.** The second prompt inserts a `user` row -> `message_count` grows -> non-terminal activity -> `working`; the reply's `finish_reason='stop'` maps to `turn_done` (parser.go:93-95) via `turnIsDone` (watcher.go:426-436) -> `ready`. Explicit turn boundary, no idle heuristic.\n\nThis is a *stronger* cell than the opencode sibling on the same row: opencode's caveat is \"no persistent PID across turns, PID-liveness doesn't apply\", whereas hermes' REPL keeps one PID for the whole recipe, so hermes is the second ProcessOwnedStore adapter that actually exercises the liveness branch.\n\n**driver = ready.** The recipe needs `send` / `wait_turn` / `sleep`; all three are in the hermes driver's `DRIVE_ELICITS` (`send slash sleep wait_turn`), and `wait_turn` is a real signal poll against `messages.finish_reason='stop'` rather than an idle guess (driver-interactive.sh:258-281).\n\n## What is NOT settled by reading code\n\nPID binding is indirect for hermes and is the one step a recording has to prove. `sessions.cwd` is empty for `source='cli'` (which is what `hermes chat` records), so the CWD that `DiscoverPIDByCWDAndCmdLineExcludingArgv` keys on comes from the watcher's live-process fallback (watcher.go:115-124, 315-318), and discovery is retried only on activity events (session_detector_activity.go:557) — none of which fire during the idle window. So the PID must be bound during turn 1 or the TTL branch falls through to `snap.pid == 0` and deletes the session (pid_manager.go:1029). See caveats.",
+      "caveats": [
+        "Single-session precondition, not a nicety: defaultLiveCWD (watcher.go:115-124) returns \"\" when 2+ live hermes session processes are found, an ambiguous binding being worse than none. With no CWD the session gets no PID, and pid_manager.go:1029's `snap.pid == 0` arm deletes it at readyTTL — the exact failure this cell asserts against. The recording must keep exactly one hermes session process alive for its whole duration.",
+        "The store is shared machine-wide, so every `source IN ('cli','tui')` session started within the watcher's maxAge surfaces at daemon start, and with IRRLICHT_READY_SESSION_TTL=15s those historical rows (pid=0) are swept during the run. Expect transcript_removed events for OTHER session ids in events.jsonl; the spec's invariants are session-scoped (validate/expected.go:757,768) so they are unaffected, but a hand-read of the recording will show the churn.",
+        "A proc-<pid> pre-session precedes the real session id: the process scanner is wired for hermes too (wiring.go:103-114), while the store row is only INSERTed on the first user message. The pre-session is superseded via updateTrackedPID -> hasActiveSession(projectDir, pid) (scanner.go:310-334), which needs a non-empty ProjectDir — the same live-CWD fallback as above. session_birth is therefore left UNPINNED and every later phase is pinned with same_session_as to the real store session.",
+        "Provisional on emission, not on parsing: daemon=full is derived from adapter + sweep code, with no hermes recording yet on any row. The one thing `record` must settle is that PID discovery actually binds the `hermes chat` PID inside turn 1.",
+        "observations.model is pinned to gpt-5.6-luna, read from the recording home's shipped default (/Users/ingo/hermes-local/.hermes/config.yaml model.default) and confirmed as the literal `sessions.model` value in that store. If the recording home is configured with another provider/model, `record` must correct it."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go:34-43",
+          "note": "ProcessOwnedStore + PIDForSession: DiscoverPID — session lifetime is tied to the live hermes PID, so the liveness branch applies."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go:1022-1035",
+          "note": "The readyTTL sweep: line 1026 spares a session whose PID is alive; line 1029 deletes it when ready OR pid==0. This is the branch the scenario asserts."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go:115-124,315-318,408-418",
+          "note": "liveCWD fallback that supplies the CWD PID discovery keys on (sessions.cwd empty for source='cli'), and the activity gate that emits nothing while idle."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go:43-52",
+          "note": "isStaleTranscript returns false for DB-backed `?session=` paths, so reapUnboundReadyGhost (pid_manager.go:1077) can never fire for hermes."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go:93-95",
+          "note": "finish_reason='stop' -> turn_done: explicit turn boundary, so the settle back to ready needs no idle-flush heuristic."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go:90-91,103-114",
+          "note": "hermes store watcher AND the process scanner are both wired, so a proc-<pid> pre-session precedes the store session id."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh:161,203,258-281",
+          "note": "`hermes chat` tmux REPL persists across both turns; DRIVE_ELICITS = send slash sleep wait_turn; wait_turn polls messages.finish_reason='stop'."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Live read: sessions rows carry model='gpt-5.6-luna', input_tokens=16269 / output_tokens=5 populated, estimated_cost_usd=0.0 (subscription) — so tokens_nonzero holds and cost must come from irrlicht's pricing table."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/capacity.go:157-169",
+          "note": "Ran EstimateCostUSD('gpt-5.6-luna', 16269, 5, 0, 0) against DefaultCapacityManager: pricing present, 0.00326 USD — cost_nonzero is assertable for this model."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH (v0.19.0 (2026.7.20) is what this cell was assessed against)",
+        "HERMES_HOME exported to the recording home, whose config.yaml carries a working model.default + provider credentials (assessed against model.default=gpt-5.6-luna, provider=openai-codex)",
+        "sqlite3 on PATH — hermes writes no transcript file, so the driver reads session id and turn completion straight from state.db",
+        "irrlichd running in --record mode with IRRLICHT_READY_SESSION_TTL=15s (the 30 min default would force a 32+ minute recording)",
+        "exactly ONE live hermes session process for the whole run — the watcher's CWD fallback returns \"\" on ambiguity, which costs the session its PID and lets the TTL sweep delete it"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/; the driver launches `hermes chat` there under tmux and polls for the 'Type your message or /help' banner before the first send (keystrokes typed during boot are swallowed silently)",
+        "The daemon's effective readyTTL must be well under the recipe's 20 s post-turn sleep; 15 s gives a 1.33x margin without burning a minute per recording",
+        "The store row does not exist at launch — it is INSERTed on the first user message — so the driver resolves the session id lazily, filtered to started_at > launch_ts (the store is shared machine-wide and a stale row would otherwise satisfy wait_turn instantly)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the hermes store session (a 20260802_hhmmss_xxxxxx-shaped id, not the proc-<pid> pre-session) entering ready after turn 1",
+        "a pid_discovered event bound the hermes chat PID to that session during turn 1 — without it the TTL sweep's pid==0 arm applies and the rest of the recording is meaningless",
+        "no transcript_removed fires for that session during the 20 s idle window (removals of unrelated historical store sessions are expected and harmless)",
+        "no state_transition to working or waiting fires for that session during the idle window",
+        "after the second send, events.jsonl shows ready -> working -> ready for the SAME session id",
+        "final state is ready; the session's metrics carry model=gpt-5.6-luna with nonzero tokens and nonzero estimated cost"
+      ],
+      "settings": {},
+      "timeout_seconds": 240,
+      "scope_note": "Proves that hermes' store-backed session survives an idle window longer than readyTTL because its `hermes chat` process is still alive — the PID-liveness branch, which the other ProcessOwnedStore adapter (opencode) cannot exercise since it spawns a fresh process per turn. The 240 s budget covers the REPL's slow boot (35 tools + 68 skills, polled up to 60 s) plus two turns and 25 s of sleeps."
+    }
+  }
+}
