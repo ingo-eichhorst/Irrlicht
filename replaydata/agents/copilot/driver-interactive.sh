@@ -125,7 +125,7 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if copilot is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
-DRIVE_ELICITS="send slash sleep wait_turn exit_clean sigkill interrupt keys restart start_session session"
+DRIVE_ELICITS="send slash sleep wait_turn exit_clean sigkill interrupt keys restart start_session session reset_session resume"
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -351,12 +351,46 @@ while IFS= read -r step; do
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     # Esc cancels the in-flight turn. The turn it would have completed never
     # lands, so drop the expectation or every later wait_turn waits forever.
-    interrupt)       tmux send-keys -t "$SESSION" Escape
+    # Copilot binds interrupt to esc-esc inside a 500 ms window: the FIRST
+    # Escape only arms the intent and returns, the second calls
+    # interruptMainTurn. A single Escape therefore does nothing, and the
+    # recording would silently come back uninterrupted — passing recipe-lint
+    # while proving nothing. Both presses go in ONE send-keys call so nothing
+    # can land between them. Ctrl-C is NOT the interrupt here (ctrl+c twice
+    # exits the REPL).
+    interrupt)       tmux send-keys -t "$SESSION" Escape Escape
                      (( EXPECTED_TURNS > 0 )) && EXPECTED_TURNS=$((EXPECTED_TURNS - 1))
                      SES_EXPECTED[$ACTIVE]=$EXPECTED_TURNS ;;
     keys)            tmux send-keys -t "$SESSION" "$(jq -r '.text' <<<"$step")" ;;
-    reset_session)   not_implemented reset_session || break ;;   # /clear vs /new rotation is UNVERIFIED for copilot — left stubbed and out of DRIVE_ELICITS so recipe-lint refuses rather than guessing
-    resume)          not_implemented resume || break ;;          # --resume=<id> is wired in launch_repl via RESUME_ID but the 1-session/2-PID contract is unverified
+    # /clear rotates: it calls clearHistory, which mints a NEW session and
+    # switches to it, so a new session-state directory appears. Re-snapshot and
+    # clear TRANSCRIPT first, or resolve_transcript short-circuits on the old
+    # path and turn_count keeps grepping the abandoned transcript.
+    reset_session)   PRE_LAUNCH_DIRS="$(ls "$COPILOT_HOME/session-state" 2>/dev/null | sort || true)"
+                     TRANSCRIPT=""; UUID=""
+                     SES_TRANSCRIPT[$ACTIVE]=""; SES_UUID[$ACTIVE]=""
+                     EXPECTED_TURNS=0; SES_EXPECTED[$ACTIVE]=0
+                     slash_cmd "/clear"
+                     sleep 2
+                     resolve_transcript || true ;;
+    # Resume keeps the ORIGINAL session id and appends to the ORIGINAL
+    # directory, so the slot's TRANSCRIPT/UUID are restored rather than
+    # re-resolved: copilot mints a stray, transcript-less session directory on
+    # every launch, and the set-difference resolver would grab THAT instead.
+    # Relaunch in the same cwd — DiscoverPIDByCWD matches the process's OS cwd,
+    # which stays the launch dir.
+    resume)          save_active
+                     _resume_id="${SES_UUID[$ACTIVE]}"
+                     _resume_tr="${SES_TRANSCRIPT[$ACTIVE]}"
+                     _resume_turns="${SES_EXPECTED[$ACTIVE]}"
+                     tmux kill-session -t "$SESSION" 2>/dev/null || true
+                     wait_tmux_session_gone "$SESSION" 15 || true
+                     RESUME_ID="$_resume_id" launch_repl
+                     TRANSCRIPT="$_resume_tr"; UUID="$_resume_id"
+                     EXPECTED_TURNS="$_resume_turns"
+                     SES_TRANSCRIPT[$ACTIVE]="$TRANSCRIPT"
+                     SES_UUID[$ACTIVE]="$UUID"
+                     SES_EXPECTED[$ACTIVE]="$EXPECTED_TURNS" ;;
     # launch_repl allocs the slot itself — allocating here too would burn a
     # second, empty slot per restart and emit blank entries in
     # session.uuids/transcript.paths.
