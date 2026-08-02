@@ -1,0 +1,149 @@
+{
+  "scenario_id": "model-switch-midsession",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+d4012d0",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes — `hermes chat` accepts the INLINE form `/model <name> [--provider <slug>] [--session]` (cli.py _handle_model_switch docstring + dispatch on canonical==\"model\"); a bare `/model` with no args opens a picker, the inline form never does. daemon_capability: bug — the adapter derives ModelName from `sessions.model` (querySessionMetrics), and on the CLI surface hermes NEVER rewrites that column on a mid-session switch, so ModelName stays model A after turn 2. The trace exists in the SAME store the daemon already opens (`session_model_usage`, one row per (model, provider) keyed by the model live at each API call), so this is an adapter read, not an observability limit. driver_capability: ready — the recipe needs send/slash/wait_turn/sleep, the four steps drive-hermes-interactive.sh actually implements."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-switch-midsession",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: ready\n\n## agent — yes\n\n`hermes chat` (the interactive REPL, `source='cli'`) intercepts `/`-prefixed input and dispatches `canonical == \"model\"` to `HermesCLI._handle_model_switch` (cli.py). Its docstring enumerates the supported forms:\n\n```\n/model                              — show current model + usage hints (opens the picker)\n/model <name>                       — switch model (this session only)\n/model <name> --session             — switch for this session only (explicit)\n/model <name> --provider <provider> — switch provider + model\n```\n\nWith an inline argument the handler calls `hermes_cli.model_switch.switch_model(...)` DIRECTLY — the prompt_toolkit picker modal is opened only on the `not model_input and not explicit_provider` branch, so the inline form is a plain `slash` step, NOT a `keys` gap. The switch is applied to the live agent via `agent.switch_model(...)` in `_apply_model_switch_result`, and persistence defaults to session-scope (`model.persist_switch_by_default` is False), so it does not touch the maintainer's config.yaml unless `--global` is passed. Turn 2 therefore genuinely runs on model B.\n\nOne interactive branch exists: `_confirm_expensive_model_switch` pops a modal when `hermes_cli.model_cost_guard.expensive_model_warning` returns non-None (a costly cloud model). Switching to a LOCAL LM Studio model never trips it, which is why the recipe's model B is a local model.\n\n## daemon — bug (the load-bearing finding)\n\nirrlicht's ModelName for a Hermes session is `sessions.model`, read once per scan in `querySessionMetrics` (`metrics.ModelName = firstNonEmpty(model.String, \"unknown\")`) and injected onto every replayed message row as the synthetic `_model` key. Nothing else in the adapter can produce a model name.\n\nOn the CLI surface hermes never rewrites that column after session creation. Three write paths touch `sessions.model`, and none of them fires for a `hermes chat` mid-session `/model`:\n\n1. `HermesState.update_session_model(session_id, model)` — the one unconditional writer, whose own docstring says it exists \"for a mid-session switch ... so that the dashboard reflects the user's latest /model choice\". Its ONLY callers are `tui_gateway/server.py` (the TUI gateway, `source='tui'`) and `gateway/slash_commands.py` (the messaging gateway, whose sources the adapter filters out). A repo-wide grep finds no caller under `cli.py` or `hermes_cli/`.\n2. `HermesState.update_token_counts(...)` rewrites `model`/`billing_provider` only on its `first_accounted_route` branch, gated on `existing_api_calls == 0` — i.e. the FIRST accounted API call of the session. Its comment states the consequence outright: \"The `sessions` row only keeps one (model, billing_provider) pair, so a mid-session `/model` switch otherwise attributes every token to the initial model (issue #51607).\"\n3. `create_session`'s upsert uses `model = COALESCE(sessions.model, excluded.model)` — it backfills a NULL, never overwrites.\n\nAnd `_apply_model_switch_result` (cli.py) persists nothing at all: it mutates in-process CLI/agent state and queues `_pending_model_switch_note`, which is PREPENDED to the next user message for the API only — the durable transcript row keeps the clean user text (`_persist_clean_user_message`).\n\nSo after `/model` + turn 2, the store reads: `sessions.model` = model A, `messages` = the ordinary user/assistant rows with no switch marker. irrlicht reports `ModelName = A` for the whole session and the scenario's central acceptance criterion — \"After turn 2: ModelName = model B (latest wins)\" — cannot be met today.\n\nWhy `bug` and not `incapable`: the trace EXISTS, in the same database file the adapter already opens read-only. `session_model_usage(session_id, model, billing_provider, ..., first_seen, last_seen)` carries one row per model actually used, written by `_record_model_usage` from the incremental `update_token_counts` path — the comment above it says the delta is \"keyed by the live model\" precisely to \"preserve an accurate per-model breakdown regardless of how many times the user switches\". The current model is `SELECT model FROM session_model_usage WHERE session_id=? ORDER BY last_seen DESC LIMIT 1`. That is an adapter read the fix would add; the owner is irrlicht, not hermes.\n\nWhat the daemon DOES get right on this cell, and what the spec still asserts as passing state phases:\n\n- The switch window shows no flicker. On the CLI surface `/model` writes NO `messages` row, so `sessions.message_count` does not grow, `Watcher.reconcile` emits no `EventActivity`, and the session simply holds `ready`. (This is a stronger guarantee than the parser's `display_kind='model_switch'` skip, which — see caveats — never fires on this surface.)\n- Token accumulation across the switch holds: `TotalTokens = sessions.input_tokens + sessions.output_tokens`, and `update_token_counts` adds every call's delta to that aggregate regardless of which model served it, so T2 > T1.\n- Both turns produce the ordinary ready→working→ready arc (user row → working; assistant row with `finish_reason='stop'` → `turn_done` → ready), on one store-backed session id.\n\n## driver — ready\n\nThe recipe needs `send`, `slash`, `wait_turn`, `sleep`. `drive-hermes-interactive.sh` implements exactly those four; every other arm (`keys`, `interrupt`, `reset_session`, `restart`, `resume`, `sigkill`, `exit_clean`, `start_session`, `session`) is a loud `not_implemented` stub — so the recipe is deliberately built to need none of them. Two driver properties make this cell safe:\n\n- `slash` and `send` are the same primitive (`send_text`), so the inline `/model …` needs no new step type.\n- `wait_turn` polls the STORE (`SELECT COUNT(*) FROM messages WHERE session_id=… AND role='assistant' AND finish_reason='stop'`) against `EXPECTED_TURNS_SEEN`; it is not a send-counter. A `slash` step therefore does NOT desync it (unlike claudecode's), so turn 2 can use a real `wait_turn` rather than a blind sleep. A `wait_turn` immediately AFTER the `/model` slash would hang (no assistant row is produced), so the switch window is a `sleep` — which is also what the spec's dwell asserts against.",
+      "caveats": [
+        "NOT LIVE-VERIFIED. This verdict is a code + live-store read, not a recording: no mid-session CLI `/model` has ever been performed in the maintainer's store (`session_model_usage` currently holds a single model per session for all 25 sessions). The daemon=bug prediction — ModelName stays model A after turn 2 — is exactly what `record` settles, by reading the live metrics surface and the two store queries in verify[]. It CANNOT be pinned as a machine assertion: `of verify` hard-asserts observations only against a recording's replay-golden summary, and the hermes driver exports no store→JSONL transcript, so a hermes recording has no golden and ValidateObservations returns Skipped (same reason the 2-1 sibling pins nothing).",
+        "The parser's `display_kind='model_switch'` skip is TUI-ONLY dead code on this surface. Only `tui_gateway/server.py` (lines 3273/3292/3303) writes a marker row; the one such row in the live store belongs to a `source='tui'` session (id 20260726_190232_65c19a, content \"[System: The active model for this chat has changed to gpt-5.6-luna via provider openai-codex...]\"). `hermes chat` never writes one. The skip is still correct and worth keeping — it protects the `tui` surface, where the marker row WOULD bump message_count, fire an EventActivity, and (via the detector's force ready→working bounce, which cannot be suppressed here because `NoSubstantiveActivity` is a tailer-only signal that the ProcessOwnedStore path never sets) produce exactly the working flicker this scenario forbids. That flicker is a TUI-surface risk this CLI recipe does not exercise.",
+        "The sibling cell 2-5 synchronous-slash-command asserts in its recipe setup that /model 'writes a display_kind=model_switch row'. That is true of the TUI gateway only, not of `hermes chat`; its avoid-/model instruction is still the right call for other reasons (it changes the session's model), but the stated reason does not hold on the CLI surface.",
+        "Model A is NOT pinnable by the recipe. `drive-hermes-interactive.sh` launches a bare `hermes chat` and ignores its SETTINGS_PATH argument (there is no --model flag on the launch), so model A is whatever `model.default` is in the recording HERMES_HOME's config.yaml. The maintainer's home reads `model.default: gpt-5.6-luna` / `provider: openai-codex`, and the sibling 2-5 cell pins that same value as its recorded model, so A is expected to be gpt-5.6-luna — but `record` must read A off the recording rather than assume it.",
+        "Model B depends on the recording home having a SECOND reachable provider. The recipe uses `google/gemma-4-26b-a4b --provider lmstudio`: LM Studio is up on this machine (its /v1/models lists that id) and the live store proves hermes has driven `source='cli'` sessions through `billing_provider='lmstudio'` at that model with ~30k-token calls, so it handles this session's context. If the recording HERMES_HOME lacks the lmstudio provider, `record` may substitute ANY second reachable model — per issue #440 the durable assertion is that the model CHANGES, not the specific pair — and must then re-pin observations.model.",
+        "Switch-window risk the recipe cannot fully remove: `merge_preflight_compression_warning` runs on every switch, and if the target model's context is smaller than the conversation, hermes can decide to compress — a real LLM call that WOULD write rows inside the switch window and break the 'no working transition' invariant. Choosing a model B with ample context (the ~17k-token system prompt is the floor) is the mitigation; a compression blip during the dwell is a recipe fault, not the daemon bug this cell tracks."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go — querySessionMetrics",
+          "note": "ModelName is read from `sessions.model` (SELECT model, cwd, end_reason, ... FROM sessions WHERE id = ?) and injected as the synthetic _model key on every message row; no other model source exists in the adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go — ParseLine, keyDisplayKind",
+          "note": "A user row with display_kind='model_switch' is Skip=true bookkeeping; ev.ModelName is set from the injected _model (the sessions row), never from the switch marker itself — so even on the TUI surface the marker does not carry the new model into metrics."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go — reconcile / scanSessions",
+          "note": "EventActivity is emitted only when sessions.message_count grows or ended_at flips; a CLI /model writes no messages row, so the switch window produces no event and the session holds ready."
+        },
+        {
+          "kind": "file",
+          "ref": "<HERMES_HOME>/hermes-agent/hermes_state.py — update_session_model (v0.19.0)",
+          "note": "The only unconditional sessions.model writer ('Update the model for a session after a mid-session switch'). Callers: tui_gateway/server.py:3226-3229 and gateway/slash_commands.py:1670,1977 — none under cli.py or hermes_cli/."
+        },
+        {
+          "kind": "file",
+          "ref": "<HERMES_HOME>/hermes-agent/hermes_state.py — update_token_counts / _record_model_usage (v0.19.0)",
+          "note": "sessions.model is rewritten only on the first_accounted_route branch (existing_api_calls == 0). Its comment: 'The sessions row only keeps one (model, billing_provider) pair, so a mid-session /model switch otherwise attributes every token to the initial model (issue #51607). Recording the per-call delta into session_model_usage keyed by the live model preserves an accurate per-model breakdown regardless of how many times the user switches.' This is the trace that makes the verdict `bug` rather than `incapable`."
+        },
+        {
+          "kind": "file",
+          "ref": "<HERMES_HOME>/hermes-agent/hermes_state.py — create_session upsert (v0.19.0)",
+          "note": "ON CONFLICT(id) DO UPDATE SET model = COALESCE(sessions.model, excluded.model) — a per-turn re-upsert backfills a NULL model but can never overwrite an existing one."
+        },
+        {
+          "kind": "file",
+          "ref": "<HERMES_HOME>/hermes-agent/cli.py — _handle_model_switch / _apply_model_switch_result / _confirm_expensive_model_switch (v0.19.0)",
+          "note": "Inline `/model <name> [--provider …] [--session|--global|--once]` switches directly (picker only when no args); the result is applied to the live agent and queued as _pending_model_switch_note for the next API call — nothing is written to the store. An expensive-model modal fires only for costly models."
+        },
+        {
+          "kind": "file",
+          "ref": "<HERMES_HOME>/hermes-agent/tui_gateway/server.py:3226-3229,3273,3292,3303 (v0.19.0)",
+          "note": "The TUI gateway is the only surface that both calls update_session_meta/update_session_model AND writes the {'role':'user','display_kind':'model_switch'} marker row — establishing that the marker and the sessions.model update are TUI-surface behaviors, not CLI ones."
+        },
+        {
+          "kind": "file",
+          "ref": "live store /Users/ingo/hermes-local/.hermes/state.db (read-only queries)",
+          "note": "One display_kind='model_switch' row exists, on session 20260726_190232_65c19a whose sessions.source='tui'. session_model_usage carries per-(session, model, provider) rows including source='cli' sessions on billing_provider='lmstudio' at google/gemma-4-26b-a4b with ~30k input tokens — evidence both for the per-model trace and for model B's reachability. No session yet has two distinct usage models, i.e. no mid-session switch has been recorded."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh — step dispatch, send_text, wait_turn",
+          "note": "send|slash share send_text; wait_turn polls the store for a NEW assistant row with finish_reason='stop' (so a slash cannot desync it); keys/interrupt/reset_session/restart/resume/sigkill/exit_clean/start_session/session are not_implemented stubs the recipe deliberately avoids."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH with an inference provider configured in <HERMES_HOME>/config.yaml (model.default + model.provider) and working credentials — this default IS model A, the recipe cannot pin it",
+        "a SECOND reachable model for the switch target: the recipe uses `google/gemma-4-26b-a4b` via `--provider lmstudio`, which requires LM Studio serving on http://127.0.0.1:1234/v1 with that model loaded at a context length that fits the session (>=32k; the hermes system prompt alone is ~17k tokens) and the lmstudio provider present in the recording home's config",
+        "model B must not be an expensive cloud model — hermes pops a `!!! Expensive Model Warning !!!` modal (cli.py _confirm_expensive_model_switch) that this driver cannot answer (`keys` is a not_implemented stub), which would strand the switch",
+        "HERMES_HOME exported in the shell that runs run-cell.sh, so both the recording daemon and the driver read the same isolated state.db",
+        "sqlite3 on PATH — the store is the only session signal hermes exposes; the driver exits nonzero(2) without it",
+        "no other hermes session process running: sessions.cwd is empty for source='cli', so the live-process CWD fallback binds a project only when exactly one session process is alive",
+        "irrlichd is recording with the hermes store watcher enabled (grant-all permission mode, so the observe-kind \"store\" permission is not left pending)"
+      ],
+      "setup": [
+        "Driver creates a fresh cwd under <staging>/cwd/ and launches `hermes chat` under tmux, polling for the prompt banner before the first keystroke. There is no --model flag on the launch (SETTINGS_PATH is unused), so turn 1 runs on config.yaml's model.default = model A.",
+        "The sessions row is INSERTed lazily on the first user message, so turn 1 is what materializes the store row every later phase is asserted against; wait_turn resolves the session id after that first send.",
+        "The switch is a single `slash` step with an INLINE argument — `/model google/gemma-4-26b-a4b --provider lmstudio --session`. Inline means no picker modal (cli.py opens the picker only when both model_input and explicit_provider are empty), and `--session` keeps the switch out of config.yaml so the maintainer's default is untouched — which is why this recipe needs no trailing restore step (contrast claudecode's, whose /model persists globally).",
+        "NO wait_turn after the slash: /model produces no assistant row, so the store poll would block until the deadline. The switch window is a fixed sleep, which doubles as the dwell the model_switch_window phase asserts (no working/waiting transition while it elapses).",
+        "Turn 2 DOES use wait_turn — hermes' wait_turn counts assistant rows with finish_reason='stop' in the store rather than counting sends, so the intervening slash cannot desync it. The trailing sleep gives the daemon room to observe the final settle before teardown.",
+        "Expect turn 2 to be slow: switching provider mid-session replays the whole conversation (~17k tokens) through the local model, so timeout_seconds is 300 rather than the usual 120."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: turn-one"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "slash",
+          "text": "/model google/gemma-4-26b-a4b --provider lmstudio --session"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: turn-two"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a proc-<PID> pre-session born ready at `hermes chat` launch, then ONE store-backed hermes session id (<YYYYMMDD>_<HHMMSS>_<hex>) running exactly TWO ready→working→ready cycles — one per turn.",
+        "Across the switch window (between turn 1's settle and turn 2's start) there is NO state_transition to working and NO state_transition to waiting for that session: a CLI /model writes no messages row, so sessions.message_count does not grow and the watcher emits nothing.",
+        "The store proves the switch really happened even though irrlicht cannot see it: `SELECT model, first_seen, last_seen FROM session_model_usage WHERE session_id=<id>` returns TWO rows — model A (the config default) and model B (google/gemma-4-26b-a4b via billing_provider='lmstudio') — while `SELECT model FROM sessions WHERE id=<id>` still returns model A. Capture both query outputs in the recording notes; they are the primary evidence for the daemon=bug issue.",
+        "EXPECTED FAILURE (the bug, recorded as prose because no machine assertion can carry it): the dashboard/websocket metric vector reads model_name = model A at BOTH t1_end and t2_end even though the store shows two models used. Capture the observed ModelName at both points; it is the issue's headline. It is not pinned in observations.model because a hermes recording produces no replay golden, so ValidateObservations skips every pin (validate/observations.go).",
+        "SessionMetrics.TotalTokens after t2_end > TotalTokens after t1_end (sessions.input_tokens + output_tokens accumulate across both models).",
+        "No messages row with display_kind='model_switch' is written (that marker is TUI-gateway only) — confirm with `SELECT COUNT(*) FROM messages WHERE session_id=<id> AND display_kind='model_switch'` returning 0.",
+        "Final session state is ready; the maintainer's config.yaml model.default is unchanged (the --session flag)."
+      ],
+      "settings": {},
+      "timeout_seconds": 300,
+      "notes": "The load-bearing asymmetry of this cell: hermes' CLI performs the switch perfectly and irrlicht cannot see it. `sessions.model` — the adapter's only model source — is written at session creation and never again on the `hermes chat` surface (update_session_model has no CLI caller; update_token_counts rewrites it only while api_call_count==0; create_session's upsert COALESCEs). The per-model truth lives one table over in session_model_usage, which the adapter does not read. So the state arc records green while the scenario's headline claim fails on the live surface — and because a hermes recording yields no replay golden, that failure can only be carried by verify[] prose plus the two store queries, never by an observations pin. Two things this recipe deliberately does NOT do, both because the driver's `keys` arm is a not_implemented stub: it never opens the model picker (inline argument only) and it never targets an expensive cloud model (whose confirmation modal it could not answer). It also needs no trailing restore step — unlike claudecode's /model, hermes' defaults to session scope and `--session` makes that explicit, so config.yaml is untouched. What differs between runs: the concrete model pair (A is whatever the recording home's model.default is; B is any second reachable model — issue #440 says assert the change, not the pair), token counts, the session id/PID, and turn-2 latency (a local model re-reading the full history is the slow step the 300s budget exists for). What must NOT differ: two ready→working→ready arcs on ONE store-backed session id, a quiet switch window with no working/waiting flicker, two distinct models in session_model_usage, and TotalTokens growing across the switch."
+    }
+  }
+}
