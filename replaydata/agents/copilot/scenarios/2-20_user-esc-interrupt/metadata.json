@@ -1,0 +1,140 @@
+{
+  "scenario_id": "user-esc-interrupt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:interrupt",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+00af800",
+    "confidence": 0.72,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: gap:interrupt (the interrupt arm sends ONE Escape; Copilot 1.0.77 binds interrupt to esc-esc within 500ms)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-esc-interrupt",
+      "agent": "copilot",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:interrupt",
+      "confidence": 0.72,
+      "body": "## Verdict\n\nagent_supports: **yes**\ndaemon_capability: **full** (via the recovery turn; see the emission caveat)\ndriver_capability: **gap:interrupt** — the arm exists but sends the wrong keystroke for this agent\n\nRoute: driver-gap. `record` fixes one line in the driver, then drives.\n\n## Scenario signal\n\n`ready → working → ready`; the state must NOT stick in `working` after the cancel, and the next prompt must drive a clean fresh arc (proving the parser reset). The scenario's own description names claudecode transport (`[Request interrupted by user]`, `parser.recordUserInterruptFlags`, classifier rule 3) — that is claudecode-specific and does NOT apply to Copilot, exactly as the pi row of this scenario records for pi.\n\n## agent_supports: yes — but the binding is esc-esc, not esc\n\nRead directly out of the shipped bundle, `@github/copilot-darwin-arm64/app.js` (CLI 1.0.77). The keybinding help table lists:\n\n```js\n{cmd:\"ctrl+c\",description:\"cancel\",quickPreview:!0},\n{cmd:\"ctrl+c\\xD72\",description:\"exit\",quickPreview:!0},\n{cmd:\"esc esc\",description:\"clear input, interrupt, stop agents, or rewind\",quickPreview:!0},\n```\n\nThe handler behind it is unambiguous. On `code===\"escape\"` with no permission dialog open (`AE===null`), the CLI resolves an intent (`rn`) — `cancel-shell` / `abort-compaction` / **`interrupt-main`** / `stop-agents` / `clear-text` / `rewind`, chosen by what is currently in flight — and then runs a DOUBLE-PRESS gate:\n\n```js\nlet ye=500;\n…\nlet Cr=Date.now(), pi=Cr-Yw.current;\nif(!(Zw.current && Hf.current===rn && pi<ye)){\n  Yw.current=Cr; Zw.current=!0; Hf.current=rn; Vm(fi(rn));   // arm + show hint\n  xu.current && clearTimeout(xu.current);\n  xu.current=setTimeout(()=>{ Vm(null); … Zw.current=!1; Hf.current=null; }, ye);\n  return;                                                    // FIRST Esc does nothing else\n}\nswitch(wr(), rn){ … case\"interrupt-main\":{ … ae.interruptMainTurn({flushQueued:!0})… ; Bd.abortAll(); return } … }\n```\n\nSo the FIRST Escape only arms the intent and paints a hint; the SECOND Escape **within 500 ms** is what calls `interruptMainTurn`. `interruptMainTurn` then gates on `h.sessionScalarIsProcessing(...)`, clears pending items, sets `sessionSetInterruptPendingAbortFlags`, and calls `cancelProcessing(\"Session interrupted\", …)` which aborts the turn's `AbortController`. Cancelling an in-flight turn is therefore a real, shipped, first-class feature — `yes` is the only defensible verdict.\n\n(The single-Escape path IS immediate in one situation: when a permission/approval dialog is open (`AE!==null`), Escape calls `ae.abort({reason:\"user_initiated\"})` straight away. This cell's driver boots with `--allow-all`, so no dialog is open and the double-press path is the one in play.)\n\n## driver_capability: gap:interrupt\n\n`replaydata/agents/copilot/driver-interactive.sh:354`:\n\n```bash\ninterrupt)       tmux send-keys -t \"$SESSION\" Escape\n                 (( EXPECTED_TURNS > 0 )) && EXPECTED_TURNS=$((EXPECTED_TURNS - 1))\n```\n\nOne Escape. Against Copilot 1.0.77 that arms the intent, paints \"interrupt\" in the hint line, and is forgotten 500 ms later — the turn keeps running. The step type is present and listed in `DRIVE_ELICITS`, so `recipe-lint`'s grammar AND semantic checks both pass it; nothing mechanical catches this. That is precisely why it is scored as a gap rather than a precondition: recording as-is would not fail, it would silently produce an UNINTERRUPTED two-turn fixture that verifies green against a spec that never asserted the interrupt. A gap routes the fix to the right owner (`record` ports the step) and blocks the drive until it is fixed.\n\nThe fix is one line — send both presses in a single tmux call so they land far inside the 500 ms window:\n\n```bash\ninterrupt)       tmux send-keys -t \"$SESSION\" Escape Escape\n```\n\n`Ctrl-C` is the documented alternative (`ctrl+c` = \"cancel\") but is strictly worse here: `ctrl+c ×2` is **exit**, so any repeat or stray second press tears the REPL down mid-recording.\n\nThis is NOT a daemon limit. Every other primitive the recipe needs (`send`, `sleep`, `wait_turn`) is genuinely ported.\n\n## daemon_capability: full\n\nThe adapter's path to the asserted arc, seam by seam:\n\n1. `ready → working` — `user.message` → `EventType:\"user_message\"` (`core/adapters/inbound/agents/copilot/parser.go` `parseUserMessage`). `session.start` is `Skip:true`, so the session is born `ready`.\n2. `working → ready` — `assistant.turn_end` → `EventType:\"turn_done\"` (parser.go, `evTurnEnd`), settling via the classifier's \"agent finished turn → ready\".\n3. The interrupt itself is INVISIBLE to irrlicht. `ParsedEvent.IsUserInterrupt` is set in exactly one place in the whole tree — `core/adapters/inbound/agents/claudecode/parser.go:385`, off the literal `[Request interrupted by user]` transcript marker — and the Copilot parser sets it nowhere. So `LastWasUserInterrupt` never becomes true for Copilot and the classifier's `user_interrupt` rule (`core/application/services/state_classifier.go:215`, reason \"user ESC interrupt\") cannot fire. Same shape as pi and aider on this scenario, both of which are `daemon=full`.\n\nWhat settles the cancelled turn therefore reduces to: **does the aborted turn still write an `assistant.turn_end`?** Two sub-cases, and the cell is `full` under both:\n\n- **(a) it does** → `turn_done` fires at the cancel and the session settles `working → ready` immediately, at the interrupt. Strongest form of the arc.\n- **(b) it does not** → the session stays `working` until the RECOVERY prompt's `assistant.turn_end` settles it. State still does not stick in `working`, and the recovery arc still proves the parser reset. This is pi's exact situation on this scenario (pi emits no `turn_done` for a cancelled turn either) and pi is recorded `daemon=full`.\n\nEvidence leaning toward (a), short of a live recording: the relay/remote session class in app.js aborts with an EXPLICIT durable emit,\n\n```js\nasync abort(e){ let n=this.activeTurn?.turnId;\n  n && (this.armAbortDrain(n), this.runtime.cancelTurn(this.sessionUri,n)…, this.emit(\"assistant.turn_end\",{turnId:n})),\n  this.emitEphemeral(\"session.idle\",{aborted:!0}), this.settleTurn(n) }\n```\n\nand the durable/ephemeral split is exactly the events.jsonl boundary: the writer subscribes `this.session.on(\"*\", a => … nativeHandle.recordEventJson(JSON.stringify(a)))` against `localEventsPath = <sessionStatePath>/events.jsonl`, and `emit`/`emitEphemeral` differ only in `emitInternal(…, ephemeral)`. So on the relay path an aborted turn's `turn_end` is persisted while the `session.idle{aborted:true}` notice is not. The LOCAL path routes through the native bridge (`case\"turnEnd\": this.emit(\"assistant.turn_end\",{turnId})`), whose decision lives in the native binary and could not be read from JS — hence provisional. Note also that no aborted-turn marker of any kind is persisted: there is no `session.idle` in events.jsonl (ephemeral by construction), and the sampled corpus of five real 1.0.77 sessions under `~/.copilot/session-state/` contains no cancel/abort event type at all (none of those sessions was interrupted, so that is corroboration, not proof).\n\nBecause the spec asserts only the user-observable arc — and deliberately does NOT assert a distinct interrupt-triggered transition, following pi — it holds under (a) and (b) alike, and `record` promotes the emission question from provisional to settled.\n\n## Why not bug / incapable\n\nNot `bug`: a `bug` requires a spec-required observable that the daemon mis-handles. Under both sub-cases the daemon delivers the asserted arc. Not `incapable`: a durable trace of the turn boundary exists in `events.jsonl` and the 3-state model represents the arc fine. The missing interrupt ATTRIBUTION (irrlicht cannot tell a cancelled turn from a completed one for Copilot) is a caveat, per the same reasoning recorded on the aider row.",
+      "caveats": [
+        "PROVISIONAL EMISSION (the thing `record` settles): whether Copilot's LOCAL session writes an `assistant.turn_end` for the aborted turn could not be established from app.js — the local turn-end emit is driven by the native bridge (`case\"turnEnd\"`), and the native binary carries no `turn_end` string. The relay session class does emit it durably on abort, which is suggestive, not conclusive. Confidence is held at 0.72 for this reason. If the aborted turn emits nothing, the settle to ready is carried by the RECOVERY turn (pi's shape) and the spec still passes; if it does emit, the settle happens at the interrupt and the spec still passes.",
+        "feature-invisible-but-spec-compliant: irrlicht cannot tell an interrupted Copilot turn from a normally-completed one. The Copilot parser never sets `ParsedEvent.IsUserInterrupt` (only `claudecode/parser.go:385` does, off `[Request interrupted by user]`), so `LastWasUserInterrupt` is never set and the classifier's `user_interrupt` rule (state_classifier.go:215) does not fire. Do NOT assert an interrupt marker or a rule-3 transition for Copilot — same call recorded on the aider and pi rows of this scenario.",
+        "The `esc esc` window is 500 ms (`let ye=500` in app.js). The two presses MUST be delivered in one `tmux send-keys -t \"$SESSION\" Escape Escape` call; two separate driver steps are timing-fragile against a bash loop plus tmux round-trips.",
+        "wait_turn bookkeeping artifact: `wait_turn` polls `grep -c '\"type\":\"assistant.turn_end\"'` against a cumulative `EXPECTED_TURNS`, and the `interrupt` arm decrements that counter. If the abort DOES write a `turn_end` (sub-case (a)), the decremented expectation is already met the moment the abort lands, so `wait_turn` returns BEFORE the recovery turn finishes. The recipe's trailing `sleep 20` covers that; `record` should decide whether to drop the decrement once the live evidence is in. Same class of turn-counter artifact the gemini-cli row documents.",
+        "Copilot's interrupt is ALSO reachable with a single Escape while a permission dialog is open (`AE!==null` → immediate `ae.abort({reason:\"user_initiated\"})`), but this recipe boots with `--allow-all` so no dialog is open. Do not rely on that path.",
+        "`--model` accepts only \"auto\" on this account and `session.auto_mode_resolved` picks between gpt-5-mini and claude-haiku-4.5 per turn, so `model` is deliberately NOT pinned in the spec's observation vector (same call as the copilot basic-turn row)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "CLI 1.0.77 shipped bundle. Keybinding help table: {cmd:\"esc esc\",description:\"clear input, interrupt, stop agents, or rewind\"} and {cmd:\"ctrl+c\",description:\"cancel\"}/{cmd:\"ctrl+c\\xD72\",description:\"exit\"}."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "Escape handler: `let ye=500` double-press window; first press only arms (`Zw.current=!0; Hf.current=rn; Vm(fi(rn)); setTimeout(...,ye); return`), second press within 500ms runs `case\"interrupt-main\": … ae.interruptMainTurn({flushQueued:!0}) … Bd.abortAll()`. This is the primary evidence that ONE Escape does not interrupt."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "`interruptMainTurn(e)`: gated on `h.sessionScalarIsProcessing`, calls `h.sessionSetInterruptPendingAbortFlags(...)` then `cancelProcessing(\"Session interrupted\", Nfe, !0)` which aborts the turn's AbortController. Proves the feature is real and turn-scoped."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "Relay session `abort()` emits a DURABLE `assistant.turn_end` for the aborted turn plus an EPHEMERAL `session.idle{aborted:true}`; the events.jsonl writer is `this.session.on(\"*\", … nativeHandle.recordEventJson(…))` against `<sessionStatePath>/events.jsonl`, and `emit`/`emitEphemeral` differ only in `emitInternal(…, ephemeral)`. Basis for sub-case (a); the LOCAL path's `case\"turnEnd\"` bridge is native and could not be read, hence provisional."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "`evTurnEnd` → `EventType:\"turn_done\"`; `parseUserMessage` → `user_message`; `session.start` Skip=true. IsUserInterrupt is set nowhere in this parser."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go:385",
+          "note": "The ONLY place in the tree that sets ParsedEvent.IsUserInterrupt (off the literal `[Request interrupted by user]` marker) — confirming the interrupt-attribution path is claudecode transport, not a shared capability."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go:215",
+          "note": "Rule `user_interrupt` (reason \"user ESC interrupt\") is gated on `metrics.LastWasUserInterrupt` (isUserInterruptReady, :302-311), so it cannot fire for Copilot."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh:354",
+          "note": "The interrupt arm: `tmux send-keys -t \"$SESSION\" Escape` — a SINGLE Escape, with the inline comment \"Esc cancels the in-flight turn\" that this assessment falsifies for Copilot 1.0.77. Also :283-291 `turn_count` greps `\"type\":\"assistant.turn_end\"` and `wait_turn` compares it to a cumulative EXPECTED_TURNS the interrupt arm decrements."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/2-20_user-esc-interrupt/metadata.json",
+          "note": "Precedent for daemon=full with no interrupt attribution: pi emits no turn_done for a cancelled turn and never sets LastWasUserInterrupt; the settle is carried by the recovery prompt and the cell is recorded full. The aider row of this scenario records the same call as a caveat."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.copilot/session-state/*/events.jsonl",
+          "note": "Corpus scan of five real 1.0.77 sessions: event types seen are session.start/model_change/auto_mode_resolved/permissions_changed/info/usage_checkpoint/shutdown, system.message, user.message, assistant.turn_start/message/turn_end, tool.execution_start/complete, permission.requested/completed — no cancel/abort/interrupt type at all. None of these sessions was interrupted, so this bounds the vocabulary rather than proving absence."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation does not require a re-login)",
+        "An active Copilot plan with AI credits — both turns spend them",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other copilot session shares the same cwd (the PID is bound by cwd)",
+        "DRIVER FIX REQUIRED BEFORE DRIVING (this is the cell's driver_capability=gap:interrupt): change replaydata/agents/copilot/driver-interactive.sh:354 from `tmux send-keys -t \"$SESSION\" Escape` to `tmux send-keys -t \"$SESSION\" Escape Escape`. Copilot 1.0.77 binds interrupt to esc-esc within a 500 ms window; one Escape only arms the intent and is forgotten. Both presses must go in ONE tmux call. Do NOT substitute Ctrl-C: `ctrl+c ×2` is exit."
+      ],
+      "setup": [
+        "The driver seeds a scratch COPILOT_HOME under the staging dir with trustedFolders + askedSetupTerminals pre-answered, so the trust modal cannot block the input box; the session directory is minted under $COPILOT_HOME/session-state/<session-id>/",
+        "Empty cwd under <staging>/cwd/ so the session is fresh, and the first prompt is pure text generation (no tool calls) so nothing can raise a permission prompt mid-cancel"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a long, detailed essay about the history of computing, at least 800 words. Do not use any tools — just write prose, and take your time."
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "interrupt"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "events.jsonl mints a proc-<PID> pre-session in ready shortly after launch (the copilot process exists before events.jsonl does)",
+        "events.jsonl mints the real <session-id> session in ready under a DIFFERENT session id once events.jsonl appears on the first prompt",
+        "events.jsonl contains a pid_discovered binding the copilot PID to the real session (matched by cwd)",
+        "events.jsonl contains a state_transition to working on the real session when the long-essay prompt lands",
+        "events.jsonl contains a state_transition to ready on the real session — carried EITHER by an assistant.turn_end written for the aborted turn (sub-case a) OR by the recovery prompt's turn_end (sub-case b, pi's shape). Do NOT assert a rule-3 'user ESC interrupt' transition: Copilot's parser never sets IsUserInterrupt.",
+        "state does not stick in working post-interrupt; the recovery prompt drives a clean arc on the same session",
+        "events.jsonl never contains a state_transition to waiting (--allow-all pre-approves, and the prompt asks for prose only)",
+        "final state of the real session is ready",
+        "observation vector: tokens_nonzero=true (assistant.message.outputTokens), cost_nonzero=true; model left unasserted (auto-router picks per turn)",
+        "RECORD MUST REPORT: whether the aborted turn wrote its own assistant.turn_end. Count '\"type\":\"assistant.turn_end\"' lines in the frozen events.jsonl — 2 means sub-case (a) and the daemon settles at the interrupt; 1 means sub-case (b) and the recovery turn carries the settle. Write the answer back into this cell's caveats either way (the assessment is provisional on exactly this)."
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}
