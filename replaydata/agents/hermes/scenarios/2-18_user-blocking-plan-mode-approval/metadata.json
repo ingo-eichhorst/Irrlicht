@@ -115,17 +115,17 @@
         "no second hermes SESSION process running concurrently — source='cli' rows carry no stored cwd and the live-process CWD fallback returns nothing when more than one session process is alive (a running gateway is fine)"
       ],
       "setup": [
-        "The driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for 'Type your message or /help' before typing — the TUI loads tools and skills for several seconds and swallows keystrokes sent before it is ready.",
-        "`/plan <task>` is intercepted by cli.py as a skill slash command: it expands the skill body plus the user's instruction into a single message and puts it on _pending_input, so it lands in state.db as one ordinary `user` row and drives a normal turn. The driver therefore needs no new primitive — `slash` is the same keystrokes as `send`.",
-        "Typing `/` opens hermes' slash autocomplete. The space after `/plan` should dismiss it (same path `/new now` uses in the 1.5 cell). If the recording shows the pane holding the typed text without submitting, the fix is Escape-before-Enter inside send_text — a driver-port detail, not a missing step type.",
-        "The prompt names the plan-only constraint AND explicitly asks the agent to request approval before implementing. This is deliberate and load-bearing: hermes has no structured approval gate, so the ONLY thing that makes the pause observable is a trailing question or imperative cue in the turn's final assistant text (ProseIndicatesWaiting). The plan skill already prescribes '… Shall I proceed?' in its Execution Handoff section; the prompt re-states it so the turn does not end on a bare 'plan saved' statement, which would settle to ready.",
-        "The task is deliberately tiny and the plan is capped short, so the turn stays inside the timeout while still spanning many 2s poll ticks (the LLM reads a ~6k-token skill body and writes a file) — the working leg is observed on its own merits, with no reliance on the catch-up-turn synthesis.",
-        "The trailing sleep holds the session in `waiting` long enough for the dwell phase's 3s window and for the watcher to have published the transition before the driver tears the tmux session down."
+        "The driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for 'Type your message or /help' before typing - the TUI loads tools and skills for several seconds and swallows keystrokes sent before it is ready.",
+        "`/plan <task>` is intercepted by cli.py as a skill slash command: it expands the skill body plus the user's instruction into a single message and puts it on _pending_input, so it lands in state.db as one ordinary `user` row and drives a normal turn. The driver therefore needs no new primitive - `slash` is the same keystrokes as `send` (verified by the committed 2.5 recording, which delivers /help and /status this way).",
+        "TOOL ROSTER (probed on this install, and the reason the prompt deviates from the plan skill's own instructions): write_file and patch are ABSENT from hermes 0.19.0's 36 callable functions here, so the skill's prescribed 'Save the plan with write_file under .hermes/plans/' step CANNOT execute. The prompt therefore tells the agent explicitly that it has no file-writing tool and to put the plan in its reply text. This does not weaken the cell: the scenario's acceptance criteria are the state transitions, and the assessment already records that hermes writes no plan-specific marker anywhere the daemon could read - the pause is carried entirely by the turn-boundary row's prose. Leaving the write_file instruction in would only risk a failed tool call polluting the arc.",
+        "The prompt names the plan-only constraint AND pins the exact closing line ('Shall I proceed with implementing this plan?'). This is deliberate and load-bearing: hermes has no structured approval gate, so the ONLY thing that makes the pause observable is a trailing question or imperative cue in the turn's final assistant text (ProseIndicatesWaiting). The plan skill's Execution Handoff section prescribes '... Shall I proceed?'; the prompt makes it mandatory so the turn cannot end on a bare 'plan saved' statement, which would settle to ready and verify PARTIAL.",
+        "The plan is deliberately WIDE (six+ numbered steps across seven named sections) rather than the 'about ten lines' an earlier draft carried. The watcher polls every 2s with a 500ms debounce, so a short turn can commit its user row and its assistant finish_reason='stop' row inside a SINGLE scan and the ready->working edge never exists to be observed. Widening the generation is the fix; weakening the spec is not.",
+        "The 14s trailing sleep holds the session in `waiting` long enough for the dwell phase's 3s window and for the watcher to have published the transition before the driver tears the tmux session down."
       ],
       "script": [
         {
           "type": "slash",
-          "text": "/plan Add a --version flag to a tiny single-file Python CLI at ./mycli.py that prints 0.1.0 and exits. Keep the plan to about ten lines. Do not implement anything yet: after you save the plan, ask me whether you should proceed."
+          "text": "/plan Add a --version flag to a small single-file Python CLI at ./mycli.py that prints 0.1.0 and exits. IMPORTANT: this session has NO file-writing tool available (write_file/patch are not in your tool roster), so do NOT call any tool - write the whole plan directly in your reply as markdown, with the sections Goal, Assumptions, Step-by-step plan (at least six numbered steps), Files likely to change, Tests, and Risks. Do not implement anything. End your reply with exactly this line: Shall I proceed with implementing this plan?"
         },
         {
           "type": "wait_turn"
@@ -137,13 +137,13 @@
       ],
       "verify": [
         "events.jsonl shows the hermes session (id shaped YYYYMMDD_HHMMSS_xxxxxx) born ready; a transient proc-<PID> presession may also appear and is not the session the arc lands on",
-        "events.jsonl shows ready → working when the /plan turn starts",
-        "events.jsonl shows working → waiting when the turn completes — and NO state_transition to ready between those two, which is the scenario's defining criterion",
+        "events.jsonl shows ready -> working when the /plan turn starts",
+        "events.jsonl shows working -> waiting when the turn completes - and NO state_transition to ready between those two, which is the scenario's defining criterion",
         "the session remains in waiting for at least 3s after the transition (no skip-over to ready before any user reply)",
         "final session state is waiting",
-        "state.db confirms the pause is the turn boundary: the newest row for that session is role='assistant' with finish_reason='stop' and its content ends in an approval question or cue — record MUST paste that content, since it is the single signal the whole verdict rests on",
-        "state.db shows the plan was written: an assistant row with finish_reason='tool_calls' naming write_file, closed by a tool row with the matching tool_call_id (and a file under .hermes/plans/ in the run cwd)",
-        "the session's websocket metrics show non-zero cumulative input+output tokens and a non-zero estimated cost when the configured model is priced by irrlicht's alias table"
+        "state.db confirms the pause is the turn boundary: the newest row for that session is role='assistant' with finish_reason='stop' and its content ends in an approval question - record MUST paste that content, since it is the single signal the whole verdict rests on",
+        "state.db shows the plan itself was delivered as prose in that same assistant row (this install has no write_file, so there is deliberately NO tool_calls row and no file under .hermes/plans/ - see the setup note)",
+        "METRIC TIER (not assertable in the golden - read the live daemon's /api/v1/sessions at record time): the session's cumulative input+output tokens are non-zero and estimated_cost_usd is non-zero for a model priced by irrlicht's alias table"
       ],
       "settings": {},
       "timeout_seconds": 300
