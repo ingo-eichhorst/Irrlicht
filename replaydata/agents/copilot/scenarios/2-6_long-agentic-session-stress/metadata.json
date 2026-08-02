@@ -1,0 +1,150 @@
+{
+  "scenario_id": "long-agentic-session-stress",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+52f711e",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-agentic-session-stress",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## What the scenario asserts\n\nFour user-observable things (scenario 2.6 acceptance_criteria): (1) WITHIN each turn state stays continuously `working` — no flicker to `ready` or `waiting` between assistant fragments or across a tool-call/result pair; (2) BETWEEN turns a clean `working -> ready` at turn end and `ready -> working` on the next prompt; (3) state is never stuck; (4) the final state is `ready`. The topology is `ready -> working -> ready` x4, and the run must include at least one tool call.\n\n## Agent (yes)\n\nGitHub Copilot CLI is a multi-turn interactive REPL; a four-prompt session is its ordinary mode of operation, and the one-turn event shape was already read off a real `events.jsonl` on CLI 1.0.77 for the `basic-turn` cell (`session.start -> session.model_change -> session.auto_mode_resolved -> system.message -> user.message -> assistant.turn_start -> assistant.message -> assistant.turn_end -> session.usage_checkpoint -> session.shutdown`). Turn 3 of the recipe additionally exercises the `bash` tool, which the sibling `auto-executed-tool-call` cell already drives on this same driver with `--allow-all`. Nothing weaker than `yes` is defensible.\n\n## Daemon (full)\n\nThe load-bearing claim is the WITHIN-turn no-flicker invariant, and for Copilot it is structural rather than heuristic — three independent reasons, each traceable to a line of code:\n\n1. **Turn boundaries are EXPLICIT.** `assistant.turn_end` is the ONLY event the parser maps to `turn_done` (`parser.go` `ParseLine`, `case evTurnEnd`). Contrast gemini-cli, whose parser has to promote a text-only assistant message to `turn_done` and therefore CAN settle early if the model emits an intermediate text-only chunk mid-turn; and contrast aider, which needs an idle-flusher heuristic. Copilot has no such path: there is exactly one settle per turn and it is read, not inferred.\n2. **`assistant.message` never settles.** `parseAssistantMessage` sets `EventType: \"assistant_message\"` unconditionally (parser.go:189-208) — a reply that precedes further tool work leaves the session `working`. The classifier ladder (`core/application/services/state_classifier.go` lines 105-236) has NO rule keyed on `assistant_message`; the only `ready` outcomes are `agent_done` (which requires `IsAgentDone()`, i.e. a `turn_done`) and `user_interrupt` (which requires `LastEventType == \"user\"` plus `LastWasUserInterrupt`/`LastWasToolDenial`, neither of which the Copilot parser ever sets). So intermediate assistant fragments cannot produce a `ready` flicker.\n3. **A tool result cannot settle or gate.** `tool.execution_start -> function_call` opens the call on the real `toolCallId` and `tool.execution_complete -> function_call_output` closes it via `ToolResultIDs` (parser.go:212-232), so `HasOpenToolCall` clears cleanly and no `open_tool_stalled` / `user_blocking_tool` waiting rule can fire mid-burst. A failed call sets only `IsError`, which no classifier rule reads.\n\n`waiting` is reachable for Copilot ONLY through the transcript-tier `transcript_permission_prompt` rule, fed by `permission.requested` (parser.go:243-248, state_classifier.go:151-155). The recipe launches with `--allow-all` (driver `launch_repl`: `--allow-all` unless `COPILOT_NO_ALLOW_ALL=1`), which is `--allow-all-tools + --allow-all-paths + --allow-all-urls`, so no `permission.requested` is ever written and the no-waiting invariant is structural, not incidental — the same argument the committed `auto-executed-tool-call` cell rests on.\n\nBetween-turn re-open: `user.message -> user_message` with `ClearToolNames` (parser.go:175-181) falls through the ladder to the `transcript_activity` default -> `working`. \"Never stuck\" follows from the same pair: each turn has exactly one opener and one closer.\n\n**Session-birth shape: presession (two-phase).** Copilot creates `session-state/<id>/` at launch holding only `workspace.yaml`; `events.jsonl` appears only when the first prompt is sent (documented in the driver's `resolve_transcript`/`wait_ready` comments and the reason `resolve_transcript` resolves on the DIRECTORY). `sessionIDFromPath` only claims `events.jsonl`, so `processlifecycle.Scanner` (1s poll, wired for every adapter) mints a `proc-<PID>` pre-session first and the real directory-keyed session arrives later under a DIFFERENT id. Birth is therefore modelled as two phases and every later phase is anchored `same_session_as: session_birth`, exactly as the committed `basic-turn` and `auto-executed-tool-call` cells do.\n\n## Driver (ready)\n\nThe recipe needs only `send`, `wait_turn` and `sleep`; all three are in `DRIVE_ELICITS` and genuinely ported. `wait_turn` counts `\"type\":\"assistant.turn_end\"` lines (`turn_count`), so a four-turn wait is an EXACT completed-turn count rather than a quietness heuristic — the primitive that matters most for a multi-turn cell, because a heuristic wait would race the next `send` and manufacture exactly the collapsed-boundary artefact this scenario is meant to detect. Interactive (not headless) is deliberate: the REPL must outlive the observation window or the final settle to `ready` is never seen.\n\n## Recipe shape and the BYOK question\n\nThe recipe is four plain prompts, with turn 3 additionally running `echo gamma` through the `bash` tool to satisfy the scenario's \"includes at least one tool call\" — the same shape the gemini-cli sibling uses, rather than codex/kiro-cli's single many-tool-call burst. Prompts are deliberately terse imperatives whose replies are a single word: `classifyAgentDone` routes a turn whose final assistant text ends in a question or an imperative cue to `waiting` instead of `ready` (`core/domain/session/waiting_cue.go`, `IsWaitingForUserInput`), so a chatty prompt would legitimately break the arc.\n\nBYOK was considered as a credit-free recording lever and DELIBERATELY NOT ADOPTED for this cell. `copilot help providers` (CLI 1.0.77) documents `COPILOT_PROVIDER_BASE_URL` / `COPILOT_PROVIDER_TYPE` / `COPILOT_PROVIDER_WIRE_API` / `COPILOT_PROVIDER_API_KEY` / `COPILOT_MODEL` and states plainly that \"GitHub authentication is not required when using a custom provider\", so pointing Copilot at a local OpenAI-compatible mock would indeed cost zero AI credits. Three reasons it is the wrong trade HERE, in descending weight:\n\n1. **It would void the thing under test.** The invariant is a property of how the REAL model streams a turn — several assistant fragments, a tool call and its result, then one boundary. A canned mock emits exactly the script it was written with, so a green recording against a mock proves the mock does not flicker, not that Copilot does not. Every other assertion in this cell can be believed from a mock; the one that matters cannot.\n2. **No such mock exists.** The rig's only OpenAI-compatible stub is `tools/onboarding-factory/recording/mock-openai-429`, which is purpose-built for the quota scenario: request #1 streams a happy path and EVERY subsequent request returns 403 `insufficient_quota` (main.go:65-82). It cannot serve turns 2-4, and it emits no tool call. A four-turn happy-path mock with a tool-call arm is new rig work, not a lever available today.\n3. **The observation vector would go dark.** A mock model id (`mock-quota-model`) is absent from the shared capacity price map, so `cost_nonzero` would fail. Working around that by setting `COPILOT_PROVIDER_MODEL_ID` to a priced well-known id while the wire model stays the mock is plausible but unverified, and would mean asserting a cost figure for tokens the real provider never billed.\n\nThe cheap, verified mitigation is the one the sibling tool-call cell already uses: export `COPILOT_AVAILABLE_TOOLS=bash`, which the driver forwards as `--available-tools=bash` and which drops roughly 8.3k of ~12k input tokens per request. Four small turns of `gpt-5-mini`/`claude-haiku-4.5` is a modest spend, and 2.6 is a COMPRESSED proxy (4 turns) rather than a genuinely long session — the credit argument that would make BYOK decisive for a hundred-turn cell does not carry at this size. BYOK remains the right lever the day this scenario grows a genuinely long variant, or for any cell whose assertion does not depend on real intra-turn emission.\n\n## What irrlicht does NOT see\n\nNo live INPUT-token signal: `assistant.message.outputTokens` is the only per-message count and input tokens land in one delta at `session.shutdown` (parser.go:264-329), so mid-session context utilisation is unavailable. Neither is asserted here. Copilot's own billing units (`totalNanoAiu`, `totalPremiumRequests`) are read but deliberately not converted to dollars, per the maintainer decision on #1256; cost comes from general token pricing like every other adapter.",
+      "caveats": [
+        "PROVISIONAL on emission, not on parsing. Reading the parser and the classifier ladder proves the daemon CANNOT settle on an intermediate assistant fragment or a tool result; it cannot prove Copilot never writes a second assistant.turn_end mid-turn, nor that the four turns don't collapse into one tailer pass. Only the live recording promotes this from provisional to settled — which is exactly why a mock-backed recording was rejected above.",
+        "The within-turn dwell assertion (t3_working, duration_at_least_ms 2000) assumes the bash tool call plus the surrounding fragments keep the turn open for at least ~2s. On a fast router pick the whole turn could complete faster; if record sees the dwell fail purely on duration, shorten it rather than weakening the no-ready/no-waiting invariants, which are the load-bearing half.",
+        "Prompt wording is load-bearing: classifyAgentDone routes a turn whose final assistant text ends in a question or an imperative cue to waiting (core/domain/session/waiting_cue.go). If a recording shows a working -> waiting at a turn end, the model got chatty — retune the prompt, do not weaken the spec.",
+        "model is deliberately NOT pinned. --model accepts only \"auto\" on this account and session.auto_mode_resolved picks between gpt-5-mini and claude-haiku-4.5 per turn, so a four-turn run can legitimately span two models; an exact match would be nondeterministic. record fills it from the recording if it turns out to be stable.",
+        "The turn-3 bash call assumes --allow-all suppresses the permission gate for it, as it does in the committed auto-executed-tool-call cell. If a recording shows waiting here, the gate fired and the launch flags need tightening — not this spec."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "assistant.turn_end is the ONLY event mapped to turn_done (ParseLine, case evTurnEnd); parseAssistantMessage (189-208) never settles; parseToolStart/parseToolComplete (212-232) pair on toolCallId so a result closes rather than gates; parsePermissionRequested (243-248) is the sole path to waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The ladder (105-236) has no rule keyed on assistant_message or function_call_output; ready comes only from agent_done (requires IsAgentDone, i.e. turn_done) or user_interrupt (requires LastWasUserInterrupt/LastWasToolDenial, neither of which the copilot parser sets). This is why within-turn no-flicker is structural for copilot."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/waiting_cue.go",
+          "note": "IsWaitingForUserInput / ProseIndicatesWaiting — a turn ending on a question or imperative cue routes to waiting, which is why the recipe's prompts elicit single-word replies."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS lists send/wait_turn/sleep (all ported); turn_count greps '\"type\":\"assistant.turn_end\"' for an EXACT completed-turn count; launch_repl adds --allow-all unless COPILOT_NO_ALLOW_ALL=1 and forwards COPILOT_AVAILABLE_TOOLS as --available-tools."
+        },
+        {
+          "kind": "command",
+          "ref": "copilot help providers (CLI 1.0.77 stdout, run 2026-08-02)",
+          "note": "Documents COPILOT_PROVIDER_BASE_URL/TYPE/WIRE_API/API_KEY and COPILOT_MODEL and states 'GitHub authentication is not required when using a custom provider' — the BYOK lever considered and rejected for this cell."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-openai-429/main.go",
+          "note": "Lines 65-82: request #1 streams a happy path, every later request returns insufficient_quota. The rig's only OpenAI-compatible stub cannot serve a 4-turn recipe and emits no tool call — so BYOK-against-a-mock is not an available lever today."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/2-2_auto-executed-tool-call/metadata.json",
+          "note": "Sibling cell establishing the --allow-all no-permission-gate argument and the COPILOT_AVAILABLE_TOOLS=bash credit mitigation this recipe reuses."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/2-6_long-agentic-session-stress/expected.jsonl",
+          "note": "Template for the 4-turn + one-tool-call shape and the mid-turn dwell phase (duration_at_least_ms + no-ready/no-waiting invariants) used here."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 600,
+      "settings": {},
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits — four turns are spent (see setup for the ~50% input-token mitigation)",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a --record daemon)",
+        "tmux available (the interactive driver drives the REPL through it)",
+        "no other copilot session shares the same cwd (the PID is bound by cwd)"
+      ],
+      "setup": [
+        "The driver isolates state under $STAGING/copilot-home via COPILOT_HOME and seeds trustedFolders + askedSetupTerminals so neither first-run prompt blocks the input box",
+        "Launch is `copilot --allow-all --no-color` in a fresh per-run cwd, so turn 3's bash call auto-executes and no permission.requested is ever written — that is what makes the no-waiting invariant structural rather than incidental",
+        "Recommended: export COPILOT_AVAILABLE_TOOLS=bash before driving. The driver forwards it as --available-tools=bash, dropping the unused tool definitions (~8.3k of ~12k input tokens) and roughly halving what these four turns cost",
+        "Interactive, not headless: the REPL must outlive all four turns so the daemon observes each working→ready settle rather than a process exit",
+        "wait_turn counts assistant.turn_end lines, so each of the four waits is an exact completed-turn count — no quietness heuristic that could race the next send and manufacture a collapsed turn boundary",
+        "Prompts elicit single-word replies on purpose: a reply ending in a question or an imperative cue would legitimately route the turn end to waiting (IsWaitingForUserInput)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: beta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Run the shell command `echo gamma` with the bash tool, then reply with exactly the word: gamma"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: delta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a transient proc-<PID> presession born ready, then the real <session-id> session (a DIFFERENT id — the session-state directory name) born ready once events.jsonl appears at the first prompt",
+        "events.jsonl contains a pid_discovered event binding the copilot PID to the real session (matched by cwd)",
+        "for EACH of the 4 turns: exactly one ready→working transition and exactly one working→ready transition on the real session",
+        "across the entire session NO state_transition to ready fires inside any turn's working span — in particular not between turn 3's tool.execution_start/tool.execution_complete pair and its final reply",
+        "across the entire session NO state_transition to waiting fires (--allow-all → no permission.requested is written)",
+        "at least one tool_use for the bash tool falls inside turn 3's working span",
+        "final state of the real session is ready and stays there",
+        "the newest recording's replay summary shows cum_output_tokens > 0 and estimated_cost_usd > 0; model_name is one of gpt-5-mini / claude-haiku-4.5 (router's choice — deliberately not pinned, and a 4-turn run may span both)"
+      ]
+    }
+  }
+}
