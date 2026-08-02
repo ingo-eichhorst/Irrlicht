@@ -1,0 +1,157 @@
+{
+  "scenario_id": "autonomous-loop",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+2d29b32.dirty",
+    "confidence": 0.82,
+    "notes": "Hermes ships /goal — a native self-prompting 'Ralph loop' (judge after every turn, continuation prompt fed back into the SAME session). Same per-iteration ready/working arc as the claudecode sibling, observed through the shared SQLite store."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop",
+      "agent": "hermes",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\n### agent_supports: yes\n\nHermes Agent 0.19.0 ships a **native autonomous self-prompting loop** — `hermes_cli/goals.py`, whose module docstring opens \"Persistent session goals — the Ralph loop for Hermes\". The mechanism, read out of the installed source (not docs):\n\n- `/goal <text>` is a registered slash command (`hermes_cli/commands.py:114` — `CommandDef(\"goal\", \"Set a standing goal Hermes works on across turns until achieved\", \"Session\", ...)`), dispatched by `_handle_goal_command` in `hermes_cli/cli_commands_mixin.py:2072`.\n- Setting a goal **kicks the loop immediately**: the handler ends with `self._pending_input.put(state.goal)` under the comment \"Kick the loop off immediately so the user doesn't have to send a separate message after setting the goal.\" So `/goal <text>` alone drives iteration 1 — exactly the claudecode `/goal` shape.\n- After **every** CLI turn the REPL calls `_maybe_continue_goal_after_turn` (`cli.py:9998`, wired at the post-turn `finally` block `cli.py:15841`). It extracts the turn's final assistant text and calls `GoalManager.evaluate_after_turn`, which runs a judge call (`judge_goal`, `goals.py:846`) against an auxiliary model asking \"is this goal satisfied by the assistant's last response?\".\n- On `continue`, the continuation prompt (`CONTINUATION_PROMPT_TEMPLATE`, `goals.py:76` — \"[Continuing toward your standing goal] … Take the next concrete step\") is pushed back onto `_pending_input` and the next REPL iteration runs it as an ordinary user message in the SAME session. Loop invariants per the docstring: it runs \"until the goal is done, turn budget is exhausted, the user pauses/clears it, or the user sends a new message\". Budget default `DEFAULT_MAX_TURNS = 20` (`goals.py`; `config.py:2450` `goals.max_turns`).\n- Full control surface: `/goal status|show|draft|pause|resume|clear|wait|unwait`, plus `/subgoal`. Goal state persists in the store's `state_meta` table keyed `goal:<session_id>` so `/resume` picks it up.\n\nThis is stronger than the codex/antigravity siblings (which have no native loop and had to model an externally-driven or intra-turn analogue) and is a direct peer of claudecode's `/goal`. Hence `yes`, not `partial`.\n\n### daemon_capability: full\n\nThe scenario's user-observable signals map onto the hermes store cleanly:\n\n- **Loop start `ready → working`.** `/goal <text>` enqueues the goal text as a real user message; it lands in `messages` as `role='user'`, which `parser.go:79` maps to `user_message` → working.\n- **Each iteration's turn boundary.** `parser.go:93` maps `role='assistant' AND finish_reason='stop'` to `turn_done`; `watcher.go:426 turnIsDone` reads the newest active row and sets `Terminal` on the activity event. This is an EXPLICIT boundary, not an idle heuristic.\n- **The self-prompt between iterations.** The continuation prompt is a plain `role='user'` row in the same `session_id`, so the daemon sees a fresh `working` with no human input — which is precisely the autonomy the scenario is after.\n- **The judge call does NOT pollute the observation.** `judge_goal` goes through `agent.auxiliary_client.call_llm` directly (`goals.py:952`) — no `run_conversation`, so it writes no `messages` row and mints no `sessions` row. No phantom session, no spurious state flip.\n- **Session identity.** `hermes chat` records `source='cli'` (adapter package doc), which the watcher's `source IN ('cli','tui')` filter (`watcher.go:284`, `metrics.go:103`) admits while excluding the gateway platforms that share the table.\n\n**Strict-bullet relaxation (same as claudecode).** The scenario's literal bullet \"state stays `working` for the entire autonomous run — no `ready` between internal iterations\" does NOT hold for hermes, and cannot: each iteration is a complete turn that terminates with `finish_reason='stop'` BEFORE the judge is even consulted, and only then is a continuation queued. The store therefore genuinely says \"turn over\", and the daemon reporting `ready` is correct handling of a correct trace — not a mis-handled observable. That is a caveat, not a `bug`, and matches the precedent the claudecode sibling set (\"claudecode flickers ready/working per iteration because Stop hooks re-prompt AFTER end_turn\") and that codex restated. The spec below asserts the per-iteration arc hermes actually produces.\n\n**Birth shape: presession adapter.** hermes is `agent.ProcessOwnedStore` and its `sessions` row is INSERTed only on the first user message, so at launch the process scanner mints a transient `proc-<PID>` pre-session first. The other ProcessOwnedStore adapter's recording confirms the exact shape — `presession_created proc-31986` + `state_transition ready`, then `transcript_new ses_…` + `state_transition ready reason='new session created'`, then `presession_removed` (opencode 2-1 events.jsonl seq 689-694). The real session IS born `ready` even though its store row already carries messages, so the two-phase birth model applies with `session_birth` pinned to the real id and every later phase anchored to it.\n\n### driver_capability: ready\n\nThe recipe needs `slash`, `wait_turn`, `sleep` only. `driver-interactive.sh:113` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"` and its `wait_turn` (line 258) polls `SELECT COUNT(*) FROM messages WHERE session_id=… AND role='assistant' AND finish_reason='stop'` against a monotonic `EXPECTED_TURNS_SEEN` baseline — so consecutive `wait_turn` steps each block for a NEW iteration, which is exactly what a goal loop needs. No missing primitive.\n\n### Recipe shape\n\nDeliberately **tool-free**: hermes' default `approvals.mode` is `smart` (`config.py:2744`), so a shell-tool goal could open an approval prompt mid-loop and flip the session to `waiting` for a reason unrelated to the scenario. A counting goal converges in three iterations with no tool call and no approval surface.",
+      "caveats": [
+        "Strict-spec relaxation (same as claudecode/codex): the session cycles ready↔working per iteration rather than holding one continuous working span. Hermes ends each turn with finish_reason='stop' BEFORE the judge runs, so the store legitimately reports turn-over between iterations; the spec asserts per-iteration arcs plus 'the next working starts with NO user input', which is what actually demonstrates autonomy.",
+        "Timing hazard for the intermediate ready: the daemon's store scan is a 2s poll with a 500ms debounce (watcher.go:22-30) and the judge round-trip sits between an iteration's turn_done and the continuation user row. If a judge reply ever came back faster than that window the intermediate ready could be coalesced away and iter1_done would not match. Real judge calls are LLM round-trips (seconds), so this is expected to hold — but it is unverified until record runs.",
+        "PendingWaitingCue risk: hermes' continuation prompt literally instructs the agent 'If you are blocked and need input from the user, say so clearly and stop' (goals.py:79), so a mid-loop reply could trip ProseIndicatesWaiting and surface waiting. The no-waiting invariant is therefore scoped narrowly to the final phase (mirroring claudecode) rather than spanning the whole run.",
+        "observations.model left UNPINNED: the maintainer's install defaults to gpt-5.6-luna (config.yaml model.default; confirmed on live sessions rows in ~/hermes-local/.hermes/state.db), but the recording runs under a separate HERMES_HOME whose config.yaml the rig provides, so the live model is not knowable here. record fills it.",
+        "observations.cost_nonzero=false is provisional: hermes writes estimated_cost_usd=0.0 with billing_mode='subscription_included', and the adapter re-prices from irrlicht's own alias table (metrics.go:158), which has no entry for gpt-5.6-luna. tokens_nonzero=true IS verified (live sessions rows carry input_tokens ≈16k / output_tokens >0). If the recording home uses a priced model, record should flip cost_nonzero to true.",
+        "First hermes cell to exercise a `slash` step: send_text types the literal text then Enter after 0.4s, and hermes' REPL is prompt_toolkit-based with slash-command completion. If a completion menu ever swallows the Enter, /goal would sit unsubmitted — record should confirm the first /goal actually submits before blaming the loop.",
+        "Recipe is deliberately tool-free because approvals.mode defaults to 'smart'. A tool-using variant of this cell would need --yolo or approvals.mode=off in the recording home, otherwise an approval prompt flips the session to waiting mid-loop."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/goals.py:1-30",
+          "note": "Module docstring: 'Persistent session goals — the Ralph loop for Hermes'; judge-after-every-turn; continuation prompt appended to the same session via run_conversation; state persisted in SessionDB state_meta as goal:<session_id>."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/goals.py:76-115,846-975",
+          "note": "CONTINUATION_PROMPT_TEMPLATE ('[Continuing toward your standing goal]'); DEFAULT_MAX_TURNS=20; judge_goal routes through agent.auxiliary_client.call_llm — a bare LLM call that writes no session/message row."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/cli_commands_mixin.py:2072-2196",
+          "note": "/goal dispatch (set/draft/show/status/pause/resume/clear/wait/unwait) and the tail that enqueues state.goal into _pending_input: 'Kick the loop off immediately' — so /goal alone drives iteration 1."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py:9998-10120,15838-15843",
+          "note": "_maybe_continue_goal_after_turn: runs after EVERY turn, judges, and on should_continue pushes continuation_prompt onto _pending_input; called from the post-turn finally block of the REPL loop."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/commands.py:114",
+          "note": "CommandDef(\"goal\", \"Set a standing goal Hermes works on across turns until achieved\", \"Session\") — /goal is a first-class registered slash command, not an undocumented internal."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/config.py:2442-2458,2744-2748",
+          "note": "goals.max_turns=20 default and the docstring of the Ralph loop; approvals.mode default 'smart' — the reason the recipe is tool-free."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go:70-95",
+          "note": "role='user' → user_message (working); role='assistant' + finish_reason='stop' → turn_done (ready). The explicit turn boundary the loop's per-iteration arc rides on."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go:278-290,408-436",
+          "note": "scanSessions filters source IN ('cli','tui'); reconcile emits new_session then activity with Terminal=turnIsDone(newest row); 2s poll + 500ms debounce."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go:93-172",
+          "note": "querySessionMetrics folds messages through Parser for state, takes token aggregates off the sessions row, and re-prices cost from irrlicht's capacity table rather than hermes' estimated_cost_usd."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-1_basic-turn/recordings/2026-05-25-23-23-19_irrlichd-0.4.7+b2c5981/events.jsonl:1-7",
+          "note": "Primary evidence for the ProcessOwnedStore birth shape: presession_created proc-<PID> + ready, then transcript_new ses_… + state_transition ready 'new session created', then presession_removed. Confirms the real store session is born ready and the two-phase birth model applies."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh:113,240-279",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\"; resolve_session_id binds only to a session started after this slot launched; wait_turn polls finish_reason='stop' against a monotonic EXPECTED_TURNS_SEEN baseline so successive waits block for NEW iterations."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db (read-only sqlite3 query, sessions table)",
+          "note": "Live store: source='cli' rows carry model=gpt-5.6-luna, input_tokens≈16k / output_tokens>0 (tokens_nonzero), estimated_cost_usd=0.0, and cwd EMPTY — matching the adapter's documented cli-has-no-cwd behavior. No goal-loop rows present (grep for 'Continuing toward your standing goal' → 0), so the loop's persisted shape is derived from source, not from a prior recording."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-7_autonomous-loop/metadata.json",
+          "note": "Sibling precedent for the relaxation: claudecode agent=yes/daemon=full with the caveat 'claudecode flickers ready/working per iteration because Stop hooks re-prompt AFTER end_turn'. hermes' judge-then-continue loop has the same shape."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 300,
+      "settings": {},
+      "preconditions": [
+        "hermes >=0.19.0 on PATH and an inference provider configured in $HERMES_HOME/config.yaml (model.default + model.provider) with working credentials — the goal judge uses auxiliary.goal_judge, whose default provider is 'auto' (i.e. the main chat model), so no extra aux config is needed.",
+        "HERMES_HOME points at the recording home; sqlite3 on PATH (the driver reads state.db for session id + turn completion).",
+        "irrlichd is recording with the hermes 'store' observe permission GRANTED (fresh IRRLICHT_HOME leaves it pending → zero observation).",
+        "No other live hermes session process: source='cli' rows carry no cwd, so the adapter borrows the project binding from the single live process (watcher.go defaultLiveCWD returns \"\" when more than one matches)."
+      ],
+      "setup": [
+        "Driver launches `hermes chat` under tmux in RUN_CWD and polls for the 'Type your message or /help' prompt (the REPL loads ~35 tools + ~68 skills, so boot is tens of seconds).",
+        "The sessions row does not exist until the first user message, so the driver resolves the session id lazily after the first send — the daemon sees a proc-<PID> presession first."
+      ],
+      "script": [
+        {
+          "type": "slash",
+          "text": "/goal Count to three, one number per reply. In each reply say exactly one number - the next one after the number in your previous reply - and nothing else, then stop. Do not use any tools. The goal is complete only after you have said the number 3."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "slash",
+          "text": "/goal clear"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl shows at least two working→ready arcs on the SAME real (non proc-) session id.",
+        "The second working starts from a messages row the driver never sent — the '[Continuing toward your standing goal]' continuation prompt — which is what distinguishes autonomy from an externally-driven loop.",
+        "Final state is ready.",
+        "The recording's store shows >=3 assistant rows with finish_reason='stop' in the session (one per iteration)."
+      ],
+      "notes": "Deliberately tool-free: approvals.mode defaults to 'smart', so a shell-command goal risks an approval prompt flipping the session to waiting mid-loop for a reason unrelated to this scenario. /goal clear at the end defensively terminates the loop if the judge's done-verdict is slow or non-deterministic; it is dispatched via process_command and writes no store row, so it adds no turn."
+    }
+  }
+}
