@@ -247,6 +247,101 @@ resolve_session_id() {
   return 0
 }
 
+# --- Store → JSONL export (the "transcript" hermes never writes) --------------
+# Hermes persists NO transcript file, so the slot path used while driving is the
+# pseudo-path "<store>?session=<id>" — the same encoding the watcher puts on
+# agent.Event.TranscriptPath. That is not a file, and everything downstream of
+# the driver wants one: curate-lifecycle-fixture.sh hard-exits "transcript not
+# found", and without a transcript there is no replay golden, so `of verify`
+# skips the whole observations block. So the run ends by materializing the
+# store rows this session produced into a real JSONL, exactly the way the other
+# store-backed column does (opencode's driver-interactive.sh).
+#
+# The row shape is dictated by core/adapters/inbound/agents/hermes/parser.go —
+# keep this SELECT and metrics.go's foldMessages/scanMessageRow in lockstep:
+#   * the SAME columns scanMessageRow injects (role, content, tool_calls,
+#     tool_call_id, tool_name, finish_reason, display_kind) plus the synthetic
+#     _ts / _model / _cwd the Parser reads for time, model and project binding;
+#   * the SAME predicates metrics.go uses — active = 1 (a /rewind soft-deletes
+#     by flipping it to 0, and replaying a rewound row would resurrect state the
+#     user threw away) and ORDER BY timestamp ASC, id ASC;
+#   * NULL columns coalesced to '' because scanMessageRow reads them through
+#     sql.NullString, so the daemon sees '' and the fixture must not differ.
+#
+# tool_calls is emitted as a JSON *string*, not a nested object, and that is
+# load-bearing: decodeToolCalls does `v.(string)` and then json.Unmarshal, so an
+# embedded object would decode to nil and every tool call in the fixture would
+# vanish. json_object() quotes a TEXT value, which is exactly the double
+# encoding the column already carries.
+#
+# `timestamp` is emitted ALONGSIDE `_ts` and is not redundant. Two different
+# readers want two different units from the same column:
+#   * hermes' Parser reads `_ts` as epoch SECONDS (parser.go keyTimestamp);
+#   * the replay engine's parseEventTimestamp (core/application/replayengine/
+#     engine.go) reads `_ts` as MILLISECONDS — opencode's convention, since
+#     opencode was the only store-backed column when it was written.
+# Emitting seconds alone therefore built a correct Parser view on top of a
+# virtual timeline in January 1970, which collapsed the golden's debounce
+# behaviour (26 rows → 3 transitions instead of 7) and scaled every duration
+# down by 1000x. parseEventTimestamp prefers a `timestamp` STRING in RFC3339
+# and returns before it ever looks at `_ts`, and the Parser ignores keys it does
+# not name — so giving the engine an ISO-8601 string and the Parser its seconds
+# satisfies both without either lying.
+export_transcript() { # <slot-index> — echoes the exported path
+  # Two statements, deliberately: `local` is a builtin, so bash expands ALL of
+  # its arguments before running it — a single `local slot="$1" sid=${SES_UUID[$slot]}`
+  # evaluates the subscript while slot is still unset and aborts under `set -u`.
+  local slot="$1"
+  local sid="${SES_UUID[$slot]:-}"
+  [[ -n "$sid" ]] || return 1
+  local out="$STAGING/$sid.jsonl"
+  : > "$out"
+  # Read-only, like every other read this driver makes: the adapter's consent
+  # copy promises "No row is ever written", and the export must not be the one
+  # thing that breaks that promise on the maintainer's own store.
+  sqlite3 "file:$(hermes_store)?mode=ro" >>"$out" <<SQL
+.timeout 5000
+.mode list
+.headers off
+.separator ""
+SELECT json_object(
+  'role',          m.role,
+  'content',       ifnull(m.content, ''),
+  'tool_calls',    ifnull(m.tool_calls, ''),
+  'tool_call_id',  ifnull(m.tool_call_id, ''),
+  'tool_name',     ifnull(m.tool_name, ''),
+  'finish_reason', ifnull(m.finish_reason, ''),
+  'display_kind',  ifnull(m.display_kind, ''),
+  'timestamp',     strftime('%Y-%m-%dT%H:%M:%fZ', m.timestamp, 'unixepoch'),
+  '_ts',           ifnull(m.timestamp, 0),
+  '_model',        ifnull(s.model, ''),
+  '_cwd',          ifnull(s.cwd, '')
+)
+FROM messages m
+JOIN sessions s ON s.id = m.session_id
+WHERE m.session_id = '$sid' AND m.active = 1
+ORDER BY m.timestamp ASC, m.id ASC;
+SQL
+  [[ -s "$out" ]] || return 1
+  echo "$out"
+}
+
+# export_all_transcripts rewrites every slot's path from the "<store>?session=<id>"
+# pseudo-path to the exported JSONL. daemon_sid keeps reporting the same id
+# either way: its `?session=` arm handles the pseudo-path and the file is NAMED
+# <session-id>.jsonl, so the basename-stem fallback lands on the identical value.
+export_all_transcripts() {
+  local i path
+  for (( i = 1; i <= N_SLOTS; i++ )); do
+    if path="$(export_transcript "$i")"; then
+      SES_TRANSCRIPT[$i]="$path"
+      echo "[driver] exported slot $i (${SES_UUID[$i]}) -> $path ($(wc -l <"$path" | tr -d ' ') rows)" >&2
+    else
+      echo "[driver] slot $i has no exportable store rows (session='${SES_UUID[$i]:-}')" >&2
+    fi
+  done
+}
+
 # --- AGENT-SPECIFIC SEAM 2: detect a completed turn --------------------------
 # Port the agent's turn-done signal: claudecode polls the transcript for
 # stop_reason=="end_turn"; codex polls the rollout for task_complete; opencode
@@ -310,6 +405,11 @@ while IFS= read -r step; do
   esac
   (( $(remaining_seconds) <= 0 )) && { EXIT_REASON="timeout"; break; }
 done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
+
+# Materialize the store rows into real transcript files BEFORE the contract is
+# written — emit_session_contract copies SES_TRANSCRIPT verbatim into
+# transcript.path / transcript.paths, so the swap has to happen first.
+export_all_transcripts
 
 # --- Write the staging contract (shared) -------------------------------------
 # emit_session_contract writes session.uuid + transcript.path (slot 1) plus the
