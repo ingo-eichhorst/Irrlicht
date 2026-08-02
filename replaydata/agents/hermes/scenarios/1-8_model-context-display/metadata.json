@@ -1,0 +1,158 @@
+{
+  "scenario_id": "model-context-display",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+fe95020",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-context-display",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Primitive\n\nFirst-contact visibility: after ONE trivial turn the dashboard must show WHICH model the Hermes session runs (metrics.model_name, non-empty and not 'unknown') and HOW FULL its context is (metrics.context_window > 0, metrics.context_utilization_percentage > 0), over the state arc ready -> working -> ready. Early placement is deliberate (#599): kiro-cli onboarded with both invisible, so every new column confronts model/context at first contact.\n\n## agent_supports - yes\n\nHermes always boots on a concrete configured model and always records it on the session row. `model.default` in <HERMES_HOME>/config.yaml is the boot model (live: `gpt-5.6-luna`, provider `openai-codex`), and `sessions.model` carries it from the moment the row is INSERTed. Live proof from the maintainer's real store (/Users/ingo/hermes-local/.hermes/state.db): the 12 newest `source='cli'` rows ALL carry model='gpt-5.6-luna' with non-zero token aggregates after a SINGLE trivial turn — e.g. message_count=2 with input_tokens=16269 / output_tokens=5, and one with cache_read_tokens=15872. There is no way to run a Hermes turn without a model or without the aggregate being updated: `update_token_counts` (hermes_state.py L4953+) is called per API call from agent/conversation_loop.py L3001 and agent/codex_runtime.py L77/L157. So one trivial prompt exercises the whole scenario.\n\n## daemon_capability - full\n\nAll three metrics are derived correctly by the adapter, and the arc is driven by an EXPLICIT turn boundary (no idle heuristic):\n\n1. model_name — querySessionMetrics (metrics.go L93-128) selects `model` off the `sessions` row (filtered `source IN ('cli','tui')`) and sets ModelName = firstNonEmpty(model, \"unknown\"). Live store rows always carry it, so it is non-empty and not 'unknown' from the first turn.\n\n2. tokens — the same row read supplies input/output/cache aggregates; metrics.go L142-146 sets CumInput/CumOutput/CumCacheRead/CumCacheCreation and TotalTokens = input+output. Hermes maintains this aggregate itself (messages.token_count is NULL in practice), which is why the adapter reads the row rather than summing messages.\n\n3. context_window + context_utilization_percentage — metrics.go L170-171 calls tailer.ComputeContextUtilization(ModelName, TotalTokens, cm, 0). With override 0 the ONLY window source is capacityMgr.GetModelCapacity(modelName).ContextWindow (tailer_metrics.go L549-580). VERIFIED against the live capacity cache (~/.local/share/irrlicht/model-capacity-cache.json, 432 models): `gpt-5.6-luna` IS present with context_window=1050000 and full pricing (input 0.2 / output 1.2 per Mtok). With a first-turn TotalTokens ~16,274 that yields context_window=1050000, utilization ~1.55% (>0), context_window_unknown=false — and a non-zero EstimatedCostUSD as a by-product (metrics.go L158-163 prices via irrlicht's own table because Hermes reports estimated_cost_usd=0.0 under billing_mode='subscription_included' — the repo convention that cost is general pricing).\n\n4. state arc — Hermes persists the inbound user turn BEFORE the first LLM call (agent/turn_context.py L1203-1212: \"Crash-resilience: persist the inbound user turn before the first LLM call\"), and every append_message bumps sessions.message_count in the same write (hermes_state.py L6540-6550). The watcher therefore sees message_count grow with the newest row role='user', so turnIsDone is false (watcher.go L426-436) and it emits a NON-terminal activity -> working. When the assistant row lands with finish_reason='stop' the next scan (fsnotify on the store dir + 2s poll backstop) emits a TERMINAL activity -> ready. finish_reason is an explicit turn boundary, so no idle-flush is involved (parser.go L11-29, L93-95).\n\nPer the assess rule \"caveats over downgrades\": the mechanism meets the canonical spec on the live metrics surface, so daemon stays `full`. The one gappy detail is in the FACTORY's verify surface, not the daemon — see the load-bearing caveat below.\n\n## LOAD-BEARING CAVEAT - the three metrics are not verify-assertable from the golden today\n\n`of verify`'s observations block reads ONLY the recording's *.replay.json.golden summary (internal/validate/observations.go L20-35, L88-104). For hermes that summary cannot carry any of this cell's metrics:\n\n- context_window / context_utilization_percentage / total_tokens are lifted into the golden ONLY for antigravity — cmd/replay/metrics.go L59 gates the #766 store-vector lift on `adapter == antigravity.AdapterName`.\n- cum_input/cum_output/cost come from the transcript replay's tailer metrics, but hermes' Parser emits NO token or cost fields (parser.go — role/finish_reason/tool-call signal only); its tokens and cost are computed by ComputeMetrics reading the sessions row, a path replay never runs. Same shape as opencode, whose 1.8 golden summary carries no model/cost/token keys at all (verified on replaydata/agents/opencode/scenarios/1-8_model-context-display/recordings/2026-06-05-11-06-00_irrlichd-0.4.8+44399ba/transcript.jsonl.replay.json.golden).\n\nSo this spec asserts the lifecycle arc in phases and pins NO metric hard-assertion — pinning one would fail every recording for a tooling reason while the daemon is correct. The three acceptance metrics are checked on the LIVE metrics surface at record time (recipe verify[]). Unlock (a follow-up, not a blocker): extend the #766 lift + store staging to hermes exactly as it was done for antigravity, after which context_window_nonzero + context_utilization_nonzero become checkable here.\n\n## driver_capability - ready\n\nThe recipe needs send / wait_turn / sleep. replaydata/agents/hermes/driver-interactive.sh declares DRIVE_ELICITS=\"send slash sleep wait_turn\" — all three are genuinely ported: launch_repl runs `hermes chat` under tmux and polls the banner (\"Type your message or /help\"), send_text types text then Enter with a 0.4s beat, and wait_turn polls the store for a NEW `role='assistant' AND finish_reason='stop'` row for the run's session (bound to a row with started_at > the slot's launch timestamp, so a stale CLI row can't satisfy it). No new primitive is needed -> ready.\n\n## Session-identity note (birth model)\n\nHermes' `sessions` row is INSERTed only on the first user message, so there is no store-derived ready birth at launch; the sub-second birth is carried by the transient proc-<PID> pre-session the process scanner mints from the CommandPattern match (hermes gets BOTH a store watcher and a scanner — core/cmd/irrlichd/wiring.go L78-104). This spec therefore follows the shape already committed for the hermes 1-1/2-1 siblings: session_birth anchored UNPINNED to recording start, and turn_end chained to turn_start (same_session_as turn_start) rather than to session_birth — so a presession row cannot steal identity and cascade same_session_as failures.\n\n## Conclusion\n\nA thin first-contact cell on the hermes basic-turn arc: one send + wait_turn + trailing sleep. Route: record. Recordable now — no human action beyond the column's existing prerequisites, provided the recording's HERMES_HOME config.yaml keeps a capacity-known model.default (gpt-5.6-luna resolves).",
+      "caveats": [
+        "LOAD-BEARING (verify surface, not the daemon): of verify's observations read only the replay golden summary, and for hermes that summary can carry NONE of this cell's metrics — the #766 store-vector lift (total_tokens / context_window / context_utilization_percentage) is gated to antigravity at cmd/replay/metrics.go:59, and cum tokens / cost / model in the golden come from the transcript replay, which for hermes computes nothing (tokens+cost+window are produced by ComputeMetrics over the SQLite store, a path replay does not run). Hence NO metric hard-assertion in observations; the three acceptance metrics are proven on the live metrics surface at record time (recipe verify[]). Unlock: extend the #766 lift + store staging to hermes as was done for antigravity.",
+        "The concrete model string is environment-dependent: it is whatever model.default the run's HERMES_HOME config.yaml carries. Live-confirmed here as gpt-5.6-luna (config.yaml model.default, provider openai-codex; all 12 newest live sessions rows agree). Left UNPINNED per #440 — record fills observations.model from the recording.",
+        "The context half hinges on the recording model resolving in the capacity table. gpt-5.6-luna DOES (context_window=1050000 in ~/.local/share/irrlicht/model-capacity-cache.json). A recording home configured to a local/unlisted model would give window 0 / utilization 0 / context_window_unknown=true (hermes calls ComputeContextUtilization with override 0, so the capacity table is the only source) — the documented opencode 1.8 failure shape.",
+        "PROVISIONAL (emission vs observation): the working window is asserted from source, not from a live recording — agent/turn_context.py persists the user row before the first LLM call and append_message bumps message_count in the same write, so the watcher sees a non-terminal activity first. If Hermes ever batched both rows at turn end, the ready->working edge would collapse and only turn_end would be observable. record settles this.",
+        "Recording-rig note (not a step-type gap, so driver stays ready): the hermes driver reports transcript.path as the pseudo-path \"<store>?session=<id>\" and has NO store->JSONL export like opencode's driver. run-cell.sh only checks that the path string is non-empty, but curation/replay need a real file, so record may have to port an exporter before a transcript.jsonl + golden exist for this column.",
+        "Cost is a by-product here, not asserted: Hermes reports estimated_cost_usd=0.0 with billing_mode='subscription_included' on this provider, so the adapter prices via irrlicht's capacity table (metrics.go L152-163). gpt-5.6-luna is priced, so EstimatedCostUSD is non-zero on the live surface even though the golden cannot show it."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go L93-174",
+          "note": "querySessionMetrics: ModelName = sessions.model (fallback 'unknown'); CumInput/CumOutput/cache from the sessions aggregate; TotalTokens = input+output; cost priced via capacity.DefaultCapacityManager (Hermes reports 0.0 under subscription_included); then ComputeContextUtilization(ModelName, TotalTokens, cm, 0) at L170-171."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go L549-580",
+          "note": "ComputeContextUtilization: with override 0 the window is capacityMgr.GetModelCapacity(modelName).ContextWindow; window>0 + tokens>0 yields utilization>0 and clears the unknown flag; window<=0 returns (0,0,'unknown',true)."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/irrlicht/model-capacity-cache.json",
+          "note": "Live capacity cache (432 models): 'gpt-5.6-luna' present with context_window=1050000, max_output=128000, pricing input 0.2 / output 1.2 per Mtok — so the recording model resolves and both context_window>0 and cost>0 follow."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db (live store, read-only query)",
+          "note": "12 newest source='cli' sessions rows all carry model='gpt-5.6-luna' with non-zero aggregates after ONE trivial turn (message_count=2, input_tokens ~16.2-17.9k, output_tokens 5-211, one with cache_read_tokens=15872) — first-turn TotalTokens ~16k against a 1.05M window is ~1.55% utilization."
+        },
+        {
+          "kind": "file",
+          "ref": "<HERMES_HOME>/config.yaml (live: /Users/ingo/hermes-local/.hermes/config.yaml)",
+          "note": "model.default: gpt-5.6-luna, model.provider: openai-codex — the boot model whose name lands on sessions.model; the driver passes no -m/--model, so this is what a recording reports."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent v0.19.0 agent/turn_context.py L1203-1212 + hermes_state.py L6540-6550",
+          "note": "'Crash-resilience: persist the inbound user turn before the first LLM call' -> _ensure_db_session + _persist_session; append_message bumps sessions.message_count in the same write. This is what makes the ready->working edge observable before the assistant row exists."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent v0.19.0 agent/conversation_loop.py L3001, agent/codex_runtime.py L77-84/L157, hermes_state.py L4953+",
+          "note": "update_token_counts is called per API call (folding input/output/cache/reasoning + cost into the sessions row); the codex path records billing_mode='subscription_included' with no cost, which is why irrlicht prices the turn itself."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go L356-436",
+          "note": "reconcile emits new_session on first sighting and an activity event when message_count grows; Terminal = justEnded || turnIsDone, where turnIsDone is newest active message role='assistant' AND finish_reason='stop' — the explicit turn boundary that drives working->ready."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go L11-29, L93-95",
+          "note": "Rows are OpenAI-shaped: user -> user_message, assistant+finish_reason='stop' -> turn_done, assistant+tool_calls -> assistant_message, tool -> tool_result. The parser carries NO token/cost fields — those come from the sessions aggregate, which is why the transcript replay golden cannot show them."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go L78-104",
+          "note": "ProcessOwnedStore hermes gets BOTH the dedicated store watcher and a processlifecycle scanner — so a transient proc-<PID> pre-session carries the sub-second ready birth while the store row appears only at the first user message."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/metrics.go L52-62 + internal/validate/observations.go L20-35, L88-104, L165-190",
+          "note": "The store-derived context vector is lifted into the golden ONLY when adapter == antigravity; ValidateObservations hard-asserts exclusively against that golden summary. Basis for pinning no metric assertion for hermes today."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/1-8_model-context-display/recordings/2026-06-05-11-06-00_irrlichd-0.4.8+44399ba/transcript.jsonl.replay.json.golden",
+          "note": "Sibling ProcessOwnedStore precedent: the golden summary carries no model_name / cost / token keys at all — confirms a store-derived adapter's metrics do not reach the golden."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\"; launch_repl runs `hermes chat` under tmux and waits for the 'Type your message or /help' banner; wait_turn polls the store for a NEW assistant row with finish_reason='stop' on a session started after this slot launched -> the recipe's step types are all ported."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#599",
+          "note": "Why 1.8 sits this early: kiro-cli onboarded with model+context invisible (sidecar-only) and the gap surfaced only in section 5."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#440",
+          "note": "replay-summary model_name is environment-dependent — assert presence, not a hardcoded string; the recording model may be substituted."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#766",
+          "note": "Added the store-derived context vector to the golden + StageReplayStore for antigravity — the exact mechanism hermes would need to make context_window/context_utilization verify-assertable."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH (verified: `hermes --version` -> Hermes Agent v0.19.0 (2026.7.20)) and sqlite3 on PATH — the driver reads session id and turn completion straight out of state.db.",
+        "HERMES_HOME exported to the recording home, and that home's config.yaml carries a working model.default + provider with credentials — the run must not write into the maintainer's real store.",
+        "For the CONTEXT half: the recording home's model.default MUST resolve in irrlicht's capacity table. gpt-5.6-luna does (context_window=1050000); an unlisted/local model would yield context_window=0 and context_utilization=0 (hermes passes contextWindowOverride=0, so the capacity table is the only source).",
+        "irrlichd is recording with the hermes store watcher enabled and the 'store' observe permission granted (fresh IRRLICHT_HOME leaves it pending, which means zero monitoring) — run-cell.sh isolated mode or --attach against a daemon started with --record."
+      ],
+      "setup": [
+        "The interactive driver launches `hermes chat` under tmux in a fresh per-run cwd and polls for the 'Type your message or /help' banner before typing — the TUI loads 35 tools + 68 skills and swallows early keystrokes, so a fixed sleep is not enough (up to 60s budget).",
+        "Hermes writes NO transcript file: the slot's transcript path is the pseudo-path '<store>?session=<id>', the same encoding the adapter puts on agent.Event.TranscriptPath. The session id (<YYYYMMDD>_<HHMMSS>_<hex>) is resolved lazily after the first send, binding only to a row with started_at > the slot's launch timestamp so a stale CLI session cannot be adopted.",
+        "The store row is INSERTed only on the first user message, so the sub-second ready birth in events.jsonl is carried by the transient proc-<PID> pre-session the scanner mints; the store-backed session appears a few seconds later and carries the turn arc.",
+        "No model flag is passed — this cell asserts DEFAULT-launch visibility, so the boot model from config.yaml is what must reach metrics.model_name.",
+        "The send is a single no-tool plain-text turn, so the working span carries no tool call and the session never enters waiting.",
+        "The three metric assertions are checked AFTER turn completion: metrics may briefly read 0 between session discovery and the first token-aggregate write."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "What is 6 times 7? Reply with just the number."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a session born ready shortly after launch (a transient proc-<PID> pre-session carries the sub-second birth; the store-backed <YYYYMMDD>_<HHMMSS>_<hex> session appears once the first user message lands).",
+        "events.jsonl contains a pid_discovered event (hermes is a Python console script, matched on the full command line, so the PID binds to the venv interpreter process).",
+        "events.jsonl shows one ready->working->ready cycle on the store-backed session id; no state_transition to waiting (no tool call, no permission gate).",
+        "LIVE METRICS SURFACE, after the turn completes: metrics.model_name is non-empty and not 'unknown' (= the HERMES_HOME config.yaml model.default; gpt-5.6-luna in this environment).",
+        "LIVE METRICS SURFACE, after the turn completes: metrics.context_window > 0 (GetModelCapacity on the recording model — 1050000 for gpt-5.6-luna) and metrics.context_utilization_percentage > 0 (~1.5% at a first-turn ~16k TotalTokens).",
+        "LIVE METRICS SURFACE, after the turn completes: cum input+output tokens > 0, read off the sessions row aggregate (Hermes leaves messages.token_count NULL).",
+        "The store-backed session's final live state is ready.",
+        "NOTE for the recorder: these metric checks are NOT assertable from the replay golden for hermes (the #766 store-vector lift is antigravity-gated and the hermes Parser emits no token/cost fields) — capture them from the live daemon/websocket surface, and pin observations.model only if the golden turns out to carry model_name."
+      ],
+      "settings": {},
+      "timeout_seconds": 180,
+      "notes": "Thin first-contact cell, structurally identical to the hermes 2-1_basic-turn arc (one send + wait_turn + trailing sleep) — the extra intent is asserting all THREE first-contact metrics after turn 1: model_name (sessions.model), context_window (GetModelCapacity on the boot model) and context_utilization_percentage (TotalTokens/window). timeout_seconds is 180 because the TUI's banner poll alone budgets up to 60s before the first keystroke; the 10s trailing sleep outlasts the working->ready settle (the watcher's backstop poll is 2s, fsnotify usually fires sooner). What differs between runs: the session id, PID, timestamps, token counts and the assistant wording. What must NOT differ: one ready->working->ready arc on one store-backed session, a non-empty non-'unknown' model_name, and a non-zero context_window + context_utilization on the live surface. KEY RISK for the record sweep: the driver reports a pseudo transcript path and hermes has no store->JSONL export like opencode's, so curation/replay may need an exporter ported before a transcript.jsonl + golden exist for this column."
+    }
+  }
+}
