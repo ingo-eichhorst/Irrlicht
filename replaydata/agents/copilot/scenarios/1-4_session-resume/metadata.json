@@ -1,0 +1,140 @@
+{
+  "scenario_id": "session-resume",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:resume",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+00af800.dirty",
+    "confidence": 0.65,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: gap:resume"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-resume",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:resume",
+      "confidence": 0.65,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:resume (confidence 0.65 — the resumed process was OBSERVED claiming the original session directory, and the CLI's own bundle shows the resume path emitting onto the same session object and the same events.jsonl, but no appended line was observed live because copilot's event writer flushes nothing until a turn runs).\n\n## Reasoning\n\n### agent_supports = yes\n\n`copilot --help` on 1.0.77 documents three resume surfaces:\n\n- `-r, --resume [value]` — \"Resume from a previous session (optionally specify existing session ID, task ID, ID prefix, or name; name matching is exact, case-insensitive)\"\n- `--continue` — \"Resume the most recent session\"\n- `--session-id <id>` — \"Resume an existing session or task by ID, or set the UUID for a new session\"\n\nConfirmed live at zero AI-credit cost (launch + quit, no prompt ever submitted): a copy of a real 4-turn session was placed in an isolated `COPILOT_HOME` and re-opened with `copilot --no-color --allow-all --resume=<id>`. The TUI rendered the entire prior conversation (all four user/assistant exchanges, including a shell tool call) and restored the session's cumulative credit counter (\"Session: 0.9 AIC used\"). Resume is real and it restores state, not just text.\n\n### daemon_capability = full\n\n| Scenario assertion | Adapter mechanism |\n|---|---|\n| \"Same `session_id` reappears (not a new session row)\" | Resume keeps the ORIGINAL session id AND the ORIGINAL `session-state/<id>/` directory; irrlicht keys the session on that directory (`sessionIDFromPath`, adapter.go), so the same row simply comes back |\n| \"State `ready` initially\" | After the first lifetime's clean `/exit` the row is already `ready` (`assistant.turn_end` → `turn_done`); `session.resume` is not activity, so nothing disturbs it |\n| \"`ready → working` on the first new turn\" | `user.message` → `EventType: \"user_message\"` (parser.go `parseUserMessage`) |\n| \"Each lifetime's cycle is independent\" | Explicit `assistant.turn_start` / `assistant.turn_end` boundaries per turn |\n| \"Transitions attributed to the current PID lifetime\" | `DiscoverPIDByCWD` (pid.go) rebinds the new PID by working directory |\n\n**The load-bearing claim — that resume APPENDS to the same `events.jsonl` rather than forking a new session — is what this assessment actually went and checked.** The native `copilot` binary is compressed and yields no plain strings (`grep -a` for `events.jsonl`, `session.start`, `assistant.turn_end` and even the help text all return zero), so the binary-scan route from the assess playbook is a dead end here. The readable artifact is the 8.6 MB `app.js` bundle shipped beside it. Four independent pieces of evidence:\n\n1. **The resume path emits onto the same session object and the same file.** `app.js` resume branch: `await c.updateWorkspaceMetadata(x)` → `registerSessionLock(c.sessionId, …)` → ``c.emit(\"session.resume\", {resumeTime, eventCount: c.getEvents().length, eventsFileSizeBytes: D.exists ? D.size : undefined, selectedModel, context: x, alreadyInUse, …})``, where `D = sessionEventsSizeFromFs(c.sessionFs.getSessionId(), c.sessionFs.sessionStatePath, …)`. The event it writes literally carries the byte size of the events file it is writing into. The writer's target is `localEventsPath = s.join(s.sessionStatePath, \"events.jsonl\")`.\n2. **The session id is taken FROM the file.** Reconstruction from events enforces `if (… !== \"session.start\") throw new Error(\"First event must be session.start\")` and then builds the session with `sessionId: s.data.sessionId, resumedFromEvents: true`. The resumed session's id IS the id on line 1 of the existing transcript — it cannot drift.\n3. **`session.resume` is a persisted event type.** The events-replay loop that walks `e[1..n]` switches on `case \"session.resume\": case \"session.model_change\":` next to `case \"session.start\":`, i.e. a later read of the same log expects to find resume records inside it.\n4. **Live filesystem observation.** The resumed process wrote `inuse.<pid>.lock` into the ORIGINAL session directory and bumped that directory's `workspace.yaml` `updated_at` from `2026-08-02T20:39:00.322Z` to `2026-08-02T21:22:14.525Z`. It took ownership of the original directory, not a copy of it.\n\nWhat was NOT observed: an actual appended line. Copilot's writer batches (`c.queued && (this.unflushedEventRefs.push(a), c.scheduleFlush && …)`) and the probe never submitted a prompt, so the file stayed byte-identical (md5 `7d6d183e…`, 35 lines) through resume AND through `/exit`. Proving the append costs one real turn, which is `record`'s job — hence confidence 0.65 rather than 0.85.\n\n**`session.resume` needs no parser work and is already handled correctly.** It is absent from parser.go's switch, so it falls to `default: ev.Skip = true`. That is the right answer, not an oversight: a resume is not agent activity, and a non-skipped resume event would flip a `ready` row to `working` before the user typed anything — the same failure mode the parser's comment calls out for `session.shutdown`.\n\n### Two findings that shape the recipe (neither is a daemon bug)\n\n**Every launch mints a second, stray session directory.** Observed on both probe launches: `--resume=<id>` created a brand-new `session-state/<new-uuid>/` next to the resumed one, containing only `workspace.yaml`, `checkpoints/`, `files/`, `research/` and an `inuse.<pid>.lock` — and never an `events.jsonl`. irrlicht is blind to it, because `sessionIDFromPath` accepts only `<id>/events.jsonl`, so no phantom session row appears. The DRIVER, however, is not blind to it: `resolve_transcript` resolves by set difference against the pre-launch directory listing and would latch onto the stray directory instead of the resumed one. The ported `resume` arm must skip `resolve_transcript` entirely and reuse slot 1's `SES_TRANSCRIPT`/`SES_UUID`.\n\n**The resumed process's OS cwd is the launch directory, not the restored workspace.** `lsof -a -p <native-pid> -d cwd` reported the tmux launch directory while the TUI header displayed the restored session's workspace (`/private/tmp`). Since `DiscoverPIDByCWD` matches the process's OS cwd against the transcript's `session.start.data.context.cwd`, a resume launched from a DIFFERENT directory would not rebind, and the scenario's \"same session_id active under a new PID\" would go unobserved. The recipe therefore resumes in the SAME cwd — which is what claudecode's recipe does too, and what the driver's `RUN_CWD` reuse already gives for free.\n\n### driver_capability = gap:resume\n\n`replaydata/agents/copilot/driver-interactive.sh` has the arm present but stubbed — `resume) not_implemented resume || break ;;` — and `DRIVE_ELICITS` (\"send slash sleep wait_turn exit_clean sigkill interrupt keys restart start_session session\") deliberately omits `resume`, so recipe-lint's SEMANTIC check fails this recipe before any recording is attempted. This is tooling work, not an observability limit: `launch_repl` already appends `--resume=<id>` when `RESUME_ID` is set, so porting is (a) `save_active`, (b) `RESUME_ID=\"${SES_UUID[1]}\"`, (c) `launch_repl` reusing slot 1's `RUN_CWD`, (d) restore `TRANSCRIPT`/`UUID` from slot 1 instead of calling `resolve_transcript`, (e) add `resume` to `DRIVE_ELICITS`.\n\n### Spec-anchoring choice\n\nThe first lifetime's birth is UNPINNED (`expected_state: ready`, `relative_to: start`, no `same_session_as`) for the same reason the sibling `session-end` cell states: copilot creates the session directory at launch but `events.jsonl` only at the first prompt, so a `proc-<PID>` pre-session may or may not be sampled, and when the file does appear it already holds `session.start … user.message`. Everything the scenario actually asserts is pinned to the real session via `same_session_as: v1_turn_start`.\n\nNo `expected_state: ready` phase is asserted for the resume itself. After the first lifetime settles to `ready` the row STAYS `ready` across the exit and the relaunch, so there is no second ready `state_transition` for such a phase to match — asserting one would fail on a correct recording. The discriminating assertion is instead `v2_turn_start`: `working`, anchored after `v1_exit` and pinned with `same_session_as: v1_turn_start`. If copilot forked into a new session id, that phase cannot match and the cell fails loudly — which is exactly the property the scenario exists to test.",
+      "caveats": [
+        "PROVISIONAL on the append: the resumed process was observed taking ownership of the original session directory (lock file + workspace.yaml updated_at bump) and app.js shows the resume path emitting onto the same session object with the same events.jsonl target, but NO appended line was observed, because copilot's event writer flushes nothing until a turn runs — the file stayed byte-identical (md5 7d6d183ebd5b50cf651ebd1a341535bf) through both the resume and the subsequent /exit. If record finds the first post-resume turn landing in a NEW session directory instead, this cell is daemon=incapable and every phase from v2_turn_start fails; that is the single result record must check first.",
+        "The ported `resume` arm MUST NOT call resolve_transcript. Every copilot launch mints an extra session-state/<uuid>/ directory that never receives an events.jsonl (observed on both probe launches), and resolve_transcript's set-difference against the pre-launch listing would resolve THAT directory rather than the resumed one, silently pointing the staging contract at an empty transcript. Reuse slot 1's SES_TRANSCRIPT/SES_UUID instead.",
+        "The resume must launch in the SAME cwd as the first lifetime. The resumed process's OS cwd is the launch directory, not the workspace the session restores (verified with lsof -d cwd), while DiscoverPIDByCWD matches the OS cwd against the transcript's session.start cwd — so resuming from elsewhere would leave the new PID unbound and the scenario's per-PID attribution unobserved.",
+        "`model` is deliberately NOT pinned in the observations block: this account reaches only gpt-5-mini and claude-haiku-4.5, `--model` accepts only \"auto\", and the router picks at runtime and reports on session.auto_mode_resolved. record fills it from the recording.",
+        "The copilot binary yields no usable strings (compressed): `grep -a` for events.jsonl / session.start / assistant.turn_end / the help text all return zero hits. Any future re-assessment of this column should read node_modules/@github/copilot/node_modules/@github/copilot-<platform>/app.js instead of running `strings` on the binary.",
+        "Driver defect inherited from the sibling cell (cosmetic, not blocking): restart/start_session call alloc_slot and then launch_repl, which allocs again. This recipe uses `resume`, not `restart`, so it is only relevant if record ports resume by copying the restart arm — do not copy the double alloc_slot."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "resume) not_implemented resume || break — the arm is a stub, and DRIVE_ELICITS omits `resume`, so recipe-lint's semantic check gates this recipe. launch_repl already honours RESUME_ID by appending --resume=<id>."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/adapter.go",
+          "note": "sessionIDFromPath derives the session id from the <session-id> PARENT DIRECTORY and accepts only the constant basename events.jsonl — which is both why a resume into the same directory reappears as the same row, and why the stray directory copilot mints on every launch is invisible to the daemon."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "session.resume is absent from the ParseLine switch and falls to default: ev.Skip = true — correct handling, since a resume is not activity and must not flip a ready row to working. user.message → user_message drives ready→working; assistant.turn_end → turn_done settles it."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/pid.go",
+          "note": "DiscoverPID = DiscoverPIDByCWD(ProcessName, cwd, …) — PID binding compares the process's OS cwd with the transcript's session.start cwd, which is why the resume must relaunch in the same directory."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "CLI 1.0.77 bundle. Resume path: updateWorkspaceMetadata → registerSessionLock(c.sessionId,…) → c.emit(\"session.resume\", {resumeTime, eventCount: c.getEvents().length, eventsFileSizeBytes: sessionEventsSizeFromFs(c.sessionFs.getSessionId(), c.sessionFs.sessionStatePath,…), context, alreadyInUse,…}). Writer target: localEventsPath = join(sessionFs.sessionStatePath, \"events.jsonl\"). Reconstruction: `First event must be session.start` then sessionId: s.data.sessionId with resumedFromEvents:true. The events-replay loop switches on `case \"session.resume\":` beside session.start, so resume records are persisted into the same log."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.nvm/versions/node/v22.18.0/bin/copilot --help (CLI 1.0.77)",
+          "note": "-r, --resume [value] \"Resume from a previous session (optionally specify existing session ID, task ID, ID prefix, or name…)\"; --continue \"Resume the most recent session\"; --session-id <id> \"Resume an existing session or task by ID, or set the UUID for a new session\"."
+        },
+        {
+          "kind": "file",
+          "ref": "live probe, isolated COPILOT_HOME, zero AI credits (launch + quit, no prompt)",
+          "note": "copilot --no-color --allow-all --resume=51ffced3-5bba-416f-b898-7338f39e69e8 against a copy of a real 4-turn session: TUI restored all prior turns and the \"Session: 0.9 AIC used\" counter; inuse.<pid>.lock appeared in the ORIGINAL directory and its workspace.yaml updated_at moved 20:39:00.322Z → 21:22:14.525Z; a stray new <uuid>/ directory with no events.jsonl was created on each launch; lsof -a -p <native-pid> -d cwd reported the LAUNCH directory, not the restored workspace; events.jsonl stayed 35 lines / md5 7d6d183ebd5b50cf651ebd1a341535bf throughout, including after /exit."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/1-2_session-end/expected.jsonl",
+          "note": "Sibling precedent in this column for the UNPINNED first birth and the same_session_as-on-turn_start anchoring this spec reuses."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/1-4_session-resume/metadata.json",
+          "note": "Reference recipe for this scenario: one turn, clean exit, resume in the SAME cwd, one more turn. This recipe specializes it (copilot exits on /exit, not Ctrl-D, and needs a longer teardown gap because PID binding is cwd-keyed)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "copilot CLI 1.0.77+ on PATH and signed in (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits — two turns are spent",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a daemon started with --record)",
+        "The driver's `resume` step type is ported (currently not_implemented and absent from DRIVE_ELICITS) — see setup",
+        "No other copilot session is writing under the staging COPILOT_HOME"
+      ],
+      "setup": [
+        "PORT THE `resume` STEP FIRST: save_active; RESUME_ID=\"${SES_UUID[1]}\"; launch_repl in slot 1's RUN_CWD; then restore TRANSCRIPT/UUID from slot 1 rather than calling resolve_transcript — copilot mints a stray session-state/<uuid>/ on every launch and the set-difference resolver would pick THAT one. Finally add `resume` to DRIVE_ELICITS.",
+        "Both lifetimes run in the SAME RUN_CWD: DiscoverPIDByCWD matches the process's OS cwd against the transcript's session.start cwd, and the resumed process keeps its LAUNCH cwd rather than the workspace it restores.",
+        "Driver exports COPILOT_HOME=<staging>/copilot-home and seeds config.json with trustedFolders + askedSetupTerminals; wait_ready still answers the folder-trust modal with Enter (it reappears even for a listed folder on 1.0.77).",
+        "The 8 s gap between exit_clean and resume lets the process sweep observe the death before a new copilot process exists in the same cwd — the cwd-keyed rebind hazard that cost gemini-cli its clean-exit process_exited."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "resume"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: again"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "THE decisive check: the second turn's user.message is appended to the FIRST lifetime's $COPILOT_HOME/session-state/<id>/events.jsonl — same directory, same file, line count grown. If a new session directory received it instead, this cell is daemon=incapable and must be backflowed.",
+        "events.jsonl (the recording) shows ONE copilot session_id carrying both lifetimes' ready→working→ready cycles, not two",
+        "a process_exited for that session_id after the first turn (clean /exit), followed by a pid_discovered for a DIFFERENT PID on the SAME session_id after the resume",
+        "no state_transition to working between the first turn's settle and the second turn's prompt — the resume itself is not activity (session.resume is Skip)",
+        "the transcript contains a session.resume record between the first lifetime's session.shutdown and the second lifetime's user.message (confirms the CLI's own resume marker reaches the store)",
+        "final session state is ready; cost and token totals are non-zero and reflect BOTH turns (copilot's usage counters are cumulative and were seen to survive the resume in the TUI's AIC readout)"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
