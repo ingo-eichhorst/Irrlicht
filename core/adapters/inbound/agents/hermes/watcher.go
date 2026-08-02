@@ -182,18 +182,9 @@ func (w *Watcher) Watch(ctx context.Context) error {
 		return err
 	}
 
-	fsw, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Printf("hermes: fsnotify unavailable, falling back to polling: %v", err)
-	} else {
+	fsw := w.newStoreNotifier()
+	if fsw != nil {
 		defer fsw.Close()
-		// Watch the containing directory rather than the file: SQLite's
-		// delete-mode commit path replaces the journal file next to the
-		// store, and a directory watch survives an inode swap that a
-		// file watch would silently stop reporting on.
-		if err := fsw.Add(filepath.Dir(w.dbPath)); err != nil {
-			log.Printf("hermes: watch %s: %v", filepath.Dir(w.dbPath), err)
-		}
 	}
 
 	ticker := time.NewTicker(w.pollInterval)
@@ -201,11 +192,7 @@ func (w *Watcher) Watch(ctx context.Context) error {
 
 	w.scan()
 
-	var fsEvents chan fsnotify.Event
-	var fsErrors chan error
-	if fsw != nil {
-		fsEvents, fsErrors = fsw.Events, fsw.Errors
-	}
+	fsEvents, fsErrors := notifierChannels(fsw)
 
 	for {
 		select {
@@ -218,9 +205,7 @@ func (w *Watcher) Watch(ctx context.Context) error {
 				fsEvents = nil
 				continue
 			}
-			if filepath.Base(ev.Name) == filepath.Base(w.dbPath) {
-				w.scan()
-			}
+			w.onStoreFSEvent(ev)
 		case err, ok := <-fsErrors:
 			if !ok {
 				fsErrors = nil
@@ -228,6 +213,42 @@ func (w *Watcher) Watch(ctx context.Context) error {
 			}
 			log.Printf("hermes: fsnotify error: %v", err)
 		}
+	}
+}
+
+// newStoreNotifier starts an fsnotify watch on the store's directory, or
+// returns nil to fall back to the poll backstop alone.
+//
+// The directory is watched rather than the file: SQLite's delete-mode commit
+// path replaces the journal file next to the store, and a directory watch
+// survives an inode swap that a file watch would silently stop reporting on.
+func (w *Watcher) newStoreNotifier() *fsnotify.Watcher {
+	fsw, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("hermes: fsnotify unavailable, falling back to polling: %v", err)
+		return nil
+	}
+	dir := filepath.Dir(w.dbPath)
+	if err := fsw.Add(dir); err != nil {
+		log.Printf("hermes: watch %s: %v", dir, err)
+	}
+	return fsw
+}
+
+// notifierChannels exposes fsw's channels, or nil channels (which block
+// forever in a select) when there is no notifier.
+func notifierChannels(fsw *fsnotify.Watcher) (chan fsnotify.Event, chan error) {
+	if fsw == nil {
+		return nil, nil
+	}
+	return fsw.Events, fsw.Errors
+}
+
+// onStoreFSEvent scans when the event names the store file itself; the
+// directory watch also reports the journal file next to it.
+func (w *Watcher) onStoreFSEvent(ev fsnotify.Event) {
+	if filepath.Base(ev.Name) == filepath.Base(w.dbPath) {
+		w.scan()
 	}
 }
 
