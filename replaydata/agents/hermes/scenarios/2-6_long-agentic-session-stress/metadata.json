@@ -1,0 +1,172 @@
+{
+  "scenario_id": "long-agentic-session-stress",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+6e35acf.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-agentic-session-stress",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent=yes / daemon=full / driver=ready → route `record`.\n\n### agent — yes\n\n`hermes chat` is a long-lived interactive REPL that keeps ONE session across many\nsequential turns; the scenario's compressed proxy (4 plain prompts in one session)\nis the ordinary path, not an edge case. Session identity is minted once per REPL\nand every turn's messages land under it (`sessions.id`, shape\n`YYYYMMDD_HHMMSS_<hex6>`; 25 rows across the sample store, `source` in\n('cli','tui')). No feature flag, slash command or mode is needed.\n\n### daemon — full\n\nThe scenario's user-observable signals are the per-turn `ready → working → ready`\narcs, no flicker within a turn, and a final settle to `ready`. Each maps onto a\nsignal this adapter already produces:\n\n- **`ready → working` at turn start.** The load-bearing question is EMISSION, not\n  parsing: does the user row reach the store BEFORE the assistant reply, or does\n  hermes batch the whole turn at the end? It is written first, deliberately —\n  `agent/turn_context.py:1198-1207` in the hermes source carries the comment\n  \"Crash-resilience: persist the inbound user turn before the first LLM call\" and\n  calls `_ensure_db_session()` + `_persist_session(messages, ...)` before the API\n  loop is entered. The watcher's next scan sees `message_count` grow with the\n  newest row `role='user'`, `turnIsDone` returns false (watcher.go:426-436), and\n  the fold hands the state rules `LastEventType=\"user_message\"` → working.\n- **No flicker within a turn.** `finish_reason` is an explicit turn boundary, so\n  the adapter never needs an idle-flush heuristic that could settle a session\n  mid-turn: `stop` → `turn_done`, `tool_calls` → `assistant_message` with open\n  ToolUses (parser.go:81-95, pinned by TestParseLine_AssistantToolCallsDoesNotEndTurn\n  and TestWatcher_ToolCallTurnIsNotTerminal). Mid-turn writes exist too and are\n  also non-terminal: hermes flushes incrementally before tool execution\n  (`agent/conversation_loop.py:5767-5772`) and after tool progress\n  (`agent/tool_executor.py:138-152`), and every one of those rows is either an\n  assistant/tool_calls or a tool row — neither closes the turn.\n- **`working → ready` at turn end.** The assistant row with `finish_reason='stop'`\n  is committed by the turn-end persist; `turnIsDone` marks the activity event\n  Terminal and the fold reports `LastEventType=\"turn_done\"`.\n- **Final settle.** Same mechanism as any turn end, plus the `ended_at`\n  transition emits one final terminal activity (watcher.go:408-418) when the REPL\n  is torn down.\n\nUnlike the opencode sibling on this row, there is no process-exit-before-poll race\nto design around (#492): the recipe is interactive, so the `hermes chat` process\noutlives every turn boundary and the terminal `stop` row is polled while the\nsession is still alive. The adapter is wired into the daemon at\n`core/cmd/irrlichd/wiring.go:90-91` (store-watcher dispatch on adapter name) and\nregistered at `core/adapters/inbound/agents/all.go:33`.\n\n### driver — ready\n\nThe recipe needs `send`, `wait_turn` and `sleep` only.\n`replaydata/agents/hermes/driver-interactive.sh` declares\n`DRIVE_ELICITS=\"send slash sleep wait_turn\"` — every needed primitive is\ngenuinely ported, not stubbed. `wait_turn` is a real signal poll over\n`messages.finish_reason='stop'` counted per session (not an idle heuristic), and\n`resolve_session_id` binds only to a row whose `started_at` post-dates this\nslot's launch, which is what keeps the SHARED store from handing the driver a\nstale session. No `keys`/`interrupt`/`reset_session` arm is touched.\n\n### Birth shape (why the spec looks different from the claudecode sibling)\n\nHermes creates its `sessions` row LAZILY, in turn setup — `_ensure_db_session()`\nis called from `agent/turn_context.py:613` / `run_agent.py:607-633`, i.e. on the\nfirst prompt, not at REPL launch. So before turn 1 the only thing the daemon can\nsee is its own `proc-<PID>` pre-session (the process matcher fires at launch:\n`(^|/)hermes( |$)` matches the console-script argv and `chat` is not a service\nsubcommand). The spec therefore models the birth as two phases and pins every\npost-birth phase to the store-backed id via `session_id_prefix` + `same_session_as`,\nso the pre-session row — which never goes `working` — cannot steal the birth and\ncascade failures.",
+      "caveats": [
+        "PROVISIONAL ON TIMING (the one thing only `record` can settle): the per-turn `working` observation depends on a watcher scan landing between the user-row commit and the assistant `stop` commit. The watcher rescans on fsnotify over the store's directory plus a 2s poll backstop, with a 500ms debounce (watcher.go:19-35), so a turn that completes inside one scan gap would coalesce into a single observation and its `working` span would never be observed. Real inference turns run seconds, so this is unlikely — but it is a property of emission timing, not of the parser, and is asserted here on a code read alone.",
+        "`observations.model` is deliberately NOT pinned. The model is whatever the recording home's config.yaml sets as `model.default`; the maintainer's dev home is `gpt-5.6-luna` on provider `openai-codex` (config.yaml:1-3, and both `gpt-5.6-luna` and `google/gemma-4-26b-a4b` appear in `sessions.model` in the live store), but the isolated HERMES_HOME the rig exports has its own config. `record` should fill it from the recording.",
+        "`cost_nonzero` is deliberately NOT asserted. metrics.go:156-163 prices via irrlicht's own capacity table rather than `sessions.estimated_cost_usd` (hermes reports 0.0 with billing_mode='subscription_included'), and a grep of core/pkg/capacity/aliases.go finds no entry for `gpt-5.6-luna` or `gemma`, so EstimateCostUSD legitimately returns 0 for these models. `tokens_nonzero` is asserted instead — `sessions.input_tokens`/`output_tokens` are maintained by `update_token_counts` per API call (conversation_loop.py:2980-3010) and are non-zero in every sampled row.",
+        "`sessions.cwd` is empty for `source='cli'`, and `hermes chat` records `source='cli'`, so the project binding is borrowed from the single live hermes process (`defaultLiveCWD`, watcher.go:115-124). That probe returns \"\" when it finds anything other than exactly one live session process — so a second hermes running on the machine during the recording drops the binding. Recording prereq below.",
+        "Tool calls are deliberately excluded from the recipe, matching the scenario description and the committed claudecode sibling (both use 4 plain prompts). Hermes' config carries an `approvals:` block and a dangerous-command approval prompt exists in its CLI path; whether it would fire for the toolsets in play is UNVERIFIED, and the driver has no `keys`/`interrupt` primitive to answer one, so a tool-call turn could legitimately enter `waiting` and stall. Consequence: the scenario's \"includes at least one tool call\" bullet is NOT satisfied by this cell — same as claudecode's.",
+        "UNVERIFIED: the sample store contains PAIRS of identically-timestamped `source='cli'` rows with no `parent_session_id` (e.g. 20260802_212608_1dc71a and 20260802_212608_feed91). The cause was not established — most likely two concurrent dev runs, but a hermes-side sibling-session fork is not ruled out. Post-birth phases are pinned via `same_session_as` so a sibling row cannot break them, but `record` should check how many hermes sessions the recording surfaced.",
+        "The unbounded `no state_transition to waiting` invariant on session_birth rests on the prompts being directive one-word replies, so `ProseIndicatesWaiting` over the assistant text should not fire (parser.go:83-91). A model that answers with a clarifying question would legitimately trip it."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go:355-436",
+          "note": "reconcile() emits activity when message_count grows; turnIsDone() reads the newest active row's role+finish_reason — 'stop' on an assistant row is the terminal marker, everything else is mid-turn"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go:51-107",
+          "note": "role/finish_reason → event kind: user→user_message (clears open tools), assistant+stop→turn_done, assistant+tool_calls→assistant_message with ToolUses, tool→tool_result"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go:93-224",
+          "note": "querySessionMetrics/foldMessages: LastEventType + open-tool set come from replaying messages; token totals + cwd come from the sessions row; cost priced by irrlicht's capacity table, not sessions.estimated_cost_usd"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/turn_context.py:1198-1207",
+          "note": "EMISSION PROOF for the working span — 'Crash-resilience: persist the inbound user turn before the first LLM call'; _ensure_db_session() + _persist_session() run before the API loop, so the user row is committed while the turn is still in flight"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/tool_executor.py:138-152",
+          "note": "_flush_session_db_after_tool_progress — incremental mid-turn flush, so tool-call/tool-result rows land during the turn (all non-terminal)"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/conversation_loop.py:5767-5772",
+          "note": "assistant tool-call turn is flushed to state.db BEFORE tool side effects run"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/run_agent.py:607-633",
+          "note": "_ensure_db_session() creates the sessions row lazily on first use (turn setup), not at REPL launch — why the store-backed session is not observable before turn 1"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/pyproject.toml:3",
+          "note": "hermes-agent version 0.19.0 — the CLI version this assessment was read against"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/config.yaml:1-4",
+          "note": "model.default=gpt-5.6-luna, model.provider=openai-codex on the dev home; the recording home supplies its own"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh:113,232-279",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\" — every primitive this recipe needs is ported; wait_turn polls COUNT(finish_reason='stop') per session, resolve_session_id binds only to a row started after this slot launched"
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go:90-91",
+          "note": "hermes.New(maxSessionAge) store watcher is wired into the daemon by adapter name"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-6_long-agentic-session-stress/metadata.json",
+          "note": "recipe template for this scenario — 4 plain prompts, send/wait_turn/sleep; the tool-call variant was dropped there for the same class of reason"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "live store sampled read-only: session ids are YYYYMMDD_HHMMSS_<hex6>; SELECT source,model,MAX(input_tokens),MAX(output_tokens) GROUP BY shows non-zero token aggregates on every cli/tui row (max 54818 in / 1956 out)"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH (Python console script; the driver launches `hermes chat`)",
+        "HERMES_HOME exported to the recording home, with its own config.yaml carrying model.default + model.provider and working credentials — hermes writes NO transcript file, so state.db under that home is the only signal",
+        "sqlite3 on PATH (the driver reads session id and turn completion straight out of state.db)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode) AND the hermes 'store' observe permission is granted — a pending permission means zero monitoring",
+        "NO other hermes session process alive during the run: sessions.cwd is empty for source='cli', so the project binding is borrowed from the single live process and an ambiguous match drops it"
+      ],
+      "setup": [
+        "The driver launches `hermes chat` under tmux in a fresh per-run cwd under <staging>/cwd/ and polls for the 'Type your message or /help' banner before sending (the TUI takes seconds to load tools + skills; keystrokes sent early are swallowed silently)",
+        "No session id is passed: hermes mints its own YYYYMMDD_HHMMSS_<hex6> id, and the row is INSERTed lazily at the first prompt. resolve_session_id binds the slot to the newest cli/tui row started AFTER this slot launched, so a leftover session in the shared store cannot be adopted",
+        "No auto-mode / permission step is needed: the recipe is 4 plain prompts with no tool calls, so nothing reaches an approval gate"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: beta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: gamma"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: delta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a proc-<PID> pre-session in ready shortly after `hermes chat` launches (the store row does not exist yet)",
+        "a store-backed session id of shape YYYYMMDD_HHMMSS_<hex6> appears and, for EACH of the 4 turns, shows exactly one ready→working transition at the prompt and exactly one working→ready transition at turn end",
+        "no state_transition to waiting fires on the store-backed session across the whole run (no tool calls, so no approval gate)",
+        "final session state is ready",
+        "state.db contains exactly 4 rows with role='assistant' AND finish_reason='stop' for that session id, and 4 role='user' rows",
+        "the session's cum_input_tokens / cum_output_tokens are non-zero (sessions.input_tokens / output_tokens)"
+      ],
+      "settings": {},
+      "timeout_seconds": 900
+    }
+  }
+}
