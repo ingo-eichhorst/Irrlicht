@@ -449,7 +449,12 @@ func (m *SessionMetrics) NeedsUserAttention() bool {
 // in pkg/tailer) pin both sets.
 func isUserBlockingTool(name string) bool {
 	return name == "AskUserQuestion" || name == "ExitPlanMode" ||
-		name == "question" || name == "ask_user_question"
+		name == "question" || name == "ask_user_question" ||
+		// GitHub Copilot's spellings (#1256): exit_plan_mode is its plan-mode
+		// gate — the same concept as ExitPlanMode above, in snake_case — and
+		// ask_user is its clarifying-question tool. Both hold a persisted
+		// tool.execution_start open while the user decides.
+		name == "exit_plan_mode" || name == "ask_user"
 }
 
 // HasOpenEditPermissionTool reports whether an open tool call is a

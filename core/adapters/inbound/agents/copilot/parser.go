@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -25,6 +26,7 @@ const (
 	evShutdown         = "session.shutdown"
 	evSubagentStarted  = "subagent.started"
 	evSubagentDone     = "subagent.completed"
+	evUserRequestedRun = "tool.user_requested"
 )
 
 // Parser implements tailer.TranscriptParser for GitHub Copilot CLI
@@ -99,6 +101,10 @@ func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
 		ev.EventType = "turn_done"
 	case evToolStart:
 		parseToolStart(data, ev)
+	case evUserRequestedRun:
+		// A `!` shell escape: the user ran a command locally, with no model
+		// turn. See parseToolComplete for why it must not register as activity.
+		ev.Skip = true
 	case evToolComplete:
 		parseToolComplete(data, ev)
 	case evPermRequested:
@@ -199,6 +205,11 @@ func (p *Parser) parseAssistantMessage(data map[string]any, ev *tailer.ParsedEve
 		return
 	}
 	ev.AssistantText = tailer.TruncateAssistantText(content)
+	// Carry the waiting verdict over the FULL text, not just the truncated
+	// display tail — a question sitting before the tail would otherwise settle
+	// the turn to ready while the agent waits on the user (issue #1150). Same
+	// computation claudecode and codex perform.
+	ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(content))
 	if est := tailer.ScanTaskEstimate(content, ev.Timestamp); est != nil {
 		ev.TaskEstimate = est
 	}
@@ -222,6 +233,17 @@ func parseToolStart(data map[string]any, ev *tailer.ParsedEvent) {
 // parseToolComplete closes the tool call its toolCallId names, and flags a
 // failed execution so the timeline can show it as an error.
 func parseToolComplete(data map[string]any, ev *tailer.ParsedEvent) {
+	// A user-requested run is Copilot's `!` shell escape — the user ran a
+	// command locally and the model was never called (the CLI's own credit
+	// counter stays at zero). It is NOT agent activity, and crucially it is
+	// followed by no assistant.turn_end: mapping it to function_call_output
+	// bounces a settled session ready -> working with nothing left to close
+	// the turn, stranding it in working for the rest of the session. Skipping
+	// it is the same fix mistral-vibe applies to its own `!` escape.
+	if requested, _ := data["isUserRequested"].(bool); requested {
+		ev.Skip = true
+		return
+	}
 	ev.EventType = "function_call_output"
 	if id := str(data, "toolCallId"); id != "" {
 		ev.ToolResultIDs = []string{id}

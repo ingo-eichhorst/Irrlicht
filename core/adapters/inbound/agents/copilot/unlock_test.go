@@ -1,0 +1,107 @@
+package copilot
+
+import (
+	"strings"
+	"testing"
+
+	"irrlicht/core/domain/session"
+	"irrlicht/core/pkg/tailer"
+)
+
+// TestShellEscapeDoesNotStickWorking pins the defect found while assessing the
+// shell-escape-command cell.
+//
+// Copilot's `!` escape runs a command LOCALLY with no model turn — it never
+// reaches the provider, and the CLI's own credit counter stays at zero. But it
+// still appends tool.user_requested + tool.execution_complete{isUserRequested:true}
+// to events.jsonl, and crucially emits NO assistant.turn_end.
+//
+// Mapping that completion to function_call_output bounces a settled session
+// ready → working with no turn-done to ever close it, so the session sticks in
+// working for the rest of its life. mistral-vibe hit the identical shape with
+// its own `!` escape and solved it by skipping the injected record.
+func TestShellEscapeDoesNotStickWorking(t *testing.T) {
+	lines := `{"type":"session.start","timestamp":"2026-08-03T09:00:00.000Z","data":{"context":{"cwd":"/tmp/p"}}}
+{"type":"user.message","timestamp":"2026-08-03T09:00:01.000Z","data":{"content":"hello"}}
+{"type":"assistant.message","timestamp":"2026-08-03T09:00:02.000Z","data":{"model":"gpt-5-mini","content":"hi","outputTokens":5}}
+{"type":"assistant.turn_end","timestamp":"2026-08-03T09:00:03.000Z","data":{"turnId":"0"}}
+{"type":"tool.user_requested","timestamp":"2026-08-03T09:00:10.000Z","data":{"toolCallId":"call_esc","toolName":"bash","isUserRequested":true}}
+{"type":"tool.execution_complete","timestamp":"2026-08-03T09:00:11.000Z","data":{"toolCallId":"call_esc","success":true,"isUserRequested":true}}
+`
+	tl := tailer.NewTranscriptTailer(writeTranscript(t, lines), &Parser{}, AdapterName)
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+
+	// The turn ended before the escape ran, and a local shell escape is not
+	// agent activity — the session must still read as finished.
+	if m.LastEventType != "turn_done" {
+		t.Errorf("LastEventType = %q, want %q — a `!` shell escape runs locally with no "+
+			"model turn, so it must not register as agent activity and strand the "+
+			"session in working", m.LastEventType, "turn_done")
+	}
+	if m.HasOpenToolCall {
+		t.Error("HasOpenToolCall = true, want false — the escape's own completion must not " +
+			"leave an open tool call behind")
+	}
+}
+
+// TestPlanModeAndAskUserAreUserBlocking pins the two Copilot builtins that
+// block on the user but were missing from the exact-match user-blocking sets.
+//
+// Copilot's plan-mode gate is `exit_plan_mode` (snake_case) — the same concept
+// as Claude Code's PascalCase `ExitPlanMode`, which IS listed. `ask_user` is
+// Copilot's clarifying-question tool. Both write a persisted
+// tool.execution_start and hold it open while the user decides, so without an
+// entry the session sits in `working` while it is really waiting.
+//
+// The two sets are deliberately duplicated (domain can't import tailer), and
+// their comments say KEEP THE TWO IN SYNC — so this asserts both.
+func TestPlanModeAndAskUserAreUserBlocking(t *testing.T) {
+	for _, name := range []string{"exit_plan_mode", "ask_user"} {
+		t.Run(name, func(t *testing.T) {
+			m := &session.SessionMetrics{
+				HasOpenToolCall:   true,
+				LastOpenToolNames: []string{name},
+			}
+			if !m.NeedsUserAttention() {
+				t.Errorf("NeedsUserAttention() = false for an open %q — the user is blocked "+
+					"on it, so the session must route to waiting", name)
+			}
+		})
+	}
+}
+
+// TestPendingWaitingCueIsComputed pins the #1150-shaped gap: claudecode and
+// codex both compute session.ProseIndicatesWaiting over a window TWICE the
+// size of the display truncation, so a question that falls off the displayed
+// tail is still detected. The copilot parser did not compute it at all, so
+// only a question inside the display tail routed to waiting.
+//
+// The question is placed deliberately between MaxAssistantTextRunes (the
+// display tail) and MaxWaitingScanRunes (the scan window) — the exact band the
+// fix exists for. A question beyond MaxWaitingScanRunes is out of scope by
+// design, not a bug.
+func TestPendingWaitingCueIsComputed(t *testing.T) {
+	filler := strings.Repeat("x", tailer.MaxAssistantTextRunes+tailer.MaxAssistantTextRunes/2)
+	content := "Which of the two approaches would you prefer? " + filler
+
+	if len([]rune(content)) <= tailer.MaxAssistantTextRunes {
+		t.Fatal("test setup: the question must fall OUTSIDE the display tail to be meaningful")
+	}
+	if strings.Contains(tailer.TruncateAssistantText(content), "prefer") {
+		t.Fatal("test setup: the question must not survive display truncation")
+	}
+
+	p := &Parser{}
+	ev := p.ParseLine(map[string]any{
+		"type": "assistant.message",
+		"data": map[string]any{"model": "gpt-5-mini", "content": content},
+	})
+
+	if !ev.PendingWaitingCue {
+		t.Error("PendingWaitingCue = false — a question past the display tail but inside " +
+			"the waiting-scan window must still be detected (issue #1150)")
+	}
+}
