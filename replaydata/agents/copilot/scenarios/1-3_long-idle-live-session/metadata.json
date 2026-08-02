@@ -1,0 +1,141 @@
+{
+  "scenario_id": "long-idle-live-session",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+a21849f",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-idle-live-session",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts three user-observable things: (1) the session row does NOT disappear once it has been idle past `readyTTL`, (2) its state stays `ready` for the whole idle window, and (3) the next user prompt resumes `ready -> working` normally. All three are carried by machinery that already exists — the daemon's PID-liveness short-circuit plus Copilot's own transcript — so nothing agent-specific has to be invented for this cell.\n\n**Agent (yes).** GitHub Copilot CLI is a long-lived interactive TUI: after a turn settles it returns to its input box and sits there until the user types again or exits (the driver's `exit_clean` has to send an explicit `/exit` to end it, driver-interactive.sh:370). \"Being idle\" is the REPL's resting state, not a feature that could be missing, so nothing weaker than `yes` is defensible.\n\n**Daemon (full).** The survival mechanism is adapter-agnostic and lives in `PIDManager.sweepStaleSnapshot` (pid_manager.go:999): a session whose `UpdatedAt` is staler than `readyTTL` is reaped ONLY when the liveness probe fails — `if snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil { return }` (pid_manager.go:1026) returns before the delete. So the cell reduces to one adapter-specific question: does Copilot's real session get a PID bound? It does — `DiscoverPID` is `DiscoverPIDByCWD(\"copilot\", cwd, ...)` (pid.go), the cwd comes from `session.start.data.context.cwd` on the transcript's very first line and is re-stamped on every later event by the parser, and `ExactName{copilot}` binds the native child rather than the `node` npm loader. That binding was confirmed live on CLI 1.0.77 in commit c06466ef.\n\nThe second reap path that could make a row vanish during an idle window is `reapUnboundReadyGhost` (pid_manager.go:1077), which deletes a `ready`, `pid == 0` session — but only once `UpdatedAt` has been stale for >30 s AND the transcript's mtime is older than `orphanTranscriptAge` (2 min, session_detector.go:29). The recipe's 20 s idle window sits inside both guards, so a PID-binding failure would NOT show up as a disappearance here. That is precisely why the spec asserts a `pid_bind` phase explicitly instead of leaving the binding implicit: PID liveness is the mechanism under test, and the phase is what actually pins it.\n\nState stability during the idle window falls out of the parser's dispatch table (parser.go:84-119). Only two event types move state: `user.message` -> `user_message` (working) and `assistant.turn_end` -> `turn_done` (ready), and both require the user to act. Every type that can fire while the user is away is `Skip: true` — `session.usage_checkpoint` and `session.shutdown` route to `parseUsage` with `ev.Skip = true` (parser.go:301; the comment at parser.go:277 states the intent: \"a usage checkpoint is bookkeeping, not agent activity\"), `session.model_change` / `session.auto_mode_resolved` are Skip, and `system.message`, `assistant.turn_start` and every event type a future CLI adds fall into the default Skip branch. So the `idle_window` invariants (no `state_transition` to `working`, none to `waiting`, no `transcript_removed`) hold by construction of the parser, not by luck of timing.\n\nResume is the ordinary turn arc already verified for `basic-turn`: the second `send` appends `user.message` -> `working`, and `assistant.turn_end` — an EXPLICIT boundary carrying a `turnId`, so no quiet-tail heuristic is involved — settles back to `ready`.\n\n**Session-birth shape: presession (two-phase).** Same as the rest of the Copilot column. `session-state/<id>/` is created at LAUNCH holding only `workspace.yaml`; `events.jsonl` appears on the first prompt. `sessionIDFromPath` only claims `events.jsonl`, so during that window the fswatcher mints nothing while `processlifecycle.Scanner` (wired for every adapter in wiring.go, 1 s poll) mints a `proc-<PID>` pre-session. The real session then arrives under a DIFFERENT id, so birth is modeled as two phases and every post-birth phase — including the idle window — is anchored to the REAL session.\n\n**Driver (ready).** The recipe needs `send`, `wait_turn` and `sleep`; `driver_step_types_from_file` on replaydata/agents/copilot/driver-interactive.sh lists all three (`DRIVE_ELICITS` at line 128 covers them). `wait_turn` counts `\"type\":\"assistant.turn_end\"` lines, an exact completed-turn count rather than a quietness heuristic — which is what makes a TWO-turn recipe deterministic here: the second `wait_turn` waits for count == 2, so the 20 s sleep between turns cannot be mistaken for a settled turn. No `reset_session` / `resume` step is needed, so the driver's two deliberate stubs are not in play.\n\n**Recording prerequisite (not a pillar downgrade).** The daemon must run with `IRRLICHT_READY_SESSION_TTL=15s`, exactly as claudecode's cell for this scenario does — the production 30-minute TTL would make \"idle past readyTTL\" untestable inside a 45-second recording. `spawn-record-daemon.sh:81` forwards the variable into the recording daemon's environment when it is set, so this is a run-time flag for `record`, not a human blocker.",
+      "caveats": [
+        "PROVISIONAL — the two-phase presession birth is derived from code reading (processlifecycle.Scanner mints proc-<PID> at a 1 s poll for every adapter; events.jsonl does not exist until the first prompt), not from a live capture of the birth. No Copilot cell has been recorded yet. If the real session is instead observed born directly in working, record re-anchors session_birth, the same correction the sibling cells flag.",
+        "The idle window is 20 s against a deliberately shortened 15 s readyTTL; production sessions sit idle for hours. duration_at_least_ms is a floor, not a ceiling, so a longer real-world idle is by definition still passing.",
+        "This recipe would NOT surface a PID-binding failure as a disappearance: reapUnboundReadyGhost needs >30 s of stale UpdatedAt AND a >2 min stale transcript (orphanTranscriptAge), both outside a 20 s window. The explicit pid_bind phase is what catches it. Extending the idle window past 2 min would make the disappearance path directly observable, at the cost of a 3+ minute recording.",
+        "Whether Copilot's own REPL has an inactivity timeout of its own has NOT been established — unverified, and irrelevant at 20 s, but it would have to be settled before anyone lengthened the idle window to minutes.",
+        "model is deliberately NOT pinned in the observation vector: --model accepts only \"auto\" on this account and session.auto_mode_resolved picks between gpt-5-mini and claude-haiku-4.5 per turn — and this recipe runs TWO turns, so the router may legitimately resolve a different model for each. Both price in the capacity map, so cost is non-zero either way.",
+        "Recording spends real Copilot AI credits (totalNanoAiu) on the maintainer's account — two turns' worth here rather than one."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "sweepStaleSnapshot (line 999): a session idle beyond readyTTL is reaped only if the liveness probe fails — line 1026 returns early when snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil. This is the mechanism the scenario asserts, and it is adapter-agnostic. reapUnboundReadyGhost (line 1077) is the other reap path: ready + pid == 0 + UpdatedAt stale >30 s + transcript mtime older than orphanTranscriptAge."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector.go",
+          "note": "orphanTranscriptAge = 2 * time.Minute (line 29) — the transcript-staleness guard that reapUnboundReadyGhost also requires, which is why a 20 s idle window cannot trip it."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/pid.go",
+          "note": "DiscoverPID = DiscoverPIDByCWD(ProcessName, cwd, ...) — the PID bind on which this whole scenario depends; cwd comes from session.start.data.context.cwd, the transcript's first line."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Process.Match = ExactName{copilot} binds the native child, not the node npm loader, so the liveness probe follows the process that actually owns the REPL. Source = FilesUnderRoot{$COPILOT_HOME/session-state, sessionIDFromPath}."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "Dispatch table (lines 84-119): only user.message and assistant.turn_end move state. session.usage_checkpoint / session.shutdown -> parseUsage with ev.Skip = true (line 301; intent stated at line 277), model_change / auto_mode_resolved Skip, and system.message / assistant.turn_start / unknown future types fall to the default Skip branch — so no event that can fire while the user is idle can move the session out of ready."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go",
+          "note": "buildAgentWatchers wires a processlifecycle.Scanner for every adapter, copilot included — the mechanism that mints the proc-<PID> pre-session before events.jsonl exists."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS (line 128) covers send/sleep/wait_turn — every step this recipe needs; wait_turn counts '\"type\":\"assistant.turn_end\"' lines, an exact completed-turn count that makes the second turn's wait unambiguous across the intervening 20 s sleep. exit_clean sends /exit (line 370), confirming the REPL is long-lived and only ends on an explicit command."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/lib/spawn-record-daemon.sh",
+          "note": "Line 81 forwards IRRLICHT_READY_SESSION_TTL into the recording daemon's environment when set — how record shortens the 30-minute production TTL to 15 s for this cell."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/1-3_long-idle-live-session/metadata.json",
+          "note": "The reference cell for this scenario: same 20 s idle window against a 15 s TTL, same six-step send/wait/sleep/send/wait/sleep shape, recorded 6/6."
+        },
+        {
+          "kind": "file",
+          "ref": "git show c06466ef (feat(copilot): add GitHub Copilot adapter)",
+          "note": "Live verification on CLI 1.0.77: session detected with the directory-derived id, working -> ready observed, PID bound to the native child, cost non-zero. The PID bind is the load-bearing precondition for this cell."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/github/copilot-cli",
+          "note": "GitHub Copilot CLI — the interactive terminal agent this column onboards."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation does not require a re-login)",
+        "An active Copilot plan with AI credits — this recipe spends two turns' worth",
+        "irrlichd is recording AND its environment carries IRRLICHT_READY_SESSION_TTL=15s (the production 30-minute default would force a 32+ minute recording)",
+        "no other copilot session shares the same cwd (the PID is bound by cwd, and the PID bind is what this scenario tests)"
+      ],
+      "setup": [
+        "The driver seeds a scratch COPILOT_HOME under the staging dir with trustedFolders + askedSetupTerminals pre-answered, so the trust modal cannot block the input box; the session directory is minted under $COPILOT_HOME/session-state/<session-id>/",
+        "The daemon's effective readyTTL must be < 20 s so the post-turn sleep clearly exceeds it. The 20 s sleep is calibrated to 1.33x a 15 s TTL — long enough to prove 'past TTL', short enough to stay inside reapUnboundReadyGhost's 30 s / 2 min guards so the only thing keeping the row alive is the live PID"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl mints a proc-<PID> pre-session in ready shortly after launch (the copilot process exists before events.jsonl does)",
+        "events.jsonl mints the real <session-id> session in ready under a DIFFERENT session id once events.jsonl appears on the first prompt",
+        "events.jsonl contains a pid_discovered event binding the copilot PID to the real session — the liveness short-circuit that keeps the row alive past readyTTL depends on it",
+        "the real session goes ready -> working -> ready across the first turn (user.message, then assistant.turn_end)",
+        "no transcript_removed fires for the real session during the 20 s idle window (readyTTL is 15 s, so the row must be kept alive by PID liveness alone)",
+        "no state_transition to working or waiting fires for the real session during the 20 s idle window",
+        "after the second send, the SAME real session goes ready -> working -> ready again",
+        "final state of the real session is ready",
+        "no tool call occurs, so no permission.requested and no waiting state at any point",
+        "observation vector: tokens_nonzero=true (assistant.message.outputTokens), cost_nonzero=true; model left unasserted (auto-router picks per turn, and there are two turns)"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
