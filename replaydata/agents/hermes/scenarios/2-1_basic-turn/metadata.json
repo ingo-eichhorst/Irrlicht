@@ -19,19 +19,21 @@
       "daemon_capability": "full",
       "driver_capability": "ready",
       "confidence": 0.85,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## agent — yes\n\nA single no-tool round-trip is Hermes' base case, and the live store already contains one verbatim: session `20260802_212608_1dc71a` (`source='cli'`, model `gpt-5.6-luna`) holds exactly two message rows — `role='user'` \"Say only: beta\" followed by `role='assistant' finish_reason='stop'` \"beta\" — with `input_tokens=16269`, `output_tokens=5`, `message_count=2` on its `sessions` row. Across the whole store there are 29 `assistant/finish_reason='stop'` rows. Binary is `hermes` v0.19.0 (2026.7.20) on PATH. No search was needed for a hidden surface: the behavior is present in captured data.\n\n## daemon — full\n\nThe two user-observable signals the scenario asserts map onto events this adapter produces today:\n\n1. **`ready → working → ready`.** `Watcher.reconcile` emits `EventNewSession` on first sight of a `sessions` row and an `EventActivity` whenever `message_count` grows, with `Terminal` set from `turnIsDone` — which reads the newest `active=1` row and returns true only for `role='assistant' AND finish_reason='stop'`. `Parser.ParseLine` maps `role='user'` → `user_message` (clears open tools) and `role='assistant' + finish_reason='stop'` → `turn_done`. Hermes' `finish_reason` is an EXPLICIT turn boundary, so no idle-flush heuristic sits between the agent and the `ready` settle — the one structural way a basic-turn arc usually degrades is absent here.\n2. **`TotalTokens > 0`.** `querySessionMetrics` reads `input_tokens`/`output_tokens`/`cache_read_tokens`/`cache_write_tokens` off the `sessions` aggregate and sets `TotalTokens = input + output`; the live store shows these are populated (16269/5 on the minimal session above). Cost is priced through irrlicht's own alias table rather than `sessions.estimated_cost_usd` (Hermes reports 0.0 under `billing_mode='subscription_included'`), which is the repo convention.\n\nBoth watcher and `processlifecycle` scanner are wired for this adapter at `core/cmd/irrlichd/wiring.go:90` / `:102`, so a launched `hermes chat` is seen as a process before its store row exists.\n\n### The one shape that makes this cell different from its siblings\n\nHermes' `sessions` row is INSERTed on the FIRST USER MESSAGE (~2s after launch), not at launch — so the store yields no launch-time `ready` birth. The `ready` birth in a recording comes from the scanner's transient `proc-<PID>` pre-session, which the real session then supersedes (`cleanupPreSessionsForProject`). That is the same situation `opencode` documents for this scenario, so the spec uses the same anchoring: `session_birth` anchored to `start` and left UNPINNED, `turn1_done` chained to `turn1_start` via `same_session_as`. It is an anchoring consequence, not an observability gap — hence `full` with a caveat rather than a downgrade.\n\n## driver — ready\n\n`replaydata/agents/hermes/driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"`, and this recipe needs only `send` + `wait_turn` + `sleep`. Its `wait_turn` is a real signal poll, not an idle guess: it counts `messages` rows with `role='assistant' AND finish_reason='stop'` for the bound session and returns when the count increases. `resolve_session_id` binds only to a session with `started_at >` the slot's launch timestamp, so a leftover row in the shared store cannot satisfy the wait. The interactive (`hermes chat`) path is the right one for this arc: the REPL outlives the turn, so the settle to `ready` falls inside the observation window instead of racing process exit.\n\n## What is NOT proven yet\n\nEverything above is code + live-store evidence; no recording exists. Under the observation-vs-emission rule the `daemon=full` verdict is PROVISIONAL on the arc actually reaching the websocket — `record` promotes it.",
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## agent \u2014 yes\n\nA single no-tool round-trip is Hermes' base case, and the live store already contains one verbatim: session `20260802_212608_1dc71a` (`source='cli'`, model `gpt-5.6-luna`) holds exactly two message rows \u2014 `role='user'` \"Say only: beta\" followed by `role='assistant' finish_reason='stop'` \"beta\" \u2014 with `input_tokens=16269`, `output_tokens=5`, `message_count=2` on its `sessions` row. Across the whole store there are 29 `assistant/finish_reason='stop'` rows. Binary is `hermes` v0.19.0 (2026.7.20) on PATH. No search was needed for a hidden surface: the behavior is present in captured data.\n\n## daemon \u2014 full\n\nThe two user-observable signals the scenario asserts map onto events this adapter produces today:\n\n1. **`ready \u2192 working \u2192 ready`.** `Watcher.reconcile` emits `EventNewSession` on first sight of a `sessions` row and an `EventActivity` whenever `message_count` grows, with `Terminal` set from `turnIsDone` \u2014 which reads the newest `active=1` row and returns true only for `role='assistant' AND finish_reason='stop'`. `Parser.ParseLine` maps `role='user'` \u2192 `user_message` (clears open tools) and `role='assistant' + finish_reason='stop'` \u2192 `turn_done`. Hermes' `finish_reason` is an EXPLICIT turn boundary, so no idle-flush heuristic sits between the agent and the `ready` settle \u2014 the one structural way a basic-turn arc usually degrades is absent here.\n2. **`TotalTokens > 0`.** `querySessionMetrics` reads `input_tokens`/`output_tokens`/`cache_read_tokens`/`cache_write_tokens` off the `sessions` aggregate and sets `TotalTokens = input + output`; the live store shows these are populated (16269/5 on the minimal session above). Cost is priced through irrlicht's own alias table rather than `sessions.estimated_cost_usd` (Hermes reports 0.0 under `billing_mode='subscription_included'`), which is the repo convention.\n\nBoth watcher and `processlifecycle` scanner are wired for this adapter at `core/cmd/irrlichd/wiring.go:90` / `:102`, so a launched `hermes chat` is seen as a process before its store row exists.\n\n### The one shape that makes this cell different from its siblings\n\nHermes' `sessions` row is INSERTed on the FIRST USER MESSAGE (~2s after launch), not at launch \u2014 so the store yields no launch-time `ready` birth. The `ready` birth in a recording comes from the scanner's transient `proc-<PID>` pre-session, which the real session then supersedes (`cleanupPreSessionsForProject`). That is the same situation `opencode` documents for this scenario, so the spec uses the same anchoring: `session_birth` anchored to `start` and left UNPINNED, `turn1_done` chained to `turn1_start` via `same_session_as`. It is an anchoring consequence, not an observability gap \u2014 hence `full` with a caveat rather than a downgrade.\n\n## driver \u2014 ready\n\n`replaydata/agents/hermes/driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"`, and this recipe needs only `send` + `wait_turn` + `sleep`. Its `wait_turn` is a real signal poll, not an idle guess: it counts `messages` rows with `role='assistant' AND finish_reason='stop'` for the bound session and returns when the count increases. `resolve_session_id` binds only to a session with `started_at >` the slot's launch timestamp, so a leftover row in the shared store cannot satisfy the wait. The interactive (`hermes chat`) path is the right one for this arc: the REPL outlives the turn, so the settle to `ready` falls inside the observation window instead of racing process exit.\n\n## What is NOT proven yet\n\nEverything above is code + live-store evidence; no recording exists. Under the observation-vs-emission rule the `daemon=full` verdict is PROVISIONAL on the arc actually reaching the websocket \u2014 `record` promotes it.",
       "caveats": [
         "PROVISIONAL daemon verdict: derived from the adapter source plus live SQLite store facts, not from a recording. No hermes events.jsonl exists yet; record settles whether the arc reaches the websocket.",
         "Late birth: the sessions row is INSERTed on the first user message (~2s after launch, adapter.go:16-19), so no store-derived ready birth exists at launch. The recording's ready birth comes from the processlifecycle scanner's proc-<PID> pre-session; session_birth is therefore anchored to start and left UNPINNED and turn1_done chains off turn1_start (the opencode shape).",
         "cwd fragility: `hermes chat` records source='cli', and CLI rows carry no cwd (live store: 21 of 22 cli rows have an empty cwd; 0 of 3 tui rows do). Both the project binding and DiscoverPID therefore depend on defaultLiveCWD resolving EXACTLY ONE live non-service hermes process. Any second interactive hermes session on the machine makes it ambiguous, defaultLiveCWD returns \"\", and the pid_bind phase plus the project link would go missing.",
-        "model/cost deliberately unpinned: which model the recording sees depends on the config.yaml in whatever HERMES_HOME the run exports. The maintainer's home defaults to model.default=gpt-5.6-luna, which irrlicht's capacity table DOES price (verified: EstimateCostUSD(gpt-5.6-luna, 16269, 5) = 0.00326, context window 1050000); the alternative local default google/gemma-4-26b-a4b is unpriced and would yield cost 0. Only tokens_nonzero is asserted; record should fill observations.model from the recording and add cost_nonzero if the recorded model is priced.",
-        "The onboarding rig has no hermes-specific env wiring today — grep for HERMES_HOME across tools/onboarding-factory/scripts returns nothing — so the driver and the recording daemon must be given a matching HERMES_HOME out of band."
+        "model/cost deliberately unpinned: which model the recording sees depends on the config.yaml in whatever HERMES_HOME the run exports. The maintainer's home defaults to model.default=gpt-5.6-luna, which irrlicht's capacity table DOES price (verified: EstimateCostUSD(gpt-5.6-luna, 16269, 5) = 0.00326, context window 1050000); the alternative local default google/gemma-4-26b-a4b is unpriced and would yield cost 0. NOTHING is asserted in observations (see the re-assessment caveat below): model would only become assertable once the driver gains a store\u2192JSONL export, and cost/tokens not even then, because the golden's cost and cum tokens both come from the Parser, which reads no usage.",
+        "The onboarding rig has no hermes-specific env wiring today \u2014 grep for HERMES_HOME across tools/onboarding-factory/scripts returns nothing \u2014 so the driver and the recording daemon must be given a matching HERMES_HOME out of band.",
+        "observations block deliberately EMPTY (re-assessment 2026-08-02, prompted by the 5.1 token-accounting pass flagging this cell by name). The committed spec pinned observations.tokens_nonzero, which CANNOT pass for hermes and was verified so against the code, not taken on trust: `of verify` hard-asserts only against the newest recording's replay golden summary (validate/observations.go:135-161, readGoldenSummary l.91-107); tokens_nonzero reads cum_input+cum_output (l.37, l.177-179); hermes' Parser sets NO token field at all (grep for Usage/CumulativeTokens/InputTokens/OutputTokens in parser.go returns nothing) because the token vector lives on the `sessions` aggregate row and reaches irrlicht only through ComputeMetrics over the SQLite store \u2014 which replay never runs. cost_nonzero would fail identically (the golden's cost is the tailer's, computed from those zero tokens) and total_tokens_nonzero is gated `adapter == antigravity.AdapterName` at cmd/replay/metrics.go:59. It was latent only because an absent golden makes ValidateObservations return Skipped/Pass=true (l.137-146); it becomes a hard verify failure the moment 2.1 is recorded WITH a golden. The spec now asserts only the lifecycle arc, which is checked against events.jsonl and is verifiable today.",
+        "Second, independent reason nothing in observations is checkable today: the hermes driver produces no transcript file at all. Its slot path is \"<store>?session=<id>\" and it has no store\u2192JSONL export (opencode's driver-interactive.sh:965 builds one with sqlite3 json_object, injecting _role/_cwd/_ts/_model, which is how the opencode sibling gets a transcript.jsonl.replay.json.golden). Without that export a hermes recording has no golden, so the whole observations block is Skipped rather than checked. Adding the export would surface model (Parser does set ev.ModelName from _model) but still NOT tokens or cost, since the Parser reads no usage from a message row."
       ],
       "sources": [
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/hermes/parser.go",
-          "note": "ParseLine: role='user' → user_message (ClearToolNames); role='assistant' + finish_reason='stop' → turn_done. finish_reason is the explicit turn boundary — no idle-flush seam is needed to settle to ready."
+          "note": "ParseLine: role='user' \u2192 user_message (ClearToolNames); role='assistant' + finish_reason='stop' \u2192 turn_done. finish_reason is the explicit turn boundary \u2014 no idle-flush seam is needed to settle to ready."
         },
         {
           "kind": "file",
@@ -46,32 +48,52 @@
         {
           "kind": "file",
           "ref": "core/adapters/inbound/agents/hermes/agent.go",
-          "note": "Source = ProcessOwnedStore over $HERMES_HOME/state.db (PathForPID ignores the pid — one shared store); observe-kind permission 'store' gates every read."
+          "note": "Source = ProcessOwnedStore over $HERMES_HOME/state.db (PathForPID ignores the pid \u2014 one shared store); observe-kind permission 'store' gates every read."
         },
         {
           "kind": "file",
           "ref": "core/cmd/irrlichd/wiring.go:90",
-          "note": "hermes gets BOTH the store watcher (line 90-91) and a processlifecycle scanner with the CommandPattern matcher + ExcludeArgv filter (line 102-110) — the scanner is what mints the transient proc-<PID> pre-session that carries the ready birth."
+          "note": "hermes gets BOTH the store watcher (line 90-91) and a processlifecycle scanner with the CommandPattern matcher + ExcludeArgv filter (line 102-110) \u2014 the scanner is what mints the transient proc-<PID> pre-session that carries the ready birth."
         },
         {
           "kind": "file",
           "ref": "/Users/ingo/hermes-local/.hermes/state.db",
-          "note": "Live store, queried read-only (sqlite3 file:…?mode=ro). Session 20260802_212608_1dc71a is a literal basic turn: user 'Say only: beta' → assistant finish_reason='stop' 'beta', input_tokens=16269 output_tokens=5 message_count=2, model gpt-5.6-luna. Store-wide: 29 assistant/stop rows, 29 assistant/tool_calls, 30 user, 29 tool; cwd empty on 21/22 cli sessions and 0/3 tui sessions."
+          "note": "Live store, queried read-only (sqlite3 file:\u2026?mode=ro). Session 20260802_212608_1dc71a is a literal basic turn: user 'Say only: beta' \u2192 assistant finish_reason='stop' 'beta', input_tokens=16269 output_tokens=5 message_count=2, model gpt-5.6-luna. Store-wide: 29 assistant/stop rows, 29 assistant/tool_calls, 30 user, 29 tool; cwd empty on 21/22 cli sessions and 0/3 tui sessions."
         },
         {
           "kind": "file",
           "ref": "/Users/ingo/.local/bin/hermes",
-          "note": "`hermes --version` → Hermes Agent v0.19.0 (2026.7.20) · upstream 177f1d7c; install dir /Users/ingo/hermes-local/.hermes/hermes-agent, Python 3.11.13."
+          "note": "`hermes --version` \u2192 Hermes Agent v0.19.0 (2026.7.20) \u00b7 upstream 177f1d7c; install dir /Users/ingo/hermes-local/.hermes/hermes-agent, Python 3.11.13."
         },
         {
           "kind": "file",
           "ref": "replaydata/agents/hermes/driver-interactive.sh",
-          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\" (line 113) — every step this recipe needs is ported. wait_turn (line 258) polls COUNT(*) of assistant rows with finish_reason='stop' for the bound session; resolve_session_id binds only to a session started after the slot's launch timestamp, so a stale row in the shared store cannot satisfy it."
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\" (line 113) \u2014 every step this recipe needs is ported. wait_turn (line 258) polls COUNT(*) of assistant rows with finish_reason='stop' for the bound session; resolve_session_id binds only to a session started after the slot's launch timestamp, so a stale row in the shared store cannot satisfy it."
         },
         {
           "kind": "file",
           "ref": "replaydata/agents/opencode/scenarios/2-1_basic-turn/expected.jsonl",
           "note": "Sibling ProcessOwnedStore cell; its unpinned session_birth + same_session_as chaining is the anchoring template reused here for the same pre-session reason."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/observations.go",
+          "note": "ValidateObservations reads ONLY the newest recording's *.replay.json.golden summary (readGoldenSummary, l.91-107); applyHardAssertions maps tokens_nonzero \u2192 totalTokens() = CumInputTokens+CumOutputTokens (l.37, l.177-179) and cost_nonzero \u2192 summary.estimated_cost_usd (l.174-176); no recording / no golden \u2192 Skipped with Pass=true (l.137-146), which is exactly why the bad tokens_nonzero pin was latent."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/metrics.go:59",
+          "note": "finalizeSummary lifts the store-derived TotalTokens/ContextWindow/ContextUtilization into the golden ONLY when `adapter == antigravity.AdapterName` \u2014 read and confirmed, so total_tokens_nonzero is not an escape hatch for hermes either."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/driver-interactive.sh:695,965",
+          "note": "The sibling ProcessOwnedStore driver exports its SQLite store to a JSONL transcript via sqlite3 json_object (_role/_cwd/_ts/_model), and opencode's parser reads per-step `tokens` off each row \u2014 which is why opencode's 2-1 golden carries cum_input=21037 / cum_output=2 and hermes' would carry 0. hermes' driver-interactive.sh has no such export (no sqlite3 json_object anywhere in the rig)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-1_basic-turn/expected.jsonl",
+          "note": "The same sibling cell pins NO observations block at all \u2014 the precedent this re-assessment follows for a store-backed 2.1."
         }
       ]
     },
@@ -80,12 +102,12 @@
       "preconditions": [
         "hermes v0.19.0+ on PATH and a provider configured in <HERMES_HOME>/config.yaml with credentials, so a single prompt completes without an auth prompt",
         "HERMES_HOME exported to the SAME recording home for both the driver and the recording daemon (the rig has no hermes env wiring today), so the daemon polls the store the run actually writes",
-        "sqlite3 on PATH — the driver's wait_turn reads the store directly; without it the driver spins to its deadline",
+        "sqlite3 on PATH \u2014 the driver's wait_turn reads the store directly; without it the driver spins to its deadline",
         "no OTHER interactive hermes session live during the run: source='cli' rows carry no cwd, so the adapter's live-process CWD fallback needs exactly one non-service hermes process to bind the project and discover the PID",
         "irrlichd recording with the hermes store watcher enabled and the 'store' permission granted (IRRLICHT_PERMISSION_MODE=grant-all on a fresh home)"
       ],
       "setup": [
-        "The interactive driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for 'Type your message or /help' before typing — the TUI swallows keystrokes sent during its ~seconds-long boot",
+        "The interactive driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for 'Type your message or /help' before typing \u2014 the TUI swallows keystrokes sent during its ~seconds-long boot",
         "Hermes writes no transcript file: the slot's transcript path is '<store>?session=<id>', the same encoding the watcher puts on agent.Event.TranscriptPath, and the session id is resolved from the sessions table after the first send (the row does not exist at launch)",
         "The prompt is a one-word reply request, so the turn carries no tool call (tool_calls_max: 0) and the session never enters waiting",
         "timeout_seconds is 240 because the driver's deadline starts BEFORE the REPL boot poll (up to 60s) and the turn itself runs against a remote reasoning model"
@@ -106,10 +128,10 @@
       "verify": [
         "events.jsonl contains a session born in ready shortly after launch (expected to be the transient proc-<PID> pre-session; the store row does not exist until the first user message)",
         "events.jsonl contains a pid_discovered event",
-        "events.jsonl contains a state_transition → working when the prompt is sent",
-        "events.jsonl contains a state_transition → ready on the SAME session once the assistant row lands with finish_reason='stop'",
+        "events.jsonl contains a state_transition \u2192 working when the prompt is sent",
+        "events.jsonl contains a state_transition \u2192 ready on the SAME session once the assistant row lands with finish_reason='stop'",
         "no state_transition to waiting appears at any point (no tool call, no permission gate)",
-        "the session's recorded metrics carry non-zero cum_input+output tokens",
+        "the session's LIVE metrics (the daemon's websocket vector, fed by ComputeMetrics over the store) carry non-zero total tokens \u2014 checked at record time on that surface, NOT via the replay golden: hermes' Parser emits no usage, so a golden would report cum_input+output = 0 (see the observations caveat)",
         "the session's final live state is ready"
       ],
       "settings": {},
