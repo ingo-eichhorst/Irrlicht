@@ -1,0 +1,129 @@
+{
+  "scenario_id": "oversized-transcript-line",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+52f711e",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "oversized-transcript-line",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThis cell is mostly about shared daemon machinery — `core/pkg/tailer`'s oversized-line handling — so the copilot-specific questions are only two: can Copilot CLI actually emit a very large single JSONL line, and does *this adapter's* state machine still complete the arc when one lands?\n\n**Agent (yes) — measured, not assumed.** Copilot's transcript is append-only with exactly one JSON record per line (`events.jsonl`), and the writer is a `session.on(\"*\")` subscriber that does `JSON.stringify(event)` and hands the string to a native batched append (`h.sessionEventsAppendLocal(localEventsPath, …)`, app.js @ ~2533038/2533900 in the darwin-arm64 SEA payload). Nothing in that path splits a record across lines, and there is no per-record size cap in it.\n\nCopilot's records are unusually FAT for their token count. Measured across the five real transcripts under `~/.copilot/session-state/*/events.jsonl` on this machine (CLI 1.0.77), per-line maxima by type:\n\n| type | max line bytes |\n|---|---|\n| `system.message` | 31,953 |\n| `assistant.message` | 9,339 |\n| `session.shutdown` | 1,025 |\n| `tool.execution_complete` | 738 |\n| `assistant.turn_end` | 185 |\n\nThe `assistant.message` bulk is not the visible reply: the 9,339-byte line carried `content` of 156 chars alongside `reasoningOpaque` (416 B) and a base64 `encryptedContent` blob of 7,720 B, for 764 `outputTokens`. So line length scales with output tokens at roughly an order of magnitude more bytes than the prose itself — a 5,000-word single-sentence reply (~7k output tokens) extrapolates to a line in the tens-to-hundreds of KB. That is the same band the scenario itself calls a sanity check rather than true cap-stress (claudecode's sibling landed ~30 KB), and it comfortably clears `bufio.Scanner`'s old 2 MB limit only in the sense that it stays *under* it — see caveats.\n\nThe larger lever exists but is out of scope here: `tool.execution_complete.data.result` carries the full tool output (verified — the payload keys are `toolCallId, model, interactionId, turnId, rte, success, result, toolTelemetry`), so a `cat` of a multi-MB file would produce a multi-MB line. The scenario's own acceptance criteria pin `Tool calls: ≤ 0`, so the recipe must not take that route; it is recorded here as the escalation path for a future deeper cap-stress cell.\n\n**Daemon (full).** The observable is only `ready → working → ready` with no parser stall. The tailer was hardened for exactly this in #270: `core/pkg/tailer/line_reader.go` replaces `bufio.Scanner` with `readLineCapped`, a 64 MB `maxTranscriptLineSize`, an `accumulateChunk` path that buffers below the cap and switches to discard-and-advance above it (`errLineTooLong`), and an `errPartialAtEOF` path that re-reads a line the writer has not yet newline-terminated. `core/pkg/tailer/large_line_test.go` pins a 3 MB line and asserts downstream events still parse.\n\nCopilot is structurally *more* robust here than claudecode, and this is the load-bearing adapter-specific point. In `core/adapters/inbound/agents/copilot/parser.go` the turn boundary is EXPLICIT and lives on its own tiny record: `assistant.turn_end` → `EventType: \"turn_done\"` (185 bytes max observed), while `assistant.message` deliberately does NOT settle the turn. So even in the pathological branch where the oversized line is the assistant reply and the tailer discards it past the 64 MB cap, the very next line still fires `working → ready`. The `ready → working` edge rides on `user.message` (max observed 720 B), which is not the line at risk. There is no path by which a single oversized record can strand this adapter in `working`.\n\nThe partial-write case is also covered rather than merely plausible: the writer batches events behind a debounce and appends them in one native call, so a tail that lands mid-append sees an unterminated line — precisely the `errPartialAtEOF` case, which stops without advancing the offset and re-reads once more bytes arrive.\n\n**Driver (ready).** `driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` reports `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn`. The recipe needs `send`, `wait_turn`, `sleep` — all present. `wait_turn` counts `\"type\":\"assistant.turn_end\"` occurrences, an exact completed-turn count, which is the right primitive for a long reply that may take a while to stream.\n\nAn INTERACTIVE recipe is used (as for every copilot lifecycle cell): the settle to `ready` must be observed while the process is alive.\n\n**Birth shape.** Same presession two-phase shape as the copilot `basic-turn` sibling — the session directory holds only `workspace.yaml` at launch and `events.jsonl` appears on the first prompt, so `processlifecycle.Scanner` mints a `proc-<PID>` row first and the real `<session-id>` session arrives under a different id. Every post-birth phase anchors to the real session.",
+      "caveats": [
+        "NOT true cap-stress. The measured ceiling for an organic copilot line is tens-to-hundreds of KB (largest real line seen on this machine: 31,953 B, a system.message). That is far below the tailer's 64 MB cap and also below bufio.Scanner's old 2 MB limit, so this cell exercises the buffered accumulateChunk path, NOT the errLineTooLong discard path. The absence of a parser stall is INFERRED from the arc completing — identical to the claudecode sibling's framing.",
+        "PROVISIONAL on emission size. The 5,000-word extrapolation is from a measured 764-outputTokens → 9,339-byte line, not from a captured long reply. gpt-5-mini / claude-haiku-4.5 may simply refuse to produce 5,000 words in one sentence and return something far shorter; the arc still completes either way, so the spec asserts only the arc and record settles the actual line size.",
+        "A genuinely oversized (>2 MB, or >64 MB) line is reachable only via tool.execution_complete.data.result (a cat of a large file), which the scenario's own acceptance criteria forbid (Tool calls: ≤ 0). Whether Copilot's native shell runtime caps that result is NOT determined here — the JS layer's only visible output cap is the grep tool's 512 KB (KPe=512*1024); the bash tool's result is assembled in the native Rust runtime and was not readable statically. A follow-up cell (or a synthetic hand-crafted line appended to a live transcript) is the way to cover the discard path.",
+        "Write atomicity is not statically confirmed. Events are flushed in debounced BATCHES through h.sessionEventsAppendLocal, a native append; whether a multi-hundred-KB line reaches the file in one write syscall is unknown from the JS side. The tailer's errPartialAtEOF path is designed for exactly this, but only a recording proves the daemon never mis-parses a half-written giant line.",
+        "model is deliberately NOT pinned in the observation vector: --model accepts only \"auto\" on this account and session.auto_mode_resolved picks between gpt-5-mini and claude-haiku-4.5 per turn.",
+        "Recording spends real Copilot AI credits (totalNanoAiu) on the maintainer's account — and a deliberately long reply spends more than a normal cell. BYOK (COPILOT_PROVIDER_BASE_URL/_TYPE/_WIRE_API/_API_KEY + COPILOT_MODEL) is the credit-free alternative and would also make the reply length deterministic."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/line_reader.go",
+          "note": "maxTranscriptLineSize = 64*1024*1024; readLineCapped returns errLineTooLong (bytes discarded, offset advanced) above the cap, errPartialAtEOF for an unterminated line so it is re-read once more bytes land. This is the #270 replacement for bufio.Scanner."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "lineReadSkip (line 637/660-682): an oversized line is 'handled in full' — logged and skipped past — so the tail loop continues with the next record instead of wedging."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/large_line_test.go",
+          "note": "TestTailAndProcess_LargeToolResultLine writes a 3 MB tool_result line (above Scanner's old 2 MB cap) and asserts downstream events still parse — the standing regression pin for #270."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "assistant.turn_end -> turn_done is the ONLY settle; assistant.message explicitly does not settle. ready->working rides on user.message. So the working->ready edge lives on a ~185-byte record, independent of whichever line is oversized — the adapter cannot be stranded in working by one giant record."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Source = FilesUnderRoot{$COPILOT_HOME/session-state, sessionIDFromPath} with agent.JSONLineParser — i.e. this adapter reads through core/pkg/tailer and inherits readLineCapped rather than doing its own line reading."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.copilot/session-state/*/events.jsonl (5 real sessions, CLI 1.0.77)",
+          "note": "Measured max line bytes per type: system.message 31,953 / assistant.message 9,339 / session.shutdown 1,025 / tool.execution_complete 738 / user.message 720 / assistant.turn_end 185. The 9,339 B assistant.message held content=156 chars + reasoningOpaque=416 B + encryptedContent=7,720 B at 764 outputTokens — the basis for the tens-to-hundreds-of-KB extrapolation for a 5,000-word reply."
+        },
+        {
+          "kind": "file",
+          "ref": "@github/copilot-darwin-arm64/app.js (CLI 1.0.77, SEA payload) @ ~2533038",
+          "note": "SessionEventWriter: session.on('*') -> JSON.stringify(event) -> nativeHandle.recordEventJson, debounced flush -> h.sessionEventsAppendLocal(localEventsPath, batch). One record per line, no JS-side per-record size cap; batched native append is why a half-written giant line (errPartialAtEOF) is a real case."
+        },
+        {
+          "kind": "file",
+          "ref": "@github/copilot-darwin-arm64/app.js @ 570749 (KPe = 512*1024)",
+          "note": "The only tool-output byte cap visible in the JS layer is the grep tool's 512 KB search cap ('search output capped at ${KPe} bytes'). No equivalent constant was found for the bash tool, whose result is produced by the native runtime — hence the caveat that a multi-MB tool.execution_complete.data.result is plausible but unproven."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "driver_step_types_from_file reports send/wait_turn/sleep/exit_clean (plus slash/keys/restart/sigkill/interrupt/resume/session/start_session/reset_session). The recipe needs only send/wait_turn/sleep — driver=ready."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#270",
+          "note": "Oversized JSONL line wedged the tailer; fixed by moving from bufio.Scanner to bufio.Reader + readLineCapped with a 64 MB cap."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-16_oversized-transcript-line/metadata.json",
+          "note": "Reference sibling — same framing (arc-only assertion, stall absence inferred), same caveat that a real CLI rarely emits a >2 MB line organically."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation does not require a re-login)",
+        "An active Copilot plan with AI credits — a deliberately long reply spends more than a normal cell",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other copilot session shares the same cwd (the PID is bound by cwd)"
+      ],
+      "setup": [
+        "The driver seeds a scratch COPILOT_HOME under the staging dir with trustedFolders + askedSetupTerminals pre-answered, so the trust modal cannot block the input box; the session directory is minted under $COPILOT_HOME/session-state/<session-id>/"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a single very long sentence as your entire reply. Make it at least 5000 words. Do not use any newlines, do not use any tools, and do not stop early."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl mints a proc-<PID> pre-session in ready shortly after launch (the copilot process exists before events.jsonl does)",
+        "events.jsonl mints the real <session-id> session in ready under a DIFFERENT session id once events.jsonl appears on the first prompt",
+        "events.jsonl contains a pid_discovered event binding the copilot PID to the real session (matched by cwd)",
+        "events.jsonl contains a state_transition to working on the real session when the user prompt lands",
+        "events.jsonl contains a state_transition to ready after assistant.turn_end — completion of this transition is the parser-resilience proof; a wedged tailer would never fire it",
+        "no state_transition to waiting occurs (the prompt forbids tools, so no permission.requested)",
+        "final state of the real session is ready",
+        "the driver records the max line length of the produced events.jsonl (awk '{if(length($0)>m)m=length($0)}END{print m}') so the cell's caveat about actual vs extrapolated line size can be settled from the recording",
+        "irrlichd logs do NOT contain a 'skipping oversized line' warning (the produced line is expected far below the 64 MB cap)",
+        "observation vector: tokens_nonzero=true (assistant.message.outputTokens), cost_nonzero=true; model left unasserted (auto-router picks per turn)"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}
