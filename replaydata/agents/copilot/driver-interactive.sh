@@ -344,6 +344,18 @@ launch_repl
 EXPECTED_TURNS=0
 while IFS= read -r step; do
   type="$(jq -r '.type' <<<"$step")"
+  # Honour a per-step `.session` retarget before dispatching, the way
+  # claudecode's driver does. The claudecode and kiro-cli recipes for
+  # multiple-sessions-same-cwd tag their re-drive as
+  # {"type":"send","session":1}; without this the field is inert, the step
+  # lands on whichever slot happens to be active, and the recording verifies
+  # GREEN while proving nothing about the session it meant to target. The
+  # dedicated {"type":"session"} step below remains valid too.
+  _tgt="$(jq -r '.session // empty' <<<"$step")"
+  if [[ -n "$_tgt" && "$type" != "session" && "$_tgt" != "$ACTIVE" ]]; then
+    save_active
+    load_slot "$_tgt"
+  fi
   case "$type" in
     send)            send_text "$(jq -r '.text' <<<"$step")" ;;
     slash)           slash_cmd "$(jq -r '.text' <<<"$step")" ;;
