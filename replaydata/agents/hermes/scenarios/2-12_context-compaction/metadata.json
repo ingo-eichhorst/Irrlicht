@@ -1,0 +1,158 @@
+{
+  "scenario_id": "context-compaction",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "gap:reset_session",
+    "agent_cli_version": "0.19.0 (2026.7.20, upstream 177f1d7c)",
+    "daemon_version": "0.5.9+2771e8c.dirty",
+    "confidence": 0.65,
+    "notes": "agent_supports: yes\ndaemon_capability: bug\ndriver_capability: gap:reset_session"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "context-compaction",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "gap:reset_session",
+      "confidence": 0.65,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: gap:reset_session\n\nAssessed against Hermes Agent v0.19.0 (2026.7.20) source and the hermes adapter as implemented in this branch. No recording was run.\n\n## Reasoning\n\n### Agent supports it (agent_supports: yes)\n\nHermes ships manual compaction as a first-class REPL slash command. `hermes_cli/commands.py:91-92` registers `CommandDef(\"compress\", \"Compress conversation context ...\", \"Session\", aliases=(\"compact\",))` — so both `/compress` and `/compact` reach the same handler, and `cli.py:9493-9494` dispatches `canonical == \"compress\"` to `_manual_compress` (`cli.py:10264`). It also has automatic compaction (`agent/context_compressor.py`, threshold 0.50 of the context window, `cli-config.yaml.example:406-427`) and a gateway hygiene sweep at 85%. This is not a `--help`-only inference: the handler, the alias table and the docs (`website/docs/developer-guide/context-compression-and-caching.md`) all agree.\n\nOne recipe-shaping constraint: `_manual_compress` refuses on a short conversation — `cli.py:10281-10283` returns early with \"Not enough conversation to compress (need at least 4 messages)\". A single priming turn is 2 history messages, so the recipe primes with TWO turns before `/compress`.\n\n### What Hermes writes to the store (the transport)\n\nHermes persists no transcript file; the sole transport is `$HERMES_HOME/state.db`. Compaction has two modes, selected by `compression.in_place` in config.yaml, which defaults to **false** (`agent/agent_init.py:1955-1956`, `is_truthy_value(_compression_cfg.get(\"in_place\"), default=False)`; consumed at `agent/conversation_compression.py:1405`). The default is therefore the **rotation** path (`agent/conversation_compression.py:2087-2165`), which calls `SessionDB.publish_compression_child` (`hermes_state.py:4215-4310`) to do all of this in ONE transaction:\n\n- the parent row gets `ended_at = now` and `end_reason = 'compression'`;\n- a NEW `sessions` row is INSERTed with a fresh id, `parent_session_id = <parent>`, `source` inherited (`'cli'` for `hermes chat`), the same model/cwd/git columns;\n- the compacted message set is INSERTed into the CHILD (`_insert_message_rows`, `hermes_state.py:6590-6685`), preserving each message's `finish_reason` (`hermes_state.py:6665`, reading `msg[\"finish_reason\"]` — which the live history dicts do carry, `agent/chat_completion_helpers.py:1245,1315-1320`).\n\nNothing is written to `sessions` or `messages` while the summarizer LLM call is in flight. The only in-flight trace is a lease row in the `compression_locks` table (`session_id`, `holder`, `expires_at`), taken before the compressor is dispatched (`agent/conversation_compression.py:1534` → `hermes_state.py:4683-4760`, `INSERT OR IGNORE INTO compression_locks` at `4738`).\n\n### What irrlicht observes today\n\nWalking the branch's watcher (`core/adapters/inbound/agents/hermes/watcher.go`) and parser over that sequence:\n\n1. **Both priming turns are clean.** `finish_reason='stop'` on the newest assistant row is the explicit turn boundary (`watcher.go:426-436` `turnIsDone`; `parser.go:93-95` maps it to `turn_done`), so each turn is a textbook `ready → working → ready` on the launch session.\n2. **The compaction window is invisible.** `scanSessions` only reacts to `message_count` growth or `ended_at` flipping (`watcher.go:408-419`). Neither happens during the summarizer call, so the session simply sits in `ready` for the whole compaction. The scenario's central assertion — `ready → working` at compaction start, `working` throughout — is not produced.\n3. **At commit the session identity changes.** The parent's `ended_at` fires `justEnded` → one terminal activity → parent stays `ready`. The child is a brand-new row, so `reconcile` emits `EventNewSession` with `ParentSessionID` set (`watcher.go:373-388`) plus an activity whose `Terminal` is `turnIsDone(child)` — true, because the child's newest inserted row is the protected tail's last assistant message carrying `finish_reason='stop'`. Net effect: the ended parent, and a second session born `ready` and linked to it as a child.\n4. **The post-compaction turn runs on the child**, and is itself a clean `ready → working → ready` — on a different session id from the priming turns.\n\nSo the user-observable arc is `ready→working→ready`, `ready→working→ready` (priming) — nothing for the compaction — then the arc restarts on a *different, subagent-linked* session. The scenario's topology (`ready → working → ready → working → ready` on one session, final state ready) is not met.\n\n### Why `bug` and not `incapable`\n\nBoth missing observables have a trace in the very store the adapter already polls read-only; the adapter just doesn't read it:\n\n- **Compaction-in-flight**: the `compression_locks` lease row is keyed by `session_id` and carries `expires_at`. A watcher that treated a live lease as `working` would produce exactly the `ready → working … → ready` arc the scenario asks for. This is product work in the hermes adapter, not an architectural limit — the three-state model represents it fine.\n- **Continuation vs subagent**: `sessions.end_reason = 'compression'` on the parent is a precise discriminator between a compaction continuation and a genuine delegation child (Hermes reuses `parent_session_id` for both — `tools/delegate_tool.py:1391,1461` for delegation, `conversation_compression.py:2136` for compaction). Today irrlicht cannot tell them apart, so a compaction continuation renders as a subagent of an ended session instead of being stitched onto it.\n\nBecause a spec-required observable is mis-handled while the trace exists, the owner is product (`bug`), not architecture. The cell records `known_failing` and the spec below asserts the CORRECT behavior — one logical session, `working` during compaction — rather than being weakened to match today's output.\n\n### Driver (gap:reset_session)\n\nEvery step type the recipe uses (`send`, `slash`, `wait_turn`, `sleep`) is present and listed in `DRIVE_ELICITS` in `replaydata/agents/hermes/driver-interactive.sh:113`. The gap is not a missing arm — it is that the driver binds the slot's session id ONCE and never re-resolves it:\n\n- `resolve_session_id` (`driver-interactive.sh:240-248`) returns early when `SES_UUID[$ACTIVE]` is already set, so it stays pinned to the launch session.\n- `wait_turn` (`driver-interactive.sh:258-275`) counts `finish_reason='stop'` rows `WHERE session_id='${SES_UUID[$ACTIVE]}'`. After the rotation, all new rows land on the CHILD, so the parent's count is frozen at 2 and the post-compaction `wait_turn` spins to the deadline and exits `timeout`.\n- `emit_session_contract` (`driver-interactive.sh:323`) would then publish only the parent id/path, leaving the child — where half the recording's phases live — unanchored.\n\nThat re-resolution is precisely the stubbed `reset_session` seam (\"in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)\", `driver-interactive.sh:302`), which is `not_implemented` and absent from `DRIVE_ELICITS`. `record` should port it (clear `SES_UUID[$ACTIVE]`/`SES_TRANSCRIPT[$ACTIVE]` and re-resolve against `started_at > launch_ts`, then emit both ids via the slot list) before driving this cell.",
+      "caveats": [
+        "PROVISIONAL — emission, not parsing. The daemon verdict rests on the claim that Hermes writes nothing to `sessions`/`messages` during the summarizer call, which is read off the source (the whole split is one transaction in `publish_compression_child`) and NOT off a recording. A live recording is the only thing that can settle it; if some intermediate write does land, the compaction window may already be observable and the verdict should move to `full` with a caveat.",
+        "Verdict is for the DEFAULT config. With `compression.in_place: true` (config.yaml) Hermes takes `archive_and_compact` (hermes_state.py:6759-6810) instead: same session id, old rows flipped to `active=0, compacted=1`. That path has its own distinct daemon problem — `message_count` is reset to the smaller ACTIVE count, so the watcher's `grew := r.messageCount > prevCount` (watcher.go:408) is false and NO activity event is emitted at all. Neither mode is observed correctly, but the failure modes differ; the recording must pin which mode was in effect.",
+        "Automatic (threshold-driven) compaction is out of scope for this cell — the recipe forces the boundary with `/compress` so the run is deterministic. Auto-compaction goes through the same `compress_context` path, so the same daemon findings apply, but that is unverified here.",
+        "`observations.model` is deliberately NOT pinned: the model comes from the recording home's `config.yaml` (`model.default`), which is not fixed by this assessment. `record` should fill it from the recording. Cost is not asserted at all — hermes reports `estimated_cost_usd = 0.0` under `billing_mode='subscription_included'` and irrlicht re-prices from its own alias table (metrics.go:154-163), so a non-zero cost depends entirely on which model the recording home is configured for.",
+        "The store is shared by every Hermes surface on the machine. The recording MUST export an isolated `HERMES_HOME` (already a column prerequisite) or the driver's `resolve_session_id` can bind to an unrelated live session — a failure this driver already hit once (see its comment at lines 233-239)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "hermes-agent/hermes_cli/commands.py:91-92",
+          "note": "v0.19.0 install (upstream 177f1d7c). CommandDef(\"compress\", ..., aliases=(\"compact\",), args_hint=\"[here [N] | focus topic | --preview|--dry-run]\") — the REPL slash command and its /compact alias. Anchors agent_supports: yes."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/cli.py:9493-9494, 10264-10290",
+          "note": "Dispatch `canonical == \"compress\"` → _manual_compress; the handler's early return \"Not enough conversation to compress (need at least 4 messages)\" is why the recipe primes with two turns before /compress."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/agent/agent_init.py:1955-1956, agent/conversation_compression.py:1405",
+          "note": "compression.in_place defaults to False, so the DEFAULT manual /compress path is session rotation, not in-place compaction. Load-bearing for the whole daemon verdict."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/agent/conversation_compression.py:2087-2165",
+          "note": "Rotation branch: publish_compression_child(parent_session_id=old, child_session_id=new, source=..., messages=compressed), then agent.session_id = new_session_id. The session id changes at the compaction boundary."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/hermes_state.py:4215-4310",
+          "note": "publish_compression_child: one transaction — parent gets ended_at + end_reason='compression'; child row INSERTed with parent_session_id and inherited source/model/cwd; compacted messages inserted into the child. No intermediate write is visible to a reader, which is why the compaction window leaves no sessions/messages trace."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/hermes_state.py:4683-4760 (INSERT at 4738), agent/conversation_compression.py:1534",
+          "note": "try_acquire_compression_lock writes a compression_locks row (session_id, holder, expires_at) BEFORE the summarizer runs. This is the unread trace that makes the missing `working` window a daemon bug rather than daemon=incapable."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/hermes_state.py:6590-6685 (finish_reason at 6665), agent/chat_completion_helpers.py:1245,1315-1320",
+          "note": "_insert_message_rows persists msg[\"finish_reason\"], and build_assistant_message puts finish_reason on the in-memory history dict — so the compaction child's protected tail ends with an assistant row carrying finish_reason='stop'. That is why the child is born `ready` rather than stuck `working`."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go:355-436",
+          "note": "reconcile emits an event only when message_count grew or ended_at flipped, and turnIsDone reads the newest active row's finish_reason. Nothing here reacts to compression_locks or to end_reason='compression', which is the concrete mis-handling behind daemon=bug."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/hermes_state.py:6759-6810",
+          "note": "archive_and_compact (the non-default in_place path): active=0/compacted=1 on old rows and message_count reset to the smaller ACTIVE count — which would make watcher.go:408's `grew` test false and suppress the activity event entirely. Basis for the in_place caveat."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh:113, 240-248, 258-275, 302, 323",
+          "note": "DRIVE_ELICITS lacks reset_session; resolve_session_id short-circuits on an already-bound SES_UUID; wait_turn polls that pinned session_id; the reset_session arm (the re-resolve seam) is not_implemented. Anchors driver=gap:reset_session."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/tools/delegate_tool.py:1391,1461",
+          "note": "Delegation also writes parent_session_id, so that column alone cannot distinguish a compaction continuation from a real subagent — sessions.end_reason='compression' on the parent is the available discriminator."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH and authenticated; model.default + model.provider set in <HERMES_HOME>/config.yaml. Verified against v0.19.0 (2026.7.20).",
+        "HERMES_HOME exported to an isolated recording home — the store is shared by EVERY hermes surface on the machine, and the driver binds by 'newest session started after launch'.",
+        "sqlite3 on PATH: hermes writes no transcript, so the driver reads session id and turn completion straight out of state.db.",
+        "compression.in_place must be unset or false in the recording home's config.yaml (the default). The in-place path has a different failure mode — see caveats.",
+        "irrlichd recording (run-cell.sh isolated/coexist, or --attach against a daemon started with --record).",
+        "DRIVER GAP: drive-hermes-interactive.sh must first port the reset_session seam — /compress rotates the session id, so the slot must clear and re-resolve SES_UUID/SES_TRANSCRIPT after the compaction and publish BOTH ids in the staging contract."
+      ],
+      "setup": [
+        "Driver launches `hermes chat` under tmux in a fresh per-run cwd under <staging>/cwd/ and waits for the 'Type your message or /help' prompt.",
+        "Hermes mints its own session id; the row is INSERTed on the first user message, so the driver resolves it lazily after the first send.",
+        "Two priming turns are required before /compress: _manual_compress refuses a history shorter than 4 messages."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Now reply with exactly the word: ready"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "slash",
+          "text": "/compress"
+        },
+        {
+          "type": "sleep",
+          "seconds": 45
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: still-here"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the hermes session entering ready after `hermes chat` boots and its store row appears",
+        "events.jsonl shows ready→working→ready for each of the two priming turns on that session",
+        "after /compress the session enters working for the compaction and settles back to ready — KNOWN FAILING today: nothing is written to sessions/messages during the summarizer call, so no working transition is emitted",
+        "the post-compaction turn is ready→working→ready on the SAME logical session — KNOWN FAILING today: the default rotation path ends the parent (end_reason='compression') and mints a child row, so the turn lands on a new session id linked as a subagent-style child",
+        "final state is ready, with no waiting anywhere in the run",
+        "state.db shows exactly one sessions row with end_reason='compression' and one child row whose parent_session_id points at it (confirms the rotation path, not in_place, was exercised)"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}
