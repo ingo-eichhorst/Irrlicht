@@ -19,7 +19,7 @@ import (
 // suite one layer up.
 func TestHasPendingIdlePrompt(t *testing.T) {
 	d := &SessionDetector{signals: session.NewSignalHolds()}
-	d.signals.Hold("has", session.SignalIdlePrompt, session.SignalPayload{})
+	d.signals.Hold("has", session.SignalIdlePrompt, session.SignalPayload{}, holdT0)
 
 	if !d.hasPendingIdlePrompt("has") {
 		t.Error("hasPendingIdlePrompt must report true for a session with a pending signal")

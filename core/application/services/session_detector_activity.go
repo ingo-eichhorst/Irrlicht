@@ -772,28 +772,31 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// before applyBackgroundLiveness — see that call site.
 
 	// Overlay every held out-of-band signal — the permission prompt (#108),
-	// the Stop hook's authoritative turn-done (#1161) and the idle_prompt
-	// correction (#1173) — onto the metrics ClassifyState is about to read.
-	// Each signal's own lifecycle rule (persistent vs consume-once, and when
-	// it goes stale) is declared in session.signalPolicies rather than spelled
-	// out here; see SignalHolds.Overlay for why their application order is
-	// load-bearing.
+	// the Stop hook's authoritative turn-done (#1161), the idle_prompt
+	// correction (#1173) and the PreCompact force-working hold (#657) — onto
+	// the metrics ClassifyState is about to read. Each signal's own lifecycle
+	// rule (persistent vs consume-once, and when it goes stale) is declared in
+	// session.signalPolicies rather than spelled out here; see
+	// SignalHolds.Overlay for why their application order is load-bearing.
 	//
 	// Must happen after RefreshOnActivity, which rebuilds metrics from the
 	// transcript and so zeroes every transient field these signals set, and
 	// before ClassifyState, which reads them.
-	d.signals.Overlay(state.SessionID, state.Metrics)
-
-	// Overlay the PreCompact force-working hold (#657).
-	d.applyCompactHold(ev.SessionID, state.Metrics, time.Now().Unix())
+	//
+	// One clock for the whole pass, read once: the overlays and the transition
+	// stamp below must agree about when "now" was, and a held signal whose
+	// staleness is time-based (session.holdContext) is only meaningful against
+	// a single instant.
+	passStart := time.Now()
+	d.signals.Overlay(state.SessionID, state.Metrics, passStart)
 
 	// Overlay the transcript-based stalled-edit-tool fallback (#488).
-	d.markStalledEditTool(ev.SessionID, state.Metrics, time.Now().Unix())
+	d.markStalledEditTool(ev.SessionID, state.Metrics, passStart.Unix())
 
 	// Content-based state detection. The tiered form is used here (and only
 	// here) so the deciding rule and its authority tier reach the recorded
 	// lifecycle event as provenance (#1288).
-	now := time.Now().Unix()
+	now := passStart.Unix()
 	verdict := ClassifyStateTiered(state.State, state.Metrics)
 	newState, reason := verdict.State, verdict.Reason
 	newState, reason, parentHeldWorking := d.holdParentForActiveChildren(state, ev, newState, reason)
@@ -1354,39 +1357,6 @@ func (d *SessionDetector) purgeDeadBackgroundProcesses(result backgroundProbeRes
 // flip without any new transcript write. The flag is redundant once
 // PermissionPending fired (the classifier prefers the hook), so it is skipped
 // then. now is injected for testability.
-// applyCompactHold maintains the PreCompact force-working hold (#657) for one
-// session. While a manual /compact is in flight the transcript receives no
-// writes, so this overlays CompactInProgress to keep the session in working
-// (ClassifyState's compact_in_progress rule) through that silent window.
-//
-// The hold clears on the first of:
-//   - the manual compact_boundary landing (SawManualCompactBoundary): the
-//     normal path — compaction finished, release working → ready (#656);
-//   - compactHoldTimeout elapsing since the PreCompact hook fired: the safety
-//     net for a /compact that was interrupted or errored with no boundary ever
-//     written. Without it an orphaned hold would be re-armed on every
-//     refreshStaleSessions tick and strand the session in working forever — the
-//     very failure #656 fixed.
-//
-// now is injected for testability. Mirrors markStalledEditTool's shape.
-func (d *SessionDetector) applyCompactHold(sessionID string, m *session.SessionMetrics, now int64) {
-	if m == nil {
-		return
-	}
-	d.permMu.Lock()
-	defer d.permMu.Unlock()
-
-	since, ok := d.compactPending[sessionID]
-	if !ok {
-		return
-	}
-	if m.SawManualCompactBoundary || now-since >= int64(compactHoldTimeout.Seconds()) {
-		delete(d.compactPending, sessionID)
-		return
-	}
-	m.CompactInProgress = true
-}
-
 func (d *SessionDetector) markStalledEditTool(sessionID string, m *session.SessionMetrics, now int64) {
 	d.permMu.Lock()
 	defer d.permMu.Unlock()

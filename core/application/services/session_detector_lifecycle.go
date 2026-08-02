@@ -45,7 +45,6 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	d.signals.DropSession(ev.SessionID)
 
 	d.permMu.Lock()
-	delete(d.compactPending, ev.SessionID)
 	delete(d.editToolOpenSince, ev.SessionID)
 	delete(d.idleProjectRetryAttempts, ev.SessionID)
 	d.permMu.Unlock()
@@ -282,7 +281,7 @@ func (d *SessionDetector) ReconcilePreSessionBackchannel(oldID, newID string) {
 func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEventName string) {
 	switch hookEventName {
 	case "PermissionRequest", "PreToolUse":
-		d.signals.Hold(sessionID, session.SignalPermissionPrompt, session.SignalPayload{})
+		d.signals.Hold(sessionID, session.SignalPermissionPrompt, session.SignalPayload{}, time.Now())
 	case "PostToolUse", "PostToolUseFailure":
 		d.signals.Release(sessionID, session.SignalPermissionPrompt)
 	}
@@ -337,7 +336,7 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 	d.signals.Hold(sessionID, session.SignalTurnDone, session.SignalPayload{
 		LastAssistantText: lastAssistantText,
 		WaitingCue:        waitingCue,
-	})
+	}, time.Now())
 
 	// classifyAndTransition overlays HookTurnDone onto the metrics before
 	// calling ClassifyState. The Stop hook fires at true turn end (after the
@@ -369,7 +368,7 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 //
 // Safe to call from any goroutine (e.g. the HTTP handler).
 func (d *SessionDetector) HandleIdlePromptHook(sessionID, transcriptPath string) {
-	d.signals.Hold(sessionID, session.SignalIdlePrompt, session.SignalPayload{})
+	d.signals.Hold(sessionID, session.SignalIdlePrompt, session.SignalPayload{}, time.Now())
 
 	d.dispatchHookActivity(sessionID, transcriptPath, "Notification")
 }
@@ -377,9 +376,10 @@ func (d *SessionDetector) HandleIdlePromptHook(sessionID, transcriptPath string)
 // HandleCompactHook processes a Claude Code PreCompact hook for a manual
 // /compact. The compaction window writes nothing to the transcript, so without
 // an out-of-band push the session stays frozen in its pre-compact state instead
-// of showing working (issue #657). Marking compactPending makes processActivity
-// overlay CompactInProgress so ClassifyState holds the session in working until
-// the compact_boundary lands (which #656 turns into turn_done → ready).
+// of showing working (issue #657). Holding SignalCompactInProgress makes
+// classifyAndTransition's Overlay set CompactInProgress so ClassifyState holds
+// the session in working until the compact_boundary lands (which #656 turns
+// into turn_done → ready) or the policy's timeout drops an orphaned hold.
 //
 // Only manual compaction is handled: auto-compaction fires mid-turn while the
 // session is already working, so a forced working blip would be spurious. The
@@ -391,9 +391,7 @@ func (d *SessionDetector) HandleCompactHook(sessionID, transcriptPath, trigger s
 		return
 	}
 
-	d.permMu.Lock()
-	d.compactPending[sessionID] = time.Now().Unix()
-	d.permMu.Unlock()
+	d.signals.Hold(sessionID, session.SignalCompactInProgress, session.SignalPayload{}, time.Now())
 
 	// Flip the session to working immediately — there is no transcript flush
 	// coming during the compaction window to trigger a natural re-evaluation.

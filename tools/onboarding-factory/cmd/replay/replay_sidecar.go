@@ -425,7 +425,11 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 	}
 	r.lastMetrics = metrics
 	domainMetrics := replayengine.TailerToDomain(metrics)
-	r.signals.Overlay(replaySessionKey, domainMetrics)
+	// Virtual time, not time.Now: a time-based staleness policy must decide
+	// from the transcript's own timeline, or the same recording would replay
+	// differently on a slow machine and the goldens would stop being a
+	// regression net.
+	r.signals.Overlay(replaySessionKey, domainMetrics, ctx.virtTime)
 	r.runClassifier(domainMetrics, ctx, grew)
 	return nil
 }
@@ -434,10 +438,17 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 // permission-pending flag based on hook type, then trigger a re-
 // classification using the last-known metrics. Hook events other than the
 // three recognized Claude Code hooks are ignored.
+//
+// PreCompact is deliberately not among them, even though #1297 made it a
+// signalPolicies row the harness could now hold like any other. No recording
+// in replaydata/ carries one: a grep for hook_name across the whole catalog
+// returns only PermissionRequest, PreToolUse, PostToolUse and
+// PostToolUseFailure. Wiring it would therefore add a branch no golden
+// exercises. Add it together with the first recording that fires one.
 func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 	switch hookEv.HookName {
 	case claudecode.HookPermissionRequest:
-		r.signals.Hold(replaySessionKey, session.SignalPermissionPrompt, session.SignalPayload{})
+		r.signals.Hold(replaySessionKey, session.SignalPermissionPrompt, session.SignalPayload{}, hookEv.Timestamp)
 	case claudecode.HookPostToolUse, claudecode.HookPostToolUseFailure:
 		r.signals.Release(replaySessionKey, session.SignalPermissionPrompt)
 	default:
@@ -447,7 +458,7 @@ func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 		return
 	}
 	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
-	r.signals.Overlay(replaySessionKey, domainMetrics)
+	r.signals.Overlay(replaySessionKey, domainMetrics, hookEv.Timestamp)
 	r.runClassifier(domainMetrics, transitionCtx{eventIdx: -1, virtTime: hookEv.Timestamp, cause: causeHook}, true)
 }
 
@@ -648,7 +659,7 @@ func (r *sidecarReplayer) applyChildOrphan(orphan orphanTrigger, d *debounceStat
 		return nil
 	}
 	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
-	r.signals.Overlay(replaySessionKey, domainMetrics)
+	r.signals.Overlay(replaySessionKey, domainMetrics, orphan.at)
 	// grew=false: r.state != StateReady is already guaranteed by the check
 	// above, so the force-bounce branch never evaluates this value here.
 	r.runClassifier(domainMetrics, transitionCtx{eventIdx: -1, virtTime: orphan.at, cause: causeEvent}, false)

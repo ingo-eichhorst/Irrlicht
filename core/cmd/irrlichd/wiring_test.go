@@ -18,11 +18,19 @@ import (
 func countWatcherKinds(t *testing.T, name string, watchers []inbound.Watcher) (scanners, fswatchers, stores int) {
 	t.Helper()
 	for _, w := range watchers {
-		switch w.(type) {
+		switch fsw := w.(type) {
 		case *processlifecycle.Scanner:
 			scanners++
 		case *fswatcher.Watcher:
 			fswatchers++
+			// Every fswatcher must carry the daemon's logger, or a failed
+			// watch registration goes back to being discarded silently
+			// (#1255). Nothing else can catch that: Watcher.logger is
+			// unexported, so dropping the WithLogger call in wiring.go
+			// otherwise leaves the whole suite green.
+			if fsw.Logger() == nil {
+				t.Errorf("%s: fswatcher for %s has no logger — wiring.go must pass one via WithLogger", name, fsw.Root())
+			}
 		case *opencode.Watcher:
 			stores++
 		default:
@@ -72,7 +80,7 @@ func assertWatcherCountsForSource(t *testing.T, name string, source agent.Source
 // one process scanner, plus the Source variant's dedicated watcher.
 func assertAgentWatcherSet(t *testing.T, a agent.Agent, noCheck func(string, int) bool) {
 	t.Helper()
-	watchers, _ := buildAgentWatchers(a, time.Minute, noCheck, nil)
+	watchers, _ := buildAgentWatchers(a, time.Minute, noCheck, e2eLog{})
 	scanners, fswatchers, stores := countWatcherKinds(t, a.Identity.Name, watchers)
 	if scanners != 1 {
 		t.Errorf("%s: got %d process scanners, want 1", a.Identity.Name, scanners)
