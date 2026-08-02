@@ -27,6 +27,8 @@ const (
 	evSubagentStarted  = "subagent.started"
 	evSubagentDone     = "subagent.completed"
 	evUserRequestedRun = "tool.user_requested"
+	evCompactionStart  = "session.compaction_start"
+	evCompactionDone   = "session.compaction_complete"
 )
 
 // Parser implements tailer.TranscriptParser for GitHub Copilot CLI
@@ -117,6 +119,24 @@ func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
 		p.trackSubagent(data, true, ev)
 	case evSubagentDone:
 		p.trackSubagent(data, false, ev)
+	case evCompactionStart:
+		// Compaction is real work the user is waiting on, and a manual
+		// /compact emits NO user.message and no assistant.turn_start — so
+		// without this arm the whole summarization call fell to the default
+		// Skip and the session sat in `ready` while Copilot's own TUI showed a
+		// compacting spinner. Non-settling, so the classifier's default
+		// transcript-activity rule holds the session `working`.
+		//
+		// Unlike Claude Code this needs neither IsManualCompactBoundary nor
+		// the hook-driven SignalCompactInProgress overlay: Copilot writes both
+		// boundaries to disk as ordinary events, so the hold is durable and
+		// replays.
+		ev.EventType = "compaction_start"
+	case evCompactionDone:
+		// The turn-shaped counterpart: compaction finished, so the session is
+		// idle again. turn_done is the only event type that returns it to
+		// ready.
+		ev.EventType = "turn_done"
 	default:
 		// Includes system.message (the system-prompt injection),
 		// assistant.turn_start (the open bracket of a turn the user message

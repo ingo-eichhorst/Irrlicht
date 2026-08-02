@@ -105,3 +105,44 @@ func TestPendingWaitingCueIsComputed(t *testing.T) {
 			"the waiting-scan window must still be detected (issue #1150)")
 	}
 }
+
+// TestCompactionHoldsSessionWorking pins the context-compaction unlock.
+//
+// Copilot's compactHistory emits session.compaction_start /
+// session.compaction_complete as ordinary (non-ephemeral) events into the same
+// events.jsonl irrlicht tails. A manual /compact emits NO user.message and no
+// assistant.turn_start/turn_end at all — so with no arm for either type both
+// fell to the default Skip, and the session sat in `ready` for the whole
+// summarization call while Copilot's own TUI showed a compacting spinner.
+//
+// Unlike Claude Code this needs neither IsManualCompactBoundary nor the
+// hook-driven SignalCompactInProgress overlay: the boundary is on disk.
+func TestCompactionHoldsSessionWorking(t *testing.T) {
+	base := `{"type":"session.start","timestamp":"2026-08-03T09:00:00.000Z","data":{"context":{"cwd":"/tmp/p"}}}
+{"type":"user.message","timestamp":"2026-08-03T09:00:01.000Z","data":{"content":"hello"}}
+{"type":"assistant.message","timestamp":"2026-08-03T09:00:02.000Z","data":{"model":"gpt-5-mini","content":"hi","outputTokens":5}}
+{"type":"assistant.turn_end","timestamp":"2026-08-03T09:00:03.000Z","data":{"turnId":"0"}}
+`
+	compacting := base + `{"type":"session.compaction_start","timestamp":"2026-08-03T09:00:20.000Z","data":{"trigger":"manual"}}` + "\n"
+	done := compacting + `{"type":"session.compaction_complete","timestamp":"2026-08-03T09:00:40.000Z","data":{"trigger":"manual"}}` + "\n"
+
+	for _, tc := range []struct {
+		name          string
+		lines         string
+		wantEventType string
+	}{
+		{"compaction in progress is activity", compacting, "compaction_start"},
+		{"compaction complete settles the session", done, "turn_done"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tl := tailer.NewTranscriptTailer(writeTranscript(t, tc.lines), &Parser{}, AdapterName)
+			m, err := tl.TailAndProcess()
+			if err != nil {
+				t.Fatalf("TailAndProcess: %v", err)
+			}
+			if m.LastEventType != tc.wantEventType {
+				t.Errorf("LastEventType = %q, want %q", m.LastEventType, tc.wantEventType)
+			}
+		})
+	}
+}
