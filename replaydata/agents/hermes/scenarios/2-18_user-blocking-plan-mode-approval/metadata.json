@@ -1,0 +1,152 @@
+{
+  "scenario_id": "user-blocking-plan-mode-approval",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+97ac09e.dirty",
+    "confidence": 0.75,
+    "notes": "Hermes' plan mode is the bundled `/plan` skill (prompt-level, no exit_plan_mode tool and no runtime mode), so the approval pause IS the turn boundary — persisted as an assistant/finish_reason='stop' row whose text carries the ask. parser.go sets PendingWaitingCue from that full text and classifyAgentDone routes turn_done+cue straight to waiting with no ready in between, so the scenario's arc is observable — unlike the siblings whose gate blocks mid-turn and flushes nothing."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-blocking-plan-mode-approval",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: full\ndriver_capability: ready\n\nRoute: record.\n\n## What this cell asserts\n\nThe scenario's load-bearing, user-observable signal is a single `working → waiting` episode driven by a plan-approval pause: the agent presents a plan, the session sits in `waiting`, and state NEVER enters `ready` between the plan emission and the user's reply. The scenario row itself scopes the recipe to that entry (\"Recipe captures only entry into waiting; the approve/reject continuation is structurally identical to other waiting-resume paths\"), and the canonical claudecode sibling's spec stops at `waiting` for the same reason. Final state = `waiting`.\n\n## agent = partial\n\nHermes 0.19.0 (2026.7.20, git install) DOES ship a named plan mode, and it is not inferred:\n\n- `skills/software-development/plan/SKILL.md` — frontmatter `name: plan`, `version: 2.0.0`, `description: \"Write a markdown plan to .hermes/plans/; no execution.\"`, tags `[planning, plan-mode, ...]`; the body's first heading is literally `# Plan Mode` and its Core behavior is \"For this turn, you are planning only. Do not implement code. Do not edit project files except the plan markdown file.\"\n- It is exposed as a dynamic slash command. Verified live, not from docs: running the installed tree's own `agent.skill_commands.scan_skill_commands()` under the recording home returns 68 skill commands including `{'/plan': 'plan'}`.\n- The official reference documents it in exactly the scenario's terms: \"bundled skills like `/plan`, which opens plan mode and saves markdown plans under `.hermes/plans/`\" (`website/docs/reference/slash-commands.md`).\n- The skill prescribes the pause itself. Its \"Execution Handoff\" section instructs the agent, after saving the plan, to close the turn with: *\"Plan complete and saved. Ready to execute using subagent-driven-development — … Shall I proceed?\"*\n\nThe verdict is `partial`, not `yes`, because the gate is PROMPT-level only — there is no runtime plan mode and no approval primitive. A full-tree grep of the installed 0.19.0 source for `plan_mode` / `exit_plan` / \"plan mode\" (excluding node_modules/.git/website) matches ONLY: this SKILL.md's heading, a vendored `sqlite3.h` comment about EXPLAIN QUERY PLAN, a CSS template, and two skill docs describing OTHER agents' plan modes (`skills/autonomous-ai-agents/claude-code/SKILL.md`, `optional-skills/.../grok/SKILL.md`). There is no `exit_plan_mode` tool in `tools/`, no mode enum, no read-only enforcement, and nothing that structurally blocks the model from implementing anyway. Compare the frozen siblings: mistral-vibe (`yes`) has a real `exit_plan_mode` tool that blocks on `ctx.user_input_callback`; gemini-cli (`yes`) has `ApprovalMode.PLAN` + `ExitPlanModeTool`; opencode (`partial`) has a tool-restriction plan agent with no gate; aider (`partial`) has an architect-mode edit gate but no plan mode. Hermes sits with the `partial` group: the mode is named and shipped, the blocking primitive is not.\n\n## daemon = full\n\nEvery frozen sibling on this row froze for the SAME reason, and it is a reason hermes does not share: their approval gate blocks MID-turn (an in-memory scheduler/UI status, a `confirm_ask` stdin read, a `user_input_callback`), and nothing is flushed to the transport while it blocks. Hermes' plan pause is not mid-turn — it IS the turn boundary. The agent finishes the turn and stops, so the pause is persisted as an ordinary `messages` row: `role='assistant'`, `finish_reason='stop'`, `content` carrying the approval ask. That row is written before the daemon's next 2s poll, and it is exactly what the adapter reads.\n\nThe chain, end to end:\n\n1. **parser.go** sets `ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text))` on EVERY assistant row, computed from the FULL untruncated text (the ordering comment there is explicit about why: `TruncateAssistantText` would drop a cue sitting further back). The same row's event type is rewritten to `turn_done` when `finish_reason='stop'`. Cue and turn boundary therefore arrive together, on one row — there is no window in which the daemon has the boundary but not the cue.\n2. **tailer.go `applyAssistantTextAndMarkers`** runs for every parsed event, `turn_done` included (it is called unconditionally from `processParsedEvent`), and keeps `lastPendingWaitingCue` in lockstep with `lastAssistantText`; the next `user_message` clears both via `ClearToolNames`. So a cue cannot leak forward from an earlier turn, and the flag reaching metrics is the LAST assistant row's.\n3. **state_classifier.go `classifyAgentDone`** checks `IsWaitingForUserInput()` BEFORE routing `turn_done` → ready, and `IsWaitingForUserInput` (waiting_cue.go) returns true on `PendingWaitingCue`. The transition emitted is `turn ended with question or cue → waiting`, direct from `working`. There is no intermediate `ready` — which is precisely the acceptance criterion \"state never entered ready between the plan emission and the user reply\".\n4. **The detector matches the skill's own closing line.** \"Shall I proceed?\" is a trailing, non-rhetorical question, so `ExtractQuestionSnippet` fires. If the model instead phrases the handoff as \"Let me know if you want me to implement this\" or \"Ready for your approval\", `ExtractWaitingCue`'s bucket-A/B patterns fire. Both legs of the `ProseIndicatesWaiting` OR are live for this turn shape.\n\nThe working leg is also safe here, unlike the collapse risk the 2.2 cell had to reason about: a plan turn runs an LLM through a ~6k-token skill body and a `write_file`, so it spans many 2s poll ticks and `message_count` grows with the newest row non-terminal — the session is observed `working` on its own merits, without leaning on `ShouldSynthesizeCatchUpTurn` / `ForceReadyToWorkingReason`.\n\n`full` rather than `bug`: no spec-required observable is mis-handled. `full` rather than `incapable`: the trace exists and the parser already derives the asserted transition.\n\n## What the daemon cannot DISTINGUISH — caveat, not a downgrade\n\nThe waiting is derived from the agent-agnostic prose rule, so in the store this plan pause is mechanically indistinguishable from an ordinary trailing-question turn (scenario 2.17). That is an agent limitation, not a daemon one — hermes writes no structured approval or plan marker anywhere the daemon can read:\n\n- `messages.display_kind` over the live store takes only NULL (116 rows) and `model_switch` (1). The complete set of values hermes' source ever writes is `model_switch` / `hidden` / `auto_continue` / `async_delegation_complete` — nothing plan- or approval-shaped. No column marks \"awaiting approval\".\n- Hermes' one REAL approval gate (dangerous commands) keeps its pending state module-level in memory (`tools/approval.py`: \"Per-session approval state (thread-safe, keyed by session_key)\") and never inserts a message row; the gateway's `tools/slash_confirm.py` does the same. So the risky-path branch (2.19 tool-gate-permission-prompt) is a separate, harder problem — this cell does not ride on it and its verdict must not be read as covering it.\n- `NeedsUserAttention` (rule 1) is unreachable for hermes regardless: hermes' ask-the-user tool is registered as `name=\"clarify\"` (`tools/clarify_tool.py`), which is absent from the canonical user-blocking set `AskUserQuestion` / `ExitPlanMode` / `question` / `ask_user_question` (metrics.go `isUserBlockingTool`). Irrelevant to this recipe (the plan skill closes in prose, it does not call `clarify`), but it is why the arc must ride the prose path.\n- `PermissionPending` (rule 0) is Claude-Code-hook-only; the hermes adapter declares no hook or permission transport.\n\nPer the caveats-over-downgrades rule, none of this weakens the pillar: the canonical spec's observables are met.\n\n## driver = ready\n\nThe recipe needs `slash`, `wait_turn`, `sleep`. `replaydata/agents/hermes/driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"` and its dispatch maps `send|slash` to the same `send_text` keystrokes, so `/plan …` is delivered as ordinary typed input — which is exactly right, because `cli.py` intercepts a skill slash command and expands it into a normal user turn via `build_skill_invocation_message` → `_pending_input.put(msg)`. `wait_turn` polls the store for a NEW `assistant/finish_reason='stop'` row — precisely the row that carries the approval ask — and `resolve_session_id` binds only to a session whose `started_at` is after this slot's launch. No gapped primitive sits on the recipe path, so this is not `gap:*`.\n\n## Session model\n\nSame ProcessOwnedStore shape as the sibling 2.2 cell: hermes carries a Process matcher, so processlifecycle mints a transient `proc-<PID>` presession at launch while the real `sessions` row is INSERTed only on the first user message. `session_birth` is therefore anchored to `start` UNPINNED so the presession cannot steal identity, `turn_start` establishes the real session, and every later phase chains off it with `same_session_as`.",
+      "caveats": [
+        "PROVISIONAL on emission — the one thing a live recording must settle. The waiting verdict hinges on the model's FINAL message carrying a trailing question or imperative cue. The plan skill prescribes it (\"… Shall I proceed?\") and the recipe's prompt re-states it, but the skill also says \"After saving the plan, reply briefly with what you planned and the saved path\", and a model that ends on that bare statement would settle to ready and the recording would verify PARTIAL. That is a recipe/agent-behaviour outcome, not a parser defect: the daemon chain (parser.go → lastPendingWaitingCue → classifyAgentDone) is verified by code read, but no recording has yet confirmed hermes emits a cue-bearing final row for a /plan turn. Hence confidence 0.75.",
+        "This cell verifies the ARC, not a plan-specific signal. Because hermes has no structured plan-approval marker, the recording will be mechanically identical to 2.17 user-blocking-question (same ProseIndicatesWaiting path, same turn_done row). It is still an honest `full`: the scenario's acceptance criteria are user-observable state transitions and they are met. But do not read this cell as evidence that irrlicht can tell a plan gate from any other question on hermes — it cannot, and nothing in the store would let it.",
+        "`model` is deliberately NOT pinned in observations. The recording home's config.yaml is provisioned at record time; the maintainer's default is `gpt-5.6-luna` (provider openai-codex), but a home configured with a local model reports a different id. record should fill it from the recording.",
+        "`cost_nonzero` depends on the recording home's model being priced by irrlicht's alias table. `gpt-5.6-luna` resolves (core/pkg/capacity: 0.20/1.20/0.02/0.25 per MTok); the other model seen in the maintainer's store, `google/gemma-4-26b-a4b`, resolves to nil pricing and would price at 0. If the recording home uses an unpriced local model, that is a pricing-table gap, not a daemon defect — record should drop cost_nonzero and note the model.",
+        "`sessions.cwd` is empty for `source='cli'` rows and `hermes chat` records source='cli', so the project binding comes from the live-process CWD fallback, which returns \"\" when more than one hermes SESSION process is alive. The recording must not run a second hermes session concurrently (a long-lived gateway is fine — isServiceArgv excludes it).",
+        "The plan skill saves via `write_file`, which is an edit-shaped tool. If that call ever lingered past the OpenToolStalled threshold the classifier would emit an EXTRA earlier `waiting` (\"stalled edit tool → likely permission prompt → waiting\") mid-turn. It would not violate the scenario's acceptance criteria (no `ready` appears), and the spec's phases are relative rather than exhaustive, so the arc still verifies — but record should note it in the recording rather than treat it as the plan pause.",
+        "TUI delivery risk for the `/plan` step: typing `/` opens hermes' slash autocomplete menu. `/plan <text>` should dismiss it at the first space (the same path the 1.5 cell's `/new now` relies on), but if the menu swallows Enter the driver's send_text must send Escape before Enter. That is a driver-port detail inside the existing `slash` primitive, not a new step type — it does not make this cell `gap:*`.",
+        "The approve/reject continuation (waiting → working → ready) is out of scope for this recipe, per the scenario row's own note and the canonical claudecode sibling's 3-phase spec. Final state is `waiting`."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/skills/software-development/plan/SKILL.md",
+          "note": "Hermes 0.19.0 bundled plan skill: frontmatter name=plan v2.0.0, tags include plan-mode; body heading is '# Plan Mode'; Core behavior 'For this turn, you are planning only — do not implement code'; 'Execution Handoff' prescribes closing the turn with '… Shall I proceed?'. Prompt-level only: no tool, no mode, no enforcement."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/skill_commands.py",
+          "note": "Verified live against the installed tree (venv/bin/python, HERMES_HOME=recording home): scan_skill_commands() returns 68 entries including {'/plan': 'plan'}. cli.py (~line 9784) intercepts a skill slash command, builds the expanded turn via build_skill_invocation_message and puts it on _pending_input — so `/plan <task>` becomes an ordinary user turn (a `user` row in state.db), which is what makes the driver's `slash` step sufficient."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/website/docs/reference/slash-commands.md",
+          "note": "Official 0.19.0 reference: 'Installed skills are also exposed as dynamic slash commands. That includes bundled skills like /plan, which opens plan mode and saves markdown plans under .hermes/plans/'."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent",
+          "note": "Negative scan (the agent=partial anchor, per the 'confirm the surface before writing no' rule): a full-tree case-insensitive grep for plan_mode | exit_plan | 'plan mode' over the installed 0.19.0 source (excluding node_modules/.git) matches ONLY the plan SKILL.md heading, a vendored sqlite3.h EXPLAIN QUERY PLAN comment, a CSS template, and two skill docs describing OTHER agents (claude-code, grok). No exit_plan_mode tool, no mode enum, no read-only enforcement. Hermes is a Python console script, so the source tree is the authoritative surface (stronger than a strings scan of the shim)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go",
+          "note": "The load-bearing chain: every assistant row sets ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text)) from the FULL text, and the SAME row is rewritten to turn_done when finish_reason='stop'. Cue and turn boundary therefore arrive together — the plan pause is the turn boundary for hermes, so nothing is lost."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "applyAssistantTextAndMarkers is called unconditionally from processParsedEvent (turn_done included) and keeps lastPendingWaitingCue in lockstep with lastAssistantText, clearing both on ClearToolNames — so the flag that reaches metrics is the LAST assistant row's and cannot leak forward from an earlier turn."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "classifyAgentDone checks IsWaitingForUserInput() BEFORE routing turn_done → ready, emitting 'turn ended with question or cue → waiting' straight from working. That is the no-ready-in-between acceptance criterion. Rule 0 (PermissionPending) is Claude-Code-hook-only and rule 1 (NeedsUserAttention) needs a user-blocking tool name — neither is reachable for hermes, so the prose path is the only one, and it suffices."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/waiting_cue.go",
+          "note": "IsWaitingForUserInput returns true on PendingWaitingCue. ProseIndicatesWaiting = ExtractQuestionSnippet OR ExtractWaitingCue; the plan skill's prescribed 'Shall I proceed?' is a trailing non-rhetorical question (first detector), and the alternate phrasings 'let me know…' / 'ready for your approval' hit bucket A/B of waitingCuePatterns (second detector)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "isUserBlockingTool = AskUserQuestion | ExitPlanMode | question | ask_user_question. Hermes' ask-the-user tool is registered as name='clarify' (tools/clarify_tool.py) and is absent from that set — the reason this arc must ride the prose path rather than the tool path. Not load-bearing for the recipe (the plan skill closes in prose)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Live store, hermes 0.19.0: SELECT display_kind, COUNT(*) FROM messages GROUP BY display_kind → NULL 116, model_switch 1. No approval- or plan-shaped display_kind exists; combined with the source-wide value set (model_switch/hidden/auto_continue/async_delegation_complete) this is the evidence that hermes persists NO structured approval marker — the basis for the 'indistinguishable from 2.17' caveat."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/approval.py",
+          "note": "Hermes' real approval gate (dangerous commands) keeps pending state module-level in memory ('Per-session approval state (thread-safe, keyed by session_key)') and never inserts a message row; tools/slash_confirm.py does the same for gateway slash confirmations. So the mid-turn approval branch (2.19) leaves no trace — which is exactly why THIS cell depends on the turn-boundary path instead."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\"; dispatch maps send|slash to the same send_text keystrokes. wait_turn polls the store for a NEW assistant/finish_reason='stop' row (EXPECTED_TURNS_SEEN) — precisely the row carrying the approval ask — and resolve_session_id binds only to a session started after this slot launched."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-18_user-blocking-plan-mode-approval/expected.jsonl",
+          "note": "Canonical sibling spec for this scenario: three phases ending at waiting (session_birth → turn_start → plan_mode_waiting), confirming the recipe scope is entry into waiting, not the approve continuation. This cell reuses that shape plus a waiting_dwell phase (codex sibling's) to prove the episode is user-visible and does not skip to ready."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/scenarios/2-2_auto-executed-tool-call/metadata.json",
+          "note": "Sibling hermes cell establishing the ProcessOwnedStore session model this spec anchors against: proc-<PID> presession at launch, real sessions row INSERTed on the first user message, so session_birth is unpinned to start and later phases chain via same_session_as."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH (verified 0.19.0 / 2026.7.20, git install — a Python console script shim into <HERMES_HOME>/hermes-agent/venv/bin/hermes)",
+        "HERMES_HOME exported to the recording home, with config.yaml carrying model.default + model.provider and credentials in .env/auth.json, so the run writes to an isolated state.db",
+        "the bundled `plan` skill present in the recording home's skills dir — verify with scan_skill_commands() returning '/plan', or that <skills>/software-development/plan/SKILL.md exists. Without it `/plan` falls through to prefix-matching and the turn never happens",
+        "sqlite3 on PATH — hermes persists no transcript file, so the driver reads the session id and turn completion straight out of state.db (the driver hard-fails without it)",
+        "tmux on PATH: `/plan` is an in-REPL slash command, so the live-TUI path is required (there is no headless way to deliver it)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no second hermes SESSION process running concurrently — source='cli' rows carry no stored cwd and the live-process CWD fallback returns nothing when more than one session process is alive (a running gateway is fine)"
+      ],
+      "setup": [
+        "The driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for 'Type your message or /help' before typing — the TUI loads tools and skills for several seconds and swallows keystrokes sent before it is ready.",
+        "`/plan <task>` is intercepted by cli.py as a skill slash command: it expands the skill body plus the user's instruction into a single message and puts it on _pending_input, so it lands in state.db as one ordinary `user` row and drives a normal turn. The driver therefore needs no new primitive — `slash` is the same keystrokes as `send`.",
+        "Typing `/` opens hermes' slash autocomplete. The space after `/plan` should dismiss it (same path `/new now` uses in the 1.5 cell). If the recording shows the pane holding the typed text without submitting, the fix is Escape-before-Enter inside send_text — a driver-port detail, not a missing step type.",
+        "The prompt names the plan-only constraint AND explicitly asks the agent to request approval before implementing. This is deliberate and load-bearing: hermes has no structured approval gate, so the ONLY thing that makes the pause observable is a trailing question or imperative cue in the turn's final assistant text (ProseIndicatesWaiting). The plan skill already prescribes '… Shall I proceed?' in its Execution Handoff section; the prompt re-states it so the turn does not end on a bare 'plan saved' statement, which would settle to ready.",
+        "The task is deliberately tiny and the plan is capped short, so the turn stays inside the timeout while still spanning many 2s poll ticks (the LLM reads a ~6k-token skill body and writes a file) — the working leg is observed on its own merits, with no reliance on the catch-up-turn synthesis.",
+        "The trailing sleep holds the session in `waiting` long enough for the dwell phase's 3s window and for the watcher to have published the transition before the driver tears the tmux session down."
+      ],
+      "script": [
+        {
+          "type": "slash",
+          "text": "/plan Add a --version flag to a tiny single-file Python CLI at ./mycli.py that prints 0.1.0 and exits. Keep the plan to about ten lines. Do not implement anything yet: after you save the plan, ask me whether you should proceed."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 14
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the hermes session (id shaped YYYYMMDD_HHMMSS_xxxxxx) born ready; a transient proc-<PID> presession may also appear and is not the session the arc lands on",
+        "events.jsonl shows ready → working when the /plan turn starts",
+        "events.jsonl shows working → waiting when the turn completes — and NO state_transition to ready between those two, which is the scenario's defining criterion",
+        "the session remains in waiting for at least 3s after the transition (no skip-over to ready before any user reply)",
+        "final session state is waiting",
+        "state.db confirms the pause is the turn boundary: the newest row for that session is role='assistant' with finish_reason='stop' and its content ends in an approval question or cue — record MUST paste that content, since it is the single signal the whole verdict rests on",
+        "state.db shows the plan was written: an assistant row with finish_reason='tool_calls' naming write_file, closed by a tool row with the matching tool_call_id (and a file under .hermes/plans/ in the run cwd)",
+        "the session's websocket metrics show non-zero cumulative input+output tokens and a non-zero estimated cost when the configured model is priced by irrlicht's alias table"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}
