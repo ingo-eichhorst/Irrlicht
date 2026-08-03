@@ -17,6 +17,7 @@ const (
 	evAutoModeResolved = "session.auto_mode_resolved"
 	evUserMessage      = "user.message"
 	evAssistantMessage = "assistant.message"
+	evTurnStart        = "assistant.turn_start"
 	evTurnEnd          = "assistant.turn_end"
 	evToolStart        = "tool.execution_start"
 	evToolComplete     = "tool.execution_complete"
@@ -103,6 +104,17 @@ func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
 		parseUserMessage(data, ev)
 	case evAssistantMessage:
 		p.parseAssistantMessage(data, ev)
+	case evTurnStart:
+		// The agent has begun a turn. This must NOT be skipped: Copilot closes
+		// a turn after every tool call and opens the next one ~50-80ms later
+		// with NO user.message in between, so on a continuation turn this is
+		// the ONLY signal that the agent is working again. Skipping it left
+		// the session reading idle for the whole continuation — 122ms in one
+		// recording and 5.24 SECONDS in another (#1256).
+		//
+		// Non-settling, so the classifier's default transcript-activity rule
+		// holds the session `working` — the same shape as compaction_start.
+		ev.EventType = "turn_start"
 	case evTurnEnd:
 		ev.EventType = "turn_done"
 	case evToolStart:
@@ -142,9 +154,8 @@ func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
 		// ready.
 		ev.EventType = "turn_done"
 	default:
-		// Includes system.message (the system-prompt injection),
-		// assistant.turn_start (the open bracket of a turn the user message
-		// already put into working) and every event type a future CLI adds.
+		// Includes system.message (the system-prompt injection) and every
+		// event type a future CLI adds.
 		ev.Skip = true
 	}
 

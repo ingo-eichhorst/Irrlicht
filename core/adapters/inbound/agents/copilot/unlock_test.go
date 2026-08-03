@@ -172,3 +172,35 @@ func TestAutoPlaceholderIsNotAModel(t *testing.T) {
 		t.Errorf("ModelName = %q after auto_mode_resolved, want gpt-5-mini", ev.ModelName)
 	}
 }
+
+// TestContinuationTurnDoesNotFlashReady pins the mid-turn `ready` flash found
+// by recording the auto-executed-tool-call and self-correction-iteration cells.
+//
+// Copilot closes a turn after every tool call and opens the next one ~50-80ms
+// later, with NO user.message in between. assistant.turn_end settles the
+// session to ready, and assistant.turn_start was skipped — justified in a
+// comment as "the open bracket of a turn the user message already put into
+// working", which holds for the FIRST turn and for no other. The session
+// therefore read idle for the whole continuation: 122ms in one recording, and
+// 5.24 SECONDS in another.
+func TestContinuationTurnDoesNotFlashReady(t *testing.T) {
+	lines := `{"type":"session.start","timestamp":"2026-08-03T10:44:00.000Z","data":{"context":{"cwd":"/tmp/p"}}}
+{"type":"user.message","timestamp":"2026-08-03T10:44:01.000Z","data":{"content":"run it"}}
+{"type":"assistant.turn_start","timestamp":"2026-08-03T10:44:02.000Z","data":{"turnId":"0"}}
+{"type":"tool.execution_start","timestamp":"2026-08-03T10:44:03.000Z","data":{"toolCallId":"call_a","toolName":"bash"}}
+{"type":"tool.execution_complete","timestamp":"2026-08-03T10:44:13.000Z","data":{"toolCallId":"call_a","success":true}}
+{"type":"assistant.turn_end","timestamp":"2026-08-03T10:44:14.149Z","data":{"turnId":"0"}}
+{"type":"assistant.turn_start","timestamp":"2026-08-03T10:44:14.228Z","data":{"turnId":"1"}}
+`
+	tl := tailer.NewTranscriptTailer(writeTranscript(t, lines), &Parser{}, AdapterName)
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+
+	if m.LastEventType == "turn_done" {
+		t.Error("LastEventType = \"turn_done\" after a continuation turn_start — the agent " +
+			"opened turn 1 immediately after closing turn 0 with no user message, so the " +
+			"session must not read as finished")
+	}
+}
