@@ -7,7 +7,7 @@
     "agent_cli_version": "1.0.77",
     "daemon_version": "0.5.9+a21849f",
     "confidence": 0.8,
-    "notes": "agent_supports: yes (model identity is explicit on three event types); daemon_capability: full; driver_capability: ready. Caveat: this account cannot PIN a model — --model accepts only \"auto\" and the hydra router picks per turn."
+    "notes": "agent_supports: yes (model identity is explicit on three event types); daemon_capability: full; driver_capability: ready. Caveat: this account cannot PIN a model — --model accepts only \"auto\" and the hydra router picks per turn. RECORDING CAVEAT (2026-08-03, recording 2026-08-03-12-17-28_irrlichd-0.5.9+30bd8dc, 3/3): model identity is CONFIRMED — the replay summary reads model_name=gpt-5-mini (concrete, neither 'unknown' nor the placeholder 'auto'), cost 0.0028286, tokens 10623. Unrelated to this cell's assertions, the live events show the same born-ready gap the session-end cell records as daemon=bug: working (12:17:48.073) and ready (12:17:48.074) land 1 ms apart, so the session displayed `ready` for the whole 7 s turn. The phases pass because they assert ordering, not duration."
   },
   "details": {
     "assessment": {
@@ -25,7 +25,8 @@
         "ModelName reads the literal placeholder \"auto\" between session.model_change and session.auto_mode_resolved. Assert the model only AFTER turn_end (the resolution always precedes the first assistant.message).",
         "ContextWindow is NOT assertable via the observation vector: the replay golden's context_window/total_tokens/context_utilization fields are scoped to antigravity (cmd/replay/metrics.go L59-63). It is evidenced in prose from the capacity table instead (200000 for claude-haiku-4-5, 272000 for gpt-5-mini in the pinned snapshot).",
         "Context-window UTILISATION is unavailable mid-session — currentTokens is only written on session.shutdown (session.usage_checkpoint carries only totalNanoAiu/totalPremiumRequests/modelCacheState), so no live utilisation assertion is possible for a one-turn recipe.",
-        "Cost is derived from general token pricing via the capacity map, not from Copilot's own billing units (totalNanoAiu AI credits are deliberately not converted to dollars — the #1256 maintainer decision)."
+        "Cost is derived from general token pricing via the capacity map, not from Copilot's own billing units (totalNanoAiu AI credits are deliberately not converted to dollars — the #1256 maintainer decision).",
+        "RECORDING CAVEAT (2026-08-03, recording 2026-08-03-12-17-28_irrlichd-0.5.9+30bd8dc, 3/3): model identity is CONFIRMED — the replay summary reads model_name=gpt-5-mini (concrete, neither 'unknown' nor the placeholder 'auto'), cost 0.0028286, tokens 10623. Unrelated to this cell's assertions, the live events show the same born-ready gap the session-end cell records as daemon=bug: working (12:17:48.073) and ready (12:17:48.074) land 1 ms apart, so the session displayed `ready` for the whole 7 s turn. The phases pass because they assert ordering, not duration."
       ],
       "sources": [
         {
