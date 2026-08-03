@@ -139,15 +139,6 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	return ev
 }
 
-// parseToolCalls extracts tool invocations from a `messages.tool_calls`
-// column. The column holds a JSON array of OpenAI-style tool calls:
-//
-//	[{"id":"888148639","call_id":"888148639","type":"function",
-//	  "function":{"name":"terminal","arguments":"{...}"}}]
-//
-// Both `id` and `call_id` were identical in every observed row; `id` is
-// preferred and `call_id` is the fallback, because the matching `tool` row
-// closes the call by `tool_call_id`.
 // finishReasonContinues is the ONE finish_reason that means the agent is still
 // working. Hermes v0.19.0's agent/conversation_loop.py assigns 'stop',
 // 'length' (hit max output tokens), 'content_filter' (model declined),
@@ -185,8 +176,14 @@ type toolCall struct {
 	} `json:"function"`
 }
 
-// decodeToolCalls unmarshals the column into calls. A malformed value yields
-// nil rather than an error: a row we cannot read must not stall the session.
+// decodeToolCalls unmarshals a `messages.tool_calls` column into calls. The
+// column holds a JSON array of OpenAI-style tool calls:
+//
+//	[{"id":"888148639","call_id":"888148639","type":"function",
+//	  "function":{"name":"terminal","arguments":"{...}"}}]
+//
+// A malformed value yields nil rather than an error: a row we cannot read
+// must not stall the session.
 func decodeToolCalls(v interface{}) []toolCall {
 	s, ok := v.(string)
 	if !ok || s == "" {
@@ -199,10 +196,11 @@ func decodeToolCalls(v interface{}) []toolCall {
 	return calls
 }
 
-func parseToolCalls(v interface{}) []tailer.ToolUse {
-	return toolUses(decodeToolCalls(v))
-}
-
+// toolUses maps decoded calls onto the tailer's ToolUse vocabulary. Both `id`
+// and `call_id` were identical in every observed row; `id` is preferred and
+// `call_id` is the fallback, because the matching `tool` row closes the call
+// by `tool_call_id`. A call carrying neither is dropped: an id-less use could
+// never be closed, and would hold the session in `working` forever.
 func toolUses(calls []toolCall) []tailer.ToolUse {
 	var uses []tailer.ToolUse
 	for _, c := range calls {

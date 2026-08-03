@@ -1,5 +1,5 @@
-// task_fold.go re-exports the tailer's TaskDelta/TaskSnapshot fold for
-// adapters that never run the tailer.
+// task_fold.go holds the TaskDelta/TaskSnapshot fold for adapters that never
+// run the tailer.
 //
 // A ProcessOwnedStore adapter (opencode, hermes) reads rows out of a SQLite
 // store and drives Parser.ParseLine itself, so TranscriptTailer — and the
@@ -9,6 +9,14 @@
 // (Create starts at pending; a snapshot is authoritative for BOTH pruning and
 // the status reversions the delta path skips by design) are subtle enough
 // that a second, independently maintained implementation is a latent bug.
+//
+// Scope, stated plainly because the file name suggests more: this de-duplicates
+// the STORE adapters against each other, not against the tailer.
+// TranscriptTailer.applyTaskDeltas and .reconcileTaskSnapshot remain separate
+// implementations of the same rules — applyTaskDeltas additionally handles
+// TaskOpAssignID, which only the transcript path produces, so the two are not
+// interchangeable today. Collapsing all three is worth doing; until then, a
+// rule change here has to be mirrored in tailer.go by hand.
 package tailer
 
 import (

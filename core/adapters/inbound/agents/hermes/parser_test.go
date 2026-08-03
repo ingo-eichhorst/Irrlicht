@@ -228,14 +228,17 @@ func TestParseLine_TodoExtractionIsNarrowAndSafe(t *testing.T) {
 	}
 }
 
-func TestParseToolCalls_Malformed(t *testing.T) {
+// The decode → map pair ParseLine runs on every assistant row, asserted
+// directly. Was written against a parseToolCalls wrapper that existed only
+// for this test; the pair is what production actually calls.
+func TestDecodeToolCalls_Malformed(t *testing.T) {
 	for _, in := range []interface{}{nil, "", "not json", `{"not":"an array"}`, `[]`} {
-		if got := parseToolCalls(in); got != nil {
-			t.Errorf("parseToolCalls(%v) = %v, want nil", in, got)
+		if got := toolUses(decodeToolCalls(in)); got != nil {
+			t.Errorf("toolUses(decodeToolCalls(%v)) = %v, want nil", in, got)
 		}
 	}
 	// call_id is the documented fallback when id is absent.
-	got := parseToolCalls(`[{"call_id":"c1","function":{"name":"read"}}]`)
+	got := toolUses(decodeToolCalls(`[{"call_id":"c1","function":{"name":"read"}}]`))
 	if len(got) != 1 || got[0].ID != "c1" {
 		t.Errorf("call_id fallback failed: %v", got)
 	}
