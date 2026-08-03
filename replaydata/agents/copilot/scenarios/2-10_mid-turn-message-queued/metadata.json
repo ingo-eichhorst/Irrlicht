@@ -79,7 +79,8 @@
         "The driver seeds a scratch COPILOT_HOME with trustedFolders + askedSetupTerminals pre-answered and launches with --allow-all, so neither the trust modal nor a permission prompt can block the input box (and no permission.requested is written, keeping `waiting` unreachable)",
         "The first prompt runs a shell `sleep 10` so the turn stays WORKING long enough to type into AND has a further in-turn model-request boundary for the steered follow-up to be materialised at (runImmediatePromptPreRequest). A text-only first turn might have no boundary left, in which case copilot falls back to consuming the follow-up as its own turn — the spec passes either way, but the tool call makes the intended mid-turn landing the likely one",
         "MID-TURN DELIVERY: the follow-up is typed with `keys` (text), a 1 s settle, then `keys` (Enter) — NOT a second `send`. send_text bumps EXPECTED_TURNS and a steered follow-up folds into turn 1 (one assistant.turn_end), so a second send would hang wait_turn until the cell timeout. The 1 s settle mirrors type_enter's 0.3 s pause: copilot's TUI redraws on input and swallows an Enter delivered in the same tick",
-        "Plain Enter is what makes this the STEERING path (mode:\"immediate\"). Ctrl+Q / Ctrl+Enter would be copilot's true queue (mode:\"enqueue\") and produce a separate follow-up turn — deliberately not driven here"
+        "Plain Enter is what makes this the STEERING path (mode:\"immediate\"). Ctrl+Q / Ctrl+Enter would be copilot's true queue (mode:\"enqueue\") and produce a separate follow-up turn — deliberately not driven here",
+        "TRAILING SLEEP MUST BE LONG (25 s, not 8): wait_turn returns at the FIRST assistant.turn_end, and the steered follow-up is materialised in a SECOND turn that closes ~6 s later. Sized at 8 s the run tore the daemon down ~70 ms before the final turn_end's 2 s activity-debounce window closed, so the live capture ended with the session still in working even though the transcript settles to ready (offline replay of that same capture produced the working→ready transition at the usage_checkpoint). That is recipe variance, not a daemon defect."
       ],
       "script": [
         {
@@ -111,7 +112,7 @@
         },
         {
           "type": "sleep",
-          "seconds": 8
+          "seconds": 25
         }
       ],
       "verify": [
