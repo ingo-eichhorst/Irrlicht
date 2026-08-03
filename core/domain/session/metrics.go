@@ -624,25 +624,33 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 		QuestionHeadline:         newM.QuestionHeadline,
 		PendingQuestionMarker:    newM.PendingQuestionMarker,
 		PendingWaitingCue:        newM.PendingWaitingCue,
-		PermissionMode:           newM.PermissionMode,
-		SubagentCompletions:      newM.SubagentCompletions,
-		AppliedTaskDeltas:        newM.AppliedTaskDeltas,
-		CumInputTokens:           newM.CumInputTokens,
-		CumOutputTokens:          newM.CumOutputTokens,
-		CumCacheReadTokens:       newM.CumCacheReadTokens,
-		CumCacheCreationTokens:   newM.CumCacheCreationTokens,
-		CompletedTurns:           newM.CompletedTurns,
-		CacheBloat:               newM.CacheBloat,
-		CacheBloatTooltip:        newM.CacheBloatTooltip,
-		CacheBloatExplanation:    newM.CacheBloatExplanation,
-		Tasks:                    newM.Tasks,
-		NoSubstantiveActivity:    newM.NoSubstantiveActivity,
-		SawManualCompactBoundary: newM.SawManualCompactBoundary,
-		SawMidPassTurnBoundary:   newM.SawMidPassTurnBoundary,
-		RateLimit:                newM.RateLimit,
-		RateLimitForecastEta:     newM.RateLimitForecastEta,
-		TaskEstimate:             newM.TaskEstimate,
-		TaskCompletionEta:        newM.TaskCompletionEta,
+		// Recomputed from the transcript every pass (the tailer derives it
+		// from unmatched permission request ids), so it is copied verbatim —
+		// and MUST be copied at all: this allowlist silently drops any field
+		// it omits, and omitting this one meant the transcript-tier permission
+		// rule could never fire live. Replay carries the field through its own
+		// converter, so the parser, classifier and replay-fixture suites were
+		// all green while live behaviour was broken (#1256).
+		TranscriptPermissionPending: newM.TranscriptPermissionPending,
+		PermissionMode:              newM.PermissionMode,
+		SubagentCompletions:         newM.SubagentCompletions,
+		AppliedTaskDeltas:           newM.AppliedTaskDeltas,
+		CumInputTokens:              newM.CumInputTokens,
+		CumOutputTokens:             newM.CumOutputTokens,
+		CumCacheReadTokens:          newM.CumCacheReadTokens,
+		CumCacheCreationTokens:      newM.CumCacheCreationTokens,
+		CompletedTurns:              newM.CompletedTurns,
+		CacheBloat:                  newM.CacheBloat,
+		CacheBloatTooltip:           newM.CacheBloatTooltip,
+		CacheBloatExplanation:       newM.CacheBloatExplanation,
+		Tasks:                       newM.Tasks,
+		NoSubstantiveActivity:       newM.NoSubstantiveActivity,
+		SawManualCompactBoundary:    newM.SawManualCompactBoundary,
+		SawMidPassTurnBoundary:      newM.SawMidPassTurnBoundary,
+		RateLimit:                   newM.RateLimit,
+		RateLimitForecastEta:        newM.RateLimitForecastEta,
+		TaskEstimate:                newM.TaskEstimate,
+		TaskCompletionEta:           newM.TaskCompletionEta,
 	}
 }
 
