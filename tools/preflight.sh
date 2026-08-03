@@ -13,10 +13,20 @@
 #   .github/workflows/web-test.yml  — npm test in both web trees
 #   .github/workflows/ars-gate.yml  — ARS architecture-regression gate
 #                                      (composite/category score vs origin/main)
-#   .github/workflows/linux.yml     — build + full test suite (-race) +
-#                                      replay-fixtures under Linux, via the
-#                                      linux-replay Docker image (opt-in:
-#                                      needs Docker, by far the slowest gate)
+#   .github/workflows/linux.yml     — its replay-fixtures step natively (see
+#                                      below); the rest — build + full test
+#                                      suite (-race) under Linux, via the
+#                                      linux-replay Docker image — is opt-in:
+#                                      needs Docker, by far the slowest gate
+#
+# replay-fixtures is the one PR-gating step that lives in linux.yml but does
+# not need Linux to be meaningful: the goldens are byte-identical across
+# platforms by construction (that is what the step exists to prove), so a
+# recording or parser change that breaks them breaks them here too. Running it
+# natively means golden drift — the failure mode a recording sweep produces
+# most often — is caught without Docker. Full Linux parity still needs
+# --linux, which catches the other two things this cannot: Linux-only
+# compilation and timing.
 #
 # The `security` group has no matching workflow — GitHub Actions doesn't run
 # it yet (see .claude/skills/ir:release/SKILL.md's Step 5.5, which runs the
@@ -233,6 +243,12 @@ if want go; then
                   "replaydata validate"      go run ./tools/onboarding-factory/cmd/of validate
   run_gate_scoped '^tools/onboarding-factory/' \
                   "recording-rig smoke test" bash tools/onboarding-factory/scripts/smoke-test.sh
+  # linux.yml's replay-fixtures step, run natively — see the header. Scoped to
+  # everything a golden is derived from: the recordings themselves, the replay
+  # harness, and the core parsers/tailer the harness drives. ~3 minutes on a
+  # full run, which is why the scoping matters for the pre-push hook.
+  run_gate_scoped '^replaydata/|^tools/onboarding-factory/|^core/pkg/tailer/|^core/adapters/inbound/agents/' \
+                  "replay fixtures"          tools/replay-fixtures.sh
   run_gate_scoped '^tools/starhistory/' \
                   "starhistory tests"        go test ./tools/starhistory/... -count=1
 fi
