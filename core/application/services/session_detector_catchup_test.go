@@ -145,8 +145,12 @@ func TestSessionDetector_CatchUpTurn_NoSynthesisWithoutLivePreSession(t *testing
 	if len(transitions) != 1 {
 		t.Fatalf("expected 1 (unchanged) state transition for session_old_1, got %d: %+v", len(transitions), transitions)
 	}
+	// One transition, and it is `ready`: this session's metrics report
+	// LastEventType "turn_done", so classifying it against its own metrics on
+	// birth (see buildNewSessionState) agrees with the flat bootstrap. The
+	// sibling test below is the one where they differ.
 	if transitions[0].NewState != session.StateReady || transitions[0].Reason != "new session created" {
-		t.Errorf("transition = %+v, want the ordinary flat new_state=ready reason=\"new session created\"", transitions[0])
+		t.Errorf("transition = %+v, want new_state=ready reason=\"new session created\"", transitions[0])
 	}
 }
 
@@ -198,8 +202,15 @@ func TestSessionDetector_CatchUpTurn_NoSynthesisWhenTurnNotYetDone(t *testing.T)
 	if len(transitions) != 1 {
 		t.Fatalf("expected 1 (unchanged) state transition for session_real_2, got %d: %+v", len(transitions), transitions)
 	}
-	if transitions[0].NewState != session.StateReady || transitions[0].Reason != "new session created" {
-		t.Errorf("transition = %+v, want the ordinary flat new_state=ready reason=\"new session created\"", transitions[0])
+	// The invariant under test is the ONE transition above: no catch-up turn is
+	// synthesized while the turn is still in flight (#996). The state on that
+	// single transition is `working`, not `ready`, because this session's own
+	// metrics say a turn is open (LastEventType "user") and every new session
+	// is now classified against them — see buildNewSessionState. Asserting
+	// `ready` here previously encoded the born-ready defect #1256 found: a
+	// session discovered mid-turn was reported idle while the agent generated.
+	if transitions[0].NewState != session.StateWorking || transitions[0].Reason != "new session created" {
+		t.Errorf("transition = %+v, want new_state=working reason=\"new session created\"", transitions[0])
 	}
 }
 

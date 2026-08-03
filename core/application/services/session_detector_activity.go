@@ -256,20 +256,37 @@ func (d *SessionDetector) buildNewSessionState(id agent.Identity, ev agent.Event
 	// Resolve git metadata and compute initial metrics.
 	d.enricher.EnrichNewSession(state, ev)
 
+	// Classify the session against its own freshly-computed metrics instead of
+	// leaving it at the generic "ready until proven otherwise" bootstrap.
+	//
+	// This used to apply to CHILD sessions only. Two independent reasons it
+	// must apply to every session:
+	//
 	// A child's own first activity event may not arrive for a while — the
 	// same background-workflow discovery lag that leaves its parent needing
-	// holdParentWorkingForNewChild (in finalizeNewSession) below. Classify it
-	// against its own freshly-computed metrics now instead of leaving it at
-	// the generic "ready until proven otherwise" bootstrap: a child stuck at
-	// ready doesn't count as active in hasActiveChildren, so the parent's
+	// holdParentWorkingForNewChild (in finalizeNewSession) below: a child stuck
+	// at ready doesn't count as active in hasActiveChildren, so the parent's
 	// hold can't survive past the child's own next activity pass — e.g. the
 	// periodic stale-session sweep would see the parent's own turn-done
 	// metrics unchanged, find no active children, and flip it straight back
 	// to ready (issue #889).
-	if state.ParentSessionID != "" {
-		if newState, _ := ClassifyState(state.State, state.Metrics); newState != state.State {
-			state.State = newState
-		}
+	//
+	// And a TOP-LEVEL session can be discovered with a turn already open. That
+	// is invisible for an agent whose transcript file appears empty and fills
+	// in later (Claude Code creates the file, then writes) — there is
+	// genuinely nothing to classify at discovery. GitHub Copilot creates
+	// events.jsonl only when the first prompt is sent, so the file ALREADY
+	// holds the open turn when the watcher first sees it: the whole first turn
+	// sits in the discovery backlog and the session was born `ready` while the
+	// agent was demonstrably generating (10.9s in one recording; a SIGKILLed
+	// session never left ready at all). Replaying the same transcript offline
+	// produced the correct ready->working, which is what identified it as a
+	// live-path-only gap rather than a parser one (#1256).
+	//
+	// Sessions with nothing to classify are unaffected: ClassifyState against
+	// nil/empty metrics returns ready, which is where they already start.
+	if newState, _ := ClassifyState(state.State, state.Metrics); newState != state.State {
+		state.State = newState
 	}
 	return state
 }
