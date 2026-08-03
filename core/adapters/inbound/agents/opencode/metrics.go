@@ -11,6 +11,7 @@ import (
 
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/capacity"
+	"irrlicht/core/pkg/sqlitero"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -29,7 +30,7 @@ func ComputeMetrics(transcriptPath, sessionID string) (*session.SessionMetrics, 
 		return nil, nil
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_journal=WAL&_timeout=500")
+	db, err := sqlitero.Open(dbPath)
 	if err != nil {
 		return nil, nil
 	}

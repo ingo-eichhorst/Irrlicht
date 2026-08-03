@@ -4,11 +4,11 @@ import (
 	"database/sql"
 	"log"
 	"strings"
-
-	_ "modernc.org/sqlite" // pure-Go SQLite driver; no CGo required
+	"sync"
 
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/capacity"
+	"irrlicht/core/pkg/sqlitero"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -58,18 +58,27 @@ func ComputeMetrics(storePath, sessionID string) (*session.SessionMetrics, error
 // Hermes runs the store in journal_mode=delete (verified: `pragma
 // journal_mode` returns "delete", and no -wal file exists next to a live
 // store), so a reader can collide with a writer's exclusive lock. The
-// timeout bounds that wait instead of blocking the watcher's scan loop.
+// timeout sqlitero sets bounds that wait instead of blocking the watcher's
+// scan loop.
 //
-// The "file:" prefix is load-bearing, not decoration: modernc.org/sqlite
-// only parses DSN query parameters for a file: URI. Given a bare path it
-// strips the query and opens with SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE,
-// so "?mode=ro" is silently ignored — verified against v1.55.0, where a
-// bare-path DSN CREATED a missing database and accepted a CREATE TABLE.
-// This adapter's permission is observe-kind and its consent copy promises
-// "No row is ever written", so the mode has to actually be enforced.
+// The DSN construction lives in core/pkg/sqlitero because two other adapters
+// read an agent-owned store behind the same observe-kind promise, and every
+// wrong spelling of "read-only" reads identically to the right one — see that
+// package for what a bare path, and an unescaped one, each do. A rejected
+// path (sqlitero.ErrUnsupportedPath) is logged once rather than per scan: the
+// condition is a static property of $HERMES_HOME and both callers run on the
+// watcher's 2s tick.
 func openReadOnly(dbPath string) (*sql.DB, error) {
-	return sql.Open("sqlite", "file:"+dbPath+"?mode=ro&_timeout=500")
+	db, err := sqlitero.Open(dbPath)
+	if err != nil {
+		unsupportedStorePathOnce.Do(func() { log.Printf("hermes: %v", err) })
+	}
+	return db, err
 }
+
+// unsupportedStorePathOnce keeps a rejected store path to one log line per
+// daemon.
+var unsupportedStorePathOnce sync.Once
 
 // parseStorePath splits a "<path>?session=<id>" transcript path. When no
 // session is embedded the caller-supplied sessionID stands.

@@ -1,12 +1,11 @@
 package antigravity
 
 import (
-	"database/sql"
 	"os"
 	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite" // registers the "sqlite" driver for database/sql
+	"irrlicht/core/pkg/sqlitero"
 )
 
 // Antigravity keeps token usage and the canonical model id in a per-conversation
@@ -87,7 +86,7 @@ func readStoreModelTokens(transcriptPath string, cache *dbCache) (dbModelTokens,
 
 	// Read-only, WAL-aware, short timeout so a live agy write never blocks the
 	// daemon (mirrors the opencode metrics reader).
-	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_journal=WAL&_timeout=500")
+	db, err := sqlitero.Open(dbPath)
 	if err != nil {
 		return dbModelTokens{}, false
 	}

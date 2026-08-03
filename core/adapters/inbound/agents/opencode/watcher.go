@@ -16,6 +16,7 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/pkg/sqlitero"
 )
 
 const defaultMinScanGap = 500 * time.Millisecond
@@ -252,9 +253,9 @@ func (w *Watcher) scanSessions() {
 	}
 	w.lastScan = time.Now()
 
-	db, err := sql.Open("sqlite", w.dbPath+"?mode=ro&_journal=WAL&_timeout=500")
+	db, err := sqlitero.Open(w.dbPath)
 	if err != nil {
-		log.Printf("opencode: sql.Open: %v", err)
+		log.Printf("opencode: open store read-only: %v", err)
 		return
 	}
 	defer db.Close()

@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	// Registers the "sqlite" driver for the database/sql handles these tests
 	// open directly to seed fixtures.
 	_ "modernc.org/sqlite"
+
+	"irrlicht/core/pkg/sqlitero"
 )
 
 // newTestStore creates a SQLite store carrying the subset of Hermes'
@@ -18,7 +21,40 @@ import (
 // output so a query that would fail against a real store fails here too.
 func newTestStore(t *testing.T) (path string, db *sql.DB) {
 	t.Helper()
-	path = filepath.Join(t.TempDir(), "state.db")
+	return newTestStoreIn(t, t.TempDir())
+}
+
+// seedStoreCopiedInto builds a one-session store at an ORDINARY path and
+// copies the finished file into dir, returning the copy's path.
+//
+// The copy is not fussiness: dir's name is the thing under test in
+// TestOpenReadOnly_URISpecialCharsInPath, and seeding in place would go
+// through modernc with a bare-path DSN, which truncates at the first "?" and
+// creates the very stray file that test asserts against. Building the fixture
+// somewhere safe keeps the assertion about openReadOnly.
+func seedStoreCopiedInto(t *testing.T, dir string) string {
+	t.Helper()
+	src, db := newTestStore(t)
+	insertSession(t, db, sessionRow{id: "s1", source: "cli", model: "m", started: 1000, msgs: 1})
+	if err := db.Close(); err != nil { // flush before copying the bytes
+		t.Fatalf("close seed store: %v", err)
+	}
+	blob, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read seed store: %v", err)
+	}
+	dst := filepath.Join(dir, "state.db")
+	if err := os.WriteFile(dst, blob, 0o644); err != nil {
+		t.Fatalf("write store into %s: %v", dir, err)
+	}
+	return dst
+}
+
+// newTestStoreIn is newTestStore with the containing directory chosen by the
+// caller.
+func newTestStoreIn(t *testing.T, dir string) (path string, db *sql.DB) {
+	t.Helper()
+	path = filepath.Join(dir, "state.db")
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatalf("open test store: %v", err)
@@ -295,6 +331,85 @@ func TestOpenReadOnly_CannotWriteOrCreate(t *testing.T) {
 	}
 	if got != "s1" {
 		t.Errorf("read back %q, want s1", got)
+	}
+}
+
+// $HERMES_HOME is user-controlled, and the DSN is a URI, so the store path
+// has to be escaped rather than concatenated in. The three characters that
+// matter are the ones a URI reads structurally:
+//
+//   - "#" opens a fragment and "?" a second query. Both TRUNCATE the path,
+//     and both carry "mode=ro" away with them — so the driver opens a
+//     SHORTER path with READWRITE|CREATE and writes a stray empty database
+//     there. That is the same broken promise TestOpenReadOnly_CannotWriteOrCreate
+//     pins ("No row is ever written"), reached by a different route.
+//   - "%2F" is read as a percent-escape (here: a literal "/") and the open
+//     fails outright, so the adapter goes silently blind for that user.
+//
+// "#" and "%" are fixed by escaping them; "?" cannot be, because modernc
+// v1.55.0 does not decode "%3F" back — so that one is REFUSED instead (see
+// errUnsupportedStorePath). Either way the invariant asserted is the same:
+// nothing is ever created outside the store's own directory.
+//
+// Seen red against the unescaped DSN ("file:"+dbPath+…), one distinct failure
+// per character: "#" read back "no such table: sessions" from a truncated
+// path, "?" left a stray "hermes" file beside the store's directory, and
+// "%2F" failed to open at all. The space is a lock — it was already fine —
+// and is here because it is the special character a real macOS home is most
+// likely to contain.
+func TestOpenReadOnly_URISpecialCharsInPath(t *testing.T) {
+	cases := []struct {
+		dirName    string
+		wantReject bool
+	}{
+		{dirName: "hermes#home"},
+		{dirName: "hermes%2Fhome"},
+		{dirName: "hermes home"},
+		{dirName: "hermes?home", wantReject: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.dirName, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, tc.dirName)
+			if err := os.Mkdir(dir, 0o755); err != nil {
+				t.Fatalf("mkdir %q: %v", tc.dirName, err)
+			}
+			path := seedStoreCopiedInto(t, dir)
+
+			db, err := openReadOnly(path)
+			switch {
+			case tc.wantReject:
+				if err == nil {
+					db.Close()
+					t.Errorf("openReadOnly accepted a %q path; it must refuse rather than let the driver write a stray database", tc.dirName)
+				} else if !errors.Is(err, sqlitero.ErrUnsupportedPath) {
+					t.Errorf("openReadOnly error = %v, want sqlitero.ErrUnsupportedPath", err)
+				}
+			case err != nil:
+				t.Fatalf("openReadOnly: %v", err)
+			default:
+				defer db.Close()
+				var got string
+				if err := db.QueryRow(`SELECT id FROM sessions WHERE id='s1'`).Scan(&got); err != nil {
+					t.Fatalf("read store under %q: %v", tc.dirName, err)
+				}
+				if got != "s1" {
+					t.Errorf("read back %q, want s1", got)
+				}
+			}
+
+			// Nothing may appear outside the store's own directory: a
+			// truncated path is how the read-only promise gets broken here.
+			entries, err := os.ReadDir(root)
+			if err != nil {
+				t.Fatalf("read %s: %v", root, err)
+			}
+			for _, e := range entries {
+				if e.Name() != tc.dirName {
+					t.Errorf("openReadOnly created %q outside the store directory — the path was truncated and mode=ro lost", e.Name())
+				}
+			}
+		})
 	}
 }
 

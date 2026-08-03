@@ -48,6 +48,13 @@ Use `./.build` for build artifacts.
 - Errors are logged via `Logger` interface, not propagated with `fmt.Errorf`
 - Child sessions (subagents and background agents) use `ParentSessionID` for parent-child linking
 - Adapters declare `Permissions` on `agent.Agent` (with Apply/Remove effect closures); every read or modification an adapter performs must be consent-gated behind one of its declared permissions — nothing is exercised while pending or denied
+- An adapter reading an agent-owned SQLite store (hermes, opencode, antigravity)
+  opens it through `core/pkg/sqlitero`, never `sql.Open` directly. The DSN
+  grammar decides whether "read-only" is real, and every wrong spelling reads
+  identically to the right one: a bare path drops `mode=ro` entirely, an
+  unescaped path can be truncated into a *different* file, and `_journal=WAL`
+  is a write. All three shipped at some point; that package is where the
+  evidence and the regression tests live.
 
 ## Testing
 
@@ -135,7 +142,11 @@ Before marking a ticket done, run the full suite — every layer must pass:
   skill file is edited, and `testdata/` is excluded from the gate's own walk
   because those fixtures are deliberately corrupt.
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
-- Replay: `tools/replay-fixtures.sh`
+- Replay: `tools/replay-fixtures.sh` — gated in CI by linux.yml, and run
+  natively as `tools/preflight.sh`'s `replay fixtures` gate, so golden drift
+  surfaces without Docker. Takes ~3 minutes unscoped; under `--changed` it
+  runs only when the diff touches `replaydata/`, the factory, or the
+  `core/` parsers and tailer a golden is derived from.
 - Replay goldens (when a recording or replay-output change is in play):
   regenerate with `UPDATE_REPLAY_GOLDENS=1 go test
   ./tools/onboarding-factory/cmd/replay/... -count=1` (the `-count=1`
@@ -175,8 +186,9 @@ Before marking a ticket done, run the full suite — every layer must pass:
 ### Local CI parity — catch failures before pushing
 
 `tools/preflight.sh` runs every PR-gating check (test.yml + web-test.yml +
-ars-gate.yml, plus the full Linux build+test+replay-fixtures gate via Docker
-under `--linux`) locally, in CI's order, and prints a pass/fail summary
+ars-gate.yml + linux.yml's replay-fixtures step natively, plus the full Linux
+build+test gate via Docker under `--linux`) locally, in CI's order, and prints
+a pass/fail summary
 instead of stopping at the first failure — so before opening a PR, run it
 once instead of round-tripping through GitHub Actions per fix:
 
