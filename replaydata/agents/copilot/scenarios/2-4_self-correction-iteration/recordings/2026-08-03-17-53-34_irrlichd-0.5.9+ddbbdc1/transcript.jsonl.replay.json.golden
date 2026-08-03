@@ -11,27 +11,27 @@
     "total_events": 18,
     "consumed_events": 18,
     "total_transitions": 3,
-    "first_event_time": "2026-08-03T10:43:25.678Z",
-    "last_event_time": "2026-08-03T10:44:39.887Z",
-    "wall_clock_session_duration": 74209000000,
+    "first_event_time": "2026-08-03T15:53:35.041Z",
+    "last_event_time": "2026-08-03T15:54:47.824Z",
+    "wall_clock_session_duration": 72783000000,
     "state_durations": {
-      "ready": 30650000000,
-      "working": 43559000000
+      "ready": 31907000000,
+      "working": 40876000000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {},
-    "estimated_cost_usd": 0.0075578500000000005,
-    "cum_input_tokens": 22089,
-    "cum_output_tokens": 877,
-    "cum_cache_read_tokens": 11264,
+    "estimated_cost_usd": 0.008456549999999998,
+    "cum_input_tokens": 22455,
+    "cum_output_tokens": 1255,
+    "cum_cache_read_tokens": 13312,
     "model_name": "gpt-5-mini"
   },
   "transitions": [
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-08-03T10:43:25.678Z",
+      "virtual_time": "2026-08-03T15:53:35.041Z",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -45,7 +45,7 @@
     {
       "index": 1,
       "event_index": 6,
-      "virtual_time": "2026-08-03T10:43:39.748Z",
+      "virtual_time": "2026-08-03T15:53:43.087Z",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -59,7 +59,7 @@
     {
       "index": 2,
       "event_index": 16,
-      "virtual_time": "2026-08-03T10:44:23.307Z",
+      "virtual_time": "2026-08-03T15:54:23.963Z",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
