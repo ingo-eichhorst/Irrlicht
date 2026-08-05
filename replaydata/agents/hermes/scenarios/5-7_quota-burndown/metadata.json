@@ -1,0 +1,87 @@
+{
+  "scenario_id": "quota-burndown",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+80d4670.dirty",
+    "confidence": 0.85,
+    "notes": "Hermes DOES keep a real quota counter (x-ratelimit-* limit/remaining/reset -> RateLimitBucket.usage_pct, plus x-nous-credits-* remaining_micros/used_fraction), but it lives only in the agent process's memory and is printed by /usage and the status bar. Nothing about it reaches $HERMES_HOME/state.db -- the sessions/session_model_usage tables carry cumulative tokens/cost only, and --usage-file writes the same cumulative vector -- so the adapter's single Source has no trace of the burndown and the daemon cannot observe it."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "quota-burndown",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable (the counter never reaches the Source the adapter tails)\ndriver_capability: ready\n\nroute: frozen\n\n## The primitive, restated for hermes\n\nquota-burndown asserts that across >=2 turns the session's `RateLimitSnapshot.Windows[0].UsedPercent` is observed non-decreasing with `SampledAt` advancing and no spurious reset to 0. The codex sibling satisfies this because the `rate_limits` map is written INTO the codex rollout transcript on every `token_count` event, so replaying the captured Source re-derives the per-turn history. The question for hermes is therefore not 'does a counter exist' but 'does the counter reach $HERMES_HOME/state.db'.\n\n## agent_supports: yes -- and a genuine COUNTER, not just cumulative usage\n\nThis was the explicit question, so it was checked past the cumulative aggregates:\n\n1. **Provider rate-limit windows.** `agent/rate_limit_tracker.py` parses the twelve `x-ratelimit-*` headers (`limit-requests`, `remaining-requests`, `reset-requests` and the `-1h` / `-tokens` variants) into four `RateLimitBucket`s (requests/min, requests/hour, tokens/min, tokens/hour). Each bucket carries `limit`, `remaining`, `reset_seconds`, `captured_at` and derives `used = limit - remaining` and `usage_pct = used/limit*100` (rate_limit_tracker.py:30-70) -- structurally the same (used_percent, resets_in) vector `session.RateLimitWindow` wants. `run_agent.py::_capture_rate_limits` re-parses these headers after EVERY streaming API call and caches the result on `self._rate_limit_state` (run_agent.py:3454-3476), so the reading really is re-sampled per turn.\n2. **Subscription/credit burndown.** `agent/credits_tracker.py` + `run_agent.py::_capture_credits` parse `x-nous-credits-*` into a `CreditsState` with `remaining_micros`, `used_fraction`, `denominator_kind` and `paid_access`, latch the session-start remaining, and fire threshold notices at depletion crossings. That is a monthly-grant burndown percentage, the closest analogue to a Claude/Codex subscription window.\n\nSo the agent both HAS the counter and updates it turn-over-turn. `agent_supports: yes` is not a courtesy verdict.\n\n## daemon_capability: incapable -- where the counter dies\n\nThe hermes adapter's Source is `agent.ProcessOwnedStore{PathForPID: func(int) string { return StorePath() }, Reader: metricsReader{}}` (agent.go, `Agent()`), gated by the single observe-kind permission `store` ('Reads $HERMES_HOME/state.db'). There is no hook installer, no statusline endpoint, no sidecar -- state.db is the ONLY thing irrlicht reads from hermes. The counter is absent from it at every level:\n\n- **No column.** `.schema sessions` on a live store (v0.19.0, schema as shipped) lists `input_tokens/output_tokens/cache_read_tokens/cache_write_tokens/reasoning_tokens`, `billing_provider/billing_base_url/billing_mode`, `estimated_cost_usd/actual_cost_usd/cost_status/cost_source/pricing_version`, `api_call_count` -- all CUMULATIVE spend. There is no limit, no remaining, no reset, no used_percent, no window. `session_model_usage` is the same vector sliced per model; `state_meta` holds three migration flags (`fts_storage_version`, `ghost_session_prune_v1`, `orphaned_compression_finalize_v1`). No table anywhere in the store models a rate-limit window.\n- **No row.** The counter is process-local: `agent._rate_limit_state` is initialized to `None` per agent (agent_init.py:875), written only by `_capture_rate_limits`, and read only by display code -- `cli.py::_show_usage` (cli.py:10568) prints `format_rate_limit_display(...)`, `gateway/slash_commands.py:4421` prints `format_rate_limit_compact(...)`, and the CLI status bar reads `get_rate_limit_state` live. `/usage` is a pure-print local command (`_handle_usage_command` -> `_show_usage`, cli.py:10495-10516): it appends nothing to the in-memory message list, and persistence flushes only from that list. Verified empirically on the maintainer's live store: `select count(*) from messages where content like '%Rate Limits%' or '%Session Token Usage%' or '%credits%'` returns 0.\n- **Not in --usage-file either.** The flag named in the brief writes, via `hermes_cli/oneshot.py::_write_usage_file` (oneshot.py:127-166), exactly: estimated_cost_usd, cost_status, cost_source, input/output/cache_read/cache_write/reasoning/total tokens, api_calls, model, provider, session_id, completed, failed, service_tier. Every field is cumulative-spend; none is a remaining/limit/reset/used_percent. It is also one-shot-only and is not a file the adapter tails.\n- **Not representable in the fixture format.** `core/domain/lifecycle` has no rate-limit field and no `KindRateLimit` (grep for `RateLimit` under `core/domain/lifecycle/` returns nothing), and no committed `events.jsonl` in `replaydata/` contains `rate_limit`. So even a hypothetical hermes trace could not be carried by the sidecar.\n\nOn the irrlicht side the matching hole is explicit: `hermes.querySessionMetrics` selects model/cwd/end_reason/started_at/ended_at plus the four token aggregates and never assigns `SessionMetrics.RateLimit`; the only occurrences of 'quota' in the whole hermes package are the two comment lines in `metrics.go` explaining that cost is priced by irrlicht's alias table while 'quota counters are taken from the agent verbatim'. `grep -l RateLimit core/adapters/inbound/agents/` matches only claudecode (statusline) and codex (parser).\n\nPer the #476 rubric, 'the behavior leaves no trace in the Source' is `incapable` (architecture), not `bug` (the daemon mis-handling an existing trace) and not a driver gap. Note this is a STRICTER incapable than claudecode's sibling: claudecode at least ships an out-of-band statusline POST that gives the LIVE daemon a `RateLimitSnapshot` (unrecordable, but observable); hermes has no transport into irrlicht at all, so even the live dashboard shows no window for a hermes session.\n\n## driver_capability: ready\n\nNo missing primitive. If the signal were observable, the recipe is the ordinary multi-turn shape -- `send` / `wait_turn` / `sleep` x3 -- and `driver_step_types_from_file replaydata/agents/hermes/driver-interactive.sh` advertises exit_clean, interrupt, keys, reset_session, restart, resume, send, session, sigkill, slash, sleep, start_session, wait_turn. Marked `ready` rather than `gap:*` deliberately, so this does not route to the tooling owner (#471 mislabel lesson): the blocker is that there is nothing in the captured Source to assert against.\n\n## Conclusion / what would unblock it\n\nFROZEN. Two independent unlocks, either of which flips daemon toward full: (a) upstream hermes persists the captured window -- e.g. `RateLimitState`/`CreditsState` written onto the `sessions` row (used_percent + window + resets_at) or into a `state_meta`/dedicated table each turn -- and the adapter projects it into `SessionMetrics.RateLimit`; or (b) hermes grows an irrlicht-facing transport (a hook/statusline-style POST) AND `lifecycle.Event` gains rate-limit fields so a fixture can capture the per-turn history. Until then no recording can satisfy the scenario, so no phases are asserted; the correct behavior is documented here and deliberately not weakened.",
+      "caveats": [
+        "The counter hermes exposes is provider RPM/RPH/TPM/TPH windows (x-ratelimit-*), which RESET every minute/hour -- so even if it were persisted, a naive 'never resets to 0' assertion would need the hour window or the Nous monthly-grant used_fraction, not the per-minute bucket. Worth re-checking when this cell is re-assessed.",
+        "Nous credits (x-nous-credits-*) are the truer subscription burndown (remaining_micros + used_fraction against a monthly-grant denominator), but they are only emitted by the Nous portal path -- a hermes session pointed at a non-Nous provider gets neither those headers nor, on some providers, the x-ratelimit-* set at all. Any future recording would be provider-conditional.",
+        "The store-schema evidence comes from the maintainer's live store at $HERMES_HOME=/Users/ingo/hermes-local/.hermes (hermes 0.19.0, upstream d0b87dad); a future hermes migration could add a quota column, which is exactly the (a) unlock listed in the body.",
+        "This is a stricter incapable than claudecode/5.7: claudecode's statusline hook at least gives the LIVE daemon a RateLimitSnapshot (only the recorded PROGRESSION is unobservable), whereas for hermes there is no live snapshot either."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "hermes-agent/agent/rate_limit_tracker.py:1-70",
+          "note": "Module docstring enumerates the twelve x-ratelimit-* headers (limit/remaining/reset for requests+tokens, minute+hour). RateLimitBucket carries limit/remaining/reset_seconds/captured_at and derives used and usage_pct -- a genuine quota COUNTER, structurally the same vector as session.RateLimitWindow. Grounds agent_supports: yes."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/run_agent.py:3454-3476 (_capture_rate_limits / get_rate_limit_state)",
+          "note": "Parses the x-ratelimit-* headers after EVERY streaming API call and caches the result on self._rate_limit_state (in-memory only). Sibling _capture_credits (run_agent.py:3478+) does the same for x-nous-credits-* -> CreditsState.remaining_micros/used_fraction. Neither writes to the store; the per-turn re-sampling exists but never leaves the process."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/agent/agent_init.py:875",
+          "note": "agent._rate_limit_state is initialized to None per agent instance -- the counter's lifetime is the agent process, so it cannot survive into anything the daemon tails or a replay re-reads."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/cli.py:10495-10516,10568 (_handle_usage_command / _show_usage) and hermes-agent/gateway/slash_commands.py:4421",
+          "note": "The only consumers of get_rate_limit_state() are display paths: /usage PRINTS format_rate_limit_display/-compact to stdout and returns; it appends nothing to the message list that _persist_session/_flush_messages_to_session_db writes from. Empirically confirmed on the live store: messages containing 'Rate Limits'/'Session Token Usage'/'credits' = 0 rows."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent/hermes_cli/oneshot.py:127-166 (_write_usage_file)",
+          "note": "The --usage-file JSON report contains estimated_cost_usd, cost_status, cost_source, input/output/cache_read/cache_write/reasoning/total tokens, api_calls, model, provider, session_id, completed, failed, service_tier. Cumulative spend only -- no remaining, no limit, no reset, no used_percent. Settles the brief's question: --usage-file is NOT a quota counter, and is not a file the adapter tails."
+        },
+        {
+          "kind": "file",
+          "ref": "$HERMES_HOME/state.db (hermes 0.19.0) -- sqlite3 .schema sessions / session_model_usage / state_meta",
+          "note": "sessions carries token aggregates + billing_provider/billing_mode/estimated_cost_usd/actual_cost_usd/cost_status/cost_source/pricing_version/api_call_count -- all cumulative; session_model_usage is the same vector per model; state_meta holds only three migration flags. No column and no table models a rate-limit window (limit/remaining/reset/used_percent). This is the whole Source the adapter reads, so the burndown leaves no trace: daemon_capability: incapable."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go (Agent) and metrics.go (querySessionMetrics)",
+          "note": "Source is agent.ProcessOwnedStore over StorePath() with the single observe permission 'store' ($HERMES_HOME/state.db) -- no hook, no statusline, no sidecar transport. querySessionMetrics selects model/cwd/end_reason/started_at/ended_at + the four token aggregates and never assigns SessionMetrics.RateLimit; the only 'quota' text in the package is the metrics.go comment noting quota counters are taken from the agent verbatim -- for hermes there is none to take."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/lifecycle/ (no RateLimit field, no KindRateLimit) + replaydata/**/events.jsonl",
+          "note": "grep for RateLimit under core/domain/lifecycle/ returns nothing and no committed events.jsonl contains 'rate_limit' -- the sidecar format cannot carry a rate-limit snapshot for ANY adapter, so even a future hermes trace would need the fixture format extended too. Same structural finding recorded in the claudecode/5.7 cell."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/5-7_quota-burndown/metadata.json and replaydata/agents/codex/scenarios/5-7_quota-burndown/metadata.json",
+          "note": "Precedent for both sides: codex is daemon=full because rate_limits rides inside its transcript on every token_count event (re-derivable on replay); claudecode is daemon=incapable because its identical data arrives out-of-band via the statusline POST. hermes lands with claudecode, and further out -- it has no out-of-band transport at all."
+        },
+        {
+          "kind": "spec",
+          "ref": "of scenario show --name quota-burndown",
+          "note": "Acceptance: Windows[0].UsedPercent after turn N >= after turn N-1, no reset to 0 between turns, RateLimitSnapshot.SampledAt updates each turn. All three are properties of a RateLimitSnapshot the hermes adapter never produces."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Not recordable (route: frozen; daemon=incapable). Hermes really does sample a quota counter per API call (x-ratelimit-* -> RateLimitBucket.usage_pct; x-nous-credits-* -> used_fraction), but it lives only on agent._rate_limit_state / agent._credits_state in the agent process and is surfaced solely by printing (/usage, status bar). $HERMES_HOME/state.db -- the adapter's only Source -- has no rate-limit column, no rate-limit table, and no message row carrying the printed output, and --usage-file reports cumulative spend rather than a counter. There is therefore nothing for a driver to elicit into the recording: a multi-turn send/wait_turn script would produce a perfectly valid recording with zero rate-limit data in it. Driver is NOT the blocker (all needed step types exist)."
+    }
+  }
+}

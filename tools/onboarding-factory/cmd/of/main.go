@@ -40,7 +40,8 @@ const usage = `usage:
   of coverage [--json] [--repo-root .]
   of scenario add|update --name n [--id i] [--description d] [--process-file f] [--acceptance-file f]
   of scenario show --name n [--json]
-  of agent add --id i --name n --provider p [--min-version v] [--prereq p]...
+  of agent add    --id i --name n --provider p [--min-version v] [--prereq p]...
+  of agent update --id i [--name n] [--provider p] [--min-version v] [--prereq p]... [--add-prereq p]...
   of cell write --agent a --scenario s --file metadata.json [--folder f]
   of cell spec  --agent a --scenario s --file expected.jsonl [--folder f]
   of verify --agent a --scenario s [--folder f] [--json]

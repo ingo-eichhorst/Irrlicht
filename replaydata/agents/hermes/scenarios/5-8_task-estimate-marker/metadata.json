@@ -1,0 +1,169 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+9bee59d.dirty",
+    "confidence": 0.75,
+    "notes": "KNOWN FAILING — hermes never surfaces task_estimate/task_completion_eta at all, and the gap is TWO-layered. (1) The parser: hermes Parser.ParseLine's `case \"assistant\"` computes PendingWaitingCue from the full text and then calls tailer.TruncateAssistantText(text), but never calls tailer.ScanTaskEstimate — `git grep ScanTaskEstimate -- core/adapters/inbound/agents/hermes/` is EMPTY — so ev.TaskEstimate is always nil even though the marker sits verbatim in messages.content. TruncateAssistantText's own doc-comment states the contract hermes violates: \"Adapters MUST scan the full text for markers (ScanTaskEstimate) BEFORE calling this\". (2) The metrics path: hermes registers a MetricsProvider (agent.go metricsReader.ComputeMetrics), and metrics/adapter.go ComputeMetrics returns EARLY for any adapter with a registered provider — before enrichTaskForecast — so neither the marker estimate NOR the tasks-derived fallback (session.TaskEstimateFromTasks over the todo list) NOR the ForecastTaskCompletion ETA is ever layered on; hermes' own metrics.go messageFold.apply reads ToolUses/ToolResultIDs/TaskDeltas/TaskSnapshot/AssistantText but never ev.TaskEstimate, and querySessionMetrics never assigns metrics.TaskEstimate/TaskCompletionEta. Fixable, with a same-transport precedent: opencode (also ProcessOwnedStore + MetricsProvider) ports ScanTaskEstimate into its parser and re-implements the persistence + forecast in its own metrics path (applyTaskEstimateTracking / attachTaskEstimateAndETA) — hence daemon=bug, not incapable. agent=yes: hermes loads AGENTS.md/CLAUDE.md/.cursorrules from cwd plus SOUL.md/.hermes.md from HERMES_HOME into the system prompt, and persists assistant text verbatim into messages.content (live store: raw newlines, no render) so an HTML comment survives; the recipe delivers the rule IN the prompt (kiro/aider pattern), which also sidesteps hermes' context-file injection scanner. driver=ready: send/wait_turn/sleep are all in the hermes driver's DRIVE_ELICITS. Route: record-known-failing."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "hermes",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes (provisional on emission) · daemon_capability: bug · driver_capability: ready → route **record-known-failing**.\n\n## Reasoning\n\n### agent_supports: yes (confidence 0.7, provisional on emission)\n\nThe behavior is not a hermes feature flag — it is the model following an instruction to emit a hidden HTML-comment marker in its own reply text. Two things have to hold for hermes, and both are established:\n\n1. **The rule can be delivered.** Hermes DOES load persistent instruction files: `agent/coding_context.py` lists `AGENTS.md`, `CLAUDE.md`, `.cursorrules` as context files (`_CONTEXT_FILES`, and the wider tuple at :82), `agent/agent_init.py:565` documents the same set plus `SOUL.md` / `.hermes.md` \"from the cwd / HERMES_HOME\", and `agent/prompt_builder.py` (§ \"Context files (SOUL.md, AGENTS.md, .cursorrules)\", ~:1845, `_load_soul` at ~:1889) injects them into the system prompt. So the scenario's process-step-1 path exists. The RECIPE nonetheless delivers the rule IN the first `send` prompt — the same choice the kiro-cli and aider siblings make — for two reasons: it removes the `seed_instruction` driver step (the thing that routes codex/opencode/pi to driver-gap), and it bypasses hermes' context-file threat scan (see caveats).\n\n2. **The emitted marker survives to the store.** Hermes persists the assistant message content verbatim: a read-only sample of the maintainer's live store (`$HERMES_HOME/state.db`, 25 sessions / 117 messages) shows `messages.content` holding raw model text with newlines preserved and no markdown render or comment stripping between the model's reply and the column. That column is exactly `raw[keyContent]` in `Parser.ParseLine`, so an HTML comment reaches the daemon's read path intact.\n\nWhat stays PROVISIONAL (hence 0.7, not higher) is model discretion: whether the configured model (`config.yaml model.default: gpt-5.6-luna`, provider `openai-codex`) re-emits the marker turn-over-turn with climbing `completed_rounds` is a behavior only a live recording settles. The 2026-05-31 marker experiment was claudecode/sonnet only, and the opencode sibling landed `agent=partial` precisely because its recorded local model was inconsistent about it.\n\n### daemon_capability: bug (confidence 0.9)\n\nThe trace exists in the store and the daemon discards it — twice over. This is not one missing line; it is two independent layers, and fixing either alone changes nothing.\n\n**Layer 1 — the parser never scans.** `Parser.ParseLine`'s `case \"assistant\"` (core/adapters/inbound/agents/hermes/parser.go) does exactly two things with the text: `ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text))` and `ev.AssistantText = tailer.TruncateAssistantText(text)`. There is no `tailer.ScanTaskEstimate` call anywhere in the hermes package — `git grep -n ScanTaskEstimate -- core/adapters/inbound/agents/hermes/` returns nothing, while the same grep hits kirocli/parser.go, pi/parser.go, vibe/parser.go and opencode/parser.go. So `ev.TaskEstimate` is permanently nil. Note the shape of the miss: hermes already got the ORDERING lesson right for the waiting cue (its own comment says the cue is computed \"from the FULL text before truncation\") but never picked up the marker scan that shares that ordering constraint. `TruncateAssistantText`'s doc-comment in core/pkg/tailer/parser.go spells out the contract being violated: \"Adapters MUST scan the full text for markers (ScanTaskEstimate) BEFORE calling this — the dropped head can carry a task-estimate marker.\" With `MaxAssistantTextRunes = 200`, a marker emitted at the top of a multi-phase progress reply is dropped from `AssistantText` outright, so nothing downstream can recover it.\n\n**Layer 2 — the store path bypasses BOTH shared pipelines.** Even a scanning parser would not surface anything today, because hermes is a `ProcessOwnedStore` adapter that registers a `MetricsProvider` (core/adapters/inbound/agents/hermes/agent.go, `metricsReader.ComputeMetrics`). In core/adapters/outbound/metrics/adapter.go, `ComputeMetrics` opens with `if provider, ok := a.metricsProviders[adapter]; ok { return provider(transcriptPath, \"\") }` — an EARLY RETURN that skips everything below it, including `enrichTaskForecast(result, markerEst, markerBase, time.Now())`. Two consequences: (a) the tailer's `lastTaskEstimate`/`firstTaskEstimate` persistence (core/pkg/tailer/tailer.go, surfaced by tailer_metrics.go) is never reached, because hermes never runs the tailer scan loop at all; and (b) the tasks-derived FALLBACK is skipped too — `session.TaskEstimateFromTasks(result.Tasks)` and `session.ForecastTaskCompletion` live inside `enrichTaskForecast`, so even though hermes DOES populate `metrics.Tasks` from the `todo` tool (the 2-3 task-list fix), no estimate is derived from it. Inside hermes' own path, `messageFold.apply` (core/adapters/inbound/agents/hermes/metrics.go) folds `ToolUses`, `ToolResultIDs`, `ClearToolNames`, `TaskDeltas`, `TaskSnapshot` and `AssistantText` — and never touches `ev.TaskEstimate`; `querySessionMetrics` never assigns `metrics.TaskEstimate` or `metrics.TaskCompletionEta`.\n\n**Net user-observable effect:** `task_estimate` and `task_completion_eta` are NEVER present on a hermes session, in any state. Four of the scenario's five metric criteria fail outright (estimate present + matching, `updated_at` advancing, `completed_rounds` non-decreasing to total, ETA burning down); the fifth — \"fields absent at ready\" — passes only vacuously, and the `ready → working → ready` topology passes on its own merits (finish_reason is an explicit turn boundary).\n\n**Why `bug`, not `incapable`:** the fix is a port, not architecture. opencode sits on the identical transport (ProcessOwnedStore + MetricsProvider) and closed exactly this gap: `opencode/parser.go` calls `tailer.ScanTaskEstimate(text, ev.Timestamp)`, and `opencode/metrics.go` re-implements the two bypassed pieces locally — `applyTaskEstimateTracking` (\"tracks the earliest and latest task-estimate … which this path bypasses\") and `attachTaskEstimateAndETA` (which sets `metrics.TaskEstimate` and calls `session.ForecastTaskCompletion`, \"which this path bypasses\"). The opencode 5.8 cell records that this flipped it from `daemon=bug` to `daemon=full`. Hermes needs the same three edits.\n\n### driver_capability: ready (confidence 0.9)\n\nThe recipe needs only `send` / `wait_turn` / `sleep`. `driver_step_types_from_file replaydata/agents/hermes/driver-interactive.sh` reports exit_clean, interrupt, keys, reset_session, restart, resume, send, session, sigkill, slash, sleep, start_session, wait_turn, and the driver's own semantic-lint list is `DRIVE_ELICITS=\"send slash sleep wait_turn\"`. Because the marker rule rides the first prompt, NO `seed_instruction` step is required — which is the single thing separating this cell from the codex / opencode / pi cells that route driver-gap on this scenario. The recipe drives the interactive `hermes chat` REPL so the process outlives the observation window and each working→ready settle plus the final ready is captured; the driver's `wait_turn` polls the store for `role='assistant' AND finish_reason='stop'`, which every plain-text round turn produces.\n\n## What record must do\n\nRecord with `known_failing` set. The spec asserts the CORRECT behavior (estimate present and matching while working, ETA burning down, gone at ready), so it goes green only after the three-edit port above lands — at which point the cell is re-assessed to `daemon=full`, exactly as hermes/task-list was after the todo fix.",
+      "caveats": [
+        "agent=yes is PROVISIONAL on emission (confidence 0.7): whether hermes' configured model (config.yaml model.default gpt-5.6-luna, provider openai-codex) re-emits the marker turn-over-turn with climbing completed_rounds is unverified — the marker experiment was claudecode/sonnet only, and the opencode sibling landed agent=partial for exactly this reason. record promotes this from provisional to settled.",
+        "The marker rule is delivered IN the first send prompt (kiro-cli / aider pattern), not via a seeded AGENTS.md — so there is no seed_instruction driver gap. This is also the safer path: hermes scans context FILES for prompt injection before injecting them, and tools/threat_patterns.py:69 blocks `<!--[^>]{0,512}(?:ignore|override|system|secret|hidden)[^>]{0,512}-->` at scope 'all'. The irrlicht-eta marker contains none of those five words so it would pass, but prompt_builder.py's _scan_context_content BLOCKS THE WHOLE FILE on a hit (replacing it with a '[BLOCKED: ...]' placeholder), so anyone later moving the rule into AGENTS.md must keep the words ignore/override/system/secret/hidden out of the HTML comment itself — and note the sibling 'deception_hide' pattern (`do not tell the user`) for the surrounding prose.",
+        "The observations vector deliberately pins NOTHING beyond agent=hermes. of verify reads only the replay golden summary (validate/observations.go applyHardAssertions), and the hermes Parser emits no usage at all — `git grep -n 'Usage|Tokens|Cost' -- core/adapters/inbound/agents/hermes/parser.go` is EMPTY, because tokens/cost/model come from querySessionMetrics reading the `sessions` row, a path replay never runs. tokens_nonzero and cost_nonzero would read 0 and HARD-FAIL, and the model name (injected as the synthetic `_model` key by scanMessageRow, not by replay) would be empty. This follows the hermes 5-1 token-accounting cell's finding; it diverges from the earlier hermes 2-13 / 2-14 / 3-3 cells, which do pin cost_nonzero/tokens_nonzero and are expected to fail their observation asserts for this same reason.",
+        "The daemon=bug here is a MISSING FEATURE in the hermes adapter, not a mis-parse: nothing is emitted wrongly, the signal is simply never read. It is orthogonal to (and independent of) the other open hermes bug cells — a fix for either does not touch this one.",
+        "Suppression-at-ready is a CLIENT presentation gate (web taskEtaPresentation / macOS SessionListView), not a daemon drop, on every adapter. Once the port lands, the 'absent at ready' criterion is satisfied by the clients; the verify engine can only match state transitions and event kinds out of events.jsonl, so the task_estimate payload assertions live in the recipe's verify checklist (read off the session API while working), not in a machine-matched phase."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go",
+          "note": "Parser.ParseLine, case \"assistant\": sets ev.PendingWaitingCue from tailer.WaitingScanWindow(text) then ev.AssistantText = tailer.TruncateAssistantText(text). No tailer.ScanTaskEstimate call exists anywhere in the hermes package (git grep -n ScanTaskEstimate -- core/adapters/inbound/agents/hermes/ returns nothing), so ev.TaskEstimate is always nil. LAYER 1 of the bug."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go",
+          "note": "TruncateAssistantText doc-comment: \"Adapters MUST scan the full text for markers (ScanTaskEstimate) BEFORE calling this — the dropped head can carry a task-estimate marker.\" MaxAssistantTextRunes = 200, so a marker emitted before the trailing 200 runes is dropped from AssistantText outright. This is the contract the hermes parser violates."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/metrics/adapter.go",
+          "note": "ComputeMetrics: `if provider, ok := a.metricsProviders[adapter]; ok { return provider(transcriptPath, \"\") }` returns EARLY, before the `enrichTaskForecast(result, markerEst, markerBase, time.Now())` call further down. enrichTaskForecast is the only place session.TaskEstimateFromTasks (the task-list fallback) and session.ForecastTaskCompletion (the ETA) are applied — so a MetricsProvider adapter like hermes gets neither the marker estimate nor the fallback nor any ETA. LAYER 2 of the bug."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go",
+          "note": "metricsReader.ComputeMetrics registers hermes as a MetricsProvider (ProcessOwnedStore transport), which is what triggers the early return in metrics/adapter.go above."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go",
+          "note": "messageFold.apply folds ev.ToolUses / ev.ToolResultIDs / ev.ClearToolNames / ev.TaskDeltas / ev.TaskSnapshot / ev.AssistantText and never reads ev.TaskEstimate; querySessionMetrics never assigns metrics.TaskEstimate or metrics.TaskCompletionEta. Its own comment on the task accumulator names the pattern that was NOT applied here — \"The store path bypasses the tailer, so the same fold it performs is applied here via the shared helpers (see #277)\"."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/metrics.go",
+          "note": "FIX PRECEDENT on the identical ProcessOwnedStore + MetricsProvider transport: applyTaskEstimateTracking (\"tracks the earliest and latest task-estimate … the tailer's lastTaskEstimate/firstTaskEstimate persistence, which this path bypasses\") and attachTaskEstimateAndETA (sets metrics.TaskEstimate and calls session.ForecastTaskCompletion, \"which this path bypasses\"), paired with tailer.ScanTaskEstimate in opencode/parser.go. This is why the hermes verdict is bug (a portable three-edit fix), not incapable."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/5-8_task-estimate-marker/metadata.json",
+          "note": "Sibling verdict for the same scenario on the same transport: \"the marker scan is now ported to the opencode adapter so the daemon surfaces task_estimate + task_completion_eta from its custom SQLite path (daemon=full, no longer a bug)\" — the exact state transition this hermes cell is waiting on."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/coding_context.py",
+          "note": "Hermes context files: _CONTEXT_FILES = (\"AGENTS.md\", \"CLAUDE.md\", \".cursorrules\") at :86 (wider tuple at :82). With agent_init.py:565 (\"(SOUL.md, .hermes.md, AGENTS.md, CLAUDE.md, .cursorrules) from the cwd / HERMES_HOME\") and prompt_builder.py's \"Context files\" section (~:1845, _load_soul ~:1889) this establishes that hermes supports the scenario's persistent-instruction-file delivery path. agent pillar."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/threat_patterns.py",
+          "note": ":69 — (r'<!--[^>]{0,512}(?:ignore|override|system|secret|hidden)[^>]{0,512}-->', \"html_comment_injection\", \"all\"). Context files are scanned by prompt_builder.py _scan_context_content, which BLOCKS the whole file with a placeholder on a hit. The irrlicht-eta marker contains none of those words (and no '>' inside the comment), so the instruction-file path would work — but the recipe still delivers the rule in the prompt, where no context scan applies."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Read-only sample of the maintainer's live store (25 sessions / 117 messages, sqlite3 'file:...?mode=ro'): messages.content holds the model's raw text verbatim — embedded newlines preserved, no markdown render or comment stripping. That column is raw[keyContent] in Parser.ParseLine, so an emitted HTML comment reaches the daemon's read path intact. agent pillar (emission survives to the transport)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "recipe-lint driver_step_types: exit_clean, interrupt, keys, reset_session, restart, resume, send, session, sigkill, slash, sleep, start_session, wait_turn; DRIVE_ELICITS=\"send slash sleep wait_turn\". The recipe needs only send/wait_turn/sleep → driver=ready, no seed_instruction gap. wait_turn polls the store for role='assistant' AND finish_reason='stop', which each plain-text round turn produces."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/5-8_task-estimate-marker/metadata.json",
+          "note": "Calibration sibling for the in-prompt delivery pattern (agent=yes, driver=ready, no seed_instruction), and for the four-turn 0→1→2→3 round shape this recipe mirrors."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/scenarios/5-1_token-accounting/expected.jsonl",
+          "note": "Prior hermes finding this cell's observations vector follows: of verify reads only the replay golden summary, while hermes' tokens/cost/model come from ComputeMetrics over the store — a path replay never runs — so pinning tokens_nonzero/cost_nonzero/model would hard-fail. Corroborated here: git grep 'Usage|Tokens|Cost' -- core/adapters/inbound/agents/hermes/parser.go is empty."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH and an inference provider configured in <HERMES_HOME>/config.yaml (model.default + model.provider) with working credentials; 0.19.0 validated",
+        "HERMES_HOME exported in the shell that runs run-cell.sh, so BOTH the recording daemon (which inherits it via spawn-record-daemon.sh) and the driver read the same state.db",
+        "sqlite3 on PATH — the store is the only session signal hermes exposes; the driver exits nonzero(2) without it",
+        "no other hermes session process running: sessions.cwd is empty for source='cli', so the live-process CWD fallback only binds a project when exactly one session process is alive",
+        "irrlichd is recording with the hermes store watcher enabled (grant-all permission mode, so the observe-kind \"store\" permission is not left pending)"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/. NO instruction file is seeded: the marker rule rides the first send prompt (the kiro-cli / aider pattern), which keeps the recipe inside send/wait_turn/sleep and avoids hermes' context-file injection scan (tools/threat_patterns.py html_comment_injection blocks a whole context file when its HTML comment contains ignore/override/system/secret/hidden)",
+        "KNOWN FAILING cell: the daemon cannot surface task_estimate today (the hermes parser never calls tailer.ScanTaskEstimate, and the store path bypasses enrichTaskForecast). Record it anyway — the store rows prove the marker reached the transport, which is what makes the fix verifiable"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "We are going to do a 3-round task. Do not use any tools. RULE for every reply from now on: end the reply with a hidden progress marker on its own line, in exactly this form, an HTML comment containing JSON: <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":3,\"completed_rounds\":M} --> where M is how many rounds you have finished so far. Emit the marker literally, do not put it in a code block, and do not mention it in your prose. Round 1 is: name three primary colours. For THIS reply, no round is finished yet, so use completed_rounds:0."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Round 1 is done. Round 2: name three primary shapes. Reply in one short sentence and end with the marker, now with completed_rounds:1."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Round 2 is done. Round 3: name three primary directions. Reply in one short sentence and end with the marker, now with completed_rounds:2."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Round 3 is done. Say that the task is complete in one short sentence and end with the marker, now with completed_rounds:3."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a hermes session birth in ready (the store session id <YYYYMMDD>_<HHMMSS>_<hex6>), preceded by the transient proc-<PID> presession the process scanner mints",
+        "events.jsonl contains four ready -> working -> ready cycles on the SAME store session, one per round prompt (each round turn's newest assistant row carries finish_reason='stop')",
+        "STORE CHECK (proves the marker reached the transport, independent of the daemon bug): sqlite3 read-only on $HERMES_HOME/state.db shows four role='assistant' rows for the session whose content contains the literal string irrlicht-eta, with completed_rounds 0,1,2,3 against total_rounds 3",
+        "KNOWN FAILING — the session API's metrics for the session carry NO task_estimate and NO task_completion_eta at any point while working. Expected today: hermes Parser.ParseLine never calls tailer.ScanTaskEstimate, so ev.TaskEstimate is nil; and metrics/adapter.go ComputeMetrics returns early for hermes' registered MetricsProvider, before enrichTaskForecast, so neither the marker estimate nor the tasks-derived fallback nor the ETA is layered on",
+        "KNOWN FAILING — task_estimate.total_rounds=3 with completed_rounds 0->1->2->3 across the four working turns, updated_at advancing each time, and task_completion_eta present from the first non-zero round and non-increasing thereafter",
+        "the fields are absent once the session settles to ready (today vacuously true — they are never present)",
+        "the session's final live state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 540
+    }
+  }
+}

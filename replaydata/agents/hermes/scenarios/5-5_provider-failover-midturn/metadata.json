@@ -1,0 +1,156 @@
+{
+  "scenario_id": "provider-failover-midturn",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "gap:429-mock",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+442c51c.dirty",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes (documented turn-scoped fallback_providers chain; try_activate_fallback swaps agent.model AND agent.provider and the same turn continues); daemon_capability: bug (the fallback model IS persisted, as a session_model_usage row keyed by model with last_seen upserted per API call, but the adapter reads ModelName from sessions.model, which hermes freezes after the first accounted API call -- first_accounted_route in update_token_counts -- so irrlicht keeps showing the primary); driver_capability: gap:429-mock (needs a tool-call-first 429 mock plus a mock-launch/config-writing driver primitive)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "provider-failover-midturn",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "gap:429-mock",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: gap:429-mock\nroute: driver-gap\n\n## What the scenario asserts\n\nThree user-observable bullets: (a) `ModelName` changes mid-turn with no user\naction, (b) state stays `working` through the failover -- no flicker to `ready`,\n(c) after the turn completes, `-> ready` with the FALLBACK model's name visible.\n(a) is the defining one; (b) and (c) are shared with basic-turn.\n\n## agent_supports: yes\n\nHermes is the first agent on this row with a real in-turn failover chain, which\nis why the seven frozen siblings (claudecode/codex/gemini-cli/kiro-cli/pi at\n`partial`, mistral-vibe at `no`) do not apply here.\n\n- `fallback_providers:` is a documented, first-class top-level config list\n  (website/docs/integrations/providers.md:1470-1494), also settable interactively\n  via `hermes fallback` (hermes_cli/fallback_cmd.py). The doc states it outright:\n  \"When activated, the fallback swaps the model and provider mid-session without\n  losing your conversation.\"\n- website/docs/user-guide/features/fallback-providers.md:115-124 pins the timing\n  the scenario needs: \"Resets the retry counter and continues the conversation\",\n  and \"Fallback is **turn-scoped** ... If the primary fails mid-turn, fallback\n  activates for that turn only. ... Within a single turn, fallback activates at\n  most once.\"\n- The code matches. `agent/error_classifier.py` defines the `FailoverReason`\n  taxonomy (`rate_limit`, `billing`, `upstream_rate_limit`, `timeout`,\n  `overloaded`, `auth`). `agent/conversation_loop.py`'s `_should_fallback` block\n  (the `\"switching to fallback provider...\"` region) calls\n  `agent._try_activate_fallback(reason=classified.reason)` and then does\n  `retry_count = 0; continue` -- the SAME turn resumes.\n- Crucially for bullet (a), the swap changes the MODEL, not just the transport:\n  `try_activate_fallback` (agent/chat_completion_helpers.py) sets\n  `agent.model = fb_model` and `agent.provider = fb_provider` from the chain\n  entry (each entry is a provider+model pair). This is exactly what the codex\n  sibling lacked -- there a provider swap could leave the model id identical.\n\n## daemon_capability: bug\n\n**Where irrlicht gets ModelName.** `querySessionMetrics` (metrics.go) sets\n`metrics.ModelName` from the `sessions.model` column and from nowhere else; the\nsame value is injected as the synthetic `_model` key onto every message row for\n`Parser.ParseLine`. `grep -rn session_model_usage core/` returns NOTHING -- the\nadapter never reads Hermes' per-model usage table.\n\n**Hermes freezes `sessions.model` after the first accounted API call.**\n`SessionDB.update_token_counts` (hermes_state.py) is the single chokepoint every\nper-API-call delta flows through. Its `first_accounted_route` guard rewrites\n`sessions.model` / `billing_provider` ONLY when `existing_api_calls == 0`, with\nthe reasoning inline:\n\n> \"Session creation records the requested primary route before any API call. If\n> it fails and fallback succeeds, the first accounted usage event is the first\n> authoritative route. After that, preserve the legacy row: one row cannot\n> represent mixed-provider usage.\"\n\n`billing_provider` is likewise only COALESCE-filled once (see the docstring of\n`update_session_billing_route`, which contrasts itself with it). And\n`try_activate_fallback` performs NO database write at all -- it mutates\n`agent.model` / `agent.provider` / the client in memory. The only function that\npersists a route change is `switch_model` (agent/agent_runtime_helpers.py),\ni.e. the user-initiated `/model` path, NOT failover.\n\nConsequence with the adapter as written: after a mid-turn failover the daemon\nkeeps reporting the PRIMARY model for the rest of the session. Bullet (a) fails\ndeterministically.\n\n**But a trace does exist, inside the store the daemon already tails.** The same\n`update_token_counts` call upserts a `session_model_usage` row per API call via\n`_record_model_usage`, keyed\n`(session_id, model, billing_provider, billing_base_url, billing_mode, task)`\nwith `last_seen = excluded.last_seen` on conflict. The CLI loop calls it right\nafter each API response (agent/conversation_loop.py, the\n`agent._session_db.update_token_counts(...)` site) passing `model=agent.model`\nand `billing_provider=agent.provider` -- i.e. the POST-failover values. Verified\nlive against this machine's store (read-only): 30 `session_model_usage` rows, 25\nwith `task=''`, one per (session, model, provider). So\n`SELECT model FROM session_model_usage WHERE session_id=? AND task='' ORDER BY\nlast_seen DESC LIMIT 1` names the model that actually served the most recent API\ncall, and would flip to the fallback the moment the failover succeeds.\n\nTrace present + adapter reading the wrong column = `bug`, not `incapable`. This\nis the sharp contrast with the sibling 2-9 (token-quota-exhausted), which is\nfrozen `incapable` precisely because the walled turn is persisted NOWHERE (no\nassistant row, no `finish_reason`, no error column). Here the fallback turn IS\npersisted -- both as an ordinary `finish_reason='stop'` assistant row and as a\n`session_model_usage` row naming the fallback model. The owner is the hermes\nadapter, so this routes to an issue, not to a freeze.\n\n**The observation window is real for a tool-using turn.** The watcher's\n`reconcile` emits an activity event when `sessions.message_count` grows. Hermes\nflushes mid-turn twice over: `_flush_messages_to_session_db` immediately before\ntool execution (agent/conversation_loop.py, \"Persist the assistant tool-call turn\nbefore any tool side effects run\") and `_flush_session_db_after_tool_progress`\n(agent/tool_executor.py). So for a turn shaped `call1 -> tool -> call2(fails ->\nfallback) -> reply`, the daemon reads metrics BEFORE the failover (primary) and\nAFTER it (fallback) -- an observable change. Nothing is flushed between the user\npressing enter and the first API response, which is why a FIRST-call failover is\nnot observable as a change even after the fix (see caveats).\n\n**Bullets (b) and (c) already hold.** The failover path appends no message and\nwrites no `finish_reason`, so no activity event fires during it and the session\ncannot flicker: `Watcher.turnIsDone` (needs `role='assistant'` AND a terminal\n`finish_reason`) and the `justEnded` branch (needs `ended_at`) are the adapter's\nonly settle paths. The fallback then closes the turn with `finish_reason='stop'`\n-> `turn_done` -> ready.\n\n## driver_capability: gap:429-mock\n\nElicitation needs a primary that SUCCEEDS on API call 1 **with a tool call** (so\nthe turn issues a second call) and then 429s, plus a real `fallback_providers`\nentry that can finish the turn. Two concrete gaps:\n\n1. `tools/onboarding-factory/recording/mock-openai-429` streams\n   `finish_reason: \"stop\"` on request 1 (main.go), which ENDS the turn -- the\n   failover would then land on the next turn's first call, i.e. the\n   unobservable first-call case, not mid-turn. A tool-call-first variant is\n   needed.\n2. `replaydata/agents/hermes/driver-interactive.sh` declares\n   `DRIVE_ELICITS=\"send slash sleep wait_turn\"` and has no mock-launch or\n   config-writing primitive; `SETTINGS_PATH` is accepted but unused (\"wire into\n   the launch if the agent reads one\"), and Hermes reads its chain from\n   `$HERMES_HOME/config.yaml`, not from a settings blob.\n\nSame label as the 2-9 sibling so the matrix shows one shared piece of missing\ntooling. Note `wait_turn` itself is NOT a gap here (unlike 2-9): the fallback\ndoes write `finish_reason='stop'`, so the driver's poll terminates.\n\n## Route\n\nagent=yes + daemon=bug + driver=gap:* -> **driver-gap**. `record` ports the\nmock/config primitive, then drives. The recording is expected to fail the model\nobservation until the adapter reads `session_model_usage`; the spec is marked\n`known_failing` and asserts the CORRECT behavior (the FALLBACK model id), not the\nbuggy one.\n",
+      "caveats": [
+        "Doc + code read of hermes 0.19.0 and of this worktree's hermes adapter; NO live failover was recorded (assess spends no CLI tokens). confidence 0.75. The load-bearing claim -- that a mid-session failover never updates sessions.model -- rests on the first_accounted_route guard in hermes_state.update_token_counts (only fires when existing_api_calls == 0) plus the absence of any DB write in try_activate_fallback.",
+        "A failover on the session's FIRST API call is NOT observable as a change, even after the adapter is fixed: nothing is flushed between the user's Enter and the first API response (the earliest in-turn flush is the pre-tool-execution one), and first_accounted_route rewrites sessions.model to the fallback before the daemon's first metrics read. The recipe therefore REQUIRES call 1 to succeed with a tool call -- an easy way to record a green-looking but meaningless run.",
+        "Fallback is turn-scoped: fallback-providers.md:124 says each new user message restores the primary (restore_primary_runtime), so the fallback ModelName reverts on turn 2. The spec asserts exactly one turn for that reason -- a 'subsequent prompts keep the fallback' assertion would be wrong.",
+        "session_model_usage also carries auxiliary rows with task != '' (title_generation is present in the live store) whose model can differ from the main loop's -- _record_model_usage deliberately does not let aux rows inherit the session route. Any adapter fix MUST filter task='' or it will report the wrong model.",
+        "Even after a fix the change surfaces at the daemon's NEXT activity event, not at the failover instant; for a turn whose failover is on the last API call it lands at turn end. That still satisfies bullet (c), but makes 'mid-turn' approximate rather than instantaneous.",
+        "Not established: whether Hermes' pre-failover retry/backoff (adaptive_rate_limit_backoff, and for rate_limit the credential-pool rotation gate _pool_may_recover_from_rate_limit) fits inside a recording budget. timeout_seconds is 300 as a hedge; record should confirm and raise it if the failover is slow to trigger.",
+        "The hermes Go adapter files were dirty in this worktree while assessing (an unrelated widening of the source filter to include 'subagent'), so every adapter claim cites a symbol (querySessionMetrics, Watcher.turnIsDone, reconcile, Parser.ParseLine) rather than a line number."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "hermes 0.19.0 docs: website/docs/integrations/providers.md:1470-1494 (Fallback Providers)",
+          "note": "fallback_providers is a documented top-level chain of provider+model pairs: 'When activated, the fallback swaps the model and provider mid-session without losing your conversation. The chain is tried entry-by-entry; activation is one-shot per session.' Grounds agent_supports=yes and, because each entry carries its own model, the fallback model id genuinely differs."
+        },
+        {
+          "kind": "url",
+          "ref": "hermes 0.19.0 docs: website/docs/user-guide/features/fallback-providers.md:115-124",
+          "note": "'Resets the retry counter and continues the conversation' and 'Fallback is turn-scoped: ... If the primary fails mid-turn, fallback activates for that turn only. ... Within a single turn, fallback activates at most once.' This is the scenario's exact shape, and the source of the turn-scoped caveat."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: agent/conversation_loop.py, the _should_fallback / '... switching to fallback provider...' block",
+          "note": "is_rate_limited (or a transport failure after 2 retries) -> agent._try_activate_fallback(reason=classified.reason) -> retry_count = 0; continue. The SAME turn resumes under the new backend; no message is appended and no finish_reason is written during the swap, which is why the session cannot flicker to ready."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: agent/chat_completion_helpers.py, try_activate_fallback",
+          "note": "Sets agent.model = fb_model, agent.provider = fb_provider, swaps the client/base_url/api_mode in place. Performs NO database write -- the whole swap is in-memory state, which is the root of the daemon-side gap."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: hermes_state.py, SessionDB.update_token_counts (first_accounted_route guard)",
+          "note": "sessions.model / billing_provider are rewritten ONLY when existing_api_calls == 0. Inline comment: 'Session creation records the requested primary route before any API call. If it fails and fallback succeeds, the first accounted usage event is the first authoritative route. After that, preserve the legacy row: one row cannot represent mixed-provider usage.' So a mid-turn failover leaves sessions.model pinned to the primary."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: hermes_state.py, SessionDB._record_model_usage + the session_model_usage schema",
+          "note": "THE TRACE. Per-API-call upsert keyed (session_id, model, billing_provider, billing_base_url, billing_mode, task) with 'last_seen = excluded.last_seen' on conflict, written from the same update_token_counts chokepoint the CLI loop calls with model=agent.model / billing_provider=agent.provider (post-failover values). Makes the live route derivable as: SELECT model FROM session_model_usage WHERE session_id=? AND task='' ORDER BY last_seen DESC LIMIT 1."
+        },
+        {
+          "kind": "file",
+          "ref": "live store: /Users/ingo/hermes-local/.hermes/state.db (sqlite3 read-only, 2026-08-02)",
+          "note": "session_model_usage is populated on the real CLI path: 30 rows total, 25 with task='' -- one per (session, model, provider), plus title_generation aux rows. No multi-model session exists yet (no failover has occurred on this machine), so the multi-row failover shape is inferred from the upsert code, not observed."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: agent/agent_runtime_helpers.py, switch_model (-> SessionDB.update_session_billing_route)",
+          "note": "The ONLY code path that persists a route change to the sessions row, and it is the user-initiated /model switch ('so the dashboard Model cards show the actual provider after a mid-session /model switch'). Failover deliberately does not call it -- confirming the asymmetry between a user switch (observable) and a failover (not)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go, querySessionMetrics",
+          "note": "ModelName is read from the sessions.model column and nowhere else, and is re-injected as the synthetic _model key on every message row for Parser. `grep -rn session_model_usage core/` returns nothing -- the adapter never reads the per-model table."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go, Watcher.reconcile / Watcher.turnIsDone",
+          "note": "An activity event (which is what makes the daemon re-read metrics) fires only when sessions.message_count grows or ended_at flips; Terminal requires role='assistant' with a terminal finish_reason. Grounds both the 'no flicker during failover' claim and the mid-turn observation window."
+        },
+        {
+          "kind": "file",
+          "ref": "hermes 0.19.0: agent/conversation_loop.py (pre-tool-execution flush) and agent/tool_executor.py, _flush_session_db_after_tool_progress",
+          "note": "The two mid-turn persistence points. They make message_count grow before and after a tool call, giving the daemon activity events on both sides of a failover that happens on API call 2+. There is NO flush between the user's Enter and the first API response -- hence the first-call blind spot in the caveats."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-openai-429/main.go",
+          "note": "Streams finish_reason 'stop' on request 1, then an insufficient_quota error. Ends the turn, so as-is it elicits a NEXT-turn failover, not a mid-turn one -- a tool-call-first variant is the concrete driver work."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh (DRIVE_ELICITS, SETTINGS_PATH)",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\"; no mock-launch or config-writing primitive, and SETTINGS_PATH is accepted but unused. Hermes reads fallback_providers from $HERMES_HOME/config.yaml. Hence driver=gap:429-mock, same label as the 2-9 sibling."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/scenarios/2-9_token-quota-exhausted/metadata.json",
+          "note": "The contrast that decides bug vs incapable: 2-9 is frozen incapable because the WALLED turn is persisted nowhere. Here the fallback turn completes and IS persisted (finish_reason='stop' row + a session_model_usage row naming the fallback), so the failure is the adapter reading the wrong column."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/5-5_provider-failover-midturn/metadata.json",
+          "note": "Sibling framing. Codex is frozen partly because a provider swap could leave message.model identical; hermes' chain entries carry an explicit model, so the fallback model id differs by construction."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes v0.19.0+ on PATH; HERMES_HOME exported to the SAME recording home for both the driver and the recording daemon, so the daemon polls the store the run actually writes",
+        "DRIVER GAP (gap:429-mock) -- record must port two things before driving: (1) a mock-openai variant that answers request 1 with a tool_call (finish_reason 'tool_calls') and 429s every request after, and (2) a driver primitive that launches that mock and writes $HERMES_HOME/config.yaml before `hermes chat` starts",
+        "config.yaml must set model.provider/base_url to the mock endpoint (Hermes honors OPENAI_BASE_URL / OPENAI_API_KEY from env or $HERMES_HOME/.env) AND a top-level fallback_providers list whose first entry is a REAL working provider+model that can finish the turn",
+        "The fallback entry's model id must DIFFER from the primary's, otherwise bullet (a) is untestable by construction",
+        "sqlite3 on PATH -- the driver's wait_turn polls the store for finish_reason='stop'; it terminates here because the fallback does close the turn",
+        "no OTHER interactive hermes session live during the run: source='cli' rows carry no cwd, so the adapter's live-process CWD fallback needs exactly one non-service hermes process",
+        "irrlichd recording with the hermes store watcher enabled and the 'store' permission granted (IRRLICHT_PERMISSION_MODE=grant-all on a fresh home)"
+      ],
+      "setup": [
+        "Turn shape is load-bearing: API call 1 MUST succeed and return a tool call, so the turn issues a second API call that the mock then 429s. A failover on call 1 is invisible as a change (hermes' first_accounted_route rewrites sessions.model before the daemon's first metrics read, and nothing is flushed between the prompt and the first response).",
+        "The prompt therefore asks for a tool-backed action; the mock's request-1 tool_call drives the pre-tool-execution flush, which is the activity event that pins the PRIMARY model on the daemon side.",
+        "Hermes writes no transcript file: the slot's transcript path is '<store>?session=<id>' and the session id is resolved from the sessions table after the first send (the row does not exist at launch).",
+        "Exactly ONE turn is driven: fallback is turn-scoped (restore_primary_runtime restores the primary on the next user message), so a second prompt would revert ModelName and muddy the assertion.",
+        "timeout_seconds 300 covers the REPL boot poll plus hermes' pre-failover retry/backoff before the fallback turn actually runs."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "List the files in the current directory using your terminal tool, then tell me how many there are."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a session born in ready shortly after launch (expected to be the transient proc-<PID> pre-session; the store row does not exist until the first user message)",
+        "events.jsonl contains a pid_discovered event",
+        "events.jsonl contains a state_transition -> working when the prompt is sent",
+        "the session stays working across the failover -- no state_transition to ready (and none to waiting) between the prompt and the turn's completion",
+        "events.jsonl contains a state_transition -> ready on the SAME session once the fallback's assistant row lands with finish_reason='stop'",
+        "KNOWN FAILING: the recorded model must be the FALLBACK model id. Today the adapter reads sessions.model, which hermes freezes at the primary after the first accounted API call, so the recording is expected to show the PRIMARY id -- that mismatch IS the bug signature, and record should hand back an issue payload rather than weaken the spec",
+        "cross-check the store directly after the run: session_model_usage for this session should hold TWO task='' rows (primary and fallback), with the fallback carrying the larger last_seen -- that is the trace the adapter is failing to read",
+        "the session's recorded metrics carry non-zero cum_input+output tokens",
+        "the session's final live state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}

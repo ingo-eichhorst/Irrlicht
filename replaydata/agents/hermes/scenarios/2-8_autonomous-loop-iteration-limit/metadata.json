@@ -1,0 +1,120 @@
+{
+  "scenario_id": "autonomous-loop-iteration-limit",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+fe95020.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes — hermes ships a real /goal autonomous self-prompting loop whose turn budget (goals.max_turns, default 20) is a CONFIGURABLE cap that self-terminates the loop; the cap is deterministically forceable, unlike claudecode's."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop-iteration-limit",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\nroute: record\n\n## Scenario signal\n\nScenario 2.8 asserts the TERMINATION SHAPE of an autonomous self-prompting loop: the agent reaches its configured max-iteration count, emits a terminal turn signal, stops self-prompting, and the session settles `working → ready` and STAYS ready (final state ready, at least 2 turns, never stuck in `working`). It presupposes the autonomous-loop primitive of the 2.7 sibling.\n\n## agent = yes — and the cap is a REAL, forceable one\n\nHermes Agent v0.19.0 ships a first-class autonomous goal loop in `hermes_cli/goals.py` (1807 lines), wired into the interactive `hermes chat` REPL:\n\n- `/goal <text>` sets a goal and immediately kicks the loop off (`self._pending_input.put(state.goal)`, cli_commands_mixin.py:2198). Subcommands: set / draft / show / status / pause / resume / clear / wait / unwait.\n- After EVERY turn the CLI calls `_maybe_continue_goal_after_turn()` (cli.py:15841), which runs an auxiliary judge model (`judge_goal`) over the turn's last response and, on a `continue` verdict, pushes a self-generated continuation prompt back into `_pending_input` (cli.py:10115-10122). No user message is involved — this is genuine self-prompting.\n- `GoalState` carries `turns_used` / `max_turns` (goals.py:399-400). `DEFAULT_MAX_TURNS = 20` (goals.py:47), overridable per install from `$HERMES_HOME/config.yaml` under `goals.max_turns` (cli.py:9912-9918: `max_turns = int(goals_cfg.get(\"max_turns\", 20) or 20)`), and per goal via `GoalManager.set(..., max_turns=)`.\n- The cap-hit path is explicit (goals.py:1571-1585): when `state.turns_used >= state.max_turns`, the loop sets `status = \"paused\"`, `paused_reason = \"turn budget exhausted (n/n)\"`, returns `should_continue: False` with NO continuation prompt, and prints `⏸ Goal paused — n/n turns used. Use /goal resume to keep going, or /goal clear to stop.`\n\nSo unlike claudecode — where the reference cell had to substitute `/goal clear` because the cap \"is not deterministically forceable today\" — hermes exposes the cap as ordinary configuration. Setting `goals.max_turns: 2` in the recording home's config.yaml makes the recording exercise the GENUINE `max_iterations_reached` termination path the scenario names, not a stand-in. This is the first cell in the 2.8 row able to do that.\n\n(Separately, `run_agent.py` carries a `max_iterations` / `_handle_max_iterations` cap at 90 — that is the per-turn TOOL-CALLING iteration cap shared with subagents, a different mechanism from the goal loop's `max_turns` turn budget. This cell asserts the goal loop's cap.)\n\n## daemon = full\n\nEvery user-observable signal the scenario asserts maps to an event this adapter already produces (core/adapters/inbound/agents/hermes/):\n\n- **birth** — `Watcher.scanSessions` selects `sessions` rows with `source IN ('cli','tui')`; `hermes chat` records `source='cli'` and the row is INSERTed while the session is live (~2s after launch, on the first user message), so `reconcile` emits `new_session`. Because the process exists before the store row does, a transient `proc-<PID>` presession row is expected first and reconciles into the real session id — the same shape as the sibling ProcessOwnedStore adapter (opencode), whose 1-1 cell records the presession row appearing ~70ms ahead of the store-keyed row. The spec models the birth as the two-phase presession form and anchors every later phase to the REAL session.\n- **`ready → working` per iteration** — the goal's kickoff text AND the self-generated continuation prompt both enter the SAME `_pending_input` queue as typed user input (cli.py:6607/6611 vs 10120), so each is persisted as an ordinary `role='user'` row with no `display_kind`; `Parser.ParseLine` maps that to `user_message` (parser.go:71-80). The only user row it skips is `display_kind='model_switch'`.\n- **`working → ready` per iteration** — `finish_reason='stop'` on the newest assistant row is Hermes' EXPLICIT turn boundary; the parser maps it to `turn_done` (parser.go:93-95) and `Watcher.turnIsDone` sets `Terminal` on the activity event (watcher.go:426-436). No idle-flush heuristic is involved, so the settle is signal-driven, not timing-driven.\n- **terminal dwell after the cap** — once the budget is exhausted the loop enqueues nothing further, so no `messages` row is written, `message_count` stops growing, and `reconcile` emits no further activity. The session stays `ready`. Nothing in the adapter re-drives it.\n- **no `waiting`** — the recipe's goal needs no tool approval, and the adapter's only `waiting` sources are the shared prose cue and open tool calls.\n\nEvery assertion is thus reachable from events the adapter emits today. Per the observation-vs-emission rule this verdict is derived from the adapter source plus the Hermes source rather than from a live recording, so it is PROVISIONAL on one point named in the caveats (that the continuation prompt lands as a persisted `role='user'` row); `record` promotes it.\n\n## driver = ready\n\nThe recipe needs `slash`, `wait_turn` and `sleep`. `DRIVE_ELICITS` in replaydata/agents/hermes/driver-interactive.sh is `send slash sleep wait_turn` — all three are genuinely ported, none is a stub. `wait_turn` polls the store for `COUNT(*) WHERE role='assistant' AND finish_reason='stop'` and blocks for a NEW completion, which is exactly the per-iteration boundary this recipe steps on, so each autonomous iteration is individually waitable. `DRIVE_SLASH_REQUIRES_STEP_TYPE=false`, so `/goal …` reaches the REPL as keystrokes rather than being stored as literal text. No missing primitive → no driver gap.\n\nThe one driver limitation is NOT a step-type gap: the scaffolded driver accepts `SETTINGS_PATH` positionally but never applies it, so the recipe's `settings` blob has to be materialized into `$HERMES_HOME/config.yaml` by the recording setup (see prereqs / preconditions). That is rig wiring, not a missing recipe primitive.\n\n## What would raise confidence\n\nA live recording confirming (a) the continuation prompt is persisted as a `role='user'` row so iteration 2 shows as `working`, and (b) the judge model configured in the recording home returns the strict JSON verdict rather than tripping the parse-failure auto-pause before the budget cap does.",
+      "caveats": [
+        "PROVISIONAL on emission, not on parsing: the second iteration's ready → working depends on hermes persisting its SELF-generated continuation prompt as a role='user' messages row. It is pushed into the same _pending_input queue as typed user input (cli.py:10120 vs 6607/6611), so it should follow the identical persistence path, but that row was not observed in a store — record settles it. If it were persisted with display_kind='hidden' the parser would still emit user_message (only 'model_switch' is skipped), so the risk is narrow.",
+        "The recording depends on an auxiliary judge model: judge_goal (goals.py:846) calls the auxiliary.goal_judge model after every turn, and DEFAULT_MAX_CONSECUTIVE_PARSE_FAILURES=3 auto-pauses the loop with the SAME user-observable arc (stops self-prompting, settles ready) if that model can't return the required JSON verdict. From events.jsonl alone a budget-cap pause and a judge-failure pause are indistinguishable, so the recording home must point auxiliary.goal_judge at a model that follows the contract for the recorded termination to be the cap-hit path it claims.",
+        "goals.max_turns must be small (2) in the recording home's config.yaml or the loop runs to the 20-turn default and the recording never reaches the cap. The scaffolded driver takes SETTINGS_PATH positionally but ignores it, so the settings blob is a rig/human setup step today rather than something the driver applies — a driver enhancement, not a recipe primitive gap.",
+        "Two different caps exist in Hermes and only one is this scenario's: goals.max_turns is the goal loop's TURN budget (default 20); agent.max_turns / HERMES_MAX_ITERATIONS (default 90, run_agent.py's max_iterations + _handle_max_iterations) is the per-turn TOOL-CALLING cap shared with subagents. Hitting the latter ends a single turn, not the loop.",
+        "Other paths auto-pause the loop with the same observable arc: DEFAULT_MAX_CONSECUTIVE_TRANSPORT_FAILURES=5 (API/auth errors), /goal pause, /goal clear, and the wait-barrier verdict (waiting_on_pid / waiting_on_session / waiting_until), which quiesces the loop WITHOUT burning a turn. The daemon cannot discriminate among these — it observes 'the loop stopped and stayed ready', which is exactly what the scenario asserts."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/goals.py",
+          "note": "The autonomous goal loop. GoalState.turns_used/max_turns (L399-400); DEFAULT_MAX_TURNS=20 (L47); GoalManager.set(max_turns=) (L1145-1153); the cap-hit branch evaluate_after_turn L1571-1585 sets status='paused', paused_reason='turn budget exhausted (n/n)', should_continue=False and returns no continuation prompt; DEFAULT_MAX_CONSECUTIVE_PARSE_FAILURES=3 (L68) and _TRANSPORT_FAILURES=5 (L73) are the competing auto-pause paths."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py",
+          "note": "REPL wiring. L9912-9918 reads goals.max_turns from $HERMES_HOME/config.yaml (default 20) into GoalManager(default_max_turns=...) — this is the knob that makes the cap deterministically forceable. L15841 calls _maybe_continue_goal_after_turn() at the end of every turn; L10107-10122 runs the judge and pushes the self-generated continuation prompt into _pending_input, the same queue typed user input uses (L6607/6611). Separately L4265-4277 is the unrelated per-turn tool-calling cap (agent.max_turns / HERMES_MAX_ITERATIONS, default 90)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/cli_commands_mixin.py",
+          "note": "_handle_goal_command (L2071-2198): the /goal surface in `hermes chat` — set/draft/show/status/pause/resume/clear/wait/unwait. L2184 prints 'Goal set (<max_turns>-turn budget)'; L2193 states the loop runs 'until it is [done], you pause/clear it, or the budget is exhausted'; L2198 enqueues the goal text to kick the first iteration off without a separate user message."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go",
+          "note": "Event vocabulary the daemon can emit for this cell: role='user' → user_message (L71-80, skipping only display_kind='model_switch'); role='assistant' with finish_reason='stop' → turn_done (L93-95). The turn boundary is explicit, so the per-iteration working→ready settle needs no idle-flush heuristic."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "Discovery + settle. scanSessions filters source IN ('cli','tui') so the `hermes chat` REPL (source='cli') is in scope (L278-289); reconcile emits new_session then activity on message_count growth (L356-419); turnIsDone (L426-436) reads the newest active row's finish_reason='stop' to set Terminal. After the goal budget is exhausted no further rows are written, so no further activity is emitted and the session dwells in ready."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "DRIVE_ELICITS='send slash sleep wait_turn' (L113) — every primitive this recipe needs is genuinely ported, not a stub arm. wait_turn (L258-275) polls the store for a NEW assistant row with finish_reason='stop', which is exactly one autonomous iteration. DRIVE_SLASH_REQUIRES_STEP_TYPE=false (L114). SETTINGS_PATH is accepted positionally (L81) but never applied — hence the config.yaml prereq."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-8_autonomous-loop-iteration-limit/metadata.json",
+          "note": "Reference cell and the point of divergence: claudecode qualifies agent=yes on /goal but records /goal clear as a STAND-IN because 'claudecode doesn't expose the numeric cap via --help or settings'. hermes exposes it as goals.max_turns in config.yaml, so this cell records the real cap-hit."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/1-1_session-start/expected.jsonl",
+          "note": "Sibling ProcessOwnedStore adapter: its notes record that 'the proc-<PID> pre-session row appears in ~70 ms and satisfies session_birth; the UUID-keyed session row materialises about half a second later'. hermes has the same gap (store row INSERTed ~2s after launch), which is why this spec uses the two-phase presession birth."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH and authenticated against a configured inference provider",
+        "HERMES_HOME exported to the isolated recording home (the store, config and auth all live under it)",
+        "$HERMES_HOME/config.yaml carries `goals.max_turns: 2` — the iteration cap the scenario asserts. NO LONGER A MANUAL STEP: as of driver commit ac01f1e7 the hermes driver applies the recipe's `settings` blob (this cell's is {\"goals\":{\"max_turns\":2}}) by deep-merging it into <HERMES_HOME>/config.yaml before launch and restoring the original on exit. The earlier wording — that the driver accepts SETTINGS_PATH but does not apply it, so the recording setup must write the key by hand — was true and is now fixed; a re-record no longer depends on an out-of-band edit. Without the cap the loop runs to hermes' 20-turn default (cli.py:9914) and never reaches the budget inside the timeout.",
+        "auxiliary.goal_judge may be left at its shipped default (provider: auto, i.e. the main chat model — hermes_cli/config.py:1799). The assessment feared the judge parse-failure auto-pause (3 consecutive non-JSON verdicts, goals.py:1560) would end the loop for the wrong reason. The sibling 2.7 recording refutes that on this install: with the default judge on gpt-5.6-luna the goal loop produced two clean `continue` verdicts (two \"[Continuing toward your standing goal]\" continuation prompts) and then a `done` verdict, i.e. three usable judge parses in a row and zero parse failures. Re-check if the recording home's model.default changes.",
+        "sqlite3 on PATH (the driver reads session id and turn completion straight out of state.db)",
+        "irrlichd is recording"
+      ],
+      "setup": [
+        "Driver launches `hermes chat` under tmux in a fresh cwd and waits for the ready prompt",
+        "Session id is resolved lazily from the store after the first send (started_at > launch_ts)",
+        "WIDENED BEFORE RECORDING (2026-08-03), per the column's TIMING prerequisite: the assessed goal was a one-line impossible question whose reply is a sub-second turn, which the 2s store poll can commit whole and erase the ready->working edge that iter1_start/iter2_start assert. Each attempt now also writes ~200 words enumerating candidates and why each failed. The goal stays impossible, so the judge keeps returning `continue` and the loop still ends on the turn budget rather than on completion — the cap is what the cell measures and it is unchanged.",
+        "GOAL REDESIGNED AFTER A FAILED FIRST TAKE (2026-08-03). The assessed goal was an impossible question (\"reply with one integer that is simultaneously odd and even\"), on the theory that an unsatisfiable goal keeps the judge returning `continue` until the turn budget stops the loop. The live judge does not behave that way: after ONE turn it returned verdict=done with reason \"The agent correctly explains that no integer can be both odd and even under standard definitions, making the requested goal impossible\" (state_meta key goal:20260803_010132_187bae). The loop ended at turns_used=1 of max_turns=2 - i.e. the cell would have recorded goal-completion, not the iteration cap it exists to assert. The goal is now a long, objectively INCOMPLETE task (write 1..2000 in blocks of 100), so the judge has no honest route to `done` inside two turns and the turn budget is necessarily what stops the loop. This also satisfies the column TIMING prerequisite for free: 100 lines per reply is a wide generation."
+      ],
+      "script": [
+        {
+          "type": "slash",
+          "text": "/goal Write out the whole numbers from 1 to 2000, one number per line, in order. In each reply write ONLY the next 100 numbers of the sequence and then stop - never more than 100 in a single reply, and always continue from where the previous reply ended. Do not summarise, do not skip ahead, do not use any tools and do not ask me any questions. The goal is complete only once the number 2000 has actually been written out."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 25
+        }
+      ],
+      "verify": [
+        "events.jsonl shows at least 2 working->ready transitions on the same store-keyed session id",
+        "the second iteration starts with no driver-sent input between the two wait_turns — the loop self-prompted",
+        "final state of the session is ready and dwells there for the whole trailing sleep",
+        "no state_transition to waiting",
+        "the persisted goal state (state_meta key goal:<session-id>) must end with status=paused and paused_reason=\"turn budget exhausted (2/2)\" - NOT status=done. A `done` verdict means the loop terminated on judge completion and the recording is of the wrong scenario, however green the state phases look."
+      ],
+      "settings": {
+        "goals": {
+          "max_turns": 2
+        }
+      },
+      "timeout_seconds": 300
+    }
+  }
+}

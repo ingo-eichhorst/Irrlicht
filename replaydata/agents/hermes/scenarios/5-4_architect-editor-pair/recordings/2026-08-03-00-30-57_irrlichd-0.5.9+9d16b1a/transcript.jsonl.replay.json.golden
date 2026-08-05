@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "hermes",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 8,
+    "consumed_events": 8,
+    "total_transitions": 5,
+    "first_event_time": "2026-08-02T22:31:01.274Z",
+    "last_event_time": "2026-08-02T22:32:17.939Z",
+    "wall_clock_session_duration": 76665000000,
+    "state_durations": {
+      "waiting": 8607000000,
+      "working": 68058000000
+    },
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "waiting_between_working": 1
+    },
+    "flickers_by_reason": {
+      "turn ended with question or cue → waiting": 1
+    },
+    "model_name": "gpt-5.6-luna"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-08-02T22:31:01.274Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 0,
+      "virtual_time": "2026-08-02T22:31:01.274Z",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 1,
+      "virtual_time": "2026-08-02T22:31:34.692Z",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "turn ended with question or cue → waiting",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": true,
+      "last_assistant_text_head": "…ide this small single-file CLI scope.\n- The skill content may need a later pa…"
+    },
+    {
+      "index": 3,
+      "event_index": 2,
+      "virtual_time": "2026-08-02T22:31:43.299Z",
+      "cause": "event",
+      "prev_state": "waiting",
+      "new_state": "working",
+      "reason": "transcript activity (waiting → working)",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 4,
+      "event_index": 7,
+      "virtual_time": "2026-08-02T22:32:17.939Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Created the `mycli-version-flag` skill in the `software-development` category."
+    }
+  ]
+}

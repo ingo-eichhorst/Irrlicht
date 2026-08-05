@@ -1,0 +1,123 @@
+{
+  "scenario_id": "self-correction-iteration",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+2771e8c",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "self-correction-iteration",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## agent \u2014 yes (observed in a live store, not inferred)\n\nHermes runs an OpenAI-shaped tool loop: an assistant row with `finish_reason='tool_calls'` is followed by a `role='tool'` row, and the loop repeats until an assistant row carries `finish_reason='stop'`. Self-correction after a FAILING tool is directly observable in a live store on this machine (/Users/ingo/hermes-local/.hermes/state.db, Hermes Agent v0.19.0):\n\n- session `20260802_212408_63a639`: user prompt \u2192 assistant(`tool_calls`, id `call_rl3pt7WRk3VqdOL9Y1CHulWU`) \u2192 tool(`execute_code`) whose content is `{\"error\": \"[TOOL_ERROR] Tool execution failed: RuntimeError: \u2026\"}` \u2192 assistant(`stop`) with the recovered answer. A failing tool result is inspected and recovered from inside ONE turn.\n- session `20260726_195104_387638`: SIX consecutive assistant(`tool_calls`)\u2192tool round-trips (`kanban_show`, `skill_view`, `terminal`, `write_file`, `read_file`, `kanban_complete`) spanning ~37s, closed by a single assistant(`stop`). Multi-cycle iteration inside one turn is routine, and every `tool` row carries a `tool_call_id` matching the assistant row's `tool_calls[].id`.\n\n## daemon \u2014 full\n\nThe scenario's three user-observable assertions map cleanly onto the adapter:\n\n**`ready \u2192 working`.** The watcher discovers the session from the `sessions` row (INSERTed live, on the first user message, `ended_at` NULL) and emits an activity event whenever `message_count` grows (watcher.go reconcile). The first user row makes the fold's `LastEventType` = `user_message`, `IsAgentDone()` false, so the classifier's total default rule (`transcript_activity`) drives ready\u2192working.\n\n**No flicker to `ready` between attempts.** `Watcher.turnIsDone` (watcher.go:426-436) marks an activity terminal ONLY when the newest active row is `role='assistant' AND finish_reason='stop'`. Mid-loop the newest row is either an assistant `tool_calls` row or a `tool` row, so no terminal is ever signalled. Independently, `SessionMetrics.IsAgentDone` (core/domain/session/metrics.go:502-549) can't fire either: hermes' parser emits `assistant_message` for a `tool_calls` row, and the heuristic fallback there matches only `\"assistant\"`/`\"assistant_output\"` \u2014 hermes deliberately stays out of it, exactly like codex. Only `finish_reason='stop'` \u2192 `turn_done` reaches the primary path. A failing tool result is just another `tool` row (`tool_result`), which carries no state signal of its own.\n\n**No flicker to `waiting` between attempts.** The waiting rules above `agent_done` in the ladder are unreachable here: `PermissionPending`/`OpenToolStalled`/`IdlePromptPending` are hook/claudecode-only overlays hermes never sets, and `NeedsUserAttention` (metrics.go:414-424) requires an OPEN tool whose name is in the user-blocking list (`AskUserQuestion`, `ExitPlanMode`, `ask_user_question`) \u2014 hermes' tools are `terminal`, `execute_code`, `read_file`, `write_file`, \u2026 none of which match. Open tool calls do keep `HasOpenToolCall` true mid-loop, which only strengthens the invariant (IsAgentDone returns false while a call is open).\n\n**Final `working \u2192 ready`.** The closing assistant row carries `finish_reason='stop'` \u2192 parser emits `turn_done`, every tool call has been closed by its `tool_call_id` (metrics.go messageFold.apply), so `IsAgentDone()` is true and `classifyAgentDone` returns ready. The watcher additionally short-circuits the activity debounce on that event (`Terminal=true`), so the settle is prompt rather than debounce-delayed.\n\n**Emission (the axis a parser read cannot settle).** Hermes persists incrementally DURING the turn, not in one batch at turn end: `agent/tool_executor.py:138-155` (`_flush_session_db_after_tool_progress` \u2014 \"Best-effort incremental SessionDB flush for tool-call progress\") is called at seven sites around tool execution, and `hermes_state.py:6396-6552` (`append_message`) does `UPDATE sessions SET message_count = message_count + 1` per row. So every retry cycle bumps `message_count` while the turn is still open, which is precisely the signal the watcher polls. That makes the working span observable rather than collapsed \u2014 but the exact granularity depends on the 2s poll + 500ms debounce, hence the timing caveat below and confidence 0.8.\n\n## driver \u2014 ready\n\nThe recipe needs `send`, `wait_turn`, `sleep`. `replaydata/agents/hermes/driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"` and all three seams are genuinely ported: `launch_repl` starts `hermes chat` under tmux and polls for the ready banner, `wait_turn` polls the store for a NEW `role='assistant' AND finish_reason='stop'` row (counting past completions so it blocks on a new turn), and `send_text` types the text with a 0.4s beat before Enter. No stubbed primitive is required.",
+      "caveats": [
+        "TIMING (the reason confidence is 0.8, not higher): the store watcher polls every 2s with a 500ms debounce and fsnotify on the store directory. A turn that completed inside a single scan window could be coalesced into one terminal activity, and the working span would never be observed. The recipe therefore forces a \u22653-round tool loop containing a `sleep 3`, so the open-turn window is many seconds wide. Only the live recording can settle this \u2014 it is the one property a parser read cannot prove.",
+        "COST IS NOT ASSERTED and is expected to be $0. Hermes writes `estimated_cost_usd=0.0` with `billing_mode='subscription_included'` (observed on every session in the live store), and the adapter deliberately reprices via irrlicht's own alias table (metrics.go); the model observed live, `gpt-5.6-luna`, has no pricing entry, so `EstimateCostUSD` returns 0 (capacity.go:157-162). Tokens ARE asserted non-zero \u2014 `sessions.input_tokens`/`output_tokens` are populated (16802/211 and 34541/1204 on the two cited sessions).",
+        "`model` is left UNPINNED for `record` to fill. The model is whatever `<HERMES_HOME>/config.yaml` sets for the recording home; the maintainer's live store shows `gpt-5.6-luna`, but that is a different HERMES_HOME than the rig will use.",
+        "CWD BINDING: `hermes chat` records `source='cli'`, and `sessions.cwd` is populated only by the TUI gateway, so the project binding is borrowed from the single live hermes process (watcher.go defaultLiveCWD \u2192 LiveCWDsByCmdline). If a second interactive hermes session is alive during the recording the fallback returns \"\" (ambiguous \u21d2 no binding) and the session surfaces with no cwd/project. Record with exactly one hermes session running.",
+        "WAITING-CUE RISK: an intermediate assistant message whose prose reads as a question routes to waiting via `PendingWaitingCue`/`ProseIndicatesWaiting` (parser.go:89), which would trip the no-waiting invariant. The recipe's prompt explicitly forbids asking the user anything; if a recording still flickers to waiting on a mid-loop question, that is a MODEL-behavior artifact of the prompt, not a daemon defect \u2014 retry with a firmer prompt before considering a pillar downgrade.",
+        "The daemon resolves the store from its OWN environment (`StorePath()` reads $HERMES_HOME, defaulting to ~/.hermes/state.db, which does not exist on this machine \u2014 the real store is at ~/hermes-local/.hermes/state.db). HERMES_HOME must be exported to the recording home for the irrlichd process as well as for the agent, or the watcher tails a store nothing writes to.",
+        "CONFIRMED by recording 2026-08-02-23-54-30_irrlichd-0.5.9+010a6fc (2026-08-02): 4/4 spec phases pass on session 20260802_235430_e8f6fe. Store rows 81-88 are exactly the asserted shape \u2014 user, then THREE assistant(finish_reason='tool_calls') -> role='tool' round-trips (skill_view returning {\"success\": false, \"error\": \"Skill 'definitely-not-a-real-skill-xyz' not found.\"}; skills_list recovering with 68 skills; skill_view succeeding on 'hermes-agent'), then the closing assistant row with finish_reason='stop'. Neither the failing tool row nor the intermediate tool_calls rows settled the session: one contiguous working span, no ready dip and no waiting, which is the whole claim of the cell.",
+        "TOOL ROSTER (probed live 2026-08-02, load-bearing for any future re-record of this cell): this install exposes 36 callable functions \u2014 browser_* (12), clarify, cronjob, delegate_task, execute_code, kanban_* (12), memory, process, session_search, skill_manage, skill_view, skills_list, text_to_speech, todo, vision_analyze, parallel. NOT exposed despite being in toolsets.py's _HERMES_CORE_TOOLS: terminal, read_file, write_file, patch, search_files, web_search, web_extract, image_generate, computer_use, ha_*. `terminal` is Docker-gated (config.yaml terminal.backend=docker) and survives only as a TOOLSET name; `execute_code` IS in the schema but is Docker-backed and fails with \"[TOOL_ERROR] ... 'docker version' failed\". Two recording attempts were spent discovering this: attempt 1 (recipe naming the terminal tool) and the read_file/write_file rewrite, whose live run had the model fall back to execute_code and fail three times without recovering. Any cell on this column that needs a tool must pick from the roster above.",
+        "observations: tokens_nonzero STRIPPED (seen red on this recording: `\u2717 tokens: want >0 got 0`, all 4 state phases green), `model` pinned in its place."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Live Hermes v0.19.0 store. Session 20260802_212408_63a639: assistant(tool_calls)\u2192tool(execute_code) with content {\"error\": \"[TOOL_ERROR] Tool execution failed: RuntimeError: \u2026\"}\u2192assistant(stop) \u2014 a failing tool inspected and recovered from inside one turn. Session 20260726_195104_387638: six assistant(tool_calls)\u2192tool round-trips over ~37s closed by one assistant(stop), every tool row's tool_call_id matching the assistant row's tool_calls[].id."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go",
+          "note": "finish_reason is the turn boundary: 'stop' \u2192 turn_done, 'tool_calls' \u2192 assistant_message + ToolUses, role='tool' \u2192 tool_result closed by tool_call_id. Intermediate rows carry no terminal signal."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "reconcile() emits an activity event whenever message_count grows; turnIsDone (426-436) sets Terminal only when the newest active row is assistant + finish_reason='stop', so no mid-loop event can settle the session."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "IsAgentDone (502-549): hermes' 'assistant_message' is NOT in the assistant/assistant_output heuristic fallback, and HasOpenToolCall short-circuits it \u2014 only turn_done settles. NeedsUserAttention (414-424): waiting requires an open USER-BLOCKING tool name; hermes' terminal/execute_code/read_file are not in that list."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/tool_executor.py",
+          "note": "_flush_session_db_after_tool_progress (138-155, called from 7 sites incl. 376/1027/1078/1098/1712/1744): \"Best-effort incremental SessionDB flush for tool-call progress\" \u2014 assistant/tool rows are persisted mid-turn, not batched at turn end. This is the emission evidence the daemon verdict rests on."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_state.py",
+          "note": "append_message (6396-6552) INSERTs one messages row and does UPDATE sessions SET message_count = message_count + 1 per row \u2014 the counter the watcher diffs to detect mid-turn activity."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\" (line 113); launch_repl runs `hermes chat` under tmux and waits for the ready banner, wait_turn polls the store for a NEW assistant row with finish_reason='stop'. Every primitive this recipe needs is ported."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/capacity.go",
+          "note": "EstimateCostUSD returns 0 when the model has no Pricing entry (157-162) \u2014 why cost_nonzero is deliberately NOT asserted for hermes' locally-configured model."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH (the console-script shim into <HERMES_HOME>/hermes-agent/venv/bin/hermes) and an inference provider configured in <HERMES_HOME>/config.yaml with credentials in <HERMES_HOME>/.env or auth.json",
+        "HERMES_HOME exported to the recording home for BOTH the agent and the irrlichd process \u2014 the daemon resolves the store from its own environment (StorePath() -> $HERMES_HOME/state.db)",
+        "sqlite3 on PATH: hermes writes no transcript file, so the driver reads the session id and turn completion straight out of state.db",
+        "irrlichd is recording (run-cell.sh isolated/coexist mode, or --attach against a daemon started with --record), with the 'store' observe permission granted",
+        "exactly ONE interactive hermes session alive during the run \u2014 `hermes chat` records source='cli' with an empty sessions.cwd, so the project binding comes from the single live hermes process and a second one makes it ambiguous (=> empty)",
+        "the configured model must be willing to run MULTIPLE tool calls in one turn; if it refuses to iterate after a failing tool, the cell is unrecordable for a MODEL reason, not a hermes/daemon incapability",
+        "the failing/recovering tool pair must be tools this install actually EXPOSES, which is NOT the same as _HERMES_CORE_TOOLS in toolsets.py. Live roster probed on 2026-08-02 by asking the model to name its callable functions (36 entries): browser_back, browser_click, browser_console, browser_get_images, browser_navigate, browser_press, browser_scroll, browser_snapshot, browser_type, browser_vision, clarify, cronjob, delegate_task, execute_code, kanban_attach, kanban_attach_url, kanban_attachments, kanban_block, kanban_comment, kanban_complete, kanban_create, kanban_heartbeat, kanban_link, kanban_list, kanban_show, kanban_unblock, memory, process, session_search, skill_manage, skill_view, skills_list, text_to_speech, todo, vision_analyze, parallel. Absent: terminal, process's sibling `terminal`, read_file, write_file, patch, search_files, web_search, web_extract, image_generate, computer_use, ha_*. `terminal` is Docker-gated (config.yaml terminal.backend=docker) and survives only as a TOOLSET name; the file tools are not in the schema at all on this install. `execute_code` IS listed but is Docker-backed too and fails with \"[TOOL_ERROR] ... 'docker version' failed\". The recipe therefore drives skill_view/skills_list, which are pure local reads with no Docker and no network."
+      ],
+      "setup": [
+        "The driver (replaydata/agents/hermes/driver-interactive.sh) launches `hermes chat` in a detached tmux session under a fresh per-run cwd, then polls the pane for the 'Type your message or /help' banner before sending anything (the REPL takes several seconds to load its tools/skills and swallows early keystrokes).",
+        "The sessions row does not exist at launch \u2014 it is INSERTed on the first user message, ~2s in \u2014 so the driver resolves the session id lazily after the first send, binding only to a row with started_at > this slot's launch timestamp (the store is shared with every other hermes session on the machine).",
+        "One send carries the whole self-correction: the failure, the recovery and the confirming re-read must ride ONE turn to be one contiguous working span. Splitting them into separate sends would produce separate working->ready arcs and destroy the invariant the cell exists to prove.",
+        "The failure is a skill_view of the skill name 'definitely-not-a-real-skill-xyz', which returns {\"success\": false, \"error\": \"Skill '...' not found.\", \"available_skills\": [...]} as a normal role='tool' row \u2014 a real tool failure that does not abort the turn. The recovery is skills_list, and the confirmation is a second skill_view on a name from that list.",
+        "Three sequential tool round-trips plus the large skills_list payload plus a three-sentence closing reply keep the turn open ~14s (measured on a live probe: user row t+0.0s, closing assistant row t+13.98s) \u2014 comfortably above the store watcher's 2s poll + 500ms debounce and above intermediate_working's duration_at_least_ms of 3000, so the working span cannot be coalesced away. The prompt's \"after you see it fail\" phrasing also forces sequencing, so the model does not batch the calls through the `parallel` pseudo-tool and collapse the round-trips.",
+        "The prompt forbids asking the user anything, so no intermediate assistant message trips the prose waiting cue (ProseIndicatesWaiting) and pushes the session to waiting mid-loop."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do all of this in ONE turn, and do not ask me anything: (1) call your skill_view tool with the skill name 'definitely-not-a-real-skill-xyz' - it does not exist, so the call will fail; (2) after you see it fail, call skills_list to find out which skills actually exist; (3) then call skill_view again on one real skill name from that list. After all three calls, reply with a three-sentence summary of which call failed, how you recovered, and what the final skill_view returned."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl contains the hermes session (id shaped YYYYMMDD_HHMMSS_xxxxxx) born ready \u2014 a transient proc-<PID> presession may also appear; the turn arc lands on the store-keyed session",
+        "events.jsonl contains a state_transition->working on that session when the prompt is sent",
+        "state.db contains, for that session, THREE assistant rows with finish_reason='tool_calls' each followed by a role='tool' row \u2014 the failing skill_view, the skills_list recovery and the confirming skill_view \u2014 before the closing assistant row",
+        "the failing attempt's tool row carries an error payload (success:false + \"Skill '...' not found.\"), returned as the tool result body rather than raised \u2014 which is exactly why it cannot settle the turn",
+        "events.jsonl contains NO state_transition to ready between the failing tool row and the recovery tool row \u2014 one contiguous working span across all retry cycles",
+        "events.jsonl contains NO state_transition to waiting for that session at any point",
+        "events.jsonl contains a state_transition->ready on the SAME session once the closing assistant row lands with finish_reason='stop'",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}

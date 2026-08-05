@@ -1,0 +1,174 @@
+{
+  "scenario_id": "synchronous-slash-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+6e35acf",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes — `hermes chat` intercepts /-prefixed input at the prompt and dispatches it through process_command() without ever reaching the agent (cli.py:15755). daemon_capability: full — a local slash writes NO messages row, so the store watcher's reconcile sees no message_count delta and emits nothing; the session holds ready. driver_capability: ready — DRIVE_ELICITS carries send/slash/sleep/wait_turn, exactly the recipe's step set."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "synchronous-slash-command",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\nRoute: record.\n\n## What the scenario asserts\n\nA ready session invokes a slash command that answers LOCALLY with no model call; state stays `ready` across the slash window and NO `→ working` transition is recorded for the slash itself. The whole observable is the ABSENCE of a second working transition (the first belongs to the warm-up turn that has to exist for the store row to be created at all).\n\n## agent_supports: yes\n\nHermes' interactive REPL (`hermes chat`) carries a central slash-command registry — `COMMAND_REGISTRY` in `hermes_cli/commands.py`, declared the single source of truth for CLI help, gateway dispatch and autocomplete. Enumerating it on the installed v0.19.0 yields 60+ commands, of which the `Info` category is entirely local render: `help` (\"Show available commands\"), `status` (\"Show session, model, token, and context info\"), `config`, `version`, `profile`, `whoami`.\n\nThe interception point is decisive. In the REPL input loop (`cli.py:15755`), any input for which `_looks_like_slash_command()` holds is routed to `self.process_command(user_input)` and the loop then `continue`s — the text never reaches the chat path, never enters `conversation_history`, and no agent turn is started. `process_command` dispatches `/help` → `show_help()` (a pure `_cprint` render over `COMMANDS_BY_CATEGORY`, no I/O, no pager, `cli.py:7154`) and `/status` → `_show_session_status()` (one `SessionDB.get_session()` READ plus in-memory attributes, `cli.py:7087`). Neither calls the model.\n\n## daemon_capability: full\n\nHermes is the second `agent.ProcessOwnedStore` adapter (agent.go): there is no transcript file at all, only `$HERMES_HOME/state.db`. The daemon's view of a session is therefore entirely a function of what lands in that store.\n\nThe store watcher's `reconcile` (watcher.go:356-419) emits an `EventActivity` only when `messageCount > prevCount` or the session just ended — `grew || justEnded`. With neither, it returns before emitting. So the daemon's read of \"no new message rows\" is literally \"no event\", and the session keeps whatever state its last terminal activity left it in: `ready`.\n\nSo the load-bearing question is whether a local slash writes a `messages` row. It does not:\n\n1. **Structurally.** The only two `append_message` call sites in the product are `run_agent.py:2079` (the per-turn flush of `conversation_history`, reached from inside the turn loop) and `hermes_cli/cli_commands_mixin.py:986` (the `/branch` history copy). A `/help` or `/status` reaches neither, because `process_command` returns before the chat path and appends nothing to `conversation_history`. Session-row creation is likewise lazy and turn-scoped: `_ensure_db_session()` (run_agent.py:606-637) is called from the turn path (run_agent.py:1924), at CLI close, and on a pending `/title`.\n2. **Empirically, against the live store.** `SELECT ... FROM messages WHERE content LIKE '/%'` over the maintainer's real store (25 sessions, 117 message rows accumulated from ordinary interactive use) returns ZERO rows. The row-shape census is `assistant`/null 58, `tool`/null 29, `user`/null 29, `user`/`model_switch` 1. **The single non-null `display_kind` row did NOT come from this surface** — an earlier version of this cell said it was `/model`'s CLI bookkeeping marker, and that was wrong. Joining the same rows to `sessions` and grouping by `source` gives `cli`/null 76, `tui`/null 40, `tui`/`model_switch` 1: the lone marker row belongs to a `source='tui'` session, and the 22 `source='cli'` sessions (which is what `hermes chat` records) contributed none. The source agrees: the only product writer of `display_kind=\"model_switch\"` is `_append_model_switch_marker` (tui_gateway/server.py:3255; the two write sites at 3292/3303 are inside it), whose single non-test caller is the TUI gateway's switch path at server.py:3892. Every one of cli.py's 31 `model_switch` occurrences is an import of the `hermes_cli.model_switch` MODULE or a method name (`_handle_model_switch`, `_apply_model_switch_result`, `_confirm_expensive_model_switch`, `_pending_model_switch_note`) — none writes a row.\n\nThis makes the `full` verdict STRONGER than first assessed, not weaker: on the `hermes chat` surface even `/model` — the one slash command previously believed to persist a marker row — writes no `messages` row at all. The adapter's Parser does `Skip` a `model_switch` row (parser.go:74-80) so it cannot reset the open-tool set or restart a turn, but that guard is defensive against TUI-gateway-written rows and never fires here. The sibling 5-3 cell carries the fuller picture and reaches the same conclusion from the other direction.\n\nThis is the same read-from-store no-op that the opencode sibling cell proves and records — with one respect in which Hermes is cleaner than claudecode: claudecode's TUI does append a `<local-command>` wrapper that its parser must filter (`isLocalCommandContent`), whereas Hermes writes nothing to filter.\n\n`/status`'s `get_session()` is a SELECT. Even if it perturbs the store file enough to trip the watcher's directory fsnotify watch, the resulting `scan` finds `message_count` unchanged and `reconcile` returns without emitting — the invariant survives a spurious scan, it does not depend on the absence of one.\n\n## driver_capability: ready\n\n`replaydata/agents/hermes/driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"` (line 113) — exactly the four step types this recipe needs, and the `slash` arm is genuinely ported, not stubbed: it shares `send_text` with `send` (line 297), which is correct for Hermes because the REPL's slash interception happens on ordinary submitted prompt text, not on a distinct key path. `DRIVE_SLASH_REQUIRES_STEP_TYPE=false` is accurate for the same reason, though the recipe uses the explicit `slash` step so the intent is legible.\n\nThree driver seams matter for this cell and are all already in place: `wait_for_prompt` polls the pane for \"Type your message or /help\" before the first keystroke (boot-time keystrokes are swallowed silently); `send_text` sleeps 0.4s between the literal text and Enter (back-to-back races the TUI and the Enter is dropped); and `resolve_session_id` filters `started_at > launch_ts` so the shared machine-wide store cannot hand `wait_turn` a stale finished session. Enter is bound straight to submit at the application level (`_bind_prompt_submit_keys`, cli.py:3558), so the `complete_while_typing` completion popup does not intercept it — no `keys` step is needed the way claudecode's cell needed one.\n\n## Session model (why the spec is shaped the way it is)\n\nHermes is a presession adapter. `hermes chat` is matched by `processCmdPattern` and the wiring gives every ProcessOwnedStore adapter a `processlifecycle.Scanner` alongside its store watcher (wiring.go:78-115), so a `proc-<PID>` row is born `ready` at launch. The store `sessions` row is INSERTed only on the first real turn, so the recipe's warm-up prompt is not decoration — without it there is no store-backed session for the slash window to be asserted against, and `resolve_session_id` never binds. The post-birth phases therefore anchor to `warm_turn_start` (the phase that necessarily lands on the real store session, since a `proc-` row never goes `working`), following the verified opencode sibling rather than pinning the birth.\n\n## Confidence 0.85\n\nagent_supports and driver_capability are read directly off the installed v0.19.0 source and the committed driver. daemon_capability combines the adapter's emit condition (a code read) with a live census of the real store showing no slash command was ever persisted across 117 rows. It is not 0.9+ because the negative — \"nothing at all is written\" — is being inferred from call-site reachability plus historical rows rather than from a live probe of this exact keystroke sequence; per the observation-vs-emission rule that promotion belongs to `record`.",
+      "caveats": [
+        "The recipe MUST stay on genuinely local commands. `/compress` runs a real model call (context compaction — a different scenario), `/new` and `/clear` mint a fresh session id (session-reset), `/branch` writes a whole copied history via append_message, and `/title` force-creates the sessions row via _ensure_db_session. `/model` is also excluded, but for a DIFFERENT reason than an earlier version of this cell gave: on the `hermes chat` surface `/model` writes NO messages row at all — the `display_kind='model_switch'` marker is written only by `_append_model_switch_marker` in tui_gateway/server.py, and the one such row in the live store belongs to a `source='tui'` session. It is excluded because it is not a pure local render: a bare `/model` opens the prompt_toolkit-native picker MODAL (cli.py:8840-8842, the `not model_input and not explicit_provider` branch), which this driver has no `keys` step to dismiss, and `/model <name>` performs a live mid-session switch — scenario 5-3's subject, carrying its own `_confirm_expensive_model_switch` modal risk. `/help` and `/status` were chosen because they are pure render + pure SELECT.",
+        "`/usage` and `/version` are also local to the model, but `_handle_usage_command` and `_print_version_info(check_updates=True)` reach the network (rate-limit endpoint / update check) and can stall the TUI for the length of a timeout. Avoided deliberately — a stall inside the dwell window would eat the recipe's budget, not the assertion.",
+        "The `no state_transition to working` invariant only holds if the warm-up turn is genuinely finished when the slash window opens. Hermes' turn boundary is explicit (`finish_reason='stop'`, watcher.go:426-436) so `wait_turn` is a real signal poll rather than an idle heuristic — but the 4s post-turn sleep is still load-bearing as separation between the two windows.",
+        "`sessions.cwd` is empty for `source='cli'` — which is what `hermes chat` records — so the project binding comes from `defaultLiveCWD`, which returns \"\" unless EXACTLY one live Hermes session process is found. A second Hermes process anywhere on the machine during the recording leaves the session unbound. Not specific to this cell; it is the column-wide recording precondition.",
+        "The store is shared machine-wide, so an unrelated Hermes session writing rows during the dwell window would produce activity events for a DIFFERENT session id. The spec's `same_session_as` anchoring contains that, but a concurrent session is still worth avoiding.",
+        "Observations are provisional in the sense the assess verb warns about: `model` is pinned to `gpt-5.6-luna` because it is confirmed twice from the live surface (`model.default` in the installed config.yaml, and 18 of 25 rows in the live store), not from vendor docs. `cost_nonzero` holds only because irrlicht prices it from capacity/aliases.go — Hermes itself reports `estimated_cost_usd=0.0` under `billing_mode='subscription_included'` (metrics.go:155-163).",
+        "CONFIRMED by recording 2026-08-03-00-07-28_irrlichd-0.5.9+a87d2df (2026-08-03): 4/4 spec phases pass and the cell's real claim — that a synchronous local slash command is INVISIBLE to irrlicht — is demonstrated in the store, not inferred. Session 20260803_000728_7ffbac: presession proc-22871 born ready at 00:07:28.217; store-backed session ready at 00:07:32.783; ready->working at 00:07:33.866; working->ready at 00:07:37.565. /help and /status were then typed into the held-open TUI and events.jsonl records NOTHING after 00:07:37.565 — no state_transition of any kind for the remaining ~16s of the run. The store agrees: `SELECT COUNT(*) FROM messages WHERE session_id=... AND content LIKE '/%'` -> 0, and the session holds exactly 2 rows (the warm-up user row 93 and its assistant row 94, finish_reason='stop'). Exactly ONE store-backed hermes session id appears.",
+        "observations: cost_nonzero and tokens_nonzero STRIPPED, model kept. Seen red on THIS recording before stripping: `✗ cost_usd: want >0 got 0` and `✗ tokens: want >0 got 0`, with all 4 state phases green. Same unsatisfiability, same reason, same remedy as the committed 1-1 / 2-1 / 2-3 / 1-6 / 2-13 cells: of verify reads only the replay golden summary, while hermes' tokens and cost are produced by ComputeMetrics over the SQLite store — a path the offline replay tool never runs. The assessment note above claiming cost_nonzero \"holds only because irrlicht prices it from capacity/aliases.go\" is right about the daemon and wrong about the verify surface: irrlicht DOES price it (the live surface shows a non-zero estimated_cost_usd for hermes sessions), the golden simply cannot carry it.",
+        "RECIPE WIDENED before this recording (commit a87d2dfc): the warm-up was \"Reply with exactly the word: ok\", a ~1s turn that can commit both the user row and the assistant finish_reason=stop row inside ONE 2s watcher scan — warm_turn_start would then have no ready->working edge to match. It now generates a 30-line count plus two sentences (3.7s working span observed, cleanly clear of the slash window). A future re-record must keep it wide."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py:15755-15776",
+          "note": "REPL input loop: `if ... _looks_like_slash_command(user_input): ... self.process_command(user_input) ... continue` — slash input is intercepted before the chat path and the loop returns to the prompt without starting an agent turn. This is the agent_supports evidence."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py:9198-9260,7087-7138,7154-7200",
+          "note": "process_command dispatch: canonical=='help' → show_help() (pure _cprint render over COMMANDS_BY_CATEGORY, no pager, no I/O); canonical=='status' → _show_session_status() (one SessionDB.get_session() READ plus in-memory attrs). Neither calls the model or writes."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/commands.py:64-",
+          "note": "COMMAND_REGISTRY — the declared single source of truth for every slash-command consumer. The Info category (help, status, config, version, profile, whoami, …) is local render; enumerated on the installed v0.19.0."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/run_agent.py:606-637,1924,2079",
+          "note": "The ONLY product write paths into the store: _ensure_db_session() creates the sessions row lazily from the turn path, and append_message() flushes conversation_history during a turn. A slash command reaches neither — this is the structural half of daemon_capability: full."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db (live read-only query, 2026-08-02)",
+          "note": "Empirical half: over 25 sessions / 117 message rows of ordinary interactive use, `SELECT ... FROM messages WHERE content LIKE '/%'` returns ZERO rows. Row census: assistant/null 58, tool/null 29, user/null 29, user/model_switch 1. Re-queried 2026-08-02 joined to sessions and grouped by source: `cli|<null>|76`, `tui|<null>|40`, `tui|model_switch|1` — so the lone marker row is TUI-gateway-written, NOT /model's on the CLI surface (correcting this cell's earlier claim); sessions split cli 22 / tui 3. Also confirms model='gpt-5.6-luna' on 18 of 25 sessions."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go:356-419,426-436",
+          "note": "reconcile emits EventActivity only when `grew || justEnded` (messageCount delta or ended_at flip); with no new message row it returns without emitting, so the session holds its last state. turnIsDone reads finish_reason='stop' — the explicit turn boundary that closes the warm-up turn to ready before the slash window opens."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go:70-80",
+          "note": "role='user' with display_kind='model_switch' is Skip-ed so a model-switch bookkeeping row cannot reset the open-tool set or restart the turn. SCOPE CORRECTION: that row is written only by the TUI gateway, so on this cell's `hermes chat` (source='cli') surface the guard never fires — it is defensive hardening, not the handling of a CLI slash command, and it is NOT the reason the recipe avoids /model."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go:24-62 + core/cmd/irrlichd/wiring.go:78-115",
+          "note": "Source = ProcessOwnedStore (no transcript file, one shared state.db); every ProcessOwnedStore adapter also gets a processlifecycle.Scanner, which mints the proc-<PID> pre-session born ready at `hermes chat` launch — the presession shape the spec's birth phase reflects."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh:113-114,184-198,240-248,258-290,297",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\" (all four the recipe needs, slash genuinely ported to send_text); wait_for_prompt polls for \"Type your message or /help\"; send_text sleeps 0.4s before Enter; resolve_session_id filters started_at > launch_ts against the shared store; wait_turn polls finish_reason='stop'."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py:3543-3560,14760-14785",
+          "note": "_bind_prompt_submit_keys binds Enter to submit at application level; the input TextArea uses complete_while_typing with a ThreadedCompleter + SlashCommandAutoSuggest, neither of which intercepts Enter. So a literal \"/help\"+Enter submits the text — no `keys` step needed (unlike claudecode's cell, which types the command character by character)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-5_synchronous-slash-command/expected.jsonl",
+          "note": "The ProcessOwnedStore sibling for this exact scenario, recorded and verified 4/4: pre-session birth → warm turn working/ready on the store-keyed session → held-ready slash window with the same invariants. This cell's spec is templated from it."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/scenarios/1-1_session-start/metadata.json",
+          "note": "Sibling hermes cell from the same wave: same column preconditions (HERMES_HOME inherited by the recording daemon, sqlite3 required, single live hermes process), and the live-store probe that pinned model gpt-5.6-luna and showed EstimateCostUSD resolving non-zero through the gpt-5 family."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/config.yaml:1-4",
+          "note": "model.default: gpt-5.6-luna, model.provider: openai-codex — the shipped config default backing the pinned `model` observation (confirmed from the live surface, not from docs)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tui_gateway/server.py:3255,3292,3303,3892",
+          "note": "The correction's primary source. `_append_model_switch_marker` (def 3255) holds the ONLY two product writes of display_kind=\"model_switch\" (3292, 3303) and its single non-test caller is the TUI gateway model-switch path at 3892. Repo-wide grep over installed v0.19.0: cli.py's 31 model_switch hits are all `from hermes_cli.model_switch import ...` or method names; gateway/slash_commands.py likewise only imports the module and calls _model_switch_skew_guard; hermes_cli/cli_agent_setup_mixin.py:591 READS the field to render \"model changed\" on resume. No CLI write path exists."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py:8760-8842",
+          "note": "_handle_model_switch: the `# No args at all: open prompt_toolkit-native picker modal` branch fires on `not model_input and not explicit_provider` (8840-8842) — the real reason the recipe avoids bare /model (the driver has no keys step to dismiss a modal). With an inline argument it calls switch_model() directly and can pop _confirm_expensive_model_switch (8910). Neither branch writes a messages row."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/scenarios/5-3_model-switch-midsession/metadata.json",
+          "note": "The sibling cell with the fuller picture, consistent with this correction: on the CLI surface /model writes no messages row (so message_count does not grow, reconcile emits nothing and the session simply holds ready) and does not rewrite sessions.model either — that cell's daemon=bug finding. It states outright that the parser's model_switch skip \"never fires on this surface\"."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH with an inference provider configured in <HERMES_HOME>/config.yaml (model.default + model.provider) and working credentials",
+        "HERMES_HOME exported in the shell that runs run-cell.sh, so BOTH the recording daemon (which inherits it via spawn-record-daemon.sh) and the driver read the same state.db",
+        "sqlite3 on PATH — the store is the only session signal hermes exposes; the driver exits nonzero(2) without it",
+        "no other hermes session process running: sessions.cwd is empty for source='cli', so the live-process CWD fallback binds a project only when exactly one session process is alive, and a concurrent session would also write unrelated rows into the shared store during the dwell window",
+        "irrlichd is recording with the hermes store watcher enabled (grant-all permission mode, so the observe-kind \"store\" permission is not left pending)",
+        "the chosen slash commands must remain local in the running hermes version — if /help or /status ever start routing through the agent the scenario premise breaks"
+      ],
+      "setup": [
+        "Driver creates a fresh cwd under <staging>/cwd/ and launches `hermes chat` under tmux, polling for the \"Type your message or /help\" banner before the first keystroke",
+        "Avoid /new, /clear and /branch (mint or copy a session — session-reset), /compress (real model call — context-compaction), /title (force-creates the sessions row) and /model (NOT because it writes a row — on this surface it writes none; the model_switch marker is TUI-gateway-only — but because bare /model opens the picker modal the driver has no keys step to dismiss, and /model <name> is a live mid-session switch, scenario 5-3)",
+        "Avoid /usage and /version: local to the model but network-bound, so they can stall the TUI inside the dwell window",
+        "The warm-up generation is deliberately WIDE (30-line count + two sentences) rather than the one-token \"Reply with exactly the word: ok\" an earlier draft carried. The watcher polls every 2s with a 500ms debounce, so a ~1s warm-up can commit its user row and its assistant finish_reason=stop row inside a SINGLE scan — warm_turn_start (the ready→working edge) then never exists to be observed. Widening the generation is the fix; weakening the spec is not. It also pushes the warm-up cleanly clear of the slash window."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Without using any tools, count from 1 to 30, one number per line. Then, without using any tools, write two sentences explaining what addition is."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "slash",
+          "text": "/help"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "slash",
+          "text": "/status"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a proc-<PID> pre-session born ready at `hermes chat` launch, then the store-backed session (id <YYYYMMDD>_<HHMMSS>_<hex>) running exactly ONE working→ready cycle — the warm-up turn that creates the store row",
+        "after /help and /status are delivered to the live TUI, NO state_transition to working and NO state_transition to waiting appears for that session across the slash window",
+        "exactly ONE store-backed hermes session_id appears — a local slash mints no new session (distinct from /new, which does)",
+        "the store's messages table gains no row for either slash command (no content beginning with '/'), which is why the watcher emits nothing",
+        "final session state is ready, and no tool calls are recorded"
+      ],
+      "settings": {},
+      "timeout_seconds": 240,
+      "notes": "Synchronous no-LLM slash commands on hermes (/help, /status). The observable is the ABSENCE of a SECOND working transition: the warm-up 'ok' turn drives ready→working→ready and is what creates the sessions row at all (Hermes' row is INSERTed lazily from the turn path, run_agent.py _ensure_db_session), then both slash commands are typed into the held-open TUI and the session STAYS ready. WHY they are invisible to the daemon: `hermes chat` intercepts /-prefixed input at cli.py:15755 and dispatches it through process_command without ever entering conversation_history, so nothing reaches the store's messages table; the adapter's reconcile only emits EventActivity when message_count grows or ended_at flips, so no event fires. WHY no wait_turn after a slash: no model call means finish_reason='stop' never increments and the driver's turn poll would spin to its deadline. The trailing 8s sleep is the dwell that lets the daemon observe the session HOLD ready; expected.jsonl's slash_window asserts ready for duration_at_least_ms:6000 with invariants forbidding working/waiting. What differs between runs: PID, session id, timestamps, token counts, warm-up latency. What must NOT differ: one working→ready arc on one store-backed session, then a held-ready slash window with no further transition, ending ready."
+    }
+  }
+}

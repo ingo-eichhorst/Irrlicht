@@ -1,0 +1,134 @@
+{
+  "scenario_id": "turn-end-terminal-text",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+2771e8c",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes — a tool-less `hermes chat` turn ends with an assistant row carrying finish_reason='stop' (verified in the live store: 11 of the 12 most recent sessions have zero tool rows and exactly one stop row). daemon_capability: full — Parser.ParseLine maps finish_reason='stop' to turn_done, so IsAgentDone() is true via the primary path and classifier rule agent_done settles working→ready without any idle heuristic. driver_capability: ready — the recipe needs send/wait_turn/sleep and the driver's wait_turn polls the store for that same finish_reason='stop'."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-end-terminal-text",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts one user-observable arc — `ready → working → ready` — closed by the adapter-specific turn-end signal, with zero tool calls. For Hermes that signal is `finish_reason='stop'` on the final assistant row.\n\n**agent = yes.** Hermes' message rows are OpenAI-shaped and `finish_reason` is an explicit turn boundary, not an inference: `stop` ends the turn, `tool_calls` means more work follows. Confirmed directly against the live store rather than from docs — the 12 most recent `source='cli'` sessions each carry exactly one `role='assistant' AND finish_reason='stop'` row, and 11 of the 12 carry zero `role='tool'` rows, i.e. the tool-less single-turn shape this cell needs is the ordinary outcome of a short prompt. A representative timeline: `user` at t=0, `assistant/stop` at t=+1.215s, `sessions.ended_at` at +1.216s (session 20260802_212608_1dc71a).\n\n**daemon = full.** Both transitions are carried, and each has a named mechanism:\n\n- `ready → working`. Hermes INSERTs the `sessions` row and the first `user` message together (`sessions.started_at` equals the first user row's `timestamp` to the millisecond in every sampled session). The watcher's directory-level fsnotify on `$HERMES_HOME` — plus a 2s poll backstop — fires a scan; `reconcile` sees `messageCount > prevCount` and emits `EventActivity` with `Terminal = turnIsDone(...)`, which is false because the newest row is the `user` one (watcher.go:426-436). `foldMessages` then replays the rows through `Parser`, leaving `LastEventType=\"user_message\"`. That is not in `IsAgentDone`'s primary (`turn_done`) or fallback (`assistant`/`assistant_output`) sets, so the classifier falls through to its total default rule `transcript_activity` → `working`.\n- `working → ready`. The assistant reply lands with `finish_reason='stop'`; `Parser.ParseLine` rewrites the event type from `assistant_message` to `turn_done` (parser.go:93-95), so `metrics.LastEventType=\"turn_done\"` and `IsAgentDone()` returns true on the primary path (metrics.go:531-533). No tool call is open (`HasOpenToolCall=false`, the open-tool guard is not tripped), and the reply carries no question or imperative cue, so `classifyAgentDone` routes to `ready` rather than `waiting`. The same `finish_reason='stop'` also sets `agent.Event.Terminal=true`, which short-circuits the detector's activity debounce (session_detector_activity.go:467-475) so the settle is not delayed by coalescing.\n\nThis is the cleanest instance of the scenario across the matrix: unlike the adapters that infer a boundary from idle time, Hermes needs no IdleFlush seam at all — the boundary is a stored field. No spec-required observable is mis-handled, so the verdict is `full`; the timing exposure below is a caveat, per caveats-over-downgrades.\n\n**driver = ready.** The recipe needs `send`, `wait_turn` and `sleep`. `driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"`, and its SEAM 2 `wait_turn` polls `SELECT COUNT(*) … role='assistant' AND finish_reason='stop'` against the store, counting a NEW completion via `EXPECTED_TURNS_SEEN`. That is the same signal the daemon reads, so driver and daemon agree on when the turn ended. No primitive is missing.\n\n**Provisional, per the observation-vs-emission rule.** Every claim above is read off the adapter, the daemon wiring and the maintainer's live store; no recording exists for this cell yet. What only a recording can settle is whether the daemon actually catches a scan in the window between the user row and the assistant row — see the first caveat. Hence confidence 0.8.",
+      "caveats": [
+        "TIMING — the `working` leg is the fragile one, and it is why the recipe's prompt is deliberately not the one-word prompt the 1.1 cell uses. Measured from the live store, a trivial `hermes chat` turn closes in ~1.2s (session 20260802_212608_1dc71a: user t=0 → assistant/stop t=+1.215s). The daemon only emits `working` if a scan lands inside that window, and `Watcher.scan` refuses to run within `minScanGap` (500ms) of the previous scan. If a prior scan happens to have run <500ms before the session INSERT, the first observation of the session can already include the assistant/stop row — the session is then born, discovered and settled in one pass, `ready → working` never appears, and the arc verifies PARTIAL. The recipe therefore asks for three sentences of prose (measured: a 50-item list took ~3.6s of generation in session 20260802_212408_63a639), widening the window to several seconds. If `record` still sees a missed `working`, the fix is a longer generation, not a spec weakening.",
+        "TOOL-LESSNESS — the scenario caps tool calls at 0, and the prompt trades a proven-tool-less shape for a longer generation window. 'Reply with exactly the word: X' is empirically tool-free (11 of the 12 most recent store sessions have zero tool rows) but too fast; the sampled prompt that DID reach for a tool was 'Count slowly 1 to 50' (session 20260802_212408_63a639 — one `role='tool'` row, a terminal call, most likely elicited by 'slowly'). The recipe prompt therefore opens with an explicit 'Do not use any tools' and asks for prose that implies no filesystem or shell affordance. Should the model still call a tool, the recording will show a `role='tool'` row and a preceding `finish_reason='tool_calls'` assistant row; the turn still ends on a single `stop`, so `wait_turn` is unaffected and only the tool-call cap fails.",
+        "WAITING CUE — `Parser.ParseLine` sets `PendingWaitingCue` from `session.ProseIndicatesWaiting` over the assistant text, and `classifyAgentDone` routes a cued turn to `waiting` instead of `ready`. A three-sentence explanatory answer ends on a statement, so the cue should not fire; but this is prose the model chooses, not a fixed string. The spec carries a `no state_transition to waiting` invariant precisely so a cued reply fails loudly as a recipe problem rather than silently as a daemon one.",
+        "CWD — `sessions.cwd` is populated only by Hermes' tui_gateway, so an interactive `hermes chat` session (`source='cli'`) carries an empty cwd; verified — every row in the maintainer's store has cwd ''. Both the watcher and `querySessionMetrics` fall back to `defaultLiveCWD`, which deliberately returns \"\" when zero or more than one live Hermes session process is found. A second Hermes session running during the recording leaves this cell's session with no project binding. Not asserted by this scenario, but it is the same precondition the 1.1 cell carries.",
+        "COST — `cost_nonzero` holds only because irrlicht prices the turn itself. Hermes reports `estimated_cost_usd=0.0` with `billing_mode='subscription_included'` (verified live), so `querySessionMetrics` deliberately ignores that column and prices via `capacity.DefaultCapacityManager().EstimateCostUSD` on the model name. That resolves for `gpt-5.6-luna` (it prices through the gpt-5 family) but would be $0 for a model with no pricing entry — so a provider switch before recording invalidates the observation, not the pillar.",
+        "CONFIRMED by recording 2026-08-02-23-30-05_irrlichd-0.5.9+a451c82 (2026-08-02): 3/3 spec phases pass. The working leg — the thing this cell was most at risk of losing — DID land: events.jsonl shows presession proc-14992 born ready, real store session 20260802_233005_3415ff born ready, ready→working (\"force ready→working on first activity\"), then working→ready (\"agent finished turn → ready\") on the SAME session. The transcript is exactly two rows, role=user then role=assistant/finish_reason=stop with three sentences of prose and NO tool_calls, so the terminal-text end signal is what closed the turn. No state_transition to waiting appears.",
+        "The longer prose prompt is load-bearing and was proven so by timing, not assumed: the turn ran 3.43s wall clock (golden first_event_time 21:30:09.069Z → last_event_time 21:30:12.499Z), which is comfortably wider than the watcher scan gap that a ~1.2s trivial turn can slip through. Keep the generation wide if this cell ever loses its working leg — do not weaken the spec.",
+        "RECORDING RETRY (1): the first attempt timed out with no `sessions` row created at all — the driver booted the REPL (wait_for_prompt returned, no stderr) and sent the text, but nothing was submitted, so resolve_session_id never bound and the export reported \"slot 1 has no exportable store rows\". The identical recipe succeeded unchanged on the immediate retry, so this is TUI input flakiness in the send→Enter handoff, not a recipe defect. Worth watching: if it recurs across cells, the 0.4s beat in the driver's send_text is the knob. One rough edge surfaced by the failure: run-cell.sh:306 threw \"[[: 0\\n0: syntax error in expression\" while reporting the failure, i.e. its error path mishandles a two-line value — cosmetic here, but it obscures the real reason on a genuine failure."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go:81-95",
+          "note": "role='assistant' with finish_reason='stop' rewrites EventType from assistant_message to turn_done — the adapter-specific terminal-text end signal this cell pins. PendingWaitingCue is computed from the full assistant text before truncation (line 89)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go:408-436",
+          "note": "reconcile emits EventActivity when messageCount grows, with Terminal = justEnded || turnIsDone; turnIsDone reads role+finish_reason off the newest active message. minScanGap=500ms (line 22) and pollInterval=2s (line 30) bound how fast a mid-turn scan can follow the previous one — the anchor for the timing caveat."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go:220-245",
+          "note": "foldMessages replays the rows through Parser; fold.apply sets lastEventType, so LastEventType is 'user_message' after the prompt row and 'turn_done' after the stop row. Cost is priced by capacity.DefaultCapacityManager rather than read from sessions.estimated_cost_usd."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go:503-548",
+          "note": "IsAgentDone: HasOpenToolCall guard first, then LastEventType=='turn_done' → true (the primary path Hermes lands on). 'user_message' matches neither the primary nor the assistant/assistant_output fallback, which is what leaves the prompt row classified as activity."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go:168-182,204-213,268-277",
+          "note": "agent_done rule fires on IsAgentDone() and delegates to classifyAgentDone (waiting when IsWaitingForUserInput, else working/waiting → ready); the ladder's total default rule transcript_activity drives ready → working for the prompt row."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go:467-475",
+          "note": "An event with Terminal=true short-circuits the activity debounce and fires processActivity immediately — so the working→ready settle is not delayed by coalescing."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh:113,240-279",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\" covers every step this recipe needs; wait_turn polls the store for a NEW role='assistant' AND finish_reason='stop' row (EXPECTED_TURNS_SEEN), i.e. the same signal the daemon reads; resolve_session_id binds only to a session started after this slot launched; sqlite3 is a hard prerequisite."
+        },
+        {
+          "kind": "file",
+          "ref": "$HERMES_HOME/state.db (live query, 2026-08-02; HERMES_HOME=/Users/ingo/hermes-local/.hermes)",
+          "note": "12 most recent source='cli' sessions: each has exactly one assistant/finish_reason='stop' row; 11 of 12 have zero role='tool' rows. Timeline of 20260802_212608_1dc71a — user 1785698768.989 → assistant/stop 1785698770.204 (1.215s) → ended_at 1785698770.205. Timeline of 20260802_212408_63a639 ('Count slowly 1 to 50') — user .129 → assistant/tool_calls +2.83s → tool +2.95s → assistant/stop +6.43s, the one tool-using sample. All rows model='gpt-5.6-luna', estimated_cost_usd=0.0, billing_mode='subscription_included', cwd ''."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/config.yaml",
+          "note": "model.default: gpt-5.6-luna, model.provider: openai-codex — the shipped config default, matching the model column on every live sessions row. This is the live-surface confirmation that lets the spec pin `model` rather than leaving it provisional."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-13_turn-end-terminal-text/expected.jsonl",
+          "note": "Sibling ProcessOwnedStore cell for the same scenario, recorded and verified 4/4. Its phase shape — session_birth anchored UNPINNED to start, the working phase establishing session identity, the settle chained via same_session_as, plus a 'no state_transition to waiting' invariant — is the shape this spec reuses, because a transient proc-<PID> presession appears on this transport too."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/scenarios/1-1_session-start/metadata.json",
+          "note": "Sibling hermes cell: establishes the transport facts this assessment builds on (proc-<PID> presession from the CommandPattern-driven scanner, store row INSERTed on the first user message, empty cwd for source='cli')."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/NousResearch/hermes-agent",
+          "note": "Upstream project. Local CLI reports \"Hermes Agent v0.19.0 (2026.7.20) · upstream d0b87dad · local e289e561\"."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH and an inference provider configured in <HERMES_HOME>/config.yaml (model.default + model.provider) with working credentials",
+        "HERMES_HOME exported in the shell that runs run-cell.sh, so BOTH the recording daemon (which inherits it via spawn-record-daemon.sh) and the driver read the same state.db",
+        "sqlite3 on PATH — the store is the only session signal hermes exposes; the driver exits nonzero(2) without it",
+        "no other hermes session process running: sessions.cwd is empty for source='cli', so the live-process CWD fallback only binds a project when exactly one session process is alive",
+        "irrlichd is recording with the hermes store watcher enabled (grant-all permission mode, so the observe-kind \"store\" permission is not left pending)"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/",
+        "This cell pins hermes' adapter-specific terminal-text end signal: the assistant produces a final plain-text message with finish_reason='stop', Parser.ParseLine maps it to turn_done, and classifier rule agent_done settles working→ready. The prompt is deliberately longer than the 1.1 cell's one-word prompt so the generation window is several seconds rather than ~1.2s — the daemon's working leg needs a store scan to land between the user row and the assistant row"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do not use any tools. Write exactly three sentences explaining why the sky appears blue."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a hermes session birth in ready (the store session id <YYYYMMDD>_<HHMMSS>_<hex>; a transient proc-<PID> pre-session may also appear)",
+        "events.jsonl contains a state_transition to working on the store session when the prompt row lands (LastEventType=user_message, no terminal marker yet)",
+        "events.jsonl contains a state_transition to ready on the SAME store session once the assistant row carries finish_reason='stop'",
+        "no state_transition to waiting appears for the session at any point (no tool call, no permission gate, no trailing-question waiting cue)",
+        "no tool_use is recorded for the session — the store shows zero role='tool' rows and no assistant row with finish_reason='tool_calls'",
+        "the session's final live state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

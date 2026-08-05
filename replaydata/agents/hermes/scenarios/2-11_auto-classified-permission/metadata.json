@@ -1,0 +1,152 @@
+{
+  "scenario_id": "auto-classified-permission",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+2771e8c",
+    "confidence": 0.8,
+    "notes": "Hermes ships a real per-call permission classifier: detect_dangerous_command flags a command, and approvals.mode='smart' (the SHIPPED DEFAULT) then asks an auxiliary LLM which auto-approves low-risk flagged commands with NO prompt. The safe-path arc ready→working→ready with state never entering waiting is fully observable on the store transport; the classification DECISION itself leaves no store trace (no approval table/column in state.db) and is reachable only via the pre_approval_request/post_approval_response plugin hooks, which this PR deliberately does not implement."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-classified-permission",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes (hermes ships a genuine per-call safe-vs-risky classifier: a pattern detector that leaves benign commands ungated, plus `approvals.mode: smart` — the SHIPPED DEFAULT — whose auxiliary-LLM guardian auto-approves low-risk flagged commands without ever prompting)\ndaemon_capability: full (the safe-path arc this cell asserts — ready→working→ready, never waiting — is what the ProcessOwnedStore transport already observes; no classifier rule in the daemon can produce a spurious `waiting` for this recipe)\ndriver_capability: ready (the recipe needs only send / wait_turn / sleep, all three in the hermes driver's DRIVE_ELICITS)\n\n## What this cell asserts\n\n`auto-classified-permission` is the SAFE-PATH branch: an in-product classifier approves a benign tool call WITHOUT firing a permission prompt, and the session traces `ready → working → ready`, never entering `waiting`. The scenario row itself scopes it that way — \"Locks down the safe-path branch …; the risky-path branch is owned by tool-gate-permission-prompt\" — and the claudecode and opencode siblings both pin exactly this via a no-waiting invariant across the turn.\n\n## agent pillar: hermes has the classifier, and it is on by default\n\nHermes' approval system is a two-stage per-call classifier, not a coarse sandbox boundary:\n\n1. **Pattern stage.** `tools/approval.py::detect_dangerous_command` decides whether a command is gated at all. Run live against the installed v0.19.0 tree (`venv/bin/python`, `sys.path` = install dir):\n   - `detect_dangerous_command('echo hello')` → `(False, None, None)` — not gated, executes with no prompt.\n   - `detect_dangerous_command('ls -la')`, `('cat README.md')` → `(False, None, None)`.\n   - `detect_dangerous_command('python3 -c \"print(1)\"')` → `(True, 'script execution via -e/-c flag', …)` — gated. Same verdict for the single-quoted and unquoted variants, so the flag survives whatever quoting the model picks.\n2. **Smart stage.** `tools/approval.py::check_all_command_guards` \"Phase 2.5: Smart approval (auxiliary LLM risk assessment)\" runs when `approval_mode == \"smart\"`, BEFORE any prompt: `_smart_approve` sends the command to an auxiliary LLM whose system prompt returns exactly one of APPROVE / DENY / ESCALATE, and an `approve` verdict returns `{\"approved\": True, \"smart_approved\": True}` — the command executes and the user is never prompted. `_smart_approve`'s own user prompt names `python -c \"print('hello')\"` as the canonical flagged-but-harmless false positive it is meant to auto-approve, and its docstring credits \"OpenAI Codex's Smart Approvals guardian subagent\" as the inspiration. `hermes_cli/config.py` `DEFAULT_CONFIG[\"approvals\"][\"mode\"]` is `\"smart\"`, so this is the out-of-the-box behavior, not an opt-in.\n\n`tools/terminal_tool.py` imports `check_all_command_guards` (not the narrower `check_dangerous_command`), so the shell tool the recipe drives is on the smart path. That is a per-call, risk-discriminating auto-classification — the mechanism this scenario is named for — hence `yes`, not `partial`.\n\n## daemon pillar: the safe-path arc is observable; the decision itself is not\n\nHermes persists no transcript file; the whole trace is the shared SQLite store at `$HERMES_HOME/state.db`, read via `agent.ProcessOwnedStore` (agent.go). For this recipe the store carries: `user` row → `assistant` row with `finish_reason='tool_calls'` and `function.name='terminal'` → `tool` row closing by `tool_call_id` (twice) → `assistant` row with `finish_reason='stop'`. parser.go maps those to `user_message` / `assistant_message`+ToolUses / `tool_result` / `turn_done`, watcher.go's `turnIsDone` marks the activity Terminal only on `assistant` + `finish_reason='stop'` (an EXPLICIT boundary, no idle heuristic), and metrics.go folds the open-tool set into `HasOpenToolCall`. That yields `ready → working → ready`.\n\nThe no-waiting half is equally load-bearing, and holds by construction here — every rule in `state_classifier.go` that can produce `waiting` is unreachable for this recipe:\n- `permission_prompt` needs `PermissionPending`, which is set only by a hook. Hermes' `pre_approval_request`/`post_approval_response` plugin hooks EXIST upstream but the hook tier is deliberately not implemented in this PR (it needs #1178 plus a YAML-safe installer), so nothing ever sets it.\n- `user_blocking_tool` needs an open tool named AskUserQuestion / ExitPlanMode / question / ask_user_question (`session/metrics.go::isUserBlockingTool`). The recipe's tool is `terminal`.\n- `open_tool_stalled` needs `HasOpenEditPermissionTool` — an open edit/write/multiedit/notebookedit/write_file (`isPermissionGatedEditTool`, exact fold-equality, no substring). `terminal` is excluded, which is why the recipe deliberately avoids hermes' `write_file`.\n- the prose cue (`PendingWaitingCue`, set in parser.go from `ProseIndicatesWaiting`) is defused by making the turn end on \"reply with exactly: done\".\n\nSo `daemon=full` for everything the scenario's acceptance criteria assert on the safe path.\n\n## The honest caveat (why 0.8, not higher)\n\nThe auto-classification DECISION leaves no trace in the store. `hermes_state.py`'s schema has no approval table and no approval column: `sessions` carries identity/tokens/cost/cwd, `messages` carries role/content/tool_calls/tool_call_id/finish_reason/display_kind, and the only `display_kind` values written anywhere in the tree are `model_switch`, `hidden`, `auto_continue`, `async_delegation_complete`. The classifier's own observability channel is the plugin hook pair (`_fire_approval_hook` → `pre_approval_request` / `post_approval_response`, and `_observe_smart_approval_verdict`), which this PR does not wire. So the recording proves the safe-path invariant — a flagged command was auto-approved and the session never entered waiting — but the smart-approve verdict is not separately visible in `events.jsonl`; it is inferred from the command having executed at all with no waiting detour. This is the same caveat the opencode sibling carries, and per the \"caveats over downgrades\" rule it does not reduce `daemon` below `full`: every spec-required observable is emitted and handled correctly.\n\nWhat keeps this cell from being a duplicate of the already-written hermes `auto-executed-tool-call` (2.2) cell is the recipe: 2.2 runs `echo hello`, which the pattern detector never flags, so no classifier runs at all. This cell runs a command that IS flagged and is then auto-approved by the smart classifier, so the gate genuinely fires and resolves without a prompt — the discriminating behavior, exercised.\n\n## driver pillar\n\n`driver_step_types_from_file replaydata/agents/hermes/driver-interactive.sh` reports send / slash / sleep / wait_turn as elicited (DRIVE_ELICITS), with every other arm present-but-stubbed. The recipe uses send + wait_turn + sleep only — no approve/deny/classify primitive is needed, because on the safe path no prompt ever appears. Hence `ready`.\n\nOne driver fact the recipe is written around: `driver-interactive.sh` accepts `SETTINGS_PATH` as `$4` but `launch_repl` never reads it, so a scenario `settings` blob is NOT applied to the run. The recipe therefore depends only on hermes' shipped defaults (`approvals.mode: smart`), never on injected config — `settings` stays `{}`.\n\n## Routing\n\n`record`: drive the safe path on the existing send/wait_turn driver, verify the ready→working→ready arc with no waiting transition, and confirm out-of-band in `state.db` that both `terminal` calls were opened and closed.",
+      "caveats": [
+        "PREREQ BLOCK RESOLVED 2026-08-03 (was: terminal absent). The maintainer started Docker; re-probed live under HERMES_HOME=/tmp/irr-hermes-home/.hermes against the installed 0.19.0 tree: check_terminal_requirements() returns True and model_tools.get_tool_definitions() lists 43 callable tools including terminal, read_file, write_file, patch and search_files (36 with Docker down). The cell is recorded AS ORIGINALLY SPECCED — no substitution, no re-spec; all three pillars stood throughout, only the environment moved.",
+        "LOAD-BEARING, and the subtlest way this cell can silently stop testing anything: with terminal.backend=docker, tools/approval.py::check_all_command_guards FIRST calls _should_skip_container_guards(env_type, has_host_access), which returns True for docker whenever the sandbox does NOT bind-mount host paths — and on that path it returns {'approved': True, 'message': None} BEFORE detect_dangerous_command or the smart stage ever run, i.e. the classifier this cell exists to exercise is skipped entirely and the recording degrades into a second copy of 2.2. It does not skip here only because this recording home's terminal.docker_volumes bind-mounts three host paths, so terminal_tool._docker_has_host_access(_get_env_config()) returns True (verified live 2026-08-03) and the guards DO run. Emptying docker_volumes, or moving to singularity/modal/daytona (unconditionally skipped), would break the cell without any recipe or spec change.",
+        "Escalation hazard retired by measurement, not assumption: approval._smart_approve('python3 -c \"print(\\'hello\\')\"', 'script execution via -e/-c flag') returned 'approve' on 4/4 live auxiliary-LLM trials (two commands x two trials) on 2026-08-03, and check_all_command_guards with the real has_host_access=True never invoked the approval_callback. That is what makes the driver-unanswerable TUI prompt described in the recording-risk caveat below an unlikely rather than an unquantified risk — it is an LLM verdict, so it is not guaranteed stable run to run.",
+        "CORRECTED BY THE LIVE RECORDING (recordings/2026-08-03-12-12-52_irrlichd-0.5.9+dbc7c53) — the assessment claimed \"the smart-approval verdict is NOT separately observable\" and that the classification event could only be inferred. That is WRONG, and the recording is the evidence: the `tool` row closing the flagged call carries the verdict in its own content, verbatim — {\"output\": \"hello\", \"exit_code\": 0, \"error\": null, \"approval\": \"Command was flagged (script execution via -e/-c flag) and auto-approved by smart approval.\"}. So the store DOES carry a direct, unambiguous trace of both halves of the decision (flagged, then auto-approved), and this cell proves the classifier fired rather than merely proving a no-waiting arc. What remains true from the original caveat is narrower: hermes_state.py has no approval TABLE or COLUMN, and irrlicht's parser does not lift the field into a typed observation — it survives as tool-result content. The pre_approval_request/post_approval_response plugin hooks remain the only structured channel, and are still not implemented in this PR.",
+        "The RISKY half (a genuinely dangerous command surfacing working→waiting) is NOT observable on this transport at all and belongs to the sibling tool-gate-permission-prompt cell: an open approval prompt writes nothing to state.db, so the daemon would see a sustained open tool call (working), never waiting. It would need the hook tier.",
+        "Recording risk: if the auxiliary LLM answers ESCALATE (or the aux call raises — _smart_approve returns 'escalate' on any exception), the flagged command falls through to a manual TUI approval prompt that the hermes driver has no step type to answer (keys/interrupt are stubbed), and wait_turn will spin to timeout_seconds. The failure is loud, not silent. If record hits it, the degraded fallback is to swap the flagged command for a plain `echo hello` — which records the same safe-path arc but no longer exercises the classifier, at which point this cell duplicates 2.2 and the caveat should be written back.",
+        "PROVISIONAL on emission: the daemon-side reasoning is derived from the adapter source plus the live store shape, not from a recording of THIS recipe. record settles whether two terminal calls in one turn land as two open/close pairs inside a single uninterrupted working span.",
+        "Recipe variance seen in the recording, harmless but noted for any re-record: the model opened the turn with a stray kanban_show call that errored (\"task_id is required\"), and its first attempt at the flagged command was mis-quoted (bash exit 2, \"unexpected EOF while looking for matching\") before it retried correctly. Neither perturbs the asserted arc — all 4 phases passed and the working span was 26s (12:13:00.976 -> 12:13:26.980), far wider than the 2s watcher scan gap the column's TIMING prerequisite warns about — but a future re-record should not treat either as required."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/approval.py",
+          "note": "Module docstring: 'Smart approval via auxiliary LLM (auto-approve low-risk commands)'. check_all_command_guards Phase 2.5 runs _smart_approve BEFORE any prompt when approval_mode=='smart' and returns {'approved': True, 'smart_approved': True} on APPROVE — no prompt fires. _smart_approve's user prompt names python -c \"print('hello')\" as the canonical flagged-but-harmless case; its docstring credits OpenAI Codex's Smart Approvals guardian subagent. _fire_approval_hook fires only pre_approval_request / post_approval_response — the plugin-hook channel this PR does not implement."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/approval.py::detect_dangerous_command",
+          "note": "Executed live against the installed v0.19.0 tree: 'echo hello' → (False, None, None); 'ls -la' → (False, …); 'cat README.md' → (False, …); 'python3 -c \"print(1)\"' → (True, 'script execution via -e/-c flag', …), same for the single-quoted and unquoted variants. This is the primary evidence that the recipe's first call is ungated and its second is classifier-gated."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/config.py",
+          "note": "DEFAULT_CONFIG['approvals'] = {'mode': 'smart', 'timeout': 300, 'cron_mode': 'deny', …} — smart auto-classification is the SHIPPED DEFAULT, so the recipe needs no injected settings (which matters because the hermes driver never applies its SETTINGS_PATH argument)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/terminal_tool.py",
+          "note": "Imports check_all_command_guards (line 256), not the narrower check_dangerous_command — so the shell tool the recipe drives goes through the smart-approval phase."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_state.py",
+          "note": "CREATE TABLE sessions / messages: no approval table, no approval column. messages carries role/content/tool_call_id/tool_calls/tool_name/finish_reason/display_kind, and the only display_kind values written in the tree are model_switch, hidden, auto_continue, async_delegation_complete. Anchors the caveat that the classification decision leaves no store trace."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go",
+          "note": "role=assistant + finish_reason='tool_calls' → assistant_message with ToolUses; role=tool → tool_result closing by tool_call_id; finish_reason='stop' → turn_done. PendingWaitingCue is set from ProseIndicatesWaiting on the assistant text — the one prose path that could produce waiting, which the recipe's 'reply with exactly: done' defuses."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "reconcile() emits new_session then EventActivity as message_count grows; turnIsDone() sets Terminal only for the newest active row being assistant + finish_reason='stop'. 2s poll backstop plus fsnotify on the store directory — the mechanism behind the ready→working→ready arc."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go",
+          "note": "Source is agent.ProcessOwnedStore over the single shared $HERMES_HOME/state.db, gated behind the observe-kind 'store' permission. Process.Match is a CommandPattern, so processlifecycle mints a transient proc-<PID> presession before the sessions row exists — why session_birth is anchored to start UNPINNED."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The waiting-producing rules: permission_prompt (needs hook-set PermissionPending), user_blocking_tool (needs NeedsUserAttention), open_tool_stalled (needs OpenToolStalled), idle_prompt (hook-only). None is reachable for a hook-less adapter driving the `terminal` tool."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "isUserBlockingTool = {AskUserQuestion, ExitPlanMode, question, ask_user_question}; isPermissionGatedEditTool = fold-exact {edit, write, multiedit, notebookedit, write_file}. `terminal` is in neither set — which is why the recipe drives terminal and not hermes' write_file."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\"; wait_turn polls state.db for a NEW assistant row with finish_reason='stop'. SETTINGS_PATH is accepted as $4 but launch_repl never reads it, so the recipe must not depend on injected config."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/scenarios.json → auto-classified-permission",
+          "note": "Scenario description scopes this cell to the safe-path branch: 'Locks down the safe-path branch …; the risky-path branch is owned by tool-gate-permission-prompt.'"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-11_auto-classified-permission/metadata.json",
+          "note": "Sibling precedent on the other ProcessOwnedStore adapter: safe branch recorded at yes/full/ready with the explicit caveat that the store transport has no waiting/permission source, so the recording proves the no-waiting arc rather than a separately-observable classification discriminator."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "RESOLVED PRECONDITION (was the BLOCKER that made this cell return prereq_blocked on 2026-08-03): the `terminal` tool must be in the live roster, and now is. Docker is running (server 28.3.2), so check_terminal_requirements() returns True and the roster is 43 tools including terminal/read_file/write_file/patch/search_files. Re-probe before recording: this whole toolset disappears again the moment the Docker daemon stops.",
+        "WHY NO OTHER TOOL SUBSTITUTES (checked, not assumed; retained because it is why this cell must not be recorded on a substitute tool): the classifier this cell exists to exercise is tools/approval.py::check_all_command_guards, and a full-tree scan of the installed 0.19.0 source outside tests/ shows it referenced in exactly three files - tools/approval.py (its own definition), tools/terminal_tool.py (the only tool call site), and tui_gateway/server.py (the gateway's approve/deny endpoint, which `hermes chat` does not go through). tools/thread_context.py names check_dangerous_command only in a module docstring, not in code. `execute_code`, the one other sandbox-executing tool in the roster, does not reference the guards at all AND fails on this machine for the same Docker reason ('Tool execution failed: RuntimeError: Docker command is available but docker version failed' - five such rows in the recording store). So with `terminal` absent there is no callable path from a hermes turn to the classifier, and any recipe built on the remaining roster would trace ready->working->ready without the gate ever firing - i.e. an exact duplicate of the already-recorded 2.2 auto-executed-tool-call, which is precisely the non-discriminating arc this cell's assessment says must NOT be substituted.",
+        "the docker sandbox MUST bind-mount at least one host path, or the classifier is bypassed before it runs: check_all_command_guards short-circuits via _should_skip_container_guards for an isolated docker backend. Verified live 2026-08-03 that terminal.docker_volumes in this recording home mounts three host paths, so _docker_has_host_access is True and the guard chain executes. See the matching caveat.",
+        "the terminal backend's docker image must already be pulled — terminal.docker_image is nikolaik/python-nodejs:python3.11-nodejs20 (2.21GB, confirmed present locally 2026-08-03). A cold pull would consume most of the 240s recipe timeout and surface as a spurious wait_turn timeout. python3 is provided by that image, so the flagged command runs inside the container, not on the host.",
+        "hermes >=0.19.0 on PATH (Python console script shim into <HERMES_HOME>/hermes-agent/venv/bin/hermes)",
+        "HERMES_HOME exported to the recording home, with config.yaml carrying model.default + model.provider and credentials in .env/auth.json — so the run writes to an isolated state.db instead of the maintainer's real store",
+        "approvals.mode left at its shipped default 'smart' (hermes_cli/config.py DEFAULT_CONFIG) and no approvals.deny rule matching `python` — a deny rule fires BEFORE the smart stage and would block the call outright",
+        "the auxiliary-LLM path must resolve: agent/auxiliary_client.py 'auto' mode falls back to the user's main provider + main model, so a working main provider is enough. If it cannot resolve, _smart_approve returns 'escalate' and the run degrades to a manual TUI prompt the driver cannot answer",
+        "python3 on PATH in the recording cwd (the flagged-but-benign command the classifier auto-approves)",
+        "sqlite3 on PATH — hermes persists no transcript file, so the driver reads the session id and turn completion straight out of state.db (it hard-fails without it)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no second hermes SESSION process running concurrently — `source='cli'` rows carry no stored cwd and the live-process CWD fallback returns nothing when more than one session process is alive (a running gateway is fine; isServiceArgv excludes it)"
+      ],
+      "setup": [
+        "The driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for 'Type your message or /help' before typing — the TUI loads tools and skills for several seconds and swallows keystrokes sent before it is ready",
+        "The turn contains TWO shell calls on purpose. `echo hello` is not flagged at all (detect_dangerous_command → False) and covers the scenario's 'safe calls execute, state stays working' bullet; `python3 -c \"print('hello')\"` IS flagged ('script execution via -e/-c flag') and is then AUTO-APPROVED by the smart classifier with no prompt — that second call is what makes this cell more than a copy of 2.2 auto-executed-tool-call",
+        "The shell tool is named `terminal`. The prompt targets it rather than hermes' `write_file` on purpose: an open edit-shaped tool would trip the daemon's 'stalled edit tool → likely permission prompt → waiting' rule and break the no-waiting invariant this cell exists to lock down",
+        "No auto-mode toggle or approval step is needed — unlike claudecode there is no mode to enter: hermes classifies every call, and both of this recipe's calls resolve to auto-approved",
+        "The session row is INSERTed on the first user message (~2s after it), not at launch, so the driver resolves the session id lazily after the first send and binds only to a row whose started_at is after this slot's launch",
+        "'reply with exactly: done' keeps the terminal assistant text free of questions and imperative cues, so ProseIndicatesWaiting cannot fire on the turn's last message",
+        "The trailing sleep gives the watcher at least three 2s poll ticks to observe finish_reason='stop' → Terminal activity → working→ready before the driver tears the tmux session down"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use your terminal tool to run exactly: echo hello. Then use your terminal tool again to run exactly: python3 -c \"print('hello')\". Then reply with exactly: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the hermes session (id shaped YYYYMMDD_HHMMSS_xxxxxx) born ready; a transient proc-<PID> presession may also appear and is not the session the arc lands on",
+        "events.jsonl shows exactly one ready→working transition and one working→ready transition for that session id",
+        "events.jsonl contains NO state_transition to waiting for that session at any point — the auto-classifier approved the flagged call without prompting, no hook sets PermissionPending, and `terminal` is neither a user-blocking nor an edit-shaped tool",
+        "state.db shows BOTH calls for that session: assistant rows with finish_reason='tool_calls' carrying function.name='terminal', each closed by a `tool` row with the matching tool_call_id, then an assistant row with finish_reason='stop'",
+        "the second call's command text in state.db contains `python3 -c` — proof the flagged command actually ran, i.e. the classifier auto-approved it rather than blocking or prompting",
+        "final session state is ready",
+        "the session's websocket metrics show non-zero cumulative input+output tokens (sessions.input_tokens/output_tokens) and a non-zero estimated cost when the configured model is priced by irrlicht's alias table"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

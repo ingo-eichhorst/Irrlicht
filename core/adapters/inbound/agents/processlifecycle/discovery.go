@@ -145,6 +145,48 @@ func LiveCWDs(processName string) (map[string]struct{}, error) {
 	return set, nil
 }
 
+// LiveCWDsByCmdline is the CommandPattern counterpart of LiveCWDs: it
+// returns the set of working directories held by live processes whose FULL
+// COMMAND LINE matches cmdLinePattern, optionally filtered by excludeArgv.
+//
+// It exists because LiveCWDs matches on the binary name via pgrep -x, which
+// never fires for an agent that ships as a Python console script — the OS
+// process is the interpreter. Hermes is such an agent, and needs the CWD
+// snapshot for the same reason opencode does: its store rows carry no
+// working directory of their own for CLI sessions.
+//
+// Per the ExcludeArgv contract a nil/unreadable argv is passed through to
+// the predicate, which must not exclude on it. Same best-effort semantics as
+// LiveCWDs: an unreadable CWD is skipped, not an error.
+func LiveCWDsByCmdline(cmdLinePattern string, excludeArgv func([]string) bool) (map[string]struct{}, error) {
+	if cmdLinePattern == "" {
+		return nil, nil
+	}
+	pids, err := osProc.FindByCmdline(cmdLinePattern)
+	if err != nil {
+		return nil, fmt.Errorf("find processes matching %q: %w", cmdLinePattern, err)
+	}
+	myPID := os.Getpid()
+	set := make(map[string]struct{}, len(pids))
+	for _, pid := range pids {
+		if pid == myPID {
+			continue
+		}
+		if excludeArgv != nil {
+			argv, _ := osProc.ArgvOf(pid)
+			if excludeArgv(argv) {
+				continue
+			}
+		}
+		dir, err := osProc.CWDOf(pid)
+		if err != nil || dir == "" {
+			continue
+		}
+		set[dir] = struct{}{}
+	}
+	return set, nil
+}
+
 // narrowByCWD filters pids to those whose CWD equals the given path, then
 // resolves to a single PID via disambiguate (falling back to highest PID).
 // Excludes the daemon's own PID. Returns 0 when no match.

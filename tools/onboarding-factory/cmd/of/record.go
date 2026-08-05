@@ -93,6 +93,19 @@ func runRecordPrereq(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "of record prereq-check: --agent is required")
 		return exitUsage
 	}
+	// Establish the column exists BEFORE reading its prerequisites. Without
+	// this, a --repo-root that isn't a repo root (the default "." from any
+	// subdirectory) and a misspelled agent id both fall through readPrereqs'
+	// missing-file path and print "no recording prerequisites declared" —
+	// a precheck reporting all-clear on the strength of having found nothing
+	// to read, which is the one answer it must never give.
+	agentDir := filepath.Join(*repoRoot, "replaydata", "agents", *agent)
+	if fi, err := os.Stat(agentDir); err != nil || !fi.IsDir() {
+		fmt.Fprintf(stderr, "of record prereq-check: no agent %q under %s "+
+			"(wrong --repo-root, or an unknown agent id)\n", *agent, filepath.Join(*repoRoot, "replaydata", "agents"))
+		return exitFail
+	}
+
 	prereqs := readPrereqs(*repoRoot, *agent)
 	if len(prereqs) == 0 {
 		fmt.Fprintf(stdout, "%s: no recording prerequisites declared\n", *agent)

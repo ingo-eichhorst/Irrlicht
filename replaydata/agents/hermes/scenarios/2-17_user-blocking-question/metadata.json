@@ -1,0 +1,146 @@
+{
+  "scenario_id": "user-blocking-question",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+97ac09e.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-blocking-question",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Scenario reading\n\n2.17 is the trailing-`?` TEXT path, not a structured ask-user tool. Its own\ndescription is explicit: \"Agent's reply ends in a question mark, signalling\nit's waiting for user input. Validates the trailing-? path through the state\nclassifier (session.IsWaitingForUserInput -> state_classifier.go decision 2a).\nThe recipe deliberately stops at the waiting episode and does not answer the\nquestion.\" The user-observable arc this cell asserts is therefore\n`ready -> working -> waiting`, with the waiting episode visible and no\nskip-over back to ready. That is the same reading claudecode, codex, kiro-cli,\nmistral-vibe and pi are assessed under.\n\n## agent - yes\n\nHermes has NO AskUserQuestion-style structured blocking-question primitive:\n`git grep -n \"ask_user|AskUser|elicit\"` over the installed source\n(`/Users/ingo/hermes-local/.hermes/hermes-agent`, v0.19.0) returns only\n`agent/codex_responses_adapter.py` (re-elicit a proper *tool call*, unrelated)\nand `agent/transports/codex_app_server_session.py:1028`\n(`mcpServer/elicitation/request`, the ACP/app-server transport, not the CLI\nturn loop). Under the structured-tool reading this cell would be `no` - that is\nwhat opencode's sibling cell froze on.\n\nUnder THIS scenario's reading the verdict is `yes`, and it is not a\nplausibility argument: the live store already contains the exact shape. Two\n`role='assistant' active=1 finish_reason='stop'` rows hold content that is a\nliteral question - `20260726_185601_4811e3` \"Hello! How can I help you today?\"\nand `20260726_190232_65c19a` \"Hi! How can I help?\". Both are ordinary\nend-of-turn rows, so Hermes ends a turn on a question mark exactly the way the\nscenario asks, and `content` is plain text (not a structured block list), which\nis what `Parser.ParseLine` reads.\n\nPassing these through the shipped detector: `splitSentences` yields \"Hello!\" +\n\"How can I help you today?\"; the trailing sentence ends in `?`, is not\nrhetorical (`isRhetorical` needs a following because/since sentence), so\n`ExtractQuestionSnippet` returns non-empty and `ProseIndicatesWaiting` is true.\n\n## daemon - full\n\nThe chain from a Hermes store row to a user-visible `waiting` is complete in\ntoday's code, with no missing seam:\n\n1. `Parser.ParseLine` (parser.go:81-95) on `role='assistant'` sets\n   `ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text))`\n   BEFORE truncation - the cue is computed on a 400-rune window\n   (`MaxWaitingScanRunes = 2 * MaxAssistantTextRunes`), not on the 200-rune\n   display tail, so a question sitting before the display cut is still seen\n   (#1150). With `finish_reason='stop'` the same event's type becomes\n   `turn_done`.\n2. `foldMessages`/`messageFold.apply` (metrics.go:189-249) carries\n   `pendingWaitingCue` alongside `lastAssistantText`, and resets it on the next\n   `user_message` - the ProcessOwnedStore path bypasses the tailer, so that\n   reset is re-implemented here on purpose. `querySessionMetrics` publishes it\n   as `metrics.PendingWaitingCue` (metrics.go:137) and `LastEventType`\n   (metrics.go:135).\n3. `SessionMetrics.IsAgentDone()` (domain/session/metrics.go:532) is true on\n   `LastEventType == \"turn_done\"` with no open tool call, so the classifier's\n   `agent_done` rung fires.\n4. `classifyAgentDone` (state_classifier.go:270-278) asks\n   `IsWaitingForUserInput()` FIRST; that returns true on\n   `m.PendingWaitingCue` (waiting_cue.go:81-83) and routes\n   `-> waiting` (\"turn ended with question or cue -> waiting\") instead of\n   `-> ready`. No hook, no tool, no idle heuristic is involved - which matters,\n   because Hermes has no hook surface at all.\n\nThe `working` leg of the arc survives even the worst timing case. The watcher\npolls every 2s (`defaultPollInterval`), so a fast turn can land the `user` row\nAND the `assistant/stop` row between two scans - one activity event carrying\n`LastEventType=turn_done` straight onto a `ready` session, which\n`classifyAgentDone` would take directly `ready -> waiting`, skipping `working`.\n`forceReadyToWorkingIfActive` (session_detector_activity.go:864-886) prevents\nthat: it runs after `RefreshOnActivity` and before `classifyAndTransition`, and\nrecords a real `ready -> working` state_transition first. Its guard is\n`transcriptGrew`, and for Hermes that is structurally true -\n`observeTranscriptGrowth` (session_detector_activity.go:726-737) `os.Stat`s\n`ev.TranscriptPath`, which for this adapter is the synthetic\n`\"<store>?session=<id>\"`; the stat errors, and the function fails OPEN\n(`transcriptGrew` stays true). So the working blip is emitted in both the\nsplit-pass and the collapsed-pass regime.\n\nNothing downstream un-does the waiting. `agent.Event.Terminal` (set from\n`turnIsDone`) only short-circuits the activity debounce\n(session_detector_activity.go:467-475); it is not a state input. Driver\nteardown does not manufacture a `ready` either: a dead PID goes through\n`HandleProcessExit`, which DELETES the session (pid_manager.go:326-344) rather\nthan transitioning it - so the \"no state_transition to ready\" invariant on the\nfinal phase is safe against the recipe's own exit.\n\n## driver - ready\n\n`replaydata/agents/hermes/driver-interactive.sh:113` declares\n`DRIVE_ELICITS=\"send slash sleep wait_turn\"`; this recipe needs `send`,\n`wait_turn`, `sleep` only. Its `wait_turn` (driver:258) polls\n`COUNT(*) FROM messages WHERE session_id=... AND role='assistant' AND\nfinish_reason='stop'` and returns on an increase - a turn that ends on a\nQUESTION is still a `finish_reason='stop'` row (both live question rows above\ncarry it), so the poll fires exactly once at the waiting boundary and does not\nhang. `resolve_session_id` binds only to a session with\n`started_at > <slot launch ts>`, so a stale row in the shared store cannot\nsatisfy the wait. Interactive is the right path: the REPL outlives the turn, so\nthe waiting classification lands inside the observation window instead of\nracing process exit.\n\n## What is NOT proven yet\n\nThe daemon verdict is code + live-store evidence, not a recording. Emission is\nunusually well covered here for a doc-based assessment (the two question rows\nabove are real, stored, `finish_reason='stop'` rows), but the arc reaching the\nwebsocket in this order and timing is what `record` settles.",
+      "caveats": [
+        "PROVISIONAL daemon verdict: derived from adapter source + live SQLite store facts, not from a recording. No hermes events.jsonl exists yet; record promotes it from provisional to settled.",
+        "Scenario-reading divergence, called out so it is not re-litigated: hermes has NO structured AskUserQuestion-equivalent (verified by grep over the installed source - only an ACP/app-server 'mcpServer/elicitation/request' on a transport the CLI turn loop does not use). This cell is assessed under scenario 2.17's OWN description (the trailing-? TEXT path through session.IsWaitingForUserInput), which is also how claudecode/codex/kiro-cli/mistral-vibe/pi are assessed. opencode's sibling cell froze at agent_supports:no under the stricter structured-tool reading; if the dispatcher re-freezes 2.17 on that reading, hermes would become no/n-a/n-a too.",
+        "The waiting verdict rests on a prose HEURISTIC, not an explicit marker: ProseIndicatesWaiting over the trailing 400 runes. The recipe therefore pins the reply shape hard (exactly one short question, ending in '?', no other text, no tool call). If the model instead answers declaratively or wraps the question mid-paragraph beyond the scan window, the turn classifies ready and the turn_end_waiting phase fails - that is a recipe/prompt-compliance failure, not a daemon bug.",
+        "Tool-call risk: hermes ships a terminal tool and a tool-calling turn ends with finish_reason='tool_calls', which keeps the session working and blocks the driver's wait_turn until a later stop row. The prompt says 'do not call any tool' for that reason; a model that ignores it makes the run time out rather than mis-assert.",
+        "Late birth (inherited from the column, adapter.go:16-19 / basic-turn cell): the sessions row is INSERTed on the first user message (~2s after launch), so there is no store-derived ready birth at launch. The recording's ready birth comes from the processlifecycle scanner's transient proc-<PID> pre-session, so session_birth is anchored to start and left UNPINNED, and every later phase chains via same_session_as off turn_start rather than off the birth.",
+        "cwd fragility (inherited): `hermes chat` writes source='cli' rows, which carry no cwd (live store: 21/22 cli rows empty). Project binding and DiscoverPID both fall back to defaultLiveCWD, which requires EXACTLY ONE live non-service hermes process; a second interactive hermes session makes it ambiguous and the pid_bind phase plus the project link go missing.",
+        "model/cost deliberately unpinned: the recorded model depends on the config.yaml in whatever HERMES_HOME the run exports (the maintainer's home defaults to gpt-5.6-luna, which irrlicht's capacity table does price). Only tokens_nonzero is asserted; record should fill observations.model from the recording and may add cost_nonzero once the recorded model is known to be priced.",
+        "The onboarding rig still has no hermes-specific env wiring (no HERMES_HOME reference under tools/onboarding-factory/scripts), so the driver and the recording daemon must be given a matching HERMES_HOME out of band.",
+        "CONFIRMED by recording 2026-08-02-23-31-59_irrlichd-0.5.9+f393664 (2026-08-02): 4/4 spec phases pass, and the waiting verdict is carried by the mechanism this cell predicted. events.jsonl: presession proc-21687 born ready, pid_discovered on it, real store session 20260802_233159_f2518c born ready with pid_discovered binding the SAME pid 21687, ready→working (\"force ready→working on first activity\"), then working→WAITING with reason \"turn ended with question or cue → waiting\" and inputs.decided_by_rule=agent_done — i.e. classifyAgentDone routed turn-done → waiting off PendingWaitingCue, not a permission gate. No state_transition to ready follows it: the session ends the recording in waiting, which is the cell's central invariant.",
+        "The prompt reliably produced a genuinely question-shaped final message on the first attempt: the assistant row is a single line, \"Which file should this feature go in?\", finish_reason=stop, no tool_calls. That trailing question mark is the whole load-bearing surface — ProseIndicatesWaiting reads the trailing window of the assistant text, so any recipe edit that lets the model add a closing statement after the question would silently turn this cell from waiting back into ready.",
+        "observations: tokens_nonzero STRIPPED (unsatisfiable on this column — the golden's summary comes from hermes.Parser, which sets only ModelName; the sessions-row token vector is ComputeMetrics-only and replay never runs it), model pinned from the golden in its place and verified green. Same removal, same reason, as the committed 2-1_basic-turn and 1-1_session-start cells."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": ".claude/skills/ir:onboarding-factory/../../../replaydata/scenarios (of scenario show --name user-blocking-question)",
+          "note": "Scenario description: 'Agent's reply ends in a question mark ... Validates the trailing-? path through the state classifier (session.IsWaitingForUserInput -> state_classifier.go decision 2a). The recipe deliberately stops at the waiting episode and does not answer the question.' Acceptance: ready -> working -> waiting; waiting episode user-visible; final state waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go:81-95",
+          "note": "role='assistant': ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text)) computed on the FULL text before TruncateAssistantText; finish_reason='stop' rewrites EventType to turn_done. This is the waiting-state path for this cell."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go:135-137,189-249",
+          "note": "foldMessages replays rows through Parser; messageFold.apply carries pendingWaitingCue with lastAssistantText and clears it on the next user_message (the ProcessOwnedStore path bypasses the tailer, where that reset normally lives). querySessionMetrics publishes PendingWaitingCue + LastEventType onto SessionMetrics."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/waiting_cue.go:33-38,62-85",
+          "note": "ProseIndicatesWaiting = ExtractQuestionSnippet OR ExtractWaitingCue; IsWaitingForUserInput returns true on m.PendingWaitingCue before falling back to the truncated LastAssistantText. WaitingScanWindow bounds the scan at 2x the display cap (tailer/parser.go:816)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go:168-182,267-278",
+          "note": "agent_done rung fires on IsAgentDone(); classifyAgentDone checks IsWaitingForUserInput FIRST and routes to waiting ('turn ended with question or cue -> waiting') instead of ready. Rungs above it (permission prompt, user-blocking tool, open_tool_stalled, idle_prompt) are all inert for hermes - no hooks, no open tool on this turn."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go:503-548",
+          "note": "IsAgentDone(): true on LastEventType == 'turn_done' with no open tool call - the explicit finish_reason='stop' boundary hermes provides, so no idle-flush seam sits between the turn end and the classification."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go:467-475,563-612,726-737,864-886",
+          "note": "Terminal only short-circuits the activity debounce (not a state input). forceReadyToWorkingIfActive records a real ready->working BEFORE classifyAndTransition, guarded on transcriptGrew; observeTranscriptGrowth os.Stats ev.TranscriptPath, which for hermes is the synthetic '<store>?session=<id>' - the stat errors and it fails OPEN, so the working leg is emitted even when one 2s scan collapses the user row and the assistant stop row into a single pass."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go:326-344,973-990",
+          "note": "A dead PID reaps via HandleProcessExit, which DELETES the session rather than transitioning it - so the recipe's own tmux teardown cannot produce the ready transition the final phase's invariant forbids."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Live store, read-only (sqlite3 'file:...?mode=ro'). 29 assistant rows with active=1 AND finish_reason='stop'; 2 of them end in '?' - 20260726_185601_4811e3 'Hello! How can I help you today?' and 20260726_190232_65c19a 'Hi! How can I help?'. Direct emission evidence: hermes stores a question-ending turn as an ordinary stop row with plain-text content. Recent cli sessions run model gpt-5.6-luna with an empty cwd."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent (v0.19.0, upstream d0b87dad)",
+          "note": "git grep -n 'ask_user|AskUser|elicit' over agent/*.py + cli.py returns only codex_responses_adapter.py (re-elicit a tool call) and transports/codex_app_server_session.py:1028 (mcpServer/elicitation/request on the ACP app-server transport). No structured ask-user tool in the CLI turn loop - which is why this cell rests on the trailing-? prose path."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh:113,258",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\" covers every step this recipe needs. wait_turn polls COUNT(*) of assistant rows with finish_reason='stop' for the bound session - a question-ending turn carries that same finish_reason, so the poll fires at the waiting boundary instead of hanging."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/scenarios/2-1_basic-turn/metadata.json",
+          "note": "Sibling cell in the same column; its late-birth / unpinned-session_birth anchoring and its cwd + HERMES_HOME preconditions are reused here for the same reasons."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-17_user-blocking-question/expected.jsonl",
+          "note": "Reference spec for this scenario: ready birth -> working -> waiting, stopping at the waiting episode without a follow-up reply."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes v0.19.0+ on PATH with a provider configured in <HERMES_HOME>/config.yaml plus credentials, so a single prompt completes without an auth prompt",
+        "HERMES_HOME exported to the SAME recording home for both the driver and the recording daemon (the rig has no hermes env wiring today), so the daemon polls the store the run actually writes",
+        "sqlite3 on PATH - hermes writes no transcript, so the driver's session resolution and wait_turn read state.db directly",
+        "no OTHER interactive hermes session live during the run: source='cli' rows carry no cwd, so the adapter's live-process CWD fallback needs exactly one non-service hermes process to bind the project and discover the PID",
+        "irrlichd recording with the hermes store watcher enabled and the 'store' permission granted (IRRLICHT_PERMISSION_MODE=grant-all on a fresh home)"
+      ],
+      "setup": [
+        "The interactive driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for 'Type your message or /help' before typing - the TUI swallows keystrokes sent during its boot",
+        "The slot's transcript path is '<store>?session=<id>' (no transcript file exists); the session id is resolved from the sessions table after the first send, because the row does not exist at launch",
+        "The prompt pins the reply to exactly one short question ending in '?', with no other text and no tool call: the waiting verdict comes from the prose heuristic over the trailing 400 runes, and a tool call would end the turn with finish_reason='tool_calls' instead of 'stop'",
+        "The recipe deliberately does NOT answer the question - this cell locks the ENTRY into waiting, per the scenario description",
+        "timeout_seconds is 240 because the driver's deadline starts BEFORE the REPL boot poll and the turn runs against a remote reasoning model"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "I want to add a small feature to my project, but I have not told you where it should go. Ask me exactly ONE short clarifying question about which file it belongs in, ending in a question mark, then stop and wait for my answer. Output only that one question and nothing else - plain text, and do not call any tool."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a session born in ready shortly after launch (expected to be the transient proc-<PID> pre-session; the store row does not exist until the first user message)",
+        "events.jsonl contains a pid_discovered event",
+        "events.jsonl contains a state_transition -> working when the prompt is sent (from the store row's user message, or from the force ready->working bounce if one 2s scan collapses the turn)",
+        "events.jsonl contains a state_transition -> waiting on the SAME session once the assistant row lands with finish_reason='stop' and question-ending content",
+        "events.jsonl contains NO state_transition -> ready on that session after the waiting transition (the recipe terminates while the session is waiting)",
+        "the session's recorded metrics carry non-zero cum_input+output tokens",
+        "the session's last observed state is waiting"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

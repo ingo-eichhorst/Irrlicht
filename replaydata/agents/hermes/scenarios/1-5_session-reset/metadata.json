@@ -1,0 +1,150 @@
+{
+  "scenario_id": "session-reset",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:reset_session",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+fe95020",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (/new, alias /reset, mints a fresh session id in place)\ndaemon_capability: full; driver_capability: gap:reset_session\nroute: driver-gap — the scaffolded hermes driver stubs the reset_session arm"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-reset",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:reset_session",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:reset_session\nroute: driver-gap (record ports the reset_session arm, then drives)\n\n## Scenario\n\nsession-reset: a live session finishes a turn, the user issues the agent's in-process reset, the old row disappears and a new `session_id` is born in `ready` — all WITHOUT relaunching the binary. Primitive exercised: an in-REPL slash command.\n\n## Agent supports it (agent_supports: yes)\n\nHermes' CLI REPL (`hermes chat`) ships `/new` with the alias `/reset` — `hermes_cli/commands.py:68` registers `CommandDef(\"new\", \"Start a new session (fresh session ID + history)\", aliases=(\"reset\",))`, and `hermes_cli/tips.py:414` states it literally: \"/new starts a fresh session in place (alias /reset) — fresh session ID, clean history, CLI stays open.\" `/clear` (tips.py:415) is the same rotation plus a screen wipe.\n\nThe implementation is `HermesCLI.new_session()` (`cli.py:7574`) and it does exactly the two things the scenario asserts, in this order:\n\n1. **Old session ends.** `self._session_db.end_session(old_session_id, \"new_session\")` (cli.py:7611) → `UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL` (`hermes_state.py:4326`). `_discard_session_if_empty(old)` follows, but only deletes a row with no messages — after a completed turn the row survives, ended.\n2. **New session is born.** A fresh id `YYYYMMDD_HHMMSS_<6hex>` is minted (cli.py:7615-7617) and `self._session_db.create_session(session_id=…, source=os.environ.get(\"HERMES_SESSION_SOURCE\", \"cli\"), model=…)` INSERTs the row IMMEDIATELY (cli.py:7707) — the process is unchanged and the REPL stays open.\n\nNote this is NOT opencode's lazy shape: the post-reset row exists at reset time, before the next prompt.\n\n## Daemon observes it (daemon_capability: full)\n\nHermes is `agent.ProcessOwnedStore` over one shared SQLite store (`core/adapters/inbound/agents/hermes/agent.go:37-43`, `PathForPID` → `$HERMES_HOME/state.db`). Each acceptance bullet maps to a concrete emission on this adapter:\n\n1. **New session appears in `ready` with a new session_id.** `Watcher.scanSessions` selects `sessions WHERE source IN ('cli','tui')` and `reconcile` emits `agent.EventNewSession` for any id it has no cursor for (`watcher.go:278-388`). The post-`/new` row is `source='cli'` (created with the `HERMES_SESSION_SOURCE` default), so it is in the filter, and it has `message_count=0` — so `grew` is false and no activity is paired with it. That is the correct shape for this assertion: the row is announced and sits in `ready` until the next prompt.\n2. **Old session disappears.** Two independent signals. (a) The old row's `ended_at` flips non-NULL, so `reconcile`'s `justEnded` fires one final `EventActivity` with `Terminal: true` (watcher.go:409-418) — the old session settles to `ready`, not left mid-turn. (b) The new session is PID-bound to the SAME hermes process (the REPL never restarts), so `PIDManager.HandlePIDAssigned` → `assignPIDLocked` → `cleanupStalePIDHolders` deletes the prior holder of that PID and records `lifecycle.KindTranscriptRemoved` for it (`core/application/services/pid_manager.go:548-613`) — the #169 same-PID cleanup, the same path that makes claudecode's `/clear` and opencode's `/new` observable. Hermes qualifies: `Process.PIDForSession = DiscoverPID` (`pid.go:20`) resolves the PID by cwd + command line, and both sessions resolve to the same live `hermes chat` process.\n3. **Turns on the new session drive ready → working → ready.** `finish_reason` is an explicit turn boundary — `Parser.ParseLine` maps `role='assistant' finish_reason='stop'` to `turn_done` and `'tool_calls'` to `assistant_message` + ToolUses (`parser.go:81-95`); `Watcher.turnIsDone` reads the same field (`watcher.go:426-436`). No idle-flush heuristic is involved, so the post-reset turn settles the same way the pre-reset one did.\n\nThe cwd binding survives the rotation: a `source='cli'` row carries an empty `cwd` (Hermes only calls `update_session_cwd` from its tui_gateway), so both the watcher (`watcher.go:315-318`) and `querySessionMetrics` (`metrics.go:119-122`) borrow the CWD of the single live hermes process. During a recording there is exactly one, which is the case `defaultLiveCWD` requires.\n\nNo `daemon=bug` and no `incapable`: every acceptance bullet has an emission, and none of them is mis-handled by code inspection.\n\n## Driver: gap:reset_session\n\n`replaydata/agents/hermes/driver-interactive.sh` is the #496 scaffold. Its dispatch table routes `reset_session` to `not_implemented reset_session` (the TODO arm), and its `DRIVE_ELICITS` constant is `\"send slash sleep wait_turn\"` — so recipe-lint's semantic check flags this recipe as a gap BEFORE any recording is attempted.\n\nThis is not a false gap that a plain `slash` step would close. Two driver-internal seams have to move with the reset:\n\n- `resolve_session_id()` returns early once `SES_UUID[$ACTIVE]` is set, so after the rotation the driver would keep polling the OLD id; `wait_turn` counts `assistant finish_reason='stop'` rows for that id and would spin to the deadline on a turn that landed on the new session.\n- `emit_session_contract` would publish only the pre-reset id, so curate would drop the post-reset session and the recording could not contain the arc the spec asserts.\n\nThe port is small and mechanical: send `/new now`, clear `SES_UUID[$ACTIVE]`/`SES_TRANSCRIPT[$ACTIVE]`, bump `SES_LAUNCH_TS[$ACTIVE]`, re-run `resolve_session_id`, reset `EXPECTED_TURNS_SEEN=0`, and append the pre-reset id to the multi-session slot lists so both ids reach `session.uuids` / `transcript.paths`.\n\n## Confirmation prompt: solved inline, not a prereq\n\n`/new` is gated by `approvals.destructive_slash_confirm` (default TRUE, `hermes_cli/config.py:2766-2774`) — a three-option modal rendered by `_confirm_destructive_slash` (`cli.py:10842+`). It does NOT need a config edit or a `keys` step: `_DESTRUCTIVE_SKIP_TOKENS = frozenset({\"now\", \"--yes\", \"-y\"})` (cli.py:10803) and the handler at cli.py:9384-9397 strips the token and returns `\"once\"` immediately. So `/new now` rotates the session with no modal at all. The recipe pins that spelling.\n\n## Confidence\n\n0.8. The agent side is settled from the shipped source (the rotation, the ended_at write and the immediate INSERT are all read line-by-line, not inferred). The daemon side is a code read of this PR's brand-new adapter plus the shared PIDManager cleanup — no hermes recording exists yet for ANY scenario, so `daemon=full` is provisional in the sense the assess skill defines: the parser/watcher demonstrably handle the trace, but no live run has yet proven the daemon sees the whole arc end to end.",
+      "caveats": [
+        "PROVISIONAL: this is the first hermes cell — no hermes recording exists for any scenario, so every daemon claim here is a code read, not a measurement. `record` promotes or corrects it.",
+        "The `old_session_ended` phase (transcript_removed for the pre-reset id) is derived from the shared same-PID cleanup in pid_manager.go, not from a hermes events.jsonl. It requires the daemon to PID-bind the post-reset session; if PID discovery is slower than the phase's 30s window, `record` should widen the bound rather than drop the assertion — the acceptance criteria demand 'old session disappears'.",
+        "No `cost_nonzero` observation is asserted. Hermes prices via irrlicht's alias table (metrics.go:158-163, deliberately ignoring sessions.estimated_cost_usd, which Hermes reports as 0.0 under billing_mode='subscription_included'), and neither model in the maintainer's live store — `gpt-5.6-luna`, `google/gemma-4-26b-a4b` — is in core/pkg/capacity/aliases.go, where a pricing miss returns 0 (capacity.go:157-168). Asserting non-zero cost would fail on a provider-dependent detail.",
+        "`model` is left unpinned per the doc-guessed-model rule: the recording home's config.yaml default is not known at assess time. `record` fills it from the recording.",
+        "Presession shape is assumed, not observed: hermes gets a processlifecycle Scanner with WithCommandLineMatch (core/cmd/irrlichd/wiring.go:103-107), which mints a `proc-<PID>` row, so the spec models the birth as two phases per the presession rule. If hermes turns out not to produce one (e.g. the scanner's sessionChecker suppresses it), `record` collapses the first two phases.",
+        "`/clear` is the same rotation plus a terminal wipe (tips.py:415) and is not separately recorded."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/commands.py:68",
+          "note": "CommandDef(\"new\", \"Start a new session (fresh session ID + history)\", \"Session\", aliases=(\"reset\",)) — the command exists in the shipped registry (Hermes Agent v0.19.0)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/tips.py:414-415",
+          "note": "\"/new starts a fresh session in place (alias /reset) — fresh session ID, clean history, CLI stays open.\" and \"/clear wipes the terminal screen AND starts a new session\"."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py:7574-7720",
+          "note": "new_session(): end_session(old, \"new_session\") → mints YYYYMMDD_HHMMSS_<6hex> → create_session(source=cli, model=…) INSERTs the new row immediately; _discard_session_if_empty only drops a message-less old row."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_state.py:4316-4332",
+          "note": "end_session → UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL — the store-level signal the watcher's justEnded branch reads."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py:9384-9397 + cli.py:10803 + hermes_cli/config.py:2766-2774",
+          "note": "approvals.destructive_slash_confirm defaults on, but _DESTRUCTIVE_SKIP_TOKENS = {now, --yes, -y} bypasses the modal — `/new now` rotates with no prompt, so the recipe needs no config edit and no keys step."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go:278-436",
+          "note": "scanSessions filters source IN ('cli','tui'); reconcile emits EventNewSession for an unknown id and a Terminal EventActivity on justEnded; turnIsDone reads finish_reason='stop'."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go:81-95",
+          "note": "role='assistant' + finish_reason='stop' → turn_done; 'tool_calls' → assistant_message + ToolUses — the explicit turn boundary both post-reset turns settle on."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go:548-613",
+          "note": "HandlePIDAssigned → assignPIDLocked → cleanupStalePIDHolders records KindTranscriptRemoved and deletes the prior holder of the same PID (#169) — the 'old session disappears' emission, reachable here because hermes declares PIDForSession=DiscoverPID and the REPL keeps its PID across /new."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go:78-107",
+          "note": "hermes is wired as a ProcessOwnedStore watcher AND gets a processlifecycle Scanner with WithCommandLineMatch/WithArgvFilter — the source of the proc-<PID> presession the spec's first phase models."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\"; the reset_session arm is `not_implemented reset_session`; resolve_session_id() early-returns on a cached SES_UUID and wait_turn polls that id — so a bare slash step cannot close this gap."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/capacity.go:157-168 + core/pkg/capacity/aliases.go",
+          "note": "EstimateCostUSD returns 0 on a pricing miss; neither gpt-5.6-luna nor google/gemma-4-26b-a4b (the models in the live hermes store) is in the alias table — why cost_nonzero is not asserted."
+        },
+        {
+          "kind": "probe",
+          "ref": "sqlite3 'file:/Users/ingo/hermes-local/.hermes/state.db?mode=ro' \"SELECT source, model, count(*) FROM sessions GROUP BY 1,2\" (2026-08-02)",
+          "note": "cli|gpt-5.6-luna|16, cli|google/gemma-4-26b-a4b|6, tui|gpt-5.6-luna|2, tui|google/gemma-4-26b-a4b|1 — confirms `hermes chat` records source='cli' and shows which models the maintainer's install actually uses."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH (verified 0.19.0 / 2026.7.20) with a provider configured in <HERMES_HOME>/config.yaml and credentials present",
+        "HERMES_HOME exported to the recording home so the run writes to an isolated state.db",
+        "sqlite3 on PATH — the store is the only session signal hermes exposes",
+        "tmux on PATH: `/new` is an in-REPL slash command, so the live-TUI path is required (there is no headless way to deliver it)",
+        "irrlichd recording (run-cell.sh isolated mode, or --attach against a --record daemon)"
+      ],
+      "setup": [
+        "The driver launches `hermes chat` under tmux in a fresh per-run cwd and waits for the 'Type your message or /help' banner before sending anything.",
+        "DRIVER PORT REQUIRED (gap:reset_session): the reset_session arm must (1) send `/new now` — the inline-skip token bypasses the destructive-slash confirmation modal, (2) clear SES_UUID[$ACTIVE] and SES_TRANSCRIPT[$ACTIVE] and bump SES_LAUNCH_TS[$ACTIVE] so resolve_session_id binds the POST-reset row, (3) reset EXPECTED_TURNS_SEEN=0 so wait_turn blocks on the new session's first turn, and (4) keep the pre-reset id in the slot lists so emit_session_contract publishes BOTH ids via session.uuids / transcript.paths — otherwise curate drops the pre-reset session and the arc cannot be verified.",
+        "Unlike opencode, hermes INSERTs the post-reset sessions row at `/new` time (cli.py:7707), so the new id is resolvable from the store before the next prompt is sent."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "reset_session"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: fresh"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the first store-keyed session id entering ready, then a working → ready turn ('ok')",
+        "after /new, a DIFFERENT session id appears in ready — the new row hermes INSERTs at reset time",
+        "the pre-reset session leaves the dashboard: transcript_removed for its id (the same-PID cleanup) after the new session is PID-bound",
+        "the second working → ready cycle is on the NEW session id, not the old one",
+        "final live state is ready and cumulative tokens on the post-reset session are non-zero"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}

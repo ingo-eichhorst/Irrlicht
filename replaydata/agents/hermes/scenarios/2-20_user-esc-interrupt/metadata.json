@@ -1,0 +1,165 @@
+{
+  "scenario_id": "user-esc-interrupt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:interrupt",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+4b65f63.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (Ctrl+C, not ESC)\ndaemon_capability: incapable; driver_capability: gap:interrupt\n=> frozen: an interrupted Hermes turn writes NO turn boundary to the store — finish_reason is never 'stop', turn_exit_reason='interrupted_by_user' is an in-memory diagnostic that is never persisted, and there is no turns table — so the post-interrupt working→ready settle is unobservable and the session sticks in working."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-esc-interrupt",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:interrupt",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable\ndriver_capability: gap:interrupt\n=> route: frozen\n\n## agent — yes (but the key is Ctrl+C, not ESC)\n\nHermes interrupts a running turn from the REPL. `cli.py:14326` binds `c-c` to `handle_ctrl_c`, whose documented priority ladder is \"2. Interrupt the running agent (first press) / 3. Force exit (second press within 2s, or when idle)\"; when `self._agent_running and self.agent` it prints `⚡ Interrupting agent... (press Ctrl+C again to force exit)` and calls `self.agent.interrupt()`. `c-q` (`cli.py:14424`) is the same interrupt without the double-press force-exit. `AIAgent.interrupt()` (`run_agent.py:2848`) sets `_interrupt_requested`, aborts the in-flight provider request via `_active_request_abort(\"interrupt_abort\")`, and fans a thread-scoped interrupt bit out to tool workers and child agents. The conversation loop checks the flag at the top of every iteration (`agent/conversation_loop.py:1109`, `_turn_exit_reason = \"interrupted_by_user\"`) and the aborted request surfaces as `InterruptedError` (`:5103`, `_turn_exit_reason = \"interrupted_during_api_call\"`). So the behavior exists and is first-class.\n\nWhat is NOT bound is ESC. Every `escape` binding in `cli.py` is either a prefix combo (`escape,enter` :14081, `escape,g` :14117, `escape,v` :14733) or a modal dismissal (`escape` under `_model_picker_state` :14244, under `_modal_prompt_active` :14512). None reaches `agent.interrupt()`. The scenario's acceptance criteria are about the state arc, not the keycap, so `agent=yes` — but a ported driver step MUST send `C-c`, not `Escape` (see driver).\n\n## daemon — incapable\n\nThe scenario's user-observable signal is the `working → ready` settle at the moment of the interrupt. Nothing in the store can carry it.\n\n**1. The store has no interrupt field and no turn table.** `sqlite3 .tables` on the live store returns `sessions`, `messages`, `session_model_usage`, `async_delegations`, `compression_locks`, `delivery_obligations`, `gateway_routing`, `schema_version`, `state_meta` + the FTS shadow tables. There is no `turns` table and no exit-reason column: the insert in `hermes_state.py:6651` enumerates every persisted message column and carries `finish_reason` but nothing about cancellation. `_turn_exit_reason` (`\"interrupted_by_user\"` / `\"interrupted_during_api_call\"`) is a diagnostic string returned in the in-memory `result` dict from `finalize_turn` (`agent/turn_finalizer.py:583`) — it is never written to SQLite.\n\n**2. An interrupted turn writes no row the daemon can read as terminal.** Two paths, both dead ends:\n\n- *Interrupt while the provider request is in flight* (the scenario's own shape: a >2s prompt, interrupted before turn-done). `agent/conversation_loop.py:3070-3101` catches `InterruptedError`, sets `interrupted = True`, and then: if partial streamed text exists it appends `{\"role\":\"assistant\",\"content\":_partial}` — a plain assistant row with **no `finish_reason`**; if there is none it only sets `final_response = \"Operation interrupted: waiting for model response (Xs elapsed).\"` and appends **nothing**. `_persist_session` then writes that list.\n- *Interrupt with a tool result as the tail.* `agent/turn_finalizer.py:289-291` calls `close_interrupted_tool_sequence`, which (`agent/message_sanitization.py:280-309`) appends `{\"role\":\"assistant\",\"content\":\"Operation interrupted.\"}` — again with no `finish_reason`, and only when the tail is a `tool` row.\n\nAnd `agent/turn_finalizer.py:308` gates the closing-assistant append on `if final_response and not interrupted:` — the interrupted turn's `final_response` is *deliberately* not persisted as a message.\n\n**3. Which means the adapter's own reads can only re-affirm `working`.** `Watcher.turnIsDone` (`watcher.go:426-436`) reads the newest `active=1` row and returns true only for `role='assistant' AND finish_reason='stop'`; `reconcile` sets `ev.Terminal` from it (`watcher.go:417`). `Parser.ParseLine` (`parser.go:93`) maps an assistant row to `turn_done` only on `finish_reason == \"stop\"`, otherwise `assistant_message`. So the best case an interrupt produces — the partial-text assistant row — is byte-shape-identical to a normal mid-turn assistant message and lands as `assistant_message`, `Terminal=false` → classifier `transcript_activity` → already `working`, no-op. The worse case adds no row at all, so `message_count` does not grow and `reconcile` emits nothing (`watcher.go:408-412`).\n\n**4. The classifier's ESC rule can never fire for this adapter.** `isUserInterruptReady` (`state_classifier.go:283-291`) requires `metrics.LastEventType == \"user\" && (LastWasUserInterrupt || LastWasToolDenial)`. The only producer of `IsUserInterrupt` in the whole daemon is `claudecode/parser.go:385`; the hermes parser sets neither flag, and no store field could justify setting one.\n\nSo the session **sticks in `working`** — exactly the negative criterion the scenario forbids. There is no trace to mis-handle, so this is `incapable`, not `bug`: the adapter's `finish_reason='stop'` rule is correct, the signal simply does not exist on this transport.\n\nNo counter-example in the corpus, either: across all 25 sessions in the live store the newest `active=1` row is `assistant/finish_reason='stop'` in every single case, and there are zero assistant rows with a NULL `finish_reason` (store-wide shapes: assistant/stop 29, assistant/tool_calls 29, tool 29, user 29, user/model_switch 1). Nothing there contradicts the source reading; nothing there confirms it either (the maintainer never interrupted a turn in this store).\n\n### The unlock: the hook tier\n\nHermes already emits the signal — just not to the store. `agent/turn_finalizer.py:668-684` fires the `on_session_end` plugin/shell hook at the end of **every** `run_conversation` (per TURN, despite the name — the file's own comment at `:661` spells out that `run_conversation` is called once per user message), with payload `session_id, task_id, turn_id, completed, interrupted, model, platform`. `agent/shell_hooks.py:87-93` documents exactly those `extra` keys, and `on_session_end` is in `VALID_HOOKS` (`hermes_cli/plugins.py:161`) with a shell-hook bridge and a `hermes hooks test` harness (`hermes_cli/hooks.py:152`). A hook tier — not implemented in this PR — would deliver an authoritative per-turn boundary carrying `interrupted: true`, which maps straight onto the daemon's existing `HookTurnDone` / `LastWasUserInterrupt` plumbing and would flip this cell to `daemon=full`. That is the single unfreeze condition on the daemon side.\n\n## driver — gap:interrupt\n\n`replaydata/agents/hermes/driver-interactive.sh:113` declares `DRIVE_ELICITS=\"send slash sleep wait_turn\"`. The recipe needs an `interrupt` step, which the driver does not implement, so this is tooling work (`gap:interrupt`), not an observability limit — the same shape kiro-cli carries on this row. Porting it is NOT a copy of the reference step: claudecode/aider `step_interrupt` sends `Escape` to the tmux pane, and `Escape` is a no-op against Hermes' running turn (see the agent pillar). The hermes port must `tmux send-keys C-c` **once** — a second press within 2s force-exits the REPL (`cli.py:14395`), which would destroy the settle window this scenario measures.\n\n## What is NOT proven\n\nEverything above is source + store-schema evidence. No live Ctrl+C was driven (this verb runs no recording and spends no agent-CLI tokens), so the claim \"an interrupted turn adds no terminal row\" is a source-level reading, not an observed one.",
+      "caveats": [
+        "NOT live-probed. Per the #934 lesson (a frozen daemon=incapable verdict on this very scenario turned out wrong for kiro-cli and antigravity, both of which DO emit a turn-done marker), this verdict was probed rather than assumed — but the probe was the Hermes source plus a read-only sweep of the 25-session live store, not a live Ctrl+C. Neither produced an interrupt-time turn boundary. A single live interrupt against a dev daemon would settle it, and is the cheapest thing to do before acting on the freeze.",
+        "ESC is not Hermes' interrupt key. Ctrl+C (cli.py:14326) and Ctrl+Q (cli.py:14424) are; every `escape` binding in cli.py is a prefix combo or a modal dismissal. A ported interrupt step that sends Escape would silently do nothing and record a green-looking stuck-working trace — worse than the missing step it replaces.",
+        "The partial-text interrupt path DOES add a row (assistant, content=the partial reply, finish_reason NULL) and so DOES emit an EventActivity — but with Terminal=false, so it can only re-affirm `working`. It is shape-identical to a normal mid-turn assistant message; there is no field that separates 'interrupted' from 'still streaming'.",
+        "Post-interrupt `working` is not permanent, but nothing that clears it is the scenario's settle: it clears on the next assistant/finish_reason='stop' (i.e. the NEXT turn completing) or when `sessions.ended_at` is set at CLI exit, which reconcile() reports as a one-shot terminal activity (watcher.go:409/417). 24 of the 25 sessions in the live store carry a non-NULL ended_at, so the teardown path is real — it just fires at process exit, minutes after the interrupt.",
+        "The unfreeze path (an on_session_end hook tier) inherits the hook-port obligation the repo already enforces: contracttesting.AssertHookEndpointFollowsBindAddr (#1178). Hermes hooks live in <HERMES_HOME>/config.yaml, so a hardcoded :7837 would block factory recording on a dev daemon the same way it did for claudecode and codex (#1171).",
+        "Recipe timing is unvalidated. `sleep 8` before the interrupt assumes the prompt is still streaming at that point; against a fast local model the turn could complete first and the recording would show a plain basic-turn arc. Whoever unfreezes this should size the sleep against the model the run actually uses."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go:408-436",
+          "note": "reconcile() emits EventActivity only when message_count grew or the session just ended, with Terminal = justEnded || turnIsDone(); turnIsDone reads the newest active=1 row and returns true ONLY for role='assistant' AND finish_reason='stop'. An interrupt satisfies neither."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go:81-95",
+          "note": "An assistant row becomes turn_done only when finish_reason == 'stop'; otherwise assistant_message. The parser sets no IsUserInterrupt — grep across core/ shows claudecode/parser.go:385 is the daemon's only producer of that flag."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go:283-291",
+          "note": "isUserInterruptReady (classifier rule 'user_interrupt') requires LastEventType=='user' && (LastWasUserInterrupt || LastWasToolDenial). Neither can ever be true for hermes, so the working→ready settle this scenario asserts has no rule that can fire."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/conversation_loop.py:3070-3101",
+          "note": "The InterruptedError path (interrupt while the provider request is in flight — this scenario's shape). Sets interrupted=True; appends {'role':'assistant','content':_partial} with NO finish_reason when partial streamed text exists, otherwise appends NOTHING and only sets final_response to the local status string INTERRUPT_WAITING_FOR_MODEL_PREFIX (:94). Then _persist_session."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/turn_finalizer.py:289-291,308-316",
+          "note": "On interrupt, close_interrupted_tool_sequence is the ONLY append, and only when the tail is a tool row; the 'close the durable turn with final_response' block is explicitly gated on `if final_response and not interrupted`. So an interrupted turn never gets a closing assistant row with a finish_reason."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/message_sanitization.py:280-309",
+          "note": "close_interrupted_tool_sequence appends {'role':'assistant','content': text.strip() or 'Operation interrupted.'} — no finish_reason key, so the row persists with finish_reason NULL and turnIsDone stays false."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/conversation_loop.py:1048,1110,5103",
+          "note": "_turn_exit_reason is initialised 'unknown' and set to 'interrupted_by_user' (loop-top flag check) or 'interrupted_during_api_call' (aborted request). It is a diagnostic returned in the in-memory result dict (turn_finalizer.py:583) and is never persisted."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_state.py:1193,6406-6420,6651-6676",
+          "note": "The messages schema and both insert paths. finish_reason is the only turn-boundary column; there is no cancellation/exit-reason column, and msg.get('finish_reason') is NULL for every row an interrupt produces."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Live store, read-only (sqlite3 file:...?mode=ro). `.tables` = sessions, messages, session_model_usage, async_delegations, compression_locks, delivery_obligations, gateway_routing, schema_version, state_meta + FTS shadows — NO turns table. Per-session tail sweep: all 25 sessions end on assistant/finish_reason='stop'; store-wide message shapes are assistant/stop 29, assistant/tool_calls 29, tool 29, user 29, user+display_kind=model_switch 1 — zero assistant rows with a NULL finish_reason, so the corpus contains no interrupted turn either way."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py:14326-14412,14424",
+          "note": "handle_ctrl_c: priority ladder ends '2. Interrupt the running agent (first press) 3. Force exit (second press within 2s)'; calls self.agent.interrupt(). c-q is the same without force-exit. Every `escape` binding in the file (14081 escape+enter, 14117 escape+g, 14244 model picker, 14512 modal prompt, 14733 escape+v) is a prefix combo or modal dismissal — ESC never interrupts a turn."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/run_agent.py:2848-2949",
+          "note": "AIAgent.interrupt(): sets _interrupt_requested, calls _active_request_abort('interrupt_abort') to tear down the in-flight provider sockets, fans a thread-scoped interrupt bit to tool workers and child agents. Confirms the interrupt aborts the model request rather than letting it finish (so no 'stop' finish_reason arrives)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/turn_finalizer.py:661-684",
+          "note": "THE UNLOCK. on_session_end fires at the end of EVERY run_conversation with kwargs session_id, task_id, turn_id, completed, interrupted, model, platform — the comment at :661 states run_conversation is called once per user message, i.e. this is a per-TURN hook despite the name."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/shell_hooks.py:87-93",
+          "note": "Shell-hook bridge doc: the on_session_end `extra` payload is task_id, turn_id, completed (bool), interrupted (bool), model, platform. Registered in hermes_cli/plugins.py:161 (VALID_HOOKS) with a `hermes hooks test` fixture at hermes_cli/hooks.py:152."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/turn_context.py:1198-1207",
+          "note": "'Crash-resilience: persist the inbound user turn before the first LLM call' — the user row (and the sessions row) is written BEFORE the provider request, so the daemon does reach `working` before the interrupt. Only the settle back to ready is unobservable."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh:113",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\" — no `interrupt` step type, hence driver=gap:interrupt."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/driver-interactive.sh:562-564",
+          "note": "Reference `interrupt)` step dispatch (aider's is at :209). Both call step_interrupt, which sends Escape to the tmux pane — the wrong key for Hermes; a hermes port must send C-c once."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/2-20_user-esc-interrupt/metadata.json",
+          "note": "Sibling frozen cell on the same row (agent=yes, daemon=incapable, driver=gap:interrupt) — the shape this cell follows: applicable:false recipe carrying the unfreeze conditions, spec meta only, no phases."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "preconditions": [
+        "FROZEN — not recordable today. The daemon cannot observe the post-interrupt working→ready settle: an interrupted Hermes turn persists no terminal row (finish_reason is never 'stop'; turn_exit_reason is in-memory only; there is no turns table), so a recording would capture a stuck-working shape that contradicts the scenario.",
+        "UNFREEZE (daemon): implement the hook tier. agent/turn_finalizer.py:668-684 fires on_session_end at the end of EVERY turn with `interrupted: bool` + `completed: bool` + turn_id/model/platform; a shell hook registered in <HERMES_HOME>/config.yaml would deliver an authoritative turn boundary and interrupt flag into the daemon's existing HookTurnDone / LastWasUserInterrupt plumbing. Must resolve the bind addr rather than hardcoding :7837 (contracttesting.AssertHookEndpointFollowsBindAddr, #1178).",
+        "UNFREEZE (driver): port an `interrupt` step into replaydata/agents/hermes/driver-interactive.sh and add `interrupt` to DRIVE_ELICITS. It must `tmux send-keys C-c` ONCE — Escape (what claudecode/aider's step_interrupt sends) is not bound to interrupt in Hermes, and a second C-c within 2 s force-exits the REPL.",
+        "Standard hermes recording prereqs also apply: HERMES_HOME exported identically to driver and daemon, sqlite3 on PATH for wait_turn, exactly one live interactive hermes process (source='cli' rows carry no cwd), and the 'store' permission granted."
+      ],
+      "setup": [],
+      "script": [
+        {
+          "type": "send",
+          "text": "Write a long, detailed essay about the history of computing, at least 500 words. Take your time and stream the whole thing."
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "interrupt"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "FROZEN: no recording. Once unfrozen, the spec to verify is ready → working → ready: the interrupt must settle the session back to ready and NOT leave it stuck in working, and the follow-up prompt must drive a clean second ready → working → ready arc on the SAME session.",
+        "no state_transition to waiting at any point",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 360
+    }
+  }
+}

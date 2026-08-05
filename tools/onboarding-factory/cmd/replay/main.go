@@ -51,6 +51,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
+	"irrlicht/core/adapters/inbound/agents/hermes"
 	"irrlicht/core/adapters/inbound/agents/kirocli"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
@@ -84,6 +85,7 @@ var parserFactories = func() map[string]agents.ParserFactory {
 	m := agents.Parsers(allAgents)
 	m[aider.AdapterName] = func() tailer.TranscriptParser { return &aider.Parser{} }
 	m[opencode.AdapterName] = func() tailer.TranscriptParser { return &opencode.Parser{} }
+	m[hermes.AdapterName] = func() tailer.TranscriptParser { return &hermes.Parser{} }
 	return m
 }()
 
@@ -137,8 +139,14 @@ func detectAdapter(path string) (string, error) {
 	case strings.Contains(abs, "/.copilot/session-state/"),
 		strings.Contains(abs, "/replaydata/agents/copilot/"):
 		return copilot.AdapterName, nil
+	// Hermes' store is a single state.db under the Hermes home. The home is
+	// relocatable via HERMES_HOME, so the fixture path is the reliable
+	// discriminator and the live path matches the default location only.
+	case strings.Contains(abs, "/.hermes/state.db"),
+		strings.Contains(abs, "/replaydata/agents/hermes/"):
+		return hermes.AdapterName, nil
 	}
-	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot", abs)
+	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes", abs)
 }
 
 // eventsSidecarExt is the lifecycle-events sidecar's file extension, paired

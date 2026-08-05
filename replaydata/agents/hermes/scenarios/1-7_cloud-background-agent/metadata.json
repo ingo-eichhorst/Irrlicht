@@ -1,0 +1,101 @@
+{
+  "scenario_id": "cloud-background-agent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+fe95020.dirty",
+    "confidence": 0.8,
+    "notes": "Hermes has first-party remote/hosted deployments (Nous-managed hosted agent instances, hosted Docker images, gateway proxy mode), but every one of them executes off-box and leaves no local trace: the adapter's Source is a LOCAL $HERMES_HOME/state.db and its PID discovery is a local process match."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "cloud-background-agent",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n\n## agent_supports = yes\n\nHermes Agent v0.19.0 ships three distinct shapes in which the agent turn executes on a machine other than the user's:\n\n- **Nous-managed hosted agents.** `docs/chronos-managed-cron-contract.md` is the authoritative wire spec for a *hosted Hermes gateway* that Nous Account Service (NAS) provisions as an `AgentInstance`, boots with a `hermes-cli-vps` bootstrap-session token planted in `auth.json`, and wakes over an authenticated `POST {agent_callback_url}/api/cron/fire` so the instance can \"scale to zero\" between fires. The agent half of that contract ships in the installed tree as the Chronos cron provider plugin (`plugins/cron_providers/chronos/__init__.py`, `_nas_client.py`) — it is code on disk, not a roadmap doc.\n- **Hosted / published Docker images.** `website/docs/user-guide/docker.md` describes hosted images where `/opt/hermes` is the immutable application tree and all mutable session state lives under `/opt/data`, with dashboard auth via Nous Portal OAuth for \"hosted/public deploys\".\n- **Gateway proxy mode.** Setting `GATEWAY_PROXY_URL` (+ `GATEWAY_PROXY_KEY`) on any gateway instance makes it \"forward to the remote agent instead of running one locally\" (`gateway/run.py`, documented in `website/docs/user-guide/messaging/matrix.md`); session continuity is carried by an `X-Hermes-Session-Id` header against a remote host running the API server.\n\nIn all three the user triggers work that runs remotely and reports back — the scenario's premise.\n\n## daemon_capability = incapable\n\nThe hermes adapter is local on BOTH of its axes, and neither can reach an off-box run:\n\n- **Store.** `agent.go` declares `Source: agent.ProcessOwnedStore{PathForPID: func(int) string { return StorePath() }}`, and `StorePath()` (adapter.go) resolves to an absolute local path — `$HERMES_HOME/state.db`, default `~/.hermes/state.db`. A hosted instance's `state.db` lives inside its own container (`/opt/data` per the Docker guide) and never appears on the user's filesystem. No file to tail, no store to poll.\n- **Process.** `pid.go` binds a session via `DiscoverPIDByCWDAndCmdLineExcludingArgv` — a local `pgrep`-class cmdline+cwd match. A remote run has no local process at all, so PID discovery yields nothing and the CWD/project binding (which `source='cli'` rows already depend on the live process for) is unavailable too.\n- **Transport.** `core/domain/agent/source.go` seals `Source` to three variants — `FilesUnderRoot`, `FilesUnderCWD`, `ProcessOwnedStore` — every one of them a local filesystem path. There is no remote/HTTP source variant for an adapter to declare, so \"daemon connects to the remote feed\" (step 2 of the scenario process) has nowhere to live today.\n\nNo local trace exists → `incapable` (architecture), not `bug`.\n\n## What would flip this to observable\n\nUnusually for this scenario, the blocker is entirely on irrlicht's side — the agent-side feed already exists. A Hermes instance run with `API_SERVER_ENABLED=true` + `API_SERVER_KEY` exposes a bearer-authenticated read surface (`gateway/platforms/api_server.py`, routes registered at ~line 1766 and re-advertised in the `/v1/capabilities` payload):\n\n- `GET /api/sessions` — list sessions\n- `GET /api/sessions/{session_id}` — one session\n- `GET /api/sessions/{session_id}/messages` — its message rows (the same rows the local adapter folds into metrics)\n- `GET /v1/runs/{run_id}/events` — a per-run event stream\n\nThat is a genuine remote feed carrying the same shape the local store carries. Contrast claudecode's cell for this scenario, where the vendor endpoint is fire-only and the blocker is on the vendor. So the concrete unlock here is one irrlicht change: a fourth `Source` variant (a remote/HTTP store reader) plus a way to configure endpoint + token, after which a hosted Hermes could be observed without the agent shipping anything new. Re-assess this cell if such a variant lands.\n\n## Route\n\nfrozen — no recording. There is nothing on this machine for a driver to produce or for a watcher to read.",
+      "caveats": [
+        "PROVISIONAL on the remote side: the hosted-agent claim is grounded in the shipped v0.19.0 tree (docs/chronos-managed-cron-contract.md + plugins/cron_providers/chronos/) and the Docker guide, not in a provisioned instance — no hosted Hermes was stood up for this assessment, so the exact on-instance store layout beyond '/opt/data' is unverified.",
+        "Adjacent but NOT this scenario: Hermes' messaging-gateway and cron surfaces (source='whatsapp'|'slack'|'discord'|'cron'|'webhook' rows in the SAME state.db) are remote-TRIGGERED but execute locally inside the long-lived gateway process. They would satisfy the scenario's 'no bound local PID' criterion — the adapter deliberately excludes that process (adapter.go serviceSubcommands: gateway/cron/webhook/serve/...) so no PID would bind — and their full state arc IS in the local store. They are nonetheless invisible today by deliberate scoping, not by defect: watcher.go's scan and metrics.go's session query both filter `source IN ('cli','tui')`, and agent.go's permission copy promises the user that gateway sessions are skipped. That is a caveat, not a daemon=bug. If the matrix wants coverage of remote-triggered/locally-executed background runs, that is a NEW scenario row, not this one.",
+        "The three remote shapes differ in how close they are: gateway proxy mode forwards to a remote agent whose API server is reachable on the LAN (so an irrlicht remote source would work against it first), while a Nous-hosted instance additionally needs portal-scoped auth. An eventual implementation should not assume the two share a credential path."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go",
+          "note": "Source is agent.ProcessOwnedStore{PathForPID: func(int) string { return StorePath() }} — a local path; permission copy states gateway (WhatsApp/Slack/...) sessions are skipped"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/adapter.go",
+          "note": "StorePath()/homeDir() resolve $HERMES_HOME/state.db locally (default ~/.hermes); serviceSubcommands excludes gateway/cron/webhook/serve so no session binds to the long-lived service process"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "scanSessions queries `FROM sessions WHERE source IN ('cli','tui')` — gateway/cron rows are filtered out of discovery"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go",
+          "note": "querySessionMetrics applies the same `source IN ('cli','tui')` filter on the metrics path"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/pid.go",
+          "note": "DiscoverPID = DiscoverPIDByCWDAndCmdLineExcludingArgv — a local cmdline+cwd process match; a remote run has no local process"
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/agent/source.go",
+          "note": "Source is a sealed sum of FilesUnderRoot / FilesUnderCWD / ProcessOwnedStore — all local filesystem paths; no remote transport variant exists"
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent@e289e561 (v0.19.0, local git checkout at $HERMES_HOME/hermes-agent): docs/chronos-managed-cron-contract.md",
+          "note": "Authoritative wire spec for a NAS-provisioned HOSTED Hermes gateway: bootstrap-session token under client hermes-cli-vps, aud=agent:{instance_id} fire JWT, POST {agent_callback_url}/api/cron/fire"
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent@e289e561: plugins/cron_providers/chronos/__init__.py, plugins/cron_providers/chronos/_nas_client.py",
+          "note": "The agent half of the hosted-agent cron contract ships as installed code, not just documentation"
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent@e289e561: gateway/platforms/api_server.py (route table ~L1766; capability advertisement ~L2849)",
+          "note": "Remote read feed that already exists agent-side: GET /api/sessions, /api/sessions/{id}, /api/sessions/{id}/messages, GET /v1/runs/{id}/events — bearer-auth via API_SERVER_KEY"
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent@e289e561: website/docs/user-guide/messaging/matrix.md",
+          "note": "GATEWAY_PROXY_URL/GATEWAY_PROXY_KEY proxy mode — 'forward to the remote agent instead of running one locally'; session continuity via X-Hermes-Session-Id"
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent@e289e561: website/docs/user-guide/docker.md",
+          "note": "Hosted/published images: /opt/hermes immutable, mutable session state under /opt/data; Nous Portal OAuth dashboard auth for hosted deploys"
+        },
+        {
+          "kind": "file",
+          "ref": "hermes-agent@e289e561: hermes --help / hermes sessions --help (CLI v0.19.0 on this machine)",
+          "note": "Empty-scan evidence for the local side: no subcommand reads a remote instance's sessions — `hermes sessions list` operates on the local SQLite store only; `hermes portal` is auth/model/tool-gateway setup, not remote execution"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/1-7_cloud-background-agent/metadata.json",
+          "note": "Sibling cell for the same scenario: agent=yes / daemon=incapable / driver=ready with an applicable:false recipe — the shape followed here"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "daemon_capability=incapable — a hosted/remote Hermes run leaves no local store row and no local process, so there is nothing on this machine for the driver to elicit or the watcher to read. No recipe."
+    }
+  }
+}

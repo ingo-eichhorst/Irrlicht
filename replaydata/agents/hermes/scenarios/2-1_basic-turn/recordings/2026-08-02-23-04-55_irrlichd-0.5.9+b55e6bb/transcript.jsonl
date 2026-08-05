@@ -1,0 +1,2 @@
+{"role":"user","content":"Reply with exactly the word: ok","tool_calls":"","tool_call_id":"","tool_name":"","finish_reason":"","display_kind":"","timestamp":"2026-08-02T21:04:59.690Z","_ts":1785704699.68973,"_model":"gpt-5.6-luna","_cwd":""}
+{"role":"assistant","content":"ok","tool_calls":"","tool_call_id":"","tool_name":"","finish_reason":"stop","display_kind":"","timestamp":"2026-08-02T21:05:00.954Z","_ts":1785704700.95378,"_model":"gpt-5.6-luna","_cwd":""}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -332,11 +333,26 @@ type prereqFlag []string
 func (p *prereqFlag) String() string     { return strings.Join(*p, ",") }
 func (p *prereqFlag) Set(v string) error { *p = append(*p, v); return nil }
 
+const agentUsage = `usage: of agent add    --id i --name n --provider p [--min-version v] [--prereq p]...
+       of agent update --id i [--name n] [--provider p] [--min-version v] [--prereq p]... [--add-prereq p]...`
+
 func runAgent(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "add" {
-		fmt.Fprintln(stderr, "usage: of agent add --id --name --provider [--min-version v] [--prereq p]...")
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, agentUsage)
 		return exitUsage
 	}
+	switch args[0] {
+	case "add":
+		return runAgentAdd(args, stdout, stderr)
+	case "update":
+		return runAgentUpdate(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintln(stderr, agentUsage)
+		return exitUsage
+	}
+}
+
+func runAgentAdd(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("of agent add")
 	var prereqs prereqFlag
 	var (
@@ -374,6 +390,79 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	fmt.Fprintf(stdout, "of agent add: %s ok (provider=%s, prereqs=%d)\n", *id, *provider, len(prereqs))
+	return exitOK
+}
+
+// runAgentUpdate edits an EXISTING column's metadata.json. It exists because
+// `add` is deliberately one-shot (it refuses a column that already exists), and
+// a column's recording prerequisites are not a one-shot fact: a `record` sweep
+// discovers them — which tools the live CLI actually exposes, which auth mode
+// works — and every later cell in that column should inherit the finding
+// instead of paying to rediscover it. Without this verb the only ways to record
+// one were to hand-edit replaydata/ (the skill's headline anti-pattern) or to
+// delete metadata.json and re-add, which drags scenarios.json through a full
+// catalog round-trip for a change that never touches it.
+//
+// Only explicitly-passed fields are written, so an update naming just
+// --add-prereq cannot silently reset a name or provider. --prereq REPLACES the
+// whole list; --add-prereq APPENDS (skipping exact duplicates, so re-running a
+// promotion is idempotent). scenarios.json is touched only when --min-version
+// is passed, for the same reason.
+func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("of agent update")
+	var prereqs, addPrereqs prereqFlag
+	var (
+		id       = fs.String("id", "", "agent id (kebab slug)")
+		name     = fs.String("name", "", "display name")
+		provider = fs.String("provider", "", "provider (e.g. anthropic, openai)")
+		minVer   = fs.String("min-version", "", "minimum supported agent version (rewrites the column registration)")
+		repoRoot = fs.String(repoRootFlagName, ".", repoRootFlagUsage)
+	)
+	fs.Var(&prereqs, "prereq", "replace the recording prerequisites with these (repeatable)")
+	fs.Var(&addPrereqs, "add-prereq", "append a recording prerequisite, skipping exact duplicates (repeatable)")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if *id == "" {
+		fmt.Fprintln(stderr, "of agent update: --id is required")
+		return exitUsage
+	}
+	metaPath := filepath.Join(*repoRoot, "replaydata", "agents", *id, "metadata.json")
+	b, err := os.ReadFile(metaPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "of agent update: no agent %q at %s (use `of agent add` for a new column)\n", *id, metaPath)
+		return exitFail
+	}
+	var am agentMeta
+	if err := json.Unmarshal(b, &am); err != nil {
+		fmt.Fprintf(stderr, "of agent update: %s is not valid agent metadata: %v\n", metaPath, err)
+		return exitFail
+	}
+	if flagPassed(fs, "name") {
+		am.Name = *name
+	}
+	if flagPassed(fs, "provider") {
+		am.Provider = *provider
+	}
+	if flagPassed(fs, "prereq") {
+		am.Prerequisites = prereqs
+	}
+	for _, p := range addPrereqs {
+		if !slices.Contains(am.Prerequisites, p) {
+			am.Prerequisites = append(am.Prerequisites, p)
+		}
+	}
+	if flagPassed(fs, "min-version") {
+		if rc := registerAgentColumn(*repoRoot, *id, *minVer, stderr); rc != exitOK {
+			return rc
+		}
+	}
+	am.ID = *id // the path is authoritative; a mismatched id in the file is a bug
+	if err := writeJSONFileAtomic(metaPath, am); err != nil {
+		fmt.Fprintf(stderr, "of agent update: write: %v\n", err)
+		return exitUsage
+	}
+	fmt.Fprintf(stdout, "of agent update: %s ok (provider=%s, prereqs=%d)\n", *id, am.Provider, len(am.Prerequisites))
 	return exitOK
 }
 

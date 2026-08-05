@@ -1,0 +1,90 @@
+{
+  "scenario_id": "subscription-detection",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+80d4670.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (hermes models provider quota itself — agent/rate_limit_tracker.py parses the 12 x-ratelimit-* headers into limit/remaining/reset/usage_pct buckets, /usage prints them plus a Nous credits block, and every sessions row carries billing_mode='subscription_included') — daemon_capability: incapable (none of it reaches state.db, the ONLY Source the hermes adapter declares; the store schema has no quota/window/plan column and 0 message rows carry rate-limit text) — driver_capability: ready (moot) -> route frozen"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subscription-detection",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready (moot)\n-> route: frozen\n\n## The scenario's assertion\n\nThe user-observable signal is a per-session subscription reading surfaced by the daemon: `RateLimitSnapshot` non-nil with at least one `Window` (or, for the codex variant, a non-empty `PlanType` / non-nil `Credits`). irrlicht has exactly three transports that can produce one, and each is adapter-specific:\n\n1. **Out-of-band HTTP hook** — claudecode's statusline receiver (`statuslineToSnapshot` in `core/adapters/inbound/agents/claudecode/statusline.go`) turns a POSTed `rate_limits` block into the snapshot.\n2. **In-band transcript field** — codex's `extractCodexRateLimits` (`core/adapters/inbound/agents/codex/parser.go`) reads `rate_limits` straight off the tailed JSONL.\n3. **Cross-account inheritance** — `core/application/services/quotainherit.go` donates a first-party CLI's snapshot to a wrapper session on the same OAuth account.\n\nThe hermes adapter wires NONE of the three.\n\n## Why agent=yes\n\nHermes genuinely models subscription/quota state, in two independent places:\n\n- **Quota windows.** `agent/rate_limit_tracker.py` (hermes 0.19.0) documents and parses the 12-header `x-ratelimit-*` schema (Nous Portal / OpenRouter / OpenAI-compatible convention) into four `RateLimitBucket`s — requests-per-minute, requests-per-hour, tokens-per-minute, tokens-per-hour — each with `limit`, `remaining`, `reset_seconds`, and derived `used` / `usage_pct` / `remaining_seconds_now`. That is structurally the same used-percent + resets-at shape `session.RateLimitWindow` carries. `run_agent.py`'s `_capture_rate_limits` fills it from every inference response; `cli.py`'s `_show_usage` renders it under `/usage`, alongside a Nous credits block, and `/usage reset` redeems a banked Codex rate-limit reset credit via `agent/account_usage.py` (`rate_limit_reset_credits`).\n- **Plan flag.** Every `sessions` row persists `billing_provider` / `billing_mode` / `cost_status` / `cost_source`. On this machine's live store all recent `source='cli'` rows read `openai-codex | subscription_included | 0.0 | included | none` — hermes explicitly knows the turn was billed against a subscription rather than metered per token.\n\nBy the same bar applied to the gemini-cli sibling cell (agent=yes because the CLI runs on a billed tier and tracks its quota posture), hermes is a clear yes — arguably a stronger one, since it both persists the plan flag and computes real quota windows.\n\n## Why daemon=incapable (the load-bearing verdict -> frozen)\n\nThe block is entirely on the daemon pillar and it is architectural, not a mis-handled trace:\n\n1. **One Source, and it carries no quota.** `Agent()` in `core/adapters/inbound/agents/hermes/agent.go` declares `agent.ProcessOwnedStore{PathForPID: StorePath(), Reader: metricsReader{}}` and a single observe permission (`PermissionKeyStore`, \"Read session store\"). The daemon therefore sees exactly `$HERMES_HOME/state.db` and nothing else — no hook receiver, no transcript file (hermes writes none), no second permission that could reach another surface.\n2. **The store schema has no quota column.** A read-only `.schema` of the live store shows `sessions` and `session_model_usage` carrying model/token/cost/billing fields only — no rate-limit, window, remaining, reset, plan-type, tier, or credits column anywhere; the full table list contains no quota table; `state_meta` holds three unrelated migration keys. `SELECT count(*) FROM messages WHERE content LIKE '%ratelimit%' OR '%RPM:%' OR '%Rate limit%'` returns 0 — `/usage` output is `print()`ed to the terminal by `_show_usage`, never inserted as a message row.\n3. **The captured state is in-memory and per-process.** `RateLimitState` lives on `self._rate_limit_state` (`run_agent.py`), read back only through `get_rate_limit_state()`. It dies with the process; nothing flushes it to disk. Likewise `redeem_codex_reset_credit` fetches `rate_limit_reset_credits` live from the Codex backend over the network at `/usage reset` time and persists nothing.\n4. **The adapter reads no billing field, deliberately.** `querySessionMetrics`'s `sessions` SELECT lists exactly `model, cwd, end_reason, started_at, ended_at, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens`; `foldMessages`' `messages` SELECT lists `role, content, tool_calls, tool_call_id, tool_name, finish_reason, display_kind, timestamp`. No `billing_*`, no `estimated_cost_usd`, and `session.SessionMetrics.RateLimit` is never assigned. Cost is priced by irrlicht's own capacity aliases (`capacity.DefaultCapacityManager().EstimateCostUSD`) per the repo convention that cost is general pricing and only quota counters are taken from the agent verbatim — and hermes hands over no quota counters to take.\n\nA grep of the whole adapter for `rate.?limit|quota|plan.?type|statusline|credits|billing` returns only the two prose comment lines in `metrics.go` explaining why `estimated_cost_usd` is ignored. There is no code path, so there is nothing a recording could capture: this is `incapable` (no trace in the transport), not `bug` (a trace the daemon mishandles) and not `gap:*` (a missing driver step).\n\n## What would unblock it\n\nAny one of three, none available today:\n\n- Hermes persisting `RateLimitState` into `state.db` (a column on `sessions` or a sibling table), after which `querySessionMetrics` could fill `SessionMetrics.RateLimit` with no new transport.\n- A hermes hook/statusline-style push into the daemon (hermes does have a gateway-hook mechanism under `$HERMES_HOME/hooks/<name>/`, empty on this machine, but nothing wires it to inference-response headers).\n- Extending `quotainherit.go`, whose recipient switch is `case \"pi\", \"opencode\":` today, to treat hermes as a wrapper. This machine's rows read `billing_provider='openai-codex'`, so a Codex donor session on the same account could in principle supply the snapshot — but hermes' provider is user-configurable (Nous Portal, any OpenAI-compatible base URL), so inheritance would cover only the subset of users running a first-party donor CLI on the same account. Re-assess if any of the three lands.",
+      "caveats": [
+        "agent=yes for the right reason and on strong evidence: hermes parses the 12-header x-ratelimit-* schema into limit/remaining/reset/usage_pct buckets (agent/rate_limit_tracker.py) and persists billing_mode='subscription_included' per session. The block is purely daemon-side.",
+        "Shape mismatch worth noting even though it does not change the verdict: hermes' windows are provider throttle windows (RPM/RPH/TPM/TPH) rather than a plan-quota 5h/7d window, and there is no plan_type string — so even if the data reached the daemon, the snapshot would assert quota-window presence, not a plan tier.",
+        "Window capture is provider-dependent: parse_rate_limit_headers returns None when the provider sends no x-ratelimit-* headers. The live store here bills through openai-codex, where those headers are not the documented convention (the tracker's docstring names the Nous Portal / OpenRouter format).",
+        "The store DOES carry a subscription flag (billing_mode='subscription_included', cost_status='included', estimated_cost_usd=0.0). The adapter deliberately reads none of it — cost is priced by irrlicht's capacity aliases, per AGENTS.md. That is a convention, not a defect, and a flag alone would not satisfy the scenario's 'RateLimitSnapshot with at least one Window' assertion anyway.",
+        "daemon=incapable is grounded in the adapter's declared Source, the live store schema, and a zero-hit message-content query — not in a plausible parser read. A recording cannot promote it, because there is no signal to record; the cell is frozen and produces none.",
+        "Structurally the same shape as the gemini-cli and kiro-cli subscription-detection cells: agent=yes, invisible to the tailed transport, frozen."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go (symbol Agent)",
+          "note": "Source = agent.ProcessOwnedStore{PathForPID: StorePath(), Reader: metricsReader{}} and a single observe permission PermissionKeyStore ('Read session store', $HERMES_HOME/state.db). The daemon reads that store and nothing else — no statusline/hook receiver, no transcript file, no second surface."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/metrics.go (symbols querySessionMetrics, foldMessages, scanMessageRow)",
+          "note": "sessions SELECT = model, cwd, end_reason, started_at, ended_at, input/output/cache_read/cache_write tokens; messages SELECT = role, content, tool_calls, tool_call_id, tool_name, finish_reason, display_kind, timestamp. No billing_* or quota column is read and session.SessionMetrics.RateLimit is never assigned; cost comes from capacity.DefaultCapacityManager().EstimateCostUSD."
+        },
+        {
+          "kind": "cmd",
+          "ref": "grep -rniE 'billing|rate_limit|quota|plan_type|subscription|statusline|credits' core/adapters/inbound/agents/hermes/",
+          "note": "Two hits, both prose comments in metrics.go explaining why sessions.estimated_cost_usd is ignored. Zero code: the adapter wires no rate-limit ingestion, no statusline receiver, no quota integration."
+        },
+        {
+          "kind": "cmd",
+          "ref": "sqlite3 'file:$HERMES_HOME/state.db?mode=ro' '.tables' '.schema sessions' '.schema session_model_usage' (hermes 0.19.0 live store)",
+          "note": "sessions carries billing_provider/billing_base_url/billing_mode/estimated_cost_usd/actual_cost_usd/cost_status/cost_source/pricing_version plus token+cwd+git columns; session_model_usage repeats the per-model billing split. NO rate-limit / window / remaining / reset / plan_type / tier / credits column exists in either, and the table list contains no quota table (state_meta holds only fts_storage_version, ghost_session_prune_v1, orphaned_compression_finalize_v1)."
+        },
+        {
+          "kind": "cmd",
+          "ref": "sqlite3 ... \"SELECT count(*) FROM messages WHERE content LIKE '%ratelimit%' OR content LIKE '%RPM:%' OR content LIKE '%Rate limit%'\"",
+          "note": "0 rows — /usage output never lands in the messages table, so even the free-text rendering of the quota state is absent from the tailed transport."
+        },
+        {
+          "kind": "cmd",
+          "ref": "sqlite3 ... \"SELECT source,billing_provider,billing_mode,estimated_cost_usd,actual_cost_usd,cost_status,cost_source FROM sessions ORDER BY started_at DESC LIMIT 8\"",
+          "note": "All rows: cli | openai-codex | subscription_included | 0.0 | (null) | included | none — hermes persists the SUBSCRIPTION FLAG but no quota counters, and irrlicht reads neither (cost is priced from its own alias table)."
+        },
+        {
+          "kind": "file",
+          "ref": "$HERMES_HOME/hermes-agent/agent/rate_limit_tracker.py (hermes 0.19.0)",
+          "note": "Module docstring documents the 12 x-ratelimit-* headers (Nous Portal / OpenRouter convention); RateLimitBucket carries limit/remaining/reset_seconds/captured_at with derived used/usage_pct/remaining_seconds_now; RateLimitState groups requests_min/requests_hour/tokens_min/tokens_hour. parse_rate_limit_headers returns None when no x-ratelimit-* header is present. This is the agent=yes evidence."
+        },
+        {
+          "kind": "file",
+          "ref": "$HERMES_HOME/hermes-agent/run_agent.py (symbols _capture_rate_limits, get_rate_limit_state)",
+          "note": "Headers are parsed per response and cached on self._rate_limit_state — process-local memory, read back only via get_rate_limit_state(). Nothing writes it to disk or to the store."
+        },
+        {
+          "kind": "file",
+          "ref": "$HERMES_HOME/hermes-agent/cli.py (symbols _handle_usage, _show_usage, _usage_reset)",
+          "note": "/usage print()s format_rate_limit_display(rl_state) plus a Nous credits block to the terminal; /usage reset calls agent/account_usage.redeem_codex_reset_credit, which reads rate_limit_reset_credits live from the Codex backend. Both are terminal/network paths — no persistence, so nothing for a store-tailing daemon to observe."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/quotainherit.go (recipient switch: case \"pi\", \"opencode\")",
+          "note": "irrlicht's third rate-limit transport — cross-account inheritance from a first-party donor CLI — is wired for pi and opencode only. hermes is not a recipient today, which is why its openai-codex billing_provider does not yield an inherited snapshot."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/statusline.go (statuslineToSnapshot); core/adapters/inbound/agents/codex/parser.go (extractCodexRateLimits)",
+          "note": "The two adapter-specific transports that make claudecode and codex daemon=full on this row. hermes wires neither — an architectural absence (incapable), not a mishandled trace (bug) and not a missing driver step (gap)."
+        }
+      ]
+    }
+  }
+}

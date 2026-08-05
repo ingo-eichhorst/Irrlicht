@@ -1,0 +1,109 @@
+{
+  "scenario_id": "backchannel-observe",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:keys",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+80d4670.dirty",
+    "confidence": 0.85,
+    "notes": "Hermes renders a genuine TUI-only approval modal (cli.py's '⚠️  Dangerous Command' panel, blocking on a queue.Queue with a 300s fail-closed deny) that never reaches its store — exactly what 6.2 targets. But the read-back path is unreachable for this adapter by construction: TerminalObserver.observe gates on Granted(adapter,\"control\"), and hermes/agent.go declares only an observe-kind 'store' permission with Control deliberately zero-valued, so the pair is never granted in ANY mode (grant-all iterates only declared permissions). Second, independent blocker: uidetect.go's trustDialogMarkers carry no hermes phrase. Not a daemon bug — this is the scenario's own 'nothing is read back without control consent' criterion. Unblock = declare Control+ControlPermission on hermes, add its marker, and port the driver's `keys` step."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "backchannel-observe",
+      "agent": "hermes",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:keys",
+      "confidence": 0.85,
+      "body": "## Verdict\n\n- **agent_supports: yes** — hermes 0.19.0's classic `hermes chat` REPL renders a blocking, TUI-only approval modal that never reaches its store: exactly the transcript-invisible waiting state 6.2 targets.\n- **daemon_capability: incapable** — the read-back path is unreachable for this adapter *by construction*: `TerminalObserver.observe` gates on `consent.Granted(adapter, ControlPermissionKey)`, and hermes' `agent.Agent` declares exactly one permission (observe-kind `store`) with `Control` deliberately zero-valued, so the `(\"hermes\",\"control\")` pair can never be granted in any mode. A second, independent blocker: `backchannel.DetectUI` carries no hermes marker.\n- **driver_capability: gap:keys** — resolving the modal needs a raw keystroke; hermes' driver stubs `keys` (`not_implemented`) and `DRIVE_ELICITS=\"send slash sleep wait_turn\"`.\n- **route: frozen** (daemon=incapable dominates; the driver gap is secondary and would still need porting once unfrozen).\n\n## What the scenario asserts\n\n6.2's user-observable signal is a `waiting` episode produced by *terminal read-back*, not by the transcript: a discovered session on a readable backend (tmux/kitty), with the backchannel toggle on **and \"control\" granted for the agent**, is shown `waiting` while an interactive trust/permission dialog is on screen, then leaves `waiting` when it is dismissed. Its last acceptance criterion is the negative one this cell lands on: *\"Nothing is read back when the backchannel toggle is off or 'control' is not granted for the agent.\"*\n\n## agent = yes (the dialog exists, and it is on the surface the driver launches)\n\nHermes' approval gate is genuine, default-on and blocking — established in the sibling 2.19 cell and re-confirmed here on the rendering side:\n\n- `tools/approval.py::prompt_dangerous_approval` (line 2273) returns `'once' | 'session' | 'always' | 'deny'` and, in an interactive CLI session, delegates to the callback the REPL registers (`cli.py:6655 set_approval_callback(self._approval_callback)`).\n- `cli.py:12011 _approval_callback` builds `_approval_state` (command, description, choices, selected, a `queue.Queue`), sets a deadline from `approvals.timeout` (default 300s, fail-closed deny) and **blocks the agent thread** on `response_queue.get` until the user answers. That is a real blocked state.\n- The panel painter (`cli.py` approval-panel renderer, ~line 12155 onward) draws a box titled **`⚠️  Dangerous Command`** with the option labels **`Allow once`**, **`Allow for this session`**, **`Add to permanent allowlist`**, **`Deny`** (plus `Show full command` for commands >70 chars), the selected row prefixed `❯ `. Navigation is arrow keys (`kb.add('up' ...)`, filtered on `bool(self._approval_state)`).\n- The modal is on the **classic prompt_toolkit REPL** (`hermes chat`) — the surface the hermes driver already launches — not the Ink `--tui` surface that gives cell 2.15 its `gap:tui_launch`. So unlike 2.15 there is no launch gap here.\n- None of that reaches `$HERMES_HOME/state.db`: 2.19 pinned that the `assistant`/`tool_calls` row is flushed *before* dispatch, so the blocked tail is byte-identical to a slow tool, and the store has no approval table or column. Transcript-invisible is precisely the precondition 6.2 exists for.\n\n## daemon = incapable (two independent blockers; the first is structural and deliberate)\n\n### Blocker 1 — the control consent gate can never open for hermes\n\n`core/application/services/terminal_observer.go` `observe()` opens with\n`if !o.consent.Granted(adapter, ControlPermissionKey) { return }` (`ControlPermissionKey = \"control\"`, `input_service.go:33`). For hermes that call is `false` **in every daemon mode**, and not because the user hasn't answered a prompt — because the pair is never declared:\n\n1. `core/adapters/inbound/agents/hermes/agent.go` `Agent()` returns `Permissions: []agent.Permission{ {Key: PermissionKeyStore, Kind: permission.KindObserve, ...} }` — one observe-kind entry, no `agent.ControlPermission()` — and the `agent.Control` field is left at its zero value, with the doc comment stating this is deliberate (\"declaring SupportsInput obliges the adapter to carry the shared control consent gate for a capability never tested. Wiring it is a follow-up, not an omission.\"). hermes is absent from the seven adapters that call `agent.ControlPermission()` (aider, claudecode, codex, geminicli, pi, kirocli, vibe) and nothing in the wiring synthesizes one.\n2. `permission.Set.Get` returns `StatePending` for a pair that was never answered (`core/domain/permission/permission.go`), so `PermissionService.Granted(\"hermes\",\"control\")` — a plain `Get(...) == StateGranted` — is `false`.\n3. **Grant-all does not rescue it.** `PermissionService`'s grant-all branch iterates `for _, a := range s.agents { for _, p := range a.Permissions { s.set.Put(..., StateGranted) } }` — only *declared* permissions. `IRRLICHT_PERMISSION_MODE=grant-all` (the mode recording daemons run in) therefore grants hermes `store` and nothing else. There is no UI path either: `Snapshot()` enumerates `a.Permissions`, so no \"control\" row is ever offered for hermes.\n\nConsequence: every hermes session returns from `observe()` at the first statement, before `CaptureScreen` is ever called. No screen is captured, `DetectUI` never runs, no `EnqueueTerminalUISignal` is emitted, no `waiting` edge exists. This is *not* the daemon mis-handling a trace — it is the daemon doing exactly what this scenario's own last acceptance criterion demands for an agent without control consent, given an adapter that deliberately declares none. Hence `incapable` (architecture/declaration), not `bug` (product defect).\n\nNote what is **not** the blocker: the backend is readable. The hermes driver launches the REPL in a detached tmux session (`driver-interactive.sh` SEAM 1), so `reader.CaptureScreen` would resolve a tmux `capture-pane` from the session's Launcher and would not return `ErrNotReadable`. The gate above is what stops it.\n\n### Blocker 2 — DetectUI has no hermes marker\n\nEven with `Control` wired and consent granted, `core/domain/backchannel/uidetect.go`'s `trustDialogMarkers` is `{\"Do you want to proceed?\", \"Do you trust the files in this folder?\", \"Do you want to allow this tool\", \"Permission for the\", \"Allow for remainder of this session\"}` — Claude Code's three plus mistral-vibe's two. Hermes' rendered panel contains none of them (`⚠️  Dangerous Command` / `Allow once` / `Allow for this session` / `Add to permanent allowlist` / `Deny`), so `DetectUI` returns `UIKindNone` and no rising edge fires. This is the same shape mistral-vibe's cell had before #988 added its markers, and it is why this cell would still not verify on the day `Control` is declared: **both** blockers must be cleared in the same pass.\n\n## driver = gap:keys\n\nThe recipe must (a) hold the modal open long enough for a poll to see it and (b) answer it. Answering is a keystroke: arrow-key navigation plus Enter, or the number-key quick-select. `replaydata/agents/hermes/driver-interactive.sh` has `keys) not_implemented keys || break` and `DRIVE_ELICITS=\"send slash sleep wait_turn\"`, so recipe-lint would refuse the recipe as a `semantic_gap` before any daemon spins up. Same primitive the sibling 2.19 cell names.\n\n## Unblock condition (what a re-assessment would need)\n\n1. Declare `Control{SupportsInput: true, ...}` + `agent.ControlPermission()` on `hermes/agent.go` and wire the shared control consent gate (the follow-up the adapter's own comment defers) — with `contracttesting.AssertPermissionGated` coverage for the new modify-kind permission.\n2. Add hermes' panel markers to `uidetect.go` — `⚠️  Dangerous Command` is the narrow, full-phrase candidate; the option labels alone are riskier (`Deny` is a common word).\n3. Port `keys` into the hermes driver and add it to `DRIVE_ELICITS`.\n\nWith all three, this cell becomes a real `record` candidate; until then no recording can produce the asserted arc.",
+      "caveats": [
+        "daemon=incapable is derived from source, NOT from a recording — no hermes recording exists for this cell, and none could: TerminalObserver.observe returns before CaptureScreen for every hermes session. The claim rests on three statically checkable facts rather than a plausible mechanism: (1) hermes/agent.go declares one observe-kind 'store' permission and no agent.ControlPermission(), with Control at its zero value; (2) permission.Set.Get defaults an unanswered pair to StatePending, so PermissionService.Granted(\"hermes\",\"control\") is false; (3) PermissionService's grant-all branch iterates only a.Permissions, so even IRRLICHT_PERMISSION_MODE=grant-all never Puts a control row for hermes. Any of those three changing invalidates the verdict — re-assess rather than trust it.",
+        "incapable vs bug, stated so it is not re-litigated: the daemon's behavior here is the scenario's own negative acceptance criterion ('Nothing is read back when ... control is not granted for the agent'), not a mis-handled trace, so this is not filed as a daemon bug. The owner is the ADAPTER declaration (a deliberate deferral documented in hermes/agent.go's Agent() comment), plus a uidetect marker gap. If the dispatcher prefers to treat an adapter-declaration deferral as product work, the honest routing is still a follow-up issue on the hermes adapter, not daemon=bug on this cell.",
+        "Blocker 2 (no hermes marker in uidetect.go's trustDialogMarkers) is INDEPENDENT of blocker 1 and would keep this cell dark even after Control is declared and granted — the mistral-vibe pre-#988 shape. Both must land in the same pass or the first recording verifies PARTIAL.",
+        "The exact on-screen text is read from the panel BUILDER (cli.py's approval-panel renderer: title '⚠️  Dangerous Command', labels 'Allow once' / 'Allow for this session' / 'Add to permanent allowlist' / 'Deny'), not from a captured tmux screen — no live hermes modal has been captured under capture-pane. Emoji-variation-selector and box-drawing/wrapping behavior on a real capture is unverified, so a future marker addition should be confirmed against a real capture before it is trusted (the mistral-vibe cell only settled its markers that way).",
+        "agent=yes is asserted for the interactive classic REPL (`hermes chat`) only. tools/approval.py fail-closed-denies without prompting when prompt_toolkit owns the terminal and no callback is registered, and returns {approved: True} outright in a non-interactive context that is neither CLI, gateway nor HERMES_EXEC_ASK — so no headless recipe could ever elicit the dialog. Unlike cell 2.15 there is no --tui launch gap: the approval panel lives on the surface the driver already launches.",
+        "No observations block (model / cost / tokens) is asserted: a frozen cell is never recorded, and a doc-guessed model pin would only fail a future recording's verify. When this cell is unfrozen, leave model provisional for record to fill and assert cost/tokens non-zero only — the guidance the sibling 2.1 and 2.19 cells already carry.",
+        "If Control IS wired for hermes in a later pass, re-assessment should also expect the presession-identity risk mistral-vibe's 6.2 cell hit (#997 RekeySession): hermes' ready birth comes from the processlifecycle proc-<PID> presession because the sessions row is INSERTed on the first user message, so a dialog opening before reconciliation would key its edge to the presession id. RekeySession exists to carry that forward, but it has never been exercised on this adapter."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go",
+          "note": "Agent(): Permissions = one observe-kind 'store' entry; agent.Control left at its zero value, deliberately (doc comment on Agent())"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/terminal_observer.go",
+          "note": "observe() gates on consent.Granted(adapter, ControlPermissionKey) before CaptureScreen — the first statement hermes never gets past"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/input_service.go",
+          "note": "ControlPermissionKey = \"control\" (the key hermes never declares)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/agent/declaration.go",
+          "note": "ControlPermission() + Control.SupportsInput; the seven adapters that call it do not include hermes"
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/permission/permission.go",
+          "note": "Set.Get defaults an unanswered agent/key pair to StatePending"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/permission_service.go",
+          "note": "Granted() = Get(...)==StateGranted; the grant-all branch and Snapshot() both iterate only a.Permissions, so no 'control' row is ever created or offered for hermes"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/terminal_observer_internal_test.go",
+          "note": "TestObserverGates/'consent denied reads nothing' — the gate's behavior is test-pinned"
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/backchannel/uidetect.go",
+          "note": "trustDialogMarkers: 3 Claude Code phrases + 2 mistral-vibe phrases; no hermes phrase"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py",
+          "note": "v0.19.0: _approval_callback (blocking queue.Queue + 300s fail-closed deadline) and the approval-panel renderer ('⚠️  Dangerous Command'; 'Allow once' / 'Allow for this session' / 'Add to permanent allowlist' / 'Deny'); arrow-key handlers filtered on _approval_state"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/approval.py",
+          "note": "prompt_dangerous_approval: CLI-only, callback-delegated, fail-closed deny; approvals.timeout default 300s"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "launches the REPL under tmux (readable backend), but DRIVE_ELICITS=\"send slash sleep wait_turn\" and keys) is not_implemented"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "sibling cell: the same approval gate leaves no trace in state.db (store tail identical to a slow tool); gap:keys"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/6-2_backchannel-observe/expected.jsonl",
+          "note": "the marker-gap-then-marker-fix precedent (#988) for a non-Claude-Code dialog, and the #997 presession-identity risk"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/6-2_backchannel-observe/metadata.json",
+          "note": "reference cell: the full gate chain (toggle -> control consent -> readable backend) this cell is judged against"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "route=frozen (daemon=incapable). No recipe can make this cell observable today: TerminalObserver.observe returns before CaptureScreen for every hermes session because hermes declares no 'control' permission (Control is deliberately zero-valued in hermes/agent.go), and even past that gate DetectUI carries no hermes marker. WHEN UNFROZEN — after (1) Control{SupportsInput}+agent.ControlPermission() are declared on hermes/agent.go, (2) hermes' panel marker ('⚠️  Dangerous Command') is added to uidetect.go's trustDialogMarkers, and (3) the driver ports `keys` into DRIVE_ELICITS — the recipe is: launch the classic REPL (`hermes chat`, NOT --tui) under tmux with approvals.mode at its default and no --yolo, with the backchannel toggle on and hermes' 'control' permission granted on the recording daemon; one `send` of a prompt asking the terminal tool to run a Tier-2 dangerous but non-hardline command; a `sleep` of >=5s while the modal is held open so at least four 1s observer polls capture it (the waiting episode); a `keys` step selecting 'Allow once' (Enter on the default selection, or the number-key quick-select) to dismiss it; then `wait_turn` and a trailing `sleep` for the settle to ready. Spec phases would then be: turn_start (working) -> ui_dialog_waiting (waiting) -> dialog_dismissed (working) -> settle (ready), anchored per the presession rules since hermes' store row is INSERTed only on the first user message."
+    }
+  }
+}

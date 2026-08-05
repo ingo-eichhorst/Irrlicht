@@ -1,0 +1,143 @@
+{
+  "scenario_id": "subagent-orphan-cleanup",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:sigkill",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+cdea666.dirty",
+    "confidence": 0.72,
+    "notes": "agent=yes (delegate_task children are real persisted sessions, run as threads in the parent's process); daemon=full (child surfaces post-6ad7c28a, shares the parent's PID, reap is a pure delete with no SetState); driver=gap:sigkill (stubbed not_implemented arm, DRIVE_ELICITS lacks it)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subagent-orphan-cleanup",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:sigkill",
+      "confidence": 0.72,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:sigkill\n-> route: **driver-gap**\n\n## Scenario\n\n3.4 subagent-orphan-cleanup: a parent session has a live child subagent; the parent's\nprocess is killed abruptly WHILE the child is still tracked, leaving the child orphaned.\nThe daemon's process-exit sweep must reap BOTH sessions and must never resurrect the\norphaned child into `working` during cleanup (regression coverage for #321). The\nuser-observable signal is: the sessions disappear after the sweep, and no `working`\ntransition fires for the orphan during cleanup.\n\n### agent_supports: yes\n\nHermes' subagent primitive is `delegate_task` (`tools/delegate_tool.py`), already\nestablished for this column by the 3-1 and 3-2 assessments. Two properties make the\norphan shape reachable here, both read from vendor source:\n\n1. **A delegate child is a real, persisted session.** `_build_child_agent`\n   (delegate_tool.py, around :1385-1391) constructs the child as a full `AIAgent` with\n   `platform=\"subagent\"`, `session_db=<the parent's SessionDB>` and\n   `parent_session_id=<parent.session_id>`, and `_persist_disabled` stays False for it\n   (`agent/agent_init.py` sets it False; the only writer of True is\n   `agent/background_review.py`). So `AIAgent._ensure_db_session` (run_agent.py) INSERTs\n   the child's own `sessions` row into the SAME `$HERMES_HOME/state.db`, with\n   `parent_session_id` populated, while the child is LIVE.\n2. **The child runs in the parent's process.** Async delegation submits children to a\n   module-level `DaemonThreadPoolExecutor` (`tools/daemon_pool.py`, used by\n   `tools/async_delegation.py:_get_executor`) \u2014 daemon THREADS, not subprocesses. One OS\n   process owns parent and child, so a single `kill -9` orphans the child exactly the way\n   this scenario needs, and both irrlicht sessions bind the SAME PID. This is structurally\n   identical to opencode's `task` tool, whose 3-4 recording is the reference.\n\nA top-level hermes delegation is background by construction (3-1's finding: the schema's\n`background` field is \"DEPRECATED / IGNORED\" and `_model_background_value` forces it), which\nis FINE for this cell and in fact helps: the parent's own reply lands quickly and the child\nkeeps running detached, so there is a long, comfortable window in which a live child and a\nlive parent coexist for the kill to land in. The orphaning is produced by the kill, not by\nany hermes feature, so agent_supports is yes.\n\n### daemon_capability: full\n\nEvery link in the chain exists in the tree as committed today.\n\n**The child now surfaces.** Hermes tags the child row `source='subagent'`:\n`_ensure_db_session` computes `source = _session_source_for_agent(self.platform)`\n(run_agent.py), `_session_source_for_agent` falls back to the platform when\n`HERMES_SESSION_SOURCE` is unset (which `hermes chat` leaves unset), and the platform is\n`\"subagent\"`. Hermes says so itself \u2014 `tools/session_search_tool.py` carries\n`_HIDDEN_SESSION_SOURCES = (\"subagent\", \"tool\")` with the comment that delegate subagent\nruns are tagged `subagent`. Until an hour before this assessment irrlicht's\n`Watcher.scanSessions` selected `... WHERE source IN ('cli','tui')`, which dropped the row\nbefore anything else could run \u2014 that is precisely what commit 6ad7c28a (\"fix(hermes):\nsurface delegated subagent sessions, dropped by the source filter\") repaired: both\n`Watcher.scanSessions` and `querySessionMetrics` now allow `'subagent'`, and\n`watcher_test.go` locks it (\"a delegated subagent session must surface \u2014 it is a real\ncoding session\", asserting `ParentSessionID == \"parent1\"`). `Watcher.reconcile` already\ncopied the row's `parent_session_id` onto `agent.Event.ParentSessionID`, so with the row\nscanned the link reaches the detector and `parent_linked` fires.\n\n**Both sessions bind the same PID.** The child row carries NO cwd of its own:\n`_launch_cwd_for_session` (run_agent.py) returns None unless `source == \"cli\"`. The\nwatcher covers exactly that case \u2014 `anyRowNeedsCWD` triggers the once-per-scan\n`liveCWD()` fallback, which resolves the single live hermes process's cwd, i.e. the\nparent's. `DiscoverPID` (pid.go, `DiscoverPIDByCWDAndCmdLineExcludingArgv`) then resolves\nthat same cwd to the same hermes PID for both sessions. `assignPIDLocked`\n(core/application/services/pid_manager.go) explicitly exempts subagents from its\nsame-PID staleness rule (`if state.ParentSessionID != \"\" { return state, nil }`, and the\nstale scan skips rows with a ParentSessionID), so the child claiming the parent's PID does\nNOT delete the parent \u2014 the failure mode that would otherwise wreck this cell.\n\n**The reap is process-exit-driven and issues no SetState.** When the PID vanishes the\nProcessWatcher fires `HandleProcessExit` per watched session: it records\n`KindProcessExited` and calls `deleteWithChildren`, which is a pure\n`repo.Delete` + `broadcast(PushTypeDeleted)` per session \u2014 no `SetState` anywhere on the\npath, so no `working`/`waiting` transition can fire for the orphan. That is the #321\ninvariant, and it is transport-agnostic. Two nearby exclusions do NOT bite here, and both\nwere checked rather than assumed: `cleanupChildren` skips DB-backed (`?session=`) children,\nbut it is the parent-finished-turn path, not the process-exit path; and `reapStaleChild`\nexempts `?session=` children from the idle sweep, which only means the orphan is not reaped\nEARLY by staleness \u2014 the process-exit path still reaps it.\n\n**Precedent for the exact ordering.** opencode is the other ProcessOwnedStore adapter with\nan in-process child, and its 3-4 recording (`.../3-4_subagent-orphan-cleanup/recordings/\n2026-05-27-05-32-05_irrlichd-0.4.7+76ca42f/events.jsonl`) shows the shape this spec asserts:\nchild `transcript_new` -> `parent_linked` -> child `pid_discovered` -> child\n`process_exited` -> parent `process_exited`, with no state_transition after the kill.\n\nNo spec-required observable is mis-handled, so this is `full`, not `bug` \u2014 but see the\ncaveats: the whole subagent limb is source-derived, never yet observed live on hermes.\n\n### driver_capability: gap:sigkill\n\n`replaydata/agents/hermes/driver-interactive.sh` declares\n`DRIVE_ELICITS=\"send slash sleep wait_turn\"`, and its dispatch arm is\n`sigkill)  not_implemented sigkill || break ;;   # TODO(hermes): kill -9 the active slot's PID`\n\u2014 present as a stub so the GRAMMAR lint passes, unimplemented so the SEMANTIC lint\n(recipe-lint reading DRIVE_ELICITS) rejects the recipe before recording. `not_implemented`\nsets `EXIT_REASON=\"nonzero(3)\"` and aborts the script. So a recipe cannot orphan an\nin-flight child on hermes today.\n\nNote this is a case where `driver_step_types_from_file` alone is misleading: it reports\n`sigkill` as a handled type for BOTH hermes and claudecode, because hermes' template keeps\nevery standard arm present. DRIVE_ELICITS is the honest signal.\n\n**The exact missing primitive.** A `sigkill` step that `kill -9`s the PID of the active\nslot's `hermes chat` process (the tmux-owned one whose cwd is the run cwd \u2014 the same PID\n`DiscoverPID` binds). The claudecode reference driver's `step_sigkill` resolves the\nsession's PID and `kill -9`s it; the hermes port needs the same shape with a\nhermes-appropriate PID resolution (`pgrep -f` on the tmux-launched `hermes` command line in\n`$RUN_CWD`, or the tmux pane's pid). This is tooling work: `record` ports the step, then\ndrives. It is NOT a daemon or agent limit.\n\n### Confidence\n\n0.72. The daemon chain is read symbol-by-symbol from the tree as committed, and the vendor\nside is read from hermes v0.19.0 source with the vendor's own `_HIDDEN_SESSION_SOURCES`\ncomment corroborating the `source='subagent'` tag. It is not higher because NOTHING about a\nhermes delegation has been observed live: the 25-session store at\n`/Users/ingo/hermes-local/.hermes/state.db` contains ZERO rows with a non-empty\n`parent_session_id` (verified by direct SQL against a read-only handle), so the child row's\nexistence, its source tag, its NULL cwd, and whether PID discovery wins the race before the\nkill are all inferred. Per the observation-vs-emission rule this `full` is PROVISIONAL and\n`record` is what settles it.",
+      "caveats": [
+        "PROVISIONAL on emission, not on parsing. No hermes delegate_task run has ever been observed: `SELECT ... FROM sessions WHERE parent_session_id IS NOT NULL AND parent_session_id != ''` against /Users/ingo/hermes-local/.hermes/state.db (25 sessions, sources cli=22 tui=3) returns ZERO rows. The child row's existence, its source='subagent' tag and its NULL cwd are read from hermes v0.19.0 source, not seen. A recording settles all three.",
+        "The child row carries NO cwd of its own (_launch_cwd_for_session returns None for source != 'cli'), so the child's PID binding depends on the watcher's live-process fallback (defaultLiveCWD via LiveCWDsByCmdline), which returns \"\" unless EXACTLY ONE non-service hermes process is live. If it does not bind, the orphan is STILL reaped \u2014 via the parent's deleteWithChildren as a `transcript_removed` with reason \"parent deleted\" instead of its own `process_exited` \u2014 and the #321 invariant still holds (deleteSession issues no SetState). If record sees that shape, re-anchor the child_cleanup phase's `kind` to transcript_removed rather than weakening the invariant.",
+        "Sibling drift worth knowing: replaydata/agents/hermes/scenarios/3-2_background-subagent was assessed daemon=bug at 22:35 on the pre-fix `source IN ('cli','tui')` filter, and commit 6ad7c28a landed that exact fix at 22:36:57 \u2014 one minute later. THIS cell is assessed against the post-fix tree (watcher.go and metrics.go both read source IN ('cli','tui','subagent'), locked by watcher_test.go). 3-2 should be re-assessed; its known_failing spec may now pass.",
+        "The scenario's prose process says \"daemon restarts\"; the shape claudecode and opencode actually record (and this recipe follows) is a mid-flight SIGKILL of the parent process, which exercises the same reap. UNVERIFIED for hermes: a genuine daemon RESTART would differ, because hermes' store is a live discovery source \u2014 both rows are still inside maxAge with ended_at NULL, so the post-restart scan would re-discover them and the outcome would depend on CleanupZombies' DB-backed-orphan branch (isStartupZombie: PID==0, DB-backed path, no live process owning the CWD) instead of on HandleProcessExit. Not what this recipe records.",
+        "Spec-authoring gotcha found while writing this cell, applies repo-wide: the invariant DSL in tools/onboarding-factory/internal/validate/expected.go parses ONLY the exact form `no state_transition to <state>` (invariantNoStateRE is anchored at both ends). The opencode 3-4 sibling's invariants (\"no state_transition to working for the orphaned child after cleanup\") do NOT match and are silently recorded as \"skipped (unknown invariant DSL form)\" \u2014 i.e. that recording's #321 assertion never ran. This spec uses the parsed form so the invariant actually executes; it is session-scoped to the phase's matched session_id, which is the orphaned child."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/delegate_tool.py",
+          "note": "_build_child_agent constructs the delegate child as a full AIAgent with platform=\"subagent\", session_db=<the parent's SessionDB> and parent_session_id=<parent.session_id> (the three kwargs are adjacent, around :1385-1391). This is what makes a delegate child a real, separately-persisted session rather than a message in the parent's."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/run_agent.py",
+          "note": "AIAgent._ensure_db_session INSERTs the child's own sessions row with source = _session_source_for_agent(self.platform) and cwd = _launch_cwd_for_session(source). _session_source_for_agent falls back to the platform when HERMES_SESSION_SOURCE is unset -> 'subagent'; _launch_cwd_for_session returns None unless source == 'cli' -> the child row has NO cwd. Both facts drive this assessment."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/session_search_tool.py",
+          "note": "_HIDDEN_SESSION_SOURCES = (\"subagent\", \"tool\") \u2014 hermes' own code naming 'subagent' as a sessions.source value. Vendor corroboration of the tag the adapter's allow-list must include."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/daemon_pool.py + tools/async_delegation.py",
+          "note": "DaemonThreadPoolExecutor spawns daemon THREADS; async_delegation._get_executor submits every child onto that module-level pool. Subagents therefore share the parent's OS process \u2014 one kill -9 orphans the child, and parent+child bind the same PID. Structurally identical to opencode's in-process `task` child."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "Watcher.scanSessions selects source IN ('cli','tui','subagent') (post-6ad7c28a), so the delegate child row is scanned; Watcher.reconcile copies the row's parent_session_id onto agent.Event.ParentSessionID; anyRowNeedsCWD + liveCWD supply the child's missing cwd from the live hermes process once per scan."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher_test.go",
+          "note": "The test locking the fix: inserts parent1 (source='cli') + child1 (source='subagent', parent='parent1') and asserts the child surfaces with ParentSessionID == \"parent1\" \u2014 \"a delegated subagent session must surface \u2014 it is a real coding session\"."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/pid.go",
+          "note": "DiscoverPID = processlifecycle.DiscoverPIDByCWDAndCmdLineExcludingArgv \u2014 cwd-matched, so the child (whose cwd comes from the live-process fallback = the parent's) resolves to the SAME hermes PID as the parent."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "assignPIDLocked exempts subagents from the same-PID staleness rule (returns no stale set when ParentSessionID != \"\", and skips rows with a ParentSessionID when scanning), so the child claiming the parent's PID does not delete the parent. HandleProcessExit records KindProcessExited then calls deleteWithChildren, which is repo.Delete + broadcast per session with NO SetState \u2014 the #321 invariant. cleanupChildren's `?session=` exclusion is the parent-finished path, not this one; reapStaleChild's `?session=` exemption only prevents an EARLY idle reap."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-27-05-32-05_irrlichd-0.4.7+76ca42f/events.jsonl",
+          "note": "Reference ordering for the identical in-process-child ProcessOwnedStore shape, verified 6/6: child transcript_new -> parent_linked -> child pid_discovered -> child process_exited -> parent process_exited, with no state_transition after the kill. This is what the hermes spec below mirrors."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\"; the dispatch carries `sigkill) not_implemented sigkill || break ;;  # TODO(hermes): kill -9 the active slot's PID`, and not_implemented sets EXIT_REASON=nonzero(3) and aborts. The stubbed-but-present arm is why driver_step_types_from_file reports sigkill as handled \u2014 DRIVE_ELICITS is the honest signal. This is the gap."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/scenarios/3-1_foreground-subagent/metadata.json",
+          "note": "Establishes for this column that delegate_task exists, ships in the default CLI toolset, and that a TOP-LEVEL delegation is background by construction (schema's `background` documented DEPRECATED/IGNORED; _model_background_value forces it) \u2014 which is why 3.1 is frozen at agent=no and why this cell gets a long parent+live-child coexistence window."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/expected.go",
+          "note": "invariantNoStateRE = ^no\\\\s+state_transition\\\\s+to\\\\s+([a-z]+)$ \u2014 anchored, so only the bare form is parsed; unknown forms are recorded as \"skipped (unknown invariant DSL form)\" and never run. checkInvariant scopes the scan to ev.SessionID == matched.SessionID, so anchoring the invariant on the child's cleanup phase asserts it for the orphan specifically."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes v0.19.0+ on PATH with a provider configured in <HERMES_HOME>/config.yaml and credentials, so the parent turn and the delegated child both run without an auth prompt",
+        "HERMES_HOME exported to the SAME recording home for both the driver and the recording daemon, so the daemon polls the store the run actually writes",
+        "sqlite3 on PATH \u2014 the driver resolves the session id and turn completion straight out of state.db",
+        "no OTHER interactive hermes session live during the run: neither a source='cli' parent row nor a source='subagent' child row carries a cwd, so the adapter's live-process CWD fallback needs EXACTLY ONE non-service hermes process to bind the project and discover the PID for both sessions",
+        "irrlichd recording with the hermes store watcher enabled and the 'store' permission granted (IRRLICHT_PERMISSION_MODE=grant-all on a fresh home)",
+        "BLOCKING: the driver's `sigkill` step must be ported first \u2014 it is a not_implemented stub today (DRIVE_ELICITS=\"send slash sleep wait_turn\"). It must kill -9 the tmux-owned `hermes chat` process whose cwd is $RUN_CWD \u2014 the same PID DiscoverPID binds \u2014 so the child is left ORPHANED rather than reaped by its own clean exit"
+      ],
+      "setup": [
+        "The driver launches `hermes chat` under tmux in a fresh per-run cwd and polls the pane for 'Type your message or /help' before typing; the parent's sessions row is INSERTed on the first user message, ~2s after the send, so the real session id does not exist at launch.",
+        "The prompt asks for ONE delegate_task subagent whose goal is a long shell sleep. Hermes forces a top-level delegation to run in the BACKGROUND, so the tool returns a handle immediately and the child keeps running on the daemon thread pool \u2014 that is the parent+live-child window the SIGKILL has to land in.",
+        "The child is a THREAD in the same process (DaemonThreadPoolExecutor), so it writes its own sessions row (source='subagent', parent_session_id = the parent's id, cwd NULL) into the same state.db and binds the SAME PID as the parent via the watcher's live-process cwd fallback. Both sessions are therefore PID-bound to the one hermes process the sigkill step kills.",
+        "Cleanup is process-exit-driven, not parser-driven: the ProcessWatcher sees the PID vanish and HandleProcessExit fires per watched session, recording process_exited and then deleting via deleteWithChildren \u2014 a pure repo.Delete + broadcast with no SetState, so no state_transition can fire for the orphaned child (the #321 invariant).",
+        "Sleep 75s before the kill: the parent's own dispatch reply lands within seconds, but the child's sessions row is only INSERTed on its first flush and the watcher polls the store every 2s, so 75s comfortably covers child birth + parent_linked + child pid_discovered while the child is still inside its `sleep 90`. The trailing 25s sleep gives the liveness sweep time to reap both and lets the invariant window close."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use the delegate_task tool to launch exactly one subagent. Its goal: run the shell command `sleep 90`, then reply with the single word done. Dispatch it and then just tell me you dispatched it \u2014 do not wait for it."
+        },
+        {
+          "type": "sleep",
+          "seconds": 75
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 25
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the transient proc-<PID> presession, then the REAL parent session (id shaped YYYYMMDD_HHMMSS_<hex6>) born in ready once the sessions row is INSERTed",
+        "events.jsonl contains a state_transition to working on the parent when the prompt is sent",
+        "events.jsonl contains a transcript_new for a NEW session born after the parent turn started \u2014 the delegate child's sessions row (source='subagent', parent_session_id set), which only surfaces post-6ad7c28a",
+        "events.jsonl contains a parent_linked whose session_id is the CHILD's and whose parent_session_id is the parent's \u2014 hermes' subagent-spawn proof (no child transcript file exists on disk; the store is the only trace)",
+        "events.jsonl contains a pid_discovered for the child carrying the SAME pid as the parent's (the child is a thread in the parent's process)",
+        "events.jsonl contains a process_exited for the orphaned CHILD after the kill (if the child never bound a PID, expect a transcript_removed with reason 'parent deleted' instead \u2014 re-anchor the spec phase, do not weaken the invariant)",
+        "events.jsonl contains a process_exited for the PARENT after the kill",
+        "no state_transition to working fires for the orphaned child after its cleanup event (#321 regression invariant \u2014 the reap issues no SetState)",
+        "no state_transition to waiting fires for the orphaned child after its cleanup event",
+        "no clean child turn end precedes the reap \u2014 the kill, not a graceful exit, ended the child (it was still inside `sleep 90`)"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}

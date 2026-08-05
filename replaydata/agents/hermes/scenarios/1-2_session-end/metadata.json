@@ -1,0 +1,165 @@
+{
+  "scenario_id": "session-end",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:exit_clean",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+fe95020",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (Ctrl-D closes the session and writes end_reason='cli_close'; SIGKILL leaves ended_at NULL)\ndaemon_capability: full; driver_capability: gap:exit_clean (hermes driver-interactive.sh stubs exit_clean/sigkill/restart)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-end",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:exit_clean",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: gap:exit_clean\n\n## Agent (yes)\n\nAll three session-end variants exist on `hermes chat` as shipped in v0.19.0.\n\n**Variant 1 — clean exit (Ctrl-D).** `cli.py:16075` catches `EOFError` out of the prompt_toolkit app loop and falls into a `finally` block that runs `self._session_db.end_session(self.agent.session_id, \"cli_close\")` (`cli.py:16145`), then the process exits. The store confirms this happens in practice: `SELECT source, end_reason, ended_at IS NULL, COUNT(*) FROM sessions GROUP BY 1,2,3` over the maintainer's real store returns `cli|cli_close|0|4` and `cli|agent_close|0|17` — i.e. every cleanly-terminated CLI session carries a non-NULL `ended_at`. `_discard_session_if_empty` (same block) would delete a session that quit with no content, so the recipe always sends a prompt before exiting.\n\n**Variants 2/3 — SIGKILL idle / SIGKILL mid-turn.** `kill -9` on a Python process runs no `finally`, so `end_session` never fires and the row keeps `ended_at NULL`. That is not inference: session `20260726_195104_387638` (source='cli', message_count=14) sits in the real store with `ended_at`, `end_reason` both NULL and its newest message is `assistant/finish_reason='tool_calls'` — a session whose process died mid-turn. That row is the variant-3 shape captured in the wild.\n\n## Daemon (full)\n\nEvery user-observable assertion the scenario makes maps onto committed transport in this adapter plus the adapter-generic process-exit sweep.\n\n- **`ready → working → ready`.** `finish_reason` is an explicit turn boundary: `parser.go:93` maps `role='assistant' AND finish_reason='stop'` to `turn_done`, and anything else on an assistant/user row to `assistant_message`/`user_message`. No idle-flush heuristic is involved, so the arc is derived, not guessed.\n- **Clean exit settles to ready before the process goes.** `watcher.go:409-418` computes `justEnded := r.ended && !prevEnded` from `ended_at IS NOT NULL` and emits a terminal activity event for it, independently of message growth — so the `cli_close` write itself produces the final `ready` even if it adds no message.\n- **`process_exited` fires.** Hermes declares `agent.CommandPattern{Regex: processCmdRegex}` (`agent.go:33`), which `wiring.go:104-105` turns into a `pgrep -f` scanner; a bound PID that returns `ESRCH` is reaped through `PIDManager.reapDeadOrInfraPID` → `HandleProcessExit`, which records `lifecycle.KindProcessExited` and then `deleteWithChildren` (`pid_manager.go:977-979`, `326-343`). This path is adapter-generic and is what settles variants 2 and 3, where the store can never settle them itself (no `ended_at`).\n- **`State does not stick in working`.** Same path: `HandleProcessExit` deletes the session outright rather than leaving it `working`, and the `readyTTL` branch (`pid_manager.go:1022-1035`) is the backstop for a session whose PID never bound.\n- **Session stays gone.** The watcher's per-session cursor keeps `emitted=true` for as long as the row is inside the `maxAge` window (`watcher.go:384-388`), and `gcExpiredCursors` only drops a cursor once the row falls out of that window — which `started_at` being immutable makes one-way (`watcher.go:341-353`). So a session the daemon deleted is never re-born by a later scan.\n\nPID binding is the one link with a hermes-specific shape and it holds: `sessions.cwd` is empty for `source='cli'` rows (verified — every recent CLI row in the real store has an empty `cwd`), so the watcher borrows the live process CWD via `defaultLiveCWD` (`watcher.go:115-124`), and `DiscoverPID` then matches on cwd + command line excluding service argv (`pid.go:20-23`). The recipe keeps the variants strictly sequential, which is what `defaultLiveCWD`'s exactly-one-live-process rule requires.\n\n## Driver (gap:exit_clean)\n\n`replaydata/agents/hermes/driver-interactive.sh` is a fresh scaffold: `DRIVE_ELICITS=\"send slash sleep wait_turn\"` (line 113), and `exit_clean`, `sigkill`, `restart` are all `not_implemented` stubs that fail loudly (lines 303-306). The scenario cannot be recorded with any subset of the elicited steps — even the variant-1-only scoping opencode used is unavailable here, because the hermes driver launches the interactive `hermes chat` REPL (`launch_repl`, SEAM 1) rather than a self-terminating headless run, so there is no clean exit without `exit_clean`. This is tooling work, not an observability limit: the cell keeps a full recipe and spec, and `record` ports the three seams (Ctrl-D, `kill -9` on the active slot's PID, alloc-a-new-slot restart) before it drives.",
+      "caveats": [
+        "PROVISIONAL on emission, not on parsing: the `working` leg of each arc has never been seen in a live hermes recording. The store row is INSERTed on the first user message and the watcher polls at 2s (defaultPollInterval, watcher.go:30) with a 500ms debounce, so a turn that completes inside one poll window would be first observed already carrying finish_reason='stop' and would collapse ready→working→ready into a single ready. The recipe therefore uses ~150-word generation prompts rather than the 'Reply with exactly the word: ok' the claudecode/codex siblings use, and variant 3 sleeps 8s (not 2s) before the kill. If `record` still sees the collapse, the fix is a longer prompt, not a pillar downgrade — the daemon parses the boundary correctly either way.",
+        "Two further driver primitives beyond the named gap are stubs and must be ported in the same pass: `sigkill` (kill -9 the active slot's hermes process — the tmux pane's python child, matched by processCmdPattern and filtered by isServiceArgv, since `hermes` is a Python console script with no per-session argv marker) and `restart` (save_active + alloc_slot with a fresh cwd + launch).",
+        "Variants must never overlap. `defaultLiveCWD` (watcher.go:115-124) returns \"\" when more than one live hermes session process exists, and a `source='cli'` row has no stored cwd of its own — two concurrent hermes processes would leave both sessions unbound to a project and unbound to a PID, which would silently defeat the process_exited assertions. The recipe's kill→sleep→restart ordering is load-bearing, not cosmetic.",
+        "Variant 3's post-kill sweep-to-ready may not land inside the recording's 8s tail (the same caveat claudecode and codex carry). The spec accommodates this by anchoring v3_exit to v3_turn_start rather than requiring an explicit post-crash ready phase.",
+        "`model` is deliberately left unpinned in the observations block. The store on this machine reports `gpt-5.6-luna`, but the recording runs under an isolated HERMES_HOME with its own config.yaml, so the model is whatever that home configures. `cost_nonzero` is also not asserted: `gpt-5.6-luna` is absent from core/pkg/capacity/aliases.go, and EstimateCostUSD returns 0 for a model with no pricing entry (capacity.go:157-162) — hermes' own `estimated_cost_usd` is 0.0 with billing_mode='subscription_included' and is deliberately not read (metrics.go:155-162). Tokens come straight from the sessions-row aggregates and are asserted non-zero."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/agent.go",
+          "note": "Source is agent.ProcessOwnedStore over $HERMES_HOME/state.db with a CommandPattern process matcher — the matcher is what makes process_exited reachable for this adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go",
+          "note": "reconcile() lines 409-418 emit a terminal activity on justEnded (ended_at becoming non-NULL) — the clean-exit settle. Lines 341-353 + 384-388 are why a deleted session is never re-born. Line 30 is the 2s poll that bounds turn-boundary resolution."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go",
+          "note": "Lines 81-95: finish_reason='stop' → turn_done, otherwise assistant_message — the explicit turn boundary the ready→working→ready arc is derived from."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "reapDeadOrInfraPID (977-979) → HandleProcessExit (326-343) records KindProcessExited and deletes; sweepStaleSnapshot (1022-1035) is the readyTTL backstop. Adapter-generic, so it is what settles the two SIGKILL variants the store cannot."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go",
+          "note": "Lines 90-91 wire hermes.New(maxSessionAge); lines 104-105 turn the CommandPattern into the scanner's pgrep -f match, so hermes mints proc-<PID> pre-sessions like codex/gemini-cli — hence the two-phase birth in the spec."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py",
+          "note": "Line 16075 catches EOFError (Ctrl-D) out of app.run(); the finally block reaches line 16145 self._session_db.end_session(self.agent.session_id, \"cli_close\") before the process exits — the variant-1 clean-exit path."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Live store read read-only: end_reason distribution is cli|cli_close|4, cli|agent_close|17, tui|ws_orphan_reap|3, plus exactly one row with ended_at NULL — session 20260726_195104_387638 (source=cli, 14 messages, newest message assistant/finish_reason='tool_calls'), a process that died mid-turn without writing ended_at. Direct evidence for variants 1 and 3."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash sleep wait_turn\" (line 113); exit_clean/sigkill/restart are not_implemented stubs (lines 303-306) — the driver gap."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/capacity.go",
+          "note": "EstimateCostUSD lines 157-162 return 0 when the model has no pricing entry; gpt-5.6-luna is absent from aliases.go — why cost_nonzero is not asserted."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "hermes >=0.19.0 on PATH and authenticated (an inference provider configured in <HERMES_HOME>/config.yaml with credentials in <HERMES_HOME>/.env or auth.json)",
+        "HERMES_HOME exported to the recording home so the run writes an isolated state.db",
+        "sqlite3 on PATH — the driver reads session id and turn completion straight out of the store",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other hermes session or gateway process is running: defaultLiveCWD returns \"\" when more than one live hermes session process exists, which would leave the recorded sessions unbound"
+      ],
+      "setup": [
+        "Driver creates 3 fresh cwds under <staging>/cwd, cwd-2, cwd-3 (one per variant). Hermes has no per-directory trust dialog, so this is not required the way it is for claudecode/codex — it keeps DiscoverPID's cwd match unambiguous across the variant chain.",
+        "Hermes assigns its own session id (<YYYYMMDD>_<HHMMSS>_<hex>) when it INSERTs the sessions row on the first user message — there is no preferred-UUID handoff, and the id does not exist at launch time."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Write exactly 150 words about the history of coffee. Do not use any tools."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Write exactly 150 words about the history of tea. Do not use any tools."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Write a 600 word essay about the history of the printing press. Do not use any tools."
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains exactly 3 distinct hermes session_ids (one per variant) plus their proc-<PID> pre-session rows",
+        "events.jsonl contains exactly 3 process_exited events, one per hermes session_id",
+        "variant 1: the first session has a state_transition to ready right after its turn completes, immediately preceding its process_exited (Ctrl-D; the store row also carries end_reason='cli_close')",
+        "variant 2: the second session ends in ready (idle) when sigkill fires; no state_transition to working or waiting appears after its final ready",
+        "variant 3: the third session is in working when sigkill fires; the sweep-promotes-to-ready transition may or may not land before process_exited inside the 8 s tail — accept either shape",
+        "each variant shows a ready → working → ready arc; a variant that shows only ready means the turn completed inside one 2 s watcher poll — lengthen the prompt and re-record rather than weakening the spec",
+        "the state band in the viewer shows three colored arcs separated by grey gaps where no session is alive between variants",
+        "no tool_call events appear on any of the three sessions (the scenario asserts tool calls <= 0)"
+      ],
+      "settings": {},
+      "timeout_seconds": 420,
+      "scope_note": "All three variants are recorded back-to-back and all three need driver seams the hermes scaffold does not yet elicit: exit_clean (Ctrl-D into the prompt_toolkit app loop, which reaches cli.py's finally → end_session('cli_close')), sigkill (kill -9 the active slot's hermes process — the tmux pane's python child, resolved via processCmdPattern filtered by isServiceArgv, since hermes is a Python console script with no per-session argv marker), and restart (save_active + alloc_slot with a fresh cwd + launch). Timings differ from the claudecode/codex siblings on purpose: hermes' REPL boot is slow (wait_for_prompt polls up to 60 s for the banner while it loads 35 tools + 68 skills), its store row is INSERTed only on the first user message, and its watcher polls at 2 s — so prompts are sized to keep the turn alive across at least two polls, the post-exit_clean sleep is 10 s (hermes prints 'Shutting down… (finalizing session)' and tears down MCP/browser/terminal before exiting), and variant 3 waits 8 s before the kill so `working` is observed first. timeout_seconds is 420 to cover three slow REPL boots plus three ~150-600 word generations."
+    }
+  }
+}

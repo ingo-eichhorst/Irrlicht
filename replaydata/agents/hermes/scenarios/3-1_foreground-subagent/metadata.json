@@ -1,0 +1,92 @@
+{
+  "scenario_id": "foreground-subagent",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.5.9+555a143.dirty",
+    "confidence": 0.85,
+    "notes": "agent_supports: no (hermes HAS subagents — delegate_task — but a top-level delegation is unconditionally BACKGROUND: run_agent._dispatch_delegate_task passes background=(not _is_subagent), the schema calls the background param 'DEPRECATED / IGNORED ... you cannot opt in or out', and a vendor test locks it; the parent's turn closes on the returned handle, so it settles to ready while the child runs — the negation of this scenario's 'parent stays working until the last child ends'. Hermes' subagent story belongs to 3.2 background-subagent.)\ndaemon_capability: n/a; driver_capability: n/a"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "foreground-subagent",
+      "agent": "hermes",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a; driver_capability: n/a\n\n## Reasoning\n\n### agent_supports: no\n\nHermes DOES have a subagent primitive, and it does create a real child SESSION — so the `no` here is narrow and specific to the FOREGROUND shape this scenario asserts, not to subagents as such.\n\nThe primitive is **`delegate_task`** (`tools/delegate_tool.py`: `DELEGATE_TASK_SCHEMA` at :3559, `registry.register(... toolset=\"delegation\")` at :3681). It ships in the default CLI tool list (`toolsets.py:65`, under \"# Code execution + delegation\"), so it is ordinary traffic rather than opt-in. `_build_child_agent` constructs the child as a full `AIAgent` with `platform=\"subagent\"`, `session_db=<the parent's SessionDB>` and `parent_session_id=<parent.session_id>` (`delegate_tool.py:1385,1390,1391`), and persistence is NOT disabled for it (the only `_persist_disabled = True` writer in the tree is `agent/background_review.py:772`), so the child writes its own `sessions` row into the same `$HERMES_HOME/state.db` with `parent_session_id` populated.\n\nWhat hermes does not have is a **foreground** delegation at the top level. A delegation issued by the top-level model is unconditionally background:\n\n- `run_agent.AIAgent._dispatch_delegate_task` (`run_agent.py:6585-6615`) — the single live model dispatch path (`agent/agent_runtime_helpers.py:2634` is its call site) — passes `background=(not _is_subagent)` where `_is_subagent = self._delegate_depth > 0`. At the top level `_delegate_depth` is 0, so `background=True`, always. Its own comment: \"Delegations from the top-level MODEL always run in the background — the model does not get to choose ... The schema-level `background` param is intentionally ignored here.\"\n- The schema the model sees says the same (`delegate_tool.py:3620-3634`): \"DEPRECATED / IGNORED. Top-level single and batch delegations run in the background automatically — you do not need to (and cannot) opt in or out ... Setting this has no effect.\"\n- The registry fallback path agrees: `_model_background_value` (`delegate_tool.py:3653-3663`) returns `not is_subagent`.\n- A vendor test locks it: `test_run_agent_dispatch_forces_background` (`tests/tools/test_async_delegation.py:795-823`) asserts `background is True` for a top-level single AND batch dispatch, and `False` only when `_delegate_depth = 1`.\n\nBackground means the tool call RETURNS IMMEDIATELY with a handle and the parent's turn is free to close. `tools/async_delegation.py` (module doc, :1-35): the parent \"dispatches a subagent that runs on a module-level daemon executor and returns a handle immediately, so the user and the model can keep working while the child runs\"; the completion is pushed onto `process_registry.completion_queue` and \"completions surface as a NEW turn when the agent is idle, never spliced between a tool result and an assistant message.\" The CLI tells the user exactly that (`cli.py:11338-11351`, `_on_tool_complete`): \"↩ Background task running — I'll resume when it finishes. Keep chatting.\"\n\nThere is no way for the model to hold its turn open on the child either:\n\n- No wait/poll tool exists. `list_async_delegations()` (`async_delegation.py:964`) has exactly one consumer — the interactive `/agents` slash command (`hermes_cli/cli_commands_mixin.py:266,285-286`) — and is not registered with the tool registry, so the model cannot call it.\n- `execute_code` is not an escape hatch: its sandbox dispatches tool calls back through `model_tools.handle_function_call` (`tools/code_execution_tool.py:563-578`), i.e. the same registry path whose `background` resolver forces `True` at depth 0.\n- No config knob flips it. The whole `delegation:` block (`hermes_cli/config.py:2376-2420` plus the knobs listed in hermes' own `AGENTS.md:1007-1010`) is `model` / `provider` / `base_url` / `api_key` / `api_mode` / `inherit_mcp_toolsets` / `max_iterations` / `max_concurrent_children` / `max_spawn_depth` / `orchestrator_enabled` / `child_timeout_seconds` / `subagent_auto_approve` — nothing sync-vs-async.\n\n**Consequence for this scenario's acceptance criteria.** The parent's turn closes as soon as the handle returns: the dispatching assistant row is followed by an `assistant` row with `finish_reason='stop'`, which is precisely hermes' explicit turn-done marker (`core/adapters/inbound/agents/hermes/parser.go:108`, `watcher.go:426`). So the parent settles to `ready` **while the child is still running**, and only returns to `working` when the completion queue forges the result turn. The user-observable arc is `ready → working → ready → working → ready` with the child alive across the middle `ready` — the literal negation of \"Parent stays `working` until child ends\" and \"Parent: `working → ready` only after the last child ends\", which are this scenario's load-bearing assertions and the only thing distinguishing 3.1 from 3.2.\n\nThe one synchronous delegation hermes has is one level down: an `orchestrator` subagent blocking on its own workers (`run_agent.py:6604-6607`: \"a delegation from an ORCHESTRATOR SUBAGENT (depth > 0) stays synchronous: the orchestrator needs its workers' results within its own turn\"). That is a grandchild shape, reachable only *through* a background top-level delegation, and is not the top-level foreground subagent the scenario describes.\n\nHermes' subagent story therefore belongs to **3.2 background-subagent**, and this cell is frozen at the agent layer.\n\n### daemon_capability: n/a — driver_capability: n/a\n\nPer the routing table, `agent=no` ⇒ both `n/a`: there is no top-level foreground-subagent behavior on this agent for the daemon to observe or the driver to elicit. No recipe, no spec phases.\n\n## Carried forward to the 3.2 (background-subagent) assessment\n\nFound while judging this cell, recorded here so 3.2 starts from it rather than re-deriving it — it is NOT what freezes 3.1, and it is not a verdict on 3.2:\n\n**Delegated child sessions are invisible to the hermes watcher, in every scenario.** `_ensure_db_session` stamps the row's `source` from `_session_source_for_agent(self.platform)` (`run_agent.py:613`), which returns the platform verbatim when no `HERMES_SESSION_SOURCE` env var or session ContextVar is set (`run_agent.py:92-102`) — and the `hermes chat` CLI path sets neither (the only `set_session_vars` callers in the tree are `acp_adapter/server.py:1771`, `tui_gateway/server.py:2697`, `gateway/run.py:17427` and `cron/scheduler.py:3066`; `cli.py` is not among them). With `platform=\"subagent\"` (`delegate_tool.py:1385`), every delegated child row lands as `source='subagent'` — while the watcher's discovery query filters `WHERE source IN ('cli','tui')` (`core/adapters/inbound/agents/hermes/watcher.go:284`). The child row is therefore dropped **before** the `parent_session_id` that same query already SELECTs (`watcher.go:281`) and projects onto `agent.Event.ParentSessionID` (`watcher.go:378`) can ever apply. That existing parent-link plumbing serves a different producer: compression / `/branch` forks, which keep `source='cli'` and set `parent_session_id` to the previous segment (`cli.py:7759,7765`).\n\nEvidence that no delegation child has ever been observed on this machine: the live store carries 25 sessions with `source` ∈ {`cli`: 22, `tui`: 3}, `SUM(parent_session_id IS NOT NULL) = 0`, and `SELECT COUNT(*) FROM messages WHERE tool_calls LIKE '%delegate_task%'` → 0.\n\nShape-wise this reads as `bug`, not `incapable`: the trace exists in the exact table the watcher already reads, and the fix is widening one filter to admit `'subagent'` without admitting the messaging-gateway sources the store permission text promises to skip. But that verdict is 3.2's to make, on a recording — asserting it here would be a doc-derived daemon call on a cell that is frozen for an unrelated reason.",
+      "caveats": [
+        "Vendor doc lag, called out because it contradicts this verdict head-on: hermes' own AGENTS.md:985-989 says \"By default the parent waits for the child's summary before continuing its own loop. With background=true, Hermes returns a delegation id immediately.\" That describes the historical DIRECT PYTHON caller default (delegate_tool.py:3645-3652 says as much). The model-facing path is the opposite and is locked by tests/tools/test_async_delegation.py:795-823, and the schema shown to the model calls `background` \"DEPRECATED / IGNORED\". Code is authoritative; the doc is about a caller the CLI never is.",
+        "This verdict is source-derived, not live-run (assess spends no agent tokens). The 25-session live store at /Users/ingo/hermes-local/.hermes/state.db contains ZERO delegate_task calls, so the persisted shape of a delegation — the child row's source, whether the child's ended_at is set, whether the completion re-entry lands as a `user` row — is inferred from source rather than observed. A 3.2 recording settles all of it.",
+        "Under the TUI (not the recording surface) the child's `source` may not be 'subagent' at all: tui_gateway/server.py:2665-2701 calls set_session_vars(source=<resolved TUI source>), async_delegation.py:673,878 submit the child worker via propagate_context_to_thread, and tools/thread_context.py:64-79 copies the parent's ContextVars into that thread — so `_session_source_for_agent` would read the TUI's source from the contextvar and the child row could pass the watcher's IN ('cli','tui') filter. UNVERIFIED: the exact string `_resolve_session_platform()` yields was not read. Irrelevant to this cell and to the recording path (`hermes chat` = source='cli', no session vars set), but it means a 3.2 assessment must judge the CLI and TUI surfaces separately.",
+        "A `role=\"orchestrator\"` delegation with delegation.max_spawn_depth >= 2 (default 2, orchestrator_enabled default true) does produce a genuinely synchronous parent-blocks-on-child relationship — but only at depth >= 1, and both the orchestrator and its leaves are created with platform=\"subagent\". It is not the top-level foreground shape 3.1 asserts and could not be driven as one, since reaching it requires a background top-level delegation first."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/run_agent.py:6585-6615",
+          "note": "_dispatch_delegate_task — the live model dispatch path — passes background=(not _is_subagent), _is_subagent = _delegate_depth > 0. Comment: \"Delegations from the top-level MODEL always run in the background — the model does not get to choose ... The schema-level `background` param is intentionally ignored here.\" Exception documented at :6604-6607: an ORCHESTRATOR SUBAGENT (depth > 0) stays synchronous."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/delegate_tool.py:3559,3620-3634,3653-3663,3681",
+          "note": "DELEGATE_TASK_SCHEMA name=\"delegate_task\"; its `background` property: \"DEPRECATED / IGNORED. Top-level single and batch delegations run in the background automatically — you do not need to (and cannot) opt in or out ... Setting this has no effect.\"; _model_background_value returns `not is_subagent` for the registry fallback; registry.register(..., toolset=\"delegation\")."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tests/tools/test_async_delegation.py:795-823",
+          "note": "test_run_agent_dispatch_forces_background: asserts captured[\"background\"] is True for a top-level single dispatch AND a top-level batch (tasks=[a,b]), and False only for a _FakeAgent with _delegate_depth = 1. A vendor-side lock on the behavior this verdict rests on."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/async_delegation.py:1-35,673,878,964",
+          "note": "Module doc: the parent \"returns a handle immediately, so the user and the model can keep working while the child runs\"; completions are pushed onto process_registry.completion_queue and \"surface as a NEW turn when the agent is idle\". Children are submitted via propagate_context_to_thread. list_async_delegations() is the /agents query helper, not a registered tool."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/cli.py:11338-11351",
+          "note": "_on_tool_complete prints, for a delegate_task result with status=dispatched and mode=background: \"↩ Background {task} running — I'll resume when {it finishes}. Keep chatting.\" — the user-facing confirmation that the parent's turn ends before the child does."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/cli_commands_mixin.py:266,285-286 + tools/code_execution_tool.py:563-578",
+          "note": "The two candidate escape hatches, both closed: list_async_delegations() is consumed only by the interactive /agents command (never registered as a model tool), and execute_code's sandbox RPC dispatches back through model_tools.handle_function_call — the same registry path that forces background=True at depth 0."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/toolsets.py:65 + tools/delegate_tool.py:1385,1390,1391 + agent/background_review.py:772",
+          "note": "delegate_task is in the default CLI tool list (\"# Code execution + delegation\"); _build_child_agent creates the child with platform=\"subagent\", the parent's session_db, and parent_session_id=<parent.session_id>; persistence is not disabled for delegate children (the sole _persist_disabled writer is background_review)."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/run_agent.py:92-102,613",
+          "note": "_ensure_db_session stamps sources.source = _session_source_for_agent(self.platform), which returns the HERMES_SESSION_SOURCE env/ContextVar when set and otherwise the platform verbatim — so a delegate child lands as source='subagent' on the CLI surface. Locked by tests/run_agent/test_session_source.py."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/watcher.go:281,284,378",
+          "note": "The discovery query SELECTs COALESCE(parent_session_id,'') and projects it onto agent.Event.ParentSessionID — but filters WHERE source IN ('cli','tui'), which drops a source='subagent' child row before the parent-link read applies. Carried to 3.2; not what freezes this cell."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/state.db",
+          "note": "Live store, hermes 0.19.0: SELECT source, COUNT(*) FROM sessions GROUP BY source → cli|22, tui|3; SELECT COUNT(*), SUM(parent_session_id IS NOT NULL) FROM sessions → 25|0; SELECT COUNT(*) FROM messages WHERE tool_calls LIKE '%delegate_task%' → 0. No delegation has ever been recorded here, so nothing about the delegated shape is observed."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/AGENTS.md:985-1012",
+          "note": "Vendor doc for delegate_task. States \"By default the parent waits for the child's summary before continuing its own loop\" (the direct-Python-caller default, contradicted by the model path above) and enumerates every delegation config knob — none of which is a sync/async switch."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "agent_supports=no — a top-level hermes delegation is unconditionally background (run_agent.py:6585-6615), so no driver step sequence can produce a parent whose working state wraps the child's lifetime. The equivalent recipe belongs to scenario 3.2 background-subagent. No recipe."
+    }
+  }
+}
