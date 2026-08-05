@@ -292,12 +292,10 @@ resolve_transcript() {
 # RESULT lines keep the session working and are excluded. SYSTEM steps
 # (CONVERSATION_HISTORY, CHECKPOINT) can TRAIL the terminal line, so count the
 # markers rather than inspect only the last line.
-turn_count() {
-  [[ -f "$TRANSCRIPT" ]] || { echo 0; return; }
-  jq -r 'select(.source=="MODEL" and .type=="PLANNER_RESPONSE"
-                and ((.tool_calls // []) | length) == 0) | "x"' \
-    "$TRANSCRIPT" 2>/dev/null | wc -l | tr -d ' '
-}
+# turn_count lives in a sibling lib so it can be unit-tested without executing
+# this driver (#1333 / B4). See replaydata/_lib/drive/turn-count_test.sh.
+# shellcheck source=turn-count.sh
+source "$(dirname "${BASH_SOURCE[0]}")/turn-count.sh"
 
 # --- AGENT-SPECIFIC SEAM 2: detect a completed turn --------------------------
 # Block until a NEW terminal PLANNER_RESPONSE appears (turn_count >= the bumped

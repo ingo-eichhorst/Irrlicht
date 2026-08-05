@@ -5,6 +5,7 @@
 
 import {
   deriveEventOffsets, findOffsetBefore, findOffsetAfter, resolveDashboardIframeUrl,
+  delayWindowText,
 } from './playbackTimeline.js';
 import {
   paintStateBand, paintEventDots, paintTurns, paintExpectedLane,
@@ -2009,11 +2010,11 @@ function _expectedTargetHTML(def) {
   return def.kind ? `kind=<code>${escapeHtml(def.kind)}</code>` : "—";
 }
 
-// _expectedWindowText renders one phase definition's timing-window cell
-// (max delay and/or minimum duration constraints, joined with " · ").
+// _expectedWindowText renders one phase definition's timing-window cell: the
+// delay bounds (shared with the timeline tooltip via delayWindowText, so the two
+// renderings can't drift) plus any minimum-duration constraint, joined with " · ".
 function _expectedWindowText(def) {
-  let win = "";
-  if (def.max_delay_ms) win += `≤ ${def.max_delay_ms} ms`;
+  let win = delayWindowText(def);
   if (def.duration_at_least_ms) win += (win ? " · " : "") + `≥ ${def.duration_at_least_ms} ms`;
   return win || "—";
 }

@@ -173,10 +173,12 @@ remain before reporting "done". `display_state` ∈ `observed` (terminal),
   cells serially (one commit per cell). Committing is version control, not
   authoring — the iron rule forbids the parent *authoring* `replaydata/`, not
   committing what the subagents already wrote through `of`.
-- **`record` is serialized and self-commits.** It drives a live CLI under the
-  single `--attach` daemon; concurrent recordings on one daemon interleave. Run
-  record cells one at a time. Because record is serial there is no commit race,
-  so the record subagent commits its own recording (part of its contract).
+- **`record` is serialized and self-commits.** It drives a live CLI under a
+  single recording daemon (attached or coexisting); concurrent recordings on one
+  daemon interleave. Run record cells one at a time — serialization also assumes
+  exclusive use of the worktree, since a concurrent commit smears the recording's
+  provenance SHAs. Because record is serial there is no commit race, so the
+  record subagent commits its own recording (part of its contract).
 - **Batch a few serial cells per `record` subagent.** A record subagent records
   one cell at a time internally, so handing it ~4 cells per dispatch is far
   cheaper on dispatcher context/turns than strict one-subagent-per-cell, with no
@@ -267,8 +269,12 @@ write verb validates-then-writes atomically and forces the foreign keys
 - **Don't record on a dirty `replaydata/` tree, and don't re-commit after
   `record`.** Commit assessments first; a clean tree is the record handoff
   signal and `record` commits its own recording.
-- **Don't run an isolated recording daemon while production `irrlichd` is up.**
-  Use `of record run --attach`; the precheck enforces this.
+- **Don't run an isolated recording daemon on production's port while
+  production `irrlichd` is up.** Either `of record run --attach`, or coexist on
+  a separate `IRRLICHT_ONBOARD_HOME` + non-7837 `IRRLICHT_ONBOARD_BIND_ADDR`;
+  the precheck enforces both shapes. Onboarding a **new** adapter is always the
+  coexist case — the running release has no such adapter compiled in and would
+  observe nothing. See `record/SKILL.md` Precondition 4.
 - **Don't accept a frozen verdict without probing it (push-through mode).** An
   `unobservable` / `blocked-*` cell may just need a feature built or an
   empirical probe — see Overnight push-through mode. But don't swing the other

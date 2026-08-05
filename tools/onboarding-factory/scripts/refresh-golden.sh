@@ -13,9 +13,15 @@
 # Why scoped: the golden test has no per-fixture UPDATE flag —
 # UPDATE_REPLAY_GOLDENS=1 rewrites EVERY golden in the tree, including
 # pre-existing drift in unrelated adapters. We regenerate all, then discard
-# every golden change that is NOT under this scenario. That keeps the
-# implement stage's "leave no dirty tree" contract and never masks another
-# cell's drift (which belongs to its own maintainer task / issue).
+# every golden change that is NOT under this scenario AND that THIS RUN caused.
+# That keeps the implement stage's "leave no dirty tree" contract and never
+# masks another cell's drift (which belongs to its own maintainer task / issue).
+#
+# The "that this run caused" half is #1333 / B1. The undo used to be
+# unconditional, so looping over cells had each iteration revert the previous
+# one's freshly-written golden — safe only under strict commit-per-cell, which
+# made that convention load-bearing for a reason nobody had written down. See
+# lib/golden-scope.sh.
 #
 # Usage:
 #   refresh-golden.sh <agent> <scenario>
@@ -44,6 +50,17 @@ if [[ ! -d "$SCEN" ]]; then
   exit 1
 fi
 
+# Restore-scope arithmetic (#1333 / B1) — which goldens this run is allowed to
+# undo. See lib/golden-scope.sh for why "already dirty" has to be snapshotted.
+# shellcheck source=lib/golden-scope.sh
+source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/golden-scope.sh"
+
+# Snapshot what was ALREADY dirty BEFORE regenerating. Without this, a loop over
+# several cells has each iteration revert the previous one's golden — the undo
+# below cannot otherwise tell "drift I just caused" from "the last cell's work".
+MODIFIED_BEFORE="$(git diff --name-only -- '*.replay.json.golden' || true)"
+UNTRACKED_BEFORE="$(git ls-files --others --exclude-standard -- '*.replay.json.golden' || true)"
+
 # Regenerate ALL goldens. The test has no per-fixture filter, and -count=1 is
 # REQUIRED: a cached `go test` run does not execute the test body, so the
 # UPDATE_REPLAY_GOLDENS side effect never fires and no goldens are written.
@@ -54,18 +71,30 @@ if ! UPDATE_REPLAY_GOLDENS=1 go test ./tools/onboarding-factory/cmd/replay/... -
   exit 1
 fi
 
-# Revert modified tracked goldens that are NOT under this scenario.
+MODIFIED_NOW="$(git diff --name-only -- '*.replay.json.golden' || true)"
+UNTRACKED_NOW="$(git ls-files --others --exclude-standard -- '*.replay.json.golden' || true)"
+
+# Revert modified tracked goldens that are NOT under this scenario AND were not
+# already modified before this run.
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
   git checkout -- "$f"
-done < <(git diff --name-only -- '*.replay.json.golden' | grep -v "^${SCEN}/" || true)
+done < <(golden_restore_list "$SCEN" "$MODIFIED_BEFORE" "$MODIFIED_NOW")
 
-# Remove newly-created (untracked) goldens that are NOT under this scenario.
+# Remove newly-created (untracked) goldens that are NOT under this scenario AND
+# did not already exist untracked before this run.
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
   rm -f "$f"
-done < <(git ls-files --others --exclude-standard -- '*.replay.json.golden' \
-           | grep -v "^${SCEN}/" || true)
+done < <(golden_remove_list "$SCEN" "$UNTRACKED_BEFORE" "$UNTRACKED_NOW")
+
+# Report what this run deliberately left alone, so "someone else's golden is
+# dirty" is visible rather than silently tolerated.
+PRESERVED="$(golden_restore_list "$SCEN" "" "$MODIFIED_BEFORE"; golden_remove_list "$SCEN" "" "$UNTRACKED_BEFORE")"
+if [[ -n "$PRESERVED" ]]; then
+  echo "refresh-golden: left $(printf '%s\n' "$PRESERVED" | grep -c . ) pre-existing dirty golden(s) outside ${SCEN} untouched:" >&2
+  printf '%s\n' "$PRESERVED" | sed 's/^/  /' >&2
+fi
 
 if git status --porcelain -- "$SCEN" | grep -q '\.replay\.json\.golden$'; then
   echo "refresh-golden: refreshed golden(s) under ${SCEN}:" >&2

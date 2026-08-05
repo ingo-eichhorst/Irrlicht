@@ -69,6 +69,12 @@ source "$SCRIPT_DIR/lib/reconcile.sh"
 # cross-adapter path also refuses a missing driver step BEFORE recording.
 # shellcheck source=lib/recipe-lint.sh
 source "$SCRIPT_DIR/lib/recipe-lint.sh"
+# Recording-file selection + "did this run finish?", both shared with
+# run-cell.sh so a fix can't reach only one rig (#1214).
+# shellcheck source=lib/pick-recording.sh
+source "$SCRIPT_DIR/lib/pick-recording.sh"
+# shellcheck source=lib/completeness-check.sh
+source "$SCRIPT_DIR/lib/completeness-check.sh"
 
 DRY_RUN=0
 positional=()
@@ -150,8 +156,20 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 fi
 
 # --- Precheck each adapter (builds bins, checks port, CLI versions) ------
+# Each adapter's detected CLI version is staged so promote-recording.sh can
+# stamp it rather than re-derive it (#1333 / B3); they move into $STAGING below,
+# one file per adapter, since a multi-agent cell promotes per adapter.
+#
+# One temp DIR keyed by filename, not an associative array: macOS ships bash 3.2,
+# where `declare -A` is a hard runtime error (and this script already says so at
+# its slot bookkeeping). Cleanup is explicit rather than an EXIT trap because
+# spawn_record_daemon arms its own and a second `trap ... EXIT` would replace it.
+PRECHECK_TMPDIR="$(mktemp -d -t irr-precheck)"
 for a in "${ADAPTERS[@]}"; do
-  ATTACH=0 "$SCRIPT_DIR/precheck.sh" "$a"
+  if ! ATTACH=0 PRECHECK_JSON_OUT="$PRECHECK_TMPDIR/$a.json" "$SCRIPT_DIR/precheck.sh" "$a"; then
+    rm -rf "$PRECHECK_TMPDIR"
+    exit 1
+  fi
 done
 
 DAEMON="$REPO_ROOT/.build/refresh/bin/irrlichd"
@@ -166,6 +184,20 @@ TS="$(date -u +%Y%m%dT%H%M%S)-$$"
 STAGING="$REPO_ROOT/.build/refresh/_multi/$SCENARIO-$TS"
 SHARED_CWD="$STAGING/cwd"
 mkdir -p "$STAGING/recordings" "$STAGING/reports" "$SHARED_CWD"
+
+# Park each adapter's precheck output next to its per-adapter staging subdir
+# (#1333 / B3), and capture the repo HEAD for provenance (#1333 / B7). The two
+# rigs share a staging contract, so a field that exists in only one of them is
+# how 4-2 came to record the user's own sessions (#1214 unified the daemon
+# lifecycle but not the per-rig env).
+for a in "${ADAPTERS[@]}"; do
+  mkdir -p "$STAGING/$a"
+  if [[ -s "$PRECHECK_TMPDIR/$a.json" ]]; then
+    mv "$PRECHECK_TMPDIR/$a.json" "$STAGING/$a/precheck.json"
+  fi
+done
+rm -rf "$PRECHECK_TMPDIR"
+GIT_HEAD_START="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 MANIFEST="$STAGING/run-manifest.json"
 DAEMON_SHUTDOWN="unknown"
@@ -262,7 +294,7 @@ stop_record_daemon   # also disarms the EXIT trap it armed
 DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo unknown)"
 
 # --- Locate the single recording ----------------------------------------
-RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | head -n1)"
+RECORDING="$(pick_isolated_recording "$STAGING/recordings" '*.jsonl')" || true
 [[ -n "$RECORDING" ]] || { echo "no recording produced under $STAGING/recordings" >&2; write_error_manifest "no_recording"; exit 1; }
 
 # --- Collect each adapter's daemon session_id(s) + transcript(s) --------
@@ -363,6 +395,17 @@ for idx in "${!ADAPTERS[@]}"; do
 done
 
 # --- Manifest -----------------------------------------------------------
+GIT_HEAD_END="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [[ "$GIT_HEAD_START" != "$GIT_HEAD_END" ]]; then
+  echo "WARNING: HEAD moved during this run ($GIT_HEAD_START -> $GIT_HEAD_END) —" >&2
+  echo "         another session committed in this worktree while it recorded." >&2
+fi
+
+# Completeness runs here too (#1333 / A3): a cross-adapter cell is torn down the
+# same way a single-adapter one is, and `ok` is just as misleading.
+COMPLETENESS="$(completeness_json "$STAGING" --scenario "$COVERAGE_ID")"
+report_completeness "$COMPLETENESS"
+
 jq -n \
   --arg scenario "$COVERAGE_ID" \
   --argjson adapters "$(printf '%s\n' "${ADAPTERS[@]}" | jq -R . | jq -s .)" \
@@ -370,12 +413,18 @@ jq -n \
   --arg staging "$STAGING" \
   --arg raw_recording "$RECORDING" \
   --arg daemon_shutdown "$DAEMON_SHUTDOWN" \
+  --argjson completeness "$COMPLETENESS" \
+  --arg git_head_start "$GIT_HEAD_START" \
+  --arg git_head_end "$GIT_HEAD_END" \
   '{scenario: $scenario,
     verdict: "STAGED",
     cross_adapter: $adapters,
     session_ids: $sids,
     staging: $staging,
     raw_recording: $raw_recording,
+    completeness: $completeness,
+    git_head_start: $git_head_start,
+    git_head_end: $git_head_end,
     daemon_shutdown: $daemon_shutdown}' \
   > "$MANIFEST"
 

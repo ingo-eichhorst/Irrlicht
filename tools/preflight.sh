@@ -241,7 +241,13 @@ if want go; then
                   "onboarding-factory tests" go test ./tools/onboarding-factory/... -count=1
   run_gate_scoped '^replaydata/|^tools/onboarding-factory/' \
                   "replaydata validate"      go run ./tools/onboarding-factory/cmd/of validate
-  run_gate_scoped '^tools/onboarding-factory/' \
+  # The rig's own tests guard two file families that live OUTSIDE
+  # tools/onboarding-factory/ (#1333): adapter-tables_test.sh polices
+  # tools/promote-recording.sh's CLI-version table against precheck's, and
+  # turn-count_test.sh covers replaydata/agents/*/turn-count.sh. Without those
+  # two alternatives, `--changed` would pass a push that edits only the file a
+  # new test was written to protect — the #1209 shape exactly.
+  run_gate_scoped '^tools/onboarding-factory/|^tools/promote-recording\.sh$|^replaydata/agents/[^/]+/turn-count\.sh$|^replaydata/_lib/drive/' \
                   "recording-rig smoke test" bash tools/onboarding-factory/scripts/smoke-test.sh
   # linux.yml's replay-fixtures step, run natively — see the header. Scoped to
   # everything a golden is derived from: the recordings themselves, the replay

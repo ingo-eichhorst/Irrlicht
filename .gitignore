@@ -136,3 +136,6 @@ opencode.json
 /expected-validate
 
 **/*.env
+# Scratch dir used by atomic_promote while a candidate recording is validated;
+# it lives inside replaydata/ and `record` commits that tree with a directory add.
+.promote-tmp*

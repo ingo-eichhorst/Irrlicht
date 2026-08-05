@@ -52,6 +52,26 @@ echo ""
 echo "== unit tests (lib/spawn-record-daemon_test.sh) =="
 bash "$SCRIPT_DIR/lib/spawn-record-daemon_test.sh" || rc=1
 
+echo ""
+echo "== unit tests (lib/completeness-check_test.sh) =="
+bash "$SCRIPT_DIR/lib/completeness-check_test.sh" || rc=1
+
+echo ""
+echo "== unit tests (lib/pick-recording_test.sh) =="
+bash "$SCRIPT_DIR/lib/pick-recording_test.sh" || rc=1
+
+echo ""
+echo "== unit tests (lib/atomic-promote_test.sh) =="
+bash "$SCRIPT_DIR/lib/atomic-promote_test.sh" || rc=1
+
+echo ""
+echo "== unit tests (lib/adapter-tables_test.sh) =="
+bash "$SCRIPT_DIR/lib/adapter-tables_test.sh" || rc=1
+
+echo ""
+echo "== unit tests (lib/golden-scope_test.sh) =="
+bash "$SCRIPT_DIR/lib/golden-scope_test.sh" || rc=1
+
 # completeness-gate / catalog-drift / consistency gates were retired (#528):
 # `of validate` + `of coverage` (Go) now own schema + referential + coverage
 # integrity, and a per-scenario shard is the single source for a cell, so the
@@ -60,6 +80,10 @@ bash "$SCRIPT_DIR/lib/spawn-record-daemon_test.sh" || rc=1
 echo ""
 echo "== unit tests (replaydata/_lib/drive/drive-lib_test.sh) =="
 bash "$SCRIPT_DIR/../../../replaydata/_lib/drive/drive-lib_test.sh" || rc=1
+
+echo ""
+echo "== unit tests (replaydata/_lib/drive/turn-count_test.sh) =="
+bash "$SCRIPT_DIR/../../../replaydata/_lib/drive/turn-count_test.sh" || rc=1
 
 echo ""
 echo "== shellcheck (advisory) =="

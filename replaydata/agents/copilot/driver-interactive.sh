@@ -318,20 +318,10 @@ resolve_transcript() {
 # 25s children. Subagent-scoped records are exactly the ones carrying a
 # top-level "agentId" (parent records have none), so skipping those rows keeps
 # the count on the parent's own turns.
-turn_count() {
-  local t="${TRANSCRIPT:-}"
-  [[ -n "$t" && -f "$t" ]] || { echo 0; return; }
-  # grep -c PRINTS 0 and EXITS 1 when there is no match, so a `|| echo 0`
-  # fallback emitted two lines ("0\n0") and every (( )) comparison downstream
-  # died with a syntax error. Count with awk instead: one line, always.
-  awk '
-    /"agentId":/                     { next }
-    /"type":"user\.message"/         { prompts++; open = 1 }
-    /"type":"assistant\.turn_start"/ { open = 1 }
-    /"type":"assistant\.turn_end"/   { open = 0 }
-    END { print (prompts - open) + 0 }
-  ' "$t"
-}
+# turn_count lives in a sibling lib so it can be unit-tested without executing
+# this driver (#1333 / B4). See replaydata/_lib/drive/turn-count_test.sh.
+# shellcheck source=turn-count.sh
+source "$(dirname "${BASH_SOURCE[0]}")/turn-count.sh"
 
 wait_turn() {
   resolve_transcript || true

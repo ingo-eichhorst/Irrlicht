@@ -127,11 +127,21 @@ type ObservationSpec struct {
 // new_session matching to the intended adapter's session in a shared,
 // multi-agent-workspace recording (see #988 item 5).
 type ExpectedPhase struct {
-	Phase             string   `json:"phase"`
-	ExpectedState     string   `json:"expected_state,omitempty"`
-	Kind              string   `json:"kind,omitempty"`
-	RelativeTo        string   `json:"relative_to,omitempty"`
-	MaxDelayMs        int64    `json:"max_delay_ms,omitempty"`
+	Phase         string `json:"phase"`
+	ExpectedState string `json:"expected_state,omitempty"`
+	Kind          string `json:"kind,omitempty"`
+	RelativeTo    string `json:"relative_to,omitempty"`
+	MaxDelayMs    int64  `json:"max_delay_ms,omitempty"`
+	// MinDelayMs is a FLOOR on the match, not a post-hoc assertion: candidates
+	// closer to the anchor than this are skipped, so a terminal-hold phase can
+	// bind past a variable number of intermediate cycles instead of latching
+	// onto the first match (#1333 / B5). Without it, a hold phase anchored at
+	// the start of an autonomous loop binds to the first `ready` and fails its
+	// hold on the next iteration — the copilot 2-8 cell worked around this by
+	// enumerating intermediate cycles purely as matcher anchors, which pins a
+	// count that is itself debounce-dependent. Composes with MaxDelayMs as a
+	// window: min filters candidates, max rejects the one that matched.
+	MinDelayMs        int64    `json:"min_delay_ms,omitempty"`
 	DurationAtLeastMs int64    `json:"duration_at_least_ms,omitempty"`
 	SameSessionAs     string   `json:"same_session_as,omitempty"`
 	NewSession        bool     `json:"new_session,omitempty"`
@@ -439,6 +449,13 @@ func phaseShapeViolation(p ExpectedPhase) string {
 		return "expected_state and kind are mutually exclusive"
 	case p.SameSessionAs != "" && p.NewSession:
 		return "same_session_as and new_session are mutually exclusive"
+	case p.MinDelayMs < 0:
+		return "min_delay_ms must not be negative"
+	case p.MaxDelayMs > 0 && p.MinDelayMs > p.MaxDelayMs:
+		// An inverted window matches nothing, ever. Catching it at parse time
+		// makes it an authoring error rather than a phase that silently never
+		// binds — the same class of trap min_delay_ms exists to remove.
+		return "min_delay_ms must not exceed max_delay_ms (the window would be empty)"
 	default:
 		return ""
 	}
@@ -619,11 +636,19 @@ func eventMatchesPhaseKind(p ExpectedPhase, ev *recordedEvent) bool {
 // findMatchingEvent scans events in order for the first one at or after
 // anchor that satisfies the phase's kind predicate and session-id
 // constraints. Events strictly before anchor are skipped — earlier matches
-// belong to an earlier phase. Returns nil when no candidate qualifies.
+// belong to an earlier phase. min_delay_ms moves that floor forward, skipping
+// candidates that are too close to the anchor (see ExpectedPhase.MinDelayMs);
+// it is applied here rather than as a post-match check precisely so the scan
+// CONTINUES past a too-early candidate instead of failing on it.
+// Returns nil when no candidate qualifies.
 func findMatchingEvent(p ExpectedPhase, events []recordedEvent, anchor time.Time, sc sessionConstraint) *recordedEvent {
+	floor := anchor
+	if p.MinDelayMs > 0 {
+		floor = anchor.Add(time.Duration(p.MinDelayMs) * time.Millisecond)
+	}
 	for i := range events {
 		ev := &events[i]
-		if ev.Ts.Before(anchor) {
+		if ev.Ts.Before(floor) {
 			continue
 		}
 		if eventSatisfiesPhase(p, ev, sc) {
@@ -659,13 +684,24 @@ func noMatchReason(p ExpectedPhase, anchorName, requireSID string) string {
 	if want == "" {
 		want = p.Kind
 	}
+	// A min_delay_ms floor is a likely reason a phase that "obviously" has a
+	// match found none, so it is always mentioned — but APPENDED rather than
+	// returned early, because a phase can carry both a floor and a session
+	// constraint and the session detail is usually the more useful half.
+	// Returning on the floor alone would report "candidates were skipped" for a
+	// phase that actually failed because its pinned session never emitted the
+	// event at all.
+	var floor string
+	if p.MinDelayMs > 0 {
+		floor = fmt.Sprintf(" (candidates closer than min_delay_ms=%d to the anchor were skipped)", p.MinDelayMs)
+	}
 	switch {
 	case requireSID != "":
-		return fmt.Sprintf("no event matching %q found for session %q at or after anchor %q", want, requireSID, anchorName)
+		return fmt.Sprintf("no event matching %q found for session %q at or after anchor %q%s", want, requireSID, anchorName, floor)
 	case p.NewSession:
-		return fmt.Sprintf("no event matching %q on a NEW session found at or after anchor %q (all candidates were already-seen session ids)", want, anchorName)
+		return fmt.Sprintf("no event matching %q on a NEW session found at or after anchor %q (all candidates were already-seen session ids)%s", want, anchorName, floor)
 	default:
-		return fmt.Sprintf("no event matching %q found at or after anchor %q", want, anchorName)
+		return fmt.Sprintf("no event matching %q found at or after anchor %q%s", want, anchorName, floor)
 	}
 }
 
@@ -725,10 +761,19 @@ func checkPhaseInvariants(p ExpectedPhase, events []recordedEvent, matched *reco
 
 // passReason formats the success reason for a matched phase.
 func passReason(p ExpectedPhase, deltaMs int64, anchorName string) string {
-	if p.MaxDelayMs > 0 {
+	// Report the floor too. When min_delay_ms is set it is load-bearing — the
+	// phase deliberately skipped earlier candidates — so a reason that named
+	// only the ceiling would hide the half of the window that did the work.
+	switch {
+	case p.MinDelayMs > 0 && p.MaxDelayMs > 0:
+		return fmt.Sprintf("matched at +%d ms (inside the %d–%d ms window)", deltaMs, p.MinDelayMs, p.MaxDelayMs)
+	case p.MinDelayMs > 0:
+		return fmt.Sprintf("matched at +%d ms (at least %d ms after anchor %q)", deltaMs, p.MinDelayMs, anchorName)
+	case p.MaxDelayMs > 0:
 		return fmt.Sprintf("matched at +%d ms (under %d ms max)", deltaMs, p.MaxDelayMs)
+	default:
+		return fmt.Sprintf("matched at +%d ms after anchor %q", deltaMs, anchorName)
 	}
-	return fmt.Sprintf("matched at +%d ms after anchor %q", deltaMs, anchorName)
 }
 
 // Invariant DSL — two forms supported in iteration 10:

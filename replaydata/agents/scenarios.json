@@ -19,7 +19,13 @@
       "codex": "jsonl",
       "opencode": "jsonl",
       "pi": "jsonl"
-    }
+    },
+    "ends_unsettled": [
+      "session-end",
+      "token-quota-exhausted",
+      "user-esc-interrupt",
+      "subagent-orphan-cleanup"
+    ]
   },
   "scenarios": [
     {

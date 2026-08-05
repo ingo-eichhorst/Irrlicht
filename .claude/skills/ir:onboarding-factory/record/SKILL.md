@@ -35,21 +35,64 @@ description: >
    `replaydata/` (re-records must be deliberate commits). If the assessment
    isn't committed yet, that's the dispatcher's ordering bug — return
    `status: infra_fail` with that note.
-4. **A recording daemon is up.** Use `--attach` against the user's running
-   `irrlichd --record` (the dashboard stays connected; the session shows up
-   live). The precheck refuses if no `--record` daemon is found — `infra_fail`.
-   A recording daemon must run with `IRRLICHT_PERMISSION_MODE=grant-all` —
-   the consent-first gate (#570) otherwise leaves a fresh daemon monitoring
-   nothing until its wizard is answered. (run-cell.sh / run-cell-multi.sh
-   set it on the daemons they spawn.)
+4. **A recording daemon is up — attached OR coexisting.** Which one is a
+   decision you make per run, not a default:
+
+   - **Attach** (`--attach`, against the user's running `irrlichd --record`)
+     when you are **re-recording an adapter the running daemon already ships**,
+     *and* that daemon is genuinely in `--record` mode. The dashboard stays
+     connected and the session shows up live.
+   - **Coexist** — an isolated daemon **built from this branch**, on its own
+     `IRRLICHT_HOME` and port — when either half of that is false:
+
+     ```bash
+     IRRLICHT_ONBOARD_HOME=/tmp/irr-onb \
+     IRRLICHT_ONBOARD_BIND_ADDR=127.0.0.1:7838 \
+     IRRLICHT_PERMISSION_MODE=grant-all \
+       of record run --agent <agent> --scenario <scenario>
+     ```
+
+     Setting `IRRLICHT_ONBOARD_HOME` is the one knob that selects coexist mode;
+     the bind addr defaults to `127.0.0.1:7838` and the precheck refuses 7837
+     (it would clash with production). Pick another free port if 7838 is taken.
+
+   **Onboarding a NEW adapter is always the coexist case**, by construction: the
+   running `irrlichd` is an installed release whose binary has no such adapter
+   compiled in, so it observes nothing no matter how healthy it looks. Coexist
+   builds the daemon from the branch, which is the only build that contains the
+   adapter you are recording. Both onboarding runs to date hit this from
+   opposite directions — copilot's production daemon had no copilot adapter;
+   hermes' production daemon was not in `--record` mode at all (`lsof` held no
+   recordings file, and the newest one predated the run by a day).
+
+   A recording daemon must run with `IRRLICHT_PERMISSION_MODE=grant-all` on
+   **either** path — the consent-first gate (#570) otherwise leaves a fresh
+   daemon monitoring nothing until its wizard is answered. (run-cell.sh /
+   run-cell-multi.sh set it on the daemons they spawn.)
 
 ## Steps
 
 ### 1. Driver-gap → port the missing step (only if route is `driver-gap`)
 
-Port the primitive named in the cell's `driver=gap:<primitive>` from the
-reference driver into the agent's driver — the recipe is sound, only a step type
-is missing:
+**First, read the assessment's own diagnosis — the analysis is already paid
+for.** `of status --json` gives you only the gap's *name*
+(`driver=gap:<primitive>`); the reasoning lives in the assessment **body**,
+which routinely names the exact defect and the exact precedent to copy:
+
+```bash
+of status --agent <agent> --scenario <scenario> --json \
+  | jq -r '.details.assessment.body, (.details.assessment.caveats // [])[]'
+```
+
+Quote what it says about the gap in your work before porting anything. (Real
+case: `1-6`'s assessment had already pinned the rewind bug to `turn_count`
+driving `EXPECTED_TURNS` backwards *and* named the `interrupt` step as the
+one-line re-baseline precedent. The record phase never read it and burned a
+full live run rediscovering the same thing days later.)
+
+Then port the primitive named in `driver=gap:<primitive>` from the reference
+driver into the agent's driver — the recipe is sound, only a step type is
+missing:
 
 ```bash
 grep -n '<primitive>)' replaydata/agents/claudecode/driver-interactive.sh \
@@ -77,7 +120,13 @@ STOP and return `status: needs_design`. Don't invent one.
 ### 2. Record (live capture)
 
 ```bash
+# Re-recording a shipped adapter against a running --record daemon:
 of record run --attach --agent <agent> --scenario <scenario>
+
+# Onboarding a new adapter, or production isn't recording (Precondition 4):
+IRRLICHT_ONBOARD_HOME=/tmp/irr-onb IRRLICHT_ONBOARD_BIND_ADDR=127.0.0.1:7838 \
+IRRLICHT_PERMISSION_MODE=grant-all \
+  of record run --agent <agent> --scenario <scenario>
 ```
 
 `of record run` resolves the driver + orchestration script, prints the
@@ -86,6 +135,53 @@ recipe in tmux and captures the daemon's `events.jsonl` + the agent's transcript
 into a STAGING dir (`.build/refresh/<agent>/<folder>-<ts>/`). It does NOT touch
 `replaydata/` — promotion is the next step. (`--dry-run` prints the resolved plan
 without driving — useful to confirm wiring.)
+
+**Before promoting, check the run actually FINISHED — on every outcome,
+including `ok`.** `driver.exit-reason` is the driver's claim about itself, not
+evidence about the recording. Of three broken copilot runs, **two reported `ok`
+with a silently truncated recording**, which is worse than a timeout because
+`ok` invites promotion: `2-6` was torn down 4s into its final turn (its
+`events.jsonl` ends on `debounce_coalesced` with no final transition at all) and
+`3-5` was killed 14s into three 25s children. Both were caught only because a
+human read the events by hand.
+
+```bash
+jq -c '.driver_exit_reason, .completeness' <staging-dir>/run-manifest.json
+# or re-run it directly:
+bash tools/onboarding-factory/scripts/lib/completeness-check.sh <staging-dir>
+```
+
+A `suspect` verdict is **advisory, not fatal** — roughly 7% of committed
+recordings legitimately end unsettled, so read the reasons and decide:
+
+- The cell's scenario genuinely ends unsettled → promote, and say so in `notes`.
+- Anything else → **do not promote**. Diagnose before re-running.
+
+Scenarios *defined* to end unsettled are declared once, in the committed
+catalog, and are waived automatically:
+
+```bash
+jq -r '.meta.ends_unsettled | join(", ")' replaydata/agents/scenarios.json
+# session-end, token-quota-exhausted, user-esc-interrupt, subagent-orphan-cleanup
+```
+
+Add a scenario there only when its **definition** requires an unsettled ending
+(the process is killed, the turn is interrupted, the quota dies, the orphan is
+abandoned) — **not** because recordings of it have ended unsettled before.
+Twelve scenarios currently trip the check somewhere in the corpus; waiving all
+of them would turn it into exactly the green-and-vacuous pass this check exists
+to prevent. For a genuine one-off, drop
+`{"ends_unsettled": true}` into `<staging>/completeness-waiver.json` instead.
+
+Also confirm by hand what the check deliberately does not mechanize: that the
+transcript's turn count matches the recipe's `send` count. A short transcript
+with a settled tail is still a truncated run.
+
+**On a `timeout`, diff the transcript against the driver's turn accounting
+BEFORE retrying.** A systematic driver bug will not fix itself on a re-run, and
+each retry costs real credits — turn accounting is the single most defect-prone
+seam in the driver (four separate defects in one run; see
+`replaydata/_lib/drive/turn-count_test.sh` for the shapes).
 
 Then promote the staged capture into the cell's `recordings/<name>/`:
 
@@ -123,9 +219,30 @@ recording (flagged, not failed, on live jitter). Report the per-field result in
 `observations`. Hard spec-phase failures are real: a sub-100% pass that is NOT
 `known_failing` still commits (the recording is real captured data and
 `replay-fixtures.sh` should surface the drift) but the `notes` MUST say
-"VALIDATION DRIFT — needs editorial review." **Never rebase `expected.jsonl` to
-make a failing verify pass** — resolving real drift is a separate maintainer
-task.
+"VALIDATION DRIFT — needs editorial review."
+
+**Editing `expected.jsonl` splits into two cases — one required, one forbidden.**
+Decide which you are in *before* you touch the file:
+
+- **Spec correction — required.** The daemon's behaviour changed, or this live
+  recording refuted the assessment, so the spec is **stale**, not drifting.
+  Correct it, and write the cause into the spec meta's `notes`: the issue or PR
+  number plus the commit **subject**. Example: `"birth is now working, not
+  ready — corrected per #1256, 'classify every new session against its own
+  metrics'"`.
+- **Spec rebase — still forbidden.** Editing phases to turn a red verify green
+  with **no cited cause**. That is papering over drift, and resolving real drift
+  is a separate maintainer task.
+
+The test between them is whether you can name what changed *outside* the spec.
+If you can't, you're rebasing. (Real case: `ae3257e6` legitimately changed when
+a session is born `working` vs `ready`, making 19 pre-existing copilot specs
+stale. The old blanket rule forbade the only correct action and offered no
+alternative.)
+
+**Cite the issue/PR + subject, never a bare branch SHA.** A pre-PR rebase
+rewrites it: those same 19 specs cite `3cde4f8d`, which is on no branch and
+will not resolve in a fresh clone. Add a SHA only after merge, if at all.
 
 Things that legitimately differ run-to-run (don't tighten for these):
 timestamps, UUIDs, PIDs, token counts, cost, cache-read counts. Structural
@@ -134,6 +251,23 @@ between two consecutive recordings means the recipe has variance — tighten it
 (more sleep, different ordering) before committing.
 
 ### 4. Backflow — correct the cell if the recording disagrees
+
+**When a cell looks wrong, read the RAW recording before blaming the daemon or
+the adapter.** The curated `events.jsonl` is a *derived* artifact; the raw
+daemon capture in the staging dir is what the daemon actually saw:
+
+```bash
+jq -c 'select(.type)' <staging>/recordings/*.jsonl | less   # raw daemon capture
+```
+
+Twice in one run the daemon recorded a cell perfectly and **curation** dropped
+half of it — `1-5_session-reset` lost the pre-reset session because a reset
+reuses its slot and the retired transcript never reached `session.uuids`, and
+`4-2_multiple-agents-same-workspace` recorded five of the *user's own* sessions
+because `run-cell-multi.sh` never exported `COPILOT_HOME`. Both looked like
+adapter or daemon failures and were neither. Note that #1214 unified the two
+rigs' daemon lifecycle but **not** their per-adapter env, which is how `4-2`
+slipped — a multi-agent cell is worth this check specifically.
 
 If the LIVE recording refutes the doc-based assessment (e.g. assessed
 `daemon=full` but the transcript/store proved the signal isn't emitted →
@@ -180,6 +314,14 @@ tools/onboarding-factory/scripts/refresh-golden.sh <agent> <scenario>
 It's idempotent — a `--re-record` that reproduced byte-identical output reports
 "no golden change."
 
+It is also safe to run in a **loop** over several cells since #1333: it
+snapshots which goldens were already dirty before regenerating and only undoes
+what that invocation itself caused. It used to revert every out-of-scope golden
+unconditionally, so each iteration silently discarded the previous cell's work —
+which made commit-per-cell (Step 6) load-bearing for a reason the skill never
+gave. Commit-per-cell is still the rule, for the reason Step 6 actually states;
+it just isn't the only thing standing between a sweep and data loss any more.
+
 ### 6. Commit the recording (mandatory before returning)
 
 ```bash
@@ -222,13 +364,26 @@ notes: <one or two sentences — drift flag, retry count, infra/prereq reason>
   single source of truth — there is no artifacts cache to maintain.
 - **Don't retry more than once**, and **don't retry a driver gap** — a missing
   step won't appear on a re-run; port it (Step 1) or return.
+- **Don't accept a guard that proves PRESENCE where it means FRESHNESS.** "A
+  recording file exists" is not "a recording exists from this run"; "the
+  prerequisites could be read" is not "the prerequisites are met"; "the
+  validator ran" is not "the validator ran before the write". Three separate
+  guards in this rig shipped the weaker check, and every one of them reported
+  green while handing back another run's data. When you add or lean on a guard,
+  say out loud which of the two it actually proves.
 - **Don't rebase `expected.jsonl`** to make a failing verify pass — flag the
-  drift, don't paper over it.
+  drift, don't paper over it. Correcting a **stale** spec with a cited cause is
+  a different act, and it is required rather than forbidden (Step 3).
+- **Don't cite a bare branch SHA** in spec `notes` — a pre-PR rebase rewrites
+  it. Cite the issue/PR number and the commit subject.
 - **Don't run `gh issue create`** — outward-facing writes are denied in your
   context, so it files nothing. Return the `issue:` payload and let the
   dispatcher file it with the user's consent.
-- **Don't run an isolated daemon while production `irrlichd` is up** — use
-  `--attach`.
+- **Don't run an isolated daemon on production's port while production
+  `irrlichd` is up** — either `--attach`, or coexist on a separate
+  `IRRLICHT_ONBOARD_HOME` + non-7837 port (Precondition 4). Coexisting is the
+  *right* answer when onboarding a new adapter: the running release has no such
+  adapter compiled in and would observe nothing.
 - **Don't skip the golden refresh**, and **don't blanket-regenerate** goldens —
   refresh only this cell's.
 - **Don't return without committing** — it breaks the next cell in a serialized
