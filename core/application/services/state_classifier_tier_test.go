@@ -120,10 +120,6 @@ func reachableMetricFixtures(t *testing.T) []metricFixture {
 			LastEventType: "assistant", HasOpenToolCall: true,
 			LastOpenToolNames: []string{"Edit"},
 		}},
-		{"stalled-edit-tool", &session.SessionMetrics{
-			LastEventType: "assistant", HasOpenToolCall: true,
-			LastOpenToolNames: []string{"Edit"}, OpenToolStalled: true,
-		}},
 		{"live-background-process", &session.SessionMetrics{
 			LastEventType: "turn_done", HasLiveBackgroundProcess: true,
 		}},
@@ -142,9 +138,20 @@ func reachableMetricFixtures(t *testing.T) []metricFixture {
 		{"permission+idle-prompt", []session.SignalKind{session.SignalPermissionPrompt, session.SignalIdlePrompt}},
 		{"compact", []session.SignalKind{session.SignalCompactInProgress}},
 		{"compact+turn-done", []session.SignalKind{session.SignalCompactInProgress, session.SignalTurnDone}},
+		// The transcript-tier stalled-edit hold (#488). Before #1319 this shape
+		// was faked by setting OpenToolStalled directly on a transcript fixture
+		// — the very route this builder's doc comment forbids, since the flag is
+		// now only ever reachable through a ripened hold. Crossing it with the
+		// permission hook is the combination that would catch a reorder letting
+		// the transcript fallback preempt the hook it defers to.
+		{"stalled-edit", []session.SignalKind{session.SignalOpenToolStalled}},
+		{"permission+stalled-edit", []session.SignalKind{
+			session.SignalPermissionPrompt, session.SignalOpenToolStalled,
+		}},
 		{"all", []session.SignalKind{
 			session.SignalPermissionPrompt, session.SignalTurnDone,
 			session.SignalIdlePrompt, session.SignalCompactInProgress,
+			session.SignalOpenToolStalled,
 		}},
 	}
 
@@ -154,13 +161,30 @@ func reachableMetricFixtures(t *testing.T) []metricFixture {
 			m := *tr.metrics // copy: Overlay mutates
 			holds := session.NewSignalHolds()
 			for _, k := range hs.kinds {
-				holds.Hold("s", k, session.SignalPayload{}, holdT0)
+				holds.Hold("s", k, session.SignalPayload{}, armedAt(k))
 			}
 			holds.Overlay("s", &m, holdT0)
 			out = append(out, metricFixture{name: tr.name + "/" + hs.name, metrics: &m})
 		}
 	}
 	return out
+}
+
+// armedAt is when a hold of this kind must have been placed for the pass at
+// holdT0 to see it in its interesting state.
+//
+// Every hook signal is ripe on arrival, so holdT0 is right for them — and it
+// must stay holdT0 for SignalCompactInProgress, whose hold goes stale once
+// compactHoldTimeout has elapsed. SignalOpenToolStalled is the one arm-then-fire
+// row: armed at holdT0 it would be unripe and apply nothing, so the corpus would
+// silently contain no stalled fixtures at all. An hour is deliberately far past
+// any plausible stalledEditToolThreshold, which is unexported in domain/session
+// and so cannot be named here.
+func armedAt(kind session.SignalKind) time.Time {
+	if kind == session.SignalOpenToolStalled {
+		return holdT0.Add(-time.Hour)
+	}
+	return holdT0
 }
 
 // TestClassify_ProvenanceDistinguishesHookFromInference is AC3: two passes that

@@ -164,12 +164,18 @@ var stateRules = []stateRule{
 		// A permission-gated file-edit tool has been open and idle long enough
 		// that the agent is almost certainly blocked on a permission prompt →
 		// waiting. Transcript-based fallback for when the curl-delivered
-		// PermissionRequest hook can't reach the daemon (#488). The detector
-		// sets OpenToolStalled only after the open tool has lingered with no
-		// transcript progress, so this never fires on a tool that is actively
-		// executing.
-		id:     "open_tool_stalled",
-		tier:   session.TierTranscript,
+		// PermissionRequest hook can't reach the daemon (#488). The hold's own
+		// policy applies OpenToolStalled only after the open tool has lingered
+		// past stalledEditToolThreshold, so this never fires on a tool that is
+		// actively executing (#1130).
+		//
+		// Reads a held signal rather than declaring a bare tier: the overlay
+		// became a signalPolicies row in #1319, once signalPolicy gained the
+		// arming predicate an after-a-threshold rule needs. Still transcript
+		// tier — being held says how the evidence is timed, not where it came
+		// from — and TierOf is now the one place that says so.
+		id:     string(session.SignalOpenToolStalled),
+		signal: session.SignalOpenToolStalled,
 		when:   func(_ string, m *session.SessionMetrics) bool { return m.OpenToolStalled },
 		decide: toState(session.StateWaiting, "stalled edit tool → likely permission prompt → waiting"),
 	},

@@ -297,8 +297,10 @@ type SessionMetrics struct {
 	// serialized state.
 	SawMidPassTurnBoundary bool `json:"-"`
 
-	// OpenToolStalled is a transient, live-only signal set by the detector
-	// when a permission-gated file-edit tool (Edit/Write/MultiEdit/
+	// OpenToolStalled is a transient, live-only signal applied by the
+	// SignalOpenToolStalled policy row (see signal_hold.go; before #1319 it was
+	// a hand-rolled overlay on the detector) once the hold the detector armed
+	// has ripened — i.e. when a permission-gated file-edit tool (Edit/Write/MultiEdit/
 	// NotebookEdit) has stayed open long enough (stalledEditToolThreshold)
 	// that the agent is almost certainly blocked on a permission prompt
 	// rather than mid-execution. Those tools are usually fast, but a minority
