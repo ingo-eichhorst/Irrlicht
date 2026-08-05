@@ -296,6 +296,17 @@ resolve_transcript() {
 #                                           turn_start re-opens it)
 # Events after the last turn_end (session.usage_checkpoint, session.shutdown)
 # are state-neutral, so a settled transcript stays settled.
+#
+# SCOPE THE COUNT TO THE PARENT. Copilot subagents do NOT get their own
+# session-state directory — every record they produce is appended to the
+# PARENT's events.jsonl, including one user.message per subagent carrying its
+# dispatch instructions. Counting those made a three-way fan-out look like
+# three extra prompts: in 3-5 the single `send` was answered by turn_count 3
+# while the parent turn had not emitted a turn_end at all, so wait_turn
+# returned during the fan-out and the driver killed the session 14s into three
+# 25s children. Subagent-scoped records are exactly the ones carrying a
+# top-level "agentId" (parent records have none), so skipping those rows keeps
+# the count on the parent's own turns.
 turn_count() {
   local t="${TRANSCRIPT:-}"
   [[ -n "$t" && -f "$t" ]] || { echo 0; return; }
@@ -303,6 +314,7 @@ turn_count() {
   # fallback emitted two lines ("0\n0") and every (( )) comparison downstream
   # died with a syntax error. Count with awk instead: one line, always.
   awk '
+    /"agentId":/                     { next }
     /"type":"user\.message"/         { prompts++; open = 1 }
     /"type":"assistant\.turn_start"/ { open = 1 }
     /"type":"assistant\.turn_end"/   { open = 0 }
