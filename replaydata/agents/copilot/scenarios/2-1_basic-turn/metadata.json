@@ -1,0 +1,110 @@
+{
+  "scenario_id": "basic-turn",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+a21849f",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "basic-turn",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts two user-observable things: the `ready -> working -> ready` arc, and `TotalTokens > 0` after the turn. Both are carried by Copilot's own transcript, so no hook tier or sidecar read is involved.\n\n**Agent (yes).** GitHub Copilot CLI is an interactive terminal coding agent whose whole purpose is a prompt/reply round-trip. The one-turn shape was read off a real captured `events.jsonl` on CLI 1.0.77: `session.start -> session.model_change -> session.auto_mode_resolved -> system.message -> user.message -> assistant.turn_start -> assistant.message -> assistant.turn_end -> session.usage_checkpoint -> session.shutdown`. Nothing weaker than `yes` is defensible for the smallest possible round-trip.\n\n**Daemon (full).** Mapping each observable to a transcript event and then to the adapter's parser:\n\n1. `ready -> working` — `user.message` is parsed as `EventType: \"user_message\"` (parser.go `parseUserMessage`), which the shared classifier treats as agent activity. `session.start` is deliberately `Skip: true`, so a session comes into existence in `ready` and only the user's prompt moves it.\n2. `working -> ready` — `assistant.turn_end` is parsed as `EventType: \"turn_done\"`. This is an EXPLICIT boundary carrying a `turnId`, so unlike gemini-cli no quiet-tail heuristic is needed and the settle cannot be mistimed. `assistant.message` deliberately does NOT settle the turn, so a reply followed by more tool work correctly stays `working`.\n3. `TotalTokens > 0` — live token accounting comes from `assistant.message.outputTokens` (parser.go `queueOutputIncrement`). This matters here specifically: `session.usage_checkpoint` carries ONLY `modelCacheState`/`totalNanoAiu`/`totalPremiumRequests`, and the cumulative `modelMetrics`/`tokenDetails`/`currentTokens` block exists only on `session.shutdown`, so a checkpoint-only read would leave a live session at zero tokens for its entire lifetime. Cost falls out of those tokens through the shared capacity price map.\n4. PID binding — `DiscoverPIDByCWD(\"copilot\", ...)`: `session.start.data.context.cwd` is the very first transcript line and the parser re-stamps `cwd` on every subsequent event, and the `ExactName{copilot}` matcher binds the native child rather than the `node` npm loader.\n\nAll four were confirmed against a live session on CLI 1.0.77 in commit c06466ef (session detected with the directory-derived id, cwd and version 1.0.77; `working -> ready` observed; PID bound; cost non-zero once `claude-haiku-4.5` was added to the alias map).\n\n**Session-birth shape: presession (two-phase).** Copilot creates `session-state/<id>/` at LAUNCH holding only `workspace.yaml`; `events.jsonl` does not exist until the first prompt is sent (stated in the driver's `resolve_transcript` and `wait_ready` comments, and the reason `resolve_transcript` resolves on the directory rather than the file). The adapter's `sessionIDFromPath` only claims `events.jsonl`, so the fswatcher mints nothing during that window — while `processlifecycle.Scanner` (wired for EVERY adapter in `core/cmd/irrlichd/wiring.go`, 1s poll) sees a `copilot` process with no real session for its PID and mints a `proc-<PID>` pre-session. The real session, keyed on the `<session-id>` directory, therefore arrives LATER and under a DIFFERENT id. That is the codex / gemini-cli / mistral-vibe presession shape, so the spec models the birth as two phases and anchors every post-birth phase to the real session.\n\n**Driver (ready).** `DRIVE_ELICITS` already lists `send`, `wait_turn`, `sleep` and `exit_clean`; the recipe needs only the first three. `wait_turn` counts `\"type\":\"assistant.turn_end\"` lines, an exact completed-turn count rather than a quietness heuristic. A `send` + `wait_turn` + `exit_clean` run is verified end to end on this machine.\n\nAn INTERACTIVE recipe is used deliberately: the settle to `ready` must be observed while the process is still alive, and the daemon's PID binding needs a live process.\n\n## What irrlicht does NOT see (and why that's narrow)\n\nThere is no live INPUT-token signal at all — `outputTokens` is the only per-message count, and input tokens land in a single delta at `session.shutdown` (a shared high-water mark stops that final delta re-counting the output already contributed). Consequently context-window utilisation is unavailable mid-session: `currentTokens` is written only at shutdown and no checkpoint field carries it. Neither is a `basic-turn` assertion — the scenario asks for `TotalTokens > 0`, which the per-message output increments satisfy from the first assistant reply — so this is a caveat, not a downgrade.\n\nCopilot's own billing units (`totalNanoAiu` AI credits, `totalPremiumRequests`) are read but deliberately not converted to dollars; cost uses general token pricing like every other adapter, per the maintainer decision on #1256.",
+      "caveats": [
+        "PROVISIONAL — the two-phase presession birth is derived from code reading (scanner mints proc-<PID> for every adapter at 1s poll; events.jsonl is absent until the first prompt), not from a live capture of the birth. The live verification in c06466ef confirmed working -> ready and PID binding but did not pin the birth sequence. record settles it; if the real session is instead observed born directly in working (the transcript's session.start and user.message land in the same write burst, so the fswatcher may parse both before broadcasting), record re-anchors session_birth.",
+        "model is deliberately NOT pinned in the observation vector. --model accepts only \"auto\" on this account, and session.auto_mode_resolved picks between the only two available models (gpt-5-mini, claude-haiku-4.5) per turn, so an exact-match assertion would be nondeterministic. Both resolve in the capacity price map, so cost is non-zero either way.",
+        "No live input-token signal and no mid-session context-window utilisation: currentTokens/modelMetrics exist only on session.shutdown. Not asserted by basic-turn.",
+        "Recording spends real Copilot AI credits (totalNanoAiu) on the maintainer's account."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "user.message -> user_message (working); assistant.turn_end -> turn_done (ready, explicit turnId boundary); session.start Skip=true so birth is ready; queueOutputIncrement supplies live tokens from assistant.message.outputTokens because usage_checkpoint carries no token counts."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Source = FilesUnderRoot{Dir: $COPILOT_HOME/session-state, SessionIDFromPath: sessionIDFromPath} with a JSONLineParser; Process.Match = ExactName{copilot}. The session id is the <session-id> directory, not the constant events.jsonl filename."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/pid.go",
+          "note": "DiscoverPID = DiscoverPIDByCWD(ProcessName, cwd, ...) — no sidecar fallback, because session.start.data.context.cwd is the first transcript line."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go",
+          "note": "buildAgentWatchers wires a processlifecycle.Scanner for EVERY adapter, copilot included — the mechanism that mints the proc-<PID> pre-session while events.jsonl does not yet exist."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/scanner.go",
+          "note": "defaultInterval = 1s; maybeTrackNewPID mints sessionID = fmt.Sprintf(\"proc-%d\", pid) when hasActiveSession finds no transcript-backed session for that PID."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS covers send/wait_turn/sleep/exit_clean; turn_count greps '\"type\":\"assistant.turn_end\"' for an exact completed-turn count; resolve_transcript/wait_ready state that the session directory holds workspace.yaml at launch and events.jsonl only once the first prompt is sent."
+        },
+        {
+          "kind": "file",
+          "ref": "git show c06466ef (feat(copilot): add GitHub Copilot adapter)",
+          "note": "Live verification on CLI 1.0.77: session detected with directory-derived id, cwd and version; working -> ready observed; PID bound to the native child not the node loader; claude-haiku-4.5 alias added so turns no longer price at $0."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/github/copilot-cli",
+          "note": "GitHub Copilot CLI — the terminal agent this column onboards."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation does not require a re-login)",
+        "An active Copilot plan with AI credits — the turn spends them",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other copilot session shares the same cwd (the PID is bound by cwd)"
+      ],
+      "setup": [
+        "The driver seeds a scratch COPILOT_HOME under the staging dir with trustedFolders + askedSetupTerminals pre-answered, so the trust modal cannot block the input box; the session directory is minted under $COPILOT_HOME/session-state/<session-id>/"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl mints a proc-<PID> pre-session in ready shortly after launch (the copilot process exists before events.jsonl does)",
+        "events.jsonl mints the real <session-id> session in ready under a DIFFERENT session id once events.jsonl appears on the first prompt",
+        "events.jsonl contains a pid_discovered event binding the copilot PID to the real session (matched by cwd)",
+        "events.jsonl contains a state_transition to working on the real session when the user prompt lands",
+        "events.jsonl contains a state_transition to ready after assistant.turn_end",
+        "no state_transition to waiting occurs (no tool call, so no permission.requested)",
+        "final state of the real session is ready",
+        "observation vector: tokens_nonzero=true (assistant.message.outputTokens), cost_nonzero=true; model left unasserted (auto-router picks per turn)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

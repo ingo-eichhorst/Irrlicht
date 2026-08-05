@@ -132,6 +132,28 @@ var stateRules = []stateRule{
 		decide: toState(session.StateWorking, "manual /compact in progress → working"),
 	},
 	{
+		// The transcript itself reports an unanswered permission prompt →
+		// waiting. The agent wrote both the request and (on answer) its
+		// resolution, so no hook is involved: GitHub Copilot emits
+		// permission.requested / permission.completed as ordinary events,
+		// paired on requestId (#1256).
+		//
+		// Placed below both hook-tier rules and above every other
+		// transcript-tier rule, which is deliberate on both sides. Below,
+		// because a hook-pushed verdict is more authoritative than a derived
+		// one and must stay attributable as such in a recorded trace — and
+		// because sitting above the hook rules would let a transcript-tier
+		// rule preempt a hook-tier one, which is exactly what
+		// TestStateRules_LadderIsTierConsistent forbids. Above, because an
+		// open prompt outranks agent_done: the agent may well have written a
+		// turn-ending event before blocking, and routing that to ready would
+		// report a session as finished while it sits waiting for the user.
+		id:     "transcript_permission_prompt",
+		tier:   session.TierTranscript,
+		when:   func(_ string, m *session.SessionMetrics) bool { return m.TranscriptPermissionPending },
+		decide: toState(session.StateWaiting, "transcript permission prompt open → waiting"),
+	},
+	{
 		// User-blocking tool open → waiting.
 		id:     "user_blocking_tool",
 		tier:   session.TierTranscript,

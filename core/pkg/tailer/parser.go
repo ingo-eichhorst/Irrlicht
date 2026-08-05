@@ -147,6 +147,27 @@ type ParsedEvent struct {
 	// both markers under IsUserInterrupt.
 	IsToolDenial bool
 
+	// PermissionRequestIDs / PermissionResolvedIDs carry a permission prompt
+	// that the TRANSCRIPT itself reports, opening and closing it by the
+	// agent's own request id. They pair exactly like ToolUses/ToolResultIDs,
+	// which is why they are id slices rather than a bare bool: an agent may
+	// have more than one prompt outstanding, and a bool would let the first
+	// resolution clear all of them.
+	//
+	// This is the transcript-tier twin of the hook-delivered permission
+	// signal. SessionMetrics.PermissionPending is set only through the signal
+	// hold a hook drives (session.SignalPermissionPrompt), is json:"-", and is
+	// never populated under replay — so an adapter whose agent writes its
+	// permission prompts to the transcript had no way to reach `waiting`
+	// before this. GitHub Copilot is the first: it emits permission.requested
+	// / permission.completed as ordinary events, paired on requestId. Keeping
+	// the two paths distinct preserves tier provenance on the lifecycle event
+	// (a hook-delivered verdict must stay distinguishable from an inferred
+	// one) and lets a recorded session replay to `waiting`, which the
+	// hook-only path cannot do.
+	PermissionRequestIDs  []string
+	PermissionResolvedIDs []string
+
 	// SubagentCompletions are parent-side signals that a child subagent has
 	// finished (parsed from origin.kind="task-notification" lines). The
 	// detector drains these on the parent path to transition children to

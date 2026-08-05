@@ -98,6 +98,15 @@ var modelAliases = map[string]string{
 	"claude-opus-4-7-thinking-high": modelClaudeOpus47,
 	"claude-4.5-haiku":              modelClaudeHaiku45,
 	"claude-4.6-haiku":              modelClaudeHaiku45,
+	// GitHub Copilot names Anthropic models family-first with a DOTTED minor
+	// version ("claude-haiku-4.5"), where the canonical key is dashed
+	// ("claude-haiku-4-5") and the Cursor entries above are version-first
+	// ("claude-4.5-haiku") — so neither the normalizer's dashed patterns nor
+	// those aliases catch it, and it fell through unpriced. Observed live on
+	// Copilot CLI 1.0.77, where the auto-router resolved a turn to exactly
+	// this string (#1256). Its sibling "claude-sonnet-4.5" already resolves
+	// on its own and needs no entry.
+	"claude-haiku-4.5": modelClaudeHaiku45,
 
 	// Cursor in-house Composer family — no LiteLLM entry; price as the
 	// underlying Sonnet generation per Cursor's docs.

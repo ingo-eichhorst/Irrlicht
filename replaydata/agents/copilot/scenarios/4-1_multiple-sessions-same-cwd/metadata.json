@@ -1,0 +1,159 @@
+{
+  "scenario_id": "multiple-sessions-same-cwd",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+7894002.dirty",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-sessions-same-cwd",
+      "agent": "copilot",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready (confidence 0.75 — the two-session-row half is structural and certain; the PID-binding half is code-derived and depends on an ordering assumption that only a live recording settles).\n\n## agent_supports = yes\n\nCopilot mints a FRESH session UUID per launch and gives each session its own directory, `$COPILOT_HOME/session-state/<uuid>/`. Nothing about session identity is keyed on the working directory, so two concurrent REPLs in one cwd are two independent sessions by construction — the sessions themselves cannot collide.\n\nThe one thing that could block concurrency is a lock, and Copilot's lock is session-scoped, not workspace-scoped. In the shipped `app.js` bundle the create path runs `let y = nf(p.sessionId, d), S = await this.registerSessionLock(p.sessionId, y); p.alreadyInUse = S`, and `registerSessionLock(e, n) { return await h.inUseLocksRegisterSession(e, n, process.pid) }`. Every lock primitive in the bundle is session-keyed — `inUseLocksRegister`, `inUseLocksRegisterSession`, `inUseLocksRelease`, `inUseLocksReleaseAllSessions`, `inUseLocksReleaseSession`, `inUseLocksSweep` — and `checkSessionsInUse({sessionIds})` queries by session id. A grep of the whole bundle for `workspaceLock` / `lockWorkspace` / `directoryLock` / `cwdLock` returns nothing. The only \"already running for: ${this.targetWorkspaceFolder}\" string belongs to an in-process re-entrancy guard on the IDE lock-file watcher (`start(){ if(this.watcher) return … }`), not a cross-process exclusion.\n\nSo two fresh launches take two different locks and neither observes `alreadyInUse`. `alreadyInUse` is a per-session flag surfaced on the resume path, not a launch veto.\n\n## daemon_capability = full\n\n| Scenario assertion | Adapter mechanism |\n|---|---|\n| \"Two distinct sessions appear, each with its own session_id\" | `Source: FilesUnderRoot{Dir: sessionsDir(), SessionIDFromPath: sessionIDFromPath}` (agent.go / adapter.go). The id IS the `<uuid>` directory name, and Copilot mints a new directory per launch — two launches, two watched `events.jsonl` files, two rows. Nothing here is cwd-keyed. |\n| \"Each session's state transitions independently — no flapping between rows\" | `JSONLineParser{NewParser: func() agent.LineParser { return &Parser{} }}` constructs a FRESH stateful `Parser` per transcript file, so session A's `user.message` / `assistant.turn_end` can never mutate session B's state. Copilot's turn boundaries are explicit (`assistant.turn_start` / `assistant.turn_end`), so neither arc is inferred from a heuristic that could straddle two sessions. |\n| \"Each session has its own PID; the binding is stable and does not cross-contaminate\" | The crux — see below. |\n\n### The crux: cwd-based PID discovery with two candidates\n\n`copilot/pid.go` is `DiscoverPIDByCWD(ProcessName, cwd, disambiguate)` — purely cwd-based, with no argv filter and no sidecar. Two concurrent sessions in the SAME cwd therefore BOTH match `narrowByCWD`, and the disambiguator decides. It resolves correctly, for three reasons that hold together:\n\n1. **The disambiguator is claim-aware, not naive.** `PIDManager.claimAwareDisambiguate` (pid_manager.go) picks the highest UNCLAIMED pid among the cwd matches, falling back to the highest claimed pid only when every candidate is already taken. `narrowByCWD`'s own default (`highestPID`) is never reached, because `TryDiscoverPID` always passes the claim-aware closure.\n2. **This exact shape is regression-tested at the services layer, adapter-agnostically.** `session_detector_pid_test.go` drives two `EventNewSession`s with the SAME `CWD`, waits for the first PID to bind so the second discovery sees it claimed, and asserts `stateA.PID != stateB.PID`, `stateA.PID == 1001` (\"highest unclaimed\"), `stateB.PID == 1000` (\"1001 already claimed\"). Copilot reaches that code through the identical `DiscoverPIDByCWD` path kiro-cli and mistral-vibe use, so the test covers copilot's crux directly.\n3. **Once bound, the binding is immutable for the session's life.** `TryDiscoverPID` returns early when `state.PID > 0`, so the re-drive of session 1 while session 2 is alive does no rediscovery at all — the phase that proves non-cross-contamination cannot regress through the discovery path.\n\nWalking the recipe's ordering concretely: session 1 launches (pid1); the scanner mints `proc-<pid1>`; the first prompt materializes `events.jsonl` and the real session binds pid1 (the only cwd candidate), and `cleanupStalePIDHolders` / `cleanupPreSessionsForProject` retire `proc-<pid1>`. `start_session` then launches pid2 in the same cwd; when session 2's transcript appears, the candidate set is `[pid1, pid2]` with pid1 claimed by session 1, so the claim-aware pick is pid2. Two rows, two pids, no overlap.\n\nThis stays `full` rather than `bug`: every spec-required observable is produced correctly on the path the recipe exercises. The residual is an ordering assumption, recorded in `caveats`.\n\n## driver_capability = ready\n\n`driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` reports `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn` — `start_session` and `session` are both present and real (not `not_implemented` stubs): `start_session) save_active; launch_repl ;;` and `session) save_active; load_slot \"$(jq -r '.session // 1' <<<\"$step\")\" ;;`.\n\nThe driver is already written for concurrency rather than merely tolerant of it:\n\n- `launch_repl` calls `alloc_slot \"copilotdrv-$$-…-$((N_SLOTS + 1))\" \"$RUN_CWD\"`, so slot 2 launches into the SAME `RUN_CWD` as slot 1 — which is precisely what this scenario needs, and what makes both processes cwd-match.\n- `resolve_transcript` resolves the new session by SET DIFFERENCE against a `PRE_LAUNCH_DIRS` snapshot taken immediately before each launch, with an in-source comment naming this case: \"a concurrent session (or a leftover from an earlier slot) makes 'newest' the wrong answer.\" Slot 1's directory is inside the snapshot, so slot 2 resolves to its own.\n- `seed_copilot_home` rewrites only `config.json` (it does not touch `session-state/`), so re-running it at slot 2's launch cannot disturb session 1's transcript.\n- `wait_ready` answers the folder-trust modal per launch, so slot 2 is not blocked even though the modal reappears for an already-trusted folder on 1.0.77.\n\n## Spec-anchoring choice\n\nEvery phase anchors on a WORKING transition, never on a `ready`. Copilot is a presession adapter (the `2-1_basic-turn` sibling models `presession_birth` → `session_birth` explicitly): the process exists while the session directory still holds only `workspace.yaml`, so `processlifecycle.Scanner` mints a born-ready `proc-<PID>` row before the fswatcher can see any transcript. With TWO processes there are up to two such placeholders in flight, and a `ready`-anchored `new_session` phase would greedily bind to whichever placeholder appeared first. `proc-*` rows never enter `working`, so working-anchoring skips them deterministically. This is the same anchoring kiro-cli's sibling cell uses for the same reason, and the miss the assess playbook warns about.\n\nThe two distinct session ids are asserted relationally (`new_session` / `same_session_as`) rather than literally, because Copilot mints its own UUID per launch and the driver does not get to choose it (`--session-id` exists but the recipe does not use it, keeping the recording faithful to an ordinary launch).\n\n`model` is deliberately NOT pinned: `--model` accepts only `auto` on this account and `session.auto_mode_resolved` picks between `gpt-5-mini` and `claude-haiku-4.5` per turn, so an exact match would be nondeterministic across three turns. `tokens_nonzero` and `cost_nonzero` are asserted — `assistant.message` carries `outputTokens` and both reachable models are priced.",
+      "caveats": [
+        "PROVISIONAL ON EMISSION: no live recording has yet put two copilot processes in one cwd. The daemon=full verdict is derived from the adapter source plus the services-layer two-sessions-same-cwd regression test, not from an observed events.jsonl. record promotes it from provisional to settled.",
+        "The claim-aware disambiguator's correctness here rests on 'highest PID == most recently launched' (narrowByCWD's documented macOS assumption). Under PID wraparound the second copilot process could get a LOWER pid than the first; if its proc-<PID> placeholder has already claimed it, claimAwareDisambiguate finds no unclaimed candidate and falls back to the highest claimed pid — session 1's — at which point cleanupStalePIDHolders would delete session 1's row. This is an agent-agnostic seam shared by every cwd-discovered adapter (kiro-cli, mistral-vibe), not a copilot regression, and it is not expected to fire in a recording where the two launches are seconds apart. If a recording DOES show a lost row or a swapped binding, this is the mechanism to look at first.",
+        "POSSIBLE UNLOCK if the cwd tie-break proves fragile: copilot writes an authoritative session-id-to-PID map to disk. app.js does registerSessionLock(sessionId, path) -> inUseLocksRegisterSession(sessionId, path, process.pid), and the 1-4_session-resume probe live-observed the resulting `inuse.<pid>.lock` inside the session's own directory. That is structurally the same signal claudecode's pid.go uses as its authoritative Layer 1 (~/.claude/sessions/<pid>.json), and would let DiscoverPID bind by session id instead of cwd. Not wired today, and deliberately not proposed as part of this cell — noted so a future fix does not have to re-derive it. Note the lock is transient: with no copilot running, none of the live session directories under ~/.copilot/session-state/ contains an inuse.*.lock (inUseLocksRelease* sweeps them on exit), so a consumer would have to tolerate its absence.",
+        "The recipe spends THREE turns of the maintainer's AI credits (session 1 turn, session 2 turn, session 1 re-drive). The third turn is not padding — it is the only phase that proves the PID-to-session binding stayed stable while a rival process shared the cwd, so it cannot be dropped to save credits.",
+        "Copilot creates <uuid>/ at launch but writes events.jsonl only on the first prompt, so BOTH real session rows appear late relative to their processes. Between start_session and session 2's first prompt the dashboard legitimately shows session 1 plus a proc-<PID> placeholder, not two real rows. Any human eyeballing the recording should read that window as correct, not as a missing session.",
+        "DRIVER FOOTGUN, worked around in this recipe rather than fixed: the copilot driver's step loop dispatches on .type only (`type=\"$(jq -r '.type' <<<\"$step\")\"`) and has no equivalent of claudecode's per-step retarget (`tgt=$(jq -r '.session // empty' <<<\"$step\")` -> save_active + load_slot). The claudecode and kiro-cli recipes for THIS scenario both tag the re-drive as {\"type\":\"send\",\"session\":1}; copied verbatim onto copilot that field is inert and the re-drive would land on session 2, producing a recording that verifies green while proving nothing about PID stability. This recipe uses an explicit {\"type\":\"session\",\"session\":1} step instead, which the driver does implement. Making the copilot driver honour the field too (five lines, mirroring claudecode) would remove the trap for every future copilot recipe.",
+        "cleanupPreSessionsForProject retires ALL proc-<pid> placeholders matching the project/cwd when a real session for that cwd arrives, and the periodic sweep's matchCWD path does the same after a 90s grace. With two live processes in one cwd, session 1's arrival can therefore retire a placeholder belonging to session 2's still-unidentified process. This only removes a transient placeholder row — the real session 2 row still arrives and still binds its own pid — and the spec's working-anchored phases are blind to it by design."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/pid.go",
+          "note": "DiscoverPID = processlifecycle.DiscoverPIDByCWD(ProcessName, cwd, disambiguate) — cwd-only, no argv filter, no sidecar. This is the cell's crux: two same-cwd processes both match and the disambiguator decides."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Source: FilesUnderRoot{Dir: sessionsDir(), SessionIDFromPath: sessionIDFromPath, Parser: JSONLineParser{NewParser: () => &Parser{}}}. Session id comes from the <uuid> directory, so two launches are two rows; a fresh stateful Parser per file means the two sessions share no parser state. Process.Match = ExactName{\"copilot\"} (the native child, not the node loader)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "claimAwareDisambiguate: highest UNCLAIMED cwd candidate, falling back to highest claimed. TryDiscoverPID returns early when state.PID > 0, so a bound session is never rediscovered. cleanupStalePIDHolders deletes any other non-subagent holder of a newly claimed pid — the mechanism that both retires the proc-<PID> placeholder and, under the wraparound caveat, could delete a live sibling."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_pid_test.go",
+          "note": "The adapter-agnostic regression test for this exact crux: two EventNewSessions with the same CWD, the second discovered after the first has bound, asserting different PIDs with sess-a==1001 ('highest unclaimed') and sess-b==1000 ('1001 already claimed'). Copilot reaches this code through the same DiscoverPIDByCWD path."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/discovery.go",
+          "note": "narrowByCWD canonicalises cwd via EvalSymlinks then filters by exact CWDOf match, delegating multi-match resolution to the caller's disambiguate; its own highestPID default ('most recently started on macOS') is the documented assumption behind the PID-wraparound caveat."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_helpers.go",
+          "note": "cleanupPreSessionsForProject retires every proc-<pid> pre-session for the arriving real session's project/cwd — the basis for the transient-placeholder caveat in a shared-cwd recording."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "CLI 1.0.77 shipped bundle. Create path: `let y=nf(p.sessionId,d),S=await this.registerSessionLock(p.sessionId,y);p.alreadyInUse=S`; `registerSessionLock(e,n){return await h.inUseLocksRegisterSession(e,n,process.pid)}`. Every lock primitive is session-keyed (inUseLocksRegister/RegisterSession/Release/ReleaseAllSessions/ReleaseSession/Sweep) and checkSessionsInUse takes {sessionIds}. Grep for workspaceLock|lockWorkspace|directoryLock|cwdLock returns nothing; the sole 'already running for: ${this.targetWorkspaceFolder}' is an in-process guard on the IDE lock-file watcher (`start(){if(this.watcher)return …}`). Hence no cwd-level exclusion on a second concurrent launch."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS includes start_session and session; both arms are implemented (start_session -> save_active + launch_repl; session -> `save_active; load_slot \"$(jq -r '.session // 1' <<<\"$step\")\"`). The step loop (`while IFS= read -r step; do type=\"$(jq -r '.type' <<<\"$step\")\"`) dispatches on .type ONLY — unlike claudecode's driver, which additionally retargets on a per-step .session field; the shared replaydata/_lib/drive/slots.sh provides save_active/load_slot but no such hook. Hence this recipe's explicit session step. launch_repl allocs each slot with RUN_CWD so slot 2 shares slot 1's cwd, and re-snapshots PRE_LAUNCH_DIRS before every launch so resolve_transcript takes a set difference — its comment names the concurrent-session case explicitly. seed_copilot_home rewrites only config.json, never session-state/."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/1-4_session-resume/metadata.json",
+          "note": "Live probe on 1.0.77 that observed `inuse.<pid>.lock` written into the session's own directory, and confirmed copilot mints a brand-new session-state/<uuid>/ on every launch. Basis for the 'possible unlock' caveat and for 'a launch always mints its own session directory'."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/2-1_basic-turn/expected.jsonl",
+          "note": "Sibling cell establishing copilot's presession shape (proc-<PID> born ready before events.jsonl exists, real session reconciling under a different id) and the observation vector reused here: tokens_nonzero + cost_nonzero asserted, model left unpinned because --model accepts only \"auto\"."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/4-1_multiple-sessions-same-cwd/expected.jsonl",
+          "note": "Template for the working-anchored phase shape used here — the sibling cwd-discovered adapter that solved the same born-ready proc-<PID> greedy-match problem for this scenario."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits — this recipe spends THREE turns (session 1, session 2, session 1 again)",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "No OTHER copilot process shares the staging cwd: the recipe deliberately creates exactly two, and a third would make the cwd tie-break ambiguous"
+      ],
+      "setup": [
+        "The driver seeds a scratch COPILOT_HOME under staging with trustedFolders + askedSetupTerminals pre-answered; each session directory is minted under $COPILOT_HOME/session-state/<session-id>/",
+        "Driver auto-launches session 1 (slot 1) via `copilot --no-color --allow-all` in <staging>/cwd",
+        "The start_session step launches session 2 (slot 2) via a second `copilot --no-color --allow-all` in the SAME <staging>/cwd, keeping session 1 alive — this is what puts two processes behind one cwd for DiscoverPIDByCWD",
+        "wait_ready answers the folder-trust modal on each launch (it reappears on 1.0.77 even for an already-trusted folder), and resolve_transcript resolves slot 2 by set difference against the pre-launch directory snapshot so it cannot latch onto slot 1's directory",
+        "An EXPLICIT {\"type\":\"session\",\"session\":1} step routes the following send/wait_turn back to session 1 while session 2 stays alive — the PID-stability re-drive. NOTE this differs from the claudecode/kiro-cli recipes for this scenario, which tag the send itself with a \"session\" FIELD: the copilot driver's step loop dispatches purely on .type and has no per-step .session retarget, so a field-tagged send would silently drive session 2 and the cell would prove nothing"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "start_session"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: bravo"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "session",
+          "session": 1
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha2"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl contains 2 distinct copilot session ids (two <uuid> directories under the scratch COPILOT_HOME/session-state), both bound to the same cwd",
+        "each session id has its own independent working->ready arc; no transition on one is attributed to the other",
+        "session 1 shows TWO working->ready arcs (turn 1 + the post-start_session re-drive); session 2 shows ONE — proving session 1 stayed bound and independent while session 2 was alive",
+        "pid_discovered binds a DIFFERENT copilot PID to each session (the claim-aware disambiguator's highest-unclaimed pick over the two same-cwd candidates)",
+        "no state flapping: the daemon never swaps the PID-to-session binding between the two rows, and neither real session row is deleted by the other's PID claim",
+        "any proc-<PID> placeholder rows are transient and retired once their real session arrives; the recording settles at exactly two real session rows",
+        "observation vector: tokens_nonzero=true, cost_nonzero=true; model left unasserted (auto-router picks per turn)"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}

@@ -148,6 +148,12 @@ func (t *TranscriptTailer) resetAccumulatorsForRotation() {
 	// pinned the session to `waiting` indefinitely. Same reasoning as
 	// openBackgroundProcs below (issue #445). See issue #1088.
 	t.openToolCalls = make(map[string]string)
+	// Same hazard as openToolCalls above, one tier higher: an unresolved
+	// permission prompt from the pre-rotation file would pin the session to
+	// `waiting` indefinitely, and the transcript-tier permission rule outranks
+	// the user-blocking-tool rule that #1088 was about. The prompt belongs to
+	// the previous file — a rotated transcript can never carry its resolution.
+	t.openPermissions = make(map[string]struct{})
 	// Background-process set belongs to the prior file; drop it so a
 	// rotated/truncated transcript doesn't keep a stale session `working`.
 	// See issue #445.

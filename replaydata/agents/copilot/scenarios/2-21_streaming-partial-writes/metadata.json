@@ -1,0 +1,67 @@
+{
+  "scenario_id": "streaming-partial-writes",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+52f711e",
+    "confidence": 0.88,
+    "notes": "agent_supports: yes (Copilot streams — it has a full in-process delta event family)\ndaemon_capability: incapable — NONE of those delta events are persisted; events.jsonl carries exactly ONE complete assistant.message per turn, written by a debounced batching writer, so the streaming-window no-flicker invariant has no partial-flush trace to assert over\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "streaming-partial-writes",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable — Copilot's streaming deltas are in-process only; the transcript the daemon tails records one whole `assistant.message` per turn\ndriver_capability: ready\n\nRoute: **frozen**. Same shape as the pi, kiro-cli and codex cells on this row: the agent streams to the TUI, but the on-disk transcript carries only complete, atomically-appended records, so the partial-flush window this scenario pins does not exist for this agent. This is an agent-transport limitation, not a daemon defect and not a driver gap.\n\n## What the scenario pins\n\n`streaming-partial-writes` (primitive `streaming_output`): the assistant reply arrives in MULTIPLE partial flushes before the turn-end signal, and state must stay `working` across every flush with no premature `→ ready` (the Bug-D flicker family, issue #102). The canonical claudecode mechanism is `resolveAssistantStreaming` (claudecode/parser.go:288) downgrading non-terminal `stop_reason` lines to `assistant_streaming`, excluded from `IsAgentDone()`. The discriminating phase is `streaming_window`: `working` held across the flushes.\n\n## agent_supports: yes — Copilot really does stream\n\nCopilot CLI 1.0.77 has a complete streaming event vocabulary in-process. Scanning the decompressed SEA payload (`~/Library/Caches/copilot/pkg/darwin-arm64/1.0.77/app.js`) for session event names yields, among others:\n\n`assistant.message_start`, `assistant.message_delta`, `assistant.streaming_delta`, `assistant.reasoning_delta`, `assistant.tool_call_delta`, `assistant.server_tool_progress`, `tool.execution_partial_result`\n\nSo the reply is generated and rendered incrementally — the agent performs the behavior.\n\n## daemon_capability: incapable — the deltas are never persisted\n\nTwo independent primary sources agree.\n\n**1. The writer, read in app.js.** The persistence path is the `Wfe` session-event-writer class (around offset 2534199 in the 1.0.77 `app.js`). It subscribes to `session.on(\"*\")`, hands each serialized event to a native `recordEventJson(l)` which returns `{queued, scheduleFlush}`, and only a `queued` event is retained; a flush is then DEBOUNCED (`flushDebounceMs`, module constants `VBt=500, frr=100`) and appends the whole accumulated batch in one `sessionEventsAppendLocal(this.localEventsPath, r)` call, where `r` is the batch of complete serialized records. Two consequences: (a) the writer filters — most events, including the delta family (the file carries 119 `emitEphemeral(` call sites), are never queued for persistence at all; (b) what is written is always whole records in a batch append, never an incrementally-flushed byte stream.\n\n**2. The live transcripts, read on disk.** Across five real 1.0.77 sessions under `~/.copilot/session-state/*/events.jsonl` (13 assistant turns, 9 user prompts, including a deliberately long-output prompt — \"count slowly from 1 to 15, one number per line, with a short comment\" at 764 output tokens), the persisted type census is:\n\n```\n13 assistant.turn_start   13 assistant.message   13 assistant.turn_end\n 9 user.message            4 tool.execution_start / _complete pairs\n 5 session.start / model_change / auto_mode_resolved / shutdown   7 session.usage_checkpoint\n 1 permission.requested / .completed\n```\n\nEvery single turn contributes EXACTLY ONE `assistant.message`, carrying the complete final `content` string. `grep` for `message_delta|streaming_delta|message_start` across all five files returns **0** matches. There is no partial-assistant record family on disk, of any kind, at any response length.\n\n**Therefore the streaming_window phase has nothing to assert over.** The copilot parser (`core/adapters/inbound/agents/copilot/parser.go`) would in fact hold `working` correctly IF partial flushes existed — `parseAssistantMessage` (parser.go:189) never settles the turn (its doc comment says so explicitly), and only `assistant.turn_end` maps to `turn_done` (parser.go:98-99). Copilot's turn boundary being EXPLICIT means the parser is structurally immune to the Bug-D flicker this row guards. But immunity to a signal the transport never emits is not an observation: a live recording would show `ready → working → ready` with the whole reply landing in a single batched append, so the recording would validate nothing the sibling `basic-turn` / `turn-end-terminal-text` cells do not already cover.\n\n## Not a driver gap\n\nThe copilot interactive driver already implements every step a would-be recipe needs (`send`, `wait_turn`, `sleep`, and even `sigkill`): `driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` → `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn`. The cell is frozen because there is no trace to observe, not because the tooling is missing a primitive.\n\n## On the torn-line reading of the scenario name\n\n\"Partial writes\" in the sense of a half-written trailing JSONL line is a shared-tailer property, not an agent-specific one, and it is covered by synthetic unit tests (`core/pkg/tailer/large_line_test.go`) — the same reasoning the codex and kiro-cli cells record. For copilot specifically the tailer degrades gracefully anyway: `Parser.ParseLine` returns `&tailer.ParsedEvent{Skip: true}` for any line without a `type` field (parser.go:78-81), so a torn record is skipped rather than erroring. That robustness is adapter-agnostic and a live CLI cannot be driven to produce a mid-line flush on demand — `sigkill` could in principle interrupt a batch append, but the timing is not deterministic and the assertion would be about the tailer, not about copilot.",
+      "caveats": [
+        "agent_supports is yes, NOT partial: unlike codex (which has no delta vocabulary at all), copilot genuinely has one — assistant.message_start / message_delta / streaming_delta / reasoning_delta / tool_call_delta all appear in the 1.0.77 app.js. The verdict splits cleanly on emission vs performance: the agent streams, the transport does not persist it.",
+        "The freeze rests on the batching + filtering writer (app.js Wfe class, debounced flush -> sessionEventsAppendLocal batch append). If a future Copilot release starts persisting the delta family to events.jsonl, this cell becomes recordable as specified with no parser change — parseAssistantMessage already never settles a turn, so partial flushes would sustain working correctly. Re-assess on a CLI bump.",
+        "OUT-OF-SCOPE OBSERVATION, for the sibling 2-2 auto-executed-tool-call cell, not this one: in the live corpus a single USER turn that runs a tool emits assistant.turn_end (turnId 0) BEFORE the follow-up turn_start (turnId 1) — e.g. session 51ffced3 at 20:42:56.178 turn_end then 20:42:57.587 assistant.message, a ~1.4s gap. Since turn_end maps to turn_done (ready) and the next assistant.message is ordinary activity (working), a tool-using turn may show a mid-turn ready blip. This scenario asserts tool calls <= 0 so it cannot occur here, and I did NOT verify the blip against a live recording — it is an inference from the parser mapping plus the on-disk timestamps, flagged for `record` to check on the tool cells rather than asserted as a defect.",
+        "Confidence 0.88 rather than higher: the transport claim is settled by direct primary evidence (five live events.jsonl files plus the writer source), but the corpus was not captured under a deliberately maximal-length prompt, so the strongest available statement is 'no delta record was ever persisted across 13 turns including a 764-output-token one', not 'copilot provably never persists one at any length'."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/Library/Caches/copilot/pkg/darwin-arm64/1.0.77/app.js",
+          "note": "Session event-writer class Wfe (~offset 2534199): session.on('*') -> nativeHandle.recordEventJson(l) -> {queued, scheduleFlush}; flush is debounced (VBt=500, frr=100 ms) and appends a BATCH of complete records via sessionEventsAppendLocal(localEventsPath, r). Filtering + batch whole-record appends, so no incremental byte-level flushing. 119 emitEphemeral( call sites carry the non-persisted events."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/Library/Caches/copilot/pkg/darwin-arm64/1.0.77/app.js",
+          "note": "In-process streaming vocabulary present in the binary: assistant.message_start, assistant.message_delta, assistant.streaming_delta, assistant.reasoning_delta, assistant.tool_call_delta, assistant.server_tool_progress, tool.execution_partial_result. Grounds agent_supports=yes."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.copilot/session-state/{2b82eada,40dfdd13,51ffced3,a030ac38,a995dbc4}/events.jsonl",
+          "note": "Live 1.0.77 corpus, 5 sessions / 13 assistant turns. Persisted type census contains 13 assistant.message for 13 assistant.turn_start-turn_end pairs — exactly one complete assistant.message per turn, including a 764-output-token 'count slowly from 1 to 15' reply. grep for message_delta|streaming_delta|message_start returns 0 across all five files. Decisive for daemon=incapable."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "parseAssistantMessage (line 189) explicitly never settles the turn; only assistant.turn_end maps to turn_done (lines 98-99). The parser WOULD sustain working across partial flushes if any existed — the gap is emission, not handling. ParseLine (lines 78-81) returns Skip=true for a line with no type field, so a torn trailing record degrades to a skip."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/2-21_streaming-partial-writes/metadata.json",
+          "note": "Row precedent: pi was reconciled full -> incapable when a live recording proved the whole reply lands as one consolidated line. kiro-cli's cell on the same row records the identical shape. copilot matches it."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "driver_step_types_from_file yields exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn — every step a recipe for this row would need is present, so driver=ready and the freeze is not a tooling gap."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "applicable:false — the cell is frozen at daemon=incapable, so no recording is taken. The would-be recipe is trivial and needs no new driver primitive (send a long-prose prompt such as 'Do not use any tools. Write a 12-line poem, one line at a time.' -> wait_turn -> sleep), which is precisely why recording it would be misleading: the driver would run fine and the recording would show a clean ready -> working -> ready arc, but the whole reply lands in ONE batched append of ONE complete assistant.message record, so the streaming_window phase would be asserting over an empty window and the recording would duplicate the basic-turn / turn-end-terminal-text cells rather than validating this row's invariant. The freeze is on the agent's transport (app.js Wfe debounced batch writer + a filter that never queues the assistant.*_delta family for persistence), not on the parser, which already sustains working across mid-turn assistant messages, and not on the driver, which has every step type this would need including sigkill. Re-assess if a future CLI persists the delta events."
+    }
+  }
+}

@@ -1,0 +1,155 @@
+{
+  "scenario_id": "token-quota-exhausted",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.31+dev",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (schema documents errorType quota/rate_limit with per-category errorCodes); daemon_capability: full (a quota-aborted turn writes a PERSISTED assistant.turn_end -> the parser's existing turn_done settles working->ready); driver_capability: ready (mock-openai-429 is already committed and BYOK reaches the CLI through the inherited tmux environment -- no driver gap, unlike the codex and gemini-cli cells in this row)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-quota-exhausted",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n=> route: record\n\n## Scenario\n\n`token-quota-exhausted` asserts a pure LIFECYCLE arc, nothing else: a turn hits the token/cost budget, the agent stops, `working -> ready`, and the session does not stick in `working`. The acceptance_criteria are state-only -- no quota metric is asserted. This is the cap-hit sibling of `quota-burndown`.\n\n## agent_supports: yes\n\nCopilot CLI 1.0.77 models quota exhaustion as a FIRST-CLASS, named error category, not as a generic failure. `schemas/session-events.schema.json` -> `ErrorData.errorType` documents the vocabulary verbatim: \"Category of error (e.g., \\\"authentication\\\", \\\"authorization\\\", \\\"quota\\\", \\\"rate_limit\\\", \\\"context_limit\\\", \\\"query\\\")\", and `ErrorData.errorCode` documents the exact codes per category -- for `errorType: \"rate_limit\"` one of `user_weekly_rate_limited` / `user_global_rate_limited` / `user_model_rate_limited` / `integration_rate_limited` / `rate_limited`, and for `errorType: \"quota\"` the CAPI codes `quota_exceeded` / `session_quota_exceeded` / `billing_not_configured`.\n\nBoth code paths exist in the bundle (`app.js`). The classifier in the agentic loop's catch arm is `pe===402 ? (k.error(`Payment required error: ...`), be=mnt(j), ve=ynt(be), re=$se(j)) : pe===429 && oe && (re=nIt(oe))`, and `nIt` maps the provider code through `GZn` -- the table whose entries are the user-facing strings \"You've reached your weekly rate limit.\", \"You've hit your rate limit.\", etc. The 402 table `CCn={402:{billing_not_configured, session_quota_exceeded, quota_exceeded, additional_spend_limit_reached}}` carries \"You've run out of your included AI credits for the month.\"\n\nSo the agent performs the behaviour end-to-end, and it distinguishes the two flavours: **AI-credit exhaustion is HTTP 402**, the rate-limit ladder is 429.\n\n## daemon_capability: full\n\nSource = `FilesUnderRoot{Dir: $COPILOT_HOME/session-state, SessionIDFromPath, JSONLineParser}` (`core/adapters/inbound/agents/copilot/agent.go`). Walking the asserted arc against `core/adapters/inbound/agents/copilot/parser.go`:\n\n1. `ready -> working` -- `user.message` -> `parseUserMessage` -> `EventType: \"user_message\"`.\n2. `working -> ready` on the budget hit -- copilot's ONLY route back to ready for this adapter is `case evTurnEnd: ev.EventType = \"turn_done\"`. The load-bearing question is therefore whether a quota-aborted turn writes `assistant.turn_end`. It does, and this is not inferred:\n   - **Schema-declared persistence.** In `session-events.schema.json`, transient events carry `\"ephemeral\": {\"const\": true, \"description\": \"Always true for events that are transient and not persisted to the session event log on disk\"}`. `AssistantTurnEndEvent` and `ErrorEvent` (session.error) carry the plain non-const `ephemeral` property -- they ARE written to `events.jsonl`. `AssistantTurnRetryEvent`, `ModelCallFailureEvent`, `IdleEvent`, `AutoModeSwitchRequestedEvent`/`Completed`, `AssistantUsageEvent`, `UsageInfoEvent` and `SessionLimitsExhaustedRequested`/`Completed` are all `const: true` -- never on disk.\n   - **Live-verified on the identical code path.** The copilot/turn-aborted-by-error sibling captured the real event order from `$COPILOT_HOME/session-state/<id>/events.jsonl` on CLI 1.0.77 for a provider 503: `user.message -> assistant.turn_start -> assistant.turn_end (21:44:10.483) -> session.error{errorType:\"query\",statusCode:503} (21:44:10.498) -> session.shutdown`. `assistant.turn_end` PRECEDES `session.error`. A 402/429 abort exits through the same `catch(...) { ... } finally { ... this.endNativeTurn() ... }` in the agentic loop -- the classifier block above is inside that same catch -- so the settle is carried by the explicit turn boundary either way.\n3. No `waiting` -- no `permission.requested` is involved.\n\nThe arc the scenario asserts is the only signal in play and the parser produces all of it, without a parser change. Recovery is event-driven, not timer-driven: there is no working-state idle sweep (`core/application/services/pid_manager.go` TTL-cleans only `StateReady` or PID-dead sessions), so if `assistant.turn_end` were absent this cell would be `daemon=bug`. It is not.\n\n### Why not bug / incapable, and where the real (caveat-level) gap is\n\nirrlicht's rate-limit surface is `ParsedEvent.RateLimit -> SessionMetrics.RateLimit + ForecastCap` (codex's `RateLimitSnapshot.ReachedType` is the reference producer). The copilot parser sets NONE of it. That is a caveat, not a downgrade, for two independent reasons:\n\n- The scenario asserts no quota metric. The spec-required observable (`working -> ready`) is fully produced.\n- More fundamentally, the remaining-budget data irrlicht would need **is not on disk to be read**. Every quota/entitlement payload copilot has is schema-marked ephemeral: `assistant.usage` carries `AssistantUsageQuotaSnapshot` (`hasQuota`, `remainingPercentage`, `entitlementRequests`, `usedRequests`, `resetDate`, `overageEntitlement`) and is `ephemeral: const true`; `session_limits_exhausted.requested` (with `usedAiCredits`/`maxAiCredits`) is `const true`; `session.usage_info` is `const true`. The only persisted budget-adjacent events are `session.usage_checkpoint`/`session.shutdown` (CONSUMPTION: `totalNanoAiu`, `totalPremiumRequests`, `modelMetrics` -- already parsed) and `session.session_limits_changed`, which carries only the CONFIGURED `maxAiCredits` ceiling, never usage against it. So a `RateLimit` snapshot for copilot is architecturally unavailable from the transcript -- no parser work can produce it. Recording this cell as a state arc is the honest and complete thing to do.\n\n`session.error` IS persisted and carries `errorType`/`errorCode`/`statusCode`, but the parser has no arm for it and it falls to the `default: ev.Skip = true`. The abort is therefore observable as a state arc while the REASON stays invisible in the timeline -- the same caveat the turn-aborted-by-error sibling records, and the same one-arm parser addition would fix both.\n\n## driver_capability: ready\n\nThe recipe needs `send` + `wait_turn` + `sleep`. `replaydata/agents/copilot/driver-interactive.sh:128` declares `DRIVE_ELICITS=\"send slash sleep wait_turn exit_clean sigkill interrupt keys restart start_session session reset_session resume\"` -- all three present. `wait_turn` gates on `assistant.turn_end` occurrences, and the aborted turn emits one, so the gate closes on the abort instead of hanging to the timeout.\n\nCritically, this is where copilot differs from the gemini-cli and codex cells in the same row, both of which are `gap:429-mock`: **the mock already exists and is committed.** `tools/onboarding-factory/recording/mock-openai-429/main.go` serves `GET /v1/models` plus `POST /v1/chat/completions` (200 + a streaming `finish_reason: stop` on request 1, the OpenAI `insufficient_quota` body with `--error-status` on every later request) -- exactly the OpenAI wire format copilot's BYOK provider speaks, and another assessor drove copilot against it directly. Nothing has to be ported, so there is no driver gap: starting the mock is a recording PRECONDITION, not a missing driver primitive.\n\nBYOK reaches the CLI through the environment, which the driver's `tmux new-session -d ... copilot \"${args[@]}\"` (line 183) inherits from the driver process -- the same mechanism the 2-2 / 2-3 / 2-4 cells use for `COPILOT_AVAILABLE_TOOLS` and the 2-14 cell uses for BYOK itself.\n\n## Elicitation: deterministic, free, and no real plan touched\n\n`copilot help providers` documents `COPILOT_PROVIDER_BASE_URL` (\"required to activate BYOK\"), `COPILOT_PROVIDER_TYPE` (openai default), `COPILOT_PROVIDER_WIRE_API`, `COPILOT_PROVIDER_API_KEY` and `COPILOT_MODEL`, and states GitHub authentication is NOT required with a custom provider. BYOK bypasses GitHub's CAPI entirely: the 2-14 probe's `session.shutdown` reported `totalNanoAiu 0` / `totalPremiumRequests 0`. So the maintainer's real Copilot plan is never touched and the recording spends ZERO AI credits -- this is what turns the codex-style \"cannot induce quota exhaustion deterministically\" freeze into a recordable cell.\n\nThe retry ladder is BOUNDED, which is the other thing that has to be true for the recording to terminate. `app.js` defaults: `retryPolicy.maxRetries ?? 5`, `rateLimitRetryPolicy.defaultRetryAfterSeconds ?? 5`, `initialRetryAfterBackoffExtraSeconds ?? 1`, `retryAfterBackoffExtraGrowth ?? 2`, `maxRetryAfterSeconds ?? 180`. With no `Retry-After` header from the mock, five retries at ~6/7/9/13/21s is roughly a minute, then the turn aborts. This is the failure mode that sank opencode's equivalent cell -- the AI-SDK there retried every 429 forever and never wrote a terminal error -- and copilot does not have it.\n\nOne BYOK-specific subtlety works in the recording's favour. The rate-limit branch is guarded on a CAPI error: `pe===429 && oe && (re=nIt(oe))` where `oe=$3e(j)` and `isCapiError: oe!==void 0`. Under BYOK there is no CAPI error, so the auto-mode-switch / rate-limit-pause branches (`session.info{infoType:\"auto_mode_switch\"}` -> `applyModelChange(cC,{cause:\"rate_limit_auto_switch\"})`, and the `pauseMessage` -> sleep `pauseSeconds` -> continue path) cannot fire. Those branches CONTINUE the turn rather than ending it, so under a real CAPI rate limit the arc would not necessarily be the one the scenario asserts. The mock produces the clean, terminal, deterministic shape.",
+      "caveats": [
+        "The quota REASON is not surfaced. session.error is persisted (schema: ErrorEvent's `ephemeral` has no const:true) and carries errorType (\"quota\"/\"rate_limit\") + errorCode (quota_exceeded / user_weekly_rate_limited / ...) + statusCode, but the copilot parser has no arm for it -- it falls to the default `ev.Skip = true`. The abort is observable as a STATE arc; the timeline never shows WHY. Same caveat as the copilot/turn-aborted-by-error sibling; one `case evSessionError:` arm would unlock both, and is worth its own issue.",
+        "irrlicht's rate-limit surface (ParsedEvent.RateLimit -> SessionMetrics.RateLimit + ForecastCap) gets NOTHING from copilot, and this is not fixable in the parser. Every remaining-budget payload copilot produces is schema-marked ephemeral (`ephemeral: {const: true}` = never written to disk): assistant.usage / AssistantUsageQuotaSnapshot (hasQuota, remainingPercentage, entitlementRequests, usedRequests, resetDate), session_limits_exhausted.requested (usedAiCredits/maxAiCredits) and session.usage_info. The only persisted budget-adjacent events are usage_checkpoint/shutdown (consumption: totalNanoAiu, totalPremiumRequests, modelMetrics) and session.session_limits_changed (the configured maxAiCredits ceiling only). Caveat, not a downgrade: the scenario asserts state topology only.",
+        "The mock's 429 is a PROVIDER rate limit, not GitHub AI-credit exhaustion. Real credit exhaustion is HTTP 402 in copilot (`CCn={402:{billing_not_configured, session_quota_exceeded, quota_exceeded, additional_spend_limit_reached}}`, errorType \"quota\"), which is NOT retried and aborts immediately; 429 is errorType \"rate_limit\" and goes through the ~60s retry ladder first. Both exit through the same catch/finally and both end in assistant.turn_end, so the asserted arc is identical -- but if the 429 ladder misbehaves live, record may run the same mock with --error-status=402 (or its 403 default) for an immediate, retry-free abort. The 429 is chosen to keep this cell consistent with the claudecode and gemini-cli cells in the same row.",
+        "A real CAPI 429 would NOT necessarily produce this arc. The rate-limit branch is CAPI-guarded (`pe===429 && oe && ...`, isCapiError) and can auto-switch models (session.info{infoType:\"auto_mode_switch\"} -> applyModelChange(cause:\"rate_limit_auto_switch\")) or pause for pauseSeconds and CONTINUE the turn, rather than ending it. Under BYOK neither branch can fire, which is what makes the recording deterministic -- but it means this cell records the mocked shape, not the live-plan shape.",
+        "The scenario's third acceptance bullet -- \"subsequent user prompts may not produce a new turn until the budget resets, state stays ready\" -- is NOT asserted for copilot, because it is not true of copilot: the CLI does not locally suppress a new turn after an abort, it re-attempts and the mock 429s again, giving another working->ready arc. The recipe stops at the two-prompt arc (the same scope the gemini-cli sibling took, where it is called out as future work) rather than asserting a behaviour the agent does not have.",
+        "PROVISIONAL on emission for the 429 case specifically. The abort -> assistant.turn_end -> session.error ordering was live-verified on CLI 1.0.77 for a provider 503 (the turn-aborted-by-error sibling), and the 402/429 classifier sits inside that same catch arm, so this is a one-step inference from a verified trace -- but only record promotes it from inferred to observed.",
+        "The two-phase presession birth is templated from the copilot/basic-turn and turn-aborted-by-error siblings and is provisional for the same reason: copilot creates session-state/<id>/ at launch but writes events.jsonl only on the first prompt, so a proc-<PID> row is expected first. If record observes the real session born directly, it re-anchors the birth phases.",
+        "Observations assert neither cost_nonzero nor tokens_nonzero and do not pin model. Prompt 1 does succeed against the mock (unlike the 2-14 cell, where every call failed), so an assistant.message with outputTokens may land and cost may be non-zero -- but the BYOK model id is not in the shared capacity price map, so cost may equally be flat zero, and the id passes through tailer.NormalizeModelName before reaching the websocket. Record fills all three from the recording rather than risking an exact-match failure this assessment cannot confirm."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "$COPILOT_CLI/schemas/session-events.schema.json (@github/copilot-darwin-arm64 1.0.77) -> ErrorData",
+          "note": "errorType is documented as one of \"authentication\", \"authorization\", \"quota\", \"rate_limit\", \"context_limit\", \"query\"; errorCode documents the per-category codes (quota: quota_exceeded / session_quota_exceeded / billing_not_configured; rate_limit: user_weekly_rate_limited / user_global_rate_limited / user_model_rate_limited / integration_rate_limited / rate_limited). This is what makes agent_supports=yes a documented fact rather than an inference."
+        },
+        {
+          "kind": "file",
+          "ref": "$COPILOT_CLI/schemas/session-events.schema.json -> AssistantTurnEndEvent, ErrorEvent vs AssistantTurnRetryEvent, AssistantUsageEvent, UsageInfoEvent, SessionLimitsExhaustedRequestedEvent/CompletedEvent, AutoModeSwitchRequestedEvent/CompletedEvent",
+          "note": "Persistence is schema-declared: transient events carry `ephemeral: {const: true, description: \"Always true for events that are transient and not persisted to the session event log on disk\"}`. turn_end and session.error have the plain non-const property (PERSISTED); turn_retry, assistant.usage (the quota snapshot), usage_info, session_limits_exhausted.* and auto_mode_switch.* are all const:true (NEVER on disk). This is the anchor for both daemon=full and the RateLimit caveat."
+        },
+        {
+          "kind": "file",
+          "ref": "$COPILOT_CLI/schemas/session-events.schema.json -> AssistantUsageQuotaSnapshot, SessionLimitsExhaustedRequestedData, SessionLimitsConfig",
+          "note": "The remaining-budget fields irrlicht's RateLimit surface would need (hasQuota, remainingPercentage, entitlementRequests, usedRequests, resetDate, usedAiCredits/maxAiCredits) live ONLY on ephemeral events. session.session_limits_changed is persisted but carries just the configured maxAiCredits ceiling. So remaining budget is unavailable from the transcript by construction."
+        },
+        {
+          "kind": "file",
+          "ref": "$COPILOT_CLI/app.js -- agentic-loop catch arm",
+          "note": "`catch(j){ ... let pe = ...status...; pe===402 ? (k.error(`Payment required error: ...`), be=mnt(j), ve=ynt(be), re=$se(j)) : pe===429 && oe && (re=nIt(oe)); ... le.sessionError && this.emit(\"session.error\", le.sessionError) ... }`, with `isCapiError: oe!==void 0`. Shows (a) 402 = AI-credit exhaustion, 429 = rate limit; (b) the rate-limit code mapping is CAPI-guarded, so a BYOK 429 cannot take the auto-switch/pause branch; (c) the abort emits session.error and exits through the same finally that ends the turn."
+        },
+        {
+          "kind": "file",
+          "ref": "$COPILOT_CLI/app.js -- GZn and CCn message tables",
+          "note": "GZn = {user_weekly_rate_limited: \"You've reached your weekly rate limit.\", user_model_rate_limited, user_global_rate_limited, integration_rate_limited, rate_limited}; CCn = {402: {billing_not_configured, session_quota_exceeded, quota_exceeded: \"You've run out of your included AI credits for the month.\", additional_spend_limit_reached}}. The user-facing quota vocabulary, confirming the feature ships in 1.0.77."
+        },
+        {
+          "kind": "file",
+          "ref": "$COPILOT_CLI/app.js -- retry policy defaults",
+          "note": "`retryPolicy.maxRetries ?? 5`, `rateLimitRetryPolicy.defaultRetryAfterSeconds ?? 5`, `initialRetryAfterBackoffExtraSeconds ?? 1`, `retryAfterBackoffExtraGrowth ?? 2`, `maxRetryAfterSeconds ?? 180`. The 429 ladder is BOUNDED (~1 minute with no Retry-After header), so the turn terminates -- copilot does not have opencode's retry-429-forever failure mode, which is why that sibling cell could never be recorded."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "`case evTurnEnd: ev.EventType = \"turn_done\"` is the ONLY route back to ready for this adapter; `parseUserMessage` drives ready->working. There is no arm for session.error (default -> ev.Skip = true) and nothing sets ParsedEvent.RateLimit -- the two caveats."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "TTL cleanup applies only to StateReady or PID-dead sessions -- there is no working-state idle sweep. Recovery from an aborted turn is event-driven, so daemon=full rests entirely on assistant.turn_end being persisted, which the schema and the sibling's live capture both confirm."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/2-14_turn-aborted-by-error/metadata.json + expected.jsonl",
+          "note": "Sibling cell, live-verified on CLI 1.0.77: the aborted turn's real events.jsonl order was assistant.turn_end (21:44:10.483) then session.error{errorType:\"query\",statusCode:503} (21:44:10.498) then session.shutdown, and the REPL survived the abort. Also establishes the BYOK-env-via-inherited-tmux-environment mechanism and the totalNanoAiu 0 / totalPremiumRequests 0 zero-cost finding."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-openai-429/main.go",
+          "note": "Committed, OpenAI-wire-format mock: GET /v1/models for provider discovery, POST /v1/chat/completions streaming 200 + finish_reason:stop on request 1 and the documented insufficient_quota body with --error-status on every request after. This is what makes copilot driver=ready where the codex and gemini-cli cells in this row are gap:429-mock."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh:128,183",
+          "note": "DRIVE_ELICITS declares send/wait_turn/sleep among its primitives (line 128) and `tmux new-session -d -s \"$SESSION\" ... copilot \"${args[@]}\"` (line 183) inherits the driver process environment, which is how the BYOK variables reach the CLI. No new primitive is needed."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/2-9_token-quota-exhausted/expected.jsonl",
+          "note": "Row sibling this spec is templated from: the same two-prompt happy-path-then-429 shape, and the precedent for treating the scenario's third acceptance bullet (subsequent prompts stay ready) as out of scope."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH. NO GitHub authentication is required and NO AI credits are spent: the cell runs in BYOK mode, which bypasses GitHub's CAPI entirely (`copilot help providers`; the 2-14 probe's shutdown reported totalNanoAiu 0 / totalPremiumRequests 0).",
+        "go on PATH (to run the mock).",
+        "Start the committed mock BEFORE driving, with the 429 status the scenario is about: `go run ./tools/onboarding-factory/recording/mock-openai-429/main.go --addr 127.0.0.1:18798 --error-status=429`. It answers GET /v1/models (provider discovery) and streams a 200 + finish_reason:stop on the FIRST POST /v1/chat/completions, then returns the insufficient_quota body on every request after -- so prompt 1 is the happy-path baseline and prompt 2 is the budget hit.",
+        "Export the BYOK environment before driving -- the driver's tmux launch inherits it, the same way the 2-2 / 2-3 / 2-4 cells pass COPILOT_AVAILABLE_TOOLS and the 2-14 cell passes BYOK: COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:18798/v1, COPILOT_PROVIDER_TYPE=openai, COPILOT_PROVIDER_WIRE_API=completions, COPILOT_PROVIDER_API_KEY=sk-irrlicht-unused, COPILOT_MODEL=irrlicht-quota-model.",
+        "127.0.0.1:18798 must be free for the mock (18799 is the turn-aborted-by-error cell's deliberately-dead port -- do not reuse it, this cell needs a LIVE listener).",
+        "irrlichd is recording -- run-cell.sh in isolated mode, or --attach against a daemon started with --record.",
+        "no other copilot session shares the same cwd (the PID is bound by cwd)."
+      ],
+      "setup": [
+        "The driver seeds a scratch COPILOT_HOME under the staging dir with trustedFolders + askedSetupTerminals pre-answered, so the trust modal cannot block the input box; the session directory is minted under $COPILOT_HOME/session-state/<session-id>/ and events.jsonl appears only on the first prompt.",
+        "Copilot prints a one-line banner warning that the BYOK model is not in the built-in catalog and it is falling back to default token limits. Expected; it does not block the input box (observed live for the 2-14 cell).",
+        "Prompt 2's abort is not immediate: copilot runs its bounded rate-limit ladder first (maxRetries 5, defaultRetryAfterSeconds 5, backoff extra 1 growing x2, capped at 180s) -- roughly a minute with no Retry-After header from the mock -- and then ends the turn. timeout_seconds is 300 to cover REPL startup + prompt 1 + that ladder with headroom.",
+        "wait_turn gates on assistant.turn_end occurrences, and the aborted turn emits one, so the second wait_turn closes on the abort rather than running to the timeout."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: again"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl mints a proc-<PID> pre-session in ready shortly after launch (the copilot process exists before its events.jsonl does)",
+        "events.jsonl mints the real <session-id> session in ready under a DIFFERENT session id once events.jsonl appears on the first prompt",
+        "events.jsonl contains a pid_discovered binding the copilot PID to the real session (matched by cwd)",
+        "prompt 1 produces a clean ready->working->ready arc on the real session (the mock streams 200 + finish_reason:stop on request 1) -- the happy-path baseline",
+        "prompt 2 drives ready->working, the mock returns 429 on every model call, copilot exhausts its bounded rate-limit ladder and ends the turn",
+        "the prompt-2 settle back to ready is carried by assistant.turn_end (the parser's turn_done), NOT by an assistant.message -- an aborted turn writes none. Recovery is event-driven; there is no working-state sweep",
+        "the session does NOT stick in working after the quota hit",
+        "events.jsonl never contains a state_transition to waiting (no tool call, so no permission.requested)",
+        "the session remains alive and ready through the trailing sleep (the REPL survives the abort -- verified live for the 2-14 sibling), so the final state is observed on a live session rather than raced against teardown",
+        "final state of the real session is ready",
+        "observation vector: model / cost / tokens are all left for record to fill -- prompt 1 succeeds so tokens may be non-zero, but the BYOK model id is not in the capacity price map and passes through NormalizeModelName, so none of the three is pinned here",
+        "DRIFT CHECK for record: confirm session.error on the aborted turn carries statusCode 429 (and note its errorType -- expected \"query\"/generic rather than \"rate_limit\", since the rate_limit classifier is CAPI-guarded and BYOK errors are not CAPI errors). This is documentation of the reason, not an assertion -- the parser skips session.error entirely."
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}

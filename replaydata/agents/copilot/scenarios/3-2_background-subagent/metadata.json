@@ -1,0 +1,130 @@
+{
+  "scenario_id": "background-subagent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+52f711e",
+    "confidence": 0.78,
+    "notes": "agent_supports: yes — Copilot CLI ships a first-class BACKGROUND subagent distinct from the foreground one: the task tool takes mode: \"background\" (changelog 1.0.35, shipped in the bundle's own changelog.json), the task registry carries executionMode \"sync\" | \"background\", and read_agent / write_agent / list_agents exist solely to talk to an agent that outlived the call. This is NOT the bash tool's detach flag (that is scenario 3.3). daemon_capability: bug — the parent's assistant.turn_end fires while the background agent is still running (the SDK's own type doc says assistant.idle is emitted 'including while related background work (running agents ...) is still pending and the session-level idle event is therefore deferred'), and irrlichd's held-working mechanism never engages for copilot: hasActiveChildren reads metrics.PendingBackgroundAgentCount or a child SessionState, and the copilot parser sets neither. The parent therefore flips working→ready mid-span, violating the unified rule's intermediate_working invariant. The trace IS on disk (an unmatched subagent.started; the parser already keeps the open set), so this is a one-seam wiring defect, not an architectural limit. driver_capability: ready."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-subagent",
+      "agent": "copilot",
+      "assessed_at": "2026-08-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.78,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug (the parent is not held working across the detached child's lifetime — the copilot parser never populates the generic `PendingBackgroundAgentCount` seam the detector's `hasActiveChildren` reads)\ndriver_capability: ready\n\nRoute: record-known-failing.\n\n## The question this cell had to settle first\n\nThis cell is only distinct from 3.1 foreground-subagent if Copilot has a subagent that OUTLIVES the parent's turn. It does, and it is a separate primitive from the `bash` tool's `detach` boolean (that one is a background PROCESS — scenario 3.3 — and must not be conflated with it).\n\nFour independent reads from the shipped 1.0.77 bundle:\n\n1. **The task tool takes a background mode.** `changelog.json` @ 1.0.35: *\"Sync task calls block until completion under MULTI_TURN_AGENTS instead of auto-promoting to background after 60s; sync no longer returns a reusable agent_id, use `mode: \"background\"` for follow-ups.\"* Sync blocks; background returns an `agent_id` immediately.\n2. **The task registry has an execution-mode axis with exactly those two values.** `app.js`: `rJr = t => t.executionMode ?? (t.canPromoteToBackground ? \"sync\" : \"background\")`, and the subagent-launch path passes `executionMode: \"background\"` explicitly (`{modelOverride, toolCallId, ownerId, preGeneratedAgentId, executionMode:\"background\", …}`). `hasNotifyingBackgroundWork` scans `taskRegistry.list()` for `r.status===\"running\" && r.type===\"agent\" && r.executionMode===\"background\"`.\n3. **A whole tool family exists only to talk to an agent that outlived its call.** `app.js` module `BP`: `Cb=\"task\"`, `dU=\"read_agent\"`, `hde=\"list_agents\"`, `mde=\"write_agent\"`. changelog 1.0.72: *\"Multi-turn subagents are always enabled, so you can send follow-up messages to running agents.\"* changelog 1.0.5: *\"Send follow-up messages to background agents with the write_agent tool.\"*\n4. **The runtime models a background agent outliving the turn as a first-class case.** changelog 1.0.71: *\"`copilot -p --autopilot` no longer hangs when a background shell or agent outlives the turn.\"* changelog 1.0.33: *\"Non-interactive mode waits for all background agents to finish before exiting\"* — i.e. only NON-interactive waits; the interactive REPL (what this recipe drives) does not. changelog 0.0.404: *\"Enable background agents for all users\"*, *\"Add `/tasks` command to view and manage background tasks\"*.\n\nSo `agent=no` / `n.a.` would have been wrong for this cell.\n\n## Does the parent's turn actually end first? Yes — and the vendor's own type doc says so\n\nThis is the scenario's DISTINGUISHING observable (parent `end_turn` lands BEFORE the child drain, where foreground's lands after), so it is worth citing precisely. From the bundle's generated SDK types, `copilot-sdk/generated/session-events.d.ts`:\n\n- `assistant.idle` (line 3601): *\"Payload emitted whenever the main agent's processing loop goes idle, **including while related background work (running agents or in-flight attached shell commands) is still pending and the session-level idle event is therefore deferred**\".*\n- `session.idle` (line 897): *\"Payload indicating the session is idle with **no** background agents or attached shell commands in flight\".*\n\nTwo different idles, and only the session-level one waits. `assistant.turn_end` sits on the main-loop side of that split: in `app.js` it is emitted straight off the native runtime's turn boundary (`case \"turnEnd\": this.emit(\"assistant.turn_end\",{turnId:e.turnId})`) with no background-work gate anywhere on the path — the gate (`hasActiveBackgroundWork()` / `drainDeferredSessionIdleIfReady`) guards only `session.idle`.\n\nThat split is decisive for irrlicht, because of what is on disk:\n\n| event | persisted to `events.jsonl`? |\n|---|---|\n| `session.idle`, `assistant.idle`, `session.background_tasks_changed` | **no** — schema pins `ephemeral: {\"const\": true}` = *\"Always true for events that are transient and not persisted to the session event log on disk\"* |\n| `assistant.turn_end`, `subagent.started`, `subagent.completed`, `system.notification` | **yes** — `ephemeral` is a plain optional boolean and is not in `required` |\n\nSo the one signal that would have said \"all background work has drained\" is exactly the one the daemon can never see, and the one that says \"the main loop stopped\" is the one it does see — and maps to ready.\n\n## daemon_capability = bug\n\nThe canonical unified rule (scenario description; claudecode's `3-2_background-subagent/expected.jsonl`) asserts: the parent's own reply reaches end_turn, yet the SESSION stays working, and goes ready only after the last background child drains.\n\nWhat happens today for copilot:\n\n1. `assistant.turn_end` → `evTurnEnd` → turn_done → the classifier's ready branch (`session_detector_activity.go:919`, `holdParentForActiveChildren`).\n2. The hold consults `hasActiveChildren(sessionID, metrics)` (`session_detector_subagent.go:206-221`), which returns true on either of two signals: `metrics.PendingBackgroundAgentCount > 0`, or a child `SessionState` whose `ParentSessionID` is this session and which is working/waiting.\n3. Copilot supplies **neither**. `trackSubagent` (`copilot/parser.go:382-404`) sets `ev.Skip = true` and mutates only its private `openSubagents` set; it never assigns `ev.PendingBackgroundAgentCount`. And a copilot subagent writes no `session-state/<id>/` directory, so there is no child SessionState either.\n4. ⇒ the parent transitions working→ready at `assistant.turn_end`, mid-span, while `subagent.started` is still unmatched on disk.\n\nThat is a `bug`, not `incapable`, on three counts:\n\n- **The trace exists and is persisted.** At the moment `assistant.turn_end` is written there is a `subagent.started` line with no matching `subagent.completed` — the exact predicate. The parser ALREADY computes it (`openSubagents`, used by `OpenSubagents`).\n- **The mechanism is generic, not claudecode-specific.** `PendingBackgroundAgentCount` is a field on `tailer.ParsedEvent` (`tailer/parser.go:133-138`) that any adapter may set; it flows `applyMetadata` → `lastPendingBackgroundAgentCount` → `SessionMetrics` (`tailer_metrics.go:24-25`, `:410`) → `hasActiveChildren`. Only claudecode populates it today (`claudecode/parser.go:271-280`), which is why the seam looks Claude-shaped, but nothing in it is.\n- **`Skip=true` does not block the fix.** `applySkippedEvent` calls `applyMetadata` (`tailer/tailer.go:760-761`), so a skipped `subagent.started`/`subagent.completed` still carries metadata. The fix is `n := len(p.openSubagents); ev.PendingBackgroundAgentCount = &n` inside `trackSubagent` — no new event kinds, no classifier change.\n\nAnd the drain terminates: `subagent.completed` is itself a transcript line, so it drives an activity pass on the parent with the count now 0; the classifier's candidate is still ready (LastEventType is turn_done) and the hold no longer fires. It does NOT depend on `reevaluateParent`, which is only ever called for a session with a non-empty `ParentSessionID` (`session_detector_activity.go:653-655`) and would never fire for copilot.\n\n## driver_capability = ready\n\nThe recipe needs `send`, `wait_turn`, `sleep`. `driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` reports: exit_clean, interrupt, keys, reset_session, restart, resume, send, session, sigkill, slash, sleep, start_session, wait_turn. No missing primitive, so this is not a `gap:*`.\n\nTwo driver properties matter for THIS cell specifically:\n\n- `wait_turn` counts `\"type\":\"assistant.turn_end\"` lines exactly (driver-interactive.sh:281-291) rather than guessing at tail quietness. Since `assistant.turn_end` fires while the background agent still runs, `wait_turn` returns at the parent's own end_turn — which is precisely the anchor this scenario needs, and would NOT have worked with a quiet-tail heuristic.\n- The REPL launches with `--allow-all` (line 175-180), not `--allow-all-tools`: a subagent's bash under `--allow-all-tools` alone was refused with *denied-no-approval-rule-and-could-not-request-from-user*. The background child's `sleep` shell command depends on this.\n\n## What the spec asserts\n\nOf the canonical claudecode phase shape, three phases are structurally unreachable for copilot and one is the defect:\n\n| claudecode phase | copilot |\n|---|---|\n| `parent_session_birth` / `parent_turn_start` | reachable — asserted |\n| `child_birth` (`transcript_new`) | unreachable — no child session directory (agent architecture, see caveats) |\n| `child_link` (`parent_linked`) | unreachable — same |\n| `intermediate_working` | **the bug** — asserted, and expected to fail today |\n| `child_drain` (child working→ready) | unreachable — same |\n| `parent_turn_end` | reachable — asserted |\n\nSo the spec keeps the CORRECT held-working assertion (never weakened to match the bug), carries `known_failing`, and documents the three architecturally-absent phases here rather than encoding them as phases that could never pass.",
+      "caveats": [
+        "The parent-link half of this scenario is unreachable for Copilot by AGENT ARCHITECTURE, not by defect — identical to the 3.1 foreground-subagent cell. A Copilot subagent runs in-process and writes no session-state/<id>/ directory, so there is no child SessionState, no transcript_new for a child, no parent_linked, and no child working→ready drain to observe. Cited: core/adapters/inbound/agents/copilot/parser.go:382-404 (trackSubagent: 'write no session directory of their own, so they are counted here rather than linked through ParentSessionID') and agent.FilesUnderRoot{Dir: sessionsDir()} in copilot/agent.go, whose SessionIDFromPath keys a session to a session-state/<id>/ directory. Fixing the PendingBackgroundAgentCount seam delivers the held-working arc and nothing more; the parent_linked phases stay permanently out of reach.",
+        "UNVERIFIED (argument name, not existence): the exact spelling of the task tool's background-mode argument. Its EXISTENCE in this build is triple-sourced (executionMode \"sync\"|\"background\" in app.js; the read_agent/write_agent/list_agents family; the 1.0.71 'outlives the turn' fix), but the literal `mode: \"background\"` comes from the bundle's changelog.json @ 1.0.35 rather than a dump of the live schema. The schema is built in Rust (`h.toolTaskBuildTool`, app.js) inside the COMPRESSED Node SEA — `strings` over the 159 MB `copilot` binary returns ZERO hits for `read_agent` / `toolCallId` / `subagent`, confirming the Rust string table is not readable, so app.js is the ceiling for a static read. If the recording's first attempt shows the model running the delegation synchronously, the fallback elicitation is ctrl+x → b, which promotes a running foreground task to background (changelog 1.0.39; `canPromoteToBackground` in app.js) and is a `keys` step the driver already has.",
+        "FAITHFULNESS GATE for record: the delegation must actually be BACKGROUND. In events.jsonl the proof is ORDERING — the first `assistant.turn_end` must land BEFORE the `subagent.completed` that pairs with the run's `subagent.started`. `subagent.started`'s payload carries no mode field (schema SubagentStartedData: toolCallId, agentName, agentDisplayName, agentDescription, model), so ordering is the ONLY on-disk discriminator between this cell and 3.1. If `subagent.completed` precedes `assistant.turn_end` the model ran it sync — re-craft the send, do NOT accept the recording as this scenario.",
+        "SCENARIO ROW INCONSISTENCY (pre-existing, not copilot-specific): scenarios.json's background-subagent `description` states the unified rule (parent HELD working across the child's life; SubagentCount INCLUDES the live child), but its `acceptance_criteria` still state the superseded pre-unification rule (parent goes ready at turn end 'not held'; SubagentCount EXCLUDES the background child). The two are direct contradictions. This assessment and the spec follow the description + the claudecode sibling spec (replaydata/agents/claudecode/scenarios/3-2_background-subagent/expected.jsonl), which is what `record` actually validates against; the acceptance_criteria appear to be stale and worth a separate fix.",
+        "UNVERIFIED (emission, not parsing): whether a background subagent's own inner turns emit ADDITIONAL `assistant.turn_end` lines into the PARENT's events.jsonl. If they do, the driver's exact turn-count in wait_turn (driver-interactive.sh:281-291) would return early or late and the parent would flip ready/working spuriously mid-span. Note the schema gives every event an optional `agentId` — 'Sub-agent instance identifier. Absent for events from the root/main agent' — so a sub-agent turn_end would be distinguishable IF it is written to the parent's log, but the copilot parser does not currently filter on agentId. Only the recording can settle this; confidence is held at 0.78 for this reason.",
+        "`model` is deliberately NOT pinned and `cost` is not asserted, matching the 3.1 sibling: `--model` accepts only \"auto\" on this account, the effective model is resolved at runtime via session.auto_mode_resolved, and gpt-5-mini has no entry in core/pkg/capacity/aliases.go so pricing resolution is unknown until the recording shows it. `record` fills both."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/changelog.json",
+          "note": "The vendor's own changelog, shipped inside the 1.0.77 bundle. 1.0.35: 'Sync task calls block until completion ... sync no longer returns a reusable agent_id, use mode: \"background\" for follow-ups' — the background primitive. 1.0.71: 'copilot -p --autopilot no longer hangs when a background shell or agent outlives the turn'. 1.0.33: 'Non-interactive mode waits for all background agents to finish before exiting' (only non-interactive). 1.0.72 / 1.0.5: multi-turn follow-ups via write_agent. 0.0.404: 'Enable background agents for all users' + '/tasks'."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/copilot-sdk/generated/session-events.d.ts",
+          "note": "Line 3601 (assistant.idle): 'emitted whenever the main agent's processing loop goes idle, INCLUDING while related background work (running agents or in-flight attached shell commands) is still pending and the session-level idle event is therefore deferred'. Line 897 (session.idle): 'idle with NO background agents or attached shell commands in flight'. This is the vendor stating that the main loop ends while background agents run."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/schemas/session-events.schema.json",
+          "note": "Persistence split, read off the `ephemeral` property: IdleEvent (session.idle), AssistantIdleEvent and BackgroundTasksChangedEvent all pin ephemeral to {\"const\": true} = 'Always true for events that are transient and not persisted to the session event log on disk'. SubagentStartedEvent / SubagentCompletedEvent / AssistantTurnEndEvent / SystemNotificationEvent do not, and omit ephemeral from `required` — they are persisted. SubagentStartedData carries only toolCallId/agentName/agentDisplayName/agentDescription/model, i.e. NO mode field."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "Background-agent machinery in the 1.0.77 bundle: `rJr = t => t.executionMode ?? (t.canPromoteToBackground ? \"sync\" : \"background\")`; the subagent-launch path passes executionMode:\"background\"; `hasNotifyingBackgroundWork` filters taskRegistry for type==='agent' && executionMode==='background'; module BP declares Cb=\"task\", dU=\"read_agent\", hde=\"list_agents\", mde=\"write_agent\"; `case \"turnEnd\": this.emit(\"assistant.turn_end\",{turnId})` is ungated while drainDeferredSessionIdleIfReady/hasActiveBackgroundWork gate only session.idle; `this.emit(\"subagent.started\", o.startedData, e)` fires on every subagent session creation. The task tool's own input_schema is built natively (h.toolTaskBuildTool) — app.js only reads back properties.agent_type."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_subagent.go",
+          "note": "hasActiveChildren (206-221) is the held-working gate and has exactly two signals: metrics.PendingBackgroundAgentCount > 0, or a child SessionState with ParentSessionID == parent that is working/waiting. Copilot supplies neither, so the hold never fires. reevaluateParent (282) exists but is irrelevant here — see the activity file."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "holdParentForActiveChildren (~895-928) is where the ready branch consults holdIfChildrenActive at :919 — the exact call the copilot parent falls through today. finalizeActivityPass calls reevaluateParent ONLY when state.ParentSessionID != \"\" (:653-655), which is why the drain for copilot must come from the parent's own activity pass on subagent.completed, not from a child transition."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "trackSubagent (382-404) sets ev.Skip = true and maintains only the private openSubagents set keyed on toolCallId; it never assigns ev.PendingBackgroundAgentCount — the one-line seam. The Parse dispatch's default branch is also Skip=true (114-119), so the persisted system.notification carrying agent_completed cannot bounce the parent back to working after the drain."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go",
+          "note": "ParsedEvent.PendingBackgroundAgentCount (133-138) is a generic *int on the shared parser contract — not a claudecode-only field. Its presence is what makes this a wiring bug rather than an architectural limit."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "applySkippedEvent (751-761) calls applyMetadata, so a Skip=true event still contributes metadata. This is why setting PendingBackgroundAgentCount inside trackSubagent works despite both subagent events being skipped."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+          "note": "applyPendingBackgroundAgentCount (253-280) is the only current writer of the field — the reference implementation the copilot fix mirrors."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/3-2_background-subagent/expected.jsonl",
+          "note": "The canonical unified-rule spec this cell's phases are modelled on: parent end_turn lands BEFORE the child drain, the session is HELD working across it, and goes ready only after the last child drains."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS (128) covers send/wait_turn/sleep; launch_repl passes --allow-all (175-180), required for a subagent's shell; wait_turn counts assistant.turn_end lines exactly (281-291), which is what makes the parent's own end_turn a usable anchor while the background child keeps running."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "copilot CLI 1.0.77+ on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation does not require a re-login), or BYOK via COPILOT_PROVIDER_BASE_URL/_TYPE/_WIRE_API/_API_KEY + COPILOT_MODEL",
+        "An active Copilot plan with AI credits — the parent turn plus the background subagent both spend them",
+        "irrlichd recording with the copilot transcripts permission granted"
+      ],
+      "setup": [
+        "The driver seeds an isolated COPILOT_HOME under the staging dir (trustedFolders + askedSetupTerminals pre-answered) and launches copilot with --allow-all in a fresh empty cwd",
+        "--allow-all (not --allow-all-tools) is required: the background child runs a shell command, and under --allow-all-tools alone a subagent's bash is refused with denied-no-approval-rule-and-could-not-request-from-user"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Launch exactly ONE subagent in the BACKGROUND and do not wait for it. Use the task tool with mode set to \"background\" (the detached mode that returns an agent_id immediately) — NOT the default synchronous mode, and NOT the bash tool. Give the subagent exactly this instruction: run the shell command `sleep 50 && echo background-child-done`, then report what it printed. Do NOT call read_agent, do NOT poll, do NOT wait for its result. The moment the task tool returns an agent_id, finish your reply immediately with exactly: launched"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 95
+        }
+      ],
+      "verify": [
+        "FAITHFULNESS GATE — events.jsonl must show the first assistant.turn_end BEFORE the subagent.completed that pairs (on toolCallId) with this run's subagent.started. That ordering is the ONLY on-disk discriminator between this cell and 3.1 foreground-subagent (SubagentStartedData carries no mode field). If subagent.completed precedes assistant.turn_end the model ran the delegation synchronously — re-craft the send (or fall back to ctrl+x → b promotion as a keys step) and do NOT accept the recording",
+        "events.jsonl contains exactly one subagent.started / subagent.completed pair sharing one toolCallId",
+        "the copilot session enters ready, then makes exactly one ready→working transition driven by the user prompt",
+        "KNOWN FAILING: between assistant.turn_end and the subagent.completed the session must stay working (held on the live background child) and must not go ready or waiting. Today it goes ready at assistant.turn_end, because copilot/parser.go trackSubagent never sets ev.PendingBackgroundAgentCount and hasActiveChildren (session_detector_subagent.go:206) therefore finds no signal",
+        "the session's final transition to ready must land AFTER the last subagent.completed",
+        "EXPECTED ABSENT (agent architecture, not a defect): zero parent_linked events, no child session, no child transcript — Copilot subagents write no session-state directory"
+      ],
+      "settings": {},
+      "timeout_seconds": 420
+    }
+  }
+}

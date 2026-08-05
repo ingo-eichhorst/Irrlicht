@@ -1,0 +1,120 @@
+{
+  "scenario_id": "auto-executed-tool-call",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+e31aad0",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready. DAEMON=FULL RESTORED 2026-08-03 (re-recording 2026-08-03-17-51-25_irrlichd-0.5.9+e31aad0, 4/4). Commit 8df11518 (\"fix(copilot): stop flashing `ready` mid-turn on a continuation turn\") maps assistant.turn_start to a non-settling activity event instead of letting it fall to the default Skip arm, so a continuation turn opened after a tool call no longer reads as idle. The re-recording reproduces the same provoking shape — assistant.turn_end(turn 0) 15:51:46.406Z, assistant.turn_start(turn 1) 15:51:46.409Z, turn 1's assistant.message 4.1 s later at 15:51:50.537Z — and events.jsonl now carries exactly ONE working→ready transition (17:51:52.83, decided_by_rule agent_done, last_event_type turn_done) with no ready→working rebound. The 122 ms false `ready` the previous recording proved is gone; known_failing cleared, the original assess verdict daemon=full stands.\n\nSUPERSEDED (kept for history) — agent_supports: yes\ndaemon_capability: bug (was full at assess) — the live recording refuted it; driver_capability: ready. RECORDING OVERRIDE (2026-08-03, recording 2026-08-03-12-35-04_irrlichd-0.5.9+94f85f7, 3/4): assessed daemon=full, the live recording refuted it. Copilot closes a turn after EVERY tool call and opens the continuation 1 ms later — this transcript has assistant.turn_end(turn 0) at 10:35:25.112Z, assistant.turn_start(turn 1) at 10:35:25.113Z, and turn 1's assistant.message only 2.1 s later at 10:35:27.223Z. parser.go maps assistant.turn_end to turn_done (settles → ready) but lets assistant.turn_start fall to the default Skip arm, justified in its comment as \"the open bracket of a turn the user message already put into working\" — which holds for the first turn and NOT for a continuation turn, since no user.message precedes it. The daemon therefore settled to `ready` at 12:35:27.247 (decided_by_rule agent_done, last_event_type turn_done) while the model was still generating, and only recovered at 12:35:27.370 via \"force ready→working on first activity\" — a 122 ms false `ready` in the middle of the tool loop. The flash was short only because the tailer's read of turn 0's turn_end lagged ~2 s behind the write; its true duration is the continuation's think time, so a longer tool chain shows a multi-second false ready. The birth is separately RE-ANCHORED: post-3cde4f8d the real session is born directly into `working` (events.jsonl already holds the open turn at discovery), so session_birth and turn_start collapsed into one phase — that part is the fix working as intended, not the bug. known_failing until the turn_start arm is fixed; the phases assert the CORRECT behaviour."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-executed-tool-call",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts one user-observable arc — `ready → working → ready` with at least one tool call mid-turn, and the negative invariant that state NEVER enters `waiting`.\n\n**agent_supports: yes.** GitHub Copilot CLI 1.0.77 executes shell tool calls inside a turn: `tool.execution_start` / `tool.execution_complete` pairs (on `data.toolCallId`) were observed live in `$COPILOT_HOME/session-state/<session-id>/events.jsonl`, with `bash` as the tool name. `--allow-all` pre-approves tools, so a safe `echo hello` runs with no confirmation prompt and therefore emits no `permission.requested` — the ungated path this cell is about. (`--allow-all-tools` alone is NOT sufficient: a subagent's bash still hit denied-no-approval-rule; the driver uses `--allow-all`.)\n\n**daemon_capability: full.** Every event the arc needs is one the copilot parser already maps (`core/adapters/inbound/agents/copilot/parser.go`):\n\n| observable | events.jsonl event | parser output |\n|---|---|---|\n| turn opens (`ready→working`) | `user.message` | `user_message` |\n| tool call runs mid-turn | `tool.execution_start` / `tool.execution_complete` | `function_call` / `function_call_output`, paired on `toolCallId` |\n| turn ends (`working→ready`) | `assistant.turn_end` | `turn_done` |\n| the negative invariant | `permission.requested` — NOT emitted under `--allow-all` | `permission_requested` (the only route to `waiting`) |\n\nThe tool round-trip keeps the session `working` rather than settling it: `parseAssistantMessage` deliberately never ends the turn (only `assistant.turn_end` does), and `session.start` / model-change / usage / shutdown events are all `Skip=true` so no bookkeeping line can flip a finished session back to `working`. `waiting` is reachable ONLY through `permission_requested`, so with no gate the invariant holds structurally, not by luck.\n\nBirth is the PRESESSION shape, not single-birth. Copilot creates the session directory at launch but writes `events.jsonl` only when the first prompt is sent (driver SEAM 3), so at launch the file watcher has nothing and `processlifecycle`'s scanner emits a `proc-<PID>` row (scanner.go:347), which is superseded when the real transcript appears under a DIFFERENT session id (`sessionIDFromPath` = the directory name). The spec therefore models the birth as two phases and anchors every later phase to `session_birth`, templated from the mistral-vibe sibling (same `FilesUnderRoot` + dir-keyed id shape).\n\nPID binding is by cwd (`DiscoverPIDByCWD(\"copilot\", …)`, pid.go) against the `ExactName{copilot}` matcher; the driver launches under tmux with `-c $RUN_CWD` canonicalized, so the match is exact.\n\n**driver_capability: ready.** The recipe needs `send` / `wait_turn` / `sleep` only; all three are in the driver's `DRIVE_ELICITS` and genuinely ported — `wait_turn` counts `\"type\":\"assistant.turn_end\"` occurrences, an EXACT completed-turn count rather than the tail-quietness heuristic other drivers settle for. No `keys`, `reset_session` or `restart` is involved, so none of the stubbed arms is touched.\n\n## Observations\n\n`cost_nonzero` + `tokens_nonzero` are asserted and are derivable OFFLINE from the staged transcript alone — unlike mistral-vibe/kiro-cli, whose usage lives in a sidecar. Output tokens land per `assistant.message.outputTokens` while the session runs (`queueOutputIncrement`), and both models this account can reach are priced in the replay capacity snapshot (`gpt-5-mini` directly; `claude-haiku-4.5` via the alias added for #1256).\n\n`model` is deliberately NOT pinned: `--model` accepts only `auto` on this account and the router picks per turn between `gpt-5-mini` and `claude-haiku-4.5` (both seen in ONE live 1.0.77 session), so an exact-match assertion would fail on router choice, not on a regression. `record` fills it from the recording.\n\n## Recording override (2026-08-03)\n\nRECORDING OVERRIDE (2026-08-03, recording 2026-08-03-12-35-04_irrlichd-0.5.9+94f85f7, 3/4): assessed daemon=full, the live recording refuted it. Copilot closes a turn after EVERY tool call and opens the continuation 1 ms later — this transcript has assistant.turn_end(turn 0) at 10:35:25.112Z, assistant.turn_start(turn 1) at 10:35:25.113Z, and turn 1's assistant.message only 2.1 s later at 10:35:27.223Z. parser.go maps assistant.turn_end to turn_done (settles → ready) but lets assistant.turn_start fall to the default Skip arm, justified in its comment as \"the open bracket of a turn the user message already put into working\" — which holds for the first turn and NOT for a continuation turn, since no user.message precedes it. The daemon therefore settled to `ready` at 12:35:27.247 (decided_by_rule agent_done, last_event_type turn_done) while the model was still generating, and only recovered at 12:35:27.370 via \"force ready→working on first activity\" — a 122 ms false `ready` in the middle of the tool loop. The flash was short only because the tailer's read of turn 0's turn_end lagged ~2 s behind the write; its true duration is the continuation's think time, so a longer tool chain shows a multi-second false ready. The birth is separately RE-ANCHORED: post-3cde4f8d the real session is born directly into `working` (events.jsonl already holds the open turn at discovery), so session_birth and turn_start collapsed into one phase — that part is the fix working as intended, not the bug. known_failing until the turn_start arm is fixed; the phases assert the CORRECT behaviour.\n\n## Fix confirmed (2026-08-03)\n\nDAEMON=FULL RESTORED 2026-08-03 (re-recording 2026-08-03-17-51-25_irrlichd-0.5.9+e31aad0, 4/4). Commit 8df11518 (\"fix(copilot): stop flashing `ready` mid-turn on a continuation turn\") maps assistant.turn_start to a non-settling activity event instead of letting it fall to the default Skip arm, so a continuation turn opened after a tool call no longer reads as idle. The re-recording reproduces the same provoking shape — assistant.turn_end(turn 0) 15:51:46.406Z, assistant.turn_start(turn 1) 15:51:46.409Z, turn 1's assistant.message 4.1 s later at 15:51:50.537Z — and events.jsonl now carries exactly ONE working→ready transition (17:51:52.83, decided_by_rule agent_done, last_event_type turn_done) with no ready→working rebound. The 122 ms false `ready` the previous recording proved is gone; known_failing cleared, the original assess verdict daemon=full stands.\n",
+      "caveats": [
+        "The no-waiting invariant rests entirely on the driver's `--allow-all` flag: without it Copilot raises `permission.requested`, the parser emits `permission_requested`, and the session correctly enters `waiting` — which is the SIBLING gated-tool scenario, not a failure of this one. If a recording ever flips to waiting here, tighten the launch flags rather than weakening the spec.",
+        "`events.jsonl` does not exist until the first prompt is sent (driver SEAM 3, live-verified on 1.0.77), so the real session is born `ready` and moves to `working` within roughly the same second. The `session_birth` state observation is therefore tight and could be coalesced with `turn_start` by the tailer's debounce; if `record` sees it collapsed, re-anchor the phases rather than dropping the ready birth.",
+        "Input tokens are only reported at `session.shutdown` (a `session.usage_checkpoint` carries `totalNanoAiu` but NO token counts — verified live on 1.0.77). This recipe has no `exit_clean` step, so the recording will carry output tokens only. That still satisfies tokens_nonzero/cost_nonzero, but the input half of the summary will read 0.",
+        "Recording spends real Copilot AI credits. Export `COPILOT_AVAILABLE_TOOLS=bash` before driving (the driver honours it and passes `--available-tools=bash`): tool definitions are ~8.3k of ~12k input tokens per turn, so restricting to the one tool this scenario needs roughly halves per-turn cost.",
+        "RECORDING-PROVED daemon=bug: RECORDING OVERRIDE (2026-08-03, recording 2026-08-03-12-35-04_irrlichd-0.5.9+94f85f7, 3/4): assessed daemon=full, the live recording refuted it. Copilot closes a turn after EVERY tool call and opens the continuation 1 ms later — this transcript has assistant.turn_end(turn 0) at 10:35:25.112Z, assistant.turn_start(turn 1) at 10:35:25.113Z, and turn 1's assistant.message only 2.1 s later at 10:35:27.223Z. parser.go maps assistant.turn_end to turn_done (settles → ready) but lets assistant.turn_start fall to the default Skip arm, justified in its comment as \"the open bracket of a turn the user message already put into working\" — which holds for the first turn and NOT for a continuation turn, since no user.message precedes it. The daemon therefore settled to `ready` at 12:35:27.247 (decided_by_rule agent_done, last_event_type turn_done) while the model was still generating, and only recovered at 12:35:27.370 via \"force ready→working on first activity\" — a 122 ms false `ready` in the middle of the tool loop. The flash was short only because the tailer's read of turn 0's turn_end lagged ~2 s behind the write; its true duration is the continuation's think time, so a longer tool chain shows a multi-second false ready. The birth is separately RE-ANCHORED: post-3cde4f8d the real session is born directly into `working` (events.jsonl already holds the open turn at discovery), so session_birth and turn_start collapsed into one phase — that part is the fix working as intended, not the bug. known_failing until the turn_start arm is fixed; the phases assert the CORRECT behaviour.",
+        "Birth shape is now OBSERVED: the real session is born `working`, not `ready` — the assess caveat predicting a possible coalesce with turn_start was right, and the phases were re-anchored accordingly rather than the ready birth being dropped (the proc-<PID> presession still carries it).",
+        "FIX CONFIRMED (supersedes the RECORDING-PROVED daemon=bug caveat above): DAEMON=FULL RESTORED 2026-08-03 (re-recording 2026-08-03-17-51-25_irrlichd-0.5.9+e31aad0, 4/4). Commit 8df11518 (\"fix(copilot): stop flashing `ready` mid-turn on a continuation turn\") maps assistant.turn_start to a non-settling activity event instead of letting it fall to the default Skip arm, so a continuation turn opened after a tool call no longer reads as idle. The re-recording reproduces the same provoking shape — assistant.turn_end(turn 0) 15:51:46.406Z, assistant.turn_start(turn 1) 15:51:46.409Z, turn 1's assistant.message 4.1 s later at 15:51:50.537Z — and events.jsonl now carries exactly ONE working→ready transition (17:51:52.83, decided_by_rule agent_done, last_event_type turn_done) with no ready→working rebound. The 122 ms false `ready` the previous recording proved is gone; known_failing cleared, the original assess verdict daemon=full stands."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "tool.execution_start/complete → function_call/function_call_output paired on toolCallId; assistant.turn_end → turn_done; permission.requested → permission_requested is the ONLY route to waiting; lifecycle/usage events are Skip"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Source is FilesUnderRoot over ~/.copilot/session-state with sessionIDFromPath = the <session-id> directory (transcript basename is the constant events.jsonl); ExactName{copilot} matcher"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/pid.go",
+          "note": "DiscoverPIDByCWD(\"copilot\", cwd, …) — cwd-only binding, no sidecar fallback; grounds the pid_bind phase"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/scanner.go",
+          "note": "maybeTrackNewPID emits sessionID proc-<pid> (line 347) when no active transcript covers the PID, superseded once the real transcript appears — the presession two-phase birth this spec models"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS carries send/wait_turn/sleep; launches with --allow-all and honours COPILOT_AVAILABLE_TOOLS; turn_count greps assistant.turn_end for an exact turn count; SEAM 3 records that events.jsonl appears only at the first prompt"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/metrics_test.go",
+          "note": "live-captured 1.0.77 envelope fixtures: assistant.message.outputTokens is the live token signal; modelMetrics/currentTokens exist only on session.shutdown; both gpt-5-mini and claude-haiku-4.5 appear in one session"
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/aliases_test.go",
+          "note": "TestCopilotAlias_ResolvesToRealCostEstimate — claude-haiku-4.5 prices non-zero via the #1256 alias; gpt-5-mini already priced on its own"
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/testdata/model-capacity-cache.json",
+          "note": "both gpt-5-mini and claude-haiku-4-5 carry pricing in the committed replay snapshot, so cost_nonzero is satisfiable in the OFFLINE golden"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/2-2_auto-executed-tool-call/expected.jsonl",
+          "note": "presession-shaped sibling for the same scenario (FilesUnderRoot + dir-keyed session id) — the two-phase birth templated here"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 180,
+      "settings": {},
+      "preconditions": [
+        "copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits — this recording spends them",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a --record daemon)",
+        "tmux available (the interactive driver drives the REPL through it)"
+      ],
+      "setup": [
+        "The driver isolates state under $STAGING/copilot-home via COPILOT_HOME (the supported lever; --config-dir is deprecated) and seeds trustedFolders + askedSetupTerminals so neither first-run prompt blocks the input box",
+        "Launch is `copilot --allow-all --no-color` in a fresh per-run cwd under <staging>/cwd/, so the bash call auto-executes and no permission.requested is ever written — that is what makes the no-waiting invariant structural rather than incidental",
+        "Recommended: export COPILOT_AVAILABLE_TOOLS=bash before driving. The driver forwards it as --available-tools=bash, which drops the unused tool definitions (~8.3k of ~12k input tokens) and roughly halves the credits this cell costs",
+        "Interactive, not headless: the REPL must outlive the turn so the daemon observes the working→ready settle rather than a process exit",
+        "wait_turn counts assistant.turn_end lines — Copilot writes an explicit turn boundary, so the wait is exact"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run the shell command `echo hello` with the bash tool, then reply with just: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a transient proc-<PID> presession born ready, then the real <session-id> session (a DIFFERENT id, the session-state directory name) born ready when the transcript appears",
+        "events.jsonl shows exactly one ready→working and one working→ready transition for the real session",
+        "at least one tool_use for the bash tool falls inside that working span (tool.execution_start / tool.execution_complete paired on toolCallId)",
+        "events.jsonl contains NO state_transition to waiting for any session during the run (--allow-all → no permission.requested)",
+        "final session state is ready",
+        "the newest recording's replay summary shows cum_output_tokens > 0 and estimated_cost_usd > 0, with model_name one of gpt-5-mini / claude-haiku-4.5 (router's choice — not pinned)"
+      ]
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "copilot",
+  "name": "GitHub Copilot",
+  "provider": "github",
+  "prerequisites": [
+    "GitHub Copilot CLI installed and authenticated (npm i -g @github/copilot; auth lives in the OS keychain and survives COPILOT_HOME isolation)",
+    "An active Copilot plan with AI credits — recording spends them"
+  ]
+}

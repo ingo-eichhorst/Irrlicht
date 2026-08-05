@@ -1,0 +1,147 @@
+{
+  "scenario_id": "shell-escape-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.78",
+    "daemon_version": "0.5.9+7894002",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: bug (tool.execution_complete for a `!` escape maps to function_call_output and sticks the session in working); driver_capability: ready\n\nDAEMON CAPABILITY CORRECTED bug -> full on 2026-08-05 by a re-recording (CLI 1.0.78). The bug was real when frozen; the parser now Skips tool.user_requested and isUserRequested completions. Live proof in recordings/2026-08-05-17-36-25: the escape's records land at 15:36:41.913 / 15:36:42.005 and the daemon emits NO transition between the first turn settling (17:36:35.423 ready) and the next real prompt (17:36:53.348 working) — 17.9s of preserved ready across the escape, then a normal turn proves the session is not wedged. 7/7 phases; known_failing cleared."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "shell-escape-command",
+      "agent": "copilot",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: **bug**; driver_capability: ready (confidence 0.85 — the agent behaviour, the exact bytes written to events.jsonl and their timing were all confirmed LIVE on CLI 1.0.77 at zero AI-credit cost; the remaining 0.15 is that the resulting daemon state arc is read off the parser + classifier rather than off a recording, which is `record`'s job).\n\n## agent_supports = yes\n\nGitHub Copilot CLI has a real `!` shell escape that runs the command LOCALLY with no model round-trip. Three independent confirmations:\n\n1. **Input-mode switch.** `app.js` (offset ~8683800): `let O=Tn.text; O.startsWith(\"!\") && Za!==\"shell\" && !zl.isNavigating() && (e_.current=Za, Hg(\"shell\"), Tn.setText(O.substring(1)))` — typing `!` flips the composer into a dedicated `shell` mode and strips the `!` from the buffer.\n2. **Submit path bypasses the model.** `app.js` (offset ~8659636): `if(xe.startsWith(\"!\")){ … await cse(xe); return }` — the `!` branch returns BEFORE any `ae.send({prompt:…})`. `cse` (offset ~8646841) calls `ae.shell.executeUserRequested({requestId, command})`, never the send path. There is no LLM turn, hence no `user.message`, no `assistant.turn_start` and no `assistant.turn_end`.\n3. **Live.** Two escapes (`!echo hello`, `!echo second`) in an isolated `COPILOT_HOME` rendered `$ Shell echo hello 1 line / │ hello` in the TUI and left the footer counter at `Session: 0 AIC used` — literally zero credits, confirming no model call.\n\nThis is NOT the model-invoked `bash`/`local_shell` tool (which arrives as `tool.execution_start` + `tool.execution_complete` inside a turn). Different scenario, different code path.\n\n## daemon_capability = bug\n\n### What Copilot writes\n\n`app.js` `executeUserRequestedShellCommand` (offset ~2191332) emits TWO non-ephemeral events (`emit`, not `emitEphemeral`, so both go through `sessionRecordEventJson` and reach the `SessionEventWriter` whose `localEventsPath` is `<sessionStatePath>/events.jsonl`, offset ~2533038):\n\n```\nthis.emit(\"tool.user_requested\", bn(h.sessionPlanUserRequestedShellStartJson(r, e)))\n…\nreturn this.emit(\"tool.execution_complete\", c.eventData)\n```\n\nConfirmed live — the exact lines appended to `events.jsonl` by `!echo third` on CLI 1.0.77:\n\n```json\n{\"type\":\"tool.user_requested\",\"data\":{\"toolCallId\":\"a22a9bfd-bb2d-409b-8a32-a8da0e6a2392\",\"toolName\":\"local_shell\",\"arguments\":{\"command\":\"echo third\",\"description\":\"Execute shell command: echo third\"}}}\n{\"type\":\"tool.execution_complete\",\"data\":{\"toolCallId\":\"a22a9bfd-bb2d-409b-8a32-a8da0e6a2392\",\"isUserRequested\":true,\"success\":true,\"result\":{\"content\":\"third\"}}}\n```\n\nNo `tool.execution_start`, no `user.message`, no `assistant.turn_end`. The escape is a bracket-less pair: a start event the parser doesn't know, and a completion event it does.\n\n### What irrlicht does with it\n\n| Line | copilot parser | Effect |\n|---|---|---|\n| `tool.user_requested` | not in the switch → `default: ev.Skip = true` (parser.go:114-118) | correctly inert |\n| `tool.execution_complete` | `evToolComplete` → `parseToolComplete` → `ev.EventType = \"function_call_output\"` (parser.go:102-103, 224-232) | **substantive activity** |\n\nA substantive event on a `ready` session hits `forceReadyToWorkingIfActive` (session_detector_activity.go:582) and bounces it to `working`. `ClassifyState` then asks `IsAgentDone()`, which returns false for `LastEventType == \"function_call_output\"` (metrics.go:513-558: not `turn_done`, not `assistant`/`assistant_output`). Nothing further is ever written — the escape emitted no turn boundary — so the session **stays in `working` indefinitely**, until the user happens to send a real prompt. The same shape is already pinned elsewhere in the codebase as \"still working\": `core/application/services/session_detector_dead_process_test.go:32,68` (\"transcript frozen on a function_call_output stays working\").\n\nThat is precisely the failure this scenario exists to catch — \"state does not stick in `working` after the shell command exits\" — so the honest verdict is `bug`, not a caveat.\n\n### Why this is the SAME bug the two sibling adapters already fixed\n\n- **mistral-vibe** writes the `!` result back as an `injected:true` user line and its parser SKIPS it (`core/adapters/inbound/agents/vibe/parser.go:127-136`), explicitly \"so the injected `!` result produces NO state change\".\n- **claudecode** writes `<bash-input>`/`<bash-stdout>` wrappers and its parser skips them (`core/adapters/inbound/agents/claudecode/parser.go:350-359`, \"These don't represent real user turns\").\n\nCopilot's adapter has no equivalent skip. It was written against model-invoked tool calls, where `tool.execution_complete` legitimately means \"a tool the agent called finished, the turn continues\".\n\n### The unlock (feasible, small, and discriminable)\n\nCopilot hands the parser an exact discriminator: `tool.execution_complete.data.isUserRequested == true` (observed live, above). A user-requested completion can be `Skip: true` — it is not a tool call the agent made and it must not close one either — while model-invoked completions (which carry no `isUserRequested`, matching the pairing `tool.execution_start`) keep today's behaviour untouched. `tool.user_requested` is already inert via the default branch; making it explicitly Skip'd documents the pair. This is the direct analogue of vibe's `injected` skip and is a parser-only change with no cross-adapter blast radius.\n\n## driver_capability = ready\n\nThe recipe needs `send`, `wait_turn`, `sleep` and `keys`. All four are in `replaydata/agents/copilot/driver-interactive.sh`'s `DRIVE_ELICITS` (line 128) with real arms; only `reset_session`/`resume` are stubbed and neither is used.\n\nThe escape MUST go through `keys`, not `send`: `send` increments `EXPECTED_TURNS`, and since a `!` escape produces no `assistant.turn_end` the next `wait_turn` would block until the cell's timeout. `keys` sends raw tmux keys and touches no counter. Note copilot's `keys` arm reads the step's **`text`** field (`tmux send-keys -t \"$SESSION\" \"$(jq -r '.text' <<<\"$step\")\"`), not `keys` — claudecode's recipe for this scenario uses `keys`, and copying it verbatim would send an empty string.\n\nThe escape is split into three `keys` steps (`!`, `echo hello`, `Enter`) with 1 s gaps because a single `tmux send-keys 'text' Enter` was observed live to leave the text sitting unsubmitted in the composer.\n\n## Recipe ordering — the turn MUST come first (load-bearing)\n\nCopilot's event writer batches: `c.queued && (this.unflushedEventRefs.push(a), c.scheduleFlush && …)`. Live consequence, measured on 1.0.77:\n\n- On a **fresh** session, `session-state/<id>/` exists at launch with only `workspace.yaml`. Two `!` escapes plus ~50 s of waiting produced **no `events.jsonl` at all** — the escape events sat unflushed in memory. irrlicht sees nothing; the session row doesn't even exist yet.\n- The first real prompt created `events.jsonl`, and the buffered escape events were flushed INTO it *before* the `user.message` (observed order: `session.start`, `session.permissions_changed`, `session.model_change`, `tool.user_requested`, `tool.execution_complete`, `tool.user_requested`, `tool.execution_complete`, `session.auto_mode_resolved`, `system.message`, `user.message`, `assistant.turn_start`, `assistant.message`, `assistant.turn_end`). In that ordering the trailing `turn_end` settles the session to `ready` anyway — **the bug is masked**.\n- Once `events.jsonl` exists, an escape appends within 5 s (13 → 15 lines, then byte-stable for 60 s).\n\nSo a claudecode-style recipe (escape first, then a turn) would record a GREEN cell over a broken adapter. This recipe therefore runs a real turn FIRST — so the session row exists and is `ready` — and only then fires the escape. That is what makes the cell discriminating: with today's parser the escape window flips to `working` and sticks; with the `isUserRequested` skip it stays `ready`.\n\nThe closing real prompt is the canonical liveness proof shared with the claudecode and mistral-vibe siblings.\n\n## Spec shape\n\nPresession two-phase birth, templated from the copilot `basic-turn` / `long-idle-live-session` siblings: `session-state/<id>/` is created at launch holding only `workspace.yaml`, `sessionIDFromPath` claims only `events.jsonl`, so `processlifecycle.Scanner` mints a `proc-<PID>` row first and the real session arrives under a DIFFERENT id. Every post-birth phase is anchored to the real session.\n\n`model` is NOT pinned: `--model` accepts only `auto` on this account and `session.auto_mode_resolved` picks between `gpt-5-mini` and `claude-haiku-4.5` per turn (the probe turn resolved to `gpt-5-mini`). `cost_nonzero`/`tokens_nonzero` are asserted — this recipe runs two real turns, and live tokens come from `assistant.message.outputTokens`.\n\nThe spec asserts the CORRECT behaviour (escape window stays `ready`) and carries `known_failing: true`, per the assess playbook for a `bug` cell.\n\nDAEMON CAPABILITY CORRECTED bug -> full on 2026-08-05 by a re-recording (CLI 1.0.78). The bug was real when frozen; the parser now Skips tool.user_requested and isUserRequested completions. Live proof in recordings/2026-08-05-17-36-25: the escape's records land at 15:36:41.913 / 15:36:42.005 and the daemon emits NO transition between the first turn settling (17:36:35.423 ready) and the next real prompt (17:36:53.348 working) — 17.9s of preserved ready across the escape, then a normal turn proves the session is not wedged. 7/7 phases; known_failing cleared.",
+      "caveats": [
+        "The escape is INVISIBLE to irrlicht until the session's events.jsonl exists — verified live: two `!` escapes on a fresh session wrote nothing to disk for ~50 s, and the buffered events were only flushed when the first real prompt created the file, landing BEFORE that prompt's user.message where the trailing assistant.turn_end masks the defect. This is why the recipe puts a real turn first; a claudecode-order recipe would pass over a broken adapter.",
+        "The stuck-in-working window is unbounded in practice: nothing in the daemon settles a `working` session with a live PID, so the row stays wrong until the user sends the next real prompt. The recipe's 10 s escape window is enough to observe it, not a bound on it.",
+        "Confidence 0.85, not higher: the agent behaviour and the exact events.jsonl bytes are live-verified, but the resulting websocket state arc is derived from parser.go + session_detector_activity.go + metrics.go rather than from a recording. `record` promotes this from provisional to settled.",
+        "`session.permissions_changed` was observed as line 1 of every transcript and is absent from the parser's switch — it falls to `default: Skip`, which is correct, but it is an event type not named in parser.go's constant block."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js (CLI 1.0.77, offset ~8683800)",
+          "note": "Input-mode switch: `O.startsWith(\"!\") && Za!==\"shell\" && (e_.current=Za, Hg(\"shell\"), Tn.setText(O.substring(1)))` — `!` enters a dedicated shell composer mode. The native `copilot` binary is a compressed Node SEA and yields nothing to `strings`, so app.js is the readable surface."
+        },
+        {
+          "kind": "file",
+          "ref": "app.js (offset ~8659636 and ~8646841)",
+          "note": "Submit path: `if(xe.startsWith(\"!\")){ … await cse(xe); return }` returns before any `ae.send({prompt:…})`; `cse` calls `ae.shell.executeUserRequested({requestId, command})`. No LLM turn — hence no user.message and no assistant.turn_end."
+        },
+        {
+          "kind": "file",
+          "ref": "app.js (offset ~2191332, `executeUserRequestedShellCommand`)",
+          "note": "`this.emit(\"tool.user_requested\", …)` then `this.emit(\"tool.execution_complete\", c.eventData)` — both NON-ephemeral (`emit`, cf. `emitEphemeral` at ~2253205), so both are recorded via sessionRecordEventJson and written to events.jsonl by the SessionEventWriter (localEventsPath, ~2533038)."
+        },
+        {
+          "kind": "file",
+          "ref": "LIVE PROBE, GitHub Copilot CLI 1.0.77, isolated COPILOT_HOME, zero AI credits for the escapes (`Session: 0 AIC used`)",
+          "note": "After one real turn created events.jsonl, `!echo third` appended exactly two lines within 5 s: {\"type\":\"tool.user_requested\",\"data\":{\"toolCallId\":\"a22a9bfd-…\",\"toolName\":\"local_shell\",\"arguments\":{\"command\":\"echo third\"}}} and {\"type\":\"tool.execution_complete\",\"data\":{\"toolCallId\":\"a22a9bfd-…\",\"isUserRequested\":true,\"success\":true,\"result\":{\"content\":\"third\"}}}. File then byte-stable for 60 s. `isUserRequested:true` is the discriminator the parser fix needs."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go:102-103,114-118,224-232",
+          "note": "THE BUG. `tool.user_requested` is unknown → default Skip (correct). `tool.execution_complete` → parseToolComplete → EventType \"function_call_output\" — substantive, with no isUserRequested carve-out."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go:582 (forceReadyToWorkingIfActive) + core/domain/session/metrics.go:513-558 (IsAgentDone)",
+          "note": "Substantive activity bounces ready→working; IsAgentDone is false for LastEventType \"function_call_output\" (not turn_done, not assistant/assistant_output), and no further event follows the escape — so the session sticks in working."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_dead_process_test.go:32,68",
+          "note": "Independent in-repo confirmation of the stuck shape: a transcript \"frozen on a function_call_output\" is pinned as still `working`."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go:127-136 and core/adapters/inbound/agents/claudecode/parser.go:350-359",
+          "note": "The two sibling adapters that already solved this scenario by SKIPPING the shell-escape trace (`injected:true` user lines; `<bash-input>`/`<bash-stdout>` wrappers). Copilot's adapter has no equivalent skip — the unlock is the same shape, keyed on isUserRequested."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh:128 (DRIVE_ELICITS) and its `keys` arm",
+          "note": "send/wait_turn/sleep/keys all elicited with real arms. The `keys` arm reads the step's `text` field, NOT `keys` — copying claudecode's recipe verbatim would send an empty string. `send` increments EXPECTED_TURNS, so the escape must use `keys` or the following wait_turn hangs (the escape emits no assistant.turn_end)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "copilot CLI 1.0.77+ on PATH and authenticated (github.com account with model access)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated mode)",
+        "copilot is launched in interactive TUI mode so the ! shell-escape composer mode is reachable"
+      ],
+      "setup": [
+        "Driver seeds an isolated COPILOT_HOME with trustedFolders for the run cwd and dismisses the folder-trust modal by pane match",
+        "Driver launches with --no-color --allow-all so the escape is not permission-gated"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ready"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "keys",
+          "text": "!"
+        },
+        {
+          "type": "sleep",
+          "seconds": 1
+        },
+        {
+          "type": "keys",
+          "text": "echo hello"
+        },
+        {
+          "type": "sleep",
+          "seconds": 1
+        },
+        {
+          "type": "keys",
+          "text": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "the real <session-id> session appears and settles to ready after the FIRST turn (this is what materializes events.jsonl — the escape alone never does)",
+        "during the ~10 s window after the !echo shell-escape, NO state_transition to working fires for that session (KNOWN FAILING today: tool.execution_complete → function_call_output flips it to working and it sticks)",
+        "during that window, NO state_transition to waiting fires",
+        "after the closing user prompt, the session shows ready→working→ready",
+        "final session state is ready",
+        "events.jsonl contains a tool.user_requested + tool.execution_complete pair with data.isUserRequested == true, and NO assistant.turn_end between them"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

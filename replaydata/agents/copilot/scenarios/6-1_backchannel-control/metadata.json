@@ -1,0 +1,159 @@
+{
+  "scenario_id": "backchannel-control",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+00af800",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes (interactive TUI, already driven live by tmux send-keys in every recorded copilot cell)\ndaemon_capability: bug — the copilot adapter DELIBERATELY declares no Control block and no ControlPermission(), so InputService can never resolve a copilot session as controllable and the daemon refuses every input/interrupt. A deliberate not-implemented (one declaration + live verification), NOT an architecture limit.\ndriver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "backchannel-control",
+      "agent": "copilot",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug (the adapter deliberately declares no Control axis — a feasible unlock, not an incapability)\ndriver_capability: ready\n\nRoute: record-known-failing.\n\n## agent_supports = yes\n\nGitHub Copilot CLI 1.0.77 is a full-screen interactive TUI whose input box is driven by ordinary terminal keystrokes — which is the exact mechanism backchannel control uses (tmux `send-keys` / kitty `send-text` / AppleScript into the session's controlling terminal). This is not inferred from docs: `replaydata/agents/copilot/driver-interactive.sh` already drives copilot end-to-end that way for every recorded cell in this column — `launch_repl` starts it under tmux, `wait_ready` (line 195-217) polls `tmux capture-pane` until the footer hint `/ commands` is drawn, and `send`/`slash` then type into the live box. Slash commands exist (the footer advertises them; `/usage` and `/model` were observed live, and `exit_clean` sends `/exit`).\n\nTwo sub-behaviours the scenario asserts are NOT yet verified for copilot, and they are the reason confidence is 0.75 rather than 0.85:\n\n1. **Interrupt semantics.** The driver implements `interrupt` as tmux `Escape` (line 354), matching the repo-wide convention for TUI agents — claudecode's `step_interrupt` (driver-interactive.sh:356-366) and kiro-cli's (:469-473) both send `Escape` too. But the DAEMON's only interrupt delivery is a literal Ctrl-C: `agent.InterruptCtrlC` → `tmuxInterrupt` sends `send-keys … C-c` (core/adapters/outbound/control/controller.go:214-218) and `kittyInterrupt` sends a raw ETX (:241-247). Whether Ctrl-C cancels a copilot turn without killing the REPL is unverified for copilot. (The same divergence exists for claudecode/kiro-cli, which declare `InterruptCtrlC` regardless — so this is a pre-existing repo-wide convention, not a copilot-specific defect. Naming it here so the unlock verifies it rather than inheriting the assumption.)\n2. **Preset inventory.** Whether copilot has a `/compact` equivalent (the one preset id `backchannel.PresetCompact` that sibling adapters map) is unverified. A `strings` scan of the binary CANNOT settle it: the shipped `copilot` is a 152 MB Node single-executable whose application bundle is not plain text — `strings -a … | grep -c` returns 0 for `assistant.turn_end`, `session-state`, `totalNanoAiu`, `trustedFolders` and `Copilot CLI` alike, i.e. only Node's own runtime strings are scannable. The slash-command list is therefore only readable from the live picker, which is why the recipe below opens it.\n\nNeither gap blocks the input half, which is the scenario's primary assertion, so the pillar is `yes` with both gaps in `caveats`.\n\n## daemon_capability = bug\n\n`core/adapters/inbound/agents/copilot/agent.go` declares NO `Control` block and no `agent.ControlPermission()` — deliberately, and the omission is documented in the doc comment (lines 18-25) and pinned by `TestAgent_NoControlDeclared` (adapter_test.go:168-177). The consequence is total, and it is a refusal rather than a mis-read:\n\n- `InputService.resolve` (core/application/services/input_service.go:109-125) gates every write and every controllability query on `s.consent.Granted(state.Adapter, ControlPermissionKey /* \"control\" */)`.\n- `PermissionService.Granted` (permission_service.go:243-247) answers `s.set.Get(agent, key) == StateGranted`. For an adapter that never DECLARES a `control` permission there is no such key to grant — it appears in no `Snapshot()` (:249-…, which iterates `a.Permissions`), so no UI or API path can move it to granted.\n- Therefore `InputService.Controllable(sessionID)` is false for every copilot session, `Input`/`Interrupt` return `ErrControlDisabled`, and the session payload never projects the affordance — the dashboard offers no input box, no interrupt, and no presets for copilot. `agents.SubagentCounters`' sibling map `agents.<Control.Presets>` (maps.go:127-129) and the `/api` presets projection (cmd/irrlichd/handlers.go:1453-1454) also skip copilot, since `Control.Presets` is nil.\n\nThis is `bug`, not `incapable`, and the distinction is load-bearing: nothing about copilot's transport blocks it. The write path is entirely agent-agnostic — `Controller.Input`/`Interrupt` resolve the backend off `session.Launcher` (tmux pane / kitty window / AppleScript host), not off the adapter, and copilot sessions are launched into exactly such terminals. The unlock is one declaration in `agent.go` — `Control{SupportsInput: true, Interrupt: agent.InterruptCtrlC, Presets: {…}}` plus `agent.ControlPermission()` in `Permissions` — which is precisely the shape mistral-vibe shipped in commit 5e22e47 to flip this same cell from `bug` to `full` (replaydata/agents/mistral-vibe/scenarios/6-1_backchannel-control/metadata.json). Deleting `TestAgent_NoControlDeclared` and wiring `contracttesting.AssertPermissionGated` for the new `modify`-kind permission is the rest of it.\n\n**What evidence would settle the unlock** (all obtainable from ONE live drive, which is what the recipe below performs):\n\n1. Does tmux `send-keys … C-c` interrupt an in-flight copilot turn and leave the REPL alive? If yes → `Interrupt: agent.InterruptCtrlC`. If it kills the REPL → the honest declaration is `Interrupt: agent.InterruptNone` (Escape has no `InterruptMethod` variant in core/domain/agent/declaration.go:46-56; adding one would be the follow-up, and would also be the right fix for claudecode/kiro-cli).\n2. Does the slash picker list a context-compaction command? If yes → `Presets: {backchannel.PresetCompact: \"/<name>\"}`; if no → declare `Presets: nil`, which the domain documents as \"the rule won't fire and the UI marks it unsupported\" (declaration.go:35-42) — a legitimate terminal answer, not a blocker.\n3. Does injected text actually start a turn (`user.message` → working) when typed by a tool rather than a human? The recording below answers this directly.\n\n## driver_capability = ready\n\nThe recipe needs `keys`, `send`, `wait_turn`, `interrupt` and `sleep`. `driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` reports: `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn`, and `DRIVE_ELICITS` (line 128) carries `send slash sleep wait_turn exit_clean sigkill interrupt keys restart start_session session`. No `gap:*`. Note the copilot driver's `keys` step reads `.text` (line 357), not `.keys` as kiro-cli's does — the recipe below uses `.text` accordingly.\n\n## What the recording does and does not prove\n\nThe driver injects through `tmux send-keys`, i.e. the SAME transport `Controller.Input` uses, so the recording is a faithful proxy for the injection half: it proves copilot's TUI accepts tool-injected keystrokes and that the daemon observes the resulting `ready → working → ready` arc. What it does NOT exercise is irrlicht's gate chain (backchannel toggle → control consent → `Controllable`) — and that is exactly the half copilot currently fails. This limitation is shared with the mistral-vibe and kiro-cli recordings of this cell, whose drivers inject the same way; the difference is only that those adapters declare `Control`.\n\nBecause `expected.jsonl`'s DSL matches only `state_transition` states, lifecycle `kind`s and the model/cost/tokens `ObservationSpec` (tools/onboarding-factory/internal/validate/expected.go:99-142, 84-97), there is NO predicate for \"the session reports controllable\" — the scenario's first acceptance bullet. So the spec asserts the arc (which is correct today) and carries `known_failing` plus this body as the record of the missing half: the phases will pass, and the flag is what says the cell is not whole. Same shape as this column's 3-1 foreground-subagent cell.",
+      "caveats": [
+        "Interrupt method UNVERIFIED for copilot: the driver sends Escape (matching claudecode/kiro-cli convention) but the daemon's only delivery is Ctrl-C (controller.go:214-218). Whether Ctrl-C interrupts a copilot turn without killing the REPL is the single fact that decides between Interrupt: InterruptCtrlC and InterruptNone in the unlock. The recording's Escape interrupt does not answer it — a deliberate C-c probe does.",
+        "Preset inventory UNVERIFIED: whether copilot has a /compact equivalent is unknown, and a binary strings scan cannot answer it (Node SEA, application bundle not plain text — verified: 0 hits for assistant.turn_end / session-state / totalNanoAiu / trustedFolders / 'Copilot CLI'). The recipe opens the slash picker with a bare '/' so the pane stream (captured by tmux pipe-pane into driver.log.stdout, driver-interactive.sh:186) records the full command list at zero AI-credit cost.",
+        "Whether an interrupted copilot turn emits assistant.turn_end — the adapter's ONLY ready trigger (parser.go:19, 85-99) — is unverified. If it does not, the interrupt_settle phase fails and the session stays working: the codex 2-20 turn_aborted shape. The cell is already known_failing, so this surfaces as a visible phase failure rather than a red suite.",
+        "The recording exercises the tmux injection transport, not irrlicht's consent gate chain; no recording of this scenario for any agent exercises the latter (TestBackchannelE2E_Local/_Remote is where that lives)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "lines 18-25: Control deliberately NOT declared (doc comment states why); lines 45-61: Permissions carries only the observe-kind transcripts key — no agent.ControlPermission()"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/adapter_test.go",
+          "note": "TestAgent_NoControlDeclared (lines 168-177) pins the omission: SupportsInput must stay false while no ControlPermission is declared"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/input_service.go",
+          "note": "resolve() lines 109-125 gate on consent.Granted(adapter, \"control\"); Controllable() (100-107) is that same chain — false for copilot, so Input/Interrupt return ErrControlDisabled"
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/permission_service.go",
+          "note": "Granted() lines 243-247 read the declared permission set; an undeclared key can never be StateGranted and never appears in Snapshot(), which iterates a.Permissions"
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/agent/declaration.go",
+          "note": "Control{SupportsInput,Interrupt,Presets} zero value = not controllable (lines 20-44); InterruptMethod has only None/CtrlC/Signal — no Escape variant (46-56); ControlPermission() is the shared modify-kind gate (63-80)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/control/controller.go",
+          "note": "Input/Interrupt resolve the backend from session.Launcher (tmux/kitty/AppleScript), agent-agnostic — lines 90-115; tmuxInterrupt sends C-c (214-218), kittyInterrupt a raw ETX (241-247)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "line 128 DRIVE_ELICITS includes interrupt/keys/send/slash/wait_turn; line 186 tmux pipe-pane captures the pane stream; wait_ready (195-217) polls capture-pane for the '/ commands' footer; interrupt (354) sends Escape; keys (357) reads .text"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/6-1_backchannel-control/metadata.json",
+          "note": "the precedent unlock: this same cell was daemon=bug for identical reasons until commit 5e22e47 declared Control + ControlPermission on the vibe adapter, flipping it to full"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "evTurnEnd = \"assistant.turn_end\" (line 19) is the only ready trigger; no abort/cancel event kind is handled, so an interrupted turn settles only if copilot itself writes turn_end"
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/expected.go",
+          "note": "ExpectedPhase (99-142) matches only expected_state / kind, and ObservationSpec (84-97) only model/cost/tokens — there is no controllability predicate, hence known_failing carries the missing half"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 240,
+      "settings": {},
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation does not require a re-login)",
+        "An active Copilot plan with AI credits — the two turns spend them",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other copilot session shares the same cwd (the PID is bound by cwd)",
+        "tmux available: the injection transport under test IS tmux send-keys"
+      ],
+      "setup": [
+        "The driver seeds a scratch COPILOT_HOME under the staging dir with trustedFolders + askedSetupTerminals pre-answered, so the trust modal cannot block the input box; the session directory is minted under $COPILOT_HOME/session-state/<session-id>/"
+      ],
+      "script": [
+        {
+          "type": "keys",
+          "text": "/"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "keys",
+          "text": "Escape"
+        },
+        {
+          "type": "sleep",
+          "seconds": 1
+        },
+        {
+          "type": "keys",
+          "text": "BSpace"
+        },
+        {
+          "type": "sleep",
+          "seconds": 1
+        },
+        {
+          "type": "send",
+          "text": "Write a haiku about a lighthouse, then wait for my next message."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Now write a detailed 500-word essay about the history of lighthouses."
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "interrupt"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "events.jsonl mints a proc-<PID> pre-session in ready shortly after launch, then the real <session-id> session in ready under a DIFFERENT id once events.jsonl appears on the first prompt",
+        "events.jsonl contains a pid_discovered event binding the copilot PID to the real session (matched by cwd)",
+        "the first injected prompt drives a state_transition to working on the real session (injection over tmux send-keys — the same transport Controller.Input uses)",
+        "assistant.turn_end settles the first turn back to ready",
+        "the second injected prompt drives working again, and the Escape interrupt settles it back to ready — THIS phase is the one that may fail: copilot's only ready trigger is assistant.turn_end, and whether an aborted turn emits it is unverified",
+        "observation vector: tokens_nonzero=true and cost_nonzero=true (assistant.message.outputTokens is live per message); model left unasserted (the auto-router picks gpt-5-mini or claude-haiku-4.5 per turn)",
+        "OUT OF BAND, from driver.log.stdout rather than events.jsonl: the slash picker opened by the leading '/' keystroke lists copilot's slash commands — read it and record whether a context-compaction command exists, which is the Presets half of the unlock",
+        "KNOWN FAILING (not machine-checkable): the session never reports controllable. The copilot adapter declares no Control/ControlPermission, so InputService.Controllable is false and the daemon offers no input, interrupt or preset for this session — the scenario's first acceptance bullet."
+      ]
+    }
+  }
+}

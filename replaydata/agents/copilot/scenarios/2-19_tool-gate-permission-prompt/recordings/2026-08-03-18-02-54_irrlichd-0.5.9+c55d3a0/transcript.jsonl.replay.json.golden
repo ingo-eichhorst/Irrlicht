@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "copilot",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 10,
+    "consumed_events": 10,
+    "total_transitions": 3,
+    "first_event_time": "2026-08-03T16:02:54.591Z",
+    "last_event_time": "2026-08-03T16:03:28.949Z",
+    "wall_clock_session_duration": 34358000000,
+    "state_durations": {
+      "ready": 8943000000,
+      "waiting": 13026000000,
+      "working": 12389000000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "estimated_cost_usd": 0.0036085,
+    "cum_input_tokens": 10586,
+    "cum_output_tokens": 481,
+    "model_name": "gpt-5-mini"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-08-03T16:02:54.591Z",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 5,
+      "virtual_time": "2026-08-03T16:03:03.534Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_start",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 8,
+      "virtual_time": "2026-08-03T16:03:15.923Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "transcript permission prompt open → waiting",
+      "last_event_type": "permission_requested",
+      "has_open_tool": true,
+      "open_tool_names": [
+        "bash"
+      ],
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…ommand to create out.txt and verify its contents by chaining creation and a r…"
+    }
+  ]
+}

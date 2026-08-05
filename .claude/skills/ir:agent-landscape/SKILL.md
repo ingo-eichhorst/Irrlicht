@@ -93,7 +93,7 @@ An agent is "NEW" only if both:
 
 The canonical source of truth is `core/adapters/inbound/agents/` (registered in `all.go`'s `All()`) + `core/adapters/inbound/orchestrators/`. As of this writing:
 
-- `live`: Claude Code (`anthropics/claude-code`), OpenAI Codex (`openai/codex`), Pi (`earendil-works/pi`, renamed from `badlogic/pi-mono` in v0.74), Aider (`Aider-AI/aider`), OpenCode (`anomalyco/opencode`), Kiro (adapter targets Kiro CLI specifically, `AdapterName "kiro-cli"`; product repo `kirodotdev/Kiro`), Gemini CLI (`google-gemini/gemini-cli`), Antigravity (closed-source, no public repo), Gas Town (`gastownhall/gastown`).
+- `live`: Claude Code (`anthropics/claude-code`), OpenAI Codex (`openai/codex`), Pi (`earendil-works/pi`, renamed from `badlogic/pi-mono` in v0.74), Aider (`Aider-AI/aider`), OpenCode (`anomalyco/opencode`), Kiro (adapter targets Kiro CLI specifically, `AdapterName "kiro-cli"`; product repo `kirodotdev/Kiro`), Gemini CLI (`google-gemini/gemini-cli`), Antigravity (closed-source, no public repo), Mistral Vibe (`mistralai/mistral-vibe`), GitHub Copilot CLI (`github/copilot-cli`, `AdapterName "copilot"`), Gas Town (`gastownhall/gastown`).
 - `planned`: Cursor, Claude Squad, Qwen Code, Crush, Continue, Goose, Kilo Code, Paperclip, Ruflo, Multiclaude, SWE-agent.
 - Everything else: `none`.
 

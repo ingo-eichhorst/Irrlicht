@@ -1,0 +1,123 @@
+{
+  "scenario_id": "turn-end-terminal-text",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+7894002",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready — the tool-less text turn is closed by the EXPLICIT assistant.turn_end boundary (parser.go:98-99 -> turn_done), not by the terminal text itself. RECORDING CAVEAT (2026-08-03, recording 2026-08-03-12-16-12_irrlichd-0.5.9+ced85ef, 4/4): the phases pass, but `working` had ZERO observable duration — the live events show state_transition working and state_transition ready at the SAME millisecond (12:16:23.598), so the session sat in `ready` for the whole 4.3s turn. This is the born-ready gap the sibling session-end cell records as daemon=bug: copilot writes events.jsonl only at the first prompt, so user.message is already in the discovery backlog and buildNewSessionState (session_detector_activity.go:236) births a top-level session flat `ready` without re-classifying its enriched metrics. The end-signal mechanism this cell exists to pin — assistant.turn_end -> turn_done -> classifier rule 2b -> ready — is confirmed correct and is NOT what is broken; only the turn's START is invisible. Cell stays daemon=full because the asserted arc is present and ordered; see the session-end cell for the bug."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-end-terminal-text",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts one user-observable arc — `ready -> working -> ready` for a turn that ends in assistant text with zero tool calls — and explicitly allows whichever adapter-specific marker closes the turn. It deliberately overlaps `basic-turn`; the distinct intent here is to pin the END SIGNAL mechanism, so the analysis below is about what settles the turn rather than about the lifecycle as a whole.\n\n**Agent (yes).** A tool-less prompt/reply round-trip is the smallest thing GitHub Copilot CLI does. The turn shape was read off a real captured `events.jsonl` on CLI 1.0.77: `session.start -> session.model_change -> session.auto_mode_resolved -> system.message -> user.message -> assistant.turn_start -> assistant.message -> assistant.turn_end -> session.usage_checkpoint -> session.shutdown`. Copilot brackets every turn explicitly with `assistant.turn_start` / `assistant.turn_end`, each carrying a `turnId`.\n\n**Daemon (full) — and the mechanism this cell exists to pin.** Copilot's end signal is architecturally UNLIKE claudecode's. In claudecode the terminal text *is* the end signal (the `stop_reason: end_turn` allow-list in `resolveAssistantStreaming`); in copilot the terminal text and the end signal are two separate transcript events:\n\n1. `assistant.message` carries `data.content`, the model's reply text. The parser (`parseAssistantMessage`, parser.go:189-208) maps it to `EventType: \"assistant_message\"`, sets `ev.AssistantText` via `tailer.TruncateAssistantText`, and scans the FULL untruncated text with `tailer.ScanTaskEstimate` / `tailer.ScanTaskSummary`. Its own comment (parser.go:187-188) states the design: \"This event never settles the turn — assistant.turn_end does that — so a reply that precedes further tool work correctly leaves the session working.\"\n2. `assistant.turn_end` is mapped to `EventType: \"turn_done\"` (parser.go:98-99). `SessionMetrics.IsAgentDone` returns true on `LastEventType == \"turn_done\"` (core/domain/session/metrics.go:542), and the state classifier's rule 2b then drives `working -> ready`.\n\nThat split is strictly SAFER than an inference-based end signal for this scenario: there is no quiet-tail heuristic (unlike gemini-cli), no stop_reason allow-list that a future CLI value could fall out of (the claudecode Bug-D shape this scenario was originally written around), and no risk of settling early on an intermediate reply. A turn may contain SEVERAL `assistant.message` events before its single `assistant.turn_end` — three messages across two turns were observed live on 1.0.77 — so \"the terminal text\" for copilot is the LAST `assistant.message` of the turn, and it is the `turn_end` that closes it. The failure mode this scenario guards against for other adapters (terminal text arrives, session never leaves `working`) can only occur here if the CLI stops emitting `assistant.turn_end` altogether, which would be a breaking transcript-format change rather than a new enum value.\n\nThe `working -> ready` settle on copilot was confirmed against a live session on CLI 1.0.77 in commit c06466ef (session detected with the directory-derived id, cwd and version; `working -> ready` observed; PID bound; cost non-zero once `claude-haiku-4.5` was added to the alias map).\n\n**No tool calls, so no waiting.** With a tool-less prompt no `tool.execution_start` and no `permission.requested` are written, so the adapter's transcript-tier permission rule (the only thing that puts a copilot session into `waiting` structurally) never fires and the arc stays two-legged.\n\n**Session-birth shape: presession (two-phase).** Copilot creates `session-state/<id>/` at LAUNCH holding only `workspace.yaml`; `events.jsonl` does not exist until the first prompt is sent (stated in the driver's `resolve_transcript` / `wait_ready` comments, and the reason `resolve_transcript` resolves on the directory rather than the file). `sessionIDFromPath` only claims `events.jsonl`, so the fswatcher mints nothing during that window, while `processlifecycle.Scanner` (wired for every adapter in `core/cmd/irrlichd/wiring.go`, 1s poll) sees a `copilot` process with no session for its PID and mints a `proc-<PID>` pre-session. The real session, keyed on the `<session-id>` directory, therefore arrives later under a DIFFERENT id. That is the codex / gemini-cli / mistral-vibe presession shape, so the spec models the birth as two phases and anchors every post-birth phase to the real session.\n\n**Driver (ready).** The recipe needs `send`, `wait_turn`, `sleep`; `DRIVE_ELICITS` in `replaydata/agents/copilot/driver-interactive.sh` lists all three (plus `slash exit_clean sigkill interrupt keys restart start_session session reset_session resume`), confirmed by `driver_step_types_from_file`. `wait_turn` polls `turn_count`, which greps `\"type\":\"assistant.turn_end\"` — an exact completed-turn count, which for this cell means the driver and the daemon key off the SAME event, so the recording cannot end before the settle it asserts.\n\nAn INTERACTIVE recipe is used deliberately: the settle to `ready` must be observed while the process is still alive.\n\n## The narrow gap this cell brushes against (caveat, not a downgrade)\n\nThe copilot parser does NOT set `PendingWaitingCue`. `claudecode` and `codex` both compute `session.ProseIndicatesWaiting(tailer.WaitingScanWindow(full))` in their assistant handler; copilot does not. The verified consequence is narrow: a question in the LAST ~200 runes of the reply still routes to `waiting` through the shared `IsWaitingForUserInput` fallback over `LastAssistantText`, but a question further back in a long reply does not — the #1150-shaped gap. It is a one-line feasible unlock, not a freeze, and it does not touch this cell's assertion: the recipe pins a short declarative reply with no question in it, and the scenario asserts the turn reaches `ready`. It is recorded here because this is the cell whose subject is \"what the terminal assistant text does to state\", which is exactly where a future reader would look for it.",
+      "caveats": [
+        "The copilot parser does not set PendingWaitingCue (claudecode/codex compute session.ProseIndicatesWaiting(tailer.WaitingScanWindow(full)) in their assistant handler; copilot does not). Verified consequence: a question in the last ~200 runes of the reply still routes to waiting via the shared IsWaitingForUserInput fallback over LastAssistantText, but a question earlier in a long reply does not — the narrow #1150-shaped gap. A one-line feasible unlock, not a freeze; orthogonal to this cell's ready-arc assertion because the recipe elicits a short declarative reply.",
+        "A turn may contain SEVERAL assistant.message events before its single assistant.turn_end (three messages across two turns observed live on CLI 1.0.77), so 'the terminal text' is the LAST assistant.message of the turn. The recipe's prompt is written to elicit exactly one short reply so the cell stays the smallest possible round-trip, but a multi-message turn would still settle correctly — the spec asserts the arc, not the message count.",
+        "PROVISIONAL — the two-phase presession birth is derived from code reading (scanner mints proc-<PID> for every adapter at 1s poll; events.jsonl is absent until the first prompt), not from a live capture of the birth. The live verification in c06466ef confirmed working -> ready and PID binding but did not pin the birth sequence. record settles it; if the real session is instead observed born directly in working (session.start and user.message can land in the same write burst), record re-anchors session_birth.",
+        "model is deliberately NOT pinned in the observation vector. --model accepts only \"auto\" on this account and session.auto_mode_resolved picks between the only two available models (gpt-5-mini, claude-haiku-4.5) per turn, so an exact-match assertion would be nondeterministic. Both resolve in the capacity price map, so cost is non-zero either way.",
+        "Overlaps intentionally with basic-turn (2.1), which is already assessed for copilot with the same recipe shape. The cells differ in intent: basic-turn asserts the happy-path lifecycle including PID binding; this cell asserts only the end-signal mechanism, so it omits the pid_bind phase and adds the no-tool-call invariant.",
+        "Recording spends real Copilot AI credits (totalNanoAiu) on the maintainer's account.",
+        "RECORDING CAVEAT (2026-08-03, recording 2026-08-03-12-16-12_irrlichd-0.5.9+ced85ef, 4/4): the phases pass, but `working` had ZERO observable duration — the live events show state_transition working and state_transition ready at the SAME millisecond (12:16:23.598), so the session sat in `ready` for the whole 4.3s turn. This is the born-ready gap the sibling session-end cell records as daemon=bug: copilot writes events.jsonl only at the first prompt, so user.message is already in the discovery backlog and buildNewSessionState (session_detector_activity.go:236) births a top-level session flat `ready` without re-classifying its enriched metrics. The end-signal mechanism this cell exists to pin — assistant.turn_end -> turn_done -> classifier rule 2b -> ready — is confirmed correct and is NOT what is broken; only the turn's START is invisible. Cell stays daemon=full because the asserted arc is present and ordered; see the session-end cell for the bug."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "Lines 96-99: evAssistantMessage -> parseAssistantMessage, evTurnEnd -> EventType \"turn_done\". Lines 183-208 (parseAssistantMessage): EventType \"assistant_message\", ev.AssistantText = tailer.TruncateAssistantText(content), full-text tailer.ScanTaskEstimate / tailer.ScanTaskSummary; the doc comment at 187-188 states the event never settles the turn — assistant.turn_end does. Lines 148-160: session.start is Skip=true so a session is born ready and only user.message moves it to working."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "Line 542: IsAgentDone returns true when LastEventType == \"turn_done\" — the primary path copilot's assistant.turn_end lands on. No fallback heuristic is needed for this adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Rule 2b: IsAgentDone() true and not waiting for user input => working/waiting -> ready. This is the transition the cell asserts."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Source = FilesUnderRoot{Dir: $COPILOT_HOME/session-state, SessionIDFromPath: sessionIDFromPath} with a JSONLineParser; Process.Match = ExactName{copilot}. Session id is the <session-id> directory, and sessionIDFromPath only claims events.jsonl — which is why the presession row exists."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go",
+          "note": "buildAgentWatchers wires a processlifecycle.Scanner for EVERY adapter, copilot included — the mechanism that mints the proc-<PID> pre-session while events.jsonl does not yet exist."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/scanner.go",
+          "note": "defaultInterval = 1s; maybeTrackNewPID mints sessionID = fmt.Sprintf(\"proc-%d\", pid) when hasActiveSession finds no transcript-backed session for that PID."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "Line 128 DRIVE_ELICITS covers send/wait_turn/sleep (and more); lines 280-296 turn_count greps '\"type\":\"assistant.turn_end\"' for an exact completed-turn count, so wait_turn blocks on the same event the daemon settles on. Confirmed with driver_step_types_from_file."
+        },
+        {
+          "kind": "file",
+          "ref": "git show c06466ef (feat(copilot): add GitHub Copilot adapter)",
+          "note": "Live verification on CLI 1.0.77: session detected with directory-derived id, cwd and version; working -> ready observed after assistant.turn_end; PID bound to the native child not the node loader; cost non-zero once claude-haiku-4.5 was added to the alias map."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-13_turn-end-terminal-text/metadata.json",
+          "note": "The reference cell this one is templated from — its end signal is the terminal stop_reason allow-list; copilot's is a separate explicit turn_end event, which is what the reasoning above contrasts."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/github/copilot-cli",
+          "note": "GitHub Copilot CLI — the terminal agent this column onboards."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation does not require a re-login)",
+        "An active Copilot plan with AI credits — the turn spends them",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other copilot session shares the same cwd (the PID is bound by cwd)"
+      ],
+      "setup": [
+        "The driver seeds a scratch COPILOT_HOME under the staging dir with trustedFolders + askedSetupTerminals pre-answered, so the trust modal cannot block the input box; the session directory is minted under $COPILOT_HOME/session-state/<session-id>/"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do not use any tools. Reply with exactly this sentence and nothing else: The terminal text closes the turn."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl mints a proc-<PID> pre-session in ready shortly after launch (the copilot process exists before events.jsonl does)",
+        "events.jsonl mints the real <session-id> session in ready under a DIFFERENT session id once events.jsonl appears on the first prompt",
+        "events.jsonl contains a state_transition to working on the real session when the user prompt lands",
+        "events.jsonl contains a state_transition to ready on the real session after assistant.turn_end",
+        "no tool_use / function_call events occur for the real session (the prompt forbids tools)",
+        "no state_transition to waiting occurs (no permission.requested, and the reply carries no question)",
+        "final state of the real session is ready",
+        "observation vector: tokens_nonzero=true (assistant.message.outputTokens), cost_nonzero=true; model left unasserted (auto-router picks per turn)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

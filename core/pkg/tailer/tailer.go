@@ -80,6 +80,13 @@ type SessionMetrics struct {
 	HasOpenToolCall   bool `json:"has_open_tool_call"`
 	OpenToolCallCount int  `json:"open_tool_call_count,omitempty"`
 
+	// TranscriptPermissionPending is true when the transcript itself shows a
+	// permission prompt opened and not yet resolved (unmatched
+	// PermissionRequestIDs). Distinct from the hook-delivered
+	// SessionMetrics.PermissionPending, which no parser can reach; see
+	// ParsedEvent.PermissionRequestIDs for why the two stay separate.
+	TranscriptPermissionPending bool `json:"transcript_permission_pending,omitempty"`
+
 	// OpenSubagents is the number of in-process child agents currently
 	// running. The tailer leaves this at zero; adapters populate it from
 	// LastOpenToolNames or whatever adapter-specific signal they use.
@@ -314,6 +321,13 @@ type TranscriptTailer struct {
 	// parallel tool closures. See issue #117.
 	openToolCalls map[string]string
 
+	// openPermissions is the id-keyed set of permission prompts the
+	// transcript has opened and not yet resolved, following exactly the
+	// openToolCalls pattern for the same reason: a bare counter or bool
+	// cannot tell which of several outstanding prompts a resolution closed.
+	// TranscriptPermissionPending is derived from len(openPermissions).
+	openPermissions map[string]struct{}
+
 	// Token breakdown accumulators (latest snapshot, not cumulative).
 	// Used for context utilization — always reflects the most recent API turn.
 	inputTokens         int64
@@ -480,6 +494,7 @@ func NewTranscriptTailer(path string, parser TranscriptParser, adapter string) *
 		parser:              parser,
 		adapter:             adapter,
 		openToolCalls:       make(map[string]string),
+		openPermissions:     make(map[string]struct{}),
 		openBackgroundProcs: make(map[string]string),
 		pendingBashPolls:    make(map[string]string),
 		pendingTaskCreates:  make(map[string]string),
@@ -894,6 +909,7 @@ func (t *TranscriptTailer) processParsedEvent(parsed *ParsedEvent, sawUserBlocki
 	}
 
 	t.applyToolCallDeltas(parsed, sawUserBlockingClosed)
+	t.applyPermissionDeltas(parsed)
 	t.applyTaskDeltas(parsed)
 	t.applyBackgroundProcessDeltas(parsed)
 	t.reconcileTaskSnapshot(parsed)
@@ -929,6 +945,32 @@ func (t *TranscriptTailer) applyToolCallDeltas(parsed *ParsedEvent, sawUserBlock
 	}
 	if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
 		t.openToolCalls = make(map[string]string)
+	}
+}
+
+// applyPermissionDeltas applies the parser's transcript-borne permission
+// deltas to openPermissions. Requests insert by id (idempotent — a re-read of
+// the same line overwrites rather than double-counting), resolutions delete by
+// id (an orphan resolution with no matching request is a harmless no-op, which
+// is what a backfill starting mid-prompt produces).
+//
+// A user message also clears the set: some agents abandon an outstanding
+// prompt when the user types something else instead of answering it, and a
+// stuck permission would otherwise pin the session in waiting forever. This
+// mirrors applyToolCallDeltas' ClearToolNames handling, and is guarded the
+// same way so an event that both answers a prompt and carries the next user
+// message still resolves precisely.
+func (t *TranscriptTailer) applyPermissionDeltas(parsed *ParsedEvent) {
+	for _, id := range parsed.PermissionRequestIDs {
+		if id != "" {
+			t.openPermissions[id] = struct{}{}
+		}
+	}
+	for _, id := range parsed.PermissionResolvedIDs {
+		delete(t.openPermissions, id)
+	}
+	if parsed.ClearToolNames && len(parsed.PermissionResolvedIDs) == 0 {
+		t.openPermissions = make(map[string]struct{})
 	}
 }
 
