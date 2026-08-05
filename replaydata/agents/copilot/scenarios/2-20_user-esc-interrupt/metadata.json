@@ -91,12 +91,13 @@
       ],
       "setup": [
         "The driver seeds a scratch COPILOT_HOME under the staging dir with trustedFolders + askedSetupTerminals pre-answered, so the trust modal cannot block the input box; the session directory is minted under $COPILOT_HOME/session-state/<session-id>/",
-        "Empty cwd under <staging>/cwd/ so the session is fresh, and the first prompt is pure text generation (no tool calls) so nothing can raise a permission prompt mid-cancel"
+        "Empty cwd under <staging>/cwd/ so the session is fresh, and the first prompt is pure text generation (no tool calls) so nothing can raise a permission prompt mid-cancel",
+        "The prompt must be one the model will actually COMPLY with and that runs long enough to interrupt. The original 'write an 800-word essay' prompt was refused on 2026-08-05 ('I'm constrained to short replies...'), and the refusal turn ended naturally 30s in — so the esc-esc had nothing left to cancel and the recording could not distinguish an interrupt from an ordinary settle. A mechanically repeatable token gives a long, compliant, interruptible generation."
       ],
       "script": [
         {
           "type": "send",
-          "text": "Write a long, detailed essay about the history of computing, at least 800 words. Do not use any tools — just write prose, and take your time."
+          "text": "Output the word banana repeated 4000 times on one single line, separated by single spaces. Do not use newlines. Do not use any tools. Do not add any commentary, preamble, or questions. Output only the repeated word."
         },
         {
           "type": "sleep",
