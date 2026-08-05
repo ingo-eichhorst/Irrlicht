@@ -12,8 +12,14 @@
 Worktrees share the parent repo's `.git` dir, so **`git stash` is not isolated per worktree** — it's a single shared stack. Concurrent agents stashing in different worktrees can pop each other's WIP. Use a local commit as a checkpoint instead (`git commit -m wip`, amend/reset later).
 When encountering suboptimal processes or issues make improvment suggestions in you final answer to the user.
 
-**Dismissals carry evidence.** Any claim whose function is *"you don't need to look here"* — *already fixed in #X*, *self-heals*, *likely benign*, *non-issue* — gets the
-same bar as the claim it supports: cite what you ran or read, or mark it assumed. This binds wherever a finding is written down (issue bodies, PR descriptions, triage comments, final answers), because a wrong dismissal is the one kind of error that stops anyone from checking it. Marking works: in #1088 every claim explicitly labelled "unverified" was investigated and came back not real, while that issue's one real bug hid in an unmarked aside.
+**Dismissals carry evidence.** Any claim whose function is *"you don't need to look
+here"* — *already fixed in #X*, *self-heals*, *likely benign*, *non-issue* — gets the
+same bar as the claim it supports: cite what you ran or read, or mark it assumed. This
+binds wherever a finding is written down (issue bodies, PR descriptions, triage
+comments, final answers), because a wrong dismissal is the one kind of error that stops
+anyone from checking it. Marking works: in #1088 every claim explicitly labelled
+"unverified" was investigated and came back not real, while that issue's one real bug
+hid in an unmarked aside.
 
 ## Build Artifacts
 
