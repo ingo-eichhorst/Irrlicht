@@ -217,6 +217,17 @@
         <li><strong>Adapter name:</strong> <code>mistral-vibe</code></li>
       </ul>
 
+      <h3>GitHub Copilot</h3>
+
+      <ul>
+        <li><strong>Transcript location:</strong> <code>events.jsonl</code> under <code>~/.copilot/session-state/&lt;session-id&gt;/</code>, relocatable via <code>$COPILOT_HOME</code></li>
+        <li>Since the transcript filename is the constant <code>events.jsonl</code>, the session id is derived from the parent directory name</li>
+        <li>The file is created only when the first prompt is sent, so the process scanner mints a <code>proc-&lt;pid&gt;</code> pre-session first and the real session arrives under a different id &mdash; already holding an open turn, so it is born <code>working</code></li>
+        <li>Turn boundaries are explicit, and permission prompts route to <code>waiting</code> straight from the transcript with no hook installation</li>
+        <li>In-process subagents write into the parent's transcript rather than their own directory, so they are counted on the parent instead of appearing as child sessions</li>
+        <li><strong>Adapter name:</strong> <code>copilot</code></li>
+      </ul>
+
       <h2>PID Discovery</h2>
 
       <table>
