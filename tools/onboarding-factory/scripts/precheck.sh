@@ -164,3 +164,22 @@ for bin in irrlichd replay; do
 done
 
 echo "precheck: OK (adapter=$ADAPTER, $ADAPTER=${CLI_VER:-n/a}, bin=$BIN_DIR)"
+
+# Machine-readable copy for callers (#1333 / B3). The version above was already
+# parsed correctly for all ten adapters, but it lived only in that human-readable
+# line — which run-cell.sh does not capture — so promote-recording.sh re-derived
+# it from a shorter table and stamped every copilot / gemini-cli / antigravity /
+# mistral-vibe manifest `agent_cli_version: "unknown"`. That is the field a
+# release sweep keys on, and the copilot run alone spanned two CLI builds
+# (1.0.77 -> 1.0.78 mid-sweep), which is exactly when it matters.
+if [[ -n "${PRECHECK_JSON_OUT:-}" ]]; then
+  jq -nc \
+    --arg adapter "$ADAPTER" \
+    --arg cli_bin "$CLI_BIN" \
+    --arg cli_version "${CLI_VER:-}" \
+    --arg min_version "${MIN_VERSION:-}" \
+    --arg daemon_version "$VERSION_STR" \
+    '{adapter: $adapter, cli_bin: $cli_bin, cli_version: $cli_version,
+      min_version: $min_version, daemon_version: $daemon_version}' \
+    > "$PRECHECK_JSON_OUT" 2>/dev/null || true
+fi

@@ -150,8 +150,13 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 fi
 
 # --- Precheck each adapter (builds bins, checks port, CLI versions) ------
+# Each adapter's detected CLI version is staged so promote-recording.sh can
+# stamp it rather than re-derive it (#1333 / B3); they move into $STAGING below,
+# one file per adapter, since a multi-agent cell promotes per adapter.
+declare -A PRECHECK_JSON_TMP=()
 for a in "${ADAPTERS[@]}"; do
-  ATTACH=0 "$SCRIPT_DIR/precheck.sh" "$a"
+  PRECHECK_JSON_TMP[$a]="$(mktemp -t "irr-precheck-$a.XXXXXX")"
+  ATTACH=0 PRECHECK_JSON_OUT="${PRECHECK_JSON_TMP[$a]}" "$SCRIPT_DIR/precheck.sh" "$a"
 done
 
 DAEMON="$REPO_ROOT/.build/refresh/bin/irrlichd"
@@ -166,6 +171,21 @@ TS="$(date -u +%Y%m%dT%H%M%S)-$$"
 STAGING="$REPO_ROOT/.build/refresh/_multi/$SCENARIO-$TS"
 SHARED_CWD="$STAGING/cwd"
 mkdir -p "$STAGING/recordings" "$STAGING/reports" "$SHARED_CWD"
+
+# Park each adapter's precheck output next to its per-adapter staging subdir
+# (#1333 / B3), and capture the repo HEAD for provenance (#1333 / B7). The two
+# rigs share a staging contract, so a field that exists in only one of them is
+# how 4-2 came to record the user's own sessions (#1214 unified the daemon
+# lifecycle but not the per-rig env).
+for a in "${ADAPTERS[@]}"; do
+  mkdir -p "$STAGING/$a"
+  if [[ -s "${PRECHECK_JSON_TMP[$a]}" ]]; then
+    mv "${PRECHECK_JSON_TMP[$a]}" "$STAGING/$a/precheck.json"
+  else
+    rm -f "${PRECHECK_JSON_TMP[$a]}"
+  fi
+done
+GIT_HEAD_START="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 MANIFEST="$STAGING/run-manifest.json"
 DAEMON_SHUTDOWN="unknown"
@@ -363,6 +383,20 @@ for idx in "${!ADAPTERS[@]}"; do
 done
 
 # --- Manifest -----------------------------------------------------------
+GIT_HEAD_END="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [[ "$GIT_HEAD_START" != "$GIT_HEAD_END" ]]; then
+  echo "WARNING: HEAD moved during this run ($GIT_HEAD_START -> $GIT_HEAD_END) —" >&2
+  echo "         another session committed in this worktree while it recorded." >&2
+fi
+
+# Completeness runs here too (#1333 / A3): a cross-adapter cell is torn down the
+# same way a single-adapter one is, and `ok` is just as misleading.
+COMPLETENESS="$(bash "$SCRIPT_DIR/lib/completeness-check.sh" "$STAGING" 2>/dev/null || echo '{"verdict":"unknown","reasons":["completeness-check failed to run"],"sessions":{}}')"
+if [[ "$(jq -r '.verdict' <<<"$COMPLETENESS" 2>/dev/null || echo unknown)" != "complete" ]]; then
+  echo "completeness: $(jq -r '.verdict' <<<"$COMPLETENESS") — DO NOT PROMOTE without reading these:" >&2
+  jq -r '.reasons[]? | "  - " + .' <<<"$COMPLETENESS" >&2 || true
+fi
+
 jq -n \
   --arg scenario "$COVERAGE_ID" \
   --argjson adapters "$(printf '%s\n' "${ADAPTERS[@]}" | jq -R . | jq -s .)" \
@@ -370,12 +404,18 @@ jq -n \
   --arg staging "$STAGING" \
   --arg raw_recording "$RECORDING" \
   --arg daemon_shutdown "$DAEMON_SHUTDOWN" \
+  --argjson completeness "$COMPLETENESS" \
+  --arg git_head_start "$GIT_HEAD_START" \
+  --arg git_head_end "$GIT_HEAD_END" \
   '{scenario: $scenario,
     verdict: "STAGED",
     cross_adapter: $adapters,
     session_ids: $sids,
     staging: $staging,
     raw_recording: $raw_recording,
+    completeness: $completeness,
+    git_head_start: $git_head_start,
+    git_head_end: $git_head_end,
     daemon_shutdown: $daemon_shutdown}' \
   > "$MANIFEST"
 

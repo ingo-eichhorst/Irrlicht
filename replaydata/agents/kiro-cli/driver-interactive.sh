@@ -309,15 +309,10 @@ transcript_claimed() {
 # has NO toolUse block (text-only). Mirrors kirocli/parser.go — a text-only
 # AssistantMessage is turn_done; mid-turn AssistantMessages carry toolUse blocks
 # and are NOT counted. (FINDINGS.md §5.)
-turn_count() {
-  if [[ -f "$TRANSCRIPT" ]]; then
-    jq -r 'select(.kind=="AssistantMessage")
-           | select([.data.content[]? | select(.kind=="toolUse")] | length == 0)
-           | "x"' "$TRANSCRIPT" 2>/dev/null | wc -l | tr -d ' '
-  else
-    echo 0
-  fi
-}
+# turn_count lives in a sibling lib so it can be unit-tested without executing
+# this driver (#1333 / B4). See replaydata/_lib/drive/turn-count_test.sh.
+# shellcheck source=turn-count.sh
+source "$(dirname "${BASH_SOURCE[0]}")/turn-count.sh"
 
 # --- AGENT-SPECIFIC SEAM 2: detect a completed turn --------------------------
 # Transcript-based: block until turn_count reaches EXPECTED_TURNS (one text-only

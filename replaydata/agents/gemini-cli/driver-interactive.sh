@@ -284,13 +284,10 @@ resolve_transcript() {
 # (turn_done). Streaming placeholders (empty content) and tool-calling messages
 # keep the session working and are excluded. $set envelopes carry no "type" and
 # are skipped by the select.
-turn_count() {
-  [[ -f "$TRANSCRIPT" ]] || { echo 0; return; }
-  jq -r 'select(.type=="gemini"
-                and ((.content // "") | gsub("\\s";"") | length) > 0
-                and ((.toolCalls // []) | length) == 0) | "x"' \
-    "$TRANSCRIPT" 2>/dev/null | wc -l | tr -d ' '
-}
+# turn_count lives in a sibling lib so it can be unit-tested without executing
+# this driver (#1333 / B4). See replaydata/_lib/drive/turn-count_test.sh.
+# shellcheck source=turn-count.sh
+source "$(dirname "${BASH_SOURCE[0]}")/turn-count.sh"
 
 step_send() { # <text>
   local text="$1"

@@ -189,14 +189,10 @@ resolve_transcript() {
 # and NO tool_calls is a finished turn. An assistant line carrying tool_calls
 # (still working) and role:"tool" lines are intentionally excluded, so a
 # tool-using turn only counts once its final answer lands.
-turn_count() {
-  if [[ -f "$TRANSCRIPT" ]]; then
-    jq -r 'select(.role=="assistant" and ((.content // "") != "") and (((.tool_calls // []) | length) == 0)) | "x"' \
-      "$TRANSCRIPT" 2>/dev/null | wc -l | tr -d ' '
-  else
-    echo 0
-  fi
-}
+# turn_count lives in a sibling lib so it can be unit-tested without executing
+# this driver (#1333 / B4). See replaydata/_lib/drive/turn-count_test.sh.
+# shellcheck source=turn-count.sh
+source "$(dirname "${BASH_SOURCE[0]}")/turn-count.sh"
 
 not_implemented() { # <step-type>
   local step_type="$1"

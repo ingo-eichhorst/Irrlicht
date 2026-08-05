@@ -293,14 +293,10 @@ resolve_transcript() {
 # mid-turn pauses or aborts and are intentionally excluded — in
 # particular, an Escape-interrupted message lands as stop_sequence and
 # must NOT be counted as a completed turn.
-turn_count() {
-  if [[ -f "$TRANSCRIPT" ]]; then
-    jq -r 'select(.type=="assistant" and .message.stop_reason=="end_turn") | "x"' \
-      "$TRANSCRIPT" 2>/dev/null | wc -l | tr -d ' '
-  else
-    echo 0
-  fi
-}
+# turn_count lives in a sibling lib so it can be unit-tested without executing
+# this driver (#1333 / B4). See replaydata/_lib/drive/turn-count_test.sh.
+# shellcheck source=turn-count.sh
+source "$(dirname "${BASH_SOURCE[0]}")/turn-count.sh"
 
 # Track expected vs. actual completed turns. Each `send` bumps EXPECTED
 # by 1; wait_turn waits for actual >= expected. Without this, wait_turn

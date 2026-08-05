@@ -303,14 +303,10 @@ resolve_transcript() {
 # turn_aborted, agent_message, token_count) are intentionally excluded —
 # in particular, an Escape-interrupted turn produces turn_aborted (not
 # task_complete) and must NOT be counted as a completed turn.
-turn_count() {
-  if [[ -f "$TRANSCRIPT" ]]; then
-    jq -r 'select(.type=="event_msg" and .payload.type=="task_complete") | "x"' \
-      "$TRANSCRIPT" 2>/dev/null | wc -l | tr -d ' '
-  else
-    echo 0
-  fi
-}
+# turn_count lives in a sibling lib so it can be unit-tested without executing
+# this driver (#1333 / B4). See replaydata/_lib/drive/turn-count_test.sh.
+# shellcheck source=turn-count.sh
+source "$(dirname "${BASH_SOURCE[0]}")/turn-count.sh"
 
 step_send() {
   local text="$1"

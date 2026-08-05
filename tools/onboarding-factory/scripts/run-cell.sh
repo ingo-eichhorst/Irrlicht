@@ -43,6 +43,10 @@ source "$SCRIPT_DIR/lib/shard-lib.sh"   # per-scenario shard reader (#511)
 # run-cell-multi.sh so a recorder fix can't reach only one of them (#1214).
 # shellcheck source=lib/spawn-record-daemon.sh
 source "$SCRIPT_DIR/lib/spawn-record-daemon.sh"
+# Recording-file selection. Attached mode must prove the file came from THIS run
+# (#1333 / B6) — the old inline fallback curated whatever ran last.
+# shellcheck source=lib/pick-recording.sh
+source "$SCRIPT_DIR/lib/pick-recording.sh"
 
 RECORDER="off"
 ATTACH=0
@@ -158,7 +162,11 @@ if [[ -n "$SCRIPT_JSON" ]]; then
 fi
 
 # --- Precheck ------------------------------------------------------------
-ATTACH="$ATTACH" "$SCRIPT_DIR/precheck.sh" "$ADAPTER"
+# PRECHECK_JSON_OUT captures the CLI version precheck detects, so
+# promote-recording.sh can stamp it instead of re-deriving it (#1333 / B3). It
+# has to be a temp path because $STAGING doesn't exist yet; it moves in below.
+PRECHECK_JSON_TMP="$(mktemp -t irr-precheck.XXXXXX)"
+ATTACH="$ATTACH" PRECHECK_JSON_OUT="$PRECHECK_JSON_TMP" "$SCRIPT_DIR/precheck.sh" "$ADAPTER"
 
 # --- Staging -------------------------------------------------------------
 # Stage under FOLDER (the on-disk recording dir), which equals COVERAGE_ID for
@@ -169,6 +177,20 @@ STAGING="$REPO_ROOT/.build/refresh/$ADAPTER/$FOLDER-$TS"
 # shellcheck source=lib/assert-staging-path.sh
 . "$REPO_ROOT/replaydata/_lib/assert-staging-path.sh"
 mkdir -p "$STAGING/recordings" "$STAGING/replaydata/agents/$ADAPTER/scenarios/$FOLDER" "$STAGING/reports"
+
+# precheck's machine-readable output now has somewhere to live (#1333 / B3).
+if [[ -s "$PRECHECK_JSON_TMP" ]]; then
+  mv "$PRECHECK_JSON_TMP" "$STAGING/precheck.json"
+else
+  rm -f "$PRECHECK_JSON_TMP"
+fi
+
+# Repo provenance (#1333 / B7). Serialized recording assumes exclusive use of
+# the worktree; nothing enforced it, so a concurrent session's commits could
+# leave a recording whose daemon_version names a build that never produced it.
+# Capture HEAD now and again after the driver returns — promote-recording.sh
+# stamps both and warns when they differ, making the smear visible not silent.
+GIT_HEAD_START="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 # Scenario's settings blob → staging file, passed to driver as a path.
 # This avoids --settings <json-blob> shell-quoting fragility.
@@ -238,8 +260,12 @@ if [[ "$ATTACH" == "1" ]]; then
   # recording files touched while the driver ran.
   ATTACH_MARKER="$STAGING/attach.start"
   : > "$ATTACH_MARKER"
-  # Validate the daemon is actually recording — the dir must contain at
-  # least one .jsonl. (A daemon not in --record mode has an empty dir.)
+  # Cheap pre-flight so an obviously-idle daemon fails BEFORE we spend credits:
+  # the dir must contain at least one .jsonl. (A daemon not in --record mode has
+  # an empty dir.) This proves PRESENCE only — a daemon that stopped recording
+  # yesterday still passes it. The real freshness check is after the driver
+  # returns, in pick_attached_recording (#1333 / B6); do not treat this as the
+  # guard.
   if ! ls "$ATTACHED_RECORDINGS_DIR"/*.jsonl >/dev/null 2>&1; then
     echo "attach: $ATTACHED_RECORDINGS_DIR contains no .jsonl files" >&2
     echo "        is the running irrlichd in --record mode?" >&2
@@ -334,20 +360,13 @@ fi
 
 # --- Locate the recording file ------------------------------------------
 # Isolated mode: one .jsonl in $STAGING/recordings/.
-# Attached mode: pick the file(s) in the running daemon's recordings
-# dir that the daemon was writing to during this run (i.e. mtime newer
-# than the attach marker we dropped before the driver ran). The daemon
-# rotates by start-time so a recording in progress always has the
-# newest mtime; multiple may match if the daemon rotated mid-run.
+# Attached mode: the file the daemon was writing to during THIS run, identified
+# by mtime against the marker dropped before the driver ran. There is
+# deliberately no stale fallback — see lib/pick-recording.sh (#1333 / B6).
 if [[ "$ATTACH" == "1" ]]; then
-  RECORDING="$(find "$ATTACHED_RECORDINGS_DIR" -maxdepth 1 -name "$JSONL_GLOB" -type f -newer "$ATTACH_MARKER" 2>/dev/null | sort | tail -n1)"
-  if [[ -z "$RECORDING" ]]; then
-    # Fall back to the most-recent file regardless of mtime, in case
-    # the daemon's writes haven't bumped the mtime past our marker.
-    RECORDING="$(find "$ATTACHED_RECORDINGS_DIR" -maxdepth 1 -name "$JSONL_GLOB" -type f 2>/dev/null | xargs ls -1t 2>/dev/null | head -n1)"
-  fi
+  RECORDING="$(pick_attached_recording "$ATTACHED_RECORDINGS_DIR" "$JSONL_GLOB" "$ATTACH_MARKER")" || exit 1
 else
-  RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name "$JSONL_GLOB" -type f 2>/dev/null | head -n1)"
+  RECORDING="$(pick_isolated_recording "$STAGING/recordings" "$JSONL_GLOB")" || true
 fi
 
 # --- Daemon-recorded session-id mapping ---------------------------------
@@ -513,11 +532,33 @@ else
   COMMITTED_PRESENT=false
 fi
 
+GIT_HEAD_END="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [[ "$GIT_HEAD_START" != "$GIT_HEAD_END" ]]; then
+  echo "WARNING: HEAD moved during this run ($GIT_HEAD_START -> $GIT_HEAD_END) —" >&2
+  echo "         another session committed in this worktree while it recorded." >&2
+fi
+
+# --- Completeness (#1333 / A3) ------------------------------------------
+# Runs on EVERY outcome, including `ok`. driver.exit-reason is the driver's
+# claim about itself; this is the daemon's account of whether the run actually
+# finished. Two of three broken copilot runs reported `ok` with a silently
+# truncated recording, and `ok` is what invites promotion. Advisory by design —
+# see the header of completeness-check.sh for why it is not a hard gate.
+COMPLETENESS="$(bash "$SCRIPT_DIR/lib/completeness-check.sh" "$STAGING" 2>/dev/null || echo '{"verdict":"unknown","reasons":["completeness-check failed to run"],"sessions":{}}')"
+COMPLETENESS_VERDICT="$(jq -r '.verdict' <<<"$COMPLETENESS" 2>/dev/null || echo unknown)"
+if [[ "$COMPLETENESS_VERDICT" != "complete" ]]; then
+  echo "completeness: $COMPLETENESS_VERDICT — DO NOT PROMOTE without reading these:" >&2
+  jq -r '.reasons[]? | "  - " + .' <<<"$COMPLETENESS" >&2 || true
+fi
+
 # --- Manifest -----------------------------------------------------------
 jq -n \
   --arg adapter "$ADAPTER" \
   --arg scenario "$FOLDER" \
   --arg session_uuid "$ACTUAL_UUID" \
+  --argjson completeness "$COMPLETENESS" \
+  --arg git_head_start "$GIT_HEAD_START" \
+  --arg git_head_end "$GIT_HEAD_END" \
   --arg staging "$STAGING" \
   --arg raw_recording "$RECORDING" \
   --arg source_transcript "$TRANSCRIPT" \
@@ -542,6 +583,9 @@ jq -n \
     committed_fixture_present: $committed_fixture_present,
     committed_report: $committed_report,
     driver_exit_reason: $driver_exit_reason,
+    completeness: $completeness,
+    git_head_start: $git_head_start,
+    git_head_end: $git_head_end,
     daemon_shutdown: $daemon_shutdown,
     timeout_seconds: $timeout_seconds}' \
   > "$MANIFEST"

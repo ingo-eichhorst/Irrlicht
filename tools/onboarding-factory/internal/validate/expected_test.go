@@ -186,6 +186,98 @@ func TestValidateExpected_maxDelayCatchesDrift(t *testing.T) {
 	}
 }
 
+// TestValidateExpected_minDelaySkipsIntermediateCycles — min_delay_ms lets a
+// terminal-hold phase bind PAST a variable number of intermediate cycles
+// (#1333 / B5).
+//
+// Phases bind to the FIRST match at or after their anchor, so a terminal-hold
+// phase anchored at the start of an autonomous loop latches onto the first
+// `ready` and then fails its hold on the next iteration:
+//
+//	"phase": "cap_reached", "pass": false,
+//	"reason": "state changed to \"working\" after only 2955 ms
+//	           (expected to hold \"ready\" for 20000 ms)"
+//
+// The workaround in copilot 2-8 was to enumerate five intermediate cycles purely
+// as matcher anchors — which then pins a count that is itself debounce-dependent
+// (the same recipe produced five or six cycles run to run), so the cell's notes
+// had to say "the count is a matcher anchor, not a claim".
+//
+// Here the loop bounces ready→working twice before settling for good at +10s.
+// Without min_delay_ms the hold phase binds to the ready at +1s and fails.
+func TestValidateExpected_minDelaySkipsIntermediateCycles(t *testing.T) {
+	dir := t.TempDir()
+	writeRec(t, dir, "events.jsonl",
+		`{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"x"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:01Z","kind":"state_transition","session_id":"x","new_state":"ready"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:02Z","kind":"state_transition","session_id":"x","new_state":"working"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:03Z","kind":"state_transition","session_id":"x","new_state":"ready"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:04Z","kind":"state_transition","session_id":"x","new_state":"working"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:10Z","kind":"state_transition","session_id":"x","new_state":"ready"}`+"\n")
+	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
+			`{"phase":"cap_reached","expected_state":"ready","relative_to":"start","min_delay_ms":5000,"duration_at_least_ms":20000,"text":"the loop stops for good — not one of the intermediate ready bounces"}`+"\n")
+	report, err := ValidateExpected(dir)
+	if err != nil {
+		t.Fatalf("ValidateExpected: %v", err)
+	}
+	if !report.Pass {
+		for _, p := range report.Phases {
+			t.Logf("phase %s: pass=%v delta=%d reason=%q", p.Phase, p.Pass, p.DeltaMs, p.Reason)
+		}
+		t.Fatal("expected the hold phase to bind past the intermediate cycles")
+	}
+	if got := report.Phases[0].DeltaMs; got != 10000 {
+		t.Errorf("cap_reached delta_ms = %d, want 10000 (it bound to an intermediate ready)", got)
+	}
+}
+
+// TestValidateExpected_minDelayFailsWhenNothingIsLateEnough — min_delay_ms must
+// narrow the candidate set, not silently widen it: when every candidate is
+// earlier than the floor, the phase fails rather than falling back to the first.
+func TestValidateExpected_minDelayFailsWhenNothingIsLateEnough(t *testing.T) {
+	dir := t.TempDir()
+	writeRec(t, dir, "events.jsonl",
+		`{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"x"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:01Z","kind":"state_transition","session_id":"x","new_state":"ready"}`+"\n")
+	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
+			`{"phase":"late_only","expected_state":"ready","relative_to":"start","min_delay_ms":5000,"text":"nothing is late enough"}`+"\n")
+	report, err := ValidateExpected(dir)
+	if err != nil {
+		t.Fatalf("ValidateExpected: %v", err)
+	}
+	if report.Pass {
+		t.Fatal("expected failure: the only ready is 1s after the anchor, floor is 5s")
+	}
+	if !strings.Contains(report.Phases[0].Reason, "min_delay_ms") {
+		t.Errorf("expected reason mentioning min_delay_ms, got %q", report.Phases[0].Reason)
+	}
+}
+
+// TestValidateExpected_minAndMaxDelayCompose — the two bounds are a window, not
+// alternatives.
+func TestValidateExpected_minAndMaxDelayCompose(t *testing.T) {
+	dir := t.TempDir()
+	writeRec(t, dir, "events.jsonl",
+		`{"ts":"2026-01-01T00:00:00Z","kind":"transcript_new","session_id":"x"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:01Z","kind":"state_transition","session_id":"x","new_state":"ready"}`+"\n"+
+			`{"ts":"2026-01-01T00:00:20Z","kind":"state_transition","session_id":"x","new_state":"ready"}`+"\n")
+	mustWrite(t, filepath.Join(dir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"test","source":"unit test"}`+"\n"+
+			`{"phase":"windowed","expected_state":"ready","relative_to":"start","min_delay_ms":5000,"max_delay_ms":10000,"text":"the +1s is too early and the +20s too late"}`+"\n")
+	report, err := ValidateExpected(dir)
+	if err != nil {
+		t.Fatalf("ValidateExpected: %v", err)
+	}
+	if report.Pass {
+		t.Fatal("expected failure: no ready falls inside the 5s..10s window")
+	}
+	if !strings.Contains(report.Phases[0].Reason, "max_delay_ms") {
+		t.Errorf("expected the late candidate to be rejected by max_delay_ms, got %q", report.Phases[0].Reason)
+	}
+}
+
 // TestValidateExpected_sameSessionAs_filtersByID — same_session_as
 // pins a phase to the session_id matched by an earlier phase. With two
 // sessions both transitioning to ready, the second phase should match

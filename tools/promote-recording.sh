@@ -45,6 +45,10 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 
 # shellcheck source=onboarding-factory/scripts/lib/shard-lib.sh
 source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/shard-lib.sh"
+# Validate-then-write (#1333 / B2): a recording that fails its spec must never
+# reach the tree.
+# shellcheck source=onboarding-factory/scripts/lib/atomic-promote.sh
+source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/atomic-promote.sh"
 
 STAGED_DIR="$STAGING/replaydata/agents/$AGENT/scenarios/$SCENARIO"
 TARGET_DIR="$REPO_ROOT/replaydata/agents/$AGENT/scenarios/$SCENARIO"
@@ -63,18 +67,69 @@ for irrlichd_bin in "$REPO_ROOT/.build/refresh/bin/irrlichd" "$REPO_ROOT/.build/
     break
   fi
 done
-case "$AGENT" in
-  claudecode) CLI_BIN="claude";   VER_FIELD=1 ;;
-  codex)      CLI_BIN="codex";    VER_FIELD=2 ;;
-  pi)         CLI_BIN="pi";       VER_FIELD=1 ;;
-  aider)      CLI_BIN="aider";    VER_FIELD=2 ;;
-  opencode)   CLI_BIN="opencode"; VER_FIELD=1 ;;
-  kiro-cli)   CLI_BIN="kiro-cli"; VER_FIELD=2 ;;
-  *)          CLI_BIN=""; VER_FIELD=1 ;;
-esac
-AGENT_VER="unknown"
-if [[ -n "$CLI_BIN" ]] && command -v "$CLI_BIN" >/dev/null 2>&1; then
-  AGENT_VER="$("$CLI_BIN" --version 2>&1 | awk -v f="$VER_FIELD" '{print $f}' | head -n1)"
+# agent_cli_version (#1333 / B3). precheck.sh already parsed this correctly,
+# seconds earlier, for all TEN adapters — it just stranded the value in a
+# human-readable stdout line no caller captured, so every manifest recorded
+# "unknown". It now stages precheck.json; prefer that.
+# Two staging shapes: run-cell.sh drives one adapter and writes
+# $STAGING/precheck.json; run-cell-multi.sh drives several into one staging tree
+# and writes $STAGING/<agent>/precheck.json. Check the per-adapter path first so
+# a multi run can't pick up a sibling adapter's version.
+AGENT_VER="$(jq -r '.cli_version // empty' "$STAGING/$AGENT/precheck.json" 2>/dev/null || true)"
+[[ -n "$AGENT_VER" ]] || AGENT_VER="$(jq -r '.cli_version // empty' "$STAGING/precheck.json" 2>/dev/null || true)"
+if [[ -z "$AGENT_VER" ]]; then
+  # Fallback for a promote that didn't come through run-cell.sh. This table was
+  # SIX entries long while precheck's was ten, which is the other half of the
+  # bug: copilot, gemini-cli, antigravity and mistral-vibe fell through to the
+  # `*)` arm, so every one of their recordings was stamped "unknown" even when
+  # the CLI was right there on PATH.
+  #
+  # Two tables that must agree is itself the hazard — adding an adapter to
+  # precheck and forgetting this one silently reintroduces the bug, which is
+  # exactly what happened when hermes landed (#1327) while this fix was in
+  # flight. tools/onboarding-factory/scripts/lib/adapter-tables_test.sh now
+  # fails when they diverge; keep it in step with precheck.sh's case block.
+  case "$AGENT" in
+    claudecode)   CLI_BIN="claude";   VER_FIELD=1 ;;
+    codex)        CLI_BIN="codex";    VER_FIELD=2 ;;
+    pi)           CLI_BIN="pi";       VER_FIELD=1 ;;
+    aider)        CLI_BIN="aider";    VER_FIELD=2 ;;
+    opencode)     CLI_BIN="opencode"; VER_FIELD=1 ;;
+    kiro-cli)     CLI_BIN="kiro-cli"; VER_FIELD=2 ;;
+    gemini-cli)   CLI_BIN="gemini";   VER_FIELD=1 ;;
+    antigravity)  CLI_BIN="agy";      VER_FIELD=1 ;;
+    mistral-vibe) CLI_BIN="vibe";     VER_FIELD=2 ;;
+    copilot)      CLI_BIN="copilot";  VER_FIELD=4 ;;
+    hermes)       CLI_BIN="hermes";   VER_FIELD=3 ;;
+    *)            CLI_BIN=""; VER_FIELD=1 ;;
+  esac
+  AGENT_VER="unknown"
+  if [[ -n "$CLI_BIN" ]] && command -v "$CLI_BIN" >/dev/null 2>&1; then
+    # Same trailing-punctuation strip as precheck.sh: `copilot --version` prints
+    # "GitHub Copilot CLI 1.0.77." and the period would ride into the manifest.
+    AGENT_VER="$("$CLI_BIN" --version 2>&1 | awk -v f="$VER_FIELD" '{print $f}' | head -n1 | sed 's/[.,]$//')"
+    # ...and the same leading-"v" strip: hermes prints "Hermes Agent v0.19.0".
+    AGENT_VER="${AGENT_VER#v}"
+    [[ -n "$AGENT_VER" ]] || AGENT_VER="unknown"
+  fi
+fi
+
+# Repo provenance (#1333 / B7). Serialized recording is already the documented
+# contract, but nothing enforced it: a concurrent session committing in the same
+# worktree mid-recording leaves manifests whose daemon_version SHA belongs to
+# another session's commits. Stamping the HEAD at run start and at driver exit
+# makes the smear visible rather than silent. run-cell.sh records both; fall
+# back to the current HEAD when promoting outside that path.
+HEAD_NOW="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+GIT_HEAD_START="$(jq -r '.git_head_start // empty' "$STAGING/run-manifest.json" 2>/dev/null || true)"
+GIT_HEAD_END="$(jq -r '.git_head_end // empty' "$STAGING/run-manifest.json" 2>/dev/null || true)"
+[[ -n "$GIT_HEAD_START" ]] || GIT_HEAD_START="$HEAD_NOW"
+[[ -n "$GIT_HEAD_END" ]]   || GIT_HEAD_END="$HEAD_NOW"
+if [[ "$GIT_HEAD_START" != "$GIT_HEAD_END" ]]; then
+  echo "WARNING: HEAD moved during this recording ($GIT_HEAD_START -> $GIT_HEAD_END)" >&2
+  echo "         another session committed in this worktree while it recorded, so" >&2
+  echo "         daemon_version may name a build that did not produce this data." >&2
+  echo "         Serialized recording assumes exclusive use of the worktree." >&2
 fi
 # recipe_hash pins the recorded recipe so the viewer can flag drift. $SCENARIO is
 # the on-disk recording FOLDER, which for variant-folder cells is NOT the shard
@@ -99,55 +154,91 @@ if [[ -e "$REC_DIR" ]]; then
   n=2; while [[ -e "${REC_DIR}-$n" ]]; do n=$((n+1)); done
   REC_NAME="${REC_NAME}-$n"; REC_DIR="$RECORDINGS_DIR/$REC_NAME"
 fi
-mkdir -p "$REC_DIR"
-
-# 2. Copy the staged recording into the new folder. transcript.md covers
-#    markdown-transcript adapters (aider); transcript.json is the metadata
-#    sidecar of sidecar-reading adapters (kiro-cli, #599) which replay stages
-#    next to its scratch copy; -f guards no-op otherwise.
-for f in events.jsonl transcript.jsonl transcript.md transcript.json; do
-  if [[ -f "$STAGED_DIR/$f" ]]; then
-    cp "$STAGED_DIR/$f" "$REC_DIR/$f"
-  fi
-done
-# Antigravity usage store (#766): curate captured the sibling SQLite store under
-# store/conversations/; carry the whole subtree so replay can rebuild the live
-# layout and resolve tokens + the canonical model. RecordingComplete checks only
-# required-file presence, so this extra subtree keeps `of validate` green.
-if [[ -d "$STAGED_DIR/store" ]]; then
-  cp -R "$STAGED_DIR/store" "$REC_DIR/store"
-  echo "wrote $REC_DIR/store (antigravity usage store)" >&2
-fi
-echo "wrote recording $REC_DIR" >&2
-
-# 3. Validate this recording against the cell's expected.jsonl, capturing the
-#    pass rate for the manifest.
-NEW_PASS_RATE=""
-if [[ -f "$TARGET_DIR/expected.jsonl" ]]; then
-  if VAL_OUT="$(cd "$REPO_ROOT" && go run ./tools/onboarding-factory/cmd/expected-validate "$TARGET_DIR" "$REC_NAME" 2>/dev/null)"; then
-    NEW_PASS_RATE="$(echo "$VAL_OUT" | jq -r '.summary' 2>/dev/null || echo "")"
-  else
-    NEW_PASS_RATE="$(echo "$VAL_OUT" | jq -r '.summary' 2>/dev/null || echo "validate-failed")"
-  fi
-fi
 NEW_STARTED_AT="$NEW_TS"
 
-# 4. Write the recording's manifest.json.
-jq -n \
-  --arg promoted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --arg daemon_version "$DAEMON_VER" \
-  --arg agent_cli_version "$AGENT_VER" \
-  --arg recipe_hash "$RECIPE_HASH" \
-  --arg expected_pass_rate "$NEW_PASS_RATE" \
-  --arg recording_started_at "$NEW_STARTED_AT" \
-  '{
-    promoted_at: $promoted_at,
-    daemon_version: $daemon_version,
-    agent_cli_version: $agent_cli_version,
-    recipe_hash: $recipe_hash,
-    expected_pass_rate: $expected_pass_rate,
-    recording_started_at: $recording_started_at
-  }' > "$REC_DIR/manifest.json"
+# 2. Fill a CANDIDATE recording dir. atomic_promote hands us a scratch path; the
+#    recording only becomes real if the validator accepts it (#1333 / B2).
+#    transcript.md covers markdown-transcript adapters (aider); transcript.json
+#    is the metadata sidecar of sidecar-reading adapters (kiro-cli, #599) which
+#    replay stages next to its scratch copy; -f guards no-op otherwise.
+populate_recording() {
+  local dst="$1" f
+  for f in events.jsonl transcript.jsonl transcript.md transcript.json; do
+    if [[ -f "$STAGED_DIR/$f" ]]; then
+      cp "$STAGED_DIR/$f" "$dst/$f"
+    fi
+  done
+  # Antigravity usage store (#766): curate captured the sibling SQLite store
+  # under store/conversations/; carry the whole subtree so replay can rebuild the
+  # live layout and resolve tokens + the canonical model. RecordingComplete
+  # checks only required-file presence, so this extra subtree keeps `of validate`
+  # green.
+  if [[ -d "$STAGED_DIR/store" ]]; then
+    cp -R "$STAGED_DIR/store" "$dst/store"
+  fi
+  # manifest.json is written INSIDE the candidate so a rejected recording leaves
+  # no manifest either. expected_pass_rate is filled in by the caller after the
+  # validator has spoken — it cannot be known before the candidate exists, so it
+  # is stamped in a second pass below.
+  jq -n \
+    --arg promoted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg daemon_version "$DAEMON_VER" \
+    --arg agent_cli_version "$AGENT_VER" \
+    --arg recipe_hash "$RECIPE_HASH" \
+    --arg recording_started_at "$NEW_STARTED_AT" \
+    --arg git_head_start "$GIT_HEAD_START" \
+    --arg git_head_end "$GIT_HEAD_END" \
+    '{
+      promoted_at: $promoted_at,
+      daemon_version: $daemon_version,
+      agent_cli_version: $agent_cli_version,
+      recipe_hash: $recipe_hash,
+      expected_pass_rate: "",
+      recording_started_at: $recording_started_at,
+      git_head_start: $git_head_start,
+      git_head_end: $git_head_end
+    }' > "$dst/manifest.json"
+}
+
+# 3. Validate the candidate against the cell's expected.jsonl. Echoes the pass
+#    rate; non-zero rejects. Run ONCE now, where it gates — the old flow ran
+#    expected-validate twice, once for the manifest field and once for the gate.
+validate_recording() {
+  local cell_dir="$1" rec_name="$2" out
+  if out="$(cd "$REPO_ROOT" && go run ./tools/onboarding-factory/cmd/expected-validate "$cell_dir" "$rec_name" 2>/dev/null)"; then
+    echo "$out" | jq -r '.summary' 2>/dev/null || echo ""
+    return 0
+  fi
+  echo "$out" | jq -r '.summary' 2>/dev/null || echo "validate-failed"
+  return 1
+}
+
+echo "validating candidate recording against expected.jsonl..." >&2
+set +e
+NEW_PASS_RATE="$(atomic_promote "$TARGET_DIR" "$REC_NAME" populate_recording validate_recording)"
+PROMOTE_RC=$?
+set -e
+
+if [[ "$PROMOTE_RC" == "3" ]]; then
+  echo "WARNING: new recording fails expected.jsonl validation ($NEW_PASS_RATE)" >&2
+  echo "         NOTHING was written — the candidate was discarded, so there is no" >&2
+  echo "         half-promoted directory to rm -rf before re-promoting." >&2
+  echo "         either the recipe needs tightening (likely) or the daemon drifted from spec (file an issue)" >&2
+  echo "         re-run with the staged capture to see the full report." >&2
+  exit 3
+fi
+if [[ "$PROMOTE_RC" != "0" ]]; then
+  echo "promote: failed to stage the recording into $REC_DIR" >&2
+  exit 1
+fi
+
+# 4. Stamp the pass rate the validator reported. The manifest was written inside
+#    the candidate (so a rejected recording leaves none); only the rate has to
+#    wait for the verdict.
+TMP_MANIFEST="$REC_DIR/manifest.json.tmp"
+jq --arg r "$NEW_PASS_RATE" '.expected_pass_rate = $r' "$REC_DIR/manifest.json" > "$TMP_MANIFEST" \
+  && mv "$TMP_MANIFEST" "$REC_DIR/manifest.json"
+echo "wrote recording $REC_DIR" >&2
 echo "wrote $REC_DIR/manifest.json ($NEW_PASS_RATE)" >&2
 
 # 5. metadata.json is NOT touched. The on-disk recordings/<name>/ tree is the
@@ -157,18 +248,5 @@ echo "wrote $REC_DIR/manifest.json ($NEW_PASS_RATE)" >&2
 #    cache to repoint — that is what kept drifting from disk. The recording dir
 #    written above (events/transcript/manifest, + the golden added next by
 #    refresh-golden.sh) IS the record.
-
-# 6. The promote does not auto-pass: if the new recording violates the spec,
-#    exit non-zero so the maintainer reviews. The recording is already saved.
-if [[ -f "$TARGET_DIR/expected.jsonl" ]]; then
-  echo "validating new recording against expected.jsonl..." >&2
-  if ! (cd "$REPO_ROOT" && go run ./tools/onboarding-factory/cmd/expected-validate "$TARGET_DIR" "$REC_NAME" >/dev/null 2>&1); then
-    echo "WARNING: new recording fails expected.jsonl validation" >&2
-    echo "         the recording is in place but the validator is unhappy" >&2
-    echo "         either the recipe needs tightening (likely) or the daemon drifted from spec (file an issue)" >&2
-    echo "         run: go run ./tools/onboarding-factory/cmd/expected-validate $TARGET_DIR $REC_NAME  for the report" >&2
-    exit 3
-  fi
-fi
 
 echo "promoted $REC_DIR" >&2

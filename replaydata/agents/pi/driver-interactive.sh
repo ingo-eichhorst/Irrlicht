@@ -222,14 +222,10 @@ resolve_transcript() {
 # would also work since both fields appear on the same line, but jq
 # avoids false positives from assistant-text content that happens to
 # contain those substrings.
-turn_count() {
-  if [[ -f "$TRANSCRIPT" ]]; then
-    jq -r 'select(.type=="message" and .message.role=="assistant" and .message.stopReason=="stop") | "x"' \
-      "$TRANSCRIPT" 2>/dev/null | wc -l | tr -d ' '
-  else
-    echo 0
-  fi
-}
+# turn_count lives in a sibling lib so it can be unit-tested without executing
+# this driver (#1333 / B4). See replaydata/_lib/drive/turn-count_test.sh.
+# shellcheck source=turn-count.sh
+source "$(dirname "${BASH_SOURCE[0]}")/turn-count.sh"
 
 # Track expected vs. actual completed turns. Each `send` bumps EXPECTED
 # by 1; wait_turn waits for actual >= expected. Without this, wait_turn

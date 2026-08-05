@@ -127,11 +127,21 @@ type ObservationSpec struct {
 // new_session matching to the intended adapter's session in a shared,
 // multi-agent-workspace recording (see #988 item 5).
 type ExpectedPhase struct {
-	Phase             string   `json:"phase"`
-	ExpectedState     string   `json:"expected_state,omitempty"`
-	Kind              string   `json:"kind,omitempty"`
-	RelativeTo        string   `json:"relative_to,omitempty"`
-	MaxDelayMs        int64    `json:"max_delay_ms,omitempty"`
+	Phase         string `json:"phase"`
+	ExpectedState string `json:"expected_state,omitempty"`
+	Kind          string `json:"kind,omitempty"`
+	RelativeTo    string `json:"relative_to,omitempty"`
+	MaxDelayMs    int64  `json:"max_delay_ms,omitempty"`
+	// MinDelayMs is a FLOOR on the match, not a post-hoc assertion: candidates
+	// closer to the anchor than this are skipped, so a terminal-hold phase can
+	// bind past a variable number of intermediate cycles instead of latching
+	// onto the first match (#1333 / B5). Without it, a hold phase anchored at
+	// the start of an autonomous loop binds to the first `ready` and fails its
+	// hold on the next iteration — the copilot 2-8 cell worked around this by
+	// enumerating intermediate cycles purely as matcher anchors, which pins a
+	// count that is itself debounce-dependent. Composes with MaxDelayMs as a
+	// window: min filters candidates, max rejects the one that matched.
+	MinDelayMs        int64    `json:"min_delay_ms,omitempty"`
 	DurationAtLeastMs int64    `json:"duration_at_least_ms,omitempty"`
 	SameSessionAs     string   `json:"same_session_as,omitempty"`
 	NewSession        bool     `json:"new_session,omitempty"`
@@ -439,6 +449,13 @@ func phaseShapeViolation(p ExpectedPhase) string {
 		return "expected_state and kind are mutually exclusive"
 	case p.SameSessionAs != "" && p.NewSession:
 		return "same_session_as and new_session are mutually exclusive"
+	case p.MinDelayMs < 0:
+		return "min_delay_ms must not be negative"
+	case p.MinDelayMs > 0 && p.MaxDelayMs > 0 && p.MinDelayMs > p.MaxDelayMs:
+		// An inverted window matches nothing, ever. Catching it at parse time
+		// makes it an authoring error rather than a phase that silently never
+		// binds — the same class of trap min_delay_ms exists to remove.
+		return "min_delay_ms must not exceed max_delay_ms (the window would be empty)"
 	default:
 		return ""
 	}
@@ -619,11 +636,19 @@ func eventMatchesPhaseKind(p ExpectedPhase, ev *recordedEvent) bool {
 // findMatchingEvent scans events in order for the first one at or after
 // anchor that satisfies the phase's kind predicate and session-id
 // constraints. Events strictly before anchor are skipped — earlier matches
-// belong to an earlier phase. Returns nil when no candidate qualifies.
+// belong to an earlier phase. min_delay_ms moves that floor forward, skipping
+// candidates that are too close to the anchor (see ExpectedPhase.MinDelayMs);
+// it is applied here rather than as a post-match check precisely so the scan
+// CONTINUES past a too-early candidate instead of failing on it.
+// Returns nil when no candidate qualifies.
 func findMatchingEvent(p ExpectedPhase, events []recordedEvent, anchor time.Time, sc sessionConstraint) *recordedEvent {
+	floor := anchor
+	if p.MinDelayMs > 0 {
+		floor = anchor.Add(time.Duration(p.MinDelayMs) * time.Millisecond)
+	}
 	for i := range events {
 		ev := &events[i]
-		if ev.Ts.Before(anchor) {
+		if ev.Ts.Before(floor) {
 			continue
 		}
 		if eventSatisfiesPhase(p, ev, sc) {
@@ -658,6 +683,11 @@ func noMatchReason(p ExpectedPhase, anchorName, requireSID string) string {
 	want := p.ExpectedState
 	if want == "" {
 		want = p.Kind
+	}
+	// A min_delay_ms floor is the likeliest reason a phase that "obviously"
+	// has a match found none, so name it ahead of the session constraints.
+	if p.MinDelayMs > 0 {
+		return fmt.Sprintf("no event matching %q found at least min_delay_ms=%d after anchor %q (candidates closer to the anchor were skipped)", want, p.MinDelayMs, anchorName)
 	}
 	switch {
 	case requireSID != "":

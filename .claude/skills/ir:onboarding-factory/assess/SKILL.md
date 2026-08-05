@@ -55,6 +55,18 @@ anchored in `sources[]` to a cited event or code/doc reference — never a
 plausible-sounding mechanism. The bar for `bug` / `incapable` / `gap:*` is a
 concrete citation; finer granularity multiplies the chance of mislabeling.
 
+**Vacuous-pass rule.** Before you write a cell, answer in one line: *under what
+condition would this cell pass while proving nothing?* Put the answer in
+`caveats` — and if the condition is an **environment property**, name it as a
+load-bearing precondition of the recipe rather than assuming it. A cell whose
+spec would still pass with the behaviour removed is not testing the behaviour,
+and nothing goes red to tell you. (Real case: copilot `2-11
+auto-classified-permission` passes only because *this* machine's
+`terminal.docker_volumes` bind-mounts host paths — the container guard returns
+approved before the classifier ever fires. Empty that list, or switch to
+another isolated backend, and the cell silently degrades into a duplicate of
+`2-2` with an unchanged spec and a green 4/4.)
+
 ## Steps
 
 ### 1. Read the scenario spec
@@ -135,6 +147,33 @@ validate` REJECTS a script recipe missing `timeout_seconds` — its absence once
 reached a driver as the literal `null` and crashed it. Headless (`prompt`) and
 `applicable:false` recipes don't need them.
 
+**The recipe's PROMPT is part of the fixture — write it for a machine, not a
+reader.** Three cells failed on model wording alone, not plumbing:
+
+- Prefer **mechanically repeatable output** over prose. "Write at least 5000
+  words" and "write a long, detailed essay (800+ words)" were both *refused*
+  (`"I can't comply with the request to generate a single extremely long…"`,
+  `"I'm constrained to short replies…"`). Ask for a repeated token N times
+  instead.
+- **A refusal that ends in a question sends the session to `waiting`**, so a
+  cell asserting `ready` fails for a reason that has nothing to do with what it
+  tests.
+- **Avoid cue-shaped phrasing near a turn end** when the cell asserts a terminal
+  state. Completion prose ending `"…to create loop3.txt and verify it."` matches
+  a curated imperative cue in `core/domain/session/waiting_cue.go` and the
+  daemon duly goes `waiting`. That is #381's deliberate recall/precision
+  tradeoff, identical across claudecode/codex — **not** an adapter bug. Pin the
+  final message to a literal token when the terminal state is the assertion.
+
+**Ambient env is a recipe INPUT, not operator memory.** Any env var that changes
+what the agent can *do* belongs in the recipe's `settings`/preconditions, and
+the run should surface what it exported. `COPILOT_AVAILABLE_TOOLS=bash` is a
+documented cost saver (~8.3k of ~12k input tokens) that also **silently aborts
+autopilot**, because autopilot validates the `task_complete` tool at every
+continuation (`session.error{errorType:"query", message:"Required tool
+'task_complete' is not available…"}`) — and would starve any subagent cell of
+`task`/`explore`. A cost lever that changes behaviour is not a cost lever.
+
 Then judge the **driver** pillar against the agent's interactive driver:
 
 ```bash
@@ -182,6 +221,29 @@ subsequent lines are phases:
     presession proc-row, which never goes `working`) is the miss that verified
     nearly every multi-phase presession cell PARTIAL until `record` re-anchored
     it. Template from the codex sibling spec.
+- **Assert the ARC and its invariants — never a cycle COUNT.** Whether a
+  self-issued continuation surfaces as a discrete `ready→working` bounce or gets
+  swallowed depends on the gap against the daemon's 2s debounce window, which is
+  not a property of the agent. Same recipe, two runs of copilot `2-7`: gaps of
+  2.87s / 2.82s produced discrete cycles; gaps of 0.90s / 0.90s coalesced every
+  continuation into one 64s `working` span. `2-8` showed it from the other side —
+  six autopilot continuations produced five cycles, because the sixth landed
+  inside the fifth turn's window. Where the scenario's real claim is *autonomy*,
+  cite the deterministic transcript records (`user.message` with
+  `agentMode:"autopilot"`, `session.task_complete`) instead. If a count is
+  unavoidable as a matcher anchor, that is a smell worth fixing in the spec, not
+  a claim — say so in `notes`.
+- **A terminal-hold phase takes `min_delay_ms`, not a pile of anchor phases.**
+  Phases bind to the FIRST match at or after their anchor, so a hold anchored at
+  the start of a loop latches onto the first `ready` and fails on the next
+  iteration. `min_delay_ms` moves the floor forward and skips the intermediate
+  cycles — it filters candidates, so the scan continues past a too-early one
+  rather than failing on it. It composes with `max_delay_ms` as a window:
+  ```jsonl
+  {"phase":"cap_reached","expected_state":"ready","relative_to":"start","min_delay_ms":5000,"duration_at_least_ms":20000,"text":"the loop stops for good"}
+  ```
+  This replaces the `2-8` workaround of enumerating five intermediate cycles
+  purely as matcher anchors, which pinned a debounce-dependent count.
 - **Observations** assert the websocket metric vector the verify engine checks —
   exact-match categorical fields (`model`), non-zero + tolerance for
   `cost`/`tokens`. This is the widened verify the factory added: a recording is
@@ -239,6 +301,15 @@ If recording this cell needs a human action (auth switch, env var, mock,
 unavailable provider) name it — it becomes `prereqs` in your return and the
 dispatcher relays it to the human. If the cell is recordable now, `prereqs:
 none`.
+
+**A load-bearing environment property is a prerequisite too**, even when the
+cell records fine today — that is the Vacuous-pass rule's other half. If your
+answer to "under what condition would this cell pass while proving nothing?"
+named a machine setting, list it here *and* in `caveats`, so a future re-record
+on a differently-configured host can tell a real pass from a hollow one. A
+prerequisite that lists live agent capabilities (a tool roster, an available
+model) must be **re-probed at record time**, never trusted from the cached list
+— hermes' roster is Docker-gated: 43 tools with the daemon up, 36 with it down.
 
 **Do NOT `git commit`.** You ran in a parallel assess wave, and N subagents
 committing the one worktree at once race (scrambled attribution, stranded
