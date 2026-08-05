@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/fswatcher"
+	"irrlicht/core/domain/agent"
 )
 
 // TestWatcher_EmitsSessionForNewDirectory proves the adapter's Source wiring
@@ -28,11 +29,22 @@ import (
 // the id "events".
 func TestWatcher_EmitsSessionForNewDirectory(t *testing.T) {
 	root := t.TempDir()
-	w := fswatcher.NewWithRoot(root, AdapterName, 0).WithSessionID(sessionIDFromPath)
+	ch, stop := startWatcher(t, root)
 
+	const sid = "51ffced3-5bba-416f-b898-7338f39e69e8"
+	writeSessionDir(t, root, sid)
+
+	awaitSessionEvent(t, ch, sid)
+	stop(t)
+}
+
+// startWatcher runs the adapter's real watcher wiring over root and returns its
+// event channel plus a stop func that cancels it and asserts a clean exit.
+func startWatcher(t *testing.T, root string) (<-chan agent.Event, func(*testing.T)) {
+	t.Helper()
+	w := fswatcher.NewWithRoot(root, AdapterName, 0).WithSessionID(sessionIDFromPath)
 	ch := w.Subscribe()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	watchErr := make(chan error, 1)
 	go func() { watchErr <- w.Watch(ctx) }()
@@ -40,10 +52,23 @@ func TestWatcher_EmitsSessionForNewDirectory(t *testing.T) {
 	select {
 	case <-w.Ready():
 	case <-time.After(2 * time.Second):
+		cancel()
 		t.Fatal("watcher did not signal Ready")
 	}
 
-	const sid = "51ffced3-5bba-416f-b898-7338f39e69e8"
+	return ch, func(t *testing.T) {
+		t.Helper()
+		cancel()
+		if err := <-watchErr; err != nil && err != context.Canceled {
+			t.Errorf("Watch returned unexpected error: %v", err)
+		}
+	}
+}
+
+// writeSessionDir creates <root>/<sid>/events.jsonl the way a real `copilot`
+// launch does — directory first, AFTER the watcher is already running.
+func writeSessionDir(t *testing.T, root, sid string) {
+	t.Helper()
 	dir := filepath.Join(root, sid)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -53,16 +78,18 @@ func TestWatcher_EmitsSessionForNewDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, transcriptFilename), []byte(line), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
 
+// awaitSessionEvent blocks until the watcher emits an event carrying sid,
+// failing if a differently-identified session arrives first (which would mean
+// the id came from the constant filename) or if nothing arrives at all.
+func awaitSessionEvent(t *testing.T, ch <-chan agent.Event, sid string) {
+	t.Helper()
 	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case ev := <-ch:
 			if ev.SessionID == sid {
-				cancel()
-				if err := <-watchErr; err != nil && err != context.Canceled {
-					t.Errorf("Watch returned unexpected error: %v", err)
-				}
 				return
 			}
 			if ev.SessionID != "" {

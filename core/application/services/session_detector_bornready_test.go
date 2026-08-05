@@ -13,29 +13,27 @@ import (
 // unexpected call panics loudly rather than silently returning a zero value.
 type bornGit struct{ outbound.GitResolver }
 
-func (bornGit) GetBranch(string) string               { return "main" }
-func (bornGit) GetProjectName(string) string          { return "project" }
-func (bornGit) GetCWDFromTranscript(string) string    { return "" }
-func (bornGit) GetBranchFromTranscript(string) string { return "" }
+func (bornGit) GetBranch(string) string      { return "main" }
+func (bornGit) GetProjectName(string) string { return "project" }
 
 type bornLog struct{ outbound.Logger }
 
-func (bornLog) LogInfo(component, session, msg string)  {}
-func (bornLog) LogError(component, session, msg string) {}
+func (bornLog) LogInfo(_, _, _ string)  {}
+func (bornLog) LogError(_, _, _ string) {}
 
 // openTurnMetrics is a metrics collector whose transcript already shows an
 // OPEN turn at the moment the session is discovered — a user message with no
 // turn-done after it.
 type openTurnMetrics struct{ outbound.MetricsCollector }
 
-func (openTurnMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetrics, error) {
+func (openTurnMetrics) ComputeMetrics(_, _ string) (*session.SessionMetrics, error) {
 	return &session.SessionMetrics{LastEventType: "user_message"}, nil
 }
 
 // emptyMetrics is the common case: nothing on disk to classify yet.
 type emptyMetrics struct{ outbound.MetricsCollector }
 
-func (emptyMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetrics, error) {
+func (emptyMetrics) ComputeMetrics(_, _ string) (*session.SessionMetrics, error) {
 	return nil, nil
 }
 
