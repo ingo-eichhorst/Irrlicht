@@ -182,6 +182,14 @@ launch_repl() {
   local args=(--no-color)
   [[ -z "${COPILOT_NO_ALLOW_ALL:-}" ]] && args+=(--allow-all)
   [[ -n "${COPILOT_AVAILABLE_TOOLS:-}" ]] && args+=("--available-tools=$COPILOT_AVAILABLE_TOOLS")
+  # Plan mode has to be a LAUNCH flag: it is what makes copilot route its
+  # answer through the model-invocable `exit_plan_mode` builtin and raise the
+  # approval overlay. Without it the agent simply writes the plan as prose and
+  # ends the turn — verified live on 1.0.78 for the architect-editor-pair cell,
+  # whose transcript held one assistant.message and no tool call at all. This
+  # is the `gap:plan-mode-launch` that froze 2-18 and 5-4: both cells need the
+  # gate to exist before they can observe anything about it.
+  [[ -n "${COPILOT_PLAN_MODE:-}" ]] && args+=(--plan)
   [[ -n "${RESUME_ID:-}" ]] && args+=("--resume=$RESUME_ID")
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" copilot "${args[@]}" \
     >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
