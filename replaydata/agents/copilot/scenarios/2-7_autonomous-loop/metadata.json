@@ -95,7 +95,9 @@
         "The driver seeds a scratch COPILOT_HOME under the staging dir with trustedFolders + askedSetupTerminals pre-answered, so the trust modal cannot block the input box; the session directory is minted under $COPILOT_HOME/session-state/<session-id>/",
         "The driver launches with --allow-all, which both pre-approves every tool (so no permission.requested is ever written and `waiting` is structurally unreachable) and suppresses the 'Enable autopilot mode' confirmation dialog — /autopilot on therefore switches mode with no keypress",
         "/autopilot on is sent BEFORE the objective so the very first turn already runs under autopilot and its idle triggers the first continuation; the slash renders locally and writes nothing to the transcript, so it does not bump the driver's expected-turn count",
-        "The objective is deliberately shaped to need three turns and to withhold task_complete until the last one — copilot ends the loop as soon as the model calls the task_complete tool, and --max-autopilot-continues caps it at 5 continuations regardless"
+        "The objective is deliberately shaped to need three turns and to withhold task_complete until the last one — copilot ends the loop as soon as the model calls the task_complete tool, and --max-autopilot-continues caps it at 5 continuations regardless",
+        "COPILOT_AVAILABLE_TOOLS must include task_complete when it is set at all: autopilot mode calls the task_complete tool to close the objective, and restricting the tool set to bash alone aborts the loop after the first iteration with session.error{errorType:query, message:\"Required tool 'task_complete' is not available. Cannot process the current request.\"}. Record this cell with COPILOT_AVAILABLE_TOOLS=bash,task_complete.",
+        "The prompt pins the agent's FINAL message to the literal word 'done'. This is not cosmetic: on the first successful run the agent's own completion prose ended '...to create loop3.txt and verify it.', which matches curated imperative pattern D in core/domain/session/waiting_cue.go (verify|check|confirm|... + the|that|this|it) and routed the settled session to waiting instead of ready. That is the shared heuristic working as designed — #381 documents the recall-over-precision tradeoff explicitly — not an adapter bug, so the recipe steers the wording rather than the code."
       ],
       "script": [
         {
@@ -108,7 +110,7 @@
         },
         {
           "type": "send",
-          "text": "Objective: create three files in the current directory, loop1.txt containing step1, loop2.txt containing step2, and loop3.txt containing step3. Work on EXACTLY ONE file per turn using a shell command, then end your turn and report which file you just created and which one is next. Do not create two files in the same turn. Do not report the objective as complete until all three files exist; after creating loop3.txt, and only then, report the objective complete."
+          "text": "Objective: create three files in the current directory, loop1.txt containing step1, loop2.txt containing step2, and loop3.txt containing step3. Work on EXACTLY ONE file per turn using a shell command, then end your turn and report which file you just created and which one is next. Do not create two files in the same turn. Do not report the objective as complete until all three files exist. After creating loop3.txt, and only then, your entire final message must be exactly the word: done"
         },
         {
           "type": "wait_turn"
