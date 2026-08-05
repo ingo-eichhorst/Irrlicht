@@ -277,16 +277,37 @@ resolve_transcript() {
 # stop_reason=="end_turn"; codex polls the rollout for task_complete; opencode
 # polls the SQLite store for a step-finish. Return 0 when a NEW turn completed
 # (or times out via remaining_seconds()).
-# turn_count counts COMPLETED turns. Copilot writes an explicit
-# assistant.turn_end per turn (with a turnId), so this is an exact count rather
-# than the heuristic tail-quietness other drivers settle for.
+# turn_count counts COMPLETED USER turns — the unit `send` increments
+# EXPECTED_TURNS by, not the unit copilot's turnId counts.
+#
+# The distinction is load-bearing and cost one bad recording. Copilot does not
+# write one assistant.turn_end per prompt: it CLOSES the turn after every tool
+# call and opens a continuation ~50-80ms later with no user.message between, so
+# a single prompt that runs one bash command emits TWO turn_end records. The
+# original count was a raw `assistant.turn_end` tally, which therefore ran ahead
+# of EXPECTED_TURNS by one for every tool call in the session — in 2-6 the 4th
+# wait_turn was satisfied by turn 3's continuation and the driver tore the
+# session down 4s into turn 4, before the daemon's 2s debounce had flushed the
+# final settle. The recording ended mid-`working` with no t4_end at all.
+#
+# Count user prompts instead, and subtract the one still in flight:
+#   user.message / assistant.turn_start  -> a turn is OPEN
+#   assistant.turn_end                   -> it is CLOSED (a continuation
+#                                           turn_start re-opens it)
+# Events after the last turn_end (session.usage_checkpoint, session.shutdown)
+# are state-neutral, so a settled transcript stays settled.
 turn_count() {
   local t="${TRANSCRIPT:-}"
   [[ -n "$t" && -f "$t" ]] || { echo 0; return; }
   # grep -c PRINTS 0 and EXITS 1 when there is no match, so a `|| echo 0`
   # fallback emitted two lines ("0\n0") and every (( )) comparison downstream
   # died with a syntax error. Count with awk instead: one line, always.
-  awk '/"type":"assistant\.turn_end"/ { n++ } END { print n+0 }' "$t"
+  awk '
+    /"type":"user\.message"/         { prompts++; open = 1 }
+    /"type":"assistant\.turn_start"/ { open = 1 }
+    /"type":"assistant\.turn_end"/   { open = 0 }
+    END { print (prompts - open) + 0 }
+  ' "$t"
 }
 
 wait_turn() {
