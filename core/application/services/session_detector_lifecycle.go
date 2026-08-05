@@ -279,11 +279,11 @@ func (d *SessionDetector) ReconcilePreSessionBackchannel(oldID, newID string) {
 //
 // Safe to call from any goroutine (e.g. HTTP handler).
 func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEventName string) {
-	switch hookEventName {
-	case "PermissionRequest", "PreToolUse":
-		d.signals.Hold(sessionID, session.SignalPermissionPrompt, session.SignalPayload{}, time.Now())
-	case "PostToolUse", "PostToolUseFailure":
-		d.signals.Release(sessionID, session.SignalPermissionPrompt)
+	// session.HookSignal is the shared hook-name → SignalKind table, also read
+	// by the replay harness's applyHookEvent. It used to be a switch here and a
+	// second switch there, and they had drifted (issue #1320).
+	if effect, ok := session.HookSignal(hookEventName); ok {
+		d.signals.ApplyHook(sessionID, effect, time.Now())
 	}
 
 	// processActivity overlays PermissionPending onto the metrics before
@@ -342,9 +342,7 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 	// calling ClassifyState. The Stop hook fires at true turn end (after the
 	// transcript flush), so a synthetic activity event is what drives the
 	// re-classification now rather than waiting for the next fswatcher pass.
-	// The literal "Stop" mirrors HandleCompactHook's "PreCompact" — the services
-	// layer must not import the claudecode adapter for its HookStop constant.
-	d.dispatchHookActivity(sessionID, transcriptPath, "Stop")
+	d.dispatchHookActivity(sessionID, transcriptPath, session.HookStop)
 }
 
 // HandleIdlePromptHook records Claude Code's Notification/idle_prompt hook
@@ -362,15 +360,13 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 // already ready by then), so this is a reconcile-and-correct: the synthetic
 // activity below drives a ready→waiting transition without the intermediate
 // working blip forceReadyToWorkingIfActive would otherwise record (it skips the
-// bounce while this flag is pending). The literal "Notification" mirrors
-// HandleStopHook's "Stop" — the services layer must not import the claudecode
-// adapter for its HookNotification constant.
+// bounce while this flag is pending).
 //
 // Safe to call from any goroutine (e.g. the HTTP handler).
 func (d *SessionDetector) HandleIdlePromptHook(sessionID, transcriptPath string) {
 	d.signals.Hold(sessionID, session.SignalIdlePrompt, session.SignalPayload{}, time.Now())
 
-	d.dispatchHookActivity(sessionID, transcriptPath, "Notification")
+	d.dispatchHookActivity(sessionID, transcriptPath, session.HookNotification)
 }
 
 // HandleCompactHook processes a Claude Code PreCompact hook for a manual
@@ -395,7 +391,7 @@ func (d *SessionDetector) HandleCompactHook(sessionID, transcriptPath, trigger s
 
 	// Flip the session to working immediately — there is no transcript flush
 	// coming during the compaction window to trigger a natural re-evaluation.
-	d.dispatchHookActivity(sessionID, transcriptPath, "PreCompact")
+	d.dispatchHookActivity(sessionID, transcriptPath, session.HookPreCompact)
 }
 
 // seedFromDisk populates the projectSessions map from existing sessions,

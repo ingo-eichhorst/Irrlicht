@@ -434,26 +434,40 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 	return nil
 }
 
-// applyHookEvent mirrors SessionDetector.HandlePermissionHook: update the
-// permission-pending flag based on hook type, then trigger a re-
-// classification using the last-known metrics. Hook events other than the
-// three recognized Claude Code hooks are ignored.
+// applyHookEvent mirrors SessionDetector.HandlePermissionHook: apply the hook's
+// signal effect, then trigger a re-classification using the last-known metrics.
 //
-// PreCompact is deliberately not among them, even though #1297 made it a
-// signalPolicies row the harness could now hold like any other. No recording
-// in replaydata/ carries one: a grep for hook_name across the whole catalog
-// returns only PermissionRequest, PreToolUse, PostToolUse and
-// PostToolUseFailure. Wiring it would therefore add a branch no golden
-// exercises. Add it together with the first recording that fires one.
+// Both sides read the same session.HookSignal table, so a hook the daemon
+// honours can no longer be silently dropped here. That divergence was real:
+// this function used to carry its own switch, which recognized
+// PermissionRequest but fell through to default on PreToolUse — a hook the
+// daemon holds SignalPermissionPrompt on, and one that replaydata/ carries two
+// of (issue #1320).
+//
+// Why it stayed invisible is worth stating precisely, because the obvious
+// answer is wrong. It is *not* that a PermissionRequest follows each PreToolUse
+// closely enough to be equivalent — replaying those two recordings by hand
+// shows the corrected hold moving the transition 19ms and 136ms earlier and
+// flipping its cause from hook to debounce_coalesce. It stayed invisible
+// because no committed gate reaches *this function* over a recording that
+// carries a hook: the two tests that do drive replayWithSidecar over real
+// fixtures (10-full-lifecycle-839f0678, 13-full-lifecycle-continue-8a525d27)
+// contain zero hook_received events, and every recording that does carry one
+// is only ever replayed transcript-only — replay-fixtures.sh and the
+// byte-identity golden never enable sidecar mode, because resolveInputPaths
+// auto-detects only a sibling named <transcript>.events.jsonl while every
+// sidecar in replaydata/ is named plain events.jsonl. See issue #1326.
+//
+// Hooks absent from the table are still ignored here. Stop could not be a table
+// row (its effect needs a payload lifecycle.Event does not carry); Notification
+// and PreCompact could be, but no recording in replaydata/ fires one — add each
+// as a table row together with the first recording that does.
 func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
-	switch hookEv.HookName {
-	case claudecode.HookPermissionRequest:
-		r.signals.Hold(replaySessionKey, session.SignalPermissionPrompt, session.SignalPayload{}, hookEv.Timestamp)
-	case claudecode.HookPostToolUse, claudecode.HookPostToolUseFailure:
-		r.signals.Release(replaySessionKey, session.SignalPermissionPrompt)
-	default:
+	effect, ok := session.HookSignal(hookEv.HookName)
+	if !ok {
 		return
 	}
+	r.signals.ApplyHook(replaySessionKey, effect, hookEv.Timestamp)
 	if r.lastMetrics == nil {
 		return
 	}
