@@ -116,6 +116,9 @@ daemon_sid() {
 # more. ACTIVE indexes the live slot; SESSION/TRANSCRIPT/UUID mirror it.
 N_SLOTS=0; ACTIVE=0
 SES_SESSION=(); SES_TRANSCRIPT=(); SES_UUID=(); SES_EXPECTED=()
+# Transcripts of sessions retired by an in-place rotation (reset_session).
+# They are dead, so they get no slot, but the fixture must still span them.
+RETIRED_TRANSCRIPTS=()
 SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,
@@ -415,6 +418,18 @@ while IFS= read -r step; do
     # clear TRANSCRIPT first, or resolve_transcript short-circuits on the old
     # path and turn_count keeps grepping the abandoned transcript.
     reset_session)   PRE_LAUNCH_DIRS="$(ls "$COPILOT_HOME/session-state" 2>/dev/null | sort || true)"
+                     # RETIRE, don't discard. The rotation is the whole point of
+                     # this cell, so the fixture has to span BOTH ids — but the
+                     # staging contract is built from the per-slot SES_TRANSCRIPT
+                     # array, and a reset reuses its slot. Clearing the slot in
+                     # place therefore left session.uuids holding only the
+                     # post-reset id, run-cell.sh's multi-session branch saw one
+                     # line and exported no IRRLICHT_EXTRA_SESSION_IDS, and
+                     # curation dropped the pre-reset half of the arc even though
+                     # the daemon had recorded it correctly. Park the outgoing
+                     # transcript so the epilogue can append it.
+                     [[ -n "${SES_TRANSCRIPT[$ACTIVE]:-}" ]] && \
+                       RETIRED_TRANSCRIPTS+=("${SES_TRANSCRIPT[$ACTIVE]}")
                      TRANSCRIPT=""; UUID=""
                      SES_TRANSCRIPT[$ACTIVE]=""; SES_UUID[$ACTIVE]=""
                      EXPECTED_TURNS=0; SES_EXPECTED[$ACTIVE]=0
@@ -470,4 +485,15 @@ done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
 # transcript path; switch to the first-line UUID if copilot keys on that (see
 # drive-pi-interactive.sh). drive_exit maps EXIT_REASON → the process exit code.
 emit_session_contract "$(daemon_sid "${SES_TRANSCRIPT[1]}")"
+
+# Append any retired (rotated-away) sessions to the contract lists. They are not
+# slots — nothing is alive in them — but run-cell.sh reads session.uuids to build
+# IRRLICHT_EXTRA_SESSION_IDS, so without this the curated fixture covers only the
+# session that happened to be current when the script ended.
+for _rt in "${RETIRED_TRANSCRIPTS[@]:-}"; do
+  [[ -n "$_rt" ]] || continue
+  echo "$(daemon_sid "$_rt")" >> "$STAGING/session.uuids"
+  echo "$_rt" >> "$STAGING/transcript.paths"
+done
+
 drive_exit
