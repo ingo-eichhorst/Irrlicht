@@ -100,7 +100,7 @@
       "script": [
         {
           "type": "send",
-          "text": "Write a single very long sentence as your entire reply. Make it at least 5000 words. Do not use any newlines, do not use any tools, and do not stop early."
+          "text": "Output the word banana repeated 3000 times on one single line, separated by single spaces. Do not use newlines. Do not use any tools. Do not add any commentary, preamble, or questions. Output only the repeated word."
         },
         {
           "type": "wait_turn"
