@@ -55,6 +55,57 @@ func TestClassifyState(t *testing.T) {
 			wantState:  session.StateWaiting,
 			wantReason: true,
 		},
+		// the transcript_permission_prompt rule: an adapter whose permission gate is
+		// visible in the TRANSCRIPT rather than delivered by a hook (#1256 —
+		// GitHub Copilot pairs permission.requested/permission.completed on
+		// requestId, so it needs no hook install to reach waiting).
+		{
+			name:    "working → waiting (transcript permission pending)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				TranscriptPermissionPending: true,
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
+		{
+			name:    "ready → waiting (transcript permission pending)",
+			current: session.StateReady,
+			metrics: &session.SessionMetrics{
+				TranscriptPermissionPending: true,
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
+		{
+			// PRECEDENCE, and the reason this rule sits ABOVE agent_done in the
+			// ladder rather than below it. An agent may write a turn-ending event
+			// before it blocks on the prompt — Copilot does exactly that — so if
+			// agent_done won here the session would report as finished while it
+			// is actually waiting on the user. This case is what makes the
+			// ordering load-bearing rather than incidental.
+			name:    "open transcript prompt outranks a finished turn",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				TranscriptPermissionPending: true,
+				LastEventType:               "turn_done",
+			},
+			wantState:  session.StateWaiting,
+			wantReason: true,
+		},
+		{
+			// The other direction: once the prompt is answered the flag clears and
+			// the same finished turn settles normally. Without this, the rule above
+			// would also pass if the classifier simply never routed to ready.
+			name:    "resolved transcript prompt lets the finished turn settle",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				TranscriptPermissionPending: false,
+				LastEventType:               "turn_done",
+			},
+			wantState:  session.StateReady,
+			wantReason: true,
+		},
 		// the compact_in_progress rule: CompactInProgress (manual /compact) → working, holding the
 		// session busy through the silent compaction window (#657).
 		{
