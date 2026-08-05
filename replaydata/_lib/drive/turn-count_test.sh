@@ -57,10 +57,21 @@ count() {
     turn_count )
 }
 
-# find_transcript <agent> <scenario-dir-prefix> [ext]
+# find_transcript <agent> <scenario-dir> [ext]
+#
+# Two things this deliberately gets right:
+#   - `tail -n1`, not `head -n1`: recording dirs are date-stamped, so the LAST
+#     one is the newest. Reading the oldest would make the header's promise
+#     ("a deliberate re-record changing a count should fail here") a lie — a
+#     re-record would add a dir this test never looks at, and it would stay
+#     green while the counter's real input changed.
+#   - `*/$scen/*`, anchored: an unanchored `*/$scen*/*` would let
+#     1-1_session-start also match a future 1-10_…, and "1-10_" sorts BEFORE
+#     "1-1_" ('0' < '_'), so the wrong cell could win. 2-1 vs 2-10..2-21 already
+#     shows this naming pattern exists.
 find_transcript() {
   local agent="$1" scen="$2" ext="${3:-jsonl}"
-  find "$ROOT/replaydata/agents/$agent" -path "*/$scen*/*" -name "transcript.$ext" 2>/dev/null | sort | head -n1
+  find "$ROOT/replaydata/agents/$agent" -path "*/$scen/*" -name "transcript.$ext" 2>/dev/null | sort | tail -n1
 }
 
 assert_count() {

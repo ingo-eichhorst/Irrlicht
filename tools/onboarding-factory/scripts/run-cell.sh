@@ -165,8 +165,15 @@ fi
 # PRECHECK_JSON_OUT captures the CLI version precheck detects, so
 # promote-recording.sh can stamp it instead of re-deriving it (#1333 / B3). It
 # has to be a temp path because $STAGING doesn't exist yet; it moves in below.
+# Cleanup is explicit rather than an EXIT trap: spawn_record_daemon arms its own
+# below, and a second `trap ... EXIT` here would replace it. precheck is the most
+# likely thing on this path to fail (CLI missing, version floor, port busy), so
+# the failure branch is the one that matters.
 PRECHECK_JSON_TMP="$(mktemp -t irr-precheck.XXXXXX)"
-ATTACH="$ATTACH" PRECHECK_JSON_OUT="$PRECHECK_JSON_TMP" "$SCRIPT_DIR/precheck.sh" "$ADAPTER"
+if ! ATTACH="$ATTACH" PRECHECK_JSON_OUT="$PRECHECK_JSON_TMP" "$SCRIPT_DIR/precheck.sh" "$ADAPTER"; then
+  rm -f "$PRECHECK_JSON_TMP"
+  exit 1
+fi
 
 # --- Staging -------------------------------------------------------------
 # Stage under FOLDER (the on-disk recording dir), which equals COVERAGE_ID for
@@ -181,9 +188,8 @@ mkdir -p "$STAGING/recordings" "$STAGING/replaydata/agents/$ADAPTER/scenarios/$F
 # precheck's machine-readable output now has somewhere to live (#1333 / B3).
 if [[ -s "$PRECHECK_JSON_TMP" ]]; then
   mv "$PRECHECK_JSON_TMP" "$STAGING/precheck.json"
-else
-  rm -f "$PRECHECK_JSON_TMP"
 fi
+rm -f "$PRECHECK_JSON_TMP"
 
 # Repo provenance (#1333 / B7). Serialized recording assumes exclusive use of
 # the worktree; nothing enforced it, so a concurrent session's commits could
@@ -545,6 +551,11 @@ fi
 # truncated recording, and `ok` is what invites promotion. Advisory by design —
 # see the header of completeness-check.sh for why it is not a hard gate.
 COMPLETENESS="$(bash "$SCRIPT_DIR/lib/completeness-check.sh" "$STAGING" 2>/dev/null || echo '{"verdict":"unknown","reasons":["completeness-check failed to run"],"sessions":{}}')"
+# The `||` fallback only fires on a NON-ZERO exit; the check exits 0 even if its
+# own jq fails, so guard the empty case separately. An empty COMPLETENESS would
+# make the `--argjson` below fail and kill the manifest write under `set -e` —
+# after the expensive live capture, leaving no run-manifest.json at all.
+[[ -n "$COMPLETENESS" ]] || COMPLETENESS='{"verdict":"unknown","reasons":["completeness-check produced no output"],"sessions":{}}'
 COMPLETENESS_VERDICT="$(jq -r '.verdict' <<<"$COMPLETENESS" 2>/dev/null || echo unknown)"
 if [[ "$COMPLETENESS_VERDICT" != "complete" ]]; then
   echo "completeness: $COMPLETENESS_VERDICT — DO NOT PROMOTE without reading these:" >&2

@@ -684,18 +684,24 @@ func noMatchReason(p ExpectedPhase, anchorName, requireSID string) string {
 	if want == "" {
 		want = p.Kind
 	}
-	// A min_delay_ms floor is the likeliest reason a phase that "obviously"
-	// has a match found none, so name it ahead of the session constraints.
+	// A min_delay_ms floor is a likely reason a phase that "obviously" has a
+	// match found none, so it is always mentioned — but APPENDED rather than
+	// returned early, because a phase can carry both a floor and a session
+	// constraint and the session detail is usually the more useful half.
+	// Returning on the floor alone would report "candidates were skipped" for a
+	// phase that actually failed because its pinned session never emitted the
+	// event at all.
+	var floor string
 	if p.MinDelayMs > 0 {
-		return fmt.Sprintf("no event matching %q found at least min_delay_ms=%d after anchor %q (candidates closer to the anchor were skipped)", want, p.MinDelayMs, anchorName)
+		floor = fmt.Sprintf(" (candidates closer than min_delay_ms=%d to the anchor were skipped)", p.MinDelayMs)
 	}
 	switch {
 	case requireSID != "":
-		return fmt.Sprintf("no event matching %q found for session %q at or after anchor %q", want, requireSID, anchorName)
+		return fmt.Sprintf("no event matching %q found for session %q at or after anchor %q%s", want, requireSID, anchorName, floor)
 	case p.NewSession:
-		return fmt.Sprintf("no event matching %q on a NEW session found at or after anchor %q (all candidates were already-seen session ids)", want, anchorName)
+		return fmt.Sprintf("no event matching %q on a NEW session found at or after anchor %q (all candidates were already-seen session ids)%s", want, anchorName, floor)
 	default:
-		return fmt.Sprintf("no event matching %q found at or after anchor %q", want, anchorName)
+		return fmt.Sprintf("no event matching %q found at or after anchor %q%s", want, anchorName, floor)
 	}
 }
 
@@ -755,10 +761,19 @@ func checkPhaseInvariants(p ExpectedPhase, events []recordedEvent, matched *reco
 
 // passReason formats the success reason for a matched phase.
 func passReason(p ExpectedPhase, deltaMs int64, anchorName string) string {
-	if p.MaxDelayMs > 0 {
+	// Report the floor too. When min_delay_ms is set it is load-bearing — the
+	// phase deliberately skipped earlier candidates — so a reason that named
+	// only the ceiling would hide the half of the window that did the work.
+	switch {
+	case p.MinDelayMs > 0 && p.MaxDelayMs > 0:
+		return fmt.Sprintf("matched at +%d ms (inside the %d–%d ms window)", deltaMs, p.MinDelayMs, p.MaxDelayMs)
+	case p.MinDelayMs > 0:
+		return fmt.Sprintf("matched at +%d ms (at least %d ms after anchor %q)", deltaMs, p.MinDelayMs, anchorName)
+	case p.MaxDelayMs > 0:
 		return fmt.Sprintf("matched at +%d ms (under %d ms max)", deltaMs, p.MaxDelayMs)
+	default:
+		return fmt.Sprintf("matched at +%d ms after anchor %q", deltaMs, anchorName)
 	}
-	return fmt.Sprintf("matched at +%d ms after anchor %q", deltaMs, anchorName)
 }
 
 // Invariant DSL — two forms supported in iteration 10:

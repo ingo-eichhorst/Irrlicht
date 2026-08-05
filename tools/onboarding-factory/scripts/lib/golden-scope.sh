@@ -22,6 +22,14 @@
 # precheck refuse". Snapshotting what was already dirty BEFORE regenerating
 # removes the hidden coupling: this run may only undo what this run caused.
 #
+# The trade this makes, stated plainly: membership is by PATH, not by content.
+# A golden that was already dirty AND that this run modifies again is left
+# alone, so fresh out-of-scope drift in that one file survives and rides along
+# with the next commit. That is the mirror image of the bug above and much the
+# milder of the two — it preserves one file's drift rather than destroying
+# several cells' work — but it is a real edge, not an oversight. Comparing
+# content hashes instead of paths would close it if it ever bites.
+#
 # Both functions take newline-separated lists and echo a newline-separated list.
 #
 #   golden_restore_list <scope> <modified_before> <modified_now>   -> git checkout --

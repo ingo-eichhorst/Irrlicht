@@ -153,10 +153,17 @@ fi
 # Each adapter's detected CLI version is staged so promote-recording.sh can
 # stamp it rather than re-derive it (#1333 / B3); they move into $STAGING below,
 # one file per adapter, since a multi-agent cell promotes per adapter.
-declare -A PRECHECK_JSON_TMP=()
+#
+# One temp DIR keyed by filename, not an associative array: macOS ships bash 3.2,
+# where `declare -A` is a hard runtime error (and this script already says so at
+# its slot bookkeeping). Cleanup is explicit rather than an EXIT trap because
+# spawn_record_daemon arms its own and a second `trap ... EXIT` would replace it.
+PRECHECK_TMPDIR="$(mktemp -d -t irr-precheck)"
 for a in "${ADAPTERS[@]}"; do
-  PRECHECK_JSON_TMP[$a]="$(mktemp -t "irr-precheck-$a.XXXXXX")"
-  ATTACH=0 PRECHECK_JSON_OUT="${PRECHECK_JSON_TMP[$a]}" "$SCRIPT_DIR/precheck.sh" "$a"
+  if ! ATTACH=0 PRECHECK_JSON_OUT="$PRECHECK_TMPDIR/$a.json" "$SCRIPT_DIR/precheck.sh" "$a"; then
+    rm -rf "$PRECHECK_TMPDIR"
+    exit 1
+  fi
 done
 
 DAEMON="$REPO_ROOT/.build/refresh/bin/irrlichd"
@@ -179,12 +186,11 @@ mkdir -p "$STAGING/recordings" "$STAGING/reports" "$SHARED_CWD"
 # lifecycle but not the per-rig env).
 for a in "${ADAPTERS[@]}"; do
   mkdir -p "$STAGING/$a"
-  if [[ -s "${PRECHECK_JSON_TMP[$a]}" ]]; then
-    mv "${PRECHECK_JSON_TMP[$a]}" "$STAGING/$a/precheck.json"
-  else
-    rm -f "${PRECHECK_JSON_TMP[$a]}"
+  if [[ -s "$PRECHECK_TMPDIR/$a.json" ]]; then
+    mv "$PRECHECK_TMPDIR/$a.json" "$STAGING/$a/precheck.json"
   fi
 done
+rm -rf "$PRECHECK_TMPDIR"
 GIT_HEAD_START="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 MANIFEST="$STAGING/run-manifest.json"
@@ -392,6 +398,9 @@ fi
 # Completeness runs here too (#1333 / A3): a cross-adapter cell is torn down the
 # same way a single-adapter one is, and `ok` is just as misleading.
 COMPLETENESS="$(bash "$SCRIPT_DIR/lib/completeness-check.sh" "$STAGING" 2>/dev/null || echo '{"verdict":"unknown","reasons":["completeness-check failed to run"],"sessions":{}}')"
+# See run-cell.sh: the `||` fallback misses a zero-exit-with-empty-stdout, which
+# would break the --argjson manifest write under `set -e`.
+[[ -n "$COMPLETENESS" ]] || COMPLETENESS='{"verdict":"unknown","reasons":["completeness-check produced no output"],"sessions":{}}'
 if [[ "$(jq -r '.verdict' <<<"$COMPLETENESS" 2>/dev/null || echo unknown)" != "complete" ]]; then
   echo "completeness: $(jq -r '.verdict' <<<"$COMPLETENESS") — DO NOT PROMOTE without reading these:" >&2
   jq -r '.reasons[]? | "  - " + .' <<<"$COMPLETENESS" >&2 || true

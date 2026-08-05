@@ -34,24 +34,35 @@ fails=0
 pass() { local label="$1"; echo "  PASS: $label"; return 0; }
 fail() { local label="$1" detail="$2"; echo "  FAIL: $label — $detail"; fails=$((fails + 1)); return 0; }
 
-# Adapter ids from a `case "$X" in ... esac` block whose arms assign CLI_BIN.
-# Skips the `*)` catch-all.
-adapters_from() {
+# The full <adapter> <cli_bin> <ver_field> triple from a `case "$X" in ... esac`
+# block whose arms assign CLI_BIN. Skips the `*)` catch-all.
+#
+# Comparing only the adapter NAMES would leave the bug half-open: two tables can
+# list an identical adapter set while disagreeing on which --version field holds
+# the number, and a wrong VER_FIELD stamps a manifest with a word from the
+# version banner ("CLI") instead of "1.0.78" — just as silently as a missing arm.
+adapter_triples_from() {
   local file="$1"
-  grep -oE '^[[:space:]]*[a-z][a-z0-9-]*\)[[:space:]]*CLI_BIN=' "$file" \
-    | sed -E 's/^[[:space:]]*//; s/\).*//' | sort -u
+  grep -oE '^[[:space:]]*[a-z][a-z0-9-]*\)[[:space:]]*CLI_BIN="[^"]*";[[:space:]]*VER_FIELD=[0-9]+' "$file" \
+    | sed -E 's/^[[:space:]]*//; s/\)[[:space:]]*CLI_BIN="/ /; s/";[[:space:]]*VER_FIELD=/ /' \
+    | sort -u
 }
 
-echo "== precheck.sh and promote-recording.sh know the same adapters (B3) =="
-pre="$(adapters_from "$PRECHECK")"
-pro="$(adapters_from "$PROMOTE")"
-if [[ "$pre" == "$pro" ]]; then
-  pass "both tables list: $(echo "$pre" | tr '\n' ' ')"
+echo "== precheck.sh and promote-recording.sh agree adapter, bin AND version field (B3) =="
+pre="$(adapter_triples_from "$PRECHECK")"
+pro="$(adapter_triples_from "$PROMOTE")"
+if [[ -z "$pre" || -z "$pro" ]]; then
+  # A parser that silently matches nothing would make this whole gate vacuous —
+  # exactly the failure mode #1333's C7 is about.
+  fail "the table parser matched nothing" \
+       "precheck arms: $(echo "$pre" | grep -c . ), promote arms: $(echo "$pro" | grep -c . ) — the case-arm format changed and this test is no longer reading it"
+elif [[ "$pre" == "$pro" ]]; then
+  pass "both tables agree on $(echo "$pre" | grep -c . ) adapters (name, bin, version field)"
 else
-  only_pre="$(comm -23 <(echo "$pre") <(echo "$pro") | tr '\n' ' ')"
-  only_pro="$(comm -13 <(echo "$pre") <(echo "$pro") | tr '\n' ' ')"
+  only_pre="$(comm -23 <(echo "$pre") <(echo "$pro") | tr '\n' ';')"
+  only_pro="$(comm -13 <(echo "$pre") <(echo "$pro") | tr '\n' ';')"
   fail "the CLI-version tables diverged" \
-       "only in precheck.sh: [${only_pre:-none}]  only in promote-recording.sh: [${only_pro:-none}] — an adapter missing from promote is stamped agent_cli_version \"unknown\""
+       "only in precheck.sh: [${only_pre:-none}]  only in promote-recording.sh: [${only_pro:-none}] — a missing arm stamps agent_cli_version \"unknown\"; a wrong VER_FIELD stamps the wrong token"
 fi
 
 echo "== every driver that counts turns has an extracted, covered counter (B4) =="

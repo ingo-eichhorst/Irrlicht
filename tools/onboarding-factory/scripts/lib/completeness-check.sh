@@ -67,6 +67,16 @@ emit() {
 #     tree promote will copy);
 #   - a promoted recordings/<name>/ dir, which has events.jsonl at its top level
 #     (so the check can be re-run by hand against committed data).
+#
+# CROSS-ADAPTER CAVEAT: run-cell-multi.sh stages one curated events.jsonl per
+# adapter under this tree, and the `head -n1` below reads only the
+# alphabetically-first. A multi-adapter cell therefore gets a verdict describing
+# one adapter's view. It is still a real check on real data — just narrower than
+# the single-adapter path, and it never reports a false `complete` for the
+# adapter it did read. (The multi rig also writes session.uuids per adapter
+# subdir rather than at the staging root, so DRIVEN_JSON is empty there and the
+# filter falls back to "all non-proc sessions" — same direction: weaker, not
+# wrong.) Both are worth tightening when a multi-adapter cell next needs it.
 EVENTS=""
 if [[ -n "$STAGING" && -d "$STAGING" ]]; then
   if [[ -s "$STAGING/events.jsonl" ]]; then
@@ -84,6 +94,17 @@ fi
 # rotations appended). Presession `proc-<PID>` rows are excluded everywhere:
 # they are transient placeholders that reconcile into a real session and never
 # settle on their own, so counting them would fire on every presession adapter.
+#
+# KNOWN GAP — aider is uncovered by the unsettled-session assertion. Its daemon-
+# side ids ARE `proc-<pid>`: that is its terminal session model, not a
+# placeholder that reconciles into something else. So for every aider cell the
+# per-session list is empty, `unsettled` is always [], and only the
+# trailing-activity assertion below is doing any work. Excluding `proc-` is
+# still right for codex/pi/gemini-cli (where a real id follows) and wrong only
+# here; distinguishing them needs adapter identity, which events.jsonl does not
+# carry on state_transition rows. Narrowing this is worth doing when the rig
+# gains an adapter field — until then aider gets the weaker of the two checks,
+# and this comment is the honest record of that rather than a silent hole.
 DRIVEN_JSON="[]"
 if [[ -s "$STAGING/session.uuids" ]]; then
   DRIVEN_JSON="$(grep -v '^proc-' "$STAGING/session.uuids" 2>/dev/null \

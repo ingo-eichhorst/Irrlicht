@@ -43,30 +43,45 @@ atomic_promote() {
   scratch="$cell_dir/.promote-tmp.$$"
   candidate="$scratch/recordings/$rec_name"
 
+  # The scratch dir holds a full copy of the candidate and lives INSIDE the
+  # committed tree, so an interrupt during validation (which shells out to
+  # `go run`, i.e. a compile) would otherwise strand it — and `record`'s next
+  # documented step is `git add <cell-dir>/`, a directory add that takes
+  # dotfiles. The RETURN trap covers every exit from here on, including the
+  # caller's Ctrl-C, and .gitignore carries `.promote-tmp*` as the belt.
+  trap 'rm -rf "$scratch"' RETURN
+
   rm -rf "$scratch"
   mkdir -p "$candidate" || return 1
 
   if ! "$populate_fn" "$candidate"; then
-    rm -rf "$scratch"
     return 1
   fi
 
   if [[ -n "$validate_fn" && -f "$cell_dir/expected.jsonl" ]]; then
     cp "$cell_dir/expected.jsonl" "$scratch/expected.jsonl"
+    # `if summary=...` rather than `[[ -n ]] && echo` on either branch: an
+    # AND-list returns 1 on an empty summary, which under a caller's `set -e`
+    # would abort a SUCCESSFUL promote right before the mv.
     if summary="$("$validate_fn" "$scratch" "$rec_name")"; then
-      [[ -n "$summary" ]] && echo "$summary"
+      if [[ -n "$summary" ]]; then echo "$summary"; fi
     else
-      rm -rf "$scratch"
-      [[ -n "$summary" ]] && echo "$summary"
+      if [[ -n "$summary" ]]; then echo "$summary"; fi
       return 3
     fi
   fi
 
-  mkdir -p "$cell_dir/recordings"
-  if ! mv "$candidate" "$final"; then
-    rm -rf "$scratch"
+  # Never merge into an existing recording: `mv a b` with b present nests it as
+  # b/a rather than failing. promote-recording.sh picks a non-colliding name
+  # first, so this only fires on a race or a different caller — but the lib
+  # advertises atomicity, so it defends itself.
+  if [[ -e "$final" ]]; then
+    echo "atomic_promote: $final already exists; refusing to merge into it" >&2
     return 1
   fi
-  rm -rf "$scratch"
+  mkdir -p "$cell_dir/recordings"
+  if ! mv "$candidate" "$final"; then
+    return 1
+  fi
   return 0
 }

@@ -292,7 +292,14 @@ function expectedMarkerTooltip(ph, def, offsetMs) {
   if (def.text) lines.push(def.text);
   if (offsetMs !== null) {
     let delta = `+${Math.round(offsetMs)} ms from recording start`;
-    if (def.max_delay_ms) delta += ` (target ≤ ${def.max_delay_ms} ms from anchor)`;
+    // Both bounds, so a load-bearing min_delay_ms floor isn't invisible here.
+    if (def.min_delay_ms && def.max_delay_ms) {
+      delta += ` (target ${def.min_delay_ms}–${def.max_delay_ms} ms from anchor)`;
+    } else if (def.min_delay_ms) {
+      delta += ` (target ≥ ${def.min_delay_ms} ms from anchor)`;
+    } else if (def.max_delay_ms) {
+      delta += ` (target ≤ ${def.max_delay_ms} ms from anchor)`;
+    }
     lines.push(delta);
   }
   if (ph.reason) lines.push(`reason: ${ph.reason}`);

@@ -235,9 +235,16 @@ fi
 # 4. Stamp the pass rate the validator reported. The manifest was written inside
 #    the candidate (so a rejected recording leaves none); only the rate has to
 #    wait for the verdict.
-TMP_MANIFEST="$REC_DIR/manifest.json.tmp"
-jq --arg r "$NEW_PASS_RATE" '.expected_pass_rate = $r' "$REC_DIR/manifest.json" > "$TMP_MANIFEST" \
-  && mv "$TMP_MANIFEST" "$REC_DIR/manifest.json"
+# The scratch file lives OUTSIDE the recording: on a jq failure `set -e` exits
+# here with the recording already promoted, and a manifest.json.tmp inside
+# recordings/<name>/ would be swept up by `record`'s next `git add <cell-dir>/`.
+TMP_MANIFEST="$(mktemp -t irr-manifest.XXXXXX)"
+if jq --arg r "$NEW_PASS_RATE" '.expected_pass_rate = $r' "$REC_DIR/manifest.json" > "$TMP_MANIFEST"; then
+  mv "$TMP_MANIFEST" "$REC_DIR/manifest.json"
+else
+  rm -f "$TMP_MANIFEST"
+  echo "WARNING: could not stamp expected_pass_rate into $REC_DIR/manifest.json" >&2
+fi
 echo "wrote recording $REC_DIR" >&2
 echo "wrote $REC_DIR/manifest.json ($NEW_PASS_RATE)" >&2
 

@@ -2010,10 +2010,21 @@ function _expectedTargetHTML(def) {
 }
 
 // _expectedWindowText renders one phase definition's timing-window cell
-// (max delay and/or minimum duration constraints, joined with " · ").
+// (min/max delay and/or minimum duration constraints, joined with " · ").
+//
+// min_delay_ms has to appear here: it is a FLOOR on which event the phase binds
+// to, so a phase specced as a 5s–10s window would otherwise render as plain
+// "≤ 10000 ms" and read as if it had no floor at all — hiding the half that
+// makes a terminal-hold phase skip past intermediate cycles (#1333 / B5).
 function _expectedWindowText(def) {
   let win = "";
-  if (def.max_delay_ms) win += `≤ ${def.max_delay_ms} ms`;
+  if (def.min_delay_ms && def.max_delay_ms) {
+    win += `${def.min_delay_ms}–${def.max_delay_ms} ms`;
+  } else if (def.min_delay_ms) {
+    win += `≥ ${def.min_delay_ms} ms`;
+  } else if (def.max_delay_ms) {
+    win += `≤ ${def.max_delay_ms} ms`;
+  }
   if (def.duration_at_least_ms) win += (win ? " · " : "") + `≥ ${def.duration_at_least_ms} ms`;
   return win || "—";
 }
