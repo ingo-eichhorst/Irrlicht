@@ -82,6 +82,85 @@ type Parser struct {
 	openSubagents map[string]struct{}
 }
 
+// eventHandler maps one Copilot event type onto a ParsedEvent. Handlers take
+// the parser so the stateful ones (model, cwd, usage, subagents) can reach it;
+// the stateless ones ignore it.
+type eventHandler func(p *Parser, data map[string]any, ev *tailer.ParsedEvent)
+
+// setEventType returns a handler that just labels the event. Used for the
+// arms whose whole behaviour is "this event type means X to the tailer".
+func setEventType(t string) eventHandler {
+	return func(_ *Parser, _ map[string]any, ev *tailer.ParsedEvent) { ev.EventType = t }
+}
+
+// skip returns a handler that drops the event. Skipped events still flow
+// through the postlude in ParseLine, so their cwd/model metadata is applied.
+func skip() eventHandler {
+	return func(_ *Parser, _ map[string]any, ev *tailer.ParsedEvent) { ev.Skip = true }
+}
+
+// eventHandlers is the complete type→behaviour map for Copilot's transcript.
+// It is a table rather than a switch on purpose: every record shares one
+// envelope and differs only by `type`, so the mapping IS the parser, and a
+// table keeps it readable at a glance as the vocabulary grows. An unlisted
+// type falls to the default in ParseLine.
+var eventHandlers = map[string]eventHandler{
+	evSessionStart: (*Parser).parseSessionStart,
+
+	// Model identity arrives on two different events with two different field
+	// names; neither is activity, so both are skipped after being recorded.
+	evModelChange: func(p *Parser, d map[string]any, ev *tailer.ParsedEvent) {
+		p.setModel(str(d, "newModel"), ev)
+		ev.Skip = true
+	},
+	evAutoModeResolved: func(p *Parser, d map[string]any, ev *tailer.ParsedEvent) {
+		p.setModel(str(d, "chosenModel"), ev)
+		ev.Skip = true
+	},
+
+	evUserMessage:      func(_ *Parser, d map[string]any, ev *tailer.ParsedEvent) { parseUserMessage(d, ev) },
+	evAssistantMessage: (*Parser).parseAssistantMessage,
+
+	// turn_start must NOT be skipped: Copilot closes a turn after every tool
+	// call and opens the next one ~50-80ms later with NO user.message in
+	// between, so on a continuation turn this is the ONLY signal that the
+	// agent is working again. Skipping it left the session reading idle for
+	// the whole continuation — 122ms in one recording and 5.24 SECONDS in
+	// another (#1256). Non-settling, so the classifier's default
+	// transcript-activity rule holds the session `working`.
+	evTurnStart: setEventType("turn_start"),
+	evTurnEnd:   setEventType("turn_done"),
+
+	evToolStart: func(_ *Parser, d map[string]any, ev *tailer.ParsedEvent) { parseToolStart(d, ev) },
+	// A `!` shell escape: the user ran a command locally, with no model turn.
+	// See parseToolComplete for why it must not register as activity.
+	evUserRequestedRun: skip(),
+	evToolComplete:     func(_ *Parser, d map[string]any, ev *tailer.ParsedEvent) { parseToolComplete(d, ev) },
+
+	evPermRequested: func(_ *Parser, d map[string]any, ev *tailer.ParsedEvent) { parsePermissionRequested(d, ev) },
+	evPermCompleted: func(_ *Parser, d map[string]any, ev *tailer.ParsedEvent) { parsePermissionCompleted(d, ev) },
+
+	evUsageCheckpoint: (*Parser).parseUsage,
+	evShutdown:        (*Parser).parseUsage,
+
+	evSubagentStarted: func(p *Parser, d map[string]any, ev *tailer.ParsedEvent) { p.trackSubagent(d, true, ev) },
+	evSubagentDone:    func(p *Parser, d map[string]any, ev *tailer.ParsedEvent) { p.trackSubagent(d, false, ev) },
+
+	// Compaction is real work the user is waiting on, and a manual /compact
+	// emits NO user.message and no assistant.turn_start — so without this arm
+	// the whole summarization call fell to the default Skip and the session
+	// sat in `ready` while Copilot's own TUI showed a compacting spinner.
+	// Non-settling, so the transcript-activity rule holds it `working`.
+	//
+	// Unlike Claude Code this needs neither IsManualCompactBoundary nor the
+	// hook-driven SignalCompactInProgress overlay: Copilot writes both
+	// boundaries to disk as ordinary events, so the hold is durable and
+	// replays. compaction_complete is the turn-shaped counterpart —
+	// turn_done is the only event type that returns the session to ready.
+	evCompactionStart: setEventType("compaction_start"),
+	evCompactionDone:  setEventType("turn_done"),
+}
+
 // ParseLine normalizes one Copilot transcript line into a ParsedEvent.
 func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
 	typ, _ := raw["type"].(string)
@@ -91,69 +170,9 @@ func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
 	data, _ := raw["data"].(map[string]any)
 	ev := &tailer.ParsedEvent{Timestamp: tailer.ParseTimestamp(raw)}
 
-	switch typ {
-	case evSessionStart:
-		p.parseSessionStart(data, ev)
-	case evModelChange:
-		p.setModel(str(data, "newModel"), ev)
-		ev.Skip = true
-	case evAutoModeResolved:
-		p.setModel(str(data, "chosenModel"), ev)
-		ev.Skip = true
-	case evUserMessage:
-		parseUserMessage(data, ev)
-	case evAssistantMessage:
-		p.parseAssistantMessage(data, ev)
-	case evTurnStart:
-		// The agent has begun a turn. This must NOT be skipped: Copilot closes
-		// a turn after every tool call and opens the next one ~50-80ms later
-		// with NO user.message in between, so on a continuation turn this is
-		// the ONLY signal that the agent is working again. Skipping it left
-		// the session reading idle for the whole continuation — 122ms in one
-		// recording and 5.24 SECONDS in another (#1256).
-		//
-		// Non-settling, so the classifier's default transcript-activity rule
-		// holds the session `working` — the same shape as compaction_start.
-		ev.EventType = "turn_start"
-	case evTurnEnd:
-		ev.EventType = "turn_done"
-	case evToolStart:
-		parseToolStart(data, ev)
-	case evUserRequestedRun:
-		// A `!` shell escape: the user ran a command locally, with no model
-		// turn. See parseToolComplete for why it must not register as activity.
-		ev.Skip = true
-	case evToolComplete:
-		parseToolComplete(data, ev)
-	case evPermRequested:
-		parsePermissionRequested(data, ev)
-	case evPermCompleted:
-		parsePermissionCompleted(data, ev)
-	case evUsageCheckpoint, evShutdown:
-		p.parseUsage(data, ev)
-	case evSubagentStarted:
-		p.trackSubagent(data, true, ev)
-	case evSubagentDone:
-		p.trackSubagent(data, false, ev)
-	case evCompactionStart:
-		// Compaction is real work the user is waiting on, and a manual
-		// /compact emits NO user.message and no assistant.turn_start — so
-		// without this arm the whole summarization call fell to the default
-		// Skip and the session sat in `ready` while Copilot's own TUI showed a
-		// compacting spinner. Non-settling, so the classifier's default
-		// transcript-activity rule holds the session `working`.
-		//
-		// Unlike Claude Code this needs neither IsManualCompactBoundary nor
-		// the hook-driven SignalCompactInProgress overlay: Copilot writes both
-		// boundaries to disk as ordinary events, so the hold is durable and
-		// replays.
-		ev.EventType = "compaction_start"
-	case evCompactionDone:
-		// The turn-shaped counterpart: compaction finished, so the session is
-		// idle again. turn_done is the only event type that returns it to
-		// ready.
-		ev.EventType = "turn_done"
-	default:
+	if h, ok := eventHandlers[typ]; ok {
+		h(p, data, ev)
+	} else {
 		// Includes system.message (the system-prompt injection) and every
 		// event type a future CLI adds.
 		ev.Skip = true
