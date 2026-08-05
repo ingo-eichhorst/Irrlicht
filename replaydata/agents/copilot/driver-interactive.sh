@@ -332,6 +332,24 @@ wait_turn() {
   while (( $(date +%s) < deadline )); do
     resolve_transcript >/dev/null 2>&1 || true
     now="$(turn_count)"
+    # RE-BASELINE ON A SHRINKING TRANSCRIPT. events.jsonl is not append-only:
+    # a checkpoint rewind rewrites it in place and DELETES the rewound turns'
+    # records — the 1-6 recording lost turn 2's user.message and
+    # assistant.message entirely, leaving only its orphaned system.message. The
+    # turn count therefore goes DOWN, and an EXPECTED_TURNS that only ever
+    # climbs can never be satisfied again: three prompts sent, final count 2,
+    # driver dead at its timeout with a perfectly good recording behind it.
+    # Absorb the drop into EXPECTED_TURNS so the counter keeps tracking the
+    # turns that still exist. Compaction is the other rewrite that can do this.
+    if (( now < LAST_TURN_COUNT )); then
+      EXPECTED_TURNS=$(( EXPECTED_TURNS - (LAST_TURN_COUNT - now) ))
+      (( EXPECTED_TURNS < 0 )) && EXPECTED_TURNS=0
+# Highest turn_count seen so far. events.jsonl can SHRINK (a rewind rewrites
+# it in place), so wait_turn compares against this to detect the drop.
+LAST_TURN_COUNT=0
+      SES_EXPECTED[$ACTIVE]=$EXPECTED_TURNS
+    fi
+    LAST_TURN_COUNT="$now"
     if (( now >= EXPECTED_TURNS )); then
       return 0
     fi
@@ -432,7 +450,7 @@ while IFS= read -r step; do
                        RETIRED_TRANSCRIPTS+=("${SES_TRANSCRIPT[$ACTIVE]}")
                      TRANSCRIPT=""; UUID=""
                      SES_TRANSCRIPT[$ACTIVE]=""; SES_UUID[$ACTIVE]=""
-                     EXPECTED_TURNS=0; SES_EXPECTED[$ACTIVE]=0
+                     EXPECTED_TURNS=0; SES_EXPECTED[$ACTIVE]=0; LAST_TURN_COUNT=0
                      slash_cmd "/clear"
                      sleep 2
                      resolve_transcript || true ;;
