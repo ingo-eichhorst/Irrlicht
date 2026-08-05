@@ -344,9 +344,6 @@ wait_turn() {
     if (( now < LAST_TURN_COUNT )); then
       EXPECTED_TURNS=$(( EXPECTED_TURNS - (LAST_TURN_COUNT - now) ))
       (( EXPECTED_TURNS < 0 )) && EXPECTED_TURNS=0
-# Highest turn_count seen so far. events.jsonl can SHRINK (a rewind rewrites
-# it in place), so wait_turn compares against this to detect the drop.
-LAST_TURN_COUNT=0
       SES_EXPECTED[$ACTIVE]=$EXPECTED_TURNS
     fi
     LAST_TURN_COUNT="$now"
@@ -398,6 +395,9 @@ active_pid() {
 
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
 launch_repl
+# Highest turn_count seen so far. events.jsonl can SHRINK (a rewind rewrites
+# it in place), so wait_turn compares against this to detect the drop.
+LAST_TURN_COUNT=0
 EXPECTED_TURNS=0
 while IFS= read -r step; do
   type="$(jq -r '.type' <<<"$step")"
