@@ -8,25 +8,18 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 33,
-    "consumed_events": 33,
-    "total_transitions": 7,
-    "first_event_time": "2026-05-24T19:42:36.496Z",
-    "last_event_time": "2026-05-24T19:42:54.392Z",
-    "wall_clock_session_duration": 17896000000,
+    "total_events": 21,
+    "consumed_events": 21,
+    "total_transitions": 4,
+    "first_event_time": "2026-05-24T21:42:36.496819+02:00",
+    "last_event_time": "2026-05-24T21:42:54.39295+02:00",
+    "wall_clock_session_duration": 17896131000,
     "state_durations": {
-      "ready": 15726000000,
-      "working": 2170000000
+      "ready": 17896131000
     },
-    "flicker_count": 3,
-    "flickers_by_category": {
-      "ready_between_working": 2,
-      "working_between_ready": 1
-    },
-    "flickers_by_reason": {
-      "agent finished turn → ready": 2,
-      "force ready→working on first activity": 1
-    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
     "estimated_cost_usd": 0.304435,
     "cum_input_tokens": 60821,
     "cum_output_tokens": 11,
@@ -36,7 +29,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-24T19:42:36.496Z",
+      "virtual_time": "2026-05-24T21:42:36.496819+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -50,7 +43,7 @@
     {
       "index": 1,
       "event_index": 11,
-      "virtual_time": "2026-05-24T19:42:38.269Z",
+      "virtual_time": "2026-05-24T21:42:40.269692+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -65,7 +58,7 @@
     {
       "index": 2,
       "event_index": 11,
-      "virtual_time": "2026-05-24T19:42:38.269Z",
+      "virtual_time": "2026-05-24T21:42:40.269692+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -79,38 +72,8 @@
     },
     {
       "index": 3,
-      "event_index": 23,
-      "virtual_time": "2026-05-24T19:42:47.975Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "bravo"
-    },
-    {
-      "index": 4,
-      "event_index": 23,
-      "virtual_time": "2026-05-24T19:42:47.975Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "bravo"
-    },
-    {
-      "index": 5,
-      "event_index": 28,
-      "virtual_time": "2026-05-24T19:42:52.222Z",
+      "event_index": 16,
+      "virtual_time": "2026-05-24T21:42:54.222319+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -120,21 +83,95 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-41099",
+      "adapter": "codex",
+      "first_seen": "2026-05-24T21:42:19.605482+02:00",
+      "last_seen": "2026-05-24T21:42:39.705794+02:00",
+      "duration_ms": 20100,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 41099,
+      "pid_discovery_lag_ms": 24,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 20076
+      }
     },
     {
-      "index": 6,
-      "event_index": 32,
-      "virtual_time": "2026-05-24T19:42:54.392Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "alpha2"
+      "session_id": "rollout-2026-05-24T21-42-21-019e5b82-862d-7ea2-8199-96cd744cf4d8",
+      "adapter": "codex",
+      "first_seen": "2026-05-24T21:42:36.458095+02:00",
+      "last_seen": "2026-05-24T21:42:59.434096+02:00",
+      "duration_ms": 22976,
+      "event_count": 48,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 41099,
+      "pid_discovery_lag_ms": 334,
+      "debounce_coalesced_events": 18,
+      "state_durations_ms": {
+        "ready": 20803,
+        "working": 2172
+      }
+    },
+    {
+      "session_id": "proc-42422",
+      "adapter": "codex",
+      "first_seen": "2026-05-24T21:42:44.737085+02:00",
+      "last_seen": "2026-05-24T21:42:46.859526+02:00",
+      "duration_ms": 2122,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 42422,
+      "pid_discovery_lag_ms": 20,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 2101
+      }
+    },
+    {
+      "session_id": "rollout-2026-05-24T21-42-42-019e5b82-d89d-7851-925a-f3e9c8a84a14",
+      "adapter": "codex",
+      "first_seen": "2026-05-24T21:42:45.922579+02:00",
+      "last_seen": "2026-05-24T21:42:59.437294+02:00",
+      "duration_ms": 13514,
+      "event_count": 30,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 42422,
+      "pid_discovery_lag_ms": 279,
+      "debounce_coalesced_events": 11,
+      "state_durations_ms": {
+        "ready": 13513,
+        "working": 0
+      }
     }
-  ]
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 3,
+    "ordered_matches": 3,
+    "ordered_mismatches": [
+      {
+        "index": 3,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

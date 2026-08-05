@@ -8,15 +8,14 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 8,
-    "consumed_events": 8,
+    "total_events": 2,
+    "consumed_events": 2,
     "total_transitions": 3,
-    "first_event_time": "2026-04-26T09:56:31.14Z",
-    "last_event_time": "2026-04-26T09:56:33.646Z",
-    "wall_clock_session_duration": 2506000000,
+    "first_event_time": "2026-04-26T11:56:33.720226+02:00",
+    "last_event_time": "2026-04-26T11:56:33.725525+02:00",
+    "wall_clock_session_duration": 5299000,
     "state_durations": {
-      "ready": 10000000,
-      "working": 2496000000
+      "ready": 5299000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -32,7 +31,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-04-26T09:56:31.14Z",
+      "virtual_time": "2026-04-26T11:56:33.720226+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -45,23 +44,24 @@
     },
     {
       "index": 1,
-      "event_index": 5,
-      "virtual_time": "2026-04-26T09:56:31.15Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-04-26T11:56:33.720226+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "user",
+      "last_event_type": "assistant",
       "has_open_tool": false,
-      "is_agent_done": false,
+      "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false
+      "waiting_for_user_input": true,
+      "last_assistant_text_head": "What would you like me to work on?"
     },
     {
       "index": 2,
-      "event_index": 7,
-      "virtual_time": "2026-04-26T09:56:33.646Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-04-26T11:56:33.720226+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "waiting",
       "reason": "turn ended with question or cue → waiting",
@@ -72,5 +72,55 @@
       "waiting_for_user_input": true,
       "last_assistant_text_head": "What would you like me to work on?"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-1072",
+      "adapter": "claude-code",
+      "first_seen": "2026-04-26T11:56:30.598866+02:00",
+      "last_seen": "2026-04-26T11:56:31.593816+02:00",
+      "duration_ms": 994,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 1072,
+      "pid_discovery_lag_ms": 508,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 884
+      }
+    },
+    {
+      "session_id": "ef21e42a-0206-4578-8b08-8a767d47f5fd",
+      "adapter": "claude-code",
+      "first_seen": "2026-04-26T11:56:31.261069+02:00",
+      "last_seen": "2026-04-26T11:56:34.124721+02:00",
+      "duration_ms": 2863,
+      "event_count": 9,
+      "state_changes": 3,
+      "final_state": "waiting",
+      "pid": 1072,
+      "pid_discovery_lag_ms": 29,
+      "debounce_coalesced_events": 1,
+      "state_durations_ms": {
+        "ready": 2431,
+        "waiting": 403,
+        "working": 0
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→waiting"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→waiting"
+    ]
+  }
 }

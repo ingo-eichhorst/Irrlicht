@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,55 @@ import (
 	"irrlicht/core/pkg/tailer"
 )
 
+// errSidecarNotDrivable marks a sidecar that parsed cleanly but carries
+// nothing a replay can be stepped through, in the two shapes replaydata/
+// actually contains:
+//
+//   - No transcript_activity event carries a file_size for the primary session.
+//   - No transcript_new event names a real session — every session id is the
+//     synthetic proc-<pid> form that findPrimarySessionID skips.
+//
+// The sentinel is keyed on those symptoms, NOT on the adapter, and the
+// distinction is worth stating because the obvious reading is wrong. For most
+// of the 56 fallbacks the cause really is an adapter property: opencode (30)
+// and hermes (24) are agent.ProcessOwnedStore, with no transcript file for the
+// daemon to watch and so no fswatcher fire to record, and aider is
+// agent.FilesUnderCWD, with no session identifier of its own.
+//
+// The remaining two are recording-level, and they are the reason this comment
+// does not claim otherwise: mistral-vibe is agent.FilesUnderRoot
+// (core/adapters/inbound/agents/vibe/agent.go:33), and its normal recordings do
+// carry transcript_activity and replay sidecar-driven. Only
+// regressions/906-presession-early-removal-{before,after}-scanner-fix fall
+// back, because they were captured for a presession/scanner bug and contain no
+// fswatcher fires at all.
+//
+// So a half-captured recording of a file-watched adapter degrades to
+// transcript-only with a message that reads like the benign case. That is
+// accepted deliberately — those two committed recordings depend on it — but it
+// is a symptom-keyed fallback, not a proof that nothing is being masked. What
+// keeps it honest: a sidecar with malformed lines is NOT eligible (see
+// replayWithSidecar), every other sidecar error is still fatal, and every
+// fallback is written into the report's SidecarFallback field, because a
+// replay quietly running in its weaker mode is precisely the failure issue
+// #1326 is about.
+var errSidecarNotDrivable = errors.New("sidecar cannot drive a replay")
+
+// notDrivableError carries the fallback reason in two forms: Reason is
+// machine-independent and is what lands in a committed golden, while Error()
+// appends the sidecar path for a human reading stderr. Keeping the path out of
+// Reason is load-bearing — replaydata/ paths are absolute at replay time, so a
+// golden built from the full message would differ between clones.
+type notDrivableError struct {
+	Reason string
+	Path   string
+}
+
+func (e *notDrivableError) Error() string { return e.Reason + ": " + e.Path }
+
+// Unwrap makes errors.Is(err, errSidecarNotDrivable) true for this type.
+func (e *notDrivableError) Unwrap() error { return errSidecarNotDrivable }
+
 // replayWithSidecar runs a deterministic replay driven by a lifecycle-events
 // sidecar. Each transcript_activity event in the sidecar is one fswatcher
 // fire the daemon observed; we feed the tailer the exact bytes the daemon
@@ -27,18 +77,31 @@ func replayWithSidecar(transcriptPath, sidecarPath string, cfg reportSettings) (
 	if err != nil {
 		return nil, fmt.Errorf("read transcript: %w", err)
 	}
-	sidecarEvents, err := loadAllLifecycleEvents(sidecarPath)
+	sidecarEvents, malformed, err := loadLifecycleEventsCountingMalformed(sidecarPath)
 	if err != nil {
 		return nil, fmt.Errorf("load sidecar: %w", err)
+	}
+	// notDrivable is only ever returned for a sidecar that parsed cleanly.
+	// A corrupt or truncated one can reach the same two conditions below with
+	// its events silently dropped by the parse, and falling back there would
+	// hide real damage behind a message that reads exactly like the benign
+	// aider / store-adapter case.
+	notDrivable := func(reason string) error {
+		if malformed > 0 {
+			return fmt.Errorf("sidecar %s has %d malformed line(s); refusing to fall back to transcript-only (%s)",
+				sidecarPath, malformed, reason)
+		}
+		return &notDrivableError{Reason: errSidecarNotDrivable.Error() + ": " + reason, Path: sidecarPath}
 	}
 
 	primarySessionID := resolvePrimarySession(cfg, sidecarEvents)
 	if primarySessionID == "" {
-		return nil, fmt.Errorf("sidecar %s has no transcript_new event — cannot identify the primary session", sidecarPath)
+		return nil, notDrivable("no transcript_new event names a real session")
 	}
 	buckets := bucketSidecarEvents(sidecarEvents, primarySessionID)
 	if len(buckets.fswatches) == 0 {
-		return nil, fmt.Errorf("sidecar has no transcript_activity events with file_size for primary session %s: %s", primarySessionID, sidecarPath)
+		return nil, notDrivable(fmt.Sprintf(
+			"no transcript_activity events with file_size for primary session %s", primarySessionID))
 	}
 
 	r, cleanup, err := newSidecarReplayer(transcriptPath, srcBytes, cfg, buckets.fswatches, buckets.children)
@@ -52,9 +115,51 @@ func replayWithSidecar(transcriptPath, sidecarPath string, cfg reportSettings) (
 	}
 
 	r.addDuration(r.state, r.report.Summary.LastEventTime.Sub(r.prevTransitionAt))
-	finalizeSummary(r.report, len(buckets.fswatches), r.stateDurations, r.lastMetrics, cfg.Adapter)
+	finalizeSummary(r.report, len(buckets.fswatches), r.stateDurations,
+		summaryMetrics(transcriptPath, cfg, r.lastMetrics), cfg.Adapter)
 	r.report.Sessions = buildSessionTimelines(sidecarEvents)
 	return r.report, nil
+}
+
+// summaryMetrics returns the token/cost/model vector for the report summary,
+// read from a full parse of the transcript rather than from the sidecar
+// timeline, falling back to the timeline's last snapshot if that parse fails.
+//
+// The MEASURED effect: taking metrics from the sidecar timeline cost 112
+// goldens their totals when #1326 turned sidecar mode on catalog-wide — 16 lost
+// model_name, 36 lost estimated_cost_usd, 64 lost cum_input_tokens — and
+// `of verify` flipped to FAIL for five cells (codex/pi model-context-display,
+// antigravity model-context-display, kiro-cli model-identification and
+// model-context-display), because internal/validate/observations.go reads this
+// block as the catalog's only source of truth for token/cost/model. Reading
+// them from a full parse restores all 112 byte-for-byte.
+//
+// The CAUSE is not fully established, and is deliberately not asserted here.
+// Two candidates were checked and one was ruled out: relaxing
+// flushPendingDebounce's `!d.coalesced` early-return changes nothing (measured
+// on codex/2-1_basic-turn — still 1 transition), so a skipped trailing flush is
+// NOT it. Incomplete fs-event coverage is real but explains only 30 of 311
+// sidecar-drivable recordings, and only 1 of the 22 worst-degraded (the other
+// 21 have 100% coverage). What is established is that the sidecar timeline's
+// last observed metrics are frequently not the transcript's final metrics.
+//
+// The split this function implements is sound regardless of that cause:
+// transitions describe *when the daemon looked* and stay sidecar-driven; the
+// metric vector describes *what the transcript ultimately contains* and is a
+// property of the file, not of the observation schedule. It also keeps this
+// block byte-identical to pre-#1326 output, confining the golden churn to the
+// transitions the change is actually about.
+//
+// Cost: a second full engine run per sidecar recording (~0.8 ms each, ~240 ms
+// over the catalog, invisible in the byte-identity test's wall clock because
+// its subtests are parallel). Reusing the already-warm tailer instead would be
+// free but shifts 8 of 399 goldens, so it needs those explained first.
+func summaryMetrics(transcriptPath string, cfg reportSettings, fallback *tailer.SessionMetrics) *tailer.SessionMetrics {
+	res, err := runTranscriptEngine(transcriptPath, cfg)
+	if err != nil || res == nil || res.LastMetrics == nil {
+		return fallback
+	}
+	return res.LastMetrics
 }
 
 // resolvePrimarySession picks the session under replay: the --session flag

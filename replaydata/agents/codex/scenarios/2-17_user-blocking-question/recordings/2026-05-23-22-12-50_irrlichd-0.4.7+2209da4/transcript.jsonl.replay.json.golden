@@ -8,16 +8,15 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 21,
-    "consumed_events": 21,
-    "total_transitions": 5,
-    "first_event_time": "2026-05-23T20:13:02.773Z",
-    "last_event_time": "2026-05-23T20:13:12.222Z",
-    "wall_clock_session_duration": 9449000000,
+    "total_events": 20,
+    "consumed_events": 20,
+    "total_transitions": 4,
+    "first_event_time": "2026-05-23T22:13:02.773936+02:00",
+    "last_event_time": "2026-05-23T22:13:12.222665+02:00",
+    "wall_clock_session_duration": 9448729000,
     "state_durations": {
-      "ready": 1931000000,
-      "waiting": 5235000000,
-      "working": 2283000000
+      "ready": 4214386000,
+      "waiting": 5234343000
     },
     "flicker_count": 1,
     "flickers_by_category": {
@@ -35,7 +34,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-23T20:13:02.773Z",
+      "virtual_time": "2026-05-23T22:13:02.773936+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -48,8 +47,8 @@
     },
     {
       "index": 1,
-      "event_index": 11,
-      "virtual_time": "2026-05-23T20:13:04.704Z",
+      "event_index": 10,
+      "virtual_time": "2026-05-23T22:13:06.705041+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -63,8 +62,8 @@
     },
     {
       "index": 2,
-      "event_index": 11,
-      "virtual_time": "2026-05-23T20:13:04.704Z",
+      "event_index": 10,
+      "virtual_time": "2026-05-23T22:13:06.705041+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "waiting",
@@ -78,8 +77,8 @@
     },
     {
       "index": 3,
-      "event_index": 16,
-      "virtual_time": "2026-05-23T20:13:09.939Z",
+      "event_index": 15,
+      "virtual_time": "2026-05-23T22:13:11.939384+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "waiting",
       "new_state": "working",
@@ -89,21 +88,69 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-69679",
+      "adapter": "codex",
+      "first_seen": "2026-05-23T22:12:50.184174+02:00",
+      "last_seen": "2026-05-23T22:13:20.305241+02:00",
+      "duration_ms": 30121,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 69679,
+      "pid_discovery_lag_ms": 20,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 30101
+      }
     },
     {
-      "index": 4,
-      "event_index": 20,
-      "virtual_time": "2026-05-23T20:13:12.222Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "… references to `oldName` in that file to call `newName` instead. I would avoi…"
+      "session_id": "rollout-2026-05-23T22-12-45-019e5677-ffe8-7e81-ba9c-f68dbed1be95",
+      "adapter": "codex",
+      "first_seen": "2026-05-23T22:13:02.742999+02:00",
+      "last_seen": "2026-05-23T22:13:17.180418+02:00",
+      "duration_ms": 14437,
+      "event_count": 46,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 69679,
+      "pid_discovery_lag_ms": 193,
+      "debounce_coalesced_events": 17,
+      "state_durations_ms": {
+        "ready": 6918,
+        "waiting": 5234,
+        "working": 2283
+      }
     }
-  ]
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 3,
+    "ordered_matches": 3,
+    "ordered_mismatches": [
+      {
+        "index": 3,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "waiting→working",
+      "working→ready",
+      "working→waiting"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "waiting→working",
+      "working→waiting"
+    ],
+    "missing_kinds": [
+      "working→ready"
+    ]
+  }
 }

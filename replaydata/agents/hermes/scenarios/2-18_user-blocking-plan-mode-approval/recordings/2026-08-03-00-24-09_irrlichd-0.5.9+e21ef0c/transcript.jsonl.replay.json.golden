@@ -66,5 +66,6 @@
       "waiting_for_user_input": true,
       "last_assistant_text_head": "…n: 0.1.0` must be avoided.\n- If `mycli.py` performs work at import time, the …"
     }
-  ]
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session 20260803_002409_2f859e"
 }

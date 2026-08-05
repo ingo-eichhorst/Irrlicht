@@ -10,11 +10,13 @@
   "summary": {
     "total_events": 2,
     "consumed_events": 2,
-    "total_transitions": 3,
-    "first_event_time": "0001-01-01T00:00:00Z",
-    "last_event_time": "0001-01-01T00:00:00Z",
-    "wall_clock_session_duration": 0,
-    "state_durations": {},
+    "total_transitions": 2,
+    "first_event_time": "2026-07-08T08:59:14.985199+02:00",
+    "last_event_time": "2026-07-08T08:59:14.986435+02:00",
+    "wall_clock_session_duration": 1236000,
+    "state_durations": {
+      "ready": 1236000
+    },
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {}
@@ -23,7 +25,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "0001-01-01T00:00:00Z",
+      "virtual_time": "2026-07-08T08:59:14.985199+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -36,33 +38,108 @@
     },
     {
       "index": 1,
-      "event_index": 1,
-      "virtual_time": "0001-01-01T00:00:00Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-07-08T08:59:14.985199+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
+      "last_event_type": "user_message",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "alpha"
+      "waiting_for_user_input": false
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-93685",
+      "adapter": "mistral-vibe",
+      "first_seen": "2026-07-08T08:59:01.134334+02:00",
+      "last_seen": "2026-07-08T08:59:30.945183+02:00",
+      "duration_ms": 29810,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 93685,
+      "pid_discovery_lag_ms": 18,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 29793
+      }
     },
     {
-      "index": 2,
-      "event_index": 1,
-      "virtual_time": "0001-01-01T00:00:00Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "alpha"
+      "session_id": "proc-93848",
+      "adapter": "claude-code",
+      "first_seen": "2026-07-08T08:59:02.028186+02:00",
+      "last_seen": "2026-07-08T08:59:51.968284+02:00",
+      "duration_ms": 49940,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 93848,
+      "pid_discovery_lag_ms": 26,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 49913
+      }
+    },
+    {
+      "session_id": "session_20260708_065901_9b9ac15a",
+      "adapter": "mistral-vibe",
+      "first_seen": "2026-07-08T08:59:14.983269+02:00",
+      "last_seen": "2026-07-08T08:59:30.898031+02:00",
+      "duration_ms": 15914,
+      "event_count": 10,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 93685,
+      "pid_discovery_lag_ms": 615,
+      "debounce_coalesced_events": 1,
+      "state_durations_ms": {
+        "ready": 13896,
+        "working": 2016
+      }
+    },
+    {
+      "session_id": "cea8f6c0-2cf4-4c20-a9a7-b53f41606c20",
+      "adapter": "claude-code",
+      "first_seen": "2026-07-08T08:59:49.651299+02:00",
+      "last_seen": "2026-07-08T09:00:07.723581+02:00",
+      "duration_ms": 18072,
+      "event_count": 15,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 93848,
+      "pid_discovery_lag_ms": 7,
+      "debounce_coalesced_events": 4,
+      "state_durations_ms": {
+        "ready": 13967,
+        "working": 4101
+      }
     }
-  ]
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 1,
+    "ordered_matches": 1,
+    "ordered_mismatches": [
+      {
+        "index": 1,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working"
+    ],
+    "missing_kinds": [
+      "working→ready"
+    ]
+  }
 }

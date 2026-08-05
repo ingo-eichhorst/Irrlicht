@@ -126,6 +126,16 @@ func runFixtureReplay(t *testing.T, transcriptPath string) []byte {
 	}
 	report.GeneratedAt = time.Time{}
 	report.SourceTranscript = ""
+	// ExtendedCheck.SidecarPath is absolute, so it must be zeroed for the same
+	// reason SourceTranscript is: goldens have to be byte-identical across
+	// worktrees, clones and CI runners. This only started mattering with #1326
+	// — before recordings were paired with their sidecars, useSidecar was never
+	// true here and ExtendedCheck was always nil, so the field never reached a
+	// golden. Caught by CI, which builds under a different absolute root than
+	// any developer machine.
+	if report.ExtendedCheck != nil {
+		report.ExtendedCheck.SidecarPath = ""
+	}
 
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

@@ -8,14 +8,14 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 5,
-    "consumed_events": 5,
-    "total_transitions": 3,
-    "first_event_time": "2026-05-25T00:11:56.261Z",
-    "last_event_time": "2026-05-25T00:12:29.199Z",
-    "wall_clock_session_duration": 32938000000,
+    "total_events": 4,
+    "consumed_events": 4,
+    "total_transitions": 1,
+    "first_event_time": "2026-05-25T02:12:29.224856+02:00",
+    "last_event_time": "2026-05-25T02:12:29.228053+02:00",
+    "wall_clock_session_duration": 3197000,
     "state_durations": {
-      "ready": 32938000000
+      "ready": 3197000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -29,7 +29,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-25T00:11:56.261Z",
+      "virtual_time": "2026-05-25T02:12:29.224856+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -39,36 +39,78 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
-    },
-    {
-      "index": 1,
-      "event_index": 4,
-      "virtual_time": "2026-05-25T00:12:29.199Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "The capital of France is Paris."
-    },
-    {
-      "index": 2,
-      "event_index": 4,
-      "virtual_time": "2026-05-25T00:12:29.199Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "The capital of France is Paris."
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-39552",
+      "adapter": "pi",
+      "first_seen": "2026-05-25T02:11:57.41221+02:00",
+      "last_seen": "2026-05-25T02:12:32.589049+02:00",
+      "duration_ms": 35176,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 39552,
+      "pid_discovery_lag_ms": 26,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 35150
+      }
+    },
+    {
+      "session_id": "2026-05-25T00-11-56-261Z_019e5c79-55e5-752c-a19e-369c190674ef",
+      "adapter": "pi",
+      "first_seen": "2026-05-25T02:12:29.200158+02:00",
+      "last_seen": "2026-05-25T02:12:33.99708+02:00",
+      "duration_ms": 4796,
+      "event_count": 15,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 39552,
+      "pid_discovery_lag_ms": 116,
+      "debounce_coalesced_events": 3,
+      "state_durations_ms": {
+        "ready": 4771,
+        "working": 1
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 0,
+    "ordered_matches": 0,
+    "ordered_mismatches": [
+      {
+        "index": 0,
+        "kind": "missing_in_replay",
+        "recorded": "ready→working"
+      },
+      {
+        "index": 1,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      },
+      {
+        "index": 2,
+        "kind": "missing_in_replay",
+        "recorded": "ready→working"
+      },
+      {
+        "index": 3,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [],
+    "missing_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

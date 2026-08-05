@@ -8,23 +8,18 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 23,
-    "consumed_events": 23,
-    "total_transitions": 5,
-    "first_event_time": "2026-05-23T19:34:28.392Z",
-    "last_event_time": "2026-05-23T19:34:47.62Z",
-    "wall_clock_session_duration": 19228000000,
+    "total_events": 22,
+    "consumed_events": 22,
+    "total_transitions": 4,
+    "first_event_time": "2026-05-23T21:34:28.39244+02:00",
+    "last_event_time": "2026-05-23T21:34:47.620064+02:00",
+    "wall_clock_session_duration": 19227624000,
     "state_durations": {
-      "ready": 16478000000,
-      "working": 2750000000
+      "ready": 19227624000
     },
-    "flicker_count": 1,
-    "flickers_by_category": {
-      "working_between_ready": 1
-    },
-    "flickers_by_reason": {
-      "force ready→working on first activity": 1
-    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
     "estimated_cost_usd": 0.165355,
     "cum_input_tokens": 61478,
     "cum_output_tokens": 24,
@@ -34,7 +29,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-23T19:34:28.392Z",
+      "virtual_time": "2026-05-23T21:34:28.39244+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -48,7 +43,7 @@
     {
       "index": 1,
       "event_index": 12,
-      "virtual_time": "2026-05-23T19:34:30.468Z",
+      "virtual_time": "2026-05-23T21:34:32.46903+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -63,7 +58,7 @@
     {
       "index": 2,
       "event_index": 12,
-      "virtual_time": "2026-05-23T19:34:30.468Z",
+      "virtual_time": "2026-05-23T21:34:32.46903+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -77,8 +72,8 @@
     },
     {
       "index": 3,
-      "event_index": 18,
-      "virtual_time": "2026-05-23T19:34:44.87Z",
+      "event_index": 17,
+      "virtual_time": "2026-05-23T21:34:46.870142+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -88,21 +83,62 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-16464",
+      "adapter": "codex",
+      "first_seen": "2026-05-23T21:34:12.986826+02:00",
+      "last_seen": "2026-05-23T21:39:13.159564+02:00",
+      "duration_ms": 300172,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 16464,
+      "pid_discovery_lag_ms": 24,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 300148
+      }
     },
     {
-      "index": 4,
-      "event_index": 22,
-      "virtual_time": "2026-05-23T19:34:47.62Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "second"
+      "session_id": "rollout-2026-05-23T21-34-10-019e5654-aee4-7d33-bf8e-c9c5eeb8e89e",
+      "adapter": "codex",
+      "first_seen": "2026-05-23T21:34:28.354257+02:00",
+      "last_seen": "2026-05-23T21:39:11.232679+02:00",
+      "duration_ms": 282878,
+      "event_count": 50,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 16464,
+      "pid_discovery_lag_ms": 222,
+      "debounce_coalesced_events": 19,
+      "state_durations_ms": {
+        "ready": 280125,
+        "working": 2752
+      }
     }
-  ]
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 3,
+    "ordered_matches": 3,
+    "ordered_mismatches": [
+      {
+        "index": 3,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

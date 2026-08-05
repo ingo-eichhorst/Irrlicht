@@ -100,5 +100,6 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n\n41\n42\n43\n44\n45\n46\n4…"
     }
-  ]
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session 20260802_234636_30e8d7"
 }

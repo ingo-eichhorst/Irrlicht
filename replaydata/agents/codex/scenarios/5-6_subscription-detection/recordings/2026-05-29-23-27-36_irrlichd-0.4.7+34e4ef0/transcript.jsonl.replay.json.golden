@@ -11,12 +11,12 @@
     "total_events": 19,
     "consumed_events": 19,
     "total_transitions": 5,
-    "first_event_time": "2026-05-29T21:27:37.955Z",
-    "last_event_time": "2026-05-29T21:28:45.258Z",
-    "wall_clock_session_duration": 67303000000,
+    "first_event_time": "2026-05-29T23:27:37.967372+02:00",
+    "last_event_time": "2026-05-29T23:28:45.834558+02:00",
+    "wall_clock_session_duration": 67867186000,
     "state_durations": {
-      "ready": 17875000000,
-      "working": 49428000000
+      "ready": 21458503000,
+      "working": 48408683000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -30,7 +30,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-29T21:27:37.955Z",
+      "virtual_time": "2026-05-29T23:27:37.967372+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -44,7 +44,7 @@
     {
       "index": 1,
       "event_index": 6,
-      "virtual_time": "2026-05-29T21:27:39.37Z",
+      "virtual_time": "2026-05-29T23:27:41.376005+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -58,7 +58,7 @@
     {
       "index": 2,
       "event_index": 10,
-      "virtual_time": "2026-05-29T21:28:11.138Z",
+      "virtual_time": "2026-05-29T23:28:11.68475+02:00",
       "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
@@ -73,7 +73,7 @@
     {
       "index": 3,
       "event_index": 14,
-      "virtual_time": "2026-05-29T21:28:27.598Z",
+      "virtual_time": "2026-05-29T23:28:29.73462+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -87,7 +87,7 @@
     {
       "index": 4,
       "event_index": 18,
-      "virtual_time": "2026-05-29T21:28:45.258Z",
+      "virtual_time": "2026-05-29T23:28:47.834558+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -99,5 +99,48 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "done"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "rollout-2026-05-29T23-26-31-019e75a1-b1e4-7ee3-b495-43f1c7e27811",
+      "adapter": "codex",
+      "first_seen": "2026-05-29T23:27:36.847698+02:00",
+      "last_seen": "2026-05-29T23:28:47.963766+02:00",
+      "duration_ms": 71116,
+      "event_count": 39,
+      "state_changes": 7,
+      "final_state": "ready",
+      "debounce_coalesced_events": 12,
+      "state_durations_ms": {
+        "ready": 19471,
+        "working": 50920
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 6,
+    "replayed_transition_count": 4,
+    "ordered_matches": 4,
+    "ordered_mismatches": [
+      {
+        "index": 4,
+        "kind": "missing_in_replay",
+        "recorded": "ready→working"
+      },
+      {
+        "index": 5,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

@@ -8,16 +8,16 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 34,
-    "consumed_events": 34,
-    "total_transitions": 5,
-    "first_event_time": "2026-05-30T23:11:37.347Z",
-    "last_event_time": "2026-05-30T23:13:00.088Z",
-    "wall_clock_session_duration": 82741000000,
+    "total_events": 33,
+    "consumed_events": 33,
+    "total_transitions": 4,
+    "first_event_time": "2026-05-31T01:11:37.348612+02:00",
+    "last_event_time": "2026-05-31T01:13:00.088134+02:00",
+    "wall_clock_session_duration": 82739522000,
     "state_durations": {
-      "ready": 2040000000,
-      "waiting": 70246000000,
-      "working": 10455000000
+      "ready": 9814120000,
+      "waiting": 72316591000,
+      "working": 608811000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -31,7 +31,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-30T23:11:37.347Z",
+      "virtual_time": "2026-05-31T01:11:37.348612+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -44,8 +44,8 @@
     },
     {
       "index": 1,
-      "event_index": 7,
-      "virtual_time": "2026-05-30T23:11:39.387Z",
+      "event_index": 6,
+      "virtual_time": "2026-05-31T01:11:41.387415+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -58,13 +58,13 @@
     },
     {
       "index": 2,
-      "event_index": 11,
-      "virtual_time": "2026-05-30T23:11:42.066Z",
-      "cause": "debounce_coalesce",
+      "event_index": 7,
+      "virtual_time": "2026-05-31T01:11:41.996226+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "waiting",
       "reason": "user-blocking tool open → waiting",
-      "last_event_type": "turn_done",
+      "last_event_type": "assistant_message",
       "has_open_tool": true,
       "open_tool_names": [
         "ExitPlanMode"
@@ -76,8 +76,8 @@
     },
     {
       "index": 3,
-      "event_index": 16,
-      "virtual_time": "2026-05-30T23:12:52.312Z",
+      "event_index": 15,
+      "virtual_time": "2026-05-31T01:12:54.312817+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "waiting",
       "new_state": "working",
@@ -87,21 +87,69 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-3681",
+      "adapter": "codex",
+      "first_seen": "2026-05-31T01:10:46.205606+02:00",
+      "last_seen": "2026-05-31T01:11:41.292053+02:00",
+      "duration_ms": 55086,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 3681,
+      "pid_discovery_lag_ms": 32,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 55054
+      }
     },
     {
-      "index": 4,
-      "event_index": 33,
-      "virtual_time": "2026-05-30T23:13:00.088Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "calc.py was created."
+      "session_id": "rollout-2026-05-31T01-10-45-019e7b27-7afd-72d1-bdd7-a48972b3f833",
+      "adapter": "codex",
+      "first_seen": "2026-05-31T01:11:37.29657+02:00",
+      "last_seen": "2026-05-31T01:14:23.189754+02:00",
+      "duration_ms": 165893,
+      "event_count": 71,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 3681,
+      "pid_discovery_lag_ms": 387,
+      "debounce_coalesced_events": 29,
+      "state_durations_ms": {
+        "ready": 85190,
+        "waiting": 72319,
+        "working": 8382
+      }
     }
-  ]
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 3,
+    "ordered_matches": 3,
+    "ordered_mismatches": [
+      {
+        "index": 3,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "waiting→working",
+      "working→ready",
+      "working→waiting"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "waiting→working",
+      "working→waiting"
+    ],
+    "missing_kinds": [
+      "working→ready"
+    ]
+  }
 }

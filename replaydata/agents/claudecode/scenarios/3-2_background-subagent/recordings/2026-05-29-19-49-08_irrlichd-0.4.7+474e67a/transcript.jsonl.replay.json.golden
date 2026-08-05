@@ -8,15 +8,14 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 31,
-    "consumed_events": 31,
-    "total_transitions": 5,
-    "first_event_time": "2026-05-29T17:49:09.2Z",
-    "last_event_time": "2026-05-29T17:49:45.712Z",
-    "wall_clock_session_duration": 36512000000,
+    "total_events": 10,
+    "consumed_events": 10,
+    "total_transitions": 3,
+    "first_event_time": "2026-05-29T19:49:09.348564+02:00",
+    "last_event_time": "2026-05-29T19:49:45.767652+02:00",
+    "wall_clock_session_duration": 36419088000,
     "state_durations": {
-      "ready": 25190000000,
-      "working": 11322000000
+      "working": 38419088000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -31,7 +30,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-29T17:49:09.2Z",
+      "virtual_time": "2026-05-29T19:49:09.348564+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -44,9 +43,9 @@
     },
     {
       "index": 1,
-      "event_index": 6,
-      "virtual_time": "2026-05-29T17:49:09.2Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-29T19:49:09.348564+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -58,38 +57,8 @@
     },
     {
       "index": 2,
-      "event_index": 23,
-      "virtual_time": "2026-05-29T17:49:20.522Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "Launched 3 background agents."
-    },
-    {
-      "index": 3,
-      "event_index": 30,
-      "virtual_time": "2026-05-29T17:49:45.712Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "Launched 3 background agents."
-    },
-    {
-      "index": 4,
-      "event_index": 30,
-      "virtual_time": "2026-05-29T17:49:45.712Z",
+      "event_index": 9,
+      "virtual_time": "2026-05-29T19:49:47.767652+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -101,5 +70,120 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "Launched 3 background agents."
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-94902",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-29T19:49:08.752715+02:00",
+      "last_seen": "2026-05-29T19:49:49.733921+02:00",
+      "duration_ms": 40981,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 94902,
+      "pid_discovery_lag_ms": 39,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 40942
+      }
+    },
+    {
+      "session_id": "79322395-6d9a-49b4-82af-08898027aa0e",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-29T19:49:09.240685+02:00",
+      "last_seen": "2026-05-29T19:49:47.775827+02:00",
+      "duration_ms": 38535,
+      "event_count": 42,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 94902,
+      "pid_discovery_lag_ms": 4,
+      "debounce_coalesced_events": 6,
+      "state_durations_ms": {
+        "ready": 160,
+        "working": 38373
+      }
+    },
+    {
+      "session_id": "agent-aab6d64c2689ba54b",
+      "adapter": "claude-code",
+      "parent_session_id": "79322395-6d9a-49b4-82af-08898027aa0e",
+      "first_seen": "2026-05-29T19:49:15.452649+02:00",
+      "last_seen": "2026-05-29T19:49:45.768542+02:00",
+      "duration_ms": 30315,
+      "event_count": 38,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 94902,
+      "pid_discovery_lag_ms": 2284,
+      "debounce_coalesced_events": 12,
+      "state_durations_ms": {
+        "ready": 1732,
+        "working": 28524
+      }
+    },
+    {
+      "session_id": "agent-aecb65d9a054e5ed9",
+      "adapter": "claude-code",
+      "parent_session_id": "79322395-6d9a-49b4-82af-08898027aa0e",
+      "first_seen": "2026-05-29T19:49:17.24777+02:00",
+      "last_seen": "2026-05-29T19:49:46.153014+02:00",
+      "duration_ms": 28905,
+      "event_count": 43,
+      "state_changes": 2,
+      "final_state": "working",
+      "pid": 94902,
+      "pid_discovery_lag_ms": 3697,
+      "debounce_coalesced_events": 15,
+      "state_durations_ms": {
+        "ready": 3055,
+        "working": 25803
+      }
+    },
+    {
+      "session_id": "agent-a85861bdb808648ce",
+      "adapter": "claude-code",
+      "parent_session_id": "79322395-6d9a-49b4-82af-08898027aa0e",
+      "first_seen": "2026-05-29T19:49:18.424746+02:00",
+      "last_seen": "2026-05-29T19:49:47.769401+02:00",
+      "duration_ms": 29344,
+      "event_count": 34,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 94902,
+      "pid_discovery_lag_ms": 2504,
+      "debounce_coalesced_events": 11,
+      "state_durations_ms": {
+        "ready": 1881,
+        "working": 27424
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "ordered_mismatches": [
+      {
+        "index": 2,
+        "kind": "missing_in_replay",
+        "recorded": "ready→working"
+      },
+      {
+        "index": 3,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

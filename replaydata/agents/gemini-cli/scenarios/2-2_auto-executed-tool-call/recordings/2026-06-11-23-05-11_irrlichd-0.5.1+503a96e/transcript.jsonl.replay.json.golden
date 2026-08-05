@@ -8,20 +8,23 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 11,
-    "consumed_events": 11,
-    "total_transitions": 3,
-    "first_event_time": "2026-06-11T21:05:24.959Z",
-    "last_event_time": "2026-06-11T21:05:31.592Z",
-    "wall_clock_session_duration": 6633000000,
+    "total_events": 10,
+    "consumed_events": 10,
+    "total_transitions": 5,
+    "first_event_time": "2026-06-11T23:05:11.761494+02:00",
+    "last_event_time": "2026-06-11T23:05:31.593429+02:00",
+    "wall_clock_session_duration": 19831935000,
     "state_durations": {
-      "working": 6633000000
+      "ready": 17291648000,
+      "working": 4540287000
     },
-    "flicker_count": 1,
+    "flicker_count": 2,
     "flickers_by_category": {
+      "ready_between_working": 1,
       "working_between_ready": 1
     },
     "flickers_by_reason": {
+      "agent finished turn → ready": 1,
       "force ready→working on first activity": 1
     },
     "estimated_cost_usd": 0.0359745,
@@ -33,7 +36,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-06-11T21:05:24.959Z",
+      "virtual_time": "2026-06-11T23:05:11.761494+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -46,9 +49,9 @@
     },
     {
       "index": 1,
-      "event_index": 3,
-      "virtual_time": "2026-06-11T21:05:24.959Z",
-      "cause": "debounce_coalesce",
+      "event_index": 1,
+      "virtual_time": "2026-06-11T23:05:24.959996+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -60,8 +63,38 @@
     },
     {
       "index": 2,
-      "event_index": 10,
-      "virtual_time": "2026-06-11T21:05:31.592Z",
+      "event_index": 3,
+      "virtual_time": "2026-06-11T23:05:29.500283+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "I will run the command `echo hello` using the shell."
+    },
+    {
+      "index": 3,
+      "event_index": 9,
+      "virtual_time": "2026-06-11T23:05:33.593429+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "done"
+    },
+    {
+      "index": 4,
+      "event_index": 9,
+      "virtual_time": "2026-06-11T23:05:33.593429+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -73,5 +106,54 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "done"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-62944",
+      "adapter": "gemini-cli",
+      "first_seen": "2026-06-11T23:05:11.555574+02:00",
+      "last_seen": "2026-06-11T23:05:32.002857+02:00",
+      "duration_ms": 20447,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 62944,
+      "pid_discovery_lag_ms": 44,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 20403
+      }
+    },
+    {
+      "session_id": "session-2026-06-11T21-05-be8dae6d",
+      "adapter": "gemini-cli",
+      "first_seen": "2026-06-11T23:05:11.759442+02:00",
+      "last_seen": "2026-06-11T23:05:33.598861+02:00",
+      "duration_ms": 21839,
+      "event_count": 24,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 62944,
+      "pid_discovery_lag_ms": 16112,
+      "debounce_coalesced_events": 7,
+      "state_durations_ms": {
+        "ready": 4097,
+        "working": 17741
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 4,
+    "ordered_matches": 4,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

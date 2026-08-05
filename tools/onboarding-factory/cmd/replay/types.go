@@ -1,6 +1,7 @@
 package main
 
 import (
+	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"time"
 
 	"irrlicht/core/domain/session"
@@ -56,6 +57,13 @@ type replayReport struct {
 	// extendedCheck diffs the replayed state transitions against the recorded
 	// ones so fixtures act as regression tests for the detector.
 	ExtendedCheck *extendedCheck `json:"extended_check,omitempty"`
+
+	// SidecarFallback records why a sidecar was found beside the transcript but
+	// could not drive the replay, leaving this report transcript-only. Empty
+	// (and omitted) on both a successful sidecar replay and a recording with no
+	// sidecar at all — so a golden carrying this field is stating, on the
+	// record, that it is the weaker of the two replay modes and why.
+	SidecarFallback string `json:"sidecar_fallback,omitempty"`
 }
 
 // sessionTimeline is a per-session summary within the report, populated from
@@ -116,6 +124,16 @@ type reportSettings struct {
 	SessionFilter      string        `json:"session_filter,omitempty"`
 	DebounceWindow     time.Duration `json:"debounce_window"`
 	FlickerMaxDuration time.Duration `json:"flicker_max_duration"`
+}
+
+// adapterOrDefault is the one place the empty-adapter default lives. It is
+// load-bearing rather than cosmetic: the name it returns selects parserFor,
+// so two call sites disagreeing would parse the same transcript differently.
+func (c reportSettings) adapterOrDefault() string {
+	if c.Adapter == "" {
+		return claudecode.AdapterName
+	}
+	return c.Adapter
 }
 
 type reportSummary struct {

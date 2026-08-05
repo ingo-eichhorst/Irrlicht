@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/application/replayengine"
 )
 
@@ -17,19 +16,8 @@ import (
 // richer report shape (per-transition classifier snapshot, state durations,
 // flicker + cost summary).
 func replay(src string, cfg reportSettings) (*replayReport, error) {
-	adapterName := cfg.Adapter
-	if adapterName == "" {
-		adapterName = claudecode.AdapterName
-	}
-
-	res, err := replayengine.ReplayTranscript(src, replayengine.Options{
-		Adapter: adapterName,
-		Parser:  parserFor(adapterName),
-		// Replay must reflect only the transcript, never the operator's
-		// local config, so goldens stay reproducible across machines (#440).
-		DisableModelConfigFallback: true,
-		DebounceWindow:             cfg.DebounceWindow,
-	})
+	adapterName := cfg.adapterOrDefault()
+	res, err := runTranscriptEngine(src, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -57,6 +45,25 @@ func replay(src string, cfg reportSettings) (*replayReport, error) {
 	b.addDuration(res.FinalState, res.LastEventTime.Sub(b.prevTransitionAt))
 	finalizeSummary(report, res.ConsumedEvents, b.stateDurations, res.LastMetrics, adapterName)
 	return report, nil
+}
+
+// runTranscriptEngine runs the shared transcript→transitions engine with the
+// settings both replay paths must agree on. Both the transcript-only replay and
+// the sidecar path's summaryMetrics call it, so a new replayengine.Option can
+// no longer be applied to one mode and forgotten in the other — which would
+// make a single transcript produce two different summary blocks depending on
+// whether a sidecar happened to be present, the divergence class #1326 exists
+// to close.
+func runTranscriptEngine(src string, cfg reportSettings) (*replayengine.Result, error) {
+	adapterName := cfg.adapterOrDefault()
+	return replayengine.ReplayTranscript(src, replayengine.Options{
+		Adapter: adapterName,
+		Parser:  parserFor(adapterName),
+		// Replay must reflect only the transcript, never the operator's
+		// local config, so goldens stay reproducible across machines (#440).
+		DisableModelConfigFallback: true,
+		DebounceWindow:             cfg.DebounceWindow,
+	})
 }
 
 // reportBuilder turns the engine's ordered transitions into report rows,

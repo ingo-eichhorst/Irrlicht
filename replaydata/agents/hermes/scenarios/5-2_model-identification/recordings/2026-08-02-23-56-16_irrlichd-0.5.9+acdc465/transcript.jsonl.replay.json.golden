@@ -70,5 +70,6 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "…ages may need to be shortened, summarized, or removed as new messages arrive.…"
     }
-  ]
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session 20260802_235613_604db2"
 }

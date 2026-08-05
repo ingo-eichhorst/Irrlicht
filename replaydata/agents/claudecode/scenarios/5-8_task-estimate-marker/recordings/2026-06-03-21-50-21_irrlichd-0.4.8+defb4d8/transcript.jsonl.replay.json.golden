@@ -8,15 +8,15 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 40,
-    "consumed_events": 40,
-    "total_transitions": 13,
-    "first_event_time": "2026-06-03T19:50:24.821Z",
-    "last_event_time": "2026-06-03T19:51:54.022Z",
-    "wall_clock_session_duration": 89201000000,
+    "total_events": 15,
+    "consumed_events": 15,
+    "total_transitions": 11,
+    "first_event_time": "2026-06-03T21:50:25.352762+02:00",
+    "last_event_time": "2026-06-03T21:52:17.501663+02:00",
+    "wall_clock_session_duration": 112148901000,
     "state_durations": {
-      "ready": 57349000000,
-      "working": 31852000000
+      "ready": 54966481000,
+      "working": 57182420000
     },
     "flicker_count": 6,
     "flickers_by_category": {
@@ -38,7 +38,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-06-03T19:50:24.821Z",
+      "virtual_time": "2026-06-03T21:50:25.352762+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -51,9 +51,9 @@
     },
     {
       "index": 1,
-      "event_index": 7,
-      "virtual_time": "2026-06-03T19:50:24.83Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-06-03T21:50:25.352762+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -65,9 +65,9 @@
     },
     {
       "index": 2,
-      "event_index": 10,
-      "virtual_time": "2026-06-03T19:50:33.365Z",
-      "cause": "debounce_coalesce",
+      "event_index": 2,
+      "virtual_time": "2026-06-03T21:50:33.748583+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -80,9 +80,9 @@
     },
     {
       "index": 3,
-      "event_index": 12,
-      "virtual_time": "2026-06-03T19:50:47.32Z",
-      "cause": "debounce_coalesce",
+      "event_index": 3,
+      "virtual_time": "2026-06-03T21:50:47.486207+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -94,38 +94,38 @@
     },
     {
       "index": 4,
-      "event_index": 13,
-      "virtual_time": "2026-06-03T19:50:49.648Z",
+      "event_index": 4,
+      "virtual_time": "2026-06-03T21:50:56.892848+02:00",
       "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
+      "last_event_type": "turn_done",
       "has_open_tool": false,
       "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…one that contains us, depends on us, and in ways we are only beginning to und…"
+    },
+    {
+      "index": 5,
+      "event_index": 5,
+      "virtual_time": "2026-06-03T21:51:10.165761+02:00",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
     },
     {
-      "index": 5,
-      "event_index": 16,
-      "virtual_time": "2026-06-03T19:50:56.522Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "…one that contains us, depends on us, and in ways we are only beginning to und…"
-    },
-    {
       "index": 6,
-      "event_index": 16,
-      "virtual_time": "2026-06-03T19:50:56.522Z",
-      "cause": "debounce_coalesce",
+      "event_index": 7,
+      "virtual_time": "2026-06-03T21:51:32.719717+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -134,13 +134,13 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "…one that contains us, depends on us, and in ways we are only beginning to und…"
+      "last_assistant_text_head": "…dent, between the grid and the desire path worn diagonally across the grass b…"
     },
     {
       "index": 7,
-      "event_index": 17,
-      "virtual_time": "2026-06-03T19:51:09.985Z",
-      "cause": "event",
+      "event_index": 8,
+      "virtual_time": "2026-06-03T21:51:34.971879+02:00",
+      "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -152,37 +152,9 @@
     },
     {
       "index": 8,
-      "event_index": 18,
-      "virtual_time": "2026-06-03T19:51:12.093Z",
+      "event_index": 9,
+      "virtual_time": "2026-06-03T21:51:44.082436+02:00",
       "cause": "event",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false
-    },
-    {
-      "index": 9,
-      "event_index": 24,
-      "virtual_time": "2026-06-03T19:51:32.773Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "user",
-      "has_open_tool": false,
-      "is_agent_done": false,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false
-    },
-    {
-      "index": 10,
-      "event_index": 31,
-      "virtual_time": "2026-06-03T19:51:43.951Z",
-      "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -194,9 +166,9 @@
       "last_assistant_text_head": "… these places. The question of how to care for them is inseparable from the q…"
     },
     {
-      "index": 11,
-      "event_index": 32,
-      "virtual_time": "2026-06-03T19:51:46.319Z",
+      "index": 9,
+      "event_index": 11,
+      "virtual_time": "2026-06-03T21:51:46.504904+02:00",
       "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
@@ -208,10 +180,10 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 12,
-      "event_index": 39,
-      "virtual_time": "2026-06-03T19:51:54.022Z",
-      "cause": "debounce_coalesce",
+      "index": 10,
+      "event_index": 12,
+      "virtual_time": "2026-06-03T21:51:54.220349+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -222,5 +194,54 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "\u003c!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":5,\"completed_rounds\":5} --\u003e\n\ndone"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-39508",
+      "adapter": "claude-code",
+      "first_seen": "2026-06-03T21:50:21.010944+02:00",
+      "last_seen": "2026-06-03T21:52:22.080275+02:00",
+      "duration_ms": 121069,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 39508,
+      "pid_discovery_lag_ms": 851,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 120257
+      }
+    },
+    {
+      "session_id": "a9dda813-73e3-49f8-a718-68315200e497",
+      "adapter": "claude-code",
+      "first_seen": "2026-06-03T21:50:25.170031+02:00",
+      "last_seen": "2026-06-03T21:52:17.970375+02:00",
+      "duration_ms": 112800,
+      "event_count": 33,
+      "state_changes": 11,
+      "final_state": "ready",
+      "pid": 39508,
+      "pid_discovery_lag_ms": 86,
+      "debounce_coalesced_events": 4,
+      "state_durations_ms": {
+        "ready": 56666,
+        "working": 56119
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 10,
+    "replayed_transition_count": 10,
+    "ordered_matches": 10,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

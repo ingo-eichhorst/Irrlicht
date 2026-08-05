@@ -8,20 +8,24 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 35,
-    "consumed_events": 35,
-    "total_transitions": 5,
-    "first_event_time": "2026-05-29T21:34:19.057Z",
-    "last_event_time": "2026-05-29T21:34:54.764Z",
-    "wall_clock_session_duration": 35707000000,
+    "total_events": 12,
+    "consumed_events": 12,
+    "total_transitions": 7,
+    "first_event_time": "2026-05-29T23:34:20.394433+02:00",
+    "last_event_time": "2026-05-29T23:35:15.480909+02:00",
+    "wall_clock_session_duration": 55086476000,
     "state_durations": {
-      "ready": 15000000,
-      "waiting": 10654000000,
-      "working": 25038000000
+      "ready": 20602189000,
+      "waiting": 10443012000,
+      "working": 24041275000
     },
-    "flicker_count": 0,
-    "flickers_by_category": {},
-    "flickers_by_reason": {},
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_waiting": 1
+    },
+    "flickers_by_reason": {
+      "transcript activity (waiting → working)": 1
+    },
     "cum_input_tokens": 8005,
     "cum_output_tokens": 1194,
     "cum_cache_read_tokens": 131066,
@@ -32,7 +36,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-29T21:34:19.057Z",
+      "virtual_time": "2026-05-29T23:34:20.394433+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -45,9 +49,9 @@
     },
     {
       "index": 1,
-      "event_index": 7,
-      "virtual_time": "2026-05-29T21:34:19.072Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-29T23:34:20.394433+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -59,26 +63,23 @@
     },
     {
       "index": 2,
-      "event_index": 20,
-      "virtual_time": "2026-05-29T21:34:37.217Z",
+      "event_index": 5,
+      "virtual_time": "2026-05-29T23:34:37.398345+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "waiting",
-      "reason": "user-blocking tool open → waiting",
-      "last_event_type": "assistant",
-      "has_open_tool": true,
-      "open_tool_names": [
-        "ExitPlanMode"
-      ],
+      "reason": "permission prompt open → waiting",
+      "last_event_type": "user",
+      "has_open_tool": false,
       "is_agent_done": false,
-      "needs_user_attention": true,
+      "needs_user_attention": false,
       "waiting_for_user_input": false
     },
     {
       "index": 3,
-      "event_index": 25,
-      "virtual_time": "2026-05-29T21:34:47.871Z",
-      "cause": "debounce_coalesce",
+      "event_index": -1,
+      "virtual_time": "2026-05-29T23:34:47.841357+02:00",
+      "cause": "hook",
       "prev_state": "waiting",
       "new_state": "working",
       "reason": "transcript activity (waiting → working)",
@@ -90,9 +91,37 @@
     },
     {
       "index": 4,
-      "event_index": 34,
-      "virtual_time": "2026-05-29T21:34:54.764Z",
-      "cause": "debounce_coalesce",
+      "event_index": 6,
+      "virtual_time": "2026-05-29T23:34:48.013042+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "user-blocking tool opened and closed in one pass → synthetic waiting",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 5,
+      "event_index": 6,
+      "virtual_time": "2026-05-29T23:34:48.013042+02:00",
+      "cause": "event",
+      "prev_state": "waiting",
+      "new_state": "working",
+      "reason": "transcript activity (waiting → working)",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 6,
+      "event_index": 9,
+      "virtual_time": "2026-05-29T23:34:54.87872+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -103,5 +132,77 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "Created `calc.py` with the two functions:\n\n```python\ndef add(a, b):\n    return a…"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-61723",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-29T23:33:27.449483+02:00",
+      "last_seen": "2026-05-29T23:35:18.49649+02:00",
+      "duration_ms": 111047,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 61723,
+      "pid_discovery_lag_ms": 632,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 110447
+      }
+    },
+    {
+      "session_id": "9046234b-7e13-4df4-af39-e20c59fe9382",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-29T23:34:20.303907+02:00",
+      "last_seen": "2026-05-29T23:35:15.766701+02:00",
+      "duration_ms": 55462,
+      "event_count": 30,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 61723,
+      "pid_discovery_lag_ms": 71,
+      "debounce_coalesced_events": 5,
+      "state_durations_ms": {
+        "ready": 21222,
+        "waiting": 10543,
+        "working": 23661
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 6,
+    "ordered_matches": 3,
+    "ordered_mismatches": [
+      {
+        "index": 3,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "working→waiting"
+      },
+      {
+        "index": 4,
+        "kind": "extra_in_replay",
+        "replayed": "waiting→working"
+      },
+      {
+        "index": 5,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "waiting→working",
+      "working→ready",
+      "working→waiting"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "waiting→working",
+      "working→ready",
+      "working→waiting"
+    ]
+  }
 }

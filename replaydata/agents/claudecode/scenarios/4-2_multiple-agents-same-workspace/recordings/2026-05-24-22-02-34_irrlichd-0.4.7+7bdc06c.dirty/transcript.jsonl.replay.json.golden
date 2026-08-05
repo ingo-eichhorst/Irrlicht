@@ -8,15 +8,15 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 11,
-    "consumed_events": 11,
+    "total_events": 6,
+    "consumed_events": 6,
     "total_transitions": 3,
-    "first_event_time": "2026-05-24T20:02:50.421Z",
-    "last_event_time": "2026-05-24T20:02:53.249Z",
-    "wall_clock_session_duration": 2828000000,
+    "first_event_time": "2026-05-24T22:02:50.557414+02:00",
+    "last_event_time": "2026-05-24T22:03:09.575615+02:00",
+    "wall_clock_session_duration": 19018201000,
     "state_durations": {
-      "ready": 1000000,
-      "working": 2827000000
+      "ready": 16211819000,
+      "working": 2806382000
     },
     "flicker_count": 1,
     "flickers_by_category": {
@@ -36,7 +36,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-24T20:02:50.421Z",
+      "virtual_time": "2026-05-24T22:02:50.557414+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -49,9 +49,9 @@
     },
     {
       "index": 1,
-      "event_index": 5,
-      "virtual_time": "2026-05-24T20:02:50.422Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-24T22:02:50.557414+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -63,9 +63,9 @@
     },
     {
       "index": 2,
-      "event_index": 10,
-      "virtual_time": "2026-05-24T20:02:53.249Z",
-      "cause": "debounce_coalesce",
+      "event_index": 2,
+      "virtual_time": "2026-05-24T22:02:53.363796+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -76,5 +76,87 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "alpha"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-91802",
+      "adapter": "codex",
+      "first_seen": "2026-05-24T22:02:34.618683+02:00",
+      "last_seen": "2026-05-24T22:02:59.669472+02:00",
+      "duration_ms": 25050,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 91802,
+      "pid_discovery_lag_ms": 55,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 24996
+      }
+    },
+    {
+      "session_id": "proc-91827",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-24T22:02:35.11223+02:00",
+      "last_seen": "2026-05-24T22:02:55.257756+02:00",
+      "duration_ms": 20145,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 91827,
+      "pid_discovery_lag_ms": 37,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 20108
+      }
+    },
+    {
+      "session_id": "777d8b6d-0e24-45de-b003-26b3999ae048",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-24T22:02:50.455259+02:00",
+      "last_seen": "2026-05-24T22:03:09.575616+02:00",
+      "duration_ms": 19120,
+      "event_count": 14,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 91827,
+      "pid_discovery_lag_ms": 2,
+      "debounce_coalesced_events": 3,
+      "state_durations_ms": {
+        "ready": 16352,
+        "working": 2767
+      }
+    },
+    {
+      "session_id": "rollout-2026-05-24T22-02-34-019e5b95-0a3c-7b93-a22e-d14f5b40d794",
+      "adapter": "codex",
+      "first_seen": "2026-05-24T22:02:51.497694+02:00",
+      "last_seen": "2026-05-24T22:02:59.597225+02:00",
+      "duration_ms": 8099,
+      "event_count": 30,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 91802,
+      "pid_discovery_lag_ms": 367,
+      "debounce_coalesced_events": 11,
+      "state_durations_ms": {
+        "ready": 8097,
+        "working": 0
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

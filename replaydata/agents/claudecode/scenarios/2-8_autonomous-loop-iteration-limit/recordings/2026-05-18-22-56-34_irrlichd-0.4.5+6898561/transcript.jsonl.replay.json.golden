@@ -8,14 +8,14 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 15,
-    "consumed_events": 15,
+    "total_events": 6,
+    "consumed_events": 6,
     "total_transitions": 5,
-    "first_event_time": "2026-05-18T20:56:48.703Z",
-    "last_event_time": "2026-05-18T20:57:04.797Z",
-    "wall_clock_session_duration": 16094000000,
+    "first_event_time": "2026-05-18T22:56:48.829722+02:00",
+    "last_event_time": "2026-05-18T22:57:13.348566+02:00",
+    "wall_clock_session_duration": 24518844000,
     "state_durations": {
-      "ready": 16094000000
+      "ready": 24518844000
     },
     "flicker_count": 1,
     "flickers_by_category": {
@@ -35,7 +35,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-18T20:56:48.703Z",
+      "virtual_time": "2026-05-18T22:56:48.829722+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -48,9 +48,9 @@
     },
     {
       "index": 1,
-      "event_index": 7,
-      "virtual_time": "2026-05-18T20:56:57.723Z",
-      "cause": "debounce_coalesce",
+      "event_index": 1,
+      "virtual_time": "2026-05-18T22:56:57.840983+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -63,9 +63,9 @@
     },
     {
       "index": 2,
-      "event_index": 7,
-      "virtual_time": "2026-05-18T20:56:57.723Z",
-      "cause": "debounce_coalesce",
+      "event_index": 1,
+      "virtual_time": "2026-05-18T22:56:57.840983+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -78,9 +78,9 @@
     },
     {
       "index": 3,
-      "event_index": 10,
-      "virtual_time": "2026-05-18T20:57:00.65Z",
-      "cause": "debounce_coalesce",
+      "event_index": 2,
+      "virtual_time": "2026-05-18T22:57:00.761728+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -93,9 +93,9 @@
     },
     {
       "index": 4,
-      "event_index": 10,
-      "virtual_time": "2026-05-18T20:57:00.65Z",
-      "cause": "debounce_coalesce",
+      "event_index": 2,
+      "virtual_time": "2026-05-18T22:57:00.761728+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -106,5 +106,54 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "Goal acknowledged: find an integer that is simultaneously odd and even. Mathemat…"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-21691",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-18T22:56:34.478061+02:00",
+      "last_seen": "2026-05-18T22:57:15.445569+02:00",
+      "duration_ms": 40967,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 21691,
+      "pid_discovery_lag_ms": 41,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 40926
+      }
+    },
+    {
+      "session_id": "f397e617-4134-4517-a9b5-b0008e71cde5",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-18T22:56:48.72549+02:00",
+      "last_seen": "2026-05-18T22:57:13.678625+02:00",
+      "duration_ms": 24953,
+      "event_count": 15,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 21691,
+      "pid_discovery_lag_ms": 2,
+      "debounce_coalesced_events": 1,
+      "state_durations_ms": {
+        "ready": 24950,
+        "working": 1
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 4,
+    "ordered_matches": 4,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

@@ -8,22 +8,19 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 14,
-    "consumed_events": 14,
+    "total_events": 6,
+    "consumed_events": 6,
     "total_transitions": 3,
-    "first_event_time": "2026-05-17T22:15:24.4Z",
-    "last_event_time": "2026-05-17T22:15:32.917Z",
-    "wall_clock_session_duration": 8517000000,
+    "first_event_time": "2026-05-18T00:15:24.518068+02:00",
+    "last_event_time": "2026-05-18T00:15:37.590592+02:00",
+    "wall_clock_session_duration": 13072524000,
     "state_durations": {
-      "working": 8517000000
+      "ready": 2569483000,
+      "working": 10503041000
     },
-    "flicker_count": 1,
-    "flickers_by_category": {
-      "working_between_ready": 1
-    },
-    "flickers_by_reason": {
-      "force ready→working on first activity": 1
-    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
     "estimated_cost_usd": 0.162616,
     "cum_input_tokens": 7,
     "cum_output_tokens": 95,
@@ -35,7 +32,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-17T22:15:24.4Z",
+      "virtual_time": "2026-05-18T00:15:24.518068+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -48,9 +45,9 @@
     },
     {
       "index": 1,
-      "event_index": 6,
-      "virtual_time": "2026-05-17T22:15:24.4Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-18T00:15:24.518068+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -62,8 +59,8 @@
     },
     {
       "index": 2,
-      "event_index": 13,
-      "virtual_time": "2026-05-17T22:15:32.917Z",
+      "event_index": 3,
+      "virtual_time": "2026-05-18T00:15:35.021109+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -75,5 +72,54 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "done"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-79847",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-18T00:15:12.3272+02:00",
+      "last_seen": "2026-05-18T00:15:27.673567+02:00",
+      "duration_ms": 15346,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 79847,
+      "pid_discovery_lag_ms": 22,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 15324
+      }
+    },
+    {
+      "session_id": "9298e3d0-453d-47ea-964c-1bde53c68855",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-18T00:15:24.416035+02:00",
+      "last_seen": "2026-05-18T00:15:37.874069+02:00",
+      "duration_ms": 13458,
+      "event_count": 16,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 79847,
+      "pid_discovery_lag_ms": 2,
+      "debounce_coalesced_events": 3,
+      "state_durations_ms": {
+        "ready": 2974,
+        "working": 10482
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

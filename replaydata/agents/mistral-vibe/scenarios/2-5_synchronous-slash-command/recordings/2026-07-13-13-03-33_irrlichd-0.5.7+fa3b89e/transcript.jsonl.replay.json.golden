@@ -8,11 +8,11 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 2,
-    "consumed_events": 2,
+    "total_events": 1,
+    "consumed_events": 1,
     "total_transitions": 3,
-    "first_event_time": "0001-01-01T00:00:00Z",
-    "last_event_time": "0001-01-01T00:00:00Z",
+    "first_event_time": "2026-07-13T13:03:39.749457+02:00",
+    "last_event_time": "2026-07-13T13:03:39.749457+02:00",
     "wall_clock_session_duration": 0,
     "state_durations": {},
     "flicker_count": 0,
@@ -23,7 +23,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "0001-01-01T00:00:00Z",
+      "virtual_time": "2026-07-13T13:03:39.749457+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -36,9 +36,9 @@
     },
     {
       "index": 1,
-      "event_index": 1,
-      "virtual_time": "0001-01-01T00:00:00Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-07-13T13:03:39.749457+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -51,9 +51,9 @@
     },
     {
       "index": 2,
-      "event_index": 1,
-      "virtual_time": "0001-01-01T00:00:00Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-07-13T13:03:39.749457+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -64,5 +64,54 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "warm"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-17709",
+      "adapter": "mistral-vibe",
+      "first_seen": "2026-07-13T13:03:33.93908+02:00",
+      "last_seen": "2026-07-13T13:03:40.363868+02:00",
+      "duration_ms": 6424,
+      "event_count": 5,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 17709,
+      "pid_discovery_lag_ms": 69,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 6356
+      }
+    },
+    {
+      "session_id": "session_20260713_110333_76c7860c",
+      "adapter": "mistral-vibe",
+      "first_seen": "2026-07-13T13:03:39.747136+02:00",
+      "last_seen": "2026-07-13T13:03:52.754045+02:00",
+      "duration_ms": 13006,
+      "event_count": 10,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 17709,
+      "pid_discovery_lag_ms": 609,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 13005,
+        "working": 0
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

@@ -67,5 +67,6 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "…ral flourishing.\n\nThe Pax Romana was an age of immense infrastructure develop…"
     }
-  ]
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_1946e3ff9ffe62LP7Q6ng0D4e8"
 }

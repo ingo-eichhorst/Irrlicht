@@ -8,16 +8,15 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 32,
-    "consumed_events": 32,
-    "total_transitions": 5,
-    "first_event_time": "2026-05-23T20:33:35.955Z",
-    "last_event_time": "2026-05-23T20:34:58.963Z",
-    "wall_clock_session_duration": 83008000000,
+    "total_events": 33,
+    "consumed_events": 33,
+    "total_transitions": 3,
+    "first_event_time": "2026-05-23T22:33:35.956194+02:00",
+    "last_event_time": "2026-05-23T22:34:58.963912+02:00",
+    "wall_clock_session_duration": 83007718000,
     "state_durations": {
-      "ready": 269000000,
-      "waiting": 74366000000,
-      "working": 8373000000
+      "ready": 77439937000,
+      "working": 5567781000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -31,7 +30,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-23T20:33:35.955Z",
+      "virtual_time": "2026-05-23T22:33:35.956194+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -45,7 +44,7 @@
     {
       "index": 1,
       "event_index": 7,
-      "virtual_time": "2026-05-23T20:33:36.224Z",
+      "virtual_time": "2026-05-23T22:33:38.224534+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -59,7 +58,7 @@
     {
       "index": 2,
       "event_index": 12,
-      "virtual_time": "2026-05-23T20:33:41.788Z",
+      "virtual_time": "2026-05-23T22:33:43.792315+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "waiting",
@@ -73,36 +72,67 @@
       "needs_user_attention": true,
       "waiting_for_user_input": false,
       "last_assistant_text_head": "…py` at the repository root.\n- File contents will be exactly:\n  ```python\n  pr…"
-    },
-    {
-      "index": 3,
-      "event_index": 27,
-      "virtual_time": "2026-05-23T20:34:56.154Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "waiting",
-      "new_state": "working",
-      "reason": "transcript activity (waiting → working)",
-      "last_event_type": "function_call_output",
-      "has_open_tool": false,
-      "is_agent_done": false,
-      "needs_user_attention": false,
-      "waiting_for_user_input": true,
-      "last_assistant_text_head": "I’ll add the single Python file at the repo root, then run it once to verify t…"
-    },
-    {
-      "index": 4,
-      "event_index": 31,
-      "virtual_time": "2026-05-23T20:34:58.963Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "…rktrees/442/.build/refresh/codex/user-blocking-plan-mode-approval-20260523T20…"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-87445",
+      "adapter": "codex",
+      "first_seen": "2026-05-23T22:33:16.234536+02:00",
+      "last_seen": "2026-05-23T22:35:41.373762+02:00",
+      "duration_ms": 145139,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 87445,
+      "pid_discovery_lag_ms": 29,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 145110
+      }
+    },
+    {
+      "session_id": "rollout-2026-05-23T22-33-15-019e568a-c68d-7801-99f9-1267eccf8793",
+      "adapter": "codex",
+      "first_seen": "2026-05-23T22:33:35.922873+02:00",
+      "last_seen": "2026-05-23T22:35:36.788189+02:00",
+      "duration_ms": 120865,
+      "event_count": 71,
+      "state_changes": 4,
+      "final_state": "ready",
+      "pid": 87445,
+      "pid_discovery_lag_ms": 389,
+      "debounce_coalesced_events": 30,
+      "state_durations_ms": {
+        "ready": 38119,
+        "waiting": 77178,
+        "working": 5566
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 3,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "ordered_mismatches": [
+      {
+        "index": 2,
+        "kind": "missing_in_replay",
+        "recorded": "waiting→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "waiting→ready",
+      "working→waiting"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→waiting"
+    ],
+    "missing_kinds": [
+      "waiting→ready"
+    ]
+  }
 }

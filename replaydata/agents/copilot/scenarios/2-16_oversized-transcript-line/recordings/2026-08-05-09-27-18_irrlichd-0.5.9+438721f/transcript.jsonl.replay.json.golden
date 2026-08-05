@@ -8,15 +8,14 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 10,
-    "consumed_events": 10,
+    "total_events": 2,
+    "consumed_events": 2,
     "total_transitions": 3,
-    "first_event_time": "2026-08-05T07:27:18.336Z",
-    "last_event_time": "2026-08-05T07:28:14.524Z",
-    "wall_clock_session_duration": 56188000000,
+    "first_event_time": "2026-08-05T09:27:25.753321+02:00",
+    "last_event_time": "2026-08-05T09:28:08.884238+02:00",
+    "wall_clock_session_duration": 43130917000,
     "state_durations": {
-      "ready": 13050000000,
-      "working": 43138000000
+      "working": 43130917000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -30,7 +29,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-08-05T07:27:18.336Z",
+      "virtual_time": "2026-08-05T09:27:25.753321+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -43,9 +42,9 @@
     },
     {
       "index": 1,
-      "event_index": 6,
-      "virtual_time": "2026-08-05T07:27:25.618Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-08-05T09:27:25.753321+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -57,9 +56,9 @@
     },
     {
       "index": 2,
-      "event_index": 8,
-      "virtual_time": "2026-08-05T07:28:08.756Z",
-      "cause": "debounce_coalesce",
+      "event_index": 1,
+      "virtual_time": "2026-08-05T09:28:08.884238+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -70,5 +69,69 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "…nana banana banana banana banana banana banana banana banana banana banana ba…"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-95449",
+      "adapter": "copilot",
+      "first_seen": "2026-08-05T09:27:18.610929+02:00",
+      "last_seen": "2026-08-05T09:27:28.216631+02:00",
+      "duration_ms": 9605,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 95449,
+      "pid_discovery_lag_ms": 73,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 9533
+      }
+    },
+    {
+      "session_id": "f09e1401-e425-4798-9251-830335c80f70",
+      "adapter": "copilot",
+      "first_seen": "2026-08-05T09:27:25.439085+02:00",
+      "last_seen": "2026-08-05T09:28:08.887848+02:00",
+      "duration_ms": 43448,
+      "event_count": 6,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 95449,
+      "pid_discovery_lag_ms": 491,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 0,
+        "working": 43302
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 1,
+    "replayed_transition_count": 2,
+    "ordered_matches": 0,
+    "ordered_mismatches": [
+      {
+        "index": 0,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 1,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "extra_kinds": [
+      "ready→working"
+    ]
+  }
 }

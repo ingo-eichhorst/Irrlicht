@@ -8,15 +8,15 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 11,
-    "consumed_events": 11,
+    "total_events": 3,
+    "consumed_events": 3,
     "total_transitions": 3,
-    "first_event_time": "2026-08-05T15:26:52.846Z",
-    "last_event_time": "2026-08-05T15:27:17.733Z",
-    "wall_clock_session_duration": 24887000000,
+    "first_event_time": "2026-08-05T17:26:59.924439+02:00",
+    "last_event_time": "2026-08-05T17:27:17.745987+02:00",
+    "wall_clock_session_duration": 17821548000,
     "state_durations": {
-      "ready": 20105000000,
-      "working": 4782000000
+      "ready": 13027170000,
+      "working": 4794378000
     },
     "flicker_count": 1,
     "flickers_by_category": {
@@ -35,7 +35,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-08-05T15:26:52.846Z",
+      "virtual_time": "2026-08-05T17:26:59.924439+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -48,9 +48,9 @@
     },
     {
       "index": 1,
-      "event_index": 6,
-      "virtual_time": "2026-08-05T15:26:59.813Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-08-05T17:26:59.924439+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -62,9 +62,9 @@
     },
     {
       "index": 2,
-      "event_index": 9,
-      "virtual_time": "2026-08-05T15:27:04.595Z",
-      "cause": "debounce_coalesce",
+      "event_index": 1,
+      "virtual_time": "2026-08-05T17:27:04.718817+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -75,5 +75,102 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "zeta"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-96821",
+      "adapter": "copilot",
+      "first_seen": "2026-08-05T17:26:52.528387+02:00",
+      "last_seen": "2026-08-05T17:27:22.254363+02:00",
+      "duration_ms": 29725,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 96821,
+      "pid_discovery_lag_ms": 66,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 29660
+      }
+    },
+    {
+      "session_id": "proc-96900",
+      "adapter": "claude-code",
+      "first_seen": "2026-08-05T17:26:52.880033+02:00",
+      "last_seen": "2026-08-05T17:27:43.042489+02:00",
+      "duration_ms": 50162,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 96900,
+      "pid_discovery_lag_ms": 66,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 50096
+      }
+    },
+    {
+      "session_id": "2889f1c5-fbc2-454a-ab88-e1acc30e30c2",
+      "adapter": "copilot",
+      "first_seen": "2026-08-05T17:26:59.740904+02:00",
+      "last_seen": "2026-08-05T17:27:20.365799+02:00",
+      "duration_ms": 20624,
+      "event_count": 9,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 96821,
+      "pid_discovery_lag_ms": 262,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 15644,
+        "working": 4929
+      }
+    },
+    {
+      "session_id": "31e6174f-7d9a-4a3f-91ff-d16f2a2edc73",
+      "adapter": "claude-code",
+      "first_seen": "2026-08-05T17:27:40.083522+02:00",
+      "last_seen": "2026-08-05T17:27:58.154403+02:00",
+      "duration_ms": 18070,
+      "event_count": 15,
+      "state_changes": 4,
+      "final_state": "ready",
+      "pid": 96900,
+      "pid_discovery_lag_ms": 3,
+      "debounce_coalesced_events": 2,
+      "state_durations_ms": {
+        "ready": 15663,
+        "working": 2406
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 1,
+    "replayed_transition_count": 2,
+    "ordered_matches": 0,
+    "ordered_mismatches": [
+      {
+        "index": 0,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 1,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "extra_kinds": [
+      "ready→working"
+    ]
+  }
 }

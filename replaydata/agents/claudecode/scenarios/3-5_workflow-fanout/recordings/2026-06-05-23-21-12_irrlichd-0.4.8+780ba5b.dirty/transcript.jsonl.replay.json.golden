@@ -8,25 +8,18 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 27,
-    "consumed_events": 27,
-    "total_transitions": 9,
-    "first_event_time": "2026-06-05T21:21:13.929Z",
-    "last_event_time": "2026-06-05T21:22:00.915Z",
-    "wall_clock_session_duration": 46986000000,
+    "total_events": 13,
+    "consumed_events": 13,
+    "total_transitions": 2,
+    "first_event_time": "2026-06-05T23:21:13.970244+02:00",
+    "last_event_time": "2026-06-05T23:22:12.661548+02:00",
+    "wall_clock_session_duration": 58691304000,
     "state_durations": {
-      "ready": 29643000000,
-      "working": 17343000000
+      "ready": 58691304000
     },
-    "flicker_count": 3,
-    "flickers_by_category": {
-      "ready_between_working": 2,
-      "working_between_ready": 1
-    },
-    "flickers_by_reason": {
-      "agent finished turn → ready": 2,
-      "force ready→working on first activity": 1
-    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
     "cum_input_tokens": 6308,
     "cum_output_tokens": 1129,
     "cum_cache_read_tokens": 73676,
@@ -37,7 +30,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-06-05T21:21:13.929Z",
+      "virtual_time": "2026-06-05T23:21:13.970244+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -50,8 +43,8 @@
     },
     {
       "index": 1,
-      "event_index": 6,
-      "virtual_time": "2026-06-05T21:21:13.929Z",
+      "event_index": 2,
+      "virtual_time": "2026-06-05T23:21:16.968977+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -61,110 +54,107 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
-    },
-    {
-      "index": 2,
-      "event_index": 8,
-      "virtual_time": "2026-06-05T21:21:25.109Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "\u003c!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":1,\"completed_rounds\":0} --\u003e"
-    },
-    {
-      "index": 3,
-      "event_index": 10,
-      "virtual_time": "2026-06-05T21:21:29.942Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "user",
-      "has_open_tool": false,
-      "is_agent_done": false,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false
-    },
-    {
-      "index": 4,
-      "event_index": 17,
-      "virtual_time": "2026-06-05T21:21:36.105Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "…ds\":1} --\u003e\n\nTask ID `w8mi56013` — 3 agents fanning out in parallel, each do…"
-    },
-    {
-      "index": 5,
-      "event_index": 20,
-      "virtual_time": "2026-06-05T21:21:55.932Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "…ds\":1} --\u003e\n\nTask ID `w8mi56013` — 3 agents fanning out in parallel, each do…"
-    },
-    {
-      "index": 6,
-      "event_index": 20,
-      "virtual_time": "2026-06-05T21:21:55.932Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "…ds\":1} --\u003e\n\nTask ID `w8mi56013` — 3 agents fanning out in parallel, each do…"
-    },
-    {
-      "index": 7,
-      "event_index": 26,
-      "virtual_time": "2026-06-05T21:22:00.915Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "… 1+1=2, slept 20s\n- agent 2: 2+2=4, slept 20s\n- agent 3: 3+3=6, slept 20s\n\n(3…"
-    },
-    {
-      "index": 8,
-      "event_index": 26,
-      "virtual_time": "2026-06-05T21:22:00.915Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "… 1+1=2, slept 20s\n- agent 2: 2+2=4, slept 20s\n- agent 3: 3+3=6, slept 20s\n\n(3…"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-61975",
+      "adapter": "claude-code",
+      "first_seen": "2026-06-05T23:21:12.789693+02:00",
+      "last_seen": "2026-06-05T23:22:14.088281+02:00",
+      "duration_ms": 61298,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 61975,
+      "pid_discovery_lag_ms": 44,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 61254
+      }
+    },
+    {
+      "session_id": "be498d73-b37e-4d70-8b26-782a56e04612",
+      "adapter": "claude-code",
+      "first_seen": "2026-06-05T23:21:13.968123+02:00",
+      "last_seen": "2026-06-05T23:22:13.266661+02:00",
+      "duration_ms": 59298,
+      "event_count": 30,
+      "state_changes": 2,
+      "final_state": "working",
+      "pid": 61975,
+      "pid_discovery_lag_ms": 6,
+      "debounce_coalesced_events": 7,
+      "state_durations_ms": {
+        "ready": 2,
+        "working": 59295
+      }
+    },
+    {
+      "session_id": "agent-ad85cefda5579a437",
+      "adapter": "claude-code",
+      "parent_session_id": "be498d73-b37e-4d70-8b26-782a56e04612",
+      "first_seen": "2026-06-05T23:21:30.081812+02:00",
+      "last_seen": "2026-06-05T23:22:12.909218+02:00",
+      "duration_ms": 42827,
+      "event_count": 13,
+      "state_changes": 2,
+      "final_state": "working",
+      "pid": 61975,
+      "pid_discovery_lag_ms": 3365,
+      "debounce_coalesced_events": 2,
+      "state_durations_ms": {
+        "ready": 2672,
+        "working": 40106
+      }
+    },
+    {
+      "session_id": "agent-a9d8452af03fbaf8b",
+      "adapter": "claude-code",
+      "parent_session_id": "be498d73-b37e-4d70-8b26-782a56e04612",
+      "first_seen": "2026-06-05T23:21:30.132263+02:00",
+      "last_seen": "2026-06-05T23:21:58.29966+02:00",
+      "duration_ms": 28167,
+      "event_count": 13,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 61975,
+      "pid_discovery_lag_ms": 2702,
+      "debounce_coalesced_events": 2,
+      "state_durations_ms": {
+        "ready": 2787,
+        "working": 25326
+      }
+    },
+    {
+      "session_id": "agent-a58c13ea8ce752c7d",
+      "adapter": "claude-code",
+      "parent_session_id": "be498d73-b37e-4d70-8b26-782a56e04612",
+      "first_seen": "2026-06-05T23:21:30.190807+02:00",
+      "last_seen": "2026-06-05T23:21:58.284276+02:00",
+      "duration_ms": 28093,
+      "event_count": 13,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 61975,
+      "pid_discovery_lag_ms": 3138,
+      "debounce_coalesced_events": 2,
+      "state_durations_ms": {
+        "ready": 2800,
+        "working": 25239
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 1,
+    "replayed_transition_count": 1,
+    "ordered_matches": 1,
+    "recorded_unique_kinds": [
+      "ready→working"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working"
+    ]
+  }
 }

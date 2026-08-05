@@ -11,12 +11,12 @@
     "total_events": 13,
     "consumed_events": 13,
     "total_transitions": 3,
-    "first_event_time": "2026-05-23T17:21:56.455Z",
-    "last_event_time": "2026-05-23T17:22:01.381Z",
-    "wall_clock_session_duration": 4926000000,
+    "first_event_time": "2026-05-23T19:21:56.455957+02:00",
+    "last_event_time": "2026-05-23T19:22:01.381413+02:00",
+    "wall_clock_session_duration": 4925456000,
     "state_durations": {
-      "ready": 5000000,
-      "working": 4921000000
+      "ready": 2046028000,
+      "working": 4879428000
     },
     "flicker_count": 1,
     "flickers_by_category": {
@@ -34,7 +34,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-23T17:21:56.455Z",
+      "virtual_time": "2026-05-23T19:21:56.455957+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -48,7 +48,7 @@
     {
       "index": 1,
       "event_index": 6,
-      "virtual_time": "2026-05-23T17:21:56.46Z",
+      "virtual_time": "2026-05-23T19:21:58.501985+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -62,7 +62,7 @@
     {
       "index": 2,
       "event_index": 12,
-      "virtual_time": "2026-05-23T17:22:01.381Z",
+      "virtual_time": "2026-05-23T19:22:03.381413+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -74,5 +74,54 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "ok"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-10804",
+      "adapter": "codex",
+      "first_seen": "2026-05-23T19:21:40.874462+02:00",
+      "last_seen": "2026-05-23T19:24:41.041992+02:00",
+      "duration_ms": 180167,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 10804,
+      "pid_discovery_lag_ms": 26,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 180143
+      }
+    },
+    {
+      "session_id": "rollout-2026-05-23T19-21-39-019e55db-593f-7f81-929f-f53927945b98",
+      "adapter": "codex",
+      "first_seen": "2026-05-23T19:21:56.413778+02:00",
+      "last_seen": "2026-05-23T19:22:10.872456+02:00",
+      "duration_ms": 14458,
+      "event_count": 31,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 10804,
+      "pid_discovery_lag_ms": 244,
+      "debounce_coalesced_events": 11,
+      "state_durations_ms": {
+        "ready": 9578,
+        "working": 4878
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

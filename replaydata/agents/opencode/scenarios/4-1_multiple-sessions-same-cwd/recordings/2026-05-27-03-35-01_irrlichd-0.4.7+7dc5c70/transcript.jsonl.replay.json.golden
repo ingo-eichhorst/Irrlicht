@@ -124,5 +124,6 @@
       "needs_user_attention": false,
       "waiting_for_user_input": false
     }
-  ]
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_198eddf59ffea8X5LIPGLwDGo8"
 }

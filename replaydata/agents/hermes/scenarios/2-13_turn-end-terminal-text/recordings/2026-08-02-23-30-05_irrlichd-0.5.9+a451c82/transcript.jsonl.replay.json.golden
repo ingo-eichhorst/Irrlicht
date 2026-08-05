@@ -70,5 +70,6 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "…has a shorter wavelength and is scattered more strongly than the longer-wavel…"
     }
-  ]
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session 20260802_233005_3415ff"
 }
