@@ -152,12 +152,26 @@ bash tools/onboarding-factory/scripts/lib/completeness-check.sh <staging-dir>
 ```
 
 A `suspect` verdict is **advisory, not fatal** — roughly 7% of committed
-recordings legitimately end unsettled (`1-2_session-end`, `2-20` esc-interrupt,
-`2-9_token-quota-exhausted`, `3-4_subagent-orphan-cleanup`), so read the reasons
-and decide:
+recordings legitimately end unsettled, so read the reasons and decide:
 
 - The cell's scenario genuinely ends unsettled → promote, and say so in `notes`.
 - Anything else → **do not promote**. Diagnose before re-running.
+
+Scenarios *defined* to end unsettled are declared once, in the committed
+catalog, and are waived automatically:
+
+```bash
+jq -r '.meta.ends_unsettled | join(", ")' replaydata/agents/scenarios.json
+# session-end, token-quota-exhausted, user-esc-interrupt, subagent-orphan-cleanup
+```
+
+Add a scenario there only when its **definition** requires an unsettled ending
+(the process is killed, the turn is interrupted, the quota dies, the orphan is
+abandoned) — **not** because recordings of it have ended unsettled before.
+Twelve scenarios currently trip the check somewhere in the corpus; waiving all
+of them would turn it into exactly the green-and-vacuous pass this check exists
+to prevent. For a genuine one-off, drop
+`{"ends_unsettled": true}` into `<staging>/completeness-waiver.json` instead.
 
 Also confirm by hand what the check deliberately does not mechanize: that the
 transcript's turn count matches the recipe's `send` count. A short transcript

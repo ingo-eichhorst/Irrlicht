@@ -5,6 +5,7 @@
 
 import {
   deriveEventOffsets, findOffsetBefore, findOffsetAfter, resolveDashboardIframeUrl,
+  delayWindowText,
 } from './playbackTimeline.js';
 import {
   paintStateBand, paintEventDots, paintTurns, paintExpectedLane,
@@ -2009,22 +2010,11 @@ function _expectedTargetHTML(def) {
   return def.kind ? `kind=<code>${escapeHtml(def.kind)}</code>` : "—";
 }
 
-// _expectedWindowText renders one phase definition's timing-window cell
-// (min/max delay and/or minimum duration constraints, joined with " · ").
-//
-// min_delay_ms has to appear here: it is a FLOOR on which event the phase binds
-// to, so a phase specced as a 5s–10s window would otherwise render as plain
-// "≤ 10000 ms" and read as if it had no floor at all — hiding the half that
-// makes a terminal-hold phase skip past intermediate cycles (#1333 / B5).
+// _expectedWindowText renders one phase definition's timing-window cell: the
+// delay bounds (shared with the timeline tooltip via delayWindowText, so the two
+// renderings can't drift) plus any minimum-duration constraint, joined with " · ".
 function _expectedWindowText(def) {
-  let win = "";
-  if (def.min_delay_ms && def.max_delay_ms) {
-    win += `${def.min_delay_ms}–${def.max_delay_ms} ms`;
-  } else if (def.min_delay_ms) {
-    win += `≥ ${def.min_delay_ms} ms`;
-  } else if (def.max_delay_ms) {
-    win += `≤ ${def.max_delay_ms} ms`;
-  }
+  let win = delayWindowText(def);
   if (def.duration_at_least_ms) win += (win ? " · " : "") + `≥ ${def.duration_at_least_ms} ms`;
   return win || "—";
 }

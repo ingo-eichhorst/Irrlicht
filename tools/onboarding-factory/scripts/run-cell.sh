@@ -47,6 +47,10 @@ source "$SCRIPT_DIR/lib/spawn-record-daemon.sh"
 # (#1333 / B6) — the old inline fallback curated whatever ran last.
 # shellcheck source=lib/pick-recording.sh
 source "$SCRIPT_DIR/lib/pick-recording.sh"
+# "Did this run actually finish?" — shared with run-cell-multi.sh for the same
+# reason the daemon lifecycle is (#1214).
+# shellcheck source=lib/completeness-check.sh
+source "$SCRIPT_DIR/lib/completeness-check.sh"
 
 RECORDER="off"
 ATTACH=0
@@ -550,17 +554,8 @@ fi
 # finished. Two of three broken copilot runs reported `ok` with a silently
 # truncated recording, and `ok` is what invites promotion. Advisory by design —
 # see the header of completeness-check.sh for why it is not a hard gate.
-COMPLETENESS="$(bash "$SCRIPT_DIR/lib/completeness-check.sh" "$STAGING" 2>/dev/null || echo '{"verdict":"unknown","reasons":["completeness-check failed to run"],"sessions":{}}')"
-# The `||` fallback only fires on a NON-ZERO exit; the check exits 0 even if its
-# own jq fails, so guard the empty case separately. An empty COMPLETENESS would
-# make the `--argjson` below fail and kill the manifest write under `set -e` —
-# after the expensive live capture, leaving no run-manifest.json at all.
-[[ -n "$COMPLETENESS" ]] || COMPLETENESS='{"verdict":"unknown","reasons":["completeness-check produced no output"],"sessions":{}}'
-COMPLETENESS_VERDICT="$(jq -r '.verdict' <<<"$COMPLETENESS" 2>/dev/null || echo unknown)"
-if [[ "$COMPLETENESS_VERDICT" != "complete" ]]; then
-  echo "completeness: $COMPLETENESS_VERDICT — DO NOT PROMOTE without reading these:" >&2
-  jq -r '.reasons[]? | "  - " + .' <<<"$COMPLETENESS" >&2 || true
-fi
+COMPLETENESS="$(completeness_json "$STAGING" --scenario "$FOLDER")"
+report_completeness "$COMPLETENESS"
 
 # --- Manifest -----------------------------------------------------------
 jq -n \

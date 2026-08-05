@@ -451,7 +451,7 @@ func phaseShapeViolation(p ExpectedPhase) string {
 		return "same_session_as and new_session are mutually exclusive"
 	case p.MinDelayMs < 0:
 		return "min_delay_ms must not be negative"
-	case p.MinDelayMs > 0 && p.MaxDelayMs > 0 && p.MinDelayMs > p.MaxDelayMs:
+	case p.MaxDelayMs > 0 && p.MinDelayMs > p.MaxDelayMs:
 		// An inverted window matches nothing, ever. Catching it at parse time
 		// makes it an authoring error rather than a phase that silently never
 		// binds — the same class of trap min_delay_ms exists to remove.

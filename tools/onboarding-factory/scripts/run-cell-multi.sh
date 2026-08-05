@@ -69,6 +69,12 @@ source "$SCRIPT_DIR/lib/reconcile.sh"
 # cross-adapter path also refuses a missing driver step BEFORE recording.
 # shellcheck source=lib/recipe-lint.sh
 source "$SCRIPT_DIR/lib/recipe-lint.sh"
+# Recording-file selection + "did this run finish?", both shared with
+# run-cell.sh so a fix can't reach only one rig (#1214).
+# shellcheck source=lib/pick-recording.sh
+source "$SCRIPT_DIR/lib/pick-recording.sh"
+# shellcheck source=lib/completeness-check.sh
+source "$SCRIPT_DIR/lib/completeness-check.sh"
 
 DRY_RUN=0
 positional=()
@@ -288,7 +294,7 @@ stop_record_daemon   # also disarms the EXIT trap it armed
 DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo unknown)"
 
 # --- Locate the single recording ----------------------------------------
-RECORDING="$(find "$STAGING/recordings" -maxdepth 1 -name '*.jsonl' -type f 2>/dev/null | head -n1)"
+RECORDING="$(pick_isolated_recording "$STAGING/recordings" '*.jsonl')" || true
 [[ -n "$RECORDING" ]] || { echo "no recording produced under $STAGING/recordings" >&2; write_error_manifest "no_recording"; exit 1; }
 
 # --- Collect each adapter's daemon session_id(s) + transcript(s) --------
@@ -397,14 +403,8 @@ fi
 
 # Completeness runs here too (#1333 / A3): a cross-adapter cell is torn down the
 # same way a single-adapter one is, and `ok` is just as misleading.
-COMPLETENESS="$(bash "$SCRIPT_DIR/lib/completeness-check.sh" "$STAGING" 2>/dev/null || echo '{"verdict":"unknown","reasons":["completeness-check failed to run"],"sessions":{}}')"
-# See run-cell.sh: the `||` fallback misses a zero-exit-with-empty-stdout, which
-# would break the --argjson manifest write under `set -e`.
-[[ -n "$COMPLETENESS" ]] || COMPLETENESS='{"verdict":"unknown","reasons":["completeness-check produced no output"],"sessions":{}}'
-if [[ "$(jq -r '.verdict' <<<"$COMPLETENESS" 2>/dev/null || echo unknown)" != "complete" ]]; then
-  echo "completeness: $(jq -r '.verdict' <<<"$COMPLETENESS") — DO NOT PROMOTE without reading these:" >&2
-  jq -r '.reasons[]? | "  - " + .' <<<"$COMPLETENESS" >&2 || true
-fi
+COMPLETENESS="$(completeness_json "$STAGING" --scenario "$COVERAGE_ID")"
+report_completeness "$COMPLETENESS"
 
 jq -n \
   --arg scenario "$COVERAGE_ID" \

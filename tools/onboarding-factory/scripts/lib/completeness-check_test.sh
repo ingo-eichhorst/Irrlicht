@@ -105,6 +105,45 @@ echo '{"ends_unsettled": true}' > "$d/completeness-waiver.json"
 assert_verdict "declared ends_unsettled -> complete" "complete" "$d"
 assert_reason "records the waiver" "waived" "$d"
 
+echo "== a proc- id is TERMINAL when no real session appears (the aider shape) =="
+# aider's daemon-side ids are `proc-<pid>` for the whole session — the placeholder
+# never reconciles into anything. An unconditional proc- exclusion made this
+# assertion a no-op for that entire adapter: 29 of 370 committed recordings have
+# zero non-proc transitions and all 29 are aider.
+d="$(stage aiderish "proc-70465" <<EOF
+{"seq":1,"ts":"2026-08-05T17:19:00Z","kind":"state_transition","session_id":"proc-70465","prev_state":"ready","new_state":"working"}
+{"seq":2,"ts":"2026-08-05T17:19:30Z","kind":"transcript_removed","session_id":"proc-70465"}
+EOF
+)"
+assert_verdict "unsettled proc- session is caught" "suspect" "$d"
+assert_reason "and it is named" "proc-70465" "$d"
+
+d="$(stage aiderish_ok "proc-70465" <<EOF
+{"seq":1,"ts":"2026-08-05T17:19:00Z","kind":"state_transition","session_id":"proc-70465","prev_state":"ready","new_state":"working"}
+{"seq":2,"ts":"2026-08-05T17:19:30Z","kind":"state_transition","session_id":"proc-70465","prev_state":"working","new_state":"ready"}
+EOF
+)"
+assert_verdict "a settled proc- session still passes" "complete" "$d"
+
+echo "== the waiver comes from the COMMITTED catalog, not just a staging file =="
+# meta.ends_unsettled in replaydata/agents/scenarios.json is the durable home:
+# a staging-only waiver was unreachable, since run-cell.sh creates the staging
+# dir, drives the agent and runs this check in one unbroken sequence.
+d="$(stage catalogwaiver "$sid" <<EOF
+{"seq":1,"ts":"2026-08-05T17:19:00Z","kind":"state_transition","session_id":"$sid","prev_state":"ready","new_state":"working"}
+{"seq":2,"ts":"2026-08-05T17:19:30Z","kind":"transcript_removed","session_id":"$sid"}
+EOF
+)"
+got="$(bash "$SCRIPT" "$d" --scenario 1-2_session-end | jq -r '.verdict')"
+[[ "$got" == "complete" ]] && pass "a declared ends_unsettled scenario is waived" \
+                           || fail "a declared ends_unsettled scenario is waived" "complete" "$got"
+got="$(bash "$SCRIPT" "$d" --scenario 2-1_basic-turn | jq -r '.verdict')"
+[[ "$got" == "suspect" ]] && pass "an undeclared scenario is NOT waived" \
+                          || fail "an undeclared scenario is NOT waived" "suspect" "$got"
+got="$(bash "$SCRIPT" "$d" | jq -r '.verdict')"
+[[ "$got" == "suspect" ]] && pass "no --scenario means no waiver" \
+                          || fail "no --scenario means no waiver" "suspect" "$got"
+
 echo "== presession proc- rows are not driven sessions =="
 d="$(stage presession "$sid" <<EOF
 {"seq":1,"ts":"2026-08-05T17:19:00Z","kind":"state_transition","session_id":"proc-80648","prev_state":"ready","new_state":"working"}

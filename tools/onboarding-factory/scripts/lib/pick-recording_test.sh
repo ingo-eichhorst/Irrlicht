@@ -38,10 +38,14 @@ assert_contains() {
 }
 
 echo "== a recording written during the run is picked =="
+# Back-date the marker rather than sleeping: `find -newer` only needs the marker
+# to be strictly older than the file, and two `sleep 1`s here were 62% of
+# everything this diff added to the smoke-test gate — paid on every CI run and
+# every local preflight. Back-dating is deterministic and also removes the
+# sub-second-mtime-granularity flake the sleep was papering over.
 d="$TMP/fresh"; mkdir -p "$d"
 touch -t 202601010000 "$d/old-session.jsonl"
-marker="$TMP/fresh.marker"; : > "$marker"
-sleep 1
+marker="$TMP/fresh.marker"; : > "$marker"; touch -t 202601020000 "$marker"
 : > "$d/new-session.jsonl"
 out="$(pick_attached_recording "$d" '*.jsonl' "$marker" 2>/dev/null)"
 rc=$?
@@ -68,8 +72,7 @@ assert_contains "diagnoses the non-recording daemon" "not recording" "$err"
 
 echo "== the newest of several fresh recordings wins (daemon rotated mid-run) =="
 d="$TMP/rotated"; mkdir -p "$d"
-marker="$TMP/rotated.marker"; : > "$marker"
-sleep 1
+marker="$TMP/rotated.marker"; : > "$marker"; touch -t 202601020000 "$marker"
 : > "$d/a-first.jsonl"
 : > "$d/b-second.jsonl"
 out="$(pick_attached_recording "$d" '*.jsonl' "$marker" 2>/dev/null)"

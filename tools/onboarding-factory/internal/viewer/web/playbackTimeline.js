@@ -202,6 +202,19 @@ function attachSegmentDisplay(segments, totalMs) {
 // segments, each already positioned (leftPct/widthPct), colored, and
 // carrying its tooltip text. Returns [] when there's no duration to lay
 // out against. Pure.
+// delayWindowText renders a phase definition's delay bounds as one string, or ""
+// when it has none. min_delay_ms has to appear alongside max: it is a FLOOR on
+// which event the phase binds to, so a phase specced as a 5s–10s window would
+// otherwise read as plain "≤ 10000 ms" — hiding the half that makes a
+// terminal-hold phase skip past intermediate cycles (#1333 / B5).
+// Shared with viewer.js's expected-phase table so the two renderings can't drift.
+export function delayWindowText(def) {
+  if (def.min_delay_ms && def.max_delay_ms) return `${def.min_delay_ms}–${def.max_delay_ms} ms`;
+  if (def.min_delay_ms) return `≥ ${def.min_delay_ms} ms`;
+  if (def.max_delay_ms) return `≤ ${def.max_delay_ms} ms`;
+  return "";
+}
+
 export function computeStateBand(events, totalMs) {
   if (!totalMs) return [];
   const {aliveFrom, aliveUntil, transitionsBySid} = buildSessionTimelines(events);
@@ -292,14 +305,8 @@ function expectedMarkerTooltip(ph, def, offsetMs) {
   if (def.text) lines.push(def.text);
   if (offsetMs !== null) {
     let delta = `+${Math.round(offsetMs)} ms from recording start`;
-    // Both bounds, so a load-bearing min_delay_ms floor isn't invisible here.
-    if (def.min_delay_ms && def.max_delay_ms) {
-      delta += ` (target ${def.min_delay_ms}–${def.max_delay_ms} ms from anchor)`;
-    } else if (def.min_delay_ms) {
-      delta += ` (target ≥ ${def.min_delay_ms} ms from anchor)`;
-    } else if (def.max_delay_ms) {
-      delta += ` (target ≤ ${def.max_delay_ms} ms from anchor)`;
-    }
+    const window = delayWindowText(def);
+    if (window) delta += ` (target ${window} from anchor)`;
     lines.push(delta);
   }
   if (ph.reason) lines.push(`reason: ${ph.reason}`);

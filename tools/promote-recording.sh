@@ -89,6 +89,18 @@ if [[ -z "$AGENT_VER" ]]; then
   # exactly what happened when hermes landed (#1327) while this fix was in
   # flight. tools/onboarding-factory/scripts/lib/adapter-tables_test.sh now
   # fails when they diverge; keep it in step with precheck.sh's case block.
+  #
+  # That test is a HOLDING PATTERN, not the intended end state. The right home
+  # for this data is replaydata/agents/scenarios.json's `.meta`, which already
+  # carries exactly this shape of per-adapter map (`min_versions`,
+  # `transcript_extensions`) and is already read by both scripts —
+  # precheck.sh reads it inline, and this file sources shard-lib.sh, which
+  # exposes meta_min_version()/meta_transcript_ext(). A
+  # `.meta.cli_version_probe: {"copilot": {"bin": "copilot", "field": 4}, …}`
+  # plus one accessor would delete both case blocks AND the test guarding them.
+  # Deferred out of #1333 because that PR's subject is the recording guards, not
+  # the catalog schema, and this block is now only a fallback (the primary path
+  # reads precheck.json). Tracked for follow-up.
   case "$AGENT" in
     claudecode)   CLI_BIN="claude";   VER_FIELD=1 ;;
     codex)        CLI_BIN="codex";    VER_FIELD=2 ;;
@@ -214,10 +226,11 @@ validate_recording() {
 }
 
 echo "validating candidate recording against expected.jsonl..." >&2
-set +e
-NEW_PASS_RATE="$(atomic_promote "$TARGET_DIR" "$REC_NAME" populate_recording validate_recording)"
-PROMOTE_RC=$?
-set -e
+# An assignment inside an AND-OR list is not errexit-fatal, and `$?` in the ||
+# arm is the function's return code — so this captures rc 0/1/3 without turning
+# errexit off for a span of script.
+NEW_PASS_RATE="$(atomic_promote "$TARGET_DIR" "$REC_NAME" populate_recording validate_recording)" \
+  && PROMOTE_RC=0 || PROMOTE_RC=$?
 
 if [[ "$PROMOTE_RC" == "3" ]]; then
   echo "WARNING: new recording fails expected.jsonl validation ($NEW_PASS_RATE)" >&2

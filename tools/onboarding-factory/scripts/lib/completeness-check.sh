@@ -44,9 +44,52 @@
 
 set -uo pipefail
 
+# --- Sourceable wrapper --------------------------------------------------
+# Both rigs need the same three things (invoke, fall back, warn), and #1214 is
+# the standing lesson about what happens when run-cell.sh and run-cell-multi.sh
+# keep their own copies of a shared step: a fix reaches only whichever one the
+# author was editing. Sourcing this file defines the helper without running the
+# CLI below, the same dual shape lib/cell-integrity.sh uses.
+#
+#   completeness_json <staging> [--scenario <folder-or-name>]
+#     Echoes the verdict JSON, ALWAYS valid and non-empty. Covers both failure
+#     shapes: a non-zero exit, and a zero exit with empty stdout (which the
+#     `||` fallback alone would miss, breaking the caller's --argjson).
+completeness_json() {
+  local out
+  out="$(bash "${BASH_SOURCE[0]}" "$@" 2>/dev/null)" \
+    || out='{"verdict":"unknown","reasons":["completeness-check failed to run"],"sessions":{}}'
+  [[ -n "$out" ]] \
+    || out='{"verdict":"unknown","reasons":["completeness-check produced no output"],"sessions":{}}'
+  echo "$out"
+}
+
+#   report_completeness <verdict-json>  → prints the reasons on a non-complete
+#     verdict; returns 0 either way (advisory, see the header).
+report_completeness() {
+  local json="$1" verdict
+  verdict="$(jq -r '.verdict' <<<"$json" 2>/dev/null || echo unknown)"
+  if [[ "$verdict" != "complete" ]]; then
+    echo "completeness: $verdict — DO NOT PROMOTE without reading these:" >&2
+    jq -r '.reasons[]? | "  - " + .' <<<"$json" >&2 || true
+  fi
+}
+
+# Sourced rather than executed → helpers are defined, nothing else runs.
+(return 0 2>/dev/null) && return 0
+
 STAGING="${1:-}"
 STRICT=0
-[[ "${2:-}" == "--strict" ]] && STRICT=1
+SCENARIO=""
+shift || true
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --strict)   STRICT=1 ;;
+    --scenario) shift; SCENARIO="${1:-}" ;;
+    *) ;;
+  esac
+  shift || true
+done
 
 emit() {
   local verdict="$1" reasons_json="$2" sessions_json="${3:-}"
@@ -95,20 +138,29 @@ fi
 # they are transient placeholders that reconcile into a real session and never
 # settle on their own, so counting them would fire on every presession adapter.
 #
-# KNOWN GAP — aider is uncovered by the unsettled-session assertion. Its daemon-
-# side ids ARE `proc-<pid>`: that is its terminal session model, not a
-# placeholder that reconciles into something else. So for every aider cell the
-# per-session list is empty, `unsettled` is always [], and only the
-# trailing-activity assertion below is doing any work. Excluding `proc-` is
-# still right for codex/pi/gemini-cli (where a real id follows) and wrong only
-# here; distinguishing them needs adapter identity, which events.jsonl does not
-# carry on state_transition rows. Narrowing this is worth doing when the rig
-# gains an adapter field — until then aider gets the weaker of the two checks,
-# and this comment is the honest record of that rather than a silent hole.
+# The exclusion is CONDITIONAL, and it has to be. A `proc-<pid>` row is a
+# placeholder only when it reconciles into something else — and for aider it
+# never does: `proc-<pid>` IS its terminal session id. An unconditional
+# `startswith("proc-") | not` therefore made the whole unsettled-session
+# assertion a structural no-op for one entire adapter, handing every aider cell
+# a `complete` verdict that proved nothing about settledness.
+#
+# The discriminator needs no adapter identity and no daemon change: a presession
+# is a placeholder exactly when the recording ALSO contains a non-`proc-`
+# session. Swept over all 370 committed recordings, 29 have zero non-proc
+# state transitions and all 29 are aider — no false positives, and the rule
+# covers the next presession-terminal adapter automatically instead of leaving a
+# second silent hole.
+# Same conditional rule for the driver's own contract: drop `proc-` rows only
+# when a real session id is also present, so an aider run isn't filtered to an
+# empty driven set.
 DRIVEN_JSON="[]"
 if [[ -s "$STAGING/session.uuids" ]]; then
-  DRIVEN_JSON="$(grep -v '^proc-' "$STAGING/session.uuids" 2>/dev/null \
-    | jq -Rsc 'split("\n") | map(select(length > 0))')"
+  DRIVEN_JSON="$(jq -Rsc '
+    split("\n") | map(select(length > 0))
+    | . as $all
+    | ($all | map(select(startswith("proc-") | not))) as $real
+    | if ($real | length) > 0 then $real else $all end' < "$STAGING/session.uuids")"
 fi
 
 # --- Assertions ----------------------------------------------------------
@@ -121,10 +173,12 @@ fi
 # 3. No state transitions at all: the daemon observed nothing worth recording.
 ANALYSIS="$(jq -sc --argjson driven "$DRIVEN_JSON" '
   [ .[] | select(.kind == "state_transition") ]                as $st
+  # A presession is a placeholder only if a real session also appears here.
+  | ( $st | map(select(.session_id | startswith("proc-") | not)) | length > 0 ) as $has_real
   | ( $st
       | group_by(.session_id)
       | map(sort_by(.seq) | {sid: .[0].session_id, last: .[-1].new_state})
-      | map(select(.sid | startswith("proc-") | not))
+      | map(select(if $has_real then (.sid | startswith("proc-") | not) else true end))
       | map(select(($driven | length) == 0 or (.sid as $s | $driven | index($s)) != null))
     )                                                          as $per
   | {
@@ -142,10 +196,36 @@ TRANSITIONS="$(jq -r '.transitions' <<<"$ANALYSIS")"
 LAST_KIND="$(jq -r '.last_kind' <<<"$ANALYSIS")"
 UNSETTLED="$(jq -c '.unsettled' <<<"$ANALYSIS")"
 
-# A cell whose scenario ends unsettled by design declares it; the waiver
-# suppresses assertion 1 ONLY — a tail the daemon never resolved is a different
-# fault and stays reportable either way.
+# A scenario that ends unsettled BY DESIGN declares it in the committed catalog:
+#
+#   replaydata/agents/scenarios.json  →  .meta.ends_unsettled: ["session-end", …]
+#
+# That is where it belongs, not in a per-run staging file: "this scenario's
+# definition requires an unsettled ending" is a durable, agent-agnostic property
+# of the scenario, and a staging-only waiver was unreachable in practice —
+# run-cell.sh creates the staging dir, drives the agent and runs this check in
+# one unbroken sequence, so nobody ever had a window to drop the file in.
+#
+# The list is deliberately NARROW. Membership means the scenario is *defined* to
+# end unsettled (the process is killed, the turn is interrupted, the quota dies,
+# the orphan is abandoned) — NOT merely that recordings of it have ended
+# unsettled before. Twelve scenarios currently produce a `suspect` verdict
+# somewhere in the corpus; waiving all of them would hollow the check out into
+# exactly the green-and-vacuous pass this whole issue is about.
+#
+# $STAGING/completeness-waiver.json still works as a per-run override.
+# Either way the waiver suppresses assertion 1 ONLY — a tail the daemon never
+# resolved is a different fault and stays reportable.
 WAIVED=0
+if [[ -n "$SCENARIO" ]]; then
+  # Accept a folder ("1-2_session-end") or a bare catalog name ("session-end").
+  SCEN_NAME="$(sed -E 's/^[0-9]+-[0-9]+_//' <<<"$SCENARIO")"
+  CATALOG="$(git -C "$(dirname "$STAGING")" rev-parse --show-toplevel 2>/dev/null || git rev-parse --show-toplevel 2>/dev/null || true)/replaydata/agents/scenarios.json"
+  if [[ -f "$CATALOG" ]] \
+     && [[ "$(jq -r --arg s "$SCEN_NAME" '(.meta.ends_unsettled // []) | index($s) != null' "$CATALOG" 2>/dev/null)" == "true" ]]; then
+    WAIVED=1
+  fi
+fi
 if [[ -f "$STAGING/completeness-waiver.json" ]] \
    && [[ "$(jq -r '.ends_unsettled // false' "$STAGING/completeness-waiver.json" 2>/dev/null)" == "true" ]]; then
   WAIVED=1
@@ -178,7 +258,9 @@ for r in ${REASONS+"${REASONS[@]}"}; do
 done
 
 REASONS_JSON="$(printf '%s\n' ${REASONS+"${REASONS[@]}"} | jq -Rsc 'split("\n") | map(select(length > 0))')"
-SESSIONS_JSON="$(jq -c '{transitions: .transitions, unsettled: .unsettled, last_kind: .last_kind}' <<<"$ANALYSIS")"
+# $ANALYSIS already IS {transitions, unsettled, last_kind} — re-projecting those
+# same three keys would just be a second copy of the key list to keep in sync.
+SESSIONS_JSON="$ANALYSIS"
 
 if [[ "$FAULTS" -eq 0 ]]; then
   emit "complete" "$REASONS_JSON" "$SESSIONS_JSON"

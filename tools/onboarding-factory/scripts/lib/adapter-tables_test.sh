@@ -22,6 +22,15 @@
 # hermes — adding it to precheck's table and not to promote's, silently
 # reopening B3 through a conflict-free rebase. That is precisely the failure a
 # clean auto-merge cannot show you, so it gets a test rather than a comment.
+#
+# SCOPE — what this test does and does not prove. It proves the two tables agree
+# WITH EACH OTHER. It does not prove either agrees with
+# `scenarios.json`'s `.meta.min_versions` (an adapter missing there silently
+# loses its version floor), and it cannot catch both tables being wrong the same
+# way. Those are not reasons to change the test; they are reasons the
+# single-source-of-truth version is strictly better — see the deferral note in
+# tools/promote-recording.sh's case block. This test is the interim guard, not
+# the intended design.
 
 set -uo pipefail   # NOT -e: assertions capture non-zero return codes
 
