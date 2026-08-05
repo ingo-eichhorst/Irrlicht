@@ -133,6 +133,7 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		LastCWD:                           m.LastCWD,
 		LastAssistantText:                 m.LastAssistantText,
 		PendingWaitingCue:                 m.PendingWaitingCue,
+		TranscriptPermissionPending:       m.TranscriptPermissionPending,
 		PermissionMode:                    m.PermissionMode,
 		SawUserBlockingToolClosedThisPass: m.SawUserBlockingToolClosedThisPass,
 		NoSubstantiveActivity:             m.NoSubstantiveActivity,

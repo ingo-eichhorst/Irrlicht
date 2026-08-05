@@ -11,6 +11,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/antigravity"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/copilot"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/kirocli"
 	"irrlicht/core/adapters/inbound/agents/opencode"
@@ -147,6 +148,7 @@ func TestSourceCensus(t *testing.T) {
 			claudecode.AdapterName, codex.AdapterName, pi.AdapterName,
 			kirocli.AdapterName, geminicli.AdapterName,
 			antigravity.AdapterName, vibe.AdapterName,
+			copilot.AdapterName,
 		},
 		"FilesUnderCWD":     {aider.AdapterName},
 		"ProcessOwnedStore": {opencode.AdapterName},
@@ -222,6 +224,13 @@ func TestParserSeamCensus(t *testing.T) {
 			[]string{kirocli.AdapterName, vibe.AdapterName, antigravity.AdapterName}},
 		{"ReplayStoreStager", func(p any) bool { _, ok := p.(tailer.ReplayStoreStager); return ok },
 			[]string{antigravity.AdapterName}},
+		// agent.SubagentCounter — projected by maps.SubagentCounters, which is
+		// how an adapter opts into reporting in-process children. It went
+		// uncensused while claudecode was the only implementer; copilot (#1256)
+		// is the second, and an adapter silently gaining or losing the seam
+		// changes SessionMetrics.OpenSubagents at runtime.
+		{"SubagentCounter", func(p any) bool { _, ok := p.(agent.SubagentCounter); return ok },
+			[]string{claudecode.AdapterName, copilot.AdapterName}},
 	}
 
 	all := agents.All()

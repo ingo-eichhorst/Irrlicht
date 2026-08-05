@@ -205,6 +205,24 @@
         <li>Stage: <strong>alpha</strong></li>
       </ul>
 
+      <h3>GitHub Copilot Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/copilot/</code></li>
+        <li><strong>Watches:</strong> <code>events.jsonl</code> under <code>~/.copilot/session-state/&lt;session-id&gt;/</code>, relocatable via <code>$COPILOT_HOME</code> (which supersedes the deprecated <code>--config-dir</code>)</li>
+        <li>Because the transcript filename is the constant <code>events.jsonl</code>, the session id is derived from the parent directory name</li>
+        <li>Every record shares one envelope &mdash; <code>{id, parentId, timestamp, type, data}</code> &mdash; so parsing is a dispatch on <code>type</code> rather than a shape guess</li>
+        <li>Turn boundaries are explicit (<code>assistant.turn_start</code> / <code>assistant.turn_end</code>), so <code>working</code>/<code>ready</code> ride on real records instead of a quiet-tail heuristic. Copilot closes the turn after every tool call and opens a continuation, which the parser treats as continued work rather than a settle</li>
+        <li>Permission prompts route to <code>waiting</code> from the transcript itself (<code>permission.requested</code> / <code>permission.completed</code>, paired on <code>requestId</code>) &mdash; no hook installation required</li>
+        <li><code>/compact</code> writes <code>session.compaction_start</code> / <code>session.compaction_complete</code> as ordinary persisted records, so the session holds <code>working</code> across the summarization call without needing a hook-driven overlay</li>
+        <li>The <code>!</code> shell escape runs locally with no model turn; its injected records are skipped so a settled session is not bounced back to <code>working</code> with nothing left to close it</li>
+        <li>Tokens and cost are live from <code>assistant.message.outputTokens</code> per message &mdash; <code>session.usage_checkpoint</code> carries no counts, and the cumulative block exists only at <code>session.shutdown</code></li>
+        <li>In-process subagents (<code>task</code>/<code>explore</code>) are counted on the parent: Copilot creates no child session directory and appends every subagent record to the parent's own <code>events.jsonl</code>, distinguished by a top-level <code>agentId</code></li>
+        <li>No <code>Control</code> block is declared &mdash; the adapter is observe-only, gated behind a single <code>transcripts</code> permission</li>
+        <li><strong>Adapter name:</strong> <code>"copilot"</code></li>
+        <li>Stage: <strong>alpha</strong></li>
+      </ul>
+
       <h3>Process Scanner</h3>
 
       <ul>

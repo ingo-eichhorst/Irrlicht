@@ -213,6 +213,20 @@ fi
 #    periodic flush, and pick the recording file from whatever the
 #    daemon is writing to (env override > default
 #    ~/.local/share/irrlicht/recordings/).
+# Copilot resolves its whole config dir — session store included — from
+# COPILOT_HOME, and the DAEMON reads that variable eagerly when it builds the
+# adapter's watcher. The driver defaults it to "$STAGING/copilot-home" only
+# when unset, so leaving it unset here would point the daemon at the real
+# ~/.copilot while the driver wrote to staging: the daemon would observe no
+# copilot session at all and every cell would record an empty fixture.
+# Exporting it once, before the daemon spawns, keeps both halves on one store.
+# (--config-dir is deprecated upstream in favour of this variable.)
+if [[ "$ADAPTER" == "copilot" ]]; then
+  export COPILOT_HOME="${COPILOT_HOME:-$STAGING/copilot-home}"
+  mkdir -p "$COPILOT_HOME"
+  echo "copilot: COPILOT_HOME=$COPILOT_HOME (daemon + driver share this store)"
+fi
+
 if [[ "$ATTACH" == "1" ]]; then
   ATTACHED_RECORDINGS_DIR="${IRRLICHT_RECORDINGS_DIR:-$HOME/.local/share/irrlicht/recordings}"
   if [[ ! -d "$ATTACHED_RECORDINGS_DIR" ]]; then

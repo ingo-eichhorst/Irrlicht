@@ -1,0 +1,99 @@
+{
+  "scenario_id": "subagent-orphan-cleanup",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "n/a",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+21d50ec",
+    "confidence": 0.85,
+    "notes": "FROZEN, structurally n.a. — not a defect. Copilot 1.0.77 subagents are IN-PROCESS: they create no session-state/<id>/ directory, so no child SessionState, no parent_linked event and no subagent transcript ever exists. The scenario's premise is a child that OUTLIVES its parent and must be swept as an orphan; an in-process delegation has no independent existence to outlive anything, so the two hard acceptance bullets (>=1 child session linked to a parent, >=1 subagent transcript) have no producible input. Unlike codex/kiro-cli there is no adapter unblock path: the child entity does not exist anywhere for irrlicht to read."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subagent-orphan-cleanup",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: partial (the subagent primitive exists; the orphanable-child topology does not)\ndaemon_capability: incapable (no trace exists — there is no child session to orphan)\ndriver_capability: n/a (frozen — no recording; NOT a driver gap, see below)\n\nRoute: frozen. Disposition: applicable_false.\n\n**This cell is structurally n.a. for Copilot, not a defect.** That distinction is the whole assessment, so it is argued explicitly below rather than asserted.\n\n## What the scenario actually requires\n\nFrom the 3.4 row in `replaydata/agents/scenarios.json`, the two load-bearing acceptance bullets are:\n\n- `>= 1 child session(s) linked to a parent`\n- `>= 1 subagent transcript(s)`\n\nand the process is: parent + children running -> parent dies / daemon restarts -> startup sweep finds PIDs gone -> **all** sessions disappear, with no spurious `working` transition for the orphaned child during cleanup. The primitive under test is not \"a session dies\", it is \"a CHILD session left behind by a dead parent is swept correctly.\"\n\n## agent_supports = partial\n\nCopilot 1.0.77 does have subagents — that is settled live in this same column, not inferred here. The `3-1_foreground-subagent` cell captured the real payloads on this machine: `subagent.started` and `subagent.completed` pairing on `toolCallId`, written into the **parent's** `events.jsonl`, with `agentId: null` on the completion. Seven built-ins ship (task, explore, research, code-review, security-review, rubber-duck, sidekick).\n\nWhat Copilot does NOT do is give a subagent an independent session. No `$COPILOT_HOME/session-state/<child>/` directory is created — the adapter records this in the code itself (`parser.go:382-404`, `trackSubagent`: Copilot's subagents \"write no session directory of their own, so they are counted here rather than linked through ParentSessionID the way codex's and pi's file-backed children are\").\n\nThat is why the pillar is `partial` and not `yes`, and not `no`:\n\n- not `no` (the pi verdict): pi has no subagent primitive at all; Copilot has one and it is live-verified.\n- not `yes` (the codex/kiro verdict): codex spawns subagents as separate child *threads*, each with its own `rollout-*.jsonl`; kiro persists a `parent_session_id` in a sidecar. In both, a child entity genuinely exists on disk and *could* be orphaned — their blocker is that the adapter cannot LINK it. Copilot's child has no existence to orphan. A delegation that runs inside the parent's turn cannot survive the parent's death by construction, so the scenario's central object — the orphan — is unconstructible.\n\n(Whether the delegation runs on a thread or in a helper OS process is NOT established here and is not load-bearing: either way it creates no session-state directory, so irrlicht never has a child SESSION, which is the entity the scenario and the sweep both operate on.)\n\n## daemon_capability = incapable\n\nThree things would each have to exist for the daemon to observe this scenario on Copilot, and none can:\n\n1. **A child session row.** irrlicht keys a Copilot session to a `session-state/<id>/` directory (`agent.go:38-41`, `agent.FilesUnderRoot{Dir: sessionsDir(), SessionIDFromPath: sessionIDFromPath}`). No directory, no `SessionState`.\n2. **A parent link.** All three linking mechanisms miss: `deriveParentSessionID` (`helpers.go:261`) matches only `.../<parent>/subagents/<child>.jsonl`; `deriveParentSessionFromTranscript` (`helpers.go:302`) needs a `{\"type\":\"session\",\"parentSession\":...}` header; and a parser may set `ev.ParentSessionID` — the Copilot parser never does (its only mention of the field is the comment at `parser.go:385` explaining why it doesn't). But this is a *moot* miss: with no child row there is nothing to attach a link to.\n3. **Something for the sweep to sweep.** The machinery this scenario exercises is child-row-shaped: `reapStaleChild` (`pid_manager.go:1044`) deletes a child `SessionState` and fires `onChildDeleted` (`:1068`) so the parent gets re-evaluated; `deleteWithChildren` cascades. With zero child rows that code path receives no input.\n\nSo: no trace exists, which is the `incapable` definition — and the reason is the agent's process model, not a missing irrlicht capability.\n\n**No unblock path exists on our side.** This is the sharpest difference from the codex and kiro-cli cells, both of which are `incapable` *with* a named adapter fix (read `thread_spawn_edges`; project the sidecar `parent_session_id`). There is no equivalent here: nothing in `$COPILOT_HOME` describes a child session, because there is no child session. Only a GitHub change making Copilot subagents out-of-process and session-backed would flip this cell. Do not file an adapter issue against it.\n\n## The recordable residue is already covered\n\nStrip the child half and what remains — SIGKILL a Copilot session, sweep it, no spurious `working` — is the single-session death path, and the `1-2_session-end` cell already records exactly that (`daemon=full`; its recipe drives `sigkill` twice, once mid-turn during a 200-word essay). Recording 3.4 for Copilot would produce a duplicate of 1-2 while silently dropping both acceptance bullets that make 3.4 a distinct scenario. Freezing is the honest outcome; a weakened recording would not be.\n\n## The one thing that IS interesting here (a caveat, not this cell's bug)\n\nA parent SIGKILLed mid-subagent leaves an **unmatched `subagent.started`** in a frozen `events.jsonl`. `Parser.openSubagents` is only ever decremented by a matching `subagent.completed` (`parser.go:400-403`), the Copilot parser does not implement `rotationResetter.ResetForRotation`, and nothing else clears the set — so any read of that transcript reports `OpenSubagents = 1` forever.\n\nIt is not a finding **for this scenario**, for two cited reasons:\n\n- **It cannot produce this scenario's failure.** The invariant 3.4 guards is \"no spurious `state_transition` to `working` during cleanup.\" `OpenSubagents` is display-only: its sole consumer is `ComputeSubagentSummary` (`grouped.go:266-270`, the subagent chip) plus `ApplySubagentTaskEstimate`. No state machine reads it, and both subagent events are `Skip=true` (`parser.go:390`), so an unmatched `started` can neither drive a transition nor hold a session in `working`.\n- **The session carrying it is deleted by the very sweep under test**, on PID liveness — empirically established by the recorded `1-2_session-end` cell, whose recipe SIGKILLs mid-turn and verifies the session disappears. The stale count is bounded by the dead session's remaining lifetime and vanishes with it. (Rotation is not a risk either: `openSubagents` is a set keyed on `toolCallId`, so a replay-from-zero after a rewrite is idempotent — the exposure is a frozen file, not a rotated one.)\n\nWhere it *would* become user-visible is `session-resume`, not orphan cleanup — see caveats; that belongs to the 1-4 / 3-1 pair and is flagged there rather than smuggled into a frozen cell.\n\n## driver_capability = n/a\n\n`n/a` because the cell is frozen, **not** because the driver is short a step. `driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` reports `send slash sleep wait_turn exit_clean sigkill interrupt keys restart start_session session reset_session resume` (DRIVE_ELICITS, line 128) — `sigkill` and `restart`, the two primitives this recipe would need, are both present. If Copilot ever grew session-backed subagents, this cell would be recordable with the driver exactly as it stands. Do not relabel this `driver-gap`.",
+      "caveats": [
+        "FOLLOW-UP, out of scope for this cell and PROVISIONAL: an unmatched `subagent.started` (parent SIGKILLed mid-subagent) is never cleared, and the `1-4_session-resume` assessment concludes that Copilot resume REUSES the same session-state/<id>/ directory and APPENDS to the same events.jsonl. If that holds, a session killed mid-subagent and then resumed would come back alive carrying a phantom open-subagent chip for the rest of its life — a real, user-visible artifact. It is NOT assertable here (this cell records nothing, and resume is a different scenario), and the resume premise is explicitly provisional: the 1-4 cell holds it at confidence 0.65, having observed the resumed process claim the original session directory but never observed an appended line live, and it is itself blocked at driver=gap:resume. The 1-4 recording is what settles it; if it confirms the append, the fix is a parser reset (or a bounded open-subagent lifetime) and belongs to 3-1/1-4, not to 3.4.",
+        "Both live subagent payloads that ground this verdict come from the 3-1_foreground-subagent capture on CLI 1.0.77 on this machine. No SIGKILL-mid-subagent run was performed for this assessment: the verdict does not need one, because it turns on the ABSENCE of a child session directory (a structural property of the store, already observed) rather than on kill-time behaviour.",
+        "The issue #321 cleanup invariant (no spurious `working` during cleanup) is daemon-internal and agent-agnostic; it stays covered by the claudecode, antigravity, opencode and mistral-vibe cells, which do have file-backed children. Copilot contributes no coverage of it and its absence costs the matrix nothing.",
+        "The 3.4 scenario row carries no `requires` array, so run-cell.sh's subagent probe (which hard-fails on parent_linked==0) would not fire for this cell in any case. Moot while frozen, but worth knowing before anyone tries to unfreeze it: a Copilot recording would report parent_linked=0 legitimately.",
+        "Re-assess ONLY on a Copilot CLI change that gives subagents their own session-state directory (or any on-disk child record). No irrlicht-side change can flip this cell."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/3-1_foreground-subagent/metadata.json",
+          "note": "Live capture on CLI 1.0.77: subagent.started/subagent.completed pair on toolCallId inside the PARENT's events.jsonl, agentId:null on completion; seven built-in agents. Establishes agent-has-subagents AND agent-creates-no-child-session — the two facts this cell turns on."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "trackSubagent (382-404): Copilot subagents 'write no session directory of their own, so they are counted here rather than linked through ParentSessionID the way codex's and pi's file-backed children are'; both events Skip=true (390). openSubagents is decremented only by a matching completed (400-403); OpenSubagents (406-411) returns len(set). No ResetForRotation — nothing clears an unmatched started."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Source: agent.FilesUnderRoot{Dir: sessionsDir(), SessionIDFromPath: sessionIDFromPath} (38-41) — an irrlicht Copilot session exists iff a session-state/<id>/ directory exists. No directory for a subagent means no child SessionState."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/helpers.go",
+          "note": "deriveParentSessionID (261) matches only .../<parent>/subagents/<child>.jsonl; deriveParentSessionFromTranscript (302) matches only a {type:session,parentSession:...} header. Neither matches Copilot's session-state/<id>/events.jsonl — moot, since there is no child row to link."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "reapStaleChild (1044-1071) deletes a child SessionState and fires onChildDeleted so the parent is re-evaluated; deleteWithChildren cascades. The orphan machinery this scenario exercises is keyed on child rows, of which Copilot produces zero."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/grouped.go",
+          "note": "ComputeSubagentSummary (266-270) is the ONLY consumer of Metrics.OpenSubagents (with ApplySubagentTaskEstimate) — the subagent chip. Display-only: no state machine reads the count, so a stale open-subagent cannot cause the spurious working transition this scenario guards."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/1-2_session-end/metadata.json",
+          "note": "daemon=full, recorded; its recipe drives sigkill twice (once mid-turn during a 200-word essay). The single-session kill + PID-liveness sweep — the only recordable residue of 3.4 for Copilot — is already covered there."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/1-4_session-resume/metadata.json",
+          "note": "Resume reuses the ORIGINAL session id and session-state/<id>/ directory and appends to the same events.jsonl — held at confidence 0.65 (resumed process observed claiming the directory; no appended line observed live) and blocked at driver=gap:resume. The provisional premise for the phantom-open-subagent follow-up caveat."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/rotation_detect.go",
+          "note": "resetAccumulatorsForRotation (120-129) calls the optional rotationResetter; only vibe implements it. Copilot does not need it for this metric: openSubagents is a toolCallId-keyed SET, so replay-from-zero is idempotent. The exposure is a FROZEN transcript, not a rotated one."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS (128) includes sigkill and restart — the two primitives a 3.4 recipe would need. driver=n/a here is 'frozen, nothing to drive', NOT a tooling gap; do not relabel this cell driver-gap."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/scenarios.json",
+          "note": "Scenario 3.4 acceptance criteria require '>= 1 child session(s) linked to a parent' and '>= 1 subagent transcript(s)', and the process turns on orphaned CHILD sessions surviving the parent. Neither is producible for Copilot. No `requires` array on the row."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#321",
+          "note": "Zombie-on-restart fix establishing the no-working-transition-during-cleanup invariant. Agent-agnostic and covered by the claudecode/antigravity/opencode/mistral-vibe cells — not a Copilot gap."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "note": "Frozen: agent=partial, daemon=incapable. No recipe is run. A Copilot subagent runs in-process and writes no session-state/<id>/ directory, so no child session exists to be orphaned by the parent's death — the scenario's two acceptance bullets (>=1 child session linked to a parent, >=1 subagent transcript) can never be satisfied, and the daemon's child-orphan sweep (reapStaleChild/onChildDeleted) has no input. The residual single-session kill+sweep is already recorded by 1-2_session-end. Not a driver gap: driver-interactive.sh already elicits sigkill and restart. Re-author only if a future Copilot CLI gives subagents their own on-disk session record.",
+      "script": []
+    }
+  }
+}

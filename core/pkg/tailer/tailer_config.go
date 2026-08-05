@@ -43,7 +43,9 @@ func surviveTurnDone(name string) bool {
 // in domain/session) pin both sets.
 func isUserBlockingToolName(name string) bool {
 	switch name {
-	case "AskUserQuestion", "ExitPlanMode", "question", "ask_user_question":
+	// exit_plan_mode / ask_user are GitHub Copilot's spellings (#1256).
+	case "AskUserQuestion", "ExitPlanMode", "question", "ask_user_question",
+		"exit_plan_mode", "ask_user":
 		return true
 	}
 	return false

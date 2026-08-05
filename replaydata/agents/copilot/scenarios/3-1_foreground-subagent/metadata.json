@@ -1,0 +1,109 @@
+{
+  "scenario_id": "foreground-subagent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.78",
+    "daemon_version": "0.5.9+a21849f",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes — Copilot ships in-process subagents (task/explore/research/code-review/security-review/rubber-duck/sidekick), live-captured as subagent.started/subagent.completed on CLI 1.0.77. daemon_capability: bug — the parser counts them correctly but agents.SubagentCounters binds a session-less parser instance, so the domain metric is always 0 (probe seen red). driver_capability: ready.\n\nDAEMON CAPABILITY CORRECTED bug -> full on 2026-08-05. The wiring defect (agents.SubagentCounters closing over a wiring-time parser while the metrics Adapter builds one per transcript) is fixed in 00af8004 and pinned red-first by TestCountOpenSubagents_UsesTheParserThatActuallyParsed. Because the recorded events.jsonl carries no metrics vector, the clearance evidence is a LIVE probe: polling GET /api/v1/sessions once a second during a real three-way fan-out showed the parent session at open_subagents=3 for the whole span (last_event_type function_call -> user_message -> function_call_output) and back to zero on turn_done. Under the old wiring that column read 0 at every sample."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "foreground-subagent",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug (SubagentCount is always 0 in the live daemon — wiring defect, proven by a probe seen red)\ndriver_capability: ready\n\nRoute: record-known-failing.\n\n## agent_supports = yes\n\nGitHub Copilot CLI 1.0.77 runs foreground subagents in-process. Live capture on this machine (the two events pair on `toolCallId`):\n\n```\n{\"type\":\"subagent.started\",\"data\":{\"toolCallId\":\"call_CNK…\",\"agentName\":\"task\",\"agentDisplayName\":\"Task Agent\",\"model\":\"gpt-5-mini\"}}\n{\"type\":\"subagent.completed\",\"data\":{\"agentName\":\"task\",\"toolCallId\":\"call_CNK…\",\"durationMs\":…,\"totalTokens\":…,\"totalToolCalls\":…,\"agentId\":null}}\n```\n\nThe bundle ships seven built-in agents (task, explore, research, code-review, security-review, rubber-duck, sidekick). The parent blocks on the delegation and resumes its own turn afterwards, which is exactly the foreground (synchronous) shape this scenario asserts.\n\nThe topology differs from claudecode's, and that difference is an AGENT property, not an irrlicht one: a Copilot subagent creates NO `$COPILOT_HOME/session-state/<id>/` directory of its own. There is no child session, therefore no child transcript and nothing to bind a `ParentSessionID` to. The copilot adapter records this explicitly (`trackSubagent`, parser.go:382-404: \"Copilot's subagents … write no session directory of their own, so they are counted here rather than linked through ParentSessionID the way codex's and pi's file-backed children are\").\n\n## What this scenario asserts, mapped to Copilot\n\n| acceptance bullet | Copilot |\n|---|---|\n| Parent `ready → working` at spawn | observable — `user.message` drives working |\n| Parent stays `working` until the child ends | observable — both subagent events are `Skip=true` (parser.go:390), and Copilot's only turn boundary is the explicit `assistant.turn_end` |\n| Parent `working → ready` after the last child ends | observable — `assistant.turn_end` → `turn_done` |\n| `SubagentCount(parent) = N` while N children alive, decreasing as each ends | **the daemon bug below** — the parser is right, the wiring is not |\n| Child session with `ParentSessionID` / `parent_linked` / a subagent transcript | never emitted — no child session exists (agent architecture, see caveats) |\n\n## daemon_capability = bug\n\nThe trace exists (`subagent.started` / `subagent.completed`) and the copilot parser handles it correctly — `OpenSubagents` (parser.go:406-411) returns `len(p.openSubagents)`, the set of started-but-not-completed `toolCallId`s, and `TestOpenSubagents` (metrics_test.go:176) pins 1 / 0 / 0. But the count never reaches `session.SessionMetrics.OpenSubagents`, so the dashboard's subagent chip stays empty for every Copilot session.\n\nRoot cause: `agents.SubagentCounters` (core/adapters/inbound/agents/maps.go:137-153) builds **one parser instance per adapter at wiring time** (`p := jp.NewParser()`) and closes over it. The instance that actually tails the session is a **different** object, created per transcript path inside the metrics adapter (`Adapter.parserFor` → `f()`, core/adapters/outbound/metrics/adapter.go:78-86, called from `ComputeMetrics` at :123). `countOpenSubagents` (:90) invokes the wiring-time singleton, which is never fed a line, so it always answers 0.\n\nclaudecode is immune by construction: its `CountOpenSubagents(m)` is a PURE function of `SessionMetrics` and deliberately returns 0 (parser.go:962), so the stale receiver is irrelevant. The `agent.SubagentCounter` signature `OpenSubagents(m *tailer.SessionMetrics) int` encodes that assumption. Copilot is the first adapter to answer from parser state, and `tailer.SessionMetrics.OpenSubagents` is declared (tailer.go:90-93) but never populated by the tailer — so there is no `m`-derived route available either.\n\nEvidence — a probe wired end-to-end through the real collector (`agentwiring.BuildMetricsCollector(agents.All())` → `ComputeMetrics(events.jsonl, \"copilot\")`) over a transcript holding one unmatched `subagent.started`, run in this worktree and then deleted:\n\n```\n=== RUN   TestProbeCopilotOpenSubagentsReachesDomainMetrics\n    zz_probe_test.go:31: domain OpenSubagents = 0\n    zz_probe_test.go:33: OpenSubagents = 0, want 1\n--- FAIL: TestProbeCopilotOpenSubagentsReachesDomainMetrics (0.00s)\n```\n\nThe existing unit test passes because it calls `p.OpenSubagents(m)` on the same instance it fed — blind to the wiring, the classic shape.\n\nThis is `bug`, not `incapable`: the signal is in the store, the parser already reads it, and one seam change (hand the counter the live parser, or have the tailer carry the count in `SessionMetrics`) delivers the observable this scenario needs.\n\n## driver_capability = ready\n\nThe recipe needs `send`, `wait_turn`, `sleep`. `driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` reports: exit_clean, interrupt, keys, reset_session, restart, resume, send, session, sigkill, slash, sleep, start_session, wait_turn. The driver launches with `--allow-all` (line 175), which matters here: `--allow-all-tools` alone is NOT enough — a subagent's bash was refused with denied-no-approval-rule-and-could-not-request-from-user. `wait_turn` counts `assistant.turn_end` lines exactly (line 278-282) rather than guessing at tail quietness.\n\n## What the spec can and cannot assert\n\nexpected.jsonl's DSL matches only `state_transition` states and lifecycle `kind`s (validate/expected.go:107-141), and `ObservationSpec` covers model/cost/tokens only. There is no subagent-count predicate, so the spec asserts the state arc (which is correct today) and carries `known_failing` plus this body as the record of the broken half. The phases will pass; the flag is what says the cell is not whole.\n\nDAEMON CAPABILITY CORRECTED bug -> full on 2026-08-05. The wiring defect (agents.SubagentCounters closing over a wiring-time parser while the metrics Adapter builds one per transcript) is fixed in 00af8004 and pinned red-first by TestCountOpenSubagents_UsesTheParserThatActuallyParsed. Because the recorded events.jsonl carries no metrics vector, the clearance evidence is a LIVE probe: polling GET /api/v1/sessions once a second during a real three-way fan-out showed the parent session at open_subagents=3 for the whole span (last_event_type function_call -> user_message -> function_call_output) and back to zero on turn_done. Under the old wiring that column read 0 at every sample.",
+      "caveats": [
+        "The parent-link half of this scenario is unreachable for Copilot by ARCHITECTURE, not by defect: a subagent writes no session-state directory, so there is no child SessionState, no parent_linked event and no subagent transcript — the daemon cannot link an entity the agent never creates. Fixing the SubagentCounters wiring gets SubagentCount(parent)=N and nothing more. Cited: core/adapters/inbound/agents/copilot/parser.go:382-404 (trackSubagent) and the Source declaration agent.FilesUnderRoot{Dir: sessionsDir()} in agent.go, whose SessionIDFromPath keys a session to a session-state/<id>/ directory.",
+        "This scenario has no `requires: [subagents]` in replaydata/agents/scenarios.json, so run-cell.sh's subagent probe (scripts/run-cell.sh:407-457, which hard-fails on parent_linked==0) does NOT fire for this cell. If `requires` is ever added to the scenario row, this cell will start failing with no_subagents_spawned even though Copilot behaved correctly — the probe's adapter case statement would need a copilot arm.",
+        "UNVERIFIED (emission, not parsing): whether a subagent's own inner turns emit additional `assistant.turn_end` lines into the PARENT's events.jsonl. If they do, the parent would flip working→ready mid-span (breaking the held-working invariant) and the driver's turn_count would return from wait_turn early. The live capture that established the subagent envelope did not settle this; only the recording can. Confidence is held at 0.8 for this reason.",
+        "UNVERIFIED: whether a subagent's tool calls raise `permission.requested` under --allow-all. If one does, the parent enters waiting and the no-waiting invariant fails. The recipe therefore gives the subagent a reasoning-only task (no shell, no file writes) to keep the approval surface at zero; the driver additionally dismisses a stray dialog (driver-interactive.sh:294-296).",
+        "`model` is deliberately NOT pinned. The account can only reach gpt-5-mini and claude-haiku-4.5 and `--model` accepts only \"auto\", so the parent's effective model is resolved at runtime via session.auto_mode_resolved — record fills it from the recording. `cost_nonzero` is left unasserted too: \"gpt-5-mini\" has no entry in core/pkg/capacity/aliases.go, so whether pricing resolves is unknown until the recording shows it."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "trackSubagent (382-404) pairs subagent.started/completed on toolCallId and marks both Skip; OpenSubagents (406-411) returns len(p.openSubagents) — ignoring the SessionMetrics argument, which is what makes the wiring defect fatal."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/maps.go",
+          "note": "SubagentCounters (137-153) calls jp.NewParser() ONCE per adapter at wiring time and closes over that instance — the defect's origin. Its own doc comment still says \"currently: claudecode\", for which the pure-function contract held."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/metrics/adapter.go",
+          "note": "parserFor (78-86) mints a DIFFERENT parser per transcript path inside the cached tailer (ComputeMetrics :123); countOpenSubagents (88-95) calls the wiring-time singleton instead, and the result lands on result.OpenSubagents (:143)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/parser.go",
+          "note": "CountOpenSubagents (951-964) returns 0 as a pure function of SessionMetrics — why claudecode never exercised the stale-receiver path, and why this defect is new with copilot."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "SessionMetrics.OpenSubagents (90-93) is declared and copied through but never populated by the tailer — so there is no m-derived route a copilot counter could use instead."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/metrics_test.go",
+          "note": "TestOpenSubagents (176-200) passes because it asserts p.OpenSubagents(m) on the same instance it fed; it is blind to the collector wiring, which is why the defect shipped green."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/expected.go",
+          "note": "ExpectedPhase (107-141) matches only state_transition states and lifecycle kinds; ObservationSpec (82-101) covers model/cost/tokens — no subagent-count predicate exists, so the broken observable cannot be asserted as a phase."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS (128) covers send/wait_turn/sleep; launch_repl uses --allow-all (175); wait_turn counts assistant.turn_end exactly (278-291)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "copilot CLI 1.0.77+ on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation does not require a re-login)",
+        "An active Copilot plan with AI credits — the subagent turn spends them",
+        "irrlichd recording with the copilot transcripts permission granted"
+      ],
+      "setup": [
+        "The driver seeds an isolated COPILOT_HOME under the staging dir (trustedFolders + askedSetupTerminals pre-answered) and launches copilot with --allow-all in a fresh empty cwd",
+        "No file is seeded into the cwd on purpose: the subagent's task is reasoning-only so no shell or write approval can be raised mid-span"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Delegate this to the task subagent instead of doing it yourself: ask it to write a two-sentence explanation of what a JSONL file is and report that explanation back to you. Wait for the subagent to finish, then reply with exactly: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "transcript events.jsonl contains a subagent.started and a subagent.completed sharing one toolCallId (the foreground delegation actually happened)",
+        "events.jsonl shows the copilot session entering ready, then exactly one ready→working transition driven by the user prompt",
+        "no state_transition to ready or waiting fires on that session between the working transition and the end of the subagent span",
+        "events.jsonl shows one working→ready transition at assistant.turn_end",
+        "KNOWN FAILING: the recorded session's open_subagents metric is 0 for the whole span (expected 1 between subagent.started and subagent.completed) — agents.SubagentCounters binds a session-less parser instance",
+        "EXPECTED ABSENT (agent architecture, not a defect): zero parent_linked events and no child session — Copilot subagents write no session-state directory"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}

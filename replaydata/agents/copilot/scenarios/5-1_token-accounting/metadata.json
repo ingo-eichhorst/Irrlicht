@@ -1,0 +1,138 @@
+{
+  "scenario_id": "token-accounting",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+a21849f",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-accounting",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n`token-accounting` asserts multi-turn token accumulation: `TotalTokens > 0` after turn 1, non-decreasing after each later turn, and — as a third criterion — cache-read tokens bucketed separately from fresh input on a fully-cached turn. The first two are fully observable for Copilot; the third is not attributable per turn (see caveats), which is a narrow gap kept as a caveat rather than a downgrade.\n\n## agent_supports: yes\n\nGitHub Copilot CLI 1.0.77 writes token counts into its append-only transcript at `~/.copilot/session-state/<session-id>/events.jsonl`, via TWO distinct paths — established live on this machine, not inferred from docs:\n\n1. **Per-message, while the session runs.** Every `assistant.message` carries `data.outputTokens` (an increment for that message). This is the ONLY token signal available mid-session.\n2. **Cumulative, at exit.** `session.shutdown` carries the full block:\n\n```json\n{\"totalNanoAiu\":383150000,\"totalPremiumRequests\":0,\"currentTokens\":15144,\n \"currentModel\":\"gpt-5-mini\",\n \"tokenDetails\":{\"input\":{\"tokenCount\":14078},\"cache_read\":{\"tokenCount\":0},\"output\":{\"tokenCount\":156}},\n \"modelMetrics\":{\"gpt-5-mini\":{\"requests\":{\"count\":1,\"cost\":0},\n   \"usage\":{\"inputTokens\":14078,\"outputTokens\":156,\"cacheReadTokens\":0,\n            \"cacheWriteTokens\":0,\"reasoningTokens\":128},\n   \"totalNanoAiu\":383150000}}}\n```\n\n**The load-bearing finding** — verified by watching a RUNNING session rather than replaying a finished transcript — is that `session.usage_checkpoint` carries ONLY `{modelCacheState, totalNanoAiu, totalPremiumRequests}`. It has NO token counts at all: `modelMetrics`, `tokenDetails` and `currentTokens` exist ONLY on `session.shutdown`. An implementation that read the cumulative block alone would leave an interactive session reporting zero tokens and zero cost for its entire lifetime, however long it ran.\n\n## daemon_capability: full\n\nThe adapter watches `FilesUnderRoot{Dir: ~/.copilot/session-state, SessionIDFromPath: <session-id> dir, Parser: JSONLineParser}` (agent.go:38-44) — the transcript filename is the constant `events.jsonl`, so the session id comes from the directory.\n\nBoth token paths are wired, against ONE shared per-model high-water mark (`Parser.lastUsage`), which is what makes them compose instead of double-counting:\n\n- `parseAssistantMessage` → `queueOutputIncrement(model, data.outputTokens)` adds the increment onto the mark and queues a `PerTurnContribution{Usage:{Output}}` (parser.go:189-208, 340-355). This is the live path: cost stops being flat-zero for a running session.\n- `parseUsage` (on `usage_checkpoint` AND `shutdown`) → `queueContribution(model, cumulative)` queues the DELTA of `modelMetrics.<model>.usage` against the same mark (parser.go:300-330, 361-381). By the time shutdown reports the cumulative total the output half has already been contributed live, so only the previously-unseen input (and cache) tokens land.\n- `drainPendingContribution` attaches one queued contribution per event, including skipped ones — metrics events are `Skip=true` (a shutdown must not flip a finished session back to `working`), but the tailer's `applySkippedEvent` still applies their token metadata.\n\nContributions are non-negative deltas folded into `SessionMetrics.TotalTokens` by `MergeMetrics`, so accumulation across the three turns is monotonic — exactly what the scenario asserts. The state arc is unremarkable and read rather than inferred: Copilot's turn boundaries are EXPLICIT (`user.message` → `working`; `assistant.turn_end` → `turn_done` → `ready`), so three `ready→working→ready` cycles land on one stable session id (parser.go:94-99).\n\nFour adapter tests drive the real 1.0.77 event shapes through the PRODUCTION tailer and pin each half: `TestTokenAccounting_EndToEnd` (input 14078 / output 156 / model / version / `LastEventType==turn_done`), `TestLiveSessionHasOutputTokensBeforeShutdown` (a running session with two checkpoints and NO shutdown still reports 155 output tokens — the regression test for the checkpoint finding above), `TestShutdownDoesNotDoubleCountOutput` (per-message 100+56 and the shutdown cumulative 156 describe the same tokens; input 14078 lands only at shutdown), and `TestUsageIsIdempotentAcrossRereads` (a cumulative block re-read must not double the session).\n\n**Cost.** Per the #1256 maintainer decision, cost is the shared general token pricing path (`core/pkg/capacity/aliases.go` → `EstimatedCostUSD`), identical to every other adapter. Copilot's own billing units — `totalNanoAiu` (÷1e9 = AI credits, confirmed against the CLI's own exit summary on two sessions) and `totalPremiumRequests` — are a separate consumption signal and are deliberately NOT reconstructed into a dollar figure; remaining/entitlement budget is not on disk anywhere. A model-alias bug surfaced and was fixed while establishing this: the auto-router reports `claude-haiku-4.5` (family-first, dotted), which matched neither the normalizer's dashed patterns nor the version-first Cursor aliases, so such a session priced at $0; `gpt-5-mini` already resolved.\n\n## driver_capability: ready\n\nThe recipe needs `send`, `wait_turn`, `sleep` and `exit_clean`; `driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` reports `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn`. No gap.\n\n`exit_clean` (`/exit`) is load-bearing for THIS scenario rather than cosmetic: input tokens have no live signal, so a recording that ends by killing the process would capture output tokens only and never the `modelMetrics` reconciliation. A clean `/exit` produces the `session.shutdown` line that makes the cumulative block observable in the recording.",
+      "caveats": [
+        "The scenario's THIRD acceptance criterion (CacheReadTokens > 0 with fresh input = 0 on a fully-cached turn) is NOT attributable per turn for Copilot, and the spec deliberately does not assert it. cacheReadTokens/cacheWriteTokens exist only inside the cumulative modelMetrics block, which the CLI writes only on session.shutdown (session.usage_checkpoint carries no token counts at all — verified live on 1.0.77). Cache reads therefore arrive as ONE session-total delta at exit, never bound to a turn. Same class as the codex sibling's 'do not assert a nonzero cache' caveat, so daemon stays full per the caveats-over-downgrades rule; the two monotonicity criteria, which are what this scenario exists to lock down, are fully observable. A 4th 'cached' turn was left out of the recipe for the same reason: it would spend AI credits for an assertion nothing can check.",
+        "Input tokens land in a single delta at session.shutdown. Any recording that ends with sigkill/interrupt instead of exit_clean will show output tokens only (cost still non-zero, input zero). This is why the recipe ends with exit_clean.",
+        "MULTI-MODEL TAIL RISK (code-read, not yet seen live): drainPendingContribution attaches at most ONE queued contribution per event (parser.go:140-146) and session.shutdown is the LAST line of the transcript, while the tailer reads incrementally from its last offset (tailer.go:518-542) and so never revisits it. If the auto-router used two models in the session, shutdown queues one delta per model (sortedKeys order) and only the first drains — the surplus is stranded and that model's input tokens are lost. It under-reports; it does not break monotonicity, which is what this scenario asserts, and three identical trivial prompts should stay on one model. Recorded here as a caveat rather than a daemon=bug because no spec-required observable is mis-handled; worth a follow-up if a recording shows two entries in modelMetrics.",
+        "Copilot's account here offers only gpt-5-mini and claude-haiku-4.5 and --model accepts only 'auto', so which model serves the turns is the router's choice and can change mid-session (TestLiveSessionHasOutputTokensBeforeShutdown's fixture is exactly that shape). The spec therefore does NOT pin observations.model — record fills it from the recording.",
+        "SESSION MODEL CORRECTED by the live recording 2026-08-03 (the assessment asserted single-birth): copilot does NOT mint events.jsonl at launch. The session-state directory is created holding only workspace.yaml, so processlifecycle mints a transient proc-<PID> presession row born ready, and the real dir-keyed session arrives ~7s later when the first prompt writes events.jsonl — born DIRECTLY into working, because the open turn is already on disk at discovery. Birth is therefore two phases (presession_birth ready, then t1_start working) and every later phase anchors to the REAL session; there is no separate ready→working edge for turn 1."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "parseUsage (L263-330) documents the verified payload split — usage_checkpoint carries only modelCacheState/totalNanoAiu/totalPremiumRequests; modelMetrics/tokenDetails/currentTokens only at shutdown. queueOutputIncrement (L331-355) is the live output path; queueContribution (L356-381) is the cumulative delta against the shared lastUsage high-water mark; drainPendingContribution (L134-146) attaches one contribution per event."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/metrics_test.go",
+          "note": "TestTokenAccounting_EndToEnd / TestLiveSessionHasOutputTokensBeforeShutdown / TestShutdownDoesNotDoubleCountOutput / TestUsageIsIdempotentAcrossRereads drive the real CLI 1.0.77 event shapes through the production tailer; the fixture at L21 is the verbatim session.shutdown payload from a live session."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go L38-44",
+          "note": "FilesUnderRoot{~/.copilot/session-state} + sessionIDFromPath (session id = directory, transcript name is the constant events.jsonl) + JSONLineParser — the transport the token events arrive on."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go L39-50, L94-99",
+          "note": "Explicit turn boundaries (user.message → working, assistant.turn_end → turn_done → ready) and Skip=true on lifecycle/metrics events, which is what gives the three clean ready→working→ready arcs this scenario's topology needs."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/aliases.go",
+          "note": "#1256 cost decision: general token pricing → EstimatedCostUSD, as for every other adapter; Copilot's totalNanoAiu (AI credits) is not reconstructed into a dollar figure. The claude-haiku-4.5 (family-first, dotted) alias was added here after it priced at $0."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh L128, L342, L360",
+          "note": "DRIVE_ELICITS covers send/wait_turn/sleep/exit_clean; exit_clean issues /exit, producing the clean session.shutdown this cell depends on."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/5-1_token-accounting/metadata.json",
+          "note": "Sibling precedent for keeping daemon=full with a 'do not assert a nonzero cache' caveat when per-turn cache tokens aren't observable."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "copilot CLI 1.0.77+ on PATH and authenticated (auth lives in the OS keychain and survives COPILOT_HOME isolation)",
+        "An active Copilot plan with AI credits — this recipe spends four CLI turns' worth",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a daemon started with --record)",
+        "Do NOT assert a non-zero cache bucket: Copilot reports cacheReadTokens only in the cumulative shutdown block, never per turn"
+      ],
+      "setup": [
+        "The interactive driver launches copilot in a fresh per-run cwd under <staging>/cwd/ and waits for the TUI prompt before the first send",
+        "No --model flag: this account accepts only 'auto', and the assertion is about token accumulation, not which model produced the tokens",
+        "Three identical trivial prompts keep the router on one model and keep tool calls at zero"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows three state_transition→working / →ready arcs on the SAME session_id (the <session-id> directory under ~/.copilot/session-state), one per prompt",
+        "no state_transition to waiting at any point, and no tool calls (the prompts are no-ops)",
+        "transcript events.jsonl carries an assistant.message with outputTokens > 0 for every turn, so cum_output_tokens is non-zero BEFORE any shutdown line exists",
+        "SessionMetrics.TotalTokens after turn 1 > 0; after turn 2 ≥ after turn 1; after turn 3 ≥ after turn 2 (monotonic across three turns)",
+        "the transcript ends with a session.shutdown line carrying modelMetrics/tokenDetails/currentTokens (the /exit path), and the replay golden's cum_input_tokens is > 0 as a result",
+        "estimated_cost_usd > 0 via the shared capacity price map — if it reads $0, the model alias is missing from core/pkg/capacity/aliases.go (that was the claude-haiku-4.5 bug), not a token-accounting gap",
+        "cache buckets may be 0 — cacheReadTokens is cumulative-at-shutdown only, never per turn; do NOT assert a non-zero cache",
+        "if modelMetrics at shutdown has MORE than one model entry, check cum_input_tokens against the sum: only one queued per-model delta can drain onto the final event (see the multi-model caveat)",
+        "the session's final live state is ready before /exit tears the REPL down"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

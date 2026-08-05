@@ -186,3 +186,36 @@ func TestModelAliases_ShadowDirectLookup(t *testing.T) {
 		t.Errorf("alias %q returned direct entry instead of canonical: %+v", alias, got)
 	}
 }
+
+// TestCopilotAlias_ResolvesToRealCostEstimate is the end-to-end regression
+// test for GitHub Copilot sessions pricing at $0. Copilot's auto-router
+// reports Anthropic models family-first with a dotted minor version
+// ("claude-haiku-4.5"); the canonical LiteLLM key is dashed
+// ("claude-haiku-4-5"), and the pre-existing Cursor aliases are version-first
+// ("claude-4.5-haiku"), so Copilot's spelling matched nothing and every turn
+// on that model cost $0.
+//
+// Observed live on Copilot CLI 1.0.77 (#1256): the router resolved a turn to
+// "claude-haiku-4.5" mid-session while "gpt-5-mini" — the other model this
+// account can reach — already priced correctly on its own.
+func TestCopilotAlias_ResolvesToRealCostEstimate(t *testing.T) {
+	cm := NewForTest(map[string]ModelCapacity{
+		"claude-haiku-4-5": {
+			ContextWindow: 200000,
+			MaxOutput:     64000,
+			Pricing: &ModelPricing{
+				InputPerMTok:  1.0,
+				OutputPerMTok: 5.0,
+			},
+		},
+	})
+
+	cost := cm.EstimateCostUSD("claude-haiku-4.5", 14078, 211, 0, 0)
+	want := (14078.0*1.0 + 211.0*5.0) / 1_000_000
+	if cost != want {
+		t.Errorf("EstimateCostUSD(claude-haiku-4.5, ...) = %v, want %v", cost, want)
+	}
+	if cost <= 0 {
+		t.Fatal("claude-haiku-4.5 still prices at $0 — the Copilot alias regressed")
+	}
+}

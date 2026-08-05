@@ -1,0 +1,121 @@
+{
+  "scenario_id": "task-list",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+00af800",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (Copilot CLI 1.0.77 ships a first-class built-in `update_todo` tool — src/runtime/src/tools/update_todo.rs — whose entries carry exactly pending|in_progress|completed); daemon_capability: bug (the payload IS persisted to events.jsonl as tool.execution_start.data.arguments.todos, but copilot/parser.go's parseToolStart reads only toolCallId+toolName and wires no TodoReconciler, so ZERO TaskDeltas are emitted and the session API `tasks` field stays empty — a feasible parser-side unlock, not architectural incapability); driver_capability: ready (send + wait_turn + sleep are all in DRIVE_ELICITS)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-list",
+      "agent": "copilot",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: ready\n\n## Reasoning\n\n### agent_supports: yes\n\nThe open question going into this cell was whether Copilot ships a todo/plan tool analogous to claudecode's TaskCreate/TaskUpdate, opencode's `todowrite` or gemini-cli's `write_todos`. It does — TWO of them — and the shipped bundle is authoritative:\n\n1. **`update_todo`** — a built-in tool implemented in the Rust runtime (`prebuilds/darwin-arm64/runtime.node` carries the panic-path source string `src/runtime/src/tools/update_todo.rs`, plus the registered napi functions `tool_update_todo_name`, `tool_update_todo_parse_entries` → `Vec<UpdateTodoEntry>`, `tool_update_todo_parse_counts` → `{total_items, completed_items, pending_items}`). Its input schema, verbatim from the same binary, is `{\"type\":\"object\",\"properties\":{\"todos\":{\"type\":\"string\",\"description\":\"A markdown checklist of TODO items showing completed and pending tasks.\"}},\"required\":[\"todos\"]}`, and its description opens \"Use this TODO tool to manage the tasks that must be completed to solve the problem. Use this tool VERY frequently to keep track of your progress towards completing the overall goal, keeping all item statuses up to date.\" The item-line grammar is a checkbox regex, also verbatim: `^[\\s]*(?:[-*+]|[0-9]+[.)])[ \\t]*\\[([ xX\\-~/])\\][ \\t]*(.*)$`. Crucially the parsed entry status is a THREE-valued enum, not a binary checkbox: `app.js`'s `function Wpi(t){switch(t){case\"completed\":case\"pending\":case\"in_progress\":return t;default:throw new Error(`Unknown todo entry status returned from Rust runtime: ${t}`)}}` — i.e. the Rust parser returns `in_progress`, so the scenario's pending → in_progress → completed walk is representable in one tool.\n\n2. **`sql` over the per-session SQLite store** — the runtime creates `CREATE TABLE IF NOT EXISTS todos (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT, status TEXT DEFAULT 'pending' CHECK(status IN ('pending','in_progress','done','blocked')), …)` plus `todo_deps`, and the system prompt instructs the model \"**IMPORTANT: Always update todo status as you work:** 1. Before starting a todo: `UPDATE todos SET status = 'in_progress' WHERE id = 'X'` 2. After completing a todo: `UPDATE todos SET status = 'done' WHERE id = 'X'`\".\n\nBoth names appear in the same tool-registry name list in the binary (`…report_progress reply_to_comment sql update_todo task_complete`). Neither spawns a child session, so SubagentCount stays 0 — exactly the single-session task list the scenario asserts, distinct from foreground/background-subagent. The recipe pins `update_todo` explicitly so the recording exercises one deterministic shape rather than whichever the router picks.\n\nThe earlier live observation that \"the only toolName observed live is bash\" is not counter-evidence: those recordings drove bash-only prompts, and 2-2's recipe further narrowed the tool set with `--available-tools=bash`.\n\n### daemon_capability: bug (NOT incapable — this is a feasible parser unlock)\n\nA local trace exists, is persisted, and carries the full payload; the adapter throws it away.\n\n- **The trace is persisted.** `schemas/session-events.schema.json` (shipped with the CLI) defines `ToolExecutionStartData` with `toolCallId`, `toolName` and `arguments` (`x-opaque-json`), and `ToolExecutionStartEvent.ephemeral` is an ordinary optional boolean — i.e. `tool.execution_start` lands in `events.jsonl`, the exact file the copilot adapter tails. `app.js`'s ACP mapper reads the payload straight off that event: `case\"tool.execution_start\":{if(t.data.toolName===jpi)return o?.set(t.data.toolCallId,t.data.arguments),null;…}` with `jpi=h.toolUpdateTodoName()`. So the whole markdown checklist is in `data.arguments.todos` of a persisted line.\n- **The adapter drops it.** `core/adapters/inbound/agents/copilot/parser.go` `parseToolStart` sets only `ev.ToolUses = []tailer.ToolUse{{ID: id, Name: name}}` — it never reads `data[\"arguments\"]`, holds no `tailer.TodoReconciler`, and `ParsedEvent.TaskDeltas` / `TaskSnapshot` are never set anywhere in the file. With no TaskDelta the tailer's fold (`tailer.go` `applyTaskCreateDelta` / `applyTaskUpdateDelta`) has nothing to accumulate, so `SessionMetrics.Tasks` stays empty and the session API's `tasks` field — the load-bearing observable of this scenario — is empty. (The parser DOES scan assistant text for irrlicht's own markers via `tailer.ScanTaskEstimate` / `ScanTaskSummary`; that is a different, unrelated signal and contributes no tasks.)\n- **The fix is small and has three precedents.** `core/pkg/tailer/todo_reconciler.go` exists precisely for \"rewrite the whole list every call, no stable per-todo id\" tools (opencode `todowrite`, gemini-cli `write_todos`, codex `update_plan`); it keys tasks by label and emits the minimal Create/Update sequence plus a TaskSnapshot. `update_todo` is exactly that shape: a full-list markdown replace, keyed by the item text. The unlock is (a) split the checklist on the shipped line regex, (b) map the checkbox char to pending/in_progress/completed, (c) hand the result to a per-Parser `TodoReconciler` on `tool.execution_start` when `toolName == \"update_todo\"`.\n\nThat is why this is `bug`, not `incapable`: nothing about Copilot's transport or the three-state model blocks it — the signal is in the tailed file today and the adapter simply doesn't map it.\n\nNote the path irrlicht must NOT depend on: `session.todos_changed` is declared `\"ephemeral\": {\"const\": true, \"description\": \"Always true for events that are transient and not persisted to the session event log on disk.\"}` and its data is `{}` (\"Signal-only event … clients should call `session.plan.readSqlTodosWithDependencies()`\"). So the CLI's own live todo channel is a payload-free, non-persisted RPC signal — unusable from a transcript tail. The tool-call arguments are the only durable route, which is why the recipe pins `update_todo` rather than the SQL path (whose durable trace is a raw `UPDATE todos SET status=…` string that would need SQL parsing).\n\n### driver_capability: ready\n\n`driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` reports `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn`. The recipe needs `send` + `wait_turn` + `sleep` only. `wait_turn` counts `assistant.turn_end` lines, which Copilot writes as an explicit boundary, so the wait is exact.",
+      "caveats": [
+        "PROVISIONAL ON EMISSION, not on the parser: the daemon=bug verdict is grounded in the CLI's own shipped event schema (tool.execution_start persists data.arguments) plus the adapter source, NOT in a recording that contains an update_todo call. What a live run must confirm is (a) that the model actually calls update_todo when asked rather than falling back to the `sql` todos table or plain prose, and (b) the literal JSON shape of data.arguments (schema says opaque JSON with a `todos` string). Confidence held at 0.8 for that reason.",
+        "Checkbox→status mapping is INFERRED. The shipped line regex captures one of ` xX-~/` and the Rust returns pending|in_progress|completed (app.js Wpi), and the telemetry-only patterns pin ` `→pending and `x|X`→completed; which of `-`, `~`, `/` means in_progress is not stated in any string I could read. record should read the actual arguments off the recording before the parser fix hard-codes a mapping.",
+        "TOOL-SET FLAG HAZARD: the sibling 2-2 recipe halves credits with COPILOT_AVAILABLE_TOOLS=bash. Doing that HERE would strip update_todo from the model's tool set and silently invalidate the cell. This recipe sets COPILOT_AVAILABLE_TOOLS=update_todo instead (bash is not needed — the scenario is pure task bookkeeping).",
+        "Two competing task mechanisms ship in the same binary (update_todo and the SQL todos table), and the plan-mode system prompt explicitly says \"tracking is handled via SQL, not markdown checkboxes\". If the recording shows the model reaching for `sql` despite the prompt, that is a recipe correction (tighten the prompt / restrict the tool set), not a change of verdict — both write their payload to a persisted tool.execution_start.",
+        "The tasks-content assertion (three items with matching subjects + statuses in the session API tasks field) is not expressible in the phase DSL — same as the claudecode/opencode/codex/gemini-cli task-list siblings, where it lives in the replay golden's summary.tasks. Here the gap is DSL-asserted through the task_tracked phase (kind: task_delta), which currently records ZERO task_delta events and is the failing phase this cell pins.",
+        "Presession birth: copilot creates its session-state directory at launch but writes events.jsonl only at the first prompt, so a transient proc-<PID> row appears first. Modelled as two phases with every later phase anchored same_session_as session_birth (templated from the copilot 2-2 sibling).",
+        "model is deliberately UNPINNED: --model accepts only \"auto\" on this account and the router picks per turn between gpt-5-mini and claude-haiku-4.5. record fills it from the recording."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/prebuilds/darwin-arm64/runtime.node",
+          "note": "strings: `src/runtime/src/tools/update_todo.rs`; registered napi fns tool_update_todo_name / tool_update_todo_parse_entries (Vec<UpdateTodoEntry>) / tool_update_todo_parse_counts; input schema {\"todos\":{\"type\":\"string\",\"description\":\"A markdown checklist of TODO items showing completed and pending tasks.\"}} required [todos]; item regex ^[\\s]*(?:[-*+]|[0-9]+[.)])[ \\t]*\\[([ xX\\-~/])\\][ \\t]*(.*)$; tool-registry name list `report_progress reply_to_comment sql update_todo task_complete`; CREATE TABLE todos(... status CHECK(status IN ('pending','in_progress','done','blocked'))) + todo_deps and the 'Always update todo status as you work' system prompt."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "jpi=h.toolUpdateTodoName(); `case\"tool.execution_start\":{if(t.data.toolName===jpi)return o?.set(t.data.toolCallId,t.data.arguments),null;…}` — the todo payload is read straight off the persisted event's data.arguments. function Wpi(t){switch(t){case\"completed\":case\"pending\":case\"in_progress\":return t;default:throw new Error(`Unknown todo entry status returned from Rust runtime: ${t}`)}} — three-valued status. Kpi() reads t.todos as a string via h.toolUpdateTodoParseEntries."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/schemas/session-events.schema.json",
+          "note": "ToolExecutionStartData carries toolCallId/toolName/arguments (x-opaque-json) and ToolExecutionStartEvent.ephemeral is an ordinary optional bool → the update_todo arguments are PERSISTED to events.jsonl. Contrast TodosChangedEvent (session.todos_changed): ephemeral const true, 'not persisted to the session event log on disk', data {} — 'Signal-only event … clients should call session.plan.readSqlTodosWithDependencies()'."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "parseToolStart sets only ev.ToolUses{ID,Name} and never reads data[\"arguments\"]; the file holds no tailer.TodoReconciler and never sets ParsedEvent.TaskDeltas / TaskSnapshot. ScanTaskEstimate/ScanTaskSummary in parseAssistantMessage are irrlicht's own markers, a different signal that yields no tasks."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/todo_reconciler.go",
+          "note": "TodoReconciler.Reconcile turns successive whole-list todo snapshots (no stable ids, label-keyed) into the minimal TaskCreate/TaskUpdate deltas + TaskSnapshot — the exact shape update_todo needs; the unlock is one Reconcile call from parseToolStart."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "applyTaskCreateDelta / applyTaskUpdateDelta consume parsed.TaskDeltas; copilot emits none, so SessionMetrics.Tasks (and the session API tasks field) stays empty."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS covers send/wait_turn/sleep (driver_step_types_from_file: exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn); launches `copilot --allow-all --no-color` and forwards COPILOT_AVAILABLE_TOOLS as --available-tools=<v>; turn_count greps assistant.turn_end."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/2-3_task-list/metadata.json",
+          "note": "precedent for this exact verdict shape: a full-list todo tool whose local trace exists but whose adapter emits no TaskDelta → daemon=bug + known_failing task_tracked phase (#662), not incapable."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/2-2_auto-executed-tool-call/expected.jsonl",
+          "note": "template for copilot's presession two-phase birth and the unpinned-model observation block."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 240,
+      "settings": {},
+      "preconditions": [
+        "copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits — this recording spends them",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a --record daemon)",
+        "tmux available (the interactive driver drives the REPL through it)"
+      ],
+      "setup": [
+        "export COPILOT_AVAILABLE_TOOLS=update_todo before driving. The driver forwards it as --available-tools=update_todo, which both trims the tool-definition input tokens AND removes the `sql` tool, so the model cannot satisfy the prompt through the SQLite todos table instead of the markdown checklist. Do NOT copy 2-2's COPILOT_AVAILABLE_TOOLS=bash here — that would strip update_todo and silently invalidate the cell.",
+        "The driver isolates state under $STAGING/copilot-home via COPILOT_HOME and seeds trustedFolders + askedSetupTerminals so neither first-run prompt blocks the input box",
+        "Launch is `copilot --allow-all --no-color` in a fresh per-run cwd, so update_todo auto-executes and no permission.requested is written — the no-waiting invariant is structural, not incidental",
+        "Interactive, not headless: the REPL must outlive the turn so the daemon observes the working→ready settle rather than a process exit",
+        "wait_turn counts assistant.turn_end lines — Copilot writes an explicit turn boundary, so the wait is exact"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use your update_todo tool to track exactly three todo items, in this order: 'read README', 'summarize README', 'reply done'. First call update_todo once with all three items unchecked. Then work them one at a time: before starting an item call update_todo again with that item marked in progress, and after finishing it call update_todo again with that item marked completed, leaving the other items' statuses as they were. Do not spawn any subagent — keep everything in this one session. When all three items are completed, reply with exactly the word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a transient proc-<PID> presession born ready, then the real <session-id> session (a DIFFERENT id, the session-state directory name) born ready when the transcript appears",
+        "the copilot transcript contains several tool.execution_start lines with toolName=update_todo whose data.arguments.todos markdown checklist walks the three items 'read README' / 'summarize README' / 'reply done' from unchecked through in-progress to completed",
+        "no subagent/child session is spawned (SubagentCount stays 0; no parent-linked session; no subagent.started event)",
+        "events.jsonl shows exactly one ready→working and one working→ready transition for the real session, and NO transition to waiting (--allow-all → no permission.requested)",
+        "the session API tasks field lists the three items with matching subjects, all ending completed (KNOWN FAILING — the copilot parser emits no TaskDelta)",
+        "events.jsonl contains at least one task_delta lifecycle event (KNOWN FAILING — expected ZERO until the parser wires a TodoReconciler)",
+        "final session state is ready",
+        "the newest recording's replay summary shows cum_output_tokens > 0 and estimated_cost_usd > 0, with model_name one of gpt-5-mini / claude-haiku-4.5 (router's choice — not pinned)"
+      ]
+    }
+  }
+}

@@ -1,0 +1,133 @@
+{
+  "scenario_id": "autonomous-loop-iteration-limit",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+52f711e.dirty",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ncopilot ships a real self-terminating autonomous loop: autopilot mode re-prompts itself on every session.idle and stops after --max-autopilot-continues continuation messages (default 5). daemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop-iteration-limit",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\nroute: record\n\n## Scenario signal\n\nautonomous-loop-iteration-limit asserts the *graceful-termination* shape of an autonomous loop: the agent self-prompts without user input, reaches its configured max-iteration count, emits a terminal turn signal, stops self-prompting, and the session settles `working → ready` and STAYS ready. The user-observable assertions are exactly: (a) at least 2 turns, (b) a `working → ready` arc per iteration driven with no user input, (c) final state `ready` even though the goal was not achieved, (d) the session does not stick in `working`.\n\n## agent = yes — the cap is a real, documented, first-class CLI knob\n\nCopilot 1.0.77 has a genuine autonomous loop AND an explicit iteration cap. Unlike claudecode's cell (whose spec notes the `max_iterations` cap 'is not deterministically forceable today' and substitutes `/goal clear`), copilot's cap is a documented CLI flag with a shipped default, so the cap-hit itself is the terminator the recording exercises.\n\n**1. The flag.** `app.js` registers, in the top-level commander option chain:\n\n```\n.addOption(new yi(\"--max-autopilot-continues <count>\",\"Maximum number of continuation messages in autopilot mode\").argParser(t=>xhi(t,\"--max-autopilot-continues\")).default(5))\n.addOption(new yi(\"--autopilot\",\"Start in autopilot mode\").conflicts(\"mode\").conflicts(\"plan\"))\n```\n\n**2. The CLI's own `/help` text** states the behaviour in prose: *'In autopilot mode, the agent pauses after a number of automatic continuation messages so usage doesn't run away unattended. The default is 5; adjust it with `--max-autopilot-continues <count>`.'*\n\n**3. The shipped changelog** (`changelog.json`, bundled with the binary) records it as a product change: *'Autopilot mode now limits continuation messages to 5 by default (configurable with --max-autopilot-continues)'* (github/copilot-agent-runtime#7165), with a later entry *'Validate --max-autopilot-continues rejects NaN, negative, and fractional values'* (#11973).\n\n**4. The loop itself.** The interactive TUI installs the continuation hook `jmn({session, maxAutopilotContinues:r, objectiveProvider, noProgressStopEnabled, ...})`, which subscribes to `session.idle`. On every idle, if `agentModeRef.current === \"autopilot\"`, it evaluates in order: aborted → stop; `task_complete` seen → stop; completion-blocked → stop; `session.error` → stop; no-progress (feature-flagged) → stop; then `B6({objectiveProvider, nonObjectiveContinuationCount:E.current, maxAutopilotContinues:r, defaultPrompt})`, which delegates to the native `autopilotPlanContinuation(status, shouldContinue, count, max)`. On `{kind:\"continue\"}` it calls `t.send({prompt, displayPrompt:\"\", requiredTool: task_complete})` — a self-injected user turn with no human input. On `{kind:\"stop\"}` it emits the `autopilot_turn_decision` telemetry (`decision:\"stop\"`, `surface:\"interactive\"`, `maxAutopilotContinues`) and sends nothing, so the session simply stays idle. The identical logic runs at `surface:\"prompt\"` in `executePromptDirectly` (headless `-p --autopilot`) and at `surface:\"session\"` in `Session.tryAutopilotContinuation`, where the call site is literally `this.tryAutopilotContinuation(aborted) || this.emitSessionIdle(aborted)` — continue suppresses idle, stop lets idle through.\n\nSo the cap-hit terminator is: the Nth+1 `session.idle` produces a stop decision, no further continuation user message is injected, and the session settles ready — precisely the scenario's shape. This is a per-session iteration counter (`nonObjectiveContinuationCount`), not a wall-clock or credit budget (the credit budget is a separate, experiment-flagged mechanism: `/autopilot <objective> --max-ai-credits <N>`, whose exhaustion aborts with `AbortReason: \"autopilot_credit_limit\"`).\n\nMode is reachable without a launch flag: `/autopilot` (command name constant `tZ=\"/autopilot\"`) is a normal, non-experimental slash command — `execute` maps `on`/`off` to `{kind:\"set-autopilot\", mode}` and the feature-flag transform `Y0e` only *simplifies* its help when `AUTOPILOT_OBJECTIVES !== true`; the `/goal` alias variant is the experimental one. That matters for the recipe: mode is switched in-REPL with a `slash` step the driver already has.\n\n## daemon = full — the loop is fully legible in events.jsonl\n\nEvery iteration of the loop is an ordinary transcript turn. `schemas/session-events.schema.json` (shipped with the CLI) documents `user.message.isAutopilotContinuation`: *'True when this user message was auto-injected by autopilot's continuation loop rather than typed by the user'*, alongside `user.message.agentMode` whose enum includes `autopilot` — i.e. each self-prompt is PERSISTED as a normal `user.message` envelope, not an in-memory-only nudge. Turn completion is copilot's explicit `assistant.turn_end` marker.\n\nMapping through `core/adapters/inbound/agents/copilot/parser.go`: `user.message` → `user_message` (ready → working), `assistant.turn_end` → `turn_done` (working → ready), and every lifecycle/metrics event (`session.start`, `session.usage_checkpoint`, `session.shutdown`, `assistant.turn_start`) is `Skip`, so nothing spurious flips state. `waiting` is reachable only through `permission.requested`, and the driver launches with `--allow-all`, which pre-approves everything — so the no-waiting half of the invariant is structural.\n\nThe recorded arc is therefore `ready → (working → ready) × (1 + max_continues)`, with the cap-hit expressed as the ABSENCE of a further `user.message` after the last `assistant.turn_end`. That satisfies every acceptance criterion (≥2 turns, working→ready, final ready, never stuck working) with no daemon gap, so `full`.\n\n## driver = ready\n\n`driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` reports: exit_clean, interrupt, keys, reset_session, restart, resume, send, session, sigkill, slash, sleep, start_session, wait_turn. The recipe needs `slash` (`/autopilot on`), `send`, `wait_turn` and `sleep` — all real arms. No `gap:*`.\n\nOne driver shape constrains the recipe rather than the verdict: `wait_turn` polls `turn_count() >= EXPECTED_TURNS`, and `EXPECTED_TURNS` is bumped only by `send_text`. Autopilot continuations are injected by the AGENT, not by the driver, so they never bump the counter and a second consecutive `wait_turn` would return immediately. The recipe therefore waits out the loop with a sized `sleep` after the first `wait_turn`, and the terminal quiet is asserted by a `duration_at_least_ms` hold on the final ready.\n\n## What the spec asserts\n\nThe cap is 5 continuations (shipped default), so a clean run is exactly 6 `assistant.turn_end` markers: the user's turn plus 5 self-injected ones. expected.jsonl enumerates all six as working/ready pairs — continuation turns anchored to the PREVIOUS turn's ready with a `max_delay_ms` window, since nothing external drives them — and closes with `cap_reached`: the ready after the 5th continuation must HOLD for 20 s with no transition to working and none to waiting. That hold is the machine-checkable form of 'reached its cap, stopped self-prompting, did not stick in working'.",
+      "caveats": [
+        "PROVISIONAL (code-derived, not yet observed live): the whole verdict is read from app.js + the bundled session-events schema, not from a recording. The claim that a continuation is persisted as a real user.message rests on the shipped schema documenting user.message.isAutopilotContinuation; record promotes it from provisional to settled.",
+        "The number of iterations is model-dependent, not purely mechanical: the loop ALSO stops early if the agent calls the task_complete tool with status 'completed' (stop reason task_complete), if session.error fires, or — when the AUTOPILOT_NO_PROGRESS_STOP flag is on — after consecutive turns with no tool.execution_complete. The recipe's prompt is written to be endless and to keep one bash call per turn so neither early exit fires, but if the model bails early the recording will show fewer than 5 continuations and record must re-anchor the phase count. The state arc is identical either way; only the iteration count moves.",
+        "No explicit cap-reached marker exists in events.jsonl. The stop decision is telemetry-only (autopilot_turn_decision with decision:'stop' and maxAutopilotContinues, surface interactive/prompt/session), so termination is observable ONLY as the absence of a further continuation user.message — hence the duration_at_least_ms hold rather than an event assertion. Same shape as the claudecode sibling. (The AutopilotObjectiveChangedStatus enum does carry a cap_reached value, but the schema marks it 'Legacy objective state indicating the previous continuation cap was reached' and it belongs to the experiment-flagged objective registry, not the default non-objective loop.)",
+        "irrlicht cannot currently tell an autopilot continuation from a typed prompt: the parser reads neither user.message.isAutopilotContinuation nor agentMode, so the loop surfaces as N ordinary turns. That is NOT spec-required here (the scenario asserts only the state arc, turn count and final state) so the daemon pillar stays full — but it is the feasible unlock if irrlicht ever wants to badge a session as autonomously looping.",
+        "--max-autopilot-continues cannot be passed by the current driver: launch_repl hardcodes its args and honours only COPILOT_NO_ALLOW_ALL, COPILOT_AVAILABLE_TOOLS and RESUME_ID, and there is no COPILOT_* env override for the flag (the CLI env scan has none). The recipe therefore uses the shipped default of 5, which costs 6 model turns. This is a cost/latency note, not a capability gap — mode is entered with /autopilot on, an existing slash step. A one-line COPILOT_EXTRA_ARGS hook in the driver would let a future re-record run the cell at --max-autopilot-continues 2.",
+        "The interactive continuation send carries requiredTool: task_complete, so each continuation turn ends with the model declaring a status (completed / continue / blocked). This is what makes 'never report the task as complete' the load-bearing instruction in the recipe prompt."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js (CLI option chain, byte ~8934675)",
+          "note": "`.addOption(new yi(\"--max-autopilot-continues <count>\",\"Maximum number of continuation messages in autopilot mode\").argParser(...).default(5))` immediately followed by `.addOption(new yi(\"--autopilot\",\"Start in autopilot mode\").conflicts(\"mode\").conflicts(\"plan\"))`. The iteration cap is a first-class CLI option with a shipped default of 5. (The copilot binary is a compressed Node SEA — `strings` yields nothing; app.js is the readable artifact.)"
+        },
+        {
+          "kind": "file",
+          "ref": "…/copilot-darwin-arm64/app.js (/help topic text, byte ~8918861)",
+          "note": "Help topic 'Autopilot': 'In autopilot mode, the agent pauses after a number of automatic continuation messages so usage doesn't run away unattended. The default is 5; adjust it with `--max-autopilot-continues <count>`.' The agent's own documentation of the cap-and-stop behaviour this scenario asserts."
+        },
+        {
+          "kind": "file",
+          "ref": "…/copilot-darwin-arm64/changelog.json",
+          "note": "improved: 'Autopilot mode now limits continuation messages to 5 by default (configurable with --max-autopilot-continues)' (github/copilot-agent-runtime#7165); fixed: 'Validate --max-autopilot-continues rejects NaN, negative, and fractional values' (#11973). Official shipped changelog — the cap is a released product feature, not an internal constant."
+        },
+        {
+          "kind": "file",
+          "ref": "…/copilot-darwin-arm64/app.js — function jmn({session,maxAutopilotContinues,...}) (byte ~7719956) and function B6({objectiveProvider,nonObjectiveContinuationCount,maxAutopilotContinues,defaultPrompt}) (byte ~1784196)",
+          "note": "The interactive autopilot loop. jmn subscribes to session.idle; while mode==='autopilot' it stops on aborted / task_complete / completion_blocked / error / no_progress, else calls B6 → native autopilotPlanContinuation(status, shouldContinue, count, max). continue → t.send({prompt, displayPrompt:'', requiredTool: task_complete}) (a self-injected user turn); stop → telemetry only, nothing sent. The session-level twin is `this.tryAutopilotContinuation(aborted) || this.emitSessionIdle(aborted)`, and the headless twin is in executePromptDirectly (surface:'prompt')."
+        },
+        {
+          "kind": "file",
+          "ref": "…/copilot-darwin-arm64/schemas/session-events.schema.json",
+          "note": "UserMessageData.isAutopilotContinuation: 'True when this user message was auto-injected by autopilot's continuation loop rather than typed by the user'; UserMessageAgentMode enum includes 'autopilot'. Proves each loop iteration is PERSISTED to the transcript as an ordinary user.message envelope — the emission question the daemon pillar hinges on. Also: AbortReason enum includes 'autopilot_credit_limit' (the separate credit budget) and AutopilotObjectiveChangedStatus includes 'cap_reached' marked legacy."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "user.message → user_message (ready→working); assistant.turn_end → turn_done (working→ready); session.start / usage_checkpoint / shutdown / assistant.turn_start all Skip so lifecycle noise cannot flip state; waiting reachable only via permission.requested. Gives the full working→ready arc for every loop iteration with no gap."
+        },
+        {
+          "kind": "file",
+          "ref": "…/copilot-darwin-arm64/app.js — tZ=\"/autopilot\" (byte ~1399469) and h3e (byte ~1619979), Y0e transform (byte ~1620877)",
+          "note": "/autopilot is a normal slash command: execute maps 'on'/'off' to {kind:'set-autopilot', mode}. Y0e only rewrites its help/args when AUTOPILOT_OBJECTIVES!==true; the /goal-aliased variant (dYn) is the experimental one. So `/autopilot on` needs no launch flag and no experimental mode — it is a plain `slash` step."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "driver_step_types_from_file → exit_clean, interrupt, keys, reset_session, restart, resume, send, session, sigkill, slash, sleep, start_session, wait_turn — every step the recipe needs. Also the constraint behind the recipe's sleep-based wait: wait_turn polls turn_count() >= EXPECTED_TURNS and only send_text bumps EXPECTED_TURNS, so agent-injected continuations don't advance it; and launch_repl hardcodes its args (only COPILOT_NO_ALLOW_ALL / COPILOT_AVAILABLE_TOOLS / RESUME_ID are honoured), which is why the cap stays at the default 5."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-8_autonomous-loop-iteration-limit/metadata.json",
+          "note": "Reference cell. claudecode's spec notes its max_iterations cap 'is not deterministically forceable today' and substitutes /goal clear. copilot diverges: the cap is a documented flag with a shipped default, so this cell exercises the real cap-hit rather than a stand-in."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 600,
+      "settings": {},
+      "preconditions": [
+        "copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits — this cell is the most expensive in the copilot column: the shipped cap of 5 continuations means SIX model turns in one recording",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a --record daemon)",
+        "tmux available (the interactive driver drives the REPL through it)"
+      ],
+      "setup": [
+        "Interactive, not headless: the REPL must outlive the loop and the settle window, or the terminal ready hold that proves the cap stopped the loop is never observed",
+        "The driver isolates state under $STAGING/copilot-home via COPILOT_HOME and seeds trustedFolders + askedSetupTerminals so neither first-run prompt blocks the input box",
+        "Launch is the driver default `copilot --allow-all --no-color`: every bash call auto-executes, so no permission.requested is ever written and the no-waiting invariant is structural rather than incidental",
+        "Strongly recommended: export COPILOT_AVAILABLE_TOOLS=bash before driving. The driver forwards it as --available-tools=bash, dropping ~8.3k of ~12k input tokens per request — across six turns that is the difference between a cheap cell and an expensive one",
+        "Autopilot is entered IN-REPL with `/autopilot on` (a plain slash step), not with the --autopilot launch flag, because launch_repl hardcodes its args. The continuation cap is therefore the shipped default of 5 — no flag needed, and no driver change",
+        "The prompt is deliberately endless and deliberately tool-using: one bash append per turn keeps tool.execution_complete firing so the (feature-flagged) no-progress stop can't pre-empt the cap, and 'never report this complete' keeps the model from ending the loop with task_complete status=completed",
+        "The sleep after the first wait_turn is what waits out the loop: agent-injected continuations never bump the driver's EXPECTED_TURNS, so a second wait_turn would return immediately. 300 s covers five short single-bash turns with headroom; the final 30 s sleep is the quiet window the cap_reached phase asserts against",
+        "Optional credit-free variant: BYOK (COPILOT_PROVIDER_BASE_URL/_TYPE/_WIRE_API/_API_KEY + COPILOT_MODEL) records with totalNanoAiu 0, but it needs a provider that actually completes turns — the repo's mock-openai-429 fixture cannot drive this loop"
+      ],
+      "script": [
+        {
+          "type": "slash",
+          "text": "/autopilot on"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Keep a tally file going. Every time you work on this, run exactly one bash command that appends the next integer to tally.txt (create it starting at 1 if it does not exist), then say which number you just appended. This task is deliberately endless: there is always a next integer, so it can never be finished. Do not stop, and never report this task as complete — always report that more work remains."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 300
+        },
+        {
+          "type": "sleep",
+          "seconds": 30
+        }
+      ],
+      "verify": [
+        "events.jsonl for the session contains 6 assistant.turn_end markers: the user's turn plus 5 agent-injected autopilot continuations (the shipped --max-autopilot-continues default)",
+        "Every continuation is a user.message with isAutopilotContinuation:true and agentMode:\"autopilot\" — no human input drove it",
+        "The daemon recording shows a working→ready pair per turn on the same session id, at least 2 of them",
+        "After the 5th continuation's assistant.turn_end the session stays ready for the whole 30 s settle window: no transition back to working (the cap stopped the loop) and none to waiting",
+        "Final state of the session is ready even though the tally task was never finished"
+      ]
+    }
+  }
+}

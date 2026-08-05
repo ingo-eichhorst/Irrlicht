@@ -49,6 +49,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/antigravity"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/copilot"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/kirocli"
 	"irrlicht/core/adapters/inbound/agents/opencode"
@@ -71,6 +72,7 @@ var allAgents = []agent.Agent{
 	geminicli.Agent(),
 	antigravity.Agent(),
 	vibe.Agent(),
+	copilot.Agent(),
 }
 
 // parserFactories is the per-adapter parser map consumed by parserFor()
@@ -132,8 +134,11 @@ func detectAdapter(path string) (string, error) {
 	case strings.Contains(abs, "/.vibe/logs/session/"),
 		strings.Contains(abs, "/replaydata/agents/mistral-vibe/"):
 		return vibe.AdapterName, nil
+	case strings.Contains(abs, "/.copilot/session-state/"),
+		strings.Contains(abs, "/replaydata/agents/copilot/"):
+		return copilot.AdapterName, nil
 	}
-	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe", abs)
+	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot", abs)
 }
 
 // eventsSidecarExt is the lifecycle-events sidecar's file extension, paired

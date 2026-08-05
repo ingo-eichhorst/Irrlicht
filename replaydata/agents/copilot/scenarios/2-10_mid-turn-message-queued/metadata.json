@@ -1,0 +1,133 @@
+{
+  "scenario_id": "mid-turn-message-queued",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+52f711e",
+    "confidence": 0.95,
+    "notes": "agent_supports: yes (plain Enter mid-turn is copilot's STEERING path, mode:\"immediate\"; ctrl+q/ctrl+return is the true queue and is deliberately not driven here); daemon_capability: full — CONFIRMED LIVE 2026-08-03: the steered follow-up arrives as turn_end → turn_start → user.message inside ~70 ms and the daemon holds working straight through it with zero ready flicker, settling to ready only on the second turn_end; driver_capability: ready (send + keys-delivered follow-up + wait_turn + a long trailing sleep, since wait_turn returns at the first of the two turn_ends)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "mid-turn-message-queued",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.95,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## agent_supports = yes — and Copilot has TWO mid-turn input paths, not one\n\nThe binary is a compressed Node SEA, so the readable artefact is `node_modules/@github/copilot-darwin-arm64/app.js` (8.9 MB, minified). Its TUI submit handler (`Zf`, wired as the composer's `onSubmit`) branches on `cd.current` — a ref set `true` on `assistant.turn_start` and `false` on `session.idle`, and surfaced to the footer as `isRuntimeRunning`. When a turn is running and the text is a plain (non-`/`, non-`!`) prompt, the handler reads:\n\n```js\nlet fi = ne?.queued ? \"enqueue\" : \"immediate\";\nae.send({prompt:O, attachments:[...V,...wr], mode:fi, billable:true, wait:true})\n```\n\n`ne.queued` is set in exactly ONE place — the composer's key handler, `if(hcn(ze)){ e.text.trim() ? ge(e.text,{queued:true}) : E?.() }`, where `function hcn(t){return !!t.ctrl && (t.code===\"q\" || t.code===\"return\")}`. So:\n\n- **plain Enter mid-turn → `mode:\"immediate\"` (STEERING)** — the follow-up is injected into the RUNNING turn.\n- **Ctrl+Q (or Ctrl+Enter) → `mode:\"enqueue\"` (TRUE QUEUE)** — the follow-up is held in the native queue and drained as its own turn after the current one. The footer advertises this: when the runtime is running and the composer has text it renders a `<key> enqueue` hint next to the `esc interrupt` hint.\n\nEither way the mid-turn follow-up is buffered rather than dropped, which is what the scenario asks for. `yes`.\n\nThis recipe deliberately drives the **plain-Enter steering path**, because that is Copilot's DEFAULT for a mid-turn Enter and because it is the path that matches the scenario's `process` literally — \"the transcript shows no turn boundary\". It is the same shape pi's cell records (pi's Enter also steers).\n\n## Where the follow-up reaches events.jsonl (the load-bearing emission question)\n\nNeither path writes anything at typing time:\n\n- steering: `send()` does `if(e.mode===\"immediate\"){let n=this.addImmediateMessagesIfProcessing([e]); if(n){this.interruptSteerableToolWaits([e],n); return}}` — `sessionImmediatePromptAddIfProcessingJson` stashes it natively and the function RETURNS before any `emit(\"user.message\",…)`.\n- enqueue: `addItemToQueue` → `sessionQueueEnqueueMessagesJson`; with the session already processing the enqueue does not reserve processing, so `sendMessages` returns without calling `processQueue()`.\n\nThe steered message is materialised later by `runImmediatePromptPreRequest`, which runs at EVERY model-request boundary INSIDE the turn (the `generatorStart` → `kind===\"preRequest\"` processor hook, called with `{turn, retry, messages, toolDefinitions}`). For each pending item it does `let c = this.recordImmediatePromptEvent(l); c.type===\"user.message\" && await this.beginRewindTurn(...)`, and `recordImmediatePromptEvent` calls `h.sessionRecordEventJson(...)` — the same native record path every persisted envelope goes through. So the steered follow-up lands in `events.jsonl` as a real `user.message` MID-TURN, with NO `assistant.turn_end` before it, and the turn then continues to a single `assistant.turn_end`.\n\nThat is the exact regression shape the scenario was written to lock down — \"queued text appears as a synthetic user-line before consumption\" — and Copilot really does produce it.\n\n## daemon_capability = full\n\nThe scenario asserts three observables; each maps to a Copilot event and to `core/adapters/inbound/agents/copilot/parser.go`:\n\n1. **State stays `working` through the queued arrival.** The mid-turn `user.message` is parsed as `EventType:\"user_message\"`, which the shared classifier treats as agent activity → `working`. The session is ALREADY `working`, so this is a no-op, not a transition. There is no path by which a `user_message` produces `ready`.\n2. **No `→ ready` flicker when the input lands.** `ready` is reachable from this transcript only via `assistant.turn_end → EventType:\"turn_done\"`, and Copilot emits exactly one `turn_end` per turn (turn boundaries are EXPLICIT, carrying a `turnId`) — so a mid-turn user line cannot mint one. `session.usage_checkpoint`/`session.shutdown`/`session.start`/`assistant.turn_start` are all `Skip:true` and cannot move state either.\n3. **The cycle still ends at `ready`.** The turn's own `assistant.turn_end` → `turn_done` → `ready`, the same settle `basic-turn` verifies live.\n\nNo `waiting` is reachable in this recipe: the driver launches with `--allow-all`, so no `permission.requested` is ever written (`parsePermissionRequested` is the only `waiting` source).\n\n**Why NO `queuedTurnSplitter` seam is needed here** (the dismissal, with its evidence — this is the question the cell exists to settle). mistral-vibe needed `SplitsQueuedFollowUpTurns()` (issue #988) because vibe's drain is gated on `agent_running()` and fires synchronously the instant a turn clears, so `turn_done` + a whole second turn land in ONE tailer pass and the daemon coalesced them, losing the queued turn's `ready→working`. Three things make that inapplicable to this cell:\n\n- The recipe's follow-up is STEERED, not queued: it is consumed inside turn 1 at a `preRequest` boundary, so there is only ever ONE turn and therefore no turn boundary to collapse. `core/pkg/tailer/tailer.go`'s `updateMidPassTurnBoundary` only arms on a `turn_done` FOLLOWED by more activity in the same pass — which this shape never produces.\n- Even on the Ctrl+Q enqueue path the spec below still verifies: it asserts the scenario's negative invariants (working holds, no `ready` flicker, no `waiting`) plus a final `ready`, NOT two distinct arcs. A collapsed single span satisfies all of them — this is precisely why pi's cell is `daemon=full` at 5/5 while recording a collapse (`replaydata/agents/pi/scenarios/2-10_mid-turn-message-queued/`). Vibe's cell failed only because ITS spec explicitly modeled `turn1_settle → queued_turn_start → queued_turn_end`.\n- `core/pkg/tailer/mid_pass_turn_boundary_test.go` documents the opt-in as exactly this choice: `TestSawMidPassTurnBoundary_FalseWhenParserDoesNotOptIn` names pi's cell as the case that WANTS the single contiguous span. Copilot's parser implements no such method (`core/adapters/inbound/agents/copilot/parser.go` has no `SplitsQueuedFollowUpTurns`), and `core/adapters/inbound/agents/maps_test.go`'s capability census is where that stays visible.\n\n## driver_capability = ready\n\nEvery step the recipe needs is in `DRIVE_ELICITS`: `send`, `sleep`, `keys`, `wait_turn`.\n\nThe follow-up is typed with `keys`, NOT a second `send`, and that is load-bearing rather than stylistic. `send_text` bumps `EXPECTED_TURNS`, and `wait_turn` blocks until `grep -c '\"type\":\"assistant.turn_end\"' >= EXPECTED_TURNS`. A steered follow-up folds into turn 1 and produces only ONE `turn_end`, so two `send`s before one `wait_turn` would wait for a second `turn_end` that never comes and the cell would die at its timeout. `keys` types without touching the counter.\n\nThe driver's arm is `tmux send-keys -t \"$SESSION\" \"$(jq -r '.text' <<<\"$step\")\"` — a single quoted argument, so it reads `.text` (not claudecode's `.keys`) and cannot take claudecode's space-separated key-name form. Verified on this machine that tmux sends an unmatched multi-word argument literally and `\"Enter\"` as the Enter key, so the follow-up is expressed as three steps: text, a 1 s settle (Copilot's TUI redraws on input and swallows an Enter delivered in the same tick — the reason `type_enter` sleeps 0.3 s), then `Enter`.\n\nThe first prompt runs a shell `sleep` on purpose: a steered message is materialised at a `preRequest` boundary, and a tool call guarantees the turn HAS a further request boundary to land on. A text-only turn might have none left, in which case Copilot would fall back to consuming the follow-up as its own turn (the enqueue shape) — which the spec still passes, but the tool call is what makes the intended mid-turn landing the likely one.\n\n## What irrlicht does NOT see\n\nThe queue/steering buffer itself is invisible: `pending_messages.modified` is emitted through `emitEphemeral`, and ephemeral events are not persisted to `events.jsonl` (`runImmediatePromptPreRequest` splits them explicitly — `if(l.ephemeral) this.acceptNativeSessionEvent(l); else this.recordImmediatePromptEvent(l)`). There is no observable for \"the user has typed text that is now buffered\". The scenario does not assert one; it asserts state invariants over the working span, which the daemon can verify from its own event stream.",
+      "caveats": [
+        "EMISSION SETTLED LIVE 2026-08-03 (CLI 1.0.77), replacing the provisional app.js-derived claim: the steered follow-up is NOT materialised inside turn 1. Copilot closes turn 1 and opens a NEW turn for it, writing assistant.turn_end → assistant.turn_start → user.message within ~70 ms and answering both requests in that second turn. Reproduced identically in two consecutive recordings. The spec's negative invariants still hold — and that is the real finding: the daemon emits NO ready flicker at the boundary, because the three lines land in one activity-debounce pass whose net state is \"turn open\". The whole run is three transitions with zero flickers. Consequence for the recipe: both turn_ends are real, so wait_turn returns at the FIRST one.",
+        "The follow-up MUST be delivered with `keys`, never a second `send`: send_text bumps EXPECTED_TURNS and a steered follow-up folds into turn 1, producing only one assistant.turn_end — a second send would hang wait_turn until the cell timeout. This is the copilot-specific counterpart of vibe's \"no wait_turn between the two sends\" caveat.",
+        "The follow-up MUST be plain text. A `/`-prefixed line mid-turn takes a different branch of Zf entirely (slash-command dispatch, and for a recognised command `ae.send(cd.current===false ? Cr : {...Cr, mode:\"immediate\"})` after resolving it to an agentMessage), and a `!`-prefixed line is a shell escape that bypasses the send path altogether.",
+        "Ctrl+Q / Ctrl+Enter is Copilot's TRUE queue (mode:\"enqueue\") and would produce mistral-vibe's two-turn shape, drained via scheduleProcessQueue's setImmediate the moment the turn clears. This cell does not drive it, because plain Enter is the default mid-turn behavior and matches the scenario's \"transcript shows no turn boundary\" process step. A future cell wanting the true-queue arc modeled as two distinct arcs (vibe's turn1_settle → queued_turn_start → queued_turn_end) would need the copilot parser to opt into tailer's queuedTurnSplitter (issue #988) — it does not today.",
+        "A steered user.message mid-turn carries ClearToolNames=true (parseUserMessage), which core/pkg/tailer/tailer.go also uses to reset open PERMISSION requests when the event carries no PermissionResolvedIDs. Harmless in this recipe (--allow-all means no permission.requested is ever written) but it means a follow-up steered while a permission prompt is open would drop the pending-permission set, i.e. waiting → working. Not asserted here; flagged so a future permission-interaction cell knows to look.",
+        "model is NOT pinned in the observation vector, for the same reason as basic-turn: --model accepts only \"auto\" on this account and session.auto_mode_resolved picks between gpt-5-mini and claude-haiku-4.5 per turn.",
+        "Recording spends real Copilot AI credits (totalNanoAiu) on the maintainer's account. The BYOK path (COPILOT_PROVIDER_BASE_URL/_TYPE/_WIRE_API/_API_KEY + COPILOT_MODEL) is credit-free and is the fallback if credit spend is a concern, but it changes the model string and was not used for the sibling cells.",
+        "BIRTH RE-ANCHORED from the live recording 2026-08-03: the transient proc-<PID> presession is born ready, but the REAL session is born DIRECTLY into working — copilot writes events.jsonl only at the first prompt, so the open turn is already on disk at discovery. Session birth and turn start are ONE phase; the pre-recording spec's separate ready birth does not exist."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "CLI 1.0.77. Composer onSubmit `Zf`: while `cd.current` (set true on assistant.turn_start, false on session.idle) a plain prompt sends with `mode: ne?.queued ? \"enqueue\" : \"immediate\"`. `ne.queued` is set only by the key predicate `function hcn(t){return !!t.ctrl && (t.code===\"q\" || t.code===\"return\")}`, so plain Enter steers and Ctrl+Q/Ctrl+Enter queues; the footer renders a `<key> enqueue` hint from showQueueingHint."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "Emission path: send() with mode:\"immediate\" calls addImmediateMessagesIfProcessing (sessionImmediatePromptAddIfProcessingJson) and RETURNS — nothing is written at typing time. runImmediatePromptPreRequest, invoked at every in-turn model-request boundary (generatorStart kind===\"preRequest\"), calls recordImmediatePromptEvent → h.sessionRecordEventJson for each non-ephemeral event and checks `c.type===\"user.message\"` — so the steered follow-up is persisted as a mid-turn user.message with no intervening turn_end. Ephemeral pending_messages.modified is NOT persisted."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "user.message → EventType \"user_message\" (activity → working, ClearToolNames=true); assistant.turn_end → \"turn_done\" (the ONLY route to ready); session.start / assistant.turn_start / usage_checkpoint / shutdown all Skip=true; permission.requested is the only waiting source. No SplitsQueuedFollowUpTurns method — the parser does not opt into tailer's queuedTurnSplitter."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/mid_pass_turn_boundary_test.go",
+          "note": "Documents the #988 opt-in and its deliberate negative case: TestSawMidPassTurnBoundary_FalseWhenParserDoesNotOptIn names pi's 2-10 fixture as the shape that WANTS a single contiguous working span with no synthetic split — the same shape this cell asserts."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/2-10_mid-turn-message-queued/expected.jsonl",
+          "note": "Precedent that a collapsed single working span satisfies this scenario at daemon=full (5/5 phases): pi steers on Enter and its spec asserts contiguity + final ready rather than two arcs. Contrast mistral-vibe's cell, whose spec DOES model two arcs and therefore needed the queuedTurnSplitter fix."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS covers send/sleep/keys/wait_turn. send_text bumps EXPECTED_TURNS and wait_turn polls `grep -c '\"type\":\"assistant.turn_end\"' >= EXPECTED_TURNS`, so the folded follow-up must be typed with `keys` (which reads `.text` and passes ONE quoted argument to tmux send-keys) rather than a second send. Launch passes --allow-all unless COPILOT_NO_ALLOW_ALL is set, so no permission.requested is written."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/2-1_basic-turn/metadata.json",
+          "note": "Sibling cell establishing copilot's presession birth shape (session-state/<id>/ holds only workspace.yaml at launch; events.jsonl appears on the first prompt, so processlifecycle.Scanner mints proc-<PID> first and the real session arrives later under a different id) and the tokens/cost observation vector reused here."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so the driver's scratch COPILOT_HOME needs no re-login)",
+        "An active Copilot plan with AI credits — both the tool call and the steered follow-up spend them",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "tmux available; no other copilot session shares the same cwd (the PID is bound by cwd)"
+      ],
+      "setup": [
+        "The driver seeds a scratch COPILOT_HOME with trustedFolders + askedSetupTerminals pre-answered and launches with --allow-all, so neither the trust modal nor a permission prompt can block the input box (and no permission.requested is written, keeping `waiting` unreachable)",
+        "The first prompt runs a shell `sleep 10` so the turn stays WORKING long enough to type into AND has a further in-turn model-request boundary for the steered follow-up to be materialised at (runImmediatePromptPreRequest). A text-only first turn might have no boundary left, in which case copilot falls back to consuming the follow-up as its own turn — the spec passes either way, but the tool call makes the intended mid-turn landing the likely one",
+        "MID-TURN DELIVERY: the follow-up is typed with `keys` (text), a 1 s settle, then `keys` (Enter) — NOT a second `send`. send_text bumps EXPECTED_TURNS and a steered follow-up folds into turn 1 (one assistant.turn_end), so a second send would hang wait_turn until the cell timeout. The 1 s settle mirrors type_enter's 0.3 s pause: copilot's TUI redraws on input and swallows an Enter delivered in the same tick",
+        "Plain Enter is what makes this the STEERING path (mode:\"immediate\"). Ctrl+Q / Ctrl+Enter would be copilot's true queue (mode:\"enqueue\") and produce a separate follow-up turn — deliberately not driven here",
+        "TRAILING SLEEP MUST BE LONG (25 s, not 8): wait_turn returns at the FIRST assistant.turn_end, and the steered follow-up is materialised in a SECOND turn that closes ~6 s later. Sized at 8 s the run tore the daemon down ~70 ms before the final turn_end's 2 s activity-debounce window closed, so the live capture ended with the session still in working even though the transcript settles to ready (offline replay of that same capture produced the working→ready transition at the usage_checkpoint). That is recipe variance, not a daemon defect."
+      ],
+      "script": [
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "send",
+          "text": "Run exactly this shell command and nothing else: sleep 10 — then reply with just the word done"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "keys",
+          "text": "also, once that finishes, tell me what 6 times 7 is"
+        },
+        {
+          "type": "sleep",
+          "seconds": 1
+        },
+        {
+          "type": "keys",
+          "text": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 25
+        }
+      ],
+      "verify": [
+        "events.jsonl mints a proc-<PID> pre-session in ready shortly after launch, then the real <session-id> session in ready under a DIFFERENT id once events.jsonl appears on the first prompt",
+        "events.jsonl contains a pid_discovered event binding the copilot PID to the real session (matched by cwd)",
+        "events.jsonl contains a state_transition to working on the real session when the first user prompt lands",
+        "events.jsonl contains NO state_transition to ready between that working transition and the point where the steered follow-up is consumed — the working span is contiguous through the follow-up's arrival",
+        "events.jsonl contains NO state_transition to waiting at any point (--allow-all means no permission.requested is written)",
+        "events.jsonl eventually shows a working→ready transition; final state of the real session is ready",
+        "the session's events.jsonl contains a SECOND user.message line for the follow-up with NO assistant.turn_end between it and the first user.message (the steering shape). If instead a turn_end precedes it, record should note that copilot consumed the follow-up as its own turn — the spec still passes, but the assessment's emission caveat should be replaced with the observed shape",
+        "observation vector: tokens_nonzero=true, cost_nonzero=true; model left unasserted (auto-router picks per turn)"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "scenario_id": "multiple-agents-same-workspace",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+21d50ec",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-agents-same-workspace",
+      "agent": "copilot",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready (confidence 0.8 — every isolation layer this cell asserts is structural and code-cited, and copilot's half of the coexistence has already been seen live; what is NOT yet observed is the two adapters' arcs inside one recording, which only `record` settles).\n\nThis is the CROSS-ADAPTER cell: copilot plus a DIFFERENT agent in one cwd, recorded by `run-cell-multi.sh` (not `run-cell.sh`) with `partner_adapter: claudecode` — the same shape the aider, kiro-cli, mistral-vibe, opencode, gemini-cli and pi siblings use.\n\n## agent_supports = yes\n\nNothing in Copilot's session model is keyed on the working directory. Each launch mints a fresh UUID and its own `$COPILOT_HOME/session-state/<uuid>/` directory, and the only exclusion primitive in the shipped 1.0.77 bundle is SESSION-keyed, not workspace-keyed: `registerSessionLock(sessionId, path) -> inUseLocksRegisterSession(sessionId, path, process.pid)`, materialising `inuse.<pid>.lock` INSIDE the session directory (live-observed by the 1-4_session-resume probe). Copilot therefore cannot contend with a foreign agent that happens to share its cwd — there is no cwd-scoped lock for a `claude` process to trip, and no `claude` process would take a copilot session lock in any case.\n\nThe stronger evidence is direct: a copilot session and a claude-code session have already been observed listed simultaneously by the SAME daemon, each carrying its own adapter label. Coexistence itself is therefore not in question for this cell; what the recording adds is the per-session arc independence inside one events.jsonl.\n\n## daemon_capability = full\n\nirrlicht isolates adapters at four layers, and this pairing exercises all four:\n\n| Scenario assertion | Mechanism for the copilot/claudecode pair |\n|---|---|\n| \"Each session appears with its correct adapter label\" | Disjoint `ProcessMatcher`s: copilot declares `agent.ExactName{Name: \"copilot\"}` (the NATIVE child — the npm install runs a node loader whose accounting name is `node`), claudecode declares `ExactName{\"claude\"}`. `maps.ProcessNames` reads the matcher name per adapter; `pgrep -x claude` cannot match `copilot` and vice versa. The scan result is tagged with the originating adapter before any session row exists. |\n| \"Each session appears with its correct adapter label\" (transcript half) | Disjoint transcript roots: copilot's `Source: FilesUnderRoot{Dir: sessionsDir()}` resolves to `$COPILOT_HOME/session-state` (default `~/.copilot/session-state`); claudecode's is `~/.claude/projects`. `maps.Parsers` builds an adapter-name → ParserFactory map from each `JSONLineParser.NewParser`, and the fswatcher attaches the factory belonging to the root the file sits under — a copilot `events.jsonl` line can never reach the claudecode parser. |\n| \"States transition independently per agent\" | Copilot's parser is a FRESH stateful `&Parser{}` per transcript file, and its turn boundaries are EXPLICIT rather than heuristic — `user.message` drives working, `assistant.turn_end` drives ready. No inference straddles files, so a claudecode turn cannot move the copilot row (or the reverse). |\n| \"No cross-contamination of metrics, parent linkage, or subagent counts\" | Metrics are per-(adapter, session_id): `maps.PIDDiscoverers`, `maps.ProcessNames`, `maps.ArgvExcluders` and `maps.SubagentCounters` are ALL keyed by `Identity.Name`, with no global per-cwd aggregation anywhere in the domain. |\n\n### Why claudecode is the right partner here, not an arbitrary one\n\nThe subagent-count bullet is the one assertion that could be vacuous against the wrong partner. `maps_test.go`'s seam census records exactly TWO `agent.SubagentCounter` implementers: `claudecode.AdapterName` and `copilot.AdapterName` (the comment names copilot/#1256 as the second). Pairing copilot with claudecode is therefore the only pairing in the matrix where BOTH sides actually report subagent counts, so \"no cross-contamination of subagent counts\" is a live assertion rather than a trivially-satisfied one. `SubagentCounters` builds one closure per adapter over that adapter's own parser instance and it is only invoked for sessions of that adapter.\n\n### The PID question, and why it is a non-issue here\n\nCopilot binds its PID by `processlifecycle.DiscoverPIDByCWD(ProcessName, cwd, disambiguate)` — cwd-based, no argv filter. A cross-adapter cell puts a foreign process in that same cwd, so it is worth being explicit about why that cannot steal the bind: `narrowByCWD` filters the candidate set by `pgrep -x <ProcessName>` FIRST and only then by cwd. The claim-aware disambiguator (`PIDManager.claimAwareDisambiguate`, highest UNCLAIMED candidate) therefore only ever arbitrates between processes of the SAME name. A `claude` process is not in copilot's candidate set at all, so the disambiguation seam that makes 4-1 (two copilots, one cwd) delicate is simply not reached by 4-2. This cell is strictly easier than its 4-1 sibling on the PID axis.\n\n## driver_capability = ready\n\nThe recipe needs only `send`, `wait_turn`, `sleep`. `driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` reports `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn` — a superset, and copilot's `DRIVE_ELICITS` lists all three, so `recipe_semantic_gaps` passes too. The driver reads `IRRLICHT_ONBOARD_CWD` into `RUN_CWD` and canonicalises it with `cd … && pwd -P` (resolving symlinks so the daemon's exact-cwd match succeeds), which is exactly the hand-off `run-cell-multi.sh` performs when it points every adapter's driver at one `$STAGING/cwd`.\n\nUnlike the 4-1 sibling, this cell drives ONE copilot turn and needs no `session`/`start_session` retargeting, so the copilot driver's known per-step `.session`-field footgun (its loop dispatches on `.type` only) is not in play.\n\n## Spec-anchoring choice\n\nThe spec is deliberately the adapter-agnostic agentA/agentB shape shared by every recorded sibling: agentA is whichever session enters `working` first, agentB the other, related by `new_session` rather than by literal ids. EVERY phase anchors on a WORKING transition, never a `ready`. Copilot is a presession adapter — it creates `session-state/<uuid>/` at launch holding only `workspace.yaml` and writes `events.jsonl` only on the first prompt, so `processlifecycle.Scanner` mints a born-ready `proc-<PID>` row first (modelled explicitly in the 2-1_basic-turn sibling). claudecode contributes its own born-ready placeholder. `proc-*` rows never enter `working`, so working-anchoring skips both deterministically; a `ready`-anchored `new_session` phase would greedily bind whichever placeholder landed first. The scenario description states a third coexisting adapter is tolerated for the same reason.\n\n## Observations\n\n`tokens_nonzero` and `cost_nonzero` are asserted and `model` is left unpinned, matching every other copilot cell. The observation vector is checked against the cell's OWN replay golden (`ValidateObservations` reads the newest recording's replay summary, and `run-cell-multi.sh` curates each fixture from that adapter's own transcript), so these assert copilot's numbers, not the partner's: copilot's `assistant.message` carries `outputTokens` and both models the auto-router reaches are priced. `model` stays unpinned because `--model` accepts only `auto` on this account and `session.auto_mode_resolved` picks between `gpt-5-mini` and `claude-haiku-4.5` per turn.\n\n## What irrlicht does NOT see (and why that is fine)\n\nirrlicht has no first-class \"workspace\" row — the daemon's session list is flat and the dashboard groups by cwd visually. The scenario asks only about per-session correctness, so this is not a downgrade.",
+      "caveats": [
+        "PROVISIONAL ON EMISSION: no recording has yet placed a copilot and a claudecode session in ONE events.jsonl. The daemon=full verdict is derived from the adapter declarations, the maps.go projections and the seam census — plus a live sighting of a copilot session and a claude-code session listed side by side by the same daemon, each with its own adapter label. That sighting settles coexistence and labelling; it does not settle the two independent arcs inside one curated recording, which is what `record` promotes from provisional to settled.",
+        "The recipe runs TWO different agent CLIs concurrently, so the rig needs both `copilot` and `claude` installed and authenticated. This spends one turn of Copilot AI credits (plus one claudecode turn). BYOK (COPILOT_PROVIDER_BASE_URL/_TYPE/_WIRE_API/_API_KEY + COPILOT_MODEL) makes the copilot half credit-free and needs no GitHub auth; note that under BYOK the cost/token observations still come from the transcript's own outputTokens, but a BYOK model outside the capacity price map would zero EstimatedCostUSD and fail cost_nonzero. Drive this cell on the normal auto-router path unless the BYOK model is priced.",
+        "Adapter labels are stable wire-level strings (`copilot`, `claudecode`); display names (\"GitHub Copilot\") can drift. Any assertion must be on the wire name, which is what the events.jsonl carries.",
+        "ONE run of run-cell-multi.sh stages fixtures for BOTH adapters (each with the same workspace events.jsonl but its own transcript). Only the copilot fixture should be promoted — claudecode's 4-2 cell is already recorded against codex as its partner, and overwriting it is out of scope for this cell.",
+        "cleanupPreSessionsForProject retires proc-<pid> placeholders matching an arriving real session's project/cwd. With two adapters in one cwd this can retire the OTHER adapter's still-unidentified placeholder early. It only removes a transient row — the real session still arrives and still binds its own pid — and the working-anchored phases are blind to it by design.",
+        "Copilot writes events.jsonl only on the first prompt, so its real session row appears LATE relative to its process. In the window between launch and the first prompt the recording legitimately shows a proc-<PID> placeholder plus the partner's row, not two real rows. Read that window as correct, not as a missing session."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Process.Match = agent.ExactName{Name: ProcessName} with the doc comment explaining ProcessName binds the NATIVE copilot child rather than the node loader parent (pgrep -x compares the kernel accounting name). Source = FilesUnderRoot{Dir: sessionsDir(), SessionIDFromPath: sessionIDFromPath, Parser: JSONLineParser{NewParser: () => &Parser{}}} — a FRESH stateful parser per transcript file, so no parser state is shared across sessions or adapters."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/adapter.go",
+          "note": "ProcessName = \"copilot\" (disjoint from claudecode's \"claude\"); sessionsDir() = $COPILOT_HOME/session-state, default ~/.copilot/session-state — disjoint from claudecode's ~/.claude/projects root. sessionIDFromPath takes the <session-id> directory and accepts only the constant events.jsonl."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/maps.go",
+          "note": "Parsers / PIDDiscoverers / ProcessNames / ArgvExcluders / SubagentCounters are ALL built by iterating agents and keying on a.Identity.Name — there is no shared global parser, discoverer or counter that could leak state between adapters, and no per-cwd aggregation anywhere."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/maps_test.go",
+          "note": "The seam census pins agent.SubagentCounter's implementer list to exactly {claudecode, copilot} — the comment names copilot (#1256) as the second implementer. This is why claudecode is the partner_adapter: it makes the scenario's 'no cross-contamination of subagent counts' bullet a live assertion instead of a vacuous one."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/all.go",
+          "note": "copilot.Agent() is registered in the All() slice the maps.* projections are built from, so the daemon runs its matcher and its transcript root alongside claudecode's in a single process."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/discovery.go",
+          "note": "DiscoverPIDByCWD narrows by PROCESS NAME first and only then by cwd, delegating multi-match resolution to the caller's disambiguate. A foreign adapter's process is never in copilot's candidate set, so claimAwareDisambiguate (core/application/services/pid_manager.go, highest-unclaimed) only ever arbitrates same-name processes — a different adapter cannot steal copilot's bind."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "driver_step_types_from_file reports exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn — a superset of this recipe's send/wait_turn/sleep, all three in DRIVE_ELICITS. RUN_CWD=\"${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}\" then canonicalised with `cd \"$RUN_CWD\" && pwd -P` so the daemon's exact-cwd match succeeds — the hand-off run-cell-multi.sh performs when it points every driver at one shared cwd."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/run-cell-multi.sh",
+          "note": "The cross-adapter rig: resolves ADAPTERS=(primary, partner_adapter), refuses a cell with no partner_adapter, lints each adapter's recipe against its driver, spawns ONE isolated --record daemon (coexist, IRRLICHT_ONBOARD_HOME mandatory), launches every driver concurrently with IRRLICHT_ONBOARD_CWD=$SHARED_CWD, then curates a per-adapter fixture whose events.jsonl unions ALL sessions (IRRLICHT_EXTRA_SESSION_IDS) but whose transcript.jsonl stays that adapter's own."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/observations.go",
+          "note": "ValidateObservations/loadObservationSpec read the observations block against the newest recording's REPLAY GOLDEN, which for a cross-adapter cell is built from this adapter's own transcript — so tokens_nonzero/cost_nonzero here assert copilot's numbers, not the partner's."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/2-1_basic-turn/expected.jsonl",
+          "note": "Sibling cell establishing copilot's presession shape (born-ready proc-<PID> before events.jsonl exists, real session reconciling under a different id) and the observation vector reused here: tokens_nonzero + cost_nonzero asserted, model left unpinned because --model accepts only \"auto\" and session.auto_mode_resolved picks per turn."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/4-2_multiple-agents-same-workspace/expected.jsonl",
+          "note": "The adapter-agnostic agentA/agentB phase shape this spec mirrors, and its rationale for anchoring every phase on a WORKING transition: both adapters emit born-ready proc-<PID> placeholders that never enter working."
+        },
+        {
+          "kind": "spec",
+          "ref": ".specs/agent-scenarios.md → Feature: Multiple agents in same workspace",
+          "note": "The three Expected bullets this cell is judged against: correct adapter labels, independent transitions, no metrics/parent-linkage/subagent-count cross-contamination."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "partner_adapter": "claudecode",
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login), AND the claude CLI on PATH and authenticated — run-cell-multi.sh drives both",
+        "An active Copilot plan with AI credits (this recipe spends ONE copilot turn), or BYOK via COPILOT_PROVIDER_BASE_URL/_TYPE/_WIRE_API/_API_KEY + COPILOT_MODEL for a credit-free copilot half — BYOK only if the chosen model is in the capacity price map, or cost_nonzero fails",
+        "irrlichd is recording via run-cell-multi.sh in coexist mode: IRRLICHT_ONBOARD_HOME must be set (bind defaults to 127.0.0.1:7838) so production is never touched",
+        "COPILOT_HOME must be EXPORTED in the shell that invokes run-cell-multi.sh, to the same path the driver will use: the daemon is spawned by spawn_record_daemon before any driver and resolves sessionsDir() eagerly from its own environment, while the driver defaults COPILOT_HOME to $STAGING/copilot-home only when it is unset. Left unset, the daemon watches ~/.copilot/session-state while the driver writes under staging, and no copilot session is observed at all",
+        "No other copilot or claudecode session is live in the shared run cwd"
+      ],
+      "setup": [
+        "run-cell-multi.sh creates ONE shared cwd and launches the copilot and claudecode interactive drivers concurrently, both pointed at it via IRRLICHT_ONBOARD_CWD; the copilot driver canonicalises it with pwd -P so the daemon's exact-cwd PID match succeeds",
+        "The copilot driver seeds its COPILOT_HOME with trustedFolders + askedSetupTerminals pre-answered so the folder-trust modal cannot block the input box; its session directory is minted under $COPILOT_HOME/session-state/<session-id>/",
+        "The single isolated --record daemon observes copilot via its session-state fswatcher and claudecode via ~/.claude/projects (keyed off the real $HOME), labelling each adapter independently through its own ProcessMatcher and parser factory",
+        "This cell stores the COPILOT transcript for the replay golden; its events.jsonl spans the whole workspace (both adapters) via IRRLICHT_EXTRA_SESSION_IDS. Promote only the copilot fixture — claudecode's own 4-2 cell is already recorded against codex"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: zeta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "events.jsonl contains TWO distinct session_ids from TWO DIFFERENT adapters (copilot + claudecode), both keyed to the same cwd slug",
+        "each session carries its own correct wire-level adapter label; neither is relabelled",
+        "each session has its own independent working->ready arc; no transition on one is attributed to the other, and the daemon never merges or flaps the two rows",
+        "the copilot session's PID is a copilot process and the claudecode session's PID is a claude process — the name-first candidate narrowing means neither adapter's process is ever a candidate for the other's bind",
+        "no cross-contamination of metrics or subagent counts: the copilot row's tokens/cost come only from its own transcript (both adapters implement SubagentCounter, so this is a live check)",
+        "any proc-<PID> placeholder rows are transient; the recording settles at two real session rows, both ready",
+        "observation vector: tokens_nonzero=true, cost_nonzero=true; model left unasserted (auto-router picks per turn)"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

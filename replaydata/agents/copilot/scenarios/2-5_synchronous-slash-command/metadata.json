@@ -1,0 +1,106 @@
+{
+  "scenario_id": "synchronous-slash-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+7894002",
+    "confidence": 0.95,
+    "notes": "agent_supports: yes (/usage is dispatched by the TUI's slash handler and renders as an in-memory timeline entry with no model call); daemon_capability: full — CONFIRMED LIVE 2026-08-03: copilot appends nothing at all to events.jsonl for the slash, so the session stays continuously ready and no transition can fire; driver_capability: ready (send + wait_turn + sleep + slash, all elicited by the copilot driver)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "synchronous-slash-command",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.95,
+      "body": "## Verdict\n\nagent=yes, daemon=full, driver=ready.\n\n## agent = yes\n\nCopilot CLI 1.0.77 ships a full in-REPL slash-command table (the TUI footer draws the `/ commands` hint the driver's `wait_ready` already greps for). The bundle carries the JS command definitions verbatim; `/usage` is the cleanest no-LLM member:\n\n```js\n{name:Jpe, help:\"Display session usage metrics and statistics\", allowDuringAgentExecution:!0,\n execute: async (t,e) => ({kind:\"add-timeline-entry\", entry:{type:\"info\", text: await t.session.usageOutput(), preserveAnsi:!0}})}\n```\n\n(`app.js` offset ~1668868.) It renders plan + AI-credit figures locally and returns a UI action — there is no model call anywhere on the path.\n\n## daemon = full — the slash command writes NOTHING to events.jsonl\n\nThe question this cell turns on is which class a slash command falls in: Copilot has TWO emit paths, and only one reaches the transcript.\n\n1. **The writer.** `events.jsonl` is written by the SessionEventWriter (`app.js` ~2533038): it subscribes `session.on(\"*\")` and hands each event to a native `recordEventJson`. `emitInternal` (~2253182) is the single funnel: `u.ephemeral ? … : sessionRecordEventJson(u)` — non-ephemeral events are recorded, ephemeral ones are dispatched to listeners only. That is the documented split behind `session.todos_changed` / `user_input.requested` (both `emitEphemeral`) never appearing in the file while `tool.execution_start` / `permission.requested` (both `emit`) do.\n2. **The slash dispatcher never reaches either path.** The TUI's submit handler (`app.js` ~7800573) tests the input for a command name, looks it up, `await Je.execute(Et, args)` and returns `{handled:!0}`. The prompt path — the ONLY code in the bundle that calls `.emit(\"user.message\", …)` (6 sites, all inside `sendPrompt`-shaped functions) — is never entered. So a slash command is not logged as a user turn, and no `assistant.turn_start` / `assistant.turn_end` bracket is opened.\n3. **`add-timeline-entry` is UI-only.** The action is applied as `u(Nt.entry)`; `u` is `addEntryToSession` in `Qfn`'s destructure (~7789567), and the call site (~8634781) passes `addEntryToSession: mi`, where `mi` is `addEphemeralEntry` from the React timeline hook (`{timeline:Ng, addEphemeralEntry:mi, …}`, ~8516764). It is in-memory React state. There is no \"timeline\" event type in the session vocabulary at all: enumerating every `.emit(\"…\")` / `.emitEphemeral(\"…\")` literal in the bundle yields ~60 persisted and ~48 ephemeral types, none of which a local render produces.\n4. **`getSessionUsageOutput` is a pure read** (~8634943): it lists session dirs, reads their event logs (≤500, last 180d) and a quota snapshot to build the text. It emits nothing.\n\nSo the daemon's Source sees a transcript that does not grow during the slash window: no new line → no `transcript_activity` → the classifier has nothing to act on and the session stays `ready`. This is the codex shape (a slash that appends zero rollout lines), NOT the claudecode shape (a `<local-command>` wrapper the parser must filter) and NOT the aider shape (the slash logged as a real `####` user prompt, which flickers working).\n\nBelt and braces: even if a lifecycle line DID land in the window — the periodic `session.usage_checkpoint` from `emitSessionLimitsUsageCheckpointIfNeeded` (~2313202) is the only realistic candidate — `parser.go` maps it through `parseUsage`, which sets `ev.Skip = true` (parser.go:301). Every event type other than `user.message` and `assistant.turn_end` is Skip or a non-state event kind, so nothing a local slash could plausibly trigger can move state. The user-observable assertion (`ready` throughout, no `→ working` for the slash itself, zero tool calls, no `waiting`) is exactly what this adapter produces.\n\n## driver = ready\n\n`replaydata/agents/copilot/driver-interactive.sh` implements `slash` as a first-class arm (`slash_cmd`), and — critically — deliberately does NOT bump `EXPECTED_TURNS`, because a local render writes no `assistant.turn_end` and a bumped counter would hang the next `wait_turn` until timeout. `DRIVE_ELICITS` lists `send slash sleep wait_turn …`, and `DRIVE_SLASH_REQUIRES_STEP_TYPE=false` (copilot is a TUI, not headless-first). `/usage` takes no argument and opens no picker, so this is not a `keys` gap.\n\n## Why the warm-up turn is mandatory\n\nCopilot creates `session-state/<id>/` at launch holding only `workspace.yaml`, and writes `events.jsonl` only when the first prompt lands. Without a warm-up turn there is no real session at all — only the transient `proc-<PID>` row from the process scanner — and the cell would assert nothing about copilot's own session. The recipe therefore mirrors claudecode/codex: one cheap real turn, then the slash, then a settle sleep. The birth is modelled as the two-phase presession shape (`proc-<PID>` → real `<session-id>`), as for every other copilot cell.\n\n## Command choice\n\n`/usage` over the alternatives: `/clear` and `/new` both call `clearHistory` and rotate the session id (`app.js` ~1625923/~1626175 — `ykt` and `bkt`), which is the session-reset scenario; `/compact` is a real model call; a bare `/model` opens a picker dialog (a `show-dialog` action) that would need a `keys` step to dismiss. `/usage` is the only verified command that renders inline, takes no argument, and leaves the REPL in its normal state.",
+      "caveats": [
+        "The recipe spends real Copilot AI credits on the maintainer's account for the warm-up turn (the slash itself costs nothing). One cheap turn on the auto-routed model (gpt-5-mini or claude-haiku-4.5).",
+        "model is deliberately NOT pinned in the observation vector: --model accepts only \"auto\" on this account and session.auto_mode_resolved picks per turn between the two available models, so an exact match would be nondeterministic.",
+        "EMISSION CONFIRMED LIVE 2026-08-03 (CLI 1.0.77) — the provisional flag on daemon=full is withdrawn: the driven /usage appended NOTHING to events.jsonl. The recorded transcript runs session.start … user.message → assistant.turn_start → assistant.message → assistant.turn_end (the warm-up turn) → session.shutdown, with zero lines between the turn_end and the teardown, and the daemon emitted no state_transition in that ~13 s window. So the slash is invisible to the transcript exactly as the bundle read predicted, and no parser filtering is needed.",
+        "BIRTH RE-ANCHORED from the live recording 2026-08-03: the transient proc-<PID> presession is born ready, but the REAL session is born DIRECTLY into working — copilot writes events.jsonl only at the first prompt, so the open warm-up turn is already on disk at discovery. Session birth and warm-turn start are ONE phase; the pre-recording spec's separate ready birth does not exist."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "CLI 1.0.77 bundle (the binary is a compressed Node SEA, so `strings` yields nothing — this file is the readable source). ~1668868: the /usage command definition returns {kind:\"add-timeline-entry\"} with no model call. ~7800573: the TUI slash dispatcher returns {handled:true} without entering the prompt path. ~2253182 emitInternal: `u.ephemeral ? … : sessionRecordEventJson(u)` — the persisted/ephemeral split. ~2533038: the SessionEventWriter that is the only writer of events.jsonl. ~8516764 + ~8634781: add-timeline-entry resolves to addEphemeralEntry, in-memory React timeline state. ~8634943: getSessionUsageOutput is a pure read of session logs + quota. ~1625923/~1626175: /clear and /new both call clearHistory (session rotation) — the reason neither is used here."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "Only user.message (→ working) and assistant.turn_end (→ turn_done/ready) move state; every other type is Skip, including session.usage_checkpoint via parseUsage (line 301 sets ev.Skip = true). A locally-rendered slash command therefore cannot move state even if it did write a line."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Source = FilesUnderRoot{Dir: $COPILOT_HOME/session-state, SessionIDFromPath} + JSONLineParser: the daemon observes exactly the events.jsonl lines and nothing else, so a UI-only render is invisible by construction."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "slash_cmd implements the `slash` step and deliberately does not increment EXPECTED_TURNS (a local render writes no assistant.turn_end); DRIVE_ELICITS includes send/slash/wait_turn/sleep. resolve_transcript resolves on the session DIRECTORY, so it does not block before the warm-up turn creates events.jsonl."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-5_synchronous-slash-command/expected.jsonl",
+          "note": "Sibling with the same shape (a slash that appends zero transcript lines): warm-up turn first, then a slash_window phase pinning ready with the two no-transition invariants. Templated from it."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77 on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits — the warm-up turn spends them; the slash itself costs nothing",
+        "irrlichd is recording — run-cell.sh in isolated mode, or --attach against a daemon started with --record",
+        "no other copilot session shares the same cwd (the PID is bound by cwd)",
+        "/usage must remain a LOCAL render in the running copilot version — its execute returns {kind:\"add-timeline-entry\"} with no model call (app.js ~1668868). If a future release routes it through the model, the scenario premise breaks."
+      ],
+      "setup": [
+        "The driver seeds a scratch COPILOT_HOME under the staging dir with trustedFolders + askedSetupTerminals pre-answered, so the trust modal cannot block the input box; the session directory is minted under $COPILOT_HOME/session-state/<session-id>/",
+        "The warm-up turn goes FIRST and is mandatory: copilot creates the session directory at launch holding only workspace.yaml and writes events.jsonl only once the first prompt lands, so without it there is no real session for the slash window to be asserted against — only the transient proc-<PID> row",
+        "Avoid /clear and /new (both call clearHistory and rotate the session id — session-reset scenario), /compact (a real model call) and a bare /model (opens a picker dialog that would need a keys step to dismiss)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: warm"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "slash",
+          "text": "/usage"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl mints a proc-<PID> pre-session in ready shortly after launch, then the real <session-id> session under a DIFFERENT id once events.jsonl appears on the warm-up prompt",
+        "events.jsonl shows EXACTLY ONE ready→working→ready cycle for the entire run, driven by the warm-up turn only (user.message → working, assistant.turn_end → ready)",
+        "events.jsonl contains NO state_transition to working after the warm-up turn returns to ready — /usage renders into the UI timeline and appends nothing to the transcript",
+        "events.jsonl contains NO state_transition to waiting at any point (a local render raises no permission prompt)",
+        "the slash window (≥5s after the warm-up turn ends) shows the real session continuously ready",
+        "the session's events.jsonl gains no user.message and no assistant.turn_start/turn_end for the /usage invocation",
+        "final state of the real session is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180,
+      "notes": "Copilot's shape matches codex, not claudecode: the slash command writes NOTHING to the transcript (the TUI dispatcher handles it and returns {handled:true} without ever entering the prompt path that emits user.message), so there is no <local-command> wrapper for the parser to filter — the daemon simply sees no activity. /usage is the chosen command because it renders inline (add-timeline-entry), takes no argument and opens no dialog. What differs between runs: the warm-up reply wording, token counts, session id, PID, timestamps and the AI-credit figures /usage prints. What must NOT differ: a single working arc on the real session, the flat ready slash window, zero tool calls and no waiting."
+    }
+  }
+}

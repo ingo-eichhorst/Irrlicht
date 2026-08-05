@@ -2,9 +2,9 @@
 
 Irrlicht is a daemon that monitors coding agent sessions. It watches transcript files and processes to classify sessions into 3 states: **working**, **waiting**, **ready**. Any upstream agent change that alters the items below can break detection.
 
-This file exists to brief a release-sweep analysis (`/ir:agent-releases`) on what it should actually look for. It covers all ten sections irrlicht ships: the **nine agent adapters** in `core/adapters/inbound/agents/` (`all.go`'s `All()` — claude-code, codex, pi, aider, opencode, kiro-cli, gemini-cli, antigravity, mistral-vibe) **plus the Gas Town orchestrator**, which is a different layer entirely (`core/adapters/inbound/orchestrators/gastown` — it polls a CLI, has no `Source` variant, and so is absent from the discovery table below).
+This file exists to brief a release-sweep analysis (`/ir:agent-releases`) on what it should actually look for. It covers all eleven sections irrlicht ships: the **ten agent adapters** in `core/adapters/inbound/agents/` (`all.go`'s `All()` — claude-code, codex, pi, aider, opencode, kiro-cli, gemini-cli, antigravity, mistral-vibe, copilot) **plus the Gas Town orchestrator**, which is a different layer entirely (`core/adapters/inbound/orchestrators/gastown` — it polls a CLI, has no `Source` variant, and so is absent from the discovery table below).
 
-*(#1090's title says "4 of 10 agent adapters" and its body lists nine names "+ the gastown orchestrator". Nine + one orchestrator = ten sections; there are not ten agent adapters. Noted because the miscount is exactly the kind of thing this file is supposed to stop.)*
+*(#1090's title says "4 of 10 agent adapters" and its body lists nine names "+ the gastown orchestrator". At that time: nine adapters + one orchestrator = ten sections; there were not ten agent adapters. Copilot (#1256) makes it ten adapters + one orchestrator = eleven sections. Noted because the miscount is exactly the kind of thing this file is supposed to stop.)*
 
 ## How to use this file
 
@@ -29,7 +29,7 @@ An adapter's `Source` variant determines how sessions are found at all. This is 
 
 | Variant | Adapters | How sessions are discovered |
 |---|---|---|
-| `agent.FilesUnderRoot` | claude-code, codex, pi, gemini-cli, mistral-vibe, kiro-cli, antigravity | fswatcher over a `$HOME`-relative root |
+| `agent.FilesUnderRoot` | claude-code, codex, pi, gemini-cli, mistral-vibe, kiro-cli, antigravity, copilot | fswatcher over a `$HOME`-relative root |
 | `agent.FilesUnderCWD` | aider | **No watcher at all** — the process scanner stat-polls `<pid's CWD>/<filename>` |
 | `agent.ProcessOwnedStore` | opencode | Dedicated SQLite watcher; full tailer bypass |
 
@@ -48,7 +48,7 @@ An adapter's `Source` variant determines how sessions are found at all. This is 
 
 | Tier | Adapters | Meaning |
 |---|---|---|
-| **(a)** Tailer only | claude-code, codex, pi, gemini-cli, aider | No second file feeds the parser. (claude-code is still not *purely* transcript-driven — its hooks deliver `PermissionPending`/`CompactInProgress` out-of-band, and `settings.json` supplies the model fallback.) |
+| **(a)** Tailer only | claude-code, codex, pi, gemini-cli, aider, copilot | No second file feeds the parser. (claude-code is still not *purely* transcript-driven — its hooks deliver `PermissionPending`/`CompactInProgress` out-of-band, and `settings.json` supplies the model fallback.) |
 | **(b)** Tailer + sibling side-read | antigravity, kiro-cli, mistral-vibe | Parser reads a sibling store for data the transcript lacks, via the `TranscriptPathAware` seam |
 | **(c)** Full bypass | **opencode** | `MetricsProvider` short-circuits before a tailer is ever constructed (`core/adapters/outbound/metrics/adapter.go:110-112`) |
 
@@ -114,7 +114,7 @@ The list is `AskUserQuestion`, `ExitPlanMode`, `question`, hardcoded in **two** 
 
 The names are Claude Code's, but the mechanism is name-matching, so **any adapter that emits one of those names gets user-blocking detection**. Codex earns it by *aliasing*: it synthesizes a fake tool call named `ExitPlanMode` for its `<proposed_plan>` block (`codex/parser.go:294-300`).
 
-**Adapters that reach `waiting` only via text heuristics, never via an open tool:** mistral-vibe (its tool is `exit_plan_mode`, snake_case), kiro-cli (lowercase tool names — #588), antigravity (plan gates are live UI, never persisted), aider. For these, an upstream *addition* of a plan-approval gate is a non-event until the name is aliased in.
+**Adapters that reach `waiting` only via text heuristics, never via an open tool:** mistral-vibe (its `exit_plan_mode` IS now in the shared list as of #1256, but vibe flushes per-turn so the open-tool window never exists on disk — see its section below), kiro-cli (lowercase tool names — #588), antigravity (plan gates are live UI, never persisted), aider. For these, an upstream *addition* of a plan-approval gate is a non-event until the name is aliased in.
 
 Adjacent hardcoded list: `isPermissionGatedEditTool` (`metrics.go:388-397`) matches `edit|write|multiedit|notebookedit` **case-insensitively**, because adapters disagree on casing.
 
@@ -185,9 +185,10 @@ The single highest-value thing to know per adapter. **Four adapters get an expli
 | kiro-cli | *heuristic* — text-only `AssistantMessage` (no `toolUse`) |
 | antigravity | *heuristic* — `PLANNER_RESPONSE` with no `tool_calls` |
 | gemini-cli | *heuristic* — non-empty content **and** zero tool calls |
+| copilot | **explicit** — `assistant.turn_end`. Note copilot closes the turn after *every* tool call and immediately opens a continuation, so a turn_end is only terminal when no `assistant.turn_start` follows without an intervening `user.message` |
 | aider | *synthesized* — `idleFlusher` after 1500ms idle; the only adapter |
 
-**There is no inactivity sweep on `working`** for the heuristic adapters (except aider's idle flush) — a session that never emits its terminal line stays `working` indefinitely. That is why the heuristic adapters are the ones to scrutinize on any upstream turn-shape change: the four explicit adapters degrade loudly, the rest degrade silently.
+**There is no inactivity sweep on `working`** for the heuristic adapters (except aider's idle flush) — a session that never emits its terminal line stays `working` indefinitely. That is why the heuristic adapters are the ones to scrutinize on any upstream turn-shape change: the five explicit adapters degrade loudly, the rest degrade silently.
 
 ---
 
@@ -283,7 +284,7 @@ Read on `turn_done` only; memoized by `(mtime, size)`; failures return last-good
 - **`turn_done` is heuristic**: assistant message with a non-empty `tool_calls[]` ⇒ keep working; assistant with **no** `tool_calls` ⇒ `turn_done`.
 - **Todos**: `function.name == "todo"` exactly, `arguments` as a JSON string, `action == "write"`.
 - **`ResetForRotation`** — vibe is the **only** adapter implementing it, because 2.19.1's ACP `/rewind` rewrites `messages.jsonl` **in place**. It's also the only `queuedTurnSplitter` (#988, the in-memory `message_queue.py` drain).
-- **User-blocking: unreachable.** Vibe's tool is `exit_plan_mode` (snake_case), absent from the hardcoded list. Even if aliased, vibe flushes `messages.jsonl` **per-turn, not per-message** — the call and its result land on disk together, *after* the user already answered, so the open-tool window never exists on disk.
+- **User-blocking: unreachable.** Vibe's tool is `exit_plan_mode` (snake_case). It was absent from the hardcoded list until #1256 added it (for GitHub Copilot, which uses the same name); that alias does not help vibe, because vibe flushes `messages.jsonl` **per-turn, not per-message** — the call and its result land on disk together, *after* the user already answered, so the open-tool window never exists on disk.
 - **Backfill quirk**: the sidecar retains only final cumulative totals, so the first `turn_done` on a backfill emits the whole session's tokens and later turns emit nothing. Session total is correct; the per-turn split is lost.
 
 #### What breaks it

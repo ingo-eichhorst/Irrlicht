@@ -1,0 +1,126 @@
+{
+  "scenario_id": "model-context-display",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+00af800.dirty",
+    "confidence": 0.8,
+    "notes": "agent=yes / daemon=bug / driver=ready — the model half is fully live, the CONTEXT half is not: session.usage_checkpoint carries no token counts at all, so ContextWindow/ContextUtilization stay 0 for a session's whole life, while a live per-turn prompt-size trace does exist in the unread ~/.copilot/session-store.db."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-context-display",
+      "agent": "copilot",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: **bug**; driver_capability: ready\n\nThis cell splits cleanly down the middle of its own acceptance criteria. `metrics.model_name` is fully observable after the first turn (criterion 1). `metrics.context_utilization_percentage > 0` and `metrics.context_window > 0` (criteria 2 and 3) are **not** observable at any point while the session is alive — not because the number doesn't exist on disk, but because it exists in a file the copilot adapter does not read. That is the `bug` definition (a trace exists, the daemon doesn't surface it), not `incapable` (no trace / the 3-state model can't represent it).\n\nThe state topology (criterion 4, `ready → working → ready`) is read rather than inferred and is unaffected.\n\n## agent_supports: yes\n\nThe Copilot CLI displays BOTH metrics in its own TUI. The shipped bundle (`node_modules/@github/copilot-darwin-arm64/app.js`, 8.9 MB, CLI 1.0.77) carries a footer element registered as `{id:\"contextWindow\", label:\"context-used\", description:\"Percentage of context window used\"}`, wired to a `contextWindowPercentage` prop and a `footer.showContextWindow` config key, alongside the status-bar model display. The same bundle registers `/context`, `/usage` and `/limits` as slash commands. So the agent computes and shows a live context-fill percentage; it simply never writes that number into the transcript irrlicht tails.\n\nModel identity is live on three transcript events the parser already reads — `session.model_change{data.newModel}`, `session.auto_mode_resolved{data.chosenModel}`, `assistant.message{data.model}` — and the concrete model lands BEFORE the first turn completes (session `51ffced3`: `session.start` → `model_change{newModel:\"auto\"}` → `auto_mode_resolved{chosenModel:\"claude-haiku-4.5\", routingMethod:\"hydra\", candidateModels:[claude-haiku-4.5,gpt-5-mini]}` → `user.message` → `assistant.message{model:\"claude-haiku-4.5\"}`). The scenario's acceptance explicitly admits a routing alias, and Copilot resolves past `\"auto\"` to a concrete label anyway.\n\n## daemon_capability: bug\n\n### What fails, and exactly why\n\n`ComputeContextUtilization` is driven by ONE input: `SessionMetrics.TotalTokens` (`core/pkg/tailer/tailer_metrics.go:583-596`). When it is zero the function early-returns `utilization=0, pressure=\"unknown\"` and never assigns `ContextWindow`, so the field is left at 0 too. And `TotalTokens` has exactly one writer in the whole daemon — `applyTokenSnapshot`, from `ParsedEvent.Tokens.Total` (`tailer_metrics.go:127-133`; a repo-wide grep for `metrics.TotalTokens =` returns that single site). Per-turn contributions do NOT feed it: they land in `cumByModel` (`applyContribution`, `tailer_metrics.go:166-188`), which is cumulative spend, not context occupancy.\n\nThe copilot parser sets `ev.Tokens` in exactly one place: `parseUsage`, from `data.currentTokens` (`core/adapters/inbound/agents/copilot/parser.go:303-305`). And `currentTokens` is written **only on `session.shutdown`**. Verified first-hand against a real 1.0.77 transcript (`~/.copilot/session-state/51ffced3-.../events.jsonl`, 35 events, 5 turns) by keying every event on its `data` keys:\n\n```\nline 10  session.usage_checkpoint  [modelCacheState, totalNanoAiu, totalPremiumRequests]\nline 21  session.usage_checkpoint  [modelCacheState, totalNanoAiu, totalPremiumRequests]\nline 27  session.usage_checkpoint  [modelCacheState, totalNanoAiu, totalPremiumRequests]\nline 33  session.usage_checkpoint  [modelCacheState, totalNanoAiu, totalPremiumRequests]\nline 34  session.shutdown          [... currentTokens, tokenDetails, modelMetrics, systemTokens, conversationTokens, toolDefinitionsTokens ...]\n```\n\nFour checkpoints across five turns, not one token count among them. So for the entire life of a running session `TotalTokens == 0` → `ContextWindow == 0`, `ContextUtilization == 0`, `PressureLevel == \"unknown\"`. **Two of this scenario's four acceptance criteria fail after the first turn, and stay failed until the process exits.**\n\n### Why this is `bug` and not `incapable`\n\nA live, per-turn, on-disk trace of context occupancy DOES exist — in `~/.copilot/session-store.db` (the CLI's global store, which the adapter does not open). Table:\n\n```sql\nCREATE TABLE assistant_usage_events (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id),\n  turn_index INTEGER, agent_id TEXT, parent_tool_call_id TEXT, model TEXT NOT NULL,\n  input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,\n  cache_write_tokens INTEGER, reasoning_tokens INTEGER, total_nano_aiu INTEGER, ...\n  token_details_json TEXT, created_at TEXT DEFAULT (datetime('now')));\n```\n\nRows for session `51ffced3` (`input_tokens` is the FULL prompt size for that request — row 9 is 4407 = 10 fresh + 4397 cache_write, and at shutdown `modelMetrics.usage.inputTokens` 22687 = `tokenDetails` 45 + 17872 cache_read + 4770 cache_write, so the column is the prompt, i.e. context occupancy):\n\n```\nid  turn  model             input_tokens  output  cache_read  cache_write  created_at\n 9   0    claude-haiku-4.5      4407         46        0          4397     20:39:01.413Z\n10   1    claude-haiku-4.5      4453        109     4397            46     20:42:55.958Z\n11   1    claude-haiku-4.5      4591          6     4443           143     20:42:57.561Z\n12   2    claude-haiku-4.5      4599         50     4443           146     20:45:37.969Z\n13   3    claude-haiku-4.5      4637         29     4589            38     20:48:16.079Z\n```\n\n**These rows are written LIVE, per turn — not flushed at exit.** The decisive check, in the shape of the sibling 5.1 cell's live-vs-shutdown proof: that session's `session.shutdown` event is timestamped `20:49:35.291Z`, more than a minute after its last usage row and ten minutes after its first. Session `40dfdd13` is starker still — shutdown at `17:32:02.461Z`, last usage row at `17:22:52.086Z`, a **nine-minute** gap. Every session on this machine shows the same ordering. So after turn 1 the number irrlicht needs is already on disk, timestamped, keyed by the same `session_id` the adapter already uses for its session identity (`agent.go` `SessionIDFromPath` = the `session-state/<session-id>` directory name).\n\nThe daemon-side fix has two established precedents of exactly this shape, which is the strongest argument that this is product work rather than an architectural limit:\n\n- **antigravity (#719 / #766)** — token usage lives in an out-of-band sibling SQLite store, read via a `ProcessOwnedStore` source; `TotalTokens` and the derived `ContextWindow`/`ContextUtilization` come from there with no in-transcript per-turn usage at all.\n- **kiro-cli (#599)** — model + context lived only in a `<uuid>.json` sidecar next to the tailed JSONL, so the v1 adapter showed neither; the fix injected the path via `tailer.TranscriptPathAware` and set `ModelName`/`ContextWindow`/a derived `Tokens.Total` on each `turn_done`. That cell is now `daemon=full`, and this scenario row (1.8) exists *because* of it.\n\nCalling this `incapable` would repeat precisely the mislabel #599 had to undo.\n\n### Second, independent blocker on the same criteria\n\nEven with the daemon fixed, the verify path is currently blind to these fields for copilot: `tools/onboarding-factory/cmd/replay/metrics.go:59-63` copies `TotalTokens` / `ContextWindow` / `ContextUtilization` into the golden `summary` **only** `if adapter == antigravity.AdapterName` — its own comment says \"kiro-cli's #599 sidecar shares the signature and could opt in the same way later\". So copilot's golden carries zeros for these three fields no matter what the daemon computes, and `observations.context_window_nonzero` / `context_utilization_nonzero` (`internal/validate/observations.go:184-188`) will read 0. Both changes — the store reader AND the adapter opt-in in `cmd/replay/metrics.go` — are needed before this cell can go green. Recorded here so `record` attributes the failure correctly instead of re-diagnosing it.\n\n### What DOES hold\n\n`metrics.model_name` after the first turn: yes, concrete (`gpt-5-mini` or `claude-haiku-4.5`, whichever the hydra router picks). `NormalizeModelName` leaves Copilot's dotted labels intact, so the dashboard shows Copilot's own string. Note the published windows are resolvable *in principle* — `gpt-5-mini` → 272000 and `claude-haiku-4.5` → 200000 (the latter via the dotted alias added to `core/pkg/capacity/aliases.go`, which previously priced at $0) — but `computeContextUtilization` never reaches the capacity lookup, because it early-returns on `TotalTokens == 0` first. The window is *derivable* and still *unreported*: the model is known, the table has the answer, and the daemon returns 0 anyway. That is the sharpest single statement of this bug.\n\nCost/tokens are live and non-zero from turn 1 via `assistant.message.outputTokens` (`queueOutputIncrement`), so the session is not metric-dead — which is what makes the missing context vector conspicuous rather than uniform.\n\n## driver_capability: ready\n\nThe recipe needs `sleep`, `send` and `wait_turn`. `driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` reports `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn`. No gap.\n\nThe recipe deliberately does NOT end with `exit_clean`, unlike the 5.1 token-accounting sibling. There, a clean `/exit` is load-bearing because input tokens only exist in the shutdown block. Here it would be actively harmful: `session.shutdown` is the one event that delivers `currentTokens`, so a recipe that exits cleanly would hand the replay a `TotalTokens` after the fact and let a post-hoc read of the transcript look like the metric was available — masking the very gap this cell exists to pin. The assertion is about a LIVE session after one turn, so the recording ends with the REPL still up and the driver's teardown trap tearing it down.",
+      "caveats": [
+        "The failing half of this cell is blocked TWICE, and both need fixing before it can go green: (1) the daemon never computes ContextWindow/ContextUtilization for copilot because SessionMetrics.TotalTokens has one writer (ParsedEvent.Tokens.Total) and the parser only fills it from session.shutdown's currentTokens; (2) even once it does, cmd/replay/metrics.go:59-63 scopes total_tokens/context_window/context_utilization in the golden summary to the antigravity adapter, so copilot's golden reports 0 regardless. record should expect the two context observations to fail and attribute them here rather than re-diagnosing.",
+        "The proposed fix source (~/.copilot/session-store.db → assistant_usage_events.input_tokens) is a CLOSE PROXY for context occupancy, not Copilot's own figure: for session 51ffced3 the last turn's prompt was 4637 tokens while shutdown reported currentTokens=3965 (= systemTokens 2842 + conversationTokens 527 + toolDefinitionsTokens 593). Both are > 0 so the scenario's criteria hold either way, but a daemon reading input_tokens would show a slightly higher occupancy than the CLI's own footer. Whether the CLI footer's percentage uses currentTokens/promptTokenLimit was NOT established — the bundle carries both promptTokenLimit and maxContextWindowTokens and the exact expression was not traced.",
+        "Reading ~/.copilot/session-store.db is OUTSIDE the copilot adapter's current Source (FilesUnderRoot over ~/.copilot/session-state/<id>/events.jsonl), so a fix must also widen the adapter's declared transcripts permission to cover the store file — nothing may be read while that permission is pending or denied.",
+        "That the store rows are written live rather than flushed at exit is established from created_at timestamps vs the shutdown event timestamp across the sessions on this machine (51ffced3: last row 20:48:16 vs shutdown 20:49:35; 40dfdd13: last row 17:22:52 vs shutdown 17:32:02). It was NOT confirmed by watching a row appear during a running turn — that would need driving the CLI, which spends credits. The nine-minute gap makes an exit-time flush implausible, but it is inference from timestamps, not direct observation.",
+        "observations.model is deliberately NOT pinned: this account exposes only gpt-5-mini and claude-haiku-4.5, --model accepts only 'auto', and the hydra router chooses per turn and can switch mid-session. record fills it from the recording.",
+        "Birth is anchored to start UNPINNED: events.jsonl is not written until the first prompt is sent, while the 1s process scanner may mint a transient proc-<PID> row first, so which row appears first is timing-dependent. record may re-template to the two-phase presession shape if the recording shows a reconciliation."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.copilot/session-state/51ffced3-5bba-416f-b898-7338f39e69e8/events.jsonl",
+          "note": "Live CLI 1.0.77 transcript, 35 events / 5 turns. Keyed every event on its data keys: all 4 session.usage_checkpoint events carry ONLY {modelCacheState, totalNanoAiu, totalPremiumRequests}; currentTokens/tokenDetails/modelMetrics appear only on the single session.shutdown (line 34, ts 20:49:35.291Z). This is the anchoring evidence for daemon=bug."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.copilot/session-store.db → table assistant_usage_events",
+          "note": "The unread live trace. Per-turn rows (session_id, turn_index, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at). Session 51ffced3: 5 rows at 20:39:01 / 20:42:55 / 20:42:57 / 20:45:37 / 20:48:16, all preceding shutdown at 20:49:35. Session 40dfdd13: last row 17:22:52 vs shutdown 17:32:02 — a nine-minute gap, so rows are written per turn, not flushed at exit."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go:127-133,583-596",
+          "note": "applyTokenSnapshot is the ONLY writer of SessionMetrics.TotalTokens (repo-wide grep for 'metrics.TotalTokens =' returns this one site); computeContextUtilization early-returns utilization=0 / pressure=unknown and never assigns ContextWindow when TotalTokens==0, so the capacity lookup is never reached even though the model is known."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go:300-329",
+          "note": "parseUsage is the parser's only site setting ev.Tokens, and it reads data.currentTokens — present only on session.shutdown. Its own doc comment records the checkpoint-vs-shutdown payload split verified live on 1.0.77."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go:166-208",
+          "note": "The model half: setModel from session.model_change(newModel) / session.auto_mode_resolved(chosenModel) / assistant.message(model), re-stamped onto every event by ParseLine, so ModelName is lit before the first turn ends."
+        },
+        {
+          "kind": "file",
+          "ref": "node_modules/@github/copilot-darwin-arm64/app.js (CLI 1.0.77 bundle)",
+          "note": "agent_supports evidence: footer element {id:'contextWindow', label:'context-used', description:'Percentage of context window used'} plus a contextWindowPercentage prop and footer.showContextWindow config key; slash-command table includes /context, /usage, /limits. The CLI itself displays the metric it never writes to the transcript."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/metrics.go:59-63",
+          "note": "The second, independent blocker: total_tokens/context_window/context_utilization are copied into the golden summary only for the antigravity adapter, so copilot's golden reports 0 for these fields whatever the daemon computes."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/1-8_model-context-display/metadata.json",
+          "note": "The precedent that makes this bug rather than incapable: kiro-cli's model+context lived only in an out-of-band sidecar and the v1 adapter was labelled incapable; #599 taught the adapter to read it and the cell is daemon=full today. Same shape, same fix class."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/dbmetrics.go + tools/onboarding-factory/cmd/replay/metrics.go:53-58 (#719/#766)",
+          "note": "Second precedent: an adapter whose entire token/context vector comes from a sibling SQLite store rather than the transcript, including the replay opt-in copilot would need."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "driver_step_types_from_file reports exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn — the recipe's sleep/send/wait_turn are all present, so driver=ready."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "copilot CLI 1.0.77+ on PATH and authenticated (credentials live in the OS keychain, so the driver's scratch COPILOT_HOME needs no re-login)",
+        "An active Copilot plan with AI credits — this recipe spends ONE turn",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a daemon started with --record)",
+        "KNOWN FAILING: the two context observations are expected to fail. Do not weaken the spec or 'fix' the recipe to make them pass — the gap is daemon-side (see the assessment), not recipe-side"
+      ],
+      "setup": [
+        "Driver seeds a scratch COPILOT_HOME under staging and launches `copilot --allow-all --no-color` in a fresh per-run cwd, waiting for the TUI prompt before the first send",
+        "NO --model flag: this account accepts only 'auto', and the assertion is that a CONCRETE model label appears, not that a specific one does",
+        "The leading sleep gives the 1s process scanner a poll before the first prompt so PID binding and any proc-<PID> pre-session settle deterministically",
+        "Model and context are read AFTER turn_end: before session.auto_mode_resolved the model reads the literal placeholder 'auto'"
+      ],
+      "script": [
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "What is 6 times 7? Reply with exactly the number."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl shows exactly one ready→working→ready cycle for the copilot session, and no transition to waiting (--allow-all means no permission prompt)",
+        "the replay golden's model_name is a concrete Copilot model label (gpt-5-mini or claude-haiku-4.5) — NOT 'unknown' and NOT the placeholder 'auto'",
+        "EXPECTED TO FAIL (known_failing): observations.context_window_nonzero and observations.context_utilization_nonzero. Confirm the failure is the assessed one by checking the recording's transcript — every session.usage_checkpoint must carry only {modelCacheState,totalNanoAiu,totalPremiumRequests} and there must be NO session.shutdown line (the recipe does not exit cleanly), hence no currentTokens anywhere",
+        "cross-check the counterfactual: ~/.copilot/session-store.db assistant_usage_events has a row for this session_id with input_tokens > 0 and a created_at at turn time — i.e. the number irrlicht reports as 0 was on disk when the turn ended",
+        "cum tokens and estimated_cost_usd are > 0 (the live assistant.message.outputTokens path) — the session is not metric-dead, only context-blind",
+        "final session state is ready, with the REPL still alive at recording end (no exit_clean — a clean shutdown would deliver currentTokens post-hoc and mask the gap)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

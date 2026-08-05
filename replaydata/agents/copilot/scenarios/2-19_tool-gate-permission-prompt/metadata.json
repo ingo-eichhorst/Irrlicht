@@ -1,0 +1,138 @@
+{
+  "scenario_id": "tool-gate-permission-prompt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+a21849f",
+    "confidence": 0.95,
+    "notes": "agent_supports: yes (Copilot CLI blocks on a tool-confirmation prompt for any write-class command with no matching approval rule); daemon_capability: FULL — the signal is entirely transcript-borne (permission.requested → PermissionRequestIDs → tailer openPermissions → TranscriptPermissionPending → classifier rule transcript_permission_prompt → waiting) and is now confirmed LIVE end-to-end: the 2026-08-03 re-recording emits state_transition new_state=waiting reason \"transcript permission prompt open → waiting\" (decided_by_tier=transcript, decided_by_rule=transcript_permission_prompt). The earlier daemon=bug verdict was real — session.MergeMetrics dropped TranscriptPermissionPending before the live detector classified — and was fixed by commit \"fix(session): carry TranscriptPermissionPending through MergeMetrics\"; driver_capability: ready (recipe needs only send+sleep, launched with COPILOT_NO_ALLOW_ALL=1 so --allow-all is dropped)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "tool-gate-permission-prompt",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.95,
+      "body": "## Verdict\n\nagent_supports: **yes** — GitHub Copilot CLI blocks on a tool-confirmation prompt whenever a tool call is not covered by an approval rule.\ndaemon_capability: **full** — and for the strongest possible reason: Copilot writes the permission prompt into the transcript itself, so no hook channel is involved.\ndriver_capability: **ready** — the recipe needs only `send` + `sleep`, both elicited by `replaydata/agents/copilot/driver-interactive.sh` (`DRIVE_ELICITS`).\n\n## Why this is the scenario Copilot is unusually GOOD at\n\nEvery other adapter that observes this scenario needs a *hook* to learn that a prompt is open, because the held prompt is live TUI state the agent never persists. claudecode uses `PermissionRequest`; codex got the same HTTP channel in PR #1171. mistral-vibe has the prompt but keeps it as an in-memory `asyncio.Future` and is `daemon=incapable` for exactly that reason.\n\nCopilot is different: `permission.requested` and `permission.completed` are **ordinary lines in `events.jsonl`**, written while the CLI sits blocked. Captured live on CLI 1.0.77 with the confirmation prompt on screen and unanswered — i.e. the request line was already on disk *before* the user answered, which is the whole ballgame for observability:\n\n```json\n{\"type\":\"permission.requested\",\"data\":{\"requestId\":\"504409c4-…\",\"permissionRequest\":{\"kind\":\"shell\",\"toolCallId\":\"call_kXL…\",\"fullCommandText\":\"echo written > out.txt\",\"commands\":[{\"identifier\":\"echo\",\"readOnly\":true}],\"possiblePaths\":[\"out.txt\"],\"hasWriteFileRedirection\":true}}}\n```\n\nand on answering:\n\n```json\n{\"type\":\"permission.completed\",\"data\":{\"requestId\":\"504409c4-…\",\"toolCallId\":\"call_…\",\"result\":{\"kind\":\"approved\"}}}\n```\n\nThe two pair on **`requestId`**, not on the `toolCallId` that also appears in the payload — the tool call and the prompt are different objects, and one tool call can be re-prompted.\n\n## The end-to-end daemon path (all four seams read, none assumed)\n\n1. **Parse.** `core/adapters/inbound/agents/copilot/parser.go` dispatches `permission.requested` → `parsePermissionRequested` (sets `ParsedEvent.PermissionRequestIDs = [requestId]`, `EventType=\"permission_requested\"`) and `permission.completed` → `parsePermissionCompleted` (`PermissionResolvedIDs`, `EventType=\"permission_completed\"`). A denial is recorded as a *resolution*, deliberately NOT mapped to `IsToolDenial` — that flag is Claude Code's turn-ending cancellation marker, and Copilot carries on after a denial, so borrowing it would push the session to `ready` mid-turn.\n2. **Fold.** `core/pkg/tailer/tailer.go` `applyPermissionDeltas` adds each request id to `openPermissions` and deletes each resolved id; a user message (`ClearToolNames` with no resolution in the same event) empties the set, so an abandoned prompt cannot pin a session in `waiting` forever.\n3. **Derive.** `core/pkg/tailer/tailer_metrics.go:475` — `TranscriptPermissionPending = len(openPermissions) > 0`, mirrored onto `session.SessionMetrics.TranscriptPermissionPending`.\n4. **Classify.** `core/application/services/state_classifier.go:151` — rule `transcript_permission_prompt`, `TierTranscript`, `when: m.TranscriptPermissionPending` → **waiting**. Its ladder position is load-bearing in both directions: BELOW both hook-tier rules (a hook-pushed verdict is more authoritative and must stay attributable as such; sitting above them would also break `TestStateRules_LadderIsTierConsistent`) and ABOVE `agent_done` (Copilot may well write a turn-ending event before blocking, and routing that to `ready` would report a session as finished while it sits waiting on the user).\n\nSo the asserted arc `ready → working → waiting` falls out of the transcript alone.\n\n## Works under REPLAY — which the hook path does not\n\n`core/application/replayengine/metrics.go:136` carries `TranscriptPermissionPending` through the replay metrics projection. That is a real capability difference from the claudecode/codex siblings, whose `waiting` episode exists only because a live curl hook reached a daemon on port 7837 and therefore cannot be reproduced offline. Copilot's waiting episode is reconstructible from the frozen `events.jsonl`, so this cell's fixture is replayable and the recording is not tied to a `:7837 --record` daemon the way codex's is.\n\n## Coverage that already exists\n\n`core/adapters/inbound/agents/copilot/permission_test.go` (`TestPermissionRequested_OpensTranscriptPermission`, `TestPermissionCompleted_ClosesTranscriptPermission`, `TestPermissionPairsByRequestID`) and `core/application/services/state_classifier_permission_test.go` (asserting `wantRule: \"transcript_permission_prompt\"`) pin the seam at both ends.\n\n## Scenario signal and where the recipe stops\n\nThe scenario asserts `ready → working → waiting` on the prompt opening (the load-bearing episode), with the recipe capturing entry into `waiting` and stopping; `waiting → working → ready` and the late-hook no-bounce are the follow-on half. Both siblings (claudecode, codex) stop at `waiting`, and this recipe mirrors them: it sends a write-class task, never answers the prompt, and terminates in `waiting`. The late-hook no-bounce clause of the scenario is a claudecode hook artifact with no Copilot analogue — Copilot's resolution is a transcript line that arrives in order, so there is no out-of-order hook to bounce the state.\n\n## The one thing that must change before recording (NOT a driver gap)\n\n`replaydata/agents/copilot/driver-interactive.sh` boots `copilot --allow-all --no-color`. `copilot --help` on 1.0.77 documents `--allow-all` as \"Enable all permissions (equivalent to --allow-all-tools --allow-all-paths --allow-all-urls)\" — i.e. it PRE-APPROVES everything and would suppress the prompt entirely, so this cell would record a plain `ready → working → ready` turn and verify PARTIAL. The launch line must omit `--allow-all` for this one cell (add an env lever alongside the existing `COPILOT_AVAILABLE_TOOLS` / `RESUME_ID` reads, e.g. `[[ -z \"${COPILOT_NO_ALLOW_ALL:-}\" ]] && args+=(--allow-all)`), so no other cell loses its auto-approval.\n\nThis is a **launch-configuration precondition, not a missing step type** — every step the recipe needs (`send`, `sleep`) is listed in `DRIVE_ELICITS`. The codex sibling for this exact scenario sets the precedent explicitly: its recipe requires `-a untrusted -s read-only` on a boot line that does not carry them, and it is recorded as `driver=ready` with the flags as a precondition. Calling this `gap:*` would route a one-line launch-flag change to the wrong owner.\n\n## Why the prompt is guaranteed to appear\n\nRead-only commands (`cat`) are auto-approved on 1.0.77 and raise NO permission event; only a write did. So the recipe asks for a shell write (`echo written > out.txt`), which is precisely the shape verified live — `kind: \"shell\"`, `hasWriteFileRedirection: true`.",
+      "caveats": [
+        "RECORDING PRECONDITION (must be handled before the driver runs, else the cell verifies PARTIAL with no waiting episode): the driver's launch line `local args=(--allow-all --no-color)` in replaydata/agents/copilot/driver-interactive.sh must omit --allow-all for THIS cell only. `copilot --help` (1.0.77) documents --allow-all as equivalent to --allow-all-tools --allow-all-paths --allow-all-urls, so it pre-approves every tool call and no permission.requested is ever written. Suggested lever, matching the driver's existing env reads: gate the flag behind an env var (COPILOT_NO_ALLOW_ALL) rather than deleting it, so every other copilot cell keeps auto-approval. Launch configuration, not a step type — driver stays `ready` (same call the codex sibling made for `-a untrusted -s read-only`).",
+        "RECIPE MUST NOT USE wait_turn WHILE THE PROMPT IS HELD: the driver's wait_turn calls dismiss_dialog_if_visible with the regex 'Allow|Do you want to|trust the files', which would answer the confirmation prompt within ~1s and collapse the waiting episode the scenario exists to capture. The authored script therefore uses send + sleep only (the same shape as the claudecode and codex siblings, which also terminate in waiting). A later cell that needs to observe the RESOLVE half must answer deliberately with a `keys` step, not by letting wait_turn dismiss it.",
+        "OBSERVATIONS deliberately assert only `agent`: the recipe terminates while the session is blocked in waiting, before any assistant.turn_end / session.usage_checkpoint / session.shutdown lands — and those are the only events carrying Copilot's modelMetrics token block. So cost and tokens are legitimately expected to be zero for this fixture and are NOT asserted non-zero. Token/cost/model coverage belongs to 5-1_token-accounting and 5-2_model-identification, not here.",
+        "MODEL left unpinned on purpose: the account backing these recordings exposes only gpt-5-mini and claude-haiku-4.5, and --model accepts only \"auto\" — so the effective model is resolved at runtime and announced by session.auto_mode_resolved (chosenModel). Pinning a doc-guessed model string is the miss that failed every gemini-cli recording; `record` fills it from the recording if this cell ever needs it.",
+        "The observed result.kind values are \"approved\" and \"denied-no-approval-rule-and-could-not-request-from-user\" (the latter in non-interactive mode with no matching rule). The enum plainly has more members; only these two were seen. Immaterial to this cell's arc — parsePermissionCompleted resolves the prompt regardless of result.kind — but a future denial-specific cell must not assume the enum is closed.",
+        "BIRTH SHAPE RE-ANCHORED from the live recording: the transient proc-<PID> presession is born ready, but the REAL session is born directly into working (state_transition new_state=working, reason \"new session created\") because copilot writes events.jsonl only at the first prompt, so the turn is already open at discovery. The pre-recording spec asserted a ready birth followed by a separate ready→working; that shape no longer exists.",
+        "DAEMON BUG FOUND AND FIXED (do not re-report): the first live recording (2026-08-03) refuted daemon=full because session.MergeMetrics / newMergedMetrics (core/domain/session/metrics.go) did not copy TranscriptPermissionPending, and the live detector classifies against the POST-merge state.Metrics — so the transcript_permission_prompt rule read false on every pass and the session never left working. The replay path was immune (replayengine feeds Convert output straight to the classifier), which is why the unit suites and replay-fixtures were green while live was broken. Commit \"fix(session): carry TranscriptPermissionPending through MergeMetrics\" closes it; the re-recording in this cell is the live proof and known_failing is cleared."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "parsePermissionRequested / parsePermissionCompleted (lines 234-261): permission.requested → ParsedEvent.PermissionRequestIDs, permission.completed → PermissionResolvedIDs, paired on requestId not toolCallId. Doc comment records the live 1.0.77 capture taken while the CLI sat blocked on its confirmation prompt."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "applyPermissionDeltas (line 964): folds request ids into openPermissions and deletes resolved ids; a user message clears the set so an abandoned prompt cannot pin the session in waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "Line 475: TranscriptPermissionPending = len(openPermissions) > 0 — the derived metric the classifier reads."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Line 151: rule `transcript_permission_prompt`, TierTranscript, when TranscriptPermissionPending → waiting. Comment records the deliberate ladder position: below both hook-tier rules (tier consistency, attributability) and above agent_done (an open prompt must outrank a turn-ending event)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/replayengine/metrics.go",
+          "note": "Line 136: TranscriptPermissionPending is carried through the replay metrics projection — the waiting episode is reproducible OFFLINE, unlike the hook-driven claudecode/codex siblings."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/permission_test.go",
+          "note": "TestPermissionRequested_OpensTranscriptPermission / TestPermissionCompleted_ClosesTranscriptPermission / TestPermissionPairsByRequestID — unit coverage of the parser half of the seam."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier_permission_test.go",
+          "note": "Asserts wantRule \"transcript_permission_prompt\" — unit coverage of the classifier half."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Source = agent.FilesUnderRoot over ~/.copilot/session-state with SessionIDFromPath (the DIRECTORY name, since the transcript basename is the constant events.jsonl); Process.Match = ExactName{copilot}. Grounds the presession birth shape and the driver's daemon_sid override."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "launch_repl boots `copilot --allow-all --no-color` (the flag that must be dropped for this cell); wait_turn's dismiss_dialog_if_visible regex 'Allow|Do you want to|trust the files' would auto-answer the prompt; DRIVE_ELICITS lists send+sleep, the only steps this recipe needs; SEAM-3 comment records that events.jsonl does not exist until the first prompt."
+        },
+        {
+          "kind": "command",
+          "ref": "copilot --help (CLI 1.0.77)",
+          "note": "--allow-all: \"Enable all permissions (equivalent to --allow-all-tools --allow-all-paths --allow-all-urls)\"; --allow-all-tools: \"Allow all tools to run automatically without confirmation\". The documented reason --allow-all suppresses the prompt. No flag makes an otherwise-approved call prompt again, so dropping --allow-all is the only lever."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "Precedent for driver=ready with a launch-flag precondition: codex's recipe needs `-a untrusted -s read-only` on a boot line that lacks them, and its caveat states this is \"a launch-configuration precondition, not a missing step type — every script step type is present, so driver=ready\"."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "The contrast case: same scenario, daemon=incapable because vibe's held prompt is an in-memory asyncio.Future and messages.jsonl is not flushed until after it resolves. Copilot writes the request line to disk WHILE blocked, which is exactly the property vibe lacks."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/2-1_basic-turn/expected.jsonl",
+          "note": "Presession birth template for a FilesUnderRoot adapter whose transcript directory is created lazily — the shape this cell's spec is modeled on (presession_birth → session_birth new_session → every later phase same_session_as session_birth)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.77+ on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login)",
+        "An active Copilot plan with AI credits — this recipe spends one turn's worth",
+        "THE DRIVER MUST LAUNCH WITHOUT --allow-all for this cell: gate replaydata/agents/copilot/driver-interactive.sh's `local args=(--allow-all --no-color)` behind an env lever (e.g. COPILOT_NO_ALLOW_ALL=1 drops it) and set it for this run only. With --allow-all every tool call is pre-approved and NO permission.requested is written — the cell would verify PARTIAL with no waiting episode.",
+        "irrlicht's copilot `transcripts` permission is granted so the daemon tails ~/.copilot/session-state (a fresh IRRLICHT_HOME leaves every permission pending → zero monitoring; use IRRLICHT_PERMISSION_MODE=grant-all for the recorder)",
+        "No hook install and no :7837 pinning needed — unlike the claudecode/codex siblings, the whole signal is transcript-borne, so the :7838 coexist recorder captures it"
+      ],
+      "setup": [
+        "The driver seeds COPILOT_HOME under <staging>/copilot-home with trustedFolders + askedSetupTerminals so the folder-trust modal does not block the input box, then waits for the '/ commands' footer before typing",
+        "A fresh empty cwd under <staging>/cwd/ so the write target does not already exist",
+        "The recipe never answers the confirmation prompt: Copilot blocks indefinitely, the session holds in waiting until teardown (mirrors the claudecode and codex siblings)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Create a file called out.txt in the current directory containing the word written, by running the shell command: echo written > out.txt. Run it now with the shell tool."
+        },
+        {
+          "type": "sleep",
+          "seconds": 30
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created (proc-<PID>) event in ready shortly after the copilot process launches",
+        "events.jsonl contains a transcript_new for the real session (session_id = the ~/.copilot/session-state/<dir> name, distinct from proc-<PID>) once the first prompt creates events.jsonl, born ready",
+        "events.jsonl contains a pid_discovered event bound to the real session_id",
+        "events.jsonl contains a state_transition to working on the real session_id when the prompt is sent (user.message)",
+        "events.jsonl contains a state_transition to waiting on the SAME real session_id once permission.requested lands (TranscriptPermissionPending=true → transcript_permission_prompt rule)",
+        "events.jsonl contains NO state_transition to ready on the real session_id after the waiting transition (the recipe never answers the prompt)",
+        "the recorded transcript contains a permission.requested line with kind=shell and hasWriteFileRedirection=true, and NO permission.completed for that requestId",
+        "final session state is waiting"
+      ],
+      "timeout_seconds": 180,
+      "settings": {}
+    }
+  }
+}

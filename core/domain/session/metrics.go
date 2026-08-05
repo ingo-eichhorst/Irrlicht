@@ -247,6 +247,16 @@ type SessionMetrics struct {
 	// set by the hook receiver in processActivity, not derived from transcript.
 	PermissionPending bool `json:"-"`
 
+	// TranscriptPermissionPending is true when the TRANSCRIPT shows a
+	// permission prompt still open — the agent wrote both the request and (on
+	// answer) its resolution, so no hook is involved. Unlike PermissionPending
+	// above this is derived, durable across a daemon restart, and populated
+	// under replay, which is what lets a recorded session's waiting state be
+	// verified offline. GitHub Copilot (#1256) is the first adapter to supply
+	// it; the two are kept separate so a recorded trace still distinguishes a
+	// hook-delivered verdict from a transcript-derived one.
+	TranscriptPermissionPending bool `json:"transcript_permission_pending,omitempty"`
+
 	// HookTurnDone is true when Claude Code's Stop hook fired for this session's
 	// current turn — an authoritative, per-adapter turn-done push delivered at
 	// true turn end (issue #1161). Transient and live-only: the detector's
@@ -439,7 +449,12 @@ func (m *SessionMetrics) NeedsUserAttention() bool {
 // in pkg/tailer) pin both sets.
 func isUserBlockingTool(name string) bool {
 	return name == "AskUserQuestion" || name == "ExitPlanMode" ||
-		name == "question" || name == "ask_user_question"
+		name == "question" || name == "ask_user_question" ||
+		// GitHub Copilot's spellings (#1256): exit_plan_mode is its plan-mode
+		// gate — the same concept as ExitPlanMode above, in snake_case — and
+		// ask_user is its clarifying-question tool. Both hold a persisted
+		// tool.execution_start open while the user decides.
+		name == "exit_plan_mode" || name == "ask_user"
 }
 
 // HasOpenEditPermissionTool reports whether an open tool call is a
@@ -609,25 +624,33 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 		QuestionHeadline:         newM.QuestionHeadline,
 		PendingQuestionMarker:    newM.PendingQuestionMarker,
 		PendingWaitingCue:        newM.PendingWaitingCue,
-		PermissionMode:           newM.PermissionMode,
-		SubagentCompletions:      newM.SubagentCompletions,
-		AppliedTaskDeltas:        newM.AppliedTaskDeltas,
-		CumInputTokens:           newM.CumInputTokens,
-		CumOutputTokens:          newM.CumOutputTokens,
-		CumCacheReadTokens:       newM.CumCacheReadTokens,
-		CumCacheCreationTokens:   newM.CumCacheCreationTokens,
-		CompletedTurns:           newM.CompletedTurns,
-		CacheBloat:               newM.CacheBloat,
-		CacheBloatTooltip:        newM.CacheBloatTooltip,
-		CacheBloatExplanation:    newM.CacheBloatExplanation,
-		Tasks:                    newM.Tasks,
-		NoSubstantiveActivity:    newM.NoSubstantiveActivity,
-		SawManualCompactBoundary: newM.SawManualCompactBoundary,
-		SawMidPassTurnBoundary:   newM.SawMidPassTurnBoundary,
-		RateLimit:                newM.RateLimit,
-		RateLimitForecastEta:     newM.RateLimitForecastEta,
-		TaskEstimate:             newM.TaskEstimate,
-		TaskCompletionEta:        newM.TaskCompletionEta,
+		// Recomputed from the transcript every pass (the tailer derives it
+		// from unmatched permission request ids), so it is copied verbatim —
+		// and MUST be copied at all: this allowlist silently drops any field
+		// it omits, and omitting this one meant the transcript-tier permission
+		// rule could never fire live. Replay carries the field through its own
+		// converter, so the parser, classifier and replay-fixture suites were
+		// all green while live behaviour was broken (#1256).
+		TranscriptPermissionPending: newM.TranscriptPermissionPending,
+		PermissionMode:              newM.PermissionMode,
+		SubagentCompletions:         newM.SubagentCompletions,
+		AppliedTaskDeltas:           newM.AppliedTaskDeltas,
+		CumInputTokens:              newM.CumInputTokens,
+		CumOutputTokens:             newM.CumOutputTokens,
+		CumCacheReadTokens:          newM.CumCacheReadTokens,
+		CumCacheCreationTokens:      newM.CumCacheCreationTokens,
+		CompletedTurns:              newM.CompletedTurns,
+		CacheBloat:                  newM.CacheBloat,
+		CacheBloatTooltip:           newM.CacheBloatTooltip,
+		CacheBloatExplanation:       newM.CacheBloatExplanation,
+		Tasks:                       newM.Tasks,
+		NoSubstantiveActivity:       newM.NoSubstantiveActivity,
+		SawManualCompactBoundary:    newM.SawManualCompactBoundary,
+		SawMidPassTurnBoundary:      newM.SawMidPassTurnBoundary,
+		RateLimit:                   newM.RateLimit,
+		RateLimitForecastEta:        newM.RateLimitForecastEta,
+		TaskEstimate:                newM.TaskEstimate,
+		TaskCompletionEta:           newM.TaskCompletionEta,
 	}
 }
 

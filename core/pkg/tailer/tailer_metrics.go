@@ -472,6 +472,7 @@ func (t *TranscriptTailer) computeOpenToolCallMetrics() {
 		names = append(names, name)
 	}
 	t.metrics.LastOpenToolNames = names
+	t.metrics.TranscriptPermissionPending = len(t.openPermissions) > 0
 }
 
 // computeTaskSnapshotMetrics mirrors the running task list onto metrics,

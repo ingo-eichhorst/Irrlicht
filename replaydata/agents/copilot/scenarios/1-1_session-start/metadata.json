@@ -1,0 +1,108 @@
+{
+  "scenario_id": "session-start",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+a21849f",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-start",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts exactly two user-observable bullets: (1) the session row appears in `ready` within 1s of agent launch, and (2) the PID is bound within 1s. Both land inside the copilot adapter's observability surface, and — as with claudecode — both are carried by the daemon's pre-session row rather than by the transcript, because Copilot materializes its transcript lazily.\n\n**Bullet 1 — ready within 1s.** `Agent()` in `core/adapters/inbound/agents/copilot/agent.go` declares `Process.Match = agent.ExactName{Name: ProcessName}` with `ProcessName = \"copilot\"`. The generic scanner (`core/adapters/inbound/agents/processlifecycle/scanner.go:347`, `:543`) mints a `proc-<PID>` pre-session row in `ready` on the first tick that sees the process, for every adapter that declares a matcher — nothing copilot-specific has to work for the row to exist. That row is therefore observable from launch, independent of any file on disk.\n\nThe real `<session-id>` row arrives later. Copilot creates `$COPILOT_HOME/session-state/<session-id>/` at launch, but that directory initially holds only `workspace.yaml`; `events.jsonl` is not written until the first user prompt (verified live on CLI 1.0.77). `sessionIDFromPath` in `adapter.go` deliberately accepts only the constant `events.jsonl` basename, so `workspace.yaml` cannot mint a premature row — the `<session-id>` session is born when the first prompt materializes the transcript. The recipe's one-token nudge is what makes that happen, exactly as claudecode's does.\n\nThe interesting risk for this adapter is whether the watcher sees a transcript inside a directory that did not exist when the watcher started — every real Copilot launch creates its session directory at runtime, so a watcher attached only to startup-present directories would observe nothing at all in production. `core/adapters/inbound/agents/copilot/watcher_test.go` (`TestWatcher_EmitsSessionForNewDirectory`) pins precisely that shape: it starts the watcher, waits for `Ready()`, then creates `<root>/<uuid>/events.jsonl` and asserts an event carrying the directory-derived session id.\n\nBirth lands in `ready`, not `working`: `parseSessionStart` sets `ev.Skip = true`, so the `session.start` line cannot trip the classifier's default \"transcript activity → working\" rule while still supplying `cwd` and `copilotVersion` through the tailer's skipped-event metadata path.\n\n**Bullet 2 — PID bound within 1s.** The `proc-<PID>` row is keyed by PID from inception, so binding happens on the same scanner tick as birth. For the `<session-id>` row, `DiscoverPID` (`pid.go`) delegates to `processlifecycle.DiscoverPIDByCWD(ProcessName, cwd, …)`, and the cwd it needs is available from the very first transcript line — `session.start.data.context.cwd` — which `ParseLine` then re-stamps onto every subsequent event. No sidecar read and no waiting for a turn to complete.\n\n## Driver\n\n`replaydata/agents/copilot/driver-interactive.sh` advertises `send`, `wait_turn` and `sleep` in `DRIVE_ELICITS`, which is the whole recipe. It launches with `--allow-all --no-color` under an isolated `COPILOT_HOME`, and dismisses the folder-trust modal by pane match (seeding `trustedFolders` alone was verified insufficient on 1.0.77). No missing primitive, so `driver=ready`.\n\nAn interactive (`script`) recipe is required rather than headless: the process must outlive the observation window for the pre-session row and the PID binding to be visible at all, and Copilot's headless mode exits at turn completion.",
+      "caveats": [
+        "Lazy transcript materialization, same divergence claudecode documents: the `<session-id>` row only appears once the first prompt writes events.jsonl. The spec's 'within 1s of agent launch' bullet is satisfied by the `proc-<PID>` pre-session row. The session DIRECTORY does exist at launch, but holds only workspace.yaml, which sessionIDFromPath ignores by design.",
+        "The 1000 ms budget is anchored to the daemon's process-scan tick and is PROVISIONAL until the recording confirms it — no copilot recording exists yet, so the timing is inferred from the generic scanner path and the sibling claudecode/codex recordings, not measured for this adapter.",
+        "The `model` observation is deliberately left unpinned: this account can reach only gpt-5-mini and claude-haiku-4.5, `--model` accepts only \"auto\", and the auto-router picks per turn — so which model answers the nudge is not deterministic. `record` should fill it only if it proves stable.",
+        "Pre-session binding depends on `pgrep -x` matching the NATIVE copilot binary rather than the node loader that spawns it (the npm distribution is a two-process tree whose child's accounting name is \"copilot\"). Verified on the npm install path only; Homebrew and the install-script paths are untested, and a distribution that runs the agent under a differently-named executable would break bullet 1's pre-session row."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/agent.go",
+          "note": "Identity.Name=copilot, Source variant FilesUnderRoot{Dir: sessionsDir(), SessionIDFromPath: sessionIDFromPath}, Process.Match=ExactName{copilot}, PIDForSession=DiscoverPID."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/adapter.go",
+          "note": "Store layout $COPILOT_HOME/session-state/<session-id>/events.jsonl (default ~/.copilot/session-state); sessionIDFromPath accepts only the constant events.jsonl basename, so the sibling workspace.yaml present at launch cannot mint a session row."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/pid.go",
+          "note": "DiscoverPID delegates to processlifecycle.DiscoverPIDByCWD(ProcessName, cwd, …) — the cwd comes from session.start.data.context.cwd, the transcript's first line, so PID binding needs no sidecar and no completed turn."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/watcher_test.go",
+          "note": "TestWatcher_EmitsSessionForNewDirectory starts the watcher, waits for Ready(), then creates <root>/<uuid>/events.jsonl — proving the production shape (session directory created at runtime, after the watcher is up) yields an event keyed by the directory name."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "parseSessionStart sets ev.Skip=true while still supplying cwd and copilotVersion, so session birth settles in ready rather than tripping the classifier's transcript-activity→working default; assistant.message carries model + outputTokens, which queueOutputIncrement turns into a live token contribution."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/scanner.go",
+          "note": "Lines 347 and 543 mint the proc-<PID> pre-session row generically from Process.Match — the mechanism behind the 'ready + PID bound within 1s of launch' bullets is adapter-agnostic, so copilot inherits it by declaring ExactName."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS advertises send/wait_turn/sleep (the whole recipe); launches with --allow-all --no-color under an isolated COPILOT_HOME and dismisses the folder-trust modal by pane match, since seeding trustedFolders was verified insufficient on 1.0.77."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/aliases_test.go",
+          "note": "TestCopilotAlias_ResolvesToRealCostEstimate: both models this account can reach price non-zero (gpt-5-mini already resolved; claude-haiku-4.5 now aliased to claude-haiku-4-5), which is what makes the cost_nonzero observation safe to assert without pinning a model."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "copilot CLI on PATH and authenticated (npm i -g @github/copilot; credentials live in the OS keychain and survive COPILOT_HOME isolation)",
+        "an active Copilot plan with AI credits — the nudge turn spends them",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/ (the driver seeds trustedFolders in COPILOT_HOME/config.json and additionally dismisses the folder-trust modal by pane match)",
+        "Point COPILOT_HOME at <staging>/copilot-home so the session store is isolated from the maintainer's real ~/.copilot"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a presession_created event for proc-<PID> within 1000 ms of the tmux new-session timestamp",
+        "events.jsonl contains a state_transition to ready for proc-<PID> within 100 ms of presession_created (pre-session is born ready)",
+        "events.jsonl contains a pid_discovered event within 1000 ms of agent launch",
+        "events.jsonl contains a transcript_new event for the <session-id> session shortly after the first send (copilot writes events.jsonl only on the first prompt)",
+        "final session state is ready",
+        "session tokens and estimated cost are both non-zero after the turn completes"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

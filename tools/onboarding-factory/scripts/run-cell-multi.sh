@@ -198,6 +198,22 @@ write_error_manifest() {
     > "$MANIFEST"
 }
 
+# Copilot resolves its whole config dir — session store included — from
+# COPILOT_HOME, and the DAEMON reads that variable eagerly when it builds the
+# adapter's watcher, so it has to be exported BEFORE the spawn below. The
+# driver defaults it to "<its staging subdir>/copilot-home" only when unset, so
+# leaving it unset here points the daemon at the real ~/.copilot while the
+# driver writes to staging: the daemon then observes every one of the user's
+# own copilot sessions and none of the driver's, and curation fails with
+# "primary session does not appear in the recording". run-cell.sh has always
+# done this; the multi rig predates the copilot adapter and did not.
+for _a in "${ADAPTERS[@]}"; do
+  [[ "$_a" == "copilot" ]] || continue
+  export COPILOT_HOME="${COPILOT_HOME:-$STAGING/copilot/copilot-home}"
+  mkdir -p "$COPILOT_HOME"
+  echo "copilot: COPILOT_HOME=$COPILOT_HOME (daemon + driver share this store)"
+done
+
 # --- Spawn ONE isolated --record daemon ---------------------------------
 # The lib snapshots the shared agent config, spawns the daemon, arms
 # stop_record_daemon as the EXIT trap, and waits for its socket. A non-zero

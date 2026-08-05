@@ -1,0 +1,161 @@
+{
+  "scenario_id": "model-switch-midsession",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.77",
+    "daemon_version": "0.5.9+a21849f",
+    "confidence": 0.85,
+    "notes": "agent_supports: partial (the CLI HAS /model <id> and /model --session <id>, but this account's plan rejects every concrete model id — live-verified — and the auto-router resolves ONCE per session, so no model CHANGE is producible here); daemon_capability: full; driver_capability: ready. The recording asserts the real arc: two turns, a no-flicker switch window, monotonic tokens."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-switch-midsession",
+      "agent": "copilot",
+      "assessed_at": "2026-08-02T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: partial; daemon_capability: full; driver_capability: ready\n\nThe Copilot CLI unambiguously *implements* mid-session model switching. It is NOT producible on the account this machine has, by any surface, and the auto-router does not produce it by itself either. So the cell records the arc that IS real (two turns, a switch window with no state flicker, monotonic tokens) and downgrades `agent_supports` to `partial` — the same shape as the gemini-cli sibling, whose live recording refuted the model-CHANGE observable while leaving the daemon capable.\n\n## 1. The CLI has the feature (why this is `partial`, not `no`)\n\n`app.js` (the shipped bundle, offset ~1497425) defines the `/model` command with `aliases:[\"/models\"]` and this help text:\n\n```\nUsage: /model [--session|--repo|--local] [<model-id>|auto]\n  /model                  Open the model picker\n  /model <model-id>       Switch now and set the default for future sessions\n  /model auto             Let Copilot pick the model automatically\n  /model --session <id>   Change the model for this session only (-s for short)\n  /model --repo <id>      Set the model default for this repo\n  /model --local <id>     Set the model default for this repo locally\n```\n\nSo the switch is an INLINE-ARGUMENT slash command — a plain `slash` driver step, NOT an arrow-key picker, and therefore **not** a `keys` driver gap (the false-gap the playbook warns about). There is even a session-scoped form (`--session`) that would switch without persisting a global default, which is exactly what a recording wants.\n\n## 2. …but every concrete model id is refused on this plan (live-verified)\n\nProbed at ZERO AI-credit cost — a slash command renders locally and does no LLM round-trip. A scratch `COPILOT_HOME` was seeded the way the driver seeds one, `copilot --no-color --allow-all` was launched under tmux, and `/model gpt-5-mini` (one of the two models the router itself lists in `availableModels`) was sent:\n\n```\n✗ Model \"gpt-5-mini\" can't be selected — only Auto mode is available on your plan.\n  Use /model auto to continue, or upgrade your plan for access to individual models.\n```\n\nThat is the `u.length===0 && jv(authInfo)` branch of `/model`'s executor: the CAPI model list `t.models` is EMPTY for this plan, so `modelResolverModelIsAvailable` fails for any id. The only value that bypasses the availability check is the literal `auto` (`Gs(t){return t===cC}`, `cC=\"auto\"`, app.js ~678247). This is the same wall the maintainer hit on the `--model` FLAG, and it is now confirmed to apply to the in-REPL `/model` command and the picker as well (the picker renders `Your <plan> plan currently includes only Auto…` off the same `Ke.available.length===0 && jv(s)` condition). BYOK (`COPILOT_PROVIDER_*`) does not open a door either: it pins ONE model at launch via `COPILOT_MODEL`, and a mid-session `/model <id>` under it still passes through the same empty-`t.models` availability check.\n\n## 3. …and the auto-router does NOT switch mid-session\n\nThis is the finding that decides the cell, and it CONTRADICTS the working assumption that hydra picks per turn. Every `events.jsonl` in the local store was read (5 sessions, 13 completed turns, CLI 1.0.77):\n\n| session | turns | auto_mode_resolved | distinct assistant.message.model | shutdown modelMetrics keys |\n|---|---|---|---|---|\n| 2b82eada | 1 | ONE → gpt-5-mini | {gpt-5-mini} | [gpt-5-mini] |\n| 40dfdd13 | 4 | ONE → gpt-5-mini | {gpt-5-mini} | [gpt-5-mini] |\n| 51ffced3 | 5 | ONE → claude-haiku-4.5 | {claude-haiku-4.5} | [claude-haiku-4.5] |\n| a030ac38 | 2 | ONE → gpt-5-mini | {gpt-5-mini} | [gpt-5-mini] |\n| a995dbc4 | 1 | ONE → gpt-5-mini | {gpt-5-mini} | [gpt-5-mini] |\n\n`session.auto_mode_resolved` fires EXACTLY ONCE per session — before the first turn — and every later turn in that session is served by the same model, including in the 4-turn and 5-turn sessions. The bundle agrees: the emit site guards on `existingTelemetryToken: sessionScalarAutoModeTelemetryToken(this.nativeSessionId)` and only emits `if(Z.autoTelemetry)`, and the resolver is fed `previousConcreteModel` and can return a `stickyOverride` — a per-session sticky decision, not a per-turn one. (There is a `multiTurnRoutingEnabled` feature flag threaded into the same call, evidently off for this account.) The earlier report of a session \"resolving to gpt-5-mini and later serving claude-haiku-4.5\" is explained by the table above: the router's choice varies BETWEEN sessions (4× gpt-5-mini, 1× claude-haiku-4.5), not within one.\n\nSo the scenario's defining observable — two distinct models in one session, `ModelName` = B by t2_end — cannot be produced here: not by command (plan-blocked) and not by luck (router is per-session sticky).\n\n## 4. daemon_capability = full\n\nUnchanged from the 5-2 sibling and NOT downgraded, because the daemon has no differing input to promote — the same reasoning gemini-cli's 5-3 landed on. Were a switch to occur, all three model-bearing events are read by the parser and `ModelName` would follow:\n\n| Scenario assertion | Adapter mechanism |\n|---|---|\n| `ModelName` = model A after turn 1 | `assistant.message.data.model` → `setModel` (parser.go L189-208); stamped on every event incl. skipped ones (L124-129) |\n| `ModelName` = model B after turn 2 (latest wins) | `session.model_change.data.newModel` and `session.auto_mode_resolved.data.chosenModel` → `setModel` (L88-93); `MergeMetrics`' latest-non-unknown-wins promotes it |\n| Per-turn cost attribution to the serving model | `queueOutputIncrement(model, outputTokens)` per `assistant.message` (L340-354) and `queueContribution` per `modelMetrics` entry (L361-380) both key on the model |\n| `TotalTokens` after T2 > after T1 | live `assistant.message.outputTokens` increments, folded as non-negative deltas → monotonic |\n| No `working`/`waiting` flicker during the switch window | `session.model_change` is `Skip=true` (parser.go L89-91), so a `/model` command cannot trip the classifier's \"transcript activity → working\" default. This is the one scenario assertion the recording DOES exercise for real — the recipe's `/model auto` writes a genuine `session.model_change` line into `events.jsonl` between the two turns |\n\n## 5. driver_capability = ready\n\n`driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` yields `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn`. The recipe needs `sleep send wait_turn slash exit_clean` — all real implementations. Copilot's driver is better-behaved than claudecode's here: its `slash` branch DECREMENTS `EXPECTED_TURNS` (driver-interactive.sh L365-375) because a local command writes no `assistant.turn_end`, so a `wait_turn` after the switch stays in sync instead of hanging — which is why this recipe can keep `wait_turn` on BOTH turns rather than falling back to claudecode's fixed-sleep compromise.\n\n## 6. What the recipe records instead\n\nTurn 1 → `/model gpt-5-mini` (the honest attempt at a real switch to model B; deterministically refused, and the refusal is captured in the driver's stdout so the entitlement wall is evidenced IN the recording) → `/model auto` (accepted, and the only accepted form, writing a real `session.model_change` into the transcript) → turn 2 → clean `/exit`. The durable assertions are the two clean cycles on one session id, the no-flicker switch window, monotonic tokens across the window, and a concrete non-`auto` `ModelName` at the end. The A≠B assertion is deliberately absent, and the caveats say why.",
+      "caveats": [
+        "MODEL CANNOT BE SWITCHED ON THIS ACCOUNT — live-verified at zero credit cost, not inferred: `/model gpt-5-mini` in a scratch-COPILOT_HOME REPL returns `Model \"gpt-5-mini\" can't be selected — only Auto mode is available on your plan. Use /model auto to continue, or upgrade your plan for access to individual models.` The CAPI model list is empty for this plan, so the picker, `/model <id>`, `/model --session <id>` and the `--model` flag are ALL blocked; only the literal `auto` passes (app.js: `Gs(t){return t===cC}`, `cC=\"auto\"`). Unblocking needs a Copilot plan with individual model access — a human/billing action, not a tooling one.",
+        "THE AUTO-ROUTER IS PER-SESSION STICKY, NOT PER-TURN (this refutes the prior working assumption). Across all 5 sessions in the local store — 13 completed turns, including one 4-turn and one 5-turn session — `session.auto_mode_resolved` fires EXACTLY ONCE, before the first turn, and every assistant.message in that session carries the same model; shutdown modelMetrics has exactly ONE key in all five. The bundle corroborates: the emit is gated on a per-session `sessionScalarAutoModeTelemetryToken` and the resolver takes `previousConcreteModel` / returns `stickyOverride`, with `multiTurnRoutingEnabled` a feature flag that is evidently off here. The earlier 'a session resolved to gpt-5-mini and later served claude-haiku-4.5' observation is cross-SESSION variation (4x gpt-5-mini, 1x claude-haiku-4.5), not a mid-session switch.",
+        "CONSEQUENCE FOR THE 5-1 MULTI-MODEL TAIL RISK — this cell does NOT trigger it, and cannot. The token-accounting cell records a code-read caveat that `drainPendingContribution` attaches at most ONE queued contribution per event (parser.go L140-146) while `session.shutdown` is the transcript's LAST line and the tailer never revisits it, so a two-model session would strand the surplus per-model delta and UNDER-REPORT input tokens. Its stated trigger was 'a recording here shows two entries in modelMetrics'. That trigger is unreachable in this environment: with the router sticky per session and every concrete model id refused, a copilot session on this account touches exactly one model, and all five local sessions confirm one modelMetrics key. The caveat therefore stays a code-read caveat and is NOT promoted to daemon=bug — no spec-required observable is mis-handled by any recording obtainable here. The fix (ParsedEvent carrying multiple contributions, or draining the whole queue on the final event) remains correct and worth doing defensively, but it CANNOT be validated by a copilot recording until one of the two unlocks below lands; do not claim otherwise on the strength of this cell.",
+        "THE ONLY KNOWN PATH TO A TWO-MODEL TRANSCRIPT here is resume-roulette, and it is too flaky for a recipe: `--resume=<id>` re-opens the ORIGINAL session-state/<id>/ directory and APPENDS to the same events.jsonl (established by the 1-4 session-resume cell), so a resumed lifetime that re-resolves to the other model would put two models — and two modelMetrics keys — in one transcript. But the router picked gpt-5-mini in 4 of 5 observed sessions, so this is a coin-flip that costs AI credits per attempt, and it is a resume, not the `/model` switch the scenario describes. Recorded as the unlock to try IF the multi-model contribution path ever needs live validation; not driven here.",
+        "`/model auto` mid-session sets Parser.model to the literal placeholder 'auto' (parser.go L89-91 → setModel), so SessionMetrics.ModelName reads 'auto' — not a model — from that event until the next assistant.message re-stamps the concrete label. Harmless in this recipe because turn 2 follows immediately, but a session that ended right after a `/model auto` would be left displaying 'auto'. Same placeholder window the 5-2 cell notes at session start; assert the model only AFTER a turn_end.",
+        "`/model <id>` without `--session` PERSISTS the choice as the global default (app.js writes `y.model=d` into the settings file). The recipe is safe from this two ways over: the only accepted value here is `auto`, which is already this account's sole option, and the driver writes it into a scratch COPILOT_HOME under staging. No restore step is needed — unlike claudecode's 5-3, which must trail a `/model opus` to un-flip the user's real default.",
+        "observations.model is deliberately UNPINNED: which of gpt-5-mini / claude-haiku-4.5 the router picks is its choice at session start and varies run to run (4:1 in the observed sample), so no model string can be pinned at assess time. record fills it from the recording. Cost is asserted non-zero only, never as a figure, and comes from the shared capacity price map per the #1256 decision — not from Copilot's totalNanoAiu AI credits."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "@github/copilot-darwin-arm64/app.js offset ~1497425 (CLI 1.0.77 shipped bundle)",
+          "note": "The /model command definition: name:_q (_q=\"/model\"), aliases:[\"/models\"], and the -h usage block listing `/model <model-id>  Switch now and set the default for future sessions` and `/model --session <id>  Change the model for this session only`. Proves the inline-argument form exists → a `slash` step, NOT a `keys` picker gap."
+        },
+        {
+          "kind": "file",
+          "ref": "@github/copilot-darwin-arm64/app.js offsets ~1499800-1500600 and ~678247",
+          "note": "The executor's availability path: `if(Gs(d))` fast-path (Gs(t){return t===cC}, cC=\"auto\") bypasses validation for the literal 'auto' only; otherwise modelResolverIsValidModel/modelResolverModelIsAvailable gate on t.models, and `u.length===0 && jv(authInfo)` produces the exact 'only Auto mode is available on your plan' error. Same condition drives the picker's `Ke.available.length===0 && jv(s)` empty-plan message."
+        },
+        {
+          "kind": "cli",
+          "ref": "live probe: COPILOT_HOME=<scratch> copilot --no-color --allow-all under tmux, sent `/model gpt-5-mini` (CLI 1.0.77, maintainer's account, ZERO AI credits — a slash command does no LLM round-trip)",
+          "note": "Captured pane: `✗ Model \"gpt-5-mini\" can't be selected — only Auto mode is available on your plan. Use /model auto to continue, or upgrade your plan for access to individual models.` gpt-5-mini is one of the two ids the router itself lists in availableModels, so this is a plan entitlement wall, not a bad id."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.copilot/session-state/*/events.jsonl — all 5 local sessions (2b82eada, 40dfdd13, 51ffced3, a030ac38, a995dbc4), 13 completed turns, read-only",
+          "note": "session.auto_mode_resolved appears EXACTLY ONCE per session in every one, including the 4-turn and 5-turn sessions; every assistant.message in a session carries the same model, and session.shutdown modelMetrics has exactly one key. Four resolved to gpt-5-mini, one to claude-haiku-4.5 — the variation is between sessions, not within one. This is the evidence that the mid-session switch is not producible by the router either."
+        },
+        {
+          "kind": "file",
+          "ref": "@github/copilot-darwin-arm64/app.js offset ~2421661 (session.auto_mode_resolved emit site)",
+          "note": "Emission is guarded by `if(Z.autoTelemetry)` with `existingTelemetryToken: sessionScalarAutoModeTelemetryToken(this.nativeSessionId)` fed into the resolver, which also takes `previousConcreteModel` and can return `stickyOverride` — a once-per-session sticky resolution. `multiTurnRoutingEnabled` is threaded in as a feature flag, evidently off for this account (0 mid-session re-resolutions in 13 turns)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go L85-93, L124-132, L140-146, L166-172, L189-208, L300-329",
+          "note": "All three model-bearing events (session.model_change→newModel, session.auto_mode_resolved→chosenModel, assistant.message→model) route into setModel and ModelName is stamped on every event including skipped ones — so a switch WOULD be observed. session.model_change is Skip=true, so the switch window fires no state machinery. drainPendingContribution (L140-146) attaches at most one queued contribution per event — the 5-1 tail risk this cell cannot trigger."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh L128, L161-215, L360-375",
+          "note": "DRIVE_ELICITS covers send/slash/sleep/wait_turn/exit_clean; the `slash` branch DECREMENTS EXPECTED_TURNS because a local command writes no assistant.turn_end, so wait_turn stays in sync after a slash (claudecode's driver does not, which is why its 5-3 recipe uses fixed sleeps instead). launch_repl passes --allow-all --no-color with no --model and seeds a scratch COPILOT_HOME."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/5-3_model-switch-midsession/metadata.json",
+          "note": "The precedent this cell follows: a live recording refuted the model-CHANGE observable, agent_supports was downgraded yes→partial, daemon stayed full ('it has no differing input to promote'), and the recording asserts the real arc (two clean turns, no-flicker switch window, distinct token deltas, single model)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/1-4_session-resume/metadata.json",
+          "note": "Establishes that --resume re-opens the ORIGINAL session-state/<id>/ directory and appends to the same events.jsonl — the basis for the 'resume roulette' unlock noted in the caveats as the only route to a two-model transcript on this account."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "copilot CLI 1.0.77+ on PATH and authenticated (credentials live in the OS keychain, so the driver's scratch COPILOT_HOME needs no re-login)",
+        "irrlichd is recording (--record) with the copilot adapter's transcripts permission granted",
+        "the capacity cache resolves whichever model the router picks (gpt-5-mini or claude-haiku-4.5) — both are in the pinned replay snapshot",
+        "NOTE: a plan with individual model access is NOT required to record this cell, but it IS what would be required to make the scenario's A≠B assertion true (see caveats)"
+      ],
+      "setup": [
+        "Driver seeds a scratch COPILOT_HOME under staging (trustedFolders + askedSetupTerminals pre-answered) and launches `copilot --allow-all --no-color` in a fresh cwd. No --model flag: this account rejects every concrete model id and accepts only 'auto'.",
+        "The leading sleep gives the 1s process scanner a poll before the first prompt, so PID binding and any proc-<PID> pre-session settle deterministically.",
+        "TWO slash steps sit between the turns, and each is there for a different reason. `/model gpt-5-mini` is the HONEST attempt at the scenario's step 2 — it is deterministically refused with 'only Auto mode is available on your plan', and that refusal lands in the driver's stdout capture so the recording itself carries the evidence for the partial verdict. `/model auto` is the only form this plan accepts, and it writes a REAL session.model_change{newModel:'auto'} line into events.jsonl — which is what gives the switch-window phase an actual event to be silent about, rather than asserting the absence of nothing.",
+        "Both slashes are safe to leave behind: 'auto' is already this account's only option and the driver writes it into the scratch COPILOT_HOME, so unlike claudecode's 5-3 no restoring step is needed.",
+        "wait_turn is used on BOTH turns: copilot's driver decrements EXPECTED_TURNS on a slash step, so the counter does not drift the way claudecode's does.",
+        "The trailing exit_clean is load-bearing, not cosmetic — input tokens have no live signal and land in one delta at session.shutdown (same reason 5-1 ends this way)."
+      ],
+      "script": [
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: turn-one"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "slash",
+          "text": "/model gpt-5-mini"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "slash",
+          "text": "/model auto"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: turn-two"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows TWO ready→working→ready cycles on the same copilot session id",
+        "the switch window between t1_end and t2_start shows NO state_transition to working and none to waiting, even though a real session.model_change line was written into the transcript by `/model auto` (parser marks it Skip)",
+        "the driver stdout capture contains the refusal `Model \"gpt-5-mini\" can't be selected — only Auto mode is available on your plan` — the recorded evidence for agent_supports=partial",
+        "the recording's replay summary carries model_name = a concrete Copilot model label (gpt-5-mini or claude-haiku-4.5) — NOT 'unknown' and NOT the placeholder 'auto'",
+        "TotalTokens after t2_end ≥ TotalTokens after t1_end (monotonic; input tokens land at shutdown)",
+        "estimated_cost_usd > 0",
+        "final session state is ready",
+        "EXPECTED TO BE ABSENT (and the reason this cell is partial): only ONE model appears across the whole transcript, and session.shutdown's modelMetrics has exactly ONE key. If a recording ever shows TWO, re-open the 5-1 drainPendingContribution caveat — that is its trigger condition."
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
