@@ -8,18 +8,25 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 12,
-    "consumed_events": 12,
-    "total_transitions": 5,
-    "first_event_time": "2026-06-13T12:51:57.174Z",
-    "last_event_time": "2026-06-13T12:52:11.997Z",
-    "wall_clock_session_duration": 14823000000,
+    "total_events": 10,
+    "consumed_events": 10,
+    "total_transitions": 4,
+    "first_event_time": "2026-06-13T14:51:43.707847+02:00",
+    "last_event_time": "2026-06-13T14:52:11.998724+02:00",
+    "wall_clock_session_duration": 28290877000,
     "state_durations": {
-      "ready": 14823000000
+      "ready": 24751879000,
+      "working": 3538998000
     },
-    "flicker_count": 0,
-    "flickers_by_category": {},
-    "flickers_by_reason": {},
+    "flicker_count": 2,
+    "flickers_by_category": {
+      "ready_between_working": 1,
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 1,
+      "force ready→working on first activity": 1
+    },
     "estimated_cost_usd": 0.0345465,
     "cum_input_tokens": 23019,
     "cum_output_tokens": 2,
@@ -29,7 +36,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-06-13T12:51:57.174Z",
+      "virtual_time": "2026-06-13T14:51:43.707847+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -42,23 +49,22 @@
     },
     {
       "index": 1,
-      "event_index": 5,
-      "virtual_time": "2026-06-13T12:51:58.712Z",
-      "cause": "debounce_coalesce",
+      "event_index": 1,
+      "virtual_time": "2026-06-13T14:51:57.174555+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
+      "last_event_type": "user_message",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "ready"
+      "waiting_for_user_input": false
     },
     {
       "index": 2,
-      "event_index": 5,
-      "virtual_time": "2026-06-13T12:51:58.712Z",
+      "event_index": 4,
+      "virtual_time": "2026-06-13T14:52:00.713553+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -72,33 +78,73 @@
     },
     {
       "index": 3,
-      "event_index": 11,
-      "virtual_time": "2026-06-13T12:52:11.997Z",
-      "cause": "debounce_coalesce",
+      "event_index": 6,
+      "virtual_time": "2026-06-13T14:52:10.346016+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
+      "last_event_type": "user_message",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "alive"
+      "waiting_for_user_input": false
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-72270",
+      "adapter": "gemini-cli",
+      "first_seen": "2026-06-13T14:51:42.843894+02:00",
+      "last_seen": "2026-06-13T14:52:03.31643+02:00",
+      "duration_ms": 20472,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 72270,
+      "pid_discovery_lag_ms": 45,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 20427
+      }
     },
     {
-      "index": 4,
-      "event_index": 11,
-      "virtual_time": "2026-06-13T12:52:11.997Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "alive"
+      "session_id": "session-2026-06-13T12-51-4e8f7d00",
+      "adapter": "gemini-cli",
+      "first_seen": "2026-06-13T14:51:43.70618+02:00",
+      "last_seen": "2026-06-13T14:52:21.201179+02:00",
+      "duration_ms": 37494,
+      "event_count": 25,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 72270,
+      "pid_discovery_lag_ms": 17842,
+      "debounce_coalesced_events": 6,
+      "state_durations_ms": {
+        "ready": 16829,
+        "working": 20663
+      }
     }
-  ]
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 3,
+    "ordered_matches": 3,
+    "ordered_mismatches": [
+      {
+        "index": 3,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

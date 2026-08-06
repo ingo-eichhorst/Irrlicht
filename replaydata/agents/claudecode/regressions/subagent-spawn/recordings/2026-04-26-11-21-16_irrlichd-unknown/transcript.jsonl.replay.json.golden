@@ -8,15 +8,15 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 16,
-    "consumed_events": 16,
+    "total_events": 7,
+    "consumed_events": 7,
     "total_transitions": 3,
-    "first_event_time": "2026-04-26T09:21:17.362Z",
-    "last_event_time": "2026-04-26T09:21:39.718Z",
-    "wall_clock_session_duration": 22356000000,
+    "first_event_time": "2026-04-26T11:21:23.908335+02:00",
+    "last_event_time": "2026-04-26T11:21:39.786067+02:00",
+    "wall_clock_session_duration": 15877732000,
     "state_durations": {
-      "ready": 6000000,
-      "working": 22350000000
+      "ready": 2785000,
+      "working": 15874947000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -32,7 +32,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-04-26T09:21:17.362Z",
+      "virtual_time": "2026-04-26T11:21:23.908335+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -45,23 +45,28 @@
     },
     {
       "index": 1,
-      "event_index": 5,
-      "virtual_time": "2026-04-26T09:21:17.368Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-04-26T11:21:23.908335+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "user",
-      "has_open_tool": false,
+      "last_event_type": "assistant",
+      "has_open_tool": true,
+      "open_tool_names": [
+        "Agent",
+        "Agent",
+        "Agent"
+      ],
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
     },
     {
       "index": 2,
-      "event_index": 15,
-      "virtual_time": "2026-04-26T09:21:39.718Z",
-      "cause": "debounce_coalesce",
+      "event_index": 5,
+      "virtual_time": "2026-04-26T11:21:39.783282+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -72,5 +77,108 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "done"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-38245",
+      "adapter": "claude-code",
+      "first_seen": "2026-04-26T11:21:16.811986+02:00",
+      "last_seen": "2026-04-26T11:21:17.815335+02:00",
+      "duration_ms": 1003,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 38245,
+      "pid_discovery_lag_ms": 185,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 981
+      }
+    },
+    {
+      "session_id": "64f42b5c-9da1-4e5f-9ec1-aae47ca0f4c8",
+      "adapter": "claude-code",
+      "first_seen": "2026-04-26T11:21:17.475196+02:00",
+      "last_seen": "2026-04-26T11:21:39.786072+02:00",
+      "duration_ms": 22310,
+      "event_count": 18,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 38245,
+      "pid_discovery_lag_ms": 25,
+      "debounce_coalesced_events": 3,
+      "state_durations_ms": {
+        "ready": 6410,
+        "working": 15875
+      }
+    },
+    {
+      "session_id": "agent-a31559a022d9a2cb6",
+      "adapter": "claude-code",
+      "parent_session_id": "64f42b5c-9da1-4e5f-9ec1-aae47ca0f4c8",
+      "first_seen": "2026-04-26T11:21:21.436571+02:00",
+      "last_seen": "2026-04-26T11:21:35.400293+02:00",
+      "duration_ms": 13963,
+      "event_count": 19,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 38245,
+      "pid_discovery_lag_ms": 1878,
+      "debounce_coalesced_events": 4,
+      "state_durations_ms": {
+        "ready": 1667,
+        "working": 12261
+      }
+    },
+    {
+      "session_id": "agent-a5435e8f32c1127d1",
+      "adapter": "claude-code",
+      "parent_session_id": "64f42b5c-9da1-4e5f-9ec1-aae47ca0f4c8",
+      "first_seen": "2026-04-26T11:21:22.381946+02:00",
+      "last_seen": "2026-04-26T11:21:26.373761+02:00",
+      "duration_ms": 3991,
+      "event_count": 8,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 38245,
+      "pid_discovery_lag_ms": 1821,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 1616,
+        "working": 2343
+      }
+    },
+    {
+      "session_id": "agent-a8662875f7da1388c",
+      "adapter": "claude-code",
+      "parent_session_id": "64f42b5c-9da1-4e5f-9ec1-aae47ca0f4c8",
+      "first_seen": "2026-04-26T11:21:23.859657+02:00",
+      "last_seen": "2026-04-26T11:21:40.032066+02:00",
+      "duration_ms": 16172,
+      "event_count": 23,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 38245,
+      "pid_discovery_lag_ms": 12866,
+      "debounce_coalesced_events": 5,
+      "state_durations_ms": {
+        "ready": 16124,
+        "working": 0
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

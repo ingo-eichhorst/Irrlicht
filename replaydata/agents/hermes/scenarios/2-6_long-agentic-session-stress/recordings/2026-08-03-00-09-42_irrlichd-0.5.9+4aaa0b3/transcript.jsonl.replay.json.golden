@@ -160,5 +160,6 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "…\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n\nDivision is the process of splittin…"
     }
-  ]
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session 20260803_000941_e4c2f1"
 }

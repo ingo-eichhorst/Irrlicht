@@ -8,15 +8,15 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 12,
-    "consumed_events": 12,
+    "total_events": 6,
+    "consumed_events": 6,
     "total_transitions": 3,
-    "first_event_time": "2026-05-17T22:28:41.54Z",
-    "last_event_time": "2026-05-17T22:28:51.002Z",
-    "wall_clock_session_duration": 9462000000,
+    "first_event_time": "2026-05-18T00:28:41.672296+02:00",
+    "last_event_time": "2026-05-18T00:28:55.88223+02:00",
+    "wall_clock_session_duration": 14209934000,
     "state_durations": {
-      "ready": 1000000,
-      "working": 9461000000
+      "ready": 4766784000,
+      "working": 9443150000
     },
     "flicker_count": 1,
     "flickers_by_category": {
@@ -36,7 +36,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-17T22:28:41.54Z",
+      "virtual_time": "2026-05-18T00:28:41.672296+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -49,9 +49,9 @@
     },
     {
       "index": 1,
-      "event_index": 6,
-      "virtual_time": "2026-05-17T22:28:41.541Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-18T00:28:41.672296+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -63,9 +63,9 @@
     },
     {
       "index": 2,
-      "event_index": 11,
-      "virtual_time": "2026-05-17T22:28:51.002Z",
-      "cause": "debounce_coalesce",
+      "event_index": 2,
+      "virtual_time": "2026-05-18T00:28:51.115446+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -76,5 +76,54 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "…ou're awake,\" she whispered, and Vex felt a current ripple through circuits i…"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-96854",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-18T00:28:25.389578+02:00",
+      "last_seen": "2026-05-18T00:28:45.560364+02:00",
+      "duration_ms": 20170,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 96854,
+      "pid_discovery_lag_ms": 20,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 20151
+      }
+    },
+    {
+      "session_id": "9f1601b2-593e-479f-9855-2af5975904e5",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-18T00:28:41.569524+02:00",
+      "last_seen": "2026-05-18T00:28:56.175925+02:00",
+      "duration_ms": 14606,
+      "event_count": 15,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 96854,
+      "pid_discovery_lag_ms": 2,
+      "debounce_coalesced_events": 3,
+      "state_durations_ms": {
+        "ready": 5186,
+        "working": 9419
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

@@ -8,18 +8,25 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 19,
-    "consumed_events": 19,
-    "total_transitions": 2,
-    "first_event_time": "2026-06-11T21:10:35.994Z",
-    "last_event_time": "2026-06-11T21:10:57.924Z",
-    "wall_clock_session_duration": 21930000000,
+    "total_events": 18,
+    "consumed_events": 18,
+    "total_transitions": 8,
+    "first_event_time": "2026-06-11T23:10:18.417501+02:00",
+    "last_event_time": "2026-06-11T23:10:57.925187+02:00",
+    "wall_clock_session_duration": 39507686000,
     "state_durations": {
-      "working": 21930000000
+      "ready": 23828239000,
+      "working": 17679447000
     },
-    "flicker_count": 0,
-    "flickers_by_category": {},
-    "flickers_by_reason": {},
+    "flicker_count": 5,
+    "flickers_by_category": {
+      "ready_between_working": 3,
+      "working_between_ready": 2
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 3,
+      "force ready→working on first activity": 2
+    },
     "estimated_cost_usd": 0.0722475,
     "cum_input_tokens": 40053,
     "cum_output_tokens": 1352,
@@ -29,7 +36,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-06-11T21:10:35.994Z",
+      "virtual_time": "2026-06-11T23:10:18.417501+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -42,9 +49,9 @@
     },
     {
       "index": 1,
-      "event_index": 3,
-      "virtual_time": "2026-06-11T21:10:35.994Z",
-      "cause": "debounce_coalesce",
+      "event_index": 1,
+      "virtual_time": "2026-06-11T23:10:35.995088+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -53,6 +60,152 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 3,
+      "virtual_time": "2026-06-11T23:10:51.613415+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…ript to programmatically construct a single, grammatically correct sentence o…"
+    },
+    {
+      "index": 3,
+      "event_index": 7,
+      "virtual_time": "2026-06-11T23:10:53.766504+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "function_call_output",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…ript to programmatically construct a single, grammatically correct sentence o…"
+    },
+    {
+      "index": 4,
+      "event_index": 8,
+      "virtual_time": "2026-06-11T23:10:55.57533+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "I will run a corrected Python command to generate the 5000+ word sentence on a s…"
+    },
+    {
+      "index": 5,
+      "event_index": 12,
+      "virtual_time": "2026-06-11T23:10:57.649483+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "function_call_output",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "I will run a corrected Python command to generate the 5000+ word sentence on a s…"
+    },
+    {
+      "index": 6,
+      "event_index": 13,
+      "virtual_time": "2026-06-11T23:10:57.901777+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "I will read the generated `sentence.txt` file to ensure that it has been formatt…"
+    },
+    {
+      "index": 7,
+      "event_index": 17,
+      "virtual_time": "2026-06-11T23:10:59.925187+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "function_call_output",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "I will read the generated `sentence.txt` file to ensure that it has been formatt…"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "session-2026-06-11T21-10-5c43e50f",
+      "adapter": "gemini-cli",
+      "first_seen": "2026-06-11T23:10:18.415412+02:00",
+      "last_seen": "2026-06-11T23:10:57.925191+02:00",
+      "duration_ms": 39509,
+      "event_count": 40,
+      "state_changes": 7,
+      "final_state": "ready",
+      "pid": 73028,
+      "pid_discovery_lag_ms": 20860,
+      "debounce_coalesced_events": 13,
+      "state_durations_ms": {
+        "ready": 4254,
+        "working": 35254
+      }
+    },
+    {
+      "session_id": "proc-73028",
+      "adapter": "gemini-cli",
+      "first_seen": "2026-06-11T23:10:18.499721+02:00",
+      "last_seen": "2026-06-11T23:10:44.145891+02:00",
+      "duration_ms": 25646,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 73028,
+      "pid_discovery_lag_ms": 47,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 25600
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 6,
+    "replayed_transition_count": 7,
+    "ordered_matches": 6,
+    "ordered_mismatches": [
+      {
+        "index": 6,
+        "kind": "extra_in_replay",
+        "replayed": "ready→working"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

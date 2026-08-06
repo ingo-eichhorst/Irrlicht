@@ -8,23 +8,23 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 31,
-    "consumed_events": 31,
-    "total_transitions": 7,
-    "first_event_time": "2026-05-18T20:52:50.573Z",
-    "last_event_time": "2026-05-18T20:53:12.254Z",
-    "wall_clock_session_duration": 21681000000,
+    "total_events": 11,
+    "consumed_events": 11,
+    "total_transitions": 11,
+    "first_event_time": "2026-05-18T22:52:50.700833+02:00",
+    "last_event_time": "2026-05-18T22:53:17.262178+02:00",
+    "wall_clock_session_duration": 26561345000,
     "state_durations": {
-      "ready": 11851000000,
-      "working": 9830000000
+      "ready": 18153522000,
+      "working": 8407823000
     },
-    "flicker_count": 4,
+    "flicker_count": 6,
     "flickers_by_category": {
-      "ready_between_working": 2,
+      "ready_between_working": 4,
       "working_between_ready": 2
     },
     "flickers_by_reason": {
-      "agent finished turn → ready": 2,
+      "agent finished turn → ready": 4,
       "force ready→working on first activity": 2
     },
     "estimated_cost_usd": 0.07060934999999999,
@@ -38,7 +38,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-18T20:52:50.573Z",
+      "virtual_time": "2026-05-18T22:52:50.700833+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -51,9 +51,9 @@
     },
     {
       "index": 1,
-      "event_index": 11,
-      "virtual_time": "2026-05-18T20:52:55.266Z",
-      "cause": "debounce_coalesce",
+      "event_index": 1,
+      "virtual_time": "2026-05-18T22:52:55.376847+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -65,9 +65,9 @@
     },
     {
       "index": 2,
-      "event_index": 15,
-      "virtual_time": "2026-05-18T20:53:01.054Z",
-      "cause": "debounce_coalesce",
+      "event_index": 3,
+      "virtual_time": "2026-05-18T22:53:01.35519+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -80,9 +80,9 @@
     },
     {
       "index": 3,
-      "event_index": 18,
-      "virtual_time": "2026-05-18T20:53:03.346Z",
-      "cause": "debounce_coalesce",
+      "event_index": 4,
+      "virtual_time": "2026-05-18T22:53:03.461657+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -95,9 +95,9 @@
     },
     {
       "index": 4,
-      "event_index": 18,
-      "virtual_time": "2026-05-18T20:53:03.346Z",
-      "cause": "debounce_coalesce",
+      "event_index": 4,
+      "virtual_time": "2026-05-18T22:53:03.461657+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -110,9 +110,39 @@
     },
     {
       "index": 5,
-      "event_index": 24,
-      "virtual_time": "2026-05-18T20:53:08.212Z",
-      "cause": "debounce_coalesce",
+      "event_index": -1,
+      "virtual_time": "2026-05-18T22:53:08.186264+02:00",
+      "cause": "hook",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Scheduled the next iteration to run `echo iter2`."
+    },
+    {
+      "index": 6,
+      "event_index": -1,
+      "virtual_time": "2026-05-18T22:53:08.186264+02:00",
+      "cause": "hook",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Scheduled the next iteration to run `echo iter2`."
+    },
+    {
+      "index": 7,
+      "event_index": 5,
+      "virtual_time": "2026-05-18T22:53:08.371439+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -123,9 +153,39 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 6,
-      "event_index": 30,
-      "virtual_time": "2026-05-18T20:53:12.254Z",
+      "index": 8,
+      "event_index": 7,
+      "virtual_time": "2026-05-18T22:53:10.800919+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Both commands have now run: `echo iter1` in the first iteration, `echo iter2` in…"
+    },
+    {
+      "index": 9,
+      "event_index": 8,
+      "virtual_time": "2026-05-18T22:53:14.364349+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Both commands have now run: `echo iter1` in the first iteration, `echo iter2` in…"
+    },
+    {
+      "index": 10,
+      "event_index": 8,
+      "virtual_time": "2026-05-18T22:53:14.364349+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -137,5 +197,54 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "Both commands have now run: `echo iter1` in the first iteration, `echo iter2` in…"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-17230",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-18T22:52:38.074779+02:00",
+      "last_seen": "2026-05-18T22:52:53.835297+02:00",
+      "duration_ms": 15760,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 17230,
+      "pid_discovery_lag_ms": 42,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 15719
+      }
+    },
+    {
+      "session_id": "93feae2d-9738-4b3d-a7dd-b03bacf0ed76",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-18T22:52:50.599755+02:00",
+      "last_seen": "2026-05-18T22:53:17.647144+02:00",
+      "duration_ms": 27047,
+      "event_count": 30,
+      "state_changes": 11,
+      "final_state": "ready",
+      "pid": 17230,
+      "pid_discovery_lag_ms": 2,
+      "debounce_coalesced_events": 3,
+      "state_durations_ms": {
+        "ready": 18519,
+        "working": 8526
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 10,
+    "replayed_transition_count": 10,
+    "ordered_matches": 10,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

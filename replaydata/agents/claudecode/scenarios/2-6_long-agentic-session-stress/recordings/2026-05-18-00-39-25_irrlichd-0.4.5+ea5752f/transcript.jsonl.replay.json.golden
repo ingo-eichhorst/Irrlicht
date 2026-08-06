@@ -8,13 +8,15 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 9,
-    "consumed_events": 9,
+    "total_events": 5,
+    "consumed_events": 5,
     "total_transitions": 2,
-    "first_event_time": "2026-05-17T22:39:39.552Z",
-    "last_event_time": "2026-05-17T22:39:39.552Z",
-    "wall_clock_session_duration": 0,
-    "state_durations": {},
+    "first_event_time": "2026-05-18T00:39:39.677657+02:00",
+    "last_event_time": "2026-05-18T00:49:23.526784+02:00",
+    "wall_clock_session_duration": 583849127000,
+    "state_durations": {
+      "ready": 583849127000
+    },
     "flicker_count": 0,
     "flickers_by_category": {},
     "flickers_by_reason": {}
@@ -23,7 +25,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-17T22:39:39.552Z",
+      "virtual_time": "2026-05-18T00:39:39.677657+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -36,9 +38,9 @@
     },
     {
       "index": 1,
-      "event_index": 8,
-      "virtual_time": "2026-05-17T22:39:39.552Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-18T00:39:39.677657+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -48,5 +50,52 @@
       "needs_user_attention": false,
       "waiting_for_user_input": false
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-9135",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-18T00:39:25.760693+02:00",
+      "last_seen": "2026-05-18T00:39:41.128794+02:00",
+      "duration_ms": 15368,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 9135,
+      "pid_discovery_lag_ms": 21,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 15347
+      }
+    },
+    {
+      "session_id": "f4f66752-fbc4-4157-9c44-966de455c199",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-18T00:39:39.574127+02:00",
+      "last_seen": "2026-05-18T00:49:23.932172+02:00",
+      "duration_ms": 584358,
+      "event_count": 13,
+      "state_changes": 2,
+      "final_state": "working",
+      "pid": 9135,
+      "pid_discovery_lag_ms": 2,
+      "debounce_coalesced_events": 3,
+      "state_durations_ms": {
+        "ready": 129,
+        "working": 584227
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 1,
+    "replayed_transition_count": 1,
+    "ordered_matches": 1,
+    "recorded_unique_kinds": [
+      "ready→working"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working"
+    ]
+  }
 }

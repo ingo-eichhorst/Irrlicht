@@ -8,15 +8,15 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 40,
-    "consumed_events": 40,
+    "total_events": 14,
+    "consumed_events": 14,
     "total_transitions": 3,
-    "first_event_time": "2026-05-24T15:09:16.744Z",
-    "last_event_time": "2026-05-24T15:09:54.914Z",
-    "wall_clock_session_duration": 38170000000,
+    "first_event_time": "2026-05-24T17:09:26.183707+02:00",
+    "last_event_time": "2026-05-24T17:09:55.03715+02:00",
+    "wall_clock_session_duration": 28853443000,
     "state_durations": {
-      "ready": 884000000,
-      "working": 37286000000
+      "ready": 3368000,
+      "working": 28850075000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -55,7 +55,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-24T15:09:16.744Z",
+      "virtual_time": "2026-05-24T17:09:26.183707+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -68,9 +68,9 @@
     },
     {
       "index": 1,
-      "event_index": 4,
-      "virtual_time": "2026-05-24T15:09:17.628Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-24T17:09:26.183707+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -82,9 +82,9 @@
     },
     {
       "index": 2,
-      "event_index": 39,
-      "virtual_time": "2026-05-24T15:09:54.914Z",
-      "cause": "debounce_coalesce",
+      "event_index": 12,
+      "virtual_time": "2026-05-24T17:09:55.033782+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -95,5 +95,38 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "done"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "a6357d32-308a-4030-84d4-59744b5438d1",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-24T17:09:17.732022+02:00",
+      "last_seen": "2026-05-24T17:09:55.282039+02:00",
+      "duration_ms": 37550,
+      "event_count": 24,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 89978,
+      "pid_discovery_lag_ms": 39,
+      "debounce_coalesced_events": 4,
+      "state_durations_ms": {
+        "ready": 8661,
+        "working": 28851
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

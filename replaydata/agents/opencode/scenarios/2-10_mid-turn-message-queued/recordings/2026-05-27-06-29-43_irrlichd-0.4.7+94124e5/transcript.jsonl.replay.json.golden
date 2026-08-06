@@ -67,5 +67,6 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "Giraffes have the longest necks of any land animal.\nTheir tongues are a bright, …"
     }
-  ]
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_1984dd89bffeOAO9byQy3QWuCs"
 }

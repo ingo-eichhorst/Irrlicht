@@ -8,23 +8,19 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 30,
-    "consumed_events": 30,
-    "total_transitions": 6,
-    "first_event_time": "2026-08-03T10:07:28.616Z",
-    "last_event_time": "2026-08-03T10:08:38.22Z",
-    "wall_clock_session_duration": 69604000000,
+    "total_events": 3,
+    "consumed_events": 3,
+    "total_transitions": 3,
+    "first_event_time": "2026-08-03T12:07:35.920623+02:00",
+    "last_event_time": "2026-08-03T12:07:50.219387+02:00",
+    "wall_clock_session_duration": 14298764000,
     "state_durations": {
-      "ready": 45849000000,
-      "working": 23755000000
+      "ready": 3471734000,
+      "working": 10827030000
     },
-    "flicker_count": 1,
-    "flickers_by_category": {
-      "working_between_ready": 1
-    },
-    "flickers_by_reason": {
-      "force ready→working on first activity": 1
-    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
     "estimated_cost_usd": 0.0032195500000000003,
     "cum_input_tokens": 10547,
     "cum_output_tokens": 165,
@@ -35,7 +31,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-08-03T10:07:28.616Z",
+      "virtual_time": "2026-08-03T12:07:35.920623+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -48,9 +44,9 @@
     },
     {
       "index": 1,
-      "event_index": 6,
-      "virtual_time": "2026-08-03T10:07:35.81Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-08-03T12:07:35.920623+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -62,9 +58,9 @@
     },
     {
       "index": 2,
-      "event_index": 9,
-      "virtual_time": "2026-08-03T10:07:46.645Z",
-      "cause": "debounce_coalesce",
+      "event_index": 1,
+      "virtual_time": "2026-08-03T12:07:46.747653+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -74,49 +70,120 @@
       "needs_user_attention": false,
       "waiting_for_user_input": false,
       "last_assistant_text_head": "ok"
-    },
-    {
-      "index": 3,
-      "event_index": 17,
-      "virtual_time": "2026-08-03T10:08:06.493Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_start",
-      "has_open_tool": false,
-      "is_agent_done": false,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false
-    },
-    {
-      "index": 4,
-      "event_index": 20,
-      "virtual_time": "2026-08-03T10:08:16.004Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "ok"
-    },
-    {
-      "index": 5,
-      "event_index": 28,
-      "virtual_time": "2026-08-03T10:08:34.811Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_start",
-      "has_open_tool": false,
-      "is_agent_done": false,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-94949",
+      "adapter": "copilot",
+      "first_seen": "2026-08-03T12:07:28.617524+02:00",
+      "last_seen": "2026-08-03T12:07:53.238865+02:00",
+      "duration_ms": 24621,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 94949,
+      "pid_discovery_lag_ms": 107,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 24514
+      }
+    },
+    {
+      "session_id": "5920fe71-13c6-431f-8545-13bb327e3fa1",
+      "adapter": "copilot",
+      "first_seen": "2026-08-03T12:07:35.786747+02:00",
+      "last_seen": "2026-08-03T12:07:51.120317+02:00",
+      "duration_ms": 15333,
+      "event_count": 10,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 94949,
+      "pid_discovery_lag_ms": 211,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 15283,
+        "working": 0
+      }
+    },
+    {
+      "session_id": "proc-96943",
+      "adapter": "copilot",
+      "first_seen": "2026-08-03T12:08:03.363842+02:00",
+      "last_seen": "2026-08-03T12:08:23.472042+02:00",
+      "duration_ms": 20108,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 96943,
+      "pid_discovery_lag_ms": 43,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 20064
+      }
+    },
+    {
+      "session_id": "5c068289-1d88-45c4-b512-47a04d06897d",
+      "adapter": "copilot",
+      "first_seen": "2026-08-03T12:08:06.472741+02:00",
+      "last_seen": "2026-08-03T12:08:20.095636+02:00",
+      "duration_ms": 13622,
+      "event_count": 10,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 96943,
+      "pid_discovery_lag_ms": 199,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 13572,
+        "working": 0
+      }
+    },
+    {
+      "session_id": "proc-98300",
+      "adapter": "copilot",
+      "first_seen": "2026-08-03T12:08:28.549145+02:00",
+      "last_seen": "2026-08-03T12:08:39.710943+02:00",
+      "duration_ms": 11161,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 98300,
+      "pid_discovery_lag_ms": 44,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 11117
+      }
+    },
+    {
+      "session_id": "144d0848-1ca0-49df-a61f-59fe01d4f5eb",
+      "adapter": "copilot",
+      "first_seen": "2026-08-03T12:08:34.781494+02:00",
+      "last_seen": "2026-08-03T12:08:39.167473+02:00",
+      "duration_ms": 4385,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 98300,
+      "pid_discovery_lag_ms": 219,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 4332
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

@@ -102,5 +102,6 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "…rches gelatinize. The result is a loaf with a stable, airy crumb. Sourdough r…"
     }
-  ]
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session 20260803_005227_8fe908"
 }

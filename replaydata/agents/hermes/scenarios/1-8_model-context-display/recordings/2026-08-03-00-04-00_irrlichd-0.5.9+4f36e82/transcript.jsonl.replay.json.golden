@@ -70,5 +70,6 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "…2\n23\n24\n25\n26\n27\n28\n29\n30\n\nMultiplication is a mathematical operation that co…"
     }
-  ]
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session 20260803_000400_f19dcf"
 }

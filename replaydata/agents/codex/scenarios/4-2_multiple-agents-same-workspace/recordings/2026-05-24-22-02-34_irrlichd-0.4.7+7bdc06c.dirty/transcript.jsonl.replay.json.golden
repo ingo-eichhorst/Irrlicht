@@ -8,14 +8,14 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 12,
-    "consumed_events": 12,
-    "total_transitions": 3,
-    "first_event_time": "2026-05-24T20:02:51.547Z",
-    "last_event_time": "2026-05-24T20:02:53.457Z",
-    "wall_clock_session_duration": 1910000000,
+    "total_events": 6,
+    "consumed_events": 6,
+    "total_transitions": 2,
+    "first_event_time": "2026-05-24T22:02:50.557414+02:00",
+    "last_event_time": "2026-05-24T22:03:09.575615+02:00",
+    "wall_clock_session_duration": 19018201000,
     "state_durations": {
-      "ready": 1910000000
+      "working": 19018201000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -29,7 +29,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-24T20:02:51.547Z",
+      "virtual_time": "2026-05-24T22:02:50.557414+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -42,33 +42,108 @@
     },
     {
       "index": 1,
-      "event_index": 11,
-      "virtual_time": "2026-05-24T20:02:53.457Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-24T22:02:50.557414+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
+      "reason": "transcript activity (ready → working)",
+      "last_event_type": "",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "bravo"
+      "waiting_for_user_input": false
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-91802",
+      "adapter": "codex",
+      "first_seen": "2026-05-24T22:02:34.618683+02:00",
+      "last_seen": "2026-05-24T22:02:59.669472+02:00",
+      "duration_ms": 25050,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 91802,
+      "pid_discovery_lag_ms": 55,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 24996
+      }
     },
     {
-      "index": 2,
-      "event_index": 11,
-      "virtual_time": "2026-05-24T20:02:53.457Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "bravo"
+      "session_id": "proc-91827",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-24T22:02:35.11223+02:00",
+      "last_seen": "2026-05-24T22:02:55.257756+02:00",
+      "duration_ms": 20145,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 91827,
+      "pid_discovery_lag_ms": 37,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 20108
+      }
+    },
+    {
+      "session_id": "777d8b6d-0e24-45de-b003-26b3999ae048",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-24T22:02:50.455259+02:00",
+      "last_seen": "2026-05-24T22:03:09.575616+02:00",
+      "duration_ms": 19120,
+      "event_count": 14,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 91827,
+      "pid_discovery_lag_ms": 2,
+      "debounce_coalesced_events": 3,
+      "state_durations_ms": {
+        "ready": 16352,
+        "working": 2767
+      }
+    },
+    {
+      "session_id": "rollout-2026-05-24T22-02-34-019e5b95-0a3c-7b93-a22e-d14f5b40d794",
+      "adapter": "codex",
+      "first_seen": "2026-05-24T22:02:51.497694+02:00",
+      "last_seen": "2026-05-24T22:02:59.597225+02:00",
+      "duration_ms": 8099,
+      "event_count": 30,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 91802,
+      "pid_discovery_lag_ms": 367,
+      "debounce_coalesced_events": 11,
+      "state_durations_ms": {
+        "ready": 8097,
+        "working": 0
+      }
     }
-  ]
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 1,
+    "ordered_matches": 1,
+    "ordered_mismatches": [
+      {
+        "index": 1,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working"
+    ],
+    "missing_kinds": [
+      "working→ready"
+    ]
+  }
 }

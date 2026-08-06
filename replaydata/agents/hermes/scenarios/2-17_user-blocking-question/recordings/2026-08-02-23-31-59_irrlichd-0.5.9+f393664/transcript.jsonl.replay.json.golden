@@ -67,5 +67,6 @@
       "waiting_for_user_input": true,
       "last_assistant_text_head": "Which file should this feature go in?"
     }
-  ]
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session 20260802_233159_f2518c"
 }

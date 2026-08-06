@@ -8,14 +8,15 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 10,
-    "consumed_events": 10,
-    "total_transitions": 2,
-    "first_event_time": "2026-05-17T22:27:25.545Z",
-    "last_event_time": "2026-05-17T22:27:25.546Z",
-    "wall_clock_session_duration": 1000000,
+    "total_events": 5,
+    "consumed_events": 5,
+    "total_transitions": 3,
+    "first_event_time": "2026-05-18T00:27:25.664559+02:00",
+    "last_event_time": "2026-05-18T00:27:41.107387+02:00",
+    "wall_clock_session_duration": 15442828000,
     "state_durations": {
-      "ready": 1000000
+      "ready": 13355862000,
+      "working": 2086966000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -25,7 +26,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-17T22:27:25.545Z",
+      "virtual_time": "2026-05-18T00:27:25.664559+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -38,9 +39,9 @@
     },
     {
       "index": 1,
-      "event_index": 9,
-      "virtual_time": "2026-05-17T22:27:25.546Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-18T00:27:25.664559+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -49,6 +50,70 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": -1,
+      "virtual_time": "2026-05-18T00:27:27.751525+02:00",
+      "cause": "hook",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "permission prompt open → waiting",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-95315",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-18T00:27:09.703258+02:00",
+      "last_seen": "2026-05-18T00:27:44.862055+02:00",
+      "duration_ms": 35158,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 95315,
+      "pid_discovery_lag_ms": 20,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 35138
+      }
+    },
+    {
+      "session_id": "2b6ee193-92d1-4173-bc17-31cd6ae90c8d",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-18T00:27:25.562072+02:00",
+      "last_seen": "2026-05-18T00:27:41.335233+02:00",
+      "duration_ms": 15773,
+      "event_count": 15,
+      "state_changes": 3,
+      "final_state": "waiting",
+      "pid": 95315,
+      "pid_discovery_lag_ms": 2,
+      "debounce_coalesced_events": 3,
+      "state_durations_ms": {
+        "ready": 127,
+        "waiting": 12983,
+        "working": 2661
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→waiting"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→waiting"
+    ]
+  }
 }

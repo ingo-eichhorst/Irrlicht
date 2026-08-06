@@ -10,13 +10,12 @@
   "summary": {
     "total_events": 42,
     "consumed_events": 42,
-    "total_transitions": 3,
-    "first_event_time": "2026-05-23T21:04:00.577Z",
-    "last_event_time": "2026-05-23T21:04:27.563Z",
-    "wall_clock_session_duration": 26986000000,
+    "total_transitions": 2,
+    "first_event_time": "2026-05-23T23:04:00.577454+02:00",
+    "last_event_time": "2026-05-23T23:04:27.563585+02:00",
+    "wall_clock_session_duration": 26986131000,
     "state_durations": {
-      "ready": 229000000,
-      "working": 26757000000
+      "ready": 26986131000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -30,7 +29,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-23T21:04:00.577Z",
+      "virtual_time": "2026-05-23T23:04:00.577454+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -44,7 +43,7 @@
     {
       "index": 1,
       "event_index": 7,
-      "virtual_time": "2026-05-23T21:04:00.806Z",
+      "virtual_time": "2026-05-23T23:04:02.806421+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -54,21 +53,64 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-26050",
+      "adapter": "codex",
+      "first_seen": "2026-05-23T23:03:45.23013+02:00",
+      "last_seen": "2026-05-23T23:04:05.415199+02:00",
+      "duration_ms": 20185,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 26050,
+      "pid_discovery_lag_ms": 24,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 20161
+      }
     },
     {
-      "index": 2,
-      "event_index": 41,
-      "virtual_time": "2026-05-23T21:04:27.563Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "Done. `a.txt` has 3 lines, `b.txt` has 2 lines, and `c.txt` has 20 lines."
+      "session_id": "rollout-2026-05-23T23-03-43-019e56a6-a7f0-75d0-a6ed-b560f4a1d899",
+      "adapter": "codex",
+      "first_seen": "2026-05-23T23:04:00.548447+02:00",
+      "last_seen": "2026-05-23T23:04:32.942467+02:00",
+      "duration_ms": 32394,
+      "event_count": 80,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 26050,
+      "pid_discovery_lag_ms": 225,
+      "debounce_coalesced_events": 31,
+      "state_durations_ms": {
+        "ready": 5632,
+        "working": 26759
+      }
     }
-  ]
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 1,
+    "ordered_matches": 1,
+    "ordered_mismatches": [
+      {
+        "index": 1,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working"
+    ],
+    "missing_kinds": [
+      "working→ready"
+    ]
+  }
 }

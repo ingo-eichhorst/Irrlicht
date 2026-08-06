@@ -10,21 +10,16 @@
   "summary": {
     "total_events": 18,
     "consumed_events": 18,
-    "total_transitions": 3,
-    "first_event_time": "2026-04-26T09:29:17.037Z",
-    "last_event_time": "2026-04-26T09:29:24.104Z",
-    "wall_clock_session_duration": 7067000000,
+    "total_transitions": 2,
+    "first_event_time": "2026-04-26T11:29:17.038111+02:00",
+    "last_event_time": "2026-04-26T11:29:24.10505+02:00",
+    "wall_clock_session_duration": 7066939000,
     "state_durations": {
-      "ready": 343000000,
-      "working": 6724000000
+      "ready": 7066939000
     },
-    "flicker_count": 1,
-    "flickers_by_category": {
-      "working_between_ready": 1
-    },
-    "flickers_by_reason": {
-      "force ready→working on first activity": 1
-    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
     "estimated_cost_usd": 0.121735,
     "cum_input_tokens": 47662,
     "cum_output_tokens": 172,
@@ -34,7 +29,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-04-26T09:29:17.037Z",
+      "virtual_time": "2026-04-26T11:29:17.038111+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -48,7 +43,7 @@
     {
       "index": 1,
       "event_index": 7,
-      "virtual_time": "2026-04-26T09:29:17.38Z",
+      "virtual_time": "2026-04-26T11:29:19.3802+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -58,21 +53,51 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-52470",
+      "adapter": "codex",
+      "first_seen": "2026-04-26T11:29:15.142429+02:00",
+      "last_seen": "2026-04-26T11:29:18.168035+02:00",
+      "duration_ms": 3025,
+      "event_count": 4,
+      "state_changes": 1,
+      "final_state": "ready",
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 2993
+      }
     },
     {
-      "index": 2,
-      "event_index": 17,
-      "virtual_time": "2026-04-26T09:29:24.104Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "done"
+      "session_id": "rollout-2026-04-26T11-29-13-019dc91f-21e4-78d3-9ed1-31d84a0a2c7a",
+      "adapter": "codex",
+      "first_seen": "2026-04-26T11:29:16.980658+02:00",
+      "last_seen": "2026-04-26T11:29:24.357798+02:00",
+      "duration_ms": 7377,
+      "event_count": 40,
+      "state_changes": 2,
+      "final_state": "working",
+      "pid": 52470,
+      "pid_discovery_lag_ms": 326,
+      "debounce_coalesced_events": 16,
+      "state_durations_ms": {
+        "ready": 107,
+        "working": 7266
+      }
     }
-  ]
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 1,
+    "replayed_transition_count": 1,
+    "ordered_matches": 1,
+    "recorded_unique_kinds": [
+      "ready→working"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working"
+    ]
+  }
 }

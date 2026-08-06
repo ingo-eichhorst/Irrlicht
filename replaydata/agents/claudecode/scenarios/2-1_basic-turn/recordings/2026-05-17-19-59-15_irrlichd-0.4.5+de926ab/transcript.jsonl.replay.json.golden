@@ -8,23 +8,18 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 8,
-    "consumed_events": 8,
+    "total_events": 2,
+    "consumed_events": 2,
     "total_transitions": 3,
-    "first_event_time": "2026-05-17T17:59:14.043Z",
-    "last_event_time": "2026-05-17T17:59:17.443Z",
-    "wall_clock_session_duration": 3400000000,
+    "first_event_time": "2026-05-17T19:59:17.44931+02:00",
+    "last_event_time": "2026-05-17T19:59:17.451738+02:00",
+    "wall_clock_session_duration": 2428000,
     "state_durations": {
-      "ready": 1303000000,
-      "working": 2097000000
+      "ready": 2428000
     },
-    "flicker_count": 1,
-    "flickers_by_category": {
-      "working_between_ready": 1
-    },
-    "flickers_by_reason": {
-      "force ready→working on first activity": 1
-    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
     "estimated_cost_usd": 0.21573,
     "cum_input_tokens": 6,
     "cum_output_tokens": 6,
@@ -35,7 +30,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-17T17:59:14.043Z",
+      "virtual_time": "2026-05-17T19:59:17.44931+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -48,23 +43,24 @@
     },
     {
       "index": 1,
-      "event_index": 5,
-      "virtual_time": "2026-05-17T17:59:15.346Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-17T19:59:17.44931+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "user",
+      "last_event_type": "assistant",
       "has_open_tool": false,
-      "is_agent_done": false,
+      "is_agent_done": true,
       "needs_user_attention": false,
-      "waiting_for_user_input": false
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ok"
     },
     {
       "index": 2,
-      "event_index": 7,
-      "virtual_time": "2026-05-17T17:59:17.443Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-17T19:59:17.44931+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -75,5 +71,38 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "ok"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "635339f8-0511-413e-ae64-9b62f5e8c8b0",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-17T19:59:15.454166+02:00",
+      "last_seen": "2026-05-17T19:59:17.97306+02:00",
+      "duration_ms": 2518,
+      "event_count": 9,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 11060,
+      "pid_discovery_lag_ms": 39,
+      "debounce_coalesced_events": 1,
+      "state_durations_ms": {
+        "ready": 2480,
+        "working": 0
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

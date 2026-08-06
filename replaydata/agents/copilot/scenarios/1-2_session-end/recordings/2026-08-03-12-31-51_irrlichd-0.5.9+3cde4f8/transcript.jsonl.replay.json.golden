@@ -8,22 +8,22 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 29,
-    "consumed_events": 29,
-    "total_transitions": 6,
-    "first_event_time": "2026-08-03T10:31:52.302Z",
-    "last_event_time": "2026-08-03T10:32:55.793Z",
-    "wall_clock_session_duration": 63491000000,
+    "total_events": 4,
+    "consumed_events": 4,
+    "total_transitions": 3,
+    "first_event_time": "2026-08-03T12:32:00.18769+02:00",
+    "last_event_time": "2026-08-03T12:32:10.113556+02:00",
+    "wall_clock_session_duration": 9925866000,
     "state_durations": {
-      "ready": 48401000000,
-      "working": 15090000000
+      "ready": 1242163000,
+      "working": 8683703000
     },
-    "flicker_count": 2,
+    "flicker_count": 1,
     "flickers_by_category": {
-      "working_between_ready": 2
+      "working_between_ready": 1
     },
     "flickers_by_reason": {
-      "force ready→working on first activity": 2
+      "force ready→working on first activity": 1
     },
     "estimated_cost_usd": 0.0032393,
     "cum_input_tokens": 10546,
@@ -35,7 +35,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-08-03T10:31:52.302Z",
+      "virtual_time": "2026-08-03T12:32:00.18769+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -48,9 +48,9 @@
     },
     {
       "index": 1,
-      "event_index": 6,
-      "virtual_time": "2026-08-03T10:32:00.07Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-08-03T12:32:00.18769+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -62,8 +62,8 @@
     },
     {
       "index": 2,
-      "event_index": 8,
-      "virtual_time": "2026-08-03T10:32:06.759Z",
+      "event_index": 2,
+      "virtual_time": "2026-08-03T12:32:08.871393+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -74,49 +74,135 @@
       "needs_user_attention": false,
       "waiting_for_user_input": false,
       "last_assistant_text_head": "ok"
-    },
-    {
-      "index": 3,
-      "event_index": 16,
-      "virtual_time": "2026-08-03T10:32:27.791Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_start",
-      "has_open_tool": false,
-      "is_agent_done": false,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false
-    },
-    {
-      "index": 4,
-      "event_index": 19,
-      "virtual_time": "2026-08-03T10:32:32.55Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "ok"
-    },
-    {
-      "index": 5,
-      "event_index": 27,
-      "virtual_time": "2026-08-03T10:32:52.151Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_start",
-      "has_open_tool": false,
-      "is_agent_done": false,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-9444",
+      "adapter": "copilot",
+      "first_seen": "2026-08-03T12:31:51.771114+02:00",
+      "last_seen": "2026-08-03T12:32:11.776435+02:00",
+      "duration_ms": 20005,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 9444,
+      "pid_discovery_lag_ms": 111,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 19896
+      }
+    },
+    {
+      "session_id": "4c6bb4df-588f-4d36-a951-a65693ca604b",
+      "adapter": "copilot",
+      "first_seen": "2026-08-03T12:31:59.963348+02:00",
+      "last_seen": "2026-08-03T12:32:11.38177+02:00",
+      "duration_ms": 11418,
+      "event_count": 11,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 9444,
+      "pid_discovery_lag_ms": 338,
+      "debounce_coalesced_events": 1,
+      "state_durations_ms": {
+        "ready": 2506,
+        "working": 8840
+      }
+    },
+    {
+      "session_id": "proc-15675",
+      "adapter": "copilot",
+      "first_seen": "2026-08-03T12:32:21.893759+02:00",
+      "last_seen": "2026-08-03T12:32:38.149706+02:00",
+      "duration_ms": 16255,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 15675,
+      "pid_discovery_lag_ms": 185,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 16071
+      }
+    },
+    {
+      "session_id": "e30bf000-9608-4a42-9134-c15ad50cdfbc",
+      "adapter": "copilot",
+      "first_seen": "2026-08-03T12:32:27.767663+02:00",
+      "last_seen": "2026-08-03T12:32:37.077052+02:00",
+      "duration_ms": 9309,
+      "event_count": 9,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 15675,
+      "pid_discovery_lag_ms": 263,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 4404,
+        "working": 4849
+      }
+    },
+    {
+      "session_id": "proc-23167",
+      "adapter": "copilot",
+      "first_seen": "2026-08-03T12:32:48.224895+02:00",
+      "last_seen": "2026-08-03T12:32:58.337324+02:00",
+      "duration_ms": 10112,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 23167,
+      "pid_discovery_lag_ms": 46,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 10066
+      }
+    },
+    {
+      "session_id": "69630212-6049-4385-93cb-7ce89408815c",
+      "adapter": "copilot",
+      "first_seen": "2026-08-03T12:32:52.075886+02:00",
+      "last_seen": "2026-08-03T12:32:56.481342+02:00",
+      "duration_ms": 4405,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "working",
+      "pid": 23167,
+      "pid_discovery_lag_ms": 282,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "working": 4345
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 1,
+    "replayed_transition_count": 2,
+    "ordered_matches": 0,
+    "ordered_mismatches": [
+      {
+        "index": 0,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 1,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "extra_kinds": [
+      "ready→working"
+    ]
+  }
 }

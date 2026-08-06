@@ -67,5 +67,6 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "The files have been created and read. A summary file has also been created."
     }
-  ]
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_19eb207c3ffezi1xnS4Ir55N9t"
 }

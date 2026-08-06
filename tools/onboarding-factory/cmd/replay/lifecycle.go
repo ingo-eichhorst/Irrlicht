@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -115,9 +116,25 @@ func findPrimarySessionID(events []lifecycle.Event) string {
 // event sorted by sequence number. Malformed lines are logged to stderr and
 // skipped so a partial file doesn't silently produce bogus replay output.
 func loadAllLifecycleEvents(path string) ([]lifecycle.Event, error) {
+	events, _, err := loadLifecycleEventsCountingMalformed(path)
+	return events, err
+}
+
+// loadLifecycleEventsCountingMalformed is loadAllLifecycleEvents plus the
+// number of lines that failed to parse.
+//
+// replayWithSidecar needs that count to tell two situations apart that are
+// otherwise identical from the outside: a sidecar that parsed cleanly and
+// simply has no events capable of driving a replay (the benign aider /
+// process-owned-store case, which falls back to transcript-only), and a
+// sidecar that is corrupt or truncated, whose events were silently dropped
+// here. Without it a garbage file degrades exactly like the benign case — and
+// for a newly added recording, whose golden is generated fresh, that would be
+// baked in as "not drivable" with nothing to alarm on.
+func loadLifecycleEventsCountingMalformed(path string) ([]lifecycle.Event, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer f.Close()
 
@@ -125,21 +142,25 @@ func loadAllLifecycleEvents(path string) ([]lifecycle.Event, error) {
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 
 	var out []lifecycle.Event
-	lineNum := 0
+	lineNum, malformed := 0, 0
 	for scanner.Scan() {
 		lineNum++
+		if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
+			continue
+		}
 		var ev lifecycle.Event
 		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
 			fmt.Fprintf(os.Stderr, "replay: skipping malformed sidecar line %d in %s: %v\n", lineNum, path, err)
+			malformed++
 			continue
 		}
 		out = append(out, ev)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, malformed, err
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
-	return out, nil
+	return out, malformed, nil
 }
 
 // filterStateTransitions extracts state_transition events for a given session

@@ -10,19 +10,22 @@
   "summary": {
     "total_events": 14,
     "consumed_events": 14,
-    "total_transitions": 13,
-    "first_event_time": "2026-06-20T12:13:08Z",
-    "last_event_time": "2026-06-20T12:13:29Z",
-    "wall_clock_session_duration": 21000000000,
+    "total_transitions": 11,
+    "first_event_time": "2026-06-20T14:13:08.099907+02:00",
+    "last_event_time": "2026-06-20T14:13:31.162798+02:00",
+    "wall_clock_session_duration": 23062891000,
     "state_durations": {
-      "ready": 21000000000
+      "ready": 20083745000,
+      "working": 4979146000
     },
-    "flicker_count": 5,
+    "flicker_count": 8,
     "flickers_by_category": {
-      "ready_between_working": 5
+      "ready_between_working": 4,
+      "working_between_ready": 4
     },
     "flickers_by_reason": {
-      "agent finished turn → ready": 5
+      "agent finished turn → ready": 4,
+      "force ready→working on first activity": 4
     },
     "model_name": "GPT-OSS 120B"
   },
@@ -30,7 +33,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-06-20T12:13:08Z",
+      "virtual_time": "2026-06-20T14:13:08.099907+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -43,24 +46,23 @@
     },
     {
       "index": 1,
-      "event_index": 2,
-      "virtual_time": "2026-06-20T12:13:08Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-06-20T14:13:08.099907+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
+      "last_event_type": "user_message",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "… to ensure functionality and performance remain intact.  \nPhase 5 – U…"
+      "waiting_for_user_input": false
     },
     {
       "index": 2,
       "event_index": 2,
-      "virtual_time": "2026-06-20T12:13:08Z",
-      "cause": "debounce_coalesce",
+      "virtual_time": "2026-06-20T14:13:11.53601+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -73,24 +75,23 @@
     },
     {
       "index": 3,
-      "event_index": 5,
-      "virtual_time": "2026-06-20T12:13:13Z",
+      "event_index": 4,
+      "virtual_time": "2026-06-20T14:13:15.664987+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
+      "last_event_type": "user_message",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "…the current architecture, highlights priority refactor targets, and defines c…"
+      "waiting_for_user_input": false
     },
     {
       "index": 4,
       "event_index": 5,
-      "virtual_time": "2026-06-20T12:13:13Z",
-      "cause": "debounce_coalesce",
+      "virtual_time": "2026-06-20T14:13:16.800575+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -103,24 +104,23 @@
     },
     {
       "index": 5,
-      "event_index": 7,
-      "virtual_time": "2026-06-20T12:13:18Z",
+      "event_index": 8,
+      "virtual_time": "2026-06-20T14:13:24.09244+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
+      "last_event_type": "user_message",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "… as reduced cyclomatic complexity, improved test coverage, and clear module c…"
+      "waiting_for_user_input": false
     },
     {
       "index": 6,
-      "event_index": 7,
-      "virtual_time": "2026-06-20T12:13:18Z",
-      "cause": "debounce_coalesce",
+      "event_index": 9,
+      "virtual_time": "2026-06-20T14:13:24.25119+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -129,28 +129,27 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "… as reduced cyclomatic complexity, improved test coverage, and clear module c…"
+      "last_assistant_text_head": "…ving architecture aligns with the design goals, allowing the codebase to evol…"
     },
     {
       "index": 7,
-      "event_index": 9,
-      "virtual_time": "2026-06-20T12:13:22Z",
+      "event_index": 10,
+      "virtual_time": "2026-06-20T14:13:27.672686+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
+      "last_event_type": "user_message",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "…ving architecture aligns with the design goals, allowing the codebase to evol…"
+      "waiting_for_user_input": false
     },
     {
       "index": 8,
-      "event_index": 9,
-      "virtual_time": "2026-06-20T12:13:22Z",
-      "cause": "debounce_coalesce",
+      "event_index": 11,
+      "virtual_time": "2026-06-20T14:13:27.921391+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -159,42 +158,12 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "…ving architecture aligns with the design goals, allowing the codebase to evol…"
+      "last_assistant_text_head": "…ix cycles, and the test results will be documented alongside the updated code…"
     },
     {
       "index": 9,
-      "event_index": 11,
-      "virtual_time": "2026-06-20T12:13:25Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "…ix cycles, and the test results will be documented alongside the updated code…"
-    },
-    {
-      "index": 10,
-      "event_index": 11,
-      "virtual_time": "2026-06-20T12:13:25Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "…ix cycles, and the test results will be documented alongside the updated code…"
-    },
-    {
-      "index": 11,
       "event_index": 13,
-      "virtual_time": "2026-06-20T12:13:29Z",
+      "virtual_time": "2026-06-20T14:13:33.162798+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -207,9 +176,9 @@
       "last_assistant_text_head": "…d‑off brief for the team, confirming that the refactoring is fully integrat…"
     },
     {
-      "index": 12,
+      "index": 10,
       "event_index": 13,
-      "virtual_time": "2026-06-20T12:13:29Z",
+      "virtual_time": "2026-06-20T14:13:33.162798+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -221,5 +190,36 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "…d‑off brief for the team, confirming that the refactoring is fully integrat…"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "78edc22b-f592-4e8a-a6b8-069205e5bff6",
+      "adapter": "antigravity",
+      "first_seen": "2026-06-20T14:13:08.09549+02:00",
+      "last_seen": "2026-06-20T14:13:33.168262+02:00",
+      "duration_ms": 25072,
+      "event_count": 35,
+      "state_changes": 11,
+      "final_state": "ready",
+      "debounce_coalesced_events": 9,
+      "state_durations_ms": {
+        "ready": 20092,
+        "working": 4979
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 10,
+    "replayed_transition_count": 10,
+    "ordered_matches": 10,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

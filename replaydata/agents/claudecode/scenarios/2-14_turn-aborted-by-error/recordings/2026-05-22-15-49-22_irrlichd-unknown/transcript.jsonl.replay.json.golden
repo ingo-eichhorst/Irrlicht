@@ -8,21 +8,24 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 11,
-    "consumed_events": 11,
+    "total_events": 5,
+    "consumed_events": 5,
     "total_transitions": 5,
-    "first_event_time": "2026-05-22T13:49:22.03Z",
-    "last_event_time": "2026-05-22T13:49:25.474Z",
-    "wall_clock_session_duration": 3444000000,
+    "first_event_time": "2026-05-22T15:49:22.16788+02:00",
+    "last_event_time": "2026-05-22T15:49:33.446943+02:00",
+    "wall_clock_session_duration": 11279063000,
     "state_durations": {
-      "ready": 3444000000
+      "ready": 9158710000,
+      "working": 2120353000
     },
-    "flicker_count": 1,
+    "flicker_count": 2,
     "flickers_by_category": {
-      "ready_between_working": 1
+      "ready_between_working": 1,
+      "working_between_ready": 1
     },
     "flickers_by_reason": {
-      "agent finished turn → ready": 1
+      "agent finished turn → ready": 1,
+      "force ready→working on first activity": 1
     },
     "model_name": "\u003csynthetic\u003e"
   },
@@ -30,7 +33,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-22T13:49:22.03Z",
+      "virtual_time": "2026-05-22T15:49:22.16788+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -43,9 +46,9 @@
     },
     {
       "index": 1,
-      "event_index": 5,
-      "virtual_time": "2026-05-22T13:49:22.156Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-22T15:49:22.16788+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -58,9 +61,9 @@
     },
     {
       "index": 2,
-      "event_index": 5,
-      "virtual_time": "2026-05-22T13:49:22.156Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-22T15:49:22.16788+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -73,23 +76,22 @@
     },
     {
       "index": 3,
-      "event_index": 10,
-      "virtual_time": "2026-05-22T13:49:25.474Z",
-      "cause": "debounce_coalesce",
+      "event_index": 1,
+      "virtual_time": "2026-05-22T15:49:25.466408+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
+      "last_event_type": "user",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "API Error: API returned an empty or malformed response (HTTP 200) — check for …"
+      "waiting_for_user_input": false
     },
     {
       "index": 4,
-      "event_index": 10,
-      "virtual_time": "2026-05-22T13:49:25.474Z",
+      "event_index": 2,
+      "virtual_time": "2026-05-22T15:49:27.586761+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -101,5 +103,38 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "API Error: API returned an empty or malformed response (HTTP 200) — check for …"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "f8814b3b-b760-403c-b354-96849752cb78",
+      "adapter": "claude-code",
+      "first_seen": "2026-05-22T15:49:22.064065+02:00",
+      "last_seen": "2026-05-22T15:49:34.007383+02:00",
+      "duration_ms": 11943,
+      "event_count": 15,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 17576,
+      "pid_discovery_lag_ms": 3,
+      "debounce_coalesced_events": 2,
+      "state_durations_ms": {
+        "ready": 9818,
+        "working": 2123
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 4,
+    "ordered_matches": 4,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

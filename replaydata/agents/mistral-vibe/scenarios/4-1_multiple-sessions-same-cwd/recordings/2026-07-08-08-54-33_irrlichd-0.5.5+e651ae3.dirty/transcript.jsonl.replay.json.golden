@@ -8,22 +8,29 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 6,
-    "consumed_events": 6,
-    "total_transitions": 3,
-    "first_event_time": "0001-01-01T00:00:00Z",
-    "last_event_time": "0001-01-01T00:00:00Z",
-    "wall_clock_session_duration": 0,
-    "state_durations": {},
-    "flicker_count": 0,
-    "flickers_by_category": {},
-    "flickers_by_reason": {}
+    "total_events": 4,
+    "consumed_events": 4,
+    "total_transitions": 4,
+    "first_event_time": "2026-07-08T08:54:47.701205+02:00",
+    "last_event_time": "2026-07-08T08:55:12.946919+02:00",
+    "wall_clock_session_duration": 25245714000,
+    "state_durations": {
+      "ready": 23243691000,
+      "working": 2002023000
+    },
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    }
   },
   "transitions": [
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "0001-01-01T00:00:00Z",
+      "virtual_time": "2026-07-08T08:54:47.701205+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -36,23 +43,22 @@
     },
     {
       "index": 1,
-      "event_index": 5,
-      "virtual_time": "0001-01-01T00:00:00Z",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-07-08T08:54:47.701205+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
+      "last_event_type": "user_message",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "bravo"
+      "waiting_for_user_input": false
     },
     {
       "index": 2,
-      "event_index": 5,
-      "virtual_time": "0001-01-01T00:00:00Z",
+      "event_index": 1,
+      "virtual_time": "2026-07-08T08:54:49.703228+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -62,7 +68,120 @@
       "is_agent_done": true,
       "needs_user_attention": false,
       "waiting_for_user_input": false,
-      "last_assistant_text_head": "bravo"
+      "last_assistant_text_head": "alpha"
+    },
+    {
+      "index": 3,
+      "event_index": 2,
+      "virtual_time": "2026-07-08T08:55:12.933287+02:00",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-86283",
+      "adapter": "mistral-vibe",
+      "first_seen": "2026-07-08T08:54:33.8349+02:00",
+      "last_seen": "2026-07-08T08:55:19.110723+02:00",
+      "duration_ms": 45275,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 86283,
+      "pid_discovery_lag_ms": 14,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 45262
+      }
+    },
+    {
+      "session_id": "session_20260708_065433_1a12d877",
+      "adapter": "mistral-vibe",
+      "first_seen": "2026-07-08T08:54:47.695338+02:00",
+      "last_seen": "2026-07-08T08:55:17.767492+02:00",
+      "duration_ms": 30072,
+      "event_count": 17,
+      "state_changes": 7,
+      "final_state": "ready",
+      "pid": 86283,
+      "pid_discovery_lag_ms": 589,
+      "debounce_coalesced_events": 2,
+      "state_durations_ms": {
+        "ready": 28045,
+        "working": 2025
+      }
+    },
+    {
+      "session_id": "proc-87915",
+      "adapter": "mistral-vibe",
+      "first_seen": "2026-07-08T08:54:53.959757+02:00",
+      "last_seen": "2026-07-08T08:55:19.110826+02:00",
+      "duration_ms": 25151,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 87915,
+      "pid_discovery_lag_ms": 13,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 25138
+      }
+    },
+    {
+      "session_id": "session_20260708_065452_8230be84",
+      "adapter": "mistral-vibe",
+      "first_seen": "2026-07-08T08:55:08.364092+02:00",
+      "last_seen": "2026-07-08T08:55:17.773585+02:00",
+      "duration_ms": 9409,
+      "event_count": 12,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 87915,
+      "pid_discovery_lag_ms": 621,
+      "debounce_coalesced_events": 1,
+      "state_durations_ms": {
+        "ready": 9407,
+        "working": 0
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 6,
+    "replayed_transition_count": 3,
+    "ordered_matches": 3,
+    "ordered_mismatches": [
+      {
+        "index": 3,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      },
+      {
+        "index": 4,
+        "kind": "missing_in_replay",
+        "recorded": "ready→working"
+      },
+      {
+        "index": 5,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

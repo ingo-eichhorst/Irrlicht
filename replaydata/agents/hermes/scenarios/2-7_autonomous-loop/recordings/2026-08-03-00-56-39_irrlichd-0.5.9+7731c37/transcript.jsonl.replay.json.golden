@@ -102,5 +102,6 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "… one less than a perfect square: its successor, four, is the square of two. I…"
     }
-  ]
+  ],
+  "sidecar_fallback": "sidecar cannot drive a replay: no transcript_activity events with file_size for primary session 20260803_005638_2b9159"
 }

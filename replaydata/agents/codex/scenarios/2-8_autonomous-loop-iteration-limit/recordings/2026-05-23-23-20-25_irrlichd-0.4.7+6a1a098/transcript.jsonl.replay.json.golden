@@ -10,20 +10,16 @@
   "summary": {
     "total_events": 31,
     "consumed_events": 31,
-    "total_transitions": 5,
-    "first_event_time": "2026-05-23T21:20:42.255Z",
-    "last_event_time": "2026-05-23T21:20:56.929Z",
-    "wall_clock_session_duration": 14674000000,
+    "total_transitions": 3,
+    "first_event_time": "2026-05-23T23:20:42.255549+02:00",
+    "last_event_time": "2026-05-23T23:20:56.929647+02:00",
+    "wall_clock_session_duration": 14674098000,
     "state_durations": {
-      "ready": 14674000000
+      "ready": 14674098000
     },
-    "flicker_count": 1,
-    "flickers_by_category": {
-      "ready_between_working": 1
-    },
-    "flickers_by_reason": {
-      "agent finished turn → ready": 1
-    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
     "estimated_cost_usd": 0.616605,
     "cum_input_tokens": 121917,
     "cum_output_tokens": 234,
@@ -33,7 +29,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-05-23T21:20:42.255Z",
+      "virtual_time": "2026-05-23T23:20:42.255549+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -47,7 +43,7 @@
     {
       "index": 1,
       "event_index": 16,
-      "virtual_time": "2026-05-23T21:20:47.036Z",
+      "virtual_time": "2026-05-23T23:20:49.036209+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
@@ -62,7 +58,7 @@
     {
       "index": 2,
       "event_index": 16,
-      "virtual_time": "2026-05-23T21:20:47.036Z",
+      "virtual_time": "2026-05-23T23:20:49.036209+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
       "new_state": "ready",
@@ -73,36 +69,67 @@
       "needs_user_attention": false,
       "waiting_for_user_input": false,
       "last_assistant_text_head": "`echo 1` ran and printed `1`.\n\nContinuing to iteration 2."
-    },
-    {
-      "index": 3,
-      "event_index": 30,
-      "virtual_time": "2026-05-23T21:20:56.929Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "`echo 2` ran and printed `2`.\n\nReached iteration 2 of 2. I will not iterate furt…"
-    },
-    {
-      "index": 4,
-      "event_index": 30,
-      "virtual_time": "2026-05-23T21:20:56.929Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "`echo 2` ran and printed `2`.\n\nReached iteration 2 of 2. I will not iterate furt…"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-38744",
+      "adapter": "codex",
+      "first_seen": "2026-05-23T23:20:25.823775+02:00",
+      "last_seen": "2026-05-23T23:21:06.008769+02:00",
+      "duration_ms": 40184,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 38744,
+      "pid_discovery_lag_ms": 32,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 40153
+      }
+    },
+    {
+      "session_id": "rollout-2026-05-23T23-20-24-019e56b5-f194-78a2-a7b3-73b56b6a7a30",
+      "adapter": "codex",
+      "first_seen": "2026-05-23T23:20:42.21997+02:00",
+      "last_seen": "2026-05-23T23:21:05.744391+02:00",
+      "duration_ms": 23524,
+      "event_count": 69,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 38744,
+      "pid_discovery_lag_ms": 231,
+      "debounce_coalesced_events": 29,
+      "state_durations_ms": {
+        "ready": 23522,
+        "working": 1
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "ordered_mismatches": [
+      {
+        "index": 2,
+        "kind": "missing_in_replay",
+        "recorded": "ready→working"
+      },
+      {
+        "index": 3,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }

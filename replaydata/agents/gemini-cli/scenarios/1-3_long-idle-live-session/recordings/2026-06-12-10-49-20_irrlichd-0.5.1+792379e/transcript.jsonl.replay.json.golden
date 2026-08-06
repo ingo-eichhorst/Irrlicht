@@ -8,15 +8,15 @@
     "flicker_max_duration": 10000000000
   },
   "summary": {
-    "total_events": 10,
-    "consumed_events": 10,
+    "total_events": 9,
+    "consumed_events": 9,
     "total_transitions": 5,
-    "first_event_time": "2026-06-12T08:49:35.758Z",
-    "last_event_time": "2026-06-12T08:50:06.99Z",
-    "wall_clock_session_duration": 31232000000,
+    "first_event_time": "2026-06-12T10:49:20.937001+02:00",
+    "last_event_time": "2026-06-12T10:50:06.996391+02:00",
+    "wall_clock_session_duration": 46059390000,
     "state_durations": {
-      "ready": 24737000000,
-      "working": 6495000000
+      "ready": 39564039000,
+      "working": 6495351000
     },
     "flicker_count": 2,
     "flickers_by_category": {
@@ -34,7 +34,7 @@
     {
       "index": 0,
       "event_index": -1,
-      "virtual_time": "2026-06-12T08:49:35.758Z",
+      "virtual_time": "2026-06-12T10:49:20.937001+02:00",
       "cause": "init",
       "prev_state": "",
       "new_state": "ready",
@@ -47,9 +47,9 @@
     },
     {
       "index": 1,
-      "event_index": 3,
-      "virtual_time": "2026-06-12T08:49:35.758Z",
-      "cause": "debounce_coalesce",
+      "event_index": 1,
+      "virtual_time": "2026-06-12T10:49:35.758736+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -61,9 +61,9 @@
     },
     {
       "index": 2,
-      "event_index": 5,
-      "virtual_time": "2026-06-12T08:49:39.756Z",
-      "cause": "debounce_coalesce",
+      "event_index": 3,
+      "virtual_time": "2026-06-12T10:49:39.756781+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -76,9 +76,9 @@
     },
     {
       "index": 3,
-      "event_index": 7,
-      "virtual_time": "2026-06-12T08:50:04.493Z",
-      "cause": "debounce_coalesce",
+      "event_index": 5,
+      "virtual_time": "2026-06-12T10:50:04.493835+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -90,9 +90,9 @@
     },
     {
       "index": 4,
-      "event_index": 9,
-      "virtual_time": "2026-06-12T08:50:06.99Z",
-      "cause": "debounce_coalesce",
+      "event_index": 7,
+      "virtual_time": "2026-06-12T10:50:06.991141+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
@@ -103,5 +103,76 @@
       "waiting_for_user_input": false,
       "last_assistant_text_head": "alive"
     }
-  ]
+  ],
+  "sessions": [
+    {
+      "session_id": "session-2026-06-12T08-49-94726cc3",
+      "adapter": "gemini-cli",
+      "first_seen": "2026-06-12T10:49:20.934446+02:00",
+      "last_seen": "2026-06-12T10:50:09.001539+02:00",
+      "duration_ms": 48067,
+      "event_count": 25,
+      "state_changes": 9,
+      "final_state": "ready",
+      "pid": 16042,
+      "pid_discovery_lag_ms": 20805,
+      "debounce_coalesced_events": 4,
+      "state_durations_ms": {
+        "ready": 26744,
+        "working": 21321
+      }
+    },
+    {
+      "session_id": "proc-16042",
+      "adapter": "gemini-cli",
+      "first_seen": "2026-06-12T10:49:21.077329+02:00",
+      "last_seen": "2026-06-12T10:49:42.270923+02:00",
+      "duration_ms": 21193,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 16042,
+      "pid_discovery_lag_ms": 48,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 21146
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 8,
+    "replayed_transition_count": 4,
+    "ordered_matches": 4,
+    "ordered_mismatches": [
+      {
+        "index": 4,
+        "kind": "missing_in_replay",
+        "recorded": "ready→working"
+      },
+      {
+        "index": 5,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      },
+      {
+        "index": 6,
+        "kind": "missing_in_replay",
+        "recorded": "ready→working"
+      },
+      {
+        "index": 7,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
 }
