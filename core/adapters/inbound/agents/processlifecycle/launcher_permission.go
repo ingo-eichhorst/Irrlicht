@@ -30,11 +30,12 @@ func LauncherPermissionDeclaration() agent.Agent {
 			Kind:            permission.KindObserve,
 			Title:           "Capture terminal identity",
 			FeatureUnlocked: "Click-to-focus: jump from a session row or notification straight to the terminal window that runs it",
-			Touches:         "Reads a fixed whitelist of environment variables from detected agent processes (TERM_PROGRAM, KITTY_*, TMUX, …)",
+			Touches:         "Reads a fixed whitelist of environment variables from detected agent processes (TERM_PROGRAM, KITTY_*, TMUX, HERDR_*, …)",
 			Detail: "When a session is linked to its process, irrlicht reads only " +
 				"these variables from that process's environment: TERM_PROGRAM, " +
 				"ITERM_SESSION_ID, TERM_SESSION_ID, TMUX, TMUX_PANE, VSCODE_PID, " +
-				"TERMINAL_EMULATOR, KITTY_PID, KITTY_LISTEN_ON, KITTY_WINDOW_ID — " +
+				"TERMINAL_EMULATOR, KITTY_PID, KITTY_LISTEN_ON, KITTY_WINDOW_ID, " +
+				"HERDR_PANE_ID, HERDR_SOCKET_PATH — " +
 				"never the full environment. Focusing itself only happens when you " +
 				"click a session (kitty remote control / AppleScript, additionally " +
 				"gated by macOS automation prompts). Toggling off stops the capture " +

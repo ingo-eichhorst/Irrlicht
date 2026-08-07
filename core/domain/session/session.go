@@ -72,6 +72,13 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 // exception is HostBundleID: when no curated TermProgram matches, the daemon
 // resolves the host bundle id by process ancestry (which the client can't do)
 // and carries it here.
+//
+// The Herdr* fields are the one case where the other fields are not merely
+// best-effort but actively wrong, so they are captured to the exclusion of
+// everything else: herdr's server owns each pane's pty and is long-lived and
+// detached, so every terminal-identity var a pane inherits ($TERM_PROGRAM,
+// $TMUX, $KITTY_*, $VSCODE_PID) describes whatever environment the *server*
+// was started in, not the pane. See processlifecycle.launcherFromEnv (#1348).
 type Launcher struct {
 	TermProgram    string `json:"term_program,omitempty"`     // $TERM_PROGRAM (e.g. iTerm.app, Apple_Terminal, vscode, cursor, ghostty, WezTerm, Hyper)
 	ITermSessionID string `json:"iterm_session_id,omitempty"` // $ITERM_SESSION_ID
@@ -84,6 +91,9 @@ type Launcher struct {
 	KittyWindowID  string `json:"kitty_window_id,omitempty"`  // $KITTY_WINDOW_ID — kitty window identifier
 	KittyPID       int    `json:"kitty_pid,omitempty"`        // $KITTY_PID — kitty.app process id (lets the activator target this specific instance when multiple kitties run)
 	HostBundleID   string `json:"host_bundle_id,omitempty"`   // CFBundleIdentifier of the host app resolved by process-ancestry when no curated TermProgram matched (e.g. md.obsidian for an in-Obsidian terminal). Unlike TermProgram, this is derived server-side because the client has no map for arbitrary embedded-terminal hosts; the client builds a generic title-match activator from it.
+
+	HerdrPaneID     string `json:"herdr_pane_id,omitempty"`     // $HERDR_PANE_ID — herdr pane address, e.g. "w1:p2" (workspace 1, pane 2)
+	HerdrSocketPath string `json:"herdr_socket_path,omitempty"` // $HERDR_SOCKET_PATH — the herdr server's socket; the complete addressing key for that server, as $TMUX's socket field is for tmux
 }
 
 // BackgroundAgent marks a session as a background agent spawned by the agent's
@@ -109,7 +119,7 @@ func (l *Launcher) IsEmpty() bool {
 		l.TermSessionID == "" && l.TmuxPane == "" &&
 		l.TmuxSocket == "" && l.VSCodePID == 0 && l.TTY == "" &&
 		l.KittyListenOn == "" && l.KittyWindowID == "" && l.KittyPID == 0 &&
-		l.HostBundleID == "")
+		l.HostBundleID == "" && l.HerdrPaneID == "" && l.HerdrSocketPath == "")
 }
 
 // SessionState represents the current state of a Claude Code or Copilot session.

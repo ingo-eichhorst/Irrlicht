@@ -35,6 +35,20 @@ func TestCaptureCommandBuilders(t *testing.T) {
 			kittyCapture(kittyL),
 			command{name: "kitten", args: []string{"@", "--to", "unix:/tmp/mykitty", "get-text", "--match", "id:12"}},
 		},
+		{
+			"herdr capture",
+			herdrCapture(&session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/herdr/h.sock"}),
+			command{
+				name: "herdr",
+				args: []string{"pane", "read", "w1:p1", "--source", "visible", "--format", "text"},
+				env:  []string{"HERDR_SOCKET_PATH=/tmp/herdr/h.sock"},
+			},
+		},
+		{
+			"herdr capture without socket",
+			herdrCapture(&session.Launcher{HerdrPaneID: "w2:p5"}),
+			command{name: "herdr", args: []string{"pane", "read", "w2:p5", "--source", "visible", "--format", "text"}},
+		},
 	}
 	for _, c := range cases {
 		if !reflect.DeepEqual(c.got, c.want) {
@@ -50,6 +64,7 @@ func TestCaptureScreenDispatch(t *testing.T) {
 		wantName  string
 		wantErrIs error
 	}{
+		{"herdr", &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/h.sock"}, "herdr", nil},
 		{"tmux", &session.Launcher{TmuxPane: "%1"}, "tmux", nil},
 		{"kitty", &session.Launcher{KittyListenOn: "unix:/x", KittyWindowID: "9"}, "kitten", nil},
 		{"applescript not readable", &session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0:U"}, "", outbound.ErrNotReadable},

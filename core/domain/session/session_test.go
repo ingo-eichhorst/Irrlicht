@@ -76,6 +76,26 @@ func TestSessionState_LauncherJSONRoundTrip(t *testing.T) {
 		t.Errorf("host_bundle_id lost in round-trip: %+v", gout.Launcher)
 	}
 
+	// A herdr pane carries only its own address — every other identity field
+	// is deliberately dropped at capture time, so this is the shape that
+	// reaches the wire for such a session (#1348).
+	herdr := &Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/herdr/h.sock"}
+	if herdr.IsEmpty() {
+		t.Error("launcher with only herdr fields should not be empty")
+	}
+	hdata, err := json.Marshal(&SessionState{SessionID: "hrd", State: StateWorking, Launcher: herdr})
+	if err != nil {
+		t.Fatalf("marshal herdr: %v", err)
+	}
+	var hout SessionState
+	if err := json.Unmarshal(hdata, &hout); err != nil {
+		t.Fatalf("unmarshal herdr: %v", err)
+	}
+	if hout.Launcher == nil || hout.Launcher.HerdrPaneID != "w1:p1" ||
+		hout.Launcher.HerdrSocketPath != "/tmp/herdr/h.sock" {
+		t.Errorf("herdr fields lost in round-trip: %+v", hout.Launcher)
+	}
+
 	// Without Launcher — backwards compat with pre-170 session JSON files.
 	legacy := []byte(`{"session_id":"xyz","state":"ready","pid":99}`)
 	var legacyOut SessionState

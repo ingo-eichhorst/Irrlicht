@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 
 	"irrlicht/core/domain/session"
@@ -44,6 +45,8 @@ func (r *Reader) CaptureScreen(sessionID string) ([]byte, error) {
 	}
 	l := state.Launcher
 	switch resolveBackend(l) {
+	case backendHerdr:
+		return r.run(herdrCapture(l))
 	case backendTmux:
 		return r.run(tmuxCapture(l))
 	case backendKitty:
@@ -67,6 +70,11 @@ func captureRunnerExec(ctx context.Context, c command) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, c.name, c.args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	if len(c.env) > 0 {
+		// Layered onto the daemon's environment, not replacing it: the child
+		// still needs PATH to resolve the backend binary at all.
+		cmd.Env = append(os.Environ(), c.env...)
+	}
 	if err := cmd.Run(); err != nil {
 		if stderr.Len() > 0 {
 			return nil, fmt.Errorf("%s: %w: %s", c.name, err, stderr.String())
@@ -93,4 +101,16 @@ func kittyCapture(l *session.Launcher) command {
 		"@", "--to", l.KittyListenOn,
 		"get-text", "--match", "id:" + l.KittyWindowID,
 	}}
+}
+
+// herdrCapture builds the read command that prints the pane's rendered screen
+// to stdout. `--source visible` is the viewport (the analogue of tmux's
+// capture-pane), and `--format text` asks for the plain rendering rather than
+// the ANSI one, so herdr does the VT emulation for us.
+func herdrCapture(l *session.Launcher) command {
+	return command{
+		name: "herdr",
+		args: []string{"pane", "read", l.HerdrPaneID, "--source", "visible", "--format", "text"},
+		env:  herdrEnv(l),
+	}
 }

@@ -38,6 +38,8 @@ var launcherEnvKeys = map[string]struct{}{
 	"KITTY_LISTEN_ON":   {}, // kitty remote-control socket path (e.g. "unix:/tmp/kitty-NNN/sock")
 	"KITTY_WINDOW_ID":   {}, // kitty window ID for precise window targeting
 	"KITTY_PID":         {}, // kitty.app PID; lets the macOS activator target this specific kitty instance
+	"HERDR_PANE_ID":     {}, // herdr pane address (e.g. "w1:p2") — injected per pane, so unlike the vars above it always describes *this* pane
+	"HERDR_SOCKET_PATH": {}, // herdr server socket; the complete addressing key for that server
 }
 
 // ReadLauncherEnv returns the launcher identity captured from the process env
@@ -82,6 +84,25 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 // VS Code / JetBrains inference) can be reasoned about independently of the
 // ancestry-walk fallbacks.
 func launcherFromEnv(env map[string]string) *session.Launcher {
+	// Inside a herdr pane, the pane's own address is the *only* trustworthy
+	// signal in the environment, so it is taken to the exclusion of every
+	// other var rather than merged with them. herdr's server owns the pty,
+	// outlives any client, and is reparented to init, so everything a pane
+	// inherits ($TERM_PROGRAM, $TMUX, $KITTY_*, $VSCODE_PID) describes the
+	// environment the *server* was started in — frozen at that moment and
+	// handed to every pane it will ever spawn.
+	//
+	// Merging would be actively harmful, not merely imprecise: a server
+	// started from a tmux pane leaks $TMUX/$TMUX_PANE, resolveBackend would
+	// rank that above herdr, and the backchannel would type into an unrelated
+	// pane in a different window. Returning early also means a terminal
+	// identity var added here later cannot silently start leaking (#1348).
+	if pane := env["HERDR_PANE_ID"]; pane != "" {
+		return &session.Launcher{
+			HerdrPaneID:     pane,
+			HerdrSocketPath: env["HERDR_SOCKET_PATH"],
+		}
+	}
 	l := &session.Launcher{
 		TermProgram:    env["TERM_PROGRAM"],
 		ITermSessionID: env["ITERM_SESSION_ID"],

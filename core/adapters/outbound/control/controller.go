@@ -29,6 +29,10 @@ const execTimeout = 2 * time.Second
 type command struct {
 	name string
 	args []string
+	// env holds "K=V" additions layered onto the daemon's own environment for
+	// this invocation. Empty for every backend addressed purely through argv;
+	// see herdrEnv for the one that isn't.
+	env []string
 }
 
 // Controller implements outbound.AgentController over terminal-backend scripting.
@@ -54,6 +58,8 @@ func (c *Controller) SendInput(sessionID string, data []byte) error {
 	}
 	l := state.Launcher
 	switch resolveBackend(l) {
+	case backendHerdr:
+		return c.exec(herdrInput(l, data))
 	case backendTmux:
 		return c.exec(tmuxInput(l, data))
 	case backendKitty:
@@ -67,14 +73,14 @@ func (c *Controller) SendInput(sessionID string, data []byte) error {
 }
 
 // submitCR is the carriage return that submits a line on the CLI backends.
-// The AppleScript hosts auto-submit, so it is appended only for tmux/kitty.
+// The AppleScript hosts auto-submit, so it is appended only for the CLI ones.
 const submitCR = "\r"
 
 // SendCommand injects command text and submits it, owning the per-backend
 // submit sequence so the caller (a preset rule) never has to (issue #754):
-// tmux/kitty get a trailing CR appended; the AppleScript path broadcasts the
-// bare command, since the macOS app's write-text/do-script auto-submits (and
-// strips any trailing newline) — appending a CR there would double-submit.
+// herdr/tmux/kitty get a trailing CR appended; the AppleScript path broadcasts
+// the bare command, since the macOS app's write-text/do-script auto-submits
+// (and strips any trailing newline) — appending a CR there would double-submit.
 func (c *Controller) SendCommand(sessionID, command string) error {
 	state, err := c.loadState(sessionID)
 	if err != nil {
@@ -82,6 +88,8 @@ func (c *Controller) SendCommand(sessionID, command string) error {
 	}
 	l := state.Launcher
 	switch resolveBackend(l) {
+	case backendHerdr:
+		return c.exec(herdrInput(l, []byte(command+submitCR)))
 	case backendTmux:
 		return c.exec(tmuxInput(l, []byte(command+submitCR)))
 	case backendKitty:
@@ -102,6 +110,8 @@ func (c *Controller) Interrupt(sessionID string) error {
 	}
 	l := state.Launcher
 	switch resolveBackend(l) {
+	case backendHerdr:
+		return c.exec(herdrInterrupt(l))
 	case backendTmux:
 		return c.exec(tmuxInterrupt(l))
 	case backendKitty:
@@ -160,6 +170,9 @@ type backend int
 
 const (
 	backendNone backend = iota
+	// backendHerdr covers the herdr agent multiplexer. Ranked first — see
+	// resolveBackend.
+	backendHerdr
 	backendTmux
 	backendKitty
 	// backendAppleScript covers iTerm2/Terminal.app — scripted by the macOS
@@ -168,14 +181,27 @@ const (
 	backendAppleScript
 )
 
-// resolveBackend picks the backend to script for a launcher. tmux wins when a
-// pane is known (most robust, TCC-free, relay-reachable); kitty next (its
-// remote-control socket + window id); then the AppleScript hosts, which the
-// daemon delegates to the macOS app. A session in tmux *inside* iTerm resolves
-// to tmux, because tmux owns the pty.
+// resolveBackend picks the backend to script for a launcher. herdr wins
+// outright when a pane is known; then tmux (TCC-free, relay-reachable); then
+// kitty (its remote-control socket + window id); then the AppleScript hosts,
+// which the daemon delegates to the macOS app. A session in tmux *inside*
+// iTerm resolves to tmux, because tmux owns the pty.
+//
+// herdr outranks even tmux, which looks like a violation of that
+// innermost-owns-the-pty rule but follows from how the launcher is built:
+// processlifecycle.launcherFromEnv only ever sets HerdrPaneID *instead of*
+// every other identity field, precisely because the rest are inherited from
+// the herdr server's launch environment and describe a different terminal
+// entirely. So the two can't legitimately compete — and if a future capture
+// path did populate both, preferring the stale one would mean typing into an
+// unrelated window, while preferring herdr merely lands input in the correct
+// window's active pane (#1348).
 func resolveBackend(l *session.Launcher) backend {
 	if l == nil {
 		return backendNone
+	}
+	if l.HerdrPaneID != "" {
+		return backendHerdr
 	}
 	if l.TmuxPane != "" {
 		return backendTmux
@@ -244,4 +270,46 @@ func kittyInterrupt(l *session.Launcher) command {
 		"send-text", "--match", "id:" + l.KittyWindowID,
 		"--", "\x03",
 	}}
+}
+
+// herdrInput builds the send-text command that types data into the pane. A
+// trailing CR (0x0d) in data submits, exactly as it does for tmux send-keys -l
+// (verified against herdr 0.8.0).
+//
+// Deliberately no `--` before the text, unlike the tmux and kitty builders:
+// herdr's CLI accepts a leading-dash positional as literal text, so a `--`
+// would itself be typed into the pane rather than ending option parsing.
+func herdrInput(l *session.Launcher, data []byte) command {
+	return command{
+		name: "herdr",
+		args: []string{"pane", "send-text", l.HerdrPaneID, string(data)},
+		env:  herdrEnv(l),
+	}
+}
+
+// herdrInterrupt sends the C-c key (interpreted, not literal) to the pane.
+// herdr rejects the `ctrl-c` spelling with `unsupported key`; `C-c` is the
+// accepted form and matches tmux's.
+func herdrInterrupt(l *session.Launcher) command {
+	return command{
+		name: "herdr",
+		args: []string{"pane", "send-keys", l.HerdrPaneID, "C-c"},
+		env:  herdrEnv(l),
+	}
+}
+
+// herdrEnv targets the session's herdr server. This is the one backend whose
+// addressing rides in the environment rather than in argv: herdr's CLI has no
+// socket flag (`--session <name>` needs a name the default session doesn't
+// have), and $HERDR_SOCKET_PATH is the documented override — verified to
+// address a specific server on its own, as `tmux -S <socket>` does.
+//
+// Empty when the socket is unknown, which leaves the child inheriting the
+// daemon's environment and so addressing herdr's default session — the best
+// available guess, and the same degradation tmuxBase makes without a socket.
+func herdrEnv(l *session.Launcher) []string {
+	if l.HerdrSocketPath == "" {
+		return nil
+	}
+	return []string{"HERDR_SOCKET_PATH=" + l.HerdrSocketPath}
 }
