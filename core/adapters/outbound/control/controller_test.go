@@ -40,12 +40,16 @@ func TestResolveBackend(t *testing.T) {
 	}{
 		{"nil", nil, backendNone},
 		{"herdr pane", &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/h.sock"}, backendHerdr},
-		{"herdr without socket still controllable", &session.Launcher{HerdrPaneID: "w1:p1"}, backendHerdr},
+		// Without the socket we cannot tell one running server from another,
+		// and pane ids are not unique across servers — so refuse rather than
+		// guess. Mirrors "kitty missing window" below.
+		{"herdr missing socket", &session.Launcher{HerdrPaneID: "w1:p1"}, backendNone},
+		{"herdr missing pane", &session.Launcher{HerdrSocketPath: "/tmp/h.sock"}, backendNone},
 		// A launcher can only carry both if some future capture path merges
 		// them; launcherFromEnv never does. Pin the safe precedence anyway —
 		// the tmux identity would be the herdr server's, pointing at a
 		// different window entirely.
-		{"herdr wins over inherited tmux", &session.Launcher{HerdrPaneID: "w1:p1", TmuxPane: "%0", TmuxSocket: "/tmp/other"}, backendHerdr},
+		{"herdr wins over inherited tmux", &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/h.sock", TmuxPane: "%0", TmuxSocket: "/tmp/other"}, backendHerdr},
 		{"tmux pane", &session.Launcher{TmuxPane: "%3"}, backendTmux},
 		{"tmux wins over kitty", &session.Launcher{TmuxPane: "%3", KittyListenOn: "unix:/x", KittyWindowID: "12"}, backendTmux},
 		{"kitty both fields", &session.Launcher{KittyListenOn: "unix:/x", KittyWindowID: "12"}, backendKitty},
@@ -67,7 +71,6 @@ func TestCommandBuilders(t *testing.T) {
 	tmuxNoSock := &session.Launcher{TmuxPane: "%7"}
 	kittyL := &session.Launcher{KittyListenOn: "unix:/tmp/mykitty", KittyWindowID: "12"}
 	herdrL := &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/herdr/h.sock"}
-	herdrNoSock := &session.Launcher{HerdrPaneID: "w2:p5"}
 
 	cases := []struct {
 		name string
@@ -105,11 +108,6 @@ func TestCommandBuilders(t *testing.T) {
 			"herdr input",
 			herdrInput(herdrL, []byte("ls\r")),
 			command{name: "herdr", args: []string{"pane", "send-text", "w1:p1", "ls\r"}, env: []string{"HERDR_SOCKET_PATH=/tmp/herdr/h.sock"}},
-		},
-		{
-			"herdr input without socket falls back to the default session",
-			herdrInput(herdrNoSock, []byte("hi")),
-			command{name: "herdr", args: []string{"pane", "send-text", "w2:p5", "hi"}},
 		},
 		{
 			"herdr interrupt",

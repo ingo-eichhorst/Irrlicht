@@ -189,18 +189,25 @@ const (
 //
 // herdr outranks even tmux, which looks like a violation of that
 // innermost-owns-the-pty rule but follows from how the launcher is built:
-// processlifecycle.launcherFromEnv only ever sets HerdrPaneID *instead of*
-// every other identity field, precisely because the rest are inherited from
-// the herdr server's launch environment and describe a different terminal
-// entirely. So the two can't legitimately compete — and if a future capture
-// path did populate both, preferring the stale one would mean typing into an
-// unrelated window, while preferring herdr merely lands input in the correct
-// window's active pane (#1348).
+// processlifecycle.ReadLauncherEnv sets HerdrPaneID *instead of* every other
+// identity field — both the env-derived ones and the ancestry-derived ones —
+// precisely because the rest describe the herdr server's environment rather
+// than this pane's. So the two can't legitimately compete; the ordering here
+// decides only what happens if some future capture path populates both, and
+// preferring the stale one would mean typing into an unrelated window, while
+// preferring herdr merely lands input in the correct window's active pane
+// (#1348).
 func resolveBackend(l *session.Launcher) backend {
 	if l == nil {
 		return backendNone
 	}
-	if l.HerdrPaneID != "" {
+	// Both fields required, as for kitty: a pane id alone would be addressed
+	// against whatever server the daemon's own environment points at, and
+	// ids like "w1:p1" exist on every server — so a missing socket would not
+	// degrade to "the default session", it would degrade to typing into a
+	// stranger. herdr injects the two together, so requiring both costs
+	// nothing in practice.
+	if l.HerdrPaneID != "" && l.HerdrSocketPath != "" {
 		return backendHerdr
 	}
 	if l.TmuxPane != "" {
@@ -304,12 +311,8 @@ func herdrInterrupt(l *session.Launcher) command {
 // have), and $HERDR_SOCKET_PATH is the documented override — verified to
 // address a specific server on its own, as `tmux -S <socket>` does.
 //
-// Empty when the socket is unknown, which leaves the child inheriting the
-// daemon's environment and so addressing herdr's default session — the best
-// available guess, and the same degradation tmuxBase makes without a socket.
+// resolveBackend guarantees a non-empty socket before any herdr command is
+// built, so this never silently falls back to the daemon's own environment.
 func herdrEnv(l *session.Launcher) []string {
-	if l.HerdrSocketPath == "" {
-		return nil
-	}
 	return []string{"HERDR_SOCKET_PATH=" + l.HerdrSocketPath}
 }

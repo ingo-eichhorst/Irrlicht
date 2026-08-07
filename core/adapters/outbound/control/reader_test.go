@@ -44,11 +44,6 @@ func TestCaptureCommandBuilders(t *testing.T) {
 				env:  []string{"HERDR_SOCKET_PATH=/tmp/herdr/h.sock"},
 			},
 		},
-		{
-			"herdr capture without socket",
-			herdrCapture(&session.Launcher{HerdrPaneID: "w2:p5"}),
-			command{name: "herdr", args: []string{"pane", "read", "w2:p5", "--source", "visible", "--format", "text"}},
-		},
 	}
 	for _, c := range cases {
 		if !reflect.DeepEqual(c.got, c.want) {

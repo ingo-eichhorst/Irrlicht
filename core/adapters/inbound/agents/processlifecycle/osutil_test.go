@@ -372,6 +372,20 @@ func TestReadLauncherEnv_Subprocess_Herdr(t *testing.T) {
 	if l.TmuxPane != "" || l.TmuxSocket != "" {
 		t.Errorf("inherited tmux identity survived the real read path: %+v", l)
 	}
+	// The ancestry fallbacks must not put host identity back: the walk from a
+	// herdr pane leads to the herdr server, not to the terminal the pane is
+	// displayed in. (This test process is itself hosted by some terminal, so
+	// without the skip TermProgram/HostBundleID would be populated here.)
+	if l.TermProgram != "" || l.HostBundleID != "" {
+		t.Errorf("ancestry identity must not be merged into a herdr launcher: %+v", l)
+	}
+	if l.KittyListenOn != "" || l.KittyWindowID != "" || l.KittyPID != 0 {
+		t.Errorf("kitty backfill must not fire for a herdr pane: %+v", l)
+	}
+	// TTY is deliberately still captured — it describes this process's own pty.
+	if l.TTY == "" {
+		t.Log("TTY empty (subprocess may have no controlling terminal); not asserted")
+	}
 }
 
 // TestReadLauncherEnv_Subprocess_KittyOverridesInheritedTermProgram covers

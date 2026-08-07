@@ -60,6 +60,24 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 
 	l := launcherFromEnv(env)
 
+	// A herdr pane is addressed by its own id and nothing else, so the
+	// ancestry fallbacks are skipped wholesale rather than merged in. They
+	// resolve the *host application* of the process tree, and for a herdr
+	// pane that tree leads to the herdr server — a different terminal from
+	// the one the pane is displayed in, and often no terminal at all once the
+	// server detaches. Letting them run would put the launcher back into the
+	// mixed state the early return in launcherFromEnv exists to prevent: a
+	// server started in the foreground from kitty would hand every pane
+	// TermProgram=kitty plus a kitty socket and window id via the backfill
+	// below, which is exactly the misroute this fixes (#1348).
+	//
+	// TTY is still captured: unlike the identity fields it is a fact about
+	// this process (its herdr-owned pty), and BackgroundAgent.Detached reads it.
+	if l.HerdrPaneID != "" {
+		l.TTY = processTTY(pid)
+		return l
+	}
+
 	// The ancestry walk is cached because three guarded blocks below may
 	// all need it (kitty TermProgram override, hardened-runtime TermProgram
 	// fallback, kitty field back-fill). Walking the ppid chain once instead
