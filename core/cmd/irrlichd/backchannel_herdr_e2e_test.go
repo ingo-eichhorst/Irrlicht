@@ -180,6 +180,15 @@ func TestBackchannelHerdrE2E(t *testing.T) {
 	}
 	assertHerdrPaneContains(t, socket, paneID, "HERDR_OK")
 
+	// Note on what this e2e does NOT cover: the submit path's real hazard is
+	// that a CR carried inside `pane send-text` stops submitting once the text
+	// wraps in an *agent's* composer, which is why herdrInput uses `pane run`.
+	// `cat` cannot exhibit that — it has no line editor, so a CR always ends a
+	// line and the e2e passes either way (verified by reverting the fix). The
+	// lock for that behaviour is TestCommandBuilders' "herdr submitting input
+	// becomes pane run", which does fail on revert; the live confirmation
+	// against a real Claude Code TUI is recorded in #1349.
+
 	// Read path: the daemon's own Reader must see the same screen.
 	screen, err := reader.CaptureScreen("hrd")
 	if err != nil {

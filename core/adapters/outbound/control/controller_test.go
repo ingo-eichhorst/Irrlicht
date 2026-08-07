@@ -103,11 +103,28 @@ func TestCommandBuilders(t *testing.T) {
 			command{name: "kitten", args: []string{"@", "--to", "unix:/tmp/mykitty", "send-text", "--match", "id:12", "--", "\x03"}},
 		},
 		{
-			// No "--" before the text: herdr accepts a leading-dash positional
-			// as literal, so a terminator would be typed into the pane.
-			"herdr input",
+			// Submitting input becomes `pane run`, which is the only herdr
+			// verb that reliably submits: a CR carried inside send-text is
+			// swallowed as a newline once the text wraps in the agent's
+			// composer. No "--" before the text either — herdr accepts a
+			// leading-dash positional as literal, so a terminator would be
+			// typed into the pane.
+			"herdr submitting input becomes pane run",
 			herdrInput(herdrL, []byte("ls\r")),
-			command{name: "herdr", args: []string{"pane", "send-text", "w1:p1", "ls\r"}, env: []string{"HERDR_SOCKET_PATH=/tmp/herdr/h.sock"}},
+			command{name: "herdr", args: []string{"pane", "run", "w1:p1", "ls"}, env: []string{"HERDR_SOCKET_PATH=/tmp/herdr/h.sock"}},
+		},
+		{
+			// Without a trailing CR the caller wants keystrokes, not a
+			// submit — that must stay send-text.
+			"herdr non-submitting input stays send-text",
+			herdrInput(herdrL, []byte("partial")),
+			command{name: "herdr", args: []string{"pane", "send-text", "w1:p1", "partial"}, env: []string{"HERDR_SOCKET_PATH=/tmp/herdr/h.sock"}},
+		},
+		{
+			// Only the trailing CR is consumed; embedded ones are text.
+			"herdr keeps embedded CRs",
+			herdrInput(herdrL, []byte("a\rb\r")),
+			command{name: "herdr", args: []string{"pane", "run", "w1:p1", "a\rb"}, env: []string{"HERDR_SOCKET_PATH=/tmp/herdr/h.sock"}},
 		},
 		{
 			"herdr interrupt",
@@ -167,6 +184,9 @@ func TestControllerDelegatesToHerdr(t *testing.T) {
 	if ran.name != "herdr" || ran.args[len(ran.args)-1] != "x" {
 		t.Errorf("SendInput: got %s %q", ran.name, ran.args)
 	}
+	if ran.args[1] != "send-text" {
+		t.Errorf("SendInput without a CR must not submit, got verb %q", ran.args[1])
+	}
 	if !reflect.DeepEqual(ran.env, []string{"HERDR_SOCKET_PATH=/tmp/h.sock"}) {
 		t.Errorf("SendInput: socket not passed to the child, env=%q", ran.env)
 	}
@@ -174,8 +194,11 @@ func TestControllerDelegatesToHerdr(t *testing.T) {
 	if err := c.SendCommand("abc", "/compact"); err != nil {
 		t.Fatalf("SendCommand: %v", err)
 	}
-	if got := ran.args[len(ran.args)-1]; got != "/compact\r" {
-		t.Errorf("SendCommand: want submitted %q, got %q", "/compact\r", got)
+	if got := ran.args[len(ran.args)-1]; got != "/compact" {
+		t.Errorf("SendCommand: want %q, got %q", "/compact", got)
+	}
+	if ran.args[1] != "run" {
+		t.Errorf("SendCommand must submit via pane run, got verb %q", ran.args[1])
 	}
 
 	if err := c.Interrupt("abc"); err != nil {

@@ -15,6 +15,7 @@ package control
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"irrlicht/core/domain/session"
@@ -276,14 +277,30 @@ func kittyInterrupt(l *session.Launcher) command {
 	}}
 }
 
-// herdrInput builds the send-text command that types data into the pane. A
-// trailing CR (0x0d) in data submits, exactly as it does for tmux send-keys -l
-// (verified against herdr 0.8.0).
+// herdrInput builds the command that types data into the pane, honouring the
+// backchannel's cross-backend contract that a trailing CR submits.
 //
-// Deliberately no `--` before the text, unlike the tmux and kitty builders:
-// herdr's CLI accepts a leading-dash positional as literal text, so a `--`
-// would itself be typed into the pane rather than ending option parsing.
+// A CR cannot simply ride along in the text the way it does for tmux
+// send-keys -l. Verified against herdr 0.8.0 driving a real Claude Code TUI:
+// `pane send-text "…\r"` submits only while the text fits one rendered line —
+// as soon as it wraps, the CR lands as a newline inside the composer and the
+// prompt sits there unsent. A 6-character prompt submitted; a 71-character one
+// did not, and needed a separate key press to go. herdr's own `pane run` is
+// documented as "sends text and Enter in one call" and submitted every length
+// tried, so it is what the submitting path uses.
+//
+// Deliberately no `--` before the text in either form, unlike the tmux and
+// kitty builders: herdr's CLI takes a leading-dash positional as literal text
+// (confirmed end to end — the agent received "--not-a-flag" as prose), so a
+// `--` would itself be typed into the pane rather than ending option parsing.
 func herdrInput(l *session.Launcher, data []byte) command {
+	if text, ok := strings.CutSuffix(string(data), submitCR); ok {
+		return command{
+			name: "herdr",
+			args: []string{"pane", "run", l.HerdrPaneID, text},
+			env:  herdrEnv(l),
+		}
+	}
 	return command{
 		name: "herdr",
 		args: []string{"pane", "send-text", l.HerdrPaneID, string(data)},
