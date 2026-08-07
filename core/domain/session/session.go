@@ -74,11 +74,16 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 // and carries it here.
 //
 // The Herdr* fields are the one case where the other fields are not merely
-// best-effort but actively wrong, so they are captured to the exclusion of
-// everything else: herdr's server owns each pane's pty and is long-lived and
-// detached, so every terminal-identity var a pane inherits ($TERM_PROGRAM,
-// $TMUX, $KITTY_*, $VSCODE_PID) describes whatever environment the *server*
-// was started in, not the pane. See processlifecycle.launcherFromEnv (#1348).
+// best-effort but actively wrong, so a herdr pane is captured with those two
+// alone and every other field left zero. herdr's server owns each pane's pty,
+// outlives any attached client and is reparented to init, so every
+// terminal-identity var a pane inherits — $TERM_PROGRAM, $TMUX, $TMUX_PANE,
+// $KITTY_*, $VSCODE_PID — describes whatever environment the *server* was
+// started in, frozen at that moment and handed to every pane it will ever
+// spawn. Capturing them verbatim sent click-to-focus to an unrelated
+// application, and, for a server started inside tmux, made the backchannel
+// resolve to tmux and type into a foreign pane in a different window. This is
+// the rationale the capture and control paths refer back to (#1348).
 type Launcher struct {
 	TermProgram    string `json:"term_program,omitempty"`     // $TERM_PROGRAM (e.g. iTerm.app, Apple_Terminal, vscode, cursor, ghostty, WezTerm, Hyper)
 	ITermSessionID string `json:"iterm_session_id,omitempty"` // $ITERM_SESSION_ID

@@ -44,16 +44,11 @@ func (r *Reader) CaptureScreen(sessionID string) ([]byte, error) {
 		return nil, fmt.Errorf("control: load session %s: %w", sessionID, err)
 	}
 	l := state.Launcher
-	switch resolveBackend(l) {
-	case backendHerdr:
-		return r.run(herdrCapture(l))
-	case backendTmux:
-		return r.run(tmuxCapture(l))
-	case backendKitty:
-		return r.run(kittyCapture(l))
-	default:
+	be, ok := cliBackends[resolveBackend(l)]
+	if !ok {
 		return nil, outbound.ErrNotReadable
 	}
+	return r.run(be.capture(l))
 }
 
 func (r *Reader) run(cmd command) ([]byte, error) {

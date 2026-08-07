@@ -4,8 +4,9 @@
 // The daemon never owns the agent process — it targets the backend using the
 // session's already-captured session.Launcher (populated by the Focus feature).
 //
-// Phase 1 covers the CLI backends that need no GUI/TCC and work headless and
-// over the relay: tmux (send-keys) and kitty (kitten @ send-text). AppleScript
+// The CLI backends need no GUI/TCC and work headless and over the relay:
+// herdr (pane send-text), tmux (send-keys) and kitty (kitten @ send-text) —
+// see cliBackends, which is the set of them. AppleScript
 // backends (iTerm2/Terminal.app) are reached via a push to the macOS app, which
 // holds the Automation TCC grant — wired with the macOS UI work; until then a
 // session hosted only by such a backend reports not-controllable.
@@ -52,24 +53,7 @@ func NewController(repo outbound.SessionRepository, push outbound.PushBroadcaste
 
 // SendInput injects data into the session's terminal as if typed.
 func (c *Controller) SendInput(sessionID string, data []byte) error {
-	state, err := c.loadState(sessionID)
-	if err != nil {
-		return err
-	}
-	l := state.Launcher
-	switch resolveBackend(l) {
-	case backendHerdr:
-		return c.exec(herdrInput(l, data))
-	case backendTmux:
-		return c.exec(tmuxInput(l, data))
-	case backendKitty:
-		return c.exec(kittyInput(l, data))
-	case backendAppleScript:
-		c.broadcastInput(state, outbound.InputActionInput, string(data))
-		return nil
-	default:
-		return fmt.Errorf("control: session %s has no controllable backend", sessionID)
-	}
+	return c.write(sessionID, data, string(data))
 }
 
 // submitCR is the carriage return that submits a line on the CLI backends.
@@ -82,24 +66,28 @@ const submitCR = "\r"
 // the bare command, since the macOS app's write-text/do-script auto-submits
 // (and strips any trailing newline) — appending a CR there would double-submit.
 func (c *Controller) SendCommand(sessionID, command string) error {
+	return c.write(sessionID, []byte(command+submitCR), command)
+}
+
+// write is the shared dispatch for both typed-input entry points. cli is the
+// byte sequence handed to a scripted backend — already carrying its submit CR
+// when the caller wants one — and script is the text broadcast to the macOS
+// app for the AppleScript hosts, which auto-submit and so must not receive it.
+func (c *Controller) write(sessionID string, cli []byte, script string) error {
 	state, err := c.loadState(sessionID)
 	if err != nil {
 		return err
 	}
 	l := state.Launcher
-	switch resolveBackend(l) {
-	case backendHerdr:
-		return c.exec(herdrInput(l, []byte(command+submitCR)))
-	case backendTmux:
-		return c.exec(tmuxInput(l, []byte(command+submitCR)))
-	case backendKitty:
-		return c.exec(kittyInput(l, []byte(command+submitCR)))
-	case backendAppleScript:
-		c.broadcastInput(state, outbound.InputActionInput, command)
-		return nil
-	default:
-		return fmt.Errorf("control: session %s has no controllable backend", sessionID)
+	b := resolveBackend(l)
+	if be, ok := cliBackends[b]; ok {
+		return c.exec(be.input(l, cli))
 	}
+	if b == backendAppleScript {
+		c.broadcastInput(state, outbound.InputActionInput, script)
+		return nil
+	}
+	return noBackendErr(sessionID)
 }
 
 // Interrupt delivers an interrupt (Ctrl-C) to the session.
@@ -109,19 +97,19 @@ func (c *Controller) Interrupt(sessionID string) error {
 		return err
 	}
 	l := state.Launcher
-	switch resolveBackend(l) {
-	case backendHerdr:
-		return c.exec(herdrInterrupt(l))
-	case backendTmux:
-		return c.exec(tmuxInterrupt(l))
-	case backendKitty:
-		return c.exec(kittyInterrupt(l))
-	case backendAppleScript:
+	b := resolveBackend(l)
+	if be, ok := cliBackends[b]; ok {
+		return c.exec(be.interrupt(l))
+	}
+	if b == backendAppleScript {
 		c.broadcastInput(state, outbound.InputActionInterrupt, "")
 		return nil
-	default:
-		return fmt.Errorf("control: session %s has no controllable backend", sessionID)
 	}
+	return noBackendErr(sessionID)
+}
+
+func noBackendErr(sessionID string) error {
+	return fmt.Errorf("control: session %s has no controllable backend", sessionID)
 }
 
 // Controllable reports whether the session has a usable backend target.
@@ -170,8 +158,6 @@ type backend int
 
 const (
 	backendNone backend = iota
-	// backendHerdr covers the herdr agent multiplexer. Ranked first — see
-	// resolveBackend.
 	backendHerdr
 	backendTmux
 	backendKitty
@@ -181,22 +167,33 @@ const (
 	backendAppleScript
 )
 
+// cliBackend groups the command builders for a backend the daemon scripts
+// directly. Membership of cliBackends is what makes a backend both
+// controllable and readable; the AppleScript hosts are deliberately absent,
+// because they are broadcast to the macOS app rather than exec'd, and that
+// asymmetry is the only real branch left in the dispatch.
+type cliBackend struct {
+	input     func(*session.Launcher, []byte) command
+	interrupt func(*session.Launcher) command
+	capture   func(*session.Launcher) command
+}
+
+var cliBackends = map[backend]cliBackend{
+	backendHerdr: {herdrInput, herdrInterrupt, herdrCapture},
+	backendTmux:  {tmuxInput, tmuxInterrupt, tmuxCapture},
+	backendKitty: {kittyInput, kittyInterrupt, kittyCapture},
+}
+
 // resolveBackend picks the backend to script for a launcher. herdr wins
 // outright when a pane is known; then tmux (TCC-free, relay-reachable); then
 // kitty (its remote-control socket + window id); then the AppleScript hosts,
 // which the daemon delegates to the macOS app. A session in tmux *inside*
 // iTerm resolves to tmux, because tmux owns the pty.
 //
-// herdr outranks even tmux, which looks like a violation of that
-// innermost-owns-the-pty rule but follows from how the launcher is built:
-// processlifecycle.ReadLauncherEnv sets HerdrPaneID *instead of* every other
-// identity field — both the env-derived ones and the ancestry-derived ones —
-// precisely because the rest describe the herdr server's environment rather
-// than this pane's. So the two can't legitimately compete; the ordering here
-// decides only what happens if some future capture path populates both, and
-// preferring the stale one would mean typing into an unrelated window, while
-// preferring herdr merely lands input in the correct window's active pane
-// (#1348).
+// herdr is checked before tmux despite that innermost-owns-the-pty rule: the
+// fields are mutually exclusive by construction, since ReadLauncherEnv gives a
+// herdr pane no other identity, so the order only matters as a safe default if
+// some future capture path populates both (#1348).
 func resolveBackend(l *session.Launcher) backend {
 	if l == nil {
 		return backendNone
@@ -310,9 +307,6 @@ func herdrInterrupt(l *session.Launcher) command {
 // socket flag (`--session <name>` needs a name the default session doesn't
 // have), and $HERDR_SOCKET_PATH is the documented override — verified to
 // address a specific server on its own, as `tmux -S <socket>` does.
-//
-// resolveBackend guarantees a non-empty socket before any herdr command is
-// built, so this never silently falls back to the daemon's own environment.
 func herdrEnv(l *session.Launcher) []string {
 	return []string{"HERDR_SOCKET_PATH=" + l.HerdrSocketPath}
 }

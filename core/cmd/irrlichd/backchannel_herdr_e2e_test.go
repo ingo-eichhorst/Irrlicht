@@ -39,17 +39,15 @@ import (
 //
 // Skips when herdr is unavailable.
 
-func herdrOK(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("herdr"); err != nil {
-		t.Skip("herdr not installed; skipping herdr backchannel e2e")
-	}
-}
+func herdrOK(t *testing.T) { requireBinary(t, "herdr") }
 
 // herdrCLI invokes the herdr CLI, optionally against a specific server socket.
+// The 3s ceiling matches the tmux e2e's: a herdr fork answers in single-digit
+// milliseconds, and a longer one would let a single hung call swallow the
+// whole socket-discovery budget below.
 func herdrCLI(t *testing.T, socket string, args ...string) ([]byte, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "herdr", args...)
 	if socket != "" {
@@ -110,13 +108,10 @@ func startHerdrCatPane(t *testing.T) (paneID, socket string) {
 	})
 
 	// The server publishes its socket asynchronously; poll until it answers.
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
-		if socket = herdrSocketOf(t, name); socket != "" {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if socket == "" {
+	if !pollUntil(t, 10*time.Second, 100*time.Millisecond, func() bool {
+		socket = herdrSocketOf(t, name)
+		return socket != ""
+	}) {
 		t.Skip("herdr server did not become reachable; skipping")
 	}
 
@@ -153,26 +148,17 @@ func startHerdrCatPane(t *testing.T) (paneID, socket string) {
 // addressing the production builders use.
 func assertHerdrPaneContains(t *testing.T, socket, paneID, want string) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+	assertPaneShows(t, want, func() []byte {
 		out, _ := herdrCLI(t, socket, "pane", "read", paneID, "--source", "visible", "--format", "text")
-		if strings.Contains(string(out), want) {
-			return
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	t.Fatalf("herdr pane never showed %q", want)
+		return out
+	})
 }
 
 func newHerdrE2EStack(paneID, socket string) (*services.InputService, *control.Reader) {
-	repo := &e2eRepo{state: &session.SessionState{
-		SessionID: "hrd",
-		Adapter:   "claude-code",
-		State:     session.StateWorking,
-		Launcher:  &session.Launcher{HerdrPaneID: paneID, HerdrSocketPath: socket},
-	}}
-	ctrl := control.NewController(repo, e2ePush{}, e2eLog{})
-	in := services.NewInputService(repo, ctrl, allowConsent{}, func() bool { return true }, e2eLog{})
-	return in, control.NewReader(repo, e2eLog{})
+	in, _, reader := newE2EStack("hrd", &session.Launcher{
+		HerdrPaneID: paneID, HerdrSocketPath: socket,
+	})
+	return in, reader
 }
 
 // TestBackchannelHerdrE2E drives a real herdr pane through the local stack and

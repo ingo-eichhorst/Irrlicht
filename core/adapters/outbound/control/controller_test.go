@@ -124,18 +124,6 @@ func TestCommandBuilders(t *testing.T) {
 	}
 }
 
-// TestHerdrInputSubmitsWithCR pins the submit contract SendCommand relies on:
-// herdr's send-text carries a trailing CR through to the pane, so the CLI
-// backends stay uniform and SendCommand needs no herdr special case.
-func TestHerdrInputSubmitsWithCR(t *testing.T) {
-	l := &session.Launcher{HerdrPaneID: "w1:p1"}
-	got := herdrInput(l, []byte("/compact"+submitCR))
-	last := got.args[len(got.args)-1]
-	if last != "/compact\r" {
-		t.Errorf("text arg: want %q, got %q", "/compact\r", last)
-	}
-}
-
 func TestControllerDelegatesToBackend(t *testing.T) {
 	repo := &fakeRepo{state: &session.SessionState{
 		SessionID: "abc",

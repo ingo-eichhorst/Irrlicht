@@ -60,10 +60,26 @@ func (e2eLog) LogError(_, _, _ string)                                 {}
 func (e2eLog) LogProcessingTime(_, _ string, _ int64, _ int, _ string) {}
 func (e2eLog) Close() error                                            { return nil }
 
-func tmuxOK(t *testing.T) {
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not installed; skipping backchannel e2e")
+// requireBinary skips the test when the named backend CLI is not installed.
+func requireBinary(t *testing.T, name string) {
+	t.Helper()
+	if _, err := exec.LookPath(name); err != nil {
+		t.Skipf("%s not installed; skipping backchannel e2e", name)
 	}
+}
+
+func tmuxOK(t *testing.T) { requireBinary(t, "tmux") }
+
+// pollUntil calls cond until it returns true or the timeout elapses.
+func pollUntil(t *testing.T, timeout, every time.Duration, cond func() bool) bool {
+	t.Helper()
+	for deadline := time.Now().Add(timeout); time.Now().Before(deadline); {
+		if cond() {
+			return true
+		}
+		time.Sleep(every)
+	}
+	return false
 }
 
 // startCatPane launches `cat` (a deterministic echo "agent") in a private tmux
@@ -90,39 +106,52 @@ func startCatPane(t *testing.T) (paneID, socket string) {
 	return strings.TrimSpace(string(out)), socket
 }
 
-// assertPaneContains polls capture-pane until want appears or the deadline hits.
-func assertPaneContains(t *testing.T, socket, paneID, want string) {
+// assertPaneShows polls a backend's screen capture until want appears. The
+// capture is a closure so the tmux and herdr e2es share the wait, not the argv.
+func assertPaneShows(t *testing.T, want string, capture func() []byte) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		out, _ := exec.CommandContext(ctx, "tmux", "-S", socket, "capture-pane", "-t", paneID, "-p").CombinedOutput()
-		cancel()
-		if strings.Contains(string(out), want) {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	if !pollUntil(t, 5*time.Second, 100*time.Millisecond, func() bool {
+		return strings.Contains(string(capture()), want)
+	}) {
+		t.Fatalf("pane never showed %q", want)
 	}
-	t.Fatalf("pane never showed %q", want)
 }
 
-func newE2EStack(paneID, socket string) (*services.InputService, *control.Controller) {
+// assertPaneContains polls tmux capture-pane until want appears.
+func assertPaneContains(t *testing.T, socket, paneID, want string) {
+	t.Helper()
+	assertPaneShows(t, want, func() []byte {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		out, _ := exec.CommandContext(ctx, "tmux", "-S", socket, "capture-pane", "-t", paneID, "-p").CombinedOutput()
+		return out
+	})
+}
+
+// newE2EStack wires the real control stack over a single-session fake repo.
+// Parameterized by launcher so each backend's e2e shares it.
+func newE2EStack(id string, l *session.Launcher) (*services.InputService, *control.Controller, *control.Reader) {
 	repo := &e2eRepo{state: &session.SessionState{
-		SessionID: "e2e",
+		SessionID: id,
 		Adapter:   "claude-code",
 		State:     session.StateWorking,
-		Launcher:  &session.Launcher{TmuxPane: paneID, TmuxSocket: socket},
+		Launcher:  l,
 	}}
 	ctrl := control.NewController(repo, e2ePush{}, e2eLog{})
 	in := services.NewInputService(repo, ctrl, allowConsent{}, func() bool { return true }, e2eLog{})
-	return in, ctrl
+	return in, ctrl, control.NewReader(repo, e2eLog{})
+}
+
+// newTmuxE2EStack is the tmux-hosted shorthand.
+func newTmuxE2EStack(paneID, socket string) (*services.InputService, *control.Controller, *control.Reader) {
+	return newE2EStack("e2e", &session.Launcher{TmuxPane: paneID, TmuxSocket: socket})
 }
 
 // TestBackchannelE2E_Local drives a real tmux pane through the local stack.
 func TestBackchannelE2E_Local(t *testing.T) {
 	tmuxOK(t)
 	paneID, socket := startCatPane(t)
-	in, _ := newE2EStack(paneID, socket)
+	in, _, _ := newTmuxE2EStack(paneID, socket)
 
 	if !in.Controllable("e2e") {
 		t.Fatal("tmux-hosted session should be controllable")
@@ -144,7 +173,7 @@ func TestBackchannelE2E_Local(t *testing.T) {
 func TestBackchannelE2E_Remote(t *testing.T) {
 	tmuxOK(t)
 	paneID, socket := startCatPane(t)
-	in, _ := newE2EStack(paneID, socket)
+	in, _, _ := newTmuxE2EStack(paneID, socket)
 
 	// Stand-in relay: accept the daemon hello, ack it, then push one control
 	// frame — exactly what the real hub's routeControl would deliver.

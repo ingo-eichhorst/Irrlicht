@@ -60,31 +60,22 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 
 	l := launcherFromEnv(env)
 
-	// A herdr pane is addressed by its own id and nothing else, so the
-	// ancestry fallbacks are skipped wholesale rather than merged in. They
-	// resolve the *host application* of the process tree, and for a herdr
-	// pane that tree leads to the herdr server — a different terminal from
-	// the one the pane is displayed in, and often no terminal at all once the
-	// server detaches. Letting them run would put the launcher back into the
-	// mixed state the early return in launcherFromEnv exists to prevent: a
-	// server started in the foreground from kitty would hand every pane
-	// TermProgram=kitty plus a kitty socket and window id via the backfill
-	// below, which is exactly the misroute this fixes (#1348).
+	// The ancestry fallbacks resolve the *host application* of the process
+	// tree, so they are skipped for a herdr pane: that tree leads to the herdr
+	// server, which is a different terminal from the one the pane is displayed
+	// in — and often no terminal at all, once the server detaches. Running
+	// them would undo launcherFromEnv's suppression by another route (a server
+	// started in the foreground from kitty would give every pane
+	// TermProgram=kitty plus a backfilled kitty socket and window id).
 	//
-	// TTY is still captured: unlike the identity fields it is a fact about
-	// this process (its herdr-owned pty), and BackgroundAgent.Detached reads it.
-	if l.HerdrPaneID != "" {
-		l.TTY = processTTY(pid)
-		return l
+	// The ancestry walk is cached because three guarded blocks may all need it
+	// (kitty TermProgram override, hardened-runtime TermProgram fallback,
+	// kitty field back-fill). Walking the ppid chain once instead of up to
+	// three times keeps ReadLauncherEnv bounded — each readProcInfo is a `ps`
+	// shellout with a 2s ceiling.
+	if l.HerdrPaneID == "" {
+		applyAncestryFallbacks(l, pid, memoizedAncestry(pid))
 	}
-
-	// The ancestry walk is cached because three guarded blocks below may
-	// all need it (kitty TermProgram override, hardened-runtime TermProgram
-	// fallback, kitty field back-fill). Walking the ppid chain once instead
-	// of up to three times keeps ReadLauncherEnv bounded — each readProcInfo
-	// is a `ps` shellout with a 2s ceiling.
-	ancestry := memoizedAncestry(pid)
-	applyAncestryFallbacks(l, pid, ancestry)
 
 	// Capture the controlling TTY so Terminal.app (and potentially others)
 	// can target the exact tab — Terminal.app's AppleScript dictionary
@@ -102,19 +93,11 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 // VS Code / JetBrains inference) can be reasoned about independently of the
 // ancestry-walk fallbacks.
 func launcherFromEnv(env map[string]string) *session.Launcher {
-	// Inside a herdr pane, the pane's own address is the *only* trustworthy
-	// signal in the environment, so it is taken to the exclusion of every
-	// other var rather than merged with them. herdr's server owns the pty,
-	// outlives any client, and is reparented to init, so everything a pane
-	// inherits ($TERM_PROGRAM, $TMUX, $KITTY_*, $VSCODE_PID) describes the
-	// environment the *server* was started in — frozen at that moment and
-	// handed to every pane it will ever spawn.
-	//
-	// Merging would be actively harmful, not merely imprecise: a server
-	// started from a tmux pane leaks $TMUX/$TMUX_PANE, resolveBackend would
-	// rank that above herdr, and the backchannel would type into an unrelated
-	// pane in a different window. Returning early also means a terminal
-	// identity var added here later cannot silently start leaking (#1348).
+	// A herdr pane carries only its own address — see session.Launcher's
+	// Herdr* fields for why everything else in that environment is a stale
+	// description of the herdr server's. Returning early rather than clearing
+	// fields one by one means an identity var added below later cannot
+	// silently start leaking into herdr sessions (#1348).
 	if pane := env["HERDR_PANE_ID"]; pane != "" {
 		return &session.Launcher{
 			HerdrPaneID:     pane,
