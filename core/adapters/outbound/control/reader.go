@@ -103,9 +103,5 @@ func kittyCapture(l *session.Launcher) command {
 // capture-pane), and `--format text` asks for the plain rendering rather than
 // the ANSI one, so herdr does the VT emulation for us.
 func herdrCapture(l *session.Launcher) command {
-	return command{
-		name: "herdr",
-		args: []string{"pane", "read", l.HerdrPaneID, "--source", "visible", "--format", "text"},
-		env:  herdrEnv(l),
-	}
+	return herdrCmd(l, "pane", "read", l.HerdrPaneID, "--source", "visible", "--format", "text")
 }

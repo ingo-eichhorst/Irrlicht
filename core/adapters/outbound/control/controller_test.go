@@ -71,6 +71,10 @@ func TestCommandBuilders(t *testing.T) {
 	tmuxNoSock := &session.Launcher{TmuxPane: "%7"}
 	kittyL := &session.Launcher{KittyListenOn: "unix:/tmp/mykitty", KittyWindowID: "12"}
 	herdrL := &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/herdr/h.sock"}
+	// wantHerdr keeps the repeated {name, env} boilerplate out of the table.
+	wantHerdr := func(args ...string) command {
+		return command{name: "herdr", args: args, env: []string{"HERDR_SOCKET_PATH=/tmp/herdr/h.sock"}}
+	}
 
 	cases := []struct {
 		name string
@@ -111,25 +115,25 @@ func TestCommandBuilders(t *testing.T) {
 			// typed into the pane.
 			"herdr submitting input becomes pane run",
 			herdrInput(herdrL, []byte("ls\r")),
-			command{name: "herdr", args: []string{"pane", "run", "w1:p1", "ls"}, env: []string{"HERDR_SOCKET_PATH=/tmp/herdr/h.sock"}},
+			wantHerdr("pane", "run", "w1:p1", "ls"),
 		},
 		{
 			// Without a trailing CR the caller wants keystrokes, not a
 			// submit — that must stay send-text.
 			"herdr non-submitting input stays send-text",
 			herdrInput(herdrL, []byte("partial")),
-			command{name: "herdr", args: []string{"pane", "send-text", "w1:p1", "partial"}, env: []string{"HERDR_SOCKET_PATH=/tmp/herdr/h.sock"}},
+			wantHerdr("pane", "send-text", "w1:p1", "partial"),
 		},
 		{
 			// Only the trailing CR is consumed; embedded ones are text.
 			"herdr keeps embedded CRs",
 			herdrInput(herdrL, []byte("a\rb\r")),
-			command{name: "herdr", args: []string{"pane", "run", "w1:p1", "a\rb"}, env: []string{"HERDR_SOCKET_PATH=/tmp/herdr/h.sock"}},
+			wantHerdr("pane", "run", "w1:p1", "a\rb"),
 		},
 		{
 			"herdr interrupt",
 			herdrInterrupt(herdrL),
-			command{name: "herdr", args: []string{"pane", "send-keys", "w1:p1", "C-c"}, env: []string{"HERDR_SOCKET_PATH=/tmp/herdr/h.sock"}},
+			wantHerdr("pane", "send-keys", "w1:p1", "C-c"),
 		},
 	}
 	for _, c := range cases {

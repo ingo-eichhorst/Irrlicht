@@ -294,29 +294,23 @@ func kittyInterrupt(l *session.Launcher) command {
 // (confirmed end to end — the agent received "--not-a-flag" as prose), so a
 // `--` would itself be typed into the pane rather than ending option parsing.
 func herdrInput(l *session.Launcher, data []byte) command {
-	if text, ok := strings.CutSuffix(string(data), submitCR); ok {
-		return command{
-			name: "herdr",
-			args: []string{"pane", "run", l.HerdrPaneID, text},
-			env:  herdrEnv(l),
-		}
+	verb, text := "send-text", string(data)
+	if stripped, ok := strings.CutSuffix(text, submitCR); ok {
+		verb, text = "run", stripped
 	}
-	return command{
-		name: "herdr",
-		args: []string{"pane", "send-text", l.HerdrPaneID, string(data)},
-		env:  herdrEnv(l),
-	}
+	return herdrCmd(l, "pane", verb, l.HerdrPaneID, text)
+}
+
+// herdrCmd builds a herdr CLI invocation addressed at the session's server.
+func herdrCmd(l *session.Launcher, args ...string) command {
+	return command{name: "herdr", args: args, env: herdrEnv(l)}
 }
 
 // herdrInterrupt sends the C-c key (interpreted, not literal) to the pane.
 // herdr rejects the `ctrl-c` spelling with `unsupported key`; `C-c` is the
 // accepted form and matches tmux's.
 func herdrInterrupt(l *session.Launcher) command {
-	return command{
-		name: "herdr",
-		args: []string{"pane", "send-keys", l.HerdrPaneID, "C-c"},
-		env:  herdrEnv(l),
-	}
+	return herdrCmd(l, "pane", "send-keys", l.HerdrPaneID, "C-c")
 }
 
 // herdrEnv targets the session's herdr server. This is the one backend whose
