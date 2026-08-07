@@ -277,6 +277,117 @@ func TestReadLauncherEnv_Subprocess_Tmux(t *testing.T) {
 	}
 }
 
+// herdrPaneEnv is the env a process sees inside a herdr pane whose server was
+// itself started from a tmux pane in a VS Code terminal that had once been a
+// kitty window. Every non-HERDR_ var here is real, inherited, and wrong: herdr's
+// server is long-lived and detached (PPID 1), so it hands its own launch-time
+// environment to every pane it will ever spawn. Values match a live capture from
+// herdr 0.8.0 (#1348).
+var herdrPaneEnv = map[string]string{
+	"HERDR_PANE_ID":     "w1:p1",
+	"HERDR_SOCKET_PATH": "/Users/test/.config/herdr/sessions/probe/herdr.sock",
+	"TERM_PROGRAM":      "tmux",
+	"TMUX":              "/tmp/irrprobe-tmux,95058,0",
+	"TMUX_PANE":         "%0",
+	"KITTY_LISTEN_ON":   "unix:/tmp/fake-kitty",
+	"KITTY_WINDOW_ID":   "42",
+	"VSCODE_PID":        "99999",
+}
+
+// TestLauncherFromEnv_HerdrSuppressesInheritedIdentity pins the defect: without
+// suppression, resolveBackend sees TmuxPane/%0 on a foreign socket and injects
+// input into an unrelated pane in a different window — strictly worse than
+// reporting the session uncontrollable.
+func TestLauncherFromEnv_HerdrSuppressesInheritedIdentity(t *testing.T) {
+	l := launcherFromEnv(herdrPaneEnv)
+	if l.TermProgram != "" {
+		t.Errorf("TermProgram: inherited value must not survive, got %q", l.TermProgram)
+	}
+	if l.TmuxPane != "" || l.TmuxSocket != "" {
+		t.Errorf("tmux identity must not survive, got pane=%q socket=%q", l.TmuxPane, l.TmuxSocket)
+	}
+	if l.KittyListenOn != "" || l.KittyWindowID != "" {
+		t.Errorf("kitty identity must not survive, got listen=%q window=%q", l.KittyListenOn, l.KittyWindowID)
+	}
+	if l.VSCodePID != 0 {
+		t.Errorf("VSCodePID: inherited value must not survive, got %d", l.VSCodePID)
+	}
+}
+
+// TestLauncherFromEnv_HerdrCapture covers the other half: the pane's own
+// identity, which is the only thing in that env that actually describes it.
+func TestLauncherFromEnv_HerdrCapture(t *testing.T) {
+	l := launcherFromEnv(herdrPaneEnv)
+	if l.HerdrPaneID != "w1:p1" {
+		t.Errorf("HerdrPaneID: want w1:p1, got %q", l.HerdrPaneID)
+	}
+	want := "/Users/test/.config/herdr/sessions/probe/herdr.sock"
+	if l.HerdrSocketPath != want {
+		t.Errorf("HerdrSocketPath: want %q, got %q", want, l.HerdrSocketPath)
+	}
+	if l.IsEmpty() {
+		t.Error("a herdr-only launcher must not be reported empty")
+	}
+}
+
+// TestLauncherFromEnv_HerdrSuppressionIsScoped guards the blast radius: the
+// suppression must key off an actual herdr pane, never fire on a plain tmux
+// session. This one is a lock — it passes before the change and must keep
+// passing after.
+func TestLauncherFromEnv_HerdrSuppressionIsScoped(t *testing.T) {
+	l := launcherFromEnv(map[string]string{
+		"TERM_PROGRAM": "tmux",
+		"TMUX":         "/private/tmp/tmux-501/default,1234,0",
+		"TMUX_PANE":    "%17",
+	})
+	if l.TmuxPane != "%17" || l.TmuxSocket != "/private/tmp/tmux-501/default" {
+		t.Errorf("non-herdr tmux identity must be preserved, got %+v", l)
+	}
+}
+
+// TestReadLauncherEnv_Subprocess_Herdr exercises the real sysctl / /proc read
+// path end to end, mirroring the tmux subprocess test above.
+func TestReadLauncherEnv_Subprocess_Herdr(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip()
+	}
+	pid := spawnSleeperWithEnv(t, []string{
+		"PATH=/usr/bin:/bin",
+		"TERM_PROGRAM=tmux",
+		"TMUX=/tmp/irrprobe-tmux,95058,0",
+		"TMUX_PANE=%0",
+		"HERDR_PANE_ID=w1:p1",
+		"HERDR_SOCKET_PATH=/tmp/herdr-probe.sock",
+	})
+	l := ReadLauncherEnv(pid)
+	if l == nil {
+		t.Fatal("expected non-nil launcher")
+	}
+	if l.HerdrPaneID != "w1:p1" {
+		t.Errorf("HerdrPaneID: got %q", l.HerdrPaneID)
+	}
+	if l.HerdrSocketPath != "/tmp/herdr-probe.sock" {
+		t.Errorf("HerdrSocketPath: got %q", l.HerdrSocketPath)
+	}
+	if l.TmuxPane != "" || l.TmuxSocket != "" {
+		t.Errorf("inherited tmux identity survived the real read path: %+v", l)
+	}
+	// The ancestry fallbacks must not put host identity back: the walk from a
+	// herdr pane leads to the herdr server, not to the terminal the pane is
+	// displayed in. (This test process is itself hosted by some terminal, so
+	// without the skip TermProgram/HostBundleID would be populated here.)
+	if l.TermProgram != "" || l.HostBundleID != "" {
+		t.Errorf("ancestry identity must not be merged into a herdr launcher: %+v", l)
+	}
+	if l.KittyListenOn != "" || l.KittyWindowID != "" || l.KittyPID != 0 {
+		t.Errorf("kitty backfill must not fire for a herdr pane: %+v", l)
+	}
+	// TTY is deliberately still captured — it describes this process's own pty.
+	if l.TTY == "" {
+		t.Log("TTY empty (subprocess may have no controlling terminal); not asserted")
+	}
+}
+
 // TestReadLauncherEnv_Subprocess_KittyOverridesInheritedTermProgram covers
 // the case where kitty was launched from a process whose env contained
 // TERM_PROGRAM=vscode (e.g. a VS Code integrated terminal). kitty itself

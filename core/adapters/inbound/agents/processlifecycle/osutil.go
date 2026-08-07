@@ -38,6 +38,8 @@ var launcherEnvKeys = map[string]struct{}{
 	"KITTY_LISTEN_ON":   {}, // kitty remote-control socket path (e.g. "unix:/tmp/kitty-NNN/sock")
 	"KITTY_WINDOW_ID":   {}, // kitty window ID for precise window targeting
 	"KITTY_PID":         {}, // kitty.app PID; lets the macOS activator target this specific kitty instance
+	"HERDR_PANE_ID":     {}, // herdr pane address (e.g. "w1:p2") — injected per pane, so unlike the vars above it always describes *this* pane
+	"HERDR_SOCKET_PATH": {}, // herdr server socket; the complete addressing key for that server
 }
 
 // ReadLauncherEnv returns the launcher identity captured from the process env
@@ -58,13 +60,22 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 
 	l := launcherFromEnv(env)
 
-	// The ancestry walk is cached because three guarded blocks below may
-	// all need it (kitty TermProgram override, hardened-runtime TermProgram
-	// fallback, kitty field back-fill). Walking the ppid chain once instead
-	// of up to three times keeps ReadLauncherEnv bounded — each readProcInfo
-	// is a `ps` shellout with a 2s ceiling.
-	ancestry := memoizedAncestry(pid)
-	applyAncestryFallbacks(l, pid, ancestry)
+	// The ancestry fallbacks resolve the *host application* of the process
+	// tree, so they are skipped for a herdr pane: that tree leads to the herdr
+	// server, which is a different terminal from the one the pane is displayed
+	// in — and often no terminal at all, once the server detaches. Running
+	// them would undo launcherFromEnv's suppression by another route (a server
+	// started in the foreground from kitty would give every pane
+	// TermProgram=kitty plus a backfilled kitty socket and window id).
+	//
+	// The ancestry walk is cached because three guarded blocks may all need it
+	// (kitty TermProgram override, hardened-runtime TermProgram fallback,
+	// kitty field back-fill). Walking the ppid chain once instead of up to
+	// three times keeps ReadLauncherEnv bounded — each readProcInfo is a `ps`
+	// shellout with a 2s ceiling.
+	if l.HerdrPaneID == "" {
+		applyAncestryFallbacks(l, pid, memoizedAncestry(pid))
+	}
 
 	// Capture the controlling TTY so Terminal.app (and potentially others)
 	// can target the exact tab — Terminal.app's AppleScript dictionary
@@ -82,6 +93,17 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 // VS Code / JetBrains inference) can be reasoned about independently of the
 // ancestry-walk fallbacks.
 func launcherFromEnv(env map[string]string) *session.Launcher {
+	// A herdr pane carries only its own address — see session.Launcher's
+	// Herdr* fields for why everything else in that environment is a stale
+	// description of the herdr server's. Returning early rather than clearing
+	// fields one by one means an identity var added below later cannot
+	// silently start leaking into herdr sessions (#1348).
+	if pane := env["HERDR_PANE_ID"]; pane != "" {
+		return &session.Launcher{
+			HerdrPaneID:     pane,
+			HerdrSocketPath: env["HERDR_SOCKET_PATH"],
+		}
+	}
 	l := &session.Launcher{
 		TermProgram:    env["TERM_PROGRAM"],
 		ITermSessionID: env["ITERM_SESSION_ID"],

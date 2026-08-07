@@ -39,6 +39,17 @@ func TestResolveBackend(t *testing.T) {
 		want backend
 	}{
 		{"nil", nil, backendNone},
+		{"herdr pane", &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/h.sock"}, backendHerdr},
+		// Without the socket we cannot tell one running server from another,
+		// and pane ids are not unique across servers — so refuse rather than
+		// guess. Mirrors "kitty missing window" below.
+		{"herdr missing socket", &session.Launcher{HerdrPaneID: "w1:p1"}, backendNone},
+		{"herdr missing pane", &session.Launcher{HerdrSocketPath: "/tmp/h.sock"}, backendNone},
+		// A launcher can only carry both if some future capture path merges
+		// them; launcherFromEnv never does. Pin the safe precedence anyway —
+		// the tmux identity would be the herdr server's, pointing at a
+		// different window entirely.
+		{"herdr wins over inherited tmux", &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/h.sock", TmuxPane: "%0", TmuxSocket: "/tmp/other"}, backendHerdr},
 		{"tmux pane", &session.Launcher{TmuxPane: "%3"}, backendTmux},
 		{"tmux wins over kitty", &session.Launcher{TmuxPane: "%3", KittyListenOn: "unix:/x", KittyWindowID: "12"}, backendTmux},
 		{"kitty both fields", &session.Launcher{KittyListenOn: "unix:/x", KittyWindowID: "12"}, backendKitty},
@@ -59,6 +70,11 @@ func TestCommandBuilders(t *testing.T) {
 	tmuxL := &session.Launcher{TmuxPane: "%3", TmuxSocket: "/tmp/tmux-501/default"}
 	tmuxNoSock := &session.Launcher{TmuxPane: "%7"}
 	kittyL := &session.Launcher{KittyListenOn: "unix:/tmp/mykitty", KittyWindowID: "12"}
+	herdrL := &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/herdr/h.sock"}
+	// wantHerdr keeps the repeated {name, env} boilerplate out of the table.
+	wantHerdr := func(args ...string) command {
+		return command{name: "herdr", args: args, env: []string{"HERDR_SOCKET_PATH=/tmp/herdr/h.sock"}}
+	}
 
 	cases := []struct {
 		name string
@@ -68,32 +84,63 @@ func TestCommandBuilders(t *testing.T) {
 		{
 			"tmux input with socket",
 			tmuxInput(tmuxL, []byte("hello\r")),
-			command{"tmux", []string{"-S", "/tmp/tmux-501/default", "send-keys", "-t", "%3", "-l", "--", "hello\r"}},
+			command{name: "tmux", args: []string{"-S", "/tmp/tmux-501/default", "send-keys", "-t", "%3", "-l", "--", "hello\r"}},
 		},
 		{
 			"tmux input no socket",
 			tmuxInput(tmuxNoSock, []byte("hi")),
-			command{"tmux", []string{"send-keys", "-t", "%7", "-l", "--", "hi"}},
+			command{name: "tmux", args: []string{"send-keys", "-t", "%7", "-l", "--", "hi"}},
 		},
 		{
 			"tmux interrupt",
 			tmuxInterrupt(tmuxL),
-			command{"tmux", []string{"-S", "/tmp/tmux-501/default", "send-keys", "-t", "%3", "C-c"}},
+			command{name: "tmux", args: []string{"-S", "/tmp/tmux-501/default", "send-keys", "-t", "%3", "C-c"}},
 		},
 		{
 			"kitty input",
 			kittyInput(kittyL, []byte("ls\r")),
-			command{"kitten", []string{"@", "--to", "unix:/tmp/mykitty", "send-text", "--match", "id:12", "--", "ls\r"}},
+			command{name: "kitten", args: []string{"@", "--to", "unix:/tmp/mykitty", "send-text", "--match", "id:12", "--", "ls\r"}},
 		},
 		{
 			"kitty interrupt",
 			kittyInterrupt(kittyL),
-			command{"kitten", []string{"@", "--to", "unix:/tmp/mykitty", "send-text", "--match", "id:12", "--", "\x03"}},
+			command{name: "kitten", args: []string{"@", "--to", "unix:/tmp/mykitty", "send-text", "--match", "id:12", "--", "\x03"}},
+		},
+		{
+			// Submitting input becomes `pane run`, which is the only herdr
+			// verb that reliably submits: a CR carried inside send-text is
+			// swallowed as a newline once the text wraps in the agent's
+			// composer. No "--" before the text either — herdr accepts a
+			// leading-dash positional as literal, so a terminator would be
+			// typed into the pane.
+			"herdr submitting input becomes pane run",
+			herdrInput(herdrL, []byte("ls\r")),
+			wantHerdr("pane", "run", "w1:p1", "ls"),
+		},
+		{
+			// Without a trailing CR the caller wants keystrokes, not a
+			// submit — that must stay send-text.
+			"herdr non-submitting input stays send-text",
+			herdrInput(herdrL, []byte("partial")),
+			wantHerdr("pane", "send-text", "w1:p1", "partial"),
+		},
+		{
+			// Only the trailing CR is consumed; embedded ones are text.
+			"herdr keeps embedded CRs",
+			herdrInput(herdrL, []byte("a\rb\r")),
+			wantHerdr("pane", "run", "w1:p1", "a\rb"),
+		},
+		{
+			"herdr interrupt",
+			herdrInterrupt(herdrL),
+			wantHerdr("pane", "send-keys", "w1:p1", "C-c"),
 		},
 	}
 	for _, c := range cases {
-		if c.got.name != c.want.name || !reflect.DeepEqual(c.got.args, c.want.args) {
-			t.Errorf("%s:\n got  %s %q\n want %s %q", c.name, c.got.name, c.got.args, c.want.name, c.want.args)
+		if c.got.name != c.want.name || !reflect.DeepEqual(c.got.args, c.want.args) ||
+			!reflect.DeepEqual(c.got.env, c.want.env) {
+			t.Errorf("%s:\n got  %s %q env=%q\n want %s %q env=%q",
+				c.name, c.got.name, c.got.args, c.got.env, c.want.name, c.want.args, c.want.env)
 		}
 	}
 }
@@ -115,6 +162,54 @@ func TestControllerDelegatesToBackend(t *testing.T) {
 	}
 	if ran.name != "tmux" || ran.args[len(ran.args)-1] != "x" {
 		t.Errorf("expected tmux send-keys with payload x, got %s %q", ran.name, ran.args)
+	}
+}
+
+// TestControllerDelegatesToHerdr covers the whole write surface for a session
+// hosted in a herdr pane — which reported "no controllable backend" before
+// #1348 — and asserts the socket reaches the child, since that is the only
+// thing distinguishing the right herdr server from another one.
+func TestControllerDelegatesToHerdr(t *testing.T) {
+	repo := &fakeRepo{state: &session.SessionState{
+		SessionID: "abc",
+		Launcher:  &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/h.sock"},
+	}}
+	c := NewController(repo, &fakePush{}, nopLog{})
+	var ran command
+	c.run = func(_ context.Context, cmd command) ([]byte, error) { ran = cmd; return nil, nil }
+
+	if !c.Controllable("abc") {
+		t.Fatal("herdr session should be controllable")
+	}
+
+	if err := c.SendInput("abc", []byte("x")); err != nil {
+		t.Fatalf("SendInput: %v", err)
+	}
+	if ran.name != "herdr" || ran.args[len(ran.args)-1] != "x" {
+		t.Errorf("SendInput: got %s %q", ran.name, ran.args)
+	}
+	if ran.args[1] != "send-text" {
+		t.Errorf("SendInput without a CR must not submit, got verb %q", ran.args[1])
+	}
+	if !reflect.DeepEqual(ran.env, []string{"HERDR_SOCKET_PATH=/tmp/h.sock"}) {
+		t.Errorf("SendInput: socket not passed to the child, env=%q", ran.env)
+	}
+
+	if err := c.SendCommand("abc", "/compact"); err != nil {
+		t.Fatalf("SendCommand: %v", err)
+	}
+	if got := ran.args[len(ran.args)-1]; got != "/compact" {
+		t.Errorf("SendCommand: want %q, got %q", "/compact", got)
+	}
+	if ran.args[1] != "run" {
+		t.Errorf("SendCommand must submit via pane run, got verb %q", ran.args[1])
+	}
+
+	if err := c.Interrupt("abc"); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if ran.name != "herdr" || ran.args[len(ran.args)-1] != "C-c" {
+		t.Errorf("Interrupt: got %s %q", ran.name, ran.args)
 	}
 }
 
