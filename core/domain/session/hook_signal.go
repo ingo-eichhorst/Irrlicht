@@ -32,6 +32,27 @@ const (
 	HookNotification = "Notification"
 )
 
+// AllHookEvents is every hook event name the constants above define, in
+// declaration order. It is the universe an adapter's consent copy is checked
+// against by contracttesting.AssertHookDisclosureMatchesInstalled (issue
+// #1356): a name in here that the adapter's disclosure text mentions but does
+// not install is a promise it doesn't keep, in the opposite direction from the
+// #1173 drift that motivated the contract.
+//
+// Every constant above must appear here. That obligation is not left to
+// discipline — it is exactly the kind of hand-maintained restatement #1356 was
+// about — so TestAllHookEvents_CoversEveryConstant reads this file's own source
+// and fails on a constant that was never added.
+var AllHookEvents = []string{
+	HookPermissionRequest,
+	HookPreToolUse,
+	HookPostToolUse,
+	HookPostToolUseFailure,
+	HookPreCompact,
+	HookStop,
+	HookNotification,
+}
+
 // HookSignalEffect is what one hook event name does to a session's signal
 // holds. Release distinguishes the two directions: a hook either asserts a
 // signal (Release false) or retracts one (Release true).

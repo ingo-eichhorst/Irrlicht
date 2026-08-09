@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/backchannel"
 	"irrlicht/core/domain/permission"
@@ -79,9 +80,13 @@ func Agent() agent.Agent {
 				Kind:            permission.KindModify,
 				Title:           "Install status hooks",
 				FeatureUnlocked: "Instant waiting-state detection (permission prompts, plan approval, questions)",
-				Touches:         "Writes 6 hook entries to ~/.claude/settings.json",
-				Detail: "Adds PermissionRequest, PreToolUse, PostToolUse, " +
-					"PostToolUseFailure, PreCompact, and Stop hook entries that POST " +
+				// Count and event list are derived from installedHookEvents, never
+				// restated: this copy is the consent contract, and hand-maintaining
+				// it is how it came to promise six entries against a seven-event
+				// install (#1173's Notification hook, undisclosed until #1356).
+				Touches: hookjson.EntriesTouched("~/.claude/settings.json", installedHookEvents),
+				Detail: "Adds " + hookjson.EventList(installedHookEvents) +
+					" hook entries that POST " +
 					"the hook payload to the local daemon at " + hookEndpointURL() +
 					" via Claude Code's native http hook (no shell/curl). Toggling " +
 					"off removes exactly these entries (also available via " +

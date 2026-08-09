@@ -114,7 +114,21 @@ Before marking a ticket done, run the full suite — every layer must pass:
   on another port is rewritten in place rather than duplicated, and uninstall
   is not port-scoped (#1178). A new hook-installing adapter wires one call
   (see `claudecode`/`codex` `hookport_test.go`) instead of porting a test file.
-  Both contract families pass by construction against a correct adapter, so
+- Hook disclosure: `contracttesting.AssertHookDisclosureMatchesInstalled`
+  (`core/internal/contracttesting/hook_disclosure.go`) binds a hooks
+  permission's consent copy to what the installer actually writes — the
+  `Touches`/`Detail` text names every event in `installedHookEvents`, states
+  the right entry count, and names no event the adapter doesn't install
+  (#1356). It exists because that text *is* the #570 consent contract and it
+  was hand-maintained: Claude Code's copy declared six entries for the whole
+  of #1173's seven-event install, so the Notification hook was written to the
+  user's `settings.json` undisclosed. Adapters now derive both the count and
+  the list from `installedHookEvents` via `hookjson.EventList`, and wire one
+  call (see `claudecode`/`codex` `hookdisclosure_test.go`). The "names no
+  uninstalled event" arm checks against `session.AllHookEvents`, itself kept
+  honest by `TestAllHookEvents_CoversEveryConstant`, which scans
+  `hook_signal.go`'s source rather than trusting a second hand-kept list.
+  All three contract families pass by construction against a correct adapter, so
   their whole value is that they *can* fail: a new or reworked contract
   assertion lands with the deliberate mutation that was seen red for each
   obligation recorded in its PR — the same bar the red-first rule above sets
