@@ -38,13 +38,13 @@ const (
 // the key is absent in a parseable assessment).
 func computeRoute(supports, daemon, driver string) Route {
 	switch {
-	case supports == "no" || supports == "unknown":
+	case supports == SupportsNo || supports == SupportsUnknown:
 		return RouteFrozen
-	case daemon == "incapable" || daemon == "n/a" || daemon == "n.a.":
+	case daemon == DaemonIncapable || daemon == DaemonNotApplicable:
 		return RouteFrozen
-	case daemon == "unknown":
+	case daemon == DaemonUnknown:
 		return RouteInconclusive
-	case strings.HasPrefix(driver, "gap:"):
+	case strings.HasPrefix(driver, DriverGapPrefix):
 		return RouteDriverGap
 	default:
 		return RouteRecordNow
@@ -131,32 +131,45 @@ func CellVerdict(route Route, appl ApplicableState, recorded bool, blocked strin
 //
 // applicable is false when the cell's recipe is marked applicable:false — a
 // deliberate deferral (e.g. a record_blocked behavior covered by a unit test).
-// Such a cell will never be recorded here, so it is terminal (n.a.), not the
-// actionable pending-record an un-recorded recordable cell gets.
+// Such a cell will never be recorded here, so it is terminal (not applicable),
+// not the actionable pending-record an un-recorded recordable cell gets.
+//
+// Every value returned here is a constant from vocabulary.go — the schema is
+// the only place a state is spelled out (#1367).
 func DeriveDisplayState(supports, daemon, driver string, hasRecording, applicable bool) string {
 	switch supports {
-	case "no":
-		return "n.a."
-	case "", "unknown":
-		return "unknown"
+	case SupportsNo:
+		return StateNotApplicable
+	case "", SupportsUnknown:
+		return StateUnknown
+	}
+	// An axis value outside the vocabulary reads as unknown rather than
+	// falling through to the optimistic arms below. Without this a malformed
+	// cell derives to "observed" and inflates the coverage numbers — the worst
+	// possible default, and one `of validate` alone cannot prevent because it
+	// gates CI, not this function (#1367 review).
+	if !IsValidAgentSupports(supports) {
+		return StateUnknown
 	}
 	switch {
-	case daemon == "n/a":
-		return "n.a."
-	case daemon == "incapable":
-		return "unobservable"
-	case daemon == "bug":
-		return "blocked-daemon"
-	case strings.HasPrefix(driver, "gap:"):
-		return "blocked-driver"
-	case daemon == "" || daemon == "unknown":
-		return "unknown"
+	case daemon == DaemonNotApplicable:
+		return StateNotApplicable
+	case daemon == DaemonIncapable:
+		return StateUnobservable
+	case daemon == DaemonBug:
+		return StateBlockedDaemon
+	case strings.HasPrefix(driver, DriverGapPrefix):
+		return StateBlockedDriver
+	case daemon == "" || daemon == DaemonUnknown:
+		return StateUnknown
+	case !IsValidDaemonCapability(daemon):
+		return StateUnknown
 	}
 	if !hasRecording {
 		if !applicable {
-			return "n.a."
+			return StateNotApplicable
 		}
-		return "pending-record"
+		return StatePendingRecord
 	}
-	return "observed"
+	return StateObserved
 }

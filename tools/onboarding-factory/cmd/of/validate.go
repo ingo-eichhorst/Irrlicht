@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 
+	"irrlicht/tools/onboarding-factory/internal/matrix"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
@@ -227,7 +228,54 @@ func validateCell(loc cellLoc, names map[string]bool, add func(path, msg string)
 	if msg := recipeTimeoutFinding(cell.Details.Recipe); msg != "" {
 		add(rel+metadataJSONSuffix, msg)
 	}
+	validateCellVocabulary(cell, rel, add)
 	validateCellRecording(loc, add)
+}
+
+// validateCellVocabulary enforces the assessment-axis vocabulary defined in
+// matrix/vocabulary.go against BOTH tiers a cell stores: the `metadata`
+// overview block and the `details.assessment` detail block. write.go mirrors
+// one into the other, so checking a single tier would let half a cell drift.
+//
+// This is what makes #1367's canonical spelling real rather than cosmetic:
+// `of validate` is already a CI gate over the whole catalog, so a retired
+// spelling cannot reach disk. The rules themselves live in the schema package
+// (matrix.ValidateAxes); this function only supplies the two tiers.
+func validateCellVocabulary(cell shard.ShardAgent, rel string, add func(path, msg string)) {
+	path := rel + metadataJSONSuffix
+	checkTier := func(tier, supports, daemon, driver string) {
+		for _, msg := range matrix.ValidateAxes(tier, supports, daemon, driver) {
+			add(path, msg)
+		}
+	}
+	checkTier("metadata", cell.Metadata.AgentSupports,
+		cell.Metadata.DaemonCapability, cell.Metadata.DriverCapability)
+
+	if len(cell.Details.Assessment) == 0 {
+		return
+	}
+	// Only the three axes are decoded, deliberately: details.assessment
+	// averages ~8KB per cell (it carries the free-text assessment prose), and
+	// decoding into matrix.AssessmentReport would materialise ~4MB of Body
+	// strings across the catalog to read three short fields. Adding a fourth
+	// axis means adding a check here either way, so the narrow struct costs no
+	// drift safety.
+	var a struct {
+		AgentSupports    string `json:"agent_supports"`
+		DaemonCapability string `json:"daemon_capability"`
+		DriverCapability string `json:"driver_capability"`
+	}
+	// The decode error is deliberately NOT used to skip this tier. Go's decoder
+	// populates every field that DID decode and still returns an error when any
+	// sibling is wrong-typed — so gating on `err == nil` would let a single
+	// unrelated type slip switch off the retired-spelling check for all three
+	// axes, and the cell would validate clean. That inverts the rule AGENTS.md
+	// states for skill-lint: when input cannot be parsed with confidence,
+	// degrade toward MORE checking, never less.
+	if err := json.Unmarshal(cell.Details.Assessment, &a); err != nil {
+		add(path, fmt.Sprintf("details.assessment is not a well-formed assessment object: %v", err))
+	}
+	checkTier("details.assessment", a.AgentSupports, a.DaemonCapability, a.DriverCapability)
 }
 
 // validateCellFK checks that scenarioID is set and resolves to a catalog

@@ -2,8 +2,8 @@
   "scenario_id": "backchannel-control",
   "metadata": {
     "agent_supports": "no",
-    "daemon_capability": "n.a.",
-    "driver_capability": "n.a.",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
     "confidence": 0.85
   },
   "details": {
@@ -12,8 +12,8 @@
       "scenario_id": "backchannel-control",
       "agent": "opencode",
       "agent_supports": "no",
-      "daemon_capability": "n.a.",
-      "driver_capability": "n.a.",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
       "confidence": 0.85,
       "body": "opencode is headless: it persists session state in a ProcessOwnedStore (SQLite) and exposes no interactive stdin TUI to inject into. The adapter declares no Control axis (SupportsInput defaults false), so InputService never marks its sessions controllable. Metrics stay in the structured store; backchannel control does not apply.",
       "sources": [

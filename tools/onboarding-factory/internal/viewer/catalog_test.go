@@ -74,15 +74,15 @@ func TestDeriveDisplayState(t *testing.T) {
 		rec, applic              bool
 		want                     string
 	}{
-		{"no", "full", "ready", true, true, "n.a."},
+		{"no", "full", "ready", true, true, "n/a"},
 		{"unknown", "full", "ready", true, true, "unknown"},
-		{"yes", "n/a", "ready", true, true, "n.a."},
+		{"yes", "n/a", "ready", true, true, "n/a"},
 		{"yes", "incapable", "ready", true, true, "unobservable"},
 		{"yes", "bug", "ready", true, true, "blocked-daemon"},
 		{"yes", "full", "gap:keys", true, true, "blocked-driver"},
 		{"yes", "full", "ready", false, true, "pending-record"},
-		// applicable:false (record_blocked deferral), not recorded → n.a.
-		{"yes", "full", "ready", false, false, "n.a."},
+		// applicable:false (record_blocked deferral), not recorded → n/a.
+		{"yes", "full", "ready", false, false, "n/a"},
 		{"yes", "full", "ready", true, true, "observed"},
 	}
 	for _, c := range cases {

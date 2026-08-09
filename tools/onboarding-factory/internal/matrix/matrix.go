@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
@@ -16,13 +17,16 @@ import (
 // canonical definition shared by the matrix model and the viewer (which
 // aliases it) so the wire/disk contract lives in one place.
 type AssessmentReport struct {
-	SchemaVersion    int    `json:"schema_version"`
-	ScenarioID       string `json:"scenario_id"`
-	Agent            string `json:"agent"`
-	AssessedAt       string `json:"assessed_at"`
-	AgentSupports    string `json:"agent_supports"`    // yes / partial / no / unknown
-	DaemonCapability string `json:"daemon_capability"` // full / bug / incapable / unknown / n/a
-	DriverCapability string `json:"driver_capability"` // ready / gap:<primitive>
+	SchemaVersion int    `json:"schema_version"`
+	ScenarioID    string `json:"scenario_id"`
+	Agent         string `json:"agent"`
+	AssessedAt    string `json:"assessed_at"`
+	// The three assessment axes. Their allowed values are defined in
+	// vocabulary.go (AgentSupportsValues / DaemonCapabilityValues /
+	// IsValidDriverCapability) and enforced by `of validate`.
+	AgentSupports    string `json:"agent_supports"`
+	DaemonCapability string `json:"daemon_capability"`
+	DriverCapability string `json:"driver_capability"`
 	// RecordBlocked documents why a cell whose three axes say record-now is
 	// nonetheless not recorded — a reason ORTHOGONAL to the axes (infra /
 	// unit_test / driver_bug / upstream). The consistency check REQUIRES this
@@ -295,7 +299,8 @@ func (m *Matrix) buildCell(agent, cid string) CellState {
 		dsDriver = c.Metadata.DriverCapability
 	}
 	// appl == AppFalse means the recipe defers this cell (applicable:false, a
-	// documented record_blocked) — never recorded here, so n.a. not pending-record.
+	// documented record_blocked) — never recorded here, so StateNotApplicable
+	// rather than pending-record.
 	cs.DisplayState = DeriveDisplayState(dsSupports, dsDaemon, dsDriver, recorded, appl != AppFalse)
 	return cs
 }
@@ -314,10 +319,10 @@ func (m *Matrix) disposition(agent, cid string, recorded, hasAssessFile bool, su
 		return DispUnassessed
 	}
 	// 3. frozen by capability.
-	if supports == "no" || supports == "unknown" {
+	if supports == SupportsNo || supports == SupportsUnknown {
 		return DispApplicableFalse
 	}
-	if daemon == "incapable" || daemon == "n/a" {
+	if daemon == DaemonIncapable || daemon == DaemonNotApplicable {
 		return DispApplicableFalse
 	}
 	// 4. degraded out at record time — ALL variants applicable:false.
@@ -325,7 +330,7 @@ func (m *Matrix) disposition(agent, cid string, recorded, hasAssessFile bool, su
 		return DispApplicableFalse
 	}
 	// 5. driver gap.
-	if len(driver) >= 4 && driver[:4] == "gap:" {
+	if strings.HasPrefix(driver, DriverGapPrefix) {
 		return DispDriverGap
 	}
 	// 6. assessed recordable, no recording.

@@ -19,7 +19,7 @@ import (
 // Cells per agent, and the display state each one derives to:
 //
 //	claudecode  1-1 observed (recorded)   2-1 pending-record   3-1 blocked-driver
-//	            4-1 blocked-daemon        5-1 unobservable     6-1 n.a. (supports=no)
+//	            4-1 blocked-daemon        5-1 unobservable     6-1 n/a (supports=no)
 //	            7-1 unknown (supports=unknown)                        → 7 cells
 //	codex       1-1 observed (recorded)   2-1 pending-record          → 2 cells
 //	aider       1-1 observed (recorded)                               → 1 cell

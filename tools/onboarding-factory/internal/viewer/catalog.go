@@ -110,7 +110,7 @@ func buildCellVerdict(ag *shard.ShardAgent) map[string]any {
 		"notes":             "",
 		// applicable is false only when the recipe explicitly marks applicable:false
 		// (a deliberate record_blocked deferral); absent/true recipe → true. Feeds
-		// the display state so such cells read n.a., not pending-record.
+		// the display state so such cells read not-applicable, not pending-record.
 		"applicable": true,
 	}
 	if ag == nil {

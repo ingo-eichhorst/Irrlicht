@@ -27,7 +27,16 @@ func TestComputeRoute(t *testing.T) {
 		{"yes", "unknown", "ready", RouteInconclusive},
 		// keyless/empty axes route record_now (bash else branch).
 		{"", "", "", RouteRecordNow},
-		{"yes", "n.a.", "ready", RouteFrozen},
+		// The canonical not-applicable daemon axis freezes the route.
+		{"yes", "n/a", "ready", RouteFrozen},
+		// #1367 removed computeRoute's compatibility arm for the RETIRED dotted
+		// spelling: `of validate` now rejects that value outright, so routing it
+		// as frozen would only have hidden malformed data. It is an unrecognised
+		// daemon value now, and routes record_now like any other. This row is the
+		// behavioural lock on that removal, which the source census cannot
+		// provide on its own: it matches plain literals, so a re-added arm
+		// built by concatenation would slip past it.
+		{"yes", "n.a.", "ready", RouteRecordNow}, // retired-spelling-ok
 	}
 	for _, c := range cases {
 		if got := computeRoute(c.s, c.d, c.drv); got != c.want {
@@ -66,16 +75,16 @@ func TestDeriveDisplayState(t *testing.T) {
 		rec, applic              bool
 		want                     string
 	}{
-		{"no", "full", "ready", true, true, "n.a."},
+		{"no", "full", "ready", true, true, "n/a"},
 		{"unknown", "full", "ready", true, true, "unknown"},
-		{"yes", "n/a", "ready", true, true, "n.a."},
+		{"yes", "n/a", "ready", true, true, "n/a"},
 		{"yes", "incapable", "ready", true, true, "unobservable"},
 		{"yes", "bug", "ready", true, true, "blocked-daemon"},
 		{"yes", "full", "gap:keys", true, true, "blocked-driver"},
 		{"yes", "unknown", "ready", false, true, "unknown"},
 		{"yes", "full", "ready", false, true, "pending-record"},
-		// applicable:false (record_blocked deferral), not recorded → n.a., NOT pending-record.
-		{"yes", "full", "ready", false, false, "n.a."},
+		// applicable:false (record_blocked deferral), not recorded → n/a, NOT pending-record.
+		{"yes", "full", "ready", false, false, "n/a"},
 		{"yes", "full", "ready", true, true, "observed"},
 	}
 	for _, c := range cases {

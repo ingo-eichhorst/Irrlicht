@@ -159,7 +159,7 @@ work-list; cells with no assessment yet are the assess work-list. Dispatch
 subagent** (see the parallelism rules). Then re-run `of status` to confirm none
 remain before reporting "done". `display_state` ∈ `observed` (terminal),
 `pending-record` (→ assess or record), `blocked-daemon` / `blocked-driver` /
-`unobservable` / `n.a.` (terminal — documented, no recording), `unknown`
+`unobservable` / `n/a` (terminal — documented, no recording), `unknown`
 (→ assess). A sweep is finished only when every cell is terminal.
 
 For "how far along is agent X" — a progress read, not a work-list — use the
