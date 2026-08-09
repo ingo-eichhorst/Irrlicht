@@ -8,11 +8,11 @@ package claudecode
 import (
 	"bufio"
 	"encoding/json"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"irrlicht/core/adapters/inbound/agents/agentpaths"
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/pkg/daemonaddr"
 )
@@ -285,11 +285,10 @@ const maxVersionScanLines = 200
 // and already parsed for this exact field (parser.go reads raw["version"] into
 // AgentVersion), so reading it here costs no process and no PATH.
 //
-// It resolves the ABSOLUTE transcripts dir rather than using transcriptsDir()
-// directly: that returns a $HOME-relative path when CLAUDE_CONFIG_DIR is unset
+// transcriptsDir() is resolved through agentpaths.Abs rather than used
+// directly: it returns a $HOME-relative path when CLAUDE_CONFIG_DIR is unset
 // (expansion happens downstream in fswatcher), which would make this walk run
-// against the daemon's CWD and always find nothing — the same trap codex's
-// newestObservedCLIVersion documents.
+// against the daemon's CWD and always find nothing.
 //
 // A stale answer is tolerable by construction: the version is the one that
 // wrote the newest transcript, so it can only lag the installed CLI downward,
@@ -297,26 +296,11 @@ const maxVersionScanLines = 200
 // "too old" reading (shouldConfirmByProbe). So a stale value costs at most one
 // process, never a false refusal.
 func newestObservedCLIVersion() string {
-	dir, err := absTranscriptsDir()
+	dir, err := agentpaths.AbsRoot(transcriptsDir())
 	if err != nil {
 		return ""
 	}
-	var newestPath string
-	var newestMod int64
-	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		if mod := info.ModTime().UnixNano(); mod > newestMod {
-			newestMod = mod
-			newestPath = path
-		}
-		return nil
-	})
+	newestPath := agentpaths.NewestFileWithSuffix(dir, ".jsonl")
 	if newestPath == "" {
 		return ""
 	}
@@ -352,18 +336,4 @@ func versionInTranscript(path string) string {
 		}
 	}
 	return ""
-}
-
-// absTranscriptsDir resolves the transcripts directory to an absolute path,
-// honoring the same CLAUDE_CONFIG_DIR override the watcher honors.
-func absTranscriptsDir() (string, error) {
-	dir := transcriptsDir()
-	if filepath.IsAbs(dir) {
-		return dir, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, dir), nil
 }

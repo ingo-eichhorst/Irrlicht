@@ -77,18 +77,18 @@ func Probe(ctx context.Context, argv []string) (string, error) {
 
 	runErr := cmd.Run()
 
-	version, ok := cliversion.Parse(out.String())
-	if !ok {
-		if runErr != nil {
-			return "", fmt.Errorf("cliprobe: probing %q: %w", strings.Join(argv, " "), runErr)
-		}
-		return "", fmt.Errorf("cliprobe: %q printed no recognizable version", strings.Join(argv, " "))
-	}
-	// A CLI that printed a usable version and then failed has still answered
-	// the only question asked, but a non-zero exit is the stronger signal that
-	// something is wrong with the install — prefer it.
+	// A run that did not complete cleanly is not trusted for its output, even
+	// when that output parses: a version-shaped fragment in an error message
+	// ("config schema 1.0.0 unsupported") would otherwise be read as the CLI's
+	// version and could produce a FALSE REFUSAL — the one direction this gate
+	// must never take quietly. Reporting unknown instead fails open, which is
+	// recoverable.
 	if runErr != nil {
 		return "", fmt.Errorf("cliprobe: probing %q: %w", strings.Join(argv, " "), runErr)
+	}
+	version, ok := cliversion.Parse(out.String())
+	if !ok {
+		return "", fmt.Errorf("cliprobe: %q printed no recognizable version", strings.Join(argv, " "))
 	}
 	return version.String(), nil
 }

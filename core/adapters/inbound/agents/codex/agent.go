@@ -29,10 +29,13 @@ const iconSVGDark = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="
 
 // Agent returns the Codex adapter registration.
 func Agent() agent.Agent {
+	// See claudecode's Agent(): one name for the wizard label and the version
+	// disclosure, so the two cannot drift.
+	const displayName = "Codex"
 	return agent.Agent{
 		Identity: agent.Identity{
 			Name:         AdapterName,
-			DisplayName:  "Codex",
+			DisplayName:  displayName,
 			IconSVGLight: iconSVGLight,
 			IconSVGDark:  iconSVGDark,
 		},
@@ -69,7 +72,7 @@ func Agent() agent.Agent {
 					"POST the hook payload to the local daemon at " + hookEndpointURL() +
 					" via curl. PermissionRequest drives a live waiting transition " +
 					"the moment an approval prompt appears; Stop carries the final " +
-					"assistant message for turn-end. " + hookjson.RequiresVersion("Codex", minCLIVersion) +
+					"assistant message for turn-end. " + hookjson.RequiresVersion(displayName, minCLIVersion) +
 					" Toggling off removes the entries.",
 				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
 				Remove: func() error { _, err := UninstallHooks(); return err },

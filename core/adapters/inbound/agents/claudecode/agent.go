@@ -34,10 +34,14 @@ const iconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" 
 
 // Agent returns the Claude Code adapter registration.
 func Agent() agent.Agent {
+	// One name, used both as the wizard's label and in the hooks permission's
+	// version disclosure below, so the copy cannot come to call the CLI
+	// something the rest of the UI doesn't.
+	const displayName = "Claude Code"
 	return agent.Agent{
 		Identity: agent.Identity{
 			Name:         AdapterName,
-			DisplayName:  "Claude Code",
+			DisplayName:  displayName,
 			IconSVGLight: iconSVG,
 			IconSVGDark:  iconSVG,
 		},
@@ -84,7 +88,7 @@ func Agent() agent.Agent {
 					" hook entries that POST " +
 					"the hook payload to the local daemon at " + hookEndpointURL() +
 					" via Claude Code's native http hook (no shell/curl). " +
-					hookjson.RequiresVersion("Claude Code", minCLIVersion) +
+					hookjson.RequiresVersion(displayName, minCLIVersion) +
 					" Toggling off removes exactly these entries (also available via " +
 					"`irrlichd --uninstall-hooks`).",
 				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },

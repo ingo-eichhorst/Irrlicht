@@ -9,15 +9,12 @@
 package codex
 
 import (
-	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
-
-	"irrlicht/core/adapters/inbound/agents/hookjson"
-	"irrlicht/core/pkg/daemonaddr"
 
 	"irrlicht/core/adapters/inbound/agents/agentpaths"
+	"irrlicht/core/adapters/inbound/agents/hookjson"
+	"irrlicht/core/pkg/daemonaddr"
 )
 
 // HookEndpointPath is the daemon's Codex hook path. Host and port are resolved
@@ -171,22 +168,7 @@ func newestObservedCLIVersion() string {
 	if err != nil {
 		return ""
 	}
-	var newestPath string
-	var newestMod int64
-	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		if mod := info.ModTime().UnixNano(); mod > newestMod {
-			newestMod = mod
-			newestPath = path
-		}
-		return nil
-	})
+	newestPath := agentpaths.NewestFileWithSuffix(dir, ".jsonl")
 	if newestPath == "" {
 		return ""
 	}
