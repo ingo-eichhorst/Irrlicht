@@ -28,11 +28,34 @@ import (
 // plural are accepted so a one-event adapter is not forced into bad grammar.
 var entryCountPattern = regexp.MustCompile(`(\d+) hook entr(?:y|ies)`)
 
+// eventShapedToken matches a CamelCase identifier of two or more words —
+// "SessionStart", "UserPromptSubmit", "PostToolUseFailure". Every agent CLI
+// names its hook events this way, and an agent fires far more of them than
+// irrlicht models, so session.AllHookEvents alone cannot see copy that promises
+// a SessionStart hook nobody installs. Matching the *shape* rather than a
+// second hand-kept roster of upstream names is deliberate: a roster is the kind
+// of list #1356 is about.
+//
+// Single-word event names ("Stop", "Notification") are outside this shape and
+// are covered by the session.AllHookEvents arm instead. The two overlap, and
+// between them they cover every name either source knows.
+var eventShapedToken = regexp.MustCompile(`\b[A-Z][a-z]+(?:[A-Z][a-z]+)+\b`)
+
 // HookDisclosure wires one adapter's hooks permission into
 // AssertHookDisclosureMatchesInstalled. Installed is the same slice the
 // adapter hands to hookjson.Config.Events — pass the variable, never a
 // hand-written copy of it, or the contract checks the declaration against
 // another declaration instead of against the install.
+//
+// That instruction is not enforced here, which bounds what the count
+// obligation proves: it is len(the slice the test passed), not a count read
+// back off a written config file. For today's two adapters the gap is closed
+// elsewhere — both pass the same installedHookEvents variable to
+// AssertHookEndpointFollowsBindAddr, which does run a real install into a temp
+// home and reads every event's entry back, and hookjson.EnsureInstalled writes
+// exactly one matcher group per event. A third adapter that wires this contract
+// with a literal slice and skips that one would get a weaker check than it
+// looks like.
 type HookDisclosure struct {
 	// Agent is the adapter's registration, exactly as the daemon consumes it.
 	Agent agent.Agent
@@ -40,6 +63,11 @@ type HookDisclosure struct {
 	PermissionKey string
 	// Installed is the installer's event list.
 	Installed []string
+	// NonEventTerms are CamelCase terms the copy legitimately mentions that
+	// are not hook events — a tool name in a matcher, a type name. Usually
+	// empty. Every entry is a name the over-promise arm stops policing, so
+	// keep the list short and say in a comment why each one is there.
+	NonEventTerms []string
 }
 
 // AssertHookDisclosureMatchesInstalled runs the issue #1356 contract against d:
@@ -52,9 +80,13 @@ type HookDisclosure struct {
 // Touches and the (i) expander shows Detail, and the user sees both before
 // granting.
 //
-// The third obligation is checked against session.AllHookEvents, the universe
-// of names the domain defines; TestAllHookEvents_CoversEveryConstant keeps that
-// universe from drifting from the constants themselves.
+// The third obligation draws candidate names from two overlapping sources:
+// session.AllHookEvents (the universe the domain models, kept complete by
+// TestAllHookEvents_CoversEveryConstant) and every event-shaped CamelCase token
+// in the copy itself, which reaches upstream events irrlicht has no constant
+// for. Neither direction is the consent-critical one — an over-promise doesn't
+// hide a write from the user — but a disclosure that names hooks the daemon
+// never installs is still not the contract the user agreed to.
 func AssertHookDisclosureMatchesInstalled(t *testing.T, d HookDisclosure) {
 	t.Helper()
 
@@ -102,14 +134,27 @@ func AssertHookDisclosureMatchesInstalled(t *testing.T, d HookDisclosure) {
 		for _, event := range d.Installed {
 			installed[event] = true
 		}
+		allowed := make(map[string]bool, len(d.NonEventTerms))
+		for _, term := range d.NonEventTerms {
+			allowed[term] = true
+		}
+		// Two candidate sources, deliberately overlapping: the names the
+		// domain models (which includes single-word ones), and every
+		// event-shaped token actually present in the copy (which reaches
+		// upstream events irrlicht has no constant for).
 		for _, event := range session.AllHookEvents {
-			if installed[event] {
+			if installed[event] || allowed[event] || !mentions(disclosure, event) {
 				continue
 			}
-			if mentions(disclosure, event) {
-				t.Errorf("consent copy names the %q hook, which the installer does not write — "+
-					"the disclosure promises more than it does", event)
+			t.Errorf("consent copy names the %q hook, which the installer does not write — "+
+				"the disclosure promises more than it does", event)
+		}
+		for _, token := range eventShapedToken.FindAllString(disclosure, -1) {
+			if installed[token] || allowed[token] {
+				continue
 			}
+			t.Errorf("consent copy names %q, which reads as a hook event but the installer "+
+				"does not write it — install it, reword the copy, or list it in NonEventTerms", token)
 		}
 	})
 }
