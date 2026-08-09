@@ -244,34 +244,36 @@ func assertBundleEndpoint(t *testing.T, client *http.Client, url string) {
 	if err != nil {
 		t.Fatalf("read %s: %v", url, err)
 	}
+	entries := readBundleEntries(t, body)
+	if _, ok := entries["version.txt"]; !ok {
+		t.Errorf("bundle from %s missing version.txt", url)
+	}
+	assertHooksCollectedInDaemon(t, url, entries["hooks.json"])
+}
+
+// readBundleEntries decodes the gzip+tar bundle into name → contents.
+func readBundleEntries(t *testing.T, body []byte) map[string][]byte {
+	t.Helper()
 	gz, err := gzip.NewReader(bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("bundle is not valid gzip: %v", err)
 	}
+	entries := map[string][]byte{}
 	tr := tar.NewReader(gz)
-	var hasVersion bool
-	var hooks []byte
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
-			break
+			return entries
 		}
 		if err != nil {
 			t.Fatalf("bundle is not a valid tar: %v", err)
 		}
-		switch hdr.Name {
-		case "version.txt":
-			hasVersion = true
-		case "hooks.json":
-			if hooks, err = io.ReadAll(tr); err != nil {
-				t.Fatalf("read hooks.json: %v", err)
-			}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("read %s from bundle: %v", hdr.Name, err)
 		}
+		entries[hdr.Name] = data
 	}
-	if !hasVersion {
-		t.Errorf("bundle from %s missing version.txt", url)
-	}
-	assertHooksCollectedInDaemon(t, url, hooks)
 }
 
 // assertHooksCollectedInDaemon checks that the LIVE daemon's bundle reports its
