@@ -323,14 +323,20 @@ func binaryPathOf(command, adapter string) (string, bool) {
 // that quote and then read as a missing binary.
 func leadingArg(command string) (string, bool) {
 	s := strings.TrimLeft(command, " ")
-	if !strings.HasPrefix(s, "'") {
-		fields := strings.Fields(s)
-		if len(fields) == 0 {
-			return "", false
-		}
-		return fields[0], true
+	if strings.HasPrefix(s, "'") {
+		return unquoteLeading(s)
 	}
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return "", false
+	}
+	return fields[0], true
+}
 
+// unquoteLeading reads one single-quoted shell word from the front of s,
+// undoing shellQuote's '\” escape. It reports false on an unterminated quote,
+// which is not a line we rendered.
+func unquoteLeading(s string) (string, bool) {
 	var out strings.Builder
 	for i := 1; i < len(s); {
 		if s[i] != '\'' {
@@ -346,7 +352,7 @@ func leadingArg(command string) (string, bool) {
 		}
 		return out.String(), true
 	}
-	return "", false // unterminated quote: not a line we rendered
+	return "", false
 }
 
 // isExecutableFile reports whether path is a regular file with an execute bit.

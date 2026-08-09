@@ -138,44 +138,50 @@ func firstPositional(args []string) (string, bool) {
 }
 
 func main() {
-	switch selectAction(os.Args[1:]) {
+	args := os.Args[1:]
+	if action := selectAction(args); action != actionRunDaemon {
+		os.Exit(runCLIAction(action, args))
+	}
+	runDaemon()
+}
+
+// runCLIAction performs every action other than starting the daemon and returns
+// the process exit code, so main() stays a two-line dispatch and the actions
+// themselves are one flat switch.
+func runCLIAction(action cliAction, args []string) int {
+	switch action {
 	case actionBeacon:
 		// Post always returns 0 — that contract is the whole of #1373; see the
 		// hookbeacon package doc for what a non-zero exit does to a tool call.
-		os.Exit(hookbeacon.Post(hookbeacon.Options{
-			Args:   hookbeacon.InvocationArgs(os.Args[1:]),
+		return hookbeacon.Post(hookbeacon.Options{
+			Args:   hookbeacon.InvocationArgs(args),
 			Stdin:  os.Stdin,
 			Stderr: os.Stderr,
-		}))
+		})
 	case actionVersion:
 		fmt.Printf("irrlichd version %s\n", Version)
 		fmt.Printf("Built with %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
-		os.Exit(0)
 	case actionUninstallHooks:
 		uninstallHooks()
-		os.Exit(0)
 	case actionPrintHookConfigs:
 		if err := printHookConfigs(os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return 1
 		}
-		os.Exit(0)
 	case actionUninstallTaskEta:
 		uninstallTaskEtaBlocks()
-		os.Exit(0)
 	case actionDiagnose:
 		runDiagnose()
-		os.Exit(0)
 	case actionUnknownSubcommand:
 		// stderr, never stdout, and the message is the only output: if this is
 		// ever reached by a hook-shaped invocation on a future binary that
 		// renamed the verb, an empty stdout is what keeps a non-zero exit from
 		// reading as a "deny" decision to a fail-closed pre-tool hook.
-		name, _ := firstPositional(os.Args[1:])
+		name, _ := firstPositional(args)
 		fmt.Fprintf(os.Stderr, "irrlichd: unknown subcommand %q\n", name)
-		os.Exit(2)
+		return 2
 	}
-	runDaemon()
+	return 0
 }
 
 // uninstallHooks removes irrlicht's hooks from every agent config file the
