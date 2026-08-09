@@ -228,6 +228,17 @@
         <li><strong>Adapter name:</strong> <code>copilot</code></li>
       </ul>
 
+      <h3>Hermes Agent</h3>
+
+      <ul>
+        <li><strong>Store location:</strong> no transcript files at all &mdash; every session lives in the shared SQLite store <code>$HERMES_HOME/state.db</code> (default <code>~/.hermes/state.db</code>), polled read-only</li>
+        <li>A session row is INSERTed while the session is live (roughly 2s after launch, <code>ended_at</code> NULL), so discovery does not wait for the session to end</li>
+        <li><code>finish_reason</code> is an explicit turn boundary &mdash; <code>stop</code> ends the turn, <code>tool_calls</code> means more work follows &mdash; so <code>working</code>/<code>ready</code> need no quiet-tail heuristic</li>
+        <li><code>sessions.cwd</code> is written only by the TUI gateway; the interactive <code>hermes chat</code> REPL records <code>source='cli'</code> with an empty cwd, so the project binding comes from the live process</li>
+        <li>Discovery matches the command line rather than the process name: <code>hermes</code> is a Python console-script, so the OS process name is the interpreter</li>
+        <li><strong>Adapter name:</strong> <code>hermes</code></li>
+      </ul>
+
       <h2>PID Discovery</h2>
 
       <table>

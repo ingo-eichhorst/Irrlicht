@@ -223,6 +223,21 @@
         <li>Stage: <strong>alpha</strong></li>
       </ul>
 
+      <h3>Hermes Agent Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/hermes/</code></li>
+        <li><strong>Reads:</strong> the shared SQLite store <code>$HERMES_HOME/state.db</code> (default <code>~/.hermes/state.db</code>) &mdash; Hermes writes <em>no</em> transcript files, so there is nothing per-session to watch. Opened read-only through <code>core/pkg/sqlitero</code>, never <code>sql.Open</code> directly</li>
+        <li>Every session &mdash; CLI, TUI, and the messaging-gateway platforms &mdash; lands in the same database: a <code>sessions</code> table (one row per session, carrying aggregate tokens, cost, cwd and parent linkage) and a <code>messages</code> table (one row per message, OpenAI-shaped)</li>
+        <li>A session row is INSERTed while the session is still live &mdash; roughly 2s after launch, with <code>ended_at</code> NULL &mdash; so the store is a live discovery source, not a post-hoc archive</li>
+        <li><code>finish_reason</code> on assistant rows is an explicit turn boundary: <code>stop</code> ends the turn, <code>tool_calls</code> means more work follows, so no idle-flush heuristic is needed</li>
+        <li><code>sessions.cwd</code> is populated only for TUI sessions &mdash; the interactive <code>hermes chat</code> REPL records <code>source='cli'</code> and carries an empty cwd, so the project binding is borrowed from the live process instead</li>
+        <li>Process discovery via command-line match: <code>hermes</code> is a Python console-script, so the OS process name is the interpreter and an exact-name match would never fire</li>
+        <li>Second <code>agent.ProcessOwnedStore</code> adapter after opencode, and the first whose store is shared across every surface the agent has</li>
+        <li><strong>Adapter name:</strong> <code>"hermes"</code></li>
+        <li>Stage: <strong>alpha</strong></li>
+      </ul>
+
       <h3>Process Scanner</h3>
 
       <ul>
