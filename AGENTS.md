@@ -134,14 +134,22 @@ Before marking a ticket done, run the full suite — every layer must pass:
   inbound hook body is caller-supplied on a local, unauthenticated endpoint, so
   a receiver confines it to the adapter's own declared transcript roots
   (`agent.Source`'s `FilesUnderRoot.AllRootsFor`, never a second list that can
-  drift) before anything downstream opens it. Four obligations: an in-tree path
-  is still accepted (the vacuity guard), and an out-of-tree path, a `..`
-  traversal and a symlink planted inside the root are each refused with a 4xx
-  and a counted reason. The symlink one is the load-bearing case — **symlinks
-  are resolved BEFORE the containment check**, and a guard with that order
-  reversed passes the first three and confines nothing (#1361, where claudecode
-  forwarded the raw path while codex confined). A new hook-receiving adapter
-  wires one call (see `claudecode`/`codex` `hookpath_test.go`).
+  drift) before anything downstream opens it. Six obligations: an in-tree path
+  is still accepted (the vacuity guard); an out-of-tree path, a `..` traversal,
+  a symlink planted inside the root and a *dangling* symlink inside the root
+  are each refused with a 4xx and a counted reason; and the adapter's
+  production constructor confines, not merely the handler the test assembled.
+  Two are load-bearing and neither is obvious. **Symlinks are resolved BEFORE
+  the containment check** — a guard with that order reversed passes every
+  lexical traversal test and confines nothing (#1361, where claudecode
+  forwarded the raw path while codex confined). And **"unresolvable" is not
+  "not written yet"**: resolution reports the same error for a broken link as
+  for an absent file, so a receiver that waves through an unresolvable leaf
+  (a reasonable allowance — the hook fires around the write) lets an attacker
+  plant a broken link, have it accepted, then create the target. A new
+  hook-receiving adapter wires one call (see `claudecode`/`codex`
+  `hookpath_test.go`; claudecode wires it twice, because its statusline
+  endpoint is a receiver too and was the one the original fix forgot).
   All three contract families pass by construction against a correct adapter, so
   their whole value is that they *can* fail: a new or reworked contract
   assertion lands with the deliberate mutation that was seen red for each

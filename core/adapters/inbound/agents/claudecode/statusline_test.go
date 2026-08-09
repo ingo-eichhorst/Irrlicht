@@ -41,10 +41,11 @@ func (silentLogger) Close() error                                         { retu
 func TestStatuslineHandler_IngestsRateLimits(t *testing.T) {
 	target := &fakeRateLimitIngester{}
 	h := NewStatuslineHandler(target, nil, silentLogger{})
+	transcript := inTreeTranscript(t, "abc")
 
 	body := `{
 		"session_id": "abc",
-		"transcript_path": "/tmp/sessions/abc.jsonl",
+		"transcript_path": "` + transcript + `",
 		"rate_limits": {
 			"five_hour": {"used_percentage": 47, "resets_at": 1778761800},
 			"seven_day": {"used_percentage": 14.0, "resets_at": 1779188400}
@@ -61,8 +62,8 @@ func TestStatuslineHandler_IngestsRateLimits(t *testing.T) {
 		t.Fatalf("expected one IngestRateLimit call, got %d", len(target.calls))
 	}
 	call := target.calls[0]
-	if call.path != "/tmp/sessions/abc.jsonl" {
-		t.Errorf("wrong path: %s", call.path)
+	if call.path != transcript {
+		t.Errorf("wrong path: got %s, want the confined transcript %s", call.path, transcript)
 	}
 	if len(call.snap.Windows) != 2 {
 		t.Fatalf("expected 2 windows, got %d", len(call.snap.Windows))
@@ -79,7 +80,7 @@ func TestStatuslineHandler_NoRateLimitsBlockIsOk(t *testing.T) {
 	target := &fakeRateLimitIngester{}
 	h := NewStatuslineHandler(target, nil, silentLogger{})
 
-	body := `{"session_id":"abc","transcript_path":"/tmp/abc.jsonl"}`
+	body := `{"session_id":"abc","transcript_path":"` + inTreeTranscript(t, "abc") + `"}`
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", bytes.NewBufferString(body))
 	rr := httptest.NewRecorder()
 	h(rr, req)
@@ -121,7 +122,7 @@ func TestStatuslineHandler_SampledAtUsesClock(t *testing.T) {
 
 	target := &fakeRateLimitIngester{}
 	h := NewStatuslineHandler(target, nil, silentLogger{})
-	body := `{"transcript_path":"/tmp/x.jsonl","rate_limits":{"five_hour":{"used_percentage":1,"resets_at":2}}}`
+	body := `{"transcript_path":"` + inTreeTranscript(t, "x") + `","rate_limits":{"five_hour":{"used_percentage":1,"resets_at":2}}}`
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", bytes.NewBufferString(body))
 	rr := httptest.NewRecorder()
 	h(rr, req)
@@ -271,7 +272,7 @@ func TestStatuslineHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 
 	body := `{
 		"session_id": "abc",
-		"transcript_path": "/tmp/sessions/abc.jsonl",
+		"transcript_path": "` + inTreeTranscript(t, "abc") + `",
 		"rate_limits": {
 			"five_hour": {"used_percentage": 47, "resets_at": 1778761800}
 		}
@@ -299,7 +300,7 @@ func TestStatuslineHandler_PermissionGateContract(t *testing.T) {
 	h := NewStatuslineHandler(target, gate, silentLogger{})
 	body := `{
 		"session_id": "abc",
-		"transcript_path": "/tmp/sessions/abc.jsonl",
+		"transcript_path": "` + inTreeTranscript(t, "abc") + `",
 		"rate_limits": {
 			"five_hour": {"used_percentage": 47, "resets_at": 1778761800}
 		}

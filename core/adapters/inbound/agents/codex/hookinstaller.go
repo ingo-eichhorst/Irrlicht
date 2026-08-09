@@ -17,6 +17,8 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/pkg/daemonaddr"
+
+	"irrlicht/core/adapters/inbound/agents/agentpaths"
 )
 
 // HookEndpointPath is the daemon's Codex hook path. Host and port are resolved
@@ -265,11 +267,15 @@ func codexHome() (string, error) {
 // It reports an error when the tree does not exist, which is the honest answer
 // for both callers: nothing to walk, and nothing a transcript could sit inside.
 func codexSessionsDir() (string, error) {
-	home, err := codexHome()
+	// Derived from the adapter's own declared root, not re-assembled from
+	// ".codex" + "sessions": that second derivation is exactly what issue #1361
+	// removed from the hook receiver, and leaving a copy here would let the
+	// tree the installer walks drift from the one the daemon watches.
+	root, err := agentpaths.AbsRoot(sessionsDir())
 	if err != nil {
 		return "", err
 	}
-	return filepath.EvalSymlinks(filepath.Join(home, "sessions"))
+	return filepath.EvalSymlinks(root)
 }
 
 func codexHooksPath() (string, error) {

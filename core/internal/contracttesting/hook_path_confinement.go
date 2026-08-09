@@ -78,6 +78,11 @@ type HookReceiver struct {
 	// confinement.
 	WriteTranscript func(t *testing.T, dir string) string
 
+	// TranscriptExt is the transcript file extension (e.g. ".jsonl"). Used to
+	// name a decoy that must NOT exist, which is why it is declared rather
+	// than read back off a throwaway WriteTranscript call.
+	TranscriptExt string
+
 	// PayloadFor renders the adapter's hook JSON body carrying transcriptPath,
 	// on an event the adapter dispatches.
 	PayloadFor func(transcriptPath string) string
@@ -183,7 +188,7 @@ func assertDanglingSymlinkRejected(t *testing.T, r HookReceiver) {
 	root := r.Root(t)
 	// A path in a directory the receiver has no claim on. Deliberately NOT
 	// created: the whole point is that it does not exist at confinement time.
-	target := filepath.Join(t.TempDir(), "planted"+filepath.Ext(r.WriteTranscript(t, t.TempDir())))
+	target := filepath.Join(t.TempDir(), "planted"+r.TranscriptExt)
 	link := filepath.Join(mkSubdir(t, root, "dangling"), filepath.Base(target))
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatalf("symlink %s -> %s: %v", link, target, err)
@@ -199,13 +204,8 @@ func assertProductionConfines(t *testing.T, r HookReceiver) {
 	outside := r.WriteTranscript(t, t.TempDir())
 	rut := r.NewProduction(t)
 
-	rec := postHookPath(t, r, rut, outside)
-	if rut.Observed() {
-		t.Errorf("the adapter's production constructor dispatched an out-of-tree transcript: %s", outside)
-	}
-	if rec.Code < 400 || rec.Code > 499 {
-		t.Errorf("production constructor: status = %d, want a 4xx — confinement is not wired into the handler the daemon builds", rec.Code)
-	}
+	assertRefusedBy(t, r, rut, outside,
+		"an out-of-tree transcript at the adapter's PRODUCTION constructor (confinement must be wired into the handler the daemon builds, not only the one the test assembles)")
 }
 
 // --- helpers ---
@@ -215,14 +215,23 @@ func assertProductionConfines(t *testing.T, r HookReceiver) {
 // counted reason.
 func assertRefused(t *testing.T, r HookReceiver, path, what string) {
 	t.Helper()
-	rut := r.New(t)
+	assertRefusedBy(t, r, r.New(t), path, what)
+}
 
+// assertRefusedBy is assertRefused against an already-built receiver. The count
+// check is skipped when Rejections is nil, which is how NewProduction is
+// allowed to supply a receiver with no handle on the confiner.
+func assertRefusedBy(t *testing.T, r HookReceiver, rut HookReceiverUnderTest, path, what string) {
+	t.Helper()
 	rec := postHookPath(t, r, rut, path)
 	if rut.Observed() {
 		t.Errorf("%s was dispatched downstream: %s", what, path)
 	}
 	if rec.Code < 400 || rec.Code > 499 {
 		t.Errorf("%s: status = %d, want a 4xx — a refused path must not be answered with a success", what, rec.Code)
+	}
+	if rut.Rejections == nil {
+		return
 	}
 	if n := rut.Rejections(); n != 1 {
 		t.Errorf("%s: counted %d rejection(s), want 1 — a refusal has to be countable, not just returned", what, n)

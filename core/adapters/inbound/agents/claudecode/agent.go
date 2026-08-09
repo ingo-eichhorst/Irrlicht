@@ -46,12 +46,7 @@ func Agent() agent.Agent {
 			PIDForSession: DiscoverPID,
 			ExcludeArgv:   IsInfraArgv,
 		},
-		Source: agent.FilesUnderRoot{
-			Dir: transcriptsDir(),
-			Parser: agent.JSONLineParser{
-				NewParser: func() agent.LineParser { return &Parser{} },
-			},
-		},
+		Source: Source(),
 		Control: agent.Control{
 			SupportsInput: true,
 			Interrupt:     agent.InterruptCtrlC,
@@ -139,4 +134,22 @@ func Agent() agent.Agent {
 // function of SessionMetrics and lives in CountOpenSubagents.
 func (p *Parser) OpenSubagents(m *tailer.SessionMetrics) int {
 	return CountOpenSubagents(m)
+}
+
+// Source is this adapter's transcript-source declaration, split out of Agent so
+// callers that need only the roots do not rebuild the whole declaration.
+//
+// Claude Code transcripts live one file per session under
+// $CLAUDE_CONFIG_DIR/projects (default ~/.claude/projects).
+//
+// The hook receiver's path confiner reads it per request (issue #1361), and
+// Agent() below is its only other caller — one declaration, so the tree the
+// daemon watches and the tree the receiver confines to cannot drift apart.
+func Source() agent.Source {
+	return agent.FilesUnderRoot{
+		Dir: transcriptsDir(),
+		Parser: agent.JSONLineParser{
+			NewParser: func() agent.LineParser { return &Parser{} },
+		},
+	}
 }

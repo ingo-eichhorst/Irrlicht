@@ -50,13 +50,9 @@ func TestHookPathConfined(t *testing.T) {
 		// keeping it from dispatching is confinement, not an unreadable file.
 		WriteTranscript: func(t *testing.T, dir string) string {
 			t.Helper()
-			path := filepath.Join(dir, "rollout-2026-07-18T00-00-00-abcdefabcdef"+transcriptExt)
-			meta := `{"type":"session_meta","payload":{"id":"sess-confine"}}` + "\n"
-			if err := os.WriteFile(path, []byte(meta), 0o600); err != nil {
-				t.Fatalf("write transcript: %v", err)
-			}
-			return path
+			return writeRolloutInto(t, dir, "sess-confine")
 		},
+		TranscriptExt: transcriptExt,
 		PayloadFor: func(transcriptPath string) string {
 			body, err := json.Marshal(codexHookPayload{
 				TranscriptPath: transcriptPath,

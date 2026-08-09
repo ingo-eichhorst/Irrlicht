@@ -19,13 +19,10 @@ const transcriptStem = "11111111-2222-3333-4444-555555555555"
 // ($HOME/.claude/projects). Both are absolute.
 func confineTestHome(t *testing.T) (home, projectDir string) {
 	t.Helper()
-	home = t.TempDir()
-	t.Setenv("HOME", home)
-	projectDir = filepath.Join(home, defaultProjectsDir, "-Users-someone-repo")
-	if err := os.MkdirAll(projectDir, 0o700); err != nil {
-		t.Fatalf("create project dir: %v", err)
-	}
-	return home, projectDir
+	// Delegates rather than relocating again: two relocations in one test
+	// would leave a path handed out by the first no longer inside the root.
+	home = hookTestHome(t)
+	return home, mkdirAllOrFail(t, filepath.Join(home, defaultProjectsDir, "-Users-someone-repo"))
 }
 
 // writeTranscriptFile writes a minimal transcript at dir/<stem>.jsonl and
@@ -68,10 +65,7 @@ func hookTestHome(t *testing.T) string {
 // that root (issue #1361) — a fabricated literal is now, correctly, refused.
 func inTreeTranscript(t *testing.T, stem string) string {
 	t.Helper()
-	dir := filepath.Join(hookTestHome(t), defaultProjectsDir, "p")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatalf("create project dir: %v", err)
-	}
+	dir := mkdirAllOrFail(t, filepath.Join(hookTestHome(t), defaultProjectsDir, "p"))
 	return writeTranscriptFile(t, dir, stem)
 }
 
@@ -175,4 +169,13 @@ func TestHookHandler_InTreeTranscriptStillAccepted(t *testing.T) {
 	if calls[0].sessionID != transcriptStem {
 		t.Errorf("sessionID: got %q, want %q", calls[0].sessionID, transcriptStem)
 	}
+}
+
+// mkdirAllOrFail creates dir (and parents) and returns it.
+func mkdirAllOrFail(t *testing.T, dir string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create %s: %v", dir, err)
+	}
+	return dir
 }

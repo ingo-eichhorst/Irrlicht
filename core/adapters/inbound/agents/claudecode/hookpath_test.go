@@ -2,12 +2,28 @@ package claudecode
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"irrlicht/core/internal/contracttesting"
 )
+
+// claudeProjectsRoot relocates the config root to a temp dir and returns the
+// declared transcript root inside it — CLAUDE_CONFIG_DIR moves the config root,
+// and transcripts live in its projects/ subdirectory.
+func claudeProjectsRoot(t *testing.T) string {
+	t.Helper()
+	cfg := t.TempDir()
+	t.Setenv(configDirEnvVar, cfg)
+	return mkdirAllOrFail(t, filepath.Join(cfg, "projects"))
+}
+
+// writeContractTranscript writes a transcript the receiver will dispatch on.
+// The session id is the filename stem, so the name has to look like one.
+func writeContractTranscript(t *testing.T, dir string) string {
+	t.Helper()
+	return writeTranscriptFile(t, dir, transcriptStem)
+}
 
 // TestHookPathConfined wires this adapter's hook receiver into the shared issue
 // #1361 contract: a caller-supplied transcript_path is confined to the
@@ -15,18 +31,9 @@ import (
 // anything outside is refused loudly and counted.
 func TestHookPathConfined(t *testing.T) {
 	contracttesting.AssertHookPathConfined(t, contracttesting.HookReceiver{
-		Root: func(t *testing.T) string {
-			t.Helper()
-			// CLAUDE_CONFIG_DIR relocates the config root; transcripts live in
-			// its projects/ subdirectory, which is the declared root.
-			cfg := t.TempDir()
-			t.Setenv(configDirEnvVar, cfg)
-			root := filepath.Join(cfg, "projects")
-			if err := os.MkdirAll(root, 0o700); err != nil {
-				t.Fatalf("create projects dir: %v", err)
-			}
-			return root
-		},
+		Root:            claudeProjectsRoot,
+		WriteTranscript: writeContractTranscript,
+		TranscriptExt:   transcriptExt,
 		New: func(t *testing.T) contracttesting.HookReceiverUnderTest {
 			t.Helper()
 			target := &mockTarget{}
@@ -45,16 +52,6 @@ func TestHookPathConfined(t *testing.T) {
 				Observed: func() bool { return len(target.getCalls()) > 0 },
 			}
 		},
-		// The session id is the filename stem, so the name has to look like a
-		// session id for a dispatch to happen at all.
-		WriteTranscript: func(t *testing.T, dir string) string {
-			t.Helper()
-			path := filepath.Join(dir, transcriptStem+transcriptExt)
-			if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
-				t.Fatalf("write transcript: %v", err)
-			}
-			return path
-		},
 		PayloadFor: func(transcriptPath string) string {
 			body, err := json.Marshal(hookPayload{
 				TranscriptPath: transcriptPath,
@@ -67,5 +64,42 @@ func TestHookPathConfined(t *testing.T) {
 			return string(body)
 		},
 		EndpointPath: HookEndpointPath,
+	})
+}
+
+// TestStatuslinePathConfined runs the same #1361 contract against the
+// statusline receiver. It sits on the same local, unauthenticated mux and takes
+// the same caller-supplied path, and it is the receiver the first cut of this
+// change forgot — which is the argument for a contract rather than a habit.
+func TestStatuslinePathConfined(t *testing.T) {
+	contracttesting.AssertHookPathConfined(t, contracttesting.HookReceiver{
+		Root:            claudeProjectsRoot,
+		WriteTranscript: writeContractTranscript,
+		TranscriptExt:   transcriptExt,
+		New: func(t *testing.T) contracttesting.HookReceiverUnderTest {
+			t.Helper()
+			target := &fakeRateLimitIngester{}
+			confiner := TranscriptConfiner()
+			return contracttesting.HookReceiverUnderTest{
+				Handler:    NewStatuslineHandlerWithConfiner(target, nil, silentLogger{}, confiner),
+				Observed:   func() bool { return len(target.calls) > 0 },
+				Rejections: confiner.RejectionCount,
+			}
+		},
+		NewProduction: func(t *testing.T) contracttesting.HookReceiverUnderTest {
+			t.Helper()
+			target := &fakeRateLimitIngester{}
+			return contracttesting.HookReceiverUnderTest{
+				Handler:  NewStatuslineHandler(target, nil, silentLogger{}),
+				Observed: func() bool { return len(target.calls) > 0 },
+			}
+		},
+		// A rate_limits block is required or the handler acks and returns
+		// before the ingest — the observation the contract keys on.
+		PayloadFor: func(transcriptPath string) string {
+			return `{"session_id":"abc","transcript_path":"` + transcriptPath +
+				`","rate_limits":{"five_hour":{"used_percentage":47,"resets_at":1778761800}}}`
+		},
+		EndpointPath: StatuslineEndpointPath,
 	})
 }

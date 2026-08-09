@@ -23,7 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
+	"sync/atomic"
 
 	"irrlicht/core/adapters/inbound/agents/agentpaths"
 	"irrlicht/core/domain/agent"
@@ -67,8 +67,22 @@ type PathConfiner struct {
 	roots  func() []string
 	suffix string
 
-	mu     sync.Mutex
-	counts map[RejectReason]uint64
+	// One counter per reason, indexed by rejectReasons order. A fixed array of
+	// atomics rather than a mutex-guarded map: the counters exist to observe a
+	// rejection BURST, so instrumentation that serializes exactly when
+	// rejections arrive together would blunt the thing it measures.
+	counts [len(rejectReasons)]atomic.Uint64
+}
+
+// rejectReasons is every reason in a fixed order, so each has a stable counter
+// slot. RejectNone is deliberately absent — it is not a rejection.
+var rejectReasons = [...]RejectReason{
+	RejectEmptyPath,
+	RejectRelativePath,
+	RejectWrongSuffix,
+	RejectNoRoots,
+	RejectUnresolvable,
+	RejectEscapesRoot,
 }
 
 // NewPathConfiner builds a confiner over roots, accepting only files whose
@@ -79,11 +93,7 @@ type PathConfiner struct {
 // evaluated lazily. Each returned element is either absolute or $HOME-relative,
 // exactly as agent.FilesUnderRoot documents; agentpaths.AbsRoot closes that gap.
 func NewPathConfiner(roots func() []string, suffix string) *PathConfiner {
-	return &PathConfiner{
-		roots:  roots,
-		suffix: suffix,
-		counts: make(map[RejectReason]uint64),
-	}
+	return &PathConfiner{roots: roots, suffix: suffix}
 }
 
 // ConfinerForSource builds a confiner from an adapter's own agent.Source
@@ -205,22 +215,20 @@ func RejectPath(w http.ResponseWriter, log outbound.Logger, component, raw strin
 // publish into — but they make "rejected and counted" an observable fact
 // rather than a claim, which is what the contract assertion checks.
 func (c *PathConfiner) Rejections() map[RejectReason]uint64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make(map[RejectReason]uint64, len(c.counts))
-	for reason, n := range c.counts {
-		out[reason] = n
+	out := make(map[RejectReason]uint64, len(rejectReasons))
+	for i, reason := range rejectReasons {
+		if n := c.counts[i].Load(); n > 0 {
+			out[reason] = n
+		}
 	}
 	return out
 }
 
 // RejectionCount returns the total number of paths this confiner has refused.
 func (c *PathConfiner) RejectionCount() uint64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	var total uint64
-	for _, n := range c.counts {
-		total += n
+	for i := range c.counts {
+		total += c.counts[i].Load()
 	}
 	return total
 }
@@ -228,9 +236,12 @@ func (c *PathConfiner) RejectionCount() uint64 {
 // count records a rejection and returns the reason, so call sites read as
 // `return "", c.count(reason)`.
 func (c *PathConfiner) count(reason RejectReason) RejectReason {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.counts[reason]++
+	for i, known := range rejectReasons {
+		if known == reason {
+			c.counts[i].Add(1)
+			break
+		}
+	}
 	return reason
 }
 
@@ -282,13 +293,15 @@ func resolvePath(path string) (string, error) {
 	if !errors.Is(err, fs.ErrNotExist) || hasParentRef(path) {
 		return "", err
 	}
-	if _, lerr := os.Lstat(path); lerr == nil || !errors.Is(lerr, fs.ErrNotExist) {
+	if _, lerr := os.Lstat(path); !errors.Is(lerr, fs.ErrNotExist) {
 		// The leaf is there (a dangling symlink, most likely) or its status
 		// cannot be established. Either way this is not the write race.
 		return "", err
 	}
+	// path is absolute (Confine checked) and free of "..", so Split always
+	// yields a non-empty dir and base is neither "" nor "..".
 	dir, base := filepath.Split(path)
-	if dir == "" || base == "" || base == "." || base == ".." {
+	if base == "." {
 		return "", err
 	}
 	resolvedDir, dirErr := filepath.EvalSymlinks(filepath.Clean(dir))
@@ -300,6 +313,11 @@ func resolvePath(path string) (string, error) {
 
 // hasParentRef reports whether path contains a ".." component.
 func hasParentRef(path string) bool {
+	// Allocation-free reject for the overwhelmingly common case; the split
+	// below only runs for a path that contains ".." as a substring.
+	if !strings.Contains(path, "..") {
+		return false
+	}
 	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
 		if part == ".." {
 			return true

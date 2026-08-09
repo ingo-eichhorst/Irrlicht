@@ -23,7 +23,12 @@ type Source interface {
 // collapse the lot into one resolver (`Roots func(goos string) []string`, with
 // constructors for the static cases) rather than extending the ladder.
 type FilesUnderRoot struct {
-	Dir    string // path relative to $HOME, e.g. ".claude/projects"
+	// Dir is the root, either absolute or relative to $HOME (e.g.
+	// ".claude/projects"). Resolving that choice is a runtime concern, so it
+	// lives outside the domain: adapters/inbound/agents/agentpaths.AbsRoot is
+	// the single implementation, shared by the fswatcher that watches the tree
+	// and the hook receiver that confines caller-supplied paths to it.
+	Dir    string
 	Parser FileParser
 
 	// DirFunc optionally replaces Dir with a resolver, for an adapter whose

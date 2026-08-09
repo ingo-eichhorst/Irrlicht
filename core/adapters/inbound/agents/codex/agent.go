@@ -40,14 +40,7 @@ func Agent() agent.Agent {
 			Match:         agent.ExactName{Name: ProcessName},
 			PIDForSession: DiscoverPID,
 		},
-		Source: agent.FilesUnderRoot{
-			Dir:                     sessionsDir(),
-			SessionIDFromPath:       sessionIDFromPath,
-			ParentSessionIDFromPath: parentSessionIDFromPath,
-			Parser: agent.JSONLineParser{
-				NewParser: func() agent.LineParser { return &Parser{} },
-			},
-		},
+		Source:  Source(),
 		Control: agent.Control{SupportsInput: true, Interrupt: agent.InterruptCtrlC},
 		Permissions: []agent.Permission{
 			agent.ControlPermission(),
@@ -85,6 +78,26 @@ func Agent() agent.Agent {
 					Uninstall:  UninstallHooks,
 				},
 			},
+		},
+	}
+}
+
+// Source is this adapter's transcript-source declaration, split out of Agent so
+// callers that need only the roots do not rebuild the whole declaration.
+//
+// Codex rollouts live under $CODEX_HOME/sessions (default
+// ~/.codex/sessions), nested sessions/YYYY/MM/DD/*.jsonl.
+//
+// The hook receiver's path confiner reads it per request (issue #1361), and
+// Agent() below is its only other caller — one declaration, so the tree the
+// daemon watches and the tree the receiver confines to cannot drift apart.
+func Source() agent.Source {
+	return agent.FilesUnderRoot{
+		Dir:                     sessionsDir(),
+		SessionIDFromPath:       sessionIDFromPath,
+		ParentSessionIDFromPath: parentSessionIDFromPath,
+		Parser: agent.JSONLineParser{
+			NewParser: func() agent.LineParser { return &Parser{} },
 		},
 	}
 }

@@ -30,7 +30,6 @@ import (
 	"runtime"
 
 	"irrlicht/core/adapters/inbound/agents/hookjson"
-	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/outbound"
@@ -111,7 +110,7 @@ func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger)
 // confineToSessionsDir, which re-derived $CODEX_HOME/sessions from its own
 // constants and so could guard a different tree than the one being watched.
 func TranscriptConfiner() *hookjson.PathConfiner {
-	return hookjson.ConfinerForSource(func() agent.Source { return Agent().Source }, runtime.GOOS, transcriptExt)
+	return hookjson.ConfinerForSource(Source, runtime.GOOS, transcriptExt)
 }
 
 // NewHookHandlerWithConfiner is NewHookHandler with an explicit confiner, for

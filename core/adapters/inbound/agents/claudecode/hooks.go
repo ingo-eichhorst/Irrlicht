@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/hookjson"
-	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/outbound"
@@ -248,7 +247,7 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter
 // agent.Source declaration so it cannot drift from the tree the daemon watches
 // (issue #1361).
 func TranscriptConfiner() *hookjson.PathConfiner {
-	return hookjson.ConfinerForSource(func() agent.Source { return Agent().Source }, runtime.GOOS, transcriptExt)
+	return hookjson.ConfinerForSource(Source, runtime.GOOS, transcriptExt)
 }
 
 // NewHookHandlerWithConfiner is NewHookHandler with an explicit confiner, for
@@ -293,9 +292,12 @@ func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGrant
 	}
 	payload.TranscriptPath = transcriptPath
 
+	// Confinement already rejected an empty or non-.jsonl path, so the only
+	// input still reaching this is a basename that is bare ".jsonl" — an empty
+	// session id, which nothing downstream can key on.
 	sessionID := sessionIDFromTranscriptPath(transcriptPath)
 	if sessionID == "" {
-		http.Error(w, "bad request: missing transcript_path", http.StatusBadRequest)
+		http.Error(w, "bad request: transcript_path has no session id", http.StatusBadRequest)
 		return
 	}
 
