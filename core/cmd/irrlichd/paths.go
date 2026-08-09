@@ -9,6 +9,7 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/logging"
@@ -85,7 +86,9 @@ func resolveSessionRepo() (*filesystem.SessionRepository, error) {
 // --diagnose CLI so both snapshot the exact same locations. fsRepo supplies both
 // the (uncached) session list and the instances dir; ledger and log dirs honor
 // IRRLICHT_HOME via the same accessors the daemon writes through.
-func buildDiagnostics(fsRepo *filesystem.SessionRepository, allAgents []agent.Agent, cfg config.Config) *services.DiagnosticsService {
+// hookHealth is nil-meaningful: the daemon passes liveHookHealth, --diagnose
+// passes nil, and hooks.json reports which it got. See hooksView.
+func buildDiagnostics(fsRepo *filesystem.SessionRepository, allAgents []agent.Agent, cfg config.Config, hookHealth func() services.HookHealthSnapshot) *services.DiagnosticsService {
 	home, _ := os.UserHomeDir()
 	ledgerDir, _ := metrics.LedgerDir()
 	logsDir, _ := logging.LogDir()
@@ -97,6 +100,7 @@ func buildDiagnostics(fsRepo *filesystem.SessionRepository, allAgents []agent.Ag
 		DefaultAdapter: claudecode.AdapterName,
 		Cfg:            cfg,
 		Version:        Version,
+		HookHealth:     hookHealth,
 		Paths: services.DiagnosticsPaths{
 			Home:            home,
 			InstancesDir:    fsRepo.InstancesDir(),
@@ -105,6 +109,22 @@ func buildDiagnostics(fsRepo *filesystem.SessionRepository, allAgents []agent.Ag
 			PermissionsFile: filepath.Join(dataDir(home), "permissions.json"),
 		},
 	})
+}
+
+// liveHookHealth snapshots the in-process hook-receiver counters for the
+// diagnostics bundle (issue #1364). Only the daemon wires it: these counters
+// accumulate in whatever process served the hooks, and --diagnose is not that
+// process.
+func liveHookHealth() services.HookHealthSnapshot {
+	snap := services.HookHealthSnapshot{UnknownNamesDropped: hookjson.UnknownEventNamesDropped()}
+	for _, row := range hookjson.UnknownEvents() {
+		snap.UnknownEvents = append(snap.UnknownEvents, services.UnknownHookEvent{
+			Adapter: row.Adapter,
+			Event:   row.Event,
+			Count:   row.Count,
+		})
+	}
+	return snap
 }
 
 // runDiagnose writes a diagnostics bundle to the current directory and exits.
@@ -128,7 +148,10 @@ func runDiagnose() {
 		log.Fatalf("diagnose: create %s: %v", out, err)
 	}
 	defer f.Close()
-	if err := buildDiagnostics(fsRepo, agents.All(), cfg).WriteBundle(f); err != nil {
+	// nil hook health on purpose: this process has served no hooks, so its
+	// counters are structurally zero and publishing them would read as an
+	// all-clear. hooks.json says so and points at GET /debug/bundle.
+	if err := buildDiagnostics(fsRepo, agents.All(), cfg, nil).WriteBundle(f); err != nil {
 		log.Fatalf("diagnose: write bundle: %v", err)
 	}
 	abs, _ := filepath.Abs(out)

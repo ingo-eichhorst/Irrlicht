@@ -80,6 +80,14 @@ func untar(t *testing.T, b []byte) map[string][]byte {
 // home path and a token to prove redaction is applied.
 func buildTestService(t *testing.T) *DiagnosticsService {
 	t.Helper()
+	return buildTestServiceWithHooks(t, nil)
+}
+
+// buildTestServiceWithHooks is buildTestService with an explicit hook-health
+// source, so a test can drive hooks.json's two collection modes: nil is the
+// --diagnose CLI (a process that served no hooks), non-nil is the daemon.
+func buildTestServiceWithHooks(t *testing.T, hookHealth func() HookHealthSnapshot) *DiagnosticsService {
+	t.Helper()
 	home := "/Users/test"
 	dir := t.TempDir()
 	instancesDir := filepath.Join(dir, "instances")
@@ -131,6 +139,7 @@ func buildTestService(t *testing.T) *DiagnosticsService {
 		DefaultAdapter: "claude-code",
 		Cfg:            cfg,
 		Version:        "9.9.9+test",
+		HookHealth:     hookHealth,
 		Paths: DiagnosticsPaths{
 			Home:            home,
 			InstancesDir:    instancesDir,
@@ -151,7 +160,7 @@ func TestWriteBundleContents(t *testing.T) {
 	for _, want := range []string{
 		"version.txt", "system.txt", "config.json", "permissions.json",
 		"state.json", "sessions.json", "liveness.json", "processes.json",
-		"events.log", "instances/sess-a.json", "ledgers/abc.ledger.json",
+		"hooks.json", "events.log", "instances/sess-a.json", "ledgers/abc.ledger.json",
 	} {
 		if _, ok := files[want]; !ok {
 			t.Errorf("bundle missing %s (have %v)", want, keys(files))
@@ -290,6 +299,81 @@ func keys(m map[string][]byte) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
+	}
+	return out
+}
+
+// TestHooksBundleReportsUnknownEvents covers the daemon-collected form of
+// hooks.json (issue #1364): the per-(adapter, name) counts a hook receiver
+// accumulated, plus the saturation total, are in the bundle a bug report
+// carries.
+func TestHooksBundleReportsUnknownEvents(t *testing.T) {
+	svc := buildTestServiceWithHooks(t, func() HookHealthSnapshot {
+		return HookHealthSnapshot{
+			// Deliberately out of order: the view sorts, so two captures of the
+			// same daemon diff cleanly instead of churning on map iteration.
+			UnknownEvents: []UnknownHookEvent{
+				{Adapter: "codex", Event: "TurnComplete", Count: 1},
+				{Adapter: "claude-code", Event: "PostToolUseV2", Count: 412},
+			},
+			UnknownNamesDropped: 7,
+		}
+	})
+
+	got := hooksJSON(t, svc)
+
+	if got["collected_from"] != "daemon" {
+		t.Errorf("collected_from = %v, want \"daemon\"", got["collected_from"])
+	}
+	if _, ok := got["note"]; ok {
+		t.Errorf("daemon-collected hooks.json carries a note it does not need: %v", got["note"])
+	}
+	if got["unknown_event_names_dropped"] != float64(7) {
+		t.Errorf("unknown_event_names_dropped = %v, want 7 — a saturated name table must not read as a complete one", got["unknown_event_names_dropped"])
+	}
+	events, _ := got["unknown_events"].([]any)
+	if len(events) != 2 {
+		t.Fatalf("unknown_events has %d entries, want 2: %v", len(events), got["unknown_events"])
+	}
+	first, _ := events[0].(map[string]any)
+	if first["adapter"] != "claude-code" || first["event"] != "PostToolUseV2" || first["count"] != float64(412) {
+		t.Errorf("first row = %v, want claude-code/PostToolUseV2/412 (sorted by adapter then event)", first)
+	}
+}
+
+// TestHooksBundleOmitsCountsWhenNotCollectedInDaemon is the honesty obligation.
+// `irrlichd --diagnose` builds its bundle in a process that never served a hook,
+// so its counters are structurally zero; publishing them as counts would tell a
+// bug reporter "no unrecognized events" on evidence that could not exist.
+func TestHooksBundleOmitsCountsWhenNotCollectedInDaemon(t *testing.T) {
+	got := hooksJSON(t, buildTestServiceWithHooks(t, nil))
+
+	if got["collected_from"] != "cli" {
+		t.Errorf("collected_from = %v, want \"cli\"", got["collected_from"])
+	}
+	if _, ok := got["unknown_events"]; ok {
+		t.Errorf("unknown_events is present without a daemon to read it from: %v — an empty list here reads as an all-clear", got["unknown_events"])
+	}
+	note, _ := got["note"].(string)
+	if !strings.Contains(note, "events.log") || !strings.Contains(note, "/debug/bundle") {
+		t.Errorf("note does not say where the real evidence is: %q", note)
+	}
+}
+
+// hooksJSON pulls hooks.json out of a freshly written bundle.
+func hooksJSON(t *testing.T, svc *DiagnosticsService) map[string]any {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := svc.WriteBundle(&buf); err != nil {
+		t.Fatalf("WriteBundle: %v", err)
+	}
+	raw, ok := untar(t, buf.Bytes())["hooks.json"]
+	if !ok {
+		t.Fatal("bundle has no hooks.json")
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("hooks.json is not valid JSON: %v\n%s", err, raw)
 	}
 	return out
 }

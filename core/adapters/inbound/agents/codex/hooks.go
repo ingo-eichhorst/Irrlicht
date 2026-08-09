@@ -191,9 +191,10 @@ func dispatchHookEvent(target HookTarget, log outbound.Logger, sessionID string,
 	case HookStop:
 		handleStopHook(target, log, sessionID, payload)
 	default:
-		// Unrecognized hook event — accept but ignore.
-		log.LogInfo(logComponentHookReceiver, sessionID,
-			fmt.Sprintf("ignored unrecognized hook event %q", payload.HookEventName))
+		// Unrecognized hook event — accept but ignore, counted per name and
+		// reported once, in the one place that behaviour is decided for every
+		// receiver (issue #1364). serveHookRequest's 200 is unaffected.
+		hookjson.IgnoreUnknownEvent(log, logComponentHookReceiver, AdapterName, sessionID, payload.HookEventName)
 	}
 }
 

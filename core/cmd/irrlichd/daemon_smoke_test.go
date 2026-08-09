@@ -250,6 +250,7 @@ func assertBundleEndpoint(t *testing.T, client *http.Client, url string) {
 	}
 	tr := tar.NewReader(gz)
 	var hasVersion bool
+	var hooks []byte
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -258,12 +259,42 @@ func assertBundleEndpoint(t *testing.T, client *http.Client, url string) {
 		if err != nil {
 			t.Fatalf("bundle is not a valid tar: %v", err)
 		}
-		if hdr.Name == "version.txt" {
+		switch hdr.Name {
+		case "version.txt":
 			hasVersion = true
+		case "hooks.json":
+			if hooks, err = io.ReadAll(tr); err != nil {
+				t.Fatalf("read hooks.json: %v", err)
+			}
 		}
 	}
 	if !hasVersion {
 		t.Errorf("bundle from %s missing version.txt", url)
+	}
+	assertHooksCollectedInDaemon(t, url, hooks)
+}
+
+// assertHooksCollectedInDaemon checks that the LIVE daemon's bundle reports its
+// hook counters as daemon-collected (issue #1364).
+//
+// This is the only thing that proves startup.go passes liveHookHealth. Every
+// other test of hooks.json builds the service itself, and the service's
+// nil-HookHealth branch is a perfectly valid, perfectly quiet output — so a
+// daemon that forgot to wire the snapshot would emit the CLI form here and no
+// unit test anywhere would notice.
+func assertHooksCollectedInDaemon(t *testing.T, url string, raw []byte) {
+	t.Helper()
+	if len(raw) == 0 {
+		t.Fatalf("bundle from %s missing hooks.json", url)
+	}
+	var hooks struct {
+		CollectedFrom string `json:"collected_from"`
+	}
+	if err := json.Unmarshal(raw, &hooks); err != nil {
+		t.Fatalf("hooks.json is not valid JSON: %v\n%s", err, raw)
+	}
+	if hooks.CollectedFrom != "daemon" {
+		t.Errorf("hooks.json collected_from = %q, want \"daemon\" — the running daemon did not wire its hook counters into the bundle", hooks.CollectedFrom)
 	}
 }
 

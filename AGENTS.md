@@ -186,7 +186,27 @@ Before marking a ticket done, run the full suite — every layer must pass:
   under launchd with a minimal PATH and routinely cannot see the user's CLI, so
   only a version successfully read AND parsed AND found below the floor blocks
   an install.
-  All five contract families pass by construction against a correct adapter, so
+- Unrecognized hook events: `contracttesting.AssertUnknownHookEventObserved`
+  (`core/internal/contracttesting/unknown_hook_event.go`) covers the other end of
+  the same receiver — the event name it does *not* know. Before #1364 both
+  receivers ended their switch with an Info log and a 200, which is
+  indistinguishable from health: an upstream event rename would leave the
+  permission reading `granted`, the config still holding our entries, and state
+  detection quietly degrading, with nothing anywhere to look at. Four
+  obligations: a recognized event still dispatches and is counted by nobody (the
+  vacuity guard — a receiver that counts *everything* otherwise looks identical
+  to one that counts correctly); an unrecognized event is answered 2xx and
+  dispatched nowhere; it is counted per **(adapter, event name)**, because a
+  rename fires on every tool call forever while a stray POST fires once and a
+  single scalar cannot tell those apart; and it is reported **exactly once per
+  distinct name**, since a line per tool call buries the evidence it exists to
+  surface. `hookjson.IgnoreUnknownEvent` is the single place it is implemented —
+  the sibling of `RejectPath`, and it deliberately takes no `http.ResponseWriter`
+  so it cannot grow an opinion about the status code. Its counters are read into
+  the diagnostics bundle's `hooks.json`; note that `--diagnose` runs in a process
+  that never served a hook, so that form omits the counts and says so rather than
+  publishing zeros (the live counts come from `GET /debug/bundle`).
+  All six contract families pass by construction against a correct adapter, so
   their whole value is that they *can* fail: a new or reworked contract
   assertion lands with the deliberate mutation that was seen red for each
   obligation recorded in its PR — the same bar the red-first rule above sets
