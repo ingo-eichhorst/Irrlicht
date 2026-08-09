@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"irrlicht/tools/onboarding-factory/internal/matrix"
 )
 
 // TestStatusSummaryCounts pins the per-agent bucket counts against richRepo's
@@ -21,11 +23,16 @@ func TestStatusSummaryCounts(t *testing.T) {
 		t.Fatalf("bad json: %v\n%s", err, out)
 	}
 
+	// richRepo has no adapters.json and no core scenarios, so every row
+	// carries an empty maturity claim, earns `planned`, and settles 0 of the
+	// core 12 (#1369). That is the correct reading of a catalog the maturity
+	// model does not apply to — not a defect in the fixture.
+	const core = 12
 	want := map[string]agentSummary{
-		"aider":      {Agent: "aider", Recorded: 1, Total: 1},
-		"claudecode": {Agent: "claudecode", Recorded: 1, Pending: 1, Blocked: 2, Unobservable: 1, NotApplicable: 1, Unknown: 1, Total: 7},
-		"codex":      {Agent: "codex", Recorded: 1, Pending: 1, Total: 2},
-		"opencode":   {Agent: "opencode", Recorded: 1, Total: 1},
+		"aider":      {Agent: "aider", Recorded: 1, Total: 1, Earned: matrix.MaturityPlanned, CoreTotal: core},
+		"claudecode": {Agent: "claudecode", Recorded: 1, Pending: 1, Blocked: 2, Unobservable: 1, NotApplicable: 1, Unknown: 1, Total: 7, Earned: matrix.MaturityPlanned, CoreTotal: core},
+		"codex":      {Agent: "codex", Recorded: 1, Pending: 1, Total: 2, Earned: matrix.MaturityPlanned, CoreTotal: core},
+		"opencode":   {Agent: "opencode", Recorded: 1, Total: 1, Earned: matrix.MaturityPlanned, CoreTotal: core},
 	}
 	if len(v.Agents) != len(want) {
 		t.Fatalf("want %d agent rows, got %d: %+v", len(want), len(v.Agents), v.Agents)
@@ -40,7 +47,7 @@ func TestStatusSummaryCounts(t *testing.T) {
 		}
 	}
 
-	wantTotal := agentSummary{Agent: "total", Recorded: 4, Pending: 2, Blocked: 2, Unobservable: 1, NotApplicable: 1, Unknown: 1, Total: 11}
+	wantTotal := agentSummary{Agent: "total", Recorded: 4, Pending: 2, Blocked: 2, Unobservable: 1, NotApplicable: 1, Unknown: 1, Total: 11, CoreTotal: core * len(want)}
 	if v.Total != wantTotal {
 		t.Errorf("total: got %+v want %+v", v.Total, wantTotal)
 	}
@@ -133,8 +140,15 @@ func TestStatusSummaryText(t *testing.T) {
 	if row == "" {
 		t.Fatalf("no claudecode row:\n%s", out)
 	}
-	if fields := strings.Fields(row); fields[len(fields)-1] != "7" {
-		t.Errorf("claudecode row should end in its 7-cell total, got %q", row)
+	// The cell total is no longer last: #1369 appended maturity / earned /
+	// core columns after it. Assert its position from the header rather than
+	// from the end, so a future column does not silently move the assertion.
+	fields := strings.Fields(row)
+	if len(fields) < 4 || fields[len(fields)-4] != "7" {
+		t.Errorf("claudecode row should carry its 7-cell total before the maturity columns, got %q", row)
+	}
+	if fields[len(fields)-1] != "0/12" {
+		t.Errorf("claudecode row should settle 0 of the core 12, got %q", row)
 	}
 }
 

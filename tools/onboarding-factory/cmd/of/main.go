@@ -82,8 +82,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 // emitSummary renders the folded per-agent counts, as JSON or as the text
 // table.
-func emitSummary(view statusView, asJSON bool, stdout, stderr io.Writer) int {
-	sv := buildSummaryView(view)
+func emitSummary(m *matrix.Matrix, view statusView, asJSON bool, stdout, stderr io.Writer) int {
+	sv := buildSummaryView(m, view)
 	if asJSON {
 		if err := writeJSON(stdout, sv); err != nil {
 			fmt.Fprintf(stderr, "of status: encode: %v\n", err)
@@ -204,7 +204,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	// (rather than re-reading the matrix) is what keeps the two renderings of
 	// `of status` arithmetically consistent.
 	if *summary {
-		return emitSummary(view, *asJSON, stdout, stderr)
+		return emitSummary(m, view, *asJSON, stdout, stderr)
 	}
 
 	if *asJSON {

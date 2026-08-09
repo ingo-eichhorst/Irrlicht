@@ -109,6 +109,29 @@ There is no separate `extend-driver` verb: a driver gap is surfaced by `assess`
 (the **driver** pillar = `gap:<primitive>`) and closed inside `record`, which
 ports the missing step from the reference driver before it drives.
 
+### Not every cell is worth a sweep (#1369)
+
+A sweep over all 46 scenarios is no longer the price of admission. Two things
+changed, and both are visible in `of status --summary`:
+
+- **12 of the 46 scenarios are core**; the other 34 are optional and block no
+  maturity promotion. Prioritise the core set when onboarding a new agent —
+  `of status --summary` prints each adapter's `core` column (settled / 12) and
+  its claimed vs earned maturity. The set lives in
+  `tools/onboarding-factory/internal/matrix/vocabulary.go`.
+- **A structurally dead cell needs no directory.** Instead of writing an
+  assessment for a scenario the agent simply cannot do, add one line to
+  `replaydata/agents/adapters.json`:
+  `"capabilities": {"<trait>": "absent"}` when the agent lacks the feature, or
+  `"untraced"` when it has it but exercising it leaves no trace in any Source
+  the adapter reads. The matrix synthesizes the cell. Trait ids are a closed
+  set in `internal/matrix/capability.go`; `of validate` rejects an invented
+  one, and rejects a declaration that contradicts a cell already on disk.
+
+Do **not** use a capability declaration for a cell that is merely *not
+recorded yet* — that is `record_blocked` on the assessment, and the two mean
+different things: one says the adapter cannot, the other says we have not.
+
 ## Dispatching a subagent
 
 For `create-scenario`, `create-agent`, `assess`, and `record`, spawn ONE

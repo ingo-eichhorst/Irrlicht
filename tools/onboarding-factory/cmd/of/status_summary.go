@@ -40,6 +40,18 @@ type agentSummary struct {
 	// Unknown ← "unknown": not yet assessed, or assessed with empty axes.
 	Unknown int `json:"unknown"`
 	Total   int `json:"total"`
+	// Maturity is the tier the adapter CLAIMS in replaydata/agents/adapters.json,
+	// Earned the highest tier its core-12 standing supports (#1369). They are
+	// reported side by side because the interesting rows are the ones where
+	// they differ: claiming more than is earned is a `of validate` failure,
+	// claiming less is a promotion nobody has taken.
+	Maturity string `json:"maturity,omitempty"`
+	Earned   string `json:"earned,omitempty"`
+	// CoreSettled counts how many of the core twelve are settled — observed,
+	// or derived dead by the capability model. It is the single number that
+	// says how far this adapter is from `stable`.
+	CoreSettled int `json:"core_settled"`
+	CoreTotal   int `json:"core_total"`
 }
 
 // add folds one cell's display state into the right bucket.
@@ -75,7 +87,7 @@ type summaryView struct {
 // the summary cannot disagree with the full dump it summarises — and the
 // --agent / --scenario filters already applied to that view carry over for
 // free.
-func buildSummaryView(view statusView) summaryView {
+func buildSummaryView(m *matrix.Matrix, view statusView) summaryView {
 	out := summaryView{Total: agentSummary{Agent: "total"}}
 	rows := make(map[string]*agentSummary, len(view.Agents))
 	for _, a := range view.Agents {
@@ -92,13 +104,30 @@ func buildSummaryView(view statusView) summaryView {
 		}
 	}
 	for _, a := range view.Agents {
+		// Maturity and core standing are properties of the ADAPTER, read
+		// straight from the matrix, so unlike the counts they are unaffected
+		// by a --scenario filter. Folding them out of the filtered view would
+		// have `of status --scenario basic-turn --summary` report every
+		// adapter as one twelfth of the way to stable.
+		rows[a].Maturity = m.Capabilities().Maturity(a)
+		rows[a].Earned = m.EarnedMaturity(a)
+		rows[a].CoreTotal = len(matrix.CoreScenarios())
+		for _, s := range m.CoreStanding(a) {
+			if s.Settled {
+				rows[a].CoreSettled++
+			}
+		}
 		out.Agents = append(out.Agents, *rows[a])
+	}
+	out.Total.CoreTotal = len(matrix.CoreScenarios()) * len(view.Agents)
+	for _, a := range out.Agents {
+		out.Total.CoreSettled += a.CoreSettled
 	}
 	return out
 }
 
 // One column-width spec for header and rows alike, so they cannot drift.
-const summaryRowFormat = "%-14s %9s %8s %8s %13s %6s %8s %6s\n"
+const summaryRowFormat = "%-14s %9s %8s %8s %13s %6s %8s %6s %8s %8s %6s\n"
 
 func printSummaryText(stdout io.Writer, view summaryView) {
 	fmt.Fprintf(stdout, "per-agent cell counts — %s, %d cells\n\n",
@@ -106,7 +135,8 @@ func printSummaryText(stdout io.Writer, view summaryView) {
 	// The not-applicable column header reads the SAME schema token `of status`
 	// prints per cell, so the two commands cannot drift apart again (#1367).
 	fmt.Fprintf(stdout, summaryRowFormat,
-		"agent", "recorded", "pending", "blocked", matrix.StateUnobservable, matrix.StateNotApplicable, matrix.StateUnknown, "total")
+		"agent", "recorded", "pending", "blocked", matrix.StateUnobservable, matrix.StateNotApplicable, matrix.StateUnknown, "total",
+		"maturity", "earned", "core")
 	for _, a := range view.Agents {
 		printSummaryRow(stdout, a)
 	}
@@ -117,6 +147,19 @@ func printSummaryText(stdout io.Writer, view summaryView) {
 	fmt.Fprintf(stdout, "note: recorded = display state %q. A cell blocked by a daemon bug or driver gap\n", matrix.StateObserved)
 	fmt.Fprintln(stdout, "counts under blocked/unobservable even if it has a recording, so total − recorded is not")
 	fmt.Fprintln(stdout, "the un-recorded count. Use `of status` for per-cell detail.")
+	fmt.Fprintf(stdout, "note: core = settled core-%d scenarios (observed, or derived dead by the capability\n", len(matrix.CoreScenarios()))
+	fmt.Fprintln(stdout, "model). maturity is the claim in replaydata/agents/adapters.json, earned is what the core")
+	fmt.Fprintln(stdout, "standing supports; `of validate` fails when a claim exceeds it. Both ignore --scenario.")
+}
+
+// dash renders an absent claim as "-" rather than as blank. A blank cell in a
+// whitespace-aligned table is indistinguishable from a rendering bug, and it
+// also silently changes the column count for anything parsing the row.
+func dash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 // plural renders "1 agent" / "2 agents".
@@ -130,5 +173,6 @@ func plural(n int, noun string) string {
 func printSummaryRow(stdout io.Writer, a agentSummary) {
 	n := strconv.Itoa
 	fmt.Fprintf(stdout, summaryRowFormat, a.Agent,
-		n(a.Recorded), n(a.Pending), n(a.Blocked), n(a.Unobservable), n(a.NotApplicable), n(a.Unknown), n(a.Total))
+		n(a.Recorded), n(a.Pending), n(a.Blocked), n(a.Unobservable), n(a.NotApplicable), n(a.Unknown), n(a.Total),
+		dash(a.Maturity), dash(a.Earned), n(a.CoreSettled)+"/"+n(a.CoreTotal))
 }

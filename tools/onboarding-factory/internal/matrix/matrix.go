@@ -63,6 +63,12 @@ type CellState struct {
 	Disposition     Disposition       `json:"disposition"`
 	DisplayState    string            `json:"display_state"`
 	BlockedReason   string            `json:"blocked_reason,omitempty"`
+	// Derived marks a cell that has NO directory on disk and exists only
+	// because the capability model says the (adapter, scenario) pair is
+	// structurally dead (#1369). It is the mechanism that lets a new adapter
+	// skip writing a directory per missing feature; the flag is exported so a
+	// reader of `of status --json` can tell a modelled cell from a written one.
+	Derived bool `json:"derived,omitempty"`
 }
 
 // Config locates the inputs. The model is shard-backed: RepoRoot (or, when
@@ -84,6 +90,17 @@ type Matrix struct {
 	shards     map[string]shard.Shard                  // coverage_id (shard.Name) → shard (scenario-global spec only)
 	agentCells map[string]map[string]*shard.ShardAgent // agent → coverage_id → cell (from metadata.json)
 	cells      map[string]map[string]CellState         // agent → coverage_id → cell
+	caps       *CapabilityModel                        // replaydata/agents/adapters.json (#1369)
+}
+
+// Capabilities returns the loaded capability model. It is never nil, so
+// callers can chain without a guard; when the file is absent the model
+// declares nothing and every derivation reports "not structural".
+func (m *Matrix) Capabilities() *CapabilityModel {
+	if m.caps == nil {
+		return &CapabilityModel{Adapters: map[string]AdapterModel{}}
+	}
+	return m.caps
 }
 
 type catalogEntry struct {
@@ -134,6 +151,15 @@ func Load(cfg Config) (*Matrix, error) {
 		m.shards[sh.Name] = sh
 	}
 
+	// The capability model is optional. A read error is reported (a corrupt
+	// file must not read as "no model" — that would silently un-derive every
+	// synthesized cell), but a missing file is fine.
+	caps, err := LoadCapabilities(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	m.caps = caps
+
 	// Load per-adapter cells (one directory scan per adapter), keyed by
 	// scenario_id, from replaydata/agents/<adapter>/scenarios/<folder>/metadata.json.
 	for _, adapter := range m.agents {
@@ -156,7 +182,15 @@ func Load(cfg Config) (*Matrix, error) {
 		m.cells[agent] = map[string]CellState{}
 		for _, sh := range shards {
 			if m.agentCells[agent] == nil || m.agentCells[agent][sh.Name] == nil {
-				continue // no cell for this (agent, scenario)
+				// No cell on disk. Before #1369 that was simply a hole in the
+				// matrix. Now, if the capability model says the pair is
+				// structurally dead, the cell is synthesized from the model —
+				// which is what lets a new adapter declare a missing feature
+				// once instead of writing a directory for it.
+				if derived, ok := m.caps.StructuralState(agent, sh.Name); ok {
+					m.cells[agent][sh.Name] = m.derivedCell(agent, sh.Name, derived)
+				}
+				continue
 			}
 			m.cells[agent][sh.Name] = m.buildCell(agent, sh.Name)
 		}

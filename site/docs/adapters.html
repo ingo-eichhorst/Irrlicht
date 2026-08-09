@@ -536,6 +536,8 @@ type Watcher interface {
 
       <p>Adapters and platforms in the compatibility grid share the same four-tier ladder: <code>planned</code>, <code>alpha</code>, <code>beta</code>, <code>stable</code>. Each tier states a <strong>common ladder</strong> (time, bug count, real-world use) once and then a small set of component-specific artefact checks. Every box can be ticked from public artefacts (the repo, GitHub issues, tagged releases) -- stage assignment reduces to running through the checklist.</p>
 
+      <p>Since #1369 each tier has a <strong>machine-checked floor</strong> alongside its human criteria. The floor is a set of <em>core</em> scenarios drawn from the 46 in the matrix &mdash; twelve of them, chosen for discriminating power rather than coverage (the set and the reasoning per scenario live in <code>tools/onboarding-factory/internal/matrix/vocabulary.go</code>). A scenario <em>settles</em> when it is recorded and observed, or when <code>replaydata/agents/adapters.json</code> declares a capability the adapter structurally lacks. The other 34 scenarios are <strong>optional</strong> and never block a promotion. <code>of validate</code> fails when an adapter claims a tier its core standing has not earned; claiming <em>less</em> is always allowed, because the time-and-adoption criteria below are invisible to it.</p>
+
       <p>The shape borrows from <a href="https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/">Kubernetes feature stages</a> (alpha experimental, beta opt-out-able, GA stable) and the <a href="https://github.com/cncf/toc/blob/main/process/graduation_criteria.md">CNCF graduation criteria</a> (real adopters, time at the previous tier).</p>
 
       <h3 id="stage-planned"><code>planned</code></h3>
@@ -559,6 +561,8 @@ type Watcher interface {
         <li>Registered in the <code>allAgents</code> slice in <code>core/cmd/irrlichd/main.go</code></li>
         <li>Emits all three lifecycle states: <code>working</code>, <code>waiting</code>, <code>ready</code></li>
         <li>Scenario cells assessed via the <code>assess</code> verb of <code>/ir:onboarding-factory</code>, recorded in <code>replaydata/agents/&lt;name&gt;/scenarios/&lt;cell&gt;/metadata.json</code></li>
+        <li><strong>Machine-checked (#1369):</strong> the four <em>alpha-floor</em> core scenarios are settled &mdash; <code>session-start</code>, <code>basic-turn</code>, <code>auto-executed-tool-call</code>, <code>turn-end-terminal-text</code>. All four are reachable from lifecycle hooks alone, which is what makes <code>alpha</code> a day-one tier for an adapter that has hooks and no transcript parser: it asserts <strong>state only, no metrics</strong>.</li>
+        <li>An entry in <code>replaydata/agents/adapters.json</code> declaring this maturity and any missing capabilities. <code>of validate</code> fails if the claim exceeds what the core scenarios earn.</li>
         <li><code>baseline-hello</code> and <code>full-lifecycle-toolcall</code> fixtures committed and replay green via <code>tools/replay-fixtures.sh</code></li>
       </ul>
 
@@ -580,7 +584,8 @@ type Watcher interface {
 
       <p><strong>For adapters, additionally:</strong></p>
       <ul class="checklist">
-        <li><strong>All</strong> scenario cells assessed <code>agent_supports: yes</code> (or <code>partial</code>) replay green &mdash; verdict recorded per cell in <code>replaydata/agents/&lt;name&gt;/scenarios/&lt;cell&gt;/metadata.json</code></li>
+        <li><strong>Machine-checked (#1369):</strong> all <strong>nine</strong> <em>state-core</em> scenarios settled &mdash; the four alpha-floor ones plus <code>session-end</code>, <code>long-idle-live-session</code>, <code>user-blocking-question</code>, <code>turn-aborted-by-error</code>, <code>multiple-sessions-same-cwd</code>. Still no metrics scenario: that is the <code>beta</code>/<code>stable</code> line.</li>
+        <li>Remaining scenario cells assessed &mdash; verdict recorded per cell in <code>replaydata/agents/&lt;name&gt;/scenarios/&lt;cell&gt;/metadata.json</code>. Since #1369 these <strong>34 non-core scenarios are optional</strong>: they are still assessed, recorded and rendered, but they do not hold a promotion back.</li>
         <li>Model + cost extraction wired through <code>core/adapters/outbound/metrics/</code></li>
         <li>Subagent / parent-child linkage emits <code>ParentSessionID</code> where the agent supports subagents</li>
       </ul>
@@ -598,6 +603,7 @@ type Watcher interface {
         <li>At least <strong>180 days</strong> since first shipped in a tagged Irrlicht release</li>
         <li>Zero <code>bug</code>-labeled issues opened against this component in the last <strong>30 days</strong></li>
         <li>Component code is settled: <code>git log &lt;component-path&gt; --since=30.days.ago</code> shows no refactors or new features &mdash; only reactive changes (upstream format updates, new platform versions)</li>
+        <li><strong>Machine-checked (#1369), adapters:</strong> all <strong>twelve</strong> core scenarios settled &mdash; the nine state-core plus the three <em>metrics-core</em> ones, <code>model-identification</code>, <code>token-accounting</code>, <code>model-context-display</code>. This is the only tier that asserts anything about tokens, cost or model identity.</li>
       </ul>
 
       <p><strong>For adapters, additionally:</strong></p>

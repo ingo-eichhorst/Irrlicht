@@ -165,3 +165,226 @@ func ValidateAxes(tier, supports, daemon, driver string) []string {
 		"a "+DriverGapPrefix+" value must name a primitive")
 	return findings
 }
+
+// ---------------------------------------------------------------------------
+// Maturity ladder (#1369)
+// ---------------------------------------------------------------------------
+
+// Maturity is an adapter's declared stage on the four-rung ladder the site
+// docs and the README have described in prose since the compatibility grid
+// existed (site/docs/adapters.html, "Maturity Stages"). Until #1369 it was
+// prose ONLY: a hand-maintained word in a markdown table with nothing reading
+// it, so an adapter's declared stage and the evidence in replaydata/ could not
+// disagree — there was no relation between them to violate.
+//
+// The tokens live here rather than beside the data for the same reason the
+// display states do: they are a closed set, and the one place a state is
+// spelled out is the schema (#1367).
+const (
+	MaturityPlanned = "planned" // named in the grid; no adapter package yet
+	MaturityAlpha   = "alpha"   // STATE ONLY — the three-state model works, metrics are not claimed
+	MaturityBeta    = "beta"    // every state-core scenario is settled
+	MaturityStable  = "stable"  // every core scenario, metrics included, is settled
+)
+
+// Maturities is the closed set, in ascending order. Order is load-bearing:
+// MaturityRank indexes into it, and the `of validate` maturity gate compares
+// ranks (declared must not exceed earned).
+var Maturities = []string{MaturityPlanned, MaturityAlpha, MaturityBeta, MaturityStable}
+
+// IsValidMaturity reports whether v is a known maturity token. Unlike the
+// assessment axes, empty is NOT valid: an adapter that appears in the
+// capability model has to say where it claims to be.
+func IsValidMaturity(v string) bool { return slices.Contains(Maturities, v) }
+
+// MaturityRank returns v's position on the ladder, or -1 when v is not a
+// maturity token.
+func MaturityRank(v string) int { return slices.Index(Maturities, v) }
+
+// ---------------------------------------------------------------------------
+// Capability states (#1369)
+// ---------------------------------------------------------------------------
+
+// A capability state is what an adapter's relationship to one behavioural
+// trait is, and it is deliberately THREE-valued rather than a boolean.
+//
+// The two-valued model — "adapter has capability X" — was tried and pruned
+// (#529's meta.capability_vocab, a 26-feature per-adapter boolean vector).
+// Re-fitted against today's matrix it explained 5 of the 52 not-applicable
+// cells for the five adapters it covered and produced THREE false positives,
+// each one a live cell it would have declared dead (codex
+// tool-gate-permission-prompt, foreground-subagent, background-subagent — all
+// pending-record today, all claimed dead by a stale permission_hooks:false /
+// subagents:false). That is why it was orphaned, and why re-introducing the
+// same shape would fail the same way.
+//
+// The reason a boolean cannot work is visible in the data: of the 126 cells
+// that are structurally dead today, ALL 74 "unobservable" ones have
+// agent_supports ∈ {yes, partial} — the agent HAS the feature — and are dead
+// only because the feature never reaches the Source the daemon tails. Merging
+// those with "the agent lacks the feature" loses exactly the distinction the
+// display vocabulary already draws between StateUnobservable and
+// StateNotApplicable. Hence three values, one per outcome.
+const (
+	// CapabilityAbsent — the agent does not have the feature at all.
+	// Derives StateNotApplicable. A property of the AGENT; stable across
+	// daemon releases.
+	CapabilityAbsent = "absent"
+	// CapabilityUntraced — the agent has the feature, but exercising it leaves
+	// no trace in any Source the adapter reads. Derives StateUnobservable.
+	// A property of the (agent, feature, transport, adapter) tuple: it flips
+	// the moment the vendor persists a field or the adapter starts tailing a
+	// second Source. claudecode's subscription-detection is exactly that — it
+	// is observable ONLY through the statusLine hook POST, not the transcript.
+	CapabilityUntraced = "untraced"
+	// CapabilityTraced — the feature exists and reaches a Source. The default
+	// for any (adapter, trait) pair the model does not mention, so a new
+	// adapter declares only what is missing.
+	CapabilityTraced = "traced"
+)
+
+// CapabilityStates is the closed set of capability states.
+var CapabilityStates = []string{CapabilityAbsent, CapabilityUntraced, CapabilityTraced}
+
+// IsValidCapabilityState reports whether v names a capability state. Empty is
+// valid and means CapabilityTraced — see the const block.
+func IsValidCapabilityState(v string) bool {
+	return v == "" || slices.Contains(CapabilityStates, v)
+}
+
+// StructuralStateFor maps a capability state to the display state it derives,
+// returning ok=false for the states that derive nothing. This is the whole of
+// the derivation: everything else in capability.go is lookup and plumbing.
+func StructuralStateFor(capState string) (displayState string, ok bool) {
+	switch capState {
+	case CapabilityAbsent:
+		return StateNotApplicable, true
+	case CapabilityUntraced:
+		return StateUnobservable, true
+	default:
+		return "", false
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The core scenario set (#1369)
+// ---------------------------------------------------------------------------
+
+// CoreStateScenarios and CoreMetricsScenarios together are the CORE TWELVE:
+// the only scenarios that gate a maturity promotion. The other 34 are
+// optional — they are still assessed, still recorded, still rendered, and
+// still gated for schema validity by `of validate`; they simply do not hold an
+// adapter back from a tier.
+//
+// WHY A CORE SET EXISTS AT ALL. 84% of an onboarding PR is recorded fixtures:
+// copilot's #1332 was 14,426 additions of which 12,130 were replaydata/ and
+// only 2,218 were adapter code. Requiring all 46 before an adapter counts as
+// anything makes the recording cost the gate on adoption, and the recording
+// cost is the one part of onboarding that does not get cheaper with practice.
+//
+// HOW THESE TWELVE WERE CHOSEN. Not for coverage — for discriminating power,
+// measured against the matrix as it actually stands. Each entry below is a
+// scenario where a failure is a failure of the PRODUCT (a row that never
+// appears, a session stuck in `working`, a $0 cost), and where the matrix
+// shows adapters genuinely differing. Scenarios that every adapter passes
+// identically discriminate nothing; scenarios dead for most adapters set an
+// unmeetable bar. The twelve sit in between: across the eleven onboarded
+// adapters they score 9–12 observed, and every miss is either a structural
+// dead cell the capability model derives, or a real daemon/driver bug that
+// SHOULD hold a promotion back.
+//
+// The set is spelled in code, not in replaydata/, on purpose. It is a policy
+// decision that gates maturity claims, so weakening it has to be a reviewable
+// diff against this comment rather than an edit to a data file.
+
+// CoreStateScenarios gate `alpha` and above (four of them) and `beta` and
+// above (all nine). They assert nothing about tokens, cost or model identity —
+// only that the three-state model is correct — which is what makes `alpha`
+// reachable by an adapter that has hooks and no transcript parser at all.
+var CoreStateScenarios = []string{
+	// --- the alpha floor: reachable on day one from lifecycle hooks alone ---
+	// A row must exist before anything else about it can be right; this is
+	// also the only cell that proves PID binding. Observed for all 11.
+	"session-start",
+	// The ready→working→ready topology IS the three-state model; every other
+	// state assertion is a refinement of it. Observed for all 11.
+	"basic-turn",
+	// A tool call must not settle the turn. This is the single most common
+	// false-`ready` bug — copilot closes a turn after EVERY tool call — and it
+	// is what separates an adapter that tracks turns from one that tracks
+	// lines. Observed for all 11.
+	"auto-executed-tool-call",
+	// The turn-done marker. Adapters without an explicit one (gemini-cli) run
+	// a heuristic, and this is the cell that catches a wrong heuristic before
+	// it ships. Observed for all 11.
+	"turn-end-terminal-text",
+
+	// --- the beta additions: need a real Source, not just hooks ---
+	// Without it sessions leak as ghosts forever — the #727/#744 class, the
+	// most-reported defect in this repo. hermes cannot yet drive it
+	// (blocked-driver), which is exactly the kind of gap a tier should hold.
+	"session-end",
+	// Distinguishes an idle live session from a dead one. A reaper that gets
+	// this wrong deletes rows out from under a working user.
+	"long-idle-live-session",
+	// `waiting` is one of the three states, and this is the only scenario that
+	// exercises it on a fair footing across adapters. An adapter that never
+	// reports `waiting` has two-thirds of the product.
+	"user-blocking-question",
+	// An errored turn must still settle. A session stuck in `working` forever
+	// is the worst user-visible failure mode there is, and four adapters
+	// genuinely cannot persist an error epilogue — the derivation says so
+	// rather than the promotion silently ignoring it.
+	"turn-aborted-by-error",
+	// Session identity: two agents in one repo must not collapse into one row
+	// or bind each other's PID. Every PID-discovery bug this repo has shipped
+	// is visible here and nowhere else.
+	"multiple-sessions-same-cwd",
+}
+
+// CoreMetricsScenarios gate `stable` only. Their absence from the alpha and
+// beta floors is what the `alpha` tier MEANS: state only, no metrics.
+var CoreMetricsScenarios = []string{
+	// The model name is the key into the pricing table; get it wrong and the
+	// entire session prices at $0, silently. Observed for all 11.
+	"model-identification",
+	// Tokens are the input to both cost and the context-percentage the user
+	// actually watches. Two adapters cannot surface them (aider, kiro-cli);
+	// both are derived, so neither is blocked from beta by it.
+	"token-accounting",
+	// The context-window percentage — the number users act on. copilot is
+	// blocked-daemon here, which is a real bug and should hold stable back.
+	"model-context-display",
+}
+
+// CoreScenarios returns the full core twelve, state scenarios first.
+func CoreScenarios() []string {
+	out := make([]string, 0, len(CoreStateScenarios)+len(CoreMetricsScenarios))
+	out = append(out, CoreStateScenarios...)
+	return append(out, CoreMetricsScenarios...)
+}
+
+// CoreAlphaScenarios is the alpha floor: the first four state scenarios, the
+// ones reachable from lifecycle hooks with no transcript parser.
+func CoreAlphaScenarios() []string { return CoreStateScenarios[:4] }
+
+// IsCoreScenario reports whether a scenario name is one of the core twelve.
+func IsCoreScenario(name string) bool {
+	return slices.Contains(CoreStateScenarios, name) || slices.Contains(CoreMetricsScenarios, name)
+}
+
+// MaturityFloor returns the scenarios a given maturity requires to be settled.
+// The floors are cumulative by construction (alpha ⊂ beta ⊂ stable), which is
+// what lets the gate compare ranks instead of sets.
+func MaturityFloor(maturity string) []string {
+	switch maturity {
+	case MaturityAlpha:
+		return CoreAlphaScenarios()
+	case MaturityBeta:
+		return CoreStateScenarios
+	case MaturityStable:
+		return CoreScenarios()
+	default: // planned — nothing is claimed, so nothing is required
+		return nil
+	}
+}
