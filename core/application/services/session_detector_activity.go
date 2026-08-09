@@ -842,7 +842,14 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 		ParentHeldWorking: parentHeldWorking,
 	})
 
-	if d.admitTransition(state, newState, stateBeforeSynthesis, expiries, passStart) {
+	// Did this pass re-base what the classifier was reading, rather than merely
+	// read it? Two things can: a synthesizer moved the session's current state
+	// out from under the verdict, or a hold ceiling expired and changed the
+	// metrics. Both matter twice below — to the dwell gate and to the
+	// provenance stamp — so the question is asked once, here.
+	rebased := state.State != stateBeforeSynthesis || len(expiries) > 0
+
+	if d.admitTransition(state, newState, verdict.Tier, rebased, passStart) {
 		applied := stateTransitionUpdate{NewState: newState, Reason: reason, Now: now}
 		switch {
 		case parentHeldWorking:
@@ -878,7 +885,23 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 // with the current state, and never learns it otherwise.
 //
 // Two classes of change skip the dwell outright. Both are cases where delaying
-// publication could only lose information, never smooth it:
+// publication could only lose information, never smooth it.
+//
+// FIRST: a HOOK-TIER VERDICT. The dwell exists to absorb a lower-tier guess
+// being corrected; a TierHook verdict IS the correction, delivered out of band
+// by the agent itself, and nothing below it is allowed to retire it anyway. The
+// edge that makes this concrete is compact_in_progress — a TierHook rule that
+// decides *working* (state_classifier.go). A manual /compact issued while the
+// session reads waiting would otherwise serve the full dwell plus a ticker
+// interval, directly contradicting that hook handler's own reason for existing:
+// "there is no transcript flush coming during the compaction window". Note this
+// does NOT subsume the two bypasses below — after a ceiling expiry, and after
+// the collapsed-waiting synthesizer re-bases, the deciding rule is
+// transcript_activity, at TierTranscript.
+// TestClassify_AHookTierVerdictIsNotDebounced.
+//
+// SECOND: THIS PASS RE-BASED WHAT THE CLASSIFIER READ (the `rebased` argument),
+// which is true in either of two ways:
 //
 //   - A HOLD CEILING FIRED this pass (#1360). An expiry is not a flap and
 //     cannot become one: the hold is deleted, nothing re-asserts it, and the
@@ -906,11 +929,11 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 func (d *SessionDetector) admitTransition(
 	state *session.SessionState,
 	newState string,
-	stateBeforeSynthesis string,
-	expiries []session.SignalExpiry,
+	tier session.SignalTier,
+	rebased bool,
 	now time.Time,
 ) bool {
-	if len(expiries) > 0 || state.State != stateBeforeSynthesis {
+	if tier == session.TierHook || rebased {
 		d.dwell.DropSession(state.SessionID)
 		return newState != state.State
 	}
@@ -1452,15 +1475,27 @@ func (d *SessionDetector) armStalledEditTool(state *session.SessionState, now ti
 // See refreshStaleSessions' non-working branch for why an idle session is ever
 // put through this.
 func (d *SessionDetector) reclassifyFromTranscript(state *session.SessionState, now time.Time) {
-	// Direction-safe on purpose. UpdatedAt is written by this detector through
-	// the same nowFn clock, so elapsed is normally non-negative — but a
-	// session persisted by an earlier daemon run carries a wall-clock stamp
-	// this process's clock need not be ahead of, and under a test clock the
-	// gap can be hours of NEGATIVE elapsed time. Comparing that against the
-	// interval short-circuits and the re-read silently does nothing, which is
-	// the worst possible failure for the one path that ends a #1366 dwell or
-	// fires a #1360 ceiling. When the two stamps cannot be reconciled the
-	// guard degrades toward doing MORE work, never less.
+	// Direction-safe on purpose, and the cost is known and accepted.
+	//
+	// UpdatedAt is written by this detector through the same nowFn clock, so
+	// elapsed is normally non-negative. It can still go negative in
+	// production: a session persisted by an earlier daemon run carries a stamp
+	// this process's clock need not be ahead of, and a backwards NTP step does
+	// the same to live ones. A bare `elapsed < interval` treats that as "just
+	// updated" and short-circuits EVERY tick for as long as the skew lasts —
+	// so the session's #1360 ceiling can never fire and its #1366 dwell can
+	// never resolve, which is precisely the permanently-pinned failure both
+	// mechanisms exist to prevent, arriving silently.
+	//
+	// The accepted cost of the `>= 0` clause is the mirror image: a
+	// future-stamped session is re-read once per tick until the clock catches
+	// up, and nothing on a no-op pass rewrites the stamp to end that early.
+	// Correctness wins — a pinned session is unbounded and invisible, extra
+	// stats are bounded and cheap — but the asymmetry is real and a dirty-check
+	// in finalizeActivityPass would remove it.
+	//
+	// The rule: when the two stamps cannot be reconciled, degrade toward doing
+	// MORE work, never less.
 	if elapsed := now.Sub(time.Unix(state.UpdatedAt, 0)); elapsed >= 0 && elapsed < staleWorkingRefreshInterval {
 		return
 	}

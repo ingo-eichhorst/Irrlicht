@@ -26,22 +26,44 @@ func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
 	if d.historyTracker != nil {
 		d.historyTracker.Remove(sessionID)
 	}
-	// Drop the out-of-band signal holds and any outstanding #1366 dwell.
-	//
-	// onRemoved does this too, but onRemoved fires on the TRANSCRIPT FILE
-	// disappearing — and a process dying does not delete its transcript. Every
-	// PIDManager-driven deletion (dead process, duplicate-PID dedup, ready-TTL
-	// age-out, parent cleanup, pre-session supersession) reaches teardown
-	// through here instead, and reached neither map: nothing else ever revisits
-	// a deleted session, so an entry left behind is permanent for the life of
-	// the process and a recycled session ID inherits it. Both calls are
-	// idempotent, which is why onRemoved keeps its own.
-	// (SignalHolds, unlike StateDwell, is not nil-safe; struct-literal test
-	// detectors can reach this path without one.)
+	d.forgetSessionScopedState(sessionID)
+}
+
+// forgetSessionScopedState drops the per-session bookkeeping that only the
+// session itself gives meaning to. It exists because there are TWO teardown
+// paths and they are not the same one:
+//
+//   - onRemoved, which fires on the TRANSCRIPT FILE disappearing;
+//   - removeFromProjectSessions, reached from the PIDManager's
+//     OnSessionDeleted callback — dead process, duplicate-PID dedup, ready-TTL
+//     age-out, parent cleanup, pre-session supersession.
+//
+// A dying process does not delete its transcript, so the second path is how
+// most sessions actually end, and it was clearing neither the signal holds nor
+// the #1366 dwell. Nothing revisits a deleted session, so an entry left behind
+// is permanent for the life of the process and a recycled session ID inherits
+// it. That drift is not hypothetical: this function was extracted after the
+// second map was added to the first list and missed on the second, which is
+// exactly how the first one was missed before it.
+//
+// Every store here is idempotent, so both callers may call it unconditionally.
+// The rule for the next per-session map: add it HERE, not to a call site.
+//
+// Not everything per-session belongs in this set. deletedSessions is a
+// deliberate tombstone written BY this path and aged out on its own schedule,
+// and the background-liveness caches are cleared inline above with their own
+// reasoning (#445).
+func (d *SessionDetector) forgetSessionScopedState(sessionID string) {
+	// SignalHolds, unlike StateDwell, is not nil-safe; struct-literal test
+	// detectors reach this path without one.
 	if d.signals != nil {
 		d.signals.DropSession(sessionID)
 	}
 	d.dwell.DropSession(sessionID)
+
+	d.idleMu.Lock()
+	delete(d.idleProjectRetryAttempts, sessionID)
+	d.idleMu.Unlock()
 }
 
 // broadcast sends a push notification if a broadcaster is configured. For

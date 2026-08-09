@@ -124,6 +124,11 @@ func TestStateDwell_MeasuresTheInjectedClockNotTheWallClock(t *testing.T) {
 // waiting. The new target is judged on its own terms — waiting→ready is not
 // debounced at all — and must not inherit elapsed time measured for a
 // different edge.
+//
+// Note what this does and does not reach: it exits at Admit's `grace == 0`
+// branch, so it pins the DELETE on an undebounced publish, not pendingExit's
+// from/to shape check. That check is unreachable while graceFor debounces a
+// single edge; see its comment.
 func TestStateDwell_AChangedTargetVoidsTheProposal(t *testing.T) {
 	d := NewStateDwell()
 
@@ -136,11 +141,11 @@ func TestStateDwell_AChangedTargetVoidsTheProposal(t *testing.T) {
 	}
 }
 
-// TestStateDwell_APublishedStateMovingUnderneathRestartsTheClock covers the
-// other half of pendingExit recording `from`: something outside the classifier
-// (a terminal UI signal, a synthesizer) moved the session's published state
-// while a proposal was outstanding. The elapsed time measured so far describes
-// an edge nobody is proposing any more.
+// TestStateDwell_APublishedStateMovingUnderneathRestartsTheClock covers
+// something outside the classifier (a terminal UI signal, a synthesizer)
+// moving the session's published state while a proposal was outstanding: the
+// outstanding entry must not survive it. Same caveat as above — this exits at
+// the `grace == 0` branch and asserts the delete, not the shape check.
 func TestStateDwell_APublishedStateMovingUnderneathRestartsTheClock(t *testing.T) {
 	d := NewStateDwell()
 

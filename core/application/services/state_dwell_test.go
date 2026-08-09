@@ -40,6 +40,20 @@ func workingMetrics() *session.SessionMetrics {
 	}
 }
 
+// dwellSession is the fixture every test here varies by one field. Note
+// ParentSessionID: it short-circuits holdParentForActiveChildren, keeping these
+// tests on the classify/publish path they are about rather than the
+// parent-child rule.
+func dwellSession(state string, m *session.SessionMetrics) *session.SessionState {
+	return &session.SessionState{
+		SessionID:       "s",
+		Adapter:         "claudecode",
+		State:           state,
+		ParentSessionID: "p",
+		Metrics:         m,
+	}
+}
+
 // transitions extracts the published state changes, which is the observable
 // #1366 is actually about — what reached the UI, not what the classifier
 // privately decided.
@@ -71,13 +85,7 @@ func TestClassify_AReversedWaitingExitNeverReachesTheUI(t *testing.T) {
 	clock := holdT0
 	d, rec := dwellDetector(&clock)
 
-	state := &session.SessionState{
-		SessionID:       "s",
-		Adapter:         "claudecode",
-		State:           session.StateWaiting,
-		ParentSessionID: "p", // no parent-hold path; this session is a child
-		Metrics:         workingMetrics(),
-	}
+	state := dwellSession(session.StateWaiting, workingMetrics())
 	ev := agent.Event{SessionID: "s"}
 
 	// Pass 1: the transcript momentarily reads as working.
@@ -107,13 +115,7 @@ func TestClassify_AWaitingExitThatHoldsIsPublished(t *testing.T) {
 	clock := holdT0
 	d, rec := dwellDetector(&clock)
 
-	state := &session.SessionState{
-		SessionID:       "s",
-		Adapter:         "claudecode",
-		State:           session.StateWaiting,
-		ParentSessionID: "p",
-		Metrics:         workingMetrics(),
-	}
+	state := dwellSession(session.StateWaiting, workingMetrics())
 	ev := agent.Event{SessionID: "s"}
 
 	d.classifyAndTransition(state, ev)
@@ -148,13 +150,7 @@ func TestClassify_EnteringWaitingIsNotDelayed(t *testing.T) {
 	clock := holdT0
 	d, rec := dwellDetector(&clock)
 
-	state := &session.SessionState{
-		SessionID:       "s",
-		Adapter:         "claudecode",
-		State:           session.StateWorking,
-		ParentSessionID: "p",
-		Metrics:         workingMetrics(),
-	}
+	state := dwellSession(session.StateWorking, workingMetrics())
 
 	d.signals.Hold("s", session.SignalPermissionPrompt, session.SignalPayload{}, clock)
 	d.classifyAndTransition(state, agent.Event{SessionID: "s"})
@@ -179,13 +175,7 @@ func TestClassify_FirstClassificationIsNotDelayed(t *testing.T) {
 	clock := holdT0
 	d, _ := dwellDetector(&clock)
 
-	state := &session.SessionState{
-		SessionID:       "s",
-		Adapter:         "claudecode",
-		State:           "", // never classified before
-		ParentSessionID: "p",
-		Metrics:         workingMetrics(),
-	}
+	state := dwellSession("", workingMetrics()) // "" — never classified before
 
 	d.signals.Hold("s", session.SignalPermissionPrompt, session.SignalPayload{}, clock)
 	d.classifyAndTransition(state, agent.Event{SessionID: "s"})
@@ -227,13 +217,7 @@ func TestClassify_CeilingExpiryIsNotSwallowedByTheDwell(t *testing.T) {
 	clock := holdT0
 	d, rec := dwellDetector(&clock)
 
-	state := &session.SessionState{
-		SessionID:       "s",
-		Adapter:         "claudecode",
-		State:           session.StateWaiting,
-		ParentSessionID: "p",
-		Metrics:         workingMetrics(),
-	}
+	state := dwellSession(session.StateWaiting, workingMetrics())
 
 	// The PermissionRequest hook landed and pinned the session. PostToolUse
 	// never came: nothing releases this hold but its ceiling.
@@ -340,13 +324,7 @@ func TestClassify_ASynthesizedWaitingIsNotLeftStranded(t *testing.T) {
 	m := workingMetrics()
 	m.SawUserBlockingToolClosedThisPass = true
 
-	state := &session.SessionState{
-		SessionID:       "s",
-		Adapter:         "claudecode",
-		State:           session.StateWorking,
-		ParentSessionID: "p",
-		Metrics:         m,
-	}
+	state := dwellSession(session.StateWorking, m)
 
 	d.classifyAndTransition(state, agent.Event{SessionID: "s"})
 
@@ -365,6 +343,34 @@ func TestClassify_ASynthesizedWaitingIsNotLeftStranded(t *testing.T) {
 	}
 	if state.State != session.StateWorking {
 		t.Errorf("session state = %q, want working", state.State)
+	}
+}
+
+// TestClassify_AHookTierVerdictIsNotDebounced covers the third bypass, found
+// by review: the dwell absorbs a lower-tier guess being corrected, and a
+// TierHook verdict *is* the correction.
+//
+// The concrete edge is compact_in_progress — the one TierHook rule that
+// decides working. A manual /compact issued while the session reads waiting
+// would otherwise serve the full dwell plus a ticker interval, contradicting
+// that hook handler's own stated reason for existing ("there is no transcript
+// flush coming during the compaction window").
+func TestClassify_AHookTierVerdictIsNotDebounced(t *testing.T) {
+	clock := holdT0
+	d, rec := dwellDetector(&clock)
+
+	state := dwellSession(session.StateWaiting, workingMetrics())
+
+	// The PreCompact hook fires while the session is pinned at waiting.
+	d.signals.Hold("s", session.SignalCompactInProgress, session.SignalPayload{}, clock)
+	d.classifyAndTransition(state, agent.Event{SessionID: "s"})
+
+	if state.State != session.StateWorking {
+		t.Fatalf("a hook-tier verdict must publish on the pass that decides it, got %q", state.State)
+	}
+	got := transitions(rec)
+	if len(got) != 1 || got[0].NewState != session.StateWorking {
+		t.Fatalf("expected one waiting→working transition, got %+v", got)
 	}
 }
 

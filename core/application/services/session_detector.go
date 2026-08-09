@@ -372,26 +372,29 @@ func (d *SessionDetector) RunStaleSessionRefreshForTest() {
 }
 
 // nowFn reads this detector's clock. The indirection is what lets a test drive
-// the ceiling and dwell timers on a virtual timeline; production leaves the
-// field nil and gets time.Now. Every elapsed-time decision in the classify
-// pipeline must come through here — a bare time.Now() alongside it would make
-// two mechanisms that are supposed to share one instant disagree.
+// the #1360 ceilings and the #1366 dwell on a virtual timeline; production
+// leaves the field nil and gets time.Now.
+//
+// WHAT MUST COME THROUGH HERE: every instant that is later compared against
+// another instant by the classify pipeline. Concretely that is the pass clock
+// (holdContext.Now and the dwell), every SignalHolds placement (HeldSince is
+// measured against the pass clock by both ceiling and ripe), and every
+// SessionState.UpdatedAt write (reclassifyFromTranscript measures the refresh
+// interval against it). Mixing a bare time.Now() into any of those makes two
+// stamps that are supposed to share one timeline disagree, and the symptom is
+// a guard silently short-circuiting rather than anything failing loudly.
+//
+// DELIBERATELY EXEMPT, because they are self-consistent wall-clock pairs that
+// no pipeline guard reads: the deletedSessions tombstone and its prune
+// threshold (session_detector_helpers.go / session_detector_lifecycle.go), and
+// historyTracker timestamps, which pair with record()'s own event stamping.
+// Naming them is the point — otherwise a reader cannot tell "deliberately wall
+// clock" from "missed in the sweep".
 func (d *SessionDetector) nowFn() time.Time {
 	if d.now != nil {
 		return d.now()
 	}
 	return time.Now()
-}
-
-// SetClockForTest replaces the detector's clock. Exported for tests outside
-// this package that need to drive the #1360 ceilings and the #1366 dwell
-// without sleeping.
-//
-// MUST be called before Run. The write is unsynchronised, while nowFn is read
-// from the event-loop goroutine — setting it on a started detector is a data
-// race, not a supported reconfiguration.
-func (d *SessionDetector) SetClockForTest(now func() time.Time) {
-	d.now = now
 }
 
 // StartDwellForTest records a decided-but-unpublished state change (#1366)

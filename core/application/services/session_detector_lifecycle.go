@@ -39,19 +39,12 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	delete(d.projectSessions, ev.SessionID)
 	d.mu.Unlock()
 
-	// Drop any leftover held signal — otherwise a hook that fired without a
-	// clearing partner (e.g. agent crash mid-overlay) would keep the entry
-	// forever, and a recycled session ID would inherit it.
-	d.signals.DropSession(ev.SessionID)
-
-	// Same reasoning for the #1366 grace timer: a decided-but-unpublished
-	// change belongs to a session that no longer exists, and leaving it would
-	// hand a recycled session ID a transition proposed for its predecessor.
-	d.dwell.DropSession(ev.SessionID)
-
-	d.idleMu.Lock()
-	delete(d.idleProjectRetryAttempts, ev.SessionID)
-	d.idleMu.Unlock()
+	// Drop every per-session store — a hook that fired without a clearing
+	// partner (e.g. an agent crash mid-overlay), a decided-but-unpublished
+	// #1366 transition, an idle-retry counter. Any of them left behind is
+	// permanent, and a recycled session ID would inherit it. One seam, shared
+	// with the PIDManager reap path; see forgetSessionScopedState.
+	d.forgetSessionScopedState(ev.SessionID)
 
 	state, err := d.repo.Load(ev.SessionID)
 	if err != nil || state == nil {

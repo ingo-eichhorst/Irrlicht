@@ -105,11 +105,18 @@ type StateDwell struct {
 	pending map[string]pendingExit
 }
 
-// pendingExit is one decided-but-unpublished state change. from is recorded
-// alongside to because a dwell is only continuous while BOTH ends hold still:
-// if the session's published state moved underneath the proposal (a terminal
-// UI signal forcing waiting, say), the elapsed time measured so far describes
-// a transition nobody is proposing any more.
+// pendingExit is one decided-but-unpublished state change.
+//
+// from and to are DEFENCE IN DEPTH, not a live invariant, and it is worth
+// being exact about that rather than letting a reader assume either. Today
+// graceFor returns non-zero for exactly one pair, so any entry that exists is
+// necessarily waiting→working and the shape check in Admit cannot fail — a
+// mutation replacing it with a bare presence test keeps the whole suite green.
+// They are kept because they are what makes a future second debounced edge
+// safe by construction instead of by remembering: the moment graceFor grows a
+// row, "the elapsed time on file describes the edge being proposed" stops
+// being free, and publishing a stale edge is the one error class this whole
+// mechanism must not commit.
 type pendingExit struct {
 	from  string
 	to    string
