@@ -2154,6 +2154,9 @@ export {
   findPermission,
   visiblePermissionsFor,
   buildAgentPermSection,
+  wizardShouldStayOpen,
+  answeredAgentNames,
+  refreshPermissions,
 } from './permissionsWizard.js';
 export {
   historyQuery, histTokens, histCount, histCO2, CHART_LABELS, DRILL_NEXT, historyRunningSum,

@@ -125,6 +125,34 @@ final class AgentPermissionsEffectErrorTests: XCTestCase {
         XCTAssertFalse(agent.needsWizard)
     }
 
+    /// The review wizard closes on Apply. The daemon answers 200 whether
+    /// or not the closure succeeded, so closing on `ok` alone would hide
+    /// the failure on the one surface built to show it.
+    func testHasFailedEffectDistinguishesBrokenFromMerelyAnswered() throws {
+        let broken = """
+        {"mode":"ask","agents":[{"name":"claude-code","display_name":"Claude Code",
+        "detected":true,"permissions":[{"key":"hooks","kind":"modify","state":"granted",
+        "title":"Install hooks","feature_unlocked":"","touches":"","detail":"",
+        "effect_error":"\(reason)"}]}]}
+        """
+        let fine = """
+        {"mode":"ask","agents":[{"name":"claude-code","display_name":"Claude Code",
+        "detected":true,"permissions":[{"key":"hooks","kind":"modify","state":"granted",
+        "title":"Install hooks","feature_unlocked":"","touches":"","detail":""}]}]}
+        """
+        XCTAssertTrue(try XCTUnwrap(decodeSnapshot(broken).agents.first).hasFailedEffect)
+        XCTAssertFalse(try XCTUnwrap(decodeSnapshot(fine).agents.first).hasFailedEffect)
+        // A pending permission has not failed — it simply hasn't run.
+        let stillPending = """
+        {"mode":"ask","agents":[{"name":"claude-code","display_name":"Claude Code",
+        "detected":true,"permissions":[{"key":"hooks","kind":"modify","state":"pending",
+        "title":"Install hooks","feature_unlocked":"","touches":"","detail":""}]}]}
+        """
+        let agent = try XCTUnwrap(decodeSnapshot(stillPending).agents.first)
+        XCTAssertFalse(agent.hasFailedEffect)
+        XCTAssertTrue(agent.hasUnresolvedPermissions)
+    }
+
     func testPendingAgentStillNeedsAndHoldsTheWizard() throws {
         let json = """
         {"mode":"ask","agents":[{"name":"claude-code","display_name":"Claude Code",

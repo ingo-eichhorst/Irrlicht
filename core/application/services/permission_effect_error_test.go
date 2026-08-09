@@ -351,6 +351,43 @@ func TestFailedApplyAtStartupIsSurfaced(t *testing.T) {
 	}
 }
 
+// TestConflictingAnswersConvergeWithFailingEffects is the failing-effect
+// twin of TestPermissionServiceConflictingAnswersConverge. That test only
+// ever uses succeeding closures, so nothing pinned the invariant that
+// matters here: the RECORDED error must always describe the FINAL state,
+// never a superseded one. runEffects skips stale effects without recording
+// a result, which is what makes that true — this proves it under -race.
+func TestConflictingAnswersConvergeWithFailingEffects(t *testing.T) {
+	f := &applyFailure{failApplyFor: -1, removeErr: errors.New("remove exploded")}
+	svc := newFailingService(f, &mockPermStore{}, &mockPush{})
+	svc.Start(context.Background())
+
+	for i := 0; i < 100; i++ {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = svc.Answer([]services.PermissionAnswer{{Agent: "testagent", Permission: "hooks", Grant: true}})
+		}()
+		go func() {
+			defer wg.Done()
+			_ = svc.Answer([]services.PermissionAnswer{{Agent: "testagent", Permission: "hooks", Grant: false}})
+		}()
+		wg.Wait()
+
+		// Both closures always fail, so whatever state won, its own
+		// failure — and only its own — must be the one on record.
+		granted := svc.Granted("testagent", "hooks")
+		got := permJSON(t, svc, "testagent", "hooks")
+		if granted && !strings.Contains(got, "settings.json is malformed") {
+			t.Fatalf("round %d: granted, but the recorded error is not the Apply failure: %s", i, got)
+		}
+		if !granted && !strings.Contains(got, "remove exploded") {
+			t.Fatalf("round %d: denied, but the recorded error is not the Remove failure: %s", i, got)
+		}
+	}
+}
+
 // TestRetryBroadcastsSoBothSurfacesRefresh: the wizard on the other surface
 // has to learn the error cleared.
 func TestRetryBroadcastsSoBothSurfacesRefresh(t *testing.T) {

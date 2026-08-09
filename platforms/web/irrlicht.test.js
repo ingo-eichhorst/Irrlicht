@@ -11,6 +11,9 @@ import {
   findPermission,
   visiblePermissionsFor,
   buildAgentPermSection,
+  wizardShouldStayOpen,
+  answeredAgentNames,
+  refreshPermissions,
   resolvedTheme,
   rowLabel,
   maybeNotifyOnUpdate,
@@ -934,6 +937,78 @@ describe('failed consent effect is visible and retryable (#1362)', () => {
     expect(findPermission(s, 'claude-code', 'nope')).toBeNull()
     expect(findPermission(s, 'codex', 'hooks')).toBeNull()
     expect(findPermission(null, 'claude-code', 'hooks')).toBeNull()
+  })
+})
+
+// Regression test for the review finding that the pure-helper tests above
+// missed entirely: the daemon broadcasts permissions_updated the moment a
+// grant is recorded, the browser re-fetches, and updatePermissionsWizard
+// used to close the auto wizard because nothing was "pending" any more —
+// taking the brand-new failure warning with it. Drives the REAL path
+// (refreshPermissions → updatePermissionsWizard), not a predicate.
+describe('a failed effect keeps the auto wizard open (#1362)', () => {
+  const REASON = 'settings.json is malformed'
+  const agent = (perm) => ({
+    mode: 'ask',
+    agents: [{
+      name: 'claude-code', display_name: 'Claude Code', detected: true,
+      permissions: [perm],
+    }],
+  })
+  const pending = agent({ key: 'hooks', kind: 'modify', state: 'pending', title: 'Install hooks' })
+  const failed = agent({
+    key: 'hooks', kind: 'modify', state: 'granted', title: 'Install hooks',
+    effect_error: REASON,
+  })
+  const healthy = agent({ key: 'hooks', kind: 'modify', state: 'granted', title: 'Install hooks' })
+
+  const backdrop = () => document.getElementById('permissions-backdrop')
+  const isOpen = () => backdrop().classList.contains('open')
+  let realFetch
+
+  const serve = (snap) => {
+    globalThis.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve(snap) })
+    return refreshPermissions()
+  }
+
+  beforeAll(() => { realFetch = globalThis.fetch })
+  afterAll(() => { globalThis.fetch = realFetch })
+  beforeEach(() => { backdrop().classList.remove('open') })
+
+  test('the wizard opens for a pending permission, then STAYS open when its Apply fails', async () => {
+    await serve(pending)
+    expect(isOpen()).toBe(true)
+
+    // The daemon's own broadcast lands: granted, but the hooks never
+    // installed. Pre-fix this closed the wizard and the user saw nothing.
+    await serve(failed)
+    expect(isOpen()).toBe(true)
+    expect(document.getElementById('permissions-body').textContent)
+      .toContain('Granted, but not applied')
+  })
+
+  test('a healthy grant still dismisses the wizard', async () => {
+    await serve(pending)
+    expect(isOpen()).toBe(true)
+    await serve(healthy)
+    expect(isOpen()).toBe(false)
+  })
+
+  test('wizardShouldStayOpen is the predicate behind both', () => {
+    expect(wizardShouldStayOpen(pending, ['claude-code'])).toBe(true)
+    expect(wizardShouldStayOpen(failed, ['claude-code'])).toBe(true)
+    expect(wizardShouldStayOpen(healthy, ['claude-code'])).toBe(false)
+    // Another agent's failure must not hold this wizard open.
+    expect(wizardShouldStayOpen(failed, ['codex'])).toBe(false)
+  })
+
+  test('answeredAgentNames scopes Apply feedback to the batch it submitted', () => {
+    expect(answeredAgentNames([
+      { agent: 'claude-code', permission: 'hooks', grant: true },
+      { agent: 'claude-code', permission: 'transcripts', grant: true },
+    ])).toEqual(['claude-code'])
+    expect(answeredAgentNames([])).toEqual([])
+    expect(answeredAgentNames(null)).toEqual([])
   })
 })
 

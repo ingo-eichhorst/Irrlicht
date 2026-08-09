@@ -97,6 +97,25 @@ export function anyEffectFailed(snap, names) {
     .some(a => (a.permissions || []).some(p => !!p.effect_error));
 }
 
+// wizardShouldStayOpen reports whether the OPEN auto wizard still has
+// something to say about its locked agents: an unanswered permission, or
+// one whose consent effect failed. The second arm is what stops the
+// wizard closing on the daemon's own permissions_updated broadcast the
+// instant a grant is recorded — which would hide the very failure this
+// change exists to report (#1362). Mirrors macOS's
+// AgentPermissions.hasUnresolvedPermissions. Pure; exported for tests.
+export function wizardShouldStayOpen(snap, names) {
+  return stillPendingForAgents(snap, names) || anyEffectFailed(snap, names);
+}
+
+// answeredAgentNames is the set of agents a submitted batch touched —
+// the correct scope for "did THIS Apply fail", as opposed to an
+// unrelated agent's pre-existing failure (e.g. one recorded when the
+// daemon re-applied grants at startup). Pure; exported for tests.
+export function answeredAgentNames(answers) {
+  return [...new Set((answers || []).map(a => a.agent))];
+}
+
 // findPermission looks one permission up in a snapshot. Pure; exported
 // for tests.
 export function findPermission(snap, agentName, permKey) {
@@ -154,7 +173,18 @@ function updatePermissionsWizard() {
   if (!backdrop) return;
   if (backdrop.classList.contains('open')) {
     if (permissionsWizardMode !== 'auto') return;
-    if (stillPendingForAgents(permissionsSnapshot, permissionsWizardAgents)) return;
+    if (wizardShouldStayOpen(permissionsSnapshot, permissionsWizardAgents)) {
+      // An open wizard is deliberately NOT re-rendered, so in-flight
+      // toggling isn't clobbered — with one exception: a failure that
+      // isn't on screen yet has to be shown. It can arrive from the macOS
+      // app answering first, or from the daemon's startup re-apply, not
+      // just from this browser's own Apply (#1362).
+      const shown = !!document.querySelector('#permissions-body .perm-effect-error');
+      if (!shown && anyEffectFailed(permissionsSnapshot, permissionsWizardAgents)) {
+        renderPermissionsWizard();
+      }
+      return;
+    }
     closePermissionsWizard();
     // Fall through: another agent may be waiting for its own prompt.
   }
@@ -275,6 +305,10 @@ function retryPermissionEffect(a, p, grant, box, btn) {
     const replacement = fresh ? buildEffectNotice(a, fresh) : null;
     if (replacement) box.replaceWith(replacement);
     else box.remove();
+    // Patching this one node keeps other rows' in-flight toggles, but the
+    // wizard's own open/closed state still has to be reconciled: a retry
+    // that fixed the last outstanding problem should let it close.
+    updatePermissionsWizard();
   });
 }
 
@@ -354,8 +388,10 @@ function submitPermissionsWizard() {
     permissionsSnapshot = snap;
     // An effect that failed is reported, not hidden: keep the wizard up
     // and re-render so the user sees WHY, instead of it closing on a
-    // "success" that installed nothing (#1362).
-    if (anyEffectFailed(snap, permissionsWizardAgents)) {
+    // "success" that installed nothing (#1362). Scoped to the agents THIS
+    // batch answered — an unrelated agent's pre-existing failure must not
+    // make Apply look like it does nothing.
+    if (anyEffectFailed(snap, answeredAgentNames(answers))) {
       renderPermissionsWizard();
       return;
     }

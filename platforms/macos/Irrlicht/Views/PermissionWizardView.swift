@@ -256,10 +256,18 @@ struct PermissionWizardView: View {
         submitting = true
         let manager = sessionManager
         let isReview = mode == .review
+        let answered = Set(answers.map(\.agent))
         Task {
             let ok = await manager.answerPermissions(answers)
             submitting = false
-            if isReview && ok {
+            // The daemon answers 200 whether or not the consent effect
+            // succeeded, so `ok` alone is not "it worked". Closing here on
+            // a failed Apply would hide the warning the review wizard is
+            // the main place to see (#1362).
+            let failed = (manager.permissionsSnapshot?.agents ?? [])
+                .filter { answered.contains($0.name) }
+                .contains { $0.hasFailedEffect }
+            if isReview && ok && !failed {
                 onClose()
             }
         }

@@ -39,7 +39,15 @@ struct AgentPermissions: Decodable, Equatable, Identifiable {
     /// grant whose Apply failed reads as "answered", the wizard closes,
     /// and the user never sees why nothing works (#1362).
     var hasUnresolvedPermissions: Bool {
-        permissions.contains { $0.state == .pending || $0.effectNotice != nil }
+        permissions.contains { $0.state == .pending } || hasFailedEffect
+    }
+
+    /// True when any of this agent's permissions has a failed consent
+    /// effect. Distinct from `hasUnresolvedPermissions`: the review wizard
+    /// closes on Apply and must NOT close on a 200 that installed nothing
+    /// — the daemon answers 200 whether or not the closure succeeded.
+    var hasFailedEffect: Bool {
+        permissions.contains { $0.effectNotice != nil }
     }
 
     enum CodingKeys: String, CodingKey {

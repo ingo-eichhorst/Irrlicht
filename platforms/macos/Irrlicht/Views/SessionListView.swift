@@ -241,12 +241,6 @@ struct SessionListView: View {
     private var usageCostTimeframe: CostTimeframe { .from(usageCostTimeframeRaw) }
     private func cycleUsageTimeframe() { usageCostTimeframeRaw = usageCostTimeframe.next().rawValue }
 
-    /// Stable identity of the current pending-wizard agent set, for the
-    /// "Decide Later" suppression above.
-    private var wizardSignature: String {
-        sessionManager.pendingWizardAgents.map(\.name).sorted().joined(separator: ",")
-    }
-
     /// Reconciles auto-wizard visibility with the consent snapshot (#570).
     /// Presentation: a detected agent has pending permissions and the set
     /// wasn't just dismissed. Dismissal: every LOCKED agent has no pending
@@ -296,7 +290,14 @@ struct SessionListView: View {
                         // "Decide Later": suppress until the pending set
                         // changes (or next app launch — consent stays
                         // pending daemon-side).
-                        dismissedWizardSignature = wizardSignature
+                        //
+                        // Keyed on the agents THIS wizard presented, not
+                        // on the live pending set: a failed effect now
+                        // pins the wizard open (#1362), making "Decide
+                        // Later" the only exit, and by then the live set
+                        // can name a DIFFERENT agent detected meanwhile —
+                        // suppressing a prompt the user never saw.
+                        dismissedWizardSignature = locked.sorted().joined(separator: ",")
                         autoWizardAgents = nil
                     }
                 )
