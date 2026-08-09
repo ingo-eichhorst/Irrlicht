@@ -27,12 +27,16 @@ func TestComputeRoute(t *testing.T) {
 		{"yes", "unknown", "ready", RouteInconclusive},
 		// keyless/empty axes route record_now (bash else branch).
 		{"", "", "", RouteRecordNow},
-		// #1367 removed computeRoute's compatibility arm for the retired
-		// dotted spelling: `of validate` now rejects that value outright, so
-		// routing it as frozen would only have hidden malformed data. It is
-		// an unrecognised daemon value now, which routes record_now like any
-		// other. The canonical spelling is covered two rows up.
+		// The canonical not-applicable daemon axis freezes the route.
 		{"yes", "n/a", "ready", RouteFrozen},
+		// #1367 removed computeRoute's compatibility arm for the RETIRED dotted
+		// spelling: `of validate` now rejects that value outright, so routing it
+		// as frozen would only have hidden malformed data. It is an unrecognised
+		// daemon value now, and routes record_now like any other. This row is the
+		// behavioural lock on that removal, which the source census cannot
+		// provide on its own: it matches plain literals, so a re-added arm
+		// built by concatenation would slip past it.
+		{"yes", "n.a.", "ready", RouteRecordNow}, // retired-spelling-ok
 	}
 	for _, c := range cases {
 		if got := computeRoute(c.s, c.d, c.drv); got != c.want {

@@ -143,6 +143,14 @@ func DeriveDisplayState(supports, daemon, driver string, hasRecording, applicabl
 	case "", SupportsUnknown:
 		return StateUnknown
 	}
+	// An axis value outside the vocabulary reads as unknown rather than
+	// falling through to the optimistic arms below. Without this a malformed
+	// cell derives to "observed" and inflates the coverage numbers — the worst
+	// possible default, and one `of validate` alone cannot prevent because it
+	// gates CI, not this function (#1367 review).
+	if !IsValidAgentSupports(supports) {
+		return StateUnknown
+	}
 	switch {
 	case daemon == DaemonNotApplicable:
 		return StateNotApplicable
@@ -153,6 +161,8 @@ func DeriveDisplayState(supports, daemon, driver string, hasRecording, applicabl
 	case strings.HasPrefix(driver, DriverGapPrefix):
 		return StateBlockedDriver
 	case daemon == "" || daemon == DaemonUnknown:
+		return StateUnknown
+	case !IsValidDaemonCapability(daemon):
 		return StateUnknown
 	}
 	if !hasRecording {

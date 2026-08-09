@@ -16,9 +16,8 @@ import (
 // mode #1367 is about — the canonical token drifting. Here, the literal is the
 // spec.
 //
-// "n.a." is the spelling #1367 retired in favour of "n/a" (retired-spelling-ok).
-// Lines that must
-// name it carry the marker `retired-spelling-ok`, which
+// The dotted spelling #1367 retired in favour of "n/a" is named on lines
+// carrying the marker `retired-spelling-ok`, which
 // TestNoSourceEmitsRetiredSpelling honours.
 
 // canonicalDisplayStates is the display-state vocabulary as #1367 fixes it,
@@ -88,34 +87,46 @@ func TestDeriveDisplayStateNotApplicableCases(t *testing.T) {
 // TestNoSourceEmitsRetiredSpelling is the census this ticket actually turns on.
 // #1367's product is a vocabulary, so the failure mode is a MISSED call site,
 // not broken logic — and a schema that rejects the retired spelling on disk
-// says nothing about a renderer that still prints it. This walks every Go and
-// JS source file the onboarding factory owns and fails on any surviving
-// literal.
+// says nothing about a renderer that still prints it. This walks the whole
+// repository and fails on any surviving literal.
+//
+// It is rooted at the REPO, not at tools/onboarding-factory, because the
+// spelling reaches beyond the factory's own sources: #1367 itself had to fix
+// .claude/skills/ir:onboarding-factory/SKILL.md, which a factory-scoped,
+// Go-and-JS-only walk would have missed entirely. Shell gates, the viewer's
+// index.html and the docs are all places the vocabulary can re-enter.
+//
+// replaydata/ is skipped wholesale: captured recordings are frozen fixtures,
+// and stored assessments carry free-text body/notes prose that legitimately
+// quotes the superseded verdict. The FIELD values there are gated by
+// `of validate` instead, which is the right tool for data.
 //
 // Lines that must legitimately name the retired spelling (the schema that
 // records it as retired, the migration fixtures, this file) opt out with the
 // marker `retired-spelling-ok`.
 func TestNoSourceEmitsRetiredSpelling(t *testing.T) {
-	// Assembled at runtime so this line is not itself a hit.
-	retired := "n" + ".a."
+	retired := "n.a." // retired-spelling-ok
 	const optOut = "retired-spelling-ok"
 
-	factoryRoot := filepath.Join("..", "..") // internal/matrix → tools/onboarding-factory
-	var hits []string
+	// internal/matrix → tools/onboarding-factory → tools → repo root.
+	repoRoot := filepath.Join("..", "..", "..", "..")
+	var hits, markerOnCode []string
 
-	err := filepath.WalkDir(factoryRoot, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case "node_modules", "testdata", ".git":
+			// worktrees holds other agents' checkouts of this same repo —
+			// walking it would double-count and is not this tree's business.
+			case ".git", ".build", "node_modules", "testdata", "replaydata", "worktrees":
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		switch filepath.Ext(path) {
-		case ".go", ".js":
+		case ".go", ".js", ".md", ".sh", ".html", ".swift", ".json", ".yml", ".yaml":
 		default:
 			return nil
 		}
@@ -123,18 +134,111 @@ func TestNoSourceEmitsRetiredSpelling(t *testing.T) {
 		if readErr != nil {
 			return readErr
 		}
+		slash := filepath.ToSlash(path)
+		// vocabulary.go is the schema itself: its retiredSpellings registry is
+		// the one place production code must name the retired token as DATA, so
+		// the marker-on-code rule below cannot apply to it.
+		isSchema := strings.HasSuffix(slash, "internal/matrix/vocabulary.go")
+		isProdGo := filepath.Ext(path) == ".go" && !strings.HasSuffix(path, "_test.go") && !isSchema
 		for i, line := range strings.Split(string(b), "\n") {
-			if strings.Contains(line, retired) && !strings.Contains(line, optOut) {
-				hits = append(hits, filepath.ToSlash(path)+":"+strconv.Itoa(i+1)+": "+strings.TrimSpace(line))
+			loc := filepath.ToSlash(path) + ":" + strconv.Itoa(i+1) + ": " + strings.TrimSpace(line)
+			if !strings.Contains(line, retired) {
+				continue
+			}
+			if !strings.Contains(line, optOut) {
+				hits = append(hits, loc)
+				continue
+			}
+			// The opt-out is a whole-line substring, so a live `case` branch on
+			// the retired token with the marker in a trailing comment would be
+			// hidden by it. In production Go the marker is therefore only
+			// honoured on a comment line — documenting the retired spelling is
+			// legitimate, executing on it is not.
+			if isProdGo && !strings.HasPrefix(strings.TrimSpace(line), "//") {
+				markerOnCode = append(markerOnCode, loc)
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walk %s: %v", factoryRoot, err)
+		t.Fatalf("walk %s: %v", repoRoot, err)
 	}
 	if len(hits) > 0 {
 		t.Fatalf("%d source line(s) still carry the retired %q spelling (#1367 canonicalised it to %q); a line that must name it should carry the %q marker:\n  %s",
 			len(hits), retired, "n/a", optOut, strings.Join(hits, "\n  "))
+	}
+	if len(markerOnCode) > 0 {
+		t.Fatalf("%d production Go line(s) use the %q marker on executable code, which would hide a live call site — the marker is only honoured on comment lines there:\n  %s",
+			len(markerOnCode), optOut, strings.Join(markerOnCode, "\n  "))
+	}
+}
+
+// TestDeriveDisplayStateRejectsOffVocabularyAxes pins the fail-safe added after
+// the #1367 review. An axis value outside the vocabulary used to fall THROUGH
+// the switch to the optimistic arms, so a malformed cell derived to "observed"
+// and silently inflated the coverage numbers — the worst possible default.
+//
+// Note the cross-product test above cannot catch this on its own: it feeds a
+// bad value in, gets "observed" out, and "observed" IS in the canonical set.
+func TestDeriveDisplayStateRejectsOffVocabularyAxes(t *testing.T) {
+	cases := []struct {
+		name                    string
+		supports, daemon, drive string
+	}{
+		{"retired daemon spelling", "yes", "n.a.", "ready"}, // retired-spelling-ok
+		{"garbage daemon", "yes", "garbage", "ready"},
+		{"garbage supports", "yep", "full", "ready"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// hasRecording=true is the case that used to read "observed".
+			if got := DeriveDisplayState(c.supports, c.daemon, c.drive, true, true); got != "unknown" {
+				t.Errorf("DeriveDisplayState(%q,%q,%q,rec=true,applic=true) = %q; an off-vocabulary axis must read %q, not be treated as onboarded",
+					c.supports, c.daemon, c.drive, got, "unknown")
+			}
+		})
+	}
+}
+
+// TestViewerRendersEveryDisplayState is the POSITIVE half of the
+// cross-language guarantee. The census asserts no source names the retired
+// token; this asserts the viewer's JavaScript handles every state the Go
+// schema defines.
+//
+// Without it, adding a state to DisplayStates renders every such cell as the
+// grey "unknown" fallback in the matrix — silent mis-bucketing, and exactly
+// the drift class #1367 is about, just across the language boundary instead of
+// between two Go files. The colours live only in JS, so there is nothing to
+// generate from; a test is the available seam.
+func TestViewerRendersEveryDisplayState(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "viewer", "web", "viewer.js"))
+	if err != nil {
+		t.Fatalf("read viewer.js: %v", err)
+	}
+	// Scope to _displayMeta: other switches (_axisBadge, _daemonBadge) match on
+	// the assessment axes and share some token spellings, so a whole-file
+	// search would report a false pass.
+	body := string(src)
+	start := strings.Index(body, "function _displayMeta(")
+	if start < 0 {
+		t.Fatal("viewer.js no longer defines _displayMeta — update this test with the renderer that replaced it")
+	}
+	end := strings.Index(body[start:], "\n}")
+	if end < 0 {
+		t.Fatal("could not find the end of _displayMeta")
+	}
+	block := body[start : start+end]
+
+	for _, state := range DisplayStates {
+		if state == StateUnknown {
+			// unknown is the default arm rather than an explicit case.
+			if !strings.Contains(block, "default:") {
+				t.Errorf("_displayMeta has no default arm, so %q would not render", StateUnknown)
+			}
+			continue
+		}
+		if !strings.Contains(block, `case "`+state+`":`) {
+			t.Errorf("_displayMeta has no `case %q:` — cells in that state will render as the grey unknown fallback", state)
+		}
 	}
 }

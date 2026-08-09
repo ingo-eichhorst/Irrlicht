@@ -117,3 +117,40 @@ func TestValidateAcceptsCanonicalVocabulary(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateChecksAssessmentTierDespiteWrongTypedSibling is a review finding
+// from PR #1402. Go's json decoder populates every field that DID decode and
+// still returns an error when a sibling is wrong-typed. Gating the
+// details.assessment tier on `err == nil` therefore let one unrelated type slip
+// switch off the retired-spelling check for all three axes in that block — and
+// the cell validated completely clean, defeating the CI gate this whole ticket
+// rests on.
+//
+// The population that hand-authors these files is exactly the population that
+// also makes type slips, so this is the reachable path, not a hypothetical.
+func TestValidateChecksAssessmentTierDespiteWrongTypedSibling(t *testing.T) {
+	const retired = "n.a." // retired-spelling-ok
+	root := validRepo(t)
+
+	// metadata tier is entirely canonical; the retired spelling is in the
+	// details.assessment tier, alongside a wrong-typed sibling.
+	dir := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "2-1_basic-turn")
+	write(t, filepath.Join(dir, "metadata.json"), `{
+  "scenario_id": "basic-turn",
+  "metadata": {"agent_supports": "yes", "daemon_capability": "full", "driver_capability": "ready"},
+  "details": {"assessment": {"agent_supports": "yes", "daemon_capability": "`+retired+`", "driver_capability": 5}}
+}`)
+	write(t, filepath.Join(dir, "expected.jsonl"), `{"schema_version":1}`+"\n")
+
+	code, _, errs := runOf("validate", "--repo-root", root)
+	if code != exitFail {
+		t.Fatalf("a wrong-typed sibling silenced the whole details.assessment tier: want exitFail, got exit=%d\nstderr:\n%s", code, errs)
+	}
+	if !strings.Contains(errs, "details.assessment.daemon_capability") || !strings.Contains(errs, "retired spelling") {
+		t.Errorf("the retired spelling in details.assessment must still be reported; stderr:\n%s", errs)
+	}
+	// The undecodable remainder is itself reported, rather than passing silently.
+	if !strings.Contains(errs, "not a well-formed assessment object") {
+		t.Errorf("the decode error should be its own finding; stderr:\n%s", errs)
+	}
+}

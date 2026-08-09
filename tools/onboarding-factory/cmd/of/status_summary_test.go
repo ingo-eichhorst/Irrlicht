@@ -167,7 +167,6 @@ func TestStatusSummaryAgentFilter(t *testing.T) {
 // It reads the token out of `of status` rather than hard-coding it on that
 // side, so the assertion is "the two commands agree", independent of which
 // spelling wins; the separate literal check below is what pins WHICH one.
-// retired-spelling-ok
 func TestStatusAndSummaryAgreeOnNotApplicableSpelling(t *testing.T) {
 	root := richRepo(t)
 
@@ -209,12 +208,15 @@ func TestStatusAndSummaryAgreeOnNotApplicableSpelling(t *testing.T) {
 	if token != "n/a" {
 		t.Errorf("display state for a supports=no cell = %q; #1367 canonicalised it to %q", token, "n/a")
 	}
-	retired := "n" + ".a." // assembled so this line is not a census hit
+	retired := "n.a." // retired-spelling-ok
 	if strings.Contains(sumOut, retired) {
 		t.Errorf("summary output still contains the retired %q spelling:\n%s", retired, sumOut)
 	}
-	textCode, statusText, _ := runOf("status", "--repo-root", root)
-	if textCode == exitOK && strings.Contains(statusText, retired) {
+	textCode, statusText, textErrs := runOf("status", "--repo-root", root)
+	if textCode != exitOK {
+		t.Fatalf("status (text) exit=%d stderr=%s", textCode, textErrs)
+	}
+	if strings.Contains(statusText, retired) {
 		t.Errorf("`of status` text output still contains the retired %q spelling:\n%s", retired, statusText)
 	}
 }

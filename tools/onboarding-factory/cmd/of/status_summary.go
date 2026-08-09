@@ -106,7 +106,7 @@ func printSummaryText(stdout io.Writer, view summaryView) {
 	// The not-applicable column header reads the SAME schema token `of status`
 	// prints per cell, so the two commands cannot drift apart again (#1367).
 	fmt.Fprintf(stdout, summaryRowFormat,
-		"agent", "recorded", "pending", "blocked", "unobservable", matrix.StateNotApplicable, "unknown", "total")
+		"agent", "recorded", "pending", "blocked", matrix.StateUnobservable, matrix.StateNotApplicable, matrix.StateUnknown, "total")
 	for _, a := range view.Agents {
 		printSummaryRow(stdout, a)
 	}
