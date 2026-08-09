@@ -14,6 +14,15 @@
 //	        return hookbeacon.IsCanonical(c, segment)
 //	    },
 //	}
+//
+// One thing the adopting adapter owes: `segment` is typed in three independent
+// places — the value it passes here, the route registerHookRoutes registers
+// (core/cmd/irrlichd/startup.go), and the row in beaconroute_test.go that pins
+// the two against each other. Export it as ONE constant from the adapter and
+// reference that constant from all three, the way claudecode and codex already
+// share a single HookEndpointPath between their route and their installer. A
+// mismatch is a permanent silent 404: the beacon exits 0 by design, so nothing
+// anywhere reports it.
 package hookbeacon
 
 import (
@@ -221,6 +230,12 @@ func inspectAgainst(command, adapter, live string) Drift {
 	if err != nil {
 		return DriftUnresolvable
 	}
+	return driftAgainst(command, adapter, live, want)
+}
+
+// driftAgainst takes the line we would write as a parameter so a caller that
+// has already rendered it does not render it again.
+func driftAgainst(command, adapter, live, want string) Drift {
 	if command == want {
 		if !isExecutableFile(live) {
 			return DriftBinaryMissing
@@ -279,12 +294,12 @@ func IsCanonical(command, adapter string) bool {
 }
 
 func canonicalAgainst(command, adapter, live string) bool {
-	switch inspectAgainst(command, adapter, live) {
-	case DriftNone, DriftUnresolvable:
-		return true
-	}
 	want, err := Command(live, adapter)
 	if err != nil {
+		return true
+	}
+	switch driftAgainst(command, adapter, live, want) {
+	case DriftNone, DriftUnresolvable:
 		return true
 	}
 	// A rewrite repairs the entry only if it would actually change the line AND
@@ -309,13 +324,11 @@ func binaryPathOf(command, adapter string) (string, bool) {
 func leadingArg(command string) (string, bool) {
 	s := strings.TrimLeft(command, " ")
 	if !strings.HasPrefix(s, "'") {
-		if i := strings.IndexByte(s, ' '); i > 0 {
-			return s[:i], true
-		}
-		if s == "" {
+		fields := strings.Fields(s)
+		if len(fields) == 0 {
 			return "", false
 		}
-		return s, true
+		return fields[0], true
 	}
 
 	var out strings.Builder

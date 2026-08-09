@@ -188,26 +188,29 @@ func EndpointPath(adapter string) string { return endpointPrefix + adapter }
 // deliver a hook instead of starting — the beacon has to be more precise than
 // the chain it is spliced into, not equally loose.
 func IsInvocation(args []string) bool {
-	switch {
-	case len(args) > 0 && args[0] == Subcommand:
-		return true
-	case len(args) > 1 && args[0] == LegacyGuardToken && args[1] == Subcommand:
-		return true
-	}
-	return false
+	_, ok := verbArgs(args)
+	return ok
 }
 
 // InvocationArgs returns the arguments after the verb, for whichever accepted
-// form was used. Pairing it with IsInvocation keeps the two spellings of "where
-// does the verb sit" in one place instead of at the call site in main().
+// form was used.
 func InvocationArgs(args []string) []string {
+	rest, _ := verbArgs(args)
+	return rest
+}
+
+// verbArgs is the single place the accepted verb positions are spelled out, so
+// IsInvocation and InvocationArgs cannot drift into disagreeing about what
+// counts as a beacon invocation — selectAction asks the first and main() asks
+// the second, about the same command line.
+func verbArgs(args []string) ([]string, bool) {
 	if len(args) > 1 && args[0] == LegacyGuardToken && args[1] == Subcommand {
-		return args[2:]
+		return args[2:], true
 	}
 	if len(args) > 0 && args[0] == Subcommand {
-		return args[1:]
+		return args[1:], true
 	}
-	return nil
+	return nil, false
 }
 
 // Options is one beacon invocation.

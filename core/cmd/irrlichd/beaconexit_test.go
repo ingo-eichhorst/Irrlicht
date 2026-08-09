@@ -4,7 +4,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -24,10 +23,7 @@ import (
 // Every case runs with no daemon reachable, which is the situation the whole
 // mechanism exists for.
 func TestBeaconSubprocessAlwaysExitsZero(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "irrlichd")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build irrlichd: %v\n%s", err, out)
-	}
+	bin := buildIrrlichd(t)
 
 	// A port nothing is listening on, so the subprocess can never reach a real
 	// daemon on this machine.
