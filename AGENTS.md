@@ -271,14 +271,21 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `tools/lib/install-uninstall_test.sh` is a bash file that writes `#!/bin/sh`
   stubs inside a heredoc, and a content grep would try to lint it as POSIX sh.
   It runs two different kinds of check on each file: a real POSIX shell's
-  parser (`dash -n`) and a static bashism linter (`checkbashisms`, else
-  `shellcheck --shell=sh` filtered to its POSIX-compatibility codes —
-  `SC3xxx`, plus `SC2039` and `SC2112`, so general style debt stays out of
-  scope). Both, because the parser alone is far weaker than it looks:
-  measured one bashism per file, `dash -n` catches **3 of 8** — it flags
-  arrays, process substitution and the `function` keyword, and accepts
-  `[[ ]]`, `${v,,}`, `+=`, `echo -e` and `source`. Either static linter
-  catches 8 of 8. That gap is #1423: `site/install.sh` reaches users as
+  parser (`dash -n`) and **every** static bashism linter installed —
+  `shellcheck --shell=sh` filtered to its POSIX-compatibility codes
+  (`SC3xxx`, plus `SC2039` and `SC2112`/`SC2113`, so general style debt stays
+  out of scope) and `checkbashisms`. Both kinds, because the parser alone is
+  far weaker than it looks: measured one bashism per file, `dash -n` catches
+  **3 of 8** — it flags arrays, process substitution and the `function`
+  keyword, and accepts `[[ ]]`, `${v,,}`, `+=`, `echo -e` and `source`, where
+  either static linter catches all eight of those. *Every* installed linter
+  rather than the first one found, because the two disagree beyond that
+  sample: `checkbashisms` accepts `local`, `set -o pipefail` and `echo -n`,
+  which `shellcheck` rejects (SC3043/SC3040/SC3037) and which an installer
+  accretes. CI has shellcheck and not checkbashisms, so preferring the other
+  one locally would let a developer's preflight pass a diff CI rejects —
+  running both is monotone, and a run without shellcheck says out loud that
+  it is weaker than CI. That gap is #1423: `site/install.sh` reaches users as
   `curl … | sh`, which on Debian and Ubuntu is dash, so a bashism lands on a
   new user's first command before anything is installed that could report it.
   The gate lives in **`linux.yml`**, not test.yml, and the placement is the
@@ -292,8 +299,12 @@ Before marking a ticket done, run the full suite — every layer must pass:
   remove. Its tests are `tools/lib/posix-lint_test.sh` over the corpus under
   `tools/lib/testdata/posix-lint/`: one deliberately-broken fixture per
   bashism class, committed rather than improvised so the mutation evidence
-  outlives the PR, plus a clean `good-clean.sh` as the vacuity guard and two
-  cases pinning the refusals. One of those cases exists because the first
+  outlives the PR, plus a clean `good-clean.sh` as the vacuity guard,
+  `noisy-but-posix.sh` (POSIX-clean but SC2086-noisy) pinning the severity
+  filter in the one direction the `bad-*` files cannot reach, and two cases
+  pinning the refusals. That suite runs in `linux.yml`, **not** in test.yml's
+  `tools/lib/*_test.sh` loop — it needs a linter the macOS image lacks, and
+  the loop skips it by name for that reason. One of those cases exists because the first
   draft of the linter reproduced #1423 inside itself — it piped into `grep`
   and tested the capture for emptiness, so a linter that failed to run came
   back empty, empty read as clean, and it printed `ALL PASS` over an installer

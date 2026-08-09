@@ -97,6 +97,15 @@ jobs:
       - name: Test the shared shell libs
         run: |
           for t in tools/lib/*_test.sh; do
+            # posix-lint_test.sh drives tools/posix-lint.sh, which REQUIRES a
+            # static bashism linter and refuses to pass without one (#1423 is
+            # about a gate that passed having checked nothing, so it fails
+            # rather than skipping). This runner is macos-latest, whose image
+            # ships neither shellcheck nor checkbashisms — which is the same
+            # reason the gate itself lives in linux.yml. Both run there.
+            # Installing a linter here would cost every PR 20-40s to re-test
+            # what linux.yml already tested.
+            case "$t" in */posix-lint_test.sh) continue ;; esac
             echo "== $t =="
             bash "$t"
           done

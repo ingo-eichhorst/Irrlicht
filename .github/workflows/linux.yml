@@ -45,6 +45,15 @@ jobs:
       - name: Lint POSIX sh scripts
         run: tools/posix-lint.sh
 
+      # The gate's own unit tests, over the deliberately-broken corpus under
+      # tools/lib/testdata/posix-lint/. They live here rather than in test.yml's
+      # `tools/lib/*_test.sh` loop for the same reason the gate does: they need
+      # a static bashism linter, and the macos image ships none. A gate that
+      # passes by construction is what #1423 is about, so the mutation corpus
+      # has to run somewhere — this is where it can.
+      - name: Test the POSIX-sh gate
+        run: bash tools/lib/posix-lint_test.sh
+
       - name: Set up Go
         uses: actions/setup-go@v7
         with:

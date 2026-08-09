@@ -336,8 +336,13 @@ fi
 # than skipping in that case — the script says what to `brew install`. A gate
 # whose absence looks like a pass is the defect #1423 was filed about, and
 # preflight is not the place to reintroduce it.
+#
+# The extensionless alternatives are not decoration: `tools/git-hooks/pre-push`
+# is already a tracked script with no suffix, and a `#!/bin/sh` file called
+# `site/install` would match nothing in a `\.sh$`-only trigger — skipping the
+# gate on precisely the push that introduces the script it exists to check.
 if want posix; then
-  run_gate_scoped '\.sh$|^tools/posix-lint\.sh$|^tools/lib/testdata/posix-lint/' \
+  run_gate_scoped '\.sh$|^(tools|site)/[^/]*$|^tools/git-hooks/|^tools/lib/testdata/posix-lint/' \
                   "POSIX sh lint (#!/bin/sh bashisms)" tools/posix-lint.sh
 fi
 

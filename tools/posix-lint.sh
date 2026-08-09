@@ -28,7 +28,11 @@
 #
 #   1. a real POSIX shell's parser (`dash -n`, or `ash -n`), and
 #   2. a static bashism linter that NAMES the violation
-#      (`checkbashisms` preferred; `shellcheck --shell=sh` otherwise).
+#      — EVERY one that is installed, not the first one found, because the two
+#      do not agree: checkbashisms accepts `local`, `set -o pipefail` and
+#      `echo -n`, which shellcheck rejects (SC3043/SC3040/SC3037). CI has
+#      shellcheck only, so preferring the other one locally would let a
+#      developer's preflight pass a diff that CI rejects.
 #
 # WHERE IT RUNS. `.github/workflows/linux.yml`'s `build-test` job, on
 # ubuntu-latest — the only runner where `/bin/sh` is genuinely dash and where
@@ -87,11 +91,26 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
   # which holds entire checkouts of this repo, and would lint every other
   # branch's scripts as if they were this one's. Staged files are index
   # entries, so a newly added script is covered on the push that adds it.
-  while IFS= read -r f; do
+  #
+  # `-z` with `core.quotePath=off`, not a plain line read: under the default
+  # `core.quotePath=true` git C-quotes any path with a non-ASCII byte, so
+  # `inställ.sh` is listed as `"inst\303\244ll.sh"` — a string that is not a
+  # real path. `[[ -f ]]` then rejects it and the file is dropped from the
+  # walk with no message, which is a bashism-carrying script reported as
+  # `ALL PASS`. The empty-set guard below cannot catch that, because it only
+  # fires when EVERY file is missed. NUL delimiting also survives newlines and
+  # spaces in paths (this repo tracks one with a space).
+  while IFS= read -r -d '' f; do
     [[ "$f" == */testdata/* ]] && continue
-    [[ -f "$f" ]] || continue
+    if [[ ! -f "$f" ]]; then
+      # Loud, not silent: a tracked path the walk cannot open is exactly the
+      # blind spot above, and the whole point of this gate is that "not
+      # looked at" must never render as "clean".
+      echo "posix-lint: skipping $f (tracked but not a regular file)" >&2
+      continue
+    fi
     is_posix_shebang "$f" && FILES+=("$f")
-  done < <(git ls-files | LC_ALL=C sort -u)
+  done < <(git -c core.quotePath=off ls-files -z | LC_ALL=C sort -z -u)
 fi
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
@@ -117,21 +136,28 @@ if [[ -z "$POSIX_SH" ]]; then
   exit 2
 fi
 
-# checkbashisms is preferred over shellcheck because it reports bashisms and
-# nothing else, so the gate's scope is fixed by the tool rather than by a
-# filter this script would have to keep in sync. shellcheck is the fallback
-# because it is preinstalled on GitHub's ubuntu runners, which makes the CI
-# path free; there its output is filtered to the POSIX-compatibility codes so
-# the gate cannot drag in unrelated style debt from scripts nobody has linted
-# before. SC3xxx is the "In POSIX sh, X is undefined" family; SC2039 is the
-# pre-0.7.2 catch-all that older shellchecks emit instead; SC2112 is the
-# `function` keyword, which lives outside the SC3xxx range.
-BASHISM_LINTER=""
-if command -v checkbashisms >/dev/null 2>&1; then
-  BASHISM_LINTER="checkbashisms"
-elif command -v shellcheck >/dev/null 2>&1; then
-  BASHISM_LINTER="shellcheck"
-else
+# EVERY available linter runs, rather than the first one found.
+#
+# The tempting design — prefer one, fall back to the other — makes the gate's
+# strength depend on which machine it is running on, and the two tools do NOT
+# agree. checkbashisms accepts `local x=1`, `set -o pipefail` and `echo -n`,
+# all of which shellcheck rejects (SC3043 / SC3040 / SC3037) and all of which
+# an installer accretes. CI has shellcheck and not checkbashisms; a developer
+# who has installed checkbashisms would then have had the weaker checker
+# silently preferred, `tools/preflight.sh --only posix` would pass, and
+# linux.yml would go red on the push — the round-trip preflight exists to
+# prevent. Running both is monotone: the local result can be stricter than
+# CI's, never weaker.
+#
+# shellcheck's output is filtered to the POSIX-compatibility codes so the gate
+# cannot drag in unrelated style debt from scripts nobody has linted before.
+# SC3xxx is the "In POSIX sh, X is undefined" family; SC2039 is the pre-0.7.2
+# catch-all that older shellchecks emit instead; SC2112/SC2113 are the two
+# `function` keyword spellings, which live outside the SC3xxx range.
+BASHISM_LINTERS=()
+command -v shellcheck    >/dev/null 2>&1 && BASHISM_LINTERS+=("shellcheck")
+command -v checkbashisms >/dev/null 2>&1 && BASHISM_LINTERS+=("checkbashisms")
+if [[ ${#BASHISM_LINTERS[@]} -eq 0 ]]; then
   echo "posix-lint: no static bashism linter found (looked for: checkbashisms, shellcheck)." >&2
   echo "  Install one:  brew install checkbashisms   |   apt-get install -y devscripts" >&2
   echo "                brew install shellcheck      |   apt-get install -y shellcheck" >&2
@@ -140,7 +166,14 @@ else
   exit 2
 fi
 
-POSIX_CODES='\[SC(3[0-9]{3}|2039|2112)\]'
+POSIX_CODES='\[SC(3[0-9]{3}|2039|211[23])\]'
+# SC1xxx is shellcheck's parse/IO family. SC1072/SC1073/SC1088 make it ABANDON
+# analysis of the file, so it can exit 1 having emitted nothing but SC1xxx —
+# and a filter that keeps only POSIX codes would then see an empty result and
+# call the file clean. That is "the tool didn't look" wearing "the code is
+# fine", the shape this whole gate exists to remove, so it is treated as a
+# failure to check rather than filtered away.
+PARSE_ABORT_CODES='\[SC1[0-9]{3}\]'
 
 # lint_bashisms <file> — print findings to stdout, return 1 when any were
 # found (or when the linter could not be trusted to have looked).
@@ -155,9 +188,18 @@ POSIX_CODES='\[SC(3[0-9]{3}|2039|2112)\]'
 # checked explicitly, and the filtering is done in bash rather than by piping
 # into grep, which removes the second process that could fail unnoticed.
 lint_bashisms() {
-  local f="$1" raw rc line out=""
+  local f="$1" linter rc=0
+  for linter in "${BASHISM_LINTERS[@]}"; do
+    lint_with "$linter" "$f" || rc=1
+  done
+  return "$rc"
+}
 
-  if [[ "$BASHISM_LINTER" == "checkbashisms" ]]; then
+# lint_with <linter> <file> — one linter's verdict on one file.
+lint_with() {
+  local linter="$1" f="$2" raw rc line out=""
+
+  if [[ "$linter" == "checkbashisms" ]]; then
     # -f forces the check regardless of what checkbashisms makes of the
     # shebang. It changes nothing for a plain `#!/bin/sh` (verified: those are
     # checked either way) — it is here so that THIS script's line-1 discovery
@@ -182,6 +224,11 @@ lint_bashisms() {
     return 1
   fi
   [[ "$rc" -eq 0 ]] && return 0
+  # A parse abort must not be filtered into silence — see PARSE_ABORT_CODES.
+  if [[ "$raw" =~ $PARSE_ABORT_CODES ]]; then
+    printf 'shellcheck could not check this file (parse error; analysis abandoned):\n%s\n' "$raw"
+    return 1
+  fi
   # Filter to the POSIX-compatibility findings in bash — no pipe, so there is
   # no second process whose failure could look like "nothing matched".
   while IFS= read -r line; do
@@ -197,7 +244,19 @@ lint_bashisms() {
 
 # ─── Run ────────────────────────────────────────────────────────────────────
 
-echo "posix-lint: ${#FILES[@]} file(s); parser=$POSIX_SH, bashisms=$BASHISM_LINTER"
+# Name every checker that ran. Which ones are present varies by host — CI has
+# shellcheck only — so a run that cannot be read back to "what actually
+# looked at this" is a run whose green means nothing in particular.
+echo "posix-lint: ${#FILES[@]} file(s); parser=$POSIX_SH, bashisms=${BASHISM_LINTERS[*]}"
+if [[ " ${BASHISM_LINTERS[*]} " != *" shellcheck "* ]]; then
+  # Not a failure — checkbashisms alone is still far stronger than the parser
+  # check that preceded this gate. But it is weaker than CI's checker, and a
+  # local green that CI will contradict should say so at the time, not on the
+  # push.
+  echo "posix-lint: NOTE — shellcheck is absent, so this run is WEAKER than CI's." >&2
+  echo "  checkbashisms accepts 'local', 'set -o pipefail' and 'echo -n'; shellcheck rejects all three." >&2
+  echo "  Install it to match the gate that guards main:  brew install shellcheck" >&2
+fi
 
 rc=0
 for f in "${FILES[@]}"; do
@@ -210,7 +269,7 @@ for f in "${FILES[@]}"; do
   fi
 
   if ! bashism_out=$(lint_bashisms "$f"); then
-    echo "FAIL [$BASHISM_LINTER] $f" >&2
+    echo "FAIL [bashisms] $f" >&2
     printf '%s\n' "$bashism_out" >&2
     file_rc=1
   fi

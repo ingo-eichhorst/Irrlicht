@@ -111,21 +111,29 @@ rc=$?
 assert_eq "vacuity: good-clean.sh passes (exit 0)" "0" "$rc"
 assert_contains "vacuity: good-clean.sh reports ALL PASS" "ALL PASS" "$out"
 
+# 9a. The severity filter, in the only direction the bad-* fixtures cannot
+#     reach. They all trip an SC3xxx, so they exercise the MATCH arm; this one
+#     makes shellcheck exit 1 carrying ONLY SC2086, which the gate must
+#     discard. Without it, deleting the code test (accepting every shellcheck
+#     line) leaves the whole suite green while site/install.sh starts failing
+#     the gate on ordinary style debt.
+out=$("$LINT" "$FIXTURES/noisy-but-posix.sh" 2>&1)
+rc=$?
+assert_eq "filter: shellcheck-noisy but POSIX-clean still passes" "0" "$rc"
+
 # ===========================================================================
 # 9b. CI PARITY: the same corpus, through the shellcheck path specifically.
 #
-#     The two linters are not interchangeable in practice, because which one
-#     runs depends on the host: this repo's CI gate runs on ubuntu-latest,
-#     whose image ships shellcheck (0.9.0) and does NOT ship checkbashisms —
-#     so shellcheck is the branch that actually guards `main`, while a
-#     developer with `brew install checkbashisms` exercises the other one and
-#     never sees it. Asserting only the preferred branch would leave the CI
-#     branch untested by construction.
+#     The gate runs every linter that is installed, so on this machine the
+#     cases above may have been satisfied by checkbashisms. CI is not that
+#     machine: the ubuntu image ships shellcheck (0.9.0) and NOT
+#     checkbashisms, so shellcheck alone is what guards `main`. Pinning a
+#     shellcheck-only PATH is the only way that configuration is ever
+#     exercised from a developer box that has both.
 #
-#     This case also pins the bash-side severity filter: shellcheck reports
-#     general style debt (SC2086 and friends) that this gate deliberately
-#     ignores, so "shellcheck found something" is not the same as "found a
-#     bashism", and the filter is what makes those different.
+#     The two are genuinely not interchangeable — checkbashisms accepts
+#     `local`, `set -o pipefail` and `echo -n`, all of which shellcheck
+#     rejects — which is why the gate runs both rather than preferring one.
 # ===========================================================================
 if command -v shellcheck >/dev/null 2>&1; then
   sc_stub="$(mktemp -d)"
@@ -142,6 +150,10 @@ if command -v shellcheck >/dev/null 2>&1; then
   rc=$?
   assert_eq "shellcheck path: good-clean.sh still passes" "0" "$rc"
   assert_contains "shellcheck path: reports which linter ran" "bashisms=shellcheck" "$out"
+  # The filter, exercised through the branch that actually guards main.
+  out=$(PATH="$sc_stub" "$LINT" "$FIXTURES/noisy-but-posix.sh" 2>&1)
+  rc=$?
+  assert_eq "shellcheck path: SC2086-only noise is not a bashism" "0" "$rc"
   rm -rf "$sc_stub"
 else
   echo "  FAIL: shellcheck absent — the branch that guards CI cannot be tested here" >&2
