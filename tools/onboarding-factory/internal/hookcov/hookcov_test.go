@@ -17,13 +17,19 @@ import (
 func TestDeclaredMatchesRegistry(t *testing.T) {
 	got := Declared()
 
-	// Exhaustive as of this commit: claudecode and codex are the only two
-	// adapters declaring a hooks permission. If a third gains one, this fails
+	// Exhaustive as of this commit: claudecode, codex and copilot are the
+	// adapters declaring a hooks permission. If a fourth gains one, this fails
 	// and the new adapter joins the list — that is the intended workflow, not
 	// an obstacle.
+	//
+	// copilot joined in #1378 and is expected to report StatusGap for a while:
+	// it declares hooks, but no copilot recording carries a hook_received
+	// event yet, because that phase deliberately re-recorded nothing (the
+	// frozen sidecars are hook-free and the replay goldens had to stay
+	// byte-identical). A GAP here is the honest reading of that, not a defect.
 	want := map[string]bool{
 		"aider": false, "antigravity": false, "claudecode": true, "codex": true,
-		"copilot": false, "gemini-cli": false, "hermes": false, "kiro-cli": false,
+		"copilot": true, "gemini-cli": false, "hermes": false, "kiro-cli": false,
 		"mistral-vibe": false, "opencode": false, "pi": false,
 	}
 	if !reflect.DeepEqual(got, want) {
