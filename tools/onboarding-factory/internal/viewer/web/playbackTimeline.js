@@ -85,6 +85,18 @@ export function eventStyle(ev) {
     // as bookkeeping.
     case "hold_expired":
       return {color: "#f59e0b", size: 14, opacity: 1, label: "Held signal expired — its release never arrived"};
+    // The hook-liveness watchdog (#1368). A channel going silent is strictly
+    // more of a fault than a single hold expiring, so it is red rather than
+    // amber; the release it causes shares hold_expired's amber because it is
+    // the same visible outcome by a different route. Recovery is green — it is
+    // the event that proves the demotion was a health signal and not a latch,
+    // and its ABSENCE after a silent marker is the thing worth spotting.
+    case "hook_channel_silent":
+      return {color: "#ef4444", size: 14, opacity: 1, label: ev.adapter ? `Hook channel for ${ev.adapter} declared dead — nothing arriving` : "Hook channel declared dead — nothing arriving"};
+    case "hook_channel_recovered":
+      return {color: "#22c55e", size: 14, opacity: 1, label: ev.adapter ? `Hook channel for ${ev.adapter} is delivering again` : "Hook channel is delivering again"};
+    case "hook_hold_released":
+      return {color: "#f59e0b", size: 14, opacity: 1, label: "Held signal released — the channel that placed it went silent"};
     case "file_event":
       return {color: "#94a3b8", size: 7, opacity: 0.6, label: "Filesystem event"};
     default:

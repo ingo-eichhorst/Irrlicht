@@ -358,7 +358,15 @@ func TestHooksBundleOmitsCountsWhenNotCollectedInDaemon(t *testing.T) {
 	}
 	// Not just the list: ANY count from a process that served no hooks is a
 	// number nobody observed, and a zero reads as an all-clear.
-	for _, field := range []string{"unknown_events", "unknown_events_total", "unknown_event_names_dropped_by_adapter"} {
+	// The #1368 fields inherit the same obligation and are listed here, not
+	// only in their own test: the two shapes differ by a handful of fields and
+	// are an obvious candidate for being unified later, and the moment they are
+	// this loop is the only thing standing between that refactor and publishing
+	// `"hook_requests_received": 0` from a process that served none.
+	for _, field := range []string{
+		"unknown_events", "unknown_events_total", "unknown_event_names_dropped_by_adapter",
+		"hook_requests_received", "channels", "silent_channel_note",
+	} {
 		if v, ok := got[field]; ok {
 			t.Errorf("%s is present without a daemon to read it from: %v", field, v)
 		}
@@ -366,6 +374,92 @@ func TestHooksBundleOmitsCountsWhenNotCollectedInDaemon(t *testing.T) {
 	note, _ := got["note"].(string)
 	if !strings.Contains(note, "events.log") || !strings.Contains(note, "/debug/bundle") {
 		t.Errorf("note does not say where the real evidence is: %q", note)
+	}
+}
+
+// TestHooksBundleReportsChannelLiveness covers the #1368 half of hooks.json:
+// which hook channels are being watched, what each has delivered, and which are
+// currently treated as dead.
+func TestHooksBundleReportsChannelLiveness(t *testing.T) {
+	svc := buildTestServiceWithHooks(t, func() HookHealthSnapshot {
+		return HookHealthSnapshot{
+			ReceiptsTotal: 91,
+			Channels: []HookChannelHealth{
+				{Adapter: "claude-code", Armed: true, Receipts: 0, TurnsSinceReceipt: 9, Silent: true},
+				{Adapter: "codex", Armed: true, Receipts: 91, TurnsSinceReceipt: 0},
+				{Adapter: "kiro-cli"},
+			},
+		}
+	})
+
+	got := hooksJSON(t, svc)
+
+	if got["hook_requests_received"] != float64(91) {
+		t.Errorf("hook_requests_received = %v, want 91", got["hook_requests_received"])
+	}
+	channels, _ := got["channels"].([]any)
+	if len(channels) != 3 {
+		t.Fatalf("channels has %d entries, want 3: %v", len(channels), got["channels"])
+	}
+
+	dead, _ := channels[0].(map[string]any)
+	if dead["adapter"] != "claude-code" || dead["silent"] != true || dead["turns_since_receipt"] != float64(9) {
+		t.Errorf("dead channel row = %v, want claude-code silent after 9 turns", dead)
+	}
+	if dead["armed"] != true {
+		t.Errorf("a silent row must also say it was armed: %v — otherwise a reader cannot tell a dead channel from an uninstalled one", dead)
+	}
+	unwatched, _ := channels[2].(map[string]any)
+	if v, ok := unwatched["armed"]; ok && v == true {
+		t.Errorf("an adapter with no consent must not read as armed: %v", unwatched)
+	}
+
+	// The three-way disambiguation is the point of the section. Collapsing this
+	// ticket's diagnosis with #1372's or #1362's is the failure mode the note
+	// exists to prevent, so it is asserted rather than trusted.
+	note, _ := got["silent_channel_note"].(string)
+	if note == "" {
+		t.Fatal("a silent channel must carry an explanation; hooks.json is what a bug reporter pastes")
+	}
+	for _, want := range []string{"claude-code", "#1368", "#1372", "#1362", "effect_error"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("silent_channel_note must mention %q so the reader is not sent to the wrong fix; got:\n%s", want, note)
+		}
+	}
+}
+
+// TestHooksBundleOmitsTheLivenessNoteWhenHealthy keeps the healthy bundle
+// terse: a paragraph of failure prose printed on every bundle would train
+// readers to skip the one that matters.
+func TestHooksBundleOmitsTheLivenessNoteWhenHealthy(t *testing.T) {
+	got := hooksJSON(t, buildTestServiceWithHooks(t, func() HookHealthSnapshot {
+		return HookHealthSnapshot{
+			ReceiptsTotal: 12,
+			Channels:      []HookChannelHealth{{Adapter: "codex", Armed: true, Receipts: 12}},
+		}
+	}))
+	if v, ok := got["silent_channel_note"]; ok {
+		t.Errorf("a healthy bundle carries the silent-channel explanation: %v", v)
+	}
+}
+
+// TestHooksBundleOmitsLivenessWhenNotCollectedInDaemon extends #1364's honesty
+// obligation to this feature, and the obligation is strictly stronger here.
+// `--diagnose` served no hooks AND observed no turns, so BOTH sides of the
+// ratio are structurally absent: a channel published from that process would
+// read as silent with zero turns behind it, which is an accusation rather than
+// a measurement.
+func TestHooksBundleOmitsLivenessWhenNotCollectedInDaemon(t *testing.T) {
+	got := hooksJSON(t, buildTestServiceWithHooks(t, nil))
+
+	for _, field := range []string{"channels", "hook_requests_received", "silent_channel_note"} {
+		if v, ok := got[field]; ok {
+			t.Errorf("%s is present without a daemon to read it from: %v", field, v)
+		}
+	}
+	note, _ := got["liveness_note"].(string)
+	if !strings.Contains(note, "no turns") || !strings.Contains(note, "/debug/bundle") {
+		t.Errorf("liveness_note must say why it is absent and where the real view is: %q", note)
 	}
 }
 

@@ -136,6 +136,12 @@ func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logge
 		return
 	}
 
+	// The channel delivered (issue #1368). Counted against the "hooks" consent
+	// only — the transcripts gate below authorizes READING the transcript, not
+	// observing that a POST arrived, and a hooks-granted / transcripts-denied
+	// install has a working channel that this counter must not call dead.
+	hookjson.ObserveHookReceipt(AdapterName)
+
 	var payload codexHookPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)

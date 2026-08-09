@@ -115,21 +115,49 @@ func buildDiagnostics(fsRepo *filesystem.SessionRepository, allAgents []agent.Ag
 // diagnostics bundle (issue #1364). Only the daemon wires it: these counters
 // accumulate in whatever process served the hooks, and --diagnose is not that
 // process.
-func liveHookHealth() services.HookHealthSnapshot {
-	rows := hookjson.UnknownEvents()
-	snap := services.HookHealthSnapshot{
-		UnknownEvents:       make([]services.UnknownHookEvent, 0, len(rows)),
-		UnknownNamesDropped: hookjson.UnknownEventNamesDropped(),
-		UnknownEventsTotal:  hookjson.UnknownEventTotal(),
+// watchdog carries the liveness half (#1368) and may be nil, which reads the
+// same way the whole function being absent does: the counters are omitted, not
+// zeroed.
+func liveHookHealth(watchdog *services.HookLivenessWatchdog) func() services.HookHealthSnapshot {
+	return func() services.HookHealthSnapshot {
+		rows := hookjson.UnknownEvents()
+		snap := services.HookHealthSnapshot{
+			UnknownEvents:       make([]services.UnknownHookEvent, 0, len(rows)),
+			UnknownNamesDropped: hookjson.UnknownEventNamesDropped(),
+			UnknownEventsTotal:  hookjson.UnknownEventTotal(),
+			Channels:            watchdog.Snapshot(),
+			ReceiptsTotal:       hookjson.HookReceiptTotal(),
+		}
+		for _, row := range rows {
+			snap.UnknownEvents = append(snap.UnknownEvents, services.UnknownHookEvent{
+				Adapter: row.Adapter,
+				Event:   row.Event,
+				Count:   row.Count,
+			})
+		}
+		return snap
 	}
-	for _, row := range rows {
-		snap.UnknownEvents = append(snap.UnknownEvents, services.UnknownHookEvent{
-			Adapter: row.Adapter,
-			Event:   row.Event,
-			Count:   row.Count,
-		})
+}
+
+// hookAdapterNames lists the adapters that declare a hook install, so the
+// liveness watchdog can publish a row for a channel that has produced no
+// traffic at all — the most telling row in a bundle from a user whose hooks
+// never worked once.
+//
+// Derived from the registry rather than written out, for the reason all.go
+// exists: a hook-receiving adapter added later must not have to remember to
+// appear here.
+func hookAdapterNames(allAgents []agent.Agent) []string {
+	var out []string
+	for _, a := range allAgents {
+		for _, p := range a.Permissions {
+			if p.Hooks != nil {
+				out = append(out, a.Identity.Name)
+				break
+			}
+		}
 	}
-	return snap
+	return out
 }
 
 // runDiagnose writes a diagnostics bundle to the current directory and exits.

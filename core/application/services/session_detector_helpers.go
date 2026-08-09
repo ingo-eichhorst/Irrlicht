@@ -61,6 +61,12 @@ func (d *SessionDetector) forgetSessionScopedState(sessionID string) {
 	}
 	d.dwell.DropSession(sessionID)
 
+	// The hook-liveness watchdog's rising-edge memory (#1368): one bool per
+	// session, kept for the life of the process otherwise, and a recycled
+	// session ID would inherit a stale "was done" and swallow its first turn.
+	// Nil-safe on its own receiver, so it needs no guard like signals above.
+	d.hookLiveness.Forget(sessionID)
+
 	d.idleMu.Lock()
 	delete(d.idleProjectRetryAttempts, sessionID)
 	d.idleMu.Unlock()

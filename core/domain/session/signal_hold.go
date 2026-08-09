@@ -574,6 +574,33 @@ type SignalExpiry struct {
 	Ceiling time.Duration
 }
 
+// SignalRelease reports one hold that ReleaseTier dropped because the channel
+// that asserted it was declared dead, rather than because it went stale, was
+// consumed, or ran out its ceiling (#1368).
+//
+// It is deliberately a different type from SignalExpiry, carrying no Ceiling,
+// because the two answer different questions and a reader must not have to
+// guess which happened. A SignalExpiry says "this hold's release was late past
+// the point of belief" — one hold, one session, wall clock. A SignalRelease
+// says "every hold from this channel is being dropped because the channel
+// itself stopped delivering" — a per-adapter verdict that happens to land on
+// this session. Collapsing them into one type with a zero Ceiling would make
+// the distinction depend on a reader noticing an absent field.
+type SignalRelease struct {
+	// Kind is the signal whose hold was dropped.
+	Kind SignalKind
+
+	// Tier is the authority the hold had been asserting, and the tier the
+	// caller asked to have released. Carried rather than implied so a recorded
+	// trace stands alone.
+	Tier SignalTier
+
+	// HeldFor is how long the hold had stood, measured Now-HeldSince against
+	// the clock the caller injected. Usually long: a hold placed by a channel
+	// that has since gone silent was, by definition, placed before it did.
+	HeldFor time.Duration
+}
+
 // heldSignal is one stored hold: what the signal carried, and when it arrived.
 // The arrival time is what a time-based staleness rule reads through
 // holdContext.HeldSince.
@@ -676,6 +703,98 @@ func (h *SignalHolds) DropSession(sessionID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.held, sessionID)
+}
+
+// ReleaseTier drops every hold on sessionID whose policy declares tier, and
+// reports what it dropped (#1368).
+//
+// This is the mechanism behind "demote the adapter to TierTranscript". Holds
+// are how a tier asserts authority over time — a TierHook hold suppresses every
+// lower tier for as long as it stands — so demoting a channel while leaving its
+// holds in place would demote nothing at all. The session would stay pinned by
+// the very channel just declared dead, and the only thing that changed would be
+// a line in a diagnostics bundle.
+//
+// Why this is sound and not a guess: the caller only reaches here after
+// observing N completed turns for the adapter with zero hook receipts. A hold
+// asserted by that channel is therefore older than those N turns, because
+// nothing from the channel has arrived since. The evidence has already been
+// collected; this is acting on it.
+//
+// Releasing does not force a state. It removes a suppression, and the next
+// classify pass decides from the transcript — which is exactly what
+// TierTranscript means and exactly what the adapter would do if it had no hook
+// channel at all. If the channel comes back, the next hook re-asserts its hold
+// from scratch.
+//
+// Two things this API cannot check and the caller therefore owes it. First, the
+// evidence above is a CALLER invariant — the domain cannot see turns or
+// receipts, so a caller that reaches here without them gets a silent, confident
+// wrong answer. Second, it releases every hold of the tier on this session, and
+// the verdict driving it is per ADAPTER; those coincide only because a session
+// belongs to one adapter and each hook receiver resolves its own transcript
+// roots, so every TierHook hold on a session came from that session's adapter.
+// That holds today and is worth re-checking if a TierHook-authority signal ever
+// arrives on a channel that is not an adapter's own receiver.
+//
+// Dropping the holds rather than suppressing them is deliberate. A
+// Suppress/Unsuppress pair would make recovery symmetric for free, but it
+// leaves stale holds alive indefinitely for a channel that may never return and
+// so needs a reaper of its own; deletion is the simpler end state, and the
+// freshness guard below is the price it pays.
+//
+// Idempotent and cheap on the common path: a session with no holds returns nil
+// without allocating, so the caller may invoke it on every pass while an
+// adapter is silent rather than tracking which sessions it has already swept.
+//
+// now is the pass clock, injected for the same reason Overlay takes one: HeldFor
+// must be measured on the transcript's virtual timeline so a recording replays
+// deterministically.
+func (h *SignalHolds) ReleaseTier(sessionID string, tier SignalTier, now time.Time) []SignalRelease {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	holds := h.held[sessionID]
+	if len(holds) == 0 {
+		return nil
+	}
+
+	var released []SignalRelease
+	// signalPolicies order, not map order: the result reaches a log and a
+	// recorded lifecycle trace, and a nondeterministic order there would make
+	// two identical runs produce different recordings.
+	for _, policy := range signalPolicies {
+		if policy.tier != tier {
+			continue
+		}
+		hs, ok := holds[policy.kind]
+		if !ok {
+			continue
+		}
+		// A hold placed at or after `now` was asserted AFTER the caller took
+		// the verdict it is acting on, so the evidence for that verdict says
+		// nothing about it. The receiver runs on its own goroutine: a hook can
+		// land, dispatch and place a fresh hold in the window between a classify
+		// pass reading the liveness counters and reaching this sweep, and
+		// dropping that hold would discard the first signal from a channel that
+		// has just come back — while the next pass reports it as recovered.
+		// Leaving it stands the hold up against a demotion that predates it,
+		// which is the correct reading of both facts.
+		if hs.heldAt.After(now) {
+			continue
+		}
+		delete(holds, policy.kind)
+		released = append(released, SignalRelease{
+			Kind:    policy.kind,
+			Tier:    policy.tier,
+			HeldFor: now.Sub(hs.heldAt),
+		})
+	}
+
+	if len(holds) == 0 {
+		delete(h.held, sessionID)
+	}
+	return released
 }
 
 // Overlay folds every currently-valid held signal for sessionID onto m, in

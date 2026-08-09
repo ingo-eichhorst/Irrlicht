@@ -379,6 +379,10 @@ type registerCoreRoutesDeps struct {
 	Version           string
 	PublishController *relay.PublishController
 	Cfg               config.Config
+	// HookLiveness supplies the per-adapter hook-liveness rows for hooks.json
+	// (#1368). Built before this call because the diagnostics bundle is
+	// registered earlier in startup than the detector that drives it.
+	HookLiveness *services.HookLivenessWatchdog
 }
 
 // registerCoreRoutes wires the always-on API surface: session state, the
@@ -408,7 +412,7 @@ func registerCoreRoutes(mux *http.ServeMux, deps registerCoreRoutesDeps) {
 	// per-PID liveness, trimmed logs, and config for bug reports. Localhost
 	// only — it carries session paths and (pre-redaction) process argv. Reads
 	// fsRepo directly for a fresh, uncached snapshot.
-	diagSvc := buildDiagnostics(deps.FSRepo, deps.AllAgents, deps.Cfg, liveHookHealth)
+	diagSvc := buildDiagnostics(deps.FSRepo, deps.AllAgents, deps.Cfg, liveHookHealth(deps.HookLiveness))
 	mux.HandleFunc("GET /debug/bundle", localhostOnly(handleDiagnosticsBundle(diagSvc)))
 }
 
