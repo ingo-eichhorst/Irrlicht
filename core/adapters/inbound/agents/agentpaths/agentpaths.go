@@ -10,6 +10,7 @@ package agentpaths
 
 import (
 	"errors"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -95,4 +96,42 @@ func AbsRoot(dir string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, dir), nil
+}
+
+// NewestFileWithSuffix returns the path of the most recently modified file
+// under root (recursively) whose name ends in suffix, or "" if there is none.
+//
+// Both hook-capable adapters need the same thing for the same reason: the
+// newest transcript is the closest proxy on disk for "the version of this
+// agent the user is running now" (#1365). Codex reads a cli_version out of its
+// session header, Claude Code reads a version stamp off any transcript line —
+// different files, different fields, identical walk. Keeping the walk here
+// means a third adapter supplies only its own field extraction, and a fix to
+// the traversal (symlinks, unreadable dirs, tie-breaking) lands once.
+//
+// Callers pass a root already resolved through AbsRoot. Handing this a
+// $HOME-relative default instead walks the daemon's CWD and returns "" — no
+// error, no empty-directory signal, just an answer that reads as "this agent
+// has no sessions".
+//
+// Walk errors are ignored per entry rather than aborting: an unreadable
+// subdirectory should cost that subtree, not the whole answer.
+func NewestFileWithSuffix(root, suffix string) string {
+	var newestPath string
+	var newestMod int64
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, suffix) {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if mod := info.ModTime().UnixNano(); mod > newestMod {
+			newestMod = mod
+			newestPath = path
+		}
+		return nil
+	})
+	return newestPath
 }

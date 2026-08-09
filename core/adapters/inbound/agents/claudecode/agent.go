@@ -34,10 +34,14 @@ const iconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" 
 
 // Agent returns the Claude Code adapter registration.
 func Agent() agent.Agent {
+	// One name, used both as the wizard's label and in the hooks permission's
+	// version disclosure below, so the copy cannot come to call the CLI
+	// something the rest of the UI doesn't.
+	const displayName = "Claude Code"
 	return agent.Agent{
 		Identity: agent.Identity{
 			Name:         AdapterName,
-			DisplayName:  "Claude Code",
+			DisplayName:  displayName,
 			IconSVGLight: iconSVG,
 			IconSVGDark:  iconSVG,
 		},
@@ -83,14 +87,28 @@ func Agent() agent.Agent {
 				Detail: "Adds " + hookjson.EventList(installedHookEvents) +
 					" hook entries that POST " +
 					"the hook payload to the local daemon at " + hookEndpointURL() +
-					" via Claude Code's native http hook (no shell/curl). Toggling " +
-					"off removes exactly these entries (also available via " +
+					" via Claude Code's native http hook (no shell/curl). " +
+					hookjson.RequiresVersion(displayName, minCLIVersion) +
+					" Toggling off removes exactly these entries (also available via " +
 					"`irrlichd --uninstall-hooks`).",
 				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
 				Remove: func() error { _, err := UninstallHooks(); return err },
 				Hooks: &agent.HookInstall{
 					ConfigPath: claudeSettingsPath,
 					Uninstall:  UninstallHooks,
+					// Declared, not implemented — PermissionService enforces it
+					// (#1365). Observed reads the version Claude Code stamps on
+					// every transcript line, which is what makes this gate real
+					// rather than decorative: the production daemon inherits a
+					// LaunchServices PATH that does not include ~/.local/bin, so
+					// the probe alone would miss and every install would take the
+					// fail-open branch. The probe stays as the fallback and as the
+					// authority whenever the passive reading says "too old".
+					Version: &agent.VersionGate{
+						Min:      minCLIVersion,
+						Probe:    []string{"claude", "--version"},
+						Observed: newestObservedCLIVersion,
+					},
 				},
 			},
 			{

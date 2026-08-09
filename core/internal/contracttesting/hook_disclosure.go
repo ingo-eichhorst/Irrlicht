@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 
 	"irrlicht/core/domain/agent"
@@ -126,6 +127,38 @@ func AssertHookDisclosureMatchesInstalled(t *testing.T, d HookDisclosure) {
 	t.Run("names_no_uninstalled_event", func(t *testing.T) {
 		assertNamesNoUninstalledEvent(t, d, named)
 	})
+	t.Run("states_the_version_floor", func(t *testing.T) {
+		assertStatesVersionFloor(t, perm, disclosure)
+	})
+}
+
+// assertStatesVersionFloor extends the #1356 contract along the axis #1365
+// added. The other three arms bind the copy to WHICH entries get written; a
+// declared minimum upstream version makes it conditional whether ANY of them
+// do, and copy that describes an install without naming its precondition
+// describes something that may not happen on the user's machine.
+//
+// This arm reads the floor off the declaration rather than taking it as a
+// field, so every adapter that declares one is covered without changing its
+// call site, and an adapter that declares none is unaffected.
+//
+// Note what does NOT need saying here: the disclosed event set is the same at
+// every version the adapter installs at. The gate is whole-install — below the
+// floor nothing is written, at or above it everything is — precisely so that
+// Touches/Detail can keep stating one exact count and one exact list. A gate
+// that filtered events per version would make the count a range, which is the
+// hand-waving #1356 abolished.
+func assertStatesVersionFloor(t *testing.T, perm agent.Permission, disclosure string) {
+	t.Helper()
+	if perm.Hooks == nil || perm.Hooks.Version == nil || perm.Hooks.Version.Min == "" {
+		return
+	}
+	if !strings.Contains(disclosure, perm.Hooks.Version.Min) {
+		t.Errorf("consent copy never states the %s minimum CLI version the install is gated "+
+			"on — the user reads this text and grants, then nothing is written and the copy "+
+			"gave no hint why (#1365); render it with hookjson.RequiresVersion so it cannot "+
+			"drift from the gate", perm.Hooks.Version.Min)
+	}
 }
 
 // assertNamesEveryInstalledEvent is the consent-critical arm: an installed

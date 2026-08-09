@@ -160,7 +160,33 @@ Before marking a ticket done, run the full suite — every layer must pass:
   contract asserts the 2xx so a new receiver inherits the rule instead of
   re-deciding it (#1361, #1364). `hookjson.RejectPath` is the single place it
   is implemented, and its doc comment records what was and was not observed.
-  All four contract families pass by construction against a correct adapter, so
+- Hook version floors: `contracttesting.AssertHookVersionGate`
+  (`core/internal/contracttesting/hook_version.go`) is the static half of
+  #1365 — a hooks permission declares the minimum upstream CLI version its
+  install requires (`agent.HookInstall.Version`), that floor is at or above
+  every installed event's own `Since` entry, and it actually refuses one patch
+  below itself with a reason naming both versions. The runtime half — that
+  `PermissionService.runClosureEffect` consults the declaration before running
+  `Apply` — is `core/application/services/permission_version_gate_test.go`, the
+  same split `AssertPermissionGated` draws. It exists because Codex carried a
+  private `codexSupportsHooks` with its own parser and floor constants while
+  Claude Code carried nothing and wrote seven entries into the user's
+  `settings.json` at any version; a third adapter joins by declaring
+  `Version: &agent.VersionGate{Min: "x.y.z", Probe: []string{"<cli>",
+  "--version"}}` and nothing else. `TestEveryHookInstallDeclaresAVersionFloor`
+  (`core/adapters/inbound/agents/hookversion_test.go`) walks the registry
+  projection so a new hook adapter is covered by existing rather than by
+  remembering to wire the contract. A refusal is an ordinary effect error, not
+  a separate "skipped" concept, so #1362's surfacing carries it for free — the
+  wizard shows "granted but NOT applied, because <the CLI is too old>", and
+  because a re-answer re-runs an effect that previously failed, the refusal's
+  own advice (upgrade the CLI and grant again) is the gesture that retries it.
+  Note the direction: an unknown or
+  unparseable version fails **open** (`core/pkg/cliversion`) — the daemon runs
+  under launchd with a minimal PATH and routinely cannot see the user's CLI, so
+  only a version successfully read AND parsed AND found below the floor blocks
+  an install.
+  All five contract families pass by construction against a correct adapter, so
   their whole value is that they *can* fail: a new or reworked contract
   assertion lands with the deliberate mutation that was seen red for each
   obligation recorded in its PR — the same bar the red-first rule above sets

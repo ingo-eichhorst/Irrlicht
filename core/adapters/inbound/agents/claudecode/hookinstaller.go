@@ -6,9 +6,13 @@
 package claudecode
 
 import (
+	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"irrlicht/core/adapters/inbound/agents/agentpaths"
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/pkg/daemonaddr"
 )
@@ -84,6 +88,61 @@ const hookMatcherPreCompact = "manual"
 // the prompt (issue #1173) — permission_prompt is already covered by the
 // blocking PermissionRequest hook, and the other types don't affect state.
 const hookMatcherNotification = "idle_prompt"
+
+// minCLIVersion is the lowest Claude Code version this install may be written
+// into (issue #1365). Declared here, enforced generically by PermissionService
+// via agent.HookInstall.Version — before #1365 this adapter had no gate at all
+// and wrote all seven entries into ~/.claude/settings.json whatever version was
+// installed.
+//
+// 2.1.122 rather than the 2.1.63 that the `type: "http"` entry alone would
+// require, because below 2.1.122 a hook entry Claude Code cannot make sense of
+// does not degrade to "that hook doesn't fire" — it takes the user's whole
+// settings.json with it. Both fixes are named in the upstream changelog:
+//
+//	2.1.101 — "an unrecognized hook event name in settings.json no longer
+//	           causes the entire file to be ignored"
+//	2.1.122 — "Fixed a malformed hooks entry in settings.json no longer
+//	           invalidating the entire file"
+//
+// That is what decides the direction of this gate. Installing into a too-old
+// Claude Code is not inert-and-slightly-untidy; it can silently disable every
+// other setting the user has — other hooks, permissions, model choice. A floor
+// high enough that a mistake degrades to one dead hook is worth more than the
+// handful of versions of reach it costs.
+const minCLIVersion = "2.1.122"
+
+// hookEventSince records, per installed event, the Claude Code version at
+// which that event is PROVEN to exist — not necessarily the version that
+// introduced it. minCLIVersion must be >= every value (AssertHookVersionGate
+// enforces it), which is what makes "do not write an entry the installed CLI
+// does not know" (#1365 scope item 2) mechanical rather than aspirational.
+//
+// Provenance, all from the upstream changelog cached at
+// ~/.claude/cache/changelog.md and re-checkable there:
+//
+//   - 1.0.38 "Released hooks" — the four original events.
+//   - 2.0.45 "Added PermissionRequest hook to automatically approve or deny
+//     tool permission requests with custom logic".
+//   - 2.1.119 "Hooks: PostToolUse and PostToolUseFailure hook inputs now
+//     include duration_ms" — an enhancement, so PostToolUseFailure existed BY
+//     2.1.119. Its introducing version is not stated anywhere in the changelog;
+//     2.1.119 is recorded here as the proven upper bound, which is the
+//     conservative direction (it can only push the floor up, never down).
+//
+// The `type: "http"` delivery all seven entries use arrived in 2.1.63 ("Added
+// HTTP hooks, which can POST JSON to a URL and receive JSON instead of running
+// a shell command") — a property of the entry rather than of any one event, so
+// it constrains minCLIVersion directly rather than appearing in this map.
+var hookEventSince = map[string]string{
+	HookPermissionRequest:  "2.0.45",
+	HookPreToolUse:         "1.0.38",
+	HookPostToolUse:        "1.0.38",
+	HookPostToolUseFailure: "2.1.119",
+	HookPreCompact:         "1.0.38",
+	HookStop:               "1.0.38",
+	HookNotification:       "1.0.38",
+}
 
 // installedHookEvents are the Claude Code hook events we install handlers for.
 var installedHookEvents = []string{
@@ -205,4 +264,76 @@ func hookEntryIsCanonical(hook map[string]interface{}) bool {
 	t, _ := hook["type"].(string)
 	u, _ := hook["url"].(string)
 	return t == "http" && u == hookEndpointURL()
+}
+
+// maxVersionScanLines bounds how far into a transcript newestObservedCLIVersion
+// reads looking for the version stamp. Claude Code puts it on every user and
+// assistant line, so it is found within the first few; the cap is there so a
+// multi-megabyte transcript cannot turn a consent click into a long read.
+const maxVersionScanLines = 200
+
+// newestObservedCLIVersion returns the Claude Code version stamped on the most
+// recently modified transcript, or "" if none can be read.
+//
+// This is the passive half of the #1365 gate, and without it the gate would be
+// decorative for this adapter. The declared fallback is `claude --version`, but
+// the production daemon is launched by Irrlicht.app and inherits a LaunchServices
+// PATH of /usr/bin:/bin:/usr/sbin:/sbin, while the official installer puts the
+// binary in ~/.local/bin — so the probe misses, the version reads as unknown,
+// and unknown fails open. Every install would take the fail-open branch and no
+// version would ever actually be checked. The transcripts are already on disk
+// and already parsed for this exact field (parser.go reads raw["version"] into
+// AgentVersion), so reading it here costs no process and no PATH.
+//
+// transcriptsDir() is resolved through agentpaths.Abs rather than used
+// directly: it returns a $HOME-relative path when CLAUDE_CONFIG_DIR is unset
+// (expansion happens downstream in fswatcher), which would make this walk run
+// against the daemon's CWD and always find nothing.
+//
+// A stale answer is tolerable by construction: the version is the one that
+// wrote the newest transcript, so it can only lag the installed CLI downward,
+// and PermissionService re-confirms with the probe before acting on any
+// "too old" reading (shouldConfirmByProbe). So a stale value costs at most one
+// process, never a false refusal.
+func newestObservedCLIVersion() string {
+	dir, err := agentpaths.AbsRoot(transcriptsDir())
+	if err != nil {
+		return ""
+	}
+	newestPath := agentpaths.NewestFileWithSuffix(dir, ".jsonl")
+	if newestPath == "" {
+		return ""
+	}
+	return versionInTranscript(newestPath)
+}
+
+// versionInTranscript returns the first "version" string found in the file.
+func versionInTranscript(path string) string {
+	// Plain ".." check: the path is built by WalkDir from a root this package
+	// resolved itself, but this is the spelling CodeQL's go/path-injection
+	// query recognizes as a sanitizer (same reasoning as codex's
+	// sessionMetaPayload).
+	if strings.Contains(path, "..") {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	// Transcript lines carry whole tool results and routinely exceed
+	// Scanner's small default token limit.
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	for i := 0; i < maxVersionScanLines && scanner.Scan(); i++ {
+		var record map[string]interface{}
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			continue
+		}
+		if v, ok := record["version"].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
 }

@@ -40,3 +40,26 @@ func EventList(events []string) string {
 		return strings.Join(events[:len(events)-1], ", ") + ", and " + events[len(events)-1]
 	}
 }
+
+// RequiresVersion renders the sentence disclosing a hook install's declared
+// minimum upstream CLI version (issue #1365).
+//
+// The floor belongs in the consent copy for the same reason the event list
+// does. #1356's rule is that the text names what the installer writes; a
+// version gate makes *whether* it writes conditional, so copy that describes
+// the install without naming the condition is describing something that may
+// not happen. Rendering it from the same string the gate compares against
+// keeps the two from drifting — the failure #1356 exists to prevent, arriving
+// on a new axis.
+//
+// The wording deliberately avoids CamelCase and any "N hook entries" phrasing:
+// the disclosure contract scans the copy for event-shaped tokens and for entry
+// counts, and a version sentence must not trip either.
+func RequiresVersion(cliName, minVersion string) string {
+	if minVersion == "" {
+		return ""
+	}
+	return fmt.Sprintf(
+		"Requires %s %s or newer; on an older version nothing is written and the daemon reports why.",
+		cliName, minVersion)
+}

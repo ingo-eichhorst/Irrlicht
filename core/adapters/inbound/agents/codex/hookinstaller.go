@@ -9,16 +9,12 @@
 package codex
 
 import (
-	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
-
-	"irrlicht/core/adapters/inbound/agents/hookjson"
-	"irrlicht/core/pkg/daemonaddr"
 
 	"irrlicht/core/adapters/inbound/agents/agentpaths"
+	"irrlicht/core/adapters/inbound/agents/hookjson"
+	"irrlicht/core/pkg/daemonaddr"
 )
 
 // HookEndpointPath is the daemon's Codex hook path. Host and port are resolved
@@ -63,14 +59,29 @@ const hookTimeoutSeconds = 5
 // permission-pending overlay is always cleared once an approved tool runs.
 const hookMatcher = ".*"
 
-// minHookMajor/Minor/Patch is the lowest Codex version whose hook event set
-// includes the events we install (PermissionRequest/PostToolUse/Stop). Hooks
-// were introduced experimental in rust-v0.114.0 (~March 2026, issue #1171).
-const (
-	minHookMajor = 0
-	minHookMinor = 114
-	minHookPatch = 0
-)
+// minCLIVersion is the lowest Codex version whose hook event set includes
+// every event we install. Declared here and enforced generically by
+// PermissionService via agent.HookInstall.Version (issue #1365), replacing the
+// adapter-private codexSupportsHooks/parseCodexVersion pair this file used to
+// carry — the thing a third adapter would otherwise have copied.
+const minCLIVersion = "0.114.0"
+
+// hookEventSince records the Codex version each event we install arrived in.
+// It is the machine-checkable form of "do not write an entry the installed CLI
+// does not know" (#1365 scope item 2): minCLIVersion must be >= every value
+// here, which AssertHookVersionGate enforces, so at any version where we
+// install at all, every event we write is one the CLI understands. Adding an
+// event that landed later than minCLIVersion fails that test rather than
+// shipping an entry an in-range CLI would reject.
+//
+// All three arrived together with the experimental hooks feature in
+// rust-v0.114.0 (~March 2026, issue #1171); Codex has no separately-dated hook
+// events yet.
+var hookEventSince = map[string]string{
+	HookPermissionRequest: "0.114.0",
+	HookPostToolUse:       "0.114.0",
+	HookStop:              "0.114.0",
+}
 
 // installedHookEvents are the Codex hook events we install handlers for. Codex
 // has no PostToolUseFailure event, so PostToolUse is the sole pending-clear
@@ -141,67 +152,6 @@ func UninstallHooks() (bool, error) {
 	return hookjson.Uninstall(hookConfig(path))
 }
 
-// applyCodexHooks is the Apply closure for the "hooks" permission: it
-// version-gates the install on the running Codex's cli_version (issue #1171).
-// A Codex older than the hooks feature is skipped rather than cluttered with a
-// config it ignores; an unknown/unparseable version fails open and installs,
-// since a dedicated hooks.json is harmless to an old Codex regardless.
-func applyCodexHooks() error {
-	if v := newestObservedCLIVersion(); v != "" && !codexSupportsHooks(v) {
-		return nil
-	}
-	_, err := EnsureHooksInstalled()
-	return err
-}
-
-// codexSupportsHooks reports whether a Codex cli_version string is new enough
-// to fire the hook events we install. Accepts bare semver ("0.114.0") and the
-// release-tag form ("rust-v0.114.0" / "v0.114.0"); an empty or unparseable
-// version fails open (returns true) — see applyCodexHooks.
-func codexSupportsHooks(version string) bool {
-	major, minor, patch, ok := parseCodexVersion(version)
-	if !ok {
-		return true
-	}
-	if major != minHookMajor {
-		return major > minHookMajor
-	}
-	if minor != minHookMinor {
-		return minor > minHookMinor
-	}
-	return patch >= minHookPatch
-}
-
-// parseCodexVersion extracts major.minor.patch from a Codex version string,
-// stripping a leading "rust-v" or "v" tag prefix. Reports ok=false when the
-// first three dot groups don't parse as integers.
-func parseCodexVersion(version string) (major, minor, patch int, ok bool) {
-	v := strings.TrimSpace(version)
-	v = strings.TrimPrefix(v, "rust-")
-	v = strings.TrimPrefix(v, "v")
-	if v == "" {
-		return 0, 0, 0, false
-	}
-	fields := strings.SplitN(v, ".", 4)
-	nums := make([]int, 3)
-	for i := 0; i < 3; i++ {
-		if i >= len(fields) {
-			return 0, 0, 0, false
-		}
-		// Trim any pre-release/build suffix off the patch field ("0-rc1").
-		field := fields[i]
-		if j := strings.IndexAny(field, "-+"); j >= 0 {
-			field = field[:j]
-		}
-		n, err := strconv.Atoi(field)
-		if err != nil {
-			return 0, 0, 0, false
-		}
-		nums[i] = n
-	}
-	return nums[0], nums[1], nums[2], true
-}
-
 // newestObservedCLIVersion returns the cli_version recorded in the most
 // recently modified Codex session file, or "" if none is found. It is the
 // install-time proxy for "the running Codex version" — the adapter captures
@@ -218,22 +168,7 @@ func newestObservedCLIVersion() string {
 	if err != nil {
 		return ""
 	}
-	var newestPath string
-	var newestMod int64
-	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		if mod := info.ModTime().UnixNano(); mod > newestMod {
-			newestMod = mod
-			newestPath = path
-		}
-		return nil
-	})
+	newestPath := agentpaths.NewestFileWithSuffix(dir, ".jsonl")
 	if newestPath == "" {
 		return ""
 	}

@@ -1,6 +1,11 @@
 package agent
 
-import "irrlicht/core/domain/permission"
+import (
+	"fmt"
+
+	"irrlicht/core/domain/permission"
+	"irrlicht/core/pkg/cliversion"
+)
 
 // Agent is the registration record each inbound agent adapter exports.
 // It collapses identity, process recognition, session source, write-back
@@ -129,6 +134,68 @@ type HookInstall struct {
 	// Uninstall removes irrlicht's entries from that file, reporting whether
 	// it modified anything.
 	Uninstall func() (bool, error)
+
+	// Version declares the upstream CLI version floor this install requires
+	// (issue #1365). Nil means the adapter declares no floor and installs
+	// unconditionally — which is what Claude Code did for its whole life, and
+	// what a third adapter would inherit by default, so a nil here is a
+	// decision worth stating rather than an omission.
+	Version *VersionGate
+}
+
+// VersionGate is a declared minimum upstream-CLI version for a hook install
+// (issue #1365).
+//
+// It is data, not behaviour, and that is the whole point. Codex used to carry
+// a private codexSupportsHooks/parseCodexVersion pair and its own
+// minHookMajor/Minor/Patch constants; Claude Code carried nothing and wrote
+// seven hook entries into ~/.claude/settings.json whatever version was
+// installed. A third adapter joins the scheme by declaring two literals here —
+// a version string and the argv that prints one — and PermissionService
+// enforces it for every adapter identically.
+type VersionGate struct {
+	// Min is the lowest upstream CLI version at which EVERY event this
+	// permission installs is known to the CLI. It is a whole-install floor,
+	// not a per-event one: see the package comment on why the installed event
+	// set must not vary with the version.
+	Min string
+
+	// Probe is the argv that asks the installed CLI its version, e.g.
+	// {"claude", "--version"}. Used when Observed is nil or yields nothing.
+	// Must be a compile-time literal — it is executed.
+	Probe []string
+
+	// Observed, when non-nil, supplies the installed version WITHOUT running
+	// anything. Codex sets it: the adapter already captures cli_version from
+	// every session header, so the newest transcript answers the question for
+	// free and works even when the binary is not on the daemon's PATH. It is
+	// consulted first; an empty return falls through to Probe. An adapter with
+	// no such signal leaves it nil and gets the probe.
+	Observed func() string
+}
+
+// Permits reports whether an install may proceed at the given installed
+// version, and when it may not, why.
+//
+// Pure comparison — resolving `installed` (reading a transcript, running a
+// binary) belongs to the caller, which keeps process execution out of the
+// domain. An unknown or unparseable version permits the install: see
+// cliversion.AtLeast for why unknown fails open rather than closed.
+func (g *VersionGate) Permits(installed string) (bool, string) {
+	if g == nil || g.Min == "" {
+		return true, ""
+	}
+	// The unknown-fails-open decision is AtLeast's and is encoded there once:
+	// it already reports ok=true for anything it could not read. Re-deriving it
+	// here from `known` would mean two places decide the direction and the
+	// contract arm that claims to pin it would only be pinning this copy.
+	if ok, _ := cliversion.AtLeast(installed, g.Min); ok {
+		return true, ""
+	}
+	return false, fmt.Sprintf(
+		"installed CLI is %s, which is older than the %s required by the hook events this installs; "+
+			"nothing was written — upgrade the CLI and grant again",
+		installed, g.Min)
 }
 
 // Identity is the always-required adapter metadata served via
