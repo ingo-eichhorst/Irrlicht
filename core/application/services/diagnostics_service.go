@@ -73,10 +73,14 @@ type UnknownHookEvent struct {
 type HookHealthSnapshot struct {
 	// UnknownEvents is every retained (adapter, name) pair with its count.
 	UnknownEvents []UnknownHookEvent
-	// UnknownNamesDropped is how many sightings arrived after the receivers'
-	// bounded name table saturated. Non-zero means UnknownEvents is incomplete
-	// — reported so a reader never has to infer that.
-	UnknownNamesDropped uint64
+	// UnknownNamesDropped is how many sightings arrived, PER ADAPTER, after the
+	// receivers' bounded name table saturated. A non-empty map means
+	// UnknownEvents is incomplete for those adapters — reported, and attributed,
+	// so a reader never has to infer either fact.
+	UnknownNamesDropped map[string]uint64
+	// UnknownEventsTotal is every unrecognized event seen, named or dropped, so
+	// the total is read rather than reconstructed.
+	UnknownEventsTotal uint64
 }
 
 // DiagnosticsServiceDeps bundles NewDiagnosticsService's dependencies.
@@ -431,33 +435,46 @@ func (s *DiagnosticsService) configView() any {
 // distinct name is written at error level, and events.log IS in this bundle, so
 // even the CLI-collected form carries the names — just not the volumes.
 func (s *DiagnosticsService) hooksView() any {
-	view := struct {
-		CollectedFrom            string             `json:"collected_from"`
-		Note                     string             `json:"note,omitempty"`
-		UnknownEvents            []UnknownHookEvent `json:"unknown_events,omitempty"`
-		UnknownEventNamesDropped uint64             `json:"unknown_event_names_dropped"`
-	}{CollectedFrom: "daemon"}
-
 	if s.hookHealth == nil {
-		view.CollectedFrom = "cli"
-		view.Note = "Collected by `irrlichd --diagnose`, which runs in a process that never served a hook, " +
-			"so the receivers' unrecognized-event counters are not readable here and are omitted rather than " +
-			"reported as zero. The FIRST sighting of each unrecognized event name is logged at error level, so " +
-			"events.log in this bundle still names them. For live counts, fetch GET /debug/bundle from the " +
-			"running daemon."
-		return view
+		// A DIFFERENT shape, not the daemon shape with zeros in it. Emitting
+		// `"unknown_event_names_dropped": 0` here would publish a count from a
+		// process that could not have observed one — the very thing the note
+		// beside it says is not being done.
+		return struct {
+			CollectedFrom string `json:"collected_from"`
+			Note          string `json:"note"`
+		}{
+			CollectedFrom: "cli",
+			Note: "Collected by `irrlichd --diagnose`, which runs in a process that never served a hook, " +
+				"so the receivers' unrecognized-event counters are not readable here and are omitted rather than " +
+				"reported as zero. The FIRST sighting of each unrecognized event name is logged at error level, so " +
+				"events.log in this bundle still names them. For live counts, fetch GET /debug/bundle from the " +
+				"running daemon.",
+		}
 	}
 
 	snap := s.hookHealth()
-	view.UnknownEvents = snap.UnknownEvents
-	view.UnknownEventNamesDropped = snap.UnknownNamesDropped
-	sort.Slice(view.UnknownEvents, func(i, j int) bool {
-		if view.UnknownEvents[i].Adapter != view.UnknownEvents[j].Adapter {
-			return view.UnknownEvents[i].Adapter < view.UnknownEvents[j].Adapter
+	// Copied before sorting: the slice belongs to the injected snapshot source,
+	// not to this service, and reordering a caller's slice in place is the
+	// aliasing bug this repo has already paid for once (#965/#967/#975).
+	events := append([]UnknownHookEvent(nil), snap.UnknownEvents...)
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].Adapter != events[j].Adapter {
+			return events[i].Adapter < events[j].Adapter
 		}
-		return view.UnknownEvents[i].Event < view.UnknownEvents[j].Event
+		return events[i].Event < events[j].Event
 	})
-	return view
+	return struct {
+		CollectedFrom            string             `json:"collected_from"`
+		UnknownEventsTotal       uint64             `json:"unknown_events_total"`
+		UnknownEvents            []UnknownHookEvent `json:"unknown_events,omitempty"`
+		UnknownEventNamesDropped map[string]uint64  `json:"unknown_event_names_dropped_by_adapter,omitempty"`
+	}{
+		CollectedFrom:            "daemon",
+		UnknownEventsTotal:       snap.UnknownEventsTotal,
+		UnknownEvents:            events,
+		UnknownEventNamesDropped: snap.UnknownNamesDropped,
+	}
 }
 
 func stateView(sessions []*session.SessionState, now time.Time) any {

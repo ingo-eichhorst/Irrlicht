@@ -26,6 +26,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"irrlicht/core/adapters/inbound/agents/hookjson"
@@ -225,12 +226,22 @@ func unknownEventTranscript(t *testing.T, r UnknownEventReceiver) string {
 // truncated key and fail for a reason that has nothing to do with the adapter.
 // Real event names are short identifiers, so a short name is also the honest
 // input.
+//
+// The sequence number is what makes the DELTA claim above true rather than
+// nearly true. "First sighting" is process-global state that no reset clears,
+// so a name derived from t.Name() alone repeats whenever the same test function
+// runs twice in one binary — `-count=2`, or one adapter wiring the contract
+// twice — and the second run sees zero log lines and blames the adapter. The
+// hash keeps failures traceable to a test; the counter keeps them independent.
 func unknownEventName(t *testing.T) string {
 	t.Helper()
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(t.Name()))
-	return fmt.Sprintf("IrrUnk%08x", h.Sum32())
+	return fmt.Sprintf("IrrUnk%08x%02d", h.Sum32(), unknownEventSeq.Add(1))
 }
+
+// unknownEventSeq makes every unknownEventName call unique within the process.
+var unknownEventSeq atomic.Uint64
 
 // unknownCountFor reads one (adapter, event) counter out of the snapshot.
 func unknownCountFor(adapter, event string) uint64 {

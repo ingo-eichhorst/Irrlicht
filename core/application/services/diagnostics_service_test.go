@@ -316,7 +316,8 @@ func TestHooksBundleReportsUnknownEvents(t *testing.T) {
 				{Adapter: "codex", Event: "TurnComplete", Count: 1},
 				{Adapter: "claude-code", Event: "PostToolUseV2", Count: 412},
 			},
-			UnknownNamesDropped: 7,
+			UnknownNamesDropped: map[string]uint64{"kiro-cli": 7},
+			UnknownEventsTotal:  420,
 		}
 	})
 
@@ -328,8 +329,12 @@ func TestHooksBundleReportsUnknownEvents(t *testing.T) {
 	if _, ok := got["note"]; ok {
 		t.Errorf("daemon-collected hooks.json carries a note it does not need: %v", got["note"])
 	}
-	if got["unknown_event_names_dropped"] != float64(7) {
-		t.Errorf("unknown_event_names_dropped = %v, want 7 — a saturated name table must not read as a complete one", got["unknown_event_names_dropped"])
+	dropped, _ := got["unknown_event_names_dropped_by_adapter"].(map[string]any)
+	if dropped["kiro-cli"] != float64(7) {
+		t.Errorf("unknown_event_names_dropped_by_adapter = %v, want kiro-cli:7 — a saturated name table must not read as a complete one, and the drops must still name the adapter", got["unknown_event_names_dropped_by_adapter"])
+	}
+	if got["unknown_events_total"] != float64(420) {
+		t.Errorf("unknown_events_total = %v, want 420 — the total is published, not left for a reader to reconstruct", got["unknown_events_total"])
 	}
 	events, _ := got["unknown_events"].([]any)
 	if len(events) != 2 {
@@ -351,8 +356,12 @@ func TestHooksBundleOmitsCountsWhenNotCollectedInDaemon(t *testing.T) {
 	if got["collected_from"] != "cli" {
 		t.Errorf("collected_from = %v, want \"cli\"", got["collected_from"])
 	}
-	if _, ok := got["unknown_events"]; ok {
-		t.Errorf("unknown_events is present without a daemon to read it from: %v — an empty list here reads as an all-clear", got["unknown_events"])
+	// Not just the list: ANY count from a process that served no hooks is a
+	// number nobody observed, and a zero reads as an all-clear.
+	for _, field := range []string{"unknown_events", "unknown_events_total", "unknown_event_names_dropped_by_adapter"} {
+		if v, ok := got[field]; ok {
+			t.Errorf("%s is present without a daemon to read it from: %v", field, v)
+		}
 	}
 	note, _ := got["note"].(string)
 	if !strings.Contains(note, "events.log") || !strings.Contains(note, "/debug/bundle") {

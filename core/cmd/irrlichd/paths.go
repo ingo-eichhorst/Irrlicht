@@ -116,7 +116,10 @@ func buildDiagnostics(fsRepo *filesystem.SessionRepository, allAgents []agent.Ag
 // accumulate in whatever process served the hooks, and --diagnose is not that
 // process.
 func liveHookHealth() services.HookHealthSnapshot {
-	snap := services.HookHealthSnapshot{UnknownNamesDropped: hookjson.UnknownEventNamesDropped()}
+	snap := services.HookHealthSnapshot{
+		UnknownNamesDropped: hookjson.UnknownEventNamesDropped(),
+		UnknownEventsTotal:  hookjson.UnknownEventTotal(),
+	}
 	for _, row := range hookjson.UnknownEvents() {
 		snap.UnknownEvents = append(snap.UnknownEvents, services.UnknownHookEvent{
 			Adapter: row.Adapter,

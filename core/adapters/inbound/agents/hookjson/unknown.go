@@ -71,8 +71,9 @@ type UnknownEvent struct {
 	Event   string
 }
 
-// unknownOutcome is what observeUnknownEvent decided, so IgnoreUnknownEvent can
-// log the two noteworthy transitions and stay silent on the common one.
+// unknownOutcome is what observeUnknownEvent decided, so IgnoreUnknownEvent
+// reports the transitions worth a log line and stays silent on the two that
+// would flood.
 type unknownOutcome int
 
 const (
@@ -81,29 +82,47 @@ const (
 	unknownRepeat unknownOutcome = iota
 	// unknownFirstSighting — a name not seen before. Counted and logged.
 	unknownFirstSighting
-	// unknownTableFull — the bounded table is saturated, so this name is not
-	// retained. Counted only in unknownNamesDropped.
-	unknownTableFull
+	// unknownTableFullFirst — the bounded table is saturated and this is the
+	// FIRST sighting dropped for this adapter. Logged, so saturation is
+	// announced once per adapter rather than once per process: a table filled by
+	// junk aimed at one adapter must not silence the announcement for a real
+	// rename arriving at another.
+	unknownTableFullFirst
+	// unknownTableFullRepeat — saturated, and this adapter has already
+	// announced it. Totalled in its drop counter only.
+	unknownTableFullRepeat
 )
 
 var (
-	// unknownMu guards insertion into unknownCounts only. Once a pair has a
-	// slot, further sightings go through its atomic without taking the write
-	// lock — which matters because the thing these counters exist to observe is
-	// a BURST, and a burst is by definition the same name arriving repeatedly.
-	// Serializing exactly then would blunt what is being measured, the same
-	// argument confine.go makes for its fixed array of atomics.
+	// unknownMu guards the two maps below. Once a pair has a slot, further
+	// sightings go through its atomic without taking any write lock — which
+	// matters because the thing these counters exist to observe is a BURST, and
+	// a burst is by definition the same name arriving repeatedly. Serializing
+	// exactly then would blunt what is being measured, the same argument
+	// confine.go makes for its fixed array of atomics.
 	unknownMu     sync.RWMutex
 	unknownCounts = make(map[UnknownEvent]*atomic.Uint64)
 
-	// unknownNamesDropped counts sightings refused a slot because the table was
-	// full. Surfaced beside the table so a saturated table is never mistaken for
-	// a complete one.
-	unknownNamesDropped atomic.Uint64
+	// unknownDropped counts, PER ADAPTER, the sightings refused a slot because
+	// the table was full.
+	//
+	// Per adapter rather than one global scalar, because the table is shared and
+	// its cap is a process-wide resource: a local process can fill all 64 slots
+	// with junk — the endpoint is unauthenticated — and every genuine rename
+	// after that is refused a row. A single scalar climbing into the thousands
+	// says only "something", which is the exact "a single scalar cannot tell
+	// those apart" failure this file exists to prevent. Keyed by adapter, it
+	// still says WHICH CLI is flooding. The name is not recoverable once the
+	// table is full; that residual is the price of the bound, and the
+	// first-drop log line at least names the first one.
+	unknownDropped = make(map[string]*atomic.Uint64)
 
-	// unknownSaturationOnce makes the table-full report a single log line rather
-	// than one per event, for the same reason first-sighting logging exists.
-	unknownSaturationOnce sync.Once
+	// unknownSaturated is a lock-free fast path for the post-saturation case.
+	// Without it every dropped sighting takes the exclusive lock just to re-read
+	// len(unknownCounts) — a process-wide write lock on the hook-receive path of
+	// every adapter, engaged during precisely the flood the design refuses to
+	// serialize.
+	unknownSaturated atomic.Bool
 )
 
 // IgnoreUnknownEvent is the uniform handling every hook receiver owes an event
@@ -112,9 +131,9 @@ var (
 // written the identical default branch by hand, and the third would have had to
 // remember to.
 //
-// It counts the sighting, logs the first occurrence of each distinct name, and
-// returns. It writes NO response: the caller has already committed to answering
-// 2xx on this path, and that rule is asserted by
+// It counts the sighting, reports the first occurrence of each distinct name,
+// and returns. It writes NO response: the caller has already committed to
+// answering 2xx on this path, and that rule is asserted by
 // contracttesting.AssertUnknownHookEventObserved rather than left to each
 // receiver.
 //
@@ -127,49 +146,64 @@ func IgnoreUnknownEvent(log outbound.Logger, component, adapter, sessionID, even
 		log.LogError(component, sessionID, fmt.Sprintf(
 			"unrecognized hook event %q from %s: ignored, answered 2xx. Further occurrences of this name are counted, not logged — an upstream event rename looks exactly like this, so check the count in the diagnostics bundle's hooks.json before dismissing it.",
 			truncateEventName(event), adapter))
-	case unknownTableFull:
-		unknownSaturationOnce.Do(func() {
-			log.LogError(component, sessionID, fmt.Sprintf(
-				"unrecognized hook event %q from %s: ignored, and NOT counted — the distinct-name table is full at %d entries. Later names are totalled in unknown_event_names_dropped only.",
-				truncateEventName(event), adapter, MaxUnknownEventNames))
-		})
-	case unknownRepeat:
-		// Counted. Deliberately silent: this is the flooding case.
+	case unknownTableFullFirst:
+		log.LogError(component, sessionID, fmt.Sprintf(
+			"unrecognized hook event %q from %s: ignored, and NOT counted by name — the distinct-name table is full at %d entries, so no further name from this adapter can be attributed. Later sightings are totalled per adapter in hooks.json's unknown_event_names_dropped_by_adapter.",
+			truncateEventName(event), adapter, MaxUnknownEventNames))
+	case unknownRepeat, unknownTableFullRepeat:
+		// Counted. Deliberately silent: these are the flooding cases.
 	}
 }
 
 // observeUnknownEvent records one sighting and reports what kind it was.
 //
 // The double-checked shape is not premature optimization: the fast path is the
-// repeat, and the write lock is taken only on the transition that also produces
-// the log line — so "first sighting" is decided by exactly one goroutine even
-// when two arrive together, which is what makes "logged once" true rather than
-// approximately true.
+// repeat, and the write lock is taken only on a transition that also produces a
+// log line — so "first sighting" and "first drop for this adapter" are each
+// decided by exactly one goroutine even when several arrive together, which is
+// what makes "reported once" true rather than approximately true. Both
+// decisions are made under the same lock as the state they consult, so there is
+// no piece of this state living outside the mutex's protection domain.
 func observeUnknownEvent(adapter, event string) unknownOutcome {
 	key := UnknownEvent{Adapter: adapter, Event: truncateEventName(event)}
 
 	unknownMu.RLock()
-	c := unknownCounts[key]
+	counter := unknownCounts[key]
+	var dropped *atomic.Uint64
+	if counter == nil && unknownSaturated.Load() {
+		dropped = unknownDropped[adapter]
+	}
 	unknownMu.RUnlock()
-	if c != nil {
-		c.Add(1)
+	if counter != nil {
+		counter.Add(1)
 		return unknownRepeat
+	}
+	if dropped != nil {
+		dropped.Add(1)
+		return unknownTableFullRepeat
 	}
 
 	unknownMu.Lock()
 	defer unknownMu.Unlock()
-	if c := unknownCounts[key]; c != nil {
-		// Lost the race to insert. The winner logs; this one only counts.
-		c.Add(1)
+	if counter := unknownCounts[key]; counter != nil {
+		// Lost the race to insert. The winner reports; this one only counts.
+		counter.Add(1)
 		return unknownRepeat
 	}
 	if len(unknownCounts) >= MaxUnknownEventNames {
-		unknownNamesDropped.Add(1)
-		return unknownTableFull
+		unknownSaturated.Store(true)
+		if dropped := unknownDropped[adapter]; dropped != nil {
+			dropped.Add(1)
+			return unknownTableFullRepeat
+		}
+		dropped := &atomic.Uint64{}
+		dropped.Add(1)
+		unknownDropped[adapter] = dropped
+		return unknownTableFullFirst
 	}
-	counter := &atomic.Uint64{}
-	counter.Add(1)
-	unknownCounts[key] = counter
+	fresh := &atomic.Uint64{}
+	fresh.Add(1)
+	unknownCounts[key] = fresh
 	return unknownFirstSighting
 }
 
@@ -203,21 +237,49 @@ type UnknownEventCount struct {
 }
 
 // UnknownEventTotal is the total number of unrecognized events seen, across
-// every name — including the ones the table had no room to name.
+// every name — including the ones the table had no room to name. It is
+// published in the diagnostics bundle rather than left for a reader to
+// reconstruct by summing rows and remembering to add the drops.
 func UnknownEventTotal() uint64 {
-	total := UnknownEventNamesDropped()
 	unknownMu.RLock()
 	defer unknownMu.RUnlock()
+	var total uint64
 	for _, counter := range unknownCounts {
 		total += counter.Load()
+	}
+	for _, dropped := range unknownDropped {
+		total += dropped.Load()
 	}
 	return total
 }
 
-// UnknownEventNamesDropped is how many sightings arrived after the distinct-name
-// table saturated. Non-zero means UnknownEvents is incomplete, which is exactly
-// the thing a reader must not have to infer.
-func UnknownEventNamesDropped() uint64 { return unknownNamesDropped.Load() }
+// UnknownEventNamesDropped is how many sightings arrived, per adapter, after
+// the distinct-name table saturated. A non-empty result means UnknownEvents is
+// incomplete FOR THOSE ADAPTERS, which is exactly the thing a reader must not
+// have to infer — and keyed by adapter it still says which CLI is producing
+// them once the names themselves are no longer recoverable.
+func UnknownEventNamesDropped() map[string]uint64 {
+	unknownMu.RLock()
+	defer unknownMu.RUnlock()
+	out := make(map[string]uint64, len(unknownDropped))
+	for adapter, dropped := range unknownDropped {
+		if n := dropped.Load(); n > 0 {
+			out[adapter] = n
+		}
+	}
+	return out
+}
+
+// UnknownEventNamesDroppedTotal is the drop count across every adapter.
+func UnknownEventNamesDroppedTotal() uint64 {
+	var total uint64
+	unknownMu.RLock()
+	defer unknownMu.RUnlock()
+	for _, dropped := range unknownDropped {
+		total += dropped.Load()
+	}
+	return total
+}
 
 // resetUnknownEvents clears the table. Test-only, and unexported so it cannot
 // become a production reset: one test in this package deliberately saturates the
@@ -229,13 +291,18 @@ func resetUnknownEvents() {
 	unknownMu.Lock()
 	defer unknownMu.Unlock()
 	unknownCounts = make(map[UnknownEvent]*atomic.Uint64)
-	unknownNamesDropped.Store(0)
-	unknownSaturationOnce = sync.Once{}
+	unknownDropped = make(map[string]*atomic.Uint64)
+	unknownSaturated.Store(false)
 }
 
 // truncateEventName bounds a retained name at a rune boundary. Cutting mid-rune
 // would store invalid UTF-8, which then has to survive JSON encoding into a
 // diagnostics bundle.
+//
+// The bound means "once per distinct name" is really "once per distinct
+// RETAINED name": two names sharing a 64-byte prefix collapse to one key. No
+// real event name comes close, and the alternative is retaining whatever a local
+// caller sends.
 func truncateEventName(name string) string {
 	if len(name) <= maxUnknownEventNameLen {
 		return name

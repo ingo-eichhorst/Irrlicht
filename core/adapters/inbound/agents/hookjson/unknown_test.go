@@ -79,7 +79,7 @@ func TestUnknownEventsAreKeyedPerAdapter(t *testing.T) {
 func TestUnknownEventTotalIncludesDropped(t *testing.T) {
 	resetUnknownEvents()
 	log := &countingLogger{}
-	before, beforeDropped := UnknownEventTotal(), UnknownEventNamesDropped()
+	before, beforeDropped := UnknownEventTotal(), UnknownEventNamesDroppedTotal()
 
 	IgnoreUnknownEvent(log, "comp", "adapter-total", "sess", "TotalledEvent")
 	IgnoreUnknownEvent(log, "comp", "adapter-total", "sess", "TotalledEvent")
@@ -87,7 +87,7 @@ func TestUnknownEventTotalIncludesDropped(t *testing.T) {
 	if got := UnknownEventTotal() - before; got != 2 {
 		t.Errorf("total delta = %d, want 2", got)
 	}
-	if got := UnknownEventNamesDropped() - beforeDropped; got != 0 {
+	if got := UnknownEventNamesDroppedTotal() - beforeDropped; got != 0 {
 		t.Errorf("dropped delta = %d, want 0 — the table was nowhere near full", got)
 	}
 }
@@ -99,8 +99,11 @@ func TestUnknownEventTotalIncludesDropped(t *testing.T) {
 func TestUnknownEventNameIsTruncatedAtRuneBoundary(t *testing.T) {
 	resetUnknownEvents()
 	log := &countingLogger{}
-	// Multi-byte runes, so a naive byte cut lands mid-rune.
-	long := strings.Repeat("ü", maxUnknownEventNameLen)
+	// 3-byte runes, chosen so byte index maxUnknownEventNameLen (64) is a
+	// CONTINUATION byte: 64 % 3 == 1. A 2-byte rune would leave index 64 on a
+	// rune start, and a naive `name[:64] + "…"` would satisfy every assertion
+	// below — the fixture has to be able to fail before it is evidence.
+	long := strings.Repeat("日", maxUnknownEventNameLen)
 
 	IgnoreUnknownEvent(log, "comp", "adapter-trunc", "sess", long)
 
@@ -124,29 +127,48 @@ func TestUnknownEventNameIsTruncatedAtRuneBoundary(t *testing.T) {
 	}
 }
 
-// TestUnknownEventTableSaturates pins the bound itself: past the cap, sightings
-// are still totalled and the incompleteness is reported, rather than the table
-// growing without limit on an unauthenticated endpoint.
+// TestUnknownEventTableSaturates pins the bound and, more importantly, what
+// survives it. The table is process-global and shared by every adapter, so a
+// local process can fill all of it — the endpoint is unauthenticated. What must
+// NOT happen is that a genuine rename arriving at some other adapter afterwards
+// becomes invisible: the name is unrecoverable, but the adapter and the volume
+// are not, and saturation is announced once per adapter rather than once per
+// process.
 func TestUnknownEventTableSaturates(t *testing.T) {
 	resetUnknownEvents()
 	log := &countingLogger{}
-	beforeDropped := UnknownEventNamesDropped()
 
-	// Overshoot the cap outright — other tests in this package share the table,
-	// so filling it exactly is not something a single test can arrange.
+	// Fill the table with junk aimed at one adapter.
 	for i := 0; i < MaxUnknownEventNames+8; i++ {
-		IgnoreUnknownEvent(log, "comp", "adapter-sat", "sess", fmt.Sprintf("Sat%03d", i))
-	}
-
-	if got := UnknownEventNamesDropped() - beforeDropped; got == 0 {
-		t.Fatalf("posting %d distinct names past a cap of %d dropped none — the table is unbounded",
-			MaxUnknownEventNames+8, MaxUnknownEventNames)
+		IgnoreUnknownEvent(log, "comp", "adapter-junk", "sess", fmt.Sprintf("Sat%03d", i))
 	}
 	if n := len(UnknownEvents()); n > MaxUnknownEventNames {
 		t.Errorf("retained %d distinct names, want at most %d", n, MaxUnknownEventNames)
 	}
-	if n := log.mentioning("distinct-name table is full"); n != 1 {
-		t.Errorf("table saturation was reported %d time(s), want exactly 1 — the report must not itself become the flood", n)
+	if UnknownEventNamesDroppedTotal() == 0 {
+		t.Fatalf("posting %d distinct names past a cap of %d dropped none — the table is unbounded",
+			MaxUnknownEventNames+8, MaxUnknownEventNames)
+	}
+
+	// Now a real rename at a DIFFERENT adapter, arriving on every tool call.
+	for i := 0; i < 500; i++ {
+		IgnoreUnknownEvent(log, "comp", "adapter-victim", "sess", "RenamedAssert")
+	}
+
+	dropped := UnknownEventNamesDropped()
+	if dropped["adapter-victim"] != 500 {
+		t.Errorf("victim adapter dropped %d, want 500 — a table filled by one adapter must not make another adapter's flood unattributable",
+			dropped["adapter-victim"])
+	}
+	if dropped["adapter-junk"] == 0 {
+		t.Error("junk adapter's drops were not attributed to it")
+	}
+	if n := log.mentioning("distinct-name table is full"); n != 2 {
+		t.Errorf("saturation was announced %d time(s), want exactly 2 — once per adapter, so a second adapter's rename is not silenced by the first adapter's junk, and not once per event either", n)
+	}
+	// The total still accounts for every event that arrived, named or not.
+	if total := UnknownEventTotal(); total < 500+uint64(MaxUnknownEventNames) {
+		t.Errorf("total = %d, want at least %d — dropped sightings must still be totalled", total, 500+MaxUnknownEventNames)
 	}
 }
 
