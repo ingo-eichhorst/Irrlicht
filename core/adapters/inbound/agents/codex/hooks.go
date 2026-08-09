@@ -27,10 +27,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"path/filepath"
-	"strings"
+	"runtime"
 
 	"irrlicht/core/adapters/inbound/agents/hookjson"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/outbound"
@@ -54,6 +54,10 @@ const (
 // logComponentHookReceiver is the Logger component tag for every log line
 // emitted by the hook HTTP handler below.
 const logComponentHookReceiver = "codex-hook-receiver"
+
+// transcriptExt is the file extension of a Codex rollout. The hook receiver
+// confines caller-supplied paths to this extension.
+const transcriptExt = ".jsonl"
 
 // codexHookPayload is the JSON body Codex sends on a hook event (stdin →
 // POSTed to the daemon by the installed curl command). Only the fields the
@@ -98,15 +102,31 @@ type ConsentGranter = hookjson.ConsentGranter
 // behind the "transcripts" permission. A nil gate means no gating — used by
 // tests.
 func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger) http.HandlerFunc {
+	return NewHookHandlerWithConfiner(target, gate, log, TranscriptConfiner())
+}
+
+// TranscriptConfiner returns the confiner this adapter's hook receiver guards
+// caller-supplied transcript paths with, rooted in the adapter's own
+// agent.Source declaration (issue #1361). It replaces the adapter-local
+// confineToSessionsDir, which re-derived $CODEX_HOME/sessions from its own
+// constants and so could guard a different tree than the one being watched.
+func TranscriptConfiner() *hookjson.PathConfiner {
+	return hookjson.ConfinerForSource(func() agent.Source { return Agent().Source }, runtime.GOOS, transcriptExt)
+}
+
+// NewHookHandlerWithConfiner is NewHookHandler with an explicit confiner, for
+// tests that need to drive a receiver rooted somewhere other than the real
+// sessions tree and to read back what it refused.
+func NewHookHandlerWithConfiner(target HookTarget, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		serveHookRequest(target, gate, log, w, r)
+		serveHookRequest(target, gate, log, confiner, w, r)
 	}
 }
 
 // serveHookRequest is NewHookHandler's request logic, pulled out of the
 // returned closure so its branching isn't counted at the closure's extra
 // nesting depth.
-func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logger, w http.ResponseWriter, r *http.Request) {
+func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -122,29 +142,29 @@ func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logge
 		http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if payload.TranscriptPath == "" {
-		http.Error(w, "bad request: missing transcript_path", http.StatusBadRequest)
-		return
-	}
 
 	// Resolving the session id opens and parses the Codex transcript file — a
 	// transcript read, so it must be gated behind the "transcripts" consent,
 	// not merely the "hooks" write consent (issue #1174). A hooks-granted /
 	// transcripts-denied session is not monitored anyway, so dropping the hook
 	// here is both consent-correct and behaviourally harmless.
+	//
+	// The consent check comes BEFORE confinement so a denied session still
+	// yields a quiet 200: a user who has not granted transcript access should
+	// not have hooks failing at them, and the path is never resolved on that
+	// branch anyway.
 	if gate != nil && !gate.Granted(AdapterName, PermissionKeyTranscripts) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	// transcript_path arrives in an HTTP body, so it is untrusted: any local
-	// process able to reach the hook port could otherwise steer the daemon into
-	// opening a file of its choosing. Confine it to the sessions tree before any
-	// read, and carry the confined path downstream so the target reads it too.
-	transcriptPath, ok := confineToSessionsDir(payload.TranscriptPath)
-	if !ok {
-		// Not a rollout inside ~/.codex/sessions — drop it. The "transcripts"
-		// consent covers exactly that tree and nothing outside it.
-		w.WriteHeader(http.StatusOK)
+	// transcript_path arrives in an HTTP body on a local, unauthenticated
+	// endpoint, so it is untrusted: any local process could otherwise steer the
+	// daemon into opening a file of its choosing. Confine it to the declared
+	// sessions tree before any read, and carry the confined path downstream so
+	// the target reads that and not the caller's string (issue #1361).
+	transcriptPath, reason := confiner.Confine(payload.TranscriptPath)
+	if reason != hookjson.RejectNone {
+		hookjson.RejectPath(w, log, logComponentHookReceiver, payload.TranscriptPath, reason)
 		return
 	}
 	payload.TranscriptPath = transcriptPath
@@ -159,35 +179,6 @@ func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logge
 
 	dispatchHookEvent(target, log, sessionID, payload)
 	w.WriteHeader(http.StatusOK)
-}
-
-// confineToSessionsDir validates a hook-supplied transcript path and returns
-// the file the daemon may open, rebuilt from the trusted sessions root so no
-// caller-controlled string reaches os.Open (SonarQube gosecurity:S2083).
-//
-// Two conditions bound it: the file must be a .jsonl rollout, and it must
-// resolve inside $CODEX_HOME/sessions — the tree agent.go's "transcripts"
-// permission scopes the user's consent to. Symlinks are resolved before the
-// containment check, so a link planted inside the tree cannot point out of it;
-// that resolution also means a path that does not exist is rejected here rather
-// than failing later at the open, which the caller already treats as a drop.
-func confineToSessionsDir(raw string) (string, bool) {
-	if filepath.Ext(raw) != ".jsonl" {
-		return "", false
-	}
-	root, err := codexSessionsDir()
-	if err != nil {
-		return "", false
-	}
-	resolved, err := filepath.EvalSymlinks(raw)
-	if err != nil {
-		return "", false
-	}
-	rel, err := filepath.Rel(root, resolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", false
-	}
-	return filepath.Join(root, rel), true
 }
 
 // dispatchHookEvent routes a decoded, consent-passed, session-resolved payload

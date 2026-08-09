@@ -280,12 +280,22 @@ func TestHookHandler_MissingTranscriptPath(t *testing.T) {
 }
 
 func TestHookHandler_UnresolvableTranscriptDropped(t *testing.T) {
-	// A transcript_path that can't be read (no header yet / gone) is dropped
-	// with 200 rather than mis-keyed onto a guessed session id.
+	// A transcript_path INSIDE the declared tree that can't be read (not
+	// flushed yet / gone) is dropped with 200 rather than mis-keyed onto a
+	// guessed session id — and, importantly, is not confused with an escape:
+	// the hook fires around the write, so a 400 here would fail a legitimate
+	// hook on a race (issue #1361).
+	home := t.TempDir()
+	t.Setenv(codexHomeEnvVar, home)
+	dir := filepath.Join(home, "sessions", "2026", "07", "18")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create sessions dir: %v", err)
+	}
+
 	target := &mockTarget{}
 	handler := NewHookHandler(target, nil, mockLogger{})
 	rec := postHook(t, handler, codexHookPayload{
-		TranscriptPath: filepath.Join(t.TempDir(), "does-not-exist.jsonl"),
+		TranscriptPath: filepath.Join(dir, "does-not-exist.jsonl"),
 		HookEventName:  HookPermissionRequest,
 	})
 	if rec.Code != http.StatusOK {
@@ -296,11 +306,12 @@ func TestHookHandler_UnresolvableTranscriptDropped(t *testing.T) {
 	}
 }
 
-func TestHookHandler_OutOfTreeTranscriptDropped(t *testing.T) {
+func TestHookHandler_OutOfTreeTranscriptRejected(t *testing.T) {
 	// transcript_path is attacker-controllable — it comes straight out of an
 	// HTTP body — so a readable file outside $CODEX_HOME/sessions must never be
 	// opened, however well-formed its session_meta header is. Both a plain
-	// out-of-tree path and one traversing back out of the tree are dropped.
+	// out-of-tree path and one traversing back out of the tree are rejected
+	// with a 400 — loudly and counted, never a silent 200 (issue #1361).
 	outside := t.TempDir()
 	path := filepath.Join(outside, "rollout-2026-07-18T00-00-00-abcdefabcdef.jsonl")
 	meta := `{"type":"session_meta","payload":{"id":"sess-escape"}}` + "\n"
@@ -324,8 +335,8 @@ func TestHookHandler_OutOfTreeTranscriptDropped(t *testing.T) {
 				TranscriptPath: transcript,
 				HookEventName:  HookPermissionRequest,
 			})
-			if rec.Code != http.StatusOK {
-				t.Errorf("status: got %d, want 200 (out-of-tree transcript is dropped, not an error)", rec.Code)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status: got %d, want 400 (an out-of-tree transcript is refused, not silently dropped)", rec.Code)
 			}
 			if target.totalCalls() != 0 {
 				t.Error("handler read a transcript outside the declared sessions tree")

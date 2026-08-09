@@ -38,3 +38,28 @@ func FromEnv(adapter, envVar, defaultDir string, subdir ...string) string {
 	}
 	return defaultDir
 }
+
+// AbsRoot resolves a declared transcript root to an absolute path: used as-is
+// when already absolute, otherwise joined under the user's home directory.
+//
+// This is the other half of the rule FromEnv starts. A root reaching the
+// runtime is either an absolute path (an env override was honored) or a
+// $HOME-relative default like ".claude/projects", and every consumer has to
+// close that gap the same way — the fswatcher that watches the tree and the
+// hook receiver that confines caller-supplied paths to it must agree on where
+// the tree is, or confinement guards a different directory than the one being
+// watched (issue #1361). Exported here, next to FromEnv, so there is one
+// implementation rather than one per consumer.
+//
+// It is purely lexical: nothing is created, statted, or symlink-resolved.
+// Callers that need a real on-disk identity resolve symlinks themselves.
+func AbsRoot(dir string) (string, error) {
+	if filepath.IsAbs(dir) {
+		return filepath.Clean(dir), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, dir), nil
+}

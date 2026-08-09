@@ -128,6 +128,20 @@ Before marking a ticket done, run the full suite — every layer must pass:
   uninstalled event" arm checks against `session.AllHookEvents`, itself kept
   honest by `TestAllHookEvents_CoversEveryConstant`, which scans
   `hook_signal.go`'s source rather than trusting a second hand-kept list.
+- Hook path confinement: `contracttesting.AssertHookPathConfined`
+  (`core/internal/contracttesting/hook_path_confinement.go`) is the
+  receiving-side counterpart to the two above — the `transcript_path` in an
+  inbound hook body is caller-supplied on a local, unauthenticated endpoint, so
+  a receiver confines it to the adapter's own declared transcript roots
+  (`agent.Source`'s `FilesUnderRoot.AllRootsFor`, never a second list that can
+  drift) before anything downstream opens it. Four obligations: an in-tree path
+  is still accepted (the vacuity guard), and an out-of-tree path, a `..`
+  traversal and a symlink planted inside the root are each refused with a 4xx
+  and a counted reason. The symlink one is the load-bearing case — **symlinks
+  are resolved BEFORE the containment check**, and a guard with that order
+  reversed passes the first three and confines nothing (#1361, where claudecode
+  forwarded the raw path while codex confined). A new hook-receiving adapter
+  wires one call (see `claudecode`/`codex` `hookpath_test.go`).
   All three contract families pass by construction against a correct adapter, so
   their whole value is that they *can* fail: a new or reworked contract
   assertion lands with the deliberate mutation that was seen red for each
