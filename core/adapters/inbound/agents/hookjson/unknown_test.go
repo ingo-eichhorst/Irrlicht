@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"unicode/utf8"
 )
@@ -36,6 +37,28 @@ func (l *countingLogger) mentioning(substr string) int {
 		}
 	}
 	return n
+}
+
+// resetUnknownEvents clears the table. It lives in the test file, not beside
+// the counters, so the production binary carries no way to zero them: a counter
+// an operator can reset is a counter that can hide the thing it was added to
+// reveal. Tests need it because one of them deliberately saturates the shared
+// table, which would otherwise make every test after it fail for a reason that
+// has nothing to do with that test.
+func resetUnknownEvents() {
+	unknownMu.Lock()
+	defer unknownMu.Unlock()
+	unknownCounts = make(map[UnknownEvent]*atomic.Uint64)
+	unknownDropped = make(map[string]*atomic.Uint64)
+}
+
+// droppedTotal sums the per-adapter drop counters.
+func droppedTotal() uint64 {
+	var total uint64
+	for _, n := range UnknownEventNamesDropped() {
+		total += n
+	}
+	return total
 }
 
 // countFor reads one (adapter, event) counter out of the snapshot.
@@ -79,7 +102,7 @@ func TestUnknownEventsAreKeyedPerAdapter(t *testing.T) {
 func TestUnknownEventTotalIncludesDropped(t *testing.T) {
 	resetUnknownEvents()
 	log := &countingLogger{}
-	before, beforeDropped := UnknownEventTotal(), UnknownEventNamesDroppedTotal()
+	before, beforeDropped := UnknownEventTotal(), droppedTotal()
 
 	IgnoreUnknownEvent(log, "comp", "adapter-total", "sess", "TotalledEvent")
 	IgnoreUnknownEvent(log, "comp", "adapter-total", "sess", "TotalledEvent")
@@ -87,7 +110,7 @@ func TestUnknownEventTotalIncludesDropped(t *testing.T) {
 	if got := UnknownEventTotal() - before; got != 2 {
 		t.Errorf("total delta = %d, want 2", got)
 	}
-	if got := UnknownEventNamesDroppedTotal() - beforeDropped; got != 0 {
+	if got := droppedTotal() - beforeDropped; got != 0 {
 		t.Errorf("dropped delta = %d, want 0 — the table was nowhere near full", got)
 	}
 }
@@ -139,15 +162,15 @@ func TestUnknownEventTableSaturates(t *testing.T) {
 	log := &countingLogger{}
 
 	// Fill the table with junk aimed at one adapter.
-	for i := 0; i < MaxUnknownEventNames+8; i++ {
+	for i := 0; i < maxUnknownEventNames+8; i++ {
 		IgnoreUnknownEvent(log, "comp", "adapter-junk", "sess", fmt.Sprintf("Sat%03d", i))
 	}
-	if n := len(UnknownEvents()); n > MaxUnknownEventNames {
-		t.Errorf("retained %d distinct names, want at most %d", n, MaxUnknownEventNames)
+	if n := len(UnknownEvents()); n > maxUnknownEventNames {
+		t.Errorf("retained %d distinct names, want at most %d", n, maxUnknownEventNames)
 	}
-	if UnknownEventNamesDroppedTotal() == 0 {
+	if droppedTotal() == 0 {
 		t.Fatalf("posting %d distinct names past a cap of %d dropped none — the table is unbounded",
-			MaxUnknownEventNames+8, MaxUnknownEventNames)
+			maxUnknownEventNames+8, maxUnknownEventNames)
 	}
 
 	// Now a real rename at a DIFFERENT adapter, arriving on every tool call.
@@ -167,8 +190,8 @@ func TestUnknownEventTableSaturates(t *testing.T) {
 		t.Errorf("saturation was announced %d time(s), want exactly 2 — once per adapter, so a second adapter's rename is not silenced by the first adapter's junk, and not once per event either", n)
 	}
 	// The total still accounts for every event that arrived, named or not.
-	if total := UnknownEventTotal(); total < 500+uint64(MaxUnknownEventNames) {
-		t.Errorf("total = %d, want at least %d — dropped sightings must still be totalled", total, 500+MaxUnknownEventNames)
+	if total := UnknownEventTotal(); total < 500+uint64(maxUnknownEventNames) {
+		t.Errorf("total = %d, want at least %d — dropped sightings must still be totalled", total, 500+maxUnknownEventNames)
 	}
 }
 

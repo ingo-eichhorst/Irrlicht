@@ -36,7 +36,6 @@ package hookjson
 
 import (
 	"fmt"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"unicode/utf8"
@@ -44,21 +43,16 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
+// Both bounds exist for the threat model in the file header: the name is
+// caller-supplied on an unauthenticated endpoint and is retained for the life
+// of the process. Real event names are short PascalCase identifiers, so both
+// are far past anything an upstream rename produces.
 const (
-	// MaxUnknownEventNames bounds how many distinct (adapter, event) pairs are
-	// retained. The hook endpoints are local and unauthenticated — confine.go
-	// says so in its first paragraph, and it is the reason that file exists —
-	// so any process on the machine can POST an event name of its choosing. An
-	// unbounded map keyed by that string is a memory-growth primitive handed to
-	// an unauthenticated caller. Real adapters recognize a handful of events
-	// each, so a table this size is far past anything an upstream rename can
-	// produce and far short of anything that matters for memory.
-	MaxUnknownEventNames = 64
+	// maxUnknownEventNames bounds how many distinct (adapter, event) pairs are
+	// retained.
+	maxUnknownEventNames = 64
 
-	// maxUnknownEventNameLen bounds the retained length of a single name, for
-	// the same reason: the pair is held for the life of the process, so a
-	// multi-megabyte "event name" must not be what is held. Every real event
-	// name is a short PascalCase identifier.
+	// maxUnknownEventNameLen bounds the retained length of one name, in bytes.
 	maxUnknownEventNameLen = 64
 )
 
@@ -116,13 +110,6 @@ var (
 	// table is full; that residual is the price of the bound, and the
 	// first-drop log line at least names the first one.
 	unknownDropped = make(map[string]*atomic.Uint64)
-
-	// unknownSaturated is a lock-free fast path for the post-saturation case.
-	// Without it every dropped sighting takes the exclusive lock just to re-read
-	// len(unknownCounts) — a process-wide write lock on the hook-receive path of
-	// every adapter, engaged during precisely the flood the design refuses to
-	// serialize.
-	unknownSaturated atomic.Bool
 )
 
 // IgnoreUnknownEvent is the uniform handling every hook receiver owes an event
@@ -141,15 +128,16 @@ var (
 // the count is keyed by; sessionID is the resolved session the event arrived
 // for, purely so the log line joins up with the rest of that session's trail.
 func IgnoreUnknownEvent(log outbound.Logger, component, adapter, sessionID, event string) {
-	switch observeUnknownEvent(adapter, event) {
+	outcome, name := observeUnknownEvent(adapter, event)
+	switch outcome {
 	case unknownFirstSighting:
 		log.LogError(component, sessionID, fmt.Sprintf(
 			"unrecognized hook event %q from %s: ignored, answered 2xx. Further occurrences of this name are counted, not logged — an upstream event rename looks exactly like this, so check the count in the diagnostics bundle's hooks.json before dismissing it.",
-			truncateEventName(event), adapter))
+			name, adapter))
 	case unknownTableFullFirst:
 		log.LogError(component, sessionID, fmt.Sprintf(
 			"unrecognized hook event %q from %s: ignored, and NOT counted by name — the distinct-name table is full at %d entries, so no further name from this adapter can be attributed. Later sightings are totalled per adapter in hooks.json's unknown_event_names_dropped_by_adapter.",
-			truncateEventName(event), adapter, MaxUnknownEventNames))
+			name, adapter, maxUnknownEventNames))
 	case unknownRepeat, unknownTableFullRepeat:
 		// Counted. Deliberately silent: these are the flooding cases.
 	}
@@ -164,23 +152,26 @@ func IgnoreUnknownEvent(log outbound.Logger, component, adapter, sessionID, even
 // what makes "reported once" true rather than approximately true. Both
 // decisions are made under the same lock as the state they consult, so there is
 // no piece of this state living outside the mutex's protection domain.
-func observeUnknownEvent(adapter, event string) unknownOutcome {
+func observeUnknownEvent(adapter, event string) (unknownOutcome, string) {
 	key := UnknownEvent{Adapter: adapter, Event: truncateEventName(event)}
 
 	unknownMu.RLock()
 	counter := unknownCounts[key]
 	var dropped *atomic.Uint64
-	if counter == nil && unknownSaturated.Load() {
+	if counter == nil && len(unknownCounts) >= maxUnknownEventNames {
+		// Post-saturation fast path: read the adapter's drop counter under the
+		// SAME read lock the map lookup above already needs, so a flood of
+		// unretainable names never reaches the exclusive lock.
 		dropped = unknownDropped[adapter]
 	}
 	unknownMu.RUnlock()
 	if counter != nil {
 		counter.Add(1)
-		return unknownRepeat
+		return unknownRepeat, key.Event
 	}
 	if dropped != nil {
 		dropped.Add(1)
-		return unknownTableFullRepeat
+		return unknownTableFullRepeat, key.Event
 	}
 
 	unknownMu.Lock()
@@ -188,45 +179,40 @@ func observeUnknownEvent(adapter, event string) unknownOutcome {
 	if counter := unknownCounts[key]; counter != nil {
 		// Lost the race to insert. The winner reports; this one only counts.
 		counter.Add(1)
-		return unknownRepeat
+		return unknownRepeat, key.Event
 	}
-	if len(unknownCounts) >= MaxUnknownEventNames {
-		unknownSaturated.Store(true)
+	if len(unknownCounts) >= maxUnknownEventNames {
 		if dropped := unknownDropped[adapter]; dropped != nil {
 			dropped.Add(1)
-			return unknownTableFullRepeat
+			return unknownTableFullRepeat, key.Event
 		}
 		dropped := &atomic.Uint64{}
 		dropped.Add(1)
 		unknownDropped[adapter] = dropped
-		return unknownTableFullFirst
+		return unknownTableFullFirst, key.Event
 	}
 	fresh := &atomic.Uint64{}
 	fresh.Add(1)
 	unknownCounts[key] = fresh
-	return unknownFirstSighting
+	return unknownFirstSighting, key.Event
 }
 
 // UnknownEvents returns a snapshot of the per-(adapter, name) sighting counts,
-// sorted by adapter then name so a bundle diffs cleanly between two captures.
+// in unspecified order — ordering is a presentation guarantee and belongs to
+// the one place that owes it, the diagnostics bundle's hooksView. Sorting here
+// too would mean the same comparator in two files, agreeing forever, with no
+// test able to see the other go stale.
 //
 // No entry is ever zero — a pair only gets a slot when it is first counted — so
 // unlike Fallbacks and Rejections there is nothing to omit; the property those
 // promise ("zeros are absent") holds here by construction.
 func UnknownEvents() []UnknownEventCount {
 	unknownMu.RLock()
+	defer unknownMu.RUnlock()
 	out := make([]UnknownEventCount, 0, len(unknownCounts))
 	for key, counter := range unknownCounts {
 		out = append(out, UnknownEventCount{UnknownEvent: key, Count: counter.Load()})
 	}
-	unknownMu.RUnlock()
-
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Adapter != out[j].Adapter {
-			return out[i].Adapter < out[j].Adapter
-		}
-		return out[i].Event < out[j].Event
-	})
 	return out
 }
 
@@ -270,31 +256,6 @@ func UnknownEventNamesDropped() map[string]uint64 {
 	return out
 }
 
-// UnknownEventNamesDroppedTotal is the drop count across every adapter.
-func UnknownEventNamesDroppedTotal() uint64 {
-	var total uint64
-	unknownMu.RLock()
-	defer unknownMu.RUnlock()
-	for _, dropped := range unknownDropped {
-		total += dropped.Load()
-	}
-	return total
-}
-
-// resetUnknownEvents clears the table. Test-only, and unexported so it cannot
-// become a production reset: one test in this package deliberately saturates the
-// table, and a saturated table makes every test after it fail for a reason that
-// has nothing to do with that test. Nothing in the daemon resets these — a
-// counter an operator can zero is a counter that can hide the thing it was added
-// to reveal.
-func resetUnknownEvents() {
-	unknownMu.Lock()
-	defer unknownMu.Unlock()
-	unknownCounts = make(map[UnknownEvent]*atomic.Uint64)
-	unknownDropped = make(map[string]*atomic.Uint64)
-	unknownSaturated.Store(false)
-}
-
 // truncateEventName bounds a retained name at a rune boundary. Cutting mid-rune
 // would store invalid UTF-8, which then has to survive JSON encoding into a
 // diagnostics bundle.
@@ -303,6 +264,13 @@ func resetUnknownEvents() {
 // RETAINED name": two names sharing a 64-byte prefix collapse to one key. No
 // real event name comes close, and the alternative is retaining whatever a local
 // caller sends.
+//
+// Not session.CapRunes, which is the repo's canonical headline truncator: it
+// bounds by RUNE count, and to do that it runs utf8.RuneCountInString over the
+// whole string and then materializes []rune(s). On the input this bound exists
+// for — a multi-megabyte name from a local caller — that is a full scan plus a
+// 4x allocation of the very string we are refusing to keep. A byte bound reads
+// at most 64 bytes.
 func truncateEventName(name string) string {
 	if len(name) <= maxUnknownEventNameLen {
 		return name

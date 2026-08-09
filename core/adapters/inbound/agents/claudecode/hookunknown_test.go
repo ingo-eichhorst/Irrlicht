@@ -1,7 +1,6 @@
 package claudecode
 
 import (
-	"encoding/json"
 	"testing"
 
 	"irrlicht/core/internal/contracttesting"
@@ -25,17 +24,7 @@ func TestUnknownHookEventObserved(t *testing.T) {
 				Observed: func() bool { return len(target.getCalls()) > 0 },
 			}
 		},
-		PayloadFor: func(transcriptPath, event string) string {
-			body, err := json.Marshal(hookPayload{
-				TranscriptPath: transcriptPath,
-				HookEventName:  event,
-				ToolName:       "Bash",
-			})
-			if err != nil {
-				panic(err)
-			}
-			return string(body)
-		},
+		PayloadFor:   contractPayload,
 		KnownEvent:   HookPermissionRequest,
 		EndpointPath: HookEndpointPath,
 	})

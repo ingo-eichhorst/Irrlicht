@@ -236,9 +236,7 @@ func assertRefusedBy(t *testing.T, r HookReceiver, rut HookReceiverUnderTest, pa
 	if rut.Observed() {
 		t.Errorf("%s was dispatched downstream: %s", what, path)
 	}
-	if rec.Code < 200 || rec.Code > 299 {
-		t.Errorf("%s: status = %d, want 2xx — a confinement refusal is reported by the log and the counter, never by a status code on the user's critical path", what, rec.Code)
-	}
+	assertHookStatus2xx(t, rec, what)
 	if rut.Rejections == nil {
 		return
 	}
@@ -250,19 +248,5 @@ func assertRefusedBy(t *testing.T, r HookReceiver, rut HookReceiverUnderTest, pa
 // postHookPath POSTs the adapter's hook body for path and returns the response.
 func postHookPath(t *testing.T, r HookReceiver, rut HookReceiverUnderTest, path string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, r.EndpointPath, strings.NewReader(r.PayloadFor(path)))
-	rec := httptest.NewRecorder()
-	rut.Handler.ServeHTTP(rec, req)
-	return rec
-}
-
-// mkSubdir creates and returns root/name. Transcripts sit some levels below the
-// root in every real layout, so the fixtures do too.
-func mkSubdir(t *testing.T, root, name string) string {
-	t.Helper()
-	dir := filepath.Join(root, name)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatalf("create %s: %v", dir, err)
-	}
-	return dir
+	return postHookBody(t, rut.Handler, r.EndpointPath, r.PayloadFor(path))
 }

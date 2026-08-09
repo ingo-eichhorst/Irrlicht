@@ -25,6 +25,19 @@ func writeContractTranscript(t *testing.T, dir string) string {
 	return writeTranscriptFile(t, dir, transcriptStem)
 }
 
+// contractPayload renders this adapter's hook body for one event.
+func contractPayload(transcriptPath, event string) string {
+	body, err := json.Marshal(hookPayload{
+		TranscriptPath: transcriptPath,
+		HookEventName:  event,
+		ToolName:       "Bash",
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(body)
+}
+
 // TestHookPathConfined wires this adapter's hook receiver into the shared issue
 // #1361 contract: a caller-supplied transcript_path is confined to the
 // adapter's declared transcript roots, with symlinks resolved first, and

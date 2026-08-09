@@ -121,15 +121,13 @@ func AssertUnknownHookEventObserved(t *testing.T, r UnknownEventReceiver) {
 func assertKnownEventUncounted(t *testing.T, r UnknownEventReceiver) {
 	t.Helper()
 	transcript := unknownEventTranscript(t, r)
-	log := &RecordingLogger{}
+	log := &recordingLogger{}
 	rut := r.New(t, log)
 
 	before := unknownTotalFor(r.Adapter)
 	rec := postUnknownEvent(t, r, rut, transcript, r.KnownEvent)
 
-	if rec.Code < 200 || rec.Code > 299 {
-		t.Fatalf("recognized event %q: status = %d, want 2xx", r.KnownEvent, rec.Code)
-	}
+	assertHookStatus2xx(t, rec, fmt.Sprintf("recognized event %q", r.KnownEvent))
 	if !rut.Observed() {
 		t.Fatalf("recognized event %q was not dispatched — every obligation below it would pass vacuously", r.KnownEvent)
 	}
@@ -145,14 +143,12 @@ func assertKnownEventUncounted(t *testing.T, r UnknownEventReceiver) {
 func assertUnknownIgnored(t *testing.T, r UnknownEventReceiver) {
 	t.Helper()
 	transcript := unknownEventTranscript(t, r)
-	rut := r.New(t, &RecordingLogger{})
+	rut := r.New(t, &recordingLogger{})
 
 	event := unknownEventName(t)
 	rec := postUnknownEvent(t, r, rut, transcript, event)
 
-	if rec.Code < 200 || rec.Code > 299 {
-		t.Errorf("unrecognized event %q: status = %d, want 2xx — an unrecognized event is reported by the log and the counter, never by a status code on the user's critical path", event, rec.Code)
-	}
+	assertHookStatus2xx(t, rec, fmt.Sprintf("unrecognized event %q", event))
 	if rut.Observed() {
 		t.Errorf("unrecognized event %q was dispatched downstream — an unfamiliar name must not be guessed into a handler", event)
 	}
@@ -162,7 +158,7 @@ func assertUnknownIgnored(t *testing.T, r UnknownEventReceiver) {
 func assertUnknownCounted(t *testing.T, r UnknownEventReceiver) {
 	t.Helper()
 	transcript := unknownEventTranscript(t, r)
-	rut := r.New(t, &RecordingLogger{})
+	rut := r.New(t, &recordingLogger{})
 
 	renamed, stray := unknownEventName(t)+"Renamed", unknownEventName(t)+"Stray"
 	beforeRenamed, beforeStray := unknownCountFor(r.Adapter, renamed), unknownCountFor(r.Adapter, stray)
@@ -186,7 +182,7 @@ func assertUnknownCounted(t *testing.T, r UnknownEventReceiver) {
 func assertUnknownReportedOnce(t *testing.T, r UnknownEventReceiver) {
 	t.Helper()
 	transcript := unknownEventTranscript(t, r)
-	log := &RecordingLogger{}
+	log := &recordingLogger{}
 	rut := r.New(t, log)
 
 	flooding, second := unknownEventName(t)+"Flood", unknownEventName(t)+"Second"
@@ -221,7 +217,7 @@ func unknownEventTranscript(t *testing.T, r UnknownEventReceiver) string {
 // silently share a key and a first-sighting.
 //
 // It hashes t.Name() rather than embedding it. Retained names are bounded
-// (hookjson.MaxUnknownEventNames' sibling cap), and a Go sub-test path is long
+// (hookjson bounds a retained name in bytes), and a Go sub-test path is long
 // enough to cross that bound — which would make the contract assert against a
 // truncated key and fail for a reason that has nothing to do with the adapter.
 // Real event names are short identifiers, so a short name is also the honest
@@ -270,47 +266,44 @@ func unknownTotalFor(adapter string) uint64 {
 // response.
 func postUnknownEvent(t *testing.T, r UnknownEventReceiver, rut UnknownEventReceiverUnderTest, transcriptPath, event string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, r.EndpointPath, strings.NewReader(r.PayloadFor(transcriptPath, event)))
-	rec := httptest.NewRecorder()
-	rut.Handler.ServeHTTP(rec, req)
-	return rec
+	return postHookBody(t, rut.Handler, r.EndpointPath, r.PayloadFor(transcriptPath, event))
 }
 
-// RecordingLogger is an outbound.Logger that keeps every line, so a contract can
+// recordingLogger is an outbound.Logger that keeps every line, so a contract can
 // assert on what was reported rather than only on what was returned. Safe for
 // concurrent use: hook receivers are HTTP handlers.
-type RecordingLogger struct {
+type recordingLogger struct {
 	mu    sync.Mutex
 	lines []string
 }
 
-func (l *RecordingLogger) LogInfo(eventType, sessionID, message string) {
+func (l *recordingLogger) LogInfo(eventType, sessionID, message string) {
 	l.append("info", eventType, sessionID, message)
 }
 
-func (l *RecordingLogger) LogError(eventType, sessionID, errorMsg string) {
+func (l *recordingLogger) LogError(eventType, sessionID, errorMsg string) {
 	l.append("error", eventType, sessionID, errorMsg)
 }
 
-func (l *RecordingLogger) LogProcessingTime(string, string, int64, int, string) {}
+func (l *recordingLogger) LogProcessingTime(string, string, int64, int, string) {}
 
-func (l *RecordingLogger) Close() error { return nil }
+func (l *recordingLogger) Close() error { return nil }
 
-func (l *RecordingLogger) append(level, eventType, sessionID, message string) {
+func (l *recordingLogger) append(level, eventType, sessionID, message string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.lines = append(l.lines, fmt.Sprintf("[%s] %s %s: %s", level, eventType, sessionID, message))
 }
 
 // Lines returns a copy of everything logged so far.
-func (l *RecordingLogger) Lines() []string {
+func (l *recordingLogger) Lines() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return append([]string(nil), l.lines...)
 }
 
 // CountMentioning counts the lines containing substr.
-func (l *RecordingLogger) CountMentioning(substr string) int {
+func (l *recordingLogger) CountMentioning(substr string) int {
 	var n int
 	for _, line := range l.Lines() {
 		if strings.Contains(line, substr) {
@@ -321,7 +314,7 @@ func (l *RecordingLogger) CountMentioning(substr string) int {
 }
 
 // FirstMentioning returns the first line containing every one of substrs.
-func (l *RecordingLogger) FirstMentioning(substrs ...string) (string, bool) {
+func (l *recordingLogger) FirstMentioning(substrs ...string) (string, bool) {
 	for _, line := range l.Lines() {
 		all := true
 		for _, s := range substrs {
