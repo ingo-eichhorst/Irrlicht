@@ -6,6 +6,11 @@ import {
   pendingWizardAgents,
   stillPendingForAgents,
   buildPermissionAnswers,
+  permissionEffectNotice,
+  anyEffectFailed,
+  findPermission,
+  visiblePermissionsFor,
+  buildAgentPermSection,
   resolvedTheme,
   rowLabel,
   maybeNotifyOnUpdate,
@@ -820,6 +825,115 @@ describe('stillPendingForAgents (#570 locked-set dismissal)', () => {
     expect(stillPendingForAgents(null, ['x'])).toBe(false)
     expect(stillPendingForAgents({}, ['x'])).toBe(false)
     expect(stillPendingForAgents(snap('pending'), null)).toBe(false)
+  })
+})
+
+describe('failed consent effect is visible and retryable (#1362)', () => {
+  const REASON = 'settings.json is malformed: invalid character \'}\''
+  const snap = (perm) => ({
+    mode: 'ask',
+    agents: [
+      {
+        name: 'claude-code', display_name: 'Claude Code', detected: true,
+        permissions: [
+          { key: 'transcripts', kind: 'observe', state: 'granted', title: 'Read transcripts' },
+          perm,
+        ],
+      },
+    ],
+  })
+  const failedGrant = {
+    key: 'hooks', kind: 'modify', state: 'granted', title: 'Install hooks',
+    effect_error: REASON,
+  }
+
+  test('a granted permission whose Apply failed reads as granted-but-not-applied', () => {
+    const notice = permissionEffectNotice(failedGrant)
+    expect(notice).not.toBeNull()
+    expect(notice.label).toBe('Granted, but not applied')
+    expect(notice.reason).toBe(REASON)
+    // Retry re-submits the SAME decision — it must never flip the grant off.
+    expect(notice.grant).toBe(true)
+  })
+
+  test('a denied permission whose Remove failed reads as revoked-but-not-undone', () => {
+    const notice = permissionEffectNotice({ ...failedGrant, state: 'denied' })
+    expect(notice.label).toBe('Revoked, but not undone')
+    expect(notice.grant).toBe(false)
+  })
+
+  test('a healthy permission produces no notice', () => {
+    expect(permissionEffectNotice({ key: 'hooks', state: 'granted' })).toBeNull()
+    expect(permissionEffectNotice({ key: 'hooks', state: 'granted', effect_error: '' })).toBeNull()
+    expect(permissionEffectNotice(null)).toBeNull()
+    // Pending never ran an effect, so a stray error is not rendered.
+    expect(permissionEffectNotice({ key: 'hooks', state: 'pending', effect_error: REASON })).toBeNull()
+  })
+
+  test('Apply resubmits a failed permission even though the toggle is unchanged', () => {
+    // Review mode: the toggle already matches the recorded state, so the
+    // pre-#1362 diffing dropped it and the retry never reached the daemon.
+    const draft = { 'claude-code/transcripts': true, 'claude-code/hooks': true }
+    const answers = buildPermissionAnswers(snap(failedGrant), draft, false)
+    expect(answers).toEqual([
+      { agent: 'claude-code', permission: 'hooks', grant: true },
+    ])
+  })
+
+  test('a healthy unchanged permission is still skipped', () => {
+    const healthy = { key: 'hooks', kind: 'modify', state: 'granted', title: 'Install hooks' }
+    const draft = { 'claude-code/transcripts': true, 'claude-code/hooks': true }
+    expect(buildPermissionAnswers(snap(healthy), draft, false)).toEqual([])
+  })
+
+  test('the auto wizard shows failed permissions alongside pending ones', () => {
+    const a = snap(failedGrant).agents[0]
+    // granted+failed is surfaced; granted+healthy stays hidden in auto mode.
+    expect(visiblePermissionsFor(a, true).map(p => p.key)).toEqual(['hooks'])
+    expect(visiblePermissionsFor(a, false).map(p => p.key)).toEqual(['transcripts', 'hooks'])
+  })
+
+  test('anyEffectFailed scopes to the wizard\'s locked agents', () => {
+    const s = snap(failedGrant)
+    expect(anyEffectFailed(s, ['claude-code'])).toBe(true)
+    expect(anyEffectFailed(s, ['codex'])).toBe(false)
+    expect(anyEffectFailed(s, null)).toBe(true)
+    expect(anyEffectFailed(snap({ key: 'hooks', state: 'granted' }), null)).toBe(false)
+    expect(anyEffectFailed(null, null)).toBe(false)
+  })
+
+  // Reachability: these assert the REAL DOM the wizard builds, not a
+  // pure helper alongside it — buildAgentPermSection is exactly what
+  // renderPermissionsWizard calls for every agent.
+  test('the wizard actually renders the warning and a Retry button', () => {
+    const a = snap(failedGrant).agents[0]
+    const section = buildAgentPermSection(a, visiblePermissionsFor(a, false))
+    const box = section.querySelector('.perm-effect-error')
+    expect(box).not.toBeNull()
+    expect(box.getAttribute('role')).toBe('alert')
+    expect(box.textContent).toContain('Granted, but not applied')
+    expect(box.textContent).toContain(REASON)
+    const btn = box.querySelector('button.perm-retry')
+    expect(btn).not.toBeNull()
+    expect(btn.textContent).toBe('Retry')
+    // The grant itself is untouched — the toggle stays on.
+    const cb = section.querySelector('input[data-perm-key="hooks"]')
+    expect(cb.checked).toBe(true)
+  })
+
+  test('a healthy permission renders no warning', () => {
+    const healthy = { key: 'hooks', kind: 'modify', state: 'granted', title: 'Install hooks' }
+    const a = snap(healthy).agents[0]
+    const section = buildAgentPermSection(a, visiblePermissionsFor(a, false))
+    expect(section.querySelector('.perm-effect-error')).toBeNull()
+  })
+
+  test('findPermission locates the fresh row after a retry', () => {
+    const s = snap(failedGrant)
+    expect(findPermission(s, 'claude-code', 'hooks').effect_error).toBe(REASON)
+    expect(findPermission(s, 'claude-code', 'nope')).toBeNull()
+    expect(findPermission(s, 'codex', 'hooks')).toBeNull()
+    expect(findPermission(null, 'claude-code', 'hooks')).toBeNull()
   })
 })
 

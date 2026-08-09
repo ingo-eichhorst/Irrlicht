@@ -63,6 +63,20 @@ type PermissionView struct {
 	FeatureUnlocked string `json:"feature_unlocked"`
 	Touches         string `json:"touches"`
 	Detail          string `json:"detail"`
+
+	// EffectError is the reason the consent effect for the CURRENT state
+	// failed, or empty when it succeeded (or the permission declares no
+	// closure). It is deliberately a field of its own rather than a fourth
+	// State: "granted" and "applied" are two different facts, and a
+	// transient filesystem error must never look like a withdrawn consent
+	// (#1362). A granted permission carrying an EffectError means the user
+	// said yes and the hooks are NOT installed; a denied one means the
+	// user said no and the hooks may still BE installed.
+	//
+	// Not persisted. Every granted permission's effect is re-run on daemon
+	// Start, so this is recomputed from scratch each boot rather than
+	// risking a stale failure outliving the condition that caused it.
+	EffectError string `json:"effect_error,omitempty"`
 }
 
 // AgentPermissions groups one agent's permissions for the API.
@@ -114,6 +128,13 @@ type PermissionService struct {
 	set      permission.Set
 	detected map[string]bool
 	watching map[string]context.CancelFunc // agent name → cancel for its running watchers
+	// effectErrs maps "agent/key" → the reason that permission's last
+	// consent effect failed. Populated and cleared by runClosureEffect,
+	// read by Snapshot, and consulted by Answer so a re-grant retries a
+	// failed Apply instead of short-circuiting as a no-op (#1362).
+	// Deliberately separate from set: it records what the SYSTEM failed to
+	// do, never what the USER decided.
+	effectErrs map[string]string
 	// parent is intentionally stored rather than threaded through as a method
 	// parameter (godre:S8242): it is the daemon-lifetime ctx set once by
 	// Start, and every watcher startWatching starts later — triggered by an
@@ -172,7 +193,13 @@ func NewPermissionService(deps PermissionServiceDeps) *PermissionService {
 		set:            set,
 		detected:       make(map[string]bool),
 		watching:       make(map[string]context.CancelFunc),
+		effectErrs:     make(map[string]string),
 	}
+}
+
+// effectKey is the composite key for the effectErrs map.
+func effectKey(agentName, permKey string) string {
+	return agentName + "/" + permKey
 }
 
 // SetDetectionProbe overrides process-matcher detection for one agent —
@@ -269,6 +296,7 @@ func (s *PermissionService) Snapshot() PermissionsSnapshot {
 				FeatureUnlocked: p.FeatureUnlocked,
 				Touches:         p.Touches,
 				Detail:          p.Detail,
+				EffectError:     s.effectErrs[effectKey(a.Identity.Name, p.Key)],
 			})
 		}
 		out.Agents = append(out.Agents, ap)
@@ -281,8 +309,10 @@ func (s *PermissionService) Snapshot() PermissionsSnapshot {
 // set is persisted, and a permissions_updated broadcast dismisses the
 // wizard on whichever surface didn't answer. Re-answering with the same
 // state is a no-op, so the losing surface's duplicate submission is
-// harmless. Returns ErrUnknownPermission (wrapped) when any entry names
-// an undeclared agent/permission pair; nothing is applied in that case.
+// harmless — unless that permission's effect FAILED, in which case the
+// identical answer is a deliberate retry and re-runs the closure (#1362).
+// Returns ErrUnknownPermission (wrapped) when any entry names an
+// undeclared agent/permission pair; nothing is applied in that case.
 //
 // State mutation happens under s.mu, but effects, persistence, and the
 // broadcast run after release — Granted() gates every hook/statusline
@@ -313,7 +343,14 @@ func (s *PermissionService) Answer(answers []PermissionAnswer) error {
 		if ans.Grant {
 			target = permission.StateGranted
 		}
-		if s.set.Get(ans.Agent, ans.Permission) == target {
+		// Same-state re-answers are no-ops — EXCEPT when this permission's
+		// effect failed, in which case the identical answer is the user
+		// hitting Retry and must re-run the closure (#1362). Without this
+		// exception a grant whose Apply failed can only be retried by
+		// revoking and re-granting, which is exactly the workaround the
+		// issue rules out.
+		if s.set.Get(ans.Agent, ans.Permission) == target &&
+			!s.effectFailedLocked(ans.Agent, ans.Permission) {
 			continue
 		}
 		s.set.Put(ans.Agent, ans.Permission, target)
@@ -359,9 +396,10 @@ func (s *PermissionService) declared(agentName, key string) (agent.Permission, b
 // permissions run their Apply/Remove closures; observe-kind permissions
 // start/stop the agent's watchers — and may additionally carry
 // Apply/Remove closures when their monitoring isn't watcher-factory based
-// (the Gas Town orchestrator). Effect errors are logged, never propagated
-// — the recorded state stands and effects are re-applied on the next
-// daemon start.
+// (the Gas Town orchestrator). Effect errors are logged and recorded on
+// the permission (surfacing in Snapshot as EffectError), never propagated
+// — the recorded state stands, the user's consent is never rolled back by
+// a failed effect, and effects are re-applied on the next daemon start.
 func (s *PermissionService) runEffects(effects []pendingEffect) {
 	if len(effects) == 0 {
 		return
@@ -394,20 +432,48 @@ func (s *PermissionService) runEffects(effects []pendingEffect) {
 	}
 }
 
-// runClosureEffect runs the effect's Apply/Remove closure, if any.
+// runClosureEffect runs the effect's Apply/Remove closure, if any, and
+// records the outcome in effectErrs so the two wizards can render "granted
+// but NOT applied, because <reason>" instead of a bare "granted" (#1362).
+// The error is still logged and still not propagated — the recorded
+// consent stands either way — but it is no longer the only trace.
 func (s *PermissionService) runClosureEffect(e pendingEffect) {
 	effect, verb := e.perm.Apply, "apply"
 	if e.target != permission.StateGranted {
 		effect, verb = e.perm.Remove, "remove"
 	}
 	if effect == nil {
+		// No closure for this direction: there is nothing that can have
+		// failed, so any error recorded for the opposite verb is stale.
+		s.recordEffectResult(e, "")
 		return
 	}
 	if err := effect(); err != nil {
 		s.log.LogError("permissions", "", fmt.Sprintf("failed to %s %s/%s: %v", verb, e.agentName, e.perm.Key, err))
+		s.recordEffectResult(e, err.Error())
 		return
 	}
+	s.recordEffectResult(e, "")
 	s.log.LogInfo("permissions", "", fmt.Sprintf("%s/%s: %sd", e.agentName, e.perm.Key, verb))
+}
+
+// recordEffectResult stores (reason != "") or clears (reason == "") the
+// effect failure for one permission. Callers hold effectMu, never mu.
+func (s *PermissionService) recordEffectResult(e pendingEffect, reason string) {
+	k := effectKey(e.agentName, e.perm.Key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if reason == "" {
+		delete(s.effectErrs, k)
+		return
+	}
+	s.effectErrs[k] = reason
+}
+
+// effectFailed reports whether the permission's last consent effect failed.
+// Caller holds s.mu.
+func (s *PermissionService) effectFailedLocked(agentName, permKey string) bool {
+	return s.effectErrs[effectKey(agentName, permKey)] != ""
 }
 
 // startWatching constructs the agent's watchers fresh, registers their
