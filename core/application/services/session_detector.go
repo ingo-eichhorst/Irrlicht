@@ -182,6 +182,19 @@ type SessionDetector struct {
 	// event loop classifies), so it is deliberately NOT guarded by idleMu.
 	signals *session.SignalHolds
 
+	// dwell is the grace timer state changes serve before they are published
+	// (#1366). Like signals it carries its own lock and takes the pass clock
+	// as an argument, so it is deliberately NOT guarded by mu. A nil value
+	// disables hysteresis; see session.StateDwell.
+	dwell *session.StateDwell
+
+	// now is this detector's clock, read once per classify pass and threaded
+	// into everything that reasons about elapsed time — the signal holds'
+	// ceilings and ripeness rules (holdContext.Now) and the #1366 dwell. nil
+	// means time.Now; tests replace it to drive both mechanisms on a virtual
+	// timeline instead of sleeping. Read through nowFn, never directly.
+	now func() time.Time
+
 	// idleMu guards idleProjectRetryAttempts below. Written from HTTP handler
 	// goroutines, read by processActivity (event-loop goroutine).
 	idleMu sync.Mutex
@@ -286,6 +299,7 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		debouncedEvents:          make(chan agent.Event, 64),
 		deletedCooldown:          10 * time.Second,
 		signals:                  session.NewSignalHolds(),
+		dwell:                    session.NewStateDwell(),
 		idleProjectRetryAttempts: make(map[string]int),
 		bgLiveProbe:              anyLiveOutputWriter,
 		bgPIDProbe:               anyLivePID,
@@ -355,6 +369,24 @@ func (d *SessionDetector) RunPIDLivenessSweepForTest() {
 // staleWorkingRefreshInterval ticker.
 func (d *SessionDetector) RunStaleSessionRefreshForTest() {
 	d.refreshStaleSessions()
+}
+
+// nowFn reads this detector's clock. The indirection is what lets a test drive
+// the ceiling and dwell timers on a virtual timeline; production leaves the
+// field nil and gets time.Now. Every elapsed-time decision in the classify
+// pipeline must come through here — a bare time.Now() alongside it would make
+// two mechanisms that are supposed to share one instant disagree.
+func (d *SessionDetector) nowFn() time.Time {
+	if d.now != nil {
+		return d.now()
+	}
+	return time.Now()
+}
+
+// SetClockForTest replaces the detector's clock. Exported for tests outside
+// this package that need to advance the #1366 dwell without sleeping.
+func (d *SessionDetector) SetClockForTest(now func() time.Time) {
+	d.now = now
 }
 
 // HoldSignalForTest places an out-of-band signal hold with an explicit

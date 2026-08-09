@@ -805,14 +805,15 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// stamp below must agree about when "now" was, and a held signal whose
 	// staleness is time-based (session.holdContext) is only meaningful against
 	// a single instant.
-	passStart := time.Now()
+	passStart := d.nowFn()
 
 	// Arm the transcript-based stalled-edit-tool fallback (#488) before the
 	// overlay, not after: it is a held signal like the rest now (#1319), and
 	// Overlay is what decides whether it has been open long enough to apply.
 	d.armStalledEditTool(state, passStart)
 
-	d.reportHoldExpiries(state, d.signals.Overlay(state.SessionID, state.Metrics, passStart), passStart)
+	expiries := d.signals.Overlay(state.SessionID, state.Metrics, passStart)
+	d.reportHoldExpiries(state, expiries, passStart)
 
 	// Content-based state detection. The tiered form is used here (and only
 	// here) so the deciding rule and its authority tier reach the recorded
@@ -841,7 +842,7 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 		ParentHeldWorking: parentHeldWorking,
 	})
 
-	if newState != state.State {
+	if d.admitTransition(state, newState, stateBeforeSynthesis, expiries, passStart) {
 		applied := stateTransitionUpdate{NewState: newState, Reason: reason, Now: now}
 		switch {
 		case parentHeldWorking:
@@ -866,6 +867,49 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	if d.cacheBloat != nil {
 		d.cacheBloat.OnActivity(state)
 	}
+}
+
+// admitTransition is the #1366 grace-timer gate: the single place that decides
+// whether this pass's classified state change is published or held back.
+//
+// It replaces a bare `newState != state.State`, and it is called on every pass
+// rather than only on the passes that produce a change — session.StateDwell
+// learns that a proposal was reversed by being told the classifier now agrees
+// with the current state, and never learns it otherwise.
+//
+// Two classes of change skip the dwell outright. Both are cases where delaying
+// publication could only lose information, never smooth it:
+//
+//   - A HOLD CEILING FIRED this pass (#1360). An expiry is not a flap and
+//     cannot become one: the hold is deleted, nothing re-asserts it, and the
+//     ceiling only fires after hours of wall clock. Debouncing it would at
+//     best delay the unpinning by a dwell, and at worst lose it entirely — the
+//     hold that kept SignalHolds.HasAny true is the very thing that just went
+//     away, so refreshStaleSessions' held-session arm stops selecting this
+//     session on the same pass that starts the dwell. That is a real hole and
+//     it is closed twice over, here and by the Pending arm in
+//     refreshStaleSessions, because #1360 exists precisely to guarantee a
+//     pinned session eventually unpins and a grace timer must not be able to
+//     take that back. TestClassify_CeilingExpiryIsNotSwallowedByTheDwell.
+//   - A SYNTHESIZER RE-BASED the current state this pass. The collapsed-waiting
+//     and collapsed-turn-boundary synthesizers author a *pair* of transitions
+//     to reconstruct edges the daemon observed collapsed into one pass; the
+//     second half is the classifier's verdict about a state the synthesizer
+//     has already declared over. Holding it back would strand the session in a
+//     synthetic waiting the pass itself knows has ended — inventing a stall
+//     rather than suppressing a flap.
+func (d *SessionDetector) admitTransition(
+	state *session.SessionState,
+	newState string,
+	stateBeforeSynthesis string,
+	expiries []session.SignalExpiry,
+	now time.Time,
+) bool {
+	if len(expiries) > 0 || state.State != stateBeforeSynthesis {
+		d.dwell.DropSession(state.SessionID)
+		return newState != state.State
+	}
+	return d.dwell.Admit(state.SessionID, state.State, newState, now)
 }
 
 // forceReadyToWorkingIfActive bounces a ready session straight to working
@@ -1470,7 +1514,7 @@ func (d *SessionDetector) refreshStaleSessions() {
 	if err != nil {
 		return
 	}
-	now := time.Now()
+	now := d.nowFn()
 	for _, state := range sessions {
 		switch state.State {
 		case session.StateWorking:
@@ -1478,28 +1522,48 @@ func (d *SessionDetector) refreshStaleSessions() {
 		case session.StateWaiting, session.StateReady:
 			d.retryIdleProjectResolution(state, now)
 
-			// A held signal is the one reason to revisit a non-working
-			// session, and without this the ceilings added in #1360 could
-			// never fire. A ceiling is only evaluated inside
-			// SignalHolds.Overlay, Overlay is only reached from the classify
-			// pipeline, and this loop ran that pipeline for StateWorking
-			// alone — while both hook holds that have a ceiling pin the
-			// session at *waiting*. The pinned session was precisely the one
-			// being skipped, so a lost release stayed lost for the life of
-			// the process. (That asymmetry is also why compactHoldTimeout
-			// appeared to prove the mechanism worked: it pins at working, the
-			// state already being re-read.)
-			//
-			// Scoped to sessions that actually hold something, deliberately:
-			// not re-reading idle transcripts is long-standing behaviour with
-			// a real cost attached — one stat and parse per idle session per
-			// tick, on a machine that may be tracking dozens — and a hold is
-			// both rare and the only thing such a pass could newly decide.
-			if d.signals != nil && d.signals.HasAny(state.SessionID) {
+			// Only when something outstanding could make a full pass decide
+			// anything new — see shouldRevisitIdleSession for both reasons and
+			// why the scoping is deliberate.
+			if d.shouldRevisitIdleSession(state.SessionID) {
 				d.reclassifyFromTranscript(state, now)
 			}
 		}
 	}
+}
+
+// shouldRevisitIdleSession reports whether the ticker has a reason to run a
+// full classify pass for a session that is not working. Both disjuncts are
+// liveness guarantees for a wall-clock timer that only ever advances inside
+// the classify pipeline, and neither implies the other.
+//
+//   - A HELD SIGNAL (#1360). A ceiling is only evaluated inside
+//     SignalHolds.Overlay, Overlay is only reached from the classify pipeline,
+//     and both hook holds that declare a ceiling pin the session at *waiting*
+//     — the state this loop used to skip. Without this the pinned session was
+//     precisely the one never revisited, so a lost release stayed lost for the
+//     life of the process. (That asymmetry is also why compactHoldTimeout
+//     appeared to prove the mechanism worked: it pins at working, the state
+//     already being re-read.)
+//   - A DWELL OUTSTANDING (#1366). The same argument one turn deeper: a grace
+//     timer is a *delay* only if a later pass arrives to end it, and on a
+//     session nothing else revisits it silently becomes a drop. The case that
+//     forces it is a ceiling expiry — dropping the hold is what makes HasAny
+//     false, so the first disjunct stops selecting the session on the very
+//     pass that needs a follow-up. admitTransition also exempts expiries from
+//     the dwell outright; this is the belt to that pair of braces, bounding
+//     every dwell whatever started it.
+//
+// Deliberately not "every non-working session": not re-reading idle
+// transcripts is long-standing behaviour with a real cost attached — one stat
+// and parse per idle session per tick, on a machine that may be tracking
+// dozens — and these two conditions are both rare and the only things such a
+// pass could newly decide.
+func (d *SessionDetector) shouldRevisitIdleSession(sessionID string) bool {
+	if d.signals != nil && d.signals.HasAny(sessionID) {
+		return true
+	}
+	return d.dwell.Pending(sessionID)
 }
 
 // retryIdleProjectResolution re-attempts CWD/project/branch backfill for an

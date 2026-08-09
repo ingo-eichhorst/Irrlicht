@@ -44,6 +44,11 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	// forever, and a recycled session ID would inherit it.
 	d.signals.DropSession(ev.SessionID)
 
+	// Same reasoning for the #1366 grace timer: a decided-but-unpublished
+	// change belongs to a session that no longer exists, and leaving it would
+	// hand a recycled session ID a transition proposed for its predecessor.
+	d.dwell.DropSession(ev.SessionID)
+
 	d.idleMu.Lock()
 	delete(d.idleProjectRetryAttempts, ev.SessionID)
 	d.idleMu.Unlock()
