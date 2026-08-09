@@ -197,17 +197,58 @@ func (c *PathConfiner) Confine(raw string) (string, RejectReason) {
 }
 
 // RejectPath writes the uniform refusal every hook receiver owes a confinement
-// failure: a 400 naming the reason, and an error-level log line carrying the
-// offending path. Never a silent 200 — the endpoint is unauthenticated, so a
-// refused path is either a misconfigured agent or a local process probing the
-// daemon, and both deserve to be visible. The path is logged with %q so an
-// embedded newline cannot forge a log record.
+// failure. It is the ONE place the wire behaviour of a refusal is decided, so
+// every receiver — present and future — inherits it instead of choosing.
+//
+// The refusal is loud in the daemon and silent on the wire: an error-level log
+// line naming the reason and the offending path, the confiner's counter
+// incremented, and a 200 with an empty body. The path is never forwarded and
+// nothing is opened, so the security property does not depend on the status
+// code at all.
+//
+// Why 2xx rather than 400, recorded because the next reader will otherwise flip
+// it on aesthetics (issue #1361 item 4 asked for a 400; issue #1364 asks for
+// 200, and this is the reconciliation):
+//
+//   - OBSERVED, from the Claude Code hooks guide: "HTTP status codes alone
+//     can't block actions." A non-2xx from a `type: http` hook is documented as
+//     a non-blocking error; to block or deny you must return 2xx with a JSON
+//     decision body. So a 400 here cannot deny a tool call or stall a turn.
+//   - OBSERVED, from the claude 2.1.226 binary: the HTTP hook client sets
+//     `validateStatus: () => true` and returns `{ok: status>=200 && status<300,
+//     statusCode, body}` — a 400 is simply `ok:false`, not an exception.
+//   - NOT OBSERVED: whether `ok:false` surfaces an error to the user, is
+//     retried, or is merely logged. The docs do not say and I did not run a
+//     live probe. That unknown sits on the user's critical path.
+//   - NOT OBSERVED for the other CLIs at all. Codex delivers via `curl ... ||
+//     true`, so its exit code is already swallowed — but gemini-cli's pre-tool
+//     hooks fail CLOSED (a non-zero result yields decision "deny" and the tool
+//     is skipped) and Copilot's preToolUse denies on error. A receiver added
+//     for one of those adapters would inherit whatever this function does, and
+//     for them a non-2xx is known to be dangerous.
+//
+// An empty-bodied 200 is the response this handler already returns on its
+// success path, so it is the one interaction with the CLI that is continuously
+// exercised. Choosing it trades nothing: "never silently drop" is satisfied by
+// the log and the counter, which is where an operator looks, and not by a
+// status code the agent may or may not show anyone.
+//
+// The one exception is a MISSING transcript_path, which stays a 400. That is a
+// malformed body rather than a verdict about a path — the field the receiver
+// keys everything on is simply absent — and both receivers already answered 400
+// for it before this change, so it is the status the CLIs have been given all
+// along. Keeping it preserves that, and confines this function's new opinion to
+// the cases that are genuinely new.
 //
 // component is the caller's Logger component tag; sessionID is empty because
 // confinement runs before an id can be derived from the path.
 func RejectPath(w http.ResponseWriter, log outbound.Logger, component, raw string, reason RejectReason) {
 	log.LogError(component, "", fmt.Sprintf("rejected hook transcript_path %q: %s", raw, reason))
-	http.Error(w, "bad request: transcript_path "+string(reason), http.StatusBadRequest)
+	if reason == RejectEmptyPath {
+		http.Error(w, "bad request: missing transcript_path", http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 // Rejections returns a snapshot of the per-reason rejection counts. Nothing

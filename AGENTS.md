@@ -137,8 +137,8 @@ Before marking a ticket done, run the full suite — every layer must pass:
   drift) before anything downstream opens it. Six obligations: an in-tree path
   is still accepted (the vacuity guard); an out-of-tree path, a `..` traversal,
   a symlink planted inside the root and a *dangling* symlink inside the root
-  are each refused with a 4xx and a counted reason; and the adapter's
-  production constructor confines, not merely the handler the test assembled.
+  are each refused, logged and counted; and the adapter's production
+  constructor confines, not merely the handler the test assembled.
   Two are load-bearing and neither is obvious. **Symlinks are resolved BEFORE
   the containment check** — a guard with that order reversed passes every
   lexical traversal test and confines nothing (#1361, where claudecode
@@ -150,7 +150,17 @@ Before marking a ticket done, run the full suite — every layer must pass:
   hook-receiving adapter wires one call (see `claudecode`/`codex`
   `hookpath_test.go`; claudecode wires it twice, because its statusline
   endpoint is a receiver too and was the one the original fix forgot).
-  All three contract families pass by construction against a correct adapter, so
+  **A confinement refusal answers 2xx** — it is reported by the log and the
+  counter, never by a status code on the user's critical path. The path is
+  already contained by not being forwarded, so the status buys no security,
+  while a non-2xx is an untested interaction with the agent CLI: Claude Code
+  documents that a non-2xx from a `type: http` hook "can't block actions" but
+  not whether it surfaces an error, and gemini-cli's pre-tool hooks and
+  Copilot's `preToolUse` are known to fail CLOSED on an error result. The
+  contract asserts the 2xx so a new receiver inherits the rule instead of
+  re-deciding it (#1361, #1364). `hookjson.RejectPath` is the single place it
+  is implemented, and its doc comment records what was and was not observed.
+  All four contract families pass by construction against a correct adapter, so
   their whole value is that they *can* fail: a new or reworked contract
   assertion lands with the deliberate mutation that was seen red for each
   obligation recorded in its PR — the same bar the red-first rule above sets

@@ -320,8 +320,9 @@ func TestHookHandler_OutOfTreeTranscriptRejected(t *testing.T) {
 	// transcript_path is attacker-controllable — it comes straight out of an
 	// HTTP body — so a readable file outside $CODEX_HOME/sessions must never be
 	// opened, however well-formed its session_meta header is. Both a plain
-	// out-of-tree path and one traversing back out of the tree are rejected
-	// with a 400 — loudly and counted, never a silent 200 (issue #1361).
+	// out-of-tree path and one traversing back out of the tree are dropped.
+	// The drop is logged and counted rather than signalled on the wire, so the
+	// status stays 200 — unchanged from before #1361; see hookjson.RejectPath.
 	outside := t.TempDir()
 	path := filepath.Join(outside, "rollout-2026-07-18T00-00-00-abcdefabcdef.jsonl")
 	meta := `{"type":"session_meta","payload":{"id":"sess-escape"}}` + "\n"
@@ -345,8 +346,8 @@ func TestHookHandler_OutOfTreeTranscriptRejected(t *testing.T) {
 				TranscriptPath: transcript,
 				HookEventName:  HookPermissionRequest,
 			})
-			if rec.Code != http.StatusBadRequest {
-				t.Errorf("status: got %d, want 400 (an out-of-tree transcript is refused, not silently dropped)", rec.Code)
+			if rec.Code != http.StatusOK {
+				t.Errorf("status: got %d, want 200 (an out-of-tree transcript is dropped, logged and counted — not signalled on the wire)", rec.Code)
 			}
 			if target.totalCalls() != 0 {
 				t.Error("handler read a transcript outside the declared sessions tree")

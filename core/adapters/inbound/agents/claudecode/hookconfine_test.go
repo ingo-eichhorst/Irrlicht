@@ -72,8 +72,11 @@ func inTreeTranscript(t *testing.T, stem string) string {
 // TestHookHandler_OutOfTreeTranscriptRejected is the issue #1361 defect test.
 // The hook endpoint is local and unauthenticated, so transcript_path is
 // attacker-controlled; a path outside the adapter's declared transcript root
-// must be refused loudly (400) and must never reach the detector, which opens
-// it.
+// must never reach the detector, which opens it.
+//
+// The status stays 200 — a refusal is reported by the log and the counter, not
+// on the wire (hookjson.RejectPath explains why). So the dispatch assertion,
+// not the status, is what carries this test.
 func TestHookHandler_OutOfTreeTranscriptRejected(t *testing.T) {
 	confineTestHome(t)
 	outside := writeTranscriptFile(t, t.TempDir(), transcriptStem)
@@ -85,8 +88,8 @@ func TestHookHandler_OutOfTreeTranscriptRejected(t *testing.T) {
 		ToolName:       "Bash",
 	})
 
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status: got %d, want 400 — an out-of-tree transcript_path must be rejected, not silently accepted", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status: got %d, want 200 — a confinement refusal fails open on the wire (see hookjson.RejectPath)", rec.Code)
 	}
 	if calls := target.getCalls(); len(calls) != 0 {
 		t.Errorf("handler forwarded an out-of-tree transcript_path to the detector: %+v", calls)
@@ -110,8 +113,8 @@ func TestHookHandler_ParentTraversalTranscriptRejected(t *testing.T) {
 		ToolName:       "Bash",
 	})
 
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status: got %d, want 400 — a parent-traversal transcript_path must be rejected", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status: got %d, want 200 — a confinement refusal fails open on the wire (see hookjson.RejectPath)", rec.Code)
 	}
 	if calls := target.getCalls(); len(calls) != 0 {
 		t.Errorf("handler forwarded a parent-traversal transcript_path to the detector: %+v", calls)
@@ -137,8 +140,8 @@ func TestHookHandler_SymlinkEscapeTranscriptRejected(t *testing.T) {
 		ToolName:       "Bash",
 	})
 
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status: got %d, want 400 — a symlink inside the root pointing out of it must be rejected", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status: got %d, want 200 — a confinement refusal fails open on the wire (see hookjson.RejectPath)", rec.Code)
 	}
 	if calls := target.getCalls(); len(calls) != 0 {
 		t.Errorf("handler followed a symlink out of the declared root: %+v", calls)

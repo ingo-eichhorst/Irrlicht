@@ -112,8 +112,17 @@ type HookReceiver struct {
 //  6. the adapter's PRODUCTION constructor confines too, not merely whatever
 //     handler the test assembled.
 //
-// Obligations 2–5 additionally require the refusal to be loud (a 4xx, never a
-// silent 200) and counted.
+// Obligations 2–5 additionally require the refusal to be VISIBLE — counted by
+// the confiner, so an operator can see it — and to answer 2xx.
+//
+// The 2xx is asserted, not merely tolerated. A refused path is already fully
+// contained by not being forwarded, so the status code buys no security; what
+// it does buy is an untested interaction on the user's critical path. Claude
+// Code documents that a non-2xx from a `type: http` hook "can't block actions",
+// but not whether it surfaces an error; gemini-cli's pre-tool hooks and
+// Copilot's preToolUse are known to fail CLOSED on an error result. A receiver
+// added for one of those adapters must not answer 4xx, so the contract pins the
+// rule rather than leaving each adapter to rediscover it (issues #1361, #1364).
 func AssertHookPathConfined(t *testing.T, r HookReceiver) {
 	t.Helper()
 	t.Run("in_tree_path_accepted", func(t *testing.T) { assertInTreeAccepted(t, r) })
@@ -227,8 +236,8 @@ func assertRefusedBy(t *testing.T, r HookReceiver, rut HookReceiverUnderTest, pa
 	if rut.Observed() {
 		t.Errorf("%s was dispatched downstream: %s", what, path)
 	}
-	if rec.Code < 400 || rec.Code > 499 {
-		t.Errorf("%s: status = %d, want a 4xx — a refused path must not be answered with a success", what, rec.Code)
+	if rec.Code < 200 || rec.Code > 299 {
+		t.Errorf("%s: status = %d, want 2xx — a confinement refusal is reported by the log and the counter, never by a status code on the user's critical path", what, rec.Code)
 	}
 	if rut.Rejections == nil {
 		return
