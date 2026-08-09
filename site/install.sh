@@ -25,7 +25,7 @@ VERSION=""
 # exercise the real uninstall path without deleting a developer's actual
 # /Applications/Irrlicht.app (and without silently passing on CI, where that
 # path happens not to exist).
-APP_PATH="${IRRLICHT_APP_PATH:-/Applications/Irrlicht.app}"
+APP_PATH="${IRRLICHT_TEST_APP_PATH:-/Applications/Irrlicht.app}"
 DAEMON_PATH="$HOME/.local/bin/irrlichd"
 LAUNCHAGENT_PATH="$HOME/Library/LaunchAgents/io.irrlicht.app.daemon.plist"
 
@@ -114,24 +114,65 @@ uninstall_agent_hooks() {
     if [ -z "$_irrlichd" ]; then
         # Close the caller's pending `step` line so the warning starts on its own.
         printf '\n'
-        warn "No irrlichd binary found — skipping agent hook cleanup."
-        warn "  Remove any leftover irrlicht entries from your agent configs by hand"
-        warn "  (e.g. ~/.claude/settings.json, ~/.codex/hooks.json)."
+        warn "No irrlichd binary found — skipped the agent hook cleanup. If you had"
+        warn "  hooks installed, clear them from ~/.claude/settings.json and ~/.codex/hooks.json."
         return 0
     fi
 
+    # Run the sweep detached from our stdin and under a bounded wait.
+    #
+    # irrlichd has no argument parser: an unknown flag falls through to STARTING
+    # A DAEMON (#1417 — core/cmd/irrlichd/dispatch_test.go pins that as
+    # deliberate). --uninstall-hooks has existed since v0.3.4, so a current
+    # binary is fine, but someone uninstalling an older one would otherwise boot
+    # a daemon right here — binding the port this function just freed — and
+    # block the script forever reading its output. An uninstall that hangs is
+    # the worst outcome available: `curl | sh` gives the child our stdin too,
+    # and a Ctrl-C leaves a half-removed product plus a live daemon.
+    #
+    # A bounded wait is the general form of the guard. A version check would
+    # cover only the versions we know about today, and would have to run the
+    # same binary to ask.
+    # 30 ticks x 0.5s = 15s. Overridable only so the test can exercise the
+    # timeout branch in a second instead of fifteen — same test seam as
+    # IRRLICHT_TEST_APP_PATH above, and like it, guarded by an assertion in
+    # tools/lib/install-uninstall_test.sh that the override still exists.
+    _hook_ticks="${IRRLICHT_HOOK_SWEEP_TICKS:-30}"
+    if ! _hook_log=$(mktemp); then
+        printf '\n'
+        warn "Could not create a temp file for the hook cleanup — skipping it."
+        return 0
+    fi
+    "$_irrlichd" --uninstall-hooks >"$_hook_log" 2>&1 </dev/null &
+    _hook_pid=$!
+    _hook_waited=0
+    while kill -0 "$_hook_pid" 2>/dev/null; do
+        if [ "$_hook_waited" -ge "$_hook_ticks" ]; then
+            kill "$_hook_pid" 2>/dev/null || true
+            printf '\n'
+            warn "irrlichd --uninstall-hooks did not finish in time — stopped it."
+            warn "  This binary may predate the flag (it needs v0.3.4 or newer)."
+            warn "  Check ~/.claude/settings.json and ~/.codex/hooks.json for stale entries."
+            rm -f "$_hook_log"
+            return 0
+        fi
+        sleep 0.5
+        _hook_waited=$((_hook_waited + 1))
+    done
+
     # Fail soft, always: the user asked for removal. `set -e` would abort the
-    # whole uninstall on a non-zero exit, so the call is a condition rather than
-    # a bare statement. Output is captured so a healthy sweep stays quiet inside
-    # the caller's one-line progress step, and is replayed only when there is
-    # something wrong to look at.
-    if _hook_output=$("$_irrlichd" --uninstall-hooks 2>&1); then
+    # whole uninstall on a non-zero exit, so the wait is a condition rather than
+    # a bare statement. The binary's own output is replayed only on failure, so
+    # a healthy sweep stays quiet inside the caller's one-line progress step.
+    if wait "$_hook_pid"; then
+        rm -f "$_hook_log"
         return 0
     fi
     printf '\n'
     warn "Could not remove irrlicht's hook entries from the agent configs:"
-    [ -n "$_hook_output" ] && printf '%s\n' "$_hook_output" >&2
+    [ -s "$_hook_log" ] && cat "$_hook_log" >&2
     warn "  Check ~/.claude/settings.json and ~/.codex/hooks.json for stale entries."
+    rm -f "$_hook_log"
     return 0
 }
 

@@ -13,7 +13,7 @@
 # this machine's real install, and all three are load-bearing:
 #   1. HOME is a mktemp -d, so ~/.claude, ~/.codex, ~/.local/bin/irrlichd,
 #      ~/Library/LaunchAgents/... and ~/.config/systemd/user/... are all fakes.
-#   2. IRRLICHT_APP_PATH redirects the one install location that is NOT under
+#   2. IRRLICHT_TEST_APP_PATH redirects the one install location that is NOT under
 #      $HOME. Without it the script would `rm -rf /Applications/Irrlicht.app`
 #      for real — and on CI, where that path does not exist, the test would pass
 #      while doing it.
@@ -68,6 +68,19 @@ assert_file_present() {
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# SAFETY PRECONDITION, checked before anything runs. Isolation leg 2 is the only
+# one this test cannot enforce by itself: it depends on site/install.sh actually
+# honouring IRRLICHT_TEST_APP_PATH. If that override is ever dropped — a plausible
+# cleanup, since it is a test seam in production code — every case below would
+# `rm -rf` the real /Applications/Irrlicht.app and only THEN report failure. On
+# CI that path does not exist, so the destruction would be invisible there.
+# Refuse to run rather than discover it afterwards.
+if ! grep -q 'IRRLICHT_TEST_APP_PATH' "$INSTALL_SH"; then
+    echo "$NAME: REFUSING TO RUN — $INSTALL_SH no longer honours IRRLICHT_TEST_APP_PATH." >&2
+    echo "  Without it this test deletes the real /Applications/Irrlicht.app." >&2
+    exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # new_env <name> — build an isolated fake machine and echo its root.
 #
@@ -75,7 +88,7 @@ trap 'rm -rf "$WORK"' EXIT
 #   <root>/home                 → HOME
 #   <root>/home/.claude/settings.json   dirty: carries an irrlicht hook entry
 #   <root>/home/.codex/hooks.json       dirty: carries an irrlicht hook entry
-#   <root>/app/Irrlicht.app     → IRRLICHT_APP_PATH (created by the caller if wanted)
+#   <root>/app/Irrlicht.app     → IRRLICHT_TEST_APP_PATH (created by the caller if wanted)
 #   <root>/bin                  → PATH stubs
 #   <root>/marker               → written by the irrlichd stub when it runs
 # ---------------------------------------------------------------------------
@@ -158,7 +171,7 @@ run_uninstall() {
     env -i \
         HOME="$root/home" \
         PATH="$root/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-        IRRLICHT_APP_PATH="$root/app/Irrlicht.app" \
+        IRRLICHT_TEST_APP_PATH="$root/app/Irrlicht.app" \
         "$@" \
         sh "$INSTALL_SH" --uninstall 2>&1
 }
@@ -215,7 +228,12 @@ out="$(run_uninstall "$root")"; rc=$?
 
 assert_eq "$rc" "0" "fail-soft: uninstall exits 0 despite the sweep failing"
 assert_contains "$out" "Irrlicht uninstalled" "fail-soft: uninstall still completes"
-assert_contains "$out" "hook" "fail-soft: the failure is surfaced, not swallowed"
+assert_contains "$out" "Could not remove" "fail-soft: the failure is announced"
+# Assert the stub's OWN diagnostic reaches the user, not just our static warning
+# line. Matching something the warning itself contains would leave the line that
+# replays the binary's output uncovered — deleting it would keep this green.
+assert_contains "$out" "simulated sweep failure" \
+    "fail-soft: the binary's own diagnostic is replayed, not swallowed"
 assert_file_absent "$root/home/.local/bin/irrlichd" "fail-soft: the binary is still removed"
 
 # ===========================================================================
@@ -277,12 +295,77 @@ assert_eq "$total" "2" "callsites: uninstall_previous still has exactly two call
 assert_eq "$sweeping" "1" "callsites: exactly one of them opts into the hook sweep"
 
 # ===========================================================================
-# 8. The installer must stay `sh`-clean — it runs under /bin/sh, not bash.
+# 8. A BINARY THAT NEVER RETURNS must not hang the uninstall.
+#
+#    irrlichd has no argument parser: an unknown flag falls through to starting
+#    a DAEMON (#1417, pinned deliberately by core/cmd/irrlichd/dispatch_test.go).
+#    --uninstall-hooks has existed since v0.3.4 — the earliest tag containing
+#    5f95c1d5 — so a current binary is fine, but uninstalling an older one would
+#    boot a daemon here, bind the port the uninstall just freed, and block
+#    forever on its output. Under `curl | sh` the child inherits the script's
+#    stdin too, so the hang is not even interruptible cleanly.
+#
+#    IRRLICHT_HOOK_SWEEP_TICKS shortens the 15s bound to 1s for this case.
 # ===========================================================================
-if sh -n "$INSTALL_SH" 2>/dev/null; then
-    pass "syntax: site/install.sh parses under /bin/sh"
+if ! grep -q 'IRRLICHT_HOOK_SWEEP_TICKS' "$INSTALL_SH"; then
+    fail "hang-guard: install.sh still honours IRRLICHT_HOOK_SWEEP_TICKS" \
+         "the override this case depends on is gone; the case below proves nothing"
 else
-    fail "syntax: site/install.sh parses under /bin/sh"
+    root="$(new_env hang)"
+    mkdir -p "$root/home/.local/bin"
+    # Never exits on its own — stands in for an old binary that started a daemon.
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s"\nwhile :; do sleep 5; done\n' \
+        "$root/marker" >"$root/home/.local/bin/irrlichd"
+    chmod +x "$root/home/.local/bin/irrlichd"
+
+    started=$(date +%s)
+    out="$(run_uninstall "$root" IRRLICHT_HOOK_SWEEP_TICKS=2)"; rc=$?
+    elapsed=$(( $(date +%s) - started ))
+
+    assert_eq "$rc" "0" "hang-guard: uninstall still exits 0"
+    assert_contains "$out" "did not finish in time" "hang-guard: says the sweep was stopped"
+    assert_contains "$out" "Irrlicht uninstalled" "hang-guard: the uninstall still completes"
+    assert_file_absent "$root/home/.local/bin/irrlichd" "hang-guard: the binary is still removed"
+    if [[ "$elapsed" -lt 30 ]]; then
+        pass "hang-guard: bounded — finished in ${elapsed}s, not forever"
+    else
+        fail "hang-guard: bounded" "took ${elapsed}s"
+    fi
+    # The stub must not survive the run: an orphan here is the stray daemon.
+    if pgrep -f "$root/home/.local/bin/irrlichd" >/dev/null 2>&1; then
+        fail "hang-guard: the stopped process leaves no orphan"
+        pkill -f "$root/home/.local/bin/irrlichd" 2>/dev/null || true
+    else
+        pass "hang-guard: the stopped process leaves no orphan"
+    fi
+fi
+
+# ===========================================================================
+# 9. The installer must stay POSIX-sh clean — it ships to Linux users via
+#    `curl | sh`, where /bin/sh is typically dash.
+#
+#    NOTE ON REACH: on macOS /bin/sh is bash 3.2 in POSIX mode, which PARSES
+#    bashisms happily — and test.yml's shell-lib step runs on macos-latest. So
+#    `sh -n` alone catches hard syntax errors only. Prefer a real POSIX shell
+#    when the machine has one, and say which check actually ran rather than
+#    letting a weak green look like a strong one.
+# ===========================================================================
+posix_sh=""
+for candidate in dash ash; do
+    if command -v "$candidate" >/dev/null 2>&1; then posix_sh="$candidate"; break; fi
+done
+if [[ -n "$posix_sh" ]]; then
+    if "$posix_sh" -n "$INSTALL_SH" 2>/dev/null; then
+        pass "syntax: site/install.sh parses under $posix_sh (real POSIX shell)"
+    else
+        fail "syntax: site/install.sh parses under $posix_sh (real POSIX shell)"
+    fi
+else
+    if sh -n "$INSTALL_SH" 2>/dev/null; then
+        pass "syntax: site/install.sh parses under /bin/sh (no dash here — syntax errors only)"
+    else
+        fail "syntax: site/install.sh parses under /bin/sh"
+    fi
 fi
 
 if [ "$fails" -eq 0 ]; then
