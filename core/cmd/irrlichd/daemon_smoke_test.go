@@ -97,9 +97,19 @@ type smokeDaemon struct {
 // addr file. A kill-backstop is registered via t.Cleanup.
 func bootSmokeDaemon(t *testing.T, bin string, extraEnv ...string) *smokeDaemon {
 	t.Helper()
+	// homeDir isolates ~/.claude hooks + Application Support logs; stateDir is
+	// IRRLICHT_HOME (socket, addr file, recordings, history, permissions.json).
+	return bootSmokeDaemonIn(t, bin, t.TempDir(), t.TempDir(), extraEnv...)
+}
+
+// bootSmokeDaemonIn is bootSmokeDaemon over caller-owned directories, for a
+// test that has to seed state — permissions.json, an agent config — before the
+// daemon reads it at startup.
+func bootSmokeDaemonIn(t *testing.T, bin, homeDir, stateDir string, extraEnv ...string) *smokeDaemon {
+	t.Helper()
 	d := &smokeDaemon{
-		homeDir:  t.TempDir(), // isolates ~/.claude hooks + Application Support logs
-		stateDir: t.TempDir(), // IRRLICHT_HOME: socket, addr file, recordings, history
+		homeDir:  homeDir,
+		stateDir: stateDir,
 		exited:   make(chan struct{}),
 	}
 	d.cmd = exec.Command(bin)

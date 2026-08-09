@@ -14,11 +14,12 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// target is the interface both handlers call into. Satisfied by
+// target is the interface the handlers call into. Satisfied by
 // *services.PermissionService.
 type target interface {
 	Snapshot() services.PermissionsSnapshot
 	Answer(answers []services.PermissionAnswer) error
+	ReloadFromStore() (int, error)
 }
 
 // answerRequest is the POST /api/v1/permissions/answer body.
@@ -70,6 +71,44 @@ func NewAnswerHandler(t target, log outbound.Logger) http.HandlerFunc {
 		}
 		// Return the updated snapshot so the answering surface refreshes
 		// without a second round-trip.
+		writeSnapshot(w, t, log)
+	}
+}
+
+// NewReloadHandler returns the handler for POST /api/v1/permissions/reload —
+// the "consent changed underneath you" nudge from another process (#1425).
+//
+// `irrlichd --uninstall-hooks` runs in a separate process; it writes "denied"
+// into permissions.json, which the running daemon has no other way to notice.
+// Without this, #1372's re-verification loop keeps asking a stale in-memory
+// gate and re-installs the entries the user just removed.
+//
+// It carries no body and names no permission: the caller does not get to say
+// what the daemon should believe, only that it should go and re-read the store
+// it already owns. That is why this cannot be used to grant anything — see
+// PermissionService.ReloadFromStore.
+//
+// Guarded the same way the answer handler is, and for the same reason: adopting
+// a "granted" from the store can run an Apply closure that rewrites
+// ~/.claude/settings.json, so a cross-origin POST from any page the user
+// happens to visit must be rejected. The route is additionally registered
+// behind localhostOnly.
+//
+// Responses:
+//   - 200: reload applied; body is the updated permissions snapshot
+//   - 403: cross-origin browser request
+//   - 500: the store could not be read (the in-memory state is left alone)
+func NewReloadHandler(t target, log outbound.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if httputil.IsCrossOriginBrowserRequest(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if _, err := t.ReloadFromStore(); err != nil {
+			log.LogError("permissions", "", err.Error())
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		writeSnapshot(w, t, log)
 	}
 }

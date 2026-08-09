@@ -519,6 +519,77 @@ func (s *PermissionService) Answer(answers []PermissionAnswer) error {
 	return nil
 }
 
+// ReloadFromStore re-reads the persisted consent store and adopts it as the
+// in-memory truth, running the effect for every permission whose state moved
+// and broadcasting permissions_updated so both wizards re-render. It reports
+// how many permissions changed.
+//
+// This is the daemon's answer to consent being changed by ANOTHER PROCESS
+// (#1425). `irrlichd --uninstall-hooks` is a separate, short-lived process: it
+// removes the entries and writes "denied" into permissions.json, but before
+// this existed the running daemon had read that store exactly once, at startup
+// in NewPermissionService, so its in-memory set still said "granted" —
+// and #1372's re-verification loop, which asks that in-memory gate on a timer,
+// re-installed the entries within one interval. The user ran a command whose
+// entire purpose is "remove these" and they came back.
+//
+// The semantics are deliberately "what a restart would do, without the
+// restart": a daemon starting now would read this same file and believe it, so
+// there is no third state to reason about, and nothing here can be reached by
+// a caller that could not equally have restarted the daemon.
+//
+// It does NOT write. The store is the input, never the output — which is what
+// keeps it from racing Answer's memory-then-disk ordering into a lost update.
+//
+// #570 is not weakened, in three separate ways. Every "granted" it can produce
+// came out of the store, i.e. out of an answer the user actually gave and the
+// daemon actually persisted; a pair absent from the store reads as pending via
+// Set.Get, so an emptied or truncated file revokes rather than opens; and only
+// DECLARED permissions are considered, so an unrecognized key in the file
+// grants nothing. Reloading is not re-consenting.
+//
+// Grant-all mode is a deliberate no-op. Its grants are in-memory only and
+// never persisted (see Start), so adopting the store would revoke every one of
+// them and leave a recording or demo daemon monitoring nothing.
+func (s *PermissionService) ReloadFromStore() (int, error) {
+	if s.mode == config.PermissionModeGrantAll {
+		return 0, nil
+	}
+	stored, err := s.store.Load()
+	if err != nil {
+		s.log.LogError("permissions", "", fmt.Sprintf("failed to reload permission state (keeping the state in memory): %v", err))
+		return 0, err
+	}
+
+	var effects []pendingEffect
+	changed := 0
+	s.mu.Lock()
+	for _, a := range s.agents {
+		for _, p := range a.Permissions {
+			want := stored.Get(a.Identity.Name, p.Key)
+			if s.set.Get(a.Identity.Name, p.Key) == want {
+				continue
+			}
+			s.set.Put(a.Identity.Name, p.Key, want)
+			changed++
+			// A move to pending runs the Remove closure and stops watchers,
+			// same as a denial — runClosureEffect treats every non-granted
+			// target as "remove", which is the fail-safe direction for a
+			// permission that has stopped saying yes.
+			effects = append(effects, pendingEffect{a.Identity.Name, p, want})
+		}
+	}
+	s.mu.Unlock()
+
+	if changed == 0 {
+		return 0, nil
+	}
+	s.runEffects(effects)
+	s.push.Broadcast(outbound.PushMessage{Type: outbound.PushTypePermissionsUpdated})
+	s.log.LogInfo("permissions", "", fmt.Sprintf("reloaded consent from the store: %d permission(s) changed", changed))
+	return changed, nil
+}
+
 // planAnswerLocked records one answer and reports (stateMoved, runEffect).
 //
 // A same-state re-answer is normally a no-op, so the losing surface's

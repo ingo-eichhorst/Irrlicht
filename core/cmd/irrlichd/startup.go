@@ -811,6 +811,14 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 		permissionshandler.NewGetHandler(permService, logger))
 	mux.HandleFunc("POST /api/v1/permissions/answer",
 		permissionshandler.NewAnswerHandler(permService, logger))
+	// Consent-changed nudge (#1425): another local process — today only
+	// `irrlichd --uninstall-hooks` — has written to permissions.json, and the
+	// running daemon otherwise reads that file exactly once, at startup.
+	// localhostOnly for the same reason the activation alias is: adopting a
+	// stored grant can run an Apply closure that rewrites a sensitive user
+	// file, so it must not be reachable from the LAN.
+	mux.HandleFunc("POST /api/v1/permissions/reload",
+		localhostOnly(permissionshandler.NewReloadHandler(permService, logger)))
 	// Task-eta activation (issue #558): legacy alias over the
 	// claude-code/instructions permission (issue #577), kept so the macOS
 	// Settings toggle's wire shape stays stable. localhostOnly: the granted

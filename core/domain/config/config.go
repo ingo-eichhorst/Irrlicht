@@ -28,6 +28,19 @@ const defaultReadySessionTTL = 30 * time.Minute
 // Overridable via IRRLICHT_YIELD_SWEEP_INTERVAL (Go duration string).
 const defaultYieldSweepInterval = 30 * time.Minute
 
+// defaultHookReverifyInterval is how often the hook-entry re-verification loop
+// (#1372) re-reads every granted install to see whether its entries are still
+// present. It mirrors services.defaultReverifyInterval, which stays as the
+// fallback for callers that construct the verifier directly (its unit tests).
+//
+// Overridable via IRRLICHT_HOOK_REVERIFY_INTERVAL (Go duration string) for the
+// same reason IRRLICHT_READY_SESSION_TTL is: a test that has to observe what
+// the loop does on its *next* pass cannot wait five minutes for one. The
+// production cadence is deliberately unhurried — see the rationale on
+// services.defaultReverifyInterval — so this is a shortening knob, not a
+// tuning invitation.
+const defaultHookReverifyInterval = 5 * time.Minute
+
 // Permission-wizard modes (issue #570). Ask is the production default:
 // nothing is read or written until the user grants each permission.
 // GrantAll auto-grants every declared permission at startup and never
@@ -122,6 +135,10 @@ type Config struct {
 	// HookSilentTurns is the hook-liveness watchdog's threshold (issue #1368),
 	// overridable via IRRLICHT_HOOK_SILENT_TURNS. 0 disables the watchdog.
 	HookSilentTurns int
+
+	// HookReverifyInterval is the hook-entry re-verification cadence (#1372),
+	// overridable via IRRLICHT_HOOK_REVERIFY_INTERVAL.
+	HookReverifyInterval time.Duration
 }
 
 // Default returns a Config populated with production defaults, with the
@@ -140,6 +157,12 @@ func Default() Config {
 			yieldInterval = parsed
 		}
 	}
+	reverifyInterval := defaultHookReverifyInterval
+	if raw := os.Getenv("IRRLICHT_HOOK_REVERIFY_INTERVAL"); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			reverifyInterval = parsed
+		}
+	}
 	mode := PermissionModeAsk
 	if os.Getenv("IRRLICHT_PERMISSION_MODE") == PermissionModeGrantAll {
 		mode = PermissionModeGrantAll
@@ -155,7 +178,8 @@ func Default() Config {
 		CacheBloatVersionDeltaTokens: int64(envInt("IRRLICHT_CACHE_BLOAT_VERSION_DELTA", defaultCacheBloatVersionDeltaToken)),
 		CacheBloatMinTurns:           envInt("IRRLICHT_CACHE_BLOAT_MIN_TURNS", defaultCacheBloatMinTurns),
 
-		HookSilentTurns: envInt("IRRLICHT_HOOK_SILENT_TURNS", defaultHookSilentTurns),
+		HookSilentTurns:      envInt("IRRLICHT_HOOK_SILENT_TURNS", defaultHookSilentTurns),
+		HookReverifyInterval: reverifyInterval,
 	}
 }
 
