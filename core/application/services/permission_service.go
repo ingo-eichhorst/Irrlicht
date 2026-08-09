@@ -357,7 +357,7 @@ func (s *PermissionService) HookChannelReady(agentName string) bool {
 // read per pass rather than a lock and a log line.
 func (s *PermissionService) RepairGrantedHookInstall(agentName, key string) (bool, error) {
 	s.mu.Lock()
-	perm, found := s.hookPermissionLocked(agentName, key)
+	perm, found := s.hookPermission(agentName, key)
 	granted := found && s.set.Get(agentName, key) == permission.StateGranted
 	s.mu.Unlock()
 	if !granted || perm.Apply == nil {
@@ -388,24 +388,26 @@ func (s *PermissionService) RepairGrantedHookInstall(agentName, key string) (boo
 	return true, nil
 }
 
-// hookPermissionLocked resolves one agent's hook-install permission by key.
-// Caller holds s.mu.
+// hookPermission resolves one agent's HOOK-INSTALL permission by key.
 //
-// Restricted to modify-kind permissions declaring a HookInstall, so this can
-// never be used to re-run an arbitrary effect by name: the re-verification loop
-// is allowed to repair hook installs and nothing else.
-func (s *PermissionService) hookPermissionLocked(agentName, key string) (agent.Permission, bool) {
-	for _, a := range s.agents {
-		if a.Identity.Name != agentName {
-			continue
-		}
-		for _, p := range a.Permissions {
-			if p.Key == key && p.Hooks != nil && p.Kind == permission.KindModify {
-				return p, true
-			}
-		}
+// A thin filter over declared() rather than a second registry walk: two copies
+// of "find the permission named key on the agent named agentName" would be two
+// places to keep in step, and the filter is the only part that is actually
+// specific to this caller.
+//
+// The filter is the point. Restricted to modify-kind permissions declaring a
+// HookInstall, so RepairGrantedHookInstall can never be used to re-run an
+// arbitrary effect by name: the re-verification loop is allowed to repair hook
+// installs and nothing else.
+//
+// Takes no lock and needs none — s.agents is written once at construction and
+// only read after. Named without the Locked suffix for that reason.
+func (s *PermissionService) hookPermission(agentName, key string) (agent.Permission, bool) {
+	p, ok := s.declared(agentName, key)
+	if !ok || p.Hooks == nil || p.Kind != permission.KindModify {
+		return agent.Permission{}, false
 	}
-	return agent.Permission{}, false
+	return p, true
 }
 
 // Snapshot returns the full consent state for GET /api/v1/permissions.

@@ -132,8 +132,9 @@ type HookEntryHealth struct {
 	// ConfigPath is the file being verified. Without it the finding is not
 	// actionable — the reader cannot go look.
 	ConfigPath string `json:"config_path,omitempty"`
-	// Watched is whether consent was granted at the last pass. A false row is
-	// published, not omitted.
+	// Watched is whether the last pass actually examined this target — i.e.
+	// consent was granted then. False also covers "no pass has run yet", which
+	// LastOutcome distinguishes. A false row is published, not omitted.
 	Watched bool `json:"watched"`
 	// Missing and Stale are the last verdict's detail, empty when intact.
 	Missing []string `json:"missing,omitempty"`
@@ -202,7 +203,6 @@ func (t reverifyTarget) id() string { return t.adapter + "/" + t.permKey }
 
 // reverifyState is one target's episode memory.
 type reverifyState struct {
-	watched            bool
 	missing            []string
 	stale              []string
 	repairs            uint64
@@ -397,7 +397,6 @@ func (v *HookEntryVerifier) checkTarget(t reverifyTarget, now time.Time, granted
 	if granted == nil || !granted(t.adapter, t.permKey) {
 		v.mu.Lock()
 		st := v.state[t.id()]
-		st.watched = false
 		st.reset()
 		st.lastOutcome = ReverifyNoConsent
 		v.mu.Unlock()
@@ -407,7 +406,6 @@ func (v *HookEntryVerifier) checkTarget(t reverifyTarget, now time.Time, granted
 
 	v.mu.Lock()
 	st := v.state[t.id()]
-	st.watched = true
 	deferred := !st.nextEligible.IsZero() && now.Before(st.nextEligible)
 	v.mu.Unlock()
 	if deferred {
@@ -484,7 +482,6 @@ func (v *HookEntryVerifier) repair(t reverifyTarget, status agent.HookEntryStatu
 		// decision.
 		v.mu.Lock()
 		st := v.state[t.id()]
-		st.watched = false
 		st.reset()
 		st.lastOutcome = ReverifyNoConsent
 		v.mu.Unlock()
@@ -632,7 +629,12 @@ func (v *HookEntryVerifier) Snapshot() HookEntryReverifySnapshot {
 			ConfigPath: t.configPath,
 		}
 		if st != nil {
-			row.Watched = st.watched
+			// Derived, never stored. hook_liveness.go's hookChannelState carries
+			// the same rule and the reason: a second field that has to agree with
+			// the first forever eventually does not, and the row it then prints
+			// ("watched": true beside "last_outcome": "skipped_no_consent") is an
+			// assertion no pass ever made.
+			row.Watched = st.lastOutcome != "" && st.lastOutcome != ReverifyNoConsent
 			// An empty lastOutcome means no pass has run yet. Published as its
 			// own word rather than omitted: every other field is then at its
 			// zero value too, and "watched:false, repairs:0, nothing missing"

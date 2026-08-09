@@ -188,6 +188,10 @@ func TestReverify_IntactInstallIsNeverWritten(t *testing.T) {
 	if got := outcome(t, v, services.ReverifyIntact); got != 5 {
 		t.Errorf("intact counter = %d, want 5", got)
 	}
+	if row := v.Snapshot().Targets[0]; !row.Watched {
+		t.Errorf("a granted, healthy target reads watched:false: %+v — the revoke test's "+
+			"watched assertion would pass vacuously against a row that is never true", row)
+	}
 }
 
 // --- scope item 4: a revoked permission stops the loop -------------------
@@ -239,6 +243,21 @@ func TestReverify_RevokedPermissionStopsTheLoop(t *testing.T) {
 	if g.askCount() < 11 {
 		t.Errorf("consent was consulted only %d times across 11 passes; it must be "+
 			"re-read every pass, never cached", g.askCount())
+	}
+	// The published row must follow the consent, not lag it. Watched is derived
+	// from the last outcome rather than stored, so this also pins that
+	// derivation: a row reading watched:true beside last_outcome
+	// "skipped_no_consent" would be an assertion no pass ever made.
+	row := v.Snapshot().Targets[0]
+	if row.Watched {
+		t.Errorf("row still reads watched:true after the permission was revoked: %+v", row)
+	}
+	if row.LastOutcome != string(services.ReverifyNoConsent) {
+		t.Errorf("last_outcome = %q, want %q", row.LastOutcome, services.ReverifyNoConsent)
+	}
+	if row.Repairs != 1 {
+		t.Errorf("repairs = %d, want the 1 from before the revoke — a revoke must not erase "+
+			"the lifetime record of what was already done", row.Repairs)
 	}
 }
 
