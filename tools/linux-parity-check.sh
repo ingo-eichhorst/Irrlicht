@@ -25,7 +25,7 @@
 #      nothing and events.jsonl comes out empty:
 #        tools/build-dev.sh && IRRLICHT_HOME=$(mktemp -d) \
 #          IRRLICHT_PERMISSION_MODE=grant-all \
-#          IRRLICHT_DAEMON_PORT=7838 core/bin/irrlichd --record /tmp/rec &
+#          IRRLICHT_DAEMON_PORT=7838 core/bin/irrlichd --record &
 #   2. Drive the cell's recipe (tmux send-keys; never human-in-loop) so the
 #      live Linux sensor emits the event stream into /tmp/rec/.../events.jsonl.
 #   3. Run this script: macOS golden vs the fresh Linux events.jsonl.

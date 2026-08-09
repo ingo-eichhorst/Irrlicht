@@ -40,10 +40,7 @@ import (
 func TestDaemonStartupSmoke(t *testing.T) {
 	// Build the daemon binary once for both boots. Done lazily here (not in
 	// TestMain) so unrelated `go test -run …` invocations don't pay the cost.
-	bin := filepath.Join(t.TempDir(), "irrlichd")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build irrlichd: %v\n%s", err, out)
-	}
+	bin := buildIrrlichd(t)
 
 	t.Run("demo", func(t *testing.T) {
 		d := bootSmokeDaemon(t, bin, "IRRLICHT_DEMO_MODE=1")
