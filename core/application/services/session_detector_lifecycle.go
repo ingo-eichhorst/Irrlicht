@@ -100,7 +100,7 @@ func (d *SessionDetector) onRelocated(ev agent.Event, newPath string) {
 		// cumulative metrics are rebuilt intact.
 		d.enricher.PruneMetrics(state.TranscriptPath)
 		state.TranscriptPath = newPath
-		state.UpdatedAt = time.Now().Unix()
+		state.UpdatedAt = d.nowFn().Unix()
 		if err := d.repo.Save(state); err != nil {
 			d.log.LogError(logComponentSessionDetector, ev.SessionID,
 				fmt.Sprintf("failed to save relocated transcript path: %v", err))
@@ -187,7 +187,7 @@ func (d *SessionDetector) onRemovedLocked(state *session.SessionState, ev agent.
 
 	prevState := state.State
 	state.State = session.StateReady
-	state.UpdatedAt = time.Now().Unix()
+	state.UpdatedAt = d.nowFn().Unix()
 	state.Confidence = "high"
 	state.LastEvent = "transcript_removed"
 
@@ -255,7 +255,7 @@ func (d *SessionDetector) ReconcilePreSessionBackchannel(oldID, newID string) {
 		prevState := newState.State
 		newState.State = session.StateWaiting
 		newState.WaitingStartTime = old.WaitingStartTime
-		newState.UpdatedAt = time.Now().Unix()
+		newState.UpdatedAt = d.nowFn().Unix()
 		if err := d.repo.Save(newState); err != nil {
 			d.log.LogError(logComponentSessionDetector, newID,
 				fmt.Sprintf("failed to carry forward waiting state from presession %s: %v", oldID, err))
@@ -287,7 +287,7 @@ func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEv
 	// by the replay harness's applyHookEvent. It used to be a switch here and a
 	// second switch there, and they had drifted (issue #1320).
 	if effect, ok := session.HookSignal(hookEventName); ok {
-		d.signals.ApplyHook(sessionID, effect, time.Now())
+		d.signals.ApplyHook(sessionID, effect, d.nowFn())
 	}
 
 	// processActivity overlays PermissionPending onto the metrics before
@@ -340,7 +340,7 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 	d.signals.Hold(sessionID, session.SignalTurnDone, session.SignalPayload{
 		LastAssistantText: lastAssistantText,
 		WaitingCue:        waitingCue,
-	}, time.Now())
+	}, d.nowFn())
 
 	// classifyAndTransition overlays HookTurnDone onto the metrics before
 	// calling ClassifyState. The Stop hook fires at true turn end (after the
@@ -368,7 +368,7 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 //
 // Safe to call from any goroutine (e.g. the HTTP handler).
 func (d *SessionDetector) HandleIdlePromptHook(sessionID, transcriptPath string) {
-	d.signals.Hold(sessionID, session.SignalIdlePrompt, session.SignalPayload{}, time.Now())
+	d.signals.Hold(sessionID, session.SignalIdlePrompt, session.SignalPayload{}, d.nowFn())
 
 	d.dispatchHookActivity(sessionID, transcriptPath, session.HookNotification)
 }
@@ -391,7 +391,7 @@ func (d *SessionDetector) HandleCompactHook(sessionID, transcriptPath, trigger s
 		return
 	}
 
-	d.signals.Hold(sessionID, session.SignalCompactInProgress, session.SignalPayload{}, time.Now())
+	d.signals.Hold(sessionID, session.SignalCompactInProgress, session.SignalPayload{}, d.nowFn())
 
 	// Flip the session to working immediately — there is no transcript flush
 	// coming during the compaction window to trigger a natural re-evaluation.
@@ -499,7 +499,7 @@ func (d *SessionDetector) seedBackfillMetadata(states []*session.SessionState) {
 		}
 	}
 	for _, state := range d.enricher.BackfillMetadata(allowed) {
-		state.UpdatedAt = time.Now().Unix()
+		state.UpdatedAt = d.nowFn().Unix()
 		if err := d.repo.Save(state); err != nil {
 			d.log.LogError(logComponentSessionDetectorSeed, state.SessionID,
 				fmt.Sprintf("failed to backfill metadata: %v", err))

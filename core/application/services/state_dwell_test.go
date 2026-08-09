@@ -321,6 +321,94 @@ func TestClassify_ADwellOutstandingKeepsTheTickerComing(t *testing.T) {
 	})
 }
 
+// TestClassify_ASynthesizedWaitingIsNotLeftStranded pins the second bypass in
+// admitTransition, which a review found was load-bearing, reachable, and held
+// up by nothing but a comment: deleting the `state.State != stateBeforeSynthesis`
+// disjunct left the whole package green.
+//
+// The collapsed-waiting synthesizer (#150) reconstructs a waiting episode the
+// fswatcher coalesced away, by emitting a synthetic working→waiting and then
+// re-classifying from that new base. For a just-closed user-blocking tool the
+// re-classification is working — which is the one edge the dwell debounces. So
+// without the bypass the pass emits a waiting it has itself already concluded
+// is over, and then withholds the exit: a fabricated "needs a human" badge, on
+// a session demonstrably not blocked, for a dwell plus a ticker interval.
+func TestClassify_ASynthesizedWaitingIsNotLeftStranded(t *testing.T) {
+	clock := holdT0
+	d, rec := dwellDetector(&clock)
+
+	m := workingMetrics()
+	m.SawUserBlockingToolClosedThisPass = true
+
+	state := &session.SessionState{
+		SessionID:       "s",
+		Adapter:         "claudecode",
+		State:           session.StateWorking,
+		ParentSessionID: "p",
+		Metrics:         m,
+	}
+
+	d.classifyAndTransition(state, agent.Event{SessionID: "s"})
+
+	got := transitions(rec)
+	if len(got) != 2 {
+		t.Fatalf("expected the synthesized pair (working→waiting, waiting→working), got %d: %+v",
+			len(got), got)
+	}
+	if got[0].PrevState != session.StateWorking || got[0].NewState != session.StateWaiting {
+		t.Errorf("first transition %q→%q, want working→waiting", got[0].PrevState, got[0].NewState)
+	}
+	if got[1].PrevState != session.StateWaiting || got[1].NewState != session.StateWorking {
+		t.Errorf("second transition %q→%q, want waiting→working — the dwell must not "+
+			"strand the session in a waiting this same pass already ended",
+			got[1].PrevState, got[1].NewState)
+	}
+	if state.State != session.StateWorking {
+		t.Errorf("session state = %q, want working", state.State)
+	}
+}
+
+// TestSessionDetector_ReapingASessionEvictsItsDwellAndHolds covers the
+// teardown path a review found uncovered.
+//
+// onRemoved drops both maps, but onRemoved fires on the TRANSCRIPT FILE
+// disappearing — and a process dying does not delete its transcript. Every
+// PIDManager-driven deletion (dead process, duplicate-PID dedup, ready-TTL
+// age-out, parent cleanup, pre-session supersession) tears down through
+// removeFromProjectSessions instead, whose own doc comment already says
+// "Every PIDManager session removal must route through here so no path leaks
+// history again" — and which dropped neither the signal holds nor the dwell.
+//
+// Nothing revisits a deleted session, so an entry left behind is permanent for
+// the life of the process, and a recycled session ID inherits a transition
+// proposed for its predecessor.
+func TestSessionDetector_ReapingASessionEvictsItsDwellAndHolds(t *testing.T) {
+	d := &SessionDetector{
+		dwell:           session.NewStateDwell(),
+		signals:         session.NewSignalHolds(),
+		projectSessions: map[string]string{"s": "proj"},
+		deletedSessions: map[string]int64{},
+		bgLive:          map[string]bool{},
+		bgProbing:       map[string]bool{},
+	}
+
+	d.dwell.Admit("s", session.StateWaiting, session.StateWorking, holdT0)
+	d.signals.Hold("s", session.SignalPermissionPrompt, session.SignalPayload{}, holdT0)
+	if !d.dwell.Pending("s") || !d.signals.HasAny("s") {
+		t.Fatal("precondition: both a dwell and a hold must be outstanding")
+	}
+
+	// The reap path — not onRemoved.
+	d.removeFromProjectSessions("s")
+
+	if d.dwell.Pending("s") {
+		t.Error("a reaped session must not leave a pending transition behind")
+	}
+	if d.signals.HasAny("s") {
+		t.Error("a reaped session must not leave a signal hold behind")
+	}
+}
+
 // TestSessionDetector_WiresAStateDwell exists because a nil *StateDwell is
 // deliberately usable and silently disables hysteresis — which is right for
 // the test suite's many struct literals and catastrophic in production.

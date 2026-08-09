@@ -384,9 +384,22 @@ func (d *SessionDetector) nowFn() time.Time {
 }
 
 // SetClockForTest replaces the detector's clock. Exported for tests outside
-// this package that need to advance the #1366 dwell without sleeping.
+// this package that need to drive the #1360 ceilings and the #1366 dwell
+// without sleeping.
+//
+// MUST be called before Run. The write is unsynchronised, while nowFn is read
+// from the event-loop goroutine — setting it on a started detector is a data
+// race, not a supported reconfiguration.
 func (d *SessionDetector) SetClockForTest(now func() time.Time) {
 	d.now = now
+}
+
+// StartDwellForTest records a decided-but-unpublished state change (#1366)
+// with an explicit start time. Exported only so tests outside this package can
+// set up a dwell the ticker then has to notice; production starts one solely
+// from inside the classify pass, via admitTransition.
+func (d *SessionDetector) StartDwellForTest(sessionID, current, candidate string, at time.Time) {
+	d.dwell.Admit(sessionID, current, candidate, at)
 }
 
 // HoldSignalForTest places an out-of-band signal hold with an explicit
@@ -715,7 +728,7 @@ func (d *SessionDetector) handleTerminalUISignal(sig terminalUISignal) {
 			Adapter: state.Adapter, UIKind: string(sig.ui), Reason: uiReason,
 		})
 
-		now := time.Now().Unix()
+		now := d.nowFn().Unix()
 		d.record(lifecycle.Event{
 			Kind: lifecycle.KindStateTransition, SessionID: sig.sessionID,
 			PrevState: state.State, NewState: newState, Reason: reason,

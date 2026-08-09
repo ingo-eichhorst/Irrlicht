@@ -26,6 +26,22 @@ func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
 	if d.historyTracker != nil {
 		d.historyTracker.Remove(sessionID)
 	}
+	// Drop the out-of-band signal holds and any outstanding #1366 dwell.
+	//
+	// onRemoved does this too, but onRemoved fires on the TRANSCRIPT FILE
+	// disappearing — and a process dying does not delete its transcript. Every
+	// PIDManager-driven deletion (dead process, duplicate-PID dedup, ready-TTL
+	// age-out, parent cleanup, pre-session supersession) reaches teardown
+	// through here instead, and reached neither map: nothing else ever revisits
+	// a deleted session, so an entry left behind is permanent for the life of
+	// the process and a recycled session ID inherits it. Both calls are
+	// idempotent, which is why onRemoved keeps its own.
+	// (SignalHolds, unlike StateDwell, is not nil-safe; struct-literal test
+	// detectors can reach this path without one.)
+	if d.signals != nil {
+		d.signals.DropSession(sessionID)
+	}
+	d.dwell.DropSession(sessionID)
 }
 
 // broadcast sends a push notification if a broadcaster is configured. For

@@ -60,7 +60,7 @@ func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 	existing, _ := d.repo.Load(ev.SessionID)
 	isNew := existing == nil
 
-	now := time.Now().Unix()
+	now := d.nowFn().Unix()
 
 	if isNew {
 		if !d.admitNewSession(id, &ev) {
@@ -647,7 +647,7 @@ func (d *SessionDetector) finalizeActivityPass(state *session.SessionState, ev a
 	// transition still bumps UpdatedAt via the write inside the classify block
 	// above, so #445's process-exit settle is unaffected.
 	if transcriptGrew {
-		state.UpdatedAt = time.Now().Unix()
+		state.UpdatedAt = d.nowFn().Unix()
 		state.EventCount++
 		state.LastEvent = "transcript_activity"
 	}
@@ -891,13 +891,18 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 //     refreshStaleSessions, because #1360 exists precisely to guarantee a
 //     pinned session eventually unpins and a grace timer must not be able to
 //     take that back. TestClassify_CeilingExpiryIsNotSwallowedByTheDwell.
-//   - A SYNTHESIZER RE-BASED the current state this pass. The collapsed-waiting
-//     and collapsed-turn-boundary synthesizers author a *pair* of transitions
-//     to reconstruct edges the daemon observed collapsed into one pass; the
-//     second half is the classifier's verdict about a state the synthesizer
-//     has already declared over. Holding it back would strand the session in a
-//     synthetic waiting the pass itself knows has ended — inventing a stall
-//     rather than suppressing a flap.
+//   - A SYNTHESIZER RE-BASED the current state this pass. In practice that is
+//     synthesizeCollapsedWaitingIfNeeded and only it: the collapsed-turn-
+//     boundary synthesizer fires from working and re-bases back to working, so
+//     it can never make this condition true. The collapsed-waiting synthesizer
+//     authors a *pair* of transitions to reconstruct an edge the daemon
+//     observed collapsed into one pass — a synthetic working→waiting, then the
+//     classifier's verdict from that new base, which for a just-closed
+//     user-blocking tool is ordinarily working. That second half is the
+//     debounced edge, and holding it back would strand the session in a
+//     synthetic waiting the same pass already knows has ended: inventing a
+//     stall rather than suppressing a flap.
+//     TestClassify_ASynthesizedWaitingIsNotLeftStranded.
 func (d *SessionDetector) admitTransition(
 	state *session.SessionState,
 	newState string,
@@ -1447,7 +1452,16 @@ func (d *SessionDetector) armStalledEditTool(state *session.SessionState, now ti
 // See refreshStaleSessions' non-working branch for why an idle session is ever
 // put through this.
 func (d *SessionDetector) reclassifyFromTranscript(state *session.SessionState, now time.Time) {
-	if now.Sub(time.Unix(state.UpdatedAt, 0)) < staleWorkingRefreshInterval {
+	// Direction-safe on purpose. UpdatedAt is written by this detector through
+	// the same nowFn clock, so elapsed is normally non-negative — but a
+	// session persisted by an earlier daemon run carries a wall-clock stamp
+	// this process's clock need not be ahead of, and under a test clock the
+	// gap can be hours of NEGATIVE elapsed time. Comparing that against the
+	// interval short-circuits and the re-read silently does nothing, which is
+	// the worst possible failure for the one path that ends a #1366 dwell or
+	// fires a #1360 ceiling. When the two stamps cannot be reconciled the
+	// guard degrades toward doing MORE work, never less.
+	if elapsed := now.Sub(time.Unix(state.UpdatedAt, 0)); elapsed >= 0 && elapsed < staleWorkingRefreshInterval {
 		return
 	}
 	if state.TranscriptPath == "" {
