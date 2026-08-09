@@ -134,6 +134,10 @@ const (
 	// stall was stdin or the receiver.
 	ReasonDeadlineExceeded Reason = "deadline_exceeded"
 
+	// ReasonPanicked is a panic recovered inside Post. It should never be
+	// seen; it is counted so that if it ever is, it is not silent.
+	ReasonPanicked Reason = "panicked"
+
 	// ReasonDaemonRejected is a non-2xx response. The daemon is up and heard
 	// us, so this is a bug on one side or the other rather than an outage —
 	// which is why it is counted apart from ReasonDaemonUnreachable.
@@ -145,7 +149,7 @@ const (
 var reasons = [...]Reason{
 	ReasonMissingAdapter, ReasonInvalidAdapter, ReasonUnreadableStdin,
 	ReasonEmptyPayload, ReasonPayloadTooLarge, ReasonDaemonUnreachable,
-	ReasonDeadlineExceeded, ReasonDaemonRejected,
+	ReasonDeadlineExceeded, ReasonDaemonRejected, ReasonPanicked,
 }
 
 // counts holds one counter per reason, indexed by the reasons order — the same
@@ -173,13 +177,37 @@ func EndpointPath(adapter string) string { return endpointPrefix + adapter }
 
 // IsInvocation reports whether args (os.Args[1:]) selects the beacon.
 //
-// It keys on the FIRST token only. irrlichd's own flag dispatch is a permissive
-// whole-command-line scan (hasFlag), and inheriting that here would make any
-// daemon invocation that happened to contain the word "hook-post" deliver a hook
-// instead of starting — the beacon has to be more precise than the chain it is
-// spliced into, not equally loose.
+// Two accepted forms, both anchored at a fixed position: the bare verb, and the
+// verb behind LegacyGuardToken — which is the form Command actually installs,
+// because irrlichd releases up to v0.3.2 only ever looked at argv[1] and a
+// trailing guard would miss them (see LegacyGuardToken).
+//
+// Position-anchored rather than scanned. irrlichd's own flag dispatch is a
+// permissive whole-command-line scan (hasFlag), and inheriting that here would
+// make any daemon invocation that happened to contain the word "hook-post"
+// deliver a hook instead of starting — the beacon has to be more precise than
+// the chain it is spliced into, not equally loose.
 func IsInvocation(args []string) bool {
-	return len(args) > 0 && args[0] == Subcommand
+	switch {
+	case len(args) > 0 && args[0] == Subcommand:
+		return true
+	case len(args) > 1 && args[0] == LegacyGuardToken && args[1] == Subcommand:
+		return true
+	}
+	return false
+}
+
+// InvocationArgs returns the arguments after the verb, for whichever accepted
+// form was used. Pairing it with IsInvocation keeps the two spellings of "where
+// does the verb sit" in one place instead of at the call site in main().
+func InvocationArgs(args []string) []string {
+	if len(args) > 1 && args[0] == LegacyGuardToken && args[1] == Subcommand {
+		return args[2:]
+	}
+	if len(args) > 0 && args[0] == Subcommand {
+		return args[1:]
+	}
+	return nil
 }
 
 // Options is one beacon invocation.
@@ -211,7 +239,19 @@ type Options struct {
 // so deliver can return a plain Reason and no code path anywhere else in the
 // package has to remember the rule. That is the shape hookjson.RejectPath uses
 // for the receiver side of the same problem.
-func Post(opts Options) int {
+func Post(opts Options) (exitCode int) {
+	// A panic would exit 2 and read as "deny" to a fail-closed pre-tool hook,
+	// which is the one way "returns 0 by construction" could still fail in
+	// production. Recovering is not defensive clutter here: it is the contract.
+	// The panic is still counted and reported, so it cannot hide.
+	defer func() {
+		if r := recover(); r != nil {
+			count(ReasonPanicked)
+			report(opts.Stderr, ReasonPanicked, fmt.Sprint(r))
+			exitCode = 0
+		}
+	}()
+
 	reason, detail := deliver(opts)
 	if reason != ReasonNone {
 		count(reason)
@@ -223,11 +263,6 @@ func Post(opts Options) int {
 // deliver performs the delivery and returns why it did not happen, plus a short
 // human detail for the stderr line. It never decides an exit code.
 func deliver(opts Options) (Reason, string) {
-	adapter, reason := adapterFrom(opts.Args)
-	if reason != ReasonNone {
-		return reason, strings.Join(opts.Args, " ")
-	}
-
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = DefaultTimeout
@@ -239,11 +274,27 @@ func deliver(opts Options) (Reason, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	adapter, reason := adapterFrom(opts.Args)
+	if reason != ReasonNone {
+		// Drain before giving up. Exiting while the CLI is still writing the
+		// payload hands it EPIPE on the hook's stdin, and a fail-closed
+		// pre-tool hook may read a child-stdin write error as a hook failure —
+		// which would defeat the exit code we were careful about. ASSUMED: not
+		// verified against a live gemini-cli or Copilot. The drain runs under
+		// the same deadline, so it cannot itself become the stall.
+		readPayload(ctx, opts.Stdin)
+		return reason, strings.Join(opts.Args, " ")
+	}
+
 	body, reason, detail := readPayload(ctx, opts.Stdin)
 	if reason != ReasonNone {
 		return reason, detail
 	}
 
+	// Address resolution is deliberately outside ctx: daemonaddr.ClientURL is
+	// an os.Lstat plus a 64-byte bounded read of a local file, with no network
+	// step, so there is nothing here for a deadline to rescue that a hung
+	// filesystem would not also hang the deadline's own goroutine on.
 	return send(ctx, daemonaddr.ClientURL(EndpointPath(adapter)), body)
 }
 
@@ -287,6 +338,14 @@ func readPayload(ctx context.Context, stdin io.Reader) ([]byte, Reason, string) 
 	// Buffered so the goroutine can always finish even after ctx has won.
 	done := make(chan result, 1)
 	go func() {
+		// This goroutine is outside Post's recover: a panic here would take
+		// the process down with exit 2 no matter what Post promises, so it
+		// carries its own and reports the panic as an unreadable stdin.
+		defer func() {
+			if r := recover(); r != nil {
+				done <- result{err: fmt.Errorf("panic while reading stdin: %v", r)}
+			}
+		}()
 		// One byte over the cap, so an over-cap body is DETECTED here rather
 		// than silently truncated into a body the daemon would have to reject.
 		body, err := io.ReadAll(io.LimitReader(stdin, maxPayloadBytes+1))

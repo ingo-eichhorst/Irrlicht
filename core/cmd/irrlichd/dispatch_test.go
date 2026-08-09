@@ -7,12 +7,14 @@ import "testing"
 //
 // Two rows carry the weight, and both fail silently rather than loudly:
 //
-//   - "the beacon wins over its own guard token". Every installed beacon command
-//     line ends in --version, so that an irrlichd predating this subcommand
-//     no-ops instead of starting a daemon (hookbeacon.LegacyGuardToken). If the
-//     version check were ever moved back in front, every installed beacon would
-//     become a version banner: exit 0, nothing delivered, no error anywhere, and
-//     session state would simply stop arriving.
+//   - "the guarded form we install". Every installed beacon command line LEADS
+//     with --version, so that an irrlichd predating this subcommand no-ops
+//     instead of starting a daemon — and leads rather than trails because
+//     releases up to v0.3.2 only ever matched os.Args[1]
+//     (hookbeacon.LegacyGuardToken records the git evidence). If the version
+//     check were ever moved back in front of the verb, every installed beacon
+//     would become a version banner: exit 0, nothing delivered, no error
+//     anywhere, and session state would simply stop arriving.
 //   - "an unknown flag still starts the daemon". That is the behaviour every
 //     irrlichd has had, and the #1373 change deliberately narrows the new
 //     rejection to POSITIONAL tokens so it cannot break an existing invocation.
@@ -33,9 +35,11 @@ func TestSelectActionOrder(t *testing.T) {
 		"--uninstall-task-eta":                      {[]string{"--uninstall-task-eta"}, actionUninstallTaskEta},
 		"--diagnose":                                {[]string{"--diagnose"}, actionDiagnose},
 		"the beacon verb":                           {[]string{"hook-post", "gemini-cli"}, actionBeacon},
-		"the beacon wins over its own guard token":  {[]string{"hook-post", "gemini-cli", "--version"}, actionBeacon},
+		"the guarded form we install":               {[]string{"--version", "hook-post", "gemini-cli"}, actionBeacon},
+		"the guarded form beats the version branch": {[]string{"--version", "hook-post", "gemini-cli", ">/dev/null"}, actionBeacon},
+		"a trailing guard token is still the verb":  {[]string{"hook-post", "gemini-cli", "--version"}, actionBeacon},
 		"the beacon verb with no adapter":           {[]string{"hook-post"}, actionBeacon},
-		"the beacon verb with a shell redirect":     {[]string{"hook-post", "gemini-cli", "--version", ">/dev/null"}, actionBeacon},
+		"the beacon verb with a shell redirect":     {[]string{"hook-post", "gemini-cli", ">/dev/null"}, actionBeacon},
 		"a positional that is not a subcommand":     {[]string{"start"}, actionUnknownSubcommand},
 		"the beacon verb in a non-leading position": {[]string{"--record", "hook-post"}, actionUnknownSubcommand},
 	}

@@ -17,62 +17,98 @@
 package hookbeacon
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// LegacyGuardToken is appended to every installed beacon command line, and it is
-// the reason this file exists rather than a one-line fmt.Sprintf.
+// LegacyGuardToken leads every installed beacon command line, and it is the
+// reason this file exists rather than a one-line fmt.Sprintf.
 //
-// irrlichd does not parse its arguments. main() is a chain of exact-match
-// hasFlag scans over os.Args that falls through to runDaemon() on anything it
-// does not recognize, so an irrlichd predating this subcommand, handed
-// `hook-post gemini-cli`, does not error — it STARTS A DAEMON. On every tool
-// call. And that is not merely wasteful: the startup path calls os.Remove on the
-// unix socket before listening, so a rogue start actively breaks the live
-// daemon's socket before failing to bind the TCP port.
+// irrlichd does not parse its arguments, and never has. An irrlichd predating
+// this subcommand, handed `hook-post gemini-cli`, does not error — it STARTS A
+// DAEMON. On every tool call. And that is not merely wasteful: the startup path
+// calls os.Remove on the unix socket before listening (setupUnixSocket), so a
+// rogue start actively breaks the live daemon's socket before failing to bind
+// the TCP port.
 //
 // That hazard cannot be fixed in the old binary, so it is fixed in the command
-// line the new one installs. --version is the guard because it is the FIRST
-// branch of that chain and has been present since the commit that first named
-// the binary irrlichd (04fc6265, the irrlichtd rename) — so every irrlichd that
-// has ever existed handles it by printing two lines and exiting 0. An old binary
-// invoked as a beacon therefore no-ops instead of starting a daemon.
+// line the new one installs: --version is a token every irrlichd exits 0 on
+// without side effects, and it is placed FIRST because irrlichd has had two
+// different dispatch shapes and only the leading position satisfies both.
+// Verified with `git show <tag>:core/cmd/irrlichd/main.go`:
 //
-// It is inert on a current binary because irrlichd dispatches the subcommand on
-// os.Args[1] BEFORE any flag check (see selectAction in core/cmd/irrlichd), and
-// because adapterFrom reads past any "-" token. Both halves are locked by tests;
-// reordering the dispatch so --version wins would silently turn every installed
-// beacon into a version banner.
+//   - v0.2.0 through v0.3.2 dispatch POSITIONALLY:
+//     `if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v")`.
+//     These match only in argv[1]. A trailing guard token would miss them
+//     entirely and they would start a daemon — so "every irrlichd handles
+//     --version anywhere in argv" is false, and an earlier draft of this file
+//     said exactly that.
+//   - Later versions scan the whole command line (hasFlag), and match a guard
+//     in any position.
+//
+// Leading satisfies both, so the guard covers every irrlichd ever released.
+//
+// It is inert on a current binary because IsInvocation accepts the guarded form
+// explicitly and irrlichd dispatches the subcommand BEFORE any flag check (see
+// selectAction in core/cmd/irrlichd), and because adapterFrom reads past any
+// "-" token. Both halves are locked by tests; reordering the dispatch so
+// --version wins would silently turn every installed beacon into a version
+// banner.
 const LegacyGuardToken = "--version"
 
-// stdoutRedirect keeps the guard token's own output off the hook's stdout, which
-// gemini-cli and Claude Code both read as a decision channel. It only takes
-// effect when the entry is run through a shell — which is how `type: "command"`
-// hooks are run today (Codex's installed entry is `curl ... || true`, which is
-// shell syntax). If some adapter ever execs the command directly the redirect
-// becomes an inert extra argument that adapterFrom skips over, and the residual
-// cost is two lines of stdout from an out-of-date binary. That is the intended
-// failure ordering: the redirect is defence in depth for the guard, not the
-// guard.
+// failOpenSuffix keeps the SHELL's exit code at 0 when the command itself never
+// runs, which is the one failure the beacon newly introduces and the one its
+// own exit-0 contract cannot reach: an absolute path that has stopped existing
+// exits 127, and a path that lost its execute bit exits 126, both from the
+// shell, before any Go code runs. Measured:
+//
+//	$ sh -c "'/gone/irrlichd' hook-post x --version >/dev/null"; echo $?   -> 127
+//	$ sh -c "'/gone/irrlichd' hook-post x --version >/dev/null || true"    -> 0
+//
+// A fail-closed pre-tool hook turns that 127 into a denied tool call, which is
+// precisely what this package exists to prevent — so the guarantee has to hold
+// even when irrlicht has been uninstalled and no daemon is left to reconcile the
+// stale entry. Codex's installed curl line carries the same `|| true` for the
+// same reason (codex/hookinstaller.go).
+const failOpenSuffix = "|| true"
+
 const stdoutRedirect = ">/dev/null"
 
 // Command renders the shell command an adapter installs for one hook event.
 //
+// The token order is load-bearing and is documented on LegacyGuardToken and
+// failOpenSuffix: guard first so every irrlichd release exits 0 rather than
+// starting a daemon, `|| true` last so the shell exits 0 even when the binary
+// is gone.
+//
 // binaryPath must be absolute — the daemon runs under launchd with a minimal
 // PATH (/usr/bin:/bin:/usr/sbin:/sbin) and the agent CLIs inherit no better, so
-// a bare "irrlichd" is the silent no-op #1161 removed, wearing a new hat. Callers
-// get it from BinaryPath.
+// a bare "irrlichd" is the silent no-op #1161 removed, wearing a new hat.
+// Callers get it from BinaryPath.
 //
 // The rendered line carries no port and no host. That is the beacon's structural
 // payoff over a curl entry: there is nothing address-shaped in the user's config
 // that can go stale, so the entire #1178 class stops being a thing that has to be
 // re-fixed per adapter rather than being fixed once more.
-func Command(binaryPath, adapter string) string {
+//
+// It returns an error rather than panicking on a bad argument because this text
+// is written into a user's config file and executed by a shell: the read side
+// (adapterFrom) already refuses an adapter that is not a safe path segment, and
+// a write side that did not would be the asymmetry that stops holding the day a
+// segment becomes config-derived rather than a compile-time literal.
+func Command(binaryPath, adapter string) (string, error) {
+	if !filepath.IsAbs(binaryPath) {
+		return "", fmt.Errorf("hookbeacon: binary path %q is not absolute; a relative path is the un-PATHed no-op #1161 removed", binaryPath)
+	}
+	if !adapterSegment.MatchString(adapter) {
+		return "", fmt.Errorf("hookbeacon: %q is not a valid adapter segment", adapter)
+	}
 	return strings.Join([]string{
-		shellQuote(binaryPath), Subcommand, adapter, LegacyGuardToken, stdoutRedirect,
-	}, " ")
+		shellQuote(binaryPath), LegacyGuardToken, Subcommand, adapter,
+		stdoutRedirect, failOpenSuffix,
+	}, " "), nil
 }
 
 // Sentinel is the substring hookjson uses to recognize an installed entry as
@@ -92,8 +128,16 @@ func Command(binaryPath, adapter string) string {
 // `irrlichd --uninstall-hooks` stops finding them. No adapter is in that position
 // today — claudecode and codex are the only installers and neither is in scope
 // for #1373.
+//
+// The trailing space is not cosmetic. hookjson matches a sentinel with
+// strings.Contains, so an unterminated "hook-post gemini" would also match an
+// installed "hook-post gemini-cli" entry: one adapter's EnsureInstalled would
+// claim the other's entry and rewrite it, and its Uninstall would delete it. No
+// current segment is a prefix of another, so this is latent rather than live —
+// which is exactly the kind of thing that stops being latent when a segment is
+// added.
 func Sentinel(adapter string) string {
-	return Subcommand + " " + adapter
+	return Subcommand + " " + adapter + " "
 }
 
 // BinaryPath returns the absolute path of the running irrlichd, for embedding in
@@ -166,23 +210,34 @@ func Inspect(command, adapter string) Drift {
 	if err != nil {
 		return DriftUnresolvable
 	}
-	if command != Command(live, adapter) {
-		return driftOfOtherEntry(command, adapter, live)
+	return inspectAgainst(command, adapter, live)
+}
+
+// inspectAgainst is Inspect with the running binary's path injected, so the
+// cases that depend on OUR binary being absent are testable without arranging
+// for os.Executable to fail.
+func inspectAgainst(command, adapter, live string) Drift {
+	want, err := Command(live, adapter)
+	if err != nil {
+		return DriftUnresolvable
 	}
-	if !isExecutableFile(live) {
-		return DriftBinaryMissing
+	if command == want {
+		if !isExecutableFile(live) {
+			return DriftBinaryMissing
+		}
+		return DriftNone
 	}
-	return DriftNone
+	return driftOfOtherEntry(command, adapter, live)
 }
 
 // driftOfOtherEntry classifies an entry that is not the line we would write now.
 //
 // The order is the point. A missing binary is checked before a differing one
 // because it is the drift that is otherwise undetectable from the config alone —
-// a path that merely differs still runs, while a path that is gone fails exactly
-// as quietly as the un-PATHed curl #1161 removed. And an entry naming the binary
-// we are actually running is shape drift, not path drift, or every rendering
-// change would be misreported as a move.
+// a path that merely differs still runs, while a path that is gone makes the
+// SHELL exit 127 before any of our code runs (which is what failOpenSuffix is
+// for). And an entry naming the binary we are actually running is shape drift,
+// not path drift, or every rendering change would be misreported as a move.
 func driftOfOtherEntry(command, adapter, live string) Drift {
 	path, ok := binaryPathOf(command, adapter)
 	if !ok {
@@ -197,25 +252,88 @@ func driftOfOtherEntry(command, adapter, live string) Drift {
 	return DriftShape
 }
 
-// IsCanonical reports whether an installed command needs no rewrite. It is the
-// hookjson.Config.IsCanonical for a beacon entry.
+// IsCanonical reports whether an installed command should be left alone. It is
+// the hookjson.Config.IsCanonical for a beacon entry.
 //
-// A false here is what makes hookjson rewrite the entry IN PLACE — replacing the
-// element rather than appending a group beside it — so a moved or deleted binary
-// is repaired on the next daemon start rather than failing quietly forever.
+// It is deliberately NOT `Inspect(...) == DriftNone`. False is what makes
+// hookjson replace the entry and mark the settings file modified, and hookjson
+// has no "the bytes did not change, skip the write" branch — so reporting a
+// drift that a rewrite cannot repair means rewriting the user's config on every
+// daemon start, forever, without ever converging. Two such drifts exist:
+//
+//   - DriftUnresolvable: we could not work out what we would write, so we have
+//     no replacement to offer. Its own doc says "must not rewrite it", and
+//     returning false here would do exactly that.
+//   - A dead binary that the rewrite would name again — either the entry is
+//     already byte-identical to what we would write, or our own binary is gone
+//     so every candidate line is equally dead.
+//
+// Both are still reported by Inspect, which is where the installer logs them.
+// Detection and repair are separate questions, and only repair belongs here.
 func IsCanonical(command, adapter string) bool {
-	return Inspect(command, adapter) == DriftNone
+	live, err := BinaryPath()
+	if err != nil {
+		return true
+	}
+	return canonicalAgainst(command, adapter, live)
+}
+
+func canonicalAgainst(command, adapter, live string) bool {
+	switch inspectAgainst(command, adapter, live) {
+	case DriftNone, DriftUnresolvable:
+		return true
+	}
+	want, err := Command(live, adapter)
+	if err != nil {
+		return true
+	}
+	// A rewrite repairs the entry only if it would actually change the line AND
+	// the binary it would name can be run.
+	return command == want || !isExecutableFile(live)
 }
 
 // binaryPathOf recovers the binary path from an installed beacon command, so a
 // stale entry can be described ("was /old/irrlichd") and not merely replaced.
 // Returns false when the command is not a beacon line for this adapter.
 func binaryPathOf(command, adapter string) (string, bool) {
-	idx := strings.Index(command, " "+Sentinel(adapter))
-	if idx <= 0 {
+	if !strings.Contains(command, Sentinel(adapter)) {
 		return "", false
 	}
-	return shellUnquote(strings.TrimSpace(command[:idx])), true
+	return leadingArg(command)
+}
+
+// leadingArg extracts the first shell word of a command line, undoing
+// shellQuote. It is the inverse of the rendering in Command, and it has to
+// understand the '\” escape or a path containing a quote would be truncated at
+// that quote and then read as a missing binary.
+func leadingArg(command string) (string, bool) {
+	s := strings.TrimLeft(command, " ")
+	if !strings.HasPrefix(s, "'") {
+		if i := strings.IndexByte(s, ' '); i > 0 {
+			return s[:i], true
+		}
+		if s == "" {
+			return "", false
+		}
+		return s, true
+	}
+
+	var out strings.Builder
+	for i := 1; i < len(s); {
+		if s[i] != '\'' {
+			out.WriteByte(s[i])
+			i++
+			continue
+		}
+		// A quote is either the '\'' escape sequence or the terminator.
+		if strings.HasPrefix(s[i:], `'\''`) {
+			out.WriteByte('\'')
+			i += 4
+			continue
+		}
+		return out.String(), true
+	}
+	return "", false // unterminated quote: not a line we rendered
 }
 
 // isExecutableFile reports whether path is a regular file with an execute bit.
@@ -236,13 +354,4 @@ func isExecutableFile(path string) bool {
 // reopens — and it is what every POSIX shell accepts.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// shellUnquote is shellQuote's inverse, for reading a path back out of an
-// installed entry.
-func shellUnquote(s string) string {
-	if len(s) < 2 || !strings.HasPrefix(s, "'") || !strings.HasSuffix(s, "'") {
-		return s
-	}
-	return strings.ReplaceAll(s[1:len(s)-1], `'\''`, "'")
 }

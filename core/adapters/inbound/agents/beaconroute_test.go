@@ -20,9 +20,15 @@ import (
 // symptom at all on the agent's side.
 //
 // Note the segment is NOT AdapterName: claudecode.AdapterName is "claude-code"
-// while its route segment is "claudecode". That mismatch is exactly the kind of
-// thing this test exists to catch when a third receiver is added, so the map keys
-// below are written out literally rather than derived from the adapter constants.
+// while its route segment is "claudecode". That is why the map keys below are
+// written out literally rather than derived from the adapter constants.
+//
+// Scope, stated honestly: this pins the two receivers that exist. It cannot fail
+// for a THIRD receiver registered at a different prefix, because
+// registerHookRoutes (core/cmd/irrlichd/startup.go) is hand-wired with no
+// registry to enumerate and this map is hand-written. Whoever adds the third
+// receiver adds its row here; until then the convention is pinned, not
+// enforced.
 func TestBeaconEndpointPathMatchesTheInstalledReceivers(t *testing.T) {
 	for segment, want := range map[string]string{
 		"claudecode": claudecode.HookEndpointPath,

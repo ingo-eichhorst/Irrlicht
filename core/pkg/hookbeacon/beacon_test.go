@@ -130,8 +130,22 @@ func TestPostAlwaysExitsZero(t *testing.T) {
 		{
 			name: "receiver wedged past the deadline",
 			setup: func(t *testing.T) Options {
+				// Wedged until the CLIENT gives up, which is the shape being
+				// tested. Tied to the request context rather than a sleep or a
+				// test-owned channel: httptest registers its own Close cleanup
+				// after this one, cleanups run LIFO, and a handler still
+				// running at Close deadlocks the subtest.
 				serverAt(t, func(w http.ResponseWriter, r *http.Request) {
-					time.Sleep(5 * time.Second)
+					// Draining the body first is load-bearing: net/http only
+					// starts the background read that notices a client hang-up
+					// once the request body has been consumed, so a handler
+					// that skips it never sees its context cancelled and then
+					// deadlocks httptest's Close during cleanup.
+					_, _ = io.Copy(io.Discard, r.Body)
+					select {
+					case <-r.Context().Done():
+					case <-time.After(3 * time.Second):
+					}
 				})
 				return Options{
 					Args: []string{"gemini-cli"}, Stdin: strings.NewReader(validPayload),
@@ -519,7 +533,7 @@ func TestEveryReasonHasACounterSlot(t *testing.T) {
 	all := []Reason{
 		ReasonMissingAdapter, ReasonInvalidAdapter, ReasonUnreadableStdin,
 		ReasonEmptyPayload, ReasonPayloadTooLarge, ReasonDaemonUnreachable,
-		ReasonDeadlineExceeded, ReasonDaemonRejected,
+		ReasonDeadlineExceeded, ReasonDaemonRejected, ReasonPanicked,
 	}
 	if len(all) != len(reasons) {
 		t.Fatalf("this test lists %d reasons but the counter table has %d — add the new one to both", len(all), len(reasons))
@@ -539,6 +553,9 @@ func TestIsInvocation(t *testing.T) {
 		want bool
 	}{
 		"the verb alone":                  {[]string{"hook-post"}, true},
+		"the guarded form we install":     {[]string{"--version", "hook-post", "gemini-cli"}, true},
+		"the guard token alone":           {[]string{"--version"}, false},
+		"the guard token then a flag":     {[]string{"--version", "--record"}, false},
 		"verb and adapter":                {[]string{"hook-post", "gemini-cli"}, true},
 		"verb, adapter and guard token":   {[]string{"hook-post", "gemini-cli", "--version"}, true},
 		"no arguments":                    {nil, false},
@@ -598,4 +615,54 @@ func TestReportNeverPanicsWithoutStderr(t *testing.T) {
 	if n := ReasonCount(); n != 1 {
 		t.Errorf("ReasonCount() = %d, want 1 — the counter must move even when there is nowhere to report", n)
 	}
+}
+
+// panicOnceWriter panics on its first write and behaves after that, so a panic
+// can be injected into Post's own body rather than into a goroutine.
+type panicOnceWriter struct{ panicked bool }
+
+func (p *panicOnceWriter) Write(b []byte) (int, error) {
+	if !p.panicked {
+		p.panicked = true
+		panic("stderr exploded")
+	}
+	return len(b), nil
+}
+
+// panicReader stands in for an io.Reader that panics — the one failure that
+// would otherwise take the process down with exit 2 from inside the read
+// goroutine, where Post's recover cannot reach it.
+type panicReader struct{}
+
+func (panicReader) Read([]byte) (int, error) { panic("stdin exploded") }
+
+// TestPostSurvivesAPanic completes the exit-0 contract. A panic exits 2, and
+// exit 2 with a fail-closed pre-tool hook is a denied tool call — so "returns 0
+// by construction" has to survive one, in both places a panic can originate.
+func TestPostSurvivesAPanic(t *testing.T) {
+	t.Run("in the read goroutine", func(t *testing.T) {
+		resetCounts()
+		t.Setenv(daemonaddr.EnvBindAddr, closedPort(t))
+		var stderr bytes.Buffer
+		if code := Post(Options{Args: []string{"gemini-cli"}, Stdin: panicReader{}, Stderr: &stderr}); code != 0 {
+			t.Fatalf("Post() = %d, want 0", code)
+		}
+		if Reasons()[ReasonUnreadableStdin] != 1 {
+			t.Errorf("Reasons() = %v, want the panic counted as unreadable stdin", Reasons())
+		}
+	})
+
+	t.Run("in Post's own body", func(t *testing.T) {
+		resetCounts()
+		t.Setenv(daemonaddr.EnvBindAddr, closedPort(t))
+		if code := Post(Options{
+			Args: []string{"gemini-cli"}, Stdin: strings.NewReader(validPayload),
+			Stderr: &panicOnceWriter{},
+		}); code != 0 {
+			t.Fatalf("Post() = %d, want 0", code)
+		}
+		if Reasons()[ReasonPanicked] != 1 {
+			t.Errorf("Reasons() = %v, want the panic counted as %q", Reasons(), ReasonPanicked)
+		}
+	})
 }

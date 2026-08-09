@@ -93,11 +93,12 @@ const (
 // positions in it are load-bearing:
 //
 //   - The beacon is FIRST, ahead of --version. Every installed beacon command
-//     line ends in --version as a guard against an older irrlichd starting a
-//     daemon instead of posting a hook (see hookbeacon.LegacyGuardToken). Moving
-//     the version check back in front would turn every installed beacon into a
-//     version banner — silently, since the beacon is not supposed to say
-//     anything on a healthy path either.
+//     line LEADS with --version as a guard against an older irrlichd starting a
+//     daemon instead of posting a hook (see hookbeacon.LegacyGuardToken, which
+//     records why the guard has to lead rather than trail). Moving the version
+//     check back in front would turn every installed beacon into a version
+//     banner — silently, since the beacon is not supposed to say anything on a
+//     healthy path either.
 //   - actionUnknownSubcommand is LAST, and it only fires on a positional token.
 //     Unknown FLAGS still fall through to the daemon, which is the behaviour
 //     every irrlichd has had; narrowing the change to positionals keeps it from
@@ -142,7 +143,7 @@ func main() {
 		// Post always returns 0 — that contract is the whole of #1373; see the
 		// hookbeacon package doc for what a non-zero exit does to a tool call.
 		os.Exit(hookbeacon.Post(hookbeacon.Options{
-			Args:   os.Args[2:],
+			Args:   hookbeacon.InvocationArgs(os.Args[1:]),
 			Stdin:  os.Stdin,
 			Stderr: os.Stderr,
 		}))

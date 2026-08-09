@@ -7,6 +7,18 @@ import (
 	"testing"
 )
 
+// mustCommand renders a command and fails the test if the arguments are
+// rejected. Command returns an error because its output is written into a
+// user's config and executed by a shell.
+func mustCommand(t *testing.T, binaryPath, adapter string) string {
+	t.Helper()
+	cmd, err := Command(binaryPath, adapter)
+	if err != nil {
+		t.Fatalf("Command(%q, %q): %v", binaryPath, adapter, err)
+	}
+	return cmd
+}
+
 func liveBinary(t *testing.T) string {
 	t.Helper()
 	path, err := BinaryPath()
@@ -38,7 +50,7 @@ func executableAt(t *testing.T, name string) string {
 // to be wrong about, because the address is resolved in the beacon process on the
 // tool call that fires it.
 func TestCommandCarriesNoAddress(t *testing.T) {
-	cmd := Command("/Applications/Irrlicht.app/Contents/MacOS/irrlichd", "gemini-cli")
+	cmd := mustCommand(t, "/Applications/Irrlicht.app/Contents/MacOS/irrlichd", "gemini-cli")
 	for _, forbidden := range []string{"7837", "7838", "http://", "https://", "localhost", "127.0.0.1", "/api/v1/"} {
 		if strings.Contains(cmd, forbidden) {
 			t.Errorf("Command() = %q contains %q — an installed entry must carry no address, or the #1178 stale-port class is back", cmd, forbidden)
@@ -50,14 +62,19 @@ func TestCommandCarriesNoAddress(t *testing.T) {
 // being invoked as a beacon and starting a daemon instead. See
 // LegacyGuardToken's doc for why --version specifically.
 func TestCommandEndsWithTheGuardToken(t *testing.T) {
-	cmd := Command("/usr/local/bin/irrlichd", "gemini-cli")
+	cmd := mustCommand(t, "/usr/local/bin/irrlichd", "gemini-cli")
 	if !strings.Contains(cmd, " "+LegacyGuardToken) {
 		t.Fatalf("Command() = %q, want it to carry the %q guard token — without it an irrlichd predating this subcommand starts a daemon on every tool call", cmd, LegacyGuardToken)
 	}
-	// The guard must come after the adapter, so a current binary reads the
-	// adapter first and a stale one still finds the flag anywhere in argv.
-	if strings.Index(cmd, LegacyGuardToken) < strings.Index(cmd, "gemini-cli") {
-		t.Errorf("Command() = %q puts the guard token before the adapter", cmd)
+	// The guard must LEAD. irrlichd v0.2.0-v0.3.2 dispatch on os.Args[1] only
+	// (verified with git show <tag>:core/cmd/irrlichd/main.go), so a trailing
+	// guard misses them and they start a daemon — the exact hazard it exists
+	// to prevent.
+	if strings.Index(cmd, LegacyGuardToken) > strings.Index(cmd, Subcommand) {
+		t.Errorf("Command() = %q puts the guard token after the verb; releases up to v0.3.2 only match argv[1]", cmd)
+	}
+	if !strings.HasSuffix(cmd, failOpenSuffix) {
+		t.Errorf("Command() = %q, want it to end in %q — a binary that has stopped existing makes the SHELL exit 127 before any of our code runs", cmd, failOpenSuffix)
 	}
 	if !strings.Contains(cmd, stdoutRedirect) {
 		t.Errorf("Command() = %q, want stdout redirected — the guard token's own banner must not reach a hook's decision channel", cmd)
@@ -67,13 +84,20 @@ func TestCommandEndsWithTheGuardToken(t *testing.T) {
 // TestCommandQuotesThePath — this repo tracks a path with a space in it, and a
 // user is free to install into one.
 func TestCommandQuotesThePath(t *testing.T) {
-	cmd := Command("/Users/a b/Irrlicht.app/Contents/MacOS/irrlichd", "codex")
+	cmd := mustCommand(t, "/Users/a b/Irrlicht.app/Contents/MacOS/irrlichd", "codex")
 	if !strings.Contains(cmd, `'/Users/a b/Irrlicht.app/Contents/MacOS/irrlichd'`) {
 		t.Errorf("Command() = %q, want the binary path quoted as one argument", cmd)
 	}
-	awkward := "/tmp/it's here/irrlichd"
-	if got := shellUnquote(shellQuote(awkward)); got != awkward {
-		t.Errorf("shellQuote/shellUnquote round trip = %q, want %q", got, awkward)
+	for _, awkward := range []string{
+		"/tmp/it's here/irrlichd",
+		"/tmp/'/irrlichd",
+		"/tmp/a'b'c/irrlichd",
+		"/tmp/trailing'/irrlichd",
+	} {
+		got, ok := leadingArg(shellQuote(awkward) + " " + LegacyGuardToken)
+		if !ok || got != awkward {
+			t.Errorf("leadingArg(shellQuote(%q)) = %q, %v; want %q, true", awkward, got, ok, awkward)
+		}
 	}
 }
 
@@ -81,8 +105,8 @@ func TestCommandQuotesThePath(t *testing.T) {
 // vary, or a moved binary reads as somebody else's entry and gets a duplicate
 // appended beside it instead of being rewritten in place.
 func TestSentinelIsPathIndependent(t *testing.T) {
-	a := Command("/one/irrlichd", "gemini-cli")
-	b := Command("/two/somewhere/else/irrlichd", "gemini-cli")
+	a := mustCommand(t, "/one/irrlichd", "gemini-cli")
+	b := mustCommand(t, "/two/somewhere/else/irrlichd", "gemini-cli")
 	sentinel := Sentinel("gemini-cli")
 
 	if !strings.Contains(a, sentinel) || !strings.Contains(b, sentinel) {
@@ -98,7 +122,7 @@ func TestSentinelIsPathIndependent(t *testing.T) {
 // user's config on every daemon start and still pass every negative case.
 func TestIsCanonicalAcceptsTheLiveCommand(t *testing.T) {
 	live := liveBinary(t)
-	cmd := Command(live, "gemini-cli")
+	cmd := mustCommand(t, live, "gemini-cli")
 	if drift := Inspect(cmd, "gemini-cli"); drift != DriftNone {
 		t.Errorf("Inspect(the command we would write now) = %q, want DriftNone", drift)
 	}
@@ -119,19 +143,19 @@ func TestInspectDetectsEveryDrift(t *testing.T) {
 		want    Drift
 	}{
 		"an entry naming a different, still-present irrlichd": {
-			command: Command(executableAt(t, "irrlichd"), adapter),
+			command: mustCommand(t, executableAt(t, "irrlichd"), adapter),
 			want:    DriftBinaryPath,
 		},
 		"an entry naming a binary that no longer exists": {
-			command: Command(filepath.Join(t.TempDir(), "gone", "irrlichd"), adapter),
+			command: mustCommand(t, filepath.Join(t.TempDir(), "gone", "irrlichd"), adapter),
 			want:    DriftBinaryMissing,
 		},
 		"an entry naming a path that is a directory": {
-			command: Command(t.TempDir(), adapter),
+			command: mustCommand(t, t.TempDir(), adapter),
 			want:    DriftBinaryMissing,
 		},
 		"an entry naming a file with no execute bit": {
-			command: Command(nonExecutableAt(t), adapter),
+			command: mustCommand(t, nonExecutableAt(t), adapter),
 			want:    DriftBinaryMissing,
 		},
 		"our binary, but an older command shape without the guard token": {
@@ -143,7 +167,7 @@ func TestInspectDetectsEveryDrift(t *testing.T) {
 			want:    DriftShape,
 		},
 		"an entry for a different adapter entirely": {
-			command: Command(live, "codex"),
+			command: mustCommand(t, live, "codex"),
 			want:    DriftShape,
 		},
 	}
@@ -173,7 +197,7 @@ func nonExecutableAt(t *testing.T) string {
 // "stale" cannot tell the user what it changed away from.
 func TestBinaryPathOfRecoversTheInstalledPath(t *testing.T) {
 	const want = "/Users/a b/Irrlicht.app/Contents/MacOS/irrlichd"
-	got, ok := binaryPathOf(Command(want, "codex"), "codex")
+	got, ok := binaryPathOf(mustCommand(t, want, "codex"), "codex")
 	if !ok {
 		t.Fatalf("binaryPathOf did not recognize the command it rendered")
 	}
@@ -200,5 +224,77 @@ func TestIsExecutableFile(t *testing.T) {
 	}
 	if !isExecutableFile(executableAt(t, "irrlichd")) {
 		t.Error("a mode-0755 regular file did not read as executable")
+	}
+}
+
+// TestCommandRejectsUnsafeArguments — Command's output is written into a user's
+// config file and run by a shell, so the write side owes the same validation
+// the read side (adapterFrom) already does. Unvalidated, `Command(exe, "x; rm
+// -rf /tmp/pwn #")` renders a shell line that runs the injected command.
+func TestCommandRejectsUnsafeArguments(t *testing.T) {
+	for _, tt := range []struct{ path, adapter, why string }{
+		{"irrlichd", "codex", "a relative binary path"},
+		{"./bin/irrlichd", "codex", "a relative binary path"},
+		{"/usr/bin/irrlichd", "x; rm -rf /tmp/pwn #", "a shell metacharacter in the adapter"},
+		{"/usr/bin/irrlichd", "../../debug/bundle", "a path traversal in the adapter"},
+		{"/usr/bin/irrlichd", "", "an empty adapter"},
+	} {
+		if got, err := Command(tt.path, tt.adapter); err == nil {
+			t.Errorf("Command(%q, %q) = %q with no error, want a refusal (%s)", tt.path, tt.adapter, got, tt.why)
+		}
+	}
+}
+
+// TestIsCanonicalLeavesUnrepairableDriftAlone is the counterpart to
+// TestInspectDetectsEveryDrift: detection and repair are separate questions.
+//
+// hookjson has no "the bytes did not change, skip the write" branch, so a drift
+// reported as non-canonical that a rewrite cannot actually repair rewrites the
+// user's settings file on every daemon start, forever, without converging.
+func TestIsCanonicalLeavesUnrepairableDriftAlone(t *testing.T) {
+	live := liveBinary(t)
+
+	t.Run("we cannot work out what we would write", func(t *testing.T) {
+		// An adapter Command refuses makes the drift unresolvable: there is no
+		// replacement line to offer, so the entry must be left alone.
+		if !IsCanonical("anything at all", "Not A Valid Segment") {
+			t.Error("an unresolvable entry read as needing a rewrite; there is nothing to rewrite it to")
+		}
+		if got := Inspect("anything at all", "Not A Valid Segment"); got != DriftUnresolvable {
+			t.Errorf("Inspect = %q, want %q — it must still be REPORTED, only not repaired", got, DriftUnresolvable)
+		}
+	})
+
+	t.Run("our own binary is gone, so every candidate line is equally dead", func(t *testing.T) {
+		gone := filepath.Join(t.TempDir(), "irrlichd")
+		cmd := mustCommand(t, gone, "gemini-cli")
+		if got := inspectAgainst(cmd, "gemini-cli", gone); got != DriftBinaryMissing {
+			t.Errorf("Inspect = %q, want %q", got, DriftBinaryMissing)
+		}
+		if !canonicalAgainst(cmd, "gemini-cli", gone) {
+			t.Error("an entry already identical to what we would write read as needing a rewrite — that rewrite changes nothing and repeats on every daemon start")
+		}
+	})
+
+	t.Run("a repairable drift is still repaired", func(t *testing.T) {
+		// The vacuity guard for this test: the leniency above must not swallow
+		// the case the reconciliation exists for.
+		stale := mustCommand(t, filepath.Join(t.TempDir(), "old", "irrlichd"), "gemini-cli")
+		if canonicalAgainst(stale, "gemini-cli", live) {
+			t.Error("a dead entry that a rewrite WOULD repair read as canonical")
+		}
+	})
+}
+
+// TestSentinelIsNotAPrefixOfAnother — hookjson matches a sentinel with
+// strings.Contains, so an unterminated sentinel lets one adapter claim, rewrite
+// and uninstall another adapter's entries whenever one id prefixes another.
+func TestSentinelIsNotAPrefixOfAnother(t *testing.T) {
+	full := mustCommand(t, "/usr/bin/irrlichd", "gemini-cli")
+	if strings.Contains(full, Sentinel("gemini")) {
+		t.Errorf("Sentinel(%q) matches an entry belonging to %q; one adapter would rewrite and uninstall the other's entries", "gemini", "gemini-cli")
+	}
+	if !strings.Contains(full, Sentinel("gemini-cli")) {
+		t.Error("the sentinel no longer matches its own rendered command")
 	}
 }
