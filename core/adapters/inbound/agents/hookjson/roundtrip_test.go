@@ -2,7 +2,6 @@ package hookjson
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -47,18 +46,6 @@ const jsoncSettings = `// ~/.gemini/settings.json — hand-maintained. Comments 
 }
 `
 
-// seedRawFile writes raw bytes as the settings file, bypassing the Go-map
-// seeders the rest of this package's tests use. A map seeder cannot express a
-// comment or a key order, which is exactly what these tests are about.
-func seedRawFile(t *testing.T, dir, name, content string) string {
-	t.Helper()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("seed %s: %v", path, err)
-	}
-	return path
-}
-
 func readRawFile(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -76,7 +63,7 @@ func readRawFile(t *testing.T, path string) string {
 func TestRoundTrip_JSONCSettingsSurviveInstallThenUninstall(t *testing.T) {
 	for name, build := range configs() {
 		t.Run(name, func(t *testing.T) {
-			path := seedRawFile(t, t.TempDir(), "settings.json", jsoncSettings)
+			path := seedRaw(t, "settings.json", jsoncSettings)
 			cfg := build(path)
 
 			installed, err := EnsureInstalled(cfg)
@@ -109,7 +96,7 @@ func TestRoundTrip_JSONCSettingsSurviveInstallThenUninstall(t *testing.T) {
 func TestEnsureInstalled_PreservesCommentsOrderAndAmpersands(t *testing.T) {
 	for name, build := range configs() {
 		t.Run(name, func(t *testing.T) {
-			path := seedRawFile(t, t.TempDir(), "settings.json", jsoncSettings)
+			path := seedRaw(t, "settings.json", jsoncSettings)
 
 			if _, err := EnsureInstalled(build(path)); err != nil {
 				t.Fatalf("EnsureInstalled: %v", err)
@@ -156,7 +143,7 @@ func TestEnsureInstalled_PlainJSONKeepsOrderAndEscaping(t *testing.T) {
 `
 	for name, build := range configs() {
 		t.Run(name, func(t *testing.T) {
-			path := seedRawFile(t, t.TempDir(), "settings.json", plain)
+			path := seedRaw(t, "settings.json", plain)
 
 			if _, err := EnsureInstalled(build(path)); err != nil {
 				t.Fatalf("EnsureInstalled: %v", err)
@@ -224,7 +211,7 @@ func TestUninstall_EmptiedHooksObjectIsRemoved(t *testing.T) {
 	const src = "{\n  \"theme\": \"dark\"\n}\n"
 	for name, build := range configs() {
 		t.Run(name, func(t *testing.T) {
-			path := seedRawFile(t, t.TempDir(), "settings.json", src)
+			path := seedRaw(t, "settings.json", src)
 			cfg := build(path)
 			mustEnsure(t, cfg, "install", true)
 			mustUninstall(t, cfg, "uninstall", true)
@@ -242,7 +229,7 @@ func TestUninstall_UserHooksKeepTheObject(t *testing.T) {
 	const src = "{\n  \"hooks\": {\n    \"PreToolUse\": [\n      {\n        \"hooks\": [\n          { \"type\": \"command\", \"command\": \"echo mine && true\" }\n        ]\n      }\n    ]\n  }\n}\n"
 	for name, build := range configs() {
 		t.Run(name, func(t *testing.T) {
-			path := seedRawFile(t, t.TempDir(), "settings.json", src)
+			path := seedRaw(t, "settings.json", src)
 			cfg := build(path)
 			mustEnsure(t, cfg, "install", true)
 			mustUninstall(t, cfg, "uninstall", true)

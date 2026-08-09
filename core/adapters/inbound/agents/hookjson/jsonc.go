@@ -9,16 +9,24 @@ package hookjson
 // no key order and no formatting, so re-serializing one with
 // json.MarshalIndent destroys all three at once:
 //
-//   - comments vanish. gemini-cli's ~/.gemini/settings.json is JSONC: the CLI
-//     reads it through stripJsonComments and writes it back through the
-//     comment-json package precisely to keep them. Before this, they did not
-//     even survive the *read* — encoding/json rejects the file outright, so an
-//     install into a commented config failed rather than merging;
 //   - key order becomes alphabetical, silently reshuffling a file the user
 //     organized deliberately;
 //   - `<`, `>` and `&` are HTML-escaped into their six-character \u00xx
 //     escapes, so a perfectly ordinary `npm run build && npm run list-tools`
-//     comes back with each ampersand replaced by a backslash-u-0026.
+//     comes back with each ampersand replaced by a backslash-u-0026 — which
+//     ~/.claude/settings.json gets today, since the statusline command this
+//     package also writes ends in `>/dev/null 2>&1`;
+//   - comments do not survive, and in fact did not survive the *read* either:
+//     encoding/json rejects them outright, so an install into a commented
+//     config failed and merged nothing.
+//
+// The first two bite the files this package writes today —
+// ~/.claude/settings.json and ~/.codex/hooks.json, both strict JSON. The third
+// is why the work happened now: it is a prerequisite for installing hooks into
+// gemini-cli's ~/.gemini/settings.json (#1355 Phase D), which is JSONC by
+// design — the CLI reads it through stripJsonComments and writes it back
+// through the comment-json package specifically to keep comments. No caller
+// reads that file yet; this package is being made ready for the one that will.
 //
 // The strategy is to never re-serialize what we did not change. Writing works
 // on byte ranges of the original file: the wanted document is structurally
@@ -342,6 +350,11 @@ func applyEdits(orig []byte, edits []edit) ([]byte, bool) {
 // from the file, and no HTML escaping, so `&&` stays `&&`. prefix is the
 // indentation of the line the value starts on; the first line carries none
 // because it follows a `"key": `.
+//
+// Every byte of JSON this package emits goes through here, so
+// SetEscapeHTML(false) — the one flag this whole change exists to set — is
+// written in exactly one place. A second encoder configured somewhere else is
+// how the escaping comes back.
 func encodeValue(v interface{}, prefix string, lay layout) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -363,24 +376,11 @@ func encodeValue(v interface{}, prefix string, lay layout) ([]byte, error) {
 // newline are the shape a hand-edited config expects, and are pinned by
 // TestWriteSettings_ShapeAndDelegation.
 func encodeDocument(settings map[string]interface{}) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(settings); err != nil { // Encode appends the newline
+	out, err := encodeValue(settings, "", layout{newline: "\n", indent: "  "})
+	if err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
-}
-
-func encodeKey(key string) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(key); err != nil {
-		return nil, err
-	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+	return append(out, '\n'), nil
 }
 
 // --- the splicer ---
@@ -521,6 +521,24 @@ func (s *splicer) trailerEnd(from int) int {
 // the separator arithmetic needs.
 type itemSpan struct{ start, end int }
 
+// itemSpans reduces a container's members or elements to those offsets. An
+// object's item starts at its key, an array's at the value itself; both end at
+// the end of the value.
+func (n *jsonNode) itemSpans() []itemSpan {
+	if n.kind == '{' {
+		items := make([]itemSpan, len(n.members))
+		for i, m := range n.members {
+			items[i] = itemSpan{start: m.keyStart, end: m.value.end}
+		}
+		return items
+	}
+	items := make([]itemSpan, len(n.elems))
+	for i, e := range n.elems {
+		items[i] = itemSpan{start: e.start, end: e.end}
+	}
+	return items
+}
+
 // removeItems emits the edits that delete idx (ascending) from a container.
 // Consecutive removals are handled as one run so their spans cannot overlap.
 func (s *splicer) removeItems(items []itemSpan, idx []int, edits *[]edit) bool {
@@ -555,16 +573,19 @@ func (s *splicer) removeRun(items []itemSpan, i, j int, edits *[]edit) bool {
 			return false
 		}
 		start := s.trailerEnd(comma + 1)
-		// Start from the end of the line above the run rather than from the
-		// previous item's comma, so a standalone comment the user wrote between
-		// the two is left where it is instead of being swallowed. In the common
-		// case the two positions are the same byte, which is what keeps this the
-		// exact inverse of an append.
+
 		// Anything trailing the removed value goes with it. Leaving it behind
 		// would splice it onto the line above, and a `/* … */` landing after a
 		// `//` on that line is no longer a block comment — its closing `*/`
 		// becomes stray text and the file stops parsing.
 		end := s.trailerEnd(items[j].end)
+
+		// Start from the end of the line above the run rather than from the
+		// previous item's comma, so a standalone comment the user wrote between
+		// the two is left where it is instead of being swallowed. In the common
+		// case the two positions are the same byte, which is what keeps this the
+		// exact inverse of an append.
+		//
 		// items[i], not items[j]: the run begins at i, and anchoring on the last
 		// item of a multi-item run would delete only that one and leave the rest
 		// of the run in the file.
@@ -704,7 +725,7 @@ func (s *splicer) diffObject(n *jsonNode, want map[string]interface{}, depth int
 		if i > 0 {
 			buf.WriteString("," + s.lay.newline + itemIndent)
 		}
-		key, err := encodeKey(k)
+		key, err := encodeValue(k, itemIndent, s.lay)
 		if err != nil {
 			return err
 		}
@@ -717,11 +738,7 @@ func (s *splicer) diffObject(n *jsonNode, want map[string]interface{}, depth int
 		buf.Write(value)
 	}
 
-	items := make([]itemSpan, len(n.members))
-	for i, m := range n.members {
-		items[i] = itemSpan{start: m.keyStart, end: m.value.end}
-	}
-	return s.applyContainerEdits(n, items, removed, len(added), buf.Bytes(), itemIndent, closeIndent, edits)
+	return s.applyContainerEdits(n, n.itemSpans(), removed, buf.Bytes(), itemIndent, closeIndent, edits)
 }
 
 func (s *splicer) diffArray(n *jsonNode, want []interface{}, depth int, edits *[]edit) error {
@@ -762,17 +779,17 @@ func (s *splicer) diffArray(n *jsonNode, want []interface{}, depth int, edits *[
 		buf.Write(value)
 	}
 
-	items := make([]itemSpan, len(n.elems))
-	for i, e := range n.elems {
-		items[i] = itemSpan{start: e.start, end: e.end}
-	}
-	return s.applyContainerEdits(n, items, plan.removed, len(plan.appended), buf.Bytes(), itemIndent, closeIndent, edits)
+	return s.applyContainerEdits(n, n.itemSpans(), plan.removed, buf.Bytes(), itemIndent, closeIndent, edits)
 }
 
 // applyContainerEdits is the shared tail of diffObject and diffArray: given
 // which items go away and what text gets appended, emit the edits.
-func (s *splicer) applyContainerEdits(n *jsonNode, items []itemSpan, removed []int, addedCount int, body []byte, itemIndent, closeIndent string, edits *[]edit) error {
-	if lastSurviving(len(items), removed) < 0 {
+func (s *splicer) applyContainerEdits(n *jsonNode, items []itemSpan, removed []int, body []byte, itemIndent, closeIndent string, edits *[]edit) error {
+	// removed is always ascending, distinct and in range — diffObject appends
+	// while ranging over members, alignArray appends monotonically — so "nothing
+	// survives" is a count rather than a search. body is non-empty exactly when
+	// something is being added, since every encoded item is at least one byte.
+	if len(removed) == len(items) {
 		// Nothing survives, so there is no separator to attach to: the
 		// container's whole interior is rewritten instead.
 		s.fillEmptyContainer(n, body, itemIndent, closeIndent, edits)
@@ -785,7 +802,7 @@ func (s *splicer) applyContainerEdits(n *jsonNode, items []itemSpan, removed []i
 	// the tail and then re-adding it for the append means two edits at one
 	// offset, which is an overlap, and anchoring the append on the removed item
 	// puts the comma at an offset the deletion splices away.
-	if tail := trailingRun(len(items), removed); tail >= 0 && addedCount > 0 {
+	if tail := trailingRun(len(items), removed); tail >= 0 && len(body) > 0 {
 		comma := s.nextComma(items[tail-1].end)
 		if comma < 0 {
 			return errNoSafeSplice
@@ -805,25 +822,10 @@ func (s *splicer) applyContainerEdits(n *jsonNode, items []itemSpan, removed []i
 	if len(removed) > 0 && !s.removeItems(items, removed, edits) {
 		return errNoSafeSplice
 	}
-	if addedCount > 0 {
+	if len(body) > 0 {
 		s.appendItems(items[len(items)-1], body, itemIndent, edits)
 	}
 	return nil
-}
-
-// lastSurviving returns the highest index in [0,count) that is not in removed,
-// or -1 when every item is going away.
-func lastSurviving(count int, removed []int) int {
-	gone := make(map[int]bool, len(removed))
-	for _, i := range removed {
-		gone[i] = true
-	}
-	for i := count - 1; i >= 0; i-- {
-		if !gone[i] {
-			return i
-		}
-	}
-	return -1
 }
 
 // trailingRun returns the first index of the run of removed items that reaches

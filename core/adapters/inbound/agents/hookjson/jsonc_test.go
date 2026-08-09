@@ -2,10 +2,12 @@ package hookjson
 
 import (
 	"encoding/json"
+	"fmt"
+	"maps"
 	"math/rand"
 	"os"
 	"reflect"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -204,9 +206,10 @@ func TestSplice_CRLFDocumentKeepsCRLF(t *testing.T) {
 // for comments cannot quietly grow into leniency for broken files, which is a
 // separate decision belonging to issue #1362.
 
+// The plain-truncated case lives in TestReadSettings_MalformedJSONErrors; these
+// are the shapes a JSONC-tolerant reader might newly be tempted to accept.
 func TestMalformedInput_StillErrors(t *testing.T) {
 	cases := map[string]string{
-		"truncated":        `{"hooks":`,
 		"trailing comma":   "{\n  \"a\": 1,\n}\n",
 		"single quotes":    `{'a': 1}`,
 		"unterminated str": `{"a": "oops}`,
@@ -236,9 +239,11 @@ func TestMalformedInput_IsNeverOverwritten(t *testing.T) {
 	}
 }
 
-// TestWriteSettings_FreshFileIsPlainEncode pins the no-original path, which is
-// the one the existing shape lock covers and the one every brand-new install
-// takes.
+// TestWriteSettings_FreshFileIsPlainEncode complements
+// TestWriteSettings_ShapeAndDelegation rather than repeating it: that one pins
+// the shape through a fake writer, this one goes through a real file on disk
+// (the no-original branch of WriteSettings' own re-read) and adds the assertion
+// that a fresh encode does not HTML-escape either.
 func TestWriteSettings_FreshFileIsPlainEncode(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/new.json"
@@ -504,6 +509,16 @@ func renderJSONC(rng *rand.Rand, doc map[string]interface{}) string {
 // a failure names the operation that produced it, and whether that operation is
 // one after which every comment in the document must still be present.
 func mutateDocument(rng *rand.Rand, doc map[string]interface{}) (string, bool) {
+	// Arrays get their own mutations rather than only ever being replaced
+	// wholesale as an object member. Arrays are what the hook machinery actually
+	// edits — `hooks[event]` is an array of matcher groups, appended to on
+	// install and filtered on uninstall — so a generator that only mutates
+	// object members would inherit the very blind spot this test exists to
+	// escape.
+	if sites := arraySites(doc, "$"); len(sites) > 0 && rng.Intn(3) == 0 {
+		return mutateArray(rng, sites[rng.Intn(len(sites))])
+	}
+
 	obj, path := randomContainer(rng, doc, "$")
 	keys := sortedKeys(obj)
 
@@ -540,11 +555,85 @@ func randomContainer(rng *rand.Rand, obj map[string]interface{}, path string) (m
 	return obj, path
 }
 
-func sortedKeys(obj map[string]interface{}) []string {
-	keys := make([]string, 0, len(obj))
-	for k := range obj {
-		keys = append(keys, k)
+// arraySite is one array reachable from the document, addressed through the
+// object that holds it so the mutation can write a new slice back.
+type arraySite struct {
+	parent map[string]interface{}
+	key    string
+	path   string
+}
+
+func arraySites(obj map[string]interface{}, path string) []arraySite {
+	var out []arraySite
+	for _, k := range sortedKeys(obj) {
+		switch v := obj[k].(type) {
+		case []interface{}:
+			out = append(out, arraySite{parent: obj, key: k, path: path + "." + k})
+			for i, e := range v {
+				if child, ok := e.(map[string]interface{}); ok {
+					out = append(out, arraySites(child, fmt.Sprintf("%s.%s[%d]", path, k, i))...)
+				}
+			}
+		case map[string]interface{}:
+			out = append(out, arraySites(v, path+"."+k)...)
+		}
 	}
-	sort.Strings(keys)
-	return keys
+	return out
+}
+
+// mutateArray appends to, removes from, or edits one element of an array. The
+// remove branch is what produces multi-element removal runs, which is where the
+// separator arithmetic is hardest.
+func mutateArray(rng *rand.Rand, site arraySite) (string, bool) {
+	arr := site.parent[site.key].([]interface{})
+
+	if len(arr) == 0 || rng.Intn(3) == 0 {
+		site.parent[site.key] = append(slices.Clone(arr), randomValue(rng, 2))
+		return "array-append " + site.path, true
+	}
+	at := rng.Intn(len(arr))
+	if rng.Intn(2) == 0 {
+		site.parent[site.key] = slices.Delete(slices.Clone(arr), at, at+1)
+		return fmt.Sprintf("array-remove %s[%d]", site.path, at), false
+	}
+	next := slices.Clone(arr)
+	next[at] = randomValue(rng, 2)
+	site.parent[site.key] = next
+	// Not comment-preserving, even when the old element was a scalar: if the
+	// new value happens to equal another element, the alignment reads the change
+	// as a removal plus a mid-array insertion, and a mid-array insertion is the
+	// documented case where the whole array is rewritten
+	// (TestSplice_MidArrayInsertRewritesOnlyThatArray).
+	return fmt.Sprintf("array-replace %s[%d]", site.path, at), false
+}
+
+func sortedKeys(obj map[string]interface{}) []string {
+	return slices.Sorted(maps.Keys(obj))
+}
+
+// TestSplice_MidArrayInsertRewritesOnlyThatArray exercises the alignment's
+// deliberate safety valve. A new element anywhere but the tail has no separator
+// to hang an edit off without guessing, so the array is re-encoded whole —
+// costing that array's comments and nothing else. The branch is unreachable
+// from this package's own merges (hook groups are appended and removed, never
+// spliced into the middle), which is exactly why it needs a test of its own:
+// nothing else would ever run it.
+func TestSplice_MidArrayInsertRewritesOnlyThatArray(t *testing.T) {
+	const src = "{\n  // keep me\n  \"list\": [\n    1, // inner comment\n    3\n  ],\n  \"other\": \"a && b\" // also keep me\n}\n"
+
+	got := spliceTo(t, src, func(s map[string]interface{}) {
+		list := s["list"].([]interface{})
+		s["list"] = []interface{}{list[0], json.Number("2"), list[1]}
+	})
+
+	if !strings.Contains(got, "// keep me") || !strings.Contains(got, "// also keep me") {
+		t.Errorf("the fallback reformatted more than the one array\n%s", got)
+	}
+	if !strings.Contains(got, `"a && b"`) {
+		t.Errorf("an untouched value outside the array was re-serialized\n%s", got)
+	}
+	if strings.Contains(got, "// inner comment") {
+		t.Errorf("expected the rewritten array to lose its own comment; if this now passes,\n"+
+			"the alignment learned mid-array insertion and this test should assert preservation\n%s", got)
+	}
 }

@@ -149,12 +149,20 @@ func Uninstall(cfg Config) (bool, error) {
 // Exported because claudecode's statusline installer merges into the same
 // settings.json and must read it exactly the same way.
 //
-// Comments are tolerated (issue #1371). gemini-cli's ~/.gemini/settings.json is
-// JSONC by design, and a `//` in a config that documents itself is not
-// malformed input — before this, an install into such a file failed the parse
-// and merged nothing at all. Comments are blanked to spaces rather than
-// stripped, so any error the decoder does report still points at the byte the
-// user has to go fix.
+// Comments are tolerated (issue #1371), for every caller rather than per
+// adapter. The file this is for is gemini-cli's ~/.gemini/settings.json, which
+// is JSONC by design — no caller reads it yet, and this is the prerequisite for
+// the one that will (#1355 Phase D). Tolerating them everywhere rather than
+// behind a Config flag is deliberate: the two files read today are strict JSON,
+// so a comment in one means the user's own agent cannot load it either, and
+// erroring here neither tells them that nor fixes it. Comments are blanked to
+// spaces rather than stripped, so any error the decoder does report still
+// points at the byte the user has to go fix.
+//
+// Not established: whether Claude Code and Codex themselves accept comments in
+// those files. If they do not, an install into a commented one now reports
+// success where it used to report a parse error — for a config their agent was
+// already failing to load.
 //
 // What has NOT changed is the treatment of genuinely broken JSON: it still
 // errors, and the file is still never overwritten. Issue #1362 is making that
