@@ -1721,7 +1721,10 @@ func (d *SessionDetector) refreshStaleSessions() {
 //     precisely the one never revisited, so a lost release stayed lost for the
 //     life of the process. (That asymmetry is also why compactHoldTimeout
 //     appeared to prove the mechanism worked: it pins at working, the state
-//     already being re-read.)
+//     already being re-read. #1387 records that older defect and is pinned by
+//     TestSessionDetector_StaleRefreshExpiresAnOrphanedCompactHoldOnAnIdleSession,
+//     since a compact hold does reach a non-working session whenever
+//     HandleCompactHook's working-flip dispatch is dropped.)
 //   - A DWELL OUTSTANDING (#1366). The same argument one turn deeper: a grace
 //     timer is a *delay* only if a later pass arrives to end it, and on a
 //     session nothing else revisits it silently becomes a drop. The case that
