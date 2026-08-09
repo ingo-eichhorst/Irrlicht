@@ -91,71 +91,93 @@ func TestSignalPolicies_HookPersistentHoldsDeclareACeiling(t *testing.T) {
 		if p.tier != TierHook || p.consumeOnce {
 			continue
 		}
+		t.Run(string(p.kind), func(t *testing.T) {
+			assertCeilingIsDeclaredAndSane(t, p)
+			assertCeilingIsEnforcedAndReported(t, p)
+			assertCeilingLeavesRipeAWindow(t, p)
+		})
+	}
+}
 
-		if p.ceiling <= 0 {
-			t.Errorf("policy %q is TierHook and persistent but declares no ceiling — "+
-				"a missed release pins the session at waiting forever, and no lower tier may correct it (#1360). "+
-				"Add a `ceiling:` with a comment stating the real-world duration it is calibrated against; "+
-				"see permissionPromptHoldTimeout for the shape",
-				p.kind)
-			continue
-		}
-		if p.ceiling < minDefensibleHookCeiling {
-			t.Errorf("policy %q declares ceiling %v, below the %v floor — a duration literal without a unit? "+
-				"A ceiling this short expires the hold on the pass that placed it",
-				p.kind, p.ceiling, minDefensibleHookCeiling)
-		}
-		if p.ceiling > maxDefensibleHookCeiling {
-			t.Errorf("policy %q declares ceiling %v, above the %v cap — that is a ceiling in name only; "+
-				"the session stays pinned longer than the daemon is likely to run",
-				p.kind, p.ceiling, maxDefensibleHookCeiling)
-		}
+// assertCeilingIsDeclaredAndSane is the forgetting check — the one that fails
+// on a new row whose author did not think about the clock. Fatal, because the
+// two assertions after it have nothing to measure without a ceiling.
+func assertCeilingIsDeclaredAndSane(t *testing.T, p signalPolicy) {
+	t.Helper()
 
-		// A declared ceiling that Overlay does not act on would satisfy every
-		// check above and fix nothing, so exercise it end to end: find a
-		// metric state under which this row is not already stale, then assert
-		// Overlay both drops the hold at the deadline and *reports* the
-		// expiry. Reporting is the discriminating half — stale drops a hold
-		// too, but only a ceiling returns a SignalExpiry, so this cannot pass
-		// by accident on a row whose staleness rule fired instead.
-		live := liveFixtureFor(p)
-		if live == nil {
-			t.Errorf("policy %q is stale under every fixture in ceilingProbeFixtures, so its ceiling cannot be "+
-				"exercised — add a metric state to that helper under which this row is still live at t0",
-				p.kind)
-			continue
-		}
+	if p.ceiling <= 0 {
+		t.Fatalf("policy %q is TierHook and persistent but declares no ceiling — "+
+			"a missed release pins the session at waiting forever, and no lower tier may correct it (#1360). "+
+			"Add a `ceiling:` with a comment stating the real-world duration it is calibrated against; "+
+			"see permissionPromptHoldTimeout for the shape",
+			p.kind)
+	}
+	if p.ceiling < minDefensibleHookCeiling {
+		t.Errorf("policy %q declares ceiling %v, below the %v floor — a duration literal without a unit? "+
+			"A ceiling this short expires the hold on the pass that placed it",
+			p.kind, p.ceiling, minDefensibleHookCeiling)
+	}
+	if p.ceiling > maxDefensibleHookCeiling {
+		t.Errorf("policy %q declares ceiling %v, above the %v cap — that is a ceiling in name only; "+
+			"the session stays pinned longer than the daemon is likely to run",
+			p.kind, p.ceiling, maxDefensibleHookCeiling)
+	}
+}
 
-		h := NewSignalHolds()
-		h.Hold(holdSID, p.kind, SignalPayload{}, holdT0)
-		expiries := h.Overlay(holdSID, live, holdT0.Add(p.ceiling))
+// assertCeilingIsEnforcedAndReported exercises the declared ceiling end to
+// end, because a field Overlay does not act on would satisfy every static
+// check and fix nothing.
+//
+// Reporting is the discriminating half: stale drops a hold too, but only a
+// ceiling returns a SignalExpiry — so this cannot pass by accident on a row
+// whose staleness rule fired instead.
+func assertCeilingIsEnforcedAndReported(t *testing.T, p signalPolicy) {
+	t.Helper()
 
-		if h.Held(holdSID, p.kind) {
-			t.Errorf("policy %q declares ceiling %v but the hold survived it — the field is not being enforced",
-				p.kind, p.ceiling)
-		}
-		if !reportsExpiryFor(expiries, p.kind) {
-			t.Errorf("policy %q expired at %v without reporting a SignalExpiry — an unobservable ceiling is a "+
-				"debugging blind spot, not a fix (#1360 scope item 4)",
-				p.kind, p.ceiling)
-		}
+	live := liveFixtureFor(p)
+	if live == nil {
+		t.Fatalf("policy %q is stale under every fixture in ceilingProbeFixtures, so its ceiling cannot be "+
+			"exercised — add a metric state to that helper under which this row is still live at t0",
+			p.kind)
+	}
 
-		// An arm-then-fire row needs a window in which it can actually fire.
-		// Overlay checks ceiling before ripe, so a ceiling at or below the
-		// ripen threshold drops the hold before it ever applies AND reports it
-		// as a lost release — a false entry in the trace, which is worse than
-		// a missing one. No row combines ceiling and ripe today, so this arm
-		// is dormant by construction; it exists so the first one that does
-		// cannot land silently.
-		if p.ripe != nil {
-			justBefore := holdContext{Metrics: live, HeldSince: holdT0, Now: holdT0.Add(p.ceiling - time.Nanosecond)}
-			if !p.ripe(justBefore) {
-				t.Errorf("policy %q is not ripe one nanosecond before its %v ceiling — it would be expired and "+
-					"reported as a lost release without ever having applied; the ceiling must exceed whatever "+
-					"elapsed threshold ripe measures",
-					p.kind, p.ceiling)
-			}
-		}
+	h := NewSignalHolds()
+	h.Hold(holdSID, p.kind, SignalPayload{}, holdT0)
+	expiries := h.Overlay(holdSID, live, holdT0.Add(p.ceiling))
+
+	if h.Held(holdSID, p.kind) {
+		t.Errorf("policy %q declares ceiling %v but the hold survived it — the field is not being enforced",
+			p.kind, p.ceiling)
+	}
+	if !reportsExpiryFor(expiries, p.kind) {
+		t.Errorf("policy %q expired at %v without reporting a SignalExpiry — an unobservable ceiling is a "+
+			"debugging blind spot, not a fix (#1360 scope item 4)",
+			p.kind, p.ceiling)
+	}
+}
+
+// assertCeilingLeavesRipeAWindow guards the combination no row has yet: an
+// arm-then-fire row needs an interval in which it can actually fire. Overlay
+// checks ceiling before ripe, so a ceiling at or below the ripen threshold
+// drops the hold before it ever applies AND reports it as a lost release — a
+// false entry in the trace, which is worse than a missing one.
+//
+// Dormant by construction today; it exists so the first row that combines the
+// two cannot land silently.
+func assertCeilingLeavesRipeAWindow(t *testing.T, p signalPolicy) {
+	t.Helper()
+
+	live := liveFixtureFor(p)
+	if p.ripe == nil || live == nil {
+		return
+	}
+
+	justBefore := holdContext{Metrics: live, HeldSince: holdT0, Now: holdT0.Add(p.ceiling - time.Nanosecond)}
+	if !p.ripe(justBefore) {
+		t.Errorf("policy %q is not ripe one nanosecond before its %v ceiling — it would be expired and "+
+			"reported as a lost release without ever having applied; the ceiling must exceed whatever "+
+			"elapsed threshold ripe measures",
+			p.kind, p.ceiling)
 	}
 }
 
