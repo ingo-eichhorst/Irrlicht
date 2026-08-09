@@ -77,9 +77,9 @@ func gatedHooksPermission(min, observed string, applied *bool) agent.Permission 
 		Title:  "Install status hooks",
 		Apply:  func() error { *applied = true; return nil },
 		Remove: func() error { *applied = false; return nil },
-		Hooks: &agent.HookInstall{
-			ConfigPath: func() (string, error) { return "/tmp/irrlicht-1365-test.json", nil },
-			Uninstall:  func() (bool, error) { return false, nil },
+		Writes: &agent.ManagedUserFile{
+			Path:      func() (string, error) { return "/tmp/irrlicht-1365-test.json", nil },
+			Uninstall: func() (bool, error) { return false, nil },
 			Version: &agent.VersionGate{
 				Min:      min,
 				Observed: func() string { return observed },
@@ -138,7 +138,7 @@ func TestHookVersionGate_UnknownVersionInstalls(t *testing.T) {
 		applied := false
 		svc, _ := newGateService()
 		p := gatedHooksPermission("2.1.122", unreadable, &applied)
-		p.Hooks.Version.Probe = nil // nothing left to learn the version from
+		p.Writes.Version.Probe = nil // nothing left to learn the version from
 
 		grant(svc, p)
 
@@ -185,7 +185,7 @@ func TestHookVersionGate_NoFloorDeclaredInstalls(t *testing.T) {
 	}, permission.StateGranted})
 
 	if !applied {
-		t.Error("Apply was skipped for a permission with no HookInstall at all")
+		t.Error("Apply was skipped for a permission with no agent.ManagedUserFile at all")
 	}
 }
 
@@ -197,7 +197,7 @@ func TestHookVersionGate_ProbeFailureInstallsAndSaysSo(t *testing.T) {
 	applied := false
 	svc, log := newGateService()
 	p := gatedHooksPermission("2.1.122", "", &applied)
-	p.Hooks.Version.Probe = []string{"irrlicht-no-such-binary-1365"}
+	p.Writes.Version.Probe = []string{"irrlicht-no-such-binary-1365"}
 
 	grant(svc, p)
 
@@ -233,24 +233,33 @@ func TestHookVersionGate_RealCodexDeclarationRefusesOldCLI(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
+	// Selected by KEY, not by "declares a managed file". Since #1383 every
+	// file-writing permission declares one, so `p.Writes != nil` no longer
+	// identifies the hooks permission — a second one on codex would silently
+	// retarget this test and nil-deref on Version below. The two hookversion
+	// contract tests select the same way.
 	var hooks agent.Permission
 	for _, p := range codex.Agent().Permissions {
-		if p.Hooks != nil {
+		if p.Key == codex.PermissionKeyHooks {
 			hooks = p
+			break
 		}
 	}
 	if hooks.Key == "" {
 		t.Fatal("codex declares no hooks permission")
 	}
-	if len(hooks.Hooks.Version.Probe) == 0 {
+	if hooks.Writes == nil || hooks.Writes.Version == nil {
+		t.Fatal("codex's hooks permission declares no version gate")
+	}
+	if len(hooks.Writes.Version.Probe) == 0 {
 		t.Fatal("codex declares no probe; the line below would be hiding its absence")
 	}
 	// Pin the version to the passive source. Left alone, the stale-transcript
 	// path would confirm against the real `codex` on the developer's machine
 	// (shouldConfirmByProbe, and correctly so — it is newer than 0.100.0), which
 	// makes the outcome depend on what happens to be installed. Everything else
-	// here is the real declaration: floor, Observed, ConfigPath, Apply.
-	hooks.Hooks.Version.Probe = nil
+	// here is the real declaration: floor, Observed, Path, Apply.
+	hooks.Writes.Version.Probe = nil
 
 	svc, log := newGateService()
 	svc.runClosureEffect(pendingEffect{"codex", hooks, permission.StateGranted})

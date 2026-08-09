@@ -377,6 +377,10 @@ func removeInstructionBlocks() error {
 // the CLI carried its own hand-written pair (task-eta + task-summary) and so
 // left the task-question block #759 installs sitting in the user's file with no
 // way to remove it, while printing "No irrlicht managed blocks found" (#1377).
+//
+// Its (bool, error) shape is also agent.ManagedUserFile.Uninstall's: the
+// declaration the recorder reads needs an undo callable from outside the
+// adapter, independent of the permission service's Remove wiring (#1383).
 func UninstallInstructionBlocks() (bool, error) {
 	changed := false
 	for _, b := range allInstructionBlocks() {

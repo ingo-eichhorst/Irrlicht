@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
 )
 
@@ -26,10 +27,15 @@ import (
 func TestEveryHookInstallDeclaresAVerifier(t *testing.T) {
 	for _, a := range All() {
 		for _, p := range a.Permissions {
-			if p.Hooks == nil {
+			// Scoped to HooksPermissionKey since #1383 widened the declaration
+			// from "the hook config" to every managed user file — the same
+			// scoping TestEveryHookInstallDeclaresAVersionFloor carries.
+			// Without it this would demand a hook verifier from claudecode's
+			// statusline and instruction blocks, which install no hooks.
+			if p.Writes == nil || p.Key != agent.HooksPermissionKey {
 				continue
 			}
-			if p.Hooks.Verify == nil {
+			if p.Writes.Verify == nil {
 				t.Errorf("%s/%s installs hooks into a user config but declares no Verify "+
 					"(#1372), so the re-verification loop skips it silently: the agent's own "+
 					"settings UI can delete our entries and the permission still reads granted "+
@@ -80,10 +86,10 @@ func TestHookVerifiersDoNotCreateTheConfigFile(t *testing.T) {
 	checked := 0
 	for _, a := range All() {
 		for _, p := range a.Permissions {
-			if p.Hooks == nil || p.Hooks.Verify == nil || p.Hooks.ConfigPath == nil {
+			if p.Writes == nil || p.Writes.Verify == nil || p.Writes.Path == nil {
 				continue
 			}
-			path, err := p.Hooks.ConfigPath()
+			path, err := p.Writes.Path()
 			if err != nil {
 				t.Errorf("%s/%s: ConfigPath failed under a temp HOME: %v", a.Identity.Name, p.Key, err)
 				continue
@@ -94,7 +100,7 @@ func TestHookVerifiersDoNotCreateTheConfigFile(t *testing.T) {
 					a.Identity.Name, p.Key, path)
 			}
 
-			status, err := p.Hooks.Verify()
+			status, err := p.Writes.Verify()
 			if err != nil {
 				t.Errorf("%s/%s: Verify errored on an absent config: %v — an install that is "+
 					"simply not there is the ordinary answer, not a fault",

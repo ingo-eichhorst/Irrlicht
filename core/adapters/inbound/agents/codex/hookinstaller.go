@@ -62,7 +62,7 @@ const hookMatcher = ".*"
 
 // minCLIVersion is the lowest Codex version whose hook event set includes
 // every event we install. Declared here and enforced generically by
-// PermissionService via agent.HookInstall.Version (issue #1365), replacing the
+// PermissionService via agent.ManagedUserFile.Version (issue #1365), replacing the
 // adapter-private codexSupportsHooks/parseCodexVersion pair this file used to
 // carry — the thing a third adapter would otherwise have copied.
 const minCLIVersion = "0.114.0"

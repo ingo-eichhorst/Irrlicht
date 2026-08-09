@@ -163,7 +163,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
 - Hook version floors: `contracttesting.AssertHookVersionGate`
   (`core/internal/contracttesting/hook_version.go`) is the static half of
   #1365 — a hooks permission declares the minimum upstream CLI version its
-  install requires (`agent.HookInstall.Version`), that floor is at or above
+  install requires (`agent.ManagedUserFile.Version`), that floor is at or above
   every installed event's own `Since` entry, and it actually refuses one patch
   below itself with a reason naming both versions. The runtime half — that
   `PermissionService.runClosureEffect` consults the declaration before running
@@ -176,7 +176,10 @@ Before marking a ticket done, run the full suite — every layer must pass:
   "--version"}}` and nothing else. `TestEveryHookInstallDeclaresAVersionFloor`
   (`core/adapters/inbound/agents/hookversion_test.go`) walks the registry
   projection so a new hook adapter is covered by existing rather than by
-  remembering to wire the contract. A refusal is an ordinary effect error, not
+  remembering to wire the contract; it narrows on
+  `agent.HooksPermissionKey`, because since #1383 the declaration it walks
+  covers every managed user file, and a floor is an obligation only of writing
+  into an agent's OWN config format. A refusal is an ordinary effect error, not
   a separate "skipped" concept, so #1362's surfacing carries it for free — the
   wizard shows "granted but NOT applied, because <the CLI is too old>", and
   because a re-answer re-runs an effect that previously failed, the refusal's
@@ -238,6 +241,31 @@ Before marking a ticket done, run the full suite — every layer must pass:
   a path-confinement rejection counts too (alive-but-misrouted is #1361's); and a
   consent-denied request counts nothing, because noting that a POST arrived is
   itself an observation.
+- Managed user files: every `modify`-kind permission with an `Apply` closure
+  declares the shared, user-owned file that closure writes
+  (`agent.Permission.Writes`, an `agent.ManagedUserFile` carrying `Path` +
+  `Uninstall`). Two projections read it, and they read deliberately different
+  slices: `agents.ManagedUserFiles` returns everything — what
+  `irrlichd --print-managed-files` prints and the onboarding recorder backs up
+  before spawning a `grant-all` daemon against the user's real `$HOME` — while
+  `agents.HookConfigs` narrows to `agent.HooksPermissionKey`, so
+  `--uninstall-hooks` keeps meaning what its name says instead of revoking the
+  CLAUDE.md instruction blocks or the kitty patch nobody asked it to touch.
+  Both project the **full consent catalog** (`consentCatalog` in
+  `core/cmd/irrlichd`), not `agents.All()`: three daemon-wide declarations —
+  gastown, launcher, kitty — are appended outside the adapter registry, and
+  projecting only the registry is exactly how the kitty config patch was
+  offered by the wizard while being invisible to both lists (#1383). The
+  catalog-wide tripwire is
+  `TestEveryModifyPermissionDeclaresTheFileItWrites`
+  (`core/cmd/irrlichd/managedfiles_test.go`); a new modify permission is
+  covered by existing rather than by remembering. It keys on a non-nil `Apply`
+  — what `grant-all` actually runs — never on `Kind`, which is the wizard label
+  the adapter author picked and which a file-writing permission could be given
+  wrongly; a permission whose `Apply` writes nothing is named in
+  `applyWritesNoUserFile` with its reason rather than falling out silently.
+  `agent.ControlPermission` needs no entry: its `Apply` is nil, which is the
+  shape to prefer.
   All seven contract families pass by construction against a correct adapter, so
   their whole value is that they *can* fail: a new or reworked contract
   assertion lands with the deliberate mutation that was seen red for each

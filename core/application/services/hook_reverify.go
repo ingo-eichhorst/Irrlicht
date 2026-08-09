@@ -310,14 +310,20 @@ func NewHookEntryVerifier(cfg HookEntryReverifyConfig) *HookEntryVerifier {
 	}
 	for _, a := range cfg.Agents {
 		for _, p := range a.Permissions {
-			if p.Hooks == nil || p.Hooks.Verify == nil {
+			// Verify is the precise gate, not the hooks key: it is the only
+			// field that says re-verification is possible at all. #1383
+			// widened Writes to every managed user file, so the
+			// instruction-block and kitty permissions reach here too — they
+			// declare no Verify and drop out, which is the correct answer
+			// rather than a coincidence.
+			if p.Writes == nil || p.Writes.Verify == nil {
 				continue
 			}
-			t := reverifyTarget{adapter: a.Identity.Name, permKey: p.Key, verify: p.Hooks.Verify}
-			if p.Hooks.ConfigPath != nil {
+			t := reverifyTarget{adapter: a.Identity.Name, permKey: p.Key, verify: p.Writes.Verify}
+			if p.Writes.Path != nil {
 				// Best effort: an unresolvable path costs the row its
 				// actionability, not the loop its function.
-				if path, err := p.Hooks.ConfigPath(); err == nil {
+				if path, err := p.Writes.Path(); err == nil {
 					t.configPath = path
 				}
 			}

@@ -191,10 +191,10 @@ func newGateFixture(state permission.State) *gateFixture {
 			f.removes++
 			return nil
 		},
-		Hooks: &agent.HookInstall{
-			ConfigPath: func() (string, error) { return "/tmp/irrelevant", nil },
-			Uninstall:  func() (bool, error) { return false, nil },
-			Verify:     func() (agent.HookEntryStatus, error) { return agent.HookEntryStatus{}, nil },
+		Writes: &agent.ManagedUserFile{
+			Path:      func() (string, error) { return "/tmp/irrelevant", nil },
+			Uninstall: func() (bool, error) { return false, nil },
+			Verify:    func() (agent.HookEntryStatus, error) { return agent.HookEntryStatus{}, nil },
 		},
 	}
 	f.svc = NewPermissionService(PermissionServiceDeps{

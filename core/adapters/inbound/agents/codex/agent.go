@@ -10,8 +10,11 @@ import (
 const PermissionKeyTranscripts = "transcripts"
 
 // PermissionKeyHooks gates installing Codex hooks into ~/.codex/hooks.json for
-// the hook-authoritative live-state tier (issue #1171).
-const PermissionKeyHooks = "hooks"
+// the hook-authoritative live-state tier (issue #1171). Aliased rather than
+// spelled out: `irrlichd --uninstall-hooks` narrows the managed-file projection
+// to this key from outside the adapter (#1383), so a local literal is a string
+// two packages agree on by convention.
+const PermissionKeyHooks = agent.HooksPermissionKey
 
 // Codex — circle with >_ terminal prompt. Color picks contrast against
 // the surrounding chrome: near-black on light themes, near-white on dark.
@@ -76,9 +79,9 @@ func Agent() agent.Agent {
 					" Toggling off removes the entries.",
 				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
 				Remove: func() error { _, err := UninstallHooks(); return err },
-				Hooks: &agent.HookInstall{
-					ConfigPath: codexHooksPath,
-					Uninstall:  UninstallHooks,
+				Writes: &agent.ManagedUserFile{
+					Path:      codexHooksPath,
+					Uninstall: UninstallHooks,
 					// Read-only; the repair it feeds runs through
 					// PermissionService, which re-checks consent under its own
 					// lock before writing (#1372).

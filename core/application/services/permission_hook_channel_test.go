@@ -21,15 +21,25 @@ import (
 // install, plus a modify permission that is NOT one. The second is the case
 // that separates "this agent has a granted permission" from "this agent's hook
 // channel is installed", and it is the easy one to conflate.
+//
+// Since #1383 the statusline permission ALSO declares a ManagedUserFile — the
+// declaration was widened from "the hook config" to every shared user-owned
+// file a permission writes, and claudecode's statusline really does write one
+// (~/.claude/settings.json). So the fixture mirrors that: a non-nil Writes on a
+// non-hooks key. This is the whole point of the row. HookChannelReady must
+// narrow on the HOOKS KEY, not on "declares a managed file" — the latter now
+// admits statusline, instruction blocks and kitty, and would arm the liveness
+// watchdog for an adapter whose hooks the user explicitly denied.
 func hookAgentDecl(f *applyFailure) agent.Agent {
 	return agent.Agent{
 		Identity: agent.Identity{Name: "testagent", DisplayName: "Test Agent"},
 		Process:  agent.Process{Match: agent.ExactName{Name: "testagent"}},
 		Permissions: []agent.Permission{
-			{Key: "hooks", Kind: permission.KindModify, Title: "Install hooks",
-				Hooks: &agent.HookInstall{}, Apply: f.apply, Remove: f.remove},
+			{Key: agent.HooksPermissionKey, Kind: permission.KindModify, Title: "Install hooks",
+				Writes: &agent.ManagedUserFile{}, Apply: f.apply, Remove: f.remove},
 			{Key: "statusline", Kind: permission.KindModify, Title: "Install statusline",
-				Apply: func() error { return nil }, Remove: func() error { return nil }},
+				Writes: &agent.ManagedUserFile{},
+				Apply:  func() error { return nil }, Remove: func() error { return nil }},
 		},
 	}
 }
