@@ -209,3 +209,46 @@ func assertKeyOrder(t *testing.T, doc string, keys []string) {
 		prev, prevKey = at, k
 	}
 }
+
+// TestUninstall_EmptiedHooksObjectIsRemoved pins the one behavior change this
+// work makes beyond the three lossy ones: an emptied "hooks" object goes away,
+// so revoking consent on a config that had no hooks gives the file back rather
+// than leaving `"hooks": {}` litter behind.
+//
+// The narrow case it does NOT cover is a user who wrote `"hooks": {"Stop": []}`
+// themselves. Their "Stop" key is already deleted by removeOurHook on main —
+// that `delete(hooksMap, event)` predates this change and is untouched by it —
+// so all this adds is removal of the empty object that deletion leaves. The
+// user content was lost before; only the wrapper is new.
+func TestUninstall_EmptiedHooksObjectIsRemoved(t *testing.T) {
+	const src = "{\n  \"theme\": \"dark\"\n}\n"
+	for name, build := range configs() {
+		t.Run(name, func(t *testing.T) {
+			path := seedRawFile(t, t.TempDir(), "settings.json", src)
+			cfg := build(path)
+			mustEnsure(t, cfg, "install", true)
+			mustUninstall(t, cfg, "uninstall", true)
+			if got := readRawFile(t, path); got != src {
+				t.Errorf("uninstall left something behind\n--- want ---\n%q\n--- got ---\n%q", src, got)
+			}
+		})
+	}
+}
+
+// TestUninstall_UserHooksKeepTheObject is the other side of it: any surviving
+// user-authored hook keeps "hooks" alive, so the cleanup can never take a
+// populated object with it.
+func TestUninstall_UserHooksKeepTheObject(t *testing.T) {
+	const src = "{\n  \"hooks\": {\n    \"PreToolUse\": [\n      {\n        \"hooks\": [\n          { \"type\": \"command\", \"command\": \"echo mine && true\" }\n        ]\n      }\n    ]\n  }\n}\n"
+	for name, build := range configs() {
+		t.Run(name, func(t *testing.T) {
+			path := seedRawFile(t, t.TempDir(), "settings.json", src)
+			cfg := build(path)
+			mustEnsure(t, cfg, "install", true)
+			mustUninstall(t, cfg, "uninstall", true)
+			if got := readRawFile(t, path); got != src {
+				t.Errorf("the user's own hook was not restored exactly\n--- want ---\n%q\n--- got ---\n%q", src, got)
+			}
+		})
+	}
+}

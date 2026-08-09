@@ -11,9 +11,9 @@ package hookjson
 //
 //   - comments vanish. gemini-cli's ~/.gemini/settings.json is JSONC: the CLI
 //     reads it through stripJsonComments and writes it back through the
-//     comment-json package precisely to keep them. Today they don't even
-//     survive the *read* — encoding/json rejects the file outright, so an
-//     install into a commented config fails rather than merging;
+//     comment-json package precisely to keep them. Before this, they did not
+//     even survive the *read* — encoding/json rejects the file outright, so an
+//     install into a commented config failed rather than merging;
 //   - key order becomes alphabetical, silently reshuffling a file the user
 //     organized deliberately;
 //   - `<`, `>` and `&` are HTML-escaped into their six-character \u00xx
@@ -27,23 +27,32 @@ package hookjson
 // order, their indentation, and their unescaped `&&` — is passed through as the
 // original bytes, because it literally is the original bytes.
 //
-// Two pieces make that possible:
+// Three pieces make that possible:
 //
-//   - blankComments overwrites each comment with spaces *in place*. The result
-//     is valid JSON that encoding/json can parse, and because blanking
-//     preserves length, every byte offset in it still indexes the same byte of
-//     the original. That is what lets a parser that has never heard of comments
-//     hand back offsets usable against a file full of them.
+//   - blankComments overwrites each comment with spaces *in place*, and records
+//     which bytes were comment. The blanked text is valid JSON that
+//     encoding/json can parse, and because blanking preserves length, every byte
+//     offset in it still indexes the original. That is what lets a parser which
+//     has never heard of comments hand back offsets usable against a file full
+//     of them.
 //   - parseSpans records, for every value in the document, the byte range it
 //     occupies. It uses encoding/json's own Decoder token stream rather than a
-//     hand-written JSON parser, so the only bespoke lexing in this file is the
-//     comment blanker.
+//     hand-written JSON parser, so the only bespoke lexing here is the blanker.
+//   - the splicer diffs wanted-against-original and emits byte edits.
+//
+// Because that last part is hand-rolled arithmetic over a file the user cares
+// about, the result is verified before it is returned: the spliced bytes are
+// re-decoded and compared against the document they are supposed to represent,
+// and any mismatch falls back to a whole-document encode. That trades the
+// user's comments for their data, which is the right way round — an
+// unparseable ~/.claude/settings.json breaks the agent and every subsequent
+// install, and the error is currently swallowed on the way out (#1362).
 //
 // Deliberately NOT changed here: what happens on genuinely malformed input.
 // A file that is not valid JSON once its comments are blanked still errors, and
 // is never overwritten — see ReadSettings. Issue #1362 is making that error
 // visible to the user rather than swallowed; it is correct behavior, not a
-// defect, and there is a test pinning it.
+// defect, and there are tests pinning it.
 
 import (
 	"bytes"
@@ -54,19 +63,29 @@ import (
 	"strings"
 )
 
-// errUnsupportedShape marks a document whose top level is something we have no
-// safe in-place edit for. The caller falls back to a whole-document encode.
-var errUnsupportedShape = errors.New("hookjson: unsupported document shape")
+// errNoSafeSplice means this document cannot be edited in place with confidence
+// — an unexpected top-level shape, overlapping edits, or a spliced result that
+// failed its own verification. The caller re-encodes the whole document
+// instead, losing comments but never content.
+var errNoSafeSplice = errors.New("hookjson: cannot splice safely")
 
 // --- comment blanking ---
 
 // blankComments returns a copy of src with every JSONC comment overwritten by
-// spaces. Newlines inside block comments are kept so line numbers — and, more
-// importantly, byte offsets — are identical to src. The result is what gets
-// parsed; the original is what gets copied from.
+// spaces.
 func blankComments(src []byte) []byte {
+	blanked, _ := blankCommentsMask(src)
+	return blanked
+}
+
+// blankCommentsMask also reports which bytes belonged to a comment. Newlines
+// inside a block comment are left as newlines in the blanked text — so line
+// structure and byte offsets are identical to src — but they are still marked,
+// which is how the separator arithmetic knows a comment spans lines.
+func blankCommentsMask(src []byte) ([]byte, []bool) {
 	out := make([]byte, len(src))
 	copy(out, src)
+	mask := make([]bool, len(src))
 
 	inString := false
 	for i := 0; i < len(src); i++ {
@@ -84,19 +103,20 @@ func blankComments(src []byte) []byte {
 		case c == '"':
 			inString = true
 		case c == '/' && i+1 < len(src) && src[i+1] == '/':
-			i = blankLineComment(src, out, i) - 1
+			i = blankLineComment(src, out, mask, i) - 1
 		case c == '/' && i+1 < len(src) && src[i+1] == '*':
-			i = blankBlockComment(src, out, i) - 1
+			i = blankBlockComment(src, out, mask, i) - 1
 		}
 	}
-	return out
+	return out, mask
 }
 
 // blankLineComment blanks from i up to (not including) the next newline and
 // returns the index it stopped at.
-func blankLineComment(src, out []byte, i int) int {
+func blankLineComment(src, out []byte, mask []bool, i int) int {
 	for i < len(src) && src[i] != '\n' {
 		out[i] = ' '
+		mask[i] = true
 		i++
 	}
 	return i
@@ -104,11 +124,13 @@ func blankLineComment(src, out []byte, i int) int {
 
 // blankBlockComment blanks from i through the closing `*/` (or to end of input
 // when unterminated, which then fails the parse) and returns the index just
-// past it. Newlines survive so offsets and line structure are unchanged.
-func blankBlockComment(src, out []byte, i int) int {
+// past it.
+func blankBlockComment(src, out []byte, mask []bool, i int) int {
 	for i < len(src) {
+		mask[i] = true
 		if src[i] == '*' && i+1 < len(src) && src[i+1] == '/' {
 			out[i], out[i+1] = ' ', ' '
+			mask[i+1] = true
 			return i + 2
 		}
 		if src[i] != '\n' {
@@ -141,11 +163,7 @@ type jsonMember struct {
 func parseSpans(blanked []byte) (*jsonNode, error) {
 	dec := json.NewDecoder(bytes.NewReader(blanked))
 	dec.UseNumber()
-	n, err := parseNode(dec, blanked)
-	if err != nil {
-		return nil, err
-	}
-	return n, nil
+	return parseNode(dec, blanked)
 }
 
 // tokenStart returns the offset of the next token, given the offset just past
@@ -182,7 +200,7 @@ func parseNode(dec *json.Decoder, src []byte) (*jsonNode, error) {
 	case '[':
 		return parseArray(dec, src, start)
 	}
-	return nil, errUnsupportedShape
+	return nil, errNoSafeSplice
 }
 
 func parseObject(dec *json.Decoder, src []byte, start int) (*jsonNode, error) {
@@ -195,7 +213,7 @@ func parseObject(dec *json.Decoder, src []byte, start int) (*jsonNode, error) {
 		}
 		key, ok := keyTok.(string)
 		if !ok {
-			return nil, errUnsupportedShape
+			return nil, errNoSafeSplice
 		}
 		value, err := parseNode(dec, src)
 		if err != nil {
@@ -276,25 +294,18 @@ func indentOfLine(src []byte, pos int) (string, bool) {
 	return string(src[ls:pos]), true
 }
 
-// containerIndents returns the indent for a container's items and for its
-// closing bracket. Observed indentation wins over a computed one, so an
-// irregularly formatted file keeps its own shape.
-func containerIndents(blanked []byte, n *jsonNode, depth int, lay layout) (item string, closing string) {
-	closing = strings.Repeat(lay.indent, depth)
-	if observed, ok := indentOfLine(blanked, n.start); ok {
-		closing = observed
+// throughLineEnd extends pos past the rest of its line when only whitespace
+// remains on it, so removing an item takes its line with it instead of leaving
+// a blank one behind. Returns pos unchanged when something else is on the line.
+func throughLineEnd(orig []byte, pos int) int {
+	i := pos
+	for i < len(orig) && (orig[i] == ' ' || orig[i] == '\t' || orig[i] == '\r') {
+		i++
 	}
-	item = closing + lay.indent
-	if len(n.members) > 0 {
-		if observed, ok := indentOfLine(blanked, n.members[0].keyStart); ok {
-			item = observed
-		}
-	} else if len(n.elems) > 0 {
-		if observed, ok := indentOfLine(blanked, n.elems[0].start); ok {
-			item = observed
-		}
+	if i < len(orig) && orig[i] == '\n' {
+		return i + 1
 	}
-	return item, closing
+	return pos
 }
 
 // --- edits ---
@@ -306,28 +317,31 @@ type edit struct {
 
 // applyEdits splices edits into orig. Insertions share a position with the edit
 // they follow, so the sort must be stable to keep them in the order emitted.
-func applyEdits(orig []byte, edits []edit) []byte {
+// Overlapping edits mean the arithmetic that produced them is wrong; rather
+// than silently dropping one and writing a plausible-looking file, it reports
+// failure so the caller can fall back to a whole-document encode.
+func applyEdits(orig []byte, edits []edit) ([]byte, bool) {
 	sort.SliceStable(edits, func(i, j int) bool { return edits[i].start < edits[j].start })
 	var out bytes.Buffer
 	prev := 0
 	for _, e := range edits {
 		if e.start < prev {
-			continue // defensive: overlapping edits, keep the earlier one
+			return nil, false
 		}
 		out.Write(orig[prev:e.start])
 		out.Write(e.text)
 		prev = e.end
 	}
 	out.Write(orig[prev:])
-	return out.Bytes()
+	return out.Bytes(), true
 }
 
 // --- encoding ---
 
-// encodeValue renders v the way this package writes JSON: two-space-style
-// indentation taken from the file, and no HTML escaping, so `&&` stays `&&`.
-// prefix is the indentation of the line the value starts on; the first line
-// carries none because it follows a `"key": `.
+// encodeValue renders v the way this package writes JSON: indentation taken
+// from the file, and no HTML escaping, so `&&` stays `&&`. prefix is the
+// indentation of the line the value starts on; the first line carries none
+// because it follows a `"key": `.
 func encodeValue(v interface{}, prefix string, lay layout) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -344,9 +358,10 @@ func encodeValue(v interface{}, prefix string, lay layout) ([]byte, error) {
 }
 
 // encodeDocument renders a whole settings document from scratch — the path
-// taken when there is no original file to preserve. The two-space indent and
-// trailing newline are the shape a hand-edited config expects, and are pinned
-// by TestWriteSettings_ShapeAndDelegation.
+// taken when there is no original file to preserve, and the fallback when an
+// in-place edit cannot be made safely. The two-space indent and trailing
+// newline are the shape a hand-edited config expects, and are pinned by
+// TestWriteSettings_ShapeAndDelegation.
 func encodeDocument(settings map[string]interface{}) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -368,161 +383,23 @@ func encodeKey(key string) ([]byte, error) {
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
-// renderMembers renders `"k": v` pairs joined by a comma and a newline, each
-// continuation line indented by indent.
-func renderMembers(keys []string, want map[string]interface{}, indent string, lay layout) ([]byte, error) {
-	var buf bytes.Buffer
-	for i, k := range keys {
-		if i > 0 {
-			buf.WriteString("," + lay.newline + indent)
-		}
-		key, err := encodeKey(k)
-		if err != nil {
-			return nil, err
-		}
-		value, err := encodeValue(want[k], indent, lay)
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(key)
-		buf.WriteString(": ")
-		buf.Write(value)
-	}
-	return buf.Bytes(), nil
+// --- the splicer ---
+
+// splicer carries the document being edited: the original bytes that get
+// copied, the blanked copy that gets parsed, the comment mask the separator
+// arithmetic consults, and the formatting to match when inserting.
+type splicer struct {
+	orig    []byte
+	blanked []byte
+	mask    []bool
+	lay     layout
 }
-
-func renderElems(values []interface{}, indent string, lay layout) ([]byte, error) {
-	var buf bytes.Buffer
-	for i, v := range values {
-		if i > 0 {
-			buf.WriteString("," + lay.newline + indent)
-		}
-		value, err := encodeValue(v, indent, lay)
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(value)
-	}
-	return buf.Bytes(), nil
-}
-
-// --- separator arithmetic ---
-//
-// Insertion and removal are written as exact inverses of each other, which is
-// what makes install-then-uninstall byte-identical. Appending an item emits a
-// comma at the end of the previous item's value and the item itself after any
-// trailing same-line comment; removing the tail deletes exactly those two
-// ranges. The comma has to go before the comment and the content after it —
-// putting the comma after would bury it inside a `//` comment and produce a
-// file that no longer parses.
-
-// nextComma returns the offset of the separating comma at or after from, or -1.
-// Blanked comments read as spaces, so a comment sitting between a value and its
-// comma is skipped like whitespace.
-func nextComma(blanked []byte, from int) int {
-	for i := from; i < len(blanked); i++ {
-		switch blanked[i] {
-		case ',':
-			return i
-		case ' ', '\t', '\r', '\n':
-			continue
-		default:
-			return -1
-		}
-	}
-	return -1
-}
-
-// endOfSameLineTrailer returns the offset just past a comment trailing on the
-// same line as from, or from itself when there is none. Comment bytes are the
-// ones where the blanked copy differs from the original.
-func endOfSameLineTrailer(orig, blanked []byte, from int) int {
-	last := from
-	for i := from; i < len(orig) && orig[i] != '\n'; i++ {
-		if blanked[i] != orig[i] {
-			last = i + 1
-			continue
-		}
-		if orig[i] == ' ' || orig[i] == '\t' || orig[i] == '\r' {
-			continue
-		}
-		break
-	}
-	return last
-}
-
-// itemSpan is one member or element of a container, reduced to the two offsets
-// the separator arithmetic needs.
-type itemSpan struct{ start, end int }
-
-// removeItems emits the edits that delete idx (ascending) from a container.
-// Consecutive removals are handled as one run so their spans cannot overlap.
-func removeItems(orig, blanked []byte, items []itemSpan, idx []int, edits *[]edit) bool {
-	for run := 0; run < len(idx); {
-		i := idx[run]
-		j := i
-		for run+1 < len(idx) && idx[run+1] == j+1 {
-			run++
-			j = idx[run]
-		}
-		run++
-		if !removeRun(orig, blanked, items, i, j, edits) {
-			return false
-		}
-	}
-	return true
-}
-
-// removeRun deletes items[i..j], keeping the container's remaining separators
-// valid. Which side the comma comes from depends on whether anything survives
-// before or after the run.
-func removeRun(orig, blanked []byte, items []itemSpan, i, j int, edits *[]edit) bool {
-	if i > 0 {
-		// Take the comma that precedes the run, and everything after it up to
-		// the end of the run — leaving a same-line comment on the previous
-		// item's line where the user put it.
-		comma := nextComma(blanked, items[i-1].end)
-		if comma < 0 {
-			return false
-		}
-		*edits = append(*edits, edit{start: endOfSameLineTrailer(orig, blanked, comma+1), end: items[j].end})
-		if j == len(items)-1 {
-			*edits = append(*edits, edit{start: comma, end: comma + 1})
-		}
-		return true
-	}
-	// Nothing survives before the run, so take the comma that follows it.
-	comma := nextComma(blanked, items[j].end)
-	if comma < 0 {
-		return false
-	}
-	*edits = append(*edits, edit{start: items[0].start, end: endOfSameLineTrailer(orig, blanked, comma+1)})
-	return true
-}
-
-// appendItems emits the edits that add body after the last item of a container.
-func appendItems(orig, blanked []byte, last itemSpan, body []byte, indent string, lay layout, edits *[]edit) {
-	*edits = append(*edits, edit{start: last.end, end: last.end, text: []byte(",")})
-	at := endOfSameLineTrailer(orig, blanked, last.end)
-	*edits = append(*edits, edit{start: at, end: at, text: []byte(lay.newline + indent + string(body))})
-}
-
-// fillEmptyContainer replaces a container's whole interior, used when it had no
-// items to hang a separator off. Emptying it again restores the original `{}`.
-func fillEmptyContainer(n *jsonNode, body []byte, itemIndent, closeIndent string, lay layout, edits *[]edit) {
-	text := ""
-	if len(body) > 0 {
-		text = lay.newline + itemIndent + string(body) + lay.newline + closeIndent
-	}
-	*edits = append(*edits, edit{start: n.start + 1, end: n.end - 1, text: []byte(text)})
-}
-
-// --- structural diff ---
 
 // spliceSettings rewrites original so that it decodes to want, changing as few
 // bytes as it can. Everything it does not have to touch stays byte-for-byte.
+// Returns errNoSafeSplice when it cannot do that with confidence.
 func spliceSettings(original []byte, want map[string]interface{}) ([]byte, error) {
-	blanked := blankComments(original)
+	blanked, mask := blankCommentsMask(original)
 	root, err := parseSpans(blanked)
 	if err != nil {
 		return nil, err
@@ -533,12 +410,33 @@ func spliceSettings(original []byte, want map[string]interface{}) ([]byte, error
 		return nil, err
 	}
 
-	lay := detectLayout(original, blanked)
+	s := &splicer{orig: original, blanked: blanked, mask: mask, lay: detectLayout(original, blanked)}
 	var edits []edit
-	if err := diffValue(original, blanked, root, normalized, 0, lay, &edits); err != nil {
+	if err := s.diffValue(root, normalized, 0, &edits); err != nil {
 		return nil, err
 	}
-	return applyEdits(original, edits), nil
+
+	out, ok := applyEdits(original, edits)
+	if !ok {
+		return nil, errNoSafeSplice
+	}
+	if !decodesTo(out, normalized) {
+		// The edit arithmetic produced something that is not the document we
+		// were asked for. Never write it: a corrupted settings.json breaks the
+		// agent and every later install, whereas re-encoding merely costs the
+		// comments this package exists to protect.
+		return nil, errNoSafeSplice
+	}
+	return out, nil
+}
+
+// decodesTo reports whether spliced bytes really represent want.
+func decodesTo(spliced []byte, want interface{}) bool {
+	got, err := decodeBytes(blankComments(spliced))
+	if err != nil {
+		return false
+	}
+	return reflect.DeepEqual(got, want)
 }
 
 // normalize round-trips a value through the decoder so it compares like-for-like
@@ -563,16 +461,184 @@ func decodeBytes(data []byte) (interface{}, error) {
 	return out, nil
 }
 
-func decodeNode(blanked []byte, n *jsonNode) (interface{}, error) {
-	return decodeBytes(blanked[n.start:n.end])
+func (s *splicer) decodeNode(n *jsonNode) (interface{}, error) {
+	return decodeBytes(s.blanked[n.start:n.end])
 }
+
+// --- separator arithmetic ---
+//
+// Appending an item emits a comma at the end of the last surviving item's value
+// and the item itself after any comment trailing that value; removing the tail
+// deletes exactly those two ranges, which is what makes install-then-uninstall
+// byte-identical. The comma has to go before the comment and the content after
+// it — putting the comma after would bury it inside a `//` comment and produce
+// a file that no longer parses.
+
+// nextComma returns the offset of the separating comma at or after from, or -1.
+// Blanked comments read as whitespace, so a comment sitting between a value and
+// its comma is skipped like whitespace.
+func (s *splicer) nextComma(from int) int {
+	for i := from; i < len(s.blanked); i++ {
+		switch s.blanked[i] {
+		case ',':
+			return i
+		case ' ', '\t', '\r', '\n':
+			continue
+		default:
+			return -1
+		}
+	}
+	return -1
+}
+
+// trailerEnd returns the offset just past any comments trailing on the same
+// line as from, or from itself when there are none.
+//
+// A block comment is consumed whole even when it spans lines. Stopping at the
+// first newline would return an offset *inside* the comment, and splicing there
+// either buries the inserted member in the comment or deletes its closing `*/`
+// and swallows the rest of the file.
+func (s *splicer) trailerEnd(from int) int {
+	last := from
+	for i := from; i < len(s.orig); {
+		if s.mask[i] {
+			for i < len(s.orig) && s.mask[i] {
+				i++
+			}
+			last = i
+			continue
+		}
+		if s.orig[i] == ' ' || s.orig[i] == '\t' || s.orig[i] == '\r' {
+			i++
+			continue
+		}
+		break // a newline, or real content, ends the trailer
+	}
+	return last
+}
+
+// itemSpan is one member or element of a container, reduced to the two offsets
+// the separator arithmetic needs.
+type itemSpan struct{ start, end int }
+
+// removeItems emits the edits that delete idx (ascending) from a container.
+// Consecutive removals are handled as one run so their spans cannot overlap.
+func (s *splicer) removeItems(items []itemSpan, idx []int, edits *[]edit) bool {
+	for run := 0; run < len(idx); {
+		i := idx[run]
+		j := i
+		for run+1 < len(idx) && idx[run+1] == j+1 {
+			run++
+			j = idx[run]
+		}
+		run++
+		if !s.removeRun(items, i, j, edits) {
+			return false
+		}
+	}
+	return true
+}
+
+// removeRun deletes items[i..j], leaving exactly one comma between every pair
+// of survivors.
+//
+// Which comma goes with the run depends on what survives around it. When
+// nothing survives after the run, the comma *before* it must go or the last
+// survivor is left with a trailing comma. When something does survive after the
+// run, that same comma is what separates the survivors on either side, so the
+// comma *after* the run goes instead — taking both would leave the survivors
+// unseparated, and taking neither writes `,,` into the user's file.
+func (s *splicer) removeRun(items []itemSpan, i, j int, edits *[]edit) bool {
+	if j == len(items)-1 && i > 0 {
+		comma := s.nextComma(items[i-1].end)
+		if comma < 0 {
+			return false
+		}
+		start := s.trailerEnd(comma + 1)
+		// Start from the end of the line above the run rather than from the
+		// previous item's comma, so a standalone comment the user wrote between
+		// the two is left where it is instead of being swallowed. In the common
+		// case the two positions are the same byte, which is what keeps this the
+		// exact inverse of an append.
+		// Anything trailing the removed value goes with it. Leaving it behind
+		// would splice it onto the line above, and a `/* … */` landing after a
+		// `//` on that line is no longer a block comment — its closing `*/`
+		// becomes stray text and the file stops parsing.
+		end := s.trailerEnd(items[j].end)
+		// items[i], not items[j]: the run begins at i, and anchoring on the last
+		// item of a multi-item run would delete only that one and leave the rest
+		// of the run in the file.
+		if _, ownLine := indentOfLine(s.blanked, items[i].start); ownLine {
+			if ls := lineStart(s.blanked, items[i].start); ls > start {
+				start = ls - 1
+			}
+		}
+		*edits = append(*edits, edit{start: start, end: end})
+		*edits = append(*edits, edit{start: comma, end: comma + 1})
+		return true
+	}
+
+	comma := s.nextComma(items[j].end)
+	if comma < 0 {
+		return false
+	}
+	start, end := items[i].start, s.trailerEnd(comma+1)
+	// When the run owns its lines outright, take the lines rather than the
+	// values, so nothing is left behind but correctly indented survivors.
+	if indent, ok := indentOfLine(s.blanked, start); ok {
+		start -= len(indent)
+		end = throughLineEnd(s.orig, end)
+	}
+	*edits = append(*edits, edit{start: start, end: end})
+	return true
+}
+
+// appendItems emits the edits that add body after the last surviving item.
+func (s *splicer) appendItems(last itemSpan, body []byte, indent string, edits *[]edit) {
+	*edits = append(*edits, edit{start: last.end, end: last.end, text: []byte(",")})
+	at := s.trailerEnd(last.end)
+	*edits = append(*edits, edit{start: at, end: at, text: []byte(s.lay.newline + indent + string(body))})
+}
+
+// fillEmptyContainer replaces a container's whole interior, used when it has no
+// surviving item to hang a separator off. Emptying it again restores `{}`.
+func (s *splicer) fillEmptyContainer(n *jsonNode, body []byte, itemIndent, closeIndent string, edits *[]edit) {
+	text := ""
+	if len(body) > 0 {
+		text = s.lay.newline + itemIndent + string(body) + s.lay.newline + closeIndent
+	}
+	*edits = append(*edits, edit{start: n.start + 1, end: n.end - 1, text: []byte(text)})
+}
+
+// containerIndents returns the indent for a container's items and for its
+// closing bracket. Observed indentation wins over a computed one, so an
+// irregularly formatted file keeps its own shape.
+func (s *splicer) containerIndents(n *jsonNode, depth int) (item string, closing string) {
+	closing = strings.Repeat(s.lay.indent, depth)
+	if observed, ok := indentOfLine(s.blanked, n.start); ok {
+		closing = observed
+	}
+	item = closing + s.lay.indent
+	if len(n.members) > 0 {
+		if observed, ok := indentOfLine(s.blanked, n.members[0].keyStart); ok {
+			item = observed
+		}
+	} else if len(n.elems) > 0 {
+		if observed, ok := indentOfLine(s.blanked, n.elems[0].start); ok {
+			item = observed
+		}
+	}
+	return item, closing
+}
+
+// --- structural diff ---
 
 // diffValue emits the edits that turn the value at n into want. A subtree that
 // already matches produces no edits at all, which is the whole mechanism by
 // which comments, ordering and escaping survive: untouched bytes are never
 // rewritten, so there is nothing for a serializer to get wrong.
-func diffValue(orig, blanked []byte, n *jsonNode, want interface{}, depth int, lay layout, edits *[]edit) error {
-	have, err := decodeNode(blanked, n)
+func (s *splicer) diffValue(n *jsonNode, want interface{}, depth int, edits *[]edit) error {
+	have, err := s.decodeNode(n)
 	if err != nil {
 		return err
 	}
@@ -583,24 +649,24 @@ func diffValue(orig, blanked []byte, n *jsonNode, want interface{}, depth int, l
 	switch n.kind {
 	case '{':
 		if m, ok := want.(map[string]interface{}); ok {
-			return diffObject(orig, blanked, n, m, depth, lay, edits)
+			return s.diffObject(n, m, depth, edits)
 		}
 	case '[':
-		if s, ok := want.([]interface{}); ok {
-			return diffArray(orig, blanked, n, s, depth, lay, edits)
+		if a, ok := want.([]interface{}); ok {
+			return s.diffArray(n, a, depth, edits)
 		}
 	}
-	return replaceNode(blanked, n, want, depth, lay, edits)
+	return s.replaceNode(n, want, depth, edits)
 }
 
 // replaceNode rewrites a value wholesale — a scalar that changed, or a value
 // whose type changed out from under the original shape.
-func replaceNode(blanked []byte, n *jsonNode, want interface{}, depth int, lay layout, edits *[]edit) error {
-	prefix := strings.Repeat(lay.indent, depth)
-	if observed, ok := indentOfLine(blanked, n.start); ok {
+func (s *splicer) replaceNode(n *jsonNode, want interface{}, depth int, edits *[]edit) error {
+	prefix := strings.Repeat(s.lay.indent, depth)
+	if observed, ok := indentOfLine(s.blanked, n.start); ok {
 		prefix = observed
 	}
-	text, err := encodeValue(want, prefix, lay)
+	text, err := encodeValue(want, prefix, s.lay)
 	if err != nil {
 		return err
 	}
@@ -608,8 +674,8 @@ func replaceNode(blanked []byte, n *jsonNode, want interface{}, depth int, lay l
 	return nil
 }
 
-func diffObject(orig, blanked []byte, n *jsonNode, want map[string]interface{}, depth int, lay layout, edits *[]edit) error {
-	itemIndent, closeIndent := containerIndents(blanked, n, depth, lay)
+func (s *splicer) diffObject(n *jsonNode, want map[string]interface{}, depth int, edits *[]edit) error {
+	itemIndent, closeIndent := s.containerIndents(n, depth)
 
 	kept := make(map[string]bool, len(n.members))
 	var removed []int
@@ -620,7 +686,7 @@ func diffObject(orig, blanked []byte, n *jsonNode, want map[string]interface{}, 
 			continue
 		}
 		kept[m.key] = true
-		if err := diffValue(orig, blanked, m.value, value, depth+1, lay, edits); err != nil {
+		if err := s.diffValue(m.value, value, depth+1, edits); err != nil {
 			return err
 		}
 	}
@@ -633,24 +699,37 @@ func diffObject(orig, blanked []byte, n *jsonNode, want map[string]interface{}, 
 	}
 	sort.Strings(added) // map iteration is random; the file must not be
 
-	body, err := renderMembers(added, want, itemIndent, lay)
-	if err != nil {
-		return err
+	var buf bytes.Buffer
+	for i, k := range added {
+		if i > 0 {
+			buf.WriteString("," + s.lay.newline + itemIndent)
+		}
+		key, err := encodeKey(k)
+		if err != nil {
+			return err
+		}
+		value, err := encodeValue(want[k], itemIndent, s.lay)
+		if err != nil {
+			return err
+		}
+		buf.Write(key)
+		buf.WriteString(": ")
+		buf.Write(value)
 	}
 
 	items := make([]itemSpan, len(n.members))
 	for i, m := range n.members {
 		items[i] = itemSpan{start: m.keyStart, end: m.value.end}
 	}
-	return applyContainerEdits(orig, blanked, n, items, removed, len(added), body, itemIndent, closeIndent, lay, edits)
+	return s.applyContainerEdits(n, items, removed, len(added), buf.Bytes(), itemIndent, closeIndent, edits)
 }
 
-func diffArray(orig, blanked []byte, n *jsonNode, want []interface{}, depth int, lay layout, edits *[]edit) error {
-	itemIndent, closeIndent := containerIndents(blanked, n, depth, lay)
+func (s *splicer) diffArray(n *jsonNode, want []interface{}, depth int, edits *[]edit) error {
+	itemIndent, closeIndent := s.containerIndents(n, depth)
 
 	have := make([]interface{}, len(n.elems))
 	for i, e := range n.elems {
-		v, err := decodeNode(blanked, e)
+		v, err := s.decodeNode(e)
 		if err != nil {
 			return err
 		}
@@ -662,47 +741,103 @@ func diffArray(orig, blanked []byte, n *jsonNode, want []interface{}, depth int,
 		// An insertion somewhere other than the tail has no separator we can
 		// hang an edit off without guessing. Rewriting the array wholesale
 		// costs only the comments inside this one array, and never corrupts.
-		return replaceNode(blanked, n, want, depth, lay, edits)
+		return s.replaceNode(n, want, depth, edits)
 	}
 
 	for _, p := range plan.paired {
-		if err := diffValue(orig, blanked, n.elems[p.have], want[p.want], depth+1, lay, edits); err != nil {
+		if err := s.diffValue(n.elems[p.have], want[p.want], depth+1, edits); err != nil {
 			return err
 		}
 	}
 
-	body, err := renderElems(plan.appended, itemIndent, lay)
-	if err != nil {
-		return err
+	var buf bytes.Buffer
+	for i, v := range plan.appended {
+		if i > 0 {
+			buf.WriteString("," + s.lay.newline + itemIndent)
+		}
+		value, err := encodeValue(v, itemIndent, s.lay)
+		if err != nil {
+			return err
+		}
+		buf.Write(value)
 	}
 
 	items := make([]itemSpan, len(n.elems))
 	for i, e := range n.elems {
 		items[i] = itemSpan{start: e.start, end: e.end}
 	}
-	return applyContainerEdits(orig, blanked, n, items, plan.removed, len(plan.appended), body, itemIndent, closeIndent, lay, edits)
+	return s.applyContainerEdits(n, items, plan.removed, len(plan.appended), buf.Bytes(), itemIndent, closeIndent, edits)
 }
 
 // applyContainerEdits is the shared tail of diffObject and diffArray: given
-// which items go away and what text gets appended, emit the edits. The branches
-// exist because a container with nothing left in it has no separator to attach
-// to, so its interior is rewritten instead.
-func applyContainerEdits(orig, blanked []byte, n *jsonNode, items []itemSpan, removed []int, addedCount int, body []byte, itemIndent, closeIndent string, lay layout, edits *[]edit) error {
-	emptied := len(removed) == len(items)
-
-	if emptied {
-		fillEmptyContainer(n, body, itemIndent, closeIndent, lay, edits)
+// which items go away and what text gets appended, emit the edits.
+func (s *splicer) applyContainerEdits(n *jsonNode, items []itemSpan, removed []int, addedCount int, body []byte, itemIndent, closeIndent string, edits *[]edit) error {
+	if lastSurviving(len(items), removed) < 0 {
+		// Nothing survives, so there is no separator to attach to: the
+		// container's whole interior is rewritten instead.
+		s.fillEmptyContainer(n, body, itemIndent, closeIndent, edits)
 		return nil
 	}
-	if len(removed) > 0 {
-		if !removeItems(orig, blanked, items, removed, edits) {
-			return errUnsupportedShape
+
+	// When the tail is being removed and new items are arriving in the same
+	// pass, the new items simply take the tail's place. The comma that already
+	// separates the last survivor stays exactly where it is — deleting it with
+	// the tail and then re-adding it for the append means two edits at one
+	// offset, which is an overlap, and anchoring the append on the removed item
+	// puts the comma at an offset the deletion splices away.
+	if tail := trailingRun(len(items), removed); tail >= 0 && addedCount > 0 {
+		comma := s.nextComma(items[tail-1].end)
+		if comma < 0 {
+			return errNoSafeSplice
 		}
+		*edits = append(*edits, edit{
+			start: s.trailerEnd(comma + 1),
+			end:   items[len(items)-1].end,
+			text:  []byte(s.lay.newline + itemIndent + string(body)),
+		})
+		earlier := removed[:len(removed)-(len(items)-tail)]
+		if len(earlier) > 0 && !s.removeItems(items, earlier, edits) {
+			return errNoSafeSplice
+		}
+		return nil
+	}
+
+	if len(removed) > 0 && !s.removeItems(items, removed, edits) {
+		return errNoSafeSplice
 	}
 	if addedCount > 0 {
-		appendItems(orig, blanked, items[len(items)-1], body, itemIndent, lay, edits)
+		s.appendItems(items[len(items)-1], body, itemIndent, edits)
 	}
 	return nil
+}
+
+// lastSurviving returns the highest index in [0,count) that is not in removed,
+// or -1 when every item is going away.
+func lastSurviving(count int, removed []int) int {
+	gone := make(map[int]bool, len(removed))
+	for _, i := range removed {
+		gone[i] = true
+	}
+	for i := count - 1; i >= 0; i-- {
+		if !gone[i] {
+			return i
+		}
+	}
+	return -1
+}
+
+// trailingRun returns the first index of the run of removed items that reaches
+// the last item, or -1 when the last item survives. Callers reach it only when
+// something survives, so the returned index is always >= 1.
+func trailingRun(count int, removed []int) int {
+	if len(removed) == 0 || removed[len(removed)-1] != count-1 {
+		return -1
+	}
+	start := count - 1
+	for k := len(removed) - 2; k >= 0 && removed[k] == start-1; k-- {
+		start--
+	}
+	return start
 }
 
 // --- array alignment ---
@@ -725,8 +860,6 @@ type arrayPlan struct {
 // never spliced into the middle — and the caller falls back to rewriting the
 // array rather than guessing at a separator.
 func alignArray(have, want []interface{}) (arrayPlan, bool) {
-	matches := longestCommonSubsequence(have, want)
-
 	var plan arrayPlan
 	ai, bi := 0, 0
 	advance := func(ma, mb int) bool {
@@ -750,7 +883,7 @@ func alignArray(have, want []interface{}) (arrayPlan, bool) {
 		return true
 	}
 
-	for _, m := range matches {
+	for _, m := range longestCommonSubsequence(have, want) {
 		if !advance(m.have, m.want) {
 			return arrayPlan{}, false
 		}

@@ -224,7 +224,7 @@ func renderSettings(original []byte, settings map[string]interface{}) ([]byte, e
 		return encodeDocument(settings)
 	}
 	data, err := spliceSettings(original, settings)
-	if errors.Is(err, errUnsupportedShape) {
+	if errors.Is(err, errNoSafeSplice) {
 		return encodeDocument(settings)
 	}
 	if err != nil {
