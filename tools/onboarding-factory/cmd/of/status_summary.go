@@ -103,6 +103,7 @@ func buildSummaryView(m *matrix.Matrix, view statusView) summaryView {
 			out.Total.add(c.DisplayState)
 		}
 	}
+	coreTotal := len(matrix.CoreScenarios())
 	for _, a := range view.Agents {
 		// Maturity and core standing are properties of the ADAPTER, read
 		// straight from the matrix, so unlike the counts they are unaffected
@@ -111,18 +112,16 @@ func buildSummaryView(m *matrix.Matrix, view statusView) summaryView {
 		// adapter as one twelfth of the way to stable.
 		rows[a].Maturity = m.Capabilities().Maturity(a)
 		rows[a].Earned = m.EarnedMaturity(a)
-		rows[a].CoreTotal = len(matrix.CoreScenarios())
+		rows[a].CoreTotal = coreTotal
 		for _, s := range m.CoreStanding(a) {
 			if s.Settled {
 				rows[a].CoreSettled++
 			}
 		}
+		out.Total.CoreSettled += rows[a].CoreSettled
 		out.Agents = append(out.Agents, *rows[a])
 	}
-	out.Total.CoreTotal = len(matrix.CoreScenarios()) * len(view.Agents)
-	for _, a := range out.Agents {
-		out.Total.CoreSettled += a.CoreSettled
-	}
+	out.Total.CoreTotal = coreTotal * len(view.Agents)
 	return out
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -44,9 +45,7 @@ func maturityRepo(t *testing.T) string {
 		addRow(n)
 	}
 	for _, tr := range matrix.Traits {
-		for _, n := range tr.Scenarios {
-			addRow(n)
-		}
+		addRow(tr.Scenario)
 	}
 	var b strings.Builder
 	b.WriteString(`{"meta":{"min_versions":{"claudecode":"2.0.0","codex":"1.0.0"}},"scenarios":[`)
@@ -61,14 +60,18 @@ func maturityRepo(t *testing.T) string {
 
 	// claudecode: every core scenario observed → earns stable. codex: the four
 	// alpha-floor scenarios observed, the rest absent → earns alpha.
-	for i, r := range rows {
+	for _, r := range rows {
 		folder := r.name
 		if !matrix.IsCoreScenario(r.name) {
 			continue
 		}
 		cell(t, root, "claudecode", folder, "yes", "full", "ready")
 		recording(t, root, "claudecode", folder, "r1", false)
-		if i < 4 {
+		// Membership, not row index: an index would silently stop meaning
+		// "the alpha floor" the moment CoreStateScenarios is reordered, and
+		// the tests below would then assert something other than their
+		// comments claim.
+		if slices.Contains(matrix.CoreAlphaScenarios(), r.name) {
 			cell(t, root, "codex", folder, "yes", "full", "ready")
 			recording(t, root, "codex", folder, "r1", false)
 		}
@@ -82,8 +85,13 @@ func maturityRepo(t *testing.T) string {
 		"adapters": map[string]any{
 			"claudecode": map[string]any{"maturity": "stable"},
 			"codex": map[string]any{
-				"maturity":     "alpha",
-				"capabilities": map[string]string{"backchannel": matrix.CapabilityAbsent},
+				"maturity": "alpha",
+				"capabilities": map[string]string{
+					"backchannel_control": matrix.CapabilityAbsent,
+					// No directory for the observe scenario: declaring it is what
+					// makes the matrix synthesize the cell (#1369).
+					"backchannel_observe": matrix.CapabilityAbsent,
+				},
 			},
 		},
 	})
@@ -110,17 +118,18 @@ func writeCapModel(t *testing.T, root string, model map[string]any) {
 // validateFindings runs `of validate --json` and returns the messages.
 func validateFindings(t *testing.T, root string) []string {
 	t.Helper()
-	var out, errOut strings.Builder
-	runValidate([]string{"--repo-root", root, "--json"}, &out, &errOut)
+	// Decoded into the package's own `finding` type, not a private copy of its
+	// shape: a re-declared struct would keep decoding into empty strings after
+	// a json-tag rename, and every assertFindingContains would then silently
+	// assert nothing. Invoked through runOf like every other test here, so the
+	// command dispatch is exercised too.
+	_, out, _ := runOf("validate", "--json", "--repo-root", root)
 	var res struct {
-		OK       bool `json:"ok"`
-		Findings []struct {
-			Path string `json:"path"`
-			Msg  string `json:"msg"`
-		} `json:"findings"`
+		OK       bool      `json:"ok"`
+		Findings []finding `json:"findings"`
 	}
-	if err := json.Unmarshal([]byte(out.String()), &res); err != nil {
-		t.Fatalf("decode %q: %v", out.String(), err)
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("decode %q: %v", out, err)
 	}
 	msgs := make([]string, 0, len(res.Findings))
 	for _, f := range res.Findings {
@@ -172,8 +181,13 @@ func TestMaturityGateRejectsAClaimBeyondTheEvidence(t *testing.T) {
 			"claudecode": map[string]any{"maturity": "stable"},
 			// codex has only the four alpha-floor scenarios recorded.
 			"codex": map[string]any{
-				"maturity":     "beta",
-				"capabilities": map[string]string{"backchannel": matrix.CapabilityAbsent},
+				"maturity": "beta",
+				"capabilities": map[string]string{
+					"backchannel_control": matrix.CapabilityAbsent,
+					// No directory for the observe scenario: declaring it is what
+					// makes the matrix synthesize the cell (#1369).
+					"backchannel_observe": matrix.CapabilityAbsent,
+				},
 			},
 		},
 	})
@@ -191,8 +205,13 @@ func TestMaturityGateAllowsClaimingLessThanEarned(t *testing.T) {
 		"adapters": map[string]any{
 			"claudecode": map[string]any{"maturity": "planned"},
 			"codex": map[string]any{
-				"maturity":     "planned",
-				"capabilities": map[string]string{"backchannel": matrix.CapabilityAbsent},
+				"maturity": "planned",
+				"capabilities": map[string]string{
+					"backchannel_control": matrix.CapabilityAbsent,
+					// No directory for the observe scenario: declaring it is what
+					// makes the matrix synthesize the cell (#1369).
+					"backchannel_observe": matrix.CapabilityAbsent,
+				},
 			},
 		},
 	})
@@ -213,7 +232,7 @@ func TestAlphaDoesNotRequireMetrics(t *testing.T) {
 		t.Fatalf("codex earns %q, want %q — codex has the alpha floor and no metrics cells", got, matrix.MaturityAlpha)
 	}
 	for _, s := range m.CoreStanding("codex") {
-		if slicesContains(matrix.CoreMetricsScenarios, s.Scenario) && s.Settled {
+		if slices.Contains(matrix.CoreMetricsScenarios, s.Scenario) && s.Settled {
 			t.Fatalf("metrics scenario %q must not be settled for codex", s.Scenario)
 		}
 	}
@@ -231,12 +250,12 @@ func TestCapModelGateCatchesADeclarationContradictingItsCell(t *testing.T) {
 			"claudecode": map[string]any{"maturity": "stable"},
 			"codex": map[string]any{
 				"maturity":     "alpha",
-				"capabilities": map[string]string{"backchannel": matrix.CapabilityUntraced},
+				"capabilities": map[string]string{"backchannel_control": matrix.CapabilityUntraced},
 			},
 		},
 	})
 	assertFindingContains(t, validateFindings(t, root),
-		"adapters.codex.capabilities.backchannel", `derives "unobservable"`, `the cell is "n/a"`)
+		"adapters.codex.capabilities.backchannel_control", `derives "unobservable"`, `the cell is "n/a"`)
 }
 
 func TestCapModelGateCatchesADeadCellTheModelDoesNotExplain(t *testing.T) {
@@ -293,9 +312,10 @@ func TestCapModelGateRejectsOffVocabularyDeclarations(t *testing.T) {
 			"codex": map[string]any{
 				"maturity": "gamma",
 				"capabilities": map[string]string{
-					"backchannel": matrix.CapabilityAbsent,
-					"telepathy":   matrix.CapabilityAbsent,
-					"interrupt":   "sortof",
+					"backchannel_control": matrix.CapabilityAbsent,
+					"backchannel_observe": matrix.CapabilityAbsent,
+					"telepathy":           matrix.CapabilityAbsent,
+					"interrupt":           "sortof",
 				},
 			},
 		},
@@ -354,11 +374,78 @@ func TestDeclaredDeadPairNeedsNoCellDirectory(t *testing.T) {
 	}
 }
 
-func slicesContains(hay []string, needle string) bool {
-	for _, h := range hay {
-		if h == needle {
-			return true
+// TestAgentAddLeavesTheTreeValid is the regression test for the review finding
+// that `of agent add` registered a column in scenarios.json and wrote no
+// capability-model entry — so the documented FIRST step of onboarding a new
+// agent left `of validate` red, with a hand-edit of replaydata/ as the only
+// remedy. That is both the factory's headline anti-pattern and the opposite of
+// the onboarding cost #1369 exists to remove.
+func TestAgentAddLeavesTheTreeValid(t *testing.T) {
+	root := maturityRepo(t)
+	code, _, errs := runOf("agent", "add", "--repo-root", root,
+		"--id", "newagent", "--name", "New Agent", "--provider", "acme", "--min-version", "1.0.0")
+	if code != exitOK {
+		t.Fatalf("of agent add exit=%d stderr=%s", code, errs)
+	}
+	if msgs := validateFindings(t, root); len(msgs) != 0 {
+		t.Fatalf("a freshly added column must leave the tree valid, got:\n  %s", strings.Join(msgs, "\n  "))
+	}
+	// It claims nothing, so nothing has to be earned.
+	m, err := matrix.LoadRepo(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Capabilities().Maturity("newagent"); got != matrix.MaturityPlanned {
+		t.Errorf("new column maturity = %q, want %q", got, matrix.MaturityPlanned)
+	}
+}
+
+// TestAgentUpdateWritesTheCapabilityModel covers the other half: declaring a
+// missing feature is a CLI verb, not a hand-edit, and `traced` removes a
+// declaration rather than storing the default.
+func TestAgentUpdateWritesTheCapabilityModel(t *testing.T) {
+	root := maturityRepo(t)
+	// `agent update` edits an existing column's metadata.json, so bring one
+	// into being through the documented path rather than hand-writing it.
+	if code, _, errs := runOf("agent", "add", "--repo-root", root,
+		"--id", "newagent", "--name", "New Agent", "--provider", "acme", "--min-version", "1.0.0"); code != exitOK {
+		t.Fatalf("of agent add exit=%d stderr=%s", code, errs)
+	}
+	if code, _, errs := runOf("agent", "update", "--repo-root", root,
+		"--id", "newagent", "--capability", "interrupt=untraced"); code != exitOK {
+		t.Fatalf("set exit=%d stderr=%s", code, errs)
+	}
+	m, err := matrix.LoadRepo(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Capabilities().CapabilityState("newagent", "interrupt"); got != matrix.CapabilityUntraced {
+		t.Fatalf("after set: %q, want %q", got, matrix.CapabilityUntraced)
+	}
+	// The declared pair now exists as a synthesized cell with no directory —
+	// the saving the whole model is for.
+	if c, ok := m.Cell("newagent", "user-esc-interrupt"); !ok || !c.Derived || c.DisplayState != matrix.StateUnobservable {
+		t.Fatalf("declared pair should synthesize an unobservable cell, got ok=%v %+v", ok, c)
+	}
+
+	if code, _, errs := runOf("agent", "update", "--repo-root", root,
+		"--id", "newagent", "--capability", "interrupt=traced"); code != exitOK {
+		t.Fatalf("unset exit=%d stderr=%s", code, errs)
+	}
+	m, err = matrix.LoadRepo(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Capabilities().CapabilityState("newagent", "interrupt"); got != matrix.CapabilityTraced {
+		t.Errorf("after unset: %q, want %q", got, matrix.CapabilityTraced)
+	}
+	if _, ok := m.Cell("newagent", "user-esc-interrupt"); ok {
+		t.Error("removing the declaration must remove the synthesized cell")
+	}
+	// An unknown trait or state is refused rather than written.
+	for _, bad := range []string{"telepathy=absent", "interrupt=sortof"} {
+		if code, _, _ := runOf("agent", "update", "--repo-root", root, "--id", "newagent", "--capability", bad); code == exitOK {
+			t.Errorf("--capability %s should have been refused", bad)
 		}
 	}
-	return false
 }

@@ -3,41 +3,43 @@ package matrix
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
+
+	"irrlicht/tools/onboarding-factory/internal/shard"
 )
 
 // This file is the capability model (#1369): the machine-readable answer to
 // "why is this cell dead?", replacing 122 hand-written per-cell assessments
-// with 116 one-line declarations in a single reviewable file.
+// with 124 one-line declarations in a single reviewable file (122 of them
+// re-encoding a cell that exists, 2 declaring a pair that had no cell at all).
 //
-// WHAT IT IS NOT. It is barely a predictor, and the measurement is worth
+// WHAT IT IS NOT. It is not a predictor at all, and the measurement is worth
 // stating plainly because the ticket that asked for this model assumed
-// otherwise. Fitted against the matrix as it stands, 30 of the 31 traits below
-// map to exactly one scenario, so for those the model is a COMPACTION of the
-// axes rather than an inference from them: declaring `interrupt: untraced` for
-// kiro-cli says precisely what kiro-cli's user-esc-interrupt cell already
-// said, in one line instead of a directory. Exactly ONE trait spans more than
-// one scenario — `backchannel`, whose two scenarios agree for every adapter
-// that has both — so cross-scenario inference accounts for 2 of the 122
-// structural cells.
+// otherwise. EVERY trait below maps to exactly one scenario, so the model is a
+// COMPACTION of the axes rather than an inference from them: declaring
+// `interrupt: untraced` for kiro-cli says precisely what kiro-cli's
+// user-esc-interrupt cell already said, in one line instead of a directory.
+// Cross-scenario inference accounts for ZERO of the 122 structural cells.
 //
-// A second spanning trait was written and then withdrawn on evidence; the
-// architect_editor entry below records why. The general shape of the failure
-// is worth knowing before anyone widens a trait: two scenarios whose dead sets
-// happen to coincide across the adapters that HAVE both cells will confidently
-// synthesize a wrong cell for an adapter that has neither.
+// Two multi-scenario traits were written and both were withdrawn on evidence —
+// architect_editor for asserting something false, backchannel_* for making the
+// validator unsatisfiable. Each entry below records its own case. The rule
+// that survives them is stated at backchannel_control.
 //
 // WHAT IT IS FOR, given that. Two things a per-cell assessment cannot do:
 //
-//  1. Onboarding cost. A structurally dead cell no longer needs to exist on
-//     disk. `Load` synthesizes it from the model, so a new adapter ships its
-//     recorded cells plus one line per missing feature instead of a directory
-//     with a metadata.json and a written assessment body per dead cell. On the
-//     current corpus that is 122 directories' worth of prose the next adapter
-//     does not write.
+//  1. Onboarding cost, for the NEXT adapter. A structurally dead cell no
+//     longer needs to exist on disk: `Load` synthesizes it, so a new adapter
+//     ships its recorded cells plus `of agent update --capability t=absent`
+//     per missing feature, instead of a directory with a metadata.json and a
+//     written assessment body per dead cell. Note the tense — 122 of the 124
+//     declarations re-encode a cell that still exists on disk, and nothing
+//     schedules deleting those. So the corpus now carries two statements of
+//     the same fact, kept honest by the validator; the saving is prospective,
+//     and only the 2 already-directory-less pairs realise it today.
 //  2. Drift. Once the model exists, the stored axes and the declared
 //     capability are two statements that can contradict each other, and
 //     `of validate` fails when they do. Before this file there was no second
@@ -56,11 +58,19 @@ import (
 // only place the two concepts touch.
 
 // Trait is one behavioural feature a scenario needs in order to be
-// observable, together with the scenarios that need it.
+// observable, together with the scenario that needs it.
+//
+// ONE scenario, not a list. A list was tried twice and withdrawn twice (see
+// architect_editor and backchannel_control below), so the type is now the
+// lock: widening a trait is a deliberate type change rather than an edit to a
+// literal, which is the bar those two comments ask for. It also removes the
+// case the validator cannot describe — a trait spanning scenarios whose cells
+// disagree has no truthful value, and nothing in this matrix guarantees two
+// scenarios move together for every adapter.
 type Trait struct {
-	ID        string
-	Title     string
-	Scenarios []string
+	ID       string
+	Title    string
+	Scenario string
 }
 
 // Traits is the closed set. It lives in Go rather than in the JSON data file
@@ -68,21 +78,21 @@ type Trait struct {
 // invented to silence a finding. The JSON says only which VALUE each adapter
 // takes for a trait named here.
 //
-// Coverage: these 31 traits span the 32 scenarios that have at least one dead
-// cell today. The other 14 scenarios have none and therefore no trait — the
+// Coverage: these 32 traits cover, one-for-one, the 32 scenarios that have at
+// least one dead cell today. The other 14 scenarios have none and therefore no trait — the
 // model deliberately says nothing about a scenario nothing has ever failed.
 var Traits = []Trait{
-	{"cloud_agent", "dispatches a run onto remote infrastructure with no local PID", []string{"cloud-background-agent"}},
-	{"session_resume", "resumes a prior session under a stable session id", []string{"session-resume"}},
-	{"session_reset", "mints a NEW session id on reset (not merely clearing context)", []string{"session-reset"}},
-	{"checkpoint_rewind", "rewinds to an earlier checkpoint", []string{"checkpoint-rewind"}},
-	{"message_queue", "queues a message typed mid-turn", []string{"mid-turn-message-queued"}},
-	{"permission_classifier", "auto-classifies a tool call against a permission policy", []string{"auto-classified-permission"}},
-	{"context_compaction", "compacts its own context window", []string{"context-compaction"}},
-	{"error_epilogue", "writes a terminal record when a turn dies of an error", []string{"turn-aborted-by-error"}},
-	{"file_transcript", "writes a line-oriented transcript file (vs a store)", []string{"oversized-transcript-line"}},
-	{"structured_question", "asks the user a structured, blocking question", []string{"user-blocking-question"}},
-	{"plan_mode", "holds a plan-approval gate the user must clear", []string{"user-blocking-plan-mode-approval"}},
+	{"cloud_agent", "dispatches a run onto remote infrastructure with no local PID", "cloud-background-agent"},
+	{"session_resume", "resumes a prior session under a stable session id", "session-resume"},
+	{"session_reset", "mints a NEW session id on reset (not merely clearing context)", "session-reset"},
+	{"checkpoint_rewind", "rewinds to an earlier checkpoint", "checkpoint-rewind"},
+	{"message_queue", "queues a message typed mid-turn", "mid-turn-message-queued"},
+	{"permission_classifier", "auto-classifies a tool call against a permission policy", "auto-classified-permission"},
+	{"context_compaction", "compacts its own context window", "context-compaction"},
+	{"error_epilogue", "writes a terminal record when a turn dies of an error", "turn-aborted-by-error"},
+	{"file_transcript", "writes a line-oriented transcript file (vs a store)", "oversized-transcript-line"},
+	{"structured_question", "asks the user a structured, blocking question", "user-blocking-question"},
+	{"plan_mode", "holds a plan-approval gate the user must clear", "user-blocking-plan-mode-approval"},
 	// architect-editor-pair is deliberately NOT folded into plan_mode, even
 	// though five adapters' 5.4 assessments say in as many words that it is
 	// "the SAME architectural blocker" as their 2.18. It has two
@@ -97,39 +107,56 @@ var Traits = []Trait{
 	// plan_mode value that says only that aider's /ask gate is not persisted.
 	// A false claim, in a cell nobody had assessed. Splitting the trait costs
 	// the model its second predicting trait and is worth it.
-	{"architect_editor", "hands one turn between two models and records both", []string{"architect-editor-pair"}},
-	{"permission_prompt", "blocks on an interactive tool-permission prompt", []string{"tool-gate-permission-prompt"}},
-	{"interrupt", "records that the user cancelled a turn", []string{"user-esc-interrupt"}},
-	{"partial_flush", "flushes partial assistant output as it streams", []string{"streaming-partial-writes"}},
-	{"task_list", "emits a structured task list", []string{"task-list"}},
-	{"autonomous_loop", "runs a goal-seeking loop without per-turn prompting", []string{"autonomous-loop"}},
-	{"iteration_limit", "caps that loop at a maximum iteration count", []string{"autonomous-loop-iteration-limit"}},
-	{"quota_exhaustion", "surfaces a provider quota refusal", []string{"token-quota-exhausted"}},
-	{"subagent_foreground", "spawns a child agent the parent turn waits on", []string{"foreground-subagent"}},
-	{"subagent_background", "dispatches a child agent fire-and-forget", []string{"background-subagent"}},
-	{"background_process", "starts a shell process the turn does not block on", []string{"background-process"}},
-	{"subagent_orphan", "can leave an orphaned child for the reaper to collect", []string{"subagent-orphan-cleanup"}},
-	{"workflow_fanout", "fans one prompt out across several child agents", []string{"workflow-fanout"}},
-	{"session_isolation", "keeps two concurrent sessions in one cwd distinct", []string{"multiple-sessions-same-cwd"}},
-	{"token_usage", "reports per-turn token counts", []string{"token-accounting"}},
-	{"model_switch", "switches model mid-session", []string{"model-switch-midsession"}},
-	{"provider_failover", "fails over to a second provider WITHIN one turn", []string{"provider-failover-midturn"}},
+	{"architect_editor", "hands one turn between two models and records both", "architect-editor-pair"},
+	{"permission_prompt", "blocks on an interactive tool-permission prompt", "tool-gate-permission-prompt"},
+	{"interrupt", "records that the user cancelled a turn", "user-esc-interrupt"},
+	{"partial_flush", "flushes partial assistant output as it streams", "streaming-partial-writes"},
+	{"task_list", "emits a structured task list", "task-list"},
+	{"autonomous_loop", "runs a goal-seeking loop without per-turn prompting", "autonomous-loop"},
+	{"iteration_limit", "caps that loop at a maximum iteration count", "autonomous-loop-iteration-limit"},
+	{"quota_exhaustion", "surfaces a provider quota refusal", "token-quota-exhausted"},
+	{"subagent_foreground", "spawns a child agent the parent turn waits on", "foreground-subagent"},
+	{"subagent_background", "dispatches a child agent fire-and-forget", "background-subagent"},
+	{"background_process", "starts a shell process the turn does not block on", "background-process"},
+	{"subagent_orphan", "can leave an orphaned child for the reaper to collect", "subagent-orphan-cleanup"},
+	{"workflow_fanout", "fans one prompt out across several child agents", "workflow-fanout"},
+	{"session_isolation", "keeps two concurrent sessions in one cwd distinct", "multiple-sessions-same-cwd"},
+	{"token_usage", "reports per-turn token counts", "token-accounting"},
+	{"model_switch", "switches model mid-session", "model-switch-midsession"},
+	{"provider_failover", "fails over to a second provider WITHIN one turn", "provider-failover-midturn"},
 	// Split from burndown_progression on evidence: claudecode observes
 	// subscription-detection (via the statusLine hook POST) while its
 	// quota-burndown is unobservable. One trait covering both would have
 	// declared a live cell dead.
-	{"subscription_signal", "exposes which billing model the session is on", []string{"subscription-detection"}},
-	{"burndown_progression", "exposes a rate-limit window that moves across turns", []string{"quota-burndown"}},
-	// The second predicting trait: hermes is untraced for both halves.
-	{"backchannel", "can be driven or observed through a controlling terminal", []string{"backchannel-control", "backchannel-observe"}},
+	{"subscription_signal", "exposes which billing model the session is on", "subscription-detection"},
+	{"burndown_progression", "exposes a rate-limit window that moves across turns", "quota-burndown"},
+	// Split, like architect_editor above, and for a sharper reason: a trait
+	// spanning two scenarios whose cells disagree has NO truthful value.
+	// `backchannel` covering both was tried; mistral-vibe is `observed` on
+	// control and `blocked-daemon` on observe, and that observe cell's own
+	// notes say "RE-ASSESS after Control fix" — so the very next edit to it
+	// would have made `of validate` unsatisfiable: `traced` fails the reverse
+	// arm on observe, `untraced`/`absent` fail the forward arm on control, and
+	// the only escape is writing a record_blocked reason that would mean the
+	// wrong thing. Two traits, two truthful values, no escape needed.
+	//
+	// THE GENERAL RULE, for whoever is tempted to widen one: a trait may span
+	// several scenarios only while those scenarios are guaranteed to move
+	// together for every adapter. Nothing in this matrix guarantees that, and
+	// both attempts to assume it were wrong within one ticket — so every trait
+	// here now covers exactly one scenario, and the cost of that is one JSON
+	// line per cell rather than per feature.
+	{"backchannel_control", "can be driven through a controlling terminal", "backchannel-control"},
+	{"backchannel_observe", "can be observed through a controlling terminal", "backchannel-observe"},
 }
 
-// TraitForScenario returns the trait a scenario needs, if any. Every scenario
-// has at most one — TestEachScenarioHasAtMostOneTrait pins that, because two
-// traits gating one scenario would make the derived state depend on map order.
+// TraitForScenario returns the trait a scenario needs, if any. At most one
+// trait may name a given scenario — TestEachScenarioHasAtMostOneTrait pins
+// that, because two traits gating one scenario would make the derived state
+// depend on the order of the Traits slice.
 func TraitForScenario(scenario string) (Trait, bool) {
 	for _, t := range Traits {
-		if slices.Contains(t.Scenarios, scenario) {
+		if t.Scenario == scenario {
 			return t, true
 		}
 	}
@@ -206,12 +233,7 @@ func (m *CapabilityModel) AdapterNames() []string {
 	if m == nil {
 		return nil
 	}
-	out := make([]string, 0, len(m.Adapters))
-	for a := range m.Adapters {
-		out = append(out, a)
-	}
-	sort.Strings(out)
-	return out
+	return slices.Sorted(maps.Keys(m.Adapters))
 }
 
 // Maturity returns an adapter's declared tier, or "" when it is not declared.
@@ -235,17 +257,111 @@ func (m *CapabilityModel) CapabilityState(adapter, traitID string) string {
 	return CapabilityTraced
 }
 
-// StructuralState is THE derivation: the display state the capability model
-// says an (adapter, scenario) cell must have, and whether it says anything at
-// all. ok=false means "not structurally dead" — either the scenario has no
-// trait, or the adapter's state for it is traced. It never returns a live
-// state; the model's whole vocabulary of outcomes is {n/a, unobservable}.
+// StructuralState is the display state the capability model says an
+// (adapter, scenario) cell must have, and whether it says anything at all.
+// ok=false means "not structurally dead" — either the scenario has no trait,
+// or the adapter's state for it is traced. It never returns a live state; the
+// model's whole vocabulary of outcomes is {n/a, unobservable}.
+//
+// It goes through StructuralAxes and the SAME DeriveDisplayState every other
+// cell uses, rather than switching on the capability state a second time. An
+// independent switch here would be a second axes→state table that could drift
+// from router.go's, and the only thing holding the two together would be a
+// test written to police the duplication.
 func (m *CapabilityModel) StructuralState(adapter, scenario string) (string, bool) {
-	t, ok := TraitForScenario(scenario)
+	supports, daemon, driver, ok := m.StructuralAxes(adapter, scenario)
 	if !ok {
 		return "", false
 	}
-	return StructuralStateFor(m.CapabilityState(adapter, t.ID))
+	// hasRecording=false, applicable=false: a structurally dead pair has
+	// neither, by definition.
+	return DeriveDisplayState(supports, daemon, driver, false, false), true
+}
+
+// SyntheticCell builds the on-disk-shaped cell a structurally dead pair would
+// have had, or nil when the model declares nothing for the pair.
+//
+// It returns a *shard.ShardAgent — the RAW layer — rather than an assembled
+// CellState, and that is the whole design. Every field a caller wants
+// (Route, Disposition, ApplicableState, DisplayState) is something buildCell
+// already computes from exactly these inputs, so handing the raw shape to the
+// existing pipeline means a modelled cell and a written one are assembled by
+// one code path and cannot disagree. The earlier version of this returned a
+// hand-built CellState and had to set four derived fields literally; it got
+// one of them wrong (Applicable), needed a duplicate fallback in rollupAxes
+// because that reads the raw layer, and needed a test to pin its private
+// axes→state derivation against router.go's.
+//
+// It is deliberately NOT pushed into shard.LoadAdapterCells. Four other
+// callers read that (of record, hookcov, the viewer's recipe endpoint twice)
+// and would be handed directory-less cells, where AgentCellDir resolves to the
+// adapter root. Synthesis stays opt-in per consumer; this helper is what keeps
+// it single-sourced anyway.
+func (m *CapabilityModel) SyntheticCell(adapter, scenario string) *shard.ShardAgent {
+	supports, daemon, driver, ok := m.StructuralAxes(adapter, scenario)
+	if !ok {
+		return nil
+	}
+	assessment, err := json.Marshal(AssessmentReport{
+		Agent:            adapter,
+		ScenarioID:       scenario,
+		AgentSupports:    supports,
+		DaemonCapability: daemon,
+		DriverCapability: driver,
+		Body:             DerivedCellNote,
+	})
+	if err != nil { // unreachable: the struct is all plain fields
+		return nil
+	}
+	return &shard.ShardAgent{
+		ScenarioID: scenario,
+		Metadata: shard.ShardMetadata{
+			AgentSupports:    supports,
+			DaemonCapability: daemon,
+			DriverCapability: driver,
+			Notes:            DerivedCellNote,
+		},
+		Details: shard.ShardDetails{
+			Assessment: assessment,
+			// applicable:false is what makes the cell terminal for the
+			// completeness gate, exactly as a hand-written deferral is.
+			Recipe: json.RawMessage(`{"applicable": false}`),
+		},
+		// Folder stays empty: there is no directory, and cellRecorded reads
+		// Folder to decide whether to look for recordings.
+	}
+}
+
+// DerivedCellNote is the single spelling of "this cell came from the model",
+// shared by every surface that renders one. Two surfaces had already forked
+// their own wording before this const existed.
+const DerivedCellNote = "derived from replaydata/agents/adapters.json (#1369); no cell directory on disk"
+
+// StructuralAxes returns the three assessment axes a structurally dead pair
+// implies. It is the same derivation as StructuralState, expressed in the
+// vocabulary the OTHER consumers speak: the rollup and the viewer's catalog
+// endpoint both read raw axes off the shard cell rather than a CellState, and
+// a pair with no directory would otherwise default to "unknown" — the one
+// state the maturity model reads as "not assessed", i.e. exactly the wrong
+// answer for a cell we have deliberately declared dead.
+//
+// The two representations are pinned to each other by
+// TestStructuralAxesDeriveTheStructuralState: whatever these axes are, feeding
+// them to DeriveDisplayState must reproduce StructuralState. Without that a
+// synthesized cell could read n/a in one surface and unobservable in another.
+func (m *CapabilityModel) StructuralAxes(adapter, scenario string) (supports, daemon, driver string, ok bool) {
+	t, found := TraitForScenario(scenario)
+	if !found {
+		return "", "", "", false
+	}
+	switch m.CapabilityState(adapter, t.ID) {
+	case CapabilityAbsent:
+		return SupportsNo, DaemonNotApplicable, "ready", true
+	case CapabilityUntraced:
+		return SupportsYes, DaemonIncapable, "ready", true
+	default:
+		return "", "", "", false
+	}
 }
 
 // CoreStatus is one core scenario's standing for one adapter.
@@ -275,8 +391,9 @@ const CellAbsent = "absent"
 // declared in the model, where one reviewer can see all 116 of them at once,
 // instead of being typed into a cell directory nobody re-reads.
 func (m *Matrix) CoreStanding(adapter string) []CoreStatus {
-	out := make([]CoreStatus, 0, len(CoreScenarios()))
-	for _, name := range CoreScenarios() {
+	core := CoreScenarios()
+	out := make([]CoreStatus, 0, len(core))
+	for _, name := range core {
 		st := CoreStatus{Scenario: name, State: CellAbsent}
 		if c, ok := m.cells[adapter][name]; ok {
 			st.State = c.DisplayState
@@ -295,21 +412,12 @@ func (m *Matrix) CoreStanding(adapter string) []CoreStatus {
 // EarnedMaturity is the highest tier whose floor the adapter's core standing
 // satisfies. It is evidence, never a claim: nothing writes it back to disk.
 func (m *Matrix) EarnedMaturity(adapter string) string {
-	settled := map[string]bool{}
-	for _, s := range m.CoreStanding(adapter) {
-		settled[s.Scenario] = s.Settled
-	}
 	earned := MaturityPlanned
 	for _, tier := range Maturities {
-		ok := true
-		for _, name := range MaturityFloor(tier) {
-			if !settled[name] {
-				ok = false
-				break
-			}
-		}
-		if !ok {
-			break // floors are cumulative, so the first miss is the ceiling
+		if len(m.UnsettledCoreFor(adapter, tier)) > 0 {
+			// Floors are cumulative (TestCoreSetShape locks alpha ⊂ beta ⊂
+			// stable), so the first miss is the ceiling.
+			break
 		}
 		earned = tier
 	}
@@ -330,27 +438,4 @@ func (m *Matrix) UnsettledCoreFor(adapter, tier string) []CoreStatus {
 		}
 	}
 	return out
-}
-
-// derivedCell builds the CellState for an (adapter, scenario) pair that has no
-// directory on disk and is structurally dead per the capability model.
-//
-// It is terminal by construction — RouteFrozen / DispApplicableFalse — which
-// is the same standing a hand-written applicable:false cell has, so the
-// completeness gate treats a modelled cell and a written one identically. It
-// carries no assessment: there is no assessment to carry, and inventing an
-// empty one would make a synthesized cell indistinguishable from an
-// unassessed real one.
-func (m *Matrix) derivedCell(agent, scenario, displayState string) CellState {
-	return CellState{
-		Agent:           agent,
-		CoverageID:      scenario,
-		Applicable:      false,
-		ApplicableState: AppFalse,
-		Recorded:        false,
-		Route:           RouteFrozen,
-		Disposition:     DispApplicableFalse,
-		DisplayState:    displayState,
-		Derived:         true,
-	}
 }

@@ -126,6 +126,11 @@ type cellView struct {
 	AgentSupports    string `json:"agent_supports,omitempty"`
 	DaemonCapability string `json:"daemon_capability,omitempty"`
 	DriverCapability string `json:"driver_capability,omitempty"`
+	// Derived marks a cell synthesized from the capability model rather than
+	// read from a directory (#1369). Emitted here because a reader filtering
+	// a work-list needs to tell a modelled cell from a written one, and the
+	// only other signal is the indirect frozen+applicable_false shape.
+	Derived bool `json:"derived,omitempty"`
 }
 
 type scenarioView struct {
@@ -145,6 +150,7 @@ func cellViewOf(cs matrix.CellState) cellView {
 		Recorded:     cs.Recorded,
 		Route:        string(cs.Route),
 		Disposition:  string(cs.Disposition),
+		Derived:      cs.Derived,
 	}
 	if cs.Assessment != nil {
 		v.AgentSupports = cs.Assessment.AgentSupports

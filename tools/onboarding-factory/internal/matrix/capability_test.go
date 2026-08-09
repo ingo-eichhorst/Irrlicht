@@ -17,19 +17,17 @@ func TestEachScenarioHasAtMostOneTrait(t *testing.T) {
 	// someone sorts a list is the worst kind of silent break.
 	owner := map[string]string{}
 	for _, tr := range Traits {
-		for _, s := range tr.Scenarios {
-			if prev, dup := owner[s]; dup {
-				t.Errorf("scenario %q is gated by both %q and %q", s, prev, tr.ID)
-			}
-			owner[s] = tr.ID
+		if prev, dup := owner[tr.Scenario]; dup {
+			t.Errorf("scenario %q is gated by both %q and %q", tr.Scenario, prev, tr.ID)
 		}
+		owner[tr.Scenario] = tr.ID
 	}
 }
 
 func TestTraitIDsAreUniqueAndNonEmpty(t *testing.T) {
 	seen := map[string]bool{}
 	for _, tr := range Traits {
-		if tr.ID == "" || tr.Title == "" || len(tr.Scenarios) == 0 {
+		if tr.ID == "" || tr.Title == "" || tr.Scenario == "" {
 			t.Errorf("trait %+v is incomplete: id, title and at least one scenario are all required", tr)
 		}
 		if seen[tr.ID] {
@@ -39,22 +37,32 @@ func TestTraitIDsAreUniqueAndNonEmpty(t *testing.T) {
 	}
 }
 
-func TestStructuralStateForMapping(t *testing.T) {
-	// The whole derivation, in four lines. absent and untraced are NOT
-	// interchangeable: collapsing them is the two-valued model #529 pruned.
+func TestStructuralStateMapping(t *testing.T) {
+	// The whole derivation. absent and untraced are NOT interchangeable:
+	// collapsing them is the two-valued model #529 pruned. Asserted through
+	// StructuralState, which routes via StructuralAxes and the real
+	// DeriveDisplayState — so this also pins that the synthesized axes are the
+	// ones that actually produce these states.
+	m := &CapabilityModel{Adapters: map[string]AdapterModel{
+		"a": {Maturity: MaturityAlpha, Capabilities: map[string]string{
+			"cloud_agent": CapabilityAbsent,
+			"interrupt":   CapabilityUntraced,
+			"task_list":   CapabilityTraced,
+		}},
+	}}
 	for _, tc := range []struct {
-		in   string
-		want string
-		ok   bool
+		scenario string
+		want     string
+		ok       bool
 	}{
-		{CapabilityAbsent, StateNotApplicable, true},
-		{CapabilityUntraced, StateUnobservable, true},
-		{CapabilityTraced, "", false},
-		{"", "", false},
+		{"cloud-background-agent", StateNotApplicable, true},
+		{"user-esc-interrupt", StateUnobservable, true},
+		{"task-list", "", false},
+		{"basic-turn", "", false}, // no trait at all
 	} {
-		got, ok := StructuralStateFor(tc.in)
+		got, ok := m.StructuralState("a", tc.scenario)
 		if got != tc.want || ok != tc.ok {
-			t.Errorf("StructuralStateFor(%q) = (%q, %v), want (%q, %v)", tc.in, got, ok, tc.want, tc.ok)
+			t.Errorf("StructuralState(a, %q) = (%q, %v), want (%q, %v)", tc.scenario, got, ok, tc.want, tc.ok)
 		}
 	}
 }

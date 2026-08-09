@@ -72,11 +72,29 @@ func (s *Server) buildCatalogJSON() ([]byte, string, error) {
 		adapterCells[slug] = shard.LoadAdapterCells(s.RepoRoot, slug) // one scan per adapter
 	}
 
+	// The capability model supplies the axes for a declared-dead pair that has
+	// no cell directory (#1369). Without it those render "unknown" here while
+	// `of status` reports n/a or unobservable for the same pair — and the
+	// whole point of the model is that such a cell need not exist on disk.
+	caps, err := matrix.LoadCapabilities(s.RepoRoot)
+	if err != nil {
+		return nil, "", err
+	}
+
 	scenarios := make([]map[string]any, 0, len(shards))
 	for _, sh := range shards {
 		coverage := make(map[string]any, len(agentSlugs))
 		for _, slug := range agentSlugs {
-			coverage[slug] = buildCellVerdict(adapterCells[slug][sh.Name])
+			cell := adapterCells[slug][sh.Name]
+			if cell == nil {
+				// A pair the capability model declares structurally dead has
+				// no directory by design (#1369). Fill it from the model so
+				// this endpoint agrees with `of status`; without it the cell
+				// renders "unknown", which is what the rest of the system
+				// means by "nobody has assessed this".
+				cell = caps.SyntheticCell(slug, sh.Name)
+			}
+			coverage[slug] = buildCellVerdict(cell)
 		}
 		scenarios = append(scenarios, map[string]any{
 			"id":       sh.Name,

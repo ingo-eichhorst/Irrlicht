@@ -89,22 +89,17 @@ func validateCoreSet(names map[string]bool, add func(path, msg string)) {
 	seen := map[string]bool{}
 	for _, n := range core {
 		if seen[n] {
-			add("internal/matrix/vocabulary.go", fmt.Sprintf("core scenario %q is listed twice", n))
+			// Also the only way a scenario can be in BOTH halves, which would
+			// put a metrics scenario in the alpha/beta floor and stop `alpha`
+			// meaning "state only" — CoreScenarios() concatenates them, so
+			// such a scenario necessarily appears twice here.
+			add("internal/matrix/vocabulary.go",
+				fmt.Sprintf("core scenario %q is listed twice (a scenario in both the state and metrics halves lands here)", n))
 		}
 		seen[n] = true
 		if !names[n] {
 			add("internal/matrix/vocabulary.go",
 				fmt.Sprintf("core scenario %q does not resolve to a catalog scenario name", n))
-		}
-	}
-	// The halves must be disjoint, or a metrics scenario would silently enter
-	// the alpha/beta floors and `alpha` would stop meaning "state only".
-	for _, n := range matrix.CoreMetricsScenarios {
-		for _, s := range matrix.CoreStateScenarios {
-			if n == s {
-				add("internal/matrix/vocabulary.go",
-					fmt.Sprintf("scenario %q is in BOTH the state and metrics halves of the core set", n))
-			}
 		}
 	}
 }
@@ -134,11 +129,9 @@ func validateCapModel(m *matrix.Matrix, names map[string]bool, add func(path, ms
 	// Every trait's scenarios must resolve; a trait naming a renamed scenario
 	// derives nothing and would quietly stop gating.
 	for _, t := range matrix.Traits {
-		for _, s := range t.Scenarios {
-			if !names[s] {
-				add("internal/matrix/capability.go",
-					fmt.Sprintf("trait %q names scenario %q, which is not in the catalog", t.ID, s))
-			}
+		if !names[t.Scenario] {
+			add("internal/matrix/capability.go",
+				fmt.Sprintf("trait %q names scenario %q, which is not in the catalog", t.ID, t.Scenario))
 		}
 	}
 
@@ -189,7 +182,8 @@ func validateCapModelAdapter(m *matrix.Matrix, caps *matrix.CapabilityModel, a s
 
 	// Agreement, cell by cell, over every scenario a trait covers.
 	for _, t := range matrix.Traits {
-		for _, s := range t.Scenarios {
+		{
+			s := t.Scenario
 			c, hasCell := m.Cell(a, s)
 			derived, structural := caps.StructuralState(a, s)
 			switch {

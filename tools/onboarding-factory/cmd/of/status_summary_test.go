@@ -245,3 +245,45 @@ func displayStateOf(dump statusView, scenarioID, agent string) string {
 	}
 	return ""
 }
+
+// TestStatusSummaryMaturityColumns covers the non-degenerate case the richRepo
+// fixture cannot: richRepo has no adapters.json and no core scenarios, so
+// every maturity assertion there pins the all-empty form and a wiring that
+// returned constants would pass. maturityRepo (validate_maturity_test.go, same
+// package) is the fixture with real claims — claudecode stable at 12/12, codex
+// alpha at 4/12 with no metrics cell at all.
+func TestStatusSummaryMaturityColumns(t *testing.T) {
+	root := maturityRepo(t)
+	code, out, errs := runOf("status", "--summary", "--json", "--repo-root", root)
+	if code != exitOK {
+		t.Fatalf("exit=%d stderr=%s", code, errs)
+	}
+	var v summaryView
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		t.Fatalf("bad json: %v\n%s", err, out)
+	}
+	want := map[string]struct {
+		maturity, earned string
+		settled          int
+	}{
+		"claudecode": {"stable", "stable", 12},
+		"codex":      {"alpha", "alpha", 4},
+	}
+	if len(v.Agents) != len(want) {
+		t.Fatalf("want %d rows, got %d: %+v", len(want), len(v.Agents), v.Agents)
+	}
+	for _, got := range v.Agents {
+		w, ok := want[got.Agent]
+		if !ok {
+			t.Fatalf("unexpected row %q", got.Agent)
+		}
+		if got.Maturity != w.maturity || got.Earned != w.earned || got.CoreSettled != w.settled || got.CoreTotal != 12 {
+			t.Errorf("%s: got maturity=%q earned=%q core=%d/%d, want %q/%q %d/12",
+				got.Agent, got.Maturity, got.Earned, got.CoreSettled, got.CoreTotal,
+				w.maturity, w.earned, w.settled)
+		}
+	}
+	if v.Total.CoreSettled != 16 || v.Total.CoreTotal != 24 {
+		t.Errorf("total core = %d/%d, want 16/24", v.Total.CoreSettled, v.Total.CoreTotal)
+	}
+}

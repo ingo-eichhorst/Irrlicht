@@ -134,3 +134,63 @@ func TestNormalizeAdapter(t *testing.T) {
 		}
 	}
 }
+
+// TestCatalogRendersDerivedCellsFromCapabilityModel is the regression test for
+// the #1369 review finding: the catalog endpoint re-scans shards and never
+// consulted the capability model, so a pair the model declares structurally
+// dead — and which therefore has no directory, that being the point — rendered
+// as "unknown". `of status` reported n/a/unobservable for the same pair, and
+// `unknown` is precisely the state the maturity model reads as "not assessed".
+func TestCatalogRendersDerivedCellsFromCapabilityModel(t *testing.T) {
+	dir := t.TempDir()
+	ag := filepath.Join(dir, "replaydata", "agents")
+	if err := os.MkdirAll(ag, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// user-esc-interrupt is gated by the `interrupt` trait; codex is a real
+	// registry adapter, so it appears as a coverage column.
+	if err := os.WriteFile(filepath.Join(ag, "scenarios.json"), []byte(`{
+  "meta": {"min_versions": {"codex": "1.0.0"}},
+  "scenarios": [{"id": "2.20", "name": "user-esc-interrupt", "section": "S", "feature": "Interrupt"}]
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ag, "adapters.json"), []byte(`{
+  "schema_version": 1,
+  "adapters": {"codex": {"maturity": "alpha", "capabilities": {"interrupt": "untraced"}}}
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{RepoRoot: dir}
+	rec := httptest.NewRecorder()
+	srv.handleCatalog(rec, httptest.NewRequest(http.MethodGet, "/api/catalog", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var doc struct {
+		Scenarios []struct {
+			Coverage map[string]map[string]any `json:"coverage"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(doc.Scenarios) != 1 {
+		t.Fatalf("want 1 scenario, got %d", len(doc.Scenarios))
+	}
+	cell := doc.Scenarios[0].Coverage["codex"]
+	if cell == nil {
+		t.Fatal("no codex coverage entry")
+	}
+	// untraced ⇒ the agent HAS the feature but it reaches no Source: the same
+	// axes `of status` synthesizes, which derive "unobservable".
+	for k, want := range map[string]any{
+		"agent_supports": "yes", "daemon_capability": "incapable",
+		"driver_capability": "ready", "applicable": false,
+	} {
+		if cell[k] != want {
+			t.Errorf("coverage.codex.%s = %v, want %v (whole cell: %v)", k, cell[k], want, cell)
+		}
+	}
+}

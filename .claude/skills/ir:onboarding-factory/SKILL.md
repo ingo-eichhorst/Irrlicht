@@ -120,13 +120,20 @@ changed, and both are visible in `of status --summary`:
   its claimed vs earned maturity. The set lives in
   `tools/onboarding-factory/internal/matrix/vocabulary.go`.
 - **A structurally dead cell needs no directory.** Instead of writing an
-  assessment for a scenario the agent simply cannot do, add one line to
-  `replaydata/agents/adapters.json`:
-  `"capabilities": {"<trait>": "absent"}` when the agent lacks the feature, or
-  `"untraced"` when it has it but exercising it leaves no trace in any Source
-  the adapter reads. The matrix synthesizes the cell. Trait ids are a closed
-  set in `internal/matrix/capability.go`; `of validate` rejects an invented
-  one, and rejects a declaration that contradicts a cell already on disk.
+  assessment for a scenario the agent simply cannot do, declare the missing
+  capability — through the CLI, like every other write:
+
+  ```
+  of agent update --id <agent> --capability <trait>=absent     # agent lacks the feature      → n/a
+  of agent update --id <agent> --capability <trait>=untraced   # has it, leaves no trace      → unobservable
+  of agent update --id <agent> --capability <trait>=traced     # removes the declaration again
+  ```
+
+  The matrix synthesizes the cell from that one line. Trait ids are a closed
+  set in `internal/matrix/capability.go`; the verb refuses an invented trait or
+  state, and `of validate` additionally rejects a declaration that contradicts
+  a cell already on disk. `of agent add` writes a `planned` entry for a new
+  column automatically, so a freshly registered agent validates clean.
 
 Do **not** use a capability declaration for a cell that is merely *not
 recorded yet* — that is `record_blocked` on the assessment, and the two mean
@@ -189,7 +196,7 @@ For "how far along is agent X" — a progress read, not a work-list — use the
 per-agent counts instead of scrolling the dump:
 
 ```bash
-of status --summary                   # recorded / pending / blocked / unobservable / n/a / unknown, per agent
+of status --summary                   # recorded / pending / blocked / unobservable / n/a / unknown / total, plus maturity / earned / core, per agent
 of status --summary --agent <agent>   # one row; composes with --scenario too
 ```
 

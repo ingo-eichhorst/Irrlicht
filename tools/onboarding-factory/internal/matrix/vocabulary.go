@@ -252,20 +252,6 @@ func IsValidCapabilityState(v string) bool {
 	return v == "" || slices.Contains(CapabilityStates, v)
 }
 
-// StructuralStateFor maps a capability state to the display state it derives,
-// returning ok=false for the states that derive nothing. This is the whole of
-// the derivation: everything else in capability.go is lookup and plumbing.
-func StructuralStateFor(capState string) (displayState string, ok bool) {
-	switch capState {
-	case CapabilityAbsent:
-		return StateNotApplicable, true
-	case CapabilityUntraced:
-		return StateUnobservable, true
-	default:
-		return "", false
-	}
-}
-
 // ---------------------------------------------------------------------------
 // The core scenario set (#1369)
 // ---------------------------------------------------------------------------

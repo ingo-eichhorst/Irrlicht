@@ -54,6 +54,10 @@ type CellState struct {
 	// Since the #510/#511 shard migration a cell exists iff its shard names the
 	// agent, so every present cell is applicable (the old requires-vs-capabilities
 	// gate is gone); fine-grained skip lives in ApplicableState (recipe.applicable).
+	// Since #1369 a cell may also be SYNTHESIZED from the capability model
+	// rather than read from a directory (see Load); it is assembled by the
+	// same path and so satisfies this invariant identically — Derived is the
+	// only field that distinguishes it.
 	Applicable bool `json:"applicable"`
 	// ApplicableState is the by_adapter.<agent>.applicable rollup (absent/true/false).
 	ApplicableState ApplicableState   `json:"applicable_state"`
@@ -91,17 +95,14 @@ type Matrix struct {
 	agentCells map[string]map[string]*shard.ShardAgent // agent → coverage_id → cell (from metadata.json)
 	cells      map[string]map[string]CellState         // agent → coverage_id → cell
 	caps       *CapabilityModel                        // replaydata/agents/adapters.json (#1369)
+	derived    map[string]bool                         // "agent\x00coverage_id" of synthesized cells
 }
 
-// Capabilities returns the loaded capability model. It is never nil, so
-// callers can chain without a guard; when the file is absent the model
-// declares nothing and every derivation reports "not structural".
-func (m *Matrix) Capabilities() *CapabilityModel {
-	if m.caps == nil {
-		return &CapabilityModel{Adapters: map[string]AdapterModel{}}
-	}
-	return m.caps
-}
+// Capabilities returns the loaded capability model. Callers may chain without
+// a nil guard: every CapabilityModel method handles a nil receiver, and when
+// the file is absent the model declares nothing and every derivation reports
+// "not structural".
+func (m *Matrix) Capabilities() *CapabilityModel { return m.caps }
 
 type catalogEntry struct {
 	ID string `json:"id"`
@@ -146,6 +147,7 @@ func Load(cfg Config) (*Matrix, error) {
 		shards:     make(map[string]shard.Shard, len(shards)),
 		agentCells: map[string]map[string]*shard.ShardAgent{},
 		cells:      map[string]map[string]CellState{},
+		derived:    map[string]bool{},
 	}
 	for _, sh := range shards {
 		m.shards[sh.Name] = sh
@@ -166,6 +168,27 @@ func Load(cfg Config) (*Matrix, error) {
 		m.agentCells[adapter] = shard.LoadAdapterCells(repoRoot, adapter)
 	}
 
+	// Fill the holes the capability model accounts for (#1369). A pair the
+	// model declares structurally dead needs no directory — that is the part
+	// that shortens onboarding — so its raw cell is synthesized here, BEFORE
+	// the assembly loop, and everything downstream (axes, route, disposition,
+	// applicable state, display state, the rollup) is produced by the same
+	// code path that serves a written cell.
+	for _, adapter := range m.agents {
+		if m.agentCells[adapter] == nil {
+			m.agentCells[adapter] = map[string]*shard.ShardAgent{}
+		}
+		for _, sh := range shards {
+			if m.agentCells[adapter][sh.Name] != nil {
+				continue // a written cell always wins; the model only fills holes
+			}
+			if c := m.caps.SyntheticCell(adapter, sh.Name); c != nil {
+				m.agentCells[adapter][sh.Name] = c
+				m.derived[adapter+"\x00"+sh.Name] = true
+			}
+		}
+	}
+
 	// catalog: one row per IN-CATALOG shard, in shard (section.index) order.
 	// LoadAll already sorts by stable id. Out-of-catalog shards carry a sentinel
 	// section id (>= 99, the migrator's marker for rows absent from the source
@@ -182,15 +205,7 @@ func Load(cfg Config) (*Matrix, error) {
 		m.cells[agent] = map[string]CellState{}
 		for _, sh := range shards {
 			if m.agentCells[agent] == nil || m.agentCells[agent][sh.Name] == nil {
-				// No cell on disk. Before #1369 that was simply a hole in the
-				// matrix. Now, if the capability model says the pair is
-				// structurally dead, the cell is synthesized from the model —
-				// which is what lets a new adapter declare a missing feature
-				// once instead of writing a directory for it.
-				if derived, ok := m.caps.StructuralState(agent, sh.Name); ok {
-					m.cells[agent][sh.Name] = m.derivedCell(agent, sh.Name, derived)
-				}
-				continue
+				continue // no cell for this (agent, scenario), and none derivable
 			}
 			m.cells[agent][sh.Name] = m.buildCell(agent, sh.Name)
 		}
@@ -307,6 +322,7 @@ func (m *Matrix) buildCell(agent, cid string) CellState {
 		ApplicableState: appl,
 		Recorded:        recorded,
 		Assessment:      rep,
+		Derived:         m.derived[agent+"\x00"+cid],
 	}
 
 	// Disposition / Route use the parsed-assessment axes exactly as the legacy
