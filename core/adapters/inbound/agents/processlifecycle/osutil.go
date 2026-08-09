@@ -76,6 +76,34 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	if pid <= 0 {
 		return nil
 	}
+	l := hostIdentity(pid)
+
+	// A herdr pane's window belongs to the attached client, so its host
+	// identity is resolved from that process instead — one indirection past
+	// the ancestry walk hostIdentity skipped (#1350). Runs after the TTY
+	// capture so the pane keeps its own pty when nothing is attached, and is
+	// overridden by the client's when something is: AdoptHostIdentity owns
+	// that rule.
+	if l.HerdrPaneID != "" {
+		l.AdoptHostIdentity(herdrClientLauncher(l.HerdrSocketPath))
+	}
+
+	if l.IsEmpty() {
+		return nil
+	}
+	return l
+}
+
+// hostIdentity resolves the window-owning identity of pid: its whitelisted
+// env, the ancestry fallbacks, and its controlling TTY. This is the sequence
+// that answers "which window is this process displayed in", and it is applied
+// twice — once to the agent, and once to a herdr client standing in for it
+// (osutil_darwin.go). Keeping it in one function is what stops the two from
+// drifting when a step is added.
+//
+// The ordering is load-bearing: ancestry before TTY, and both before any
+// adoption by the caller.
+func hostIdentity(pid int) *session.Launcher {
 	// Env may be empty — hardened-runtime processes hide it from sysctl.
 	// Don't bail here: the ancestry fallback below is the only signal we
 	// have in that case.
@@ -94,8 +122,8 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	// The ancestry walk is cached because three guarded blocks may all need it
 	// (kitty TermProgram override, hardened-runtime TermProgram fallback,
 	// kitty field back-fill). Walking the ppid chain once instead of up to
-	// three times keeps ReadLauncherEnv bounded — each readProcInfo is a `ps`
-	// shellout with a 2s ceiling.
+	// three times keeps this bounded — each readProcInfo is a `ps` shellout
+	// with a 2s ceiling.
 	if l.HerdrPaneID == "" {
 		applyAncestryFallbacks(l, pid, memoizedAncestry(pid))
 	}
@@ -104,18 +132,6 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	// can target the exact tab — Terminal.app's AppleScript dictionary
 	// matches tabs by `tty` but has no session-UUID analog.
 	l.TTY = processTTY(pid)
-
-	// A herdr pane's window belongs to the attached client, so its host
-	// identity is resolved from that process instead — one indirection past
-	// the ancestry walk skipped above (#1350). Runs after the TTY capture so
-	// the pane keeps its own pty when nothing is attached, and is overridden
-	// by the client's when something is: AdoptHostIdentity owns that rule.
-	if l.HerdrPaneID != "" {
-		l.AdoptHostIdentity(herdrClientLauncher(l.HerdrSocketPath))
-	}
-	if l.IsEmpty() {
-		return nil
-	}
 	return l
 }
 

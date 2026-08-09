@@ -56,9 +56,8 @@ func kittyWindowIDForPID(socket string, sessionPID int) string { return "" }
 // reject every antigravity CLI session on this platform instead.
 func IsKnownInteractiveHost(pid int) bool { return true }
 
-// herdrClientPIDs / herdrClientLauncher resolve a herdr pane's window through
-// the attached client (#1350). Darwin-only: the identity they produce is only
-// consumed by the macOS click-to-focus path, and resolving it needs the same
-// ancestry walk the stubs above already decline to do.
-func herdrClientPIDs(socketPath string) []int                 { return nil }
+// herdrClientLauncher resolves a herdr pane's window through the attached
+// client (#1350). Darwin-only: the identity it produces is only consumed by the
+// macOS click-to-focus path, and resolving it needs the same ancestry walk the
+// stubs above already decline to do.
 func herdrClientLauncher(socketPath string) *session.Launcher { return nil }

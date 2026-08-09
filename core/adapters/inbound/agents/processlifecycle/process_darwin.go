@@ -117,25 +117,57 @@ func (darwinObserver) WriterOf(path string) (int, error) {
 		return 0, nil // file not open by any process
 	}
 
-	myPID := os.Getpid()
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			continue
-		}
-		if fields[0] == "COMMAND" { // header row
-			continue
-		}
-		pid, err := strconv.Atoi(fields[1])
-		if err != nil || pid <= 0 || pid == myPID {
-			continue
-		}
-		fd := fields[3] // e.g. "14w", "8299r" — writer ends with 'w'
-		if len(fd) > 0 && fd[len(fd)-1] == 'w' {
-			return pid, nil
+	for _, e := range parseLsofFDs(string(out), os.Getpid()) {
+		// e.g. "14w", "8299r" — this caller wants write mode only.
+		if e.FD[len(e.FD)-1] == 'w' {
+			return e.PID, nil
 		}
 	}
 	return 0, nil
+}
+
+// lsofFD is one open-file row of lsof's default table: the process holding the
+// file and its raw FD column (e.g. "14w", "3r", "9u", "5uW").
+type lsofFD struct {
+	PID int
+	FD  string
+}
+
+// Mode returns the access mode letter of the FD column — 'r', 'w' or 'u'
+// (read/write) — or 0 when the column has none.
+//
+// It reads the first non-digit rather than the last byte, because lsof may
+// append a lock character after the mode: a file locked for writing shows
+// "5uW", whose last byte is the lock, not the mode. Callers that only ever see
+// unlocked files are unaffected either way.
+func (e lsofFD) Mode() byte {
+	for i := 0; i < len(e.FD); i++ {
+		if e.FD[i] < '0' || e.FD[i] > '9' {
+			return e.FD[i]
+		}
+	}
+	return 0
+}
+
+// parseLsofFDs tokenizes lsof's default table, dropping the header row, rows
+// too short to carry an FD column, and self. It deliberately applies no mode
+// filter: WriterOf wants the first pure writer, while herdr client discovery
+// (osutil_darwin.go) also counts read/write handles, and keeping the predicate
+// at the call site is what stops those two rules from being confused for one.
+func parseLsofFDs(out string, self int) []lsofFD {
+	var entries []lsofFD
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 || fields[0] == "COMMAND" {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[1])
+		if err != nil || pid <= 0 || pid == self || fields[3] == "" {
+			continue
+		}
+		entries = append(entries, lsofFD{PID: pid, FD: fields[3]})
+	}
+	return entries
 }
 
 // EnvOf returns the whitelisted launcher env of pid via KERN_PROCARGS2 sysctl

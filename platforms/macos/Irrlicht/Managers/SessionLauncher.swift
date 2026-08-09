@@ -48,23 +48,29 @@ enum SessionLauncher {
         guard let activator = resolveActivator(for: session.launcher) else {
             let tp = session.launcher?.termProgram ?? "nil"
             let bid = session.launcher?.hostBundleID ?? "nil"
-            // A herdr pane with no host is the expected "nothing is displaying
-            // this session" case rather than a capture failure, so name it:
-            // otherwise a detached multiplexer session is indistinguishable
-            // from a launcher we simply failed to read (#1350). Only claim
-            // "no attached client" when the host fields really are empty —
-            // a resolved client whose terminal has no registry entry also
-            // lands here, and pointing that at a missing client would send
-            // whoever debugs it looking for the wrong thing.
-            let herdr = session.launcher?.herdrPaneID.map { pane in
-                let unresolved = (session.launcher?.termProgram ?? "").isEmpty
-                    && (session.launcher?.hostBundleID ?? "").isEmpty
-                return "herdr_pane=\(pane), \(unresolved ? "no attached client" : "client resolved but its host has no activator")"
-            } ?? "herdr_pane=nil"
+            let herdr = herdrDiagnostic(for: session.launcher)
             logger.info("no activator for session \(session.id, privacy: .public) (term_program=\(tp, privacy: .public), host_bundle_id=\(bid, privacy: .public), \(herdr, privacy: .public))")
             return
         }
         _ = activator.activate(session)
+    }
+
+    /// Explains, for the "no activator" log, why a herdr session produced no
+    /// window. A pane with no host at all is the expected "nothing is
+    /// displaying this session" case rather than a capture failure, and saying
+    /// so is what makes a detached multiplexer session distinguishable from a
+    /// launcher we simply failed to read (#1350). It only claims that when the
+    /// host fields really are empty: a client that *was* resolved, whose
+    /// terminal has no registry entry, lands here too, and pointing that at a
+    /// missing client would send whoever debugs it looking for the wrong thing.
+    ///
+    /// Exposed for tests, which is the only way either wording is checked.
+    static func herdrDiagnostic(for launcher: Launcher?) -> String {
+        guard let pane = launcher?.herdrPaneID else { return "herdr_pane=nil" }
+        let unresolved = (launcher?.termProgram ?? "").isEmpty
+            && (launcher?.hostBundleID ?? "").isEmpty
+        let why = unresolved ? "no attached client" : "client resolved but its host has no activator"
+        return "herdr_pane=\(pane), \(why)"
     }
 
     /// Selects the activator for a launcher without performing activation
@@ -91,8 +97,7 @@ enum SessionLauncher {
         if base == nil, let bundleID = launcher?.hostBundleID, !bundleID.isEmpty {
             base = AXTitleMatchActivator(termProgram: launcher?.termProgram ?? "", bundleID: bundleID)
         }
-        guard let base = base else { return nil }
-        var activator: HostActivator = base
+        guard var activator: HostActivator = base else { return nil }
         if launcher?.tmuxPane != nil {
             activator = TmuxActivator(inner: activator)
         }

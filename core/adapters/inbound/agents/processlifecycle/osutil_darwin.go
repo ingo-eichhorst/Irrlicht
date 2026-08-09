@@ -383,13 +383,11 @@ func readProcInfo(pid int) (ppid int, cmd string, err error) {
 // client has no writer on its client log, and one with two clients attached
 // (herdr supports attaching from more than one place) has two.
 //
-// Only *writers* count. "Holds the log open" is not the predicate: `lsof -t`
-// discards the FD column, so it cannot tell a client's `3w` from a
-// `tail -f` reader's `3r` — and a reader is not a client. Left unfiltered, a
-// developer tailing the log to debug herdr would have their own terminal
-// adopted as the host of every session on that server (and, being newer, would
-// sort first), which is precisely the #1348 misroute. Parsing the FD column is
-// the same thing darwinObserver.WriterOf does for the same reason.
+// Only writers count. "Holds the log open" is not the predicate: a `tail -f`
+// reader is not a client, and adopting its terminal as the host of every
+// session on that server would be the #1348 misroute with a new cause — and,
+// being the newer process, it would sort first. Hence the FD-column filter,
+// which is also why this cannot use `lsof -t` (that form drops the column).
 //
 // Ordering answers open question 3 of #1350: the most recently attached client
 // is the window the user most recently chose to view the session in, and PIDs
@@ -403,38 +401,26 @@ func herdrClientPIDs(socketPath string) []int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	// Default table output, not -t: the FD column is the whole point.
 	// A non-zero exit means no process holds the file open — the detached
 	// case, not an error.
 	out, err := exec.CommandContext(ctx, lsofPath, logPath).Output()
 	if err != nil {
 		return nil
 	}
-	pids := parseHerdrClientWriters(string(out), os.Getpid())
+	pids := herdrClientWriters(string(out), os.Getpid())
 	sort.Sort(sort.Reverse(sort.IntSlice(pids)))
 	return pids
 }
 
-// parseHerdrClientWriters extracts the writer PIDs from lsof's default table,
-// skipping the header, the daemon itself, and every read-only holder. Split out
-// of herdrClientPIDs so the FD-column rule is testable without a live herdr.
-func parseHerdrClientWriters(out string, self int) []int {
+// herdrClientWriters selects the client PIDs from an lsof table. 'u' counts
+// alongside 'w': it is read/write, which a client's log handle may legitimately
+// be, whereas a plain 'r' reader never is. Split out so the rule is testable
+// without a live herdr.
+func herdrClientWriters(out string, self int) []int {
 	var pids []int
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 4 || fields[0] == "COMMAND" {
-			continue
-		}
-		pid, err := strconv.Atoi(fields[1])
-		if err != nil || pid <= 0 || pid == self {
-			continue
-		}
-		// e.g. "3w", "9u" — a client opens the log for writing. "u" is
-		// read/write, which also qualifies; "3r" does not.
-		if fd := fields[3]; fd != "" {
-			if mode := fd[len(fd)-1]; mode == 'w' || mode == 'u' {
-				pids = append(pids, pid)
-			}
+	for _, e := range parseLsofFDs(out, self) {
+		if mode := e.Mode(); mode == 'w' || mode == 'u' {
+			pids = append(pids, e.PID)
 		}
 	}
 	return pids
@@ -442,18 +428,16 @@ func parseHerdrClientWriters(out string, self int) []int {
 
 // maxHerdrClientCandidates bounds how many attached clients are probed for a
 // resolvable host. Each candidate costs an env read plus an ancestry walk, and
-// ReadLauncherEnv documents a two-second ceiling; attaching more than a handful
-// of clients to one session is not a real workflow, so the cap keeps the
-// contract enforceable rather than aspirational.
+// attaching more than a handful of clients to one session is not a real
+// workflow, so the cap keeps that work proportionate.
 const maxHerdrClientCandidates = 4
 
 // herdrClientLauncher resolves the host-window identity of the herdr session
-// addressed by socketPath, by reading it from the attached client the same way
-// it would be read from any directly-hosted agent: the whitelisted env of that
-// process plus the ancestry fallbacks. Returns nil when nothing is attached, or
-// when no attached client resolves to a local GUI host — an SSH client has a
-// real tty but no local window, and reporting one anyway is the misroute #1348
-// removed.
+// addressed by socketPath, by reading it from the attached client exactly the
+// way it would be read from any directly-hosted agent (hostIdentity). Returns
+// nil when nothing is attached, or when no attached client resolves to a local
+// GUI host — an SSH client has a real tty but no local window, and reporting
+// one anyway is the misroute #1348 removed.
 //
 // Only ever called with a socket path the daemon captured from the pane's own
 // $HERDR_SOCKET_PATH, so a resolved identity always accompanies a complete
@@ -483,15 +467,12 @@ func resolveHerdrClientLauncher(socketPath string) *session.Launcher {
 		pids = pids[:maxHerdrClientCandidates]
 	}
 	for _, pid := range pids {
-		env, _ := osProc.EnvOf(pid)
-		host := launcherFromEnv(env)
+		host := hostIdentity(pid)
 		if host.HerdrPaneID != "" {
 			// herdr nested in herdr: this client's own window is another
 			// indirection away. Don't recurse — try the next candidate.
 			continue
 		}
-		applyAncestryFallbacks(host, pid, memoizedAncestry(pid))
-		host.TTY = processTTY(pid)
 		if host.TermProgram == "" && host.HostBundleID == "" {
 			continue
 		}
@@ -510,30 +491,31 @@ type herdrClientCacheEntry struct {
 	at       time.Time
 }
 
-var herdrClientCache = struct {
-	sync.Mutex
-	entries map[string]herdrClientCacheEntry
-}{entries: map[string]herdrClientCacheEntry{}}
+var (
+	herdrClientCacheMu sync.Mutex
+	herdrClientCache   = map[string]herdrClientCacheEntry{}
+)
 
-// herdrClientCacheGet returns a copy of the cached identity for socketPath, so
-// a caller mutating what it gets back cannot corrupt the entry for the next
-// pane of the same server. ok is false once the entry has aged out.
+// herdrClientCacheGet reports the cached identity for socketPath. A cached
+// "nothing attached" is a real answer and returns (nil, true); ok is false only
+// when there is no live entry. Expired entries are dropped on the way past, so
+// sockets that stop being used don't accumulate.
 func herdrClientCacheGet(socketPath string) (*session.Launcher, bool) {
-	herdrClientCache.Lock()
-	defer herdrClientCache.Unlock()
-	entry, ok := herdrClientCache.entries[socketPath]
-	if !ok || time.Since(entry.at) > herdrClientCacheTTL {
+	herdrClientCacheMu.Lock()
+	defer herdrClientCacheMu.Unlock()
+	entry, ok := herdrClientCache[socketPath]
+	if !ok {
 		return nil, false
 	}
-	if entry.launcher == nil {
-		return nil, true
+	if time.Since(entry.at) > herdrClientCacheTTL {
+		delete(herdrClientCache, socketPath)
+		return nil, false
 	}
-	clone := *entry.launcher
-	return &clone, true
+	return entry.launcher, true
 }
 
 func herdrClientCachePut(socketPath string, l *session.Launcher) {
-	herdrClientCache.Lock()
-	defer herdrClientCache.Unlock()
-	herdrClientCache.entries[socketPath] = herdrClientCacheEntry{launcher: l, at: time.Now()}
+	herdrClientCacheMu.Lock()
+	defer herdrClientCacheMu.Unlock()
+	herdrClientCache[socketPath] = herdrClientCacheEntry{launcher: l, at: time.Now()}
 }

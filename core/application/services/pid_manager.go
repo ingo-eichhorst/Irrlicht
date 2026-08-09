@@ -1226,9 +1226,14 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 //   - The host identity of a herdr pane (issue #1350), which is resolved from
 //     the attached herdr client rather than from the pane itself. A session
 //     that was detached when its PID was bound has no host to record, so this
-//     is the path by which one attached since then is picked up. Capture is
-//     still once-per-PID-bind and this runs at seed, so re-attaching a session
-//     to a *different* terminal is not noticed until the daemon restarts.
+//     is the path by which one attached since then is picked up. Two limits
+//     follow from where this runs, and both are deliberate for now: capture is
+//     once-per-PID-bind and this runs only at seed, so re-attaching a session
+//     to a *different* terminal is not noticed until the daemon restarts; and
+//     because the need is gated on *no* host being recorded, a host that did
+//     resolve is never re-checked afterwards. Refreshing it from the periodic
+//     liveness sweep instead would fix both — the daemon pushes launcher
+//     updates to clients, so nothing on the click path would have to change.
 func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 	if state.Launcher == nil {
 		pm.captureLauncher(state, state.PID)
@@ -1266,8 +1271,11 @@ type launcherBackfillNeeds struct {
 	tty, kittyPID, kittyListen, kittyWindow, herdrHost bool
 }
 
+// any reports whether anything needs refreshing. Compares against the zero
+// value rather than or-ing the fields, so a need added to the struct is covered
+// without a second edit here.
 func (n launcherBackfillNeeds) any() bool {
-	return n.tty || n.kittyPID || n.kittyListen || n.kittyWindow || n.herdrHost
+	return n != launcherBackfillNeeds{}
 }
 
 // launcherBackfillNeedsFor computes which fields of l are missing and

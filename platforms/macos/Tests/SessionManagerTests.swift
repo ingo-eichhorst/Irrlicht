@@ -474,6 +474,27 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(result.stdout, "has-home")
     }
 
+    // Both wordings of the "no activator" diagnostic (#1350). The distinction
+    // is the whole reason the line exists: "no attached client" is a real,
+    // expected state, while a resolved client whose terminal has no registry
+    // entry is a gap in the registry — and sending someone to look for a
+    // missing client in that case wastes the debugging session the log was
+    // added to shorten.
+    func testHerdrDiagnosticDistinguishesDetachedFromUnregisteredHost() throws {
+        func launcher(_ json: String) throws -> Launcher {
+            try JSONDecoder().decode(Launcher.self, from: Data(json.utf8))
+        }
+        let detached = try launcher(#"{"herdr_pane_id":"w1:p1"}"#)
+        XCTAssertEqual(SessionLauncher.herdrDiagnostic(for: detached),
+                       "herdr_pane=w1:p1, no attached client")
+
+        let unregisteredHost = try launcher(#"{"herdr_pane_id":"w1:p1","term_program":"foot"}"#)
+        XCTAssertEqual(SessionLauncher.herdrDiagnostic(for: unregisteredHost),
+                       "herdr_pane=w1:p1, client resolved but its host has no activator")
+
+        XCTAssertEqual(SessionLauncher.herdrDiagnostic(for: nil), "herdr_pane=nil")
+    }
+
     func testResolveActivatorHerdrComposesWithTmux() throws {
         let nested = try JSONDecoder().decode(Launcher.self, from: Data(#"""
         {"term_program":"ghostty","tmux_pane":"%3","tmux_socket":"/tmp/tmux-501/default",

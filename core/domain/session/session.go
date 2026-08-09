@@ -148,18 +148,15 @@ func (l *Launcher) AdoptHostIdentity(from *Launcher) bool {
 	if l == nil || from.IsEmpty() {
 		return false
 	}
-	before := *l
-	l.TermProgram = from.TermProgram
-	l.ITermSessionID = from.ITermSessionID
-	l.TermSessionID = from.TermSessionID
-	l.TmuxPane = from.TmuxPane
-	l.TmuxSocket = from.TmuxSocket
-	l.VSCodePID = from.VSCodePID
-	l.KittyListenOn = from.KittyListenOn
-	l.KittyWindowID = from.KittyWindowID
-	l.KittyPID = from.KittyPID
-	l.HostBundleID = from.HostBundleID
-	// Both sides must have one, and the guard is symmetric on purpose:
+	// Copy wholesale and put back the two fields that are the *pane's*, rather
+	// than listing the host fields one by one. The host set grows (it has
+	// eleven members and gains one per terminal integration) while the herdr
+	// address is closed at two, so enumerating the closed set is what keeps a
+	// newly added host field from being silently left behind here.
+	merged := *from
+	merged.HerdrPaneID = l.HerdrPaneID
+	merged.HerdrSocketPath = l.HerdrSocketPath
+	// TTY needs both sides, and the guard is symmetric on purpose:
 	// BackgroundAgent.Detached is computed from this field (#744), so a client
 	// resolved without a controlling tty must not erase the pane's own — and,
 	// in the other direction, an agent that genuinely has no controlling
@@ -167,10 +164,14 @@ func (l *Launcher) AdoptHostIdentity(from *Launcher) bool {
 	// pane's herdr env) must not be handed the client's tty and stop looking
 	// detached. The client's tty describes the client's window, not a terminal
 	// this process has.
-	if l.TTY != "" && from.TTY != "" {
-		l.TTY = from.TTY
+	if l.TTY == "" || from.TTY == "" {
+		merged.TTY = l.TTY
 	}
-	return *l != before
+	if merged == *l {
+		return false
+	}
+	*l = merged
+	return true
 }
 
 // SessionState represents the current state of a Claude Code or Copilot session.

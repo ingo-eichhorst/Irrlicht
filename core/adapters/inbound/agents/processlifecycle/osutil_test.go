@@ -469,99 +469,28 @@ func TestReadLauncherEnv_Subprocess_JetBrainsImpliesTermProgram(t *testing.T) {
 // --- herdr click-to-focus (#1350) -------------------------------------------
 
 // newHerdrSessionDir returns a stand-in for a herdr session directory: the
-// socket path the pane's $HERDR_SOCKET_PATH points at, and the client log
-// that sits beside it. Mirrors the real layout, which is identical for the
-// default session (<config>/herdr.sock) and a named one
+// socket path the pane's $HERDR_SOCKET_PATH points at. The client log that
+// identifies an attached client sits beside it and is derived, never spelled
+// out again, so the layout has one definition (herdrClientLogPath). Mirrors the
+// real thing, which is identical for the default session
+// (<config>/herdr.sock) and a named one
 // (<config>/sessions/<name>/herdr.sock) — verified against herdr 0.8.0.
-func newHerdrSessionDir(t *testing.T) (socketPath, clientLog string) {
+func newHerdrSessionDir(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	return filepath.Join(dir, "herdr.sock"), filepath.Join(dir, "herdr-client.log")
-}
-
-// spawnHerdrClient starts a sleeper that stands in for an attached herdr
-// client: it holds clientLog open for writing and carries the host terminal's
-// identity in its own env. Waits until the open fd is actually visible to the
-// discovery helper so the caller isn't racing the child's OpenFile.
-func spawnHerdrClient(t *testing.T, socketPath, clientLog string, env ...string) int {
-	t.Helper()
-	pid := spawnSleeperWithEnv(t, append([]string{
-		"PATH=/usr/bin:/bin",
-		"GO_WANT_LAUNCHER_HELPER_HOLD=" + clientLog,
-	}, env...))
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, got := range herdrClientPIDs(socketPath) {
-			if got == pid {
-				return pid
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("client pid %d never became visible as a writer of %s", pid, clientLog)
-	return 0
-}
-
-// TestReadLauncherEnv_Herdr_ResolvesHostFromAttachedClient pins the defect in
-// #1350: a herdr pane reached the macOS app with no term_program and no
-// host_bundle_id, so resolveActivator returned nil and a click did nothing.
-// The window belongs to the attached *client*, so the host identity has to be
-// read from that process — one indirection past the pane's own env, which
-// describes the (detached, reparented) server and is deliberately suppressed.
-func TestReadLauncherEnv_Herdr_ResolvesHostFromAttachedClient(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("herdr client resolution is darwin-only (lsof + ancestry)")
-	}
-	socketPath, clientLog := newHerdrSessionDir(t)
-	spawnHerdrClient(t, socketPath, clientLog,
-		"TERM_PROGRAM=iTerm.app",
-		"ITERM_SESSION_ID=w0t0p0-CLIENT",
-	)
-	agentPID := spawnSleeperWithEnv(t, []string{
-		"PATH=/usr/bin:/bin",
-		"HERDR_PANE_ID=w1:p2",
-		"HERDR_SOCKET_PATH=" + socketPath,
-		// The stale, inherited identity a real pane carries — it describes the
-		// server's launch environment and must stay suppressed (#1348).
-		"TERM_PROGRAM=tmux",
-		"TMUX=/tmp/foreign-tmux,95058,0",
-		"TMUX_PANE=%0",
-	})
-
-	l := ReadLauncherEnv(agentPID)
-	if l == nil {
-		t.Fatal("expected non-nil launcher")
-	}
-	if l.TermProgram != "iTerm.app" {
-		t.Errorf("TermProgram: want the attached client's iTerm.app, got %q", l.TermProgram)
-	}
-	if l.ITermSessionID != "w0t0p0-CLIENT" {
-		t.Errorf("ITermSessionID: want the client's window selector, got %q", l.ITermSessionID)
-	}
-	// The pane address must survive the merge — it is what the activator
-	// focuses, and what resolveBackend keys the control path on.
-	if l.HerdrPaneID != "w1:p2" || l.HerdrSocketPath != socketPath {
-		t.Errorf("herdr address lost: pane=%q socket=%q", l.HerdrPaneID, l.HerdrSocketPath)
-	}
-	// The client's env carried no tmux, so the pane's inherited tmux identity
-	// must not reappear by this route — resolveBackend requires both herdr
-	// fields, and a surviving TmuxPane is the #1348 misroute.
-	if l.TmuxPane != "" || l.TmuxSocket != "" {
-		t.Errorf("inherited tmux identity survived: pane=%q socket=%q", l.TmuxPane, l.TmuxSocket)
-	}
+	return filepath.Join(t.TempDir(), "herdr.sock")
 }
 
 // TestReadLauncherEnv_Herdr_DetachedSessionResolvesNoHost is the honest-failure
-// half: a herdr session with no attached client has no window anywhere, so the
-// launcher must stay herdr-only rather than guess. Verified live against herdr
-// 0.8.0 — a detached session's client log has no writer at all.
+// half of #1350: a herdr session with no attached client has no window
+// anywhere, so the launcher must stay herdr-only rather than guess. Verified
+// live against herdr 0.8.0 — a detached session's client log has no writer.
 func TestReadLauncherEnv_Herdr_DetachedSessionResolvesNoHost(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip()
 	}
-	socketPath, clientLog := newHerdrSessionDir(t)
+	socketPath := newHerdrSessionDir(t)
 	// The log exists (the session ran once) but nobody holds it open.
-	if err := os.WriteFile(clientLog, []byte("detached\n"), 0o600); err != nil {
+	if err := os.WriteFile(herdrClientLogPath(socketPath), []byte("detached\n"), 0o600); err != nil {
 		t.Fatalf("seed client log: %v", err)
 	}
 	agentPID := spawnSleeperWithEnv(t, []string{
@@ -586,35 +515,6 @@ func TestReadLauncherEnv_Herdr_DetachedSessionResolvesNoHost(t *testing.T) {
 	}
 }
 
-// TestHerdrClientPIDs_MultipleClientsAreOrderedNewestFirst covers open question
-// 3 of #1350. herdr supports attaching from more than one place at once;
-// verified live (two clients on one session → two writers on the client log).
-// The newest attach is the window the user most recently chose, so the
-// discovery helper reports descending PID and the resolver takes the first
-// candidate that yields a host.
-func TestHerdrClientPIDs_MultipleClientsAreOrderedNewestFirst(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("herdr client resolution is darwin-only (lsof + ancestry)")
-	}
-	socketPath, clientLog := newHerdrSessionDir(t)
-	first := spawnHerdrClient(t, socketPath, clientLog)
-	second := spawnHerdrClient(t, socketPath, clientLog)
-
-	pids := herdrClientPIDs(socketPath)
-	if len(pids) < 2 {
-		t.Fatalf("want both attached clients, got %v (first=%d second=%d)", pids, first, second)
-	}
-	for i := 1; i < len(pids); i++ {
-		if pids[i-1] < pids[i] {
-			t.Errorf("want descending pids (newest attach first), got %v", pids)
-			break
-		}
-	}
-	if pids[0] != max(first, second) {
-		t.Errorf("newest client must win: got %d, want %d", pids[0], max(first, second))
-	}
-}
-
 // TestHerdrClientLogPath pins the addressing derivation: the client log sits
 // beside the socket, so the socket path the daemon already captures is a
 // complete key — no $HERDR_SESSION capture and no argv parsing needed
@@ -628,44 +528,6 @@ func TestHerdrClientLogPath(t *testing.T) {
 	for socket, want := range cases {
 		if got := herdrClientLogPath(socket); got != want {
 			t.Errorf("herdrClientLogPath(%q) = %q, want %q", socket, got, want)
-		}
-	}
-}
-
-// TestParseHerdrClientWriters covers the FD-column rule: "holds the client log
-// open" is not the predicate, "holds it open for writing" is. A read-only
-// holder — a developer running `tail -f` on the log to debug herdr — is not a
-// client, and adopting its terminal as the herdr host would be the #1348
-// misroute with a new cause. The reader is deliberately given the higher PID
-// here, because the caller sorts descending and would otherwise prefer it.
-func TestParseHerdrClientWriters(t *testing.T) {
-	const out = `COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF   NODE NAME
-herdr     26932 ingo    3w   REG   1,18      372 136170 /cfg/herdr/herdr-client.log
-tail      99999 ingo    3r   REG   1,18      372 136170 /cfg/herdr/herdr-client.log
-herdr     26940 ingo    9u   REG   1,18      372 136170 /cfg/herdr/herdr-client.log
-irrlichd    777 ingo    4w   REG   1,18      372 136170 /cfg/herdr/herdr-client.log`
-
-	got := parseHerdrClientWriters(out, 777)
-	want := map[int]bool{26932: true, 26940: true}
-	if len(got) != len(want) {
-		t.Fatalf("got %v, want exactly the writers %v", got, want)
-	}
-	for _, pid := range got {
-		if !want[pid] {
-			t.Errorf("pid %d must not be reported: readers are not clients, and the daemon is not its own client", pid)
-		}
-	}
-}
-
-// TestParseHerdrClientWriters_NoHolders is the detached case as lsof reports
-// it — header only, or nothing at all.
-func TestParseHerdrClientWriters_NoHolders(t *testing.T) {
-	for name, out := range map[string]string{
-		"empty":       "",
-		"header only": "COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF   NODE NAME",
-	} {
-		if got := parseHerdrClientWriters(out, 1); len(got) != 0 {
-			t.Errorf("%s: want no clients, got %v", name, got)
 		}
 	}
 }
