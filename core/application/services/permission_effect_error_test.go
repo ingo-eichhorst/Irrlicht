@@ -85,47 +85,38 @@ func newFailingService(f *applyFailure, store *mockPermStore, push *mockPush) *s
 	})
 }
 
-// permJSON marshals the snapshot and returns the raw JSON for one
-// permission, so assertions read exactly what the web dashboard and the
-// macOS app decode.
-func permJSON(t *testing.T, svc *services.PermissionService, agentName, key string) string {
+// permView finds one permission in the snapshot. Assertions read the API
+// projection (and marshal it) rather than a Go field, so this whole file
+// compiles against pre-fix main.
+func permView(t *testing.T, svc *services.PermissionService, agentName, key string) services.PermissionView {
 	t.Helper()
-	snap := svc.Snapshot()
-	for _, a := range snap.Agents {
-		if a.Name != agentName {
-			continue
-		}
-		for _, p := range a.Permissions {
-			if p.Key != key {
-				continue
-			}
-			b, err := json.Marshal(p)
-			if err != nil {
-				t.Fatalf("marshal %s/%s: %v", agentName, key, err)
-			}
-			return string(b)
-		}
-	}
-	t.Fatalf("permission %s/%s not in snapshot", agentName, key)
-	return ""
-}
-
-// permState reads the state string out of the snapshot.
-func permState(t *testing.T, svc *services.PermissionService, agentName, key string) string {
-	t.Helper()
-	snap := svc.Snapshot()
-	for _, a := range snap.Agents {
+	for _, a := range svc.Snapshot().Agents {
 		if a.Name != agentName {
 			continue
 		}
 		for _, p := range a.Permissions {
 			if p.Key == key {
-				return p.State
+				return p
 			}
 		}
 	}
 	t.Fatalf("permission %s/%s not in snapshot", agentName, key)
-	return ""
+	return services.PermissionView{}
+}
+
+// permJSON is exactly what the web dashboard and the macOS app decode.
+func permJSON(t *testing.T, svc *services.PermissionService, agentName, key string) string {
+	t.Helper()
+	b, err := json.Marshal(permView(t, svc, agentName, key))
+	if err != nil {
+		t.Fatalf("marshal %s/%s: %v", agentName, key, err)
+	}
+	return string(b)
+}
+
+func permState(t *testing.T, svc *services.PermissionService, agentName, key string) string {
+	t.Helper()
+	return permView(t, svc, agentName, key).State
 }
 
 // TestFailedApplyIsSurfacedInSnapshot is the core #1362 defect test. Today
@@ -213,6 +204,32 @@ func TestReGrantRetriesFailedApply(t *testing.T) {
 	if applied != 2 {
 		t.Fatalf("apply calls after retry = %d, want 2 — a grant whose Apply "+
 			"failed is not retryable, the user must revoke and re-grant", applied)
+	}
+}
+
+// TestPureRetryDoesNotRewriteTheStore: a retry moves no state, so there is
+// nothing new to persist and a byte-identical write would be pure waste.
+func TestPureRetryDoesNotRewriteTheStore(t *testing.T) {
+	f := &applyFailure{failApplyFor: -1}
+	store := &mockPermStore{}
+	svc := newFailingService(f, store, &mockPush{})
+	svc.Start(context.Background())
+
+	ans := []services.PermissionAnswer{{Agent: "testagent", Permission: "hooks", Grant: true}}
+	if err := svc.Answer(ans); err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+	if store.saveCount() != 1 {
+		t.Fatalf("saves after grant = %d, want 1", store.saveCount())
+	}
+	if err := svc.Answer(ans); err != nil {
+		t.Fatalf("Answer (retry): %v", err)
+	}
+	if applied, _ := f.calls(); applied != 2 {
+		t.Fatalf("retry did not re-run Apply: applied = %d", applied)
+	}
+	if store.saveCount() != 1 {
+		t.Fatalf("saves after retry = %d, want 1 — the set is unchanged", store.saveCount())
 	}
 }
 

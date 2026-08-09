@@ -11,7 +11,10 @@ final class AgentPermissionsEffectErrorTests: XCTestCase {
         try JSONDecoder().decode(PermissionsSnapshot.self, from: Data(json.utf8))
     }
 
-    private func item(state: String, effectError: String?) throws -> PermissionItem {
+    /// One agent carrying a single `hooks` permission in the given state.
+    /// Every test below is a view onto this one fixture — the wire format
+    /// is written once so a new required field breaks one place, not six.
+    private func agentModel(state: String, effectError: String?) throws -> AgentPermissions {
         let errField = effectError.map { ", \"effect_error\": \"\($0)\"" } ?? ""
         let json = """
         {"mode":"ask","agents":[{"name":"claude-code","display_name":"Claude Code",
@@ -19,7 +22,11 @@ final class AgentPermissionsEffectErrorTests: XCTestCase {
         "title":"Install hooks","feature_unlocked":"waiting detection","touches":"settings.json",
         "detail":"adds hook entries"\(errField)}]}]}
         """
-        return try XCTUnwrap(decodeSnapshot(json).agents.first?.permissions.first)
+        return try XCTUnwrap(decodeSnapshot(json).agents.first)
+    }
+
+    private func item(state: String, effectError: String?) throws -> PermissionItem {
+        try XCTUnwrap(agentModel(state: state, effectError: effectError).permissions.first)
     }
 
     // MARK: - Decoding
@@ -98,16 +105,22 @@ final class AgentPermissionsEffectErrorTests: XCTestCase {
 
     // MARK: - Auto-wizard lifecycle
 
+    /// The review wizard closes on Apply. The daemon answers 200 whether
+    /// or not the closure succeeded, so closing on `ok` alone would hide
+    /// the failure on the one surface built to show it.
+    func testHasFailedEffectDistinguishesBrokenFromMerelyAnswered() throws {
+        XCTAssertTrue(try agentModel(state: "granted", effectError: reason).hasFailedEffect)
+        XCTAssertFalse(try agentModel(state: "granted", effectError: nil).hasFailedEffect)
+        // A pending permission has not failed — it simply hasn't run.
+        let pending = try agentModel(state: "pending", effectError: nil)
+        XCTAssertFalse(pending.hasFailedEffect)
+        XCTAssertTrue(pending.hasUnresolvedPermissions)
+    }
+
     /// Dismissal must not treat "granted but broken" as resolved, or the
     /// wizard closes on a success that installed nothing.
     func testFailedEffectKeepsTheAutoWizardOpen() throws {
-        let json = """
-        {"mode":"ask","agents":[{"name":"claude-code","display_name":"Claude Code",
-        "detected":true,"permissions":[{"key":"hooks","kind":"modify","state":"granted",
-        "title":"Install hooks","feature_unlocked":"","touches":"","detail":"",
-        "effect_error":"\(reason)"}]}]}
-        """
-        let agent = try XCTUnwrap(decodeSnapshot(json).agents.first)
+        let agent = try agentModel(state: "granted", effectError: reason)
         XCTAssertTrue(agent.hasUnresolvedPermissions)
         // ...but it must NOT re-present the wizard on its own, or a
         // permanent failure would loop forever.
@@ -115,51 +128,13 @@ final class AgentPermissionsEffectErrorTests: XCTestCase {
     }
 
     func testFullyAnsweredHealthyAgentDismissesTheWizard() throws {
-        let json = """
-        {"mode":"ask","agents":[{"name":"claude-code","display_name":"Claude Code",
-        "detected":true,"permissions":[{"key":"hooks","kind":"modify","state":"granted",
-        "title":"Install hooks","feature_unlocked":"","touches":"","detail":""}]}]}
-        """
-        let agent = try XCTUnwrap(decodeSnapshot(json).agents.first)
+        let agent = try agentModel(state: "granted", effectError: nil)
         XCTAssertFalse(agent.hasUnresolvedPermissions)
         XCTAssertFalse(agent.needsWizard)
     }
 
-    /// The review wizard closes on Apply. The daemon answers 200 whether
-    /// or not the closure succeeded, so closing on `ok` alone would hide
-    /// the failure on the one surface built to show it.
-    func testHasFailedEffectDistinguishesBrokenFromMerelyAnswered() throws {
-        let broken = """
-        {"mode":"ask","agents":[{"name":"claude-code","display_name":"Claude Code",
-        "detected":true,"permissions":[{"key":"hooks","kind":"modify","state":"granted",
-        "title":"Install hooks","feature_unlocked":"","touches":"","detail":"",
-        "effect_error":"\(reason)"}]}]}
-        """
-        let fine = """
-        {"mode":"ask","agents":[{"name":"claude-code","display_name":"Claude Code",
-        "detected":true,"permissions":[{"key":"hooks","kind":"modify","state":"granted",
-        "title":"Install hooks","feature_unlocked":"","touches":"","detail":""}]}]}
-        """
-        XCTAssertTrue(try XCTUnwrap(decodeSnapshot(broken).agents.first).hasFailedEffect)
-        XCTAssertFalse(try XCTUnwrap(decodeSnapshot(fine).agents.first).hasFailedEffect)
-        // A pending permission has not failed — it simply hasn't run.
-        let stillPending = """
-        {"mode":"ask","agents":[{"name":"claude-code","display_name":"Claude Code",
-        "detected":true,"permissions":[{"key":"hooks","kind":"modify","state":"pending",
-        "title":"Install hooks","feature_unlocked":"","touches":"","detail":""}]}]}
-        """
-        let agent = try XCTUnwrap(decodeSnapshot(stillPending).agents.first)
-        XCTAssertFalse(agent.hasFailedEffect)
-        XCTAssertTrue(agent.hasUnresolvedPermissions)
-    }
-
     func testPendingAgentStillNeedsAndHoldsTheWizard() throws {
-        let json = """
-        {"mode":"ask","agents":[{"name":"claude-code","display_name":"Claude Code",
-        "detected":true,"permissions":[{"key":"hooks","kind":"modify","state":"pending",
-        "title":"Install hooks","feature_unlocked":"","touches":"","detail":""}]}]}
-        """
-        let agent = try XCTUnwrap(decodeSnapshot(json).agents.first)
+        let agent = try agentModel(state: "pending", effectError: nil)
         XCTAssertTrue(agent.hasUnresolvedPermissions)
         XCTAssertTrue(agent.needsWizard)
     }

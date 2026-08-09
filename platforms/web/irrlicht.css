@@ -1262,7 +1262,7 @@
       align-items: flex-start;
       gap: 8px;
       margin-top: 6px;
-      margin-left: 26px;
+      margin-left: 44px;
       padding: 6px 8px;
       background: rgba(255, 59, 48, 0.1);
       border: 1px solid var(--pressure-high);
@@ -1275,15 +1275,13 @@
       color: var(--pressure-high);
       overflow-wrap: anywhere;
     }
+    /* Base (font, radius, cursor, border width) comes from
+       .settings-action-btn, already in scope inside .settings-modal —
+       only the alert colouring is overridden here. */
     .permissions-modal .perm-retry {
       flex: none;
-      background: none;
-      border: 1px solid var(--pressure-high);
-      border-radius: 4px;
+      border-color: var(--pressure-high);
       color: var(--pressure-high);
-      cursor: pointer;
-      font-family: inherit;
-      font-size: 11px;
       padding: 2px 8px;
       white-space: nowrap;
     }

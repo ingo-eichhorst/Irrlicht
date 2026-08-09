@@ -73,9 +73,17 @@ type PermissionView struct {
 	// said yes and the hooks are NOT installed; a denied one means the
 	// user said no and the hooks may still BE installed.
 	//
-	// Not persisted. Every granted permission's effect is re-run on daemon
-	// Start, so this is recomputed from scratch each boot rather than
+	// Not persisted. Start re-runs every GRANTED permission's effect, so an
+	// apply failure is recomputed from scratch each boot rather than
 	// risking a stale failure outliving the condition that caused it.
+	//
+	// Known asymmetry: Start does not re-run Remove for denied
+	// permissions, so a remove failure is visible only until the next
+	// daemon restart, after which the permission reads as a clean "denied"
+	// while the modification may still be on disk. That gap is
+	// pre-existing — before #1362 a failed Remove left no trace at all —
+	// and closing it means reconciling denied effects at Start too, which
+	// is a behaviour change beyond this fix.
 	EffectError string `json:"effect_error,omitempty"`
 }
 
@@ -338,6 +346,7 @@ func (s *PermissionService) Answer(answers []PermissionAnswer) error {
 	}
 
 	var effects []pendingEffect
+	stateChanged := false
 	for i, ans := range answers {
 		target := permission.StateDenied
 		if ans.Grant {
@@ -349,15 +358,20 @@ func (s *PermissionService) Answer(answers []PermissionAnswer) error {
 		// exception a grant whose Apply failed can only be retried by
 		// revoking and re-granting, which is exactly the workaround the
 		// issue rules out.
-		if s.set.Get(ans.Agent, ans.Permission) == target &&
-			!s.effectFailedLocked(ans.Agent, ans.Permission) {
-			continue
+		if s.set.Get(ans.Agent, ans.Permission) == target {
+			if !s.effectFailedLocked(ans.Agent, ans.Permission) {
+				continue
+			}
+		} else {
+			s.set.Put(ans.Agent, ans.Permission, target)
+			stateChanged = true
 		}
-		s.set.Put(ans.Agent, ans.Permission, target)
 		effects = append(effects, pendingEffect{ans.Agent, perms[i], target})
 	}
+	// A pure retry re-runs the effect without moving any state, so there is
+	// nothing new to write — persisting a byte-identical set would be waste.
 	var toSave permission.Set
-	if len(effects) > 0 && s.mode != config.PermissionModeGrantAll {
+	if stateChanged && s.mode != config.PermissionModeGrantAll {
 		toSave = s.set.Clone()
 	}
 	s.mu.Unlock()
@@ -442,32 +456,29 @@ func (s *PermissionService) runClosureEffect(e pendingEffect) {
 	if e.target != permission.StateGranted {
 		effect, verb = e.perm.Remove, "remove"
 	}
-	if effect == nil {
-		// No closure for this direction: there is nothing that can have
-		// failed, so any error recorded for the opposite verb is stale.
-		s.recordEffectResult(e, "")
-		return
+	// A nil closure records success: nothing can have failed, so any error
+	// left over from the opposite verb is stale.
+	var reason string
+	if effect != nil {
+		if err := effect(); err != nil {
+			reason = err.Error()
+			s.log.LogError("permissions", "", fmt.Sprintf("failed to %s %s/%s: %v", verb, e.agentName, e.perm.Key, err))
+		} else {
+			s.log.LogInfo("permissions", "", fmt.Sprintf("%s/%s: %sd", e.agentName, e.perm.Key, verb))
+		}
 	}
-	if err := effect(); err != nil {
-		s.log.LogError("permissions", "", fmt.Sprintf("failed to %s %s/%s: %v", verb, e.agentName, e.perm.Key, err))
-		s.recordEffectResult(e, err.Error())
-		return
-	}
-	s.recordEffectResult(e, "")
-	s.log.LogInfo("permissions", "", fmt.Sprintf("%s/%s: %sd", e.agentName, e.perm.Key, verb))
+	s.recordEffectResult(e, reason)
 }
 
-// recordEffectResult stores (reason != "") or clears (reason == "") the
-// effect failure for one permission. Callers hold effectMu, never mu.
+// recordEffectResult stores this permission's effect outcome; the empty
+// string means "succeeded", which is also how a missing key reads, so both
+// consumers need no special case. Callers hold effectMu, never mu — and
+// call this only AFTER the closure returns, so no file I/O is ever in
+// flight while s.mu is held.
 func (s *PermissionService) recordEffectResult(e pendingEffect, reason string) {
-	k := effectKey(e.agentName, e.perm.Key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if reason == "" {
-		delete(s.effectErrs, k)
-		return
-	}
-	s.effectErrs[k] = reason
+	s.effectErrs[effectKey(e.agentName, e.perm.Key)] = reason
 }
 
 // effectFailed reports whether the permission's last consent effect failed.

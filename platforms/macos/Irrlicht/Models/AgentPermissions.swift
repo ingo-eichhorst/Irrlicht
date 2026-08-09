@@ -30,7 +30,12 @@ struct AgentPermissions: Decodable, Equatable, Identifiable {
     /// forever. Failures keep an OPEN wizard open
     /// (`hasUnresolvedPermissions`) and are always visible in review mode.
     var needsWizard: Bool {
-        detected && permissions.contains { $0.state == .pending }
+        detected && hasPending
+    }
+
+    /// True when any of this agent's permissions is still unanswered.
+    var hasPending: Bool {
+        permissions.contains { $0.state == .pending }
     }
 
     /// True while this agent still needs the wizard's attention: an
@@ -39,7 +44,7 @@ struct AgentPermissions: Decodable, Equatable, Identifiable {
     /// grant whose Apply failed reads as "answered", the wizard closes,
     /// and the user never sees why nothing works (#1362).
     var hasUnresolvedPermissions: Bool {
-        permissions.contains { $0.state == .pending } || hasFailedEffect
+        hasPending || hasFailedEffect
     }
 
     /// True when any of this agent's permissions has a failed consent

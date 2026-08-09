@@ -97,25 +97,6 @@ export function anyEffectFailed(snap, names) {
     .some(a => (a.permissions || []).some(p => !!p.effect_error));
 }
 
-// wizardShouldStayOpen reports whether the OPEN auto wizard still has
-// something to say about its locked agents: an unanswered permission, or
-// one whose consent effect failed. The second arm is what stops the
-// wizard closing on the daemon's own permissions_updated broadcast the
-// instant a grant is recorded — which would hide the very failure this
-// change exists to report (#1362). Mirrors macOS's
-// AgentPermissions.hasUnresolvedPermissions. Pure; exported for tests.
-export function wizardShouldStayOpen(snap, names) {
-  return stillPendingForAgents(snap, names) || anyEffectFailed(snap, names);
-}
-
-// answeredAgentNames is the set of agents a submitted batch touched —
-// the correct scope for "did THIS Apply fail", as opposed to an
-// unrelated agent's pre-existing failure (e.g. one recorded when the
-// daemon re-applied grants at startup). Pure; exported for tests.
-export function answeredAgentNames(answers) {
-  return [...new Set((answers || []).map(a => a.agent))];
-}
-
 // findPermission looks one permission up in a snapshot. Pure; exported
 // for tests.
 export function findPermission(snap, agentName, permKey) {
@@ -173,14 +154,19 @@ function updatePermissionsWizard() {
   if (!backdrop) return;
   if (backdrop.classList.contains('open')) {
     if (permissionsWizardMode !== 'auto') return;
-    if (wizardShouldStayOpen(permissionsSnapshot, permissionsWizardAgents)) {
+    // A failed consent effect holds the wizard open just as a pending
+    // permission does — otherwise the daemon's own permissions_updated
+    // broadcast closes it the instant a grant is recorded, taking the new
+    // failure warning with it (#1362). Mirrors macOS's
+    // AgentPermissions.hasUnresolvedPermissions.
+    const failed = anyEffectFailed(permissionsSnapshot, permissionsWizardAgents);
+    if (failed || stillPendingForAgents(permissionsSnapshot, permissionsWizardAgents)) {
       // An open wizard is deliberately NOT re-rendered, so in-flight
       // toggling isn't clobbered — with one exception: a failure that
       // isn't on screen yet has to be shown. It can arrive from the macOS
       // app answering first, or from the daemon's startup re-apply, not
-      // just from this browser's own Apply (#1362).
-      const shown = !!document.querySelector('#permissions-body .perm-effect-error');
-      if (!shown && anyEffectFailed(permissionsSnapshot, permissionsWizardAgents)) {
+      // just from this browser's own Apply.
+      if (failed && !document.querySelector('#permissions-body .perm-effect-error')) {
         renderPermissionsWizard();
       }
       return;
@@ -280,9 +266,9 @@ function buildEffectNotice(a, p) {
   text.appendChild(document.createTextNode(notice.reason));
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'perm-retry';
+  btn.className = 'settings-action-btn perm-retry';
   btn.textContent = notice.retryLabel;
-  btn.addEventListener('click', () => retryPermissionEffect(a, p, notice.grant, box, btn));
+  btn.addEventListener('click', () => retryPermissionEffect(a.name, p.key, notice.grant, box, btn));
   box.appendChild(text);
   box.appendChild(btn);
   return box;
@@ -292,17 +278,17 @@ function buildEffectNotice(a, p) {
 // The daemon re-runs the closure because it has a recorded failure for it
 // (#1362) — the user never has to revoke and re-grant. Only this row is
 // re-rendered, so other rows' in-flight toggles survive.
-function retryPermissionEffect(a, p, grant, box, btn) {
+function retryPermissionEffect(agentName, permKey, grant, box, btn) {
   btn.disabled = true;
   const original = btn.textContent;
   btn.textContent = 'Retrying…';
-  postPermissionAnswers([{ agent: a.name, permission: p.key, grant }]).then(snap => {
+  postPermissionAnswers([{ agent: agentName, permission: permKey, grant }]).then(snap => {
     btn.disabled = false;
     btn.textContent = original;
     if (!snap) return; // request failed — leave the notice up for another try
     permissionsSnapshot = snap;
-    const fresh = findPermission(snap, a.name, p.key);
-    const replacement = fresh ? buildEffectNotice(a, fresh) : null;
+    const fresh = findPermission(snap, agentName, permKey);
+    const replacement = fresh ? buildEffectNotice({ name: agentName }, fresh) : null;
     if (replacement) box.replaceWith(replacement);
     else box.remove();
     // Patching this one node keeps other rows' in-flight toggles, but the
@@ -391,7 +377,7 @@ function submitPermissionsWizard() {
     // "success" that installed nothing (#1362). Scoped to the agents THIS
     // batch answered — an unrelated agent's pre-existing failure must not
     // make Apply look like it does nothing.
-    if (anyEffectFailed(snap, answeredAgentNames(answers))) {
+    if (anyEffectFailed(snap, answers.map(x => x.agent))) {
       renderPermissionsWizard();
       return;
     }

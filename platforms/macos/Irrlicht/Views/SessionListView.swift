@@ -241,6 +241,13 @@ struct SessionListView: View {
     private var usageCostTimeframe: CostTimeframe { .from(usageCostTimeframeRaw) }
     private func cycleUsageTimeframe() { usageCostTimeframeRaw = usageCostTimeframe.next().rawValue }
 
+    /// Stable identity of a wizard's agent set, for the "Decide Later"
+    /// suppression below. One formatter, because the signature is written
+    /// at dismissal and compared at presentation — two spellings drift.
+    private func wizardSignature(_ names: [String]) -> String {
+        names.sorted().joined(separator: ",")
+    }
+
     /// Reconciles auto-wizard visibility with the consent snapshot (#570).
     /// Presentation: a detected agent has pending permissions and the set
     /// wasn't just dismissed. Dismissal: every LOCKED agent has no pending
@@ -264,7 +271,7 @@ struct SessionListView: View {
         }
         if autoWizardAgents == nil {
             let names = sessionManager.pendingWizardAgents.map(\.name).sorted()
-            if !names.isEmpty && dismissedWizardSignature != names.joined(separator: ",") {
+            if !names.isEmpty && dismissedWizardSignature != wizardSignature(names) {
                 autoWizardAgents = names
             }
         }
@@ -297,7 +304,7 @@ struct SessionListView: View {
                         // Later" the only exit, and by then the live set
                         // can name a DIFFERENT agent detected meanwhile —
                         // suppressing a prompt the user never saw.
-                        dismissedWizardSignature = locked.sorted().joined(separator: ",")
+                        dismissedWizardSignature = wizardSignature(locked)
                         autoWizardAgents = nil
                     }
                 )

@@ -3,17 +3,17 @@ import { describe, test, expect, beforeEach, beforeAll, afterAll } from 'vitest'
 import { formatCO2, co2TierTitle } from './formatters.js'
 import { readCss } from './snapshots/serialize.js'
 import {
-  pendingWizardAgents,
-  stillPendingForAgents,
-  buildPermissionAnswers,
   permissionEffectNotice,
   anyEffectFailed,
   findPermission,
   visiblePermissionsFor,
   buildAgentPermSection,
-  wizardShouldStayOpen,
-  answeredAgentNames,
   refreshPermissions,
+} from './permissionsWizard.js'
+import {
+  pendingWizardAgents,
+  stillPendingForAgents,
+  buildPermissionAnswers,
   resolvedTheme,
   rowLabel,
   maybeNotifyOnUpdate,
@@ -994,22 +994,6 @@ describe('a failed effect keeps the auto wizard open (#1362)', () => {
     expect(isOpen()).toBe(false)
   })
 
-  test('wizardShouldStayOpen is the predicate behind both', () => {
-    expect(wizardShouldStayOpen(pending, ['claude-code'])).toBe(true)
-    expect(wizardShouldStayOpen(failed, ['claude-code'])).toBe(true)
-    expect(wizardShouldStayOpen(healthy, ['claude-code'])).toBe(false)
-    // Another agent's failure must not hold this wizard open.
-    expect(wizardShouldStayOpen(failed, ['codex'])).toBe(false)
-  })
-
-  test('answeredAgentNames scopes Apply feedback to the batch it submitted', () => {
-    expect(answeredAgentNames([
-      { agent: 'claude-code', permission: 'hooks', grant: true },
-      { agent: 'claude-code', permission: 'transcripts', grant: true },
-    ])).toEqual(['claude-code'])
-    expect(answeredAgentNames([])).toEqual([])
-    expect(answeredAgentNames(null)).toEqual([])
-  })
 })
 
 describe('histTokens', () => {
