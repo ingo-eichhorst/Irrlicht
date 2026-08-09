@@ -31,7 +31,7 @@ func TestSelectActionOrder(t *testing.T) {
 		"--version prints the version":              {[]string{"--version"}, actionVersion},
 		"-v prints the version":                     {[]string{"-v"}, actionVersion},
 		"--uninstall-hooks":                         {[]string{"--uninstall-hooks"}, actionUninstallHooks},
-		"--print-hook-configs":                      {[]string{"--print-hook-configs"}, actionPrintHookConfigs},
+		"--print-managed-files":                     {[]string{"--print-managed-files"}, actionPrintManagedFiles},
 		"--uninstall-task-eta":                      {[]string{"--uninstall-task-eta"}, actionUninstallTaskEta},
 		"--diagnose":                                {[]string{"--diagnose"}, actionDiagnose},
 		"the beacon verb":                           {[]string{"hook-post", "gemini-cli"}, actionBeacon},

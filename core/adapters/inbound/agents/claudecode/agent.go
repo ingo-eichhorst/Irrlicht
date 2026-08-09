@@ -11,7 +11,10 @@ import (
 // Permission keys for the consent wizard (issue #570). Referenced by the
 // hook/statusline HTTP handlers' consent gates and the daemon wiring.
 const (
-	PermissionKeyHooks        = "hooks"
+	// Aliased rather than spelled out: `irrlichd --uninstall-hooks` narrows the
+	// managed-file projection to this key from outside the adapter (#1383), so
+	// a local literal is a string two packages agree on by convention.
+	PermissionKeyHooks        = agent.HooksPermissionKey
 	PermissionKeyStatusline   = "statusline"
 	PermissionKeyTranscripts  = "transcripts"
 	PermissionKeyInstructions = "instructions"
@@ -93,9 +96,9 @@ func Agent() agent.Agent {
 					"`irrlichd --uninstall-hooks`).",
 				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
 				Remove: func() error { _, err := UninstallHooks(); return err },
-				Hooks: &agent.HookInstall{
-					ConfigPath: claudeSettingsPath,
-					Uninstall:  UninstallHooks,
+				Writes: &agent.ManagedUserFile{
+					Path:      claudeSettingsPath,
+					Uninstall: UninstallHooks,
 					// Read-only; the repair it feeds runs through
 					// PermissionService, which re-checks consent under its own
 					// lock before writing (#1372).
@@ -128,6 +131,18 @@ func Agent() agent.Agent {
 					"command (or removes the entry if irrlicht installed it).",
 				Apply:  func() error { _, err := EnsureStatuslineInstalled(); return err },
 				Remove: func() error { _, err := UninstallStatusline(); return err },
+				// Declared even though it resolves to the same file the hooks
+				// permission above declares. The recorder dedups by path, so
+				// this adds nothing to the protected set today — and that is
+				// exactly the point: statusline writes a command carrying the
+				// daemon's own bind port, and until now it was protected only
+				// by the coincidence of sharing settings.json with hooks, with
+				// nothing asserting the coincidence. Move it to its own file
+				// and it stays covered (#1383).
+				Writes: &agent.ManagedUserFile{
+					Path:      claudeSettingsPath,
+					Uninstall: UninstallStatusline,
+				},
 			},
 			{
 				Key:   PermissionKeyInstructions,
@@ -144,6 +159,14 @@ func Agent() agent.Agent {
 				Detail:          instructionsDetail(),
 				Apply:           applyInstructionBlocks,
 				Remove:          removeInstructionBlocks,
+				// ~/.claude/CLAUDE.md follows $HOME, not IRRLICHT_HOME, so a
+				// grant-all recording daemon writes the user's real file and
+				// IRRLICHT_ONBOARD_HOME does not isolate it. Declaring it is
+				// what puts it in the recorder's protected set (#1383).
+				Writes: &agent.ManagedUserFile{
+					Path:      claudeMemoryPath,
+					Uninstall: UninstallInstructionBlocks,
+				},
 			},
 			agent.ControlPermission(),
 		},

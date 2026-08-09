@@ -725,16 +725,12 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	if !deps.DemoMode {
 		hasLive = processlifecycle.HasLiveProcess
 	}
-	// The consent catalog is the agent adapters plus three daemon-wide
-	// entries with no Source/Process axes: the Gas Town orchestrator
-	// (reads ~/gt), launcher-identity capture (reads whitelisted env
-	// vars from agent processes for click-to-focus), and the kitty
-	// remote-control config patch (writes kitty.conf for tab-precise
-	// click-to-focus, #425).
-	permissionAgents := append(append([]agent.Agent{}, allAgents...),
-		gastownadapter.PermissionDeclaration(deps.StartGastown, deps.StopGastown),
-		processlifecycle.LauncherPermissionDeclaration(),
-		processlifecycle.KittyPermissionDeclaration())
+	// consentCatalog (consentcatalog.go) composes the agent adapters with the
+	// three daemon-wide entries. It is shared with the --print-managed-files
+	// and --uninstall-hooks flag paths on purpose: what the wizard offers is
+	// what grant-all grants, so it has to be the same list the recorder's
+	// protected file set is projected from (#1383).
+	permissionAgents := consentCatalog(allAgents, deps.StartGastown, deps.StopGastown)
 	permService := services.NewPermissionService(services.PermissionServiceDeps{
 		Agents:    permissionAgents,
 		Store:     permStore,

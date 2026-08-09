@@ -29,10 +29,10 @@ func hooksVersionGate(t *testing.T) *agent.VersionGate {
 	t.Helper()
 	for _, p := range Agent().Permissions {
 		if p.Key == PermissionKeyHooks {
-			if p.Hooks == nil || p.Hooks.Version == nil {
+			if p.Writes == nil || p.Writes.Version == nil {
 				t.Fatal("hooks permission declares no version gate")
 			}
-			return p.Hooks.Version
+			return p.Writes.Version
 		}
 	}
 	t.Fatal("no hooks permission")

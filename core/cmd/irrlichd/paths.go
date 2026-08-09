@@ -152,7 +152,12 @@ func hookAdapterNames(allAgents []agent.Agent) []string {
 	var out []string
 	for _, a := range allAgents {
 		for _, p := range a.Permissions {
-			if p.Hooks != nil {
+			// The hooks key, not just "declares a managed user file": since
+			// #1383 widened Writes, an adapter that only patches something
+			// like CLAUDE.md would otherwise earn a hook-liveness row for a
+			// channel it never uses — a permanently silent channel reported
+			// as broken.
+			if p.Key == agent.HooksPermissionKey && p.Writes != nil {
 				out = append(out, a.Identity.Name)
 				break
 			}

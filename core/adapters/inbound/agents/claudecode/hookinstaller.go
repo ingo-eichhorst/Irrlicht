@@ -92,7 +92,7 @@ const hookMatcherNotification = "idle_prompt"
 
 // minCLIVersion is the lowest Claude Code version this install may be written
 // into (issue #1365). Declared here, enforced generically by PermissionService
-// via agent.HookInstall.Version — before #1365 this adapter had no gate at all
+// via agent.ManagedUserFile.Version — before #1365 this adapter had no gate at all
 // and wrote all seven entries into ~/.claude/settings.json whatever version was
 // installed.
 //

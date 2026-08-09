@@ -109,31 +109,53 @@ type Permission struct {
 	Apply  func() error
 	Remove func() error
 
-	// Hooks is non-nil exactly for the permission that installs irrlicht's
-	// hooks into an agent-owned config file. It carries what callers OUTSIDE
-	// the adapter need — which file, and how to take our entries back out.
-	Hooks *HookInstall
+	// Writes is non-nil for every permission whose Apply closure writes a
+	// shared, user-owned file — a file that follows $HOME rather than
+	// IRRLICHT_HOME, and that therefore outlives the daemon that wrote it. It
+	// carries what callers OUTSIDE the adapter need: which file, and how to
+	// take irrlicht's content back out.
+	Writes *ManagedUserFile
 }
 
-// HookInstall is the outside-the-adapter half of a hooks permission (#1357).
+// HooksPermissionKey is the permission key under which an adapter installs
+// irrlicht's hooks into an agent-owned config file. It is declared here rather
+// than restated per adapter because two things narrow on it from outside the
+// adapters: `irrlichd --uninstall-hooks`, which must touch the hook entries and
+// nothing else, and the registry-wide version-floor tripwire. A per-adapter
+// spelling is a string two packages have to agree on by convention (#1383).
+const HooksPermissionKey = "hooks"
+
+// ManagedUserFile is the outside-the-adapter half of a permission that writes a
+// shared user-owned file (#1357, widened by #1383).
 //
-// Two places have to enumerate every agent config file irrlicht installs hooks
-// into: the daemon's `--uninstall-hooks`, which must leave nothing behind
-// pointing at a dead port, and the onboarding recorder, which backs those files
-// up before running a grant-all daemon against the user's real $HOME. Both used
-// to carry a hand-maintained two-element literal list, correct only for as long
-// as there were exactly two hook adapters. Declaring the file here — next to the
-// Apply/Remove closures that write it — makes both lists a projection of the
-// registry, so a third adapter is covered by existing over being remembered.
-type HookInstall struct {
-	// ConfigPath resolves the ABSOLUTE path of the agent config file the
-	// hooks are written into, honoring the same env overrides the adapter's
-	// own installer honors (e.g. CODEX_HOME). It must resolve the real path
+// Two places have to enumerate those files. The daemon's `--uninstall-hooks`
+// must leave nothing behind pointing at a dead port. And the onboarding
+// recorder backs them up before running a grant-all daemon against the user's
+// real $HOME — grant-all exercises EVERY modify permission's Apply closure, so
+// the recorder's protected set is "every managed user file", not "every hook
+// config": it is what stops a recording leaving irrlicht's managed blocks in
+// the user's own ~/.claude/CLAUDE.md and ~/.config/kitty/kitty.conf.
+//
+// Both lists used to be hand-maintained literals, correct only for as long as
+// the adapter set stayed frozen. Declaring the file here — next to the
+// Apply/Remove closures that write it — makes both a projection of the consent
+// catalog, so a new adapter is covered by existing over being remembered.
+//
+// The two consumers read DIFFERENT slices of the same declaration and that is
+// deliberate: the recorder protects everything, while `--uninstall-hooks`
+// narrows to HooksPermissionKey so it never revokes a capability the user did
+// not ask it to touch.
+type ManagedUserFile struct {
+	// Path resolves the ABSOLUTE path of the file this permission writes,
+	// honoring the same env overrides the adapter's own installer honors
+	// (e.g. CODEX_HOME, XDG_CONFIG_HOME). It must resolve the real path
 	// rather than a display string: the recorder backs up and restores
 	// exactly what it returns.
-	ConfigPath func() (string, error)
-	// Uninstall removes irrlicht's entries from that file, reporting whether
-	// it modified anything.
+	Path func() (string, error)
+	// Uninstall removes irrlicht's content from that file, reporting whether
+	// it modified anything. Required, not optional: a permission that can
+	// write a user-owned file it cannot take itself back out of is the state
+	// this declaration exists to make impossible.
 	Uninstall func() (bool, error)
 
 	// Verify reports what our entries look like in that file RIGHT NOW,
@@ -156,10 +178,14 @@ type HookInstall struct {
 	Verify func() (HookEntryStatus, error)
 
 	// Version declares the upstream CLI version floor this install requires
-	// (issue #1365). Nil means the adapter declares no floor and installs
-	// unconditionally — which is what Claude Code did for its whole life, and
-	// what a third adapter would inherit by default, so a nil here is a
-	// decision worth stating rather than an omission.
+	// (issue #1365). Nil means the permission declares no floor and installs
+	// unconditionally — which is what Claude Code's hooks did for their whole
+	// life, and what a new hook adapter would inherit by default, so a nil on a
+	// HooksPermissionKey permission is a decision worth stating rather than an
+	// omission (TestEveryHookInstallDeclaresAVersionFloor enforces it there).
+	// Permissions that patch a config file irrlicht owns end-to-end — the
+	// CLAUDE.md instruction blocks, the kitty remote-control block — depend on
+	// no upstream CLI feature and leave it nil.
 	Version *VersionGate
 }
 

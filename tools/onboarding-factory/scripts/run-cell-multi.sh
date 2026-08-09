@@ -25,7 +25,7 @@
 # reach us rather than production. The transcript fswatcher (~/.claude/projects,
 # keyed off the real $HOME) covers this scenario's working->ready arcs either
 # way. This script snapshots and restores the shared agent config the daemon
-# rewrites (lib/hook-config-snapshot.sh), so production's hooks are put back
+# rewrites (lib/managed-file-snapshot.sh), so production's hooks are put back
 # when the recording ends.
 #
 # Coexist is MANDATORY here: IRRLICHT_ONBOARD_HOME must be set (defaulting

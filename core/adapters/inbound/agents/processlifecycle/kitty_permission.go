@@ -76,6 +76,16 @@ func KittyPermissionDeclaration() agent.Agent {
 				"instance but stays on its last-focused tab.",
 			Apply:  func() error { _, err := EnsureKittyConfigPatched(); return err },
 			Remove: func() error { _, err := UninstallKittyConfig(); return err },
+			// kitty.conf follows $XDG_CONFIG_HOME/$HOME, not IRRLICHT_HOME, so
+			// a grant-all recording daemon patches the user's real file and
+			// IRRLICHT_ONBOARD_HOME does not isolate it. This entry is not part
+			// of agents.All() — it is appended to the consent catalog in
+			// core/cmd/irrlichd — which is why the projection runs over the
+			// full catalog rather than the adapter slice (#1383).
+			Writes: &agent.ManagedUserFile{
+				Path:      kittyConfPath,
+				Uninstall: UninstallKittyConfig,
+			},
 		}},
 	}
 }

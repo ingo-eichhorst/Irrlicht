@@ -50,17 +50,17 @@ func AssertHookVersionGate(t *testing.T, g HookVersionGate) {
 	if !ok {
 		t.Fatalf("agent %q declares no permission with key %q", g.Agent.Identity.Name, g.PermissionKey)
 	}
-	if perm.Hooks == nil {
-		t.Fatalf("permission %q declares no HookInstall — a hooks permission must, "+
+	if perm.Writes == nil {
+		t.Fatalf("permission %q declares no agent.ManagedUserFile — a hooks permission must, "+
 			"so that --uninstall-hooks and the version gate can both see it", g.PermissionKey)
 	}
-	if perm.Hooks.Version == nil || perm.Hooks.Version.Min == "" {
+	if perm.Writes.Version == nil || perm.Writes.Version.Min == "" {
 		t.Fatalf("hooks permission %q declares no minimum CLI version (#1365) — an adapter "+
 			"that installs into an agent's config at any version writes entries an older CLI "+
 			"may reject, and the user sees a granted permission whose channel never fires",
 			g.PermissionKey)
 	}
-	gate := perm.Hooks.Version
+	gate := perm.Writes.Version
 
 	t.Run("floor_is_parseable", func(t *testing.T) {
 		assertFloorParses(t, gate.Min)

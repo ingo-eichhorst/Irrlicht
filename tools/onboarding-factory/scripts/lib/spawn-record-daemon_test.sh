@@ -13,8 +13,8 @@
 #
 # The last case is the one that matters most: it asserts neither run-cell.sh nor
 # run-cell-multi.sh has grown its own copy of the lifecycle back. That
-# duplication is the actual defect of #1214 — #1178's hook-config snapshot
-# landed in one script only, and the other would still have exited leaving the
+# duplication is the actual defect of #1214 — #1178's config snapshot landed
+# in one script only, and the other would still have exited leaving the
 # user's agent config repointed at a dead port.
 
 set -uo pipefail   # NOT -e: assertions capture non-zero return codes
@@ -29,7 +29,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Floor under every case: $HOME feeds record_daemon_sock's production branch and
-# hook-config-snapshot's file list, so point it somewhere harmless before the
+# managed-file-snapshot's file list, so point it somewhere harmless before the
 # first case runs — a test must never reach the developer's real
 # ~/.claude/settings.json (#1212).
 HOME="$TMP/nohome"
@@ -168,10 +168,10 @@ printf '{"hooks":{"Stop":"localhost:7837"}}\n' > "$HOME/.claude/settings.json"
 # The snapshot asks the daemon binary which files to protect (#1357), so stand
 # one in that declares the shipped pair.
 FAKE_DAEMON="$STAGING/irrlichd"
-printf '%s\n%s\n' "$HOME/.claude/settings.json" "$CODEX_HOME/hooks.json" > "$STAGING/hook-configs"
-printf '#!/usr/bin/env bash\ncat %q\n' "$STAGING/hook-configs" > "$FAKE_DAEMON"
+printf '%s\n%s\n' "$HOME/.claude/settings.json" "$CODEX_HOME/hooks.json" > "$STAGING/managed-files"
+printf '#!/usr/bin/env bash\ncat %q\n' "$STAGING/managed-files" > "$FAKE_DAEMON"
 chmod +x "$FAKE_DAEMON"
-snapshot_hook_configs "$STAGING/hook-config-backup" "$FAKE_DAEMON"
+snapshot_managed_files "$STAGING/managed-file-backup" "$FAKE_DAEMON"
 printf '{"hooks":{"Stop":"localhost:7838"}}\n' > "$HOME/.claude/settings.json"   # daemon repoints it
 stop_record_daemon
 assert_eq "settings.json restored" '{"hooks":{"Stop":"localhost:7837"}}' "$(cat "$HOME/.claude/settings.json")"
@@ -186,8 +186,8 @@ echo "== an unwritable backup dir refuses to start the daemon =="
 # A snapshot that cannot save the user's config must stop the run before the
 # grant-all daemon has rewritten anything — there would be nothing to hand back.
 fresh_staging unwritable
-HOOK_CONFIG_BACKUP_DIR=""   # the case above left a spent snapshot behind
-: > "$TMP/unwritable/hook-config-backup"   # a FILE where the dir must go
+MANAGED_FILE_BACKUP_DIR=""   # the case above left a spent snapshot behind
+: > "$TMP/unwritable/managed-file-backup"   # a FILE where the dir must go
 err="$(spawn_record_daemon /nonexistent/irrlichd "$TMP/unwritable" 127.0.0.1:7838 "" 2>&1)"
 rc=$?
 assert_eq "returns non-zero" "1" "$rc"
@@ -201,7 +201,7 @@ echo "== a snapshot that cannot complete refuses to start the daemon =="
 # and never reaches the snapshot, so without this case nothing distinguishes the
 # two: deleting the snapshot guard entirely left the whole suite green. Give it
 # a perfectly writable staging dir and a daemon that cannot answer
-# --print-hook-configs, and nothing may be spawned.
+# --print-managed-files, and nothing may be spawned.
 fresh_staging nosnapshot
 BAD_DAEMON="$STAGING/irrlichd"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$BAD_DAEMON"
@@ -236,7 +236,7 @@ fi
 echo "== the lifecycle has exactly one owner (#1214) =="
 # The defect this lib exists to prevent is a SECOND copy of the lifecycle
 # growing back in a caller. Each rung of the lifecycle has a fingerprint: a
-# signal sent to a process (the shutdown ladder), `snapshot_hook_configs` (the
+# signal sent to a process (the shutdown ladder), `snapshot_managed_files` (the
 # config snapshot), and an `IRRLICHT_RECORDINGS_DIR=` assignment (the env
 # assembly). All three belong to the lib alone; a caller may only ask for the
 # lifecycle by name. The signal pattern covers the spellings a re-implementation
@@ -249,8 +249,8 @@ for script in run-cell.sh run-cell-multi.sh; do
     "$(grep -q 'spawn_record_daemon' "$path" && echo yes || echo no)"
   assert_eq "$script signals no process of its own" "0" \
     "$(grep -cE "$SIGNAL_RE" "$path" | tr -d ' ')"
-  assert_eq "$script has no hook-config snapshot of its own" "0" \
-    "$(grep -c 'snapshot_hook_configs' "$path" | tr -d ' ')"
+  assert_eq "$script has no managed-file snapshot of its own" "0" \
+    "$(grep -c 'snapshot_managed_files' "$path" | tr -d ' ')"
   assert_eq "$script assembles no daemon env of its own" "0" \
     "$(grep -c 'IRRLICHT_RECORDINGS_DIR=' "$path" | tr -d ' ')"
 done

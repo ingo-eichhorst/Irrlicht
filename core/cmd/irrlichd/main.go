@@ -81,7 +81,7 @@ const (
 	actionBeacon cliAction = iota
 	actionVersion
 	actionUninstallHooks
-	actionPrintHookConfigs
+	actionPrintManagedFiles
 	actionUninstallTaskEta
 	actionDiagnose
 	actionUnknownSubcommand
@@ -114,8 +114,8 @@ func selectAction(args []string) cliAction {
 		return actionVersion
 	case hasFlagIn(args, "--uninstall-hooks"):
 		return actionUninstallHooks
-	case hasFlagIn(args, "--print-hook-configs"):
-		return actionPrintHookConfigs
+	case hasFlagIn(args, "--print-managed-files"):
+		return actionPrintManagedFiles
 	case hasFlagIn(args, "--uninstall-task-eta"):
 		return actionUninstallTaskEta
 	case hasFlagIn(args, "--diagnose"):
@@ -164,8 +164,8 @@ func runCLIAction(action cliAction, args []string) int {
 		fmt.Printf("Built with %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	case actionUninstallHooks:
 		uninstallHooks()
-	case actionPrintHookConfigs:
-		if err := printHookConfigs(os.Stdout); err != nil {
+	case actionPrintManagedFiles:
+		if err := printManagedFiles(os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -195,8 +195,15 @@ func runCLIAction(action cliAction, args []string) int {
 // missing from that list would keep its entries in the user's real config
 // permanently after an uninstall, firing on every turn at a dead port, with
 // nothing to tell the user where they came from (#1357).
+//
+// HookConfigs is the HOOKS slice of the managed-file projection #1383 widened.
+// The narrowing is what keeps this command's name true: the catalog also
+// declares the CLAUDE.md instruction blocks and the kitty remote-control block,
+// and running their uninstallers from here would revoke capabilities the user
+// asked nothing about. Those are reachable from the permission wizard, and
+// `--uninstall-task-eta` below covers the instruction blocks specifically.
 func uninstallHooks() {
-	configs, err := agents.HookConfigs(agents.All())
+	configs, err := agents.HookConfigs(declaredConsentCatalog())
 	if err != nil {
 		log.Fatalf("failed to resolve the agent config files to uninstall from: %v", err)
 	}
@@ -218,7 +225,7 @@ func uninstallHooks() {
 // re-installed them via the Apply closure. That is precisely the #570
 // regression this function exists to prevent, and the registry projection only
 // widens the window as adapters are added.
-func uninstallHookConfigs(w io.Writer, configs []agents.HookConfig, store outbound.PermissionStore) int {
+func uninstallHookConfigs(w io.Writer, configs []agents.ManagedUserFile, store outbound.PermissionStore) int {
 	failed := 0
 	for _, c := range configs {
 		if !reportUninstall(w, c.Path, c.Uninstall) {
@@ -235,7 +242,7 @@ func uninstallHookConfigs(w io.Writer, configs []agents.HookConfig, store outbou
 // the next daemon start via the Apply closure, silently undoing the uninstall
 // (#570). A permission that was never granted is left alone — turning a pending
 // answer into a denial would stop the wizard ever asking about it.
-func denyHooksPermissions(w io.Writer, configs []agents.HookConfig, store outbound.PermissionStore) {
+func denyHooksPermissions(w io.Writer, configs []agents.ManagedUserFile, store outbound.PermissionStore) {
 	set, err := store.Load()
 	if err != nil {
 		return
@@ -257,31 +264,47 @@ func denyHooksPermissions(w io.Writer, configs []agents.HookConfig, store outbou
 	fmt.Fprintln(w, "Recorded the hooks permission(s) as denied (re-grant via the permission wizard)")
 }
 
-// printHookConfigs writes the resolved absolute path of every agent config file
-// irrlicht installs hooks into, one per line.
+// printManagedFiles writes the resolved absolute path of every shared,
+// user-owned file irrlicht writes, one per line.
 //
-// It exists for the onboarding recording rig (#1357): a recording daemon runs
-// grant-all and installs its hooks into the user's REAL config, so the rig has
-// to back those files up before spawning it — and asking the daemon is the only
-// way that list cannot drift from the adapters that actually write them. An
-// empty result is an error, not an empty list: the rig would read "nothing to
-// protect" as success and record over the user's config unprotected.
-func printHookConfigs(w io.Writer) error {
-	configs, err := agents.HookConfigs(agents.All())
+// It exists for the onboarding recording rig (#1357, widened by #1383): a
+// recording daemon runs IRRLICHT_PERMISSION_MODE=grant-all against the user's
+// REAL $HOME, which exercises EVERY modify permission's Apply closure — the
+// hook installers, the CLAUDE.md instruction blocks, the kitty remote-control
+// patch. Those paths follow $HOME, not IRRLICHT_HOME, so IRRLICHT_ONBOARD_HOME
+// does not isolate them and the rig has to back them up before spawning the
+// daemon. Asking the daemon is the only way that list cannot drift from the
+// permissions that actually write them.
+//
+// It projects the full consent catalog rather than agents.All(): the kitty
+// patch is one of three daemon-wide declarations appended outside the adapter
+// registry, and projecting only the registry is how it stayed unprotected.
+//
+// An empty result is an error, not an empty list: the rig would read "nothing
+// to protect" as success and record over the user's files unprotected.
+//
+// Renamed from --print-hook-configs with the concept (#1383). The rig is its
+// only consumer, and precheck.sh rebuilds the daemon before every recording
+// run, so the two travel together.
+func printManagedFiles(w io.Writer) error {
+	files, err := agents.ManagedUserFiles(declaredConsentCatalog())
 	if err != nil {
-		return fmt.Errorf("failed to resolve the agent config files irrlicht installs hooks into: %w", err)
+		return fmt.Errorf("failed to resolve the shared user files irrlicht writes: %w", err)
 	}
-	if len(configs) == 0 {
-		return fmt.Errorf("no adapter declares a hooks permission")
+	if len(files) == 0 {
+		return fmt.Errorf("no permission declares a managed user file")
 	}
-	writeHookConfigPaths(w, configs)
+	writeManagedFilePaths(w, files)
 	return nil
 }
 
-// writeHookConfigPaths prints each distinct config path once. The dedup is
+// writeManagedFilePaths prints each distinct path once. The dedup is
 // load-bearing rather than cosmetic: the rig keys its backups by line index, so
 // a path listed twice would be backed up under two indices and restored twice.
-func writeHookConfigPaths(w io.Writer, configs []agents.HookConfig) {
+// Since #1383 the shipped catalog actually produces a duplicate — claudecode's
+// hooks and statusline permissions both declare ~/.claude/settings.json — so
+// this is exercised by the real registry rather than only by a synthetic case.
+func writeManagedFilePaths(w io.Writer, configs []agents.ManagedUserFile) {
 	seen := make(map[string]bool, len(configs))
 	for _, c := range configs {
 		if seen[c.Path] {

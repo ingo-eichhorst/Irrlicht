@@ -307,7 +307,13 @@ func (s *PermissionService) HookChannelReady(agentName string) bool {
 			continue
 		}
 		for _, p := range a.Permissions {
-			if p.Hooks == nil {
+			// Narrowed to the hooks key, not merely "declares a managed
+			// file": #1383 widened Writes to every shared user-owned file a
+			// permission writes, so claudecode's statusline and instruction
+			// blocks (and kitty's remote-control patch) now declare one too.
+			// Asking only "is some managed file granted" would report the
+			// hook channel ready on an adapter whose hooks were denied.
+			if p.Key != agent.HooksPermissionKey || p.Writes == nil {
 				continue
 			}
 			if s.set.Get(agentName, p.Key) == permission.StateGranted && !s.effectFailedLocked(agentName, p.Key) {
@@ -395,16 +401,20 @@ func (s *PermissionService) RepairGrantedHookInstall(agentName, key string) (boo
 // places to keep in step, and the filter is the only part that is actually
 // specific to this caller.
 //
-// The filter is the point. Restricted to modify-kind permissions declaring a
-// HookInstall, so RepairGrantedHookInstall can never be used to re-run an
-// arbitrary effect by name: the re-verification loop is allowed to repair hook
-// installs and nothing else.
+// The filter is the point. Restricted to modify-kind permissions under the
+// hooks key that declare a managed user file, so RepairGrantedHookInstall can
+// never be used to re-run an arbitrary effect by name: the re-verification
+// loop is allowed to repair hook installs and nothing else. The hooks-key
+// clause is load-bearing since #1383 widened Writes from "the hook config" to
+// every managed user file — without it this would also admit the instruction
+// and kitty permissions, which is precisely the arbitrary-effect re-run the
+// filter exists to prevent.
 //
 // Takes no lock and needs none — s.agents is written once at construction and
 // only read after. Named without the Locked suffix for that reason.
 func (s *PermissionService) hookPermission(agentName, key string) (agent.Permission, bool) {
 	p, ok := s.declared(agentName, key)
-	if !ok || p.Hooks == nil || p.Kind != permission.KindModify {
+	if !ok || p.Writes == nil || p.Key != agent.HooksPermissionKey || p.Kind != permission.KindModify {
 		return agent.Permission{}, false
 	}
 	return p, true
@@ -599,7 +609,7 @@ func (s *PermissionService) runEffects(effects []pendingEffect) int {
 // The error is still logged and still not propagated — the recorded
 // consent stands either way — but it is no longer the only trace.
 //
-// A declared upstream-version floor (agent.HookInstall.Version, issue #1365)
+// A declared upstream-version floor (agent.ManagedUserFile.Version, issue #1365)
 // is checked here rather than inside each adapter's Apply closure, so an
 // adapter joins the scheme by declaring a version string instead of by copying
 // a function. It deliberately produces an ordinary effect error rather than a
@@ -665,10 +675,10 @@ func (s *PermissionService) effectFailedLocked(agentName, permKey string) bool {
 // costs nothing and works when the binary is not on the daemon's PATH. The
 // probe is the fallback for adapters with no such signal.
 func (s *PermissionService) hookVersionRefusal(p agent.Permission) error {
-	if p.Hooks == nil || p.Hooks.Version == nil || p.Hooks.Version.Min == "" {
+	if p.Writes == nil || p.Writes.Version == nil || p.Writes.Version.Min == "" {
 		return nil
 	}
-	gate := p.Hooks.Version
+	gate := p.Writes.Version
 
 	installed := ""
 	if gate.Observed != nil {

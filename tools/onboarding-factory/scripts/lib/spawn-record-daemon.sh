@@ -7,7 +7,7 @@
 # socket-ready wait, the same INT→TERM→KILL shutdown ladder, and the same
 # snapshot/restore of the shared agent config the daemon rewrites. Each used to
 # carry its own copy, so a recorder-lifecycle fix reached only whichever script
-# the author happened to be editing: #1178's hook-config snapshot landed in
+# the author happened to be editing: #1178's config snapshot landed in
 # run-cell.sh alone, and the cross-adapter recorder would still have exited
 # leaving the user's ~/.claude/settings.json repointed at a dead port (#1214).
 #
@@ -25,12 +25,12 @@
 # Artifacts it writes under <staging>:
 #   daemon.log           — the daemon's stdout+stderr
 #   daemon.shutdown      — how it ended: sigint | sigterm | sigkill | unknown
-#   hook-config-backup/  — the pre-run copy of the shared agent config
+#   managed-file-backup/  — the pre-run copy of the shared agent config
 #   recordings/          — IRRLICHT_RECORDINGS_DIR (the caller mkdir -p's it)
 
 # shellcheck source-path=SCRIPTDIR
-# shellcheck source=hook-config-snapshot.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hook-config-snapshot.sh"
+# shellcheck source=managed-file-snapshot.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/managed-file-snapshot.sh"
 
 # State published for the caller (and read back by stop_record_daemon).
 RECORD_DAEMON_PID=""
@@ -94,13 +94,13 @@ spawn_record_daemon() {
   RECORD_DAEMON_SOCK="$(record_daemon_sock "$home")"
 
   # Save the shared agent config the daemon is about to rewrite (see
-  # lib/hook-config-snapshot.sh); the shutdown hands it back. WHICH files those
+  # lib/managed-file-snapshot.sh); the shutdown hands it back. WHICH files those
   # are is asked of the daemon binary itself, so the set follows the adapters
   # that actually install hooks (#1357). Refuse to start if the backup dir can't
   # be created. The snapshot owns that directory — it creates it and reports its
   # own failure — so there is one gate here, not two: a recording daemon we
   # cannot undo must never be spawned in the first place.
-  if ! snapshot_hook_configs "$staging/hook-config-backup" "$daemon_bin"; then
+  if ! snapshot_managed_files "$staging/managed-file-backup" "$daemon_bin"; then
     echo "cannot snapshot the shared agent config; refusing to spawn the recording daemon" >&2
     return 1
   fi
@@ -173,7 +173,7 @@ kill_record_daemon() {
 # as the trap itself, the disarm is a harmless no-op.
 stop_record_daemon() {
   kill_record_daemon
-  restore_hook_configs
+  restore_managed_files
   trap - EXIT
   return 0
 }

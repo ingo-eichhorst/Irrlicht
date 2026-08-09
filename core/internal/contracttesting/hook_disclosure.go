@@ -150,14 +150,14 @@ func AssertHookDisclosureMatchesInstalled(t *testing.T, d HookDisclosure) {
 // hand-waving #1356 abolished.
 func assertStatesVersionFloor(t *testing.T, perm agent.Permission, disclosure string) {
 	t.Helper()
-	if perm.Hooks == nil || perm.Hooks.Version == nil || perm.Hooks.Version.Min == "" {
+	if perm.Writes == nil || perm.Writes.Version == nil || perm.Writes.Version.Min == "" {
 		return
 	}
-	if !strings.Contains(disclosure, perm.Hooks.Version.Min) {
+	if !strings.Contains(disclosure, perm.Writes.Version.Min) {
 		t.Errorf("consent copy never states the %s minimum CLI version the install is gated "+
 			"on — the user reads this text and grants, then nothing is written and the copy "+
 			"gave no hint why (#1365); render it with hookjson.RequiresVersion so it cannot "+
-			"drift from the gate", perm.Hooks.Version.Min)
+			"drift from the gate", perm.Writes.Version.Min)
 	}
 }
 

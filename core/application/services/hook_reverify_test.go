@@ -89,10 +89,10 @@ func reverifyAgent(f *fakeInstall) agent.Agent {
 				Title:  "Install hooks",
 				Apply:  func() error { return nil },
 				Remove: func() error { return nil },
-				Hooks: &agent.HookInstall{
-					ConfigPath: func() (string, error) { return "/tmp/fake/settings.json", nil },
-					Uninstall:  func() (bool, error) { return false, nil },
-					Verify:     f.verify,
+				Writes: &agent.ManagedUserFile{
+					Path:      func() (string, error) { return "/tmp/fake/settings.json", nil },
+					Uninstall: func() (bool, error) { return false, nil },
+					Verify:    f.verify,
 				},
 			},
 		},
@@ -324,10 +324,10 @@ func TestReverify_RevokedPermissionNeverTouchesTheFileOnDisk(t *testing.T) {
 			Title:  "Install hooks",
 			Apply:  func() error { _, err := hookjson.EnsureInstalled(cfg); return err },
 			Remove: func() error { _, err := hookjson.Uninstall(cfg); return err },
-			Hooks: &agent.HookInstall{
-				ConfigPath: func() (string, error) { return path, nil },
-				Uninstall:  func() (bool, error) { return hookjson.Uninstall(cfg) },
-				Verify:     func() (agent.HookEntryStatus, error) { return hookjson.Verify(cfg) },
+			Writes: &agent.ManagedUserFile{
+				Path:      func() (string, error) { return path, nil },
+				Uninstall: func() (bool, error) { return hookjson.Uninstall(cfg) },
+				Verify:    func() (agent.HookEntryStatus, error) { return hookjson.Verify(cfg) },
 			},
 		}},
 	}
@@ -565,8 +565,8 @@ func TestReverify_AdapterWithoutAVerifierIsSkipped(t *testing.T) {
 		Process:  agent.Process{Match: agent.ExactName{Name: "noverify"}},
 		Permissions: []agent.Permission{{
 			Key: "hooks", Kind: permission.KindModify, Title: "Install hooks",
-			Apply: func() error { return nil },
-			Hooks: &agent.HookInstall{ConfigPath: func() (string, error) { return "/tmp/x", nil }},
+			Apply:  func() error { return nil },
+			Writes: &agent.ManagedUserFile{Path: func() (string, error) { return "/tmp/x", nil }},
 		}},
 	}
 	f := newFakeInstall()

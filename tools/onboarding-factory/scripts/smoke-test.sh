@@ -45,8 +45,8 @@ echo "== unit tests (lib/classify-failure_test.sh) =="
 bash "$SCRIPT_DIR/lib/classify-failure_test.sh" || rc=1
 
 echo ""
-echo "== unit tests (lib/hook-config-snapshot_test.sh) =="
-bash "$SCRIPT_DIR/lib/hook-config-snapshot_test.sh" || rc=1
+echo "== unit tests (lib/managed-file-snapshot_test.sh) =="
+bash "$SCRIPT_DIR/lib/managed-file-snapshot_test.sh" || rc=1
 
 echo ""
 echo "== unit tests (lib/spawn-record-daemon_test.sh) =="
