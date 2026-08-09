@@ -135,12 +135,14 @@ func TestInstructionsDisclosure_MatchesInstalledBlocks(t *testing.T) {
 	})
 
 	t.Run("names_no_uninstalled_block", func(t *testing.T) {
-		// FeatureUnlocked joins this arm: it is the benefit line the wizard
-		// shows above the row, and naming a retired block there advertises a
-		// capability the install does not deliver. It is deliberately left out
-		// of the two arms above — it sells the feature, it does not enumerate
-		// the writes.
-		overPromise := disclosure + "\n" + perm.FeatureUnlocked
+		// Title and FeatureUnlocked join this arm: they are the wizard's row
+		// label and benefit line, and naming a retired block in either
+		// advertises a capability the install does not deliver. They are
+		// deliberately left out of the two arms above — they sell the feature,
+		// they do not enumerate the writes. Title matters most here because it
+		// is the last hand-written string in this permission, which is exactly
+		// the shape of drift the rest of the change makes unrepresentable.
+		overPromise := strings.Join([]string{disclosure, perm.FeatureUnlocked, perm.Title}, "\n")
 		written := map[string]bool{}
 		for _, name := range installed {
 			written[name] = true

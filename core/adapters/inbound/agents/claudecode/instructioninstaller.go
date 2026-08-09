@@ -20,6 +20,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 )
 
 // Sentinels delimiting the managed block. Detection keys on these full
@@ -225,32 +227,21 @@ func uninstallBlock(beginSentinel, endSentinel string) (bool, error) {
 	return true, writeMemoryFile(path, stripped)
 }
 
-// EnsureTaskEtaBlockInstalled writes-or-patches the task-eta managed block.
-func EnsureTaskEtaBlockInstalled() (bool, error) {
+// ensureTaskEtaBlock writes-or-patches the task-eta managed block.
+func ensureTaskEtaBlock() (bool, error) {
 	return ensureBlockInstalled(taskEtaBeginSentinel, taskEtaEndSentinel, managedTaskEtaBlock)
 }
 
-// UninstallTaskEtaBlock removes only the task-eta managed block.
-func UninstallTaskEtaBlock() (bool, error) {
+// uninstallTaskEtaBlock removes only the task-eta managed block.
+func uninstallTaskEtaBlock() (bool, error) {
 	return uninstallBlock(taskEtaBeginSentinel, taskEtaEndSentinel)
 }
 
-// UninstallTaskSummaryBlock removes only the (retired, issue #1186) task-summary
-// managed block — the cleanup path for CLAUDE.md files a prior version wrote.
-func UninstallTaskSummaryBlock() (bool, error) {
-	return uninstallBlock(taskSummaryBeginSentinel, taskSummaryEndSentinel)
-}
-
-// EnsureTaskQuestionBlockInstalled writes-or-patches the task-question managed
-// block (issue #759) — installed alongside the eta/summary blocks under the
-// same instructions permission.
-func EnsureTaskQuestionBlockInstalled() (bool, error) {
+// ensureTaskQuestionBlock writes-or-patches the task-question managed block
+// (issue #759) — installed alongside the task-eta block under the same
+// instructions permission.
+func ensureTaskQuestionBlock() (bool, error) {
 	return ensureBlockInstalled(taskQuestionBeginSentinel, taskQuestionEndSentinel, managedTaskQuestionBlock)
-}
-
-// UninstallTaskQuestionBlock removes only the task-question managed block.
-func UninstallTaskQuestionBlock() (bool, error) {
-	return uninstallBlock(taskQuestionBeginSentinel, taskQuestionEndSentinel)
 }
 
 // managedInstructionBlock is one irrlicht-managed block in ~/.claude/CLAUDE.md:
@@ -312,9 +303,14 @@ func instructionsTouched() string {
 	for _, b := range installedInstructionBlocks {
 		names = append(names, b.name)
 	}
+	// hookjson.EventList is the repo's one prose-list renderer for consent copy.
+	// It is named for its first caller, but the serial comma it fixes is a
+	// property of the copy, not of hooks: both disclosure contracts read names
+	// back out of the rendered text, so a second copy of this switch is a second
+	// place the punctuation can drift.
 	return fmt.Sprintf("Maintains %d managed %s (%s) in %s",
 		len(installedInstructionBlocks), blockNoun(len(installedInstructionBlocks)),
-		joinProse(names), claudeMemoryDisplayPath)
+		hookjson.EventList(names), claudeMemoryDisplayPath)
 }
 
 // instructionsDetail renders the Detail text behind the wizard's (i) expander.
@@ -331,8 +327,8 @@ func instructionsDetail() string {
 			"instructing the agent to emit hidden markers: %s. All surrounding file "+
 			"content is preserved byte-for-byte, and a managed block an earlier "+
 			"irrlicht version wrote but this one no longer uses is removed on the same "+
-			"pass. Toggling off removes exactly these blocks (also available via the "+
-			"macOS Settings toggle).",
+			"pass. Toggling off removes these blocks and any such retired block, and "+
+			"nothing else (also available via the macOS Settings toggle).",
 		len(installedInstructionBlocks), blockNoun(len(installedInstructionBlocks)),
 		claudeMemoryDisplayPath, strings.Join(clauses, "; "))
 }
@@ -344,22 +340,6 @@ func blockNoun(n int) string {
 		return "block"
 	}
 	return "blocks"
-}
-
-// joinProse renders items as "A", "A and B", "A, B, and C". The serial comma is
-// deliberate and matches hookjson.EventList: the disclosure assertions read
-// names back out of the copy, so the punctuation must not be tuned per caller.
-func joinProse(items []string) string {
-	switch len(items) {
-	case 0:
-		return ""
-	case 1:
-		return items[0]
-	case 2:
-		return items[0] + " and " + items[1]
-	default:
-		return strings.Join(items[:len(items)-1], ", ") + ", and " + items[len(items)-1]
-	}
 }
 
 // applyInstructionBlocks installs the managed instruction blocks — the grant
@@ -383,20 +363,39 @@ func applyInstructionBlocks() error {
 }
 
 // removeInstructionBlocks removes all managed blocks — the revoke effect of
-// the instructions permission. Retired blocks are swept here too, so revoking
-// leaves nothing behind whichever version installed it.
+// the instructions permission.
 func removeInstructionBlocks() error {
-	for _, b := range installedInstructionBlocks {
-		if _, err := uninstallBlock(b.begin, b.end); err != nil {
-			return err
+	_, err := UninstallAllInstructionBlocks()
+	return err
+}
+
+// UninstallAllInstructionBlocks removes every managed instruction block —
+// installed and retired alike — reporting whether ~/.claude/CLAUDE.md changed.
+// It backs both the permission's revoke effect and the `irrlichd
+// --uninstall-task-eta` escape hatch, driven by the same two inventories Apply
+// is, so the two cleanup paths cannot come to sweep different sets. They had:
+// the CLI carried its own hand-written pair (task-eta + task-summary) and so
+// left the task-question block #759 installs sitting in the user's file with no
+// way to remove it, while printing "No irrlicht managed blocks found" (#1377).
+func UninstallAllInstructionBlocks() (bool, error) {
+	changed := false
+	for _, b := range allInstructionBlocks() {
+		modified, err := uninstallBlock(b.begin, b.end)
+		if err != nil {
+			return changed, err
 		}
+		changed = changed || modified
 	}
-	for _, b := range retiredInstructionBlocks {
-		if _, err := uninstallBlock(b.begin, b.end); err != nil {
-			return err
-		}
-	}
-	return nil
+	return changed, nil
+}
+
+// allInstructionBlocks is every block this package knows a sentinel for, in a
+// fresh slice — never append-onto-a-package-var, which would write through the
+// inventory's backing array whenever it had spare capacity.
+func allInstructionBlocks() []managedInstructionBlock {
+	all := make([]managedInstructionBlock, 0, len(installedInstructionBlocks)+len(retiredInstructionBlocks))
+	all = append(all, installedInstructionBlocks...)
+	return append(all, retiredInstructionBlocks...)
 }
 
 // patchManagedBlock returns existing with the managed block inserted or
