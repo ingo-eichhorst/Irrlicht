@@ -28,6 +28,32 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      # POSIX-sh gate (#1423). This job is the host because ubuntu is the only
+      # runner where the property can actually be tested: `/bin/sh` here is
+      # dash, and the image ships shellcheck (0.9.0). test.yml's `go-test` job
+      # cannot host it — that job is pinned to macos-latest for the macOS
+      # runtime paths in `go test ./core/...` (kqueue exit-watch, pgrep/lsof
+      # discovery), and the macos image ships no shellcheck at all, so the
+      # gate would have to `brew install` a linter on every PR to check two
+      # files. Runs before setup-go: it needs no toolchain, takes well under a
+      # second, and behind the Go steps a compile error would abort the job
+      # and leave an installer-only PR with no installer feedback.
+      #
+      # site/install.sh reaches users as `curl … | sh`, which on Debian and
+      # Ubuntu is dash — so a bashism here lands on a new user's first
+      # command, before anything is installed that could report it.
+      - name: Lint POSIX sh scripts
+        run: tools/posix-lint.sh
+
+      # The gate's own unit tests, over the deliberately-broken corpus under
+      # tools/lib/testdata/posix-lint/. They live here rather than in test.yml's
+      # `tools/lib/*_test.sh` loop for the same reason the gate does: they need
+      # a static bashism linter, and the macos image ships none. A gate that
+      # passes by construction is what #1423 is about, so the mutation corpus
+      # has to run somewhere — this is where it can.
+      - name: Test the POSIX-sh gate
+        run: bash tools/lib/posix-lint_test.sh
+
       - name: Set up Go
         uses: actions/setup-go@v7
         with:

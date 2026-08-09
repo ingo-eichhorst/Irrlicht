@@ -57,6 +57,7 @@
 #   tools/preflight.sh --only security # just govulncheck + gosec + npm audit
 #   tools/preflight.sh --only tools    # just the tools/lib shell-lib unit tests
 #   tools/preflight.sh --only skills   # just the .claude/skills/**/*.md linter
+#   tools/preflight.sh --only posix    # just the #!/bin/sh POSIX/bashism lint
 #   tools/preflight.sh --only linux    # just the Linux Docker gate
 #   tools/preflight.sh --changed       # scope every gate to the packages/trees
 #                                        this branch changes vs origin/main —
@@ -100,7 +101,7 @@ done
 # Not `GROUPS` — that is a bash built-in holding the caller's supplementary
 # group IDs, and assigning to it silently does nothing, so the check would
 # compare against a list of numeric gids and reject every real group name.
-VALID_GROUPS=(go web arch tools skills security linux)
+VALID_GROUPS=(go web arch tools skills posix security linux)
 if [[ -n "$ONLY" ]]; then
   known=0
   for g in "${VALID_GROUPS[@]}"; do [[ "$ONLY" == "$g" ]] && known=1; done
@@ -318,6 +319,31 @@ fi
 if want skills; then
   run_gate_scoped '^\.claude/skills/.*\.md$|(^|/)SKILL\.md$|^tools/skill-lint\.sh$' \
                   "skill-file lint" tools/skill-lint.sh
+fi
+
+# ---- posix group (mirrors linux.yml's "Lint POSIX sh scripts" step) --------
+# The #!/bin/sh corpus is two files today (site/install.sh and
+# tools/linux-replay-entrypoint.sh) and the gate re-lints all of them whenever
+# it fires — it is a fraction of a second, and the trigger cannot enumerate
+# them anyway, because a NEW POSIX script is exactly the file the gate most
+# needs to see on the push that adds it. So the regex is deliberately loose:
+# any *.sh, any extensionless file under tools/ or site/, plus the linter and
+# its own corpus. Over-firing costs milliseconds; under-firing is #1209's
+# silent-skip shape again.
+#
+# Unlike the CI step this gate can legitimately be unrunnable on a developer
+# machine that has neither checkbashisms nor shellcheck. It still FAILS rather
+# than skipping in that case — the script says what to `brew install`. A gate
+# whose absence looks like a pass is the defect #1423 was filed about, and
+# preflight is not the place to reintroduce it.
+#
+# The extensionless alternatives are not decoration: `tools/git-hooks/pre-push`
+# is already a tracked script with no suffix, and a `#!/bin/sh` file called
+# `site/install` would match nothing in a `\.sh$`-only trigger — skipping the
+# gate on precisely the push that introduces the script it exists to check.
+if want posix; then
+  run_gate_scoped '\.sh$|^(tools|site)/[^/]*$|^tools/git-hooks/|^tools/lib/testdata/posix-lint/' \
+                  "POSIX sh lint (#!/bin/sh bashisms)" tools/posix-lint.sh
 fi
 
 # ---- security group (mirrors tools/security-scan.sh's local mode; the same
