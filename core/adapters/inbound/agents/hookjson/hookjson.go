@@ -22,6 +22,7 @@ package hookjson
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 )
@@ -128,6 +129,16 @@ func Uninstall(cfg Config) (bool, error) {
 		return false, nil
 	}
 
+	// Our removals emptied the "hooks" object, so drop it: on a config that had
+	// no hooks before we installed, leaving `"hooks": {}` behind means revoking
+	// consent does not give the user their file back (issue #1371). Gated on
+	// having actually removed something, so a user's own pre-existing empty
+	// object — which never reaches here, because modified stays false — is not
+	// touched. A user hook in any event keeps the object non-empty and it stays.
+	if len(hooksMap) == 0 {
+		delete(settings, "hooks")
+	}
+
 	return true, WriteSettings(cfg.Path, settings, cfg.WriteFile)
 }
 
@@ -137,6 +148,19 @@ func Uninstall(cfg Config) (bool, error) {
 // JSON does error: overwriting it would destroy content the user meant to keep.
 // Exported because claudecode's statusline installer merges into the same
 // settings.json and must read it exactly the same way.
+//
+// Comments are tolerated (issue #1371). gemini-cli's ~/.gemini/settings.json is
+// JSONC by design, and a `//` in a config that documents itself is not
+// malformed input — before this, an install into such a file failed the parse
+// and merged nothing at all. Comments are blanked to spaces rather than
+// stripped, so any error the decoder does report still points at the byte the
+// user has to go fix.
+//
+// What has NOT changed is the treatment of genuinely broken JSON: it still
+// errors, and the file is still never overwritten. Issue #1362 is making that
+// error visible rather than swallowed by the callers; it is the correct
+// behavior, and TestReadSettings_MalformedJSONErrors plus
+// TestMalformedInput_IsNeverOverwritten pin it.
 //
 // A file holding a bare `null` decodes to a nil map with no error, which every
 // later write would panic on ("assignment to entry in nil map"), so it is
@@ -154,7 +178,7 @@ func ReadSettings(path string) (map[string]interface{}, error) {
 		return map[string]interface{}{}, nil
 	}
 	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
+	if err := json.Unmarshal(blankComments(data), &settings); err != nil {
 		return nil, err
 	}
 	if settings == nil {
@@ -163,16 +187,50 @@ func ReadSettings(path string) (map[string]interface{}, error) {
 	return settings, nil
 }
 
-// WriteSettings re-serializes settings (2-space indented, trailing newline —
-// the shape a hand-edited config file expects) and hands the bytes to writeFile.
+// WriteSettings persists settings to path and hands the bytes to writeFile.
 // Exported alongside ReadSettings for the same statusline caller.
+//
+// It re-reads the file it is about to replace so it can change as little of it
+// as possible: the wanted document is compared against the one on disk and only
+// the byte ranges that actually differ are rewritten (issue #1371). That is what
+// keeps a hand-maintained config intact — comments, key order, blank lines and
+// an unescaped `&&` all survive because those bytes are copied, not
+// re-serialized. See jsonc.go for how.
+//
+// Only when there is nothing to preserve — no file, or an empty one — is the
+// document encoded from scratch, 2-space indented with a trailing newline,
+// which is the shape a hand-edited config expects.
+//
+// The re-read cannot resurrect content the caller already dropped: callers
+// obtain settings from ReadSettings on the same path moments earlier, so the
+// bytes read here are the bytes that decoded into what they mutated.
 func WriteSettings(path string, settings map[string]interface{}, writeFile func(path string, data []byte) error) error {
-	data, err := json.MarshalIndent(settings, "", "  ")
+	original, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	data, err := renderSettings(original, settings)
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
 	return writeFile(path, data)
+}
+
+// renderSettings produces the bytes to write: a minimal splice of the original
+// when there is one, a fresh encode when there is not.
+func renderSettings(original []byte, settings map[string]interface{}) ([]byte, error) {
+	if len(bytes.TrimSpace(original)) == 0 {
+		return encodeDocument(settings)
+	}
+	data, err := spliceSettings(original, settings)
+	if errors.Is(err, errUnsupportedShape) {
+		return encodeDocument(settings)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 // HasOurHook reports whether any matcher group carrying sentinel already exists
