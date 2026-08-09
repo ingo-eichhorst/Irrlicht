@@ -812,7 +812,7 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// Overlay is what decides whether it has been open long enough to apply.
 	d.armStalledEditTool(state, passStart)
 
-	d.signals.Overlay(state.SessionID, state.Metrics, passStart)
+	d.reportHoldExpiries(state, d.signals.Overlay(state.SessionID, state.Metrics, passStart), passStart)
 
 	// Content-based state detection. The tiered form is used here (and only
 	// here) so the deciding rule and its authority tier reach the recorded
@@ -1385,6 +1385,80 @@ func (d *SessionDetector) armStalledEditTool(state *session.SessionState, now ti
 	d.signals.HoldIfAbsent(state.SessionID, session.SignalOpenToolStalled, session.SignalPayload{}, now)
 }
 
+// reclassifyFromTranscript re-reads one session's transcript and re-runs the
+// classify pipeline, subject to the three preconditions every ticker-driven
+// re-read shares. It is the body of both refreshStaleSessions branches, kept
+// in one place so those preconditions cannot drift apart — the consent gate
+// especially, since a branch that forgot it would silently keep reading a
+// revoked adapter and nothing else in the system would object.
+//
+//   - the interval: a session updated moments ago has nothing new to say, and
+//     re-reading it every tick is pure cost;
+//   - a transcript to read at all;
+//   - consent (#570): this path re-reads independently of the gated watcher
+//     pipeline, so after a revoke, persisted sessions would otherwise keep
+//     being re-read and re-broadcast every tick — "existing sessions stop
+//     updating" must hold.
+//
+// See refreshStaleSessions' non-working branch for why an idle session is ever
+// put through this.
+func (d *SessionDetector) reclassifyFromTranscript(state *session.SessionState, now time.Time) {
+	if now.Sub(time.Unix(state.UpdatedAt, 0)) < staleWorkingRefreshInterval {
+		return
+	}
+	if state.TranscriptPath == "" {
+		return
+	}
+	if !d.observeAllowed(state.Adapter) {
+		return
+	}
+	d.processActivityWithoutIdentity(agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      state.SessionID,
+		TranscriptPath: state.TranscriptPath,
+	})
+}
+
+// reportHoldExpiries surfaces the holds Overlay dropped because their
+// wall-clock ceiling elapsed (#1360). It is the observability half of that
+// fix, and it lives here rather than in the domain because core/domain/session
+// owns no logger and may not import one — the architecture test enforces that
+// direction, so the domain reports expiries as data and the caller decides
+// what to do with them.
+//
+// A ceiling firing means a release that should have arrived never did: the
+// hook fired, the PostToolUse (or the transcript's end-of-life marker) did
+// not, and the session had been pinned by a signal nothing below it was
+// allowed to correct. That is precisely the condition an operator cannot
+// otherwise infer from a recording — before this, the only trace was a
+// ClassifierInputs bit quietly reading false on some later transition, which
+// is indistinguishable from the hold never having been placed.
+//
+// Both sinks are deliberate and neither substitutes for the other: the log
+// line is what a human tailing the daemon sees live, and the lifecycle event
+// is what the replay harness reads back out of a recording. Normal staleness
+// releases are NOT reported — they are the expected path, and emitting them
+// would bury the interesting case in one line per permission denial.
+func (d *SessionDetector) reportHoldExpiries(state *session.SessionState, expiries []session.SignalExpiry, at time.Time) {
+	for _, e := range expiries {
+		d.log.LogInfo(logComponentSessionDetector, state.SessionID, fmt.Sprintf(
+			"held signal %q (%v tier) expired after %v, past its %v ceiling — its release never arrived; "+
+				"the session is no longer pinned by it",
+			e.Kind, e.Tier, e.HeldFor.Round(time.Second), e.Ceiling))
+
+		d.record(lifecycle.Event{
+			Kind:       lifecycle.KindHoldExpired,
+			Timestamp:  at,
+			SessionID:  state.SessionID,
+			Adapter:    state.Adapter,
+			SignalKind: string(e.Kind),
+			SignalTier: e.Tier.String(),
+			HeldForMS:  e.HeldFor.Milliseconds(),
+			CeilingMS:  e.Ceiling.Milliseconds(),
+		})
+	}
+}
+
 // refreshStaleSessions re-reads working sessions that haven't received a
 // file-system watcher event recently. This catches tool calls
 // (AskUserQuestion, ExitPlanMode) that were missed because the subscriber
@@ -1400,27 +1474,30 @@ func (d *SessionDetector) refreshStaleSessions() {
 	for _, state := range sessions {
 		switch state.State {
 		case session.StateWorking:
-			if now.Sub(time.Unix(state.UpdatedAt, 0)) < staleWorkingRefreshInterval {
-				continue
-			}
-			if state.TranscriptPath == "" {
-				continue
-			}
-			// Consent-gated per adapter (#570): this refresh re-reads the
-			// transcript independently of the (gated) watcher pipeline. After
-			// a revoke, persisted working sessions would otherwise keep being
-			// re-read and re-broadcast every tick — "existing sessions stop
-			// updating" must hold.
-			if !d.observeAllowed(state.Adapter) {
-				continue
-			}
-			d.processActivityWithoutIdentity(agent.Event{
-				Type:           agent.EventActivity,
-				SessionID:      state.SessionID,
-				TranscriptPath: state.TranscriptPath,
-			})
+			d.reclassifyFromTranscript(state, now)
 		case session.StateWaiting, session.StateReady:
 			d.retryIdleProjectResolution(state, now)
+
+			// A held signal is the one reason to revisit a non-working
+			// session, and without this the ceilings added in #1360 could
+			// never fire. A ceiling is only evaluated inside
+			// SignalHolds.Overlay, Overlay is only reached from the classify
+			// pipeline, and this loop ran that pipeline for StateWorking
+			// alone — while both hook holds that have a ceiling pin the
+			// session at *waiting*. The pinned session was precisely the one
+			// being skipped, so a lost release stayed lost for the life of
+			// the process. (That asymmetry is also why compactHoldTimeout
+			// appeared to prove the mechanism worked: it pins at working, the
+			// state already being re-read.)
+			//
+			// Scoped to sessions that actually hold something, deliberately:
+			// not re-reading idle transcripts is long-standing behaviour with
+			// a real cost attached — one stat and parse per idle session per
+			// tick, on a machine that may be tracking dozens — and a hold is
+			// both rare and the only thing such a pass could newly decide.
+			if d.signals != nil && d.signals.HasAny(state.SessionID) {
+				d.reclassifyFromTranscript(state, now)
+			}
 		}
 	}
 }

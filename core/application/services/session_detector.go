@@ -357,6 +357,14 @@ func (d *SessionDetector) RunStaleSessionRefreshForTest() {
 	d.refreshStaleSessions()
 }
 
+// HoldSignalForTest places an out-of-band signal hold with an explicit
+// HeldSince. Exported only so tests outside this package can set up a hold
+// that is already older than its policy's ceiling; production code holds
+// through ApplyHook, which always stamps time.Now.
+func (d *SessionDetector) HoldSignalForTest(sessionID string, kind session.SignalKind, at time.Time) {
+	d.signals.Hold(sessionID, kind, session.SignalPayload{}, at)
+}
+
 // CleanupZombies runs a one-shot startup sweep that deletes persisted
 // sessions whose process is provably gone. Call before the daemon starts
 // serving requests so the API never returns stale records inherited from a

@@ -62,6 +62,14 @@ const (
 	// turn exceeding the project's p25 baseline × threshold. The named
 	// consumer is the ir:agent-releases workflow.
 	KindCacheBloatDetected Kind = "cache_bloat_detected"
+
+	// Held-signal ceiling expiry (issue #1360). Emitted when an out-of-band
+	// signal hold is dropped because its wall-clock ceiling elapsed rather
+	// than because its own staleness rule ended it or a Release retired it —
+	// which for a TierHook hold means a release that should have arrived
+	// never did. Rare by construction, and the one event that explains a
+	// session silently ceasing to be pinned at waiting.
+	KindHoldExpired Kind = "hold_expired"
 )
 
 // Event is a single recorded lifecycle signal. The Kind field discriminates
@@ -120,6 +128,15 @@ type Event struct {
 	// Terminal-backend read-back (KindUIDetected). The UI state read off the
 	// rendered terminal screen, e.g. "trust_dialog". Empty on the clearing edge.
 	UIKind string `json:"ui_kind,omitempty"`
+
+	// Held-signal ceiling expiry (KindHoldExpired, issue #1360). HeldForMS is
+	// how long the hold actually stood; CeilingMS is the bound it exceeded.
+	// Both are carried so a recorded trace stays interpretable after a ceiling
+	// is retuned — the elapsed time alone cannot say whether it was overdue.
+	SignalKind string `json:"signal_kind,omitempty"`
+	SignalTier string `json:"signal_tier,omitempty"`
+	HeldForMS  int64  `json:"held_for_ms,omitempty"`
+	CeilingMS  int64  `json:"ceiling_ms,omitempty"`
 
 	// Cache-creation regression (KindCacheBloatDetected, issue #374).
 	Project           string  `json:"project,omitempty"`

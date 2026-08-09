@@ -534,6 +534,16 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 	// from the transcript's own timeline, or the same recording would replay
 	// differently on a slow machine and the goldens would stop being a
 	// regression net.
+	//
+	// Overlay's []SignalExpiry return is deliberately discarded here and at
+	// the other two call sites in this file (#1360). The daemon turns an
+	// expiry into a log line and a lifecycle.KindHoldExpired event; this
+	// replayer has no event sink to write one to — its output model is the
+	// transition stream that emit() builds — so surfacing expiries would mean
+	// adding an event kind to the golden format for every adapter at once.
+	// The *effect* of a ceiling still replays faithfully, because the hold is
+	// dropped either way and the resulting transition is what the goldens
+	// compare (runExtendedCheck diffs state_transition events only).
 	r.signals.Overlay(replaySessionKey, domainMetrics, ctx.virtTime)
 	r.runClassifier(domainMetrics, ctx, grew)
 	return nil
