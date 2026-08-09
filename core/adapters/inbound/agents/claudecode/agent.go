@@ -130,20 +130,20 @@ func Agent() agent.Agent {
 				Remove: func() error { _, err := UninstallStatusline(); return err },
 			},
 			{
-				Key:             PermissionKeyInstructions,
-				Kind:            permission.KindModify,
-				Title:           "Install task-progress rule",
-				FeatureUnlocked: "Task-completion ETA chip + task summary from agent-reported markers",
-				Touches:         "Maintains two managed blocks in ~/.claude/CLAUDE.md",
-				Detail: "Writes two irrlicht-managed blocks (each between BEGIN/END " +
-					"sentinels) to ~/.claude/CLAUDE.md instructing the agent to emit " +
-					"hidden markers: a task-progress marker (which irrlicht reads to " +
-					"project a completion ETA) and a one-line task summary (so a human " +
-					"can tell what a session is about). All surrounding file content " +
-					"is preserved byte-for-byte. Toggling off removes exactly these " +
-					"blocks (also available via the macOS Settings toggle).",
-				Apply:  applyInstructionBlocks,
-				Remove: removeInstructionBlocks,
+				Key:   PermissionKeyInstructions,
+				Kind:  permission.KindModify,
+				Title: "Install task-progress rule",
+				// The block list and count are derived from
+				// installedInstructionBlocks — the same slice Apply iterates —
+				// never restated here. Hand-maintaining this text is how it came
+				// to disclose the task-summary block retired in #1186 while
+				// saying nothing about the task-question block (#759) it has
+				// been writing to the user's CLAUDE.md ever since (#1377).
+				FeatureUnlocked: "Task-completion ETA chip + waiting-question headline from agent-reported markers",
+				Touches:         instructionsTouched(),
+				Detail:          instructionsDetail(),
+				Apply:           applyInstructionBlocks,
+				Remove:          removeInstructionBlocks,
 			},
 			agent.ControlPermission(),
 		},

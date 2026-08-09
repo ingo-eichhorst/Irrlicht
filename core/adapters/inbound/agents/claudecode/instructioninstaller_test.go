@@ -27,7 +27,7 @@ func readFileString(t *testing.T, path string) string {
 
 func TestEnsureTaskEtaBlock_CreatesFileIfAbsent(t *testing.T) {
 	home := withTempHome(t)
-	modified, err := EnsureTaskEtaBlockInstalled()
+	modified, err := ensureTaskEtaBlock()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,12 +44,12 @@ func TestEnsureTaskEtaBlock_CreatesFileIfAbsent(t *testing.T) {
 
 func TestEnsureTaskEtaBlock_Idempotent(t *testing.T) {
 	home := withTempHome(t)
-	if _, err := EnsureTaskEtaBlockInstalled(); err != nil {
+	if _, err := ensureTaskEtaBlock(); err != nil {
 		t.Fatal(err)
 	}
 	first := readFileString(t, memoryPathFor(home))
 
-	modified, err := EnsureTaskEtaBlockInstalled()
+	modified, err := ensureTaskEtaBlock()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestEnsureTaskEtaBlock_PreservesSurroundingContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := EnsureTaskEtaBlockInstalled(); err != nil {
+	if _, err := ensureTaskEtaBlock(); err != nil {
 		t.Fatal(err)
 	}
 	content := readFileString(t, path)
@@ -92,7 +92,7 @@ func TestEnsureTaskEtaBlock_UpgradesStaleBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	modified, err := EnsureTaskEtaBlockInstalled()
+	modified, err := ensureTaskEtaBlock()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestEnsureTaskEtaBlock_UpgradesStaleBlock(t *testing.T) {
 	}
 
 	// And the upgrade itself is idempotent.
-	if again, err := EnsureTaskEtaBlockInstalled(); err != nil || again {
+	if again, err := ensureTaskEtaBlock(); err != nil || again {
 		t.Errorf("re-install after upgrade: modified=%v err=%v, want false,nil", again, err)
 	}
 }
@@ -163,7 +163,7 @@ is how many you've finished. Update every few steps.
 		t.Fatal(err)
 	}
 
-	modified, err := EnsureTaskEtaBlockInstalled()
+	modified, err := ensureTaskEtaBlock()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ already making (never to the command itself).
 		t.Fatal(err)
 	}
 
-	modified, err := EnsureTaskEtaBlockInstalled()
+	modified, err := ensureTaskEtaBlock()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ text when no Bash call is coming.
 		t.Fatal(err)
 	}
 
-	modified, err := EnsureTaskEtaBlockInstalled()
+	modified, err := ensureTaskEtaBlock()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,10 +304,10 @@ func TestUninstallTaskEtaBlock_RoundTripsToOriginal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := EnsureTaskEtaBlockInstalled(); err != nil {
+	if _, err := ensureTaskEtaBlock(); err != nil {
 		t.Fatal(err)
 	}
-	modified, err := UninstallTaskEtaBlock()
+	modified, err := uninstallTaskEtaBlock()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ func TestUninstallTaskEtaBlock_PreservesUserContentAroundBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := UninstallTaskEtaBlock(); err != nil {
+	if _, err := uninstallTaskEtaBlock(); err != nil {
 		t.Fatal(err)
 	}
 	got := readFileString(t, path)
@@ -343,7 +343,7 @@ func TestUninstallTaskEtaBlock_Noops(t *testing.T) {
 	home := withTempHome(t)
 
 	// No file at all.
-	modified, err := UninstallTaskEtaBlock()
+	modified, err := uninstallTaskEtaBlock()
 	if err != nil || modified {
 		t.Errorf("no file: modified=%v err=%v, want false,nil", modified, err)
 	}
@@ -359,7 +359,7 @@ func TestUninstallTaskEtaBlock_Noops(t *testing.T) {
 	if err := os.WriteFile(path, []byte("just user stuff\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	modified, err = UninstallTaskEtaBlock()
+	modified, err = uninstallTaskEtaBlock()
 	if err != nil || modified {
 		t.Errorf("no block: modified=%v err=%v, want false,nil", modified, err)
 	}
@@ -397,7 +397,7 @@ func TestPatchManagedBlock_BeginWithoutEndAppendsFresh(t *testing.T) {
 
 func TestEnsureTaskQuestionBlock_CreatesFileIfAbsent(t *testing.T) {
 	home := withTempHome(t)
-	modified, err := EnsureTaskQuestionBlockInstalled()
+	modified, err := ensureTaskQuestionBlock()
 	if err != nil {
 		t.Fatal(err)
 	}

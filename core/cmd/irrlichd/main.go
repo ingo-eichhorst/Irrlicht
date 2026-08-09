@@ -313,19 +313,17 @@ func reportUninstall(w io.Writer, path string, uninstall func() (bool, error)) b
 	return true
 }
 
-// uninstallTaskEtaBlocks removes irrlicht's managed task-eta and
-// task-summary blocks from ~/.claude/CLAUDE.md.
+// uninstallTaskEtaBlocks removes every irrlicht-managed instruction block from
+// ~/.claude/CLAUDE.md. The set is the adapter's, not restated here: this used to
+// name task-eta and task-summary by hand and so silently left the task-question
+// block behind (#1377).
 func uninstallTaskEtaBlocks() {
-	etaModified, err := claudecode.UninstallTaskEtaBlock()
+	modified, err := claudecode.UninstallInstructionBlocks()
 	if err != nil {
-		log.Fatalf("failed to uninstall task-eta block: %v", err)
+		log.Fatalf("failed to uninstall irrlicht instruction blocks: %v", err)
 	}
-	summaryModified, err := claudecode.UninstallTaskSummaryBlock()
-	if err != nil {
-		log.Fatalf("failed to uninstall task-summary block: %v", err)
-	}
-	if etaModified || summaryModified {
-		fmt.Println("Removed irrlicht task-eta/task-summary blocks from ~/.claude/CLAUDE.md")
+	if modified {
+		fmt.Println("Removed irrlicht managed blocks from ~/.claude/CLAUDE.md")
 	} else {
 		fmt.Println("No irrlicht managed blocks found in ~/.claude/CLAUDE.md")
 	}
