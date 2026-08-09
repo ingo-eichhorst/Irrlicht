@@ -7,9 +7,9 @@
 //
 // Read-side commands (this phase):
 //
-//	of status   [--agent a] [--scenario s] [--runs] [--json]   coverage / run status
-//	of validate [--json]                                        schema + referential integrity
-//	of coverage [--json]                                        derived rollup (in-memory)
+//	of status   [--agent a] [--scenario s] [--runs] [--summary] [--json]  coverage / run status
+//	of validate [--json]                                                  schema + referential integrity
+//	of coverage [--hooks] [--json]                                        derived rollup, or hook coverage
 //
 // Exit codes (matching the sibling cmd tools):
 //
@@ -35,9 +35,9 @@ const (
 )
 
 const usage = `usage:
-  of status   [--agent a] [--scenario s] [--runs] [--json] [--repo-root .]
+  of status   [--agent a] [--scenario s] [--runs] [--summary] [--json] [--repo-root .]
   of validate [--json] [--repo-root .]
-  of coverage [--json] [--repo-root .]
+  of coverage [--hooks] [--json] [--repo-root .]
   of scenario add|update --name n [--id i] [--description d] [--process-file f] [--acceptance-file f]
   of scenario show --name n [--json]
   of agent add    --id i --name n --provider p [--min-version v] [--prereq p]...
@@ -129,6 +129,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		agent    = fs.String("agent", "", "filter to one agent column")
 		scenario = fs.String("scenario", "", "filter to one scenario (by name or id)")
 		runs     = fs.Bool("runs", false, "show the factory run-log instead of coverage")
+		summary  = fs.Bool("summary", false, "per-agent cell counts instead of the full cell dump")
 		asJSON   = fs.Bool("json", false, "emit JSON")
 		repoRoot = fs.String("repo-root", ".", "repository root")
 	)
@@ -155,6 +156,22 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 
 	view := buildStatusView(m, *repoRoot, agents, *scenario)
+
+	// --summary folds the same view into per-agent counts. Folding the view
+	// (rather than re-reading the matrix) is what keeps the two renderings of
+	// `of status` arithmetically consistent.
+	if *summary {
+		sv := buildSummaryView(view)
+		if *asJSON {
+			if err := writeJSON(stdout, sv); err != nil {
+				fmt.Fprintf(stderr, "of status: encode: %v\n", err)
+				return exitUsage
+			}
+			return exitOK
+		}
+		printSummaryText(stdout, sv)
+		return exitOK
+	}
 
 	if *asJSON {
 		if err := writeJSON(stdout, view); err != nil {

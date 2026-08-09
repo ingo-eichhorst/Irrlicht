@@ -1,0 +1,239 @@
+// Package hookcov derives per-adapter hook coverage over the onboarding
+// catalog: how many of each adapter's recordings carry at least one
+// hook_received lifecycle event, against how many could — i.e. whether the
+// adapter declares a "hooks" permission in the daemon's adapter registry.
+//
+// Two facts live in two different places and this package is the join:
+//
+//   - "declares hooks" is code, not catalog. Nothing under replaydata/ records
+//     it; the only machine-readable source is agent.Agent.Permissions in the
+//     daemon's adapter registry.
+//   - "has a hook-bearing recording" is disk, reached through the catalog
+//     loaders (shard.LoadAdapterCells → shard.AgentCellDir →
+//     validate.RecordingDirs → replay.LoadEvents) rather than a bespoke walk
+//     of replaydata/, so this report can never drift from what the rest of the
+//     factory tooling believes the catalog contains.
+//
+// Every number is derived at call time. Nothing is cached and nothing is
+// hardcoded — a count committed to source would be stale the day it landed.
+//
+// # Attribution
+//
+// A recording counts toward the adapter whose cell directory holds it.
+// Per-event attribution is not possible: lifecycle events carry an `adapter`
+// field, but the hook_received events actually present in the corpus leave it
+// empty, so a multi-agent scenario credits its owning adapter even when a
+// co-resident agent produced the hook. Recorded here because the number is
+// otherwise quietly wrong for exactly those cells.
+//
+// # Scope
+//
+// Catalog cells only — replaydata/agents/<adapter>/scenarios. The sibling
+// regressions/ tree is not a catalog cell and no catalog loader enumerates it,
+// so it is excluded and the CLI says so in its output rather than leaving a
+// reader to discover the discrepancy by grep.
+package hookcov
+
+import (
+	"path/filepath"
+	"sort"
+
+	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/core/domain/lifecycle"
+	"irrlicht/tools/onboarding-factory/internal/replay"
+	"irrlicht/tools/onboarding-factory/internal/shard"
+	"irrlicht/tools/onboarding-factory/internal/validate"
+)
+
+// permissionKeyHooks is the Permission.Key adapters use to declare that they
+// install agent hooks. It mirrors claudecode.PermissionKeyHooks and
+// codex.PermissionKeyHooks, which are independent consts of the same value;
+// TestDeclaredMatchesRegistry pins the join so a rename on either side fails a
+// test instead of silently reporting every adapter as declaring nothing.
+const permissionKeyHooks = "hooks"
+
+// Status is the per-adapter verdict. The distinction that matters is
+// StatusGap vs StatusNone: both have zero hook-bearing recordings, but only
+// one of them is a problem.
+type Status string
+
+const (
+	// StatusOK — declares hooks and has at least one hook-bearing recording.
+	StatusOK Status = "ok"
+	// StatusGap — declares hooks and has NONE. The loud failure this report
+	// exists to surface: the regression net does not exercise the channel.
+	StatusGap Status = "gap"
+	// StatusIncidental — declares no hooks, yet a recording carries hook
+	// events. Real in this corpus: multi-agent scenarios where a co-resident
+	// agent emitted them. Not a problem, but not "no hooks here" either.
+	StatusIncidental Status = "incidental"
+	// StatusNone — declares no hooks and has none. Nothing to see.
+	StatusNone Status = "none"
+)
+
+// AdapterCoverage is one adapter's row.
+type AdapterCoverage struct {
+	Adapter       string `json:"adapter"`
+	DeclaresHooks bool   `json:"declares_hooks"`
+	Cells         int    `json:"cells"`
+	Recordings    int    `json:"recordings"`
+	WithHooks     int    `json:"recordings_with_hooks"`
+	Status        Status `json:"status"`
+}
+
+// Totals is the corpus-wide rollup of the rows.
+type Totals struct {
+	Cells      int `json:"cells"`
+	Recordings int `json:"recordings"`
+	WithHooks  int `json:"recordings_with_hooks"`
+}
+
+// Report is the whole derived view, adapters sorted by name.
+type Report struct {
+	Adapters []AdapterCoverage `json:"adapters"`
+	Totals   Totals            `json:"totals"`
+}
+
+// Gaps names every adapter that declares hooks but has no hook-bearing
+// recording, in report order. Nil when there are none.
+func (r Report) Gaps() []string {
+	var out []string
+	for _, a := range r.Adapters {
+		if a.Status == StatusGap {
+			out = append(out, a.Adapter)
+		}
+	}
+	return out
+}
+
+// Declared reports, per on-disk adapter slug, whether that adapter declares a
+// hooks permission in the daemon's adapter registry. Every registry adapter
+// gets an entry, so a false is "asked and answered" rather than "absent".
+func Declared() map[string]bool {
+	out := make(map[string]bool)
+	for _, a := range agents.All() {
+		slug := Slug(a.Identity.Name)
+		declares := false
+		for _, p := range a.Permissions {
+			if p.Key == permissionKeyHooks {
+				declares = true
+				break
+			}
+		}
+		out[slug] = declares
+	}
+	return out
+}
+
+// Slug maps a daemon adapter's Identity.Name to the directory name used under
+// replaydata/agents. Only claude-code differs (the pre-#319 spelling survives
+// in the registry); gemini-cli, kiro-cli and mistral-vibe match their slugs
+// verbatim, hyphens and all.
+//
+// Deliberately NOT the same function as viewer.normalizeAdapter, which also
+// maps "" to claudecode so that pre-#319 recordings with no adapter field
+// still render a branded icon. That fallback would be a bug here: it would
+// invent an adapter for an unattributed name.
+func Slug(identityName string) string {
+	if identityName == "claude-code" {
+		return "claudecode"
+	}
+	return identityName
+}
+
+// Coverage builds the report. catalogAdapters is the onboarded column set
+// (shard.Agents); declares is the registry join (Declared). Both are
+// parameters rather than read inside so tests can pin the arithmetic without
+// depending on the compiled-in registry.
+//
+// The adapter set is the union of the catalog columns and any hooks-declaring
+// registry adapter missing from them — an adapter that declares hooks and has
+// no catalog presence at all is the loudest gap there is, and dropping it
+// because it has no cells would hide exactly the case worth shouting about.
+func Coverage(repoRoot string, catalogAdapters []string, declares map[string]bool) Report {
+	// Resolve to an absolute path up front. Both validate and replay refuse
+	// any path containing "..", so a relative --repo-root like "../.." would
+	// otherwise read as zero recordings everywhere — which in THIS report
+	// renders as every hooks-declaring adapter being a gap. A silent
+	// all-clear is bad; a silent all-alarm is worse.
+	if abs, err := filepath.Abs(repoRoot); err == nil {
+		repoRoot = abs
+	}
+
+	rep := Report{}
+	for _, adapter := range adapterSet(catalogAdapters, declares) {
+		row := AdapterCoverage{Adapter: adapter, DeclaresHooks: declares[adapter]}
+		for _, cell := range shard.LoadAdapterCells(repoRoot, adapter) {
+			if cell == nil || cell.Folder == "" {
+				continue // loader could not place the cell on disk
+			}
+			row.Cells++
+			cellDir := shard.AgentCellDir(repoRoot, adapter, cell.Folder)
+			for _, recDir := range validate.RecordingDirs(cellDir) {
+				row.Recordings++
+				if hasHookEvent(filepath.Join(recDir, "events.jsonl")) {
+					row.WithHooks++
+				}
+			}
+		}
+		row.Status = statusOf(row.DeclaresHooks, row.WithHooks)
+		rep.Adapters = append(rep.Adapters, row)
+		rep.Totals.Cells += row.Cells
+		rep.Totals.Recordings += row.Recordings
+		rep.Totals.WithHooks += row.WithHooks
+	}
+	return rep
+}
+
+// adapterSet is the sorted union described on Coverage.
+func adapterSet(catalogAdapters []string, declares map[string]bool) []string {
+	seen := make(map[string]bool, len(catalogAdapters))
+	for _, a := range catalogAdapters {
+		seen[a] = true
+	}
+	for a, d := range declares {
+		if d {
+			seen[a] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for a := range seen {
+		out = append(out, a)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// statusOf is the whole point of the report in one function: zero
+// hook-bearing recordings means opposite things depending on whether the
+// adapter claims to install hooks.
+func statusOf(declares bool, withHooks int) Status {
+	switch {
+	case declares && withHooks > 0:
+		return StatusOK
+	case declares:
+		return StatusGap
+	case withHooks > 0:
+		return StatusIncidental
+	default:
+		return StatusNone
+	}
+}
+
+// hasHookEvent reports whether a recording's events sidecar carries at least
+// one hook_received event. It goes through replay.LoadEvents — the sanctioned
+// reader — rather than scanning bytes, so it cannot disagree with replay about
+// line-length caps or malformed-line handling. A missing or unreadable
+// sidecar counts as "no hooks", the same as an empty one.
+func hasHookEvent(eventsPath string) bool {
+	events, err := replay.LoadEvents(eventsPath)
+	if err != nil {
+		return false
+	}
+	for _, e := range events {
+		if e.Kind == lifecycle.KindHookReceived {
+			return true
+		}
+	}
+	return false
+}

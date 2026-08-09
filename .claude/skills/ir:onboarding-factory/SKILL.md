@@ -162,6 +162,33 @@ remain before reporting "done". `display_state` ∈ `observed` (terminal),
 `unobservable` / `n.a.` (terminal — documented, no recording), `unknown`
 (→ assess). A sweep is finished only when every cell is terminal.
 
+For "how far along is agent X" — a progress read, not a work-list — use the
+per-agent counts instead of scrolling the dump:
+
+```bash
+of status --summary                   # recorded / pending / blocked / unobservable / n/a / unknown, per agent
+of status --summary --agent <agent>   # one row; composes with --scenario too
+```
+
+Its buckets always sum to the agent's cell total, so nothing is hidden by the
+aggregation. **It is still not a work-list**: `--summary` gives you a count,
+never the cell ids, so deriving the next stage's work from it is the same
+mistake as deriving it from subagent prose. Enumerate from the full dump.
+
+To ask a different question of the same catalog — how much of the recorded
+corpus actually exercises the hook channel — use:
+
+```bash
+of coverage --hooks                   # per adapter: recordings carrying a hook_received event
+```
+
+It joins the catalog to the daemon's adapter registry, so it separates the two
+cases a raw count conflates: an adapter that **declares** a hooks permission and
+has zero hook-bearing recordings (a `GAP` — the regression net does not cover a
+channel the daemon depends on) from one that declares none (fine). Scope is
+catalog cells; the non-catalog `regressions/` tree is excluded and the output
+says so.
+
 ## Parallelism + ordering rules for sweeps
 
 - **`assess` fans out; the PARENT commits.** assess is read-only of the live
@@ -238,9 +265,9 @@ commits).
 or the built `of` binary). The verbs the skill drives:
 
 ```
-of status   [--agent a] [--scenario s] [--runs] [--json]   coverage / run-log
-of validate [--json]                                        schema + referential integrity
-of coverage [--json]                                        derived rollup
+of status   [--agent a] [--scenario s] [--runs] [--summary] [--json]  coverage / run-log
+of validate [--json]                                                  schema + referential integrity
+of coverage [--hooks] [--json]                                        derived rollup, or hook coverage
 of scenario add|update --name n [--id i] [--description d]
                        [--process-file f] [--acceptance-file f]
 of agent add --id i --name n --provider p [--min-version v] [--prereq p]...
