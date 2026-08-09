@@ -182,6 +182,19 @@ type SessionDetector struct {
 	// event loop classifies), so it is deliberately NOT guarded by idleMu.
 	signals *session.SignalHolds
 
+	// dwell is the grace timer state changes serve before they are published
+	// (#1366). Like signals it carries its own lock and takes the pass clock
+	// as an argument, so it is deliberately NOT guarded by mu. A nil value
+	// disables hysteresis; see session.StateDwell.
+	dwell *session.StateDwell
+
+	// now is this detector's clock, read once per classify pass and threaded
+	// into everything that reasons about elapsed time — the signal holds'
+	// ceilings and ripeness rules (holdContext.Now) and the #1366 dwell. nil
+	// means time.Now; tests replace it to drive both mechanisms on a virtual
+	// timeline instead of sleeping. Read through nowFn, never directly.
+	now func() time.Time
+
 	// idleMu guards idleProjectRetryAttempts below. Written from HTTP handler
 	// goroutines, read by processActivity (event-loop goroutine).
 	idleMu sync.Mutex
@@ -286,6 +299,7 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		debouncedEvents:          make(chan agent.Event, 64),
 		deletedCooldown:          10 * time.Second,
 		signals:                  session.NewSignalHolds(),
+		dwell:                    session.NewStateDwell(),
 		idleProjectRetryAttempts: make(map[string]int),
 		bgLiveProbe:              anyLiveOutputWriter,
 		bgPIDProbe:               anyLivePID,
@@ -355,6 +369,40 @@ func (d *SessionDetector) RunPIDLivenessSweepForTest() {
 // staleWorkingRefreshInterval ticker.
 func (d *SessionDetector) RunStaleSessionRefreshForTest() {
 	d.refreshStaleSessions()
+}
+
+// nowFn reads this detector's clock. The indirection is what lets a test drive
+// the #1360 ceilings and the #1366 dwell on a virtual timeline; production
+// leaves the field nil and gets time.Now.
+//
+// WHAT MUST COME THROUGH HERE: every instant that is later compared against
+// another instant by the classify pipeline. Concretely that is the pass clock
+// (holdContext.Now and the dwell), every SignalHolds placement (HeldSince is
+// measured against the pass clock by both ceiling and ripe), and every
+// SessionState.UpdatedAt write (reclassifyFromTranscript measures the refresh
+// interval against it). Mixing a bare time.Now() into any of those makes two
+// stamps that are supposed to share one timeline disagree, and the symptom is
+// a guard silently short-circuiting rather than anything failing loudly.
+//
+// DELIBERATELY EXEMPT, because they are self-consistent wall-clock pairs that
+// no pipeline guard reads: the deletedSessions tombstone and its prune
+// threshold (session_detector_helpers.go / session_detector_lifecycle.go), and
+// historyTracker timestamps, which pair with record()'s own event stamping.
+// Naming them is the point — otherwise a reader cannot tell "deliberately wall
+// clock" from "missed in the sweep".
+func (d *SessionDetector) nowFn() time.Time {
+	if d.now != nil {
+		return d.now()
+	}
+	return time.Now()
+}
+
+// StartDwellForTest records a decided-but-unpublished state change (#1366)
+// with an explicit start time. Exported only so tests outside this package can
+// set up a dwell the ticker then has to notice; production starts one solely
+// from inside the classify pass, via admitTransition.
+func (d *SessionDetector) StartDwellForTest(sessionID, current, candidate string, at time.Time) {
+	d.dwell.Admit(sessionID, current, candidate, at)
 }
 
 // HoldSignalForTest places an out-of-band signal hold with an explicit
@@ -683,7 +731,7 @@ func (d *SessionDetector) handleTerminalUISignal(sig terminalUISignal) {
 			Adapter: state.Adapter, UIKind: string(sig.ui), Reason: uiReason,
 		})
 
-		now := time.Now().Unix()
+		now := d.nowFn().Unix()
 		d.record(lifecycle.Event{
 			Kind: lifecycle.KindStateTransition, SessionID: sig.sessionID,
 			PrevState: state.State, NewState: newState, Reason: reason,

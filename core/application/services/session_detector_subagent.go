@@ -20,7 +20,7 @@ func (d *SessionDetector) refreshSubagentSummary(state *session.SessionState) {
 		children = nil
 	}
 	state.Subagents = session.ComputeSubagentSummary(state, children)
-	session.ApplySubagentTaskEstimate(state, children, time.Now())
+	session.ApplySubagentTaskEstimate(state, children, d.nowFn())
 }
 
 // finishOrphanedChildren walks the child sessions of parentID and promotes
@@ -44,7 +44,7 @@ func (d *SessionDetector) finishOrphanedChildren(parentID string) {
 	if err != nil {
 		return
 	}
-	now := time.Now().Unix()
+	now := d.nowFn().Unix()
 	for _, s := range states {
 		if !d.isOrphanedChild(s, parentID) {
 			continue
@@ -148,7 +148,7 @@ func (d *SessionDetector) applySubagentCompletions(parentID string, completions 
 	if err != nil {
 		return
 	}
-	now := time.Now().Unix()
+	now := d.nowFn().Unix()
 	for _, c := range completions {
 		if c.AgentID == "" {
 			continue
@@ -262,7 +262,7 @@ func (d *SessionDetector) holdParentWorkingForNewChild(parentID string) {
 		}
 		d.record(lifecycle.Event{Kind: lifecycle.KindStateTransition, SessionID: parentID, PrevState: parent.State, NewState: session.StateWorking, Reason: "new child discovered while ready — holding working"})
 		parent.State = session.StateWorking
-		parent.UpdatedAt = time.Now().Unix()
+		parent.UpdatedAt = d.nowFn().Unix()
 		d.refreshSubagentSummary(parent)
 		if err := d.repo.Save(parent); err != nil {
 			d.log.LogError(logComponentSessionDetector, parentID,
@@ -361,7 +361,7 @@ func (d *SessionDetector) transitionParentAfterChildrenDone(parent *session.Sess
 		return
 	}
 
-	now := time.Now().Unix()
+	now := d.nowFn().Unix()
 	if reason != "" {
 		d.log.LogInfo(logComponentSessionDetector, parentID,
 			fmt.Sprintf("children done, parent re-evaluated: %s", reason))

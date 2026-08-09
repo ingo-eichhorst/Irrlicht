@@ -504,6 +504,25 @@ func (r *sidecarReplayer) applyParentHoldAndSynthesizedWaiting(newState, reason 
 		r.state = session.StateWaiting
 		newState, reason = services.ClassifyState(r.state, domainMetrics)
 	}
+	// Deliberately NOT mirroring the #1366 grace timer here, for the same
+	// reason #988 kept ShouldSynthesizeCollapsedTurnBoundary out of the
+	// transcript engine: only the live path has real timing to gate on.
+	//
+	// The dwell is a *publication* policy — it decides what reaches the UI,
+	// and SessionDetector.applyStateTransition is the thing it sits in front
+	// of. This replayer has no UI; its output model is the transition stream
+	// emit() builds, and runExtendedCheck diffs state_transition events only.
+	// So the goldens are a regression net for the parsers, the tailer and the
+	// classifier, and debouncing that net lowers its resolution: a correctly
+	// derived waiting→working with no later event behind it would simply stop
+	// appearing, and a future regression that stopped deriving it would then
+	// be invisible. Measured blast radius at the time of writing, so the
+	// trade-off is a number rather than a hunch: 41 such transitions across 15
+	// goldens in 4 adapters (claudecode 9, codex 3, hermes 2, pi 1).
+	//
+	// The classifier is untouched by #1366 — ClassifyStateTiered is byte for
+	// byte what it was — so this file keeps measuring exactly what it measured
+	// before, and no golden moves.
 	if newState != r.state {
 		r.emit(transitionFromMetrics(ctx.eventIdx, ctx.virtTime, ctx.cause,
 			r.state, newState, reason, domainMetrics))
