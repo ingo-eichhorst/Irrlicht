@@ -365,11 +365,11 @@ func applyInstructionBlocks() error {
 // removeInstructionBlocks removes all managed blocks — the revoke effect of
 // the instructions permission.
 func removeInstructionBlocks() error {
-	_, err := UninstallAllInstructionBlocks()
+	_, err := UninstallInstructionBlocks()
 	return err
 }
 
-// UninstallAllInstructionBlocks removes every managed instruction block —
+// UninstallInstructionBlocks removes every managed instruction block —
 // installed and retired alike — reporting whether ~/.claude/CLAUDE.md changed.
 // It backs both the permission's revoke effect and the `irrlichd
 // --uninstall-task-eta` escape hatch, driven by the same two inventories Apply
@@ -377,7 +377,7 @@ func removeInstructionBlocks() error {
 // the CLI carried its own hand-written pair (task-eta + task-summary) and so
 // left the task-question block #759 installs sitting in the user's file with no
 // way to remove it, while printing "No irrlicht managed blocks found" (#1377).
-func UninstallAllInstructionBlocks() (bool, error) {
+func UninstallInstructionBlocks() (bool, error) {
 	changed := false
 	for _, b := range allInstructionBlocks() {
 		modified, err := uninstallBlock(b.begin, b.end)

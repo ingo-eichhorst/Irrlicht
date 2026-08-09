@@ -318,7 +318,7 @@ func reportUninstall(w io.Writer, path string, uninstall func() (bool, error)) b
 // name task-eta and task-summary by hand and so silently left the task-question
 // block behind (#1377).
 func uninstallTaskEtaBlocks() {
-	modified, err := claudecode.UninstallAllInstructionBlocks()
+	modified, err := claudecode.UninstallInstructionBlocks()
 	if err != nil {
 		log.Fatalf("failed to uninstall irrlicht instruction blocks: %v", err)
 	}
