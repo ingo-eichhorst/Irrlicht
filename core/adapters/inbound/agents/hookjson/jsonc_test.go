@@ -637,3 +637,40 @@ func TestSplice_MidArrayInsertRewritesOnlyThatArray(t *testing.T) {
 			"the alignment learned mid-array insertion and this test should assert preservation\n%s", got)
 	}
 }
+
+// TestSplice_HugeArrayDoesNotAllocateQuadratically pins the bound on the
+// alignment table. The lengths feeding it come from the user's settings file,
+// and the table costs len(a)·len(b) ints — CodeQL flagged the unbounded make()
+// as a high-severity allocation-size overflow (PR #1381). Past the bound the
+// array is rewritten rather than aligned, which is correct but lossy for that
+// array's comments, so this asserts the document still comes out right.
+func TestSplice_HugeArrayDoesNotAllocateQuadratically(t *testing.T) {
+	big := make([]interface{}, maxAlignedArray+1)
+	for i := range big {
+		big[i] = json.Number("0")
+	}
+	if _, ok := alignArray(big, append(slices.Clone(big), json.Number("1"))); ok {
+		t.Fatalf("alignArray accepted %d elements; the quadratic table must be bounded", len(big))
+	}
+
+	// End to end: an oversized array still splices to the right document.
+	var src strings.Builder
+	src.WriteString("{\n  // keep me\n  \"list\": [")
+	for i := range big {
+		if i > 0 {
+			src.WriteString(", ")
+		}
+		src.WriteString("0")
+	}
+	src.WriteString("]\n}\n")
+
+	got := spliceTo(t, src.String(), func(s map[string]interface{}) {
+		s["list"] = append(s["list"].([]interface{}), json.Number("1"))
+	})
+	if !strings.Contains(got, "// keep me") {
+		t.Errorf("the fallback reformatted more than the oversized array\n%.200s", got)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(got), "]\n}") {
+		t.Errorf("unexpected shape after the oversized-array fallback\n%.200s", got)
+	}
+}

@@ -862,6 +862,10 @@ type arrayPlan struct {
 // never spliced into the middle — and the caller falls back to rewriting the
 // array rather than guessing at a separator.
 func alignArray(have, want []interface{}) (arrayPlan, bool) {
+	if len(have) > maxAlignedArray || len(want) > maxAlignedArray {
+		return arrayPlan{}, false
+	}
+
 	var plan arrayPlan
 	ai, bi := 0, 0
 	advance := func(ma, mb int) bool {
@@ -897,9 +901,19 @@ func alignArray(have, want []interface{}) (arrayPlan, bool) {
 	return plan, true
 }
 
+// maxAlignedArray bounds the quadratic alignment table below. A hook event
+// array holds single-digit matcher groups, so this is far above anything a
+// hand-maintained config produces — but the table costs len(a)·len(b) ints, and
+// the lengths come from a file we do not control. A settings.json carrying a
+// couple of megabytes of `[0,0,0,…]` would ask for tens of gigabytes and take
+// the daemon down with it, so past this size the alignment is skipped and the
+// array is rewritten instead: the same safe fallback a mid-array insertion
+// takes, costing that array's comments and nothing else.
+const maxAlignedArray = 512
+
 // longestCommonSubsequence returns the matched index pairs of the longest run of
-// deep-equal elements common to a and b, in order. Arrays here hold a handful of
-// hook groups, so the quadratic table is free.
+// deep-equal elements common to a and b, in order. Callers bound the inputs by
+// maxAlignedArray, so the quadratic table is free.
 func longestCommonSubsequence(a, b []interface{}) []arrayPair {
 	table := make([][]int, len(a)+1)
 	for i := range table {
