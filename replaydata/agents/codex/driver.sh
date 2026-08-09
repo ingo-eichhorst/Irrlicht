@@ -71,10 +71,22 @@ UUID="$(jq -r 'select(.type == "thread.started") | .thread_id' \
 # Resolve the rollout file. Codex stores transcripts under date-stamped
 # subdirs; the filename always contains the UUID, so a name-glob is
 # sufficient. Poll up to 30s in case the file is still being created.
+#
+# CODEX_HOME, not $HOME: codex and the daemon (codexHome() in
+# core/adapters/inbound/agents/codex/hookinstaller.go) both resolve the
+# config dir from it, so a hardcoded $HOME here searches the wrong tree
+# whenever a recording runs against an isolated home (#1388).
+#
+# Note this headless driver cannot answer codex's interactive hook-trust
+# menu — `codex exec` has no TUI to render it — so hooks fire here only if
+# the entries are ALREADY trusted for this CODEX_HOME. Cells that need to
+# observe a hook must route through driver-interactive.sh, which answers
+# that menu during boot.
+CODEX_HOME_RESOLVED="${CODEX_HOME:-$HOME/.codex}"
 TRANSCRIPT=""
 if [[ -n "$UUID" ]]; then
   for _ in $(seq 1 60); do
-    candidate="$(find "$HOME/.codex/sessions" -maxdepth 4 \
+    candidate="$(find "$CODEX_HOME_RESOLVED/sessions" -maxdepth 4 \
                   -name "rollout-*-${UUID}.jsonl" -type f 2>/dev/null \
                 | head -n1)"
     if [[ -n "$candidate" ]]; then
