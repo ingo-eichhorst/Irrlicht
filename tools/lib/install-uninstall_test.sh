@@ -32,6 +32,34 @@ REPO_ROOT="$(cd "$DIR/../.." && pwd)"
 INSTALL_SH="$REPO_ROOT/site/install.sh"
 NAME="install-uninstall_test"
 
+# The shell the installer is EXECUTED under, resolved once and shared by
+# run_uninstall and by check 9's parse test at the bottom.
+#
+# Not plain `sh` (#1423). Users get this script as `curl … | sh`, and on
+# Debian and Ubuntu that is dash — but on macOS, where these tests run in CI,
+# `/bin/sh` is bash 3.2 in POSIX mode, which accepts a great deal of bash that
+# dash rejects. Running the real thing under a real POSIX shell is the only
+# part of that gap a *runtime* test can close, and macOS does ship one:
+# /bin/dash is an Apple system binary (com.apple.dash), so this upgrade costs
+# nothing and needs no new runner.
+#
+# It closes only part of the gap, and deliberately so: a runtime check reaches
+# only the lines a case actually executes. The static half — every line of
+# every #!/bin/sh script, whether or not a test runs it — is tools/posix-lint.sh.
+#
+# Absolute path because run_uninstall runs under `env -i` with its own PATH.
+POSIX_SH=""
+for candidate in dash ash; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        POSIX_SH="$(command -v "$candidate")"
+        break
+    fi
+done
+# Fall back to `sh` rather than failing: a developer machine without dash
+# should still be able to run this suite. Check 9 reports which one ran, so a
+# weaker green never looks like a stronger one.
+INSTALL_RUNNER="${POSIX_SH:-sh}"
+
 fails=0
 
 pass() { printf 'PASS: %s\n' "$1"; }
@@ -173,7 +201,7 @@ run_uninstall() {
         PATH="$root/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
         IRRLICHT_TEST_APP_PATH="$root/app/Irrlicht.app" \
         "$@" \
-        sh "$INSTALL_SH" --uninstall 2>&1
+        "$INSTALL_RUNNER" "$INSTALL_SH" --uninstall 2>&1
 }
 
 # ===========================================================================
@@ -344,25 +372,30 @@ fi
 # 9. The installer must stay POSIX-sh clean — it ships to Linux users via
 #    `curl | sh`, where /bin/sh is typically dash.
 #
-#    NOTE ON REACH: on macOS /bin/sh is bash 3.2 in POSIX mode, which PARSES
-#    bashisms happily — and test.yml's shell-lib step runs on macos-latest. So
-#    `sh -n` alone catches hard syntax errors only. Prefer a real POSIX shell
-#    when the machine has one, and say which check actually ran rather than
-#    letting a weak green look like a strong one.
+#    NOTE ON REACH, and it is narrow (#1423). This is a PARSER check, and a
+#    parser accepts most bashisms as ordinary commands. Measured, one bashism
+#    per file, `dash -n` catches 3 of 8: it flags arrays, process substitution
+#    and the `function` keyword, and waves through `[[ ]]`, `${v,,}`, `+=`,
+#    `echo -e` and `source`. So this case is a floor, not the gate.
+#
+#    The real gate is tools/posix-lint.sh, which adds a static bashism linter
+#    (checkbashisms, or shellcheck filtered to its POSIX-compatibility codes)
+#    over every tracked #!/bin/sh script and catches 8 of 8. It runs in
+#    linux.yml, on the one runner where /bin/sh is genuinely dash. This case
+#    stays because it is free and it fails in a different way: it is the check
+#    that still works when no linter is installed.
 # ===========================================================================
-posix_sh=""
-for candidate in dash ash; do
-    if command -v "$candidate" >/dev/null 2>&1; then posix_sh="$candidate"; break; fi
-done
-if [[ -n "$posix_sh" ]]; then
-    if "$posix_sh" -n "$INSTALL_SH" 2>/dev/null; then
-        pass "syntax: site/install.sh parses under $posix_sh (real POSIX shell)"
+if [[ -n "$POSIX_SH" ]]; then
+    if "$POSIX_SH" -n "$INSTALL_SH" 2>/dev/null; then
+        pass "syntax: site/install.sh parses under $POSIX_SH (real POSIX shell; also ran it)"
     else
-        fail "syntax: site/install.sh parses under $posix_sh (real POSIX shell)"
+        fail "syntax: site/install.sh parses under $POSIX_SH (real POSIX shell)"
     fi
 else
+    # Say plainly that the cases above executed the installer under bash-as-sh,
+    # so a weak green never reads as a strong one.
     if sh -n "$INSTALL_SH" 2>/dev/null; then
-        pass "syntax: site/install.sh parses under /bin/sh (no dash here — syntax errors only)"
+        pass "syntax: site/install.sh parses under /bin/sh (NO dash here — syntax errors only, and the runtime cases used bash-as-sh)"
     else
         fail "syntax: site/install.sh parses under /bin/sh"
     fi

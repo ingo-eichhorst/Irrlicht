@@ -265,6 +265,43 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `tools/lib/testdata/skill-lint/` — so the assertions never move when a real
   skill file is edited, and `testdata/` is excluded from the gate's own walk
   because those fixtures are deliberately corrupt.
+- POSIX shell scripts: `tools/posix-lint.sh` checks every tracked file whose
+  **first line** is a `#!/bin/sh` shebang — today `site/install.sh` and
+  `tools/linux-replay-entrypoint.sh`. Line 1 only, because
+  `tools/lib/install-uninstall_test.sh` is a bash file that writes `#!/bin/sh`
+  stubs inside a heredoc, and a content grep would try to lint it as POSIX sh.
+  It runs two different kinds of check on each file: a real POSIX shell's
+  parser (`dash -n`) and a static bashism linter (`checkbashisms`, else
+  `shellcheck --shell=sh` filtered to its POSIX-compatibility codes —
+  `SC3xxx`, plus `SC2039` and `SC2112`, so general style debt stays out of
+  scope). Both, because the parser alone is far weaker than it looks:
+  measured one bashism per file, `dash -n` catches **3 of 8** — it flags
+  arrays, process substitution and the `function` keyword, and accepts
+  `[[ ]]`, `${v,,}`, `+=`, `echo -e` and `source`. Either static linter
+  catches 8 of 8. That gap is #1423: `site/install.sh` reaches users as
+  `curl … | sh`, which on Debian and Ubuntu is dash, so a bashism lands on a
+  new user's first command before anything is installed that could report it.
+  The gate lives in **`linux.yml`**, not test.yml, and the placement is the
+  decision rather than an accident — ubuntu-latest is the only runner where
+  `/bin/sh` is genuinely dash *and* the image ships shellcheck (0.9.0); the
+  macos image ships none, and test.yml's `go-test` job is pinned to macOS for
+  the runtime paths in `go test ./core/...`. Mirrored locally by
+  `tools/preflight.sh --only posix`. **Three ways out are hard failures, not
+  skips** — no POSIX shell, no static linter, and an empty file set — because
+  a gate whose absence reads as a pass is the exact defect it was built to
+  remove. Its tests are `tools/lib/posix-lint_test.sh` over the corpus under
+  `tools/lib/testdata/posix-lint/`: one deliberately-broken fixture per
+  bashism class, committed rather than improvised so the mutation evidence
+  outlives the PR, plus a clean `good-clean.sh` as the vacuity guard and two
+  cases pinning the refusals. One of those cases exists because the first
+  draft of the linter reproduced #1423 inside itself — it piped into `grep`
+  and tested the capture for emptiness, so a linter that failed to run came
+  back empty, empty read as clean, and it printed `ALL PASS` over an installer
+  carrying a deliberate `[[ ]]`. `testdata/` is excluded from the gate's own
+  walk, the same split `skill-lint.sh` draws. Separately,
+  `install-uninstall_test.sh` now *executes* the installer under `dash` rather
+  than `sh` (macOS ships `/bin/dash`), which is the runtime half — it reaches
+  only the lines a case runs, where the linter reads every line.
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh` — gated in CI by linux.yml, and run
   natively as `tools/preflight.sh`'s `replay fixtures` gate, so golden drift
