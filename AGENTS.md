@@ -206,7 +206,20 @@ Before marking a ticket done, run the full suite — every layer must pass:
   the diagnostics bundle's `hooks.json`; note that `--diagnose` runs in a process
   that never served a hook, so that form omits the counts and says so rather than
   publishing zeros (the live counts come from `GET /debug/bundle`).
-  All six contract families pass by construction against a correct adapter, so
+- Hook receipts: `contracttesting.AssertHookReceiptObserved`
+  (`core/internal/contracttesting/hook_receipt.go`) is the #1368 counterpart —
+  the event that never *arrives*, rather than the one that arrives unrecognized.
+  It is the only receiving-side contract whose failure is a false **accusation**
+  instead of a silence: the liveness watchdog demotes a channel that produces no
+  receipts across N turns and releases the holds it placed, so a receiver that
+  forgets `hookjson.ObserveHookReceipt` is reported dead and stops being trusted
+  while working perfectly — and the watchdog cannot tell that apart from a real
+  outage. Four obligations: a recognized event counts exactly one receipt; an
+  *unrecognized* one counts too (alive-but-misunderstood is #1364's diagnosis);
+  a path-confinement rejection counts too (alive-but-misrouted is #1361's); and a
+  consent-denied request counts nothing, because noting that a POST arrived is
+  itself an observation.
+  All seven contract families pass by construction against a correct adapter, so
   their whole value is that they *can* fail: a new or reworked contract
   assertion lands with the deliberate mutation that was seen red for each
   obligation recorded in its PR — the same bar the red-first rule above sets

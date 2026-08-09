@@ -70,6 +70,35 @@ const (
 	// never did. Rare by construction, and the one event that explains a
 	// session silently ceasing to be pinned at waiting.
 	KindHoldExpired Kind = "hold_expired"
+
+	// Hook-liveness watchdog (issue #1368). Three kinds, kept apart because
+	// they are three different facts and collapsing any two of them would
+	// re-create the ambiguity the watchdog exists to remove.
+	//
+	// KindHookChannelSilent: an adapter whose hook consent is granted and whose
+	// install reported success completed N turns without its receiver being
+	// handed a single request. The channel is treated as dead and the adapter
+	// falls back to TierTranscript. Distinct from the two neighbouring
+	// diagnoses that look identical from the outside: an install whose effect
+	// FAILED never wrote entries at all and is reported as a permission
+	// effect_error (#1362), and entries that were written and later went
+	// missing are #1372's subject. This event says entries were written, the
+	// daemon believes they are there, and nothing is coming.
+	KindHookChannelSilent Kind = "hook_channel_silent"
+
+	// KindHookChannelRecovered: a receipt arrived for an adapter previously
+	// declared silent. The demotion is a health signal, not a latch — this is
+	// the event that proves it, and its absence after a silent event is what
+	// says the channel never came back.
+	KindHookChannelRecovered Kind = "hook_channel_recovered"
+
+	// KindHookHoldReleased: one TierHook hold dropped because the watchdog
+	// declared its channel silent. Deliberately NOT KindHoldExpired: that one
+	// means a single hold outlived its wall-clock ceiling (#1360), which is a
+	// statement about elapsed time on one session. This one means the channel
+	// that placed the hold stopped delivering, which is a statement about the
+	// adapter. Same visible outcome, opposite investigation.
+	KindHookHoldReleased Kind = "hook_hold_released"
 )
 
 // Event is a single recorded lifecycle signal. The Kind field discriminates
@@ -137,6 +166,19 @@ type Event struct {
 	SignalTier string `json:"signal_tier,omitempty"`
 	HeldForMS  int64  `json:"held_for_ms,omitempty"`
 	CeilingMS  int64  `json:"ceiling_ms,omitempty"`
+
+	// Hook-liveness watchdog (KindHookChannelSilent / KindHookChannelRecovered,
+	// issue #1368). SilentTurns is how many consecutive completed turns the
+	// adapter produced with no hook receipt; TurnThreshold is the bound that
+	// was crossed. Both are recorded for the reason CeilingMS is: the threshold
+	// is tunable, so an elapsed count alone cannot say whether a trace from an
+	// older daemon was overdue by the rules that daemon was running.
+	// HookReceipts is the adapter's lifetime receipt total at the moment of the
+	// verdict — zero says the channel never worked, non-zero says it worked and
+	// stopped, and those have different first suspects.
+	SilentTurns   int    `json:"silent_turns,omitempty"`
+	TurnThreshold int    `json:"turn_threshold,omitempty"`
+	HookReceipts  uint64 `json:"hook_receipts,omitempty"`
 
 	// Cache-creation regression (KindCacheBloatDetected, issue #374).
 	Project           string  `json:"project,omitempty"`

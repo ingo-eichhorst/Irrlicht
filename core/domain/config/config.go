@@ -53,6 +53,59 @@ const (
 	defaultCacheBloatMinTurns          = 3
 )
 
+// defaultHookSilentTurns is how many consecutive completed turns an adapter may
+// produce with zero hook receipts before its hook channel is declared silent
+// and the adapter falls back to TierTranscript (issue #1368).
+//
+// The rationale, and why five rather than one or fifty:
+//
+// The expected rate is at least one hook event per completed turn, not per
+// session and not per hour. Both hook-receiving adapters install a Stop hook —
+// claudecode's installedHookEvents includes HookStop, and codex's Stop is the
+// authoritative turn-done push (#1171) — so on a healthy channel every turn
+// boundary the daemon counts should be accompanied by at least one receipt, and
+// a permission-heavy turn produces several. That makes zero-over-N a genuine
+// signal rather than an inference from silence, and it is why the threshold is
+// counted in TURNS: a wall-clock window cannot tell a dead channel from a user
+// at lunch, which is precisely the ambiguity this exists to remove.
+//
+// One turn would already be suspicious and is far too twitchy to act on. The
+// daemon's turn boundary is a rising edge of transcript-derived IsAgentDone,
+// which is deliberately independent of the channel under test, so the two
+// clocks can interleave: a Stop hook can land just after the pass that counted
+// its turn, an install can complete mid-turn, and a session already in flight
+// when consent was granted owes no receipt for the turn it was in. Each of
+// those costs at most one or two turns. Five clears all of them with margin.
+//
+// The upper bound is set by what the demotion is FOR. Its most consequential
+// effect is releasing hook-tier holds that would otherwise pin a session at
+// waiting until #1360's 12-hour ceiling drops them. Five turns is minutes of
+// real use, so the watchdog is the fast path to that same relief; a threshold
+// in the tens would make it slower than the backstop it is meant to beat.
+//
+// The premise is an adapter fact, and it is not currently declarable: the
+// watchdog arms on any adapter declaring a HookInstall, while the "at least one
+// receipt per turn" expectation comes from both current adapters happening to
+// install a Stop hook. A future #1355 adapter that installs only, say, a
+// permission hook would owe no receipt on a quiet turn and be convicted at this
+// threshold. Surfacing the installed event set on agent.HookInstall is the fix
+// when that adapter arrives; until then the env var is the escape hatch.
+//
+// One caveat the count deliberately carries rather than hides: silent turns are
+// aggregated PER ADAPTER, while the excuses above are per session. A session
+// already in flight at the instant consent is granted owes no receipt for the
+// turn it is in, so N such sessions can donate N uncredited turns at once. Two
+// things bound that. The watchdog seeds a session's rising-edge memory on first
+// observation rather than counting it (see hook_liveness.go), which removes the
+// large source — a daemon restart re-reading every persisted working session —
+// entirely; and recovery is immediate on the first receipt with no turn
+// boundary required, so a burst at grant time self-corrects on the next hook
+// rather than latching.
+//
+// 0 (or a negative, which envInt rejects back to this default) disables the
+// watchdog entirely — the kill switch, matching CacheBloatThreshold's.
+const defaultHookSilentTurns = 5
+
 // Config holds daemon-wide runtime configuration.
 type Config struct {
 	MaxSessionAge      time.Duration
@@ -65,6 +118,10 @@ type Config struct {
 	CacheBloatThreshold          float64
 	CacheBloatVersionDeltaTokens int64
 	CacheBloatMinTurns           int
+
+	// HookSilentTurns is the hook-liveness watchdog's threshold (issue #1368),
+	// overridable via IRRLICHT_HOOK_SILENT_TURNS. 0 disables the watchdog.
+	HookSilentTurns int
 }
 
 // Default returns a Config populated with production defaults, with the
@@ -97,6 +154,8 @@ func Default() Config {
 		CacheBloatThreshold:          envFloat("IRRLICHT_CACHE_BLOAT_THRESHOLD", defaultCacheBloatThreshold),
 		CacheBloatVersionDeltaTokens: int64(envInt("IRRLICHT_CACHE_BLOAT_VERSION_DELTA", defaultCacheBloatVersionDeltaToken)),
 		CacheBloatMinTurns:           envInt("IRRLICHT_CACHE_BLOAT_MIN_TURNS", defaultCacheBloatMinTurns),
+
+		HookSilentTurns: envInt("IRRLICHT_HOOK_SILENT_TURNS", defaultHookSilentTurns),
 	}
 }
 

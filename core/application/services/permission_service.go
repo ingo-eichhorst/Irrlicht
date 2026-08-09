@@ -283,6 +283,41 @@ func (s *PermissionService) Granted(agentName, key string) bool {
 	return s.set.Get(agentName, key) == permission.StateGranted
 }
 
+// HookChannelReady reports whether agentName's hook channel is EXPECTED to
+// deliver: it declares at least one hook-install permission that is granted and
+// whose apply effect did not fail (issue #1368).
+//
+// This is the daemon's best knowledge that our entries are in the agent's
+// config, and it is deliberately built from what the daemon DID rather than
+// from re-reading the file. Re-reading would cost a JSON parse per turn on the
+// classify path, and it would answer a different question anyway — #1372's
+// question, "are the entries still there", which is a separate diagnosis with a
+// separate fix.
+//
+// The effect-failure term is load-bearing, not defensive. A granted permission
+// whose Apply failed means the user said yes and the hooks are NOT installed
+// (#1362), so this must read false — see hook_liveness.go's header for why
+// convicting that channel of silence would report a known failure in weaker
+// words and against the wrong issue.
+func (s *PermissionService) HookChannelReady(agentName string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range s.agents {
+		if a.Identity.Name != agentName {
+			continue
+		}
+		for _, p := range a.Permissions {
+			if p.Hooks == nil {
+				continue
+			}
+			if s.set.Get(agentName, p.Key) == permission.StateGranted && !s.effectFailedLocked(agentName, p.Key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Snapshot returns the full consent state for GET /api/v1/permissions.
 func (s *PermissionService) Snapshot() PermissionsSnapshot {
 	s.mu.Lock()

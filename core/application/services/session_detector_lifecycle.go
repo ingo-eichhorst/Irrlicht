@@ -41,9 +41,10 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 
 	// Drop every per-session store — a hook that fired without a clearing
 	// partner (e.g. an agent crash mid-overlay), a decided-but-unpublished
-	// #1366 transition, an idle-retry counter. Any of them left behind is
-	// permanent, and a recycled session ID would inherit it. One seam, shared
-	// with the PIDManager reap path; see forgetSessionScopedState.
+	// #1366 transition, an idle-retry counter, the hook-liveness watchdog's
+	// rising-edge memory (#1368). Any of them left behind is permanent, and a
+	// recycled session ID would inherit it. One seam, shared with the
+	// PIDManager reap path; see forgetSessionScopedState.
 	d.forgetSessionScopedState(ev.SessionID)
 
 	state, err := d.repo.Load(ev.SessionID)

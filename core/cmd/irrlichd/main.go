@@ -16,6 +16,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/agentwiring"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
@@ -426,6 +427,19 @@ func runDaemon() {
 		defer pwCleanup()
 	}
 
+	// Hook-liveness watchdog (#1368). Built here because it has two consumers
+	// on opposite sides of startup — the diagnostics bundle registered a few
+	// lines below, and the detector built further down — and neither exists
+	// yet. Its two collaborators are injected as they appear; until both are,
+	// it reports every channel disarmed, which is honest: no hook can have been
+	// served before the receivers are registered either.
+	hookLiveness := services.NewHookLivenessWatchdog(services.HookLivenessConfig{
+		SilentTurns:    cfg.HookSilentTurns,
+		DefaultAdapter: claudecode.AdapterName,
+		Adapters:       hookAdapterNames(allAgents),
+		Receipts:       hookjson.HookReceiptsFor,
+	})
+
 	mux := http.NewServeMux()
 	registerCoreRoutes(mux, registerCoreRoutesDeps{
 		FSRepo:            fsRepo,
@@ -436,6 +450,7 @@ func runDaemon() {
 		Version:           Version,
 		PublishController: rel.publishController,
 		Cfg:               cfg,
+		HookLiveness:      hookLiveness,
 	})
 
 	// Static web UI: served from disk so the dashboard ships as three files
@@ -508,6 +523,13 @@ func runDaemon() {
 		StartGastown:     startGastown,
 		StopGastown:      stopGastown,
 	})
+
+	// The watchdog's second collaborator, available only now: "is this channel
+	// expected to deliver" is a consent question, and answering it before the
+	// permission service exists would arm the watchdog against channels nobody
+	// has agreed to install yet.
+	hookLiveness.SetChannelReady(permService.HookChannelReady)
+	detector.SetHookLivenessWatchdog(hookLiveness)
 
 	backchannelEngine, terminalObserver := setupBackchannel(mux, setupBackchannelDeps{
 		CachedRepo:        cachedRepo,

@@ -121,6 +121,7 @@ type SessionDetector struct {
 	costTracker    outbound.CostTracker    // optional; nil = disabled
 	historyTracker outbound.HistoryTracker // optional; nil = disabled
 	cacheBloat     *CacheBloatDetector     // optional; nil = disabled (#374)
+	hookLiveness   *HookLivenessWatchdog   // optional; nil = disabled (#1368)
 	metrics        outbound.MetricsCollector
 
 	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
@@ -447,6 +448,14 @@ func (d *SessionDetector) SetHistoryTracker(h outbound.HistoryTracker) {
 // Pass nil to disable.
 func (d *SessionDetector) SetCacheBloatDetector(c *CacheBloatDetector) {
 	d.cacheBloat = c
+}
+
+// SetHookLivenessWatchdog wires the optional per-adapter hook-liveness watchdog
+// (#1368). When set, each processActivity pass drives it so an adapter whose
+// hook channel has stopped delivering is demoted to TierTranscript and its
+// pinned hook-tier holds are released. Pass nil to disable.
+func (d *SessionDetector) SetHookLivenessWatchdog(w *HookLivenessWatchdog) {
+	d.hookLiveness = w
 }
 
 // SetLauncherEnvReader installs a reader that captures terminal/IDE identity

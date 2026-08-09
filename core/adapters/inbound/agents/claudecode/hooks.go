@@ -274,6 +274,13 @@ func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGrant
 		return
 	}
 
+	// The channel delivered (issue #1368). Counted here — after the consent
+	// gate, before anything can reject the payload — because the question this
+	// answers is "are hooks arriving at all", and a body we then refuse still
+	// proves they are. See receipt.go for why each rejection below still
+	// counts and why a consent-denied request must not.
+	hookjson.ObserveHookReceipt(AdapterName)
+
 	var payload hookPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)

@@ -812,6 +812,14 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// Overlay is what decides whether it has been open long enough to apply.
 	d.armStalledEditTool(state, passStart)
 
+	// Hook-liveness watchdog (#1368), before the overlay on purpose. It counts
+	// turns off transcript-derived IsAgentDone, and Overlay is what writes the
+	// hook-sourced turn-done onto that field — so measuring after it would let
+	// the channel under test contribute to its own alibi. Reading first also
+	// means a demotion decided this pass releases this pass's holds, rather
+	// than leaving the session pinned for one more.
+	releasedHookHolds := d.checkHookLiveness(state, passStart)
+
 	expiries := d.signals.Overlay(state.SessionID, state.Metrics, passStart)
 	d.reportHoldExpiries(state, expiries, passStart)
 
@@ -853,7 +861,17 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// current state out from under the verdict; a hold ceiling changed the
 	// metrics it read. Folded here rather than passed separately so the gate
 	// keeps one question, and because the last two are also read below.
-	rebased := state.State != stateBeforeSynthesis || len(expiries) > 0
+	// releasedHookHolds is the #1368 sibling of the expiry term, and it has to
+	// be here rather than fall out of expiries: checkHookLiveness deletes the
+	// hold BEFORE Overlay runs, so a watchdog release can never appear in
+	// expiries. admitTransition's argument for exempting a ceiling expiry
+	// applies verbatim — the hold is gone and nothing re-asserts it, so
+	// debouncing the un-pinning only delays it — and with the hook hold dropped
+	// the deciding rule is transcript-tier by construction, so the TierHook arm
+	// below cannot rescue it either. Without this term the watchdog's whole
+	// point (relief in minutes rather than #1360's twelve hours) is handed
+	// straight back to a dwell.
+	rebased := state.State != stateBeforeSynthesis || len(expiries) > 0 || releasedHookHolds > 0
 	authoritative := verdict.Tier == session.TierHook || rebased
 
 	if d.admitTransition(state, newState, authoritative, passStart) {
@@ -1516,6 +1534,110 @@ func (d *SessionDetector) reclassifyFromTranscript(state *session.SessionState, 
 		SessionID:      state.SessionID,
 		TranscriptPath: state.TranscriptPath,
 	})
+}
+
+// checkHookLiveness drives the per-adapter hook-liveness watchdog and acts on
+// its verdict (#1368).
+//
+// # Why a demotion must also release the channel's holds
+//
+// This is the question the issue asks, and the answer is yes: the holds ARE the
+// tier being lowered, so a demotion that left them standing would demote
+// nothing — the session stays pinned at waiting by the very channel just
+// declared dead, and the only observable change is a row in a diagnostics
+// bundle. The rest of the argument — why the evidence already collected covers
+// those holds, and why releasing one cannot invent a state — lives on
+// SignalHolds.ReleaseTier, next to the mechanism, and is deliberately not
+// restated here.
+//
+// What is only true at this altitude: #1360's 12-hour ceilings already drop
+// these holds, so this changes WHEN, not WHETHER, and that is the whole value.
+// Five turns is minutes; twelve hours is a working day of a session stuck at
+// the wrong state. The ceiling remains the backstop for the case the watchdog
+// cannot see — an adapter that produces no further turns at all, where there is
+// no evidence to convict on. Two mechanisms, different evidence, deliberately
+// not merged.
+func (d *SessionDetector) checkHookLiveness(state *session.SessionState, at time.Time) int {
+	// d.signals is guarded for the reason forgetSessionScopedState states: it
+	// is not nil-safe, and struct-literal test detectors reach these paths
+	// without one.
+	if d.hookLiveness == nil || state == nil || d.signals == nil {
+		return 0
+	}
+
+	change := d.hookLiveness.OnActivity(state)
+	switch change.Transition {
+	case HookLivenessSilent:
+		d.log.LogError(logComponentSessionDetector, state.SessionID, fmt.Sprintf(
+			"hook channel for %s looks dead: %d completed turns with zero hook requests received, "+
+				"while its hook consent is granted and its install reported success (%d hook requests seen in total "+
+				"this process). Treating %s as %v tier until a hook arrives; any hook-tier holds it placed are being "+
+				"released. If the entries have since been removed from the agent's config this reports the same way — "+
+				"check them before assuming the receiver is at fault.",
+			change.Adapter, change.SilentTurns, change.Receipts, change.Adapter, session.TierTranscript))
+		d.record(lifecycle.Event{
+			Kind:          lifecycle.KindHookChannelSilent,
+			Timestamp:     at,
+			SessionID:     state.SessionID,
+			Adapter:       change.Adapter,
+			SignalTier:    session.TierTranscript.String(),
+			SilentTurns:   change.SilentTurns,
+			TurnThreshold: change.Threshold,
+			HookReceipts:  change.Receipts,
+		})
+	case HookLivenessRecovered:
+		d.log.LogInfo(logComponentSessionDetector, state.SessionID, fmt.Sprintf(
+			"hook channel for %s is delivering again after being treated as dead; hook-tier signals are authoritative "+
+				"for it once more", change.Adapter))
+		d.record(lifecycle.Event{
+			Kind:          lifecycle.KindHookChannelRecovered,
+			Timestamp:     at,
+			SessionID:     state.SessionID,
+			Adapter:       change.Adapter,
+			SignalTier:    session.TierHook.String(),
+			TurnThreshold: change.Threshold,
+			HookReceipts:  change.Receipts,
+		})
+	case HookLivenessUnchanged:
+		// The common case, and the silent one.
+	}
+
+	if !change.Silent {
+		return 0
+	}
+	// Swept every pass while the adapter is silent, not once at the moment of
+	// demotion. A hold placed just before the verdict, or a session that only
+	// becomes active afterwards, would otherwise stay pinned — and ReleaseTier
+	// is a no-op on a session holding nothing, so the repetition is free.
+	released := d.signals.ReleaseTier(state.SessionID, session.TierHook, at)
+	d.reportSilentChannelReleases(state, released, at)
+	return len(released)
+}
+
+// reportSilentChannelReleases logs and records the hook-tier holds dropped
+// because their channel was declared silent (#1368).
+//
+// Split from reportHoldExpiries rather than folded into it: the two describe
+// different failures — one hold outliving its ceiling versus one channel
+// outliving its usefulness — and a reader who cannot tell them apart from the
+// recorded trace cannot tell which of the two fixes applies.
+func (d *SessionDetector) reportSilentChannelReleases(state *session.SessionState, released []session.SignalRelease, at time.Time) {
+	for _, r := range released {
+		d.log.LogInfo(logComponentSessionDetector, state.SessionID, fmt.Sprintf(
+			"released held signal %q (%v tier) after %v: the %s hook channel that placed it has stopped delivering, "+
+				"so the session is no longer pinned by it",
+			r.Kind, r.Tier, r.HeldFor.Round(time.Second), state.Adapter))
+
+		d.record(lifecycle.Event{
+			Kind:       lifecycle.KindHookHoldReleased,
+			Timestamp:  at,
+			SessionID:  state.SessionID,
+			Adapter:    state.Adapter,
+			SignalKind: string(r.Kind),
+			SignalTier: r.Tier.String(),
+			HeldForMS:  r.HeldFor.Milliseconds(),
+		})
+	}
 }
 
 // reportHoldExpiries surfaces the holds Overlay dropped because their

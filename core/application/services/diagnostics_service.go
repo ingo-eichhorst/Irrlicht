@@ -81,6 +81,19 @@ type HookHealthSnapshot struct {
 	// UnknownEventsTotal is every unrecognized event seen, named or dropped, so
 	// the total is read rather than reconstructed.
 	UnknownEventsTotal uint64
+
+	// Channels is the hook-liveness watchdog's per-adapter view (issue #1368):
+	// which channels are being watched, how many requests each has delivered,
+	// and which are currently treated as dead. It rides in the SAME snapshot as
+	// the unrecognized-event counters, and hooks.json renders both in one
+	// section, because they answer two halves of one question — "are hooks
+	// arriving, and do we understand them" — and because a second nil-meaningful
+	// seam would be a second thing to get wrong in the CLI case.
+	Channels []HookChannelHealth
+
+	// ReceiptsTotal is every consent-passed hook request this process was
+	// handed, across all adapters.
+	ReceiptsTotal uint64
 }
 
 // DiagnosticsServiceDeps bundles NewDiagnosticsService's dependencies.
@@ -443,6 +456,7 @@ func (s *DiagnosticsService) hooksView() any {
 		return struct {
 			CollectedFrom string `json:"collected_from"`
 			Note          string `json:"note"`
+			LivenessNote  string `json:"liveness_note"`
 		}{
 			CollectedFrom: "cli",
 			Note: "Collected by `irrlichd --diagnose`, which runs in a process that never served a hook, " +
@@ -450,6 +464,12 @@ func (s *DiagnosticsService) hooksView() any {
 				"reported as zero. The FIRST sighting of each unrecognized event name is logged at error level, so " +
 				"events.log in this bundle still names them. For live counts, fetch GET /debug/bundle from the " +
 				"running daemon.",
+			LivenessNote: "The per-adapter hook-liveness watchdog (#1368) is omitted here for the same reason and " +
+				"one more: this process served no hooks AND observed no turns, so both sides of the ratio it " +
+				"reports are structurally absent — a channel would read as silent with zero turns behind it, which " +
+				"is an accusation, not a measurement. Its verdicts are logged, so events.log in this bundle still " +
+				"carries any `hook channel for <adapter> looks dead` line. For the live view, fetch " +
+				"GET /debug/bundle from the running daemon.",
 		}
 	}
 
@@ -464,17 +484,55 @@ func (s *DiagnosticsService) hooksView() any {
 		}
 		return events[i].Event < events[j].Event
 	})
+	// Not copied, unlike events above, and not sorted: Snapshot allocates a
+	// fresh slice per call and owes a stable order to its own callers, so there
+	// is nothing here to alias and re-sorting would be a second copy of one
+	// comparator that no test could see go stale.
+	channels := snap.Channels
 	return struct {
-		CollectedFrom            string             `json:"collected_from"`
-		UnknownEventsTotal       uint64             `json:"unknown_events_total"`
-		UnknownEvents            []UnknownHookEvent `json:"unknown_events,omitempty"`
-		UnknownEventNamesDropped map[string]uint64  `json:"unknown_event_names_dropped_by_adapter,omitempty"`
+		CollectedFrom            string              `json:"collected_from"`
+		HookRequestsReceived     uint64              `json:"hook_requests_received"`
+		Channels                 []HookChannelHealth `json:"channels,omitempty"`
+		SilentChannelNote        string              `json:"silent_channel_note,omitempty"`
+		UnknownEventsTotal       uint64              `json:"unknown_events_total"`
+		UnknownEvents            []UnknownHookEvent  `json:"unknown_events,omitempty"`
+		UnknownEventNamesDropped map[string]uint64   `json:"unknown_event_names_dropped_by_adapter,omitempty"`
 	}{
 		CollectedFrom:            "daemon",
+		HookRequestsReceived:     snap.ReceiptsTotal,
+		Channels:                 channels,
+		SilentChannelNote:        silentChannelNote(channels),
 		UnknownEventsTotal:       snap.UnknownEventsTotal,
 		UnknownEvents:            events,
 		UnknownEventNamesDropped: snap.UnknownNamesDropped,
 	}
+}
+
+// silentChannelNote spells out what a `"silent": true` row means, and — just as
+// importantly — what it does not (issue #1368).
+//
+// It is emitted only when a channel is actually silent, so the healthy bundle
+// stays terse. The three-way disambiguation is the point: the same
+// user-visible symptom ("hooks aren't working") has three causes with three
+// different first moves, and a bug reporter pasting this file should not have
+// to know which issue number owns which.
+func silentChannelNote(channels []HookChannelHealth) string {
+	var silent []string
+	for _, c := range channels {
+		if c.Silent {
+			silent = append(silent, c.Adapter)
+		}
+	}
+	if len(silent) == 0 {
+		return ""
+	}
+	return "Hook channel(s) " + strings.Join(silent, ", ") + " delivered nothing across the watchdog's turn " +
+		"threshold while consent was granted and the install reported success, so they were demoted to the " +
+		"transcript tier and any hook-tier holds they had placed were released (#1368). This says entries were " +
+		"WRITTEN and nothing is arriving through them. It does NOT mean the entries are still present — if " +
+		"something removed them since, this is how that looks too (#1372). And it is a different fault from an " +
+		"install that FAILED, which never wrote entries at all and shows up as effect_error on the permission " +
+		"rather than here (#1362). Check the agent's own hook config next, then the daemon's bind port."
 }
 
 func stateView(sessions []*session.SessionState, now time.Time) any {
