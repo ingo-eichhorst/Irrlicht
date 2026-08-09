@@ -142,6 +142,9 @@ func (m *Matrix) rollupAxes(agent, coverageID string) (supports, daemon, driver,
 			}
 		}
 	}
+	// No fallback for the capability model is needed here: Load synthesizes a
+	// declared-dead pair straight into m.agentCells (#1369), so this lookup
+	// already finds it and the rollup cannot contradict `of status`.
 	return "unknown", "unknown", "ready", ""
 }
 

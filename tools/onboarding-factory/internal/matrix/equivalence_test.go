@@ -14,6 +14,9 @@ import (
 // agent-keys (the cells the shard names for that agent). This proves Load wires
 // every shard cell — and ONLY shard cells — into the matrix.
 //
+// Since #1369 the "ONLY shard cells" half is bounded rather than absolute —
+// see assertApplicableCellsMatchShard for what a synthesized cell must prove.
+//
 // It also documents the benign divergences from the legacy capabilities-driven
 // model: cells the legacy loader would have visited (because the agent had a
 // capabilities.json and the scenario's requires were met) but which carry no
@@ -60,18 +63,44 @@ func wantedCellsByAgent(repoRoot string, shards []shard.Shard) map[string]map[st
 }
 
 // assertApplicableCellsMatchShard is the P2 wiring oracle proper: for every
-// onboarded agent, ApplicableCells' coverage_ids must exactly equal the
-// shard agent-keys wantByAgent computed.
+// onboarded agent, ApplicableCells' coverage_ids must equal the shard
+// agent-keys wantByAgent computed, PLUS the cells #1369 synthesizes from the
+// capability model.
+//
+// The "and ONLY shard cells" half of the original invariant was deliberately
+// relaxed here, and the relaxation is bounded rather than removed: a cell that
+// is not on disk has to carry Derived=true AND be a pair the capability model
+// declares structurally dead. So the oracle still catches a cell appearing
+// from nowhere — it just no longer treats the model as nowhere.
+//
+// Two cells take this path on the committed corpus today, both
+// backchannel-observe (antigravity, opencode), both from a `backchannel:
+// absent` declaration whose sibling backchannel-control cell is on disk.
 func assertApplicableCellsMatchShard(t *testing.T, m *Matrix, wantByAgent map[string]map[string]bool) {
 	t.Helper()
 	for _, agent := range m.Agents() {
 		got := map[string]bool{}
 		for _, cs := range m.ApplicableCells(agent) {
+			if cs.Derived {
+				// Admissible only if the model really does declare it dead.
+				want, ok := m.Capabilities().StructuralState(agent, cs.CoverageID)
+				if !ok {
+					t.Errorf("agent %s: cell %s is marked derived but the capability model declares nothing for it",
+						agent, cs.CoverageID)
+				} else if cs.DisplayState != want {
+					t.Errorf("agent %s: derived cell %s is %q, model says %q",
+						agent, cs.CoverageID, cs.DisplayState, want)
+				}
+				if wantByAgent[agent][cs.CoverageID] {
+					t.Errorf("agent %s: cell %s is on disk and must not be reported as derived", agent, cs.CoverageID)
+				}
+				continue
+			}
 			got[cs.CoverageID] = true
 		}
 		want := wantByAgent[agent]
 		if !sameSet(got, want) {
-			t.Errorf("agent %s: ApplicableCells coverage_ids != shard agent-keys\n got:  %v\n want: %v",
+			t.Errorf("agent %s: non-derived ApplicableCells coverage_ids != shard agent-keys\n got:  %v\n want: %v",
 				agent, sortedKeys(got), sortedKeys(want))
 		}
 	}

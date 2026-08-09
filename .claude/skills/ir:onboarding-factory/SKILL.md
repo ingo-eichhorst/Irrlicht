@@ -109,6 +109,36 @@ There is no separate `extend-driver` verb: a driver gap is surfaced by `assess`
 (the **driver** pillar = `gap:<primitive>`) and closed inside `record`, which
 ports the missing step from the reference driver before it drives.
 
+### Not every cell is worth a sweep (#1369)
+
+A sweep over all 46 scenarios is no longer the price of admission. Two things
+changed, and both are visible in `of status --summary`:
+
+- **12 of the 46 scenarios are core**; the other 34 are optional and block no
+  maturity promotion. Prioritise the core set when onboarding a new agent —
+  `of status --summary` prints each adapter's `core` column (settled / 12) and
+  its claimed vs earned maturity. The set lives in
+  `tools/onboarding-factory/internal/matrix/vocabulary.go`.
+- **A structurally dead cell needs no directory.** Instead of writing an
+  assessment for a scenario the agent simply cannot do, declare the missing
+  capability — through the CLI, like every other write:
+
+  ```
+  of agent update --id <agent> --capability <trait>=absent     # agent lacks the feature      → n/a
+  of agent update --id <agent> --capability <trait>=untraced   # has it, leaves no trace      → unobservable
+  of agent update --id <agent> --capability <trait>=traced     # removes the declaration again
+  ```
+
+  The matrix synthesizes the cell from that one line. Trait ids are a closed
+  set in `internal/matrix/capability.go`; the verb refuses an invented trait or
+  state, and `of validate` additionally rejects a declaration that contradicts
+  a cell already on disk. `of agent add` writes a `planned` entry for a new
+  column automatically, so a freshly registered agent validates clean.
+
+Do **not** use a capability declaration for a cell that is merely *not
+recorded yet* — that is `record_blocked` on the assessment, and the two mean
+different things: one says the adapter cannot, the other says we have not.
+
 ## Dispatching a subagent
 
 For `create-scenario`, `create-agent`, `assess`, and `record`, spawn ONE
@@ -166,7 +196,7 @@ For "how far along is agent X" — a progress read, not a work-list — use the
 per-agent counts instead of scrolling the dump:
 
 ```bash
-of status --summary                   # recorded / pending / blocked / unobservable / n/a / unknown, per agent
+of status --summary                   # recorded / pending / blocked / unobservable / n/a / unknown / total, plus maturity / earned / core, per agent
 of status --summary --agent <agent>   # one row; composes with --scenario too
 ```
 

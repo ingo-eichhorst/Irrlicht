@@ -54,6 +54,10 @@ type CellState struct {
 	// Since the #510/#511 shard migration a cell exists iff its shard names the
 	// agent, so every present cell is applicable (the old requires-vs-capabilities
 	// gate is gone); fine-grained skip lives in ApplicableState (recipe.applicable).
+	// Since #1369 a cell may also be SYNTHESIZED from the capability model
+	// rather than read from a directory (see Load); it is assembled by the
+	// same path and so satisfies this invariant identically — Derived is the
+	// only field that distinguishes it.
 	Applicable bool `json:"applicable"`
 	// ApplicableState is the by_adapter.<agent>.applicable rollup (absent/true/false).
 	ApplicableState ApplicableState   `json:"applicable_state"`
@@ -63,6 +67,12 @@ type CellState struct {
 	Disposition     Disposition       `json:"disposition"`
 	DisplayState    string            `json:"display_state"`
 	BlockedReason   string            `json:"blocked_reason,omitempty"`
+	// Derived marks a cell that has NO directory on disk and exists only
+	// because the capability model says the (adapter, scenario) pair is
+	// structurally dead (#1369). It is the mechanism that lets a new adapter
+	// skip writing a directory per missing feature; the flag is exported so a
+	// reader of `of status --json` can tell a modelled cell from a written one.
+	Derived bool `json:"derived,omitempty"`
 }
 
 // Config locates the inputs. The model is shard-backed: RepoRoot (or, when
@@ -84,7 +94,15 @@ type Matrix struct {
 	shards     map[string]shard.Shard                  // coverage_id (shard.Name) → shard (scenario-global spec only)
 	agentCells map[string]map[string]*shard.ShardAgent // agent → coverage_id → cell (from metadata.json)
 	cells      map[string]map[string]CellState         // agent → coverage_id → cell
+	caps       *CapabilityModel                        // replaydata/agents/adapters.json (#1369)
+	derived    map[string]bool                         // "agent\x00coverage_id" of synthesized cells
 }
+
+// Capabilities returns the loaded capability model. Callers may chain without
+// a nil guard: every CapabilityModel method handles a nil receiver, and when
+// the file is absent the model declares nothing and every derivation reports
+// "not structural".
+func (m *Matrix) Capabilities() *CapabilityModel { return m.caps }
 
 type catalogEntry struct {
 	ID string `json:"id"`
@@ -129,15 +147,46 @@ func Load(cfg Config) (*Matrix, error) {
 		shards:     make(map[string]shard.Shard, len(shards)),
 		agentCells: map[string]map[string]*shard.ShardAgent{},
 		cells:      map[string]map[string]CellState{},
+		derived:    map[string]bool{},
 	}
 	for _, sh := range shards {
 		m.shards[sh.Name] = sh
 	}
 
+	// The capability model is optional. A read error is reported (a corrupt
+	// file must not read as "no model" — that would silently un-derive every
+	// synthesized cell), but a missing file is fine.
+	caps, err := LoadCapabilities(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	m.caps = caps
+
 	// Load per-adapter cells (one directory scan per adapter), keyed by
 	// scenario_id, from replaydata/agents/<adapter>/scenarios/<folder>/metadata.json.
 	for _, adapter := range m.agents {
 		m.agentCells[adapter] = shard.LoadAdapterCells(repoRoot, adapter)
+	}
+
+	// Fill the holes the capability model accounts for (#1369). A pair the
+	// model declares structurally dead needs no directory — that is the part
+	// that shortens onboarding — so its raw cell is synthesized here, BEFORE
+	// the assembly loop, and everything downstream (axes, route, disposition,
+	// applicable state, display state, the rollup) is produced by the same
+	// code path that serves a written cell.
+	for _, adapter := range m.agents {
+		if m.agentCells[adapter] == nil {
+			m.agentCells[adapter] = map[string]*shard.ShardAgent{}
+		}
+		for _, sh := range shards {
+			if m.agentCells[adapter][sh.Name] != nil {
+				continue // a written cell always wins; the model only fills holes
+			}
+			if c := m.caps.SyntheticCell(adapter, sh.Name); c != nil {
+				m.agentCells[adapter][sh.Name] = c
+				m.derived[adapter+"\x00"+sh.Name] = true
+			}
+		}
 	}
 
 	// catalog: one row per IN-CATALOG shard, in shard (section.index) order.
@@ -156,7 +205,7 @@ func Load(cfg Config) (*Matrix, error) {
 		m.cells[agent] = map[string]CellState{}
 		for _, sh := range shards {
 			if m.agentCells[agent] == nil || m.agentCells[agent][sh.Name] == nil {
-				continue // no cell for this (agent, scenario)
+				continue // no cell for this (agent, scenario), and none derivable
 			}
 			m.cells[agent][sh.Name] = m.buildCell(agent, sh.Name)
 		}
@@ -273,6 +322,7 @@ func (m *Matrix) buildCell(agent, cid string) CellState {
 		ApplicableState: appl,
 		Recorded:        recorded,
 		Assessment:      rep,
+		Derived:         m.derived[agent+"\x00"+cid],
 	}
 
 	// Disposition / Route use the parsed-assessment axes exactly as the legacy

@@ -249,6 +249,33 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `web/` or recording-rig change is in play, also `bash
   tools/onboarding-factory/scripts/smoke-test.sh` (the rig's `bash -n` + lib
   unit tests).
+- Onboarding maturity + capability model (#1369): `replaydata/agents/adapters.json`
+  is the COLUMN file of the matrix, symmetric to `scenarios.json`'s rows. It
+  holds each adapter's claimed maturity (`planned`/`alpha`/`beta`/`stable`) and
+  the traits it lacks. `of validate` gates three things over it, and all three
+  are scoped to a catalog that actually carries the core set, so a partial
+  fixture tree is unaffected:
+  - **The core twelve.** Only 12 of the 46 scenarios gate a promotion; the
+    other 34 are optional and block nothing. The set, and one line of
+    justification per scenario, is in `internal/matrix/vocabulary.go` — in code
+    rather than in data, so weakening it is a reviewable diff. `alpha` requires
+    four state scenarios reachable from hooks alone, `beta` all nine
+    state-core, `stable` all twelve including the three metrics ones. That
+    split is what `alpha` MEANS: state only, no metrics.
+  - **The capability model.** Traits are a closed set in
+    `internal/matrix/capability.go`; each adapter's value for one is
+    three-valued — `absent` (derives `n/a`), `untraced` (has the feature, it
+    reaches no Source the adapter reads → derives `unobservable`), or the
+    default `traced`. A boolean cannot express this and the two-valued version
+    was pruned in #529 after producing false positives. A declared dead pair
+    **needs no cell directory** — the matrix synthesizes it — which is the
+    part that shortens onboarding. Agreement is checked both ways: a
+    declaration must match its cell, and a structurally dead cell must be
+    explained by a declaration or by a documented `record_blocked` reason.
+  - **Maturity claims.** Declaring more than the core standing earns is a
+    failure; declaring less never is (the 30-day / adoption criteria live in
+    `site/docs/adapters.html` and no gate can see them). `of status --summary`
+    shows claimed vs earned side by side.
 - Web (only when touching a `web/` tree): `npm test` in that tree. There are
   two independent suites, each with its own `node_modules`:
   - `platforms/web/` — the dashboard.

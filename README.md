@@ -51,7 +51,9 @@ curl -fsSL https://irrlicht.io/install.sh | sh
 
 ## Supported agents
 
-Stages: `stable` production-ready · `beta` feature-complete, edge cases remain · `alpha` core detection works, rough edges · `planned` on the roadmap.
+Stages: `stable` production-ready · `beta` feature-complete, edge cases remain · `alpha` core detection works (state only, metrics not claimed) · `planned` on the roadmap.
+
+The **11 onboarded coding agents** below declare their stage in [`replaydata/agents/adapters.json`](replaydata/agents/adapters.json), and `of validate` fails if a stage claims more than a core set of 12 scenarios earns. Orchestrator, platform and `planned` rows are editorial — no adapter exists for them yet, so nothing checks them.
 
 **Coding agents**
 

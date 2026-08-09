@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "_comment": [
+    "The COLUMN file of the onboarding matrix, symmetric to scenarios.json's rows (#1369).",
+    "maturity  — the tier this adapter CLAIMS. `of validate` fails when the claim outruns the",
+    "            evidence in replaydata/; it never rewrites the claim. Ladder and the core-12",
+    "            floor each tier requires: tools/onboarding-factory/internal/matrix/vocabulary.go.",
+    "capabilities — only the NON-DEFAULT values. An omitted trait means 'traced': the adapter has",
+    "            the feature and it reaches a Source the adapter reads. 'absent' means the agent",
+    "            does not have the feature (derives n/a); 'untraced' means it has it but exercising",
+    "            it leaves no trace (derives unobservable). Trait ids are a closed set defined in",
+    "            internal/matrix/capability.go — a trait not named there is a validation finding.",
+    "A pair declared absent/untraced needs NO cell directory: the matrix synthesizes it. The 122",
+    "cells that predate this file keep their directories, and `of validate` pins each one against",
+    "the declaration here."
+  ],
+  "adapters": {
+    "aider": {
+      "maturity": "alpha",
+      "capabilities": {
+        "autonomous_loop": "absent",
+        "burndown_progression": "absent",
+        "checkpoint_rewind": "untraced",
+        "cloud_agent": "absent",
+        "context_compaction": "absent",
+        "message_queue": "absent",
+        "permission_classifier": "untraced",
+        "plan_mode": "untraced",
+        "session_isolation": "untraced",
+        "session_reset": "absent",
+        "session_resume": "untraced",
+        "structured_question": "untraced",
+        "subscription_signal": "absent",
+        "token_usage": "untraced"
+      }
+    },
+    "antigravity": {
+      "maturity": "alpha",
+      "capabilities": {
+        "architect_editor": "untraced",
+        "backchannel_control": "absent",
+        "backchannel_observe": "absent",
+        "background_process": "untraced",
+        "burndown_progression": "untraced",
+        "checkpoint_rewind": "absent",
+        "cloud_agent": "absent",
+        "error_epilogue": "untraced",
+        "interrupt": "untraced",
+        "permission_prompt": "untraced",
+        "plan_mode": "untraced",
+        "session_reset": "absent",
+        "structured_question": "untraced",
+        "subscription_signal": "absent",
+        "task_list": "absent"
+      }
+    },
+    "claudecode": {
+      "maturity": "beta",
+      "capabilities": {
+        "burndown_progression": "untraced",
+        "cloud_agent": "untraced",
+        "provider_failover": "untraced"
+      }
+    },
+    "codex": {
+      "maturity": "alpha",
+      "capabilities": {
+        "background_process": "absent",
+        "cloud_agent": "untraced",
+        "error_epilogue": "untraced",
+        "interrupt": "untraced",
+        "partial_flush": "untraced",
+        "permission_classifier": "untraced",
+        "provider_failover": "untraced",
+        "subagent_orphan": "untraced"
+      }
+    },
+    "copilot": {
+      "maturity": "alpha",
+      "capabilities": {
+        "burndown_progression": "untraced",
+        "cloud_agent": "untraced",
+        "partial_flush": "untraced",
+        "subagent_orphan": "untraced",
+        "subscription_signal": "untraced"
+      }
+    },
+    "gemini-cli": {
+      "maturity": "alpha",
+      "capabilities": {
+        "architect_editor": "untraced",
+        "burndown_progression": "untraced",
+        "cloud_agent": "absent",
+        "permission_classifier": "untraced",
+        "permission_prompt": "untraced",
+        "plan_mode": "untraced",
+        "provider_failover": "untraced",
+        "subagent_background": "absent",
+        "subagent_foreground": "untraced",
+        "subscription_signal": "untraced",
+        "workflow_fanout": "absent"
+      }
+    },
+    "hermes": {
+      "maturity": "alpha",
+      "capabilities": {
+        "backchannel_control": "untraced",
+        "backchannel_observe": "untraced",
+        "burndown_progression": "untraced",
+        "cloud_agent": "untraced",
+        "file_transcript": "absent",
+        "interrupt": "untraced",
+        "partial_flush": "untraced",
+        "permission_prompt": "untraced",
+        "quota_exhaustion": "untraced",
+        "subagent_foreground": "absent",
+        "subscription_signal": "untraced"
+      }
+    },
+    "kiro-cli": {
+      "maturity": "alpha",
+      "capabilities": {
+        "architect_editor": "untraced",
+        "background_process": "absent",
+        "burndown_progression": "untraced",
+        "cloud_agent": "absent",
+        "error_epilogue": "untraced",
+        "interrupt": "untraced",
+        "model_switch": "untraced",
+        "partial_flush": "untraced",
+        "plan_mode": "untraced",
+        "provider_failover": "untraced",
+        "quota_exhaustion": "absent",
+        "session_reset": "untraced",
+        "subagent_background": "untraced",
+        "subagent_foreground": "untraced",
+        "subagent_orphan": "untraced",
+        "subscription_signal": "untraced",
+        "token_usage": "untraced"
+      }
+    },
+    "mistral-vibe": {
+      "maturity": "alpha",
+      "capabilities": {
+        "architect_editor": "untraced",
+        "background_process": "absent",
+        "burndown_progression": "absent",
+        "cloud_agent": "untraced",
+        "error_epilogue": "untraced",
+        "interrupt": "untraced",
+        "iteration_limit": "absent",
+        "permission_prompt": "untraced",
+        "plan_mode": "untraced",
+        "provider_failover": "absent",
+        "quota_exhaustion": "untraced",
+        "subagent_background": "absent",
+        "subscription_signal": "absent",
+        "workflow_fanout": "absent"
+      }
+    },
+    "opencode": {
+      "maturity": "alpha",
+      "capabilities": {
+        "backchannel_control": "absent",
+        "backchannel_observe": "absent",
+        "background_process": "absent",
+        "cloud_agent": "absent",
+        "file_transcript": "absent",
+        "permission_prompt": "untraced",
+        "plan_mode": "untraced",
+        "quota_exhaustion": "untraced",
+        "structured_question": "absent"
+      }
+    },
+    "pi": {
+      "maturity": "alpha",
+      "capabilities": {
+        "architect_editor": "absent",
+        "autonomous_loop": "absent",
+        "background_process": "absent",
+        "burndown_progression": "absent",
+        "cloud_agent": "absent",
+        "iteration_limit": "absent",
+        "partial_flush": "untraced",
+        "permission_classifier": "absent",
+        "permission_prompt": "absent",
+        "plan_mode": "absent",
+        "provider_failover": "untraced",
+        "quota_exhaustion": "untraced",
+        "subagent_background": "absent",
+        "subagent_foreground": "absent",
+        "subagent_orphan": "absent",
+        "subscription_signal": "absent",
+        "task_list": "absent"
+      }
+    }
+  }
+}

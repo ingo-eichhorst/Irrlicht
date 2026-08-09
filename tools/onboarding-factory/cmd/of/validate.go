@@ -61,6 +61,7 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 
 	names := validateCatalog(*repoRoot, add)
 	validateCells(*repoRoot, names, add)
+	validateMaturityModel(*repoRoot, names, add)
 
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].Path != findings[j].Path {

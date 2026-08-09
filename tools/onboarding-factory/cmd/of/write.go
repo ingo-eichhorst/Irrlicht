@@ -334,7 +334,8 @@ func (p *prereqFlag) String() string     { return strings.Join(*p, ",") }
 func (p *prereqFlag) Set(v string) error { *p = append(*p, v); return nil }
 
 const agentUsage = `usage: of agent add    --id i --name n --provider p [--min-version v] [--prereq p]...
-       of agent update --id i [--name n] [--provider p] [--min-version v] [--prereq p]... [--add-prereq p]...`
+       of agent update --id i [--name n] [--provider p] [--min-version v] [--prereq p]... [--add-prereq p]...
+                       [--maturity planned|alpha|beta|stable] [--capability trait=absent|untraced|traced]...`
 
 func runAgent(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -384,6 +385,13 @@ func runAgentAdd(args []string, stdout, stderr io.Writer) int {
 	if rc := registerAgentColumn(*repoRoot, *id, *minVer, stderr); rc != exitOK {
 		return rc
 	}
+	// Give the new column an entry in the capability model too. Without it
+	// `of validate` fails the tree the moment the column is registered, and
+	// the only remedy would be the hand-edit this CLI exists to avoid (#1369).
+	if err := ensureAdapterModel(*repoRoot, *id); err != nil {
+		fmt.Fprintf(stderr, "of agent add: capability model: %v\n", err)
+		return exitUsage
+	}
 	am := agentMeta{ID: *id, Name: *name, Provider: *provider, Prerequisites: prereqs}
 	if err := writeJSONFileAtomic(metaPath, am); err != nil {
 		fmt.Fprintf(stderr, "of agent add: write: %v\n", err)
@@ -411,11 +419,14 @@ func runAgentAdd(args []string, stdout, stderr io.Writer) int {
 func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("of agent update")
 	var prereqs, addPrereqs prereqFlag
+	caps := capabilityFlag{}
+	fs.Var(caps, "capability", "trait=state (absent|untraced|traced); traced removes the declaration")
 	var (
 		id       = fs.String("id", "", "agent id (kebab slug)")
 		name     = fs.String("name", "", "display name")
 		provider = fs.String("provider", "", "provider (e.g. anthropic, openai)")
 		minVer   = fs.String("min-version", "", "minimum supported agent version (rewrites the column registration)")
+		maturity = fs.String("maturity", "", "claimed maturity: planned|alpha|beta|stable (#1369)")
 		repoRoot = fs.String(repoRootFlagName, ".", repoRootFlagUsage)
 	)
 	fs.Var(&prereqs, "prereq", "replace the recording prerequisites with these (repeatable)")
@@ -455,6 +466,12 @@ func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
 	if flagPassed(fs, "min-version") {
 		if rc := registerAgentColumn(*repoRoot, *id, *minVer, stderr); rc != exitOK {
 			return rc
+		}
+	}
+	if flagPassed(fs, "maturity") || len(caps) > 0 {
+		if err := setAdapterModel(*repoRoot, *id, *maturity, caps); err != nil {
+			fmt.Fprintf(stderr, "of agent update: capability model: %v\n", err)
+			return exitUsage
 		}
 	}
 	am.ID = *id // the path is authoritative; a mismatched id in the file is a bug
