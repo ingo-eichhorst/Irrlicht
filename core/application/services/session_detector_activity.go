@@ -847,9 +847,16 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// out from under the verdict, or a hold ceiling expired and changed the
 	// metrics. Both matter twice below — to the dwell gate and to the
 	// provenance stamp — so the question is asked once, here.
+	// Three things make this pass's verdict authoritative rather than a guess
+	// the dwell should sit on; admitTransition's doc argues each. A hook-tier
+	// verdict IS the correction the dwell waits for; a synthesizer moved the
+	// current state out from under the verdict; a hold ceiling changed the
+	// metrics it read. Folded here rather than passed separately so the gate
+	// keeps one question, and because the last two are also read below.
 	rebased := state.State != stateBeforeSynthesis || len(expiries) > 0
+	authoritative := verdict.Tier == session.TierHook || rebased
 
-	if d.admitTransition(state, newState, verdict.Tier, rebased, passStart) {
+	if d.admitTransition(state, newState, authoritative, passStart) {
 		applied := stateTransitionUpdate{NewState: newState, Reason: reason, Now: now}
 		switch {
 		case parentHeldWorking:
@@ -929,11 +936,10 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 func (d *SessionDetector) admitTransition(
 	state *session.SessionState,
 	newState string,
-	tier session.SignalTier,
-	rebased bool,
+	authoritative bool,
 	now time.Time,
 ) bool {
-	if tier == session.TierHook || rebased {
+	if authoritative {
 		d.dwell.DropSession(state.SessionID)
 		return newState != state.State
 	}

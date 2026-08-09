@@ -123,6 +123,12 @@ type pendingExit struct {
 	since time.Time
 }
 
+// describes reports whether this entry is the proposal being made now — both
+// ends, not just the destination. See the type's comment for why both.
+func (p pendingExit) describes(current, candidate string) bool {
+	return p.from == current && p.to == candidate
+}
+
 // NewStateDwell returns an empty grace-timer store.
 func NewStateDwell() *StateDwell {
 	return &StateDwell{pending: make(map[string]pendingExit)}
@@ -163,7 +169,7 @@ func (d *StateDwell) Admit(sessionID, current, candidate string, now time.Time) 
 	}
 
 	p, ok := d.pending[sessionID]
-	if !ok || p.from != current || p.to != candidate {
+	if !ok || !p.describes(current, candidate) {
 		// First sighting of this proposal, or the proposal changed shape. The
 		// clock restarts rather than carrying over, which errs toward staying
 		// in waiting — the cheap side of graceFor's asymmetry.
