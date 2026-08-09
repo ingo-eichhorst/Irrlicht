@@ -408,7 +408,7 @@ func registerCoreRoutes(mux *http.ServeMux, deps registerCoreRoutesDeps) {
 	// per-PID liveness, trimmed logs, and config for bug reports. Localhost
 	// only — it carries session paths and (pre-redaction) process argv. Reads
 	// fsRepo directly for a fresh, uncached snapshot.
-	diagSvc := buildDiagnostics(deps.FSRepo, deps.AllAgents, deps.Cfg)
+	diagSvc := buildDiagnostics(deps.FSRepo, deps.AllAgents, deps.Cfg, liveHookHealth)
 	mux.HandleFunc("GET /debug/bundle", localhostOnly(handleDiagnosticsBundle(diagSvc)))
 }
 

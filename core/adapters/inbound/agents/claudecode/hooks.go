@@ -319,9 +319,10 @@ func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGrant
 	case HookNotification:
 		handleNotificationHook(target, log, sessionID, payload)
 	default:
-		// Unrecognized hook event — accept but ignore.
-		log.LogInfo(logComponentHookReceiver, sessionID,
-			fmt.Sprintf("ignored unrecognized hook event %q", payload.HookEventName))
+		// Unrecognized hook event — accept but ignore, counted per name and
+		// reported once, in the one place that behaviour is decided for every
+		// receiver (issue #1364). The 200 below is unaffected.
+		hookjson.IgnoreUnknownEvent(log, logComponentHookReceiver, AdapterName, sessionID, payload.HookEventName)
 	}
 
 	w.WriteHeader(http.StatusOK)

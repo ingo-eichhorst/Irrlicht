@@ -50,6 +50,37 @@ type DiagnosticsService struct {
 	cfg            config.Config
 	version        string
 	paths          DiagnosticsPaths
+	hookHealth     func() HookHealthSnapshot
+}
+
+// UnknownHookEvent is one (adapter, event name) pair a hook receiver was sent
+// and did not recognize, with how many times it arrived (issue #1364). The name
+// is half the key on purpose: an upstream rename arrives on every tool call
+// forever, a stray local POST arrives once, and a count that cannot separate
+// those says nothing.
+type UnknownHookEvent struct {
+	Adapter string `json:"adapter"`
+	Event   string `json:"event"`
+	Count   uint64 `json:"count"`
+}
+
+// HookHealthSnapshot is the receiver-side hook counters at one instant.
+//
+// It is a plain value handed in by the composition root rather than read from
+// the adapter package, because application/services must not import
+// adapters/inbound — the hexagonal rule core/architecture_test.go enforces. The
+// daemon converts hookjson's snapshot into this; --diagnose supplies nothing.
+type HookHealthSnapshot struct {
+	// UnknownEvents is every retained (adapter, name) pair with its count.
+	UnknownEvents []UnknownHookEvent
+	// UnknownNamesDropped is how many sightings arrived, PER ADAPTER, after the
+	// receivers' bounded name table saturated. A non-empty map means
+	// UnknownEvents is incomplete for those adapters — reported, and attributed,
+	// so a reader never has to infer either fact.
+	UnknownNamesDropped map[string]uint64
+	// UnknownEventsTotal is every unrecognized event seen, named or dropped, so
+	// the total is read rather than reconstructed.
+	UnknownEventsTotal uint64
 }
 
 // DiagnosticsServiceDeps bundles NewDiagnosticsService's dependencies.
@@ -65,6 +96,11 @@ type DiagnosticsServiceDeps struct {
 	Cfg            config.Config
 	Version        string
 	Paths          DiagnosticsPaths
+	// HookHealth snapshots the live hook-receiver counters. NIL IS MEANINGFUL:
+	// it says this process never served a hook (the --diagnose CLI), and
+	// hooks.json then omits the counts and says where the real ones are, rather
+	// than publishing zeros that look like an all-clear.
+	HookHealth func() HookHealthSnapshot
 }
 
 // NewDiagnosticsService wires the service.
@@ -78,6 +114,7 @@ func NewDiagnosticsService(deps DiagnosticsServiceDeps) *DiagnosticsService {
 		cfg:            deps.Cfg,
 		version:        deps.Version,
 		paths:          deps.Paths,
+		hookHealth:     deps.HookHealth,
 	}
 }
 
@@ -106,6 +143,7 @@ func (s *DiagnosticsService) WriteBundle(w io.Writer) error {
 	s.addLedgers(b)
 	b.addJSON("liveness.json", s.liveness(sessions, b.red))
 	b.addJSON("processes.json", s.processes(b.red))
+	b.addJSON("hooks.json", s.hooksView())
 	s.addLogs(b)
 
 	if errs := b.errs; len(errs) > 0 {
@@ -378,6 +416,64 @@ func (s *DiagnosticsService) configView() any {
 		MaxSessionAge:   s.cfg.MaxSessionAge.String(),
 		ReadySessionTTL: s.cfg.ReadySessionTTL.String(),
 		PermissionMode:  s.cfg.PermissionMode,
+	}
+}
+
+// hooksView renders hooks.json: what the daemon's hook receivers were sent and
+// did not recognize (issue #1364).
+//
+// The honesty problem this section has to solve is structural, not cosmetic.
+// The counters live in the daemon process, and `irrlichd --diagnose` builds its
+// bundle in a SEPARATE, freshly launched process that resolves the same stores
+// off disk and never serves a hook (see runDiagnose's doc comment). Reporting
+// its zeros as counts would tell a bug reporter "no unrecognized events" using
+// numbers from a process that could not have seen one — the exact silence #1364
+// is about, re-created inside the fix for it. So when no snapshot source is
+// wired the counts are OMITTED and the section says where the real ones are.
+//
+// The log line is what covers that gap in practice: the first sighting of each
+// distinct name is written at error level, and events.log IS in this bundle, so
+// even the CLI-collected form carries the names — just not the volumes.
+func (s *DiagnosticsService) hooksView() any {
+	if s.hookHealth == nil {
+		// A DIFFERENT shape, not the daemon shape with zeros in it. Emitting
+		// `"unknown_event_names_dropped": 0` here would publish a count from a
+		// process that could not have observed one — the very thing the note
+		// beside it says is not being done.
+		return struct {
+			CollectedFrom string `json:"collected_from"`
+			Note          string `json:"note"`
+		}{
+			CollectedFrom: "cli",
+			Note: "Collected by `irrlichd --diagnose`, which runs in a process that never served a hook, " +
+				"so the receivers' unrecognized-event counters are not readable here and are omitted rather than " +
+				"reported as zero. The FIRST sighting of each unrecognized event name is logged at error level, so " +
+				"events.log in this bundle still names them. For live counts, fetch GET /debug/bundle from the " +
+				"running daemon.",
+		}
+	}
+
+	snap := s.hookHealth()
+	// Copied before sorting: the slice belongs to the injected snapshot source,
+	// not to this service, and reordering a caller's slice in place is the
+	// aliasing bug this repo has already paid for once (#965/#967/#975).
+	events := append([]UnknownHookEvent(nil), snap.UnknownEvents...)
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].Adapter != events[j].Adapter {
+			return events[i].Adapter < events[j].Adapter
+		}
+		return events[i].Event < events[j].Event
+	})
+	return struct {
+		CollectedFrom            string             `json:"collected_from"`
+		UnknownEventsTotal       uint64             `json:"unknown_events_total"`
+		UnknownEvents            []UnknownHookEvent `json:"unknown_events,omitempty"`
+		UnknownEventNamesDropped map[string]uint64  `json:"unknown_event_names_dropped_by_adapter,omitempty"`
+	}{
+		CollectedFrom:            "daemon",
+		UnknownEventsTotal:       snap.UnknownEventsTotal,
+		UnknownEvents:            events,
+		UnknownEventNamesDropped: snap.UnknownNamesDropped,
 	}
 }
 
