@@ -37,6 +37,14 @@ func TestHookPathConfined(t *testing.T) {
 				Rejections: confiner.RejectionCount,
 			}
 		},
+		NewProduction: func(t *testing.T) contracttesting.HookReceiverUnderTest {
+			t.Helper()
+			target := &mockTarget{}
+			return contracttesting.HookReceiverUnderTest{
+				Handler:  NewHookHandler(target, nil, mockLogger{}),
+				Observed: func() bool { return target.totalCalls() > 0 },
+			}
+		},
 		// Codex resolves the session id from the rollout's session_meta header,
 		// so the decoy outside the tree carries one too — the only thing
 		// keeping it from dispatching is confinement, not an unreadable file.

@@ -59,6 +59,17 @@ type HookReceiver struct {
 	// the rejection count starts at zero and Observed cannot carry over.
 	New func(t *testing.T) HookReceiverUnderTest
 
+	// NewProduction builds the receiver through the adapter's DEFAULT exported
+	// constructor — the one the daemon actually calls — rather than any
+	// test-only variant New may use to reach the rejection counter.
+	//
+	// Without it the contract only ever inspects a handler the test assembled,
+	// so an adapter could satisfy every obligation with a correctly wired test
+	// handler while its real constructor confines nothing: the #1361 hole,
+	// shipped past a green contract. Rejections may be nil here; the
+	// obligation this field serves is about reachability, not counting.
+	NewProduction func(t *testing.T) HookReceiverUnderTest
+
 	// WriteTranscript writes a transcript the adapter would dispatch on into
 	// dir, and returns its absolute path. The contract uses it for the in-tree
 	// fixture AND for the out-of-tree decoy, so a refusal can never be confused
@@ -86,9 +97,17 @@ type HookReceiver struct {
 //     it with ".." is refused;
 //  4. a symlink INSIDE the declared root pointing at a file outside it is
 //     refused — the ordering obligation, and the only one a
-//     containment-before-resolution guard fails.
+//     containment-before-resolution guard fails;
+//  5. a DANGLING symlink inside the declared root is refused. Resolution
+//     reports "does not exist" for a broken link exactly as it does for a file
+//     that has not been written yet, so a receiver that waves through an
+//     unresolvable leaf (a reasonable allowance — the hook fires around the
+//     write) hands the attacker an escape needing no race at all: plant the
+//     broken link, get the path accepted, then create the target;
+//  6. the adapter's PRODUCTION constructor confines too, not merely whatever
+//     handler the test assembled.
 //
-// Obligations 2–4 additionally require the refusal to be loud (a 4xx, never a
+// Obligations 2–5 additionally require the refusal to be loud (a 4xx, never a
 // silent 200) and counted.
 func AssertHookPathConfined(t *testing.T, r HookReceiver) {
 	t.Helper()
@@ -96,6 +115,8 @@ func AssertHookPathConfined(t *testing.T, r HookReceiver) {
 	t.Run("out_of_tree_path_rejected", func(t *testing.T) { assertOutOfTreeRejected(t, r) })
 	t.Run("parent_traversal_rejected", func(t *testing.T) { assertTraversalRejected(t, r) })
 	t.Run("symlink_escape_rejected", func(t *testing.T) { assertSymlinkEscapeRejected(t, r) })
+	t.Run("dangling_symlink_rejected", func(t *testing.T) { assertDanglingSymlinkRejected(t, r) })
+	t.Run("production_constructor_confines", func(t *testing.T) { assertProductionConfines(t, r) })
 }
 
 // assertInTreeAccepted is obligation 1. It runs first because every assertion
@@ -152,6 +173,39 @@ func assertSymlinkEscapeRejected(t *testing.T, r HookReceiver) {
 		t.Fatalf("symlink %s -> %s: %v", link, outside, err)
 	}
 	assertRefused(t, r, link, "a symlink inside the declared root pointing out of it (symlinks must be resolved BEFORE the containment check)")
+}
+
+// assertDanglingSymlinkRejected is obligation 5. The link is inside the root
+// and its target does not exist yet, so a guard that treats "cannot resolve" as
+// "not written yet" accepts it — and the attacker then creates the target.
+func assertDanglingSymlinkRejected(t *testing.T, r HookReceiver) {
+	t.Helper()
+	root := r.Root(t)
+	// A path in a directory the receiver has no claim on. Deliberately NOT
+	// created: the whole point is that it does not exist at confinement time.
+	target := filepath.Join(t.TempDir(), "planted"+filepath.Ext(r.WriteTranscript(t, t.TempDir())))
+	link := filepath.Join(mkSubdir(t, root, "dangling"), filepath.Base(target))
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink %s -> %s: %v", link, target, err)
+	}
+	assertRefused(t, r, link, "a dangling symlink inside the declared root (an unresolvable leaf must not be assumed to be an unflushed write)")
+}
+
+// assertProductionConfines is obligation 6: the confinement is reachable
+// through the constructor the daemon calls, not only the one the test wires.
+func assertProductionConfines(t *testing.T, r HookReceiver) {
+	t.Helper()
+	r.Root(t)
+	outside := r.WriteTranscript(t, t.TempDir())
+	rut := r.NewProduction(t)
+
+	rec := postHookPath(t, r, rut, outside)
+	if rut.Observed() {
+		t.Errorf("the adapter's production constructor dispatched an out-of-tree transcript: %s", outside)
+	}
+	if rec.Code < 400 || rec.Code > 499 {
+		t.Errorf("production constructor: status = %d, want a 4xx — confinement is not wired into the handler the daemon builds", rec.Code)
+	}
 }
 
 // --- helpers ---

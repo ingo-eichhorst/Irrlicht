@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -110,7 +111,20 @@ func ConfinerForSource(src func() agent.Source, goos, suffix string) *PathConfin
 		if !ok {
 			return nil
 		}
-		return files.AllRootsFor(goos)
+		// Drop empty entries rather than resolving them. AllRootsFor always
+		// returns at least one element — RootDirFor is prepended
+		// unconditionally — so an adapter whose DirFunc failed and returned ""
+		// would otherwise present a root that resolves to $HOME, turning the
+		// fail-closed branch below into confinement over the entire home
+		// directory. An empty root is the absence of a root.
+		roots := files.AllRootsFor(goos)
+		kept := make([]string, 0, len(roots))
+		for _, root := range roots {
+			if strings.TrimSpace(root) != "" {
+				kept = append(kept, root)
+			}
+		}
+		return kept
 	}, suffix)
 }
 
@@ -126,10 +140,19 @@ func ConfinerForSource(src func() agent.Source, goos, suffix string) *PathConfin
 // The accepted path is rebuilt as declared-root + the resolved relative
 // component, never returned as the caller's own string, so no caller-controlled
 // path reaches os.Open (SonarQube gosecurity:S2083). It is rebuilt on the
-// DECLARED root rather than the symlink-resolved one so the result stays in the
-// same namespace as the fswatcher's paths, which are not symlink-resolved —
-// downstream state is keyed by transcript path, and two spellings of one file
-// are two sessions.
+// DECLARED root rather than the symlink-resolved one so the ROOT PREFIX stays
+// in the namespace the fswatcher emits paths in — that side is not
+// symlink-resolved, downstream state is keyed by transcript path, and two
+// spellings of one file are two sessions. On a machine whose $HOME or temp dir
+// sits behind a symlink (/var → /private/var on macOS) this is what keeps the
+// hook's key and the watcher's key equal.
+//
+// The relative component is a resolved one, so the guarantee stops at the
+// prefix: a symlink INSIDE the tree is collapsed here while the watcher reports
+// the link name. No shipped adapter layout has one, and the failure is quiet
+// and partial rather than wrong — hook-delivered rate limits, task estimates
+// and summaries miss their tailer and are dropped, while state classification,
+// which is keyed by session id, is unaffected.
 func (c *PathConfiner) Confine(raw string) (string, RejectReason) {
 	if raw == "" {
 		return "", c.count(RejectEmptyPath)
@@ -147,6 +170,13 @@ func (c *PathConfiner) Confine(raw string) (string, RejectReason) {
 	resolved, err := resolvePath(raw)
 	if err != nil {
 		return "", c.count(RejectUnresolvable)
+	}
+	// Re-assert the extension on the RESOLVED path. The pre-check above reads
+	// the caller's string, which an in-tree symlink can spell ".jsonl" while
+	// pointing at something else entirely — the daemon would then tail a
+	// non-transcript file and derive a session id from its name.
+	if c.suffix != "" && filepath.Ext(resolved) != c.suffix {
+		return "", c.count(RejectWrongSuffix)
 	}
 	for _, declared := range roots {
 		if confined, ok := containedIn(declared, resolved); ok {
@@ -236,12 +266,25 @@ func containedIn(declared, resolved string) (string, bool) {
 // and only when the path carries no ".." — a parent reference cannot be
 // resolved without the filesystem, and resolving it lexically is precisely the
 // bypass this function exists to prevent.
+//
+// "Missing" has to mean absent from the directory, not merely unresolvable.
+// EvalSymlinks reports fs.ErrNotExist for a DANGLING symlink exactly as it does
+// for a file that was never created, and the two are not equivalent here: an
+// attacker who plants a broken link inside the tree, has it accepted, and only
+// then creates the target has escaped the root without ever needing a race.
+// Lstat is what tells them apart — it succeeds on a symlink whatever its target
+// — so an existing leaf is a resolution failure, never an unflushed write.
 func resolvePath(path string) (string, error) {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err == nil {
 		return resolved, nil
 	}
 	if !errors.Is(err, fs.ErrNotExist) || hasParentRef(path) {
+		return "", err
+	}
+	if _, lerr := os.Lstat(path); lerr == nil || !errors.Is(lerr, fs.ErrNotExist) {
+		// The leaf is there (a dangling symlink, most likely) or its status
+		// cannot be established. Either way this is not the write race.
 		return "", err
 	}
 	dir, base := filepath.Split(path)

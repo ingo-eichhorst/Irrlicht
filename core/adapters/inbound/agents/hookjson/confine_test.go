@@ -118,6 +118,66 @@ func TestConfine_SymlinkEscapeResolvedBeforeContainment(t *testing.T) {
 	}
 }
 
+// TestConfine_DanglingSymlinkIsNotAnUnflushedWrite guards the missing-leaf
+// allowance's one sharp edge. EvalSymlinks reports fs.ErrNotExist for a broken
+// symlink exactly as it does for a file that was never written, so treating
+// "unresolvable" as "not flushed yet" would let an attacker plant a broken link
+// inside the tree, have the path accepted, and only then create the target —
+// an escape with no race in it.
+func TestConfine_DanglingSymlinkIsNotAnUnflushedWrite(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "planted-later.jsonl") // deliberately absent
+	link := filepath.Join(root, "sub", "innocent.jsonl")
+	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	got, reason := staticRoots(root).Confine(link)
+	if reason == RejectNone {
+		t.Fatalf("Confine(%q) accepted a dangling in-tree symlink as %q", link, got)
+	}
+	// Once the attacker creates the target, the same path must still be refused.
+	if err := os.WriteFile(target, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if got, reason := staticRoots(root).Confine(link); reason != RejectEscapesRoot {
+		t.Errorf("with the target created, Confine(%q) = (%q, %q), want %q", link, got, reason, RejectEscapesRoot)
+	}
+}
+
+// TestConfine_SuffixIsRecheckedAfterResolution pins the second half of the
+// extension guard: the pre-check reads the caller's string, which an in-tree
+// symlink can spell ".jsonl" while pointing at something else.
+func TestConfine_SuffixIsRecheckedAfterResolution(t *testing.T) {
+	root := t.TempDir()
+	real := writeFile(t, filepath.Join(root, "sub", "store.db"))
+	link := filepath.Join(root, "sub", "looks-like.jsonl")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	if got, reason := staticRoots(root).Confine(link); reason != RejectWrongSuffix {
+		t.Errorf("Confine(%q) = (%q, %q), want %q — the extension must be re-asserted on the resolved path", link, got, reason, RejectWrongSuffix)
+	}
+}
+
+// TestConfinerForSource_EmptyRootIsNotHome is the fail-open this guards. A root
+// of "" resolves under $HOME, so an adapter whose DirFunc failed would confine
+// to the entire home directory instead of to nothing.
+func TestConfinerForSource_EmptyRootIsNotHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	victim := writeFile(t, filepath.Join(home, ".ssh", "id_rsa.jsonl"))
+
+	c := ConfinerForSource(func() agent.Source { return agent.FilesUnderRoot{Dir: ""} }, "darwin", ".jsonl")
+	if got, reason := c.Confine(victim); reason != RejectNoRoots {
+		t.Errorf("Confine(%q) = (%q, %q), want %q — an empty declared root must not resolve to $HOME", victim, got, reason, RejectNoRoots)
+	}
+}
+
 // TestConfine_CountsEveryRejectionByReason checks the counters the receivers
 // report. Nothing publishes them yet, which is exactly why they need a test:
 // an uncounted rejection is indistinguishable from no rejection.

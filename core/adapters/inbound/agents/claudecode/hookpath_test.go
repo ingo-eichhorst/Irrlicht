@@ -37,6 +37,14 @@ func TestHookPathConfined(t *testing.T) {
 				Rejections: confiner.RejectionCount,
 			}
 		},
+		NewProduction: func(t *testing.T) contracttesting.HookReceiverUnderTest {
+			t.Helper()
+			target := &mockTarget{}
+			return contracttesting.HookReceiverUnderTest{
+				Handler:  NewHookHandler(target, nil, nil, mockLogger{}),
+				Observed: func() bool { return len(target.getCalls()) > 0 },
+			}
+		},
 		// The session id is the filename stem, so the name has to look like a
 		// session id for a dispatch to happen at all.
 		WriteTranscript: func(t *testing.T, dir string) string {
