@@ -418,14 +418,17 @@ func spliceSettings(original []byte, want map[string]interface{}) ([]byte, error
 
 	out, ok := applyEdits(original, edits)
 	if !ok {
-		return nil, errNoSafeSplice
+		return nil, noSafeSplice(FallbackOverlappingEdits)
 	}
 	if !decodesTo(out, normalized) {
 		// The edit arithmetic produced something that is not the document we
 		// were asked for. Never write it: a corrupted settings.json breaks the
 		// agent and every later install, whereas re-encoding merely costs the
 		// comments this package exists to protect.
-		return nil, errNoSafeSplice
+		//
+		// Counted, and the only reason that means a defect here rather than a
+		// shape we declined — see fallback.go.
+		return nil, noSafeSplice(FallbackVerifyFailed)
 	}
 	return out, nil
 }
@@ -756,8 +759,11 @@ func (s *splicer) diffArray(n *jsonNode, want []interface{}, depth int, edits *[
 	plan, ok := alignArray(have, want)
 	if !ok {
 		// An insertion somewhere other than the tail has no separator we can
-		// hang an edit off without guessing. Rewriting the array wholesale
-		// costs only the comments inside this one array, and never corrupts.
+		// hang an edit off without guessing, and an oversized array is not
+		// worth a quadratic table. Rewriting the array wholesale costs only the
+		// comments inside this one array, and never corrupts — but it is still
+		// a silent loss, so it is counted (fallback.go).
+		countFallback(FallbackArrayRewrite)
 		return s.replaceNode(n, want, depth, edits)
 	}
 
@@ -805,7 +811,7 @@ func (s *splicer) applyContainerEdits(n *jsonNode, items []itemSpan, removed []i
 	if tail := trailingRun(len(items), removed); tail >= 0 && len(body) > 0 {
 		comma := s.nextComma(items[tail-1].end)
 		if comma < 0 {
-			return errNoSafeSplice
+			return noSafeSplice(FallbackUnsupportedShape)
 		}
 		*edits = append(*edits, edit{
 			start: s.trailerEnd(comma + 1),
@@ -814,13 +820,13 @@ func (s *splicer) applyContainerEdits(n *jsonNode, items []itemSpan, removed []i
 		})
 		earlier := removed[:len(removed)-(len(items)-tail)]
 		if len(earlier) > 0 && !s.removeItems(items, earlier, edits) {
-			return errNoSafeSplice
+			return noSafeSplice(FallbackUnsupportedShape)
 		}
 		return nil
 	}
 
 	if len(removed) > 0 && !s.removeItems(items, removed, edits) {
-		return errNoSafeSplice
+		return noSafeSplice(FallbackUnsupportedShape)
 	}
 	if len(body) > 0 {
 		s.appendItems(items[len(items)-1], body, itemIndent, edits)

@@ -2,6 +2,7 @@ package hookjson
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"math/rand"
@@ -672,5 +673,96 @@ func TestSplice_HugeArrayDoesNotAllocateQuadratically(t *testing.T) {
 	}
 	if !strings.HasSuffix(strings.TrimSpace(got), "]\n}") {
 		t.Errorf("unexpected shape after the oversized-array fallback\n%.200s", got)
+	}
+}
+
+// --- fallback observability (issue #1371) ---
+
+// countsDelta runs fn and reports how many fallbacks of each reason it caused.
+// Deltas rather than absolutes because the counters are package-level and every
+// other test in this file contributes to them.
+func countsDelta(fn func()) map[FallbackReason]uint64 {
+	before := Fallbacks()
+	fn()
+	after := Fallbacks()
+
+	delta := map[FallbackReason]uint64{}
+	for reason, n := range after {
+		if d := n - before[reason]; d > 0 {
+			delta[reason] = d
+		}
+	}
+	return delta
+}
+
+// TestFallback_ArrayRewriteIsCounted is the reachable end of the contract: a
+// degradation the user can actually trigger must show up in the counters, not
+// just in the output. Without this the array rewrite is exactly the kind of
+// silent loss that made four separate corruption bugs in this file invisible
+// until someone wrote a property test.
+func TestFallback_ArrayRewriteIsCounted(t *testing.T) {
+	const src = "{\n  \"list\": [\n    1, // inner\n    3\n  ]\n}\n"
+
+	delta := countsDelta(func() {
+		spliceTo(t, src, func(s map[string]interface{}) {
+			list := s["list"].([]interface{})
+			s["list"] = []interface{}{list[0], json.Number("2"), list[1]}
+		})
+	})
+
+	if delta[FallbackArrayRewrite] != 1 {
+		t.Errorf("array rewrite not counted: got %v, want one %s", delta, FallbackArrayRewrite)
+	}
+	if delta[FallbackVerifyFailed] != 0 {
+		t.Errorf("a scoped array rewrite must not register as a verifier failure: %v", delta)
+	}
+}
+
+// TestFallback_CleanSpliceCountsNothing is the other half — a counter that only
+// ever goes up is not evidence of anything.
+func TestFallback_CleanSpliceCountsNothing(t *testing.T) {
+	delta := countsDelta(func() {
+		spliceTo(t, jsoncSettings, func(s map[string]interface{}) { s["theme"] = "Dracula" })
+	})
+	if len(delta) != 0 {
+		t.Errorf("a clean splice registered a fallback: %v", delta)
+	}
+}
+
+// TestFallback_WholeDocumentReasonsAreWired covers the three whole-document
+// reasons. They are unreachable from outside this package by construction —
+// which is the entire reason they are counted: if one ever fires in the field
+// it is a defect in jsonc.go, and FallbackVerifyFailed says so specifically.
+// The assertion is that each reason has a live counter slot and that
+// noSafeSplice routes to the sentinel renderSettings falls back on.
+func TestFallback_WholeDocumentReasonsAreWired(t *testing.T) {
+	for _, reason := range []FallbackReason{
+		FallbackUnsupportedShape, FallbackOverlappingEdits, FallbackVerifyFailed,
+	} {
+		t.Run(string(reason), func(t *testing.T) {
+			var err error
+			delta := countsDelta(func() { err = noSafeSplice(reason) })
+
+			if !errors.Is(err, errNoSafeSplice) {
+				t.Errorf("noSafeSplice(%s) = %v, want the errNoSafeSplice sentinel renderSettings falls back on", reason, err)
+			}
+			if delta[reason] != 1 {
+				t.Errorf("noSafeSplice(%s) counted %v, want one", reason, delta)
+			}
+		})
+	}
+}
+
+// TestFallback_RenderSettingsFallsBackOnSentinel pins what the counter is
+// counting: an errNoSafeSplice becomes a whole-document encode rather than a
+// failed write, so the user keeps a valid file and loses only formatting.
+func TestFallback_RenderSettingsFallsBackOnSentinel(t *testing.T) {
+	// A document whose top level is not an object cannot be spliced onto a map.
+	got, err := renderSettings([]byte("[1, 2]\n"), map[string]interface{}{"cmd": "a && b"})
+	if err != nil {
+		t.Fatalf("renderSettings: %v", err)
+	}
+	if want := "{\n  \"cmd\": \"a && b\"\n}\n"; string(got) != want {
+		t.Errorf("fallback encode = %q, want %q", got, want)
 	}
 }
