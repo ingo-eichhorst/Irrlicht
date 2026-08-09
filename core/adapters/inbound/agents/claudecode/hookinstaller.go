@@ -85,6 +85,61 @@ const hookMatcherPreCompact = "manual"
 // blocking PermissionRequest hook, and the other types don't affect state.
 const hookMatcherNotification = "idle_prompt"
 
+// minCLIVersion is the lowest Claude Code version this install may be written
+// into (issue #1365). Declared here, enforced generically by PermissionService
+// via agent.HookInstall.Version — before #1365 this adapter had no gate at all
+// and wrote all seven entries into ~/.claude/settings.json whatever version was
+// installed.
+//
+// 2.1.122 rather than the 2.1.63 that the `type: "http"` entry alone would
+// require, because below 2.1.122 a hook entry Claude Code cannot make sense of
+// does not degrade to "that hook doesn't fire" — it takes the user's whole
+// settings.json with it. Both fixes are named in the upstream changelog:
+//
+//	2.1.101 — "an unrecognized hook event name in settings.json no longer
+//	           causes the entire file to be ignored"
+//	2.1.122 — "Fixed a malformed hooks entry in settings.json no longer
+//	           invalidating the entire file"
+//
+// That is what decides the direction of this gate. Installing into a too-old
+// Claude Code is not inert-and-slightly-untidy; it can silently disable every
+// other setting the user has — other hooks, permissions, model choice. A floor
+// high enough that a mistake degrades to one dead hook is worth more than the
+// handful of versions of reach it costs.
+const minCLIVersion = "2.1.122"
+
+// hookEventSince records, per installed event, the Claude Code version at
+// which that event is PROVEN to exist — not necessarily the version that
+// introduced it. minCLIVersion must be >= every value (AssertHookVersionGate
+// enforces it), which is what makes "do not write an entry the installed CLI
+// does not know" (#1365 scope item 2) mechanical rather than aspirational.
+//
+// Provenance, all from the upstream changelog cached at
+// ~/.claude/cache/changelog.md and re-checkable there:
+//
+//   - 1.0.38 "Released hooks" — the four original events.
+//   - 2.0.45 "Added PermissionRequest hook to automatically approve or deny
+//     tool permission requests with custom logic".
+//   - 2.1.119 "Hooks: PostToolUse and PostToolUseFailure hook inputs now
+//     include duration_ms" — an enhancement, so PostToolUseFailure existed BY
+//     2.1.119. Its introducing version is not stated anywhere in the changelog;
+//     2.1.119 is recorded here as the proven upper bound, which is the
+//     conservative direction (it can only push the floor up, never down).
+//
+// The `type: "http"` delivery all seven entries use arrived in 2.1.63 ("Added
+// HTTP hooks, which can POST JSON to a URL and receive JSON instead of running
+// a shell command") — a property of the entry rather than of any one event, so
+// it constrains minCLIVersion directly rather than appearing in this map.
+var hookEventSince = map[string]string{
+	HookPermissionRequest:  "2.0.45",
+	HookPreToolUse:         "1.0.38",
+	HookPostToolUse:        "1.0.38",
+	HookPostToolUseFailure: "2.1.119",
+	HookPreCompact:         "1.0.38",
+	HookStop:               "1.0.38",
+	HookNotification:       "1.0.38",
+}
+
 // installedHookEvents are the Claude Code hook events we install handlers for.
 var installedHookEvents = []string{
 	HookPermissionRequest,

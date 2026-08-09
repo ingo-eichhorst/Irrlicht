@@ -17,6 +17,7 @@ import (
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/config"
 	"irrlicht/core/domain/permission"
+	"irrlicht/core/pkg/cliversion"
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
 )
@@ -461,6 +462,16 @@ func (s *PermissionService) runEffects(effects []pendingEffect) {
 // but NOT applied, because <reason>" instead of a bare "granted" (#1362).
 // The error is still logged and still not propagated — the recorded
 // consent stands either way — but it is no longer the only trace.
+//
+// A declared upstream-version floor (agent.HookInstall.Version, issue #1365)
+// is checked here rather than inside each adapter's Apply closure, so an
+// adapter joins the scheme by declaring a version string instead of by copying
+// a function. It deliberately produces an ordinary effect error rather than a
+// separate "skipped" concept, so #1362's surfacing carries it for free: the
+// wizard renders "granted but NOT applied, because <the CLI is too old>", and
+// because planAnswerLocked re-runs the effect when a re-answer finds a
+// recorded failure, the refusal's own advice — upgrade the CLI and grant again
+// — is literally the gesture that retries it.
 func (s *PermissionService) runClosureEffect(e pendingEffect) {
 	effect, verb := e.perm.Apply, "apply"
 	if e.target != permission.StateGranted {
@@ -470,7 +481,17 @@ func (s *PermissionService) runClosureEffect(e pendingEffect) {
 	// left over from the opposite verb is stale.
 	var reason string
 	if effect != nil {
-		if err := effect(); err != nil {
+		// Only granting is gated. Removing our entries from a config file is
+		// always safe and always wanted, including on a CLI too old to have
+		// understood them in the first place.
+		err := error(nil)
+		if e.target == permission.StateGranted {
+			err = s.hookVersionRefusal(e.perm)
+		}
+		if err == nil {
+			err = effect()
+		}
+		if err != nil {
 			reason = err.Error()
 			s.log.LogError("permissions", "", fmt.Sprintf("failed to %s %s/%s: %v", verb, e.agentName, e.perm.Key, err))
 		} else {
@@ -495,6 +516,45 @@ func (s *PermissionService) recordEffectResult(e pendingEffect, reason string) {
 // Caller holds s.mu.
 func (s *PermissionService) effectFailedLocked(agentName, permKey string) bool {
 	return s.effectErrs[effectKey(agentName, permKey)] != ""
+}
+
+// hookVersionRefusal resolves the installed upstream CLI version for a
+// permission that declares a floor and returns a non-nil error when the
+// install must not proceed. It returns nil for every permission that declares
+// no floor, which is every non-hook permission and any hook adapter that has
+// not opted in.
+//
+// Resolution prefers the adapter's own passive signal over running anything:
+// Codex reads cli_version out of the transcript it is already tailing, which
+// costs nothing and works when the binary is not on the daemon's PATH. The
+// probe is the fallback for adapters with no such signal.
+func (s *PermissionService) hookVersionRefusal(p agent.Permission) error {
+	if p.Hooks == nil || p.Hooks.Version == nil || p.Hooks.Version.Min == "" {
+		return nil
+	}
+	gate := p.Hooks.Version
+
+	installed := ""
+	if gate.Observed != nil {
+		installed = gate.Observed()
+	}
+	if installed == "" && len(gate.Probe) > 0 {
+		probed, err := cliversion.Probe(context.Background(), gate.Probe)
+		if err != nil {
+			// Unknown version: fail open, but say so. A probe that cannot run
+			// is the state most likely to be misread later as "the gate
+			// checked and approved".
+			s.log.LogInfo("permissions", "", fmt.Sprintf(
+				"%s: version probe failed (%v); installing anyway — an unreadable version is not an old one", p.Key, err))
+			return nil
+		}
+		installed = probed
+	}
+
+	if allowed, why := gate.Permits(installed); !allowed {
+		return errors.New(why)
+	}
+	return nil
 }
 
 // startWatching constructs the agent's watchers fresh, registers their

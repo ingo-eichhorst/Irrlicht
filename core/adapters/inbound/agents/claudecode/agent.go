@@ -83,14 +83,26 @@ func Agent() agent.Agent {
 				Detail: "Adds " + hookjson.EventList(installedHookEvents) +
 					" hook entries that POST " +
 					"the hook payload to the local daemon at " + hookEndpointURL() +
-					" via Claude Code's native http hook (no shell/curl). Toggling " +
-					"off removes exactly these entries (also available via " +
+					" via Claude Code's native http hook (no shell/curl). " +
+					hookjson.RequiresVersion("Claude Code", minCLIVersion) +
+					" Toggling off removes exactly these entries (also available via " +
 					"`irrlichd --uninstall-hooks`).",
 				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
 				Remove: func() error { _, err := UninstallHooks(); return err },
 				Hooks: &agent.HookInstall{
 					ConfigPath: claudeSettingsPath,
 					Uninstall:  UninstallHooks,
+					// Declared, not implemented — PermissionService enforces it
+					// (#1365). No Observed source: Claude Code records its version
+					// per transcript entry, but reading it would mean walking
+					// ~/.claude/projects at grant time, and unlike Codex's single
+					// session header there is no cheap newest-session read. The
+					// probe is honest and bounded; if it cannot run, the install
+					// proceeds (an unreadable version is not an old one).
+					Version: &agent.VersionGate{
+						Min:   minCLIVersion,
+						Probe: []string{"claude", "--version"},
+					},
 				},
 			},
 			{

@@ -69,13 +69,23 @@ func Agent() agent.Agent {
 					"POST the hook payload to the local daemon at " + hookEndpointURL() +
 					" via curl. PermissionRequest drives a live waiting transition " +
 					"the moment an approval prompt appears; Stop carries the final " +
-					"assistant message for turn-end. Install is version-gated on the " +
-					"running Codex's cli_version. Toggling off removes the entries.",
-				Apply:  func() error { return applyCodexHooks() },
+					"assistant message for turn-end. " + hookjson.RequiresVersion("Codex", minCLIVersion) +
+					" Toggling off removes the entries.",
+				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
 				Remove: func() error { _, err := UninstallHooks(); return err },
 				Hooks: &agent.HookInstall{
 					ConfigPath: codexHooksPath,
 					Uninstall:  UninstallHooks,
+					// The floor is declared, not implemented: PermissionService
+					// enforces it for every adapter (#1365). Observed reads
+					// cli_version out of the newest session header, so the common
+					// case costs no process at all and works even when the binary
+					// is not on the daemon's PATH; Probe is the fallback.
+					Version: &agent.VersionGate{
+						Min:      minCLIVersion,
+						Probe:    []string{"codex", "--version"},
+						Observed: newestObservedCLIVersion,
+					},
 				},
 			},
 		},
