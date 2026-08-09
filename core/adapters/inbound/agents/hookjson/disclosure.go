@@ -7,7 +7,19 @@
 // consumes makes that drift unrepresentable rather than merely tested for.
 package hookjson
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
+
+// EntriesTouched renders the Touches line of a hooks permission: "Writes N
+// hook entries to <path>". Both the number and the noun live here rather than
+// in each adapter, so a third adapter cannot state a count that disagrees with
+// its install, and cannot word the sentence in a way the contract assertion
+// (which reads the count back out of the copy) fails to recognize.
+func EntriesTouched(path string, events []string) string {
+	return fmt.Sprintf("Writes %d hook entries to %s", len(events), path)
+}
 
 // EventList renders events as prose for consent copy: "A", "A and B",
 // "A, B, and C". Callers pass the same slice they put in Config.Events, so the

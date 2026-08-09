@@ -73,27 +73,47 @@ func hookEventConstants(t *testing.T) map[string]string {
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			spec, ok := n.(*ast.ValueSpec)
-			if !ok {
-				return true
+		// Top-level const declarations only: a ValueSpec inside a function body
+		// is a local, and a var is not part of the event vocabulary.
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
 			}
-			for i, ident := range spec.Names {
-				if !strings.HasPrefix(ident.Name, "Hook") || i >= len(spec.Values) {
+			for _, spec := range gen.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok {
 					continue
 				}
-				lit, ok := spec.Values[i].(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
-				}
-				value, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					t.Fatalf("unquote %s = %s: %v", ident.Name, lit.Value, err)
-				}
-				found[ident.Name] = value
+				collectHookConstants(t, name, value, found)
 			}
-			return true
-		})
+		}
 	}
 	return found
+}
+
+// collectHookConstants adds spec's Hook* string constants to found. A Hook*
+// constant whose value is not a plain string literal — a concatenation, an
+// alias of another constant — is a hard failure rather than a skip: this guard
+// exists because failing open is the one thing a drift guard must not do, and
+// "I could not evaluate that one" is indistinguishable from "there was nothing
+// there" to everyone downstream.
+func collectHookConstants(t *testing.T, file string, spec *ast.ValueSpec, found map[string]string) {
+	t.Helper()
+	for i, ident := range spec.Names {
+		if !strings.HasPrefix(ident.Name, "Hook") || i >= len(spec.Values) {
+			continue
+		}
+		lit, ok := spec.Values[i].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			t.Fatalf("%s: %s is not bound to a plain string literal, so this guard cannot check "+
+				"it against AllHookEvents — spell it as a literal, or give the event constants a "+
+				"distinct type and filter on that rather than on the name prefix", file, ident.Name)
+		}
+		value, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			t.Fatalf("%s: unquote %s = %s: %v", file, ident.Name, lit.Value, err)
+		}
+		found[ident.Name] = value
+	}
 }

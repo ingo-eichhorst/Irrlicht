@@ -1,8 +1,6 @@
 package claudecode
 
 import (
-	"fmt"
-
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/backchannel"
@@ -86,8 +84,7 @@ func Agent() agent.Agent {
 				// restated: this copy is the consent contract, and hand-maintaining
 				// it is how it came to promise six entries against a seven-event
 				// install (#1173's Notification hook, undisclosed until #1356).
-				Touches: fmt.Sprintf("Writes %d hook entries to ~/.claude/settings.json",
-					len(installedHookEvents)),
+				Touches: hookjson.EntriesTouched("~/.claude/settings.json", installedHookEvents),
 				Detail: "Adds " + hookjson.EventList(installedHookEvents) +
 					" hook entries that POST " +
 					"the hook payload to the local daemon at " + hookEndpointURL() +

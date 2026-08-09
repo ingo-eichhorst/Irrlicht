@@ -1,8 +1,6 @@
 package codex
 
 import (
-	"fmt"
-
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
@@ -72,8 +70,7 @@ func Agent() agent.Agent {
 				// Derived from installedHookEvents rather than restated — see the
 				// same note on claudecode's hooks permission (#1356). Codex's copy
 				// happened to be accurate; the contract is what keeps it so.
-				Touches: fmt.Sprintf("Writes %d hook entries to ~/.codex/hooks.json",
-					len(installedHookEvents)),
+				Touches: hookjson.EntriesTouched("~/.codex/hooks.json", installedHookEvents),
 				Detail: "Adds " + hookjson.EventList(installedHookEvents) + " hooks to " +
 					"~/.codex/hooks.json (a dedicated file, never config.toml) that " +
 					"POST the hook payload to the local daemon at " + hookEndpointURL() +

@@ -15,6 +15,7 @@ package contracttesting
 
 import (
 	"regexp"
+	"sort"
 	"strconv"
 	"testing"
 
@@ -39,7 +40,14 @@ var entryCountPattern = regexp.MustCompile(`(\d+) hook entr(?:y|ies)`)
 // Single-word event names ("Stop", "Notification") are outside this shape and
 // are covered by the session.AllHookEvents arm instead. The two overlap, and
 // between them they cover every name either source knows.
-var eventShapedToken = regexp.MustCompile(`\b[A-Z][a-z]+(?:[A-Z][a-z]+)+\b`)
+//
+// Anchored because it is applied to whole words, not scanned across prose.
+var eventShapedToken = regexp.MustCompile(`^[A-Z][a-z]+(?:[A-Z][a-z]+)+$`)
+
+// wordPattern splits consent copy into identifier-shaped words. Deliberately
+// includes digits and underscores so "cli_version" is one word rather than two,
+// which keeps a fragment from being mistaken for an event name.
+var wordPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]*`)
 
 // HookDisclosure wires one adapter's hooks permission into
 // AssertHookDisclosureMatchesInstalled. Installed is the same slice the
@@ -102,10 +110,16 @@ func AssertHookDisclosureMatchesInstalled(t *testing.T, d HookDisclosure) {
 		t.Fatal("HookDisclosure.Installed is empty — pass the installer's event list")
 	}
 	disclosure := perm.Touches + "\n" + perm.Detail
+	// One tokenization serves both the "is this name present" and the "what
+	// event-shaped names are present" questions. Whole-word matching is what
+	// makes the first safe: "PostToolUse" occurs inside "PostToolUseFailure",
+	// so a substring test on copy naming only the latter would read as
+	// disclosing both.
+	named := wordsIn(disclosure)
 
 	t.Run("names_every_installed_event", func(t *testing.T) {
 		for _, event := range d.Installed {
-			if !mentions(disclosure, event) {
+			if !named[event] {
 				t.Errorf("consent copy never names the %q hook, but the installer writes it — "+
 					"an undisclosed write to the user's config (#570)", event)
 			}
@@ -138,23 +152,19 @@ func AssertHookDisclosureMatchesInstalled(t *testing.T, d HookDisclosure) {
 		for _, term := range d.NonEventTerms {
 			allowed[term] = true
 		}
-		// Two candidate sources, deliberately overlapping: the names the
-		// domain models (which includes single-word ones), and every
-		// event-shaped token actually present in the copy (which reaches
-		// upstream events irrlicht has no constant for).
-		for _, event := range session.AllHookEvents {
-			if installed[event] || allowed[event] || !mentions(disclosure, event) {
+		// The two candidate sources overlap (every multi-word modelled name is
+		// in both), so they are merged before reporting: one over-promise in
+		// the copy should produce one failure line, not two. The contract's
+		// whole value is the message someone reads at 2am.
+		reported := map[string]bool{}
+		for _, name := range append(uninstalledNamesIn(named), eventShapedNamesIn(named)...) {
+			if installed[name] || allowed[name] || reported[name] {
 				continue
 			}
-			t.Errorf("consent copy names the %q hook, which the installer does not write — "+
-				"the disclosure promises more than it does", event)
-		}
-		for _, token := range eventShapedToken.FindAllString(disclosure, -1) {
-			if installed[token] || allowed[token] {
-				continue
-			}
+			reported[name] = true
 			t.Errorf("consent copy names %q, which reads as a hook event but the installer "+
-				"does not write it — install it, reword the copy, or list it in NonEventTerms", token)
+				"does not write it — the disclosure promises more than it does; install it, "+
+				"reword the copy, or list it in NonEventTerms", name)
 		}
 	})
 }
@@ -169,9 +179,38 @@ func findPermission(a agent.Agent, key string) (agent.Permission, bool) {
 	return agent.Permission{}, false
 }
 
-// mentions reports whether text names event as a whole word. Substring
-// matching would not do: "PostToolUse" occurs inside "PostToolUseFailure", so
-// copy that named only the latter would read as disclosing both.
-func mentions(text, event string) bool {
-	return regexp.MustCompile(`\b` + regexp.QuoteMeta(event) + `\b`).MatchString(text)
+// wordsIn returns the set of whole words in text. Hook event names are single
+// identifiers, so set membership is exactly whole-word matching — and one scan
+// serves every arm instead of a regexp compiled per candidate name.
+func wordsIn(text string) map[string]bool {
+	words := map[string]bool{}
+	for _, w := range wordPattern.FindAllString(text, -1) {
+		words[w] = true
+	}
+	return words
+}
+
+// uninstalledNamesIn returns the modelled hook event names present in words, in
+// the domain's declaration order so failures are deterministic.
+func uninstalledNamesIn(words map[string]bool) []string {
+	var found []string
+	for _, event := range session.AllHookEvents {
+		if words[event] {
+			found = append(found, event)
+		}
+	}
+	return found
+}
+
+// eventShapedNamesIn returns the words that read as hook event names without
+// the domain necessarily modelling them, sorted so failures are deterministic.
+func eventShapedNamesIn(words map[string]bool) []string {
+	var found []string
+	for word := range words {
+		if eventShapedToken.MatchString(word) {
+			found = append(found, word)
+		}
+	}
+	sort.Strings(found)
+	return found
 }
