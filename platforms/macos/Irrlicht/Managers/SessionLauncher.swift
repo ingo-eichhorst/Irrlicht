@@ -51,8 +51,16 @@ enum SessionLauncher {
             // A herdr pane with no host is the expected "nothing is displaying
             // this session" case rather than a capture failure, so name it:
             // otherwise a detached multiplexer session is indistinguishable
-            // from a launcher we simply failed to read (#1350).
-            let herdr = session.launcher?.herdrPaneID.map { "herdr_pane=\($0), no attached client" } ?? "herdr_pane=nil"
+            // from a launcher we simply failed to read (#1350). Only claim
+            // "no attached client" when the host fields really are empty —
+            // a resolved client whose terminal has no registry entry also
+            // lands here, and pointing that at a missing client would send
+            // whoever debugs it looking for the wrong thing.
+            let herdr = session.launcher?.herdrPaneID.map { pane in
+                let unresolved = (session.launcher?.termProgram ?? "").isEmpty
+                    && (session.launcher?.hostBundleID ?? "").isEmpty
+                return "herdr_pane=\(pane), \(unresolved ? "no attached client" : "client resolved but its host has no activator")"
+            } ?? "herdr_pane=nil"
             logger.info("no activator for session \(session.id, privacy: .public) (term_program=\(tp, privacy: .public), host_bundle_id=\(bid, privacy: .public), \(herdr, privacy: .public))")
             return
         }

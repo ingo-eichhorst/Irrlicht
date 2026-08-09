@@ -168,3 +168,22 @@ func TestLauncher_AdoptHostIdentity_KeepsOwnTTYWhenClientHasNone(t *testing.T) {
 		t.Errorf("TermProgram: want ghostty, got %q", pane.TermProgram)
 	}
 }
+
+// TestLauncher_AdoptHostIdentity_TTYlessAgentStaysTTYless is the other half of
+// the TTY guard, and the one the first cut of #1350 got wrong: a background
+// agent detached into a pool inherits the pane's herdr env but genuinely has no
+// controlling terminal. Handing it the client's tty would make
+// BackgroundAgent.Detached compute false and hide the "detached" badge #744
+// exists to show — for an agent with no window the user can ever reach.
+func TestLauncher_AdoptHostIdentity_TTYlessAgentStaysTTYless(t *testing.T) {
+	detachedAgent := &Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/cfg/herdr/herdr.sock"}
+	detachedAgent.AdoptHostIdentity(&Launcher{TermProgram: "iTerm.app", TTY: "/dev/ttys012"})
+	if detachedAgent.TTY != "" {
+		t.Errorf("an agent with no controlling terminal must not adopt the client's: got %q", detachedAgent.TTY)
+	}
+	// The rest of the host identity is still adopted — the window exists even
+	// though this process has no terminal of its own.
+	if detachedAgent.TermProgram != "iTerm.app" {
+		t.Errorf("TermProgram: want iTerm.app, got %q", detachedAgent.TermProgram)
+	}
+}

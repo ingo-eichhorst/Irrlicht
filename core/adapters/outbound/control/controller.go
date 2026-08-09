@@ -191,10 +191,16 @@ var cliBackends = map[backend]cliBackend{
 // which the daemon delegates to the macOS app. A session in tmux *inside*
 // iTerm resolves to tmux, because tmux owns the pty.
 //
-// herdr is checked before tmux despite that innermost-owns-the-pty rule: the
-// fields are mutually exclusive by construction, since ReadLauncherEnv gives a
-// herdr pane no other identity, so the order only matters as a safe default if
-// some future capture path populates both (#1348).
+// herdr is checked before tmux despite that innermost-owns-the-pty rule, and
+// that ordering is now load-bearing rather than merely a safe default. It used
+// to be unreachable — ReadLauncherEnv gave a herdr pane no other identity at
+// all — but since #1350 a herdr launcher carries the *client's* host identity,
+// and a client running inside tmux contributes real TmuxPane/TmuxSocket
+// fields. Those describe the window displaying the pane, not the pane, so
+// scripting them would type into the herdr TUI instead of the agent: exactly
+// the #1348 misroute, arriving by a different route. Reordering these two
+// checks reintroduces it. TestResolveBackend_HerdrWinsOverClientTmux is the
+// lock.
 func resolveBackend(l *session.Launcher) backend {
 	if l == nil {
 		return backendNone

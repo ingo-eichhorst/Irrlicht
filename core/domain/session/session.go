@@ -99,7 +99,7 @@ type Launcher struct {
 	TmuxPane       string `json:"tmux_pane,omitempty"`        // $TMUX_PANE
 	TmuxSocket     string `json:"tmux_socket,omitempty"`      // first `,`-field of $TMUX
 	VSCodePID      int    `json:"vscode_pid,omitempty"`       // $VSCODE_PID (vscode/cursor/windsurf)
-	TTY            string `json:"tty,omitempty"`              // controlling TTY of the agent process, e.g. "/dev/ttys021" — Terminal.app AppleScript matches tabs by this
+	TTY            string `json:"tty,omitempty"`              // controlling TTY, e.g. "/dev/ttys021" — Terminal.app AppleScript matches tabs by this. The agent process's own, except on a herdr session with a client attached, where it is the client's: that is the tab actually displaying the pane (#1350)
 	KittyListenOn  string `json:"kitty_listen_on,omitempty"`  // $KITTY_LISTEN_ON — kitty remote-control socket path
 	KittyWindowID  string `json:"kitty_window_id,omitempty"`  // $KITTY_WINDOW_ID — kitty window identifier
 	KittyPID       int    `json:"kitty_pid,omitempty"`        // $KITTY_PID — kitty.app process id (lets the activator target this specific instance when multiple kitties run)
@@ -159,10 +159,15 @@ func (l *Launcher) AdoptHostIdentity(from *Launcher) bool {
 	l.KittyWindowID = from.KittyWindowID
 	l.KittyPID = from.KittyPID
 	l.HostBundleID = from.HostBundleID
-	// Only when the client actually has one: a client resolved without a
-	// controlling tty must not erase the pane's own, which is what
-	// BackgroundAgent.Detached is computed from (#744).
-	if from.TTY != "" {
+	// Both sides must have one, and the guard is symmetric on purpose:
+	// BackgroundAgent.Detached is computed from this field (#744), so a client
+	// resolved without a controlling tty must not erase the pane's own — and,
+	// in the other direction, an agent that genuinely has no controlling
+	// terminal (a background agent detached into a pool, which inherits the
+	// pane's herdr env) must not be handed the client's tty and stop looking
+	// detached. The client's tty describes the client's window, not a terminal
+	// this process has.
+	if l.TTY != "" && from.TTY != "" {
 		l.TTY = from.TTY
 	}
 	return *l != before

@@ -631,3 +631,41 @@ func TestHerdrClientLogPath(t *testing.T) {
 		}
 	}
 }
+
+// TestParseHerdrClientWriters covers the FD-column rule: "holds the client log
+// open" is not the predicate, "holds it open for writing" is. A read-only
+// holder — a developer running `tail -f` on the log to debug herdr — is not a
+// client, and adopting its terminal as the herdr host would be the #1348
+// misroute with a new cause. The reader is deliberately given the higher PID
+// here, because the caller sorts descending and would otherwise prefer it.
+func TestParseHerdrClientWriters(t *testing.T) {
+	const out = `COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF   NODE NAME
+herdr     26932 ingo    3w   REG   1,18      372 136170 /cfg/herdr/herdr-client.log
+tail      99999 ingo    3r   REG   1,18      372 136170 /cfg/herdr/herdr-client.log
+herdr     26940 ingo    9u   REG   1,18      372 136170 /cfg/herdr/herdr-client.log
+irrlichd    777 ingo    4w   REG   1,18      372 136170 /cfg/herdr/herdr-client.log`
+
+	got := parseHerdrClientWriters(out, 777)
+	want := map[int]bool{26932: true, 26940: true}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want exactly the writers %v", got, want)
+	}
+	for _, pid := range got {
+		if !want[pid] {
+			t.Errorf("pid %d must not be reported: readers are not clients, and the daemon is not its own client", pid)
+		}
+	}
+}
+
+// TestParseHerdrClientWriters_NoHolders is the detached case as lsof reports
+// it — header only, or nothing at all.
+func TestParseHerdrClientWriters_NoHolders(t *testing.T) {
+	for name, out := range map[string]string{
+		"empty":       "",
+		"header only": "COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF   NODE NAME",
+	} {
+		if got := parseHerdrClientWriters(out, 1); len(got) != 0 {
+			t.Errorf("%s: want no clients, got %v", name, got)
+		}
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -382,6 +383,14 @@ func readProcInfo(pid int) (ppid int, cmd string, err error) {
 // client has no writer on its client log, and one with two clients attached
 // (herdr supports attaching from more than one place) has two.
 //
+// Only *writers* count. "Holds the log open" is not the predicate: `lsof -t`
+// discards the FD column, so it cannot tell a client's `3w` from a
+// `tail -f` reader's `3r` — and a reader is not a client. Left unfiltered, a
+// developer tailing the log to debug herdr would have their own terminal
+// adopted as the host of every session on that server (and, being newer, would
+// sort first), which is precisely the #1348 misroute. Parsing the FD column is
+// the same thing darwinObserver.WriterOf does for the same reason.
+//
 // Ordering answers open question 3 of #1350: the most recently attached client
 // is the window the user most recently chose to view the session in, and PIDs
 // are allocated ascending, so descending PID is "newest first". lsof matches
@@ -394,24 +403,49 @@ func herdrClientPIDs(socketPath string) []int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	// -t prints bare PIDs, one per line, and exits non-zero when no process
-	// holds the file open — the detached case, not an error.
-	out, err := exec.CommandContext(ctx, lsofPath, "-t", logPath).Output()
+	// Default table output, not -t: the FD column is the whole point.
+	// A non-zero exit means no process holds the file open — the detached
+	// case, not an error.
+	out, err := exec.CommandContext(ctx, lsofPath, logPath).Output()
 	if err != nil {
 		return nil
 	}
-	self := os.Getpid()
-	var pids []int
-	for _, line := range strings.Fields(string(out)) {
-		pid, convErr := strconv.Atoi(line)
-		if convErr != nil || pid <= 0 || pid == self {
-			continue
-		}
-		pids = append(pids, pid)
-	}
+	pids := parseHerdrClientWriters(string(out), os.Getpid())
 	sort.Sort(sort.Reverse(sort.IntSlice(pids)))
 	return pids
 }
+
+// parseHerdrClientWriters extracts the writer PIDs from lsof's default table,
+// skipping the header, the daemon itself, and every read-only holder. Split out
+// of herdrClientPIDs so the FD-column rule is testable without a live herdr.
+func parseHerdrClientWriters(out string, self int) []int {
+	var pids []int
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 || fields[0] == "COMMAND" {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[1])
+		if err != nil || pid <= 0 || pid == self {
+			continue
+		}
+		// e.g. "3w", "9u" — a client opens the log for writing. "u" is
+		// read/write, which also qualifies; "3r" does not.
+		if fd := fields[3]; fd != "" {
+			if mode := fd[len(fd)-1]; mode == 'w' || mode == 'u' {
+				pids = append(pids, pid)
+			}
+		}
+	}
+	return pids
+}
+
+// maxHerdrClientCandidates bounds how many attached clients are probed for a
+// resolvable host. Each candidate costs an env read plus an ancestry walk, and
+// ReadLauncherEnv documents a two-second ceiling; attaching more than a handful
+// of clients to one session is not a real workflow, so the cap keeps the
+// contract enforceable rather than aspirational.
+const maxHerdrClientCandidates = 4
 
 // herdrClientLauncher resolves the host-window identity of the herdr session
 // addressed by socketPath, by reading it from the attached client the same way
@@ -426,8 +460,29 @@ func herdrClientPIDs(socketPath string) []int {
 // herdr address; control keeps routing to herdr (resolveBackend requires both
 // Herdr fields and tests them first) rather than to any tmux/kitty identity
 // adopted from the client.
+//
+// Results are memoized briefly because every pane of one herdr server shares a
+// socket, and the startup seed resolves them back to back, synchronously: an
+// lsof scan costs ~0.3s on a quiet machine, so eight panes would otherwise pay
+// eight identical scans before the daemon starts serving.
 func herdrClientLauncher(socketPath string) *session.Launcher {
-	for _, pid := range herdrClientPIDs(socketPath) {
+	if socketPath == "" {
+		return nil
+	}
+	if cached, ok := herdrClientCacheGet(socketPath); ok {
+		return cached
+	}
+	resolved := resolveHerdrClientLauncher(socketPath)
+	herdrClientCachePut(socketPath, resolved)
+	return resolved
+}
+
+func resolveHerdrClientLauncher(socketPath string) *session.Launcher {
+	pids := herdrClientPIDs(socketPath)
+	if len(pids) > maxHerdrClientCandidates {
+		pids = pids[:maxHerdrClientCandidates]
+	}
+	for _, pid := range pids {
 		env, _ := osProc.EnvOf(pid)
 		host := launcherFromEnv(env)
 		if host.HerdrPaneID != "" {
@@ -443,4 +498,42 @@ func herdrClientLauncher(socketPath string) *session.Launcher {
 		return host
 	}
 	return nil
+}
+
+// herdrClientCacheTTL is short enough that attaching a client is picked up by
+// the next session bound after it, and long enough to collapse one startup
+// seed's worth of repeats into a single scan.
+const herdrClientCacheTTL = 5 * time.Second
+
+type herdrClientCacheEntry struct {
+	launcher *session.Launcher
+	at       time.Time
+}
+
+var herdrClientCache = struct {
+	sync.Mutex
+	entries map[string]herdrClientCacheEntry
+}{entries: map[string]herdrClientCacheEntry{}}
+
+// herdrClientCacheGet returns a copy of the cached identity for socketPath, so
+// a caller mutating what it gets back cannot corrupt the entry for the next
+// pane of the same server. ok is false once the entry has aged out.
+func herdrClientCacheGet(socketPath string) (*session.Launcher, bool) {
+	herdrClientCache.Lock()
+	defer herdrClientCache.Unlock()
+	entry, ok := herdrClientCache.entries[socketPath]
+	if !ok || time.Since(entry.at) > herdrClientCacheTTL {
+		return nil, false
+	}
+	if entry.launcher == nil {
+		return nil, true
+	}
+	clone := *entry.launcher
+	return &clone, true
+}
+
+func herdrClientCachePut(socketPath string, l *session.Launcher) {
+	herdrClientCache.Lock()
+	defer herdrClientCache.Unlock()
+	herdrClientCache.entries[socketPath] = herdrClientCacheEntry{launcher: l, at: time.Now()}
 }

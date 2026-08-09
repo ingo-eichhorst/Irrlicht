@@ -46,6 +46,14 @@ struct HerdrActivator: HostActivator {
         // ordering it second costs a redraw, not a wrong window. This is the
         // one place this activator deliberately differs from TmuxActivator,
         // which runs its selection before delegating.
+        //
+        // The guarantee is only as synchronous as `inner`. When the herdr
+        // client is itself inside tmux, `inner` is TmuxActivator, which returns
+        // immediately and does its own raise on a background queue — so that
+        // composed path inherits tmux's existing async raise and this ordering
+        // buys nothing. Fixing it means changing TmuxActivator's ordering for
+        // every tmux user, which is out of scope here; herdr-in-tmux is the
+        // rare nesting, and the plain path is the one this protects.
         let activated = inner.activate(session)
 
         DispatchQueue.global(qos: .userInitiated).async {
