@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"irrlicht/core/domain/permission"
 	"irrlicht/core/pkg/capacity"
 	"irrlicht/core/pkg/daemonaddr"
+	"irrlicht/core/pkg/hookbeacon"
 	"irrlicht/core/ports/outbound"
 )
 
@@ -57,7 +59,13 @@ func (l lazyControl) Interrupt(id string) error {
 const envUIDir = "IRRLICHT_UI_DIR"
 
 func hasFlag(name string) bool {
-	for _, arg := range os.Args[1:] {
+	return hasFlagIn(os.Args[1:], name)
+}
+
+// hasFlagIn is hasFlag over an explicit argument list, so selectAction is a pure
+// function of argv and its ORDER can be tested without building a binary.
+func hasFlagIn(args []string, name string) bool {
+	for _, arg := range args {
 		if arg == name {
 			return true
 		}
@@ -65,30 +73,106 @@ func hasFlag(name string) bool {
 	return false
 }
 
+// cliAction is what one irrlichd command line selects.
+type cliAction int
+
+const (
+	actionBeacon cliAction = iota
+	actionVersion
+	actionUninstallHooks
+	actionPrintHookConfigs
+	actionUninstallTaskEta
+	actionDiagnose
+	actionUnknownSubcommand
+	actionRunDaemon
+)
+
+// selectAction resolves a command line to the one thing irrlichd will do.
+//
+// The order is part of the contract, not an implementation detail, and two
+// positions in it are load-bearing:
+//
+//   - The beacon is FIRST, ahead of --version. Every installed beacon command
+//     line ends in --version as a guard against an older irrlichd starting a
+//     daemon instead of posting a hook (see hookbeacon.LegacyGuardToken). Moving
+//     the version check back in front would turn every installed beacon into a
+//     version banner — silently, since the beacon is not supposed to say
+//     anything on a healthy path either.
+//   - actionUnknownSubcommand is LAST, and it only fires on a positional token.
+//     Unknown FLAGS still fall through to the daemon, which is the behaviour
+//     every irrlichd has had; narrowing the change to positionals keeps it from
+//     touching any existing invocation while still closing the fall-through that
+//     makes a beacon-shaped command line start a daemon on a future binary that
+//     renames the verb.
+func selectAction(args []string) cliAction {
+	switch {
+	case hookbeacon.IsInvocation(args):
+		return actionBeacon
+	case hasFlagIn(args, "--version"), hasFlagIn(args, "-v"):
+		return actionVersion
+	case hasFlagIn(args, "--uninstall-hooks"):
+		return actionUninstallHooks
+	case hasFlagIn(args, "--print-hook-configs"):
+		return actionPrintHookConfigs
+	case hasFlagIn(args, "--uninstall-task-eta"):
+		return actionUninstallTaskEta
+	case hasFlagIn(args, "--diagnose"):
+		return actionDiagnose
+	}
+	if _, ok := firstPositional(args); ok {
+		return actionUnknownSubcommand
+	}
+	return actionRunDaemon
+}
+
+// firstPositional returns the first argument that is not flag-shaped.
+func firstPositional(args []string) (string, bool) {
+	for _, arg := range args {
+		if arg == "" || strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return arg, true
+	}
+	return "", false
+}
+
 func main() {
-	if hasFlag("--version") || hasFlag("-v") {
+	switch selectAction(os.Args[1:]) {
+	case actionBeacon:
+		// Post always returns 0 — that contract is the whole of #1373; see the
+		// hookbeacon package doc for what a non-zero exit does to a tool call.
+		os.Exit(hookbeacon.Post(hookbeacon.Options{
+			Args:   os.Args[2:],
+			Stdin:  os.Stdin,
+			Stderr: os.Stderr,
+		}))
+	case actionVersion:
 		fmt.Printf("irrlichd version %s\n", Version)
 		fmt.Printf("Built with %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		os.Exit(0)
-	}
-	if hasFlag("--uninstall-hooks") {
+	case actionUninstallHooks:
 		uninstallHooks()
 		os.Exit(0)
-	}
-	if hasFlag("--print-hook-configs") {
+	case actionPrintHookConfigs:
 		if err := printHookConfigs(os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		os.Exit(0)
-	}
-	if hasFlag("--uninstall-task-eta") {
+	case actionUninstallTaskEta:
 		uninstallTaskEtaBlocks()
 		os.Exit(0)
-	}
-	if hasFlag("--diagnose") {
+	case actionDiagnose:
 		runDiagnose()
 		os.Exit(0)
+	case actionUnknownSubcommand:
+		// stderr, never stdout, and the message is the only output: if this is
+		// ever reached by a hook-shaped invocation on a future binary that
+		// renamed the verb, an empty stdout is what keeps a non-zero exit from
+		// reading as a "deny" decision to a fail-closed pre-tool hook.
+		name, _ := firstPositional(os.Args[1:])
+		fmt.Fprintf(os.Stderr, "irrlichd: unknown subcommand %q\n", name)
+		os.Exit(2)
 	}
 	runDaemon()
 }
