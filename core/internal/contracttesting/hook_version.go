@@ -142,26 +142,47 @@ func assertFloorRefusesOlder(t *testing.T, gate *agent.VersionGate) {
 		t.Errorf("gate refuses its own floor %s — the comparison is exclusive where it "+
 			"should be inclusive", gate.Min)
 	}
-	older := justBelow(floor)
-	if older == floor {
-		return // a 0.0.0 floor has no predecessor to refuse
+	// Each field decremented independently rather than one synthetic
+	// predecessor: a single "just below" value like 0.99.99 exercises only the
+	// borrow path, so a comparison that is correct there and off by one at the
+	// major boundary would still pass. These are the three boundaries a
+	// field-wise comparison can get wrong.
+	for _, older := range predecessors(floor) {
+		allowed, why := gate.Permits(older.String())
+		if allowed {
+			t.Errorf("gate permits %s, below the declared floor %s", older, gate.Min)
+			continue
+		}
+		// The refusal is the only thing the user ever sees about it (the daemon
+		// log today, #1362's wizard surfacing once PR #1379 lands), so an empty
+		// or version-free reason is a silent skip wearing an error's clothes —
+		// the exact behaviour #1365 filed against Codex.
+		if why == "" {
+			t.Errorf("gate refuses %s without a reason; the refusal is what the user is shown", older)
+			continue
+		}
+		if !strings.Contains(why, older.String()) || !strings.Contains(why, gate.Min) {
+			t.Errorf("refusal %q names neither the installed version %s nor the required %s; "+
+				"a user cannot act on it", why, older, gate.Min)
+		}
 	}
-	allowed, why := gate.Permits(older.String())
-	if allowed {
-		t.Errorf("gate permits %s, below the declared floor %s", older, gate.Min)
-		return
+}
+
+// predecessors returns every version reachable by decrementing exactly one
+// field of v, skipping fields already at zero (which have no predecessor at
+// that position).
+func predecessors(v cliversion.Version) []cliversion.Version {
+	var out []cliversion.Version
+	if v.Patch > 0 {
+		out = append(out, cliversion.Version{Major: v.Major, Minor: v.Minor, Patch: v.Patch - 1})
 	}
-	// The refusal is the only thing the user ever sees about it (via the
-	// daemon log today, #1362's wizard surfacing once PR #1379 lands), so an
-	// empty or version-free reason is a silent skip wearing an error's clothes
-	// — the exact behaviour #1365 filed against Codex.
-	if why == "" {
-		t.Error("gate refuses without a reason; the refusal is what the user is shown")
+	if v.Minor > 0 {
+		out = append(out, cliversion.Version{Major: v.Major, Minor: v.Minor - 1, Patch: v.Patch})
 	}
-	if !strings.Contains(why, older.String()) || !strings.Contains(why, gate.Min) {
-		t.Errorf("refusal %q names neither the installed version %s nor the required %s; "+
-			"a user cannot act on it", why, older, gate.Min)
+	if v.Major > 0 {
+		out = append(out, cliversion.Version{Major: v.Major - 1, Minor: v.Minor, Patch: v.Patch})
 	}
+	return out
 }
 
 // assertUnknownFailsOpen pins the direction chosen in cliversion.AtLeast. It is
@@ -177,20 +198,5 @@ func assertUnknownFailsOpen(t *testing.T, gate *agent.VersionGate) {
 				"not an old one, and failing closed here disables hooks for anyone whose "+
 				"CLI the daemon cannot probe", unknown, why)
 		}
-	}
-}
-
-// justBelow returns the version one patch level below v, borrowing across
-// minor and major so a floor of x.y.0 still has a representable predecessor.
-func justBelow(v cliversion.Version) cliversion.Version {
-	switch {
-	case v.Patch > 0:
-		return cliversion.Version{Major: v.Major, Minor: v.Minor, Patch: v.Patch - 1}
-	case v.Minor > 0:
-		return cliversion.Version{Major: v.Major, Minor: v.Minor - 1, Patch: 99}
-	case v.Major > 0:
-		return cliversion.Version{Major: v.Major - 1, Minor: 99, Patch: 99}
-	default:
-		return v // 0.0.0 has no predecessor; assertFloorRefusesOlder tolerates it
 	}
 }

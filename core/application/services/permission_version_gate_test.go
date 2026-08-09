@@ -1,10 +1,18 @@
 package services
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	// Importing an adapter from the services package is confined to this test
+	// file and is the point of the composition test below: it is the only place
+	// the real declaration and the real enforcement meet. Test-only, so it does
+	// not affect the hexagonal import direction core/architecture_test.go
+	// enforces (that walks non-test package imports).
+	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
 )
@@ -198,5 +206,58 @@ func TestHookVersionGate_ProbeFailureInstallsAndSaysSo(t *testing.T) {
 	if len(log.infos) == 0 {
 		t.Error("a probe that could not run left no trace; an unchecked gate must not be " +
 			"indistinguishable from a passed one")
+	}
+}
+
+// TestHookVersionGate_RealCodexDeclarationRefusesOldCLI is the composition
+// test: the REAL adapter declaration driven through the REAL service, asserting
+// nothing lands on disk. Every other test here mocks one side or the other —
+// the adapter tests call gate.Permits directly, and the tests above use a
+// synthetic permission — so without this, a wiring regression between the two
+// (the service reading the wrong field, an adapter dropping its Version block)
+// would leave every test green.
+//
+// It replaces the end-to-end coverage that codex's TestApplyCodexHooks_VersionGate
+// had before #1365 moved the gate out of the adapter.
+func TestHookVersionGate_RealCodexDeclarationRefusesOldCLI(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	sessions := filepath.Join(home, "sessions")
+	if err := os.MkdirAll(sessions, 0o755); err != nil {
+		t.Fatalf("mkdir sessions: %v", err)
+	}
+	meta := `{"type":"session_meta","payload":{"id":"s1","cli_version":"0.100.0"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(sessions, "s1.jsonl"), []byte(meta), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	var hooks agent.Permission
+	for _, p := range codex.Agent().Permissions {
+		if p.Hooks != nil {
+			hooks = p
+		}
+	}
+	if hooks.Key == "" {
+		t.Fatal("codex declares no hooks permission")
+	}
+	if len(hooks.Hooks.Version.Probe) == 0 {
+		t.Fatal("codex declares no probe; the line below would be hiding its absence")
+	}
+	// Pin the version to the passive source. Left alone, the stale-transcript
+	// path would confirm against the real `codex` on the developer's machine
+	// (shouldConfirmByProbe, and correctly so — it is newer than 0.100.0), which
+	// makes the outcome depend on what happens to be installed. Everything else
+	// here is the real declaration: floor, Observed, ConfigPath, Apply.
+	hooks.Hooks.Version.Probe = nil
+
+	svc, log := newGateService()
+	svc.runClosureEffect(pendingEffect{"codex", hooks, permission.StateGranted})
+
+	if _, err := os.Stat(filepath.Join(home, "hooks.json")); !os.IsNotExist(err) {
+		t.Errorf("hooks.json was written under %s for a Codex reporting 0.100.0 — "+
+			"the real declaration and the real service did not compose into a refusal", home)
+	}
+	if !log.errorMentioning("0.100.0") {
+		t.Errorf("no logged reason naming the installed version; errors were %v", log.errors)
 	}
 }

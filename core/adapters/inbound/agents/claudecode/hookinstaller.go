@@ -6,8 +6,12 @@
 package claudecode
 
 import (
+	"bufio"
+	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/pkg/daemonaddr"
@@ -260,4 +264,106 @@ func hookEntryIsCanonical(hook map[string]interface{}) bool {
 	t, _ := hook["type"].(string)
 	u, _ := hook["url"].(string)
 	return t == "http" && u == hookEndpointURL()
+}
+
+// maxVersionScanLines bounds how far into a transcript newestObservedCLIVersion
+// reads looking for the version stamp. Claude Code puts it on every user and
+// assistant line, so it is found within the first few; the cap is there so a
+// multi-megabyte transcript cannot turn a consent click into a long read.
+const maxVersionScanLines = 200
+
+// newestObservedCLIVersion returns the Claude Code version stamped on the most
+// recently modified transcript, or "" if none can be read.
+//
+// This is the passive half of the #1365 gate, and without it the gate would be
+// decorative for this adapter. The declared fallback is `claude --version`, but
+// the production daemon is launched by Irrlicht.app and inherits a LaunchServices
+// PATH of /usr/bin:/bin:/usr/sbin:/sbin, while the official installer puts the
+// binary in ~/.local/bin — so the probe misses, the version reads as unknown,
+// and unknown fails open. Every install would take the fail-open branch and no
+// version would ever actually be checked. The transcripts are already on disk
+// and already parsed for this exact field (parser.go reads raw["version"] into
+// AgentVersion), so reading it here costs no process and no PATH.
+//
+// It resolves the ABSOLUTE transcripts dir rather than using transcriptsDir()
+// directly: that returns a $HOME-relative path when CLAUDE_CONFIG_DIR is unset
+// (expansion happens downstream in fswatcher), which would make this walk run
+// against the daemon's CWD and always find nothing — the same trap codex's
+// newestObservedCLIVersion documents.
+//
+// A stale answer is tolerable by construction: the version is the one that
+// wrote the newest transcript, so it can only lag the installed CLI downward,
+// and PermissionService re-confirms with the probe before acting on any
+// "too old" reading (shouldConfirmByProbe). So a stale value costs at most one
+// process, never a false refusal.
+func newestObservedCLIVersion() string {
+	dir, err := absTranscriptsDir()
+	if err != nil {
+		return ""
+	}
+	var newestPath string
+	var newestMod int64
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if mod := info.ModTime().UnixNano(); mod > newestMod {
+			newestMod = mod
+			newestPath = path
+		}
+		return nil
+	})
+	if newestPath == "" {
+		return ""
+	}
+	return versionInTranscript(newestPath)
+}
+
+// versionInTranscript returns the first "version" string found in the file.
+func versionInTranscript(path string) string {
+	// Plain ".." check: the path is built by WalkDir from a root this package
+	// resolved itself, but this is the spelling CodeQL's go/path-injection
+	// query recognizes as a sanitizer (same reasoning as codex's
+	// sessionMetaPayload).
+	if strings.Contains(path, "..") {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	// Transcript lines carry whole tool results and routinely exceed
+	// Scanner's small default token limit.
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	for i := 0; i < maxVersionScanLines && scanner.Scan(); i++ {
+		var record map[string]interface{}
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			continue
+		}
+		if v, ok := record["version"].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// absTranscriptsDir resolves the transcripts directory to an absolute path,
+// honoring the same CLAUDE_CONFIG_DIR override the watcher honors.
+func absTranscriptsDir() (string, error) {
+	dir := transcriptsDir()
+	if filepath.IsAbs(dir) {
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, dir), nil
 }

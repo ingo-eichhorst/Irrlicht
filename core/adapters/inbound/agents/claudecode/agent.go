@@ -93,15 +93,17 @@ func Agent() agent.Agent {
 					ConfigPath: claudeSettingsPath,
 					Uninstall:  UninstallHooks,
 					// Declared, not implemented — PermissionService enforces it
-					// (#1365). No Observed source: Claude Code records its version
-					// per transcript entry, but reading it would mean walking
-					// ~/.claude/projects at grant time, and unlike Codex's single
-					// session header there is no cheap newest-session read. The
-					// probe is honest and bounded; if it cannot run, the install
-					// proceeds (an unreadable version is not an old one).
+					// (#1365). Observed reads the version Claude Code stamps on
+					// every transcript line, which is what makes this gate real
+					// rather than decorative: the production daemon inherits a
+					// LaunchServices PATH that does not include ~/.local/bin, so
+					// the probe alone would miss and every install would take the
+					// fail-open branch. The probe stays as the fallback and as the
+					// authority whenever the passive reading says "too old".
 					Version: &agent.VersionGate{
-						Min:   minCLIVersion,
-						Probe: []string{"claude", "--version"},
+						Min:      minCLIVersion,
+						Probe:    []string{"claude", "--version"},
+						Observed: newestObservedCLIVersion,
 					},
 				},
 			},

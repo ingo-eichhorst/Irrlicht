@@ -17,6 +17,7 @@ import (
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/config"
 	"irrlicht/core/domain/permission"
+	"irrlicht/core/pkg/cliprobe"
 	"irrlicht/core/pkg/cliversion"
 	"irrlicht/core/ports/inbound"
 	"irrlicht/core/ports/outbound"
@@ -538,23 +539,70 @@ func (s *PermissionService) hookVersionRefusal(p agent.Permission) error {
 	if gate.Observed != nil {
 		installed = gate.Observed()
 	}
-	if installed == "" && len(gate.Probe) > 0 {
-		probed, err := cliversion.Probe(context.Background(), gate.Probe)
+	if s.shouldConfirmByProbe(gate, installed) {
+		probed, err := cliprobe.Probe(s.effectContext(), gate.Probe)
 		if err != nil {
-			// Unknown version: fail open, but say so. A probe that cannot run
-			// is the state most likely to be misread later as "the gate
+			// Unknown version: fail open, but say so. A probe that could not
+			// run is the state most likely to be misread later as "the gate
 			// checked and approved".
 			s.log.LogInfo("permissions", "", fmt.Sprintf(
 				"%s: version probe failed (%v); installing anyway — an unreadable version is not an old one", p.Key, err))
-			return nil
+		} else {
+			installed = probed
 		}
-		installed = probed
 	}
 
 	if allowed, why := gate.Permits(installed); !allowed {
 		return errors.New(why)
 	}
 	return nil
+}
+
+// shouldConfirmByProbe decides whether to spend a process on confirming the
+// version. It returns false only for the case that needs no help: a passive
+// signal that parses and already clears the floor.
+//
+// The two cases it does probe are the ones where the passive answer cannot be
+// relied on:
+//
+//   - It is unknown or unparseable. An adapter with no Observed source at all
+//     (Claude Code) is always here, and so is one whose source returned
+//     something it could not read — falling open without asking the binary
+//     that could have answered would make the gate decorative.
+//   - It parses and says "too old". A passive signal is the LAST-RUN version,
+//     not the installed one, so it can only be stale downward: a user who
+//     upgrades and grants before starting a new session would otherwise be
+//     refused on a version they no longer run, with nothing installed and the
+//     permission still showing green. A false refusal is the one direction
+//     this gate must never produce quietly, so it is worth a process to be
+//     sure.
+func (s *PermissionService) shouldConfirmByProbe(gate *agent.VersionGate, installed string) bool {
+	if len(gate.Probe) == 0 {
+		return false
+	}
+	if _, parsed := cliversion.Parse(installed); !parsed {
+		return true
+	}
+	allowed, _ := gate.Permits(installed)
+	return !allowed
+}
+
+// effectContext is the daemon-lifetime context effects run under, so a
+// shutdown mid-probe cancels it rather than leaving a process to time out.
+// Start sets parent; a service constructed without one (tests) falls back to
+// Background.
+//
+// Takes s.mu because Start writes parent under it. Callers hold effectMu,
+// never mu, so this respects the documented lock order (effectMu before mu)
+// — and it is released before the probe runs, so no exec ever happens with
+// the hot Granted() gate's mutex held.
+func (s *PermissionService) effectContext() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.parent != nil {
+		return s.parent
+	}
+	return context.Background()
 }
 
 // startWatching constructs the agent's watchers fresh, registers their

@@ -1,10 +1,6 @@
 package cliversion
 
-import (
-	"context"
-	"testing"
-	"time"
-)
+import "testing"
 
 func TestParse(t *testing.T) {
 	cases := []struct {
@@ -94,84 +90,5 @@ func TestAtLeast(t *testing.T) {
 			t.Errorf("AtLeast(%q, %q) = (ok=%v, known=%v), want (ok=%v, known=%v)",
 				tc.installed, tc.minimum, ok, known, tc.wantOK, tc.wantKnown)
 		}
-	}
-}
-
-func TestProbe_ReadsVersionFromStdout(t *testing.T) {
-	got, err := Probe(context.Background(), []string{"sh", "-c", `echo "2.1.226 (Claude Code)"`})
-	if err != nil {
-		t.Fatalf("Probe: %v", err)
-	}
-	if got != "2.1.226" {
-		t.Errorf("Probe = %q, want %q", got, "2.1.226")
-	}
-}
-
-// TestProbe_MissingBinaryFailsImmediately pins the most common real-world
-// case, not an exotic one: the daemon runs under launchd with a minimal PATH,
-// so an agent CLI installed in ~/.local/bin is simply not findable. That must
-// cost nothing and must not wait out ProbeTimeout.
-func TestProbe_MissingBinaryFailsImmediately(t *testing.T) {
-	start := time.Now()
-	_, err := Probe(context.Background(), []string{"irrlicht-no-such-binary-1365"})
-	elapsed := time.Since(start)
-
-	if err == nil {
-		t.Fatal("Probe of a nonexistent binary returned no error")
-	}
-	if elapsed > ProbeTimeout/2 {
-		t.Errorf("Probe took %v for a missing binary; PATH lookup should fail before "+
-			"anything is spawned, well inside the %v budget", elapsed, ProbeTimeout)
-	}
-}
-
-func TestProbe_HungBinaryIsBounded(t *testing.T) {
-	start := time.Now()
-	_, err := Probe(context.Background(), []string{"sh", "-c", "sleep 30"})
-	elapsed := time.Since(start)
-
-	if err == nil {
-		t.Fatal("Probe of a hung binary returned no error")
-	}
-	if elapsed > 3*ProbeTimeout {
-		t.Errorf("Probe took %v to give up on a hung binary; the consent path cannot "+
-			"wait that long", elapsed)
-	}
-}
-
-// TestProbe_OrphanHoldingStdoutIsBounded is the failure mode ProbeTimeout alone
-// does not cover: the CLI exits promptly but leaves a background child holding
-// the stdout pipe, so exec waits for EOF that never comes. Without
-// cmd.WaitDelay this test hangs for 30s rather than failing.
-func TestProbe_OrphanHoldingStdoutIsBounded(t *testing.T) {
-	start := time.Now()
-	_, err := Probe(context.Background(), []string{"sh", "-c", "sleep 30 & echo no-version-here"})
-	elapsed := time.Since(start)
-
-	if err == nil {
-		t.Fatal("Probe returned no error for output carrying no version")
-	}
-	if elapsed > 3*ProbeTimeout {
-		t.Errorf("Probe took %v when a grandchild held stdout open; WaitDelay is supposed "+
-			"to bound exactly this", elapsed)
-	}
-}
-
-func TestProbe_UnparseableOutputIsAnError(t *testing.T) {
-	if _, err := Probe(context.Background(), []string{"sh", "-c", "echo hello there"}); err == nil {
-		t.Error("Probe accepted output containing no version")
-	}
-}
-
-func TestProbe_NonZeroExitIsAnError(t *testing.T) {
-	if _, err := Probe(context.Background(), []string{"sh", "-c", "echo 1.2.3; exit 3"}); err == nil {
-		t.Error("Probe ignored a non-zero exit status; a CLI that failed is not a CLI " +
-			"whose version we read")
-	}
-}
-
-func TestProbe_EmptyArgv(t *testing.T) {
-	if _, err := Probe(context.Background(), nil); err == nil {
-		t.Error("Probe accepted an empty command")
 	}
 }

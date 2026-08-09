@@ -185,8 +185,11 @@ func (g *VersionGate) Permits(installed string) (bool, string) {
 	if g == nil || g.Min == "" {
 		return true, ""
 	}
-	ok, known := cliversion.AtLeast(installed, g.Min)
-	if ok || !known {
+	// The unknown-fails-open decision is AtLeast's and is encoded there once:
+	// it already reports ok=true for anything it could not read. Re-deriving it
+	// here from `known` would mean two places decide the direction and the
+	// contract arm that claims to pin it would only be pinning this copy.
+	if ok, _ := cliversion.AtLeast(installed, g.Min); ok {
 		return true, ""
 	}
 	return false, fmt.Sprintf(

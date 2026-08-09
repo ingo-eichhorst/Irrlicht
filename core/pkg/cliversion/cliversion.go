@@ -1,6 +1,7 @@
-// Package cliversion parses, compares and probes upstream agent-CLI version
-// strings — the shared half of issue #1365's declared minimum version per
-// hook-capable adapter.
+// Package cliversion parses and compares upstream agent-CLI version strings —
+// the shared half of issue #1365's declared minimum version per hook-capable
+// adapter. It is deliberately free of process execution so the domain can
+// import it; running a CLI to ask its version lives in core/pkg/cliprobe.
 //
 // It exists because the alternative is the thing #1365 is about: Codex grew a
 // bespoke parseCodexVersion/codexSupportsHooks pair inside its own adapter,
@@ -16,28 +17,10 @@
 package cliversion
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strconv"
-	"strings"
-	"time"
 )
-
-// ProbeTimeout bounds how long a version probe may take. A version check runs
-// on the consent path — the user has just clicked "grant" and is watching —
-// so a CLI that hangs must lose quickly rather than wedge the grant.
-const ProbeTimeout = 2 * time.Second
-
-// probeWaitDelay bounds the extra time Probe waits for the child's output
-// pipes to close after its context expires. Killing the process is not enough
-// on its own: exec waits for stdout to reach EOF, and a grandchild that
-// inherited the pipe holds it open after its parent dies, so a plain
-// CommandContext kill can still block indefinitely. This is the difference
-// between "fails fast" as an intention and as a guarantee.
-const probeWaitDelay = 500 * time.Millisecond
 
 // versionTriple matches a bare major.minor.patch run of digits anywhere in a
 // version banner. Requiring all three fields is deliberate: every agent CLI in
@@ -122,43 +105,4 @@ func AtLeast(installed, minimum string) (ok, known bool) {
 		return true, false
 	}
 	return got.Compare(floor) >= 0, true
-}
-
-// Probe runs argv and returns the first version triple it prints on stdout.
-//
-// All three failure modes an external binary can present — missing, hung,
-// unintelligible — collapse to the same result: an error, which callers turn
-// into "unknown", which AtLeast fails open on.
-//
-//   - Missing binary: exec's PATH lookup fails before anything is spawned, so
-//     this returns immediately rather than after the timeout.
-//   - Hung binary: bounded by ProbeTimeout, and by probeWaitDelay against a
-//     grandchild holding the output pipe open past the kill.
-//   - Unintelligible output: reported as an error here and as unknown by Parse.
-//
-// argv comes from an adapter's compile-time declaration, never from a session,
-// a config file, or anything else an attacker could reach; it is passed to
-// exec as separate arguments with no shell in between.
-func Probe(ctx context.Context, argv []string) (string, error) {
-	if len(argv) == 0 {
-		return "", errors.New("cliversion: no probe command declared")
-	}
-	ctx, cancel := context.WithTimeout(ctx, ProbeTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.WaitDelay = probeWaitDelay
-	// A version probe must never block on a prompt, and must never inherit the
-	// daemon's stdin.
-	cmd.Stdin = nil
-
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("cliversion: probing %q: %w", strings.Join(argv, " "), err)
-	}
-	version, ok := Parse(string(out))
-	if !ok {
-		return "", fmt.Errorf("cliversion: %q printed no recognizable version", strings.Join(argv, " "))
-	}
-	return version.String(), nil
 }
