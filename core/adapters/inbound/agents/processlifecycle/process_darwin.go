@@ -158,11 +158,14 @@ func parseLsofFDs(out string, self int) []lsofFD {
 	var entries []lsofFD
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 4 || fields[0] == "COMMAND" {
+		if len(fields) < 4 || fields[0] == "COMMAND" { // short row, or the header
 			continue
 		}
 		pid, err := strconv.Atoi(fields[1])
-		if err != nil || pid <= 0 || pid == self || fields[3] == "" {
+		if err != nil || pid <= 0 {
+			continue
+		}
+		if pid == self {
 			continue
 		}
 		entries = append(entries, lsofFD{PID: pid, FD: fields[3]})

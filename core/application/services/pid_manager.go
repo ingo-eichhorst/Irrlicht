@@ -1303,6 +1303,23 @@ func applyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fre
 		l.TTY = fresh.TTY
 		updated = true
 	}
+	if applyKittyLauncherBackfill(l, needs, fresh) {
+		updated = true
+	}
+	// fresh was produced by the same reader, so its host fields are already
+	// the attached client's. A still-detached session yields none and this
+	// reports no change rather than writing empties over empties.
+	if needs.herdrHost && l.AdoptHostIdentity(fresh) {
+		updated = true
+	}
+	return updated
+}
+
+// applyKittyLauncherBackfill copies the three kitty fields fresh has that l is
+// missing per needs. Split out of applyLauncherBackfill so that function stays
+// one branch per *kind* of backfill rather than one per field.
+func applyKittyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fresh *session.Launcher) bool {
+	updated := false
 	if needs.kittyPID && fresh.KittyPID != 0 {
 		l.KittyPID = fresh.KittyPID
 		updated = true
@@ -1313,12 +1330,6 @@ func applyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fre
 	}
 	if needs.kittyWindow && fresh.KittyWindowID != "" {
 		l.KittyWindowID = fresh.KittyWindowID
-		updated = true
-	}
-	// fresh was produced by the same reader, so its host fields are already
-	// the attached client's. A still-detached session yields none and this
-	// reports no change rather than writing empties over empties.
-	if needs.herdrHost && l.AdoptHostIdentity(fresh) {
 		updated = true
 	}
 	return updated
