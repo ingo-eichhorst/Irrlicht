@@ -73,9 +73,13 @@ func TestSessionDetector_StaleRefreshExpiresAHookHoldOnAWaitingSession(t *testin
 
 	newHeldWaitingSession(t, repo, "held1")
 
-	// The PermissionRequest hook landed two hours ago; PostToolUse never came.
-	// Two hours is past permissionPromptHoldTimeout with room to spare.
-	det.HoldSignalForTest("held1", session.SignalPermissionPrompt, time.Now().Add(-2*time.Hour))
+	// The PermissionRequest hook landed three days ago; PostToolUse never came.
+	// Deliberately far past any defensible ceiling rather than just past the
+	// current one: this test is about the ticker reaching the session at all,
+	// so retuning permissionPromptHoldTimeout must not be able to break it.
+	// (It could, once: an earlier version held two hours back and started
+	// failing the moment that constant grew to twelve.)
+	det.HoldSignalForTest("held1", session.SignalPermissionPrompt, time.Now().Add(-72*time.Hour))
 
 	det.RunStaleSessionRefreshForTest()
 

@@ -259,6 +259,66 @@ func TestSignalHolds_NormalStalenessIsNotReportedAsAnExpiry(t *testing.T) {
 	}
 }
 
+// TestSignalHolds_HookCeilingsSurviveAnOvernight is a defect test for the
+// ceiling VALUES, and it FAILED at the first cut of them (1h permission,
+// 4h idle).
+//
+// The governing workflow for this repo is an agent left running overnight and
+// reviewed the next morning. A prompt reached at 22:00 must still be
+// advertising itself as waiting when its user looks at 08:00 — ten hours later
+// — because the two hook rows with a ceiling are the ones that say "a human is
+// needed here", and for most of the tools they cover nothing re-derives that
+// once the hold is gone (see permissionPromptHoldTimeout for exactly which).
+//
+// Deliberately expressed as clock times rather than as `< ceiling`: the point
+// is a real interval a real user leaves, not a tautology about the constant.
+// A ceiling retuned below ten hours must break this test, which is the whole
+// reason it does not reference the constants.
+func TestSignalHolds_HookCeilingsSurviveAnOvernight(t *testing.T) {
+	promptAt := time.Date(2026, 8, 2, 22, 0, 0, 0, time.UTC)  // agent blocks at 22:00
+	reviewedAt := time.Date(2026, 8, 3, 8, 0, 0, 0, time.UTC) // user looks at 08:00
+
+	cases := []struct {
+		kind    SignalKind
+		metrics func() *SessionMetrics
+		applied func(*SessionMetrics) bool
+	}{
+		{
+			// ExitPlanMode-shaped: a plan approval, the #307 fast path, which
+			// has no transcript-tier fallback whatsoever.
+			kind:    SignalPermissionPrompt,
+			metrics: func() *SessionMetrics { return &SessionMetrics{LastEventType: "turn_done"} },
+			applied: func(m *SessionMetrics) bool { return m.PermissionPending },
+		},
+		{
+			kind:    SignalIdlePrompt,
+			metrics: func() *SessionMetrics { return &SessionMetrics{LastEventType: "turn_done"} },
+			applied: func(m *SessionMetrics) bool { return m.IdlePromptPending },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			h := NewSignalHolds()
+			h.Hold(holdSID, tc.kind, SignalPayload{}, promptAt)
+
+			m := tc.metrics()
+			h.Overlay(holdSID, m, reviewedAt)
+
+			if !tc.applied(m) {
+				t.Errorf("%q stopped applying somewhere in the %v overnight gap — the session had quietly "+
+					"stopped asking for a human by the time one looked",
+					tc.kind, reviewedAt.Sub(promptAt))
+			}
+			if !h.Held(holdSID, tc.kind) {
+				t.Errorf("%q was dropped during the overnight gap; a ceiling shorter than a night un-flags "+
+					"the session invisibly, which is worse than the pin it replaces",
+					tc.kind)
+			}
+		})
+	}
+}
+
 // TestSignalHolds_PermissionPrompt_MissedReleaseDoesNotPinForever is the #1360
 // defect test, and it FAILED before the ceiling existed.
 //

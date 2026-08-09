@@ -68,46 +68,81 @@ const compactHoldTimeout = 5 * time.Minute
 
 // permissionPromptHoldTimeout bounds the SignalPermissionPrompt hold (#1360).
 //
-// Calibrated against a human, not a machine. Answering a permission prompt
-// takes seconds to a couple of minutes, and the long tail is not deliberation
-// but absence — the user stepped away from the desk. One hour clears a lunch
-// break or an ordinary meeting with room to spare. Past that, "the release was
-// missed" is a better explanation of a still-open prompt than "somebody has
-// been reading this dialog for over an hour".
+// WHICH PROMPTS HAVE A SAFETY NET, AND WHICH DO NOT. This matters more than
+// the number, because expiry means something different for each group. The
+// only transcript-tier signal that can re-derive "a prompt is open" is #488's
+// SignalOpenToolStalled, and it fires solely for the five names
+// isPermissionGatedEditTool matches (edit/write/multiedit/notebookedit/
+// write_file). Against claudecode's installed matcher —
+// "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode"
+// (hookinstaller.go, hookMatcher) — that covers four of nine alternatives:
 //
-// Cutting a genuinely-open prompt short is the lesser error because it is soft
-// and self-correcting from both directions. The session merely stops being
-// pinned and re-classifies from the transcript — where, for the edit-tool
-// case, #488's SignalOpenToolStalled re-derives the very same waiting, because
-// its ripe rule unblocks the moment PermissionPending stops being set. And if
-// the user does eventually answer, the resulting PostToolUse reaches a hold
-// that is already gone, which Release handles as a no-op. The failure being
-// replaced is neither soft nor self-correcting: TierHook forbids every lower
-// tier from retiring this hold, so one missed release pins the session at
-// waiting until the daemon restarts.
-const permissionPromptHoldTimeout = time.Hour
+//   - COVERED (expiry is soft): Write, Edit, MultiEdit, NotebookEdit. If the
+//     tool is still open, SignalOpenToolStalled ripens the moment
+//     PermissionPending stops being set and re-derives the same waiting, one
+//     tier down where anything can still correct it.
+//   - NOT COVERED (expiry is silent): Bash, WebFetch, mcp__.*, AskUserQuestion,
+//     ExitPlanMode. Nothing re-derives the prompt. The session simply stops
+//     reading waiting.
+//
+// The uncovered group is not the marginal one. hookMatcherPreToolUse is
+// exactly "AskUserQuestion|ExitPlanMode" — the #307 fast path, whose entire
+// reason to exist is flipping working→waiting without transcript-flush
+// latency — so the one prompt class with no fallback at all is also the one
+// the fast path was built for. A plan approval and a Bash approval are
+// ordinary, not edge cases.
+//
+// WHY TWELVE HOURS. The ceiling is therefore calibrated against the uncovered
+// group, where being wrong is expensive and invisible: a phantom waiting is
+// visible and the user clears it by looking, but a dropped waiting means the
+// session has stopped advertising that it needs a human and there is no cue to
+// go and check — the precise failure this project exists to prevent. The
+// governing workflow is an agent left running overnight and reviewed the next
+// morning: a session that hits ExitPlanMode at 22:00 must still read waiting
+// at 08:00. Twelve hours spans that with margin while still bounding the pin
+// inside a single day, so a stuck session heals before the following night
+// rather than persisting across two.
+//
+// An hour was the first cut here and it was wrong — justified by the fallback
+// above without checking how far the fallback reaches.
+//
+// The residual is a weekend: a prompt opened Friday night expires before
+// Monday. No finite ceiling covers that, and an effectively infinite one would
+// restore the bug. The hold_expired event this drops (see SignalExpiry) is how
+// that case is told apart from a session that was never pinned.
+//
+// Cutting a real wait short remains the lesser error overall, because it is
+// bounded and diagnosable, whereas the failure being replaced is neither:
+// TierHook forbids every lower tier from retiring this hold, so one missed
+// release pins the session at waiting until the daemon restarts. A late
+// PostToolUse reaching an already-expired hold is a no-op in Release.
+const permissionPromptHoldTimeout = 12 * time.Hour
 
 // idlePromptHoldTimeout bounds the SignalIdlePrompt hold (#1360).
 //
-// Deliberately four times the permission ceiling, because the two conditions
-// have different natural lifetimes. A permission prompt is a modal question
-// somebody is expected to answer now; an idle prompt is a session left sitting
-// at the prompt, and leaving one open across an afternoon is ordinary use
-// rather than a fault. Four hours is past any plausible stepped-away window
-// while still being bounded, so a session abandoned at the end of a day has
-// stopped advertising itself as waiting on its user by the next morning.
+// This row has NO transcript-tier fallback at all — not the partial coverage
+// permissionPromptHoldTimeout describes, none. #488's SignalOpenToolStalled
+// keys off an open edit tool, and an idle prompt is by definition a session
+// with no tool open. So every expiry here is the silent kind: the session
+// stops reading waiting and nothing re-derives it.
 //
-// It is the more generous of the two precisely because it has no fallback to
-// degrade onto: an expired permission prompt hands off to #488's
-// transcript-tier SignalOpenToolStalled, whereas an expired idle prompt simply
-// returns the session to whatever the transcript says — ready, for a finished
-// turn. Cutting a real idle window short therefore costs a genuine
-// waiting → ready downgrade: a session that did want an answer stops asking
-// for one. That is still the lesser error, because it is one badge reading the
-// user corrects by looking, and any later hook for that session re-holds and
-// restores it. The unbounded hold it replaces is correctable by nothing the
-// system can produce.
-const idlePromptHoldTimeout = 4 * time.Hour
+// It therefore takes the same value as the permission ceiling, and for the
+// same governing reason — an agent left overnight must still read waiting when
+// its user looks in the morning. The two constants stay separate rather than
+// collapsing into one because their coverage stories differ (that row is
+// four-ninths covered, this one is not at all), so a future change to either
+// calibration must not silently move the other.
+//
+// Four hours was the first cut and it was too short: an idle prompt reached at
+// 22:00 expired at 02:00 and read ready by breakfast, which is exactly the
+// invisible failure the ceiling is supposed to be worth its cost against.
+//
+// The upside is that this ceiling is rarely the thing that ends the hold. Its
+// staleness rule — IsAgentDone going false — fires on any user reply or tool
+// open, which is a far more reliable release than the permission row's
+// PostToolUse round-trip. The ceiling is a backstop for a transcript that
+// stopped being parsed, not the expected path.
+const idlePromptHoldTimeout = 12 * time.Hour
 
 // stalledEditToolThreshold is how long a permission-gated file-edit tool
 // (Edit/Write/MultiEdit/NotebookEdit) may stay open before it is read as a held

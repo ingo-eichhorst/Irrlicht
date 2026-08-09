@@ -85,6 +85,87 @@ func TestClassify_HookHoldCeilingUnpinsAStuckSession(t *testing.T) {
 	}
 }
 
+// TestClassify_WhatTheUserSeesAfterAPermissionCeilingExpires pins the claim
+// that permissionPromptHoldTimeout's rationale rests on, for both populations
+// it splits the world into. Before this, every test here established only that
+// the ceiling FIRES; none established what a user actually observes afterwards
+// — which is the thing that decides whether an hour or a night is the right
+// number.
+//
+// Neither case is a defect test: both describe behaviour the current code
+// already has. The first is a LOCK on #488's fallback, and it is the assertion
+// that would have caught the original comment's claim that expiry is "soft and
+// self-correcting" across the board. The second is a CHARACTERIZATION of the
+// residual that claim got wrong, written down so it stops being invisible.
+func TestClassify_WhatTheUserSeesAfterAPermissionCeilingExpires(t *testing.T) {
+	// Well past the ceiling, without naming the constant: this asserts the
+	// shape of the outcome, not the tuning.
+	pastAnyCeiling := holdT0.Add(72 * time.Hour)
+
+	t.Run("covered tool: the transcript tier re-derives waiting", func(t *testing.T) {
+		// An Edit prompt — one of the four alternatives of claudecode's
+		// matcher that isPermissionGatedEditTool also matches.
+		holds := session.NewSignalHolds()
+		const sid = "s"
+
+		holds.Hold(sid, session.SignalPermissionPrompt, session.SignalPayload{}, holdT0)
+		// #488's fallback, armed by the detector the moment the tool is seen
+		// open. Arm-once, so its clock starts with the prompt.
+		holds.HoldIfAbsent(sid, session.SignalOpenToolStalled, session.SignalPayload{}, holdT0)
+
+		m := &session.SessionMetrics{
+			LastEventType:     "assistant",
+			HasOpenToolCall:   true,
+			LastOpenToolNames: []string{"Edit"},
+		}
+		holds.Overlay(sid, m, pastAnyCeiling)
+
+		if m.PermissionPending {
+			t.Fatal("precondition: the hook hold must have expired, or this proves nothing about the fallback")
+		}
+		v := ClassifyStateTiered(session.StateWaiting, m)
+		if v.State != session.StateWaiting {
+			t.Errorf("an edit-tool prompt must still read waiting after the hook ceiling expires — "+
+				"SignalOpenToolStalled is the net; got %q", v.State)
+		}
+		if v.Tier != session.TierTranscript {
+			t.Errorf("the re-derived verdict must be attributed to the transcript tier (correctable), got %v", v.Tier)
+		}
+	})
+
+	t.Run("uncovered tool: nothing re-derives it, the session reads ready", func(t *testing.T) {
+		// ExitPlanMode-shaped: the #307 fast path. No tool is open — a plan
+		// approval is not a file edit — so isPermissionGatedEditTool matches
+		// nothing and #488 never arms.
+		//
+		// CHARACTERIZATION, not an endorsement. This is the accepted residual
+		// that sets the ceiling: the session silently stops advertising that a
+		// human is needed, and only the recorded hold_expired event says why.
+		// It is why the constant is calibrated against an overnight rather
+		// than a lunch break, and why shortening it is not a free tuning knob.
+		holds := session.NewSignalHolds()
+		const sid = "s"
+
+		holds.Hold(sid, session.SignalPermissionPrompt, session.SignalPayload{}, holdT0)
+
+		m := &session.SessionMetrics{LastEventType: "turn_done"}
+		holds.Overlay(sid, m, pastAnyCeiling)
+
+		if m.OpenToolStalled {
+			t.Fatal("no edit tool is open, so the #488 fallback must not have armed")
+		}
+		v := ClassifyStateTiered(session.StateWaiting, m)
+		if v.State == session.StateWaiting {
+			t.Fatal("this test documents the residual; if a plan approval now survives its ceiling, " +
+				"the fallback story changed and permissionPromptHoldTimeout's comment must be rewritten")
+		}
+		if v.State != session.StateReady {
+			t.Errorf("expected the uncovered case to fall through to ready, got %q — "+
+				"if this changed, update the rationale it is cited by", v.State)
+		}
+	})
+}
+
 // TestSessionDetector_HoldCeilingExpiryIsLoggedAndRecorded covers #1360 scope
 // item 4: a ceiling that rewrites session state without saying so is a new
 // debugging blind spot rather than a fix.
