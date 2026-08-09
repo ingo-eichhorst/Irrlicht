@@ -184,7 +184,7 @@
       <p>Returns the running daemon's version. Used by the web dashboard's header chip and by client integrations (the upcoming VS Code panel, future relay-served clients) to gate behavior on daemon capabilities.</p>
 
       <pre><code>{
-  "version": "0.5.9"
+  "version": "0.5.10"
 }</code></pre>
 
       <h3>GET /api/v1/agents</h3>
@@ -327,7 +327,7 @@ curl -X POST http://127.0.0.1:7837/api/v1/sessions/52d087d1-.../focus</code></pr
 
       <h3>POST /api/v1/sessions/{id}/input</h3>
 
-      <p>Forwards text into a session's controlling terminal &mdash; the &ldquo;backchannel&rdquo; write path that lets Irrlicht act on an agent, not just observe it. Body: <code>{"data": string}</code>, a plain (JSON-escaped) byte string; control characters travel as JSON <code>\u</code> escapes (e.g. <code>{"data":"hello\r"}</code>). Input is injected as if you typed it, by scripting the terminal backend (tmux/kitty/&hellip;) that owns the session. <strong>Loopback only</strong>, and mutating cross-origin browser requests are rejected (<code>Sec-Fetch-Site</code>). Gated by the backchannel master toggle <em>and</em> the per-adapter <code>control</code> permission &mdash; both must be on.</p>
+      <p>Forwards text into a session's controlling terminal &mdash; the &ldquo;backchannel&rdquo; write path that lets Irrlicht act on an agent, not just observe it. Body: <code>{"data": string}</code>, a plain (JSON-escaped) byte string; control characters travel as JSON <code>\u</code> escapes (e.g. <code>{"data":"hello\r"}</code>). Input is injected as if you typed it, by scripting the terminal backend (tmux/kitty/herdr/&hellip;) that owns the session. <strong>Loopback only</strong>, and mutating cross-origin browser requests are rejected (<code>Sec-Fetch-Site</code>). Gated by the backchannel master toggle <em>and</em> the per-adapter <code>control</code> permission &mdash; both must be on.</p>
 
       <p>Responses: <code>200</code> forwarded &middot; <code>400</code> malformed request &middot; <code>403</code> backchannel disabled or <code>control</code> consent not granted &middot; <code>404</code> session not found &middot; <code>405</code> non-<code>POST</code> &middot; <code>409</code> session has no controllable terminal backend.</p>
 

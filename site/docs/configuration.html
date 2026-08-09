@@ -175,6 +175,18 @@
             <td>Relocate the Mistral Vibe adapter's transcript root (the daemon appends <code>/logs/session</code>). Non-absolute values are rejected with a log warning. Vibe's own <code>[session_logging].save_dir</code> in <code>$VIBE_HOME/config.toml</code> takes precedence and replaces the root outright</td>
           </tr>
           <tr>
+            <td><code>COPILOT_HOME</code></td>
+            <td>Absolute path</td>
+            <td><code>~/.copilot</code></td>
+            <td>Relocate the GitHub Copilot adapter's root (the daemon appends <code>/session-state</code>). Supersedes Copilot's deprecated <code>--config-dir</code> flag</td>
+          </tr>
+          <tr>
+            <td><code>HERMES_HOME</code></td>
+            <td>Absolute path</td>
+            <td><code>~/.hermes</code></td>
+            <td>Relocate the Hermes Agent adapter's home (the daemon reads <code>state.db</code> under it)</td>
+          </tr>
+          <tr>
             <td><code>IRRLICHT_PERMISSION_MODE</code></td>
             <td><code>ask</code> | <code>grant-all</code></td>
             <td><code>ask</code></td>
@@ -402,6 +414,8 @@ launchctl setenv IRRLICHT_DEBUG 1
         <li><strong>Gemini CLI:</strong> <code>~/.gemini/tmp/&lt;project&gt;/chats/&lt;session-id&gt;.jsonl</code></li>
         <li><strong>Antigravity:</strong> <code>~/.gemini/antigravity-cli/brain/&lt;conv-id&gt;/.system_generated/logs/transcript.jsonl</code> (CLI) or <code>~/.gemini/antigravity/brain/&lt;conv-id&gt;/.system_generated/logs/transcript.jsonl</code> (IDE)</li>
         <li><strong>Mistral Vibe:</strong> <code>~/.vibe/logs/session/&lt;session-id&gt;/messages.jsonl</code> (plus a sibling <code>meta.json</code> sidecar for cwd, model, and context metrics)</li>
+        <li><strong>GitHub Copilot:</strong> <code>~/.copilot/session-state/&lt;session-id&gt;/events.jsonl</code></li>
+        <li><strong>Hermes Agent:</strong> <code>~/.hermes/state.db</code> (one shared SQLite store for every session &mdash; Hermes writes no transcript files)</li>
       </ul>
 
       <!-- ── App Settings ── -->

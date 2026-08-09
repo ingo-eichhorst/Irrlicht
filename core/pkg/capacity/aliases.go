@@ -32,6 +32,7 @@ const (
 	modelClaudeHaiku45       = "claude-haiku-4-5"
 	modelClaudeOpus47        = "claude-opus-4-7"
 	modelKimiK2Thinking      = "moonshot.kimi-k2-thinking"
+	modelKimiK3              = "kimi-k3"
 	modelGemini31ProPreview  = "gemini-3.1-pro-preview"
 	modelGemini3FlashPreview = "gemini-3-flash-preview"
 	modelGemini35Flash       = "gemini-3.5-flash"
@@ -66,6 +67,7 @@ var modelAliases = map[string]string{
 	"cline-auto":             modelClaudeSonnet45,
 	"openclaw-auto":          modelClaudeSonnet45,
 	"qwen-auto":              modelClaudeSonnet45,
+	"quickdesk-auto":         modelClaudeSonnet45,
 
 	// Cursor — dot-version tier-last names plus tier/reasoning suffixes
 	// (-high, -low, -medium, -thinking, -high-thinking, -fast-mode) that
@@ -129,6 +131,16 @@ var modelAliases = map[string]string{
 	"kimi-auto":       modelKimiK2Thinking, // LOCAL_OVERRIDE: codeburn → kimi-k2-thinking (not in LiteLLM).
 	"kimi-code":       modelKimiK2Thinking, // LOCAL_OVERRIDE: codeburn → kimi-k2-thinking (not in LiteLLM).
 	"kimi-for-coding": modelKimiK2Thinking, // LOCAL_OVERRIDE: codeburn → kimi-k2-thinking (not in LiteLLM).
+	// K2.6 and K3 slugs carry codeburn's canonical verbatim: LiteLLM ships
+	// neither "kimi-k2p6" nor "kimi-k3" under any spelling (only K2-thinking
+	// and moonshotai.kimi-k2.5), so there is no correct key to override to and
+	// guessing an adjacent generation would misprice. They resolve to a
+	// zero-value capacity until LiteLLM ships the entries, exactly as the bare
+	// slug does today — the alias is here so pricing starts working the moment
+	// it does.
+	"k2d6-agent": "kimi-k2p6",
+	"k3":         modelKimiK3,
+	"k3-agent":   modelKimiK3,
 
 	// Antigravity Gemini IDs resolve to preview-priced entries. The conversation
 	// store also emits ids the transcript never shows: "gemini-pro-default" (the
