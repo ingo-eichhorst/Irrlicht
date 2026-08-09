@@ -79,6 +79,12 @@ export function eventStyle(ev) {
       return {color: "#94a3b8", size: 7, opacity: 0.6, label: "Bookkeeping — multiple updates coalesced"};
     case "hook_received":
       return {color: "#94a3b8", size: 8, opacity: 0.7, label: "Hook event received"};
+    // Rare and worth finding in playback: a held hook signal hit its
+    // wall-clock ceiling, meaning the release that should have retired it
+    // never arrived (#1360). Amber and full-size so it reads as a fault, not
+    // as bookkeeping.
+    case "hold_expired":
+      return {color: "#f59e0b", size: 14, opacity: 1, label: "Held signal expired — its release never arrived"};
     case "file_event":
       return {color: "#94a3b8", size: 7, opacity: 0.6, label: "Filesystem event"};
     default:

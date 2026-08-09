@@ -79,6 +79,13 @@ func ceilingProbeFixtures() []*SessionMetrics {
 //
 // The first catches a forgotten ceiling, the other two catch a ceiling that is
 // present but does not bound anything useful.
+//
+// The ripe-window arm at the end is dormant by construction — no row today is
+// both TierHook-persistent and arm-then-fire — so it was not mutation-tested
+// against a real row. It exists because Overlay checks ceiling before ripe, so
+// the first row that combines them would otherwise expire before it ever
+// applied and be reported as a lost release, which is a false entry in the
+// trace rather than a missing one.
 func TestSignalPolicies_HookPersistentHoldsDeclareACeiling(t *testing.T) {
 	for _, p := range signalPolicies {
 		if p.tier != TierHook || p.consumeOnce {
@@ -131,6 +138,23 @@ func TestSignalPolicies_HookPersistentHoldsDeclareACeiling(t *testing.T) {
 			t.Errorf("policy %q expired at %v without reporting a SignalExpiry — an unobservable ceiling is a "+
 				"debugging blind spot, not a fix (#1360 scope item 4)",
 				p.kind, p.ceiling)
+		}
+
+		// An arm-then-fire row needs a window in which it can actually fire.
+		// Overlay checks ceiling before ripe, so a ceiling at or below the
+		// ripen threshold drops the hold before it ever applies AND reports it
+		// as a lost release — a false entry in the trace, which is worse than
+		// a missing one. No row combines ceiling and ripe today, so this arm
+		// is dormant by construction; it exists so the first one that does
+		// cannot land silently.
+		if p.ripe != nil {
+			justBefore := holdContext{Metrics: live, HeldSince: holdT0, Now: holdT0.Add(p.ceiling - time.Nanosecond)}
+			if !p.ripe(justBefore) {
+				t.Errorf("policy %q is not ripe one nanosecond before its %v ceiling — it would be expired and "+
+					"reported as a lost release without ever having applied; the ceiling must exceed whatever "+
+					"elapsed threshold ripe measures",
+					p.kind, p.ceiling)
+			}
 		}
 	}
 }

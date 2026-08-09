@@ -269,6 +269,16 @@ type signalPolicy struct {
 	// A ceiling is a backstop, not an end-of-life rule. stale is evaluated
 	// first, so a hold that ended for its own declared reason is not reported
 	// as an expiry and only a hold that genuinely ran out of time is.
+	//
+	// CONSTRAINT for a row that also declares ripe: the ceiling must leave the
+	// row a window in which it can actually fire, i.e. it must exceed whatever
+	// elapsed threshold ripe measures. Overlay checks ceiling *before* ripe —
+	// an expiry beats a pending arm, because "never came due and no longer
+	// describes reality" is an expiry — so a ceiling shorter than the ripen
+	// threshold would drop the hold before it ever applied and report it as a
+	// lost release, which is a lie in the trace rather than a missing signal.
+	// No row combines the two today; TestSignalPolicies_HookPersistentHoldsDeclareACeiling
+	// enforces it for the first one that does.
 	ceiling time.Duration
 
 	// ripe reports that the held signal is ready to be applied. Nil means
@@ -422,8 +432,8 @@ var signalPolicies = []signalPolicy{
 		// silent, and this row stopped being the one place the pattern lived.
 		//
 		// Position-independent: its staleness reads only transcript-derived
-		// state and the clock, and the field it applies is read by no other
-		// policy. It was last in the table when #1297 added it — where the
+		// state, its ceiling is time-only, and the field it applies is read by
+		// no other policy. It was last in the table when #1297 added it — where the
 		// hand-rolled overlay it replaced ran — and #1319 appended
 		// SignalOpenToolStalled after it, which is fine precisely because
 		// nothing here depends on being last. The row that genuinely does is
@@ -609,6 +619,20 @@ func (h *SignalHolds) Held(sessionID string, kind SignalKind) bool {
 	defer h.mu.Unlock()
 	_, ok := h.held[sessionID][kind]
 	return ok
+}
+
+// HasAny reports whether any signal at all is currently held for sessionID.
+//
+// It exists for scheduling, not classification (#1360). A ceiling can only be
+// evaluated by a classify pass, and the daemon's periodic refresh skips
+// sessions that are not working — which is every session a hook hold has
+// pinned at waiting. The refresh asks this to find the few sessions it must
+// revisit anyway, without re-reading the transcript of every idle session on
+// the machine.
+func (h *SignalHolds) HasAny(sessionID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.held[sessionID]) > 0
 }
 
 // DropSession forgets every hold for a session, for when the session itself

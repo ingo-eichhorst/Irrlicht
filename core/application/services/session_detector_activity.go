@@ -1385,6 +1385,49 @@ func (d *SessionDetector) armStalledEditTool(state *session.SessionState, now ti
 	d.signals.HoldIfAbsent(state.SessionID, session.SignalOpenToolStalled, session.SignalPayload{}, now)
 }
 
+// refreshHeldSession re-runs the classify pipeline for a non-working session
+// that still has an out-of-band signal hold outstanding (#1360).
+//
+// Without it, the ceilings this issue adds could never fire in the situation
+// they exist for. A ceiling is only evaluated inside SignalHolds.Overlay, and
+// Overlay is only reached from the classify pipeline; refreshStaleSessions —
+// the one thing that revisits a session no transcript event is arriving for —
+// ran that pipeline for StateWorking alone. Both hook holds with a ceiling pin
+// the session at *waiting*, so the pinned session was precisely the one the
+// ticker skipped, and a lost release stayed lost for the life of the process.
+//
+// That asymmetry is also why compactHoldTimeout appeared to prove the
+// mechanism worked: it pins at working, the state already being re-read.
+//
+// Scoped to sessions with a hold outstanding, deliberately. The ticker not
+// re-reading idle transcripts is long-standing behaviour with a real cost
+// attached — one stat and parse per idle session per tick, on a machine that
+// may be tracking dozens — and a hold is both rare and the only reason this
+// pass has anything to decide. The remaining guards are the working branch's,
+// for the same reasons: the interval keeps a busy session from being re-read
+// every tick, and observeAllowed keeps a revoked adapter from being read at
+// all (#570), which a refresh outside the gated watcher pipeline would
+// otherwise quietly bypass.
+func (d *SessionDetector) refreshHeldSession(state *session.SessionState, now time.Time) {
+	if d.signals == nil || !d.signals.HasAny(state.SessionID) {
+		return
+	}
+	if now.Sub(time.Unix(state.UpdatedAt, 0)) < staleWorkingRefreshInterval {
+		return
+	}
+	if state.TranscriptPath == "" {
+		return
+	}
+	if !d.observeAllowed(state.Adapter) {
+		return
+	}
+	d.processActivityWithoutIdentity(agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      state.SessionID,
+		TranscriptPath: state.TranscriptPath,
+	})
+}
+
 // reportHoldExpiries surfaces the holds Overlay dropped because their
 // wall-clock ceiling elapsed (#1360). It is the observability half of that
 // fix, and it lives here rather than in the domain because core/domain/session
@@ -1461,6 +1504,7 @@ func (d *SessionDetector) refreshStaleSessions() {
 			})
 		case session.StateWaiting, session.StateReady:
 			d.retryIdleProjectResolution(state, now)
+			d.refreshHeldSession(state, now)
 		}
 	}
 }
