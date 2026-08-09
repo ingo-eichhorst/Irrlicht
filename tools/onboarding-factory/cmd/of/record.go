@@ -137,7 +137,7 @@ func estimateColumnBudget(repoRoot, agent string) (cells, turns int) {
 	recipes := shard.LoadAdapterCells(repoRoot, agent) // keyed by scenario_id (= name)
 	for _, sh := range shard.LoadAll(repoRoot) {
 		cs, ok := m.Cell(agent, sh.Name)
-		if !ok || cs.DisplayState != "pending-record" {
+		if !ok || cs.DisplayState != matrix.StatePendingRecord {
 			continue
 		}
 		cells++

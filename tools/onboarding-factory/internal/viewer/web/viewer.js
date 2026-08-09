@@ -479,7 +479,7 @@ function loadOverview() {
 // renderCoverageMatrix paints the 38×5 maintainer coverage matrix.
 // Each cell's segment-2 chip is colored by the derived display_state
 // (observed / pending-record / blocked-daemon / blocked-driver /
-// unobservable / n.a. / unknown), rolled up daemon-side from
+// unobservable / n/a / unknown), rolled up daemon-side from
 // agent_supports + daemon_capability + driver_capability + the measured
 // recording status. Notes (if any) show in the tooltip.
 // buildCoverageHead builds the coverage panel's header (title + agent
@@ -1101,14 +1101,17 @@ function _displayMeta(state) {
     case "blocked-driver": return {bg: "#fde7c1", fg: "#8a4500", text: "blocked: driver"};
     case "blocked-daemon": return {bg: "#f8c8c8", fg: "#8a0000", text: "blocked: daemon"};
     case "unobservable":   return {bg: "#ffcda3", fg: "#a8480a", text: "unobservable"};
-    case "n.a.":           return {bg: "#eeece4", fg: "#999",    text: "n.a."};
+    // #1367: one spelling of the not-applicable state, matching the token
+    // matrix/vocabulary.go derives (StateNotApplicable) and `of status`
+    // prints. The dotted "n.a." form is retired and `of validate` rejects it. retired-spelling-ok
+    case "n/a":            return {bg: "#eeece4", fg: "#999",    text: "n/a"};
     default:               return {bg: "#e5e5e5", fg: "#555",    text: "unknown"};
   }
 }
 
 // coverageBadge renders the detail-page header pill from the derived
 // display state.
-function coverageBadge(displayState) {
+export function coverageBadge(displayState) {
   const m = _displayMeta(displayState);
   return {label: m.text, bg: m.bg, fg: m.fg};
 }

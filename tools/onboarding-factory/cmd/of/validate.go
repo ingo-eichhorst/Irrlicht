@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 
+	"irrlicht/tools/onboarding-factory/internal/matrix"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
@@ -227,7 +229,80 @@ func validateCell(loc cellLoc, names map[string]bool, add func(path, msg string)
 	if msg := recipeTimeoutFinding(cell.Details.Recipe); msg != "" {
 		add(rel+metadataJSONSuffix, msg)
 	}
+	validateCellVocabulary(cell, rel, add)
 	validateCellRecording(loc, add)
+}
+
+// axisValues is one tier's three assessment axes, named by their JSON path so
+// a finding points at the exact field to edit.
+type axisValues struct {
+	tier                                       string
+	supports, daemonCapability, driverCapabity string
+}
+
+// validateCellVocabulary enforces the assessment-axis vocabulary defined in
+// matrix/vocabulary.go against BOTH tiers a cell stores: the `metadata`
+// overview block and the `details.assessment` detail block. write.go mirrors
+// one into the other, so checking a single tier would let half a cell drift.
+//
+// This is what makes #1367's canonical spelling real rather than cosmetic:
+// `of validate` is already a CI gate over the whole catalog, so a retired
+// spelling cannot reach disk. A display-time alias would have left both
+// spellings alive in the data, which was the actual problem.
+func validateCellVocabulary(cell shard.ShardAgent, rel string, add func(path, msg string)) {
+	tiers := []axisValues{{
+		tier:             "metadata",
+		supports:         cell.Metadata.AgentSupports,
+		daemonCapability: cell.Metadata.DaemonCapability,
+		driverCapabity:   cell.Metadata.DriverCapability,
+	}}
+	// details.assessment is a RawMessage and may be absent or not an object;
+	// a shape this loose is pre-existing, so an unparseable block is skipped
+	// rather than turned into a new class of finding by this ticket.
+	if len(cell.Details.Assessment) > 0 {
+		var a struct {
+			AgentSupports    string `json:"agent_supports"`
+			DaemonCapability string `json:"daemon_capability"`
+			DriverCapability string `json:"driver_capability"`
+		}
+		if json.Unmarshal(cell.Details.Assessment, &a) == nil {
+			tiers = append(tiers, axisValues{
+				tier:             "details.assessment",
+				supports:         a.AgentSupports,
+				daemonCapability: a.DaemonCapability,
+				driverCapabity:   a.DriverCapability,
+			})
+		}
+	}
+
+	for _, t := range tiers {
+		checkAxis(rel, t.tier+".agent_supports", t.supports, matrix.IsValidAgentSupports, matrix.AgentSupportsValues, add)
+		checkAxis(rel, t.tier+".daemon_capability", t.daemonCapability, matrix.IsValidDaemonCapability, matrix.DaemonCapabilityValues, add)
+		checkAxis(rel, t.tier+".driver_capability", t.driverCapabity, matrix.IsValidDriverCapability, nil, add)
+	}
+}
+
+// checkAxis reports one axis value that is either a retired spelling or
+// outside its allowed set. The retired-spelling case is reported separately
+// and names the canonical replacement, because "invalid value" alone leaves
+// the reader to guess which of two spellings won — the very ambiguity #1367
+// set out to remove. It is checked on every axis, including the open-ended
+// driver one that has no closed set of its own.
+func checkAxis(rel, field, value string, valid func(string) bool, allowed []string, add func(path, msg string)) {
+	if canonical, retired := matrix.CanonicalFor(value); retired {
+		add(rel+metadataJSONSuffix, fmt.Sprintf(
+			"%s is %q, a retired spelling — use %q (#1367)", field, value, canonical))
+		return
+	}
+	if valid(value) {
+		return
+	}
+	if allowed != nil {
+		add(rel+metadataJSONSuffix, fmt.Sprintf(
+			"%s is %q (allowed: %s)", field, value, strings.Join(allowed, ", ")))
+		return
+	}
+	add(rel+metadataJSONSuffix, fmt.Sprintf("%s is %q", field, value))
 }
 
 // validateCellFK checks that scenarioID is set and resolves to a catalog

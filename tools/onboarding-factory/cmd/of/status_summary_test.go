@@ -157,3 +157,64 @@ func TestStatusSummaryAgentFilter(t *testing.T) {
 		t.Errorf("filtered total should count only codex's 2 cells, got %d", v.Total.Total)
 	}
 }
+
+// TestStatusAndSummaryAgreeOnNotApplicableSpelling is #1367's headline
+// regression test. `of status` prints a cell's display state verbatim, while
+// `of status --summary` buckets that same state under a column header — and
+// the two used different spellings ("n.a." vs "n/a") for the identical state, retired-spelling-ok
+// which quietly doubles every downstream grep and comparison.
+//
+// It reads the token out of `of status` rather than hard-coding it on that
+// side, so the assertion is "the two commands agree", independent of which
+// spelling wins; the separate literal check below is what pins WHICH one.
+// retired-spelling-ok
+func TestStatusAndSummaryAgreeOnNotApplicableSpelling(t *testing.T) {
+	root := richRepo(t)
+
+	// richRepo's claudecode 6-1 cell has agent_supports="no" — the
+	// not-applicable route.
+	code, dumpOut, errs := runOf("status", "--json", "--repo-root", root)
+	if code != exitOK {
+		t.Fatalf("status --json exit=%d stderr=%s", code, errs)
+	}
+	var dump statusView
+	if err := json.Unmarshal([]byte(dumpOut), &dump); err != nil {
+		t.Fatalf("bad json: %v\n%s", err, dumpOut)
+	}
+	var token string
+	for _, sv := range dump.Scenarios {
+		if sv.ID == "6.1" {
+			token = sv.Cells["claudecode"].DisplayState
+		}
+	}
+	if token == "" {
+		t.Fatalf("no claudecode cell for scenario 6.1 in:\n%s", dumpOut)
+	}
+
+	code, sumOut, errs := runOf("status", "--summary", "--repo-root", root)
+	if code != exitOK {
+		t.Fatalf("status --summary exit=%d stderr=%s", code, errs)
+	}
+	header := strings.SplitN(sumOut, "\n", 4)
+	if len(header) < 3 {
+		t.Fatalf("unexpected summary shape:\n%s", sumOut)
+	}
+	headerLine := header[2]
+	if !strings.Contains(headerLine, token) {
+		t.Errorf("`of status` renders the not-applicable state as %q but `of status --summary`'s header column does not use that token.\nheader: %q\nThe two commands must spell one state one way (#1367).", token, headerLine)
+	}
+
+	// And the agreed token is the canonical slash spelling, not the retired
+	// dotted one.
+	if token != "n/a" {
+		t.Errorf("display state for a supports=no cell = %q; #1367 canonicalised it to %q", token, "n/a")
+	}
+	retired := "n" + ".a." // assembled so this line is not a census hit
+	if strings.Contains(sumOut, retired) {
+		t.Errorf("summary output still contains the retired %q spelling:\n%s", retired, sumOut)
+	}
+	textCode, statusText, _ := runOf("status", "--repo-root", root)
+	if textCode == exitOK && strings.Contains(statusText, retired) {
+		t.Errorf("`of status` text output still contains the retired %q spelling:\n%s", retired, statusText)
+	}
+}

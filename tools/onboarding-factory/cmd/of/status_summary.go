@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+
+	"irrlicht/tools/onboarding-factory/internal/matrix"
 )
 
 // agentSummary is one agent's cell counts, bucketed by the matrix display
@@ -31,7 +33,9 @@ type agentSummary struct {
 	Blocked int `json:"blocked"`
 	// Unobservable ← "unobservable": the daemon cannot observe this at all.
 	Unobservable int `json:"unobservable"`
-	// NotApplicable ← "n.a.": out of scope for this agent.
+	// NotApplicable ← matrix.StateNotApplicable: out of scope for this agent.
+	// The JSON key stays "not_applicable" — it names the bucket, not the
+	// display token, and renaming it would break `--summary --json` readers.
 	NotApplicable int `json:"not_applicable"`
 	// Unknown ← "unknown": not yet assessed, or assessed with empty axes.
 	Unknown int `json:"unknown"`
@@ -42,15 +46,15 @@ type agentSummary struct {
 func (a *agentSummary) add(displayState string) {
 	a.Total++
 	switch displayState {
-	case "observed":
+	case matrix.StateObserved:
 		a.Recorded++
-	case "pending-record":
+	case matrix.StatePendingRecord:
 		a.Pending++
-	case "blocked-daemon", "blocked-driver":
+	case matrix.StateBlockedDaemon, matrix.StateBlockedDriver:
 		a.Blocked++
-	case "unobservable":
+	case matrix.StateUnobservable:
 		a.Unobservable++
-	case "n.a.":
+	case matrix.StateNotApplicable:
 		a.NotApplicable++
 	default:
 		// "unknown", plus any state matrix adds later. Bucketing an
@@ -99,8 +103,10 @@ const summaryRowFormat = "%-14s %9s %8s %8s %13s %6s %8s %6s\n"
 func printSummaryText(stdout io.Writer, view summaryView) {
 	fmt.Fprintf(stdout, "per-agent cell counts — %s, %d cells\n\n",
 		plural(len(view.Agents), "agent"), view.Total.Total)
+	// The not-applicable column header reads the SAME schema token `of status`
+	// prints per cell, so the two commands cannot drift apart again (#1367).
 	fmt.Fprintf(stdout, summaryRowFormat,
-		"agent", "recorded", "pending", "blocked", "unobservable", "n/a", "unknown", "total")
+		"agent", "recorded", "pending", "blocked", "unobservable", matrix.StateNotApplicable, "unknown", "total")
 	for _, a := range view.Agents {
 		printSummaryRow(stdout, a)
 	}
@@ -108,7 +114,7 @@ func printSummaryText(stdout io.Writer, view summaryView) {
 	// Without this, "recorded" reads as "has a recording" and the complement
 	// reads as the remaining work. It is neither — see agentSummary.Recorded.
 	fmt.Fprintln(stdout)
-	fmt.Fprintln(stdout, "note: recorded = display state \"observed\". A cell blocked by a daemon bug or driver gap")
+	fmt.Fprintf(stdout, "note: recorded = display state %q. A cell blocked by a daemon bug or driver gap\n", matrix.StateObserved)
 	fmt.Fprintln(stdout, "counts under blocked/unobservable even if it has a recording, so total − recorded is not")
 	fmt.Fprintln(stdout, "the un-recorded count. Use `of status` for per-cell detail.")
 }
