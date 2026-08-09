@@ -73,23 +73,27 @@ func hookEventConstants(t *testing.T) map[string]string {
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
-		// Top-level const declarations only: a ValueSpec inside a function body
-		// is a local, and a var is not part of the event vocabulary.
-		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.CONST {
-				continue
-			}
-			for _, spec := range gen.Specs {
-				value, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
+		collectFileConstants(t, name, file, found)
+	}
+	return found
+}
+
+// collectFileConstants adds one file's top-level Hook* string constants to
+// found. Top-level const declarations only: a ValueSpec inside a function body
+// is a local, and a var is not part of the package's event vocabulary.
+func collectFileConstants(t *testing.T, name string, file *ast.File, found map[string]string) {
+	t.Helper()
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			if value, ok := spec.(*ast.ValueSpec); ok {
 				collectHookConstants(t, name, value, found)
 			}
 		}
 	}
-	return found
 }
 
 // collectHookConstants adds spec's Hook* string constants to found. A Hook*

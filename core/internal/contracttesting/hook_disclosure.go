@@ -118,55 +118,72 @@ func AssertHookDisclosureMatchesInstalled(t *testing.T, d HookDisclosure) {
 	named := wordsIn(disclosure)
 
 	t.Run("names_every_installed_event", func(t *testing.T) {
-		for _, event := range d.Installed {
-			if !named[event] {
-				t.Errorf("consent copy never names the %q hook, but the installer writes it — "+
-					"an undisclosed write to the user's config (#570)", event)
-			}
-		}
+		assertNamesEveryInstalledEvent(t, d.Installed, named)
 	})
-
 	t.Run("states_the_installed_count", func(t *testing.T) {
-		matches := entryCountPattern.FindAllStringSubmatch(disclosure, -1)
-		if len(matches) == 0 {
-			t.Fatalf("consent copy states no entry count; want %q", strconv.Itoa(len(d.Installed))+" hook entries")
-		}
-		for _, m := range matches {
-			stated, err := strconv.Atoi(m[1])
-			if err != nil {
-				t.Fatalf("unparseable entry count %q: %v", m[1], err)
-			}
-			if stated != len(d.Installed) {
-				t.Errorf("consent copy declares %d hook entries, installer writes %d",
-					stated, len(d.Installed))
-			}
-		}
+		assertStatesInstalledCount(t, d.Installed, disclosure)
 	})
-
 	t.Run("names_no_uninstalled_event", func(t *testing.T) {
-		installed := make(map[string]bool, len(d.Installed))
-		for _, event := range d.Installed {
-			installed[event] = true
-		}
-		allowed := make(map[string]bool, len(d.NonEventTerms))
-		for _, term := range d.NonEventTerms {
-			allowed[term] = true
-		}
-		// The two candidate sources overlap (every multi-word modelled name is
-		// in both), so they are merged before reporting: one over-promise in
-		// the copy should produce one failure line, not two. The contract's
-		// whole value is the message someone reads at 2am.
-		reported := map[string]bool{}
-		for _, name := range append(uninstalledNamesIn(named), eventShapedNamesIn(named)...) {
-			if installed[name] || allowed[name] || reported[name] {
-				continue
-			}
-			reported[name] = true
-			t.Errorf("consent copy names %q, which reads as a hook event but the installer "+
-				"does not write it — the disclosure promises more than it does; install it, "+
-				"reword the copy, or list it in NonEventTerms", name)
-		}
+		assertNamesNoUninstalledEvent(t, d, named)
 	})
+}
+
+// assertNamesEveryInstalledEvent is the consent-critical arm: an installed
+// event the copy never names is a write the user was not told about.
+func assertNamesEveryInstalledEvent(t *testing.T, installed []string, named map[string]bool) {
+	t.Helper()
+	for _, event := range installed {
+		if !named[event] {
+			t.Errorf("consent copy never names the %q hook, but the installer writes it — "+
+				"an undisclosed write to the user's config (#570)", event)
+		}
+	}
+}
+
+// assertStatesInstalledCount checks every count the copy states, not just the
+// first: a permission that mentions its entry count twice must not have them
+// disagree.
+func assertStatesInstalledCount(t *testing.T, installed []string, disclosure string) {
+	t.Helper()
+	matches := entryCountPattern.FindAllStringSubmatch(disclosure, -1)
+	if len(matches) == 0 {
+		t.Fatalf("consent copy states no entry count; want %q",
+			strconv.Itoa(len(installed))+" hook entries")
+	}
+	for _, m := range matches {
+		stated, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatalf("unparseable entry count %q: %v", m[1], err)
+		}
+		if stated != len(installed) {
+			t.Errorf("consent copy declares %d hook entries, installer writes %d",
+				stated, len(installed))
+		}
+	}
+}
+
+// assertNamesNoUninstalledEvent is the over-promise arm. Its two candidate
+// sources overlap (every multi-word modelled name is in both), so they are
+// merged before reporting: one wrong name should produce one failure line, not
+// two. The contract's whole value is the message someone reads at 2am.
+func assertNamesNoUninstalledEvent(t *testing.T, d HookDisclosure, named map[string]bool) {
+	t.Helper()
+	exempt := make(map[string]bool, len(d.Installed)+len(d.NonEventTerms))
+	for _, event := range d.Installed {
+		exempt[event] = true
+	}
+	for _, term := range d.NonEventTerms {
+		exempt[term] = true
+	}
+	for _, name := range append(uninstalledNamesIn(named), eventShapedNamesIn(named)...) {
+		if exempt[name] {
+			continue
+		}
+		exempt[name] = true // reported once
+		t.Errorf("consent copy names %q, which reads as a hook event but the installer "+
+			"does not write it — the disclosure promises more than it does; install it, "+
+			"reword the copy, or list it in NonEventTerms", name)
+	}
 }
 
 // findPermission returns the declared permission with the given key.
