@@ -66,6 +66,49 @@ const (
 // session re-classifies normally.
 const compactHoldTimeout = 5 * time.Minute
 
+// permissionPromptHoldTimeout bounds the SignalPermissionPrompt hold (#1360).
+//
+// Calibrated against a human, not a machine. Answering a permission prompt
+// takes seconds to a couple of minutes, and the long tail is not deliberation
+// but absence — the user stepped away from the desk. One hour clears a lunch
+// break or an ordinary meeting with room to spare. Past that, "the release was
+// missed" is a better explanation of a still-open prompt than "somebody has
+// been reading this dialog for over an hour".
+//
+// Cutting a genuinely-open prompt short is the lesser error because it is soft
+// and self-correcting from both directions. The session merely stops being
+// pinned and re-classifies from the transcript — where, for the edit-tool
+// case, #488's SignalOpenToolStalled re-derives the very same waiting, because
+// its ripe rule unblocks the moment PermissionPending stops being set. And if
+// the user does eventually answer, the resulting PostToolUse reaches a hold
+// that is already gone, which Release handles as a no-op. The failure being
+// replaced is neither soft nor self-correcting: TierHook forbids every lower
+// tier from retiring this hold, so one missed release pins the session at
+// waiting until the daemon restarts.
+const permissionPromptHoldTimeout = time.Hour
+
+// idlePromptHoldTimeout bounds the SignalIdlePrompt hold (#1360).
+//
+// Deliberately four times the permission ceiling, because the two conditions
+// have different natural lifetimes. A permission prompt is a modal question
+// somebody is expected to answer now; an idle prompt is a session left sitting
+// at the prompt, and leaving one open across an afternoon is ordinary use
+// rather than a fault. Four hours is past any plausible stepped-away window
+// while still being bounded, so a session abandoned at the end of a day has
+// stopped advertising itself as waiting on its user by the next morning.
+//
+// It is the more generous of the two precisely because it has no fallback to
+// degrade onto: an expired permission prompt hands off to #488's
+// transcript-tier SignalOpenToolStalled, whereas an expired idle prompt simply
+// returns the session to whatever the transcript says — ready, for a finished
+// turn. Cutting a real idle window short therefore costs a genuine
+// waiting → ready downgrade: a session that did want an answer stops asking
+// for one. That is still the lesser error, because it is one badge reading the
+// user corrects by looking, and any later hook for that session re-holds and
+// restores it. The unbounded hold it replaces is correctable by nothing the
+// system can produce.
+const idlePromptHoldTimeout = 4 * time.Hour
+
 // stalledEditToolThreshold is how long a permission-gated file-edit tool
 // (Edit/Write/MultiEdit/NotebookEdit) may stay open before it is read as a held
 // permission prompt and SignalOpenToolStalled applies — the transcript-based
@@ -139,6 +182,13 @@ type SignalPayload struct {
 // today needs it, and guessing its shape from one hypothetical caller is how
 // the wrong abstraction gets frozen in.
 //
+// #1360 then moved the expiry half back *out* of stale, into the declared
+// signalPolicy.ceiling — see that field for why a duration a test can read
+// beats a clock term only a closure can see. Now stays here regardless: ripe
+// reads it, and Overlay measures every ceiling against this same injected
+// instant, so an expiry replays on the transcript's timeline like everything
+// else.
+//
 // Now is injected by the caller rather than read from time.Now here, so
 // staleness stays testable and — for the offline replay harness, which runs on
 // the transcript's virtual timeline — deterministic.
@@ -192,9 +242,34 @@ type signalPolicy struct {
 	consumeOnce bool
 
 	// stale reports that the held signal has stopped describing reality and
-	// must be dropped *without* being applied. Nil means "only consumeOnce
-	// or an explicit Release ends this hold".
+	// must be dropped *without* being applied. Nil means "only consumeOnce,
+	// an explicit Release, or the ceiling below ends this hold".
 	stale func(c holdContext) bool
+
+	// ceiling bounds how long this hold may survive on the wall clock,
+	// measured from HeldSince. Zero means unbounded, which is only defensible
+	// for a row a lower tier can still correct — see
+	// TestSignalPolicies_HookPersistentHoldsDeclareACeiling for the rows where
+	// it is not, and permissionPromptHoldTimeout for how one is calibrated.
+	//
+	// Declared as data rather than folded into stale as another clock term
+	// (#1360), for two reasons the merged form cannot serve:
+	//
+	//   - Observability. Overlay reports a ceiling expiry back to its caller,
+	//     which logs it and records a KindHoldExpired lifecycle event. A stale
+	//     closure returns one bool and so cannot say which of its terms fired;
+	//     a ceiling hidden inside it would rewrite session state silently,
+	//     which is a new debugging blind spot rather than a fix.
+	//   - Enforceability. A structural test can read this field. It cannot
+	//     read intent out of a closure, and the alternative — probing stale
+	//     with a synthetic clock — needs a hand-written "not yet stale"
+	//     metrics fixture per row, which is one more table for the author of
+	//     the next row to forget to update.
+	//
+	// A ceiling is a backstop, not an end-of-life rule. stale is evaluated
+	// first, so a hold that ended for its own declared reason is not reported
+	// as an expiry and only a hold that genuinely ran out of time is.
+	ceiling time.Duration
 
 	// ripe reports that the held signal is ready to be applied. Nil means
 	// "ripe on arrival", which is every hook signal: a hook fires because the
@@ -270,8 +345,17 @@ var signalPolicies = []signalPolicy{
 		// retiring a higher one reads backwards, but it is sound here — this
 		// is not the transcript overruling the hook's verdict, it is the
 		// transcript supplying the end-of-life notice the hook never sends.
-		stale: func(c holdContext) bool { return c.Metrics.LastWasToolDenial },
-		apply: func(c holdContext) { c.Metrics.PermissionPending = true },
+		//
+		// Both of those paths are things that must *happen*. Neither fires if
+		// the daemon never sees the POST — a crash, a restart, a port change,
+		// an uninstalled hook — or if the adapter stops writing the denial
+		// marker in the shape LastWasToolDenial matches. This row sits at the
+		// top of the authority ladder, so no lower-tier signal may correct it,
+		// and without the ceiling below a session pinned that way stayed
+		// pinned for the life of the process (#1360).
+		stale:   func(c holdContext) bool { return c.Metrics.LastWasToolDenial },
+		ceiling: permissionPromptHoldTimeout,
+		apply:   func(c holdContext) { c.Metrics.PermissionPending = true },
 	},
 
 	{
@@ -304,8 +388,15 @@ var signalPolicies = []signalPolicy{
 		// thing that happened. IsAgentDone going false means either the user
 		// replied or a tool opened — either way the idle window is over and
 		// the rules that own those cases take it from here.
-		stale: func(c holdContext) bool { return !c.Metrics.IsAgentDone() },
-		apply: func(c holdContext) { c.Metrics.IdlePromptPending = true },
+		//
+		// That is a transcript observation, so the rule is exactly as good as
+		// the parse: a transcript that stops being read, a rotated file, or an
+		// adapter whose turn-done marker changes shape all leave IsAgentDone
+		// stuck true and this TierHook hold uncorrectable from below. Hence
+		// the ceiling (#1360).
+		stale:   func(c holdContext) bool { return !c.Metrics.IsAgentDone() },
+		ceiling: idlePromptHoldTimeout,
+		apply:   func(c holdContext) { c.Metrics.IdlePromptPending = true },
 	},
 
 	{
@@ -316,13 +407,19 @@ var signalPolicies = []signalPolicy{
 		// re-evaluation in that window or the stale pre-compact turn_done
 		// leaks the session back to ready (#657).
 		//
-		// The first row whose staleness reads the clock, and the reason
-		// holdContext exists. It clears on the first of:
+		// The first row to be bounded by the clock, and the reason holdContext
+		// exists. It clears on the first of:
 		//
 		//   - the manual compact_boundary landing: the normal path —
 		//     compaction finished, release working → ready (#656);
 		//   - compactHoldTimeout elapsing — see that constant for why the
 		//     ceiling is there and why five minutes.
+		//
+		// Those two were one merged stale predicate until #1360, which split
+		// the clock term out into the declared ceiling below. Behaviour is
+		// unchanged — Overlay still drops the hold at >= compactHoldTimeout
+		// measured from HeldSince — but the expiry is now reported rather than
+		// silent, and this row stopped being the one place the pattern lived.
 		//
 		// Position-independent: its staleness reads only transcript-derived
 		// state and the clock, and the field it applies is read by no other
@@ -331,10 +428,9 @@ var signalPolicies = []signalPolicy{
 		// SignalOpenToolStalled after it, which is fine precisely because
 		// nothing here depends on being last. The row that genuinely does is
 		// SignalOpenToolStalled; see TestSignalPolicies_OrderIsPinned.
-		stale: func(c holdContext) bool {
-			return c.Metrics.SawManualCompactBoundary || c.Now.Sub(c.HeldSince) >= compactHoldTimeout
-		},
-		apply: func(c holdContext) { c.Metrics.CompactInProgress = true },
+		stale:   func(c holdContext) bool { return c.Metrics.SawManualCompactBoundary },
+		ceiling: compactHoldTimeout,
+		apply:   func(c holdContext) { c.Metrics.CompactInProgress = true },
 	},
 
 	{
@@ -403,6 +499,34 @@ func TierOf(kind SignalKind) SignalTier {
 type SignalHolds struct {
 	mu   sync.Mutex
 	held map[string]map[SignalKind]heldSignal
+}
+
+// SignalExpiry reports one hold that Overlay dropped because its wall-clock
+// ceiling elapsed, rather than because its own staleness rule ended it or a
+// Release retired it (#1360).
+//
+// Overlay returns these so its caller can log the expiry and record it in the
+// lifecycle trace. That indirection is the price of the domain layer owning no
+// logger: a ceiling that rewrites a session's state without saying so anywhere
+// is a debugging blind spot, and the whole failure mode being fixed here is one
+// nobody could see from the outside.
+type SignalExpiry struct {
+	// Kind is the signal whose hold ran out of time.
+	Kind SignalKind
+
+	// Tier is the authority that hold had been asserting. A TierHook expiry is
+	// the consequential one: while it stood, nothing below it was permitted to
+	// correct the session.
+	Tier SignalTier
+
+	// HeldFor is how long the hold stood before the ceiling dropped it,
+	// measured Now-HeldSince against the clock the caller injected.
+	HeldFor time.Duration
+
+	// Ceiling is the bound that was exceeded. Carried alongside HeldFor so a
+	// recorded trace stays readable after the constant is retuned — otherwise
+	// an old event and a new one are indistinguishable.
+	Ceiling time.Duration
 }
 
 // heldSignal is one stored hold: what the signal carried, and when it arrived.
@@ -507,18 +631,25 @@ func (h *SignalHolds) DropSession(sessionID string) {
 // policy (SignalCompactInProgress today; the Phase 5/6 grace timers next) stays
 // testable and replays deterministically on the transcript's virtual timeline.
 //
-// Each hold runs the same three-way gate: stale drops it unapplied, an unripe
-// ripe leaves it untouched for a later pass, and otherwise it is applied (and
-// consumed, if consume-once).
+// Each hold runs the same four-way gate: stale drops it unapplied, an elapsed
+// ceiling drops it unapplied *and* reports it, an unripe ripe leaves it
+// untouched for a later pass, and otherwise it is applied (and consumed, if
+// consume-once).
+//
+// Returns the holds dropped by their ceiling, in table order — normally none.
+// Callers that ignore the result still get the expiry; what they give up is
+// being able to say it happened, which for a TierHook row is the difference
+// between a fix and a silent state rewrite (#1360). The daemon's caller logs
+// each one and records a lifecycle.KindHoldExpired event.
 //
 // Note that staleness is evaluated before apply on every pass, including the
 // first: a signal that is already contradicted when it arrives is discarded
 // rather than applied once. That matters for a late signal (the ~6s
 // idle_prompt, or a retrospective OTel span) that lands after the condition it
 // describes has already ended.
-func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics, now time.Time) {
+func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics, now time.Time) []SignalExpiry {
 	if m == nil {
-		return
+		return nil
 	}
 
 	h.mu.Lock()
@@ -526,8 +657,10 @@ func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics, now time.Time
 
 	holds := h.held[sessionID]
 	if len(holds) == 0 {
-		return
+		return nil
 	}
+
+	var expired []SignalExpiry
 
 	for _, policy := range signalPolicies {
 		hs, ok := holds[policy.kind]
@@ -539,6 +672,21 @@ func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics, now time.Time
 
 		if policy.stale != nil && policy.stale(c) {
 			delete(holds, policy.kind)
+			continue
+		}
+
+		// The backstop, checked after stale so a hold that ended for its own
+		// declared reason is never mis-reported as having run out of time.
+		// >= rather than >: the deadline itself is outside the window, which
+		// is what the compact row's tests have pinned since #657.
+		if heldFor := c.Now.Sub(c.HeldSince); policy.ceiling > 0 && heldFor >= policy.ceiling {
+			delete(holds, policy.kind)
+			expired = append(expired, SignalExpiry{
+				Kind:    policy.kind,
+				Tier:    policy.tier,
+				HeldFor: heldFor,
+				Ceiling: policy.ceiling,
+			})
 			continue
 		}
 
@@ -560,4 +708,6 @@ func (h *SignalHolds) Overlay(sessionID string, m *SessionMetrics, now time.Time
 	if len(holds) == 0 {
 		delete(h.held, sessionID)
 	}
+
+	return expired
 }

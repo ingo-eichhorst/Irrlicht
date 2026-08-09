@@ -812,7 +812,7 @@ func (d *SessionDetector) classifyAndTransition(state *session.SessionState, ev 
 	// Overlay is what decides whether it has been open long enough to apply.
 	d.armStalledEditTool(state, passStart)
 
-	d.signals.Overlay(state.SessionID, state.Metrics, passStart)
+	d.reportHoldExpiries(state, d.signals.Overlay(state.SessionID, state.Metrics, passStart), passStart)
 
 	// Content-based state detection. The tiered form is used here (and only
 	// here) so the deciding rule and its authority tier reach the recorded
@@ -1383,6 +1383,46 @@ func (d *SessionDetector) armStalledEditTool(state *session.SessionState, now ti
 		return
 	}
 	d.signals.HoldIfAbsent(state.SessionID, session.SignalOpenToolStalled, session.SignalPayload{}, now)
+}
+
+// reportHoldExpiries surfaces the holds Overlay dropped because their
+// wall-clock ceiling elapsed (#1360). It is the observability half of that
+// fix, and it lives here rather than in the domain because core/domain/session
+// owns no logger and may not import one — the architecture test enforces that
+// direction, so the domain reports expiries as data and the caller decides
+// what to do with them.
+//
+// A ceiling firing means a release that should have arrived never did: the
+// hook fired, the PostToolUse (or the transcript's end-of-life marker) did
+// not, and the session had been pinned by a signal nothing below it was
+// allowed to correct. That is precisely the condition an operator cannot
+// otherwise infer from a recording — before this, the only trace was a
+// ClassifierInputs bit quietly reading false on some later transition, which
+// is indistinguishable from the hold never having been placed.
+//
+// Both sinks are deliberate and neither substitutes for the other: the log
+// line is what a human tailing the daemon sees live, and the lifecycle event
+// is what the replay harness reads back out of a recording. Normal staleness
+// releases are NOT reported — they are the expected path, and emitting them
+// would bury the interesting case in one line per permission denial.
+func (d *SessionDetector) reportHoldExpiries(state *session.SessionState, expiries []session.SignalExpiry, at time.Time) {
+	for _, e := range expiries {
+		d.log.LogInfo(logComponentSessionDetector, state.SessionID, fmt.Sprintf(
+			"held signal %q (%v tier) expired after %v, past its %v ceiling — its release never arrived; "+
+				"the session is no longer pinned by it",
+			e.Kind, e.Tier, e.HeldFor.Round(time.Second), e.Ceiling))
+
+		d.record(lifecycle.Event{
+			Kind:       lifecycle.KindHoldExpired,
+			Timestamp:  at,
+			SessionID:  state.SessionID,
+			Adapter:    state.Adapter,
+			SignalKind: string(e.Kind),
+			SignalTier: e.Tier.String(),
+			HeldForMS:  e.HeldFor.Milliseconds(),
+			CeilingMS:  e.Ceiling.Milliseconds(),
+		})
+	}
 }
 
 // refreshStaleSessions re-reads working sessions that haven't received a
