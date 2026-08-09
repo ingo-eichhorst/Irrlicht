@@ -104,6 +104,44 @@ func TestDeriveDisplayStateNotApplicableCases(t *testing.T) {
 // Lines that must legitimately name the retired spelling (the schema that
 // records it as retired, the migration fixtures, this file) opt out with the
 // marker `retired-spelling-ok`.
+// retiredScanExts are the source kinds the census reads. Extensions rather
+// than a name list so a new file type is covered by default.
+var retiredScanExts = map[string]bool{
+	".go": true, ".js": true, ".md": true, ".sh": true, ".html": true,
+	".swift": true, ".json": true, ".yml": true, ".yaml": true,
+}
+
+// retiredScanSkipDirs are directories the census never descends into.
+// worktrees holds other agents' checkouts of this same repo; replaydata holds
+// frozen recordings plus assessment prose that legitimately quotes the
+// superseded verdict (its FIELD values are gated by `of validate` instead).
+var retiredScanSkipDirs = map[string]bool{
+	".git": true, ".build": true, "node_modules": true,
+	"testdata": true, "replaydata": true, "worktrees": true,
+}
+
+// scanRetired reports the lines of one file that name the retired spelling
+// without the opt-out marker (hits), and — in production Go only — the lines
+// that carry the marker on executable code rather than in a comment
+// (markerOnCode). The opt-out is a whole-line substring, so a live branch on
+// the retired token with a trailing marker comment would otherwise be hidden
+// by it: documenting the retired spelling is legitimate, executing on it is not.
+func scanRetired(path, content, retired, optOut string, enforceMarkerPlacement bool) (hits, markerOnCode []string) {
+	for i, line := range strings.Split(content, "\n") {
+		if !strings.Contains(line, retired) {
+			continue
+		}
+		loc := filepath.ToSlash(path) + ":" + strconv.Itoa(i+1) + ": " + strings.TrimSpace(line)
+		switch {
+		case !strings.Contains(line, optOut):
+			hits = append(hits, loc)
+		case enforceMarkerPlacement && !strings.HasPrefix(strings.TrimSpace(line), "//"):
+			markerOnCode = append(markerOnCode, loc)
+		}
+	}
+	return hits, markerOnCode
+}
+
 func TestNoSourceEmitsRetiredSpelling(t *testing.T) {
 	retired := "n.a." // retired-spelling-ok
 	const optOut = "retired-spelling-ok"
@@ -113,51 +151,26 @@ func TestNoSourceEmitsRetiredSpelling(t *testing.T) {
 	var hits, markerOnCode []string
 
 	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
+		switch {
+		case err != nil:
 			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			// worktrees holds other agents' checkouts of this same repo —
-			// walking it would double-count and is not this tree's business.
-			case ".git", ".build", "node_modules", "testdata", "replaydata", "worktrees":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		switch filepath.Ext(path) {
-		case ".go", ".js", ".md", ".sh", ".html", ".swift", ".json", ".yml", ".yaml":
-		default:
+		case d.IsDir() && retiredScanSkipDirs[d.Name()]:
+			return filepath.SkipDir
+		case d.IsDir() || !retiredScanExts[filepath.Ext(path)]:
 			return nil
 		}
 		b, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return readErr
 		}
-		slash := filepath.ToSlash(path)
 		// vocabulary.go is the schema itself: its retiredSpellings registry is
-		// the one place production code must name the retired token as DATA, so
-		// the marker-on-code rule below cannot apply to it.
-		isSchema := strings.HasSuffix(slash, "internal/matrix/vocabulary.go")
-		isProdGo := filepath.Ext(path) == ".go" && !strings.HasSuffix(path, "_test.go") && !isSchema
-		for i, line := range strings.Split(string(b), "\n") {
-			loc := filepath.ToSlash(path) + ":" + strconv.Itoa(i+1) + ": " + strings.TrimSpace(line)
-			if !strings.Contains(line, retired) {
-				continue
-			}
-			if !strings.Contains(line, optOut) {
-				hits = append(hits, loc)
-				continue
-			}
-			// The opt-out is a whole-line substring, so a live `case` branch on
-			// the retired token with the marker in a trailing comment would be
-			// hidden by it. In production Go the marker is therefore only
-			// honoured on a comment line — documenting the retired spelling is
-			// legitimate, executing on it is not.
-			if isProdGo && !strings.HasPrefix(strings.TrimSpace(line), "//") {
-				markerOnCode = append(markerOnCode, loc)
-			}
-		}
+		// the one place production code must name the retired token as data.
+		isSchema := strings.HasSuffix(filepath.ToSlash(path), "internal/matrix/vocabulary.go")
+		prodGo := filepath.Ext(path) == ".go" && !strings.HasSuffix(path, "_test.go") && !isSchema
+
+		fileHits, fileMarkers := scanRetired(path, string(b), retired, optOut, prodGo)
+		hits = append(hits, fileHits...)
+		markerOnCode = append(markerOnCode, fileMarkers...)
 		return nil
 	})
 	if err != nil {

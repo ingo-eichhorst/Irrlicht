@@ -180,12 +180,7 @@ func TestStatusAndSummaryAgreeOnNotApplicableSpelling(t *testing.T) {
 	if err := json.Unmarshal([]byte(dumpOut), &dump); err != nil {
 		t.Fatalf("bad json: %v\n%s", err, dumpOut)
 	}
-	var token string
-	for _, sv := range dump.Scenarios {
-		if sv.ID == "6.1" {
-			token = sv.Cells["claudecode"].DisplayState
-		}
-	}
+	token := displayStateOf(dump, "6.1", "claudecode")
 	if token == "" {
 		t.Fatalf("no claudecode cell for scenario 6.1 in:\n%s", dumpOut)
 	}
@@ -194,11 +189,16 @@ func TestStatusAndSummaryAgreeOnNotApplicableSpelling(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("status --summary exit=%d stderr=%s", code, errs)
 	}
-	header := strings.SplitN(sumOut, "\n", 4)
-	if len(header) < 3 {
-		t.Fatalf("unexpected summary shape:\n%s", sumOut)
+	headerLine := ""
+	for _, l := range strings.Split(sumOut, "\n") {
+		if strings.HasPrefix(l, "agent") {
+			headerLine = l
+			break
+		}
 	}
-	headerLine := header[2]
+	if headerLine == "" {
+		t.Fatalf("no column-header row in the summary:\n%s", sumOut)
+	}
 	if !strings.Contains(headerLine, token) {
 		t.Errorf("`of status` renders the not-applicable state as %q but `of status --summary`'s header column does not use that token.\nheader: %q\nThe two commands must spell one state one way (#1367).", token, headerLine)
 	}
@@ -219,4 +219,15 @@ func TestStatusAndSummaryAgreeOnNotApplicableSpelling(t *testing.T) {
 	if strings.Contains(statusText, retired) {
 		t.Errorf("`of status` text output still contains the retired %q spelling:\n%s", retired, statusText)
 	}
+}
+
+// displayStateOf pulls one cell's display state out of an `of status --json`
+// dump.
+func displayStateOf(dump statusView, scenarioID, agent string) string {
+	for _, sv := range dump.Scenarios {
+		if sv.ID == scenarioID {
+			return sv.Cells[agent].DisplayState
+		}
+	}
+	return ""
 }

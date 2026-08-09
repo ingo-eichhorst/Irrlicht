@@ -14,17 +14,18 @@ import (
 // Lines naming the retired spelling carry `retired-spelling-ok` so
 // matrix.TestNoSourceEmitsRetiredSpelling skips them.
 
-// capabilityCell writes a cell whose capability axes are set on BOTH tiers —
-// the overview `metadata` block and the `details.assessment` block. Both are
-// written by the factory (write.go mirrors one into the other), so both have
-// to be validated or the migration can leave half the data behind.
-func capabilityCell(t *testing.T, root, agent, folder, scenarioID, metaField, metaValue, assessField, assessValue string) {
+// capabilityCell overwrites validRepo's second cell so that `field` carries
+// metaValue on the overview `metadata` tier and assessValue on the
+// `details.assessment` tier. Both tiers are written by the factory (write.go
+// mirrors one into the other), so both have to be validated or a migration can
+// leave half the data behind — which is why the two values are separate knobs.
+func capabilityCell(t *testing.T, root, field, metaValue, assessValue string) {
 	t.Helper()
-	dir := filepath.Join(root, "replaydata", "agents", agent, "scenarios", folder)
+	dir := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "2-1_basic-turn")
 	write(t, filepath.Join(dir, "metadata.json"), `{
-  "scenario_id": "`+scenarioID+`",
-  "metadata": {"agent_supports": "yes", "`+metaField+`": "`+metaValue+`"},
-  "details": {"assessment": {"agent_supports": "yes", "`+assessField+`": "`+assessValue+`"}}
+  "scenario_id": "basic-turn",
+  "metadata": {"agent_supports": "yes", "`+field+`": "`+metaValue+`"},
+  "details": {"assessment": {"agent_supports": "yes", "`+field+`": "`+assessValue+`"}}
 }`)
 	write(t, filepath.Join(dir, "expected.jsonl"), `{"schema_version":1}`+"\n")
 }
@@ -37,20 +38,19 @@ func TestValidateRejectsRetiredNotApplicableSpelling(t *testing.T) {
 
 	cases := []struct {
 		name                   string
-		metaField, assessField string
+		field                  string
 		metaValue, assessValue string
 	}{
-		{"metadata.daemon_capability", "daemon_capability", "daemon_capability", retired, "full"},
-		{"metadata.driver_capability", "driver_capability", "driver_capability", retired, "ready"},
-		{"details.assessment.daemon_capability", "daemon_capability", "daemon_capability", "full", retired},
-		{"details.assessment.driver_capability", "driver_capability", "driver_capability", "ready", retired},
+		{"metadata.daemon_capability", "daemon_capability", retired, "full"},
+		{"metadata.driver_capability", "driver_capability", retired, "ready"},
+		{"details.assessment.daemon_capability", "daemon_capability", "full", retired},
+		{"details.assessment.driver_capability", "driver_capability", "ready", retired},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := validRepo(t)
-			capabilityCell(t, root, "claudecode", "2-1_basic-turn", "basic-turn",
-				tc.metaField, tc.metaValue, tc.assessField, tc.assessValue)
+			capabilityCell(t, root, tc.field, tc.metaValue, tc.assessValue)
 
 			code, _, errs := runOf("validate", "--repo-root", root)
 			if code != exitFail {
@@ -73,8 +73,7 @@ func TestValidateRejectsRetiredNotApplicableSpelling(t *testing.T) {
 // above while leaving every other typo unvalidated.
 func TestValidateRejectsUnknownCapabilityValue(t *testing.T) {
 	root := validRepo(t)
-	capabilityCell(t, root, "claudecode", "2-1_basic-turn", "basic-turn",
-		"daemon_capability", "kinda", "daemon_capability", "full")
+	capabilityCell(t, root, "daemon_capability", "kinda", "full")
 
 	code, _, errs := runOf("validate", "--repo-root", root)
 	if code != exitFail {
@@ -106,8 +105,7 @@ func TestValidateAcceptsCanonicalVocabulary(t *testing.T) {
 	for _, c := range canonical {
 		t.Run(c.field+"="+c.value, func(t *testing.T) {
 			root := validRepo(t)
-			capabilityCell(t, root, "claudecode", "2-1_basic-turn", "basic-turn",
-				c.field, c.value, c.field, c.value)
+			capabilityCell(t, root, c.field, c.value, c.value)
 
 			code, _, errs := runOf("validate", "--repo-root", root)
 			if code != exitOK {
