@@ -7,9 +7,9 @@
 //
 // Read-side commands (this phase):
 //
-//	of status   [--agent a] [--scenario s] [--runs] [--json]   coverage / run status
-//	of validate [--json]                                        schema + referential integrity
-//	of coverage [--json]                                        derived rollup (in-memory)
+//	of status   [--agent a] [--scenario s] [--runs] [--summary] [--json]  coverage / run status
+//	of validate [--json]                                                  schema + referential integrity
+//	of coverage [--hooks] [--json]                                        derived rollup, or hook coverage
 //
 // Exit codes (matching the sibling cmd tools):
 //
@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"irrlicht/tools/onboarding-factory/internal/matrix"
 	"irrlicht/tools/onboarding-factory/internal/shard"
@@ -35,9 +36,9 @@ const (
 )
 
 const usage = `usage:
-  of status   [--agent a] [--scenario s] [--runs] [--json] [--repo-root .]
+  of status   [--agent a] [--scenario s] [--runs] [--summary] [--json] [--repo-root .]
   of validate [--json] [--repo-root .]
-  of coverage [--json] [--repo-root .]
+  of coverage [--hooks] [--json] [--repo-root .]
   of scenario add|update --name n [--id i] [--description d] [--process-file f] [--acceptance-file f]
   of scenario show --name n [--json]
   of agent add    --id i --name n --provider p [--min-version v] [--prereq p]...
@@ -77,6 +78,36 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
 	}
+}
+
+// emitSummary renders the folded per-agent counts, as JSON or as the text
+// table.
+func emitSummary(view statusView, asJSON bool, stdout, stderr io.Writer) int {
+	sv := buildSummaryView(view)
+	if asJSON {
+		if err := writeJSON(stdout, sv); err != nil {
+			fmt.Fprintf(stderr, "of status: encode: %v\n", err)
+			return exitUsage
+		}
+		return exitOK
+	}
+	printSummaryText(stdout, sv)
+	return exitOK
+}
+
+// absRoot resolves --repo-root to an absolute path. Every filesystem reader
+// under internal/validate and internal/replay refuses a path containing ".."
+// (a CodeQL taint barrier) by returning an EMPTY result rather than an error,
+// so a relative root like "--repo-root .." silently reports a catalog in which
+// nothing is recorded — exit 0, no warning. `of status --summary` renders that
+// as a full table of zeros, which reads as a finished measurement rather than
+// a misread path. Resolving once at the flag boundary is what makes the guard
+// a no-op for legitimate callers instead of a trap.
+func absRoot(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
 }
 
 func writeJSON(w io.Writer, v any) error {
@@ -129,12 +160,14 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		agent    = fs.String("agent", "", "filter to one agent column")
 		scenario = fs.String("scenario", "", "filter to one scenario (by name or id)")
 		runs     = fs.Bool("runs", false, "show the factory run-log instead of coverage")
+		summary  = fs.Bool("summary", false, "per-agent cell counts instead of the full cell dump")
 		asJSON   = fs.Bool("json", false, "emit JSON")
 		repoRoot = fs.String("repo-root", ".", "repository root")
 	)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
+	*repoRoot = absRoot(*repoRoot)
 
 	if *runs {
 		return runStatusRuns(*repoRoot, *asJSON, stdout, stderr)
@@ -153,8 +186,26 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		}
 		agents = []string{*agent}
 	}
-
 	view := buildStatusView(m, *repoRoot, agents, *scenario)
+
+	// Validate --scenario the way --agent is validated. An unmatched filter
+	// used to yield a visibly empty listing; under --summary it yields a full
+	// table of zeros that reads as a completed measurement, so a typo has to
+	// fail loudly instead. Checked on the built view rather than by a second
+	// catalog walk, so the guard and the filter are literally the same
+	// predicate — buildStatusView emits a row for every matching shard, so an
+	// empty result means nothing matched.
+	if *scenario != "" && len(view.Scenarios) == 0 {
+		fmt.Fprintf(stderr, "of status: %q is not a scenario (by name or id)\n", *scenario)
+		return exitUsage
+	}
+
+	// --summary folds the same view into per-agent counts. Folding the view
+	// (rather than re-reading the matrix) is what keeps the two renderings of
+	// `of status` arithmetically consistent.
+	if *summary {
+		return emitSummary(view, *asJSON, stdout, stderr)
+	}
 
 	if *asJSON {
 		if err := writeJSON(stdout, view); err != nil {

@@ -122,6 +122,21 @@ func sanitizePathComponent(name string) string {
 // "../"-containing value through to the filesystem. The viewer's HTTP
 // handler already restricts these to a `^[a-z0-9][a-z0-9_-]*$` slug before
 // they ever reach here, so this is a no-op for every legitimate caller.
+// SlugForAdapter maps a daemon adapter's agent.Identity.Name to the directory
+// name it uses under replaydata/agents. Only claude-code differs — the
+// pre-#319 spelling survives in the registry — while gemini-cli, kiro-cli and
+// mistral-vibe match their slugs verbatim, hyphens and all.
+//
+// This package owns "where does adapter X live on disk" (AgentCellDir,
+// AgentFolderForScenario), so the mapping belongs here rather than being
+// re-derived by each caller that indexes the catalog by registry name.
+func SlugForAdapter(identityName string) string {
+	if identityName == "claude-code" {
+		return "claudecode"
+	}
+	return identityName
+}
+
 func AgentCellDir(repoRoot, adapter, folder string) string {
 	return filepath.Join(repoRoot, "replaydata", "agents", sanitizePathComponent(adapter), "scenarios", sanitizePathComponent(folder))
 }

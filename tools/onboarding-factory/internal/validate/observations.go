@@ -65,9 +65,21 @@ type ObservationReport struct {
 	Drifts  []ObsDrift  `json:"drifts,omitempty"`
 }
 
-// sortedRecordingDirs returns the cell's recording dirs newest-first (names are
-// timestamp-prefixed, so reverse-lexical == reverse-chronological).
-func sortedRecordingDirs(scenarioDir string) []string {
+// RecordingDirs returns the cell's recording dirs newest-first (names are
+// timestamp-prefixed, so reverse-lexical == reverse-chronological). Exported
+// as the single enumerator for "every recording of this cell": callers that
+// need the whole set (e.g. hook coverage) use it instead of a second
+// os.ReadDir, the way callers needing only the latest use NewestRecordingDir.
+// Returns nil when the cell has no recordings/ dir.
+//
+// Guarded the same way NewestRecordingDir is: every exported reader in this
+// package refuses a path containing "..", and an enumerator that did not would
+// be the one way to get a real listing out of validate from an unsanitised
+// path.
+func RecordingDirs(scenarioDir string) []string {
+	if hasParentTraversal(scenarioDir) {
+		return nil
+	}
 	entries, err := os.ReadDir(filepath.Join(scenarioDir, "recordings"))
 	if err != nil {
 		return nil
@@ -134,7 +146,7 @@ func loadObservationSpec(scenarioDir string) *ObservationSpec {
 // that field. No newest golden → Skipped (Pass=true).
 func ValidateObservations(scenarioDir string) (*ObservationReport, error) {
 	rep := &ObservationReport{Pass: true}
-	dirs := sortedRecordingDirs(scenarioDir)
+	dirs := RecordingDirs(scenarioDir)
 	if len(dirs) == 0 {
 		rep.Skipped, rep.Note = true, "no recordings"
 		return rep, nil

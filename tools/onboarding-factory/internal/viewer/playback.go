@@ -21,6 +21,7 @@ import (
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 	"irrlicht/tools/onboarding-factory/internal/replay"
+	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
 
@@ -729,13 +730,13 @@ func (m *PlaybackManager) handleAgents(w http.ResponseWriter, r *http.Request) {
 // dashboard joins sessions to agents by string equality, so a mismatch
 // here means the session row renders without its branded icon.
 func normalizeAdapter(a string) string {
-	switch a {
-	case "claude-code":
-		return "claudecode"
-	case "":
+	if a == "" {
+		// Recording-path only: a pre-#319 sidecar with no adapter field.
+		// shard.SlugForAdapter deliberately does NOT do this, because for a
+		// registry name an empty string is not claudecode, it is a bug.
 		return "claudecode"
 	}
-	return a
+	return shard.SlugForAdapter(a)
 }
 
 // handleSessions returns the current synthetic session list in the EXACT

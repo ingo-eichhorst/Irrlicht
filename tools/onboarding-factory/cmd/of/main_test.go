@@ -32,20 +32,11 @@ func validRepo(t *testing.T) string {
     {"id": "2.1", "name": "basic-turn", "description": "d", "process": "p", "acceptance_criteria": "a"}
   ]
 }`)
-	cell := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "1-1_session-start")
-	write(t, filepath.Join(cell, "metadata.json"), `{
-  "scenario_id": "session-start",
-  "details": {"assessment": {"agent_supports": "yes", "daemon_capability": "full", "driver_capability": "ready"}}
-}`)
-	write(t, filepath.Join(cell, "expected.jsonl"), `{"schema_version":1}`+"\n")
-	// "Recorded" is a disk fact, and a recording must be complete: events +
-	// manifest + a transcript + (for a jsonl transcript) its replay golden.
-	rec := filepath.Join(cell, "recordings", "r1")
-	write(t, filepath.Join(rec, "events.jsonl"),
-		`{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"pid_discovered","session_id":"s"}`+"\n")
-	write(t, filepath.Join(rec, "manifest.json"), `{}`+"\n")
-	write(t, filepath.Join(rec, "transcript.jsonl"), `{}`+"\n")
-	write(t, filepath.Join(rec, "transcript.jsonl.replay.json.golden"), `{}`+"\n")
+	// Shares fixture_test.go's cell/recording helpers so "what a complete
+	// recording is" lives in one place — validate.RecordingComplete gaining a
+	// required file must not mean editing two fixtures in this package.
+	cell(t, root, "claudecode", "1-1_session-start", "yes", "full", "ready")
+	recording(t, root, "claudecode", "1-1_session-start", "r1", false)
 	return root
 }
 
