@@ -128,7 +128,7 @@ assert_eq "filter: shellcheck-noisy but POSIX-clean still passes" "0" "$rc"
 #     cases above may have been satisfied by checkbashisms. CI is not that
 #     machine: the ubuntu image ships shellcheck (0.9.0) and NOT
 #     checkbashisms, so shellcheck alone is what guards `main`. Pinning a
-#     shellcheck-only PATH is the only way that configuration is ever
+#     a shellcheck-only PATH is the only way that configuration is ever
 #     exercised from a developer box that has both.
 #
 #     The two are genuinely not interchangeable — checkbashisms accepts

@@ -31,12 +31,12 @@
 #      — EVERY one that is installed, not the first one found, because the two
 #      do not agree: checkbashisms accepts `local`, `set -o pipefail` and
 #      `echo -n`, which shellcheck rejects (SC3043/SC3040/SC3037). CI has
-#      shellcheck only, so preferring the other one locally would let a
+#      only shellcheck, so preferring the other one locally would let a
 #      developer's preflight pass a diff that CI rejects.
 #
 # WHERE IT RUNS. `.github/workflows/linux.yml`'s `build-test` job, on
 # ubuntu-latest — the only runner where `/bin/sh` is genuinely dash and where
-# shellcheck is preinstalled (ubuntu-24.04 image ships shellcheck 0.9.0;
+# a preinstalled shellcheck (ubuntu-24.04 ships shellcheck 0.9.0;
 # the macos-15 image ships none, which is why test.yml's macOS `go-test` job
 # is deliberately NOT the host for this). Mirrored locally by
 # `tools/preflight.sh --only posix`.
@@ -149,7 +149,7 @@ fi
 # prevent. Running both is monotone: the local result can be stricter than
 # CI's, never weaker.
 #
-# shellcheck's output is filtered to the POSIX-compatibility codes so the gate
+# Output from shellcheck is filtered to the POSIX-compatibility codes so the gate
 # cannot drag in unrelated style debt from scripts nobody has linted before.
 # SC3xxx is the "In POSIX sh, X is undefined" family; SC2039 is the pre-0.7.2
 # catch-all that older shellchecks emit instead; SC2112/SC2113 are the two
@@ -217,7 +217,7 @@ lint_with() {
   fi
 
   raw=$(shellcheck --shell=sh --format=gcc "$f" 2>&1); rc=$?
-  # shellcheck: 0 = clean, 1 = findings. 2+ means it could not parse or run,
+  # Exit codes: 0 = clean, 1 = findings. 2+ means it could not parse or run,
   # which must never be reported as a clean file.
   if [[ "$rc" -gt 1 ]]; then
     printf 'shellcheck could not check this file (exit %s):\n%s\n' "$rc" "$raw"
@@ -245,7 +245,7 @@ lint_with() {
 # ─── Run ────────────────────────────────────────────────────────────────────
 
 # Name every checker that ran. Which ones are present varies by host — CI has
-# shellcheck only — so a run that cannot be read back to "what actually
+# only shellcheck — so a run that cannot be read back to "what actually
 # looked at this" is a run whose green means nothing in particular.
 echo "posix-lint: ${#FILES[@]} file(s); parser=$POSIX_SH, bashisms=${BASHISM_LINTERS[*]}"
 if [[ " ${BASHISM_LINTERS[*]} " != *" shellcheck "* ]]; then
