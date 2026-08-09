@@ -720,6 +720,16 @@ struct Launcher: Codable, Hashable {
     /// terminal embedded in Obsidian). Lets `SessionLauncher` build a generic
     /// title-match activator for hosts that have no registry entry.
     let hostBundleID: String?
+    /// $HERDR_PANE_ID — the pane address to focus inside the herdr session
+    /// (e.g. "w1:p2"). Present only for a session running in a herdr pane; the
+    /// host fields above then describe the herdr *client* displaying it, which
+    /// is a different process from the agent (see the daemon's session.Launcher).
+    let herdrPaneID: String?
+    /// $HERDR_SOCKET_PATH — addresses the herdr server that owns the pane.
+    /// Required alongside the pane id: a bare pane address like "w1:p1" exists
+    /// on every running server, so focusing without the socket could target a
+    /// pane in an unrelated session.
+    let herdrSocketPath: String?
 
     enum CodingKeys: String, CodingKey {
         case termProgram    = "term_program"
@@ -732,6 +742,8 @@ struct Launcher: Codable, Hashable {
         case kittyWindowID  = "kitty_window_id"
         case kittyPID       = "kitty_pid"
         case hostBundleID   = "host_bundle_id"
+        case herdrPaneID    = "herdr_pane_id"
+        case herdrSocketPath = "herdr_socket_path"
     }
 }
 

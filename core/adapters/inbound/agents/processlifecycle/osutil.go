@@ -10,6 +10,7 @@ package processlifecycle
 
 import (
 	"encoding/binary"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -40,6 +41,28 @@ var launcherEnvKeys = map[string]struct{}{
 	"KITTY_PID":         {}, // kitty.app PID; lets the macOS activator target this specific kitty instance
 	"HERDR_PANE_ID":     {}, // herdr pane address (e.g. "w1:p2") — injected per pane, so unlike the vars above it always describes *this* pane
 	"HERDR_SOCKET_PATH": {}, // herdr server socket; the complete addressing key for that server
+}
+
+// herdrClientLogName is the per-session file every attached herdr client holds
+// open for writing, in the same directory as the server socket. It is what
+// makes $HERDR_SOCKET_PATH — which the daemon already captures — a complete
+// key for finding the client, with no need to also capture $HERDR_SESSION or
+// to parse a client's argv (which differs between `herdr --session <name>`,
+// a bare `herdr` on the default session, and `herdr session attach <name>`).
+// Verified against herdr 0.8.0: the layout is identical for the default
+// session (<config>/herdr.sock) and named ones
+// (<config>/sessions/<name>/herdr.sock), and a session with no client attached
+// has no writer on this file at all.
+const herdrClientLogName = "herdr-client.log"
+
+// herdrClientLogPath maps a captured $HERDR_SOCKET_PATH to the client log
+// beside it. Returns "" for an empty socket path so callers inherit the
+// "no address, no client" answer instead of probing a bare directory.
+func herdrClientLogPath(socketPath string) string {
+	if socketPath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(socketPath), herdrClientLogName)
 }
 
 // ReadLauncherEnv returns the launcher identity captured from the process env
@@ -81,6 +104,15 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	// can target the exact tab — Terminal.app's AppleScript dictionary
 	// matches tabs by `tty` but has no session-UUID analog.
 	l.TTY = processTTY(pid)
+
+	// A herdr pane's window belongs to the attached client, so its host
+	// identity is resolved from that process instead — one indirection past
+	// the ancestry walk skipped above (#1350). Runs after the TTY capture so
+	// the pane keeps its own pty when nothing is attached, and is overridden
+	// by the client's when something is: AdoptHostIdentity owns that rule.
+	if l.HerdrPaneID != "" {
+		l.AdoptHostIdentity(herdrClientLauncher(l.HerdrSocketPath))
+	}
 	if l.IsEmpty() {
 		return nil
 	}

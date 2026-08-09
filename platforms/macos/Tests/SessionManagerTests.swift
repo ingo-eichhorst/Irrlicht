@@ -378,6 +378,9 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(SessionLauncher.bundleID(for: "cmux"),      "com.cmuxterm.app")
         // tmux is a decorator, not a standalone term_program — no registry entry.
         XCTAssertNil(SessionLauncher.bundleID(for: "tmux"))
+        // herdr likewise: the host comes from the attached client, so herdr
+        // never names a bundle of its own (#1350).
+        XCTAssertNil(SessionLauncher.bundleID(for: "herdr"))
         XCTAssertNil(SessionLauncher.bundleID(for: nil))
         XCTAssertNil(SessionLauncher.bundleID(for: "unknown-terminal"))
     }
@@ -408,6 +411,78 @@ final class SessionManagerTests: XCTestCase {
         // Nothing identifying → no activator (silent no-op, as before).
         XCTAssertNil(SessionLauncher.resolveActivator(for: try launcher("{}")))
         XCTAssertNil(SessionLauncher.resolveActivator(for: nil))
+    }
+
+    // A session running in a herdr pane (#1350). herdr's server owns the pane's
+    // pty and outlives any attached client, so the window belongs to the client
+    // — the daemon resolves that client and reports its identity in the ordinary
+    // host fields, which is what makes an activator resolvable at all here. The
+    // pane address then rides along so the right pane is selected inside it.
+    func testResolveActivatorHerdrPaneWrapsHostActivator() throws {
+        let attached = try JSONDecoder().decode(Launcher.self, from: Data(#"""
+        {"term_program":"iTerm.app","iterm_session_id":"w0t0p0-CLIENT",
+         "herdr_pane_id":"w1:p2","herdr_socket_path":"/cfg/herdr/sessions/probe/herdr.sock"}
+        """#.utf8))
+
+        // Wire contract: both herdr keys decode.
+        XCTAssertEqual(attached.herdrPaneID, "w1:p2")
+        XCTAssertEqual(attached.herdrSocketPath, "/cfg/herdr/sessions/probe/herdr.sock")
+
+        // The host activator is wrapped, and still reports the inner host so
+        // the window that actually gets raised is the client's.
+        let resolved = SessionLauncher.resolveActivator(for: attached)
+        XCTAssertTrue(resolved is HerdrActivator)
+        XCTAssertEqual(resolved?.bundleID, "com.googlecode.iterm2")
+        XCTAssertEqual(resolved?.termProgram, "iTerm.app")
+    }
+
+    // The honest-failure half: a herdr session with no attached client has no
+    // host anywhere, so it must resolve to nothing rather than raise whatever
+    // application happens to be nearby — the misroute #1348 removed.
+    func testResolveActivatorHerdrDetachedResolvesToNil() throws {
+        let detached = try JSONDecoder().decode(Launcher.self, from: Data(#"""
+        {"herdr_pane_id":"w1:p1","herdr_socket_path":"/cfg/herdr/herdr.sock"}
+        """#.utf8))
+        XCTAssertEqual(detached.herdrPaneID, "w1:p1")
+        XCTAssertNil(detached.termProgram)
+        XCTAssertNil(SessionLauncher.resolveActivator(for: detached))
+    }
+
+    // herdr and tmux compose: a herdr client can itself be running in a tmux
+    // pane, and both selections are needed to land in the right window. Pins
+    // that adding the herdr decorator did not replace the tmux one.
+    // ProcessRunner gained an `env:` parameter for herdr, which addresses its
+    // server through $HERDR_SOCKET_PATH because its CLI has no socket flag
+    // (#1350). Layering, not replacing, is the contract: a CLI that still needs
+    // $HOME or $PATH must keep them.
+    func testProcessRunnerLayersEnvOntoCurrentEnvironment() throws {
+        let result = ProcessRunner.run("/bin/sh",  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
+                                       args: ["-c", "printf '%s|%s' \"$HERDR_SOCKET_PATH\" \"${HOME:+has-home}\""],
+                                       env: ["HERDR_SOCKET_PATH": "/cfg/herdr/herdr.sock"],
+                                       timeout: 5.0)
+        XCTAssertEqual(result.status, 0, "stderr: \(result.stderr)")
+        XCTAssertEqual(result.stdout, "/cfg/herdr/herdr.sock|has-home")
+    }
+
+    // Omitting `env:` must leave the child on the inherited environment — the
+    // path every existing activator (tmux, kitty) still takes.
+    func testProcessRunnerWithoutEnvInheritsEnvironment() throws {
+        let result = ProcessRunner.run("/bin/sh",  // NOSONAR (swift:S1075) — local filesystem/binary path, not a network endpoint
+                                       args: ["-c", "printf '%s' \"${HOME:+has-home}\""],
+                                       timeout: 5.0)
+        XCTAssertEqual(result.status, 0, "stderr: \(result.stderr)")
+        XCTAssertEqual(result.stdout, "has-home")
+    }
+
+    func testResolveActivatorHerdrComposesWithTmux() throws {
+        let nested = try JSONDecoder().decode(Launcher.self, from: Data(#"""
+        {"term_program":"ghostty","tmux_pane":"%3","tmux_socket":"/tmp/tmux-501/default",
+         "herdr_pane_id":"w1:p2","herdr_socket_path":"/cfg/herdr/herdr.sock"}
+        """#.utf8))
+        let resolved = SessionLauncher.resolveActivator(for: nested)
+        let herdr = try XCTUnwrap(resolved as? HerdrActivator)
+        XCTAssertTrue(herdr.inner is TmuxActivator)
+        XCTAssertEqual(herdr.bundleID, "com.mitchellh.ghostty")
     }
 
     func testJetBrainsActivatorRunningBundleIDIsNilOrKnown() {

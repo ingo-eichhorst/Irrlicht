@@ -15,11 +15,24 @@ enum ProcessRunner {
     /// Launches `launchPath` with `args` and blocks until the process exits or
     /// `timeout` expires. On timeout the process is terminated and `status` is
     /// set to -1.
+    ///
+    /// `env` is layered onto the current environment rather than replacing it,
+    /// so a CLI that still needs $HOME or $PATH keeps them. It exists for tools
+    /// that take their target out of the environment instead of argv — herdr
+    /// addresses its server through $HERDR_SOCKET_PATH and has no socket flag.
     @discardableResult
-    static func run(_ launchPath: String, args: [String], timeout: TimeInterval = 3.0) -> Result {
+    static func run(
+        _ launchPath: String,
+        args: [String],
+        env: [String: String]? = nil,
+        timeout: TimeInterval = 3.0
+    ) -> Result {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: launchPath)
         proc.arguments = args
+        if let env, !env.isEmpty {
+            proc.environment = ProcessInfo.processInfo.environment.merging(env) { _, new in new }
+        }
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()

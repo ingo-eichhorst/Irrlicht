@@ -48,7 +48,12 @@ enum SessionLauncher {
         guard let activator = resolveActivator(for: session.launcher) else {
             let tp = session.launcher?.termProgram ?? "nil"
             let bid = session.launcher?.hostBundleID ?? "nil"
-            logger.info("no activator for session \(session.id, privacy: .public) (term_program=\(tp, privacy: .public), host_bundle_id=\(bid, privacy: .public))")
+            // A herdr pane with no host is the expected "nothing is displaying
+            // this session" case rather than a capture failure, so name it:
+            // otherwise a detached multiplexer session is indistinguishable
+            // from a launcher we simply failed to read (#1350).
+            let herdr = session.launcher?.herdrPaneID.map { "herdr_pane=\($0), no attached client" } ?? "herdr_pane=nil"
+            logger.info("no activator for session \(session.id, privacy: .public) (term_program=\(tp, privacy: .public), host_bundle_id=\(bid, privacy: .public), \(herdr, privacy: .public))")
             return
         }
         _ = activator.activate(session)
@@ -61,7 +66,15 @@ enum SessionLauncher {
     /// have no registry entry (e.g. a terminal inside Obsidian) — bringing the
     /// host app/window to the front, not a specific pane. The result is wrapped
     /// in `TmuxActivator` when the session lives in a tmux pane so the correct
-    /// pane is selected before the host window is raised.
+    /// pane is selected before the host window is raised, and in
+    /// `HerdrActivator` when it lives in a herdr pane. The two compose: a herdr
+    /// client can itself be running inside tmux, in which case both selections
+    /// are needed and neither substitutes for the other.
+    ///
+    /// For a herdr session the host fields were resolved from the attached
+    /// herdr client, not from the agent's own process tree (#1350) — so a
+    /// detached session has no host, falls through to nil, and honestly does
+    /// nothing rather than raising some other window.
     static func resolveActivator(for launcher: Launcher?) -> HostActivator? {
         var base: HostActivator?
         if let tp = launcher?.termProgram {
@@ -71,7 +84,14 @@ enum SessionLauncher {
             base = AXTitleMatchActivator(termProgram: launcher?.termProgram ?? "", bundleID: bundleID)
         }
         guard let base = base else { return nil }
-        return launcher?.tmuxPane != nil ? TmuxActivator(inner: base) : base
+        var activator: HostActivator = base
+        if launcher?.tmuxPane != nil {
+            activator = TmuxActivator(inner: activator)
+        }
+        if launcher?.herdrPaneID != nil {
+            activator = HerdrActivator(inner: activator)
+        }
+        return activator
     }
 
     /// Returns the macOS bundle ID for a `$TERM_PROGRAM` value, or nil

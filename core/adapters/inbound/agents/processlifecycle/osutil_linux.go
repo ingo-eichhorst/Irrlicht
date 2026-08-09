@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"irrlicht/core/domain/session"
 )
 
 // readProcessEnv reads /proc/<pid>/environ and returns the whitelisted
@@ -53,3 +55,10 @@ func kittyWindowIDForPID(socket string, sessionPID int) string { return "" }
 // process, issue #784) only exists on macOS, so failing closed here would
 // reject every antigravity CLI session on this platform instead.
 func IsKnownInteractiveHost(pid int) bool { return true }
+
+// herdrClientPIDs / herdrClientLauncher resolve a herdr pane's window through
+// the attached client (#1350). Darwin-only: the identity they produce is only
+// consumed by the macOS click-to-focus path, and resolving it needs the same
+// ancestry walk the stubs above already decline to do.
+func herdrClientPIDs(socketPath string) []int                 { return nil }
+func herdrClientLauncher(socketPath string) *session.Launcher { return nil }

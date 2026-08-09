@@ -106,3 +106,65 @@ func TestSessionState_LauncherJSONRoundTrip(t *testing.T) {
 		t.Errorf("legacy session should have nil Launcher, got %+v", legacyOut.Launcher)
 	}
 }
+
+// TestLauncher_AdoptHostIdentity covers how a herdr pane acquires the window
+// it is displayed in (#1350): the pane keeps its own address, and every
+// host-window field comes from the attached client.
+func TestLauncher_AdoptHostIdentity(t *testing.T) {
+	pane := &Launcher{
+		HerdrPaneID:     "w1:p2",
+		HerdrSocketPath: "/cfg/herdr/sessions/probe/herdr.sock",
+		TTY:             "/dev/ttys900", // the pane's own pty, captured first
+	}
+	client := &Launcher{
+		TermProgram:    "iTerm.app",
+		ITermSessionID: "w0t0p0-CLIENT",
+		TTY:            "/dev/ttys012",
+		HostBundleID:   "com.googlecode.iterm2",
+	}
+	if !pane.AdoptHostIdentity(client) {
+		t.Fatal("adopting a populated client identity must report a change")
+	}
+	if pane.TermProgram != "iTerm.app" || pane.ITermSessionID != "w0t0p0-CLIENT" {
+		t.Errorf("host identity not adopted: %+v", pane)
+	}
+	if pane.TTY != "/dev/ttys012" {
+		t.Errorf("TTY: want the client's tab, got %q", pane.TTY)
+	}
+	if pane.HerdrPaneID != "w1:p2" || pane.HerdrSocketPath != "/cfg/herdr/sessions/probe/herdr.sock" {
+		t.Errorf("the pane's own address must survive: %+v", pane)
+	}
+}
+
+// TestLauncher_AdoptHostIdentity_NoClientIsNoOp is the honest-failure lock: a
+// detached herdr session has no window anywhere, and must keep its pane-only
+// launcher rather than end up half-populated.
+func TestLauncher_AdoptHostIdentity_NoClientIsNoOp(t *testing.T) {
+	for name, from := range map[string]*Launcher{
+		"nil":   nil,
+		"empty": {},
+	} {
+		pane := &Launcher{HerdrPaneID: "w1:p1", TTY: "/dev/ttys900"}
+		if pane.AdoptHostIdentity(from) {
+			t.Errorf("%s: must report no change", name)
+		}
+		if pane.TTY != "/dev/ttys900" || pane.HerdrPaneID != "w1:p1" {
+			t.Errorf("%s: launcher was mutated: %+v", name, pane)
+		}
+	}
+}
+
+// TestLauncher_AdoptHostIdentity_KeepsOwnTTYWhenClientHasNone pins the reason
+// the TTY copy is guarded: BackgroundAgent.Detached is computed from this
+// field (#744), so a client resolved without a controlling terminal must not
+// erase the pane's own pty and make a live session look detached.
+func TestLauncher_AdoptHostIdentity_KeepsOwnTTYWhenClientHasNone(t *testing.T) {
+	pane := &Launcher{HerdrPaneID: "w1:p1", TTY: "/dev/ttys900"}
+	pane.AdoptHostIdentity(&Launcher{TermProgram: "ghostty"})
+	if pane.TTY != "/dev/ttys900" {
+		t.Errorf("TTY: want the pane's own pty preserved, got %q", pane.TTY)
+	}
+	if pane.TermProgram != "ghostty" {
+		t.Errorf("TermProgram: want ghostty, got %q", pane.TermProgram)
+	}
+}

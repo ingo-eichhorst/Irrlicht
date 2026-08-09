@@ -1223,6 +1223,12 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 //   - KittyPID: shipped to support per-process kitty activation (issue #326).
 //     Without it, KittyActivator on macOS falls back to bundle-level activation
 //     which can pick the wrong kitty when multiple kitty.app instances run.
+//   - The host identity of a herdr pane (issue #1350), which is resolved from
+//     the attached herdr client rather than from the pane itself. A session
+//     that was detached when its PID was bound has no host to record, so this
+//     is the path by which one attached since then is picked up. Capture is
+//     still once-per-PID-bind and this runs at seed, so re-attaching a session
+//     to a *different* terminal is not noticed until the daemon restarts.
 func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 	if state.Launcher == nil {
 		pm.captureLauncher(state, state.PID)
@@ -1257,11 +1263,11 @@ func (pm *PIDManager) touchAndSave(state *session.SessionState) {
 // launcherBackfillNeeds tracks which Launcher fields are missing and should
 // be refreshed from a fresh env read.
 type launcherBackfillNeeds struct {
-	tty, kittyPID, kittyListen, kittyWindow bool
+	tty, kittyPID, kittyListen, kittyWindow, herdrHost bool
 }
 
 func (n launcherBackfillNeeds) any() bool {
-	return n.tty || n.kittyPID || n.kittyListen || n.kittyWindow
+	return n.tty || n.kittyPID || n.kittyListen || n.kittyWindow || n.herdrHost
 }
 
 // launcherBackfillNeedsFor computes which fields of l are missing and
@@ -1274,6 +1280,10 @@ func launcherBackfillNeedsFor(l *session.Launcher) launcherBackfillNeeds {
 		kittyPID:    isKitty && l.KittyPID == 0,
 		kittyListen: isKitty && l.KittyListenOn == "",
 		kittyWindow: isKitty && l.KittyWindowID == "",
+		// A herdr pane with no host recorded had no client attached when it
+		// was captured. Mutually exclusive with the kitty needs above, which
+		// all require TermProgram == "kitty".
+		herdrHost: l.HerdrPaneID != "" && l.TermProgram == "" && l.HostBundleID == "",
 	}
 }
 
@@ -1295,6 +1305,12 @@ func applyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fre
 	}
 	if needs.kittyWindow && fresh.KittyWindowID != "" {
 		l.KittyWindowID = fresh.KittyWindowID
+		updated = true
+	}
+	// fresh was produced by the same reader, so its host fields are already
+	// the attached client's. A still-detached session yields none and this
+	// reports no change rather than writing empties over empties.
+	if needs.herdrHost && l.AdoptHostIdentity(fresh) {
 		updated = true
 	}
 	return updated

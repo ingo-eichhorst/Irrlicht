@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/pathutil"
 )
 
@@ -372,4 +374,73 @@ func readProcInfo(pid int) (ppid int, cmd string, err error) {
 	}
 	cmd = strings.TrimSpace(line[space:])
 	return ppid, cmd, nil
+}
+
+// herdrClientPIDs returns the PIDs of every herdr client currently attached to
+// the session addressed by socketPath, newest attach first. A detached session
+// yields nil — verified live against herdr 0.8.0, where a session with no
+// client has no writer on its client log, and one with two clients attached
+// (herdr supports attaching from more than one place) has two.
+//
+// Ordering answers open question 3 of #1350: the most recently attached client
+// is the window the user most recently chose to view the session in, and PIDs
+// are allocated ascending, so descending PID is "newest first". lsof matches
+// by device and inode rather than by string, so a symlinked path (a macOS
+// t.TempDir() lives under /var -> /private/var) needs no canonicalisation here.
+func herdrClientPIDs(socketPath string) []int {
+	logPath := herdrClientLogPath(socketPath)
+	if logPath == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	// -t prints bare PIDs, one per line, and exits non-zero when no process
+	// holds the file open — the detached case, not an error.
+	out, err := exec.CommandContext(ctx, lsofPath, "-t", logPath).Output()
+	if err != nil {
+		return nil
+	}
+	self := os.Getpid()
+	var pids []int
+	for _, line := range strings.Fields(string(out)) {
+		pid, convErr := strconv.Atoi(line)
+		if convErr != nil || pid <= 0 || pid == self {
+			continue
+		}
+		pids = append(pids, pid)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(pids)))
+	return pids
+}
+
+// herdrClientLauncher resolves the host-window identity of the herdr session
+// addressed by socketPath, by reading it from the attached client the same way
+// it would be read from any directly-hosted agent: the whitelisted env of that
+// process plus the ancestry fallbacks. Returns nil when nothing is attached, or
+// when no attached client resolves to a local GUI host — an SSH client has a
+// real tty but no local window, and reporting one anyway is the misroute #1348
+// removed.
+//
+// Only ever called with a socket path the daemon captured from the pane's own
+// $HERDR_SOCKET_PATH, so a resolved identity always accompanies a complete
+// herdr address; control keeps routing to herdr (resolveBackend requires both
+// Herdr fields and tests them first) rather than to any tmux/kitty identity
+// adopted from the client.
+func herdrClientLauncher(socketPath string) *session.Launcher {
+	for _, pid := range herdrClientPIDs(socketPath) {
+		env, _ := osProc.EnvOf(pid)
+		host := launcherFromEnv(env)
+		if host.HerdrPaneID != "" {
+			// herdr nested in herdr: this client's own window is another
+			// indirection away. Don't recurse — try the next candidate.
+			continue
+		}
+		applyAncestryFallbacks(host, pid, memoizedAncestry(pid))
+		host.TTY = processTTY(pid)
+		if host.TermProgram == "" && host.HostBundleID == "" {
+			continue
+		}
+		return host
+	}
+	return nil
 }
