@@ -290,7 +290,17 @@ func resolvePath(path string) (string, error) {
 	if err == nil {
 		return resolved, nil
 	}
-	if !errors.Is(err, fs.ErrNotExist) || hasParentRef(path) {
+	// The ".." test is written inline, as a plain strings.Contains, rather than
+	// through a helper: it is a real guard (a parent reference cannot be
+	// resolved without the filesystem, and resolving it lexically is the very
+	// bypass this function exists to prevent) AND it is the form CodeQL's
+	// go/path-injection query recognizes as a sanitizer for the Lstat below —
+	// an interprocedural predicate is not (same lesson as session_meta.go's
+	// guard and store.go's underRoot in #910). Contains is stricter than a
+	// component-wise check, which is the right direction here: it also refuses
+	// a not-yet-written leaf whose own name embeds "..", and no agent names a
+	// transcript that way.
+	if !errors.Is(err, fs.ErrNotExist) || strings.Contains(path, "..") {
 		return "", err
 	}
 	if _, lerr := os.Lstat(path); !errors.Is(lerr, fs.ErrNotExist) {
@@ -309,19 +319,4 @@ func resolvePath(path string) (string, error) {
 		return "", dirErr
 	}
 	return filepath.Join(resolvedDir, base), nil
-}
-
-// hasParentRef reports whether path contains a ".." component.
-func hasParentRef(path string) bool {
-	// Allocation-free reject for the overwhelmingly common case; the split
-	// below only runs for a path that contains ".." as a substring.
-	if !strings.Contains(path, "..") {
-		return false
-	}
-	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
-		if part == ".." {
-			return true
-		}
-	}
-	return false
 }
