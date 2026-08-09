@@ -1,6 +1,9 @@
 package codex
 
 import (
+	"fmt"
+
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
 )
@@ -66,8 +69,12 @@ func Agent() agent.Agent {
 				Kind:            permission.KindModify,
 				Title:           "Install Codex hooks",
 				FeatureUnlocked: "Instant waiting/ready detection (approval prompts, turn end)",
-				Touches:         "Writes hook entries to ~/.codex/hooks.json",
-				Detail: "Adds PermissionRequest, PostToolUse and Stop hooks to " +
+				// Derived from installedHookEvents rather than restated — see the
+				// same note on claudecode's hooks permission (#1356). Codex's copy
+				// happened to be accurate; the contract is what keeps it so.
+				Touches: fmt.Sprintf("Writes %d hook entries to ~/.codex/hooks.json",
+					len(installedHookEvents)),
+				Detail: "Adds " + hookjson.EventList(installedHookEvents) + " hooks to " +
 					"~/.codex/hooks.json (a dedicated file, never config.toml) that " +
 					"POST the hook payload to the local daemon at " + hookEndpointURL() +
 					" via curl. PermissionRequest drives a live waiting transition " +
