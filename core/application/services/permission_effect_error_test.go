@@ -91,11 +91,8 @@ func newFailingService(f *applyFailure, store *mockPermStore, push *mockPush) *s
 func permView(t *testing.T, svc *services.PermissionService, agentName, key string) services.PermissionView {
 	t.Helper()
 	for _, a := range svc.Snapshot().Agents {
-		if a.Name != agentName {
-			continue
-		}
 		for _, p := range a.Permissions {
-			if p.Key == key {
+			if a.Name == agentName && p.Key == key {
 				return p
 			}
 		}

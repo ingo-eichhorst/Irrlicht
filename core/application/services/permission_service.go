@@ -352,20 +352,11 @@ func (s *PermissionService) Answer(answers []PermissionAnswer) error {
 		if ans.Grant {
 			target = permission.StateGranted
 		}
-		// Same-state re-answers are no-ops — EXCEPT when this permission's
-		// effect failed, in which case the identical answer is the user
-		// hitting Retry and must re-run the closure (#1362). Without this
-		// exception a grant whose Apply failed can only be retried by
-		// revoking and re-granting, which is exactly the workaround the
-		// issue rules out.
-		if s.set.Get(ans.Agent, ans.Permission) == target {
-			if !s.effectFailedLocked(ans.Agent, ans.Permission) {
-				continue
-			}
-		} else {
-			s.set.Put(ans.Agent, ans.Permission, target)
-			stateChanged = true
+		moved, run := s.planAnswerLocked(ans.Agent, ans.Permission, target)
+		if !run {
+			continue
 		}
+		stateChanged = stateChanged || moved
 		effects = append(effects, pendingEffect{ans.Agent, perms[i], target})
 	}
 	// A pure retry re-runs the effect without moving any state, so there is
@@ -387,6 +378,25 @@ func (s *PermissionService) Answer(answers []PermissionAnswer) error {
 	}
 	s.push.Broadcast(outbound.PushMessage{Type: outbound.PushTypePermissionsUpdated})
 	return nil
+}
+
+// planAnswerLocked records one answer and reports (stateMoved, runEffect).
+//
+// A same-state re-answer is normally a no-op, so the losing surface's
+// duplicate submission is harmless — EXCEPT when this permission's effect
+// failed, in which case the identical answer is the user hitting Retry and
+// must re-run the closure (#1362). Without that exception a grant whose
+// Apply failed could only be retried by revoking and re-granting, the
+// workaround the issue rules out. A retry moves no state, so it also tells
+// the caller there is nothing new to persist.
+//
+// Caller holds s.mu.
+func (s *PermissionService) planAnswerLocked(agentName, key string, target permission.State) (moved, run bool) {
+	if s.set.Get(agentName, key) != target {
+		s.set.Put(agentName, key, target)
+		return true, true
+	}
+	return false, s.effectFailedLocked(agentName, key)
 }
 
 // declared returns the declaration for the agent/key pair.

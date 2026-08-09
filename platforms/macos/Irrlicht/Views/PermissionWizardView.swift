@@ -267,7 +267,8 @@ struct PermissionWizardView: View {
             let failed = (manager.permissionsSnapshot?.agents ?? [])
                 .filter { answered.contains($0.name) }
                 .contains { $0.hasFailedEffect }
-            if isReview && ok && !failed {
+            let appliedCleanly = ok && !failed
+            if isReview && appliedCleanly {
                 onClose()
             }
         }

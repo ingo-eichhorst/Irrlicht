@@ -100,13 +100,8 @@ export function anyEffectFailed(snap, names) {
 // findPermission looks one permission up in a snapshot. Pure; exported
 // for tests.
 export function findPermission(snap, agentName, permKey) {
-  for (const a of (snap?.agents || [])) {
-    if (a.name !== agentName) continue;
-    for (const p of (a.permissions || [])) {
-      if (p.key === permKey) return p;
-    }
-  }
-  return null;
+  const agent = (snap?.agents || []).find(a => a.name === agentName);
+  return (agent?.permissions || []).find(p => p.key === permKey) || null;
 }
 
 // visiblePermissionsFor picks the rows one agent shows. Auto mode asks
@@ -154,27 +149,33 @@ function updatePermissionsWizard() {
   if (!backdrop) return;
   if (backdrop.classList.contains('open')) {
     if (permissionsWizardMode !== 'auto') return;
-    // A failed consent effect holds the wizard open just as a pending
-    // permission does — otherwise the daemon's own permissions_updated
-    // broadcast closes it the instant a grant is recorded, taking the new
-    // failure warning with it (#1362). Mirrors macOS's
-    // AgentPermissions.hasUnresolvedPermissions.
-    const failed = anyEffectFailed(permissionsSnapshot, permissionsWizardAgents);
-    if (failed || stillPendingForAgents(permissionsSnapshot, permissionsWizardAgents)) {
-      // An open wizard is deliberately NOT re-rendered, so in-flight
-      // toggling isn't clobbered — with one exception: a failure that
-      // isn't on screen yet has to be shown. It can arrive from the macOS
-      // app answering first, or from the daemon's startup re-apply, not
-      // just from this browser's own Apply.
-      if (failed && !document.querySelector('#permissions-body .perm-effect-error')) {
-        renderPermissionsWizard();
-      }
-      return;
-    }
+    if (autoWizardStillHasSomethingToSay()) return;
     closePermissionsWizard();
     // Fall through: another agent may be waiting for its own prompt.
   }
   if (pendingWizardAgents(permissionsSnapshot).length > 0) openPermissionsWizard('auto');
+}
+
+// autoWizardStillHasSomethingToSay reports whether the OPEN auto wizard
+// must stay up, and renders a not-yet-visible failure into it if so.
+//
+// A failed consent effect holds it open just as a pending permission does
+// — otherwise the daemon's own permissions_updated broadcast closes it the
+// instant a grant is recorded, taking the new failure warning with it
+// (#1362). Mirrors macOS's AgentPermissions.hasUnresolvedPermissions.
+function autoWizardStillHasSomethingToSay() {
+  const failed = anyEffectFailed(permissionsSnapshot, permissionsWizardAgents);
+  if (!failed && !stillPendingForAgents(permissionsSnapshot, permissionsWizardAgents)) {
+    return false;
+  }
+  // An open wizard is deliberately NOT re-rendered, so in-flight toggling
+  // isn't clobbered — with one exception: a failure that isn't on screen
+  // yet has to be shown. It can arrive from the macOS app answering first,
+  // or from the daemon's startup re-apply, not just from our own Apply.
+  if (failed && !document.querySelector('#permissions-body .perm-effect-error')) {
+    renderPermissionsWizard();
+  }
+  return true;
 }
 
 function openPermissionsWizard(mode) {
