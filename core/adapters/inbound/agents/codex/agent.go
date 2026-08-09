@@ -80,6 +80,10 @@ func Agent() agent.Agent {
 					"running Codex's cli_version. Toggling off removes the entries.",
 				Apply:  func() error { return applyCodexHooks() },
 				Remove: func() error { _, err := UninstallHooks(); return err },
+				Hooks: &agent.HookInstall{
+					ConfigPath: codexHooksPath,
+					Uninstall:  UninstallHooks,
+				},
 			},
 		},
 	}

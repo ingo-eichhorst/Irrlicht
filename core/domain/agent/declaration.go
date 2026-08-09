@@ -102,6 +102,33 @@ type Permission struct {
 	// and stopping the agent's watchers) is owned by the daemon wiring.
 	Apply  func() error
 	Remove func() error
+
+	// Hooks is non-nil exactly for the permission that installs irrlicht's
+	// hooks into an agent-owned config file. It carries what callers OUTSIDE
+	// the adapter need — which file, and how to take our entries back out.
+	Hooks *HookInstall
+}
+
+// HookInstall is the outside-the-adapter half of a hooks permission (#1357).
+//
+// Two places have to enumerate every agent config file irrlicht installs hooks
+// into: the daemon's `--uninstall-hooks`, which must leave nothing behind
+// pointing at a dead port, and the onboarding recorder, which backs those files
+// up before running a grant-all daemon against the user's real $HOME. Both used
+// to carry a hand-maintained two-element literal list, correct only for as long
+// as there were exactly two hook adapters. Declaring the file here — next to the
+// Apply/Remove closures that write it — makes both lists a projection of the
+// registry, so a third adapter is covered by existing over being remembered.
+type HookInstall struct {
+	// ConfigPath resolves the ABSOLUTE path of the agent config file the
+	// hooks are written into, honoring the same env overrides the adapter's
+	// own installer honors (e.g. CODEX_HOME). It must resolve the real path
+	// rather than a display string: the recorder backs up and restores
+	// exactly what it returns.
+	ConfigPath func() (string, error)
+	// Uninstall removes irrlicht's entries from that file, reporting whether
+	// it modified anything.
+	Uninstall func() (bool, error)
 }
 
 // Identity is the always-required adapter metadata served via
