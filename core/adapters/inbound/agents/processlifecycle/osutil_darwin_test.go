@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestKittyAncestryPID_Self(t *testing.T) {
@@ -353,4 +354,158 @@ func reverseLookup(termProgram string) string {
 		}
 	}
 	return ""
+}
+
+// --- herdr client discovery (#1350) -----------------------------------------
+//
+// Darwin-only because client discovery is: it walks lsof's FD table and then
+// the process ancestry, neither of which the linux/other builds implement.
+
+// spawnHerdrClient starts a sleeper that stands in for an attached herdr
+// client: it holds the session's client log open for writing (which is what
+// identifies a client) and carries the host terminal's identity in its own env.
+// Waits until the open fd is actually visible to the discovery helper so the
+// caller isn't racing the child's OpenFile.
+func spawnHerdrClient(t *testing.T, socketPath string, env ...string) int {
+	t.Helper()
+	pid := spawnSleeperWithEnv(t, append([]string{
+		"PATH=/usr/bin:/bin",
+		"GO_WANT_LAUNCHER_HELPER_HOLD=" + herdrClientLogPath(socketPath),
+	}, env...))
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, got := range herdrClientPIDs(socketPath) {
+			if got == pid {
+				return pid
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("client pid %d never became visible as a writer of the client log", pid)
+	return 0
+}
+
+// TestReadLauncherEnv_Herdr_ResolvesHostFromAttachedClient pins the defect in
+// #1350: a herdr pane reached the macOS app with no term_program and no
+// host_bundle_id, so resolveActivator returned nil and a click did nothing.
+// The window belongs to the attached *client*, so the host identity has to be
+// read from that process — one indirection past the pane's own env, which
+// describes the (detached, reparented) server and is deliberately suppressed.
+func TestReadLauncherEnv_Herdr_ResolvesHostFromAttachedClient(t *testing.T) {
+	socketPath := newHerdrSessionDir(t)
+	spawnHerdrClient(t, socketPath,
+		"TERM_PROGRAM=iTerm.app",
+		"ITERM_SESSION_ID=w0t0p0-CLIENT",
+	)
+	agentPID := spawnSleeperWithEnv(t, []string{
+		"PATH=/usr/bin:/bin",
+		"HERDR_PANE_ID=w1:p2",
+		"HERDR_SOCKET_PATH=" + socketPath,
+		// The stale, inherited identity a real pane carries — it describes the
+		// server's launch environment and must stay suppressed (#1348).
+		"TERM_PROGRAM=tmux",
+		"TMUX=/tmp/foreign-tmux,95058,0",
+		"TMUX_PANE=%0",
+	})
+
+	l := ReadLauncherEnv(agentPID)
+	if l == nil {
+		t.Fatal("expected non-nil launcher")
+	}
+	if l.TermProgram != "iTerm.app" {
+		t.Errorf("TermProgram: want the attached client's iTerm.app, got %q", l.TermProgram)
+	}
+	if l.ITermSessionID != "w0t0p0-CLIENT" {
+		t.Errorf("ITermSessionID: want the client's window selector, got %q", l.ITermSessionID)
+	}
+	// The pane address must survive the merge — it is what the activator
+	// focuses, and what resolveBackend keys the control path on.
+	if l.HerdrPaneID != "w1:p2" || l.HerdrSocketPath != socketPath {
+		t.Errorf("herdr address lost: pane=%q socket=%q", l.HerdrPaneID, l.HerdrSocketPath)
+	}
+	// The client's env carried no tmux, so the pane's inherited tmux identity
+	// must not reappear by this route — resolveBackend requires both herdr
+	// fields, and a surviving TmuxPane is the #1348 misroute.
+	if l.TmuxPane != "" || l.TmuxSocket != "" {
+		t.Errorf("inherited tmux identity survived: pane=%q socket=%q", l.TmuxPane, l.TmuxSocket)
+	}
+}
+
+// TestHerdrClientPIDs_MultipleClientsAreOrderedNewestFirst covers open question
+// 3 of #1350. herdr supports attaching from more than one place at once;
+// verified live (two clients on one session → two writers on the client log).
+// The newest attach is the window the user most recently chose, so the
+// discovery helper reports descending PID and the resolver takes the first
+// candidate that yields a host.
+func TestHerdrClientPIDs_MultipleClientsAreOrderedNewestFirst(t *testing.T) {
+	socketPath := newHerdrSessionDir(t)
+	first := spawnHerdrClient(t, socketPath)
+	second := spawnHerdrClient(t, socketPath)
+
+	pids := herdrClientPIDs(socketPath)
+	if len(pids) < 2 {
+		t.Fatalf("want both attached clients, got %v (first=%d second=%d)", pids, first, second)
+	}
+	for i := 1; i < len(pids); i++ {
+		if pids[i-1] < pids[i] {
+			t.Errorf("want descending pids (newest attach first), got %v", pids)
+			break
+		}
+	}
+	if pids[0] != max(first, second) {
+		t.Errorf("newest client must win: got %d, want %d", pids[0], max(first, second))
+	}
+}
+
+// TestHerdrClientWriters covers the FD-column rule: "holds the client log open"
+// is not the predicate, "holds it open for writing" is. A read-only holder — a
+// developer running `tail -f` on the log to debug herdr — is not a client, and
+// adopting its terminal as the herdr host would be the #1348 misroute with a
+// new cause. The reader is deliberately given the higher PID here, because the
+// caller sorts descending and would otherwise prefer it.
+func TestHerdrClientWriters(t *testing.T) {
+	const out = `COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF   NODE NAME
+herdr     26932 ingo    3w   REG   1,18      372 136170 /cfg/herdr/herdr-client.log
+tail      99999 ingo    3r   REG   1,18      372 136170 /cfg/herdr/herdr-client.log
+herdr     26940 ingo    9u   REG   1,18      372 136170 /cfg/herdr/herdr-client.log
+herdr     26941 ingo    5uW  REG   1,18      372 136170 /cfg/herdr/herdr-client.log
+irrlichd    777 ingo    4w   REG   1,18      372 136170 /cfg/herdr/herdr-client.log`
+
+	got := herdrClientWriters(out, 777)
+	want := map[int]bool{26932: true, 26940: true, 26941: true}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want exactly the writers %v", got, want)
+	}
+	for _, pid := range got {
+		if !want[pid] {
+			t.Errorf("pid %d must not be reported: readers are not clients, and the daemon is not its own client", pid)
+		}
+	}
+}
+
+// TestHerdrClientWriters_NoHolders is the detached case as lsof reports it —
+// header only, or nothing at all.
+func TestHerdrClientWriters_NoHolders(t *testing.T) {
+	for name, out := range map[string]string{
+		"empty":       "",
+		"header only": "COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF   NODE NAME",
+	} {
+		if got := herdrClientWriters(out, 1); len(got) != 0 {
+			t.Errorf("%s: want no clients, got %v", name, got)
+		}
+	}
+}
+
+// TestLsofFDMode pins the mode parse, including the lock-character case: lsof
+// appends a lock flag *after* the mode, so "5uW" is a read/write handle with a
+// write lock — reading the last byte would call its mode 'W' and miss it.
+func TestLsofFDMode(t *testing.T) {
+	cases := map[string]byte{
+		"14w": 'w', "8299r": 'r', "9u": 'u', "5uW": 'u', "3wR": 'w', "cwd": 'c', "12": 0,
+	}
+	for fd, want := range cases {
+		if got := (lsofFD{FD: fd}).Mode(); got != want {
+			t.Errorf("lsofFD{FD: %q}.Mode() = %q, want %q", fd, got, want)
+		}
+	}
 }

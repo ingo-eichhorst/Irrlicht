@@ -3,6 +3,7 @@ package processlifecycle
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -16,6 +17,21 @@ import (
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_LAUNCHER_HELPER") != "1" {
 		return
+	}
+	// GO_WANT_LAUNCHER_HELPER_HOLD makes the sleeper stand in for an attached
+	// herdr client: it holds the named file open for writing, which is the
+	// signal herdrClientPIDs matches on. Held for longer than the plain
+	// sleeper because the herdr tests poll for the open fd to become visible
+	// to lsof; every caller kills it via t.Cleanup, so the longer sleep costs
+	// nothing.
+	if hold := os.Getenv("GO_WANT_LAUNCHER_HELPER_HOLD"); hold != "" {
+		f, err := os.OpenFile(hold, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+		if err != nil {
+			os.Exit(1)
+		}
+		defer f.Close()
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
 	}
 	time.Sleep(3 * time.Second)
 	os.Exit(0)
@@ -447,5 +463,71 @@ func TestReadLauncherEnv_Subprocess_JetBrainsImpliesTermProgram(t *testing.T) {
 	}
 	if l.TermProgram != "jetbrains" {
 		t.Errorf("TermProgram: expected implicit 'jetbrains', got %q", l.TermProgram)
+	}
+}
+
+// --- herdr click-to-focus (#1350) -------------------------------------------
+
+// newHerdrSessionDir returns a stand-in for a herdr session directory: the
+// socket path the pane's $HERDR_SOCKET_PATH points at. The client log that
+// identifies an attached client sits beside it and is derived, never spelled
+// out again, so the layout has one definition (herdrClientLogPath). Mirrors the
+// real thing, which is identical for the default session
+// (<config>/herdr.sock) and a named one
+// (<config>/sessions/<name>/herdr.sock) — verified against herdr 0.8.0.
+func newHerdrSessionDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "herdr.sock")
+}
+
+// TestReadLauncherEnv_Herdr_DetachedSessionResolvesNoHost is the honest-failure
+// half of #1350: a herdr session with no attached client has no window
+// anywhere, so the launcher must stay herdr-only rather than guess. Verified
+// live against herdr 0.8.0 — a detached session's client log has no writer.
+func TestReadLauncherEnv_Herdr_DetachedSessionResolvesNoHost(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip()
+	}
+	socketPath := newHerdrSessionDir(t)
+	// The log exists (the session ran once) but nobody holds it open.
+	if err := os.WriteFile(herdrClientLogPath(socketPath), []byte("detached\n"), 0o600); err != nil {
+		t.Fatalf("seed client log: %v", err)
+	}
+	agentPID := spawnSleeperWithEnv(t, []string{
+		"PATH=/usr/bin:/bin",
+		"HERDR_PANE_ID=w1:p1",
+		"HERDR_SOCKET_PATH=" + socketPath,
+		"TERM_PROGRAM=kitty",
+		"KITTY_WINDOW_ID=42",
+	})
+	l := ReadLauncherEnv(agentPID)
+	if l == nil {
+		t.Fatal("expected non-nil launcher (the herdr address is still identity)")
+	}
+	if l.TermProgram != "" || l.HostBundleID != "" {
+		t.Errorf("no client is attached, so no host may be reported: %+v", l)
+	}
+	if l.KittyWindowID != "" || l.KittyListenOn != "" {
+		t.Errorf("inherited kitty identity must stay suppressed: %+v", l)
+	}
+	if l.HerdrPaneID != "w1:p1" {
+		t.Errorf("HerdrPaneID: got %q", l.HerdrPaneID)
+	}
+}
+
+// TestHerdrClientLogPath pins the addressing derivation: the client log sits
+// beside the socket, so the socket path the daemon already captures is a
+// complete key — no $HERDR_SESSION capture and no argv parsing needed
+// (open question 1 of #1350).
+func TestHerdrClientLogPath(t *testing.T) {
+	cases := map[string]string{
+		"/Users/t/.config/herdr/herdr.sock":                "/Users/t/.config/herdr/herdr-client.log",
+		"/Users/t/.config/herdr/sessions/probe/herdr.sock": "/Users/t/.config/herdr/sessions/probe/herdr-client.log",
+		"": "",
+	}
+	for socket, want := range cases {
+		if got := herdrClientLogPath(socket); got != want {
+			t.Errorf("herdrClientLogPath(%q) = %q, want %q", socket, got, want)
+		}
 	}
 }

@@ -66,6 +66,37 @@ func TestResolveBackend(t *testing.T) {
 	}
 }
 
+// TestResolveBackend_HerdrWinsOverClientTmux locks the ordering resolveBackend's
+// doc comment now depends on. Since #1350 a herdr launcher legitimately carries
+// tmux/kitty fields — they come from the attached herdr *client*, and describe
+// the window displaying the pane rather than the pane itself. Scripting them
+// would type into the herdr TUI instead of the agent, so herdr must keep
+// winning; the case is no longer unreachable, and the "mutually exclusive by
+// construction" argument that used to make this ordering moot is gone.
+func TestResolveBackend_HerdrWinsOverClientTmux(t *testing.T) {
+	clientInTmux := &session.Launcher{
+		HerdrPaneID:     "w1:p2",
+		HerdrSocketPath: "/cfg/herdr/herdr.sock",
+		// Real, correct, and the client's own — not inherited junk.
+		TermProgram: "ghostty",
+		TmuxPane:    "%3",
+		TmuxSocket:  "/tmp/tmux-501/default",
+	}
+	if got := resolveBackend(clientInTmux); got != backendHerdr {
+		t.Errorf("resolveBackend = %v, want backendHerdr", got)
+	}
+
+	clientInKitty := &session.Launcher{
+		HerdrPaneID:     "w1:p2",
+		HerdrSocketPath: "/cfg/herdr/herdr.sock",
+		KittyListenOn:   "unix:/tmp/mykitty",
+		KittyWindowID:   "12",
+	}
+	if got := resolveBackend(clientInKitty); got != backendHerdr {
+		t.Errorf("resolveBackend = %v, want backendHerdr", got)
+	}
+}
+
 func TestCommandBuilders(t *testing.T) {
 	tmuxL := &session.Launcher{TmuxPane: "%3", TmuxSocket: "/tmp/tmux-501/default"}
 	tmuxNoSock := &session.Launcher{TmuxPane: "%7"}

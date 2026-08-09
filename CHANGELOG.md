@@ -12,6 +12,9 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+### Added
+- **Click-to-focus works for sessions running in a [herdr](https://herdr.dev/) pane.** Clicking such a session used to do nothing: herdr's server owns every pane's pty, outlives any attached client and is reparented to init, so the pane's own process tree leads to no window and #1349 deliberately refused to guess one. The window belongs to the herdr *client*, so the daemon now finds the client attached to that pane's session and reads the host identity from it — the same whitelisted env plus ancestry walk used for a directly-hosted agent — and the macOS app selects the pane with `herdr agent focus` before raising that window. A session nobody has attached still resolves to no window, which is the honest answer rather than a wrong one; with more than one client attached, the most recent attach wins. Verified against herdr 0.8.0. macOS only — the web dashboard reads no launcher fields. (#1350)
+
 ## [0.5.10] — 2026-08-09
 
 ### Two more agents monitored — GitHub Copilot CLI and Hermes — herdr joins tmux and kitty as a controllable terminal, and live state now comes from the agent's own hooks instead of prose heuristics

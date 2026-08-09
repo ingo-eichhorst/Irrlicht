@@ -74,9 +74,9 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 // and carries it here.
 //
 // The Herdr* fields are the one case where the other fields are not merely
-// best-effort but actively wrong, so a herdr pane is captured with those two
-// alone and every other field left zero. herdr's server owns each pane's pty,
-// outlives any attached client and is reparented to init, so every
+// best-effort but actively wrong *when read from the pane*, so a herdr pane
+// never keeps what its own environment claims. herdr's server owns each pane's
+// pty, outlives any attached client and is reparented to init, so every
 // terminal-identity var a pane inherits — $TERM_PROGRAM, $TMUX, $TMUX_PANE,
 // $KITTY_*, $VSCODE_PID — describes whatever environment the *server* was
 // started in, frozen at that moment and handed to every pane it will ever
@@ -84,6 +84,14 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 // application, and, for a server started inside tmux, made the backchannel
 // resolve to tmux and type into a foreign pane in a different window. This is
 // the rationale the capture and control paths refer back to (#1348).
+//
+// The host fields on a herdr launcher are therefore populated from a different
+// process: the attached herdr *client*, which is what actually owns a window
+// (#1350). Provenance is the whole distinction — the same TmuxPane that is a
+// misroute when inherited by a pane is the correct selector when it is the
+// client's own, because then the client really is running in that tmux pane.
+// A session with no attached client keeps the two Herdr* fields alone, which
+// is the honest answer: nothing is displaying it anywhere.
 type Launcher struct {
 	TermProgram    string `json:"term_program,omitempty"`     // $TERM_PROGRAM (e.g. iTerm.app, Apple_Terminal, vscode, cursor, ghostty, WezTerm, Hyper)
 	ITermSessionID string `json:"iterm_session_id,omitempty"` // $ITERM_SESSION_ID
@@ -91,7 +99,7 @@ type Launcher struct {
 	TmuxPane       string `json:"tmux_pane,omitempty"`        // $TMUX_PANE
 	TmuxSocket     string `json:"tmux_socket,omitempty"`      // first `,`-field of $TMUX
 	VSCodePID      int    `json:"vscode_pid,omitempty"`       // $VSCODE_PID (vscode/cursor/windsurf)
-	TTY            string `json:"tty,omitempty"`              // controlling TTY of the agent process, e.g. "/dev/ttys021" — Terminal.app AppleScript matches tabs by this
+	TTY            string `json:"tty,omitempty"`              // controlling TTY, e.g. "/dev/ttys021" — Terminal.app AppleScript matches tabs by this. The agent process's own, except on a herdr session with a client attached, where it is the client's: that is the tab actually displaying the pane (#1350)
 	KittyListenOn  string `json:"kitty_listen_on,omitempty"`  // $KITTY_LISTEN_ON — kitty remote-control socket path
 	KittyWindowID  string `json:"kitty_window_id,omitempty"`  // $KITTY_WINDOW_ID — kitty window identifier
 	KittyPID       int    `json:"kitty_pid,omitempty"`        // $KITTY_PID — kitty.app process id (lets the activator target this specific instance when multiple kitties run)
@@ -125,6 +133,45 @@ func (l *Launcher) IsEmpty() bool {
 		l.TmuxSocket == "" && l.VSCodePID == 0 && l.TTY == "" &&
 		l.KittyListenOn == "" && l.KittyWindowID == "" && l.KittyPID == 0 &&
 		l.HostBundleID == "" && l.HerdrPaneID == "" && l.HerdrSocketPath == "")
+}
+
+// AdoptHostIdentity copies every host-window field of from onto l, leaving
+// l's own herdr address untouched, and reports whether anything changed. It is
+// how a herdr pane acquires the identity of the client that displays it: the
+// pane supplies the address to focus, the client supplies the window to raise.
+//
+// A nil or empty from is a no-op, so "no client attached" degrades to the
+// herdr-only launcher rather than to a half-populated one. Callers must only
+// pass a launcher they resolved from the attached client — the point of #1348
+// is that the pane's own environment is not that.
+func (l *Launcher) AdoptHostIdentity(from *Launcher) bool {
+	if l == nil || from.IsEmpty() {
+		return false
+	}
+	// Copy wholesale and put back the two fields that are the *pane's*, rather
+	// than listing the host fields one by one. The host set grows (it has
+	// eleven members and gains one per terminal integration) while the herdr
+	// address is closed at two, so enumerating the closed set is what keeps a
+	// newly added host field from being silently left behind here.
+	merged := *from
+	merged.HerdrPaneID = l.HerdrPaneID
+	merged.HerdrSocketPath = l.HerdrSocketPath
+	// TTY needs both sides, and the guard is symmetric on purpose:
+	// BackgroundAgent.Detached is computed from this field (#744), so a client
+	// resolved without a controlling tty must not erase the pane's own — and,
+	// in the other direction, an agent that genuinely has no controlling
+	// terminal (a background agent detached into a pool, which inherits the
+	// pane's herdr env) must not be handed the client's tty and stop looking
+	// detached. The client's tty describes the client's window, not a terminal
+	// this process has.
+	if l.TTY == "" || from.TTY == "" {
+		merged.TTY = l.TTY
+	}
+	if merged == *l {
+		return false
+	}
+	*l = merged
+	return true
 }
 
 // SessionState represents the current state of a Claude Code or Copilot session.

@@ -48,10 +48,29 @@ enum SessionLauncher {
         guard let activator = resolveActivator(for: session.launcher) else {
             let tp = session.launcher?.termProgram ?? "nil"
             let bid = session.launcher?.hostBundleID ?? "nil"
-            logger.info("no activator for session \(session.id, privacy: .public) (term_program=\(tp, privacy: .public), host_bundle_id=\(bid, privacy: .public))")
+            let herdr = herdrDiagnostic(for: session.launcher)
+            logger.info("no activator for session \(session.id, privacy: .public) (term_program=\(tp, privacy: .public), host_bundle_id=\(bid, privacy: .public), \(herdr, privacy: .public))")
             return
         }
         _ = activator.activate(session)
+    }
+
+    /// Explains, for the "no activator" log, why a herdr session produced no
+    /// window. A pane with no host at all is the expected "nothing is
+    /// displaying this session" case rather than a capture failure, and saying
+    /// so is what makes a detached multiplexer session distinguishable from a
+    /// launcher we simply failed to read (#1350). It only claims that when the
+    /// host fields really are empty: a client that *was* resolved, whose
+    /// terminal has no registry entry, lands here too, and pointing that at a
+    /// missing client would send whoever debugs it looking for the wrong thing.
+    ///
+    /// Exposed for tests, which is the only way either wording is checked.
+    static func herdrDiagnostic(for launcher: Launcher?) -> String {
+        guard let pane = launcher?.herdrPaneID else { return "herdr_pane=nil" }
+        let unresolved = (launcher?.termProgram ?? "").isEmpty
+            && (launcher?.hostBundleID ?? "").isEmpty
+        let why = unresolved ? "no attached client" : "client resolved but its host has no activator"
+        return "herdr_pane=\(pane), \(why)"
     }
 
     /// Selects the activator for a launcher without performing activation
@@ -61,7 +80,15 @@ enum SessionLauncher {
     /// have no registry entry (e.g. a terminal inside Obsidian) — bringing the
     /// host app/window to the front, not a specific pane. The result is wrapped
     /// in `TmuxActivator` when the session lives in a tmux pane so the correct
-    /// pane is selected before the host window is raised.
+    /// pane is selected before the host window is raised, and in
+    /// `HerdrActivator` when it lives in a herdr pane. The two compose: a herdr
+    /// client can itself be running inside tmux, in which case both selections
+    /// are needed and neither substitutes for the other.
+    ///
+    /// For a herdr session the host fields were resolved from the attached
+    /// herdr client, not from the agent's own process tree (#1350) — so a
+    /// detached session has no host, falls through to nil, and honestly does
+    /// nothing rather than raising some other window.
     static func resolveActivator(for launcher: Launcher?) -> HostActivator? {
         var base: HostActivator?
         if let tp = launcher?.termProgram {
@@ -70,8 +97,14 @@ enum SessionLauncher {
         if base == nil, let bundleID = launcher?.hostBundleID, !bundleID.isEmpty {
             base = AXTitleMatchActivator(termProgram: launcher?.termProgram ?? "", bundleID: bundleID)
         }
-        guard let base = base else { return nil }
-        return launcher?.tmuxPane != nil ? TmuxActivator(inner: base) : base
+        guard var activator: HostActivator = base else { return nil }
+        if launcher?.tmuxPane != nil {
+            activator = TmuxActivator(inner: activator)
+        }
+        if launcher?.herdrPaneID != nil {
+            activator = HerdrActivator(inner: activator)
+        }
+        return activator
     }
 
     /// Returns the macOS bundle ID for a `$TERM_PROGRAM` value, or nil

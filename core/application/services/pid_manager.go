@@ -1223,6 +1223,17 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 //   - KittyPID: shipped to support per-process kitty activation (issue #326).
 //     Without it, KittyActivator on macOS falls back to bundle-level activation
 //     which can pick the wrong kitty when multiple kitty.app instances run.
+//   - The host identity of a herdr pane (issue #1350), which is resolved from
+//     the attached herdr client rather than from the pane itself. A session
+//     that was detached when its PID was bound has no host to record, so this
+//     is the path by which one attached since then is picked up. Two limits
+//     follow from where this runs, and both are deliberate for now: capture is
+//     once-per-PID-bind and this runs only at seed, so re-attaching a session
+//     to a *different* terminal is not noticed until the daemon restarts; and
+//     because the need is gated on *no* host being recorded, a host that did
+//     resolve is never re-checked afterwards. Refreshing it from the periodic
+//     liveness sweep instead would fix both — the daemon pushes launcher
+//     updates to clients, so nothing on the click path would have to change.
 func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 	if state.Launcher == nil {
 		pm.captureLauncher(state, state.PID)
@@ -1257,11 +1268,14 @@ func (pm *PIDManager) touchAndSave(state *session.SessionState) {
 // launcherBackfillNeeds tracks which Launcher fields are missing and should
 // be refreshed from a fresh env read.
 type launcherBackfillNeeds struct {
-	tty, kittyPID, kittyListen, kittyWindow bool
+	tty, kittyPID, kittyListen, kittyWindow, herdrHost bool
 }
 
+// any reports whether anything needs refreshing. Compares against the zero
+// value rather than or-ing the fields, so a need added to the struct is covered
+// without a second edit here.
 func (n launcherBackfillNeeds) any() bool {
-	return n.tty || n.kittyPID || n.kittyListen || n.kittyWindow
+	return n != launcherBackfillNeeds{}
 }
 
 // launcherBackfillNeedsFor computes which fields of l are missing and
@@ -1274,6 +1288,10 @@ func launcherBackfillNeedsFor(l *session.Launcher) launcherBackfillNeeds {
 		kittyPID:    isKitty && l.KittyPID == 0,
 		kittyListen: isKitty && l.KittyListenOn == "",
 		kittyWindow: isKitty && l.KittyWindowID == "",
+		// A herdr pane with no host recorded had no client attached when it
+		// was captured. Mutually exclusive with the kitty needs above, which
+		// all require TermProgram == "kitty".
+		herdrHost: l.HerdrPaneID != "" && l.TermProgram == "" && l.HostBundleID == "",
 	}
 }
 
@@ -1285,6 +1303,23 @@ func applyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fre
 		l.TTY = fresh.TTY
 		updated = true
 	}
+	if applyKittyLauncherBackfill(l, needs, fresh) {
+		updated = true
+	}
+	// fresh was produced by the same reader, so its host fields are already
+	// the attached client's. A still-detached session yields none and this
+	// reports no change rather than writing empties over empties.
+	if needs.herdrHost && l.AdoptHostIdentity(fresh) {
+		updated = true
+	}
+	return updated
+}
+
+// applyKittyLauncherBackfill copies the three kitty fields fresh has that l is
+// missing per needs. Split out of applyLauncherBackfill so that function stays
+// one branch per *kind* of backfill rather than one per field.
+func applyKittyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fresh *session.Launcher) bool {
+	updated := false
 	if needs.kittyPID && fresh.KittyPID != 0 {
 		l.KittyPID = fresh.KittyPID
 		updated = true

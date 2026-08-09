@@ -2,6 +2,8 @@
 
 package processlifecycle
 
+import "irrlicht/core/domain/session"
+
 // readProcessEnv is not implemented on this platform — launcher capture
 // is disabled and the menu-bar app falls back to Finder-reveal of cwd.
 func readProcessEnv(pid int) (map[string]string, error) {
@@ -27,3 +29,9 @@ func kittyWindowIDForPID(socket string, sessionPID int) string { return "" }
 // process, issue #784) only exists on macOS, so failing closed here would
 // reject every antigravity CLI session on this platform instead.
 func IsKnownInteractiveHost(pid int) bool { return true }
+
+// herdrClientLauncher resolves a herdr pane's window through the attached
+// client (#1350). Darwin-only: the identity it produces is only consumed by the
+// macOS click-to-focus path, and resolving it needs the same ancestry walk the
+// stubs above already decline to do.
+func herdrClientLauncher(socketPath string) *session.Launcher { return nil }
