@@ -241,24 +241,29 @@ struct SessionListView: View {
     private var usageCostTimeframe: CostTimeframe { .from(usageCostTimeframeRaw) }
     private func cycleUsageTimeframe() { usageCostTimeframeRaw = usageCostTimeframe.next().rawValue }
 
-    /// Stable identity of the current pending-wizard agent set, for the
-    /// "Decide Later" suppression above.
-    private var wizardSignature: String {
-        sessionManager.pendingWizardAgents.map(\.name).sorted().joined(separator: ",")
+    /// Stable identity of a wizard's agent set, for the "Decide Later"
+    /// suppression below. One formatter, because the signature is written
+    /// at dismissal and compared at presentation — two spellings drift.
+    private func wizardSignature(_ names: [String]) -> String {
+        names.sorted().joined(separator: ",")
     }
 
     /// Reconciles auto-wizard visibility with the consent snapshot (#570).
     /// Presentation: a detected agent has pending permissions and the set
     /// wasn't just dismissed. Dismissal: every LOCKED agent has no pending
     /// permissions left — i.e. answered, here or on the web dashboard
-    /// (first answer wins). A detection flip alone (agent exited while the
+    /// (first answer wins) — AND none of their consent effects failed
+    /// (#1362), so a grant whose Apply blew up keeps the wizard up to
+    /// report it instead of closing on a success that installed nothing.
+    /// "Decide Later" remains the escape hatch for a failure the user
+    /// can't fix right now. A detection flip alone (agent exited while the
     /// user is deciding) never dismisses an open wizard.
     private func reconcileAutoWizard() {
         let snapAgents = sessionManager.permissionsSnapshot?.agents ?? []
         if let locked = autoWizardAgents {
             let stillPending = locked.contains { name in
                 snapAgents.first(where: { $0.name == name })?
-                    .permissions.contains { $0.state == .pending } ?? false
+                    .hasUnresolvedPermissions ?? false
             }
             if !stillPending {
                 autoWizardAgents = nil
@@ -266,7 +271,7 @@ struct SessionListView: View {
         }
         if autoWizardAgents == nil {
             let names = sessionManager.pendingWizardAgents.map(\.name).sorted()
-            if !names.isEmpty && dismissedWizardSignature != names.joined(separator: ",") {
+            if !names.isEmpty && dismissedWizardSignature != wizardSignature(names) {
                 autoWizardAgents = names
             }
         }
@@ -292,7 +297,14 @@ struct SessionListView: View {
                         // "Decide Later": suppress until the pending set
                         // changes (or next app launch — consent stays
                         // pending daemon-side).
-                        dismissedWizardSignature = wizardSignature
+                        //
+                        // Keyed on the agents THIS wizard presented, not
+                        // on the live pending set: a failed effect now
+                        // pins the wizard open (#1362), making "Decide
+                        // Later" the only exit, and by then the live set
+                        // can name a DIFFERENT agent detected meanwhile —
+                        // suppressing a prompt the user never saw.
+                        dismissedWizardSignature = wizardSignature(locked)
                         autoWizardAgents = nil
                     }
                 )

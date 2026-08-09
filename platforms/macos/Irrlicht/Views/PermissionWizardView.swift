@@ -45,10 +45,14 @@ struct PermissionWizardView: View {
         }
     }
 
-    /// The permissions shown for one agent: pending only in auto mode,
-    /// everything in review mode.
+    /// The permissions shown for one agent: everything in review mode; in
+    /// auto mode the unanswered ones plus any whose consent effect failed,
+    /// so a broken install is not invisible on the surface the user is
+    /// already looking at (#1362). This deliberately does NOT widen
+    /// `needsWizard`, so a failure never pops the wizard open by itself.
     private func visiblePermissions(of agent: AgentPermissions) -> [PermissionItem] {
-        mode == .auto ? agent.permissions.filter { $0.state == .pending } : agent.permissions
+        guard mode == .auto else { return agent.permissions }
+        return agent.permissions.filter { $0.state == .pending || $0.effectNotice != nil }
     }
 
     var body: some View {
@@ -155,6 +159,55 @@ struct PermissionWizardView: View {
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 38)
+            if let notice = perm.effectNotice {
+                effectNoticeRow(agent: agent, perm: perm, notice: notice)
+            }
+        }
+    }
+
+    /// "Granted, but not applied" — the consent stands and the effect did
+    /// not land (#1362). Red in-content alert chrome, matching
+    /// SessionRowView's inline warning strip.
+    private func effectNoticeRow(agent: AgentPermissions, perm: PermissionItem,
+                                 notice: EffectNotice) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundColor(IrrColors.pressureHigh)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(notice.label)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(IrrColors.pressureHigh)
+                Text(notice.reason)
+                    .font(.caption2)
+                    .foregroundColor(IrrColors.pressureHigh)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 6)
+            Button(notice.retryLabel) { retry(agent: agent, perm: perm, notice: notice) }
+                .disabled(submitting)
+                .tooltip("Run this permission's effect again without changing your decision")
+        }
+        .padding(6)
+        .background(IrrColors.pressureHigh.opacity(0.08))
+        .cornerRadius(IrrRadius.sm)
+        .padding(.leading, 38)
+        .padding(.top, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(perm.title): \(notice.label). \(notice.reason)")
+    }
+
+    /// Re-submits the SAME decision for one permission. The daemon re-runs
+    /// the closure because it has a recorded failure for it, so the user
+    /// never has to revoke and re-grant (#1362).
+    private func retry(agent: AgentPermissions, perm: PermissionItem, notice: EffectNotice) {
+        submitting = true
+        let manager = sessionManager
+        let answer = PermissionAnswer(agent: agent.name, permission: perm.key, grant: notice.grant)
+        Task {
+            _ = await manager.answerPermissions([answer])
+            submitting = false
         }
     }
 
@@ -191,13 +244,8 @@ struct PermissionWizardView: View {
         for agent in agents {
             for perm in visiblePermissions(of: agent) {
                 let grant = draft[draftKey(agent, perm)] ?? defaultValue(for: perm)
-                switch perm.state {
-                case .pending:
+                if perm.shouldSubmit(grant: grant) {
                     answers.append(PermissionAnswer(agent: agent.name, permission: perm.key, grant: grant))
-                case .granted, .denied:
-                    if grant != (perm.state == .granted) {
-                        answers.append(PermissionAnswer(agent: agent.name, permission: perm.key, grant: grant))
-                    }
                 }
             }
         }
@@ -208,10 +256,19 @@ struct PermissionWizardView: View {
         submitting = true
         let manager = sessionManager
         let isReview = mode == .review
+        let answered = Set(answers.map(\.agent))
         Task {
             let ok = await manager.answerPermissions(answers)
             submitting = false
-            if isReview && ok {
+            // The daemon answers 200 whether or not the consent effect
+            // succeeded, so `ok` alone is not "it worked". Closing here on
+            // a failed Apply would hide the warning the review wizard is
+            // the main place to see (#1362).
+            let failed = (manager.permissionsSnapshot?.agents ?? [])
+                .filter { answered.contains($0.name) }
+                .contains { $0.hasFailedEffect }
+            let appliedCleanly = ok && !failed
+            if isReview && appliedCleanly {
                 onClose()
             }
         }
