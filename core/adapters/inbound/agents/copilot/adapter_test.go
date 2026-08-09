@@ -175,8 +175,8 @@ func TestAgent_Permissions(t *testing.T) {
 	if transcripts.Apply != nil || transcripts.Remove != nil {
 		t.Error("observe-kind permission must not carry Apply/Remove effects")
 	}
-	if transcripts.Hooks != nil {
-		t.Error("the transcripts permission must not carry a HookInstall")
+	if transcripts.Writes != nil {
+		t.Error("the transcripts permission must not carry a ManagedUserFile")
 	}
 
 	hooks, ok := byKey[PermissionKeyHooks]
@@ -189,14 +189,14 @@ func TestAgent_Permissions(t *testing.T) {
 	if hooks.Apply == nil || hooks.Remove == nil {
 		t.Error("the hooks permission must carry both Apply and Remove effects")
 	}
-	if hooks.Hooks == nil {
-		t.Fatal("the hooks permission must carry a HookInstall")
+	if hooks.Writes == nil {
+		t.Fatal("the hooks permission must carry a ManagedUserFile")
 	}
-	if hooks.Hooks.ConfigPath == nil || hooks.Hooks.Uninstall == nil || hooks.Hooks.Verify == nil {
-		t.Error("HookInstall must declare ConfigPath, Uninstall and Verify")
+	if hooks.Writes.Path == nil || hooks.Writes.Uninstall == nil || hooks.Writes.Verify == nil {
+		t.Error("ManagedUserFile must declare Path, Uninstall and Verify")
 	}
-	if hooks.Hooks.Version == nil {
-		t.Error("HookInstall must declare a version floor")
+	if hooks.Writes.Version == nil {
+		t.Error("ManagedUserFile must declare a version floor")
 	}
 
 	for _, p := range perms {

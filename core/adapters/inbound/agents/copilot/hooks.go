@@ -50,12 +50,18 @@ import (
 	"runtime"
 
 	"irrlicht/core/adapters/inbound/agents/hookjson"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 )
 
 // PermissionKeyHooks gates installing and receiving Copilot hooks (issue #570).
-const PermissionKeyHooks = "hooks"
+//
+// Aliased to the shared domain constant rather than restated: since #1383 two
+// projections narrow on it — agents.HookConfigs (what --uninstall-hooks
+// revokes) and the managed-user-file catalog — so a literal that drifted would
+// silently drop this install out of both.
+const PermissionKeyHooks = agent.HooksPermissionKey
 
 // Hook event names, as they appear in the delivered envelope's
 // hook_event_name field.

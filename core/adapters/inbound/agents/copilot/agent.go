@@ -95,10 +95,13 @@ func Agent() agent.Agent {
 					"`irrlichd --uninstall-hooks`).",
 				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
 				Remove: func() error { _, err := UninstallHooks(); return err },
-				Hooks: &agent.HookInstall{
-					ConfigPath: copilotHooksPath,
-					Uninstall:  UninstallHooks,
-					Verify:     VerifyHooksInstalled,
+				Writes: &agent.ManagedUserFile{
+					Path:      copilotHooksPath,
+					Uninstall: UninstallHooks,
+					// Read-only; the repair it feeds runs through
+					// PermissionService, which re-checks consent under its own
+					// lock before writing (#1372).
+					Verify: VerifyHooksInstalled,
 					Version: &agent.VersionGate{
 						Min:      minCLIVersion,
 						Probe:    []string{"copilot", "--version"},
