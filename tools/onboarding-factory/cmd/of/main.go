@@ -154,6 +154,14 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		}
 		agents = []string{*agent}
 	}
+	// Validate --scenario the way --agent is validated. An unmatched filter
+	// used to yield a visibly empty listing; under --summary it yields a full
+	// table of zeros that reads as a completed measurement, so a typo has to
+	// fail loudly instead.
+	if *scenario != "" && !hasScenario(*repoRoot, *scenario) {
+		fmt.Fprintf(stderr, "of status: %q is not a scenario (by name or id)\n", *scenario)
+		return exitUsage
+	}
 
 	view := buildStatusView(m, *repoRoot, agents, *scenario)
 
@@ -182,6 +190,18 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	printStatusText(stdout, view)
 	return exitOK
+}
+
+// hasScenario reports whether the filter matches a shard by name or by id —
+// the same two spellings buildStatusView accepts, so the guard and the filter
+// can never disagree about what "matches".
+func hasScenario(repoRoot, filter string) bool {
+	for _, sh := range shard.LoadAll(repoRoot) {
+		if sh.Name == filter || sh.ID == filter {
+			return true
+		}
+	}
+	return false
 }
 
 // buildStatusView projects the matrix + catalog shards (optionally filtered

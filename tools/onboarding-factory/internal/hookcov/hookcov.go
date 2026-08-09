@@ -11,8 +11,14 @@
 //   - "has a hook-bearing recording" is disk, reached through the catalog
 //     loaders (shard.LoadAdapterCells → shard.AgentCellDir →
 //     validate.RecordingDirs → replay.LoadEvents) rather than a bespoke walk
-//     of replaydata/, so this report can never drift from what the rest of the
-//     factory tooling believes the catalog contains.
+//     of replaydata/, so this report reads the same tree the rest of the
+//     factory tooling reads.
+//
+// One caveat on that second bullet: a cell here is a metadata.json folder on
+// disk, whereas `of status` counts a cell only once its scenario_id resolves
+// to a catalog row. The two therefore agree only while the FK holds — which
+// `of validate` gates in CI, and which does hold today (482 == 482). They are
+// not equal by construction.
 //
 // Every number is derived at call time. Nothing is cached and nothing is
 // hardcoded — a count committed to source would be stale the day it landed.
@@ -28,7 +34,7 @@
 //
 // # Scope
 //
-// Catalog cells only — replaydata/agents/<adapter>/scenarios. The sibling
+// Cells on disk under replaydata/agents/<adapter>/scenarios. The sibling
 // regressions/ tree is not a catalog cell and no catalog loader enumerates it,
 // so it is excluded and the CLI says so in its output rather than leaving a
 // reader to discover the discrepancy by grep.
@@ -94,6 +100,18 @@ type Report struct {
 	Totals   Totals            `json:"totals"`
 }
 
+// Declaring counts the adapters that declare a hooks permission — the
+// denominator a gap count is meaningful against.
+func (r Report) Declaring() int {
+	n := 0
+	for _, a := range r.Adapters {
+		if a.DeclaresHooks {
+			n++
+		}
+	}
+	return n
+}
+
 // Gaps names every adapter that declares hooks but has no hook-bearing
 // recording, in report order. Nil when there are none.
 func (r Report) Gaps() []string {
@@ -151,11 +169,13 @@ func Slug(identityName string) string {
 // no catalog presence at all is the loudest gap there is, and dropping it
 // because it has no cells would hide exactly the case worth shouting about.
 func Coverage(repoRoot string, catalogAdapters []string, declares map[string]bool) Report {
-	// Resolve to an absolute path up front. Both validate and replay refuse
-	// any path containing "..", so a relative --repo-root like "../.." would
-	// otherwise read as zero recordings everywhere — which in THIS report
-	// renders as every hooks-declaring adapter being a gap. A silent
-	// all-clear is bad; a silent all-alarm is worse.
+	// Resolve to an absolute path up front. validate.RecordingDirs and
+	// replay.LoadEvents both refuse any path containing "..", so a relative
+	// --repo-root like "../.." would otherwise report zero recordings and
+	// zero hook-bearing recordings for every adapter — which in THIS report
+	// renders as every hooks-declaring adapter being a GAP. A silent
+	// all-clear is bad; a silent all-alarm is worse. TestCoverageRelativeRepoRoot
+	// is what keeps this from being deleted as dead code.
 	if abs, err := filepath.Abs(repoRoot); err == nil {
 		repoRoot = abs
 	}
@@ -165,7 +185,10 @@ func Coverage(repoRoot string, catalogAdapters []string, declares map[string]boo
 		row := AdapterCoverage{Adapter: adapter, DeclaresHooks: declares[adapter]}
 		for _, cell := range shard.LoadAdapterCells(repoRoot, adapter) {
 			if cell == nil || cell.Folder == "" {
-				continue // loader could not place the cell on disk
+				// Defensive only: LoadAdapterCells always fills Folder from the
+				// directory it scanned and never stores a nil. Kept so a future
+				// loader change degrades to under-counting rather than panicking.
+				continue
 			}
 			row.Cells++
 			cellDir := shard.AgentCellDir(repoRoot, adapter, cell.Folder)

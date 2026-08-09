@@ -1,6 +1,8 @@
 package hookcov
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -86,6 +88,65 @@ func TestAdapterSetIncludesUnrepresentedDeclarer(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("adapterSet = %v, want %v (sorted union; pi declares nothing so it stays out)", got, want)
 	}
+}
+
+// TestCoverageRelativeRepoRoot is what keeps the filepath.Abs call in
+// Coverage alive. validate.RecordingDirs and replay.LoadEvents both refuse any
+// path containing "..", so without the Abs a repo root reached via ".." counts
+// zero recordings and zero hook events for every adapter — rendering every
+// hooks-declaring adapter as a GAP. That is the loudest possible wrong answer
+// from this report, and before this test it was defended by three lines no
+// test exercised: deleting them left the whole suite green.
+// A RELATIVE root is required, and it must be spelled ".." rather than
+// filepath.Join(root, "x", ".."): Join runs Clean, which cancels an interior
+// "x/.." and leaves an absolute path with no ".." in it at all — a version of
+// this test written that way passes with the Abs guard deleted, proving
+// nothing. Only a LEADING ".." survives Clean, which is why this chdirs.
+func TestCoverageRelativeRepoRoot(t *testing.T) {
+	root := t.TempDir()
+	writeHookFixture(t, root)
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	declares := map[string]bool{"claudecode": true}
+	direct := Coverage(root, []string{"claudecode"}, declares)
+	if len(direct.Adapters) != 1 || direct.Adapters[0].WithHooks != 1 {
+		t.Fatalf("fixture precondition: direct read should find 1 hook-bearing recording, got %+v", direct.Adapters)
+	}
+
+	// From root/sub, ".." IS root — but spelled so that every path derived
+	// from it keeps a leading "..".
+	t.Chdir(filepath.Join(root, "sub"))
+	relative := Coverage("..", []string{"claudecode"}, declares)
+
+	if !reflect.DeepEqual(direct, relative) {
+		t.Errorf("a repo root spelled \"..\" must give the same report\nabsolute: %+v\nrelative: %+v",
+			direct.Adapters, relative.Adapters)
+	}
+	if relative.Adapters[0].Status == StatusGap {
+		t.Errorf("relative repo root invented a GAP for an adapter with %d hook-bearing recordings",
+			direct.Adapters[0].WithHooks)
+	}
+}
+
+// writeHookFixture lays down one claudecode cell with one hook-bearing
+// recording — the minimum shape Coverage reads.
+func writeHookFixture(t *testing.T, root string) {
+	t.Helper()
+	mk := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cell := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "1-1_one")
+	mk(filepath.Join(cell, "metadata.json"), `{"scenario_id":"one"}`)
+	mk(filepath.Join(cell, "recordings", "r1", "events.jsonl"),
+		`{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"hook_received","session_id":"s","hook_name":"PostToolUse"}`+"\n")
 }
 
 // TestGapsListsOnlyGaps confirms the convenience accessor the CLI shouts with.

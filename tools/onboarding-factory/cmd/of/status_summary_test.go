@@ -46,13 +46,15 @@ func TestStatusSummaryCounts(t *testing.T) {
 	}
 }
 
-// TestStatusSummaryIsTotalPreserving is the anti-lossy lock. The onboarding
-// skill warns that "lossy summaries drop cells": a bucket set that does not
-// cover every value matrix.DeriveDisplayState can return would silently
-// under-report progress, which is the exact failure a summary must not have.
-// Asserted per agent AND on the total row, so a state dropped from only one
-// of the two aggregations still fails.
-func TestStatusSummaryIsTotalPreserving(t *testing.T) {
+// TestStatusSummaryBucketsSumToTotal is a LOCK, not a red-first test: add()
+// always increments Total and exactly one bucket (with a default: catch-all),
+// so this passes by construction. It is worth keeping only as a guard against
+// a future add() that increments Total on a path with no bucket — it does NOT
+// prove states are bucketed *correctly*. Dropping "blocked-driver" from add()
+// keeps this green (the cells fall into Unknown); TestStatusSummaryCounts is
+// what catches that, and TestStatusSummaryAgreesWithFullDump below is what
+// catches a cell going missing entirely.
+func TestStatusSummaryBucketsSumToTotal(t *testing.T) {
 	root := richRepo(t)
 	code, out, errs := runOf("status", "--summary", "--json", "--repo-root", root)
 	if code != exitOK {
@@ -64,8 +66,72 @@ func TestStatusSummaryIsTotalPreserving(t *testing.T) {
 	}
 	for _, a := range append(append([]agentSummary{}, v.Agents...), v.Total) {
 		if sum := a.buckets(); sum != a.Total {
-			t.Errorf("%s: buckets sum to %d but total is %d — a display state is unbucketed", a.Agent, sum, a.Total)
+			t.Errorf("%s: buckets sum to %d but total is %d — Total moved without a bucket", a.Agent, sum, a.Total)
 		}
+	}
+}
+
+// TestStatusSummaryAgreesWithFullDump is the real anti-lossy assertion: it
+// compares the summary against the OTHER command's output rather than against
+// itself. The skill's warning is that "lossy summaries drop cells", and only a
+// cross-check against the full per-cell dump can detect a dropped cell — a
+// self-consistency check cannot, because a dropped cell lowers the buckets and
+// the total together.
+func TestStatusSummaryAgreesWithFullDump(t *testing.T) {
+	root := richRepo(t)
+
+	code, dumpOut, errs := runOf("status", "--json", "--repo-root", root)
+	if code != exitOK {
+		t.Fatalf("full dump exit=%d stderr=%s", code, errs)
+	}
+	var dump statusView
+	if err := json.Unmarshal([]byte(dumpOut), &dump); err != nil {
+		t.Fatalf("bad dump json: %v", err)
+	}
+	perAgent := map[string]int{}
+	cells := 0
+	for _, sv := range dump.Scenarios {
+		for agent := range sv.Cells {
+			perAgent[agent]++
+			cells++
+		}
+	}
+
+	code, sumOut, errs := runOf("status", "--summary", "--json", "--repo-root", root)
+	if code != exitOK {
+		t.Fatalf("summary exit=%d stderr=%s", code, errs)
+	}
+	var v summaryView
+	if err := json.Unmarshal([]byte(sumOut), &v); err != nil {
+		t.Fatalf("bad summary json: %v", err)
+	}
+	if v.Total.Total != cells {
+		t.Errorf("summary counts %d cells, the full dump has %d", v.Total.Total, cells)
+	}
+	for _, a := range v.Agents {
+		if a.Total != perAgent[a.Agent] {
+			t.Errorf("%s: summary counts %d cells, full dump has %d", a.Agent, a.Total, perAgent[a.Agent])
+		}
+	}
+}
+
+// TestStatusRejectsUnknownScenario pins the guard added alongside --summary:
+// an unmatched --scenario must fail loudly rather than render a table of
+// zeros that reads as a real measurement.
+func TestStatusRejectsUnknownScenario(t *testing.T) {
+	root := richRepo(t)
+	for _, args := range [][]string{
+		{"status", "--scenario", "bogus", "--repo-root", root},
+		{"status", "--summary", "--scenario", "bogus", "--repo-root", root},
+	} {
+		code, out, errs := runOf(args...)
+		if code != exitUsage {
+			t.Errorf("%v: want exit %d, got %d (stdout=%q stderr=%q)", args, exitUsage, code, out, errs)
+		}
+	}
+	// A real scenario id still works, so the guard accepts both spellings.
+	if code, _, errs := runOf("status", "--summary", "--scenario", "1.1", "--repo-root", root); code != exitOK {
+		t.Errorf("scenario by id should be accepted: exit=%d stderr=%s", code, errs)
 	}
 }
 

@@ -71,7 +71,15 @@ type ObservationReport struct {
 // need the whole set (e.g. hook coverage) use it instead of a second
 // os.ReadDir, the way callers needing only the latest use NewestRecordingDir.
 // Returns nil when the cell has no recordings/ dir.
+//
+// Guarded the same way NewestRecordingDir is: every exported reader in this
+// package refuses a path containing "..", and an enumerator that did not would
+// be the one way to get a real listing out of validate from an unsanitised
+// path.
 func RecordingDirs(scenarioDir string) []string {
+	if hasParentTraversal(scenarioDir) {
+		return nil
+	}
 	entries, err := os.ReadDir(filepath.Join(scenarioDir, "recordings"))
 	if err != nil {
 		return nil

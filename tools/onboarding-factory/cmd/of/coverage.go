@@ -22,7 +22,7 @@ func runCoverage(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("of coverage")
 	var (
 		hooks    = fs.Bool("hooks", false, "report per-adapter hook_received coverage instead of the rollup")
-		asJSON   = fs.Bool("json", false, "emit JSON (the rollup is JSON either way)")
+		asJSON   = fs.Bool("json", false, "emit JSON (selects JSON vs text under --hooks; the rollup is JSON either way)")
 		repoRoot = fs.String("repo-root", ".", "repository root")
 	)
 	if err := fs.Parse(args); err != nil {
@@ -92,7 +92,7 @@ const hookRowFormat = "%-14s %14s %6d %11d %11d  %s\n"
 
 func printHookCoverageText(stdout io.Writer, rep hookcov.Report) {
 	fmt.Fprintln(stdout, "hook coverage — recordings containing a hook_received event, per adapter")
-	fmt.Fprintln(stdout, "scope: catalog cells only (replaydata/agents/<adapter>/scenarios); the non-catalog regressions/ tree is excluded")
+	fmt.Fprintln(stdout, "scope: cells on disk under replaydata/agents/<adapter>/scenarios; the non-catalog regressions/ tree is excluded")
 	fmt.Fprintln(stdout)
 	fmt.Fprintf(stdout, "%-14s %14s %6s %11s %11s  %s\n",
 		"adapter", "declares-hooks", "cells", "recordings", "with-hooks", "status")
@@ -105,8 +105,10 @@ func printHookCoverageText(stdout io.Writer, rep hookcov.Report) {
 
 	fmt.Fprintln(stdout)
 	if gaps := rep.Gaps(); len(gaps) > 0 {
-		fmt.Fprintf(stdout, "GAP: %d of %d adapters declare hooks but have zero hook-bearing recordings: %s\n",
-			len(gaps), len(rep.Adapters), strings.Join(gaps, ", "))
+		// Denominator is the hooks-declaring adapters, not all of them: "1 of
+		// 11" invites the reading that 11 adapters declare hooks.
+		fmt.Fprintf(stdout, "GAP: %d of %d hooks-declaring adapters have zero hook-bearing recordings: %s\n",
+			len(gaps), rep.Declaring(), strings.Join(gaps, ", "))
 	} else {
 		fmt.Fprintln(stdout, "no gaps: every adapter that declares hooks has at least one hook-bearing recording")
 	}

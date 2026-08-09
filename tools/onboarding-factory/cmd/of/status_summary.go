@@ -13,7 +13,13 @@ import (
 // summary at all.
 type agentSummary struct {
 	Agent string `json:"agent"`
-	// Recorded ← "observed": the cell has a recording on disk.
+	// Recorded ← "observed": assessed recordable AND has a recording. NOT the
+	// same as "has a recording on disk": DeriveDisplayState consults the
+	// recording only after the daemon/driver switch, so a cell whose daemon
+	// axis is bug/incapable — or whose driver has a gap — is counted under
+	// blocked/unobservable even when a recording exists. 11 cells in the
+	// current corpus are in exactly that state, so "482 − recorded" is not
+	// the number of un-recorded cells.
 	Recorded int `json:"recorded"`
 	// Pending ← "pending-record": assessed recordable, not yet recorded.
 	Pending int `json:"pending"`
@@ -94,13 +100,28 @@ func buildSummaryView(view statusView) summaryView {
 const summaryRowFormat = "%-14s %9d %8d %8d %13d %6d %8d %6d\n"
 
 func printSummaryText(stdout io.Writer, view summaryView) {
-	fmt.Fprintf(stdout, "per-agent cell counts — %d agents, %d cells\n\n", len(view.Agents), view.Total.Total)
+	fmt.Fprintf(stdout, "per-agent cell counts — %s, %d cells\n\n",
+		plural(len(view.Agents), "agent"), view.Total.Total)
 	fmt.Fprintf(stdout, "%-14s %9s %8s %8s %13s %6s %8s %6s\n",
 		"agent", "recorded", "pending", "blocked", "unobservable", "n/a", "unknown", "total")
 	for _, a := range view.Agents {
 		printSummaryRow(stdout, a)
 	}
 	printSummaryRow(stdout, view.Total)
+	// Without this, "recorded" reads as "has a recording" and the complement
+	// reads as the remaining work. It is neither — see agentSummary.Recorded.
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "note: recorded = display state \"observed\". A cell blocked by a daemon bug or driver gap")
+	fmt.Fprintln(stdout, "counts under blocked/unobservable even if it has a recording, so total − recorded is not")
+	fmt.Fprintln(stdout, "the un-recorded count. Use `of status` for per-cell detail.")
+}
+
+// plural renders "1 agent" / "2 agents".
+func plural(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 func printSummaryRow(stdout io.Writer, a agentSummary) {
