@@ -104,28 +104,36 @@ func assertFloorCoversEveryEvent(t *testing.T, min string, installed []string, s
 		t.Fatal("HookVersionGate.Installed is empty — pass the installer's event list")
 	}
 	for _, event := range installed {
-		got, ok := since[event]
-		if !ok {
-			t.Errorf("no Since entry for installed event %q — every event written into the "+
-				"user's config needs a stated version it is known to exist at, or the floor "+
-				"cannot be shown to cover it", event)
-			continue
-		}
-		if _, parsed := cliversion.Parse(got); !parsed {
-			t.Errorf("Since[%q] = %q is not a major.minor.patch triple", event, got)
-			continue
-		}
-		if ok, known := cliversion.AtLeast(min, got); known && !ok {
-			t.Errorf("declared floor %s is below %s, the version %q is known at — at a CLI "+
-				"between the two the install writes an entry naming an event that CLI does "+
-				"not have; raise the floor to at least %s", min, got, event, got)
-		}
+		assertFloorCoversEvent(t, min, event, since[event])
 	}
 	for event := range since {
 		if !slices.Contains(installed, event) {
 			t.Errorf("Since names %q, which is not installed — a stale provenance entry "+
 				"makes the floor look better justified than it is", event)
 		}
+	}
+}
+
+// assertFloorCoversEvent checks one event's provenance against the floor.
+// A missing or unparseable Since is reported rather than skipped: an event
+// with no stated version is one nobody checked, which is the position
+// claudecode's seven-event install was in before #1365.
+func assertFloorCoversEvent(t *testing.T, min, event, since string) {
+	t.Helper()
+	if since == "" {
+		t.Errorf("no Since entry for installed event %q — every event written into the "+
+			"user's config needs a stated version it is known to exist at, or the floor "+
+			"cannot be shown to cover it", event)
+		return
+	}
+	if _, parsed := cliversion.Parse(since); !parsed {
+		t.Errorf("Since[%q] = %q is not a major.minor.patch triple", event, since)
+		return
+	}
+	if ok, known := cliversion.AtLeast(min, since); known && !ok {
+		t.Errorf("declared floor %s is below %s, the version %q is known at — at a CLI "+
+			"between the two the install writes an entry naming an event that CLI does "+
+			"not have; raise the floor to at least %s", min, since, event, since)
 	}
 }
 
