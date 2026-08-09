@@ -113,8 +113,16 @@ worktree name. `close` additionally resolves it from `pwd` / `git status -sb` /
    issue-matching worktree — run `pwd` + `git status -sb` to check):
    ```bash
    git -C <main-repo> fetch origin main
-   git -C <main-repo> worktree add -b feat/<N>-<slug> .claude/worktrees/<N>-<slug> origin/main
+   BASE_SHA=$(git -C <main-repo> rev-parse origin/main)   # freeze the branch point
+   git -C <main-repo> worktree add -b feat/<N>-<slug> .claude/worktrees/<N>-<slug> "$BASE_SHA"
+   git -C <main-repo> config --local "branch.feat/<N>-<slug>.irExecBase" "$BASE_SHA"
    ```
+   Keep the `git -C <main-repo>` prefix on the `config` line too, and use the literal
+   branch name. A bare `cd` into the new worktree is not equivalent: nothing here runs
+   under `set -e`, so a `cd` that fails leaves the next command resolving
+   `--abbrev-ref HEAD` against **whatever repo the shell happens to be in** and
+   stamping this run's SHA onto *another branch's* key in the shared `.git/config`.
+
    `.claude/worktrees/` is gitignored. **Do all work via the worktree path** — editing
    the main checkout's files by absolute path touches the wrong tree.
 2a. **Confirm you are running the current playbook.** The skill text you are
@@ -147,6 +155,69 @@ worktree name. `close` additionally resolves it from `pwd` / `git status -sb` /
    step 13's `test -f` confirms the **reviewer** exists, never that the
    **instructions** are current — a stale playbook passes every check it
    contains, because those checks are stale too.)
+2b. **The branch point is a literal SHA, and `origin/main` is shared mutable state.**
+   Worktrees share the parent repo's `.git`, so *another agent's* `git fetch` advances
+   `origin/main` under a run that never fetched (AGENTS.md bans `git stash` for the
+   same reason). Every later step that means *"what did I branch from"* reads the
+   frozen SHA, never the ref — a SHA cannot move under a concurrent fetch. Step 2
+   branches from `"$BASE_SHA"` rather than from `origin/main` for the same reason: it
+   closes the window between the `rev-parse` and the `worktree add`.
+
+   **Store it in git config, not in a scratch file.** The key is namespaced by branch
+   name, and step 1a guarantees one branch per issue, so concurrent agents cannot
+   collide; `.git/config` is shared across worktrees, so any turn of the run can read
+   it back. It is also outside the working tree, so step 11b's `git add -A` can't
+   stage it.
+
+   Do **not** park the SHA in `/tmp` or an agent scratchpad. Those directories are
+   shared and recycled: while implementing this very fix, a `/tmp` scratch file
+   holding the base SHA was silently overwritten by a concurrent agent within
+   minutes, and the run read back *another ticket's* commit — the same shared-mutable-
+   state bug this step exists to fix, one layer down. Git config and git itself are
+   the only stores here that are actually per-branch.
+
+   **Record it on every entry into the worktree, not only when you created it.**
+   Phase 7 keeps the remote branch, so a second `/ir:exec` on the same issue resumes
+   onto an existing branch, takes step 2's skip, and finds the key *present but
+   stale* — pointing several merged commits back, which no "missing key" check
+   catches. Overwrite it rather than inheriting it:
+   ```bash
+   BR=$(git rev-parse --abbrev-ref HEAD)   # resumed into an existing worktree/branch
+   git config --local "branch.$BR.irExecBase" "$(git merge-base origin/main HEAD)"
+   ```
+
+   **Re-derive `BASE_SHA` in every new shell.** The variable does not survive between
+   tool calls, and an empty one is *silently wrong* rather than loud: `git log
+   ""..origin/main` is exactly `git log HEAD..origin/main` and exits 0 — the
+   self-defeating probe Phase 5 exists to replace. Prepend this to any block that
+   consumes it:
+   ```bash
+   BR=$(git rev-parse --abbrev-ref HEAD)
+   BASE_SHA=$(git config --local --get "branch.$BR.irExecBase") \
+     || BASE_SHA=$(git merge-base origin/main HEAD)   # honest branch point; NOT origin/main
+   [ -n "$BASE_SHA" ] || { echo "no recorded base — see step 2b"; exit 1; }
+   ```
+   `git merge-base origin/main HEAD` is a safe reconstruction because a merge base
+   resolves backwards to where the branch actually diverged; `git rev-parse
+   origin/main` is not, because by then it is a different commit than the one you
+   branched from. Its one blind spot is a reset that **already** happened — after a
+   bad `reset --soft origin/main` the merge base *is* `origin/main`. To check that
+   case, read the branch's creation entry:
+   ```bash
+   git reflog show "$BR" | tail -1     # "branch: Created from <sha>"; column 1 is the SHA
+   ```
+   The reflog is authoritative **only until Phase 5's first rebase**. After a rebase
+   the branch point legitimately moved and the two disagree by design: the git-config
+   value wins, and the reflog's creation entry is stale. So **re-record as part of the
+   rebase**, immediately after it succeeds:
+   ```bash
+   git config --local "branch.$BR.irExecBase" "$(git rev-parse origin/main)"
+   ```
+   (A worktree created by the pre-#1419 playbook reads `Created from origin/main`
+   rather than a SHA — the message echoes the literal argument — but column 1 still
+   carries the commit. `ir:release` re-records after its own rebase for the same
+   reason, at its step 7b-guard; note it keeps its SHA in `/tmp`, which this step
+   deliberately does not.)
 
 ## Phase 2 — Investigate & plan
 
@@ -354,7 +425,23 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
     `nothing to commit` while the porcelain check still passes, and the run walks
     on to step 12 with `wip` as the branch's only commit. `--fill` then takes the
     PR title from it and step 19's squash lands **`wip` on `main`**. Amend it
-    (`git commit --amend`), or `git reset --soft origin/main` and recommit.
+    (`git commit --amend`), or `git reset --soft "$BASE_SHA"` and recommit.
+
+    ⚠ **Reset to `"$BASE_SHA"` (step 2b), never to `origin/main`.** This is the one
+    idiom in this skill that can *destroy landed work*, and it survives every gate.
+    `git reset --soft` moves `HEAD` but leaves the index and working tree alone, so
+    resetting onto a ref that advanced mid-run re-parents **your stale tree** onto
+    **someone else's newer commit**. The next `git commit` then records their merged
+    files as *deleted by you*. Nothing objects: the result is a coherent **older**
+    tree, so it compiles, `go test` and `preflight.sh` pass, and CI certifies the
+    revert — the reverted code was self-consistent before it existed. Reset to the
+    frozen SHA and none of it starts, because `HEAD`'s parent is the commit you
+    actually branched from.
+
+    Re-derive `BASE_SHA` first using step 2b's snippet — it does not survive between
+    tool calls. Here an unset one at least fails loudly (`git reset --soft ""` is
+    `fatal: ambiguous argument ''`, exit 128), but the tempting repair is the banned
+    spelling, so derive it rather than reaching for `origin/main`.
 
     ```bash
     git status --short                                # see what you're about to stage
@@ -363,6 +450,14 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
     git status --porcelain                            # must print nothing
     git log --oneline origin/main..HEAD               # ≥1 commit, and no `wip` subjects
     ```
+
+    The `log` line keeps the **live** ref deliberately — do not "fix" it to
+    `"$BASE_SHA"..HEAD` for symmetry with the reset two lines above. It asks *"what
+    will this PR contribute"*, and two-dot `origin/main..HEAD` excludes whatever main
+    already has, which is the right answer at both ends of Phase 5. Re-anchored to the
+    branch point it would list other agents' merged commits as this branch's own once
+    Phase 5 rebases (measured: 2 commits vs 1, #1419). Two lines of the same step want
+    opposite readings of `origin/main`; see the table in Phase 5.
 
     Both gates are needed and they catch opposite failures: porcelain proves
     nothing was *left behind*, the `log` proves something is actually *there* and
@@ -399,17 +494,39 @@ pre-push hook or the PR itself, by which point the work is committed onto a
 stale base:
 
 ```bash
+BR=$(git rev-parse --abbrev-ref HEAD)                # re-derive: the variable does not
+BASE_SHA=$(git config --local --get "branch.$BR.irExecBase") \
+  || BASE_SHA=$(git merge-base origin/main HEAD)     #   survive between tool calls (step 2b)
+[ -n "$BASE_SHA" ] || { echo "no recorded base — see step 2b"; exit 1; }
+
 git status --porcelain                               # MUST be empty first — commit the work before rebasing
 git fetch origin main                                # also refreshes the ref steps 13–14 diff against
-git log --oneline HEAD..origin/main                  # did main move at all?  empty ⇒ base current, skip to calibration
+git log --oneline "$BASE_SHA"..origin/main           # did main move since you branched?  empty ⇒ base current
 git diff --name-only -z origin/main...HEAD \
-  | xargs -0 -r git log --oneline HEAD..origin/main --   # did it move *here*?
+  | xargs -0 -r git log --oneline "$BASE_SHA"..origin/main --   # did it move *here*?
 ```
+
+The `[ -n … ]` guard is not defensive clutter: an **empty** `$BASE_SHA` does not error,
+it silently means `HEAD`. `git log ""..origin/main` is byte-identical to `git log
+HEAD..origin/main` and exits 0 (measured, #1419) — so a run that forgot to re-derive
+would quietly get back the exact self-defeating probe the next paragraph forbids,
+with no signal at all.
 
 The porcelain line is a precondition, not decoration: step 11b should have left
 the tree clean, and if it didn't, the collision probe below reads empty no matter
 what you changed — see 11b for why. Go back and commit rather than working
 around it.
+
+**Anchor both probes to `"$BASE_SHA"` (step 2b), not to `HEAD`.** The natural
+spelling `git log HEAD..origin/main` is **self-defeating**: it asks "is anything on
+main missing from me", and `git reset --soft origin/main` makes `origin/main` a
+parent of `HEAD`, so it answers *empty* — "base current" — at the precise moment a
+reset onto a moved ref has just reverted someone's merged PR. `git merge-base
+--is-ancestor origin/main HEAD` is **the same trap in a different spelling** and is
+no substitute: the reset genuinely does make `origin/main` an ancestor, so it too
+reports "up to date" (both measured against a constructed revert, #1419). Only an
+endpoint that cannot move — the recorded branch point — keeps the question
+meaningful, which is why step 2 records it (step 2b).
 
 Use the `-z`/`xargs -0 -r` form rather than an unquoted `$(git diff --name-only …)`.
 Both of its failure modes are silent and both point the wrong way: unquoted
@@ -420,6 +537,11 @@ substitution leaves a bare trailing `--`, which git reads as *no pathspec at all
 so every unrelated commit reports as a collision. `xargs -0 -r` handles both: NUL
 delimiting survives spaces, and `-r` skips the command entirely on empty input
 (GNU honours it; BSD/macOS xargs accepts it and already skips by default).
+
+**After any successful rebase below, re-record the base** —
+`git config --local "branch.$BR.irExecBase" "$(git rev-parse origin/main)"` — the
+branch point genuinely moved, and a later reset to the pre-rebase value would undo
+the rebase (step 2b).
 
 - **Nothing from the first `log`** — the base is current; continue.
 - **`main` moved, but not into this branch's files** — `git rebase origin/main`,
@@ -451,6 +573,54 @@ delimiting survives spaces, and `-r` skips the command entirely on empty input
   — #1201 edited the Verifiability row while the branch edited the adjacent
   Specification row — plus two semantic reconciliations a textual auto-merge would
   have gotten silently wrong.)
+
+**Deletion tripwire — run it after the rebase, before the push.** Everything above
+prevents the *known* route to a silent revert. This catches the outcome itself, by
+whatever route it arrived, and it is one command:
+
+```bash
+git diff --diff-filter=D --name-only origin/main...HEAD   # expected: EMPTY
+```
+
+Non-empty means this branch **removes files that `main` currently has**. For almost
+every ticket that is a bug, not a feature. Treat any output as a stop: read the list,
+and either name the deletion as deliberate in the PR body (retiring a fixture,
+`git mv`) or find out whose merged work you are about to revert. Do not push past it
+silently — that is the one step the incident below had no defence against.
+
+**Diff against `origin/main`, not against `"$BASE_SHA"` — this is the one check that
+inverts the rule.** Every *other* "what did I change" question wants the frozen branch
+point; this one wants the live ref, because it must ask the question GitHub's PR diff
+will ask. The reverted file was added to `main` **after** you branched, so it never
+existed at your branch point and `git diff --diff-filter=D "$BASE_SHA"...HEAD` reports
+**empty** — a tripwire that cannot fire on the very incident it was written for
+(measured, #1419: `"$BASE_SHA"...HEAD` silent, `origin/main...HEAD` names the file).
+Three-dot is correct here and is not the same as the two-dot form: after the bad reset
+the merge base *is* `origin/main`, so the deletions surface; on a healthy branch the
+merge base is your branch point, so your own work never reads as a deletion.
+
+**Which `origin/main` does a step mean?** They are different needs currently spelled
+the same way, and two of them sit two lines apart inside step 11b:
+
+| Step | Reads | Why |
+|---|---|---|
+| 2 — `worktree add` | **current**, then frozen | Branch from the newest main; record it as `BASE_SHA` in the same breath. |
+| 11b — `git reset --soft` | **original** (`"$BASE_SHA"`) | "Undo *my* commit." A moved ref re-parents a stale tree and reverts merged work. |
+| 11b — `git log …..HEAD` | **current** | "What will this PR contribute?" Excludes what main already has; correct at both ends of Phase 5. |
+| Phase 5 — freshness probes | **original** vs **current** | The comparison *is* the question; a probe with `HEAD` as an endpoint goes vacuous after a reset. |
+| Phase 5 — `git rebase` | **current** | Legitimately wants the newest main so the PR merges cleanly. |
+| Phase 5 — deletion tripwire | **current** | Must match the PR's own diff; the recorded SHA cannot see a file added to main after you branched. |
+| 13/14/15 — review + simplify bases | **current**, three-dot | `origin/main...HEAD` resolves back to the merge base on its own. |
+| 12 — `gh pr create --base main` | **current** | The PR's target branch, not a diff base. |
+
+(Real incident, #1419: a run branched, `origin/main` advanced mid-run when a
+concurrent agent's fetch pulled in a merged PR, and `git reset --soft origin/main`
+re-parented the stale tree onto it — deleting that PR's files. Every gate passed,
+because the tree was coherent, and `git log HEAD..origin/main` was empty *by
+construction*. It was caught only by a human eyeballing the file list. Four safety
+nets fail simultaneously here: it compiles, tests pass, CI certifies, and the natural
+staleness probe answers "no" exactly when the damage was just done — so the tripwire
+above is deliberately a check on the *outcome*, not on the cause.)
 
 **Then calibrate the depth of steps 13–14 to the diff you just produced** — a
 one-line string edit and a multi-package refactor must not get identical
@@ -659,6 +829,13 @@ Phase 6.
 - One worktree + one branch + one PR per issue. Phase 1 step 1a is what enforces
   that against *other* agents' work, not just your own — run it before
   `worktree add`, every time.
+- `origin/main` is **shared mutable state** — concurrent agents' fetches advance it
+  mid-run. Phase 1 step 2 freezes the branch point as `BASE_SHA` (step 2b); step 11b resets to
+  that SHA and never to the ref, because `reset --soft` onto a moved ref silently
+  reverts merged work past every gate. Phase 5's deletion tripwire
+  (`git diff --diff-filter=D --name-only origin/main...HEAD`, expected empty) is the
+  backstop that catches the outcome by any route — see the "Which `origin/main`" table
+  there for which steps want the frozen SHA and which want the live ref.
 - Phase 5 re-fetches `origin/main` and rebases onto it before the push. Phase 1's
   branch point is not a base check you can rely on — step 2 skips its fetch when
   you resume inside an existing worktree — and a run long enough to be worth
