@@ -101,9 +101,11 @@ func printHookCoverageText(stdout io.Writer, rep hookcov.Report) {
 	fmt.Fprintf(stdout, hookRowFormat,
 		"adapter", "declares-hooks", "cells", "recordings", "with-hooks", "status")
 	for _, a := range rep.Adapters {
-		printHookRow(stdout, a.Adapter, yesNo(a.DeclaresHooks), a.Cells, a.Recordings, a.WithHooks, hookStatusNote(a.Status))
+		printHookRow(stdout, a.Adapter, yesNo(a.DeclaresHooks),
+			counts{a.Cells, a.Recordings, a.WithHooks}, hookStatusNote(a.Status))
 	}
-	printHookRow(stdout, "total", "", rep.Totals.Cells, rep.Totals.Recordings, rep.Totals.WithHooks, "")
+	printHookRow(stdout, "total", "",
+		counts{rep.Totals.Cells, rep.Totals.Recordings, rep.Totals.WithHooks}, "")
 
 	fmt.Fprintln(stdout)
 	if gaps := rep.Gaps(); len(gaps) > 0 {
@@ -116,11 +118,15 @@ func printHookCoverageText(stdout io.Writer, rep hookcov.Report) {
 	}
 }
 
+// counts is the numeric middle of a hook-coverage row, grouped so the printer
+// takes one value per column group rather than a run of bare ints.
+type counts struct{ cells, recordings, withHooks int }
+
 // printHookRow renders one table line. Trailing whitespace is trimmed so the
 // totals row — which has no status cell — does not ship padding.
-func printHookRow(stdout io.Writer, adapter, declares string, cells, recordings, withHooks int, status string) {
+func printHookRow(stdout io.Writer, adapter, declares string, c counts, status string) {
 	line := fmt.Sprintf(hookRowFormat, adapter, declares,
-		strconv.Itoa(cells), strconv.Itoa(recordings), strconv.Itoa(withHooks), status)
+		strconv.Itoa(c.cells), strconv.Itoa(c.recordings), strconv.Itoa(c.withHooks), status)
 	fmt.Fprintln(stdout, strings.TrimRight(line, " \n"))
 }
 

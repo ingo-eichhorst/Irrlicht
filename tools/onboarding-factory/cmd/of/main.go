@@ -80,6 +80,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
+// emitSummary renders the folded per-agent counts, as JSON or as the text
+// table.
+func emitSummary(view statusView, asJSON bool, stdout, stderr io.Writer) int {
+	sv := buildSummaryView(view)
+	if asJSON {
+		if err := writeJSON(stdout, sv); err != nil {
+			fmt.Fprintf(stderr, "of status: encode: %v\n", err)
+			return exitUsage
+		}
+		return exitOK
+	}
+	printSummaryText(stdout, sv)
+	return exitOK
+}
+
 // absRoot resolves --repo-root to an absolute path. Every filesystem reader
 // under internal/validate and internal/replay refuses a path containing ".."
 // (a CodeQL taint barrier) by returning an EMPTY result rather than an error,
@@ -189,16 +204,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	// (rather than re-reading the matrix) is what keeps the two renderings of
 	// `of status` arithmetically consistent.
 	if *summary {
-		sv := buildSummaryView(view)
-		if *asJSON {
-			if err := writeJSON(stdout, sv); err != nil {
-				fmt.Fprintf(stderr, "of status: encode: %v\n", err)
-				return exitUsage
-			}
-			return exitOK
-		}
-		printSummaryText(stdout, sv)
-		return exitOK
+		return emitSummary(view, *asJSON, stdout, stderr)
 	}
 
 	if *asJSON {

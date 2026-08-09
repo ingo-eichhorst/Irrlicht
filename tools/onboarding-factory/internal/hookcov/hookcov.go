@@ -176,27 +176,43 @@ func Coverage(repoRoot string, catalogAdapters []string, declares map[string]boo
 
 	rep := Report{}
 	for _, adapter := range adapterSet(catalogAdapters, declares) {
-		row := AdapterCoverage{Adapter: adapter, DeclaresHooks: declares[adapter]}
-		for _, cell := range shard.LoadAdapterCells(repoRoot, adapter) {
-			if cell == nil {
-				continue // LoadAdapterCells never stores one; cheap panic guard
-			}
-			row.Cells++
-			cellDir := shard.AgentCellDir(repoRoot, adapter, cell.Folder)
-			for _, recDir := range validate.RecordingDirs(cellDir) {
-				row.Recordings++
-				if hasHookEvent(filepath.Join(recDir, "events.jsonl")) {
-					row.WithHooks++
-				}
-			}
-		}
-		row.Status = statusOf(row.DeclaresHooks, row.WithHooks)
+		row := coverageFor(repoRoot, adapter, declares[adapter])
 		rep.Adapters = append(rep.Adapters, row)
 		rep.Totals.Cells += row.Cells
 		rep.Totals.Recordings += row.Recordings
 		rep.Totals.WithHooks += row.WithHooks
 	}
 	return rep
+}
+
+// coverageFor walks one adapter's cells and their recordings. repoRoot must
+// already be absolute — Coverage resolves it once for every adapter.
+func coverageFor(repoRoot, adapter string, declaresHooks bool) AdapterCoverage {
+	row := AdapterCoverage{Adapter: adapter, DeclaresHooks: declaresHooks}
+	for _, cell := range shard.LoadAdapterCells(repoRoot, adapter) {
+		if cell == nil {
+			continue // LoadAdapterCells never stores one; cheap panic guard
+		}
+		row.Cells++
+		cellDir := shard.AgentCellDir(repoRoot, adapter, cell.Folder)
+		withHooks, total := hookBearingRecordings(cellDir)
+		row.Recordings += total
+		row.WithHooks += withHooks
+	}
+	row.Status = statusOf(row.DeclaresHooks, row.WithHooks)
+	return row
+}
+
+// hookBearingRecordings counts one cell's recordings and how many of them
+// carry at least one hook_received event.
+func hookBearingRecordings(cellDir string) (withHooks, total int) {
+	for _, recDir := range validate.RecordingDirs(cellDir) {
+		total++
+		if hasHookEvent(filepath.Join(recDir, "events.jsonl")) {
+			withHooks++
+		}
+	}
+	return withHooks, total
 }
 
 // adapterSet is the sorted union described on Coverage.
