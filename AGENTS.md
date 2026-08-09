@@ -241,11 +241,6 @@ Before marking a ticket done, run the full suite — every layer must pass:
   a path-confinement rejection counts too (alive-but-misrouted is #1361's); and a
   consent-denied request counts nothing, because noting that a POST arrived is
   itself an observation.
-  All seven contract families pass by construction against a correct adapter, so
-  their whole value is that they *can* fail: a new or reworked contract
-  assertion lands with the deliberate mutation that was seen red for each
-  obligation recorded in its PR — the same bar the red-first rule above sets
-  for defect tests.
 - Managed user files: every `modify`-kind permission with an `Apply` closure
   declares the shared, user-owned file that closure writes
   (`agent.Permission.Writes`, an `agent.ManagedUserFile` carrying `Path` +
@@ -271,6 +266,11 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `applyWritesNoUserFile` with its reason rather than falling out silently.
   `agent.ControlPermission` needs no entry: its `Apply` is nil, which is the
   shape to prefer.
+  All seven contract families pass by construction against a correct adapter, so
+  their whole value is that they *can* fail: a new or reworked contract
+  assertion lands with the deliberate mutation that was seen red for each
+  obligation recorded in its PR — the same bar the red-first rule above sets
+  for defect tests.
 - Skill files: `tools/skill-lint.sh` reads every `.md` under
   `.claude/skills/` plus any other tracked `SKILL.md` (there is one under
   `tools/irrlicht-design-system/`) — the files that tell agents how to triage,
