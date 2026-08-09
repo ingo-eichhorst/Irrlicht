@@ -81,6 +81,11 @@ const (
 	// different problem from one clobbered once — and it is the one thing the
 	// counters alone would not put in front of a reader of events.log.
 	reverifyStormThreshold = 3
+
+	// reverifyNoPassYet is the last_outcome published for a target the loop has
+	// not yet examined. Not a ReverifyOutcome: nothing counts it, because no
+	// decision was made.
+	reverifyNoPassYet = "no_pass_yet"
 )
 
 // ReverifyOutcome is what one pass decided about one target. The set is closed,
@@ -202,10 +207,16 @@ type reverifyState struct {
 	stale              []string
 	repairs            uint64
 	consecutiveRepairs int
-	lastOutcome        ReverifyOutcome
-	backoff            time.Duration
-	nextEligible       time.Time
-	lastError          string
+	// consecutiveUnreadable escalates the deferral for a config that cannot be
+	// parsed. It is a SEPARATE counter from consecutiveRepairs, which is
+	// published as a repair count: an unreadable config is never repaired, so
+	// borrowing that field to drive the back-off would put a number in the
+	// diagnostics bundle claiming writes that never happened.
+	consecutiveUnreadable int
+	lastOutcome           ReverifyOutcome
+	backoff               time.Duration
+	nextEligible          time.Time
+	lastError             string
 }
 
 // reset returns a target to "nothing is going on", used when consent goes away
@@ -215,6 +226,7 @@ type reverifyState struct {
 func (s *reverifyState) reset() {
 	s.missing, s.stale = nil, nil
 	s.consecutiveRepairs = 0
+	s.consecutiveUnreadable = 0
 	s.backoff = 0
 	s.nextEligible = time.Time{}
 	s.lastError = ""
@@ -278,6 +290,11 @@ func NewHookEntryVerifier(cfg HookEntryReverifyConfig) *HookEntryVerifier {
 	if cfg.BackoffBase <= 0 {
 		cfg.BackoffBase = defaultReverifyBackoffBase
 	}
+	// Two clamps, not a copy-paste. The first supplies the default for an unset
+	// or nonsensical cap; the second catches the case the default cannot serve —
+	// a caller passing a BackoffBase LARGER than the default cap, where leaving
+	// the default in place would make the cap smaller than the base and
+	// backoffFor's guard would return the cap on the very first repair.
 	if cfg.BackoffMax < cfg.BackoffBase {
 		cfg.BackoffMax = defaultReverifyBackoffMax
 	}
@@ -321,6 +338,18 @@ func (v *HookEntryVerifier) Run(ctx context.Context) {
 	if v == nil || len(v.targets) == 0 {
 		return
 	}
+	// One pass immediately, before the first tick. Two reasons: a clobber that
+	// happened while the daemon was down is repaired at once rather than up to
+	// an Interval later, and — the reporting one — a bundle collected in the
+	// first few minutes of uptime would otherwise show every row in its zero
+	// state, which reads as "not granted, nothing wrong" for a permission that
+	// may be granted and an install that may be gone.
+	//
+	// Safe to run here: the caller starts this only after PermissionService.Start
+	// has synchronously re-applied every granted install, so this pass observes
+	// the boot repair rather than racing it.
+	v.pass(v.now())
+
 	ticker := time.NewTicker(v.cfg.Interval)
 	defer ticker.Stop()
 	for {
@@ -388,7 +417,7 @@ func (v *HookEntryVerifier) checkTarget(t reverifyTarget, now time.Time, granted
 
 	status, err := t.verify()
 	if err != nil {
-		v.recordUnreadable(t, err)
+		v.recordUnreadable(t, err, now)
 		return
 	}
 	if status.Intact() {
@@ -398,7 +427,7 @@ func (v *HookEntryVerifier) checkTarget(t reverifyTarget, now time.Time, granted
 	v.repair(t, status, now, repair)
 }
 
-func (v *HookEntryVerifier) recordUnreadable(t reverifyTarget, err error) {
+func (v *HookEntryVerifier) recordUnreadable(t reverifyTarget, err error, now time.Time) {
 	v.mu.Lock()
 	st := v.state[t.id()]
 	first := st.lastOutcome != ReverifyUnreadable
@@ -407,7 +436,13 @@ func (v *HookEntryVerifier) recordUnreadable(t reverifyTarget, err error) {
 	// Defer the next read as well: a config we cannot parse will not become
 	// parseable by being read again in five minutes, and this is the same spin
 	// the storm back-off prevents, arriving by a different route.
-	st.backoff = v.backoffFor(st.consecutiveRepairs + 1)
+	//
+	// nextEligible is what checkTarget actually reads — setting only backoff
+	// would publish a deferral in the diagnostics bundle that does not exist,
+	// which is a worse failure than not deferring at all.
+	st.consecutiveUnreadable++
+	st.backoff = v.backoffFor(st.consecutiveUnreadable)
+	st.nextEligible = now.Add(st.backoff)
 	v.mu.Unlock()
 	v.count(ReverifyUnreadable)
 	if first && v.cfg.Log != nil {
@@ -459,6 +494,12 @@ func (v *HookEntryVerifier) repair(t reverifyTarget, status agent.HookEntryStatu
 
 	v.mu.Lock()
 	st := v.state[t.id()]
+	// Captured before lastOutcome is overwritten: the failure branch below logs
+	// only on the FIRST failure of an episode, the same once-per-episode rule
+	// recordUnreadable and logRepair follow. Without it a permanently failing
+	// repair — the shape a CLI below the #1365 version floor produces — writes
+	// an error line every pass for the life of the daemon.
+	firstFailure := st.lastOutcome != ReverifyRepairFailed
 	st.repairs++
 	st.consecutiveRepairs++
 	st.missing = append([]string(nil), status.Missing...)
@@ -475,7 +516,7 @@ func (v *HookEntryVerifier) repair(t reverifyTarget, status agent.HookEntryStatu
 
 	if err != nil {
 		v.count(ReverifyRepairFailed)
-		if v.cfg.Log != nil {
+		if firstFailure && v.cfg.Log != nil {
 			v.cfg.Log.LogError("hooks", "", fmt.Sprintf(
 				"%s/%s: failed to re-install hook entries in %s (%s): %v (#1372). The permission now "+
 					"carries this as its effect_error (#1362); re-granting it in the wizard retries.",
@@ -592,6 +633,14 @@ func (v *HookEntryVerifier) Snapshot() HookEntryReverifySnapshot {
 		}
 		if st != nil {
 			row.Watched = st.watched
+			// An empty lastOutcome means no pass has run yet. Published as its
+			// own word rather than omitted: every other field is then at its
+			// zero value too, and "watched:false, repairs:0, nothing missing"
+			// is indistinguishable from a healthy unconsented row unless
+			// something says the loop has not looked.
+			if st.lastOutcome == "" {
+				row.LastOutcome = reverifyNoPassYet
+			}
 			row.Missing = append([]string(nil), st.missing...)
 			row.Stale = append([]string(nil), st.stale...)
 			row.Repairs = st.repairs

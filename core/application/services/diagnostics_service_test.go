@@ -556,6 +556,40 @@ func TestHooksBundleReportsEntryReverification(t *testing.T) {
 				"wrong fix; got:\n%s", want, note)
 		}
 	}
+	// The fixture row is a SUCCESSFUL repair that still carries Missing:[Stop]
+	// — the residue every repair leaves until the next intact pass clears it,
+	// which is at least one back-off window later. Classifying on that residue
+	// rather than on last_outcome told the reader the repair had failed, in the
+	// same paragraph as "Re-installed this session: claude-code (7)".
+	if strings.Contains(note, "Repair FAILED") || strings.Contains(note, "has not yet succeeded") {
+		t.Errorf("a repaired target is reported as a failed repair; hooks.json is what a bug "+
+			"reporter pastes, and this sends them hunting a failure that did not happen:\n%s", note)
+	}
+}
+
+// The other half of the same rule: a repair that really DID fail must be named,
+// so tightening the classifier above cannot silently swallow the real case.
+func TestHooksBundleReportsAFailedRepairAsFailed(t *testing.T) {
+	got := hooksJSON(t, buildTestServiceWithHooks(t, func() HookHealthSnapshot {
+		return HookHealthSnapshot{
+			EntryReverification: HookEntryReverifySnapshot{
+				Outcomes: map[ReverifyOutcome]uint64{ReverifyRepairFailed: 3},
+				Targets: []HookEntryHealth{{
+					Adapter: "codex", Permission: "hooks", Watched: true,
+					Missing: []string{"Stop"}, Repairs: 3, ConsecutiveRepairs: 3,
+					LastOutcome: string(ReverifyRepairFailed),
+					LastError:   "installed CLI is 0.100.0, which is older than the 0.144.4 required",
+				}},
+			},
+		}
+	}))
+	note, _ := got["entry_reverification_note"].(string)
+	if !strings.Contains(note, "Repair FAILED") || !strings.Contains(note, "codex") {
+		t.Errorf("a genuinely failed repair is not named in the note:\n%s", note)
+	}
+	if !strings.Contains(note, "effect_error") {
+		t.Errorf("the failed-repair sentence must point at where the reason actually is:\n%s", note)
+	}
 }
 
 // A healthy machine gets rows and no essay — the same terseness rule the

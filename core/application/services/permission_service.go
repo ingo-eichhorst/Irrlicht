@@ -364,14 +364,21 @@ func (s *PermissionService) RepairGrantedHookInstall(agentName, key string) (boo
 		return false, nil
 	}
 
-	s.runEffects([]pendingEffect{{agentName: agentName, perm: perm, target: permission.StateGranted}})
+	if ran := s.runEffects([]pendingEffect{{agentName: agentName, perm: perm, target: permission.StateGranted}}); ran == 0 {
+		// Gate 3 fired: consent went away while this repair waited on effectMu,
+		// so nothing was written. Report it as NOT ATTEMPTED, which is what the
+		// caller means by that word — the alternative is worse than cosmetic.
+		// effectErrs is untouched by a skip, so the read below would return ""
+		// (or, worse, a stale error from a previous attempt) and the loop would
+		// bank a repair that never happened: a lifetime counter, a log line
+		// blaming something outside irrlicht for a deletion, and an armed
+		// back-off, all describing a write the service refused to make.
+		return false, nil
+	}
 
 	// Read the outcome out of the same slot the interactive path writes, rather
 	// than having runEffects hand it back: one recorded truth, which is what the
-	// wizard renders and what HookChannelReady reads. A superseding revoke that
-	// caused runEffects to skip leaves the previous value in place, and the next
-	// pass's consent check — which will find the permission denied — is what
-	// stops the loop, not this return.
+	// wizard renders and what HookChannelReady reads.
 	s.mu.Lock()
 	reason := s.effectErrs[effectKey(agentName, key)]
 	s.mu.Unlock()
@@ -544,10 +551,16 @@ func (s *PermissionService) declared(agentName, key string) (agent.Permission, b
 // the permission (surfacing in Snapshot as EffectError), never propagated
 // — the recorded state stands, the user's consent is never rolled back by
 // a failed effect, and effects are re-applied on the next daemon start.
-func (s *PermissionService) runEffects(effects []pendingEffect) {
+// It returns how many effects it actually RAN, which is not len(effects): an
+// effect superseded while the batch waited on effectMu is skipped. Only the
+// out-of-band #1372 repair reads the count, and it needs it — from outside,
+// "skipped because consent went away" and "applied successfully" are otherwise
+// indistinguishable, and the repair loop would bank a phantom re-install.
+func (s *PermissionService) runEffects(effects []pendingEffect) int {
 	if len(effects) == 0 {
-		return
+		return 0
 	}
+	ran := 0
 	s.effectMu.Lock()
 	defer s.effectMu.Unlock()
 	for _, e := range effects {
@@ -565,6 +578,7 @@ func (s *PermissionService) runEffects(effects []pendingEffect) {
 			s.log.LogInfo("permissions", "", fmt.Sprintf("%s/%s: skipping stale %s effect (state is now %s)", e.agentName, e.perm.Key, e.target, current))
 			continue
 		}
+		ran++
 		s.runClosureEffect(e)
 		if e.perm.Kind == permission.KindObserve {
 			if e.target == permission.StateGranted {
@@ -574,6 +588,7 @@ func (s *PermissionService) runEffects(effects []pendingEffect) {
 			}
 		}
 	}
+	return ran
 }
 
 // runClosureEffect runs the effect's Apply/Remove closure, if any, and

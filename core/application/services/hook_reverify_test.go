@@ -605,3 +605,108 @@ func TestReverify_SnapshotPublishesARowPerTargetBeforeAnyPass(t *testing.T) {
 			"is being repaired, or the finding is not actionable")
 	}
 }
+
+// --- review follow-up ------------------------------------------------------
+
+// An unreadable config must actually be deferred, not merely reported as
+// deferred. The single-pass test above cannot see the difference: backoff is
+// published from st.backoff, but the skip is decided from st.nextEligible, and
+// setting only the first produces a bundle claiming a cooling-off window that
+// does not exist while the file is re-parsed on every pass forever.
+func TestReverify_UnreadableConfigIsActuallyDeferredNotJustReportedAs(t *testing.T) {
+	f, g, log := newFakeInstall(), &grantSwitch{granted: true}, &mockLogger{}
+	v := newVerifier(f, g, log) // BackoffBase 5m
+
+	f.mu.Lock()
+	f.verifyErr = errors.New("invalid character '}' looking for beginning of object key string")
+	f.mu.Unlock()
+
+	// Five passes one minute apart — all well inside the first deferral.
+	for i := 0; i < 5; i++ {
+		v.RunPassForTest(reverifyEpoch.Add(time.Duration(i) * time.Minute))
+	}
+
+	verifies, _ := f.counts()
+	if verifies != 1 {
+		t.Errorf("the config was re-parsed %d times across five passes inside the back-off "+
+			"window, want 1 — a file we cannot parse will not become parseable by being read "+
+			"again in a minute", verifies)
+	}
+	if got := outcome(t, v, services.ReverifyBackoff); got != 4 {
+		t.Errorf("skipped_backoff = %d, want 4", got)
+	}
+	row := v.Snapshot().Targets[0]
+	if row.BackoffSeconds == 0 {
+		t.Errorf("backoff_seconds = 0 while deferring; the bundle must not understate it")
+	}
+
+	// And it escalates: a second unreadable pass after the window must defer
+	// for longer, not reset to the base every time.
+	v.RunPassForTest(reverifyEpoch.Add(6 * time.Minute))
+	if got := v.Snapshot().Targets[0].BackoffSeconds; got <= row.BackoffSeconds {
+		t.Errorf("backoff_seconds stayed at %ds after a second unreadable pass (was %ds); "+
+			"a permanently broken config must not be re-read at the base cadence forever",
+			got, row.BackoffSeconds)
+	}
+}
+
+// A permanently failing repair — the shape a CLI below the #1365 version floor
+// produces, where the version gate refuses every time — must not write an
+// error line on every pass for the life of the daemon. Every sibling path in
+// the file has a once-per-episode guard; this one is held to the same rule.
+func TestReverify_RepairFailureLogsOncePerEpisode(t *testing.T) {
+	f, g, log := newFakeInstall(), &grantSwitch{granted: true}, &mockLogger{}
+	v := newVerifier(f, g, log)
+
+	f.mu.Lock()
+	f.repairErr = errors.New("installed CLI is 2.0.1, which is older than the 2.1.122 required")
+	f.mu.Unlock()
+
+	at := reverifyEpoch
+	for i := 0; i < 12; i++ {
+		f.damage("Stop")
+		v.RunPassForTest(at)
+		at = at.Add(2 * time.Hour) // clear every deferral, so every pass retries
+	}
+
+	var failures []string
+	for _, line := range log.errorSnapshot() {
+		if strings.Contains(line, "failed to re-install") {
+			failures = append(failures, line)
+		}
+	}
+	if len(failures) == 0 {
+		t.Fatalf("12 failed repairs produced no error line at all")
+	}
+	if len(failures) > 1 {
+		t.Errorf("12 failed repairs produced %d error lines; a repair that can never succeed "+
+			"would write one per pass forever, which is the noise the once-per-episode rule "+
+			"exists to prevent (#1364/#1368):\n%s", len(failures), strings.Join(failures, "\n"))
+	}
+	if got := outcome(t, v, services.ReverifyRepairFailed); got != 12 {
+		t.Errorf("repair_failed = %d, want 12 — the COUNTER carries the volume that the log "+
+			"deliberately does not", got)
+	}
+}
+
+// After a successful repair the loop keeps Missing/Stale as the record of what
+// the last verdict found, until an intact pass clears them. The diagnostics
+// note must not read that residue as "the repair has not yet succeeded".
+func TestReverify_ASuccessfulRepairIsNotReportedAsAFailedOne(t *testing.T) {
+	f, g, log := newFakeInstall(), &grantSwitch{granted: true}, &mockLogger{}
+	v := newVerifier(f, g, log)
+
+	f.damage("Stop")
+	v.RunPassForTest(reverifyEpoch)
+
+	row := v.Snapshot().Targets[0]
+	if row.LastOutcome != string(services.ReverifyRepaired) {
+		t.Fatalf("last_outcome = %q, want %q", row.LastOutcome, services.ReverifyRepaired)
+	}
+	if len(row.Missing) == 0 {
+		t.Fatalf("precondition: the row no longer carries the residue this test is about")
+	}
+	if row.LastError != "" {
+		t.Errorf("a successful repair left last_error = %q", row.LastError)
+	}
+}

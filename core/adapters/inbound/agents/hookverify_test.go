@@ -1,6 +1,8 @@
 package agents
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"irrlicht/core/domain/permission"
@@ -56,29 +58,63 @@ func TestEveryHookInstallDeclaresAVerifier(t *testing.T) {
 	}
 }
 
-// TestHookVerifiersAreReadOnlyOnAnAbsentConfig is the cheapest possible check
-// that a declared Verify is actually a read: called against the real resolved
-// config path it must not create the file, and must not panic or error merely
-// because nothing is installed.
+// TestHookVerifiersDoNotCreateTheConfigFile runs each adapter's PRODUCTION
+// Verify closure against an empty HOME and asserts it left no file behind.
 //
-// It runs the production closures rather than a fixture, so it covers the wiring
-// (right hookConfig, right path resolver) that a package-local test would mock
-// away. It deliberately asserts nothing about the CONTENT of the verdict — this
-// machine may or may not have Claude Code installed, and a test that depended on
-// that would be a flake, not a check.
-func TestHookVerifiersDoNotErrorOnARealPath(t *testing.T) {
+// It exercises the real wiring — the adapter's own path resolver and hookConfig
+// — which a package-local test would mock away, and it is the only mechanical
+// check that a declared Verify is genuinely a read. "Read-only" is the whole
+// reason the repair is a separate step behind the consent gate (#1372/#570); a
+// verifier that quietly created or rewrote the file would move a write outside
+// that gate while every consent test still passed.
+//
+// HOME (and CODEX_HOME) point at a temp dir, so this asserts on a known-empty
+// tree rather than on the developer's real config, which may legitimately hold
+// anything at all.
+func TestHookVerifiersDoNotCreateTheConfigFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on windows
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	checked := 0
 	for _, a := range All() {
 		for _, p := range a.Permissions {
-			if p.Hooks == nil || p.Hooks.Verify == nil {
+			if p.Hooks == nil || p.Hooks.Verify == nil || p.Hooks.ConfigPath == nil {
 				continue
 			}
-			if _, err := p.Hooks.Verify(); err != nil {
-				// Malformed JSON in a developer's real config is a legitimate
-				// error and not this test's business, so this is only a signal
-				// when it fires in CI, where the home dir is clean.
-				t.Logf("%s/%s Verify returned %v (expected only for a malformed real config)",
+			path, err := p.Hooks.ConfigPath()
+			if err != nil {
+				t.Errorf("%s/%s: ConfigPath failed under a temp HOME: %v", a.Identity.Name, p.Key, err)
+				continue
+			}
+			if _, err := os.Stat(path); err == nil {
+				t.Fatalf("%s/%s: %s already exists under a fresh temp HOME — the fixture is "+
+					"not empty, so the assertion below would prove nothing",
+					a.Identity.Name, p.Key, path)
+			}
+
+			status, err := p.Hooks.Verify()
+			if err != nil {
+				t.Errorf("%s/%s: Verify errored on an absent config: %v — an install that is "+
+					"simply not there is the ordinary answer, not a fault",
 					a.Identity.Name, p.Key, err)
 			}
+			if status.Intact() {
+				t.Errorf("%s/%s: Verify reports an intact install with no config file at all "+
+					"(%+v); nothing is installed, so the loop would never repair it",
+					a.Identity.Name, p.Key, status)
+			}
+			if _, err := os.Stat(path); err == nil {
+				t.Errorf("%s/%s: Verify CREATED %s. It must be a pure read — the repair is a "+
+					"separate step that runs behind the #570 consent gate, and a verifier that "+
+					"writes moves a write outside that gate entirely",
+					a.Identity.Name, p.Key, path)
+			}
+			checked++
 		}
+	}
+	if checked == 0 {
+		t.Fatal("no hook adapter was exercised; this test passed without checking anything")
 	}
 }

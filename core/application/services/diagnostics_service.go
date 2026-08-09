@@ -547,10 +547,16 @@ func (s *DiagnosticsService) hooksView() any {
 func entryReverificationNote(rows []HookEntryHealth) string {
 	var repaired, damaged, unreadable []string
 	for _, r := range rows {
-		switch {
-		case r.LastOutcome == string(ReverifyUnreadable):
+		// Keyed off the OUTCOME, never off the residue. Missing/Stale record
+		// what the last verdict FOUND and survive a successful repair until the
+		// next intact pass clears them — which is at least one back-off window
+		// later — so classifying on their length alone reports every repaired
+		// target as "the repair has not yet succeeded" for up to an hour after
+		// it did.
+		switch r.LastOutcome {
+		case string(ReverifyUnreadable):
 			unreadable = append(unreadable, r.Adapter)
-		case len(r.Missing) > 0 || len(r.Stale) > 0:
+		case string(ReverifyRepairFailed):
 			damaged = append(damaged, r.Adapter)
 		}
 		if r.Repairs > 0 {
@@ -573,8 +579,10 @@ func entryReverificationNote(rows []HookEntryHealth) string {
 			"fields to read. "
 	}
 	if len(damaged) > 0 {
-		note += "Currently damaged: " + strings.Join(damaged, ", ") +
-			" — entries are missing or stale as of the last pass and the repair has not yet succeeded. "
+		note += "Repair FAILED for: " + strings.Join(damaged, ", ") +
+			" — entries are missing or stale and the re-install errored, so they are still not " +
+			"installed. The reason is on the permission as effect_error in permissions.json, and " +
+			"re-granting the permission in the wizard retries it. "
 	}
 	if len(unreadable) > 0 {
 		note += "Unreadable: " + strings.Join(unreadable, ", ") +
