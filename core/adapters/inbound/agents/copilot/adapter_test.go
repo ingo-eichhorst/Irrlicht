@@ -131,36 +131,82 @@ func TestAgent_Process_ExactName(t *testing.T) {
 	}
 }
 
-// TestAgent_Permissions pins the consent surface. Copilot is observe-only: it
-// installs nothing, so it declares exactly one observe permission and no
-// modify permission — which is also why no contracttesting.AssertPermissionGated
-// call is owed here (that contract covers modify-kind permissions, and the
-// observe gate is enforced daemon-side by startWatching/stopWatching).
+// TestAgent_Permissions pins the consent surface: one observe permission for
+// reading transcripts, and — since #1378 — one modify permission for the hook
+// install.
 //
-// The count matters beyond tidiness: PermissionService resolves an adapter to
-// its FIRST observe-kind entry and stops, so a second one would be silently
-// unreachable.
+// The ONE-observe count matters beyond tidiness: PermissionService resolves an
+// adapter to its FIRST observe-kind entry and stops, so a second observe entry
+// would be silently unreachable. The hooks entry must therefore be
+// modify-kind, which is asserted rather than assumed.
+//
+// Both entries are checked for the four prose fields because the consent
+// wizard renders all of them; the hooks entry's copy is additionally bound to
+// what the installer actually writes by AssertHookDisclosureMatchesInstalled
+// (hookdisclosure_test.go), which is the check that would catch a stale event
+// list here.
 func TestAgent_Permissions(t *testing.T) {
 	perms := Agent().Permissions
-	if len(perms) != 1 {
-		t.Fatalf("got %d permissions, want exactly 1 (observe-only adapter)", len(perms))
+	if len(perms) != 2 {
+		t.Fatalf("got %d permissions, want exactly 2 (transcripts + hooks)", len(perms))
 	}
-	p := perms[0]
-	if p.Key != PermissionKeyTranscripts {
-		t.Errorf("Key = %q, want %q", p.Key, PermissionKeyTranscripts)
+
+	byKey := map[string]agent.Permission{}
+	observes := 0
+	for _, p := range perms {
+		byKey[p.Key] = p
+		if p.Kind == permission.KindObserve {
+			observes++
+		}
 	}
-	if p.Kind != permission.KindObserve {
-		t.Errorf("Kind = %v, want %v", p.Kind, permission.KindObserve)
+	if observes != 1 {
+		t.Errorf("got %d observe-kind permissions, want exactly 1 — "+
+			"PermissionService resolves an adapter to its first observe entry and stops, "+
+			"so any second one is unreachable", observes)
 	}
-	if p.Apply != nil || p.Remove != nil {
+
+	transcripts, ok := byKey[PermissionKeyTranscripts]
+	if !ok {
+		t.Fatalf("no %q permission declared", PermissionKeyTranscripts)
+	}
+	if transcripts.Kind != permission.KindObserve {
+		t.Errorf("transcripts Kind = %v, want %v", transcripts.Kind, permission.KindObserve)
+	}
+	if transcripts.Apply != nil || transcripts.Remove != nil {
 		t.Error("observe-kind permission must not carry Apply/Remove effects")
 	}
-	for name, field := range map[string]string{
-		"Title": p.Title, "FeatureUnlocked": p.FeatureUnlocked,
-		"Touches": p.Touches, "Detail": p.Detail,
-	} {
-		if strings.TrimSpace(field) == "" {
-			t.Errorf("%s is empty — the consent wizard renders this to the user", name)
+	if transcripts.Hooks != nil {
+		t.Error("the transcripts permission must not carry a HookInstall")
+	}
+
+	hooks, ok := byKey[PermissionKeyHooks]
+	if !ok {
+		t.Fatalf("no %q permission declared", PermissionKeyHooks)
+	}
+	if hooks.Kind != permission.KindModify {
+		t.Errorf("hooks Kind = %v, want %v — an install writes a file", hooks.Kind, permission.KindModify)
+	}
+	if hooks.Apply == nil || hooks.Remove == nil {
+		t.Error("the hooks permission must carry both Apply and Remove effects")
+	}
+	if hooks.Hooks == nil {
+		t.Fatal("the hooks permission must carry a HookInstall")
+	}
+	if hooks.Hooks.ConfigPath == nil || hooks.Hooks.Uninstall == nil || hooks.Hooks.Verify == nil {
+		t.Error("HookInstall must declare ConfigPath, Uninstall and Verify")
+	}
+	if hooks.Hooks.Version == nil {
+		t.Error("HookInstall must declare a version floor")
+	}
+
+	for _, p := range perms {
+		for name, field := range map[string]string{
+			"Title": p.Title, "FeatureUnlocked": p.FeatureUnlocked,
+			"Touches": p.Touches, "Detail": p.Detail,
+		} {
+			if strings.TrimSpace(field) == "" {
+				t.Errorf("%s/%s is empty — the consent wizard renders this to the user", p.Key, name)
+			}
 		}
 	}
 }

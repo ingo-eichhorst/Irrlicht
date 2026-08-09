@@ -18,6 +18,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
+	"irrlicht/core/adapters/inbound/agents/copilot"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	backchannelhandler "irrlicht/core/adapters/inbound/backchannel"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
@@ -925,6 +926,8 @@ func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, 
 		claudecode.NewStatuslineHandler(metricsCollector, permService, logger))
 	mux.HandleFunc("POST "+codex.HookEndpointPath,
 		codex.NewHookHandler(detector, permService, logger))
+	mux.HandleFunc("POST "+copilot.HookEndpointPath,
+		copilot.NewHookHandler(detector, permService, logger))
 }
 
 // publishAddrFile writes the addr file and thereby signals "the daemon is
