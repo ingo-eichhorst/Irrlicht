@@ -26,8 +26,8 @@ import (
 // from no declaration at all.
 
 // gateLog captures what the service reported. The log line is not incidental
-// here: it is the entire user-visible output of a refusal today, and the thing
-// #1362's consent-effect surfacing (PR #1379) will lift into the wizard.
+// here: the same string is recorded as the permission's EffectError, which is
+// what #1362's consent-effect surfacing renders in both wizards.
 type gateLog struct {
 	mu     sync.Mutex
 	infos  []string
@@ -90,7 +90,9 @@ func gatedHooksPermission(min, observed string, applied *bool) agent.Permission 
 
 func newGateService() (*PermissionService, *gateLog) {
 	log := &gateLog{}
-	return &PermissionService{log: log}, log
+	// effectErrs must exist: runClosureEffect records every outcome there
+	// (#1362), so a bare struct panics on the first effect.
+	return &PermissionService{log: log, effectErrs: map[string]string{}}, log
 }
 
 func grant(svc *PermissionService, p agent.Permission) {
@@ -259,5 +261,58 @@ func TestHookVersionGate_RealCodexDeclarationRefusesOldCLI(t *testing.T) {
 	}
 	if !log.errorMentioning("0.100.0") {
 		t.Errorf("no logged reason naming the installed version; errors were %v", log.errors)
+	}
+}
+
+// TestHookVersionGate_RefusalIsRecordedAsAnEffectError is the #1365 x #1362
+// join. The gate deliberately produces an ordinary effect error rather than a
+// separate "skipped" concept, so the refusal rides the mechanism #1379 landed:
+// it is stored in effectErrs, which Snapshot exposes as EffectError and both
+// wizards render as "granted but NOT applied, because <reason>".
+//
+// Without this the two features are only adjacent — the gate could refuse into
+// the log while the wizard still showed a clean "granted", which is the exact
+// state #1365 was filed about.
+func TestHookVersionGate_RefusalIsRecordedAsAnEffectError(t *testing.T) {
+	applied := false
+	svc, _ := newGateService()
+	p := gatedHooksPermission("2.1.122", "2.1.121", &applied)
+
+	grant(svc, p)
+
+	got := svc.effectErrs[effectKey("test-agent", "hooks")]
+	if got == "" {
+		t.Fatal("refusal was not recorded as an EffectError — the wizard would render a " +
+			"clean \"granted\" for a permission that installed nothing (#1362/#1365)")
+	}
+	if !strings.Contains(got, "2.1.121") || !strings.Contains(got, "2.1.122") {
+		t.Errorf("recorded EffectError %q does not name both versions", got)
+	}
+	// The recorded failure is also what makes the refusal's advice actionable:
+	// planAnswerLocked re-runs the effect when a re-answer finds one.
+	svc.mu.Lock()
+	retries := svc.effectFailedLocked("test-agent", "hooks")
+	svc.mu.Unlock()
+	if !retries {
+		t.Error("a recorded refusal does not mark the permission for retry, so " +
+			"\"upgrade the CLI and grant again\" would not actually re-run the install")
+	}
+}
+
+// TestHookVersionGate_SuccessClearsAnEarlierRefusal pins the other half: after
+// the user upgrades and re-grants, the stale "too old" reason must not linger
+// on a permission that is now installed.
+func TestHookVersionGate_SuccessClearsAnEarlierRefusal(t *testing.T) {
+	applied := false
+	svc, _ := newGateService()
+
+	grant(svc, gatedHooksPermission("2.1.122", "2.1.121", &applied)) // too old
+	grant(svc, gatedHooksPermission("2.1.122", "2.1.226", &applied)) // upgraded
+
+	if !applied {
+		t.Fatal("install did not run after the CLI was upgraded")
+	}
+	if got := svc.effectErrs[effectKey("test-agent", "hooks")]; got != "" {
+		t.Errorf("stale refusal %q survived a successful install", got)
 	}
 }

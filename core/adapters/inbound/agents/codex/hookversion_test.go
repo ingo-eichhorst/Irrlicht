@@ -62,8 +62,8 @@ func hooksVersionGate(t *testing.T) *agent.VersionGate {
 // that can never fire and nothing anywhere said why.
 //
 // The reason is now carried by the refusal itself, which PermissionService
-// routes into the failed-effect log and which #1362's consent-effect surfacing
-// (PR #1379) will carry to the wizard unchanged once it lands.
+// records as the permission's EffectError, so #1362's consent-effect surfacing
+// renders it in both wizards.
 func TestHooksGate_BelowFloorSaysWhy(t *testing.T) {
 	writeCodexSessionWithVersion(t, "0.100.0")
 	gate := hooksVersionGate(t)

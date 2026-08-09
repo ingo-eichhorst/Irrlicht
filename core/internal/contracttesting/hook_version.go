@@ -161,9 +161,10 @@ func assertFloorRefusesOlder(t *testing.T, gate *agent.VersionGate) {
 			t.Errorf("gate permits %s, below the declared floor %s", older, gate.Min)
 			continue
 		}
-		// The refusal is the only thing the user ever sees about it (the daemon
-		// log today, #1362's wizard surfacing once PR #1379 lands), so an empty
-		// or version-free reason is a silent skip wearing an error's clothes —
+		// The refusal string IS the user-visible text: PermissionService
+		// records it as the permission's EffectError and both wizards render
+		// "granted but NOT applied, because <reason>" (#1362). An empty or
+		// version-free reason is a silent skip wearing an error's clothes —
 		// the exact behaviour #1365 filed against Codex.
 		if why == "" {
 			t.Errorf("gate refuses %s without a reason; the refusal is what the user is shown", older)

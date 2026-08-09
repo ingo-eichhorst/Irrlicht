@@ -176,7 +176,12 @@ Before marking a ticket done, run the full suite — every layer must pass:
   "--version"}}` and nothing else. `TestEveryHookInstallDeclaresAVersionFloor`
   (`core/adapters/inbound/agents/hookversion_test.go`) walks the registry
   projection so a new hook adapter is covered by existing rather than by
-  remembering to wire the contract. Note the direction: an unknown or
+  remembering to wire the contract. A refusal is an ordinary effect error, not
+  a separate "skipped" concept, so #1362's surfacing carries it for free — the
+  wizard shows "granted but NOT applied, because <the CLI is too old>", and
+  because a re-answer re-runs an effect that previously failed, the refusal's
+  own advice (upgrade the CLI and grant again) is the gesture that retries it.
+  Note the direction: an unknown or
   unparseable version fails **open** (`core/pkg/cliversion`) — the daemon runs
   under launchd with a minimal PATH and routinely cannot see the user's CLI, so
   only a version successfully read AND parsed AND found below the floor blocks
