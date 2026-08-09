@@ -96,6 +96,10 @@ func Agent() agent.Agent {
 				Hooks: &agent.HookInstall{
 					ConfigPath: claudeSettingsPath,
 					Uninstall:  UninstallHooks,
+					// Read-only; the repair it feeds runs through
+					// PermissionService, which re-checks consent under its own
+					// lock before writing (#1372).
+					Verify: VerifyHooksInstalled,
 					// Declared, not implemented — PermissionService enforces it
 					// (#1365). Observed reads the version Claude Code stamps on
 					// every transcript line, which is what makes this gate real

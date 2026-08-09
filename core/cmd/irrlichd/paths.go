@@ -115,10 +115,10 @@ func buildDiagnostics(fsRepo *filesystem.SessionRepository, allAgents []agent.Ag
 // diagnostics bundle (issue #1364). Only the daemon wires it: these counters
 // accumulate in whatever process served the hooks, and --diagnose is not that
 // process.
-// watchdog carries the liveness half (#1368) and may be nil, which reads the
-// same way the whole function being absent does: the counters are omitted, not
-// zeroed.
-func liveHookHealth(watchdog *services.HookLivenessWatchdog) func() services.HookHealthSnapshot {
+// watchdog carries the liveness half (#1368) and verifier the entry-presence
+// half (#1372); either may be nil, which reads the same way the whole function
+// being absent does — that section is omitted, not zeroed.
+func liveHookHealth(watchdog *services.HookLivenessWatchdog, verifier *services.HookEntryVerifier) func() services.HookHealthSnapshot {
 	return func() services.HookHealthSnapshot {
 		rows := hookjson.UnknownEvents()
 		snap := services.HookHealthSnapshot{
@@ -127,6 +127,7 @@ func liveHookHealth(watchdog *services.HookLivenessWatchdog) func() services.Hoo
 			UnknownEventsTotal:  hookjson.UnknownEventTotal(),
 			Channels:            watchdog.Snapshot(),
 			ReceiptsTotal:       hookjson.HookReceiptTotal(),
+			EntryReverification: verifier.Snapshot(),
 		}
 		for _, row := range rows {
 			snap.UnknownEvents = append(snap.UnknownEvents, services.UnknownHookEvent{

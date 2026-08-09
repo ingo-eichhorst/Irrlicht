@@ -94,6 +94,16 @@ type HookHealthSnapshot struct {
 	// ReceiptsTotal is every consent-passed hook request this process was
 	// handed, across all adapters.
 	ReceiptsTotal uint64
+
+	// EntryReverification is the periodic entry-presence loop's view (#1372):
+	// per hook install, whether our entries are still in the agent's config,
+	// how often they have had to be put back, and whether a repair storm is
+	// being backed off from. It rides in this same snapshot, and renders into
+	// the same hooks.json section, for the reason Channels does — a reader
+	// looking at "hooks aren't working" needs all three diagnoses side by side,
+	// and a fourth nil-meaningful seam would be a fourth thing to get wrong in
+	// the --diagnose case.
+	EntryReverification HookEntryReverifySnapshot
 }
 
 // DiagnosticsServiceDeps bundles NewDiagnosticsService's dependencies.
@@ -454,10 +464,18 @@ func (s *DiagnosticsService) hooksView() any {
 		// process that could not have observed one — the very thing the note
 		// beside it says is not being done.
 		return struct {
-			CollectedFrom string `json:"collected_from"`
-			Note          string `json:"note"`
-			LivenessNote  string `json:"liveness_note"`
+			CollectedFrom     string `json:"collected_from"`
+			Note              string `json:"note"`
+			LivenessNote      string `json:"liveness_note"`
+			EntryReverifyNote string `json:"entry_reverification_note"`
 		}{
+			EntryReverifyNote: "The hook-entry re-verification loop (#1372) is omitted here for the same reason: " +
+				"it runs in the daemon, so this process has performed no passes and its counters are " +
+				"structurally zero — publishing them would report 'entries verified present' from a process " +
+				"that never looked. Its repairs ARE logged, so events.log in this bundle still carries any " +
+				"`hook entries were ... and have been re-installed` line, and a repair that failed is on the " +
+				"permission as effect_error in permissions.json. For the live view, fetch GET /debug/bundle " +
+				"from the running daemon.",
 			CollectedFrom: "cli",
 			Note: "Collected by `irrlichd --diagnose`, which runs in a process that never served a hook, " +
 				"so the receivers' unrecognized-event counters are not readable here and are omitted rather than " +
@@ -489,23 +507,88 @@ func (s *DiagnosticsService) hooksView() any {
 	// is nothing here to alias and re-sorting would be a second copy of one
 	// comparator that no test could see go stale.
 	channels := snap.Channels
+	reverify := snap.EntryReverification
 	return struct {
-		CollectedFrom            string              `json:"collected_from"`
-		HookRequestsReceived     uint64              `json:"hook_requests_received"`
-		Channels                 []HookChannelHealth `json:"channels,omitempty"`
-		SilentChannelNote        string              `json:"silent_channel_note,omitempty"`
-		UnknownEventsTotal       uint64              `json:"unknown_events_total"`
-		UnknownEvents            []UnknownHookEvent  `json:"unknown_events,omitempty"`
-		UnknownEventNamesDropped map[string]uint64   `json:"unknown_event_names_dropped_by_adapter,omitempty"`
+		CollectedFrom            string                     `json:"collected_from"`
+		HookRequestsReceived     uint64                     `json:"hook_requests_received"`
+		Channels                 []HookChannelHealth        `json:"channels,omitempty"`
+		SilentChannelNote        string                     `json:"silent_channel_note,omitempty"`
+		EntryReverification      []HookEntryHealth          `json:"entry_reverification,omitempty"`
+		EntryReverifyOutcomes    map[ReverifyOutcome]uint64 `json:"entry_reverification_outcomes,omitempty"`
+		EntryReverifyNote        string                     `json:"entry_reverification_note,omitempty"`
+		UnknownEventsTotal       uint64                     `json:"unknown_events_total"`
+		UnknownEvents            []UnknownHookEvent         `json:"unknown_events,omitempty"`
+		UnknownEventNamesDropped map[string]uint64          `json:"unknown_event_names_dropped_by_adapter,omitempty"`
 	}{
 		CollectedFrom:            "daemon",
 		HookRequestsReceived:     snap.ReceiptsTotal,
 		Channels:                 channels,
 		SilentChannelNote:        silentChannelNote(channels),
+		EntryReverification:      reverify.Targets,
+		EntryReverifyOutcomes:    reverify.Outcomes,
+		EntryReverifyNote:        entryReverificationNote(reverify.Targets),
 		UnknownEventsTotal:       snap.UnknownEventsTotal,
 		UnknownEvents:            events,
 		UnknownEventNamesDropped: snap.UnknownNamesDropped,
 	}
+}
+
+// entryReverificationNote spells out what the entry_reverification rows mean
+// (issue #1372) — and, like silentChannelNote beside it, what they do not.
+//
+// Emitted only when there is something to say: a repair has happened, or a
+// target is currently damaged, or a config could not be read. A bundle from a
+// healthy machine keeps the terse rows and no essay.
+//
+// The three-way disambiguation is repeated here rather than cross-referenced
+// because the two notes are read independently — a reader lands on whichever
+// one fired — and the whole failure this family of issues is about is that the
+// same symptom has three causes with three different first moves.
+func entryReverificationNote(rows []HookEntryHealth) string {
+	var repaired, damaged, unreadable []string
+	for _, r := range rows {
+		switch {
+		case r.LastOutcome == string(ReverifyUnreadable):
+			unreadable = append(unreadable, r.Adapter)
+		case len(r.Missing) > 0 || len(r.Stale) > 0:
+			damaged = append(damaged, r.Adapter)
+		}
+		if r.Repairs > 0 {
+			repaired = append(repaired, fmt.Sprintf("%s (%d)", r.Adapter, r.Repairs))
+		}
+	}
+	if len(repaired) == 0 && len(damaged) == 0 && len(unreadable) == 0 {
+		return ""
+	}
+
+	note := "irrlicht re-verifies that its hook entries are still present in each agent's own config, " +
+		"on a timer, and re-installs them when they are not (#1372). "
+	if len(repaired) > 0 {
+		note += "Re-installed this session: " + strings.Join(repaired, ", ") + ". " +
+			"A non-zero count means something OUTSIDE irrlicht removed or rewrote those entries after " +
+			"the user granted the permission — an agent whose own settings UI syncs by omission deletes " +
+			"every key it did not know about on any config change, and gemini-cli is confirmed to do " +
+			"exactly that. A count that keeps climbing is that, happening repeatedly; the loop backs off " +
+			"exponentially rather than fighting it, so consecutive_repairs and backoff_seconds are the " +
+			"fields to read. "
+	}
+	if len(damaged) > 0 {
+		note += "Currently damaged: " + strings.Join(damaged, ", ") +
+			" — entries are missing or stale as of the last pass and the repair has not yet succeeded. "
+	}
+	if len(unreadable) > 0 {
+		note += "Unreadable: " + strings.Join(unreadable, ", ") +
+			" — the config could not be parsed, so nothing was written; the installer refuses to " +
+			"overwrite a file it cannot read, and this needs a human. "
+	}
+	note += "This section is about whether the entries EXIST. It is a different question from " +
+		"whether anything is arriving through them, which is the channels/silent_channel_note above " +
+		"(#1368), and from an install that FAILED and never wrote entries at all, which shows up as " +
+		"effect_error on the permission (#1362). A repair that fails is recorded there too, so a " +
+		"repair_failed count here has its reason on the permission. " +
+		"watched:false means the permission is not currently granted, so nothing is read or written " +
+		"for that row at all — not that the entries are gone."
+	return note
 }
 
 // silentChannelNote spells out what a `"silent": true` row means, and — just as
@@ -530,9 +613,11 @@ func silentChannelNote(channels []HookChannelHealth) string {
 		"threshold while consent was granted and the install reported success, so they were demoted to the " +
 		"transcript tier and any hook-tier holds they had placed were released (#1368). This says entries were " +
 		"WRITTEN and nothing is arriving through them. It does NOT mean the entries are still present — if " +
-		"something removed them since, this is how that looks too (#1372). And it is a different fault from an " +
-		"install that FAILED, which never wrote entries at all and shows up as effect_error on the permission " +
-		"rather than here (#1362). Check the agent's own hook config next, then the daemon's bind port."
+		"something removed them since, this is how that looks too, and the entry_reverification rows below are " +
+		"what tell those apart (#1372): a row with repairs:0 and no missing/stale means the entries WERE there " +
+		"at the last pass, so this really is a dead channel and not a clobbered config. And it is a different " +
+		"fault from an install that FAILED, which never wrote entries at all and shows up as effect_error on " +
+		"the permission rather than here (#1362). Check the daemon's bind port next."
 }
 
 func stateView(sessions []*session.SessionState, now time.Time) any {

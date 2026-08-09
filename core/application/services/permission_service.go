@@ -318,6 +318,89 @@ func (s *PermissionService) HookChannelReady(agentName string) bool {
 	return false
 }
 
+// RepairGrantedHookInstall re-runs one hook permission's install effect out of
+// band, for the periodic entry re-verification loop (issue #1372).
+//
+// It reports whether the effect was ATTEMPTED, and if so whether it succeeded.
+// attempted=false is the consent refusal — the permission is not currently
+// granted, is unknown, or declares no hook install — and it is not an error:
+// declining to write is the correct outcome, not a failure to be retried.
+//
+// There are two consent checks on this path and they cover different windows.
+// The pre-check below is the one that refuses every ordinary revoked caller —
+// it is a real gate, not decoration, and deleting it is visible as a red test.
+// But it can only be as fresh as the instant it was asked, and the write that
+// follows may wait on a mutex first. So the write itself is not performed here:
+// it goes through runEffects, exactly as a wizard answer does, which means the
+// background repair inherits every guarantee the interactive path already had
+// and cannot drift from it:
+//
+//   - runEffects takes effectMu, so a repair cannot race a concurrent Answer
+//     batch into the same installer;
+//   - under effectMu it re-reads the recorded state and SKIPS any effect whose
+//     target no longer matches. That third read is what makes revocation
+//     authoritative rather than eventually noticed: consent withdrawn at any
+//     point before the closure runs means the closure does not run, and the
+//     skip is logged. It is the only one of the three that a user revoking
+//     WHILE a repair waits on the lock can be caught by, and
+//     TestRunEffects_SkipsAGrantEffectWhoseStateIsNoLongerGranted pins it;
+//   - runClosureEffect consults the declared version floor (#1365) before
+//     applying, so a repair cannot install into a CLI too old for the entries;
+//   - the outcome lands in effectErrs, so a repair that FAILS surfaces as the
+//     permission's EffectError and is retried by the user re-answering — the
+//     #1362 mechanism, not a second one. That also drops HookChannelReady to
+//     false, which correctly disarms #1368's liveness watchdog for an adapter
+//     whose install is known broken.
+//
+// The pre-check below also keeps the common case — nothing granted, nothing to
+// do — off effectMu entirely, so an unanswered wizard costs the loop one map
+// read per pass rather than a lock and a log line.
+func (s *PermissionService) RepairGrantedHookInstall(agentName, key string) (bool, error) {
+	s.mu.Lock()
+	perm, found := s.hookPermissionLocked(agentName, key)
+	granted := found && s.set.Get(agentName, key) == permission.StateGranted
+	s.mu.Unlock()
+	if !granted || perm.Apply == nil {
+		return false, nil
+	}
+
+	s.runEffects([]pendingEffect{{agentName: agentName, perm: perm, target: permission.StateGranted}})
+
+	// Read the outcome out of the same slot the interactive path writes, rather
+	// than having runEffects hand it back: one recorded truth, which is what the
+	// wizard renders and what HookChannelReady reads. A superseding revoke that
+	// caused runEffects to skip leaves the previous value in place, and the next
+	// pass's consent check — which will find the permission denied — is what
+	// stops the loop, not this return.
+	s.mu.Lock()
+	reason := s.effectErrs[effectKey(agentName, key)]
+	s.mu.Unlock()
+	if reason != "" {
+		return true, errors.New(reason)
+	}
+	return true, nil
+}
+
+// hookPermissionLocked resolves one agent's hook-install permission by key.
+// Caller holds s.mu.
+//
+// Restricted to modify-kind permissions declaring a HookInstall, so this can
+// never be used to re-run an arbitrary effect by name: the re-verification loop
+// is allowed to repair hook installs and nothing else.
+func (s *PermissionService) hookPermissionLocked(agentName, key string) (agent.Permission, bool) {
+	for _, a := range s.agents {
+		if a.Identity.Name != agentName {
+			continue
+		}
+		for _, p := range a.Permissions {
+			if p.Key == key && p.Hooks != nil && p.Kind == permission.KindModify {
+				return p, true
+			}
+		}
+	}
+	return agent.Permission{}, false
+}
+
 // Snapshot returns the full consent state for GET /api/v1/permissions.
 func (s *PermissionService) Snapshot() PermissionsSnapshot {
 	s.mu.Lock()

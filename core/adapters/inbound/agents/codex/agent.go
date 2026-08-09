@@ -79,6 +79,10 @@ func Agent() agent.Agent {
 				Hooks: &agent.HookInstall{
 					ConfigPath: codexHooksPath,
 					Uninstall:  UninstallHooks,
+					// Read-only; the repair it feeds runs through
+					// PermissionService, which re-checks consent under its own
+					// lock before writing (#1372).
+					Verify: VerifyHooksInstalled,
 					// The floor is declared, not implemented: PermissionService
 					// enforces it for every adapter (#1365). Observed reads
 					// cli_version out of the newest session header, so the common

@@ -206,6 +206,25 @@ Before marking a ticket done, run the full suite — every layer must pass:
   the diagnostics bundle's `hooks.json`; note that `--diagnose` runs in a process
   that never served a hook, so that form omits the counts and says so rather than
   publishing zeros (the live counts come from `GET /debug/bundle`).
+- Hook entry presence: not a contract family — a registry tripwire,
+  `TestEveryHookInstallDeclaresAVerifier`
+  (`core/adapters/inbound/agents/hookverify_test.go`), riding the same
+  projection as #1365's version-floor tripwire. It exists because the install
+  is not a one-shot fact: an agent whose own settings UI rewrites its config
+  deletes our entries silently, with the permission still reading `granted`
+  and no error anywhere. gemini-cli's writer is sync-by-omission and #1355's
+  Phase C audit verified the deletion live. So a hooks permission declares
+  `Verify` beside `Uninstall` (one line, `hookjson.Verify` does the matching
+  via the adapter's own `hookConfig`), and `services.HookEntryVerifier`
+  re-reads every granted install on a timer, repairing through
+  `PermissionService.RepairGrantedHookInstall` — never through the adapter's
+  `Apply` directly, because the repair is a WRITE and has to pass the same
+  #570 consent the install did. An adapter that omits `Verify` is skipped in
+  silence, which is why the tripwire is the coverage rather than a per-adapter
+  test. Keep the three hook diagnoses distinguishable: entries GONE is this
+  one, entries present but nothing ARRIVING is #1368, and an install that
+  FAILED is #1362's `effect_error` — `hooks.json` prints all three side by
+  side and each note names the other two.
 - Hook receipts: `contracttesting.AssertHookReceiptObserved`
   (`core/internal/contracttesting/hook_receipt.go`) is the #1368 counterpart —
   the event that never *arrives*, rather than the one that arrives unrecognized.

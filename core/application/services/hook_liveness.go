@@ -12,12 +12,14 @@
 //     visible as PermissionView.EffectError and a permissions LogError (#1362).
 //     The watchdog stays disarmed for that adapter, so it can never re-report
 //     that failure in weaker words.
-//   - entries written and later REMOVED by something else — #1372, not built.
-//     The watchdog will eventually call such a channel silent, because from in
-//     here it is silent; what it does NOT do is claim to know why. Its log line
-//     and its lifecycle event say "nothing is arriving", never "the entries are
-//     present", and hooks.json names #1372 as the thing that would tell them
-//     apart.
+//   - entries written and later REMOVED by something else — #1372, now built,
+//     and deliberately still a separate diagnosis. The watchdog will call such
+//     a channel silent, because from in here it is silent; what it does NOT do
+//     is claim to know why. Its log line and its lifecycle event say "nothing
+//     is arriving", never "the entries are present". The entry re-verification
+//     loop (hook_reverify.go) is what answers the other half, by re-reading the
+//     file; hooks.json prints both sections so a reader can tell a dead channel
+//     from a clobbered config without knowing which issue owns which.
 //   - hooks arriving under names we do not recognize — #1364. Those still count
 //     as receipts, because the channel is demonstrably alive; the unknown-event
 //     counters in the same hooks.json section are what say the names are wrong.

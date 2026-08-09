@@ -383,6 +383,11 @@ type registerCoreRoutesDeps struct {
 	// (#1368). Built before this call because the diagnostics bundle is
 	// registered earlier in startup than the detector that drives it.
 	HookLiveness *services.HookLivenessWatchdog
+	// HookVerifier supplies the entry re-verification rows for hooks.json
+	// (#1372), for the same reason and with the same timing as HookLiveness:
+	// built before this call, its consent collaborators injected after the
+	// permission service exists.
+	HookVerifier *services.HookEntryVerifier
 }
 
 // registerCoreRoutes wires the always-on API surface: session state, the
@@ -412,7 +417,7 @@ func registerCoreRoutes(mux *http.ServeMux, deps registerCoreRoutesDeps) {
 	// per-PID liveness, trimmed logs, and config for bug reports. Localhost
 	// only — it carries session paths and (pre-redaction) process argv. Reads
 	// fsRepo directly for a fresh, uncached snapshot.
-	diagSvc := buildDiagnostics(deps.FSRepo, deps.AllAgents, deps.Cfg, liveHookHealth(deps.HookLiveness))
+	diagSvc := buildDiagnostics(deps.FSRepo, deps.AllAgents, deps.Cfg, liveHookHealth(deps.HookLiveness, deps.HookVerifier))
 	mux.HandleFunc("GET /debug/bundle", localhostOnly(handleDiagnosticsBundle(diagSvc)))
 }
 
@@ -984,6 +989,7 @@ type startBackgroundLoopsDeps struct {
 	GitResolver       *git.Adapter
 	TerminalObserver  *services.TerminalObserver
 	PermService       *services.PermissionService
+	HookVerifier      *services.HookEntryVerifier
 	Cfg               config.Config
 	DemoMode          bool
 	Logger            outbound.Logger
@@ -1014,6 +1020,15 @@ func startBackgroundLoops(deps startBackgroundLoopsDeps) context.CancelFunc {
 
 	if !deps.DemoMode {
 		deps.PermService.Start(detectorCtx)
+		// Hook-entry re-verification (#1372). Started only outside demo mode
+		// and only after PermService.Start, which re-applies every granted
+		// install: starting it earlier would have the loop racing the boot
+		// repair and reporting a clobber the daemon was already fixing.
+		//
+		// It is inert in demo mode by omission rather than by an internal
+		// check — demo mode has no real consent state, so a loop asking
+		// "is this granted" would be asking a fiction.
+		go deps.HookVerifier.Run(detectorCtx)
 		// Hooks are delivered by Claude Code's native `type: http` transport
 		// straight to the daemon (#1161) — no curl, no shell — so there is no
 		// external tool whose absence could silently no-op delivery (the reason
