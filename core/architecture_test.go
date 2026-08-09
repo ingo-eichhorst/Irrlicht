@@ -47,6 +47,31 @@ func TestArchitectureLayerImportDirection(t *testing.T) {
 			sourcePrefix:      "irrlicht/core/application/services/",
 			forbiddenPrefixes: []string{"irrlicht/core/adapters/inbound/"},
 		},
+		// pkg/ is the shared leaf layer: stdlib, other pkg/ packages, and
+		// domain types. It is depended ON by every other layer — including
+		// domain/agent, which imports pkg/tailer — so an edge out of pkg/ into
+		// adapters/ or application/ inverts the direction for everything above
+		// it at once.
+		//
+		// Added by #1391, where the obvious fix for a shared JSONC decode was
+		// to have pkg/tailer import the hookjson adapter. Nothing in this table
+		// bound pkg/ at the time, so that import would have passed this test
+		// and quietly established the repo's first pkg -> adapters edge. It
+		// happens to be caught today by the compiler — domain/agent imports
+		// pkg/tailer and hookjson imports domain/agent, so the edge closes an
+		// import cycle — but that is an accident of which adapter it was, not a
+		// rule. An adapter that imports no domain package would have compiled
+		// fine.
+		//
+		// ports/ is deliberately absent from the forbidden list: no pkg/
+		// package imports it today, but a leaf implementing a port interface
+		// would be legitimate, and this rule is meant to pin the direction that
+		// is actually wrong rather than the widest one available.
+		{
+			name:              "pkg must not import adapters or application",
+			sourcePrefix:      "irrlicht/core/pkg/",
+			forbiddenPrefixes: []string{"irrlicht/core/adapters/", "irrlicht/core/application/"},
+		},
 	}
 
 	for _, pkg := range pkgs {

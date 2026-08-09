@@ -69,6 +69,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"irrlicht/core/pkg/jsonc"
 )
 
 // errNoSafeSplice means this document cannot be edited in place with confidence
@@ -78,76 +80,23 @@ import (
 var errNoSafeSplice = errors.New("hookjson: cannot splice safely")
 
 // --- comment blanking ---
+//
+// The blanker itself now lives in core/pkg/jsonc, because core/pkg/tailer
+// reads ~/.claude/settings.json too and the two readers have to agree on what
+// a valid document is (#1391). Only the blanker moved; every span-parsing and
+// splicing symbol below stays here, where its only caller is.
+//
+// These two remain as package-local aliases so the ~40 call sites and tests
+// below read unchanged, and so this package keeps naming the operation in its
+// own vocabulary.
 
 // blankComments returns a copy of src with every JSONC comment overwritten by
 // spaces.
-func blankComments(src []byte) []byte {
-	blanked, _ := blankCommentsMask(src)
-	return blanked
-}
+func blankComments(src []byte) []byte { return jsonc.Blank(src) }
 
-// blankCommentsMask also reports which bytes belonged to a comment. Newlines
-// inside a block comment are left as newlines in the blanked text — so line
-// structure and byte offsets are identical to src — but they are still marked,
-// which is how the separator arithmetic knows a comment spans lines.
-func blankCommentsMask(src []byte) ([]byte, []bool) {
-	out := make([]byte, len(src))
-	copy(out, src)
-	mask := make([]bool, len(src))
-
-	inString := false
-	for i := 0; i < len(src); i++ {
-		c := src[i]
-		if inString {
-			switch c {
-			case '\\':
-				i++ // an escaped byte can never close the string
-			case '"':
-				inString = false
-			}
-			continue
-		}
-		switch {
-		case c == '"':
-			inString = true
-		case c == '/' && i+1 < len(src) && src[i+1] == '/':
-			i = blankLineComment(src, out, mask, i) - 1
-		case c == '/' && i+1 < len(src) && src[i+1] == '*':
-			i = blankBlockComment(src, out, mask, i) - 1
-		}
-	}
-	return out, mask
-}
-
-// blankLineComment blanks from i up to (not including) the next newline and
-// returns the index it stopped at.
-func blankLineComment(src, out []byte, mask []bool, i int) int {
-	for i < len(src) && src[i] != '\n' {
-		out[i] = ' '
-		mask[i] = true
-		i++
-	}
-	return i
-}
-
-// blankBlockComment blanks from i through the closing `*/` (or to end of input
-// when unterminated, which then fails the parse) and returns the index just
-// past it.
-func blankBlockComment(src, out []byte, mask []bool, i int) int {
-	for i < len(src) {
-		mask[i] = true
-		if src[i] == '*' && i+1 < len(src) && src[i+1] == '/' {
-			out[i], out[i+1] = ' ', ' '
-			mask[i+1] = true
-			return i + 2
-		}
-		if src[i] != '\n' {
-			out[i] = ' '
-		}
-		i++
-	}
-	return i
-}
+// blankCommentsMask also reports which bytes belonged to a comment. See
+// jsonc.BlankMask for why length is preserved.
+func blankCommentsMask(src []byte) ([]byte, []bool) { return jsonc.BlankMask(src) }
 
 // --- span-recording parse ---
 
