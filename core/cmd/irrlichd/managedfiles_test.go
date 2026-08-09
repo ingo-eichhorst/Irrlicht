@@ -159,10 +159,11 @@ func TestUninstallHookConfigsLeavesUngrantedPermissionsAlone(t *testing.T) {
 
 // TestWriteManagedFilePathsDeduplicates pins the dedup the rig depends on: it
 // keys its backups by line index, so one file listed twice would be backed up
-// under two indices and restored twice. Two adapters sharing a config file is
-// the case that produces it (claudecode's hooks and statusline already share
-// ~/.claude/settings.json), so this cannot be exercised through the shipped
-// registry — it is driven directly.
+// under two indices and restored twice. Driven directly so the invariant is
+// pinned independently of what the catalog happens to declare — but since #1383
+// declared claudecode's statusline as well as its hooks, both resolving to
+// ~/.claude/settings.json, the SHIPPED catalog now produces the duplicate too,
+// and TestPrintManagedFilesCoversEveryDeclaredFile's linesOf catches it there.
 func TestWriteManagedFilePathsDeduplicates(t *testing.T) {
 	var buf bytes.Buffer
 	writeManagedFilePaths(&buf, []agents.ManagedUserFile{
@@ -234,12 +235,17 @@ func TestUninstallHookConfigsSurvivesOneFailingAdapter(t *testing.T) {
 // cannot hand back: after the recorder is gone the user is left carrying
 // content they may have explicitly denied.
 //
-// The rule is deliberately "modify-kind with a non-nil Apply", not "declares
-// hooks": Apply is exactly what grant-all runs. A modify permission that
-// genuinely writes nothing to disk (agent.ControlPermission, whose Apply is
-// nil) falls outside it by construction rather than by an exception list, and a
-// future one that modifies something by another mechanism has to say so here
-// rather than slipping past.
+// The rule keys on **a non-nil Apply**, not on "declares hooks" and not on the
+// permission's Kind: Apply is exactly what grant-all runs, while Kind is the
+// label the adapter author picked for the wizard row. Keying on Kind would let
+// a future permission that writes $HOME escape by being declared observe-kind —
+// the same shape as #1383 point 4, one field over.
+//
+// A permission whose Apply writes nothing therefore has to be named here with
+// its reason, rather than falling out silently. Today there is exactly one:
+// gastown/state, whose Apply starts a filesystem watcher. agent.ControlPermission
+// is not in the list because its Apply is nil — it falls outside by
+// construction, which is the shape to prefer.
 //
 // It runs over the FULL consent catalog — agents.All() PLUS the three
 // daemon-wide declarations — because that is what the wizard offers and
@@ -257,20 +263,42 @@ func TestEveryModifyPermissionDeclaresTheFileItWrites(t *testing.T) {
 	checked := 0
 	for _, a := range catalog {
 		for _, p := range a.Permissions {
-			if p.Kind != permission.KindModify || p.Apply == nil {
+			if p.Apply == nil {
+				continue
+			}
+			id := a.Identity.Name + "/" + p.Key
+			if reason, exempt := applyWritesNoUserFile[id]; exempt {
+				if p.Writes != nil {
+					t.Errorf("%s is listed as writing no user file (%q) but declares one — "+
+						"remove it from applyWritesNoUserFile", id, reason)
+				}
 				continue
 			}
 			checked++
 			if p.Writes == nil {
-				t.Errorf("%s/%s is a modify permission with an Apply closure but declares no agent.ManagedUserFile: "+
+				t.Errorf("%s has an Apply closure but declares no agent.ManagedUserFile: "+
 					"a grant-all recording daemon runs that closure against the user's real $HOME and the recording rig "+
-					"has no way to learn which file to hand back (#1383)", a.Identity.Name, p.Key)
+					"has no way to learn which file to hand back (#1383). If it genuinely writes no shared user file, "+
+					"add it to applyWritesNoUserFile with the reason", id)
 			}
 		}
 	}
 	if checked == 0 {
-		t.Fatal("no modify permission with an Apply closure was found — the check is vacuous")
+		t.Fatal("every permission with an Apply closure is exempt — the check is vacuous")
 	}
+}
+
+// applyWritesNoUserFile names every permission whose Apply closure runs under
+// grant-all yet writes no shared, user-owned file, with the reason.
+//
+// It is an explicit list on purpose. The alternative — inferring the exemption
+// from permission.Kind — is what let gastown/state sit outside the rule
+// invisibly: it is observe-kind, so a Kind-based predicate skipped it without
+// anyone deciding that it should be skipped. An entry here is a claim someone
+// wrote down and a reviewer can check; a missing entry is a test failure rather
+// than silence.
+var applyWritesNoUserFile = map[string]string{
+	"gastown/state": "Apply starts and stops the Gas Town watcher; it reads ~/gt and writes nothing",
 }
 
 // TestPrintManagedFilesNamesTheFilesTheIssueFound is the concrete arm of the

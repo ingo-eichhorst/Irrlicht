@@ -264,9 +264,13 @@ Before marking a ticket done, run the full suite — every layer must pass:
   catalog-wide tripwire is
   `TestEveryModifyPermissionDeclaresTheFileItWrites`
   (`core/cmd/irrlichd/managedfiles_test.go`); a new modify permission is
-  covered by existing rather than by remembering. A permission whose `Apply`
-  genuinely writes nothing (`agent.ControlPermission`, whose `Apply` is nil)
-  falls outside by construction, not by an exception list.
+  covered by existing rather than by remembering. It keys on a non-nil `Apply`
+  — what `grant-all` actually runs — never on `Kind`, which is the wizard label
+  the adapter author picked and which a file-writing permission could be given
+  wrongly; a permission whose `Apply` writes nothing is named in
+  `applyWritesNoUserFile` with its reason rather than falling out silently.
+  `agent.ControlPermission` needs no entry: its `Apply` is nil, which is the
+  shape to prefer.
 - Skill files: `tools/skill-lint.sh` reads every `.md` under
   `.claude/skills/` plus any other tracked `SKILL.md` (there is one under
   `tools/irrlicht-design-system/`) — the files that tell agents how to triage,

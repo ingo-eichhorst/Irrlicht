@@ -200,8 +200,9 @@ func runCLIAction(action cliAction, args []string) int {
 // The narrowing is what keeps this command's name true: the catalog also
 // declares the CLAUDE.md instruction blocks and the kitty remote-control block,
 // and running their uninstallers from here would revoke capabilities the user
-// asked nothing about. Those are reachable from the permission wizard, and
-// `--uninstall-task-eta` below covers the instruction blocks specifically.
+// asked nothing about. Revoking those is the permission wizard's job — this
+// command is the escape hatch for the one case the wizard cannot reach, hook
+// entries left in an agent config pointing at a daemon that is gone.
 func uninstallHooks() {
 	configs, err := agents.HookConfigs(declaredConsentCatalog())
 	if err != nil {
