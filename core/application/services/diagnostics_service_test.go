@@ -366,6 +366,11 @@ func TestHooksBundleOmitsCountsWhenNotCollectedInDaemon(t *testing.T) {
 	for _, field := range []string{
 		"unknown_events", "unknown_events_total", "unknown_event_names_dropped_by_adapter",
 		"hook_requests_received", "channels", "silent_channel_note",
+		// The #1372 DATA fields, on the same footing. Its note is deliberately
+		// not in this list: like liveness_note, the CLI form publishes an
+		// explanation of the absence, which is the opposite of publishing a
+		// number nobody observed.
+		"entry_reverification", "entry_reverification_outcomes",
 	} {
 		if v, ok := got[field]; ok {
 			t.Errorf("%s is present without a daemon to read it from: %v", field, v)
@@ -479,4 +484,154 @@ func hooksJSON(t *testing.T, svc *DiagnosticsService) map[string]any {
 		t.Fatalf("hooks.json is not valid JSON: %v\n%s", err, raw)
 	}
 	return out
+}
+
+// --- #1372: the entry re-verification half of hooks.json ------------------
+
+// TestHooksBundleReportsEntryReverification covers what a bug reporter needs to
+// see when the agent's own settings UI has been eating our entries: which file,
+// how many times it has been put back, and whether the loop is currently
+// backing off from a fight it is losing.
+func TestHooksBundleReportsEntryReverification(t *testing.T) {
+	svc := buildTestServiceWithHooks(t, func() HookHealthSnapshot {
+		return HookHealthSnapshot{
+			ReceiptsTotal: 4,
+			EntryReverification: HookEntryReverifySnapshot{
+				Outcomes: map[ReverifyOutcome]uint64{
+					ReverifyIntact: 40, ReverifyRepaired: 7, ReverifyBackoff: 12,
+				},
+				Targets: []HookEntryHealth{
+					{
+						Adapter: "claude-code", Permission: "hooks",
+						ConfigPath: "/Users/x/.claude/settings.json", Watched: true,
+						Missing: []string{"Stop"}, Repairs: 7, ConsecutiveRepairs: 5,
+						LastOutcome: string(ReverifyRepaired), BackoffSeconds: 1800,
+					},
+					{Adapter: "codex", Permission: "hooks", Watched: false},
+				},
+			},
+		}
+	})
+
+	got := hooksJSON(t, svc)
+
+	rows, _ := got["entry_reverification"].([]any)
+	if len(rows) != 2 {
+		t.Fatalf("entry_reverification has %d rows, want 2: %v", len(rows), got["entry_reverification"])
+	}
+	damaged, _ := rows[0].(map[string]any)
+	if damaged["adapter"] != "claude-code" || damaged["repairs"] != float64(7) {
+		t.Errorf("damaged row = %v, want claude-code with 7 repairs", damaged)
+	}
+	if damaged["config_path"] == nil || damaged["config_path"] == "" {
+		t.Errorf("row carries no config_path; the reader cannot go look: %v", damaged)
+	}
+	if damaged["backoff_seconds"] != float64(1800) {
+		t.Errorf("backoff_seconds = %v, want 1800 — the deferral in force is how a reader "+
+			"tells a one-off clobber from a repair storm", damaged["backoff_seconds"])
+	}
+	unwatched, _ := rows[1].(map[string]any)
+	if v, ok := unwatched["watched"]; ok && v == true {
+		t.Errorf("a row with no consent must not read as watched: %v", unwatched)
+	}
+
+	outcomes, _ := got["entry_reverification_outcomes"].(map[string]any)
+	if outcomes[string(ReverifyRepaired)] != float64(7) {
+		t.Errorf("outcomes[%s] = %v, want 7", ReverifyRepaired, outcomes[string(ReverifyRepaired)])
+	}
+	if _, present := outcomes[string(ReverifyRepairFailed)]; present {
+		t.Errorf("a zero outcome is published: %v — zeros read as an all-clear", outcomes)
+	}
+
+	// Same obligation the silent-channel note carries, and for the same reason:
+	// three causes, three first moves, and a reader who should not have to know
+	// which issue owns which.
+	note, _ := got["entry_reverification_note"].(string)
+	if note == "" {
+		t.Fatal("repaired entries must carry an explanation; hooks.json is what a bug reporter pastes")
+	}
+	for _, want := range []string{"claude-code", "#1372", "#1368", "#1362", "effect_error", "watched:false"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("entry_reverification_note must mention %q so the reader is not sent to the "+
+				"wrong fix; got:\n%s", want, note)
+		}
+	}
+	// The fixture row is a SUCCESSFUL repair that still carries Missing:[Stop]
+	// — the residue every repair leaves until the next intact pass clears it,
+	// which is at least one back-off window later. Classifying on that residue
+	// rather than on last_outcome told the reader the repair had failed, in the
+	// same paragraph as "Re-installed this session: claude-code (7)".
+	if strings.Contains(note, "Repair FAILED") || strings.Contains(note, "has not yet succeeded") {
+		t.Errorf("a repaired target is reported as a failed repair; hooks.json is what a bug "+
+			"reporter pastes, and this sends them hunting a failure that did not happen:\n%s", note)
+	}
+}
+
+// The other half of the same rule: a repair that really DID fail must be named,
+// so tightening the classifier above cannot silently swallow the real case.
+func TestHooksBundleReportsAFailedRepairAsFailed(t *testing.T) {
+	got := hooksJSON(t, buildTestServiceWithHooks(t, func() HookHealthSnapshot {
+		return HookHealthSnapshot{
+			EntryReverification: HookEntryReverifySnapshot{
+				Outcomes: map[ReverifyOutcome]uint64{ReverifyRepairFailed: 3},
+				Targets: []HookEntryHealth{{
+					Adapter: "codex", Permission: "hooks", Watched: true,
+					Missing: []string{"Stop"}, Repairs: 3, ConsecutiveRepairs: 3,
+					LastOutcome: string(ReverifyRepairFailed),
+					LastError:   "installed CLI is 0.100.0, which is older than the 0.144.4 required",
+				}},
+			},
+		}
+	}))
+	note, _ := got["entry_reverification_note"].(string)
+	if !strings.Contains(note, "Repair FAILED") || !strings.Contains(note, "codex") {
+		t.Errorf("a genuinely failed repair is not named in the note:\n%s", note)
+	}
+	if !strings.Contains(note, "effect_error") {
+		t.Errorf("the failed-repair sentence must point at where the reason actually is:\n%s", note)
+	}
+}
+
+// A healthy machine gets rows and no essay — the same terseness rule the
+// silent-channel note follows.
+func TestHooksBundleOmitsTheReverificationNoteWhenHealthy(t *testing.T) {
+	got := hooksJSON(t, buildTestServiceWithHooks(t, func() HookHealthSnapshot {
+		return HookHealthSnapshot{
+			EntryReverification: HookEntryReverifySnapshot{
+				Outcomes: map[ReverifyOutcome]uint64{ReverifyIntact: 99},
+				Targets: []HookEntryHealth{
+					{Adapter: "codex", Permission: "hooks", Watched: true, LastOutcome: string(ReverifyIntact)},
+				},
+			},
+		}
+	}))
+	if v, ok := got["entry_reverification_note"]; ok {
+		t.Errorf("a healthy bundle carries the re-verification essay: %v", v)
+	}
+	if rows, _ := got["entry_reverification"].([]any); len(rows) != 1 {
+		t.Errorf("the ROWS must still be published when healthy (got %v) — an absent row is "+
+			"indistinguishable from a bundle collected before the feature existed", got["entry_reverification"])
+	}
+}
+
+// The --diagnose process runs no passes, so publishing "entries verified
+// present" from it would be a measurement nobody took. Same honesty obligation
+// as #1364's counters and #1368's channels.
+func TestHooksBundleOmitsReverificationWhenNotCollectedInDaemon(t *testing.T) {
+	got := hooksJSON(t, buildTestServiceWithHooks(t, nil))
+
+	for _, field := range []string{"entry_reverification", "entry_reverification_outcomes"} {
+		if v, ok := got[field]; ok {
+			t.Errorf("%s is present without a daemon to read it from: %v", field, v)
+		}
+	}
+	note, _ := got["entry_reverification_note"].(string)
+	if !strings.Contains(note, "#1372") || !strings.Contains(note, "/debug/bundle") {
+		t.Errorf("entry_reverification_note must say why it is absent and where the real view "+
+			"is: %q", note)
+	}
+	if !strings.Contains(note, "effect_error") {
+		t.Errorf("the CLI note must still point at permissions.json for a failed repair, since "+
+			"that IS readable from this process: %q", note)
+	}
 }

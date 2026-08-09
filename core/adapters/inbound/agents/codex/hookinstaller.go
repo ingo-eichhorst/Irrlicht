@@ -14,6 +14,7 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents/agentpaths"
 	"irrlicht/core/adapters/inbound/agents/hookjson"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/pkg/daemonaddr"
 )
 
@@ -140,6 +141,18 @@ func EnsureHooksInstalled() (bool, error) {
 		return false, err
 	}
 	return hookjson.EnsureInstalled(hookConfig(path))
+}
+
+// VerifyHooksInstalled reports which of our entries are missing from, or stale
+// in, ~/.codex/hooks.json — without writing anything (issue #1372). Same
+// hookConfig as the installer, so "stale" means exactly what
+// EnsureHooksInstalled would rewrite.
+func VerifyHooksInstalled() (agent.HookEntryStatus, error) {
+	path, err := codexHooksPath()
+	if err != nil {
+		return agent.HookEntryStatus{}, err
+	}
+	return hookjson.Verify(hookConfig(path))
 }
 
 // UninstallHooks removes irrlicht hook entries from ~/.codex/hooks.json.

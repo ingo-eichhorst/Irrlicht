@@ -302,6 +302,14 @@ func (l *mockLogger) infoSnapshot() []string {
 	return out
 }
 
+func (l *mockLogger) errorSnapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]string, len(l.errors))
+	copy(out, l.errors)
+	return out
+}
+
 type mockGit struct{}
 
 func (g *mockGit) GetBranch(dir string) string { return "main" }

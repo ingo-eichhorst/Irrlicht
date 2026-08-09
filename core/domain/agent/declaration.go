@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 
 	"irrlicht/core/domain/permission"
 	"irrlicht/core/pkg/cliversion"
@@ -135,12 +136,68 @@ type HookInstall struct {
 	// it modified anything.
 	Uninstall func() (bool, error)
 
+	// Verify reports what our entries look like in that file RIGHT NOW,
+	// without writing anything (issue #1372).
+	//
+	// It exists because the install is not a one-shot fact. An agent whose own
+	// UI rewrites its settings can delete our entries between the grant and
+	// the next hook: gemini-cli's writer is sync-by-omission — it drops every
+	// key absent from the snapshot the CLI took at startup, recursively — and
+	// one of its write paths (saveModelChange) is not even user-initiated. The
+	// symptom is indistinguishable from every other silent hook failure: a
+	// permission still reading `granted`, no error anywhere, and waiting
+	// detection quietly degraded.
+	//
+	// Read-only is the contract, not an implementation detail. The repair is a
+	// separate step run through the permission service, so that the write
+	// stays behind the same consent gate the original install passed, and so
+	// that a verifier can never become a way to write to a config the user
+	// withdrew consent for (#570).
+	Verify func() (HookEntryStatus, error)
+
 	// Version declares the upstream CLI version floor this install requires
 	// (issue #1365). Nil means the adapter declares no floor and installs
 	// unconditionally — which is what Claude Code did for its whole life, and
 	// what a third adapter would inherit by default, so a nil here is a
 	// decision worth stating rather than an omission.
 	Version *VersionGate
+}
+
+// HookEntryStatus is one read-only look at an install (issue #1372): which of
+// the events the adapter installs are no longer represented in the config file
+// the way we would write them today.
+//
+// The two buckets are kept apart because they are different accidents, even
+// though the repair for both is the same call. Missing means nothing carrying
+// our sentinel is in that event's array at all — somebody deleted it, which is
+// the gemini-cli sync-by-omission case. Stale means an entry of ours IS there
+// but no longer canonical — most often pointing at a port this daemon is not
+// listening on (#1178), which a user reading the file would not spot as broken.
+type HookEntryStatus struct {
+	// Missing are event names with no irrlicht entry left in the file.
+	Missing []string
+	// Stale are event names whose irrlicht entry is present but not in the
+	// shape (or at the endpoint) we would install today.
+	Stale []string
+}
+
+// Intact reports whether the install needs nothing done to it.
+func (s HookEntryStatus) Intact() bool {
+	return len(s.Missing) == 0 && len(s.Stale) == 0
+}
+
+// Damage renders the finding for a log line, e.g. "missing: Stop, Notification;
+// stale: PreToolUse". Empty for an intact install, so a caller never logs a
+// verdict with nothing behind it.
+func (s HookEntryStatus) Damage() string {
+	var parts []string
+	if len(s.Missing) > 0 {
+		parts = append(parts, "missing: "+strings.Join(s.Missing, ", "))
+	}
+	if len(s.Stale) > 0 {
+		parts = append(parts, "stale: "+strings.Join(s.Stale, ", "))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // VersionGate is a declared minimum upstream-CLI version for a hook install

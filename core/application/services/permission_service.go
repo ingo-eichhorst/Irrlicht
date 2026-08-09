@@ -318,6 +318,98 @@ func (s *PermissionService) HookChannelReady(agentName string) bool {
 	return false
 }
 
+// RepairGrantedHookInstall re-runs one hook permission's install effect out of
+// band, for the periodic entry re-verification loop (issue #1372).
+//
+// It reports whether the effect was ATTEMPTED, and if so whether it succeeded.
+// attempted=false is the consent refusal — the permission is not currently
+// granted, is unknown, or declares no hook install — and it is not an error:
+// declining to write is the correct outcome, not a failure to be retried.
+//
+// There are two consent checks on this path and they cover different windows.
+// The pre-check below is the one that refuses every ordinary revoked caller —
+// it is a real gate, not decoration, and deleting it is visible as a red test.
+// But it can only be as fresh as the instant it was asked, and the write that
+// follows may wait on a mutex first. So the write itself is not performed here:
+// it goes through runEffects, exactly as a wizard answer does, which means the
+// background repair inherits every guarantee the interactive path already had
+// and cannot drift from it:
+//
+//   - runEffects takes effectMu, so a repair cannot race a concurrent Answer
+//     batch into the same installer;
+//   - under effectMu it re-reads the recorded state and SKIPS any effect whose
+//     target no longer matches. That third read is what makes revocation
+//     authoritative rather than eventually noticed: consent withdrawn at any
+//     point before the closure runs means the closure does not run, and the
+//     skip is logged. It is the only one of the three that a user revoking
+//     WHILE a repair waits on the lock can be caught by, and
+//     TestRunEffects_SkipsAGrantEffectWhoseStateIsNoLongerGranted pins it;
+//   - runClosureEffect consults the declared version floor (#1365) before
+//     applying, so a repair cannot install into a CLI too old for the entries;
+//   - the outcome lands in effectErrs, so a repair that FAILS surfaces as the
+//     permission's EffectError and is retried by the user re-answering — the
+//     #1362 mechanism, not a second one. That also drops HookChannelReady to
+//     false, which correctly disarms #1368's liveness watchdog for an adapter
+//     whose install is known broken.
+//
+// The pre-check below also keeps the common case — nothing granted, nothing to
+// do — off effectMu entirely, so an unanswered wizard costs the loop one map
+// read per pass rather than a lock and a log line.
+func (s *PermissionService) RepairGrantedHookInstall(agentName, key string) (bool, error) {
+	s.mu.Lock()
+	perm, found := s.hookPermission(agentName, key)
+	granted := found && s.set.Get(agentName, key) == permission.StateGranted
+	s.mu.Unlock()
+	if !granted || perm.Apply == nil {
+		return false, nil
+	}
+
+	if ran := s.runEffects([]pendingEffect{{agentName: agentName, perm: perm, target: permission.StateGranted}}); ran == 0 {
+		// Gate 3 fired: consent went away while this repair waited on effectMu,
+		// so nothing was written. Report it as NOT ATTEMPTED, which is what the
+		// caller means by that word — the alternative is worse than cosmetic.
+		// effectErrs is untouched by a skip, so the read below would return ""
+		// (or, worse, a stale error from a previous attempt) and the loop would
+		// bank a repair that never happened: a lifetime counter, a log line
+		// blaming something outside irrlicht for a deletion, and an armed
+		// back-off, all describing a write the service refused to make.
+		return false, nil
+	}
+
+	// Read the outcome out of the same slot the interactive path writes, rather
+	// than having runEffects hand it back: one recorded truth, which is what the
+	// wizard renders and what HookChannelReady reads.
+	s.mu.Lock()
+	reason := s.effectErrs[effectKey(agentName, key)]
+	s.mu.Unlock()
+	if reason != "" {
+		return true, errors.New(reason)
+	}
+	return true, nil
+}
+
+// hookPermission resolves one agent's HOOK-INSTALL permission by key.
+//
+// A thin filter over declared() rather than a second registry walk: two copies
+// of "find the permission named key on the agent named agentName" would be two
+// places to keep in step, and the filter is the only part that is actually
+// specific to this caller.
+//
+// The filter is the point. Restricted to modify-kind permissions declaring a
+// HookInstall, so RepairGrantedHookInstall can never be used to re-run an
+// arbitrary effect by name: the re-verification loop is allowed to repair hook
+// installs and nothing else.
+//
+// Takes no lock and needs none — s.agents is written once at construction and
+// only read after. Named without the Locked suffix for that reason.
+func (s *PermissionService) hookPermission(agentName, key string) (agent.Permission, bool) {
+	p, ok := s.declared(agentName, key)
+	if !ok || p.Hooks == nil || p.Kind != permission.KindModify {
+		return agent.Permission{}, false
+	}
+	return p, true
+}
+
 // Snapshot returns the full consent state for GET /api/v1/permissions.
 func (s *PermissionService) Snapshot() PermissionsSnapshot {
 	s.mu.Lock()
@@ -461,10 +553,16 @@ func (s *PermissionService) declared(agentName, key string) (agent.Permission, b
 // the permission (surfacing in Snapshot as EffectError), never propagated
 // — the recorded state stands, the user's consent is never rolled back by
 // a failed effect, and effects are re-applied on the next daemon start.
-func (s *PermissionService) runEffects(effects []pendingEffect) {
+// It returns how many effects it actually RAN, which is not len(effects): an
+// effect superseded while the batch waited on effectMu is skipped. Only the
+// out-of-band #1372 repair reads the count, and it needs it — from outside,
+// "skipped because consent went away" and "applied successfully" are otherwise
+// indistinguishable, and the repair loop would bank a phantom re-install.
+func (s *PermissionService) runEffects(effects []pendingEffect) int {
 	if len(effects) == 0 {
-		return
+		return 0
 	}
+	ran := 0
 	s.effectMu.Lock()
 	defer s.effectMu.Unlock()
 	for _, e := range effects {
@@ -482,6 +580,7 @@ func (s *PermissionService) runEffects(effects []pendingEffect) {
 			s.log.LogInfo("permissions", "", fmt.Sprintf("%s/%s: skipping stale %s effect (state is now %s)", e.agentName, e.perm.Key, e.target, current))
 			continue
 		}
+		ran++
 		s.runClosureEffect(e)
 		if e.perm.Kind == permission.KindObserve {
 			if e.target == permission.StateGranted {
@@ -491,6 +590,7 @@ func (s *PermissionService) runEffects(effects []pendingEffect) {
 			}
 		}
 	}
+	return ran
 }
 
 // runClosureEffect runs the effect's Apply/Remove closure, if any, and

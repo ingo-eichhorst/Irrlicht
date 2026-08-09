@@ -301,7 +301,7 @@ func upgradeGroupEntries(g interface{}, cfg Config) bool {
 		if !ok {
 			continue
 		}
-		if entryIsSentinel(hook, cfg.Sentinel) && !cfg.IsCanonical(hook) {
+		if entryIsStale(hook, cfg) {
 			entries[i] = cfg.Entry()
 			upgraded = true
 		}
@@ -342,18 +342,43 @@ func upgradeStaleMatchers(hooksMap map[string]interface{}, event string, cfg Con
 // reject — permanently, since EnsureInstalled would then report no change and
 // never revisit it.
 func reconcileGroupMatcher(group map[string]interface{}, expected string) bool {
-	if expected == "" {
-		if _, present := group["matcher"]; present {
-			delete(group, "matcher")
-			return true
-		}
+	if !matcherIsStale(group, expected) {
 		return false
 	}
-	if m, _ := group["matcher"].(string); m != expected {
-		group["matcher"] = expected
+	if expected == "" {
+		delete(group, "matcher")
 		return true
 	}
-	return false
+	group["matcher"] = expected
+	return true
+}
+
+// entryIsStale and matcherIsStale are the two definitions of "this install is
+// not what we would write today", and they are functions rather than inline
+// conditions so that EnsureInstalled's repair and Verify's read-only report
+// cannot drift apart (issue #1372).
+//
+// That drift is the whole risk of adding a second reader: a Verify that judged
+// staleness even slightly differently would either repair nothing while
+// reporting damage — a loop that writes forever and never converges — or
+// report health while EnsureInstalled would have rewritten the file. Both are
+// worse than not checking. TestVerifyAgreesWithEnsureInstalled pins the
+// equivalence over the same corpus rather than trusting this comment.
+func entryIsStale(hook map[string]interface{}, cfg Config) bool {
+	return entryIsSentinel(hook, cfg.Sentinel) && !cfg.IsCanonical(hook)
+}
+
+// matcherIsStale reports whether a sentinel-bearing group's matcher differs
+// from the one cfg now expects. Keyed off PRESENCE for the empty-expected case
+// for the reason reconcileGroupMatcher documents: `"matcher": null` in a
+// hand-edited file is a matcher key both upstreams reject.
+func matcherIsStale(group map[string]interface{}, expected string) bool {
+	if expected == "" {
+		_, present := group["matcher"]
+		return present
+	}
+	m, _ := group["matcher"].(string)
+	return m != expected
 }
 
 // addOurHook appends a matcher group holding entry to the event's array. The

@@ -440,6 +440,21 @@ func runDaemon() {
 		Receipts:       hookjson.HookReceiptsFor,
 	})
 
+	// Hook-entry re-verification loop (#1372). Same construction timing and the
+	// same reason as the watchdog above: the diagnostics bundle registered a few
+	// lines below reads its snapshot, and its consent collaborators do not exist
+	// yet. Until SetConsent runs it reports every target unwatched and writes
+	// nothing — which is honest, since nothing has been consented to either.
+	//
+	// Deliberately a SEPARATE object from the watchdog: that one answers "is
+	// anything arriving" from receipts and turns, this one answers "are the
+	// entries still there" by re-reading the file, and collapsing them would
+	// merge two diagnoses whose whole value is being distinguishable.
+	hookVerifier := services.NewHookEntryVerifier(services.HookEntryReverifyConfig{
+		Agents: allAgents,
+		Log:    logger,
+	})
+
 	mux := http.NewServeMux()
 	registerCoreRoutes(mux, registerCoreRoutesDeps{
 		FSRepo:            fsRepo,
@@ -451,6 +466,7 @@ func runDaemon() {
 		PublishController: rel.publishController,
 		Cfg:               cfg,
 		HookLiveness:      hookLiveness,
+		HookVerifier:      hookVerifier,
 	})
 
 	// Static web UI: served from disk so the dashboard ships as three files
@@ -531,6 +547,11 @@ func runDaemon() {
 	hookLiveness.SetChannelReady(permService.HookChannelReady)
 	detector.SetHookLivenessWatchdog(hookLiveness)
 
+	// The verifier's collaborators, available for the same reason and at the
+	// same moment. Both come from the permission service on purpose: the loop
+	// gets no write path of its own, only the right to ask (#1372/#570).
+	hookVerifier.SetConsent(permService.Granted, permService.RepairGrantedHookInstall)
+
 	backchannelEngine, terminalObserver := setupBackchannel(mux, setupBackchannelDeps{
 		CachedRepo:        cachedRepo,
 		Push:              push,
@@ -568,6 +589,7 @@ func runDaemon() {
 		GitResolver:       gitResolver,
 		TerminalObserver:  terminalObserver,
 		PermService:       permService,
+		HookVerifier:      hookVerifier,
 		Cfg:               cfg,
 		DemoMode:          demoMode,
 		Logger:            logger,
