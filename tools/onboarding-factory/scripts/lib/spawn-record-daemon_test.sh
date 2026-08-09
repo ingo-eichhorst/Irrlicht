@@ -165,7 +165,13 @@ HOME="$TMP/restore-home"
 CODEX_HOME="$TMP/restore-codex"
 mkdir -p "$CODEX_HOME"
 printf '{"hooks":{"Stop":"localhost:7837"}}\n' > "$HOME/.claude/settings.json"
-snapshot_hook_configs "$STAGING/hook-config-backup"
+# The snapshot asks the daemon binary which files to protect (#1357), so stand
+# one in that declares the shipped pair.
+FAKE_DAEMON="$STAGING/irrlichd"
+printf '%s\n%s\n' "$HOME/.claude/settings.json" "$CODEX_HOME/hooks.json" > "$STAGING/hook-configs"
+printf '#!/usr/bin/env bash\ncat %q\n' "$STAGING/hook-configs" > "$FAKE_DAEMON"
+chmod +x "$FAKE_DAEMON"
+snapshot_hook_configs "$STAGING/hook-config-backup" "$FAKE_DAEMON"
 printf '{"hooks":{"Stop":"localhost:7838"}}\n' > "$HOME/.claude/settings.json"   # daemon repoints it
 stop_record_daemon
 assert_eq "settings.json restored" '{"hooks":{"Stop":"localhost:7837"}}' "$(cat "$HOME/.claude/settings.json")"
@@ -177,17 +183,35 @@ trap 'rm -rf "$TMP"' EXIT
 HOME="$TMP/nohome"
 
 echo "== an unwritable backup dir refuses to start the daemon =="
-# restore_hook_configs reads "no backup for this file" as "the daemon created
-# it, remove it" — so a snapshot that silently did nothing would end the run by
-# deleting the user's real config. Refuse before anything is spawned.
+# A snapshot that cannot save the user's config must stop the run before the
+# grant-all daemon has rewritten anything — there would be nothing to hand back.
 fresh_staging unwritable
+HOOK_CONFIG_BACKUP_DIR=""   # the case above left a spent snapshot behind
 : > "$TMP/unwritable/hook-config-backup"   # a FILE where the dir must go
 err="$(spawn_record_daemon /nonexistent/irrlichd "$TMP/unwritable" 127.0.0.1:7838 "" 2>&1)"
 rc=$?
 assert_eq "returns non-zero" "1" "$rc"
-[[ "$err" == *"cannot create the hook-config backup dir"* ]] && got=yes || got=no
+[[ "$err" == *"cannot create the backup dir"* ]] && got=yes || got=no
 assert_eq "says why" "yes" "$got"
 [[ -f "$TMP/unwritable/daemon.log" ]] && got=spawned || got=none
+assert_eq "nothing was spawned" "none" "$got"
+
+echo "== a snapshot that cannot complete refuses to start the daemon =="
+# The rung ABOVE this one (an uncreatable backup dir) exits at the mkdir gate
+# and never reaches the snapshot, so without this case nothing distinguishes the
+# two: deleting the snapshot guard entirely left the whole suite green. Give it
+# a perfectly writable staging dir and a daemon that cannot answer
+# --print-hook-configs, and nothing may be spawned.
+fresh_staging nosnapshot
+BAD_DAEMON="$STAGING/irrlichd"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$BAD_DAEMON"
+chmod +x "$BAD_DAEMON"
+err="$(spawn_record_daemon "$BAD_DAEMON" "$STAGING" 127.0.0.1:7838 "" 2>&1)"
+rc=$?
+assert_eq "returns non-zero" "1" "$rc"
+[[ "$err" == *"refusing to spawn the recording daemon"* ]] && got=yes || got=no
+assert_eq "says why" "yes" "$got"
+[[ -f "$STAGING/daemon.log" ]] && got=spawned || got=none
 assert_eq "nothing was spawned" "none" "$got"
 
 echo "== waiting on a socket that never appears fails loudly =="

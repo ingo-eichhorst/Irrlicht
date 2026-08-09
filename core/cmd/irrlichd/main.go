@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -14,7 +15,6 @@ import (
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/agentwiring"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
-	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
@@ -75,6 +75,13 @@ func main() {
 		uninstallHooks()
 		os.Exit(0)
 	}
+	if hasFlag("--print-hook-configs") {
+		if err := printHookConfigs(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if hasFlag("--uninstall-task-eta") {
 		uninstallTaskEtaBlocks()
 		os.Exit(0)
@@ -86,54 +93,132 @@ func main() {
 	runDaemon()
 }
 
-// uninstallHooks removes irrlicht's hooks from both Claude Code
-// (~/.claude/settings.json) and Codex (~/.codex/hooks.json) and, for each
-// adapter whose hooks permission was previously granted, records the explicit
-// opt-out in the consent store (#570) — a persisted "granted" would otherwise
-// re-install the hooks on the next daemon start (via the Apply closure),
-// silently reverting this decision.
+// uninstallHooks removes irrlicht's hooks from every agent config file the
+// adapter registry declares and, for each adapter whose hooks permission was
+// previously granted, records the explicit opt-out in the consent store (#570)
+// — a persisted "granted" would otherwise re-install the hooks on the next
+// daemon start (via the Apply closure), silently reverting this decision.
+//
+// The set comes from agents.HookConfigs rather than a literal list: an adapter
+// missing from that list would keep its entries in the user's real config
+// permanently after an uninstall, firing on every turn at a dead port, with
+// nothing to tell the user where they came from (#1357).
 func uninstallHooks() {
-	reportUninstall("~/.claude/settings.json", claudecode.UninstallHooks)
-	reportUninstall("~/.codex/hooks.json", codex.UninstallHooks)
-
+	configs, err := agents.HookConfigs(agents.All())
+	if err != nil {
+		log.Fatalf("failed to resolve the agent config files to uninstall from: %v", err)
+	}
 	home, _ := os.UserHomeDir()
-	store := filesystem.NewPermissionStore(dataDir(home))
+	if failed := uninstallHookConfigs(os.Stdout, configs, filesystem.NewPermissionStore(dataDir(home))); failed > 0 {
+		os.Exit(1)
+	}
+}
+
+// uninstallHookConfigs runs every declared uninstaller and then records the
+// matching hooks permissions as denied. It returns how many uninstallers
+// failed.
+//
+// One adapter's failure must not end the run. `hookjson` deliberately refuses
+// to rewrite a config file it cannot parse, so a single hand-edited
+// ~/.claude/settings.json used to abort the whole command — leaving every LATER
+// adapter's entries firing at a dead port, and (because the consent block never
+// ran) leaving their hooks permissions still granted, so the next daemon start
+// re-installed them via the Apply closure. That is precisely the #570
+// regression this function exists to prevent, and the registry projection only
+// widens the window as adapters are added.
+func uninstallHookConfigs(w io.Writer, configs []agents.HookConfig, store outbound.PermissionStore) int {
+	failed := 0
+	for _, c := range configs {
+		if !reportUninstall(w, c.Path, c.Uninstall) {
+			failed++
+		}
+	}
+
+	denyHooksPermissions(w, configs, store)
+	return failed
+}
+
+// denyHooksPermissions records every hooks permission that had been granted as
+// explicitly denied. Without it a persisted "granted" re-installs the hooks on
+// the next daemon start via the Apply closure, silently undoing the uninstall
+// (#570). A permission that was never granted is left alone — turning a pending
+// answer into a denial would stop the wizard ever asking about it.
+func denyHooksPermissions(w io.Writer, configs []agents.HookConfig, store outbound.PermissionStore) {
 	set, err := store.Load()
 	if err != nil {
 		return
 	}
-
 	denied := false
-	if set.Get(claudecode.AdapterName, claudecode.PermissionKeyHooks) == permission.StateGranted {
-		set.Put(claudecode.AdapterName, claudecode.PermissionKeyHooks, permission.StateDenied)
-		denied = true
-	}
-	if set.Get(codex.AdapterName, codex.PermissionKeyHooks) == permission.StateGranted {
-		set.Put(codex.AdapterName, codex.PermissionKeyHooks, permission.StateDenied)
-		denied = true
+	for _, c := range configs {
+		if set.Get(c.Adapter, c.Key) == permission.StateGranted {
+			set.Put(c.Adapter, c.Key, permission.StateDenied)
+			denied = true
+		}
 	}
 	if !denied {
 		return
 	}
 	if err := store.Save(set); err != nil {
-		fmt.Printf("warning: failed to record hooks permission(s) as denied: %v\n", err)
+		fmt.Fprintf(w, "warning: failed to record hooks permission(s) as denied: %v\n", err)
 		return
 	}
-	fmt.Println("Recorded the hooks permission(s) as denied (re-grant via the permission wizard)")
+	fmt.Fprintln(w, "Recorded the hooks permission(s) as denied (re-grant via the permission wizard)")
+}
+
+// printHookConfigs writes the resolved absolute path of every agent config file
+// irrlicht installs hooks into, one per line.
+//
+// It exists for the onboarding recording rig (#1357): a recording daemon runs
+// grant-all and installs its hooks into the user's REAL config, so the rig has
+// to back those files up before spawning it — and asking the daemon is the only
+// way that list cannot drift from the adapters that actually write them. An
+// empty result is an error, not an empty list: the rig would read "nothing to
+// protect" as success and record over the user's config unprotected.
+func printHookConfigs(w io.Writer) error {
+	configs, err := agents.HookConfigs(agents.All())
+	if err != nil {
+		return fmt.Errorf("failed to resolve the agent config files irrlicht installs hooks into: %w", err)
+	}
+	if len(configs) == 0 {
+		return fmt.Errorf("no adapter declares a hooks permission")
+	}
+	writeHookConfigPaths(w, configs)
+	return nil
+}
+
+// writeHookConfigPaths prints each distinct config path once. The dedup is
+// load-bearing rather than cosmetic: the rig keys its backups by line index, so
+// a path listed twice would be backed up under two indices and restored twice.
+func writeHookConfigPaths(w io.Writer, configs []agents.HookConfig) {
+	seen := make(map[string]bool, len(configs))
+	for _, c := range configs {
+		if seen[c.Path] {
+			continue
+		}
+		seen[c.Path] = true
+		fmt.Fprintln(w, c.Path)
+	}
 }
 
 // reportUninstall runs one adapter's hook uninstaller and prints whether it
-// removed anything.
-func reportUninstall(path string, uninstall func() (bool, error)) {
+// removed anything. path is the file the adapter itself resolved, so a
+// CODEX_HOME user is told which file was actually cleaned rather than the
+// default one.
+//
+// It reports whether the uninstall succeeded; a failure is printed and returned
+// rather than fatal, so the caller can still clean up every other adapter.
+func reportUninstall(w io.Writer, path string, uninstall func() (bool, error)) bool {
 	modified, err := uninstall()
 	if err != nil {
-		log.Fatalf("failed to uninstall hooks from %s: %v", path, err)
+		fmt.Fprintf(w, "warning: failed to uninstall hooks from %s: %v\n", path, err)
+		return false
 	}
 	if modified {
-		fmt.Printf("Removed irrlicht hooks from %s\n", path)
+		fmt.Fprintf(w, "Removed irrlicht hooks from %s\n", path)
 	} else {
-		fmt.Printf("No irrlicht hooks found in %s\n", path)
+		fmt.Fprintf(w, "No irrlicht hooks found in %s\n", path)
 	}
+	return true
 }
 
 // uninstallTaskEtaBlocks removes irrlicht's managed task-eta and

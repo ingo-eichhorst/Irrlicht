@@ -94,15 +94,16 @@ spawn_record_daemon() {
   RECORD_DAEMON_SOCK="$(record_daemon_sock "$home")"
 
   # Save the shared agent config the daemon is about to rewrite (see
-  # lib/hook-config-snapshot.sh); the shutdown hands it back. Refuse to start if
-  # the backup dir can't be created: restore_hook_configs reads "no backup for
-  # this file" as "the daemon created it", so an unwritable snapshot would end
-  # the run by DELETING the user's real ~/.claude/settings.json.
-  if ! mkdir -p "$staging/hook-config-backup"; then
-    echo "cannot create the hook-config backup dir: $staging/hook-config-backup" >&2
+  # lib/hook-config-snapshot.sh); the shutdown hands it back. WHICH files those
+  # are is asked of the daemon binary itself, so the set follows the adapters
+  # that actually install hooks (#1357). Refuse to start if the backup dir can't
+  # be created. The snapshot owns that directory — it creates it and reports its
+  # own failure — so there is one gate here, not two: a recording daemon we
+  # cannot undo must never be spawned in the first place.
+  if ! snapshot_hook_configs "$staging/hook-config-backup" "$daemon_bin"; then
+    echo "cannot snapshot the shared agent config; refusing to spawn the recording daemon" >&2
     return 1
   fi
-  snapshot_hook_configs "$staging/hook-config-backup"
 
   # Read the env into an array so a value containing spaces (e.g. an
   # IRRLICHT_HOME path with a space) stays one word — an unquoted

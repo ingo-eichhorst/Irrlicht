@@ -88,6 +88,10 @@ func Agent() agent.Agent {
 					"`irrlichd --uninstall-hooks`).",
 				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
 				Remove: func() error { _, err := UninstallHooks(); return err },
+				Hooks: &agent.HookInstall{
+					ConfigPath: claudeSettingsPath,
+					Uninstall:  UninstallHooks,
+				},
 			},
 			{
 				Key:             PermissionKeyStatusline,
