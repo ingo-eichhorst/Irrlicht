@@ -300,7 +300,10 @@ if want tools; then
   # asserts they agree — and a commit touching only one of those two is exactly
   # the commit that breaks the invariant, so leaving them out would skip the
   # test precisely when it matters (#1291).
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^go\.work$|^\.github/dependabot\.yml$' \
+  # site/install.sh is in the trigger set because tools/lib/install-uninstall_test.sh
+  # tests it (#1416). Without it a push touching only the installer would SKIP
+  # the one gate that covers the installer.
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$' \
                   "tools/lib shell-lib tests" shell_lib_tests
 fi
 

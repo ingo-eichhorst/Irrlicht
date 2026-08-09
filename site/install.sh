@@ -17,8 +17,15 @@ DAEMON_ONLY=0
 UNINSTALL=0
 VERSION=""
 
-# Install locations
-APP_PATH="/Applications/Irrlicht.app"
+# Install locations.
+#
+# APP_PATH is the only one that is not under $HOME, which makes it the only one
+# a test cannot isolate by pointing HOME at a temp dir — and uninstall_previous
+# `rm -rf`s it. The override exists so tools/lib/install-uninstall_test.sh can
+# exercise the real uninstall path without deleting a developer's actual
+# /Applications/Irrlicht.app (and without silently passing on CI, where that
+# path happens not to exist).
+APP_PATH="${IRRLICHT_APP_PATH:-/Applications/Irrlicht.app}"
 DAEMON_PATH="$HOME/.local/bin/irrlichd"
 LAUNCHAGENT_PATH="$HOME/Library/LaunchAgents/io.irrlicht.app.daemon.plist"
 
@@ -74,11 +81,75 @@ What a normal install does:
 EOF
 }
 
+# ─── Agent hook cleanup ────────────────────────────────────────────────────
+# Ask irrlichd to remove every hook entry it wrote into the user's agent config
+# files (~/.claude/settings.json, ~/.codex/hooks.json, …). Without this an
+# uninstalled irrlicht stays in the user's agent configuration, pointing at a
+# binary that no longer exists (#1416).
+#
+# The adapter set is resolved from the adapter registry inside the binary
+# (#1357), so there is deliberately NO list of agents or config paths here: a
+# second list is a list that drifts as adapters are added, which is the bug
+# #1357 fixed on the Go side.
+#
+# Only the real `--uninstall` calls this — see the call in uninstall_previous.
+uninstall_agent_hooks() {
+    # Both install flavours, in the order the installer creates them: the
+    # daemon-only binary, then the daemon inside the .app bundle. Deliberately
+    # NOT `command -v irrlichd`: that can resolve to an unrelated dev build in
+    # someone's worktree, and this is the one place we are about to rewrite the
+    # user's agent configs from whatever we find.
+    _irrlichd=""
+    for _candidate in "$DAEMON_PATH" "$APP_PATH/Contents/MacOS/irrlichd"; do
+        if [ -x "$_candidate" ]; then
+            _irrlichd="$_candidate"
+            break
+        fi
+    done
+
+    # A partial earlier uninstall, or a hand-deleted binary. There is nothing
+    # left to run the sweep with; say so and carry on. Failing the uninstall
+    # over this would strand the user with a half-removed product, which is
+    # strictly worse than the residue we are trying to clean up.
+    if [ -z "$_irrlichd" ]; then
+        # Close the caller's pending `step` line so the warning starts on its own.
+        printf '\n'
+        warn "No irrlichd binary found — skipping agent hook cleanup."
+        warn "  Remove any leftover irrlicht entries from your agent configs by hand"
+        warn "  (e.g. ~/.claude/settings.json, ~/.codex/hooks.json)."
+        return 0
+    fi
+
+    # Fail soft, always: the user asked for removal. `set -e` would abort the
+    # whole uninstall on a non-zero exit, so the call is a condition rather than
+    # a bare statement. Output is captured so a healthy sweep stays quiet inside
+    # the caller's one-line progress step, and is replayed only when there is
+    # something wrong to look at.
+    if _hook_output=$("$_irrlichd" --uninstall-hooks 2>&1); then
+        return 0
+    fi
+    printf '\n'
+    warn "Could not remove irrlicht's hook entries from the agent configs:"
+    [ -n "$_hook_output" ] && printf '%s\n' "$_hook_output" >&2
+    warn "  Check ~/.claude/settings.json and ~/.codex/hooks.json for stale entries."
+    return 0
+}
+
 # ─── Uninstall previous install ────────────────────────────────────────────
 # Removes every variant we may have installed in the past:
 # .app bundle, daemon-only binary, LaunchAgent. Leaves user data (logs,
 # Application Support) alone.
+#
+# $1 — pass 1 to also sweep irrlicht's hook entries out of the user's agent
+# configs. Opt-in, and only the real `--uninstall` opts in. This function also
+# runs on the re-install/upgrade path, and `--uninstall-hooks` does more than
+# edit config files: it records the hooks permissions as DENIED (#570), so that
+# a persisted "granted" cannot re-install them on the next daemon start. That
+# denial is written into the user data an uninstall deliberately KEEPS — so
+# sweeping on an upgrade would silently switch hook-based monitoring off for a
+# user who only asked for a newer version.
 uninstall_previous() {
+    sweep_agent_hooks="${1:-0}"
     removed_something=0
 
     # Stop running processes — match any Irrlicht*.app bundle regardless of
@@ -128,6 +199,14 @@ uninstall_previous() {
         rm -f "$HOME/.config/systemd/user/irrlichd.service"
         systemctl --user daemon-reload 2>/dev/null || true
         removed_something=1
+    fi
+
+    # Clean irrlicht out of the agent configs while a binary that can do it
+    # still exists — both places we might find one are removed just below.
+    # Placed after the daemon is stopped and its LaunchAgent/systemd unit are
+    # gone, so nothing can restart and re-apply the entries we just removed.
+    if [ "$sweep_agent_hooks" -eq 1 ]; then
+        uninstall_agent_hooks
     fi
 
     # Remove app bundle
@@ -200,7 +279,7 @@ say ""
 
 if [ "$UNINSTALL" -eq 1 ]; then
     step "Removing existing Irrlicht install"
-    uninstall_previous
+    uninstall_previous 1
     ok
     say ""
     say "  ${GREEN}✓${RESET} Irrlicht uninstalled"
