@@ -1,7 +1,9 @@
 // hooks.go provides the HTTP handler for receiving Claude Code hook events.
-// Claude Code fires hooks on PermissionRequest, PreToolUse, PostToolUse,
-// PostToolUseFailure, PreCompact and Stop — the daemon uses these to surface
-// user-blocking and turn-done state in the classifier. PermissionRequest covers
+// The events we install are listed once, in installedHookEvents
+// (hookinstaller.go); this comment deliberately does not restate them, because
+// the copy that did drifted to six for the whole of #1173's seven-event install
+// (#1356). The daemon uses them to surface user-blocking and turn-done state in
+// the classifier. The roles worth calling out: PermissionRequest covers
 // permission gates (issue #108); PreToolUse on AskUserQuestion / ExitPlanMode
 // covers user-input overlays that block the agent before the transcript is
 // flushed (issue #307); Stop is the authoritative per-turn done signal
