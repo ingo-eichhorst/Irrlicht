@@ -312,17 +312,22 @@ cd Irrlicht
       <!-- ── Uninstalling ── -->
       <h2 id="uninstalling">Uninstalling</h2>
 
-      <p>To remove Irrlicht completely, quit the app and delete the following:</p>
+      <p>Use the installer's <code>--uninstall</code> flag. It stops the daemon, removes the app bundle, the <code>irrlichd</code> binary and the LaunchAgent (or systemd user unit on Linux), <em>and</em> clears the hook entries Irrlicht wrote into your agent configs:</p>
 
-      <pre><code># Remove the app
-rm -rf /Applications/Irrlicht.app
+      <pre><code>curl -fsSL https://irrlicht.io/install.sh | sh -s -- --uninstall</code></pre>
 
-# Remove application data and logs
-rm -rf ~/Library/Application\ Support/Irrlicht/</code></pre>
+      <p>Your session history and configuration in <code>~/Library/Application Support/Irrlicht/</code> are kept. To remove those too:</p>
+
+      <pre><code>rm -rf ~/Library/Application\ Support/Irrlicht/</code></pre>
 
       <div class="callout callout-warning">
         <strong>Warning</strong>
         Removing the <code>Application Support/Irrlicht/</code> directory deletes all local session history and configuration. Back up anything you want to keep before running the command above.
+      </div>
+
+      <div class="callout callout-info">
+        <strong>Deleting the app by hand leaves hooks behind</strong>
+        If you remove Irrlicht by dragging it to the Trash or with <code>rm -rf /Applications/Irrlicht.app</code>, the hook entries stay in your agent configs and keep firing at a port nothing is listening on. Run <code>--uninstall</code> above instead &mdash; or, if the binary is already gone, clear Irrlicht's entries from <code>~/.claude/settings.json</code> and <code>~/.codex/hooks.json</code> yourself.
       </div>
 
       <!-- ── Bottom nav ── -->
