@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"irrlicht/tools/onboarding-factory/internal/hookcov"
@@ -28,11 +29,11 @@ func runCoverage(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
+	*repoRoot = absRoot(*repoRoot)
 
 	if *hooks {
 		return runCoverageHooks(*repoRoot, *asJSON, stdout, stderr)
 	}
-	_ = asJSON // the rollup is JSON; the flag exists for CLI symmetry
 
 	m, err := matrix.LoadRepo(*repoRoot)
 	if err != nil {
@@ -88,20 +89,21 @@ func hookStatusNote(s hookcov.Status) string {
 	}
 }
 
-const hookRowFormat = "%-14s %14s %6d %11d %11d  %s\n"
+// One column-width spec for the whole table: header, rows and the totals line
+// all format through hookRowFormat with %s cells, so the widths cannot drift
+// between them. printHookRow converts the counts.
+const hookRowFormat = "%-14s %14s %6s %11s %11s  %s\n"
 
 func printHookCoverageText(stdout io.Writer, rep hookcov.Report) {
 	fmt.Fprintln(stdout, "hook coverage — recordings containing a hook_received event, per adapter")
 	fmt.Fprintln(stdout, "scope: cells on disk under replaydata/agents/<adapter>/scenarios; the non-catalog regressions/ tree is excluded")
 	fmt.Fprintln(stdout)
-	fmt.Fprintf(stdout, "%-14s %14s %6s %11s %11s  %s\n",
+	fmt.Fprintf(stdout, hookRowFormat,
 		"adapter", "declares-hooks", "cells", "recordings", "with-hooks", "status")
 	for _, a := range rep.Adapters {
-		fmt.Fprintf(stdout, hookRowFormat,
-			a.Adapter, yesNo(a.DeclaresHooks), a.Cells, a.Recordings, a.WithHooks, hookStatusNote(a.Status))
+		printHookRow(stdout, a.Adapter, yesNo(a.DeclaresHooks), a.Cells, a.Recordings, a.WithHooks, hookStatusNote(a.Status))
 	}
-	fmt.Fprintf(stdout, "%-14s %14s %6d %11d %11d\n",
-		"total", "", rep.Totals.Cells, rep.Totals.Recordings, rep.Totals.WithHooks)
+	printHookRow(stdout, "total", "", rep.Totals.Cells, rep.Totals.Recordings, rep.Totals.WithHooks, "")
 
 	fmt.Fprintln(stdout)
 	if gaps := rep.Gaps(); len(gaps) > 0 {
@@ -112,6 +114,14 @@ func printHookCoverageText(stdout io.Writer, rep hookcov.Report) {
 	} else {
 		fmt.Fprintln(stdout, "no gaps: every adapter that declares hooks has at least one hook-bearing recording")
 	}
+}
+
+// printHookRow renders one table line. Trailing whitespace is trimmed so the
+// totals row — which has no status cell — does not ship padding.
+func printHookRow(stdout io.Writer, adapter, declares string, cells, recordings, withHooks int, status string) {
+	line := fmt.Sprintf(hookRowFormat, adapter, declares,
+		strconv.Itoa(cells), strconv.Itoa(recordings), strconv.Itoa(withHooks), status)
+	fmt.Fprintln(stdout, strings.TrimRight(line, " \n"))
 }
 
 func yesNo(b bool) string {

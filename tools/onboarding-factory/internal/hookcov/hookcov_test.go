@@ -37,7 +37,8 @@ func TestDeclaredMatchesRegistry(t *testing.T) {
 	}
 }
 
-// TestSlugMapsOnlyClaudeCode locks the name mapping. Over-normalising is the
+// TestSlugMapsOnlyClaudeCode locks the shared shard.SlugForAdapter mapping as
+// hookcov consumes it. Over-normalising is the
 // hazard: the viewer's near-identical helper also maps "" to claudecode, and
 // copying that here would invent an adapter for an unattributed name.
 func TestSlugMapsOnlyClaudeCode(t *testing.T) {
@@ -50,8 +51,8 @@ func TestSlugMapsOnlyClaudeCode(t *testing.T) {
 		"":             "",
 	}
 	for in, want := range cases {
-		if got := Slug(in); got != want {
-			t.Errorf("Slug(%q) = %q, want %q", in, got, want)
+		if got := slug(in); got != want {
+			t.Errorf("slug(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

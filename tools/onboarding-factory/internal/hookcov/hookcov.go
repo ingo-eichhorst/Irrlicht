@@ -130,7 +130,7 @@ func (r Report) Gaps() []string {
 func Declared() map[string]bool {
 	out := make(map[string]bool)
 	for _, a := range agents.All() {
-		slug := Slug(a.Identity.Name)
+		slug := slug(a.Identity.Name)
 		declares := false
 		for _, p := range a.Permissions {
 			if p.Key == permissionKeyHooks {
@@ -143,21 +143,15 @@ func Declared() map[string]bool {
 	return out
 }
 
-// Slug maps a daemon adapter's Identity.Name to the directory name used under
-// replaydata/agents. Only claude-code differs (the pre-#319 spelling survives
-// in the registry); gemini-cli, kiro-cli and mistral-vibe match their slugs
-// verbatim, hyphens and all.
+// slug is shard.SlugForAdapter, which owns the registry-name → on-disk-slug
+// map for every caller that indexes the catalog by adapter.
 //
-// Deliberately NOT the same function as viewer.normalizeAdapter, which also
-// maps "" to claudecode so that pre-#319 recordings with no adapter field
-// still render a branded icon. That fallback would be a bug here: it would
-// invent an adapter for an unattributed name.
-func Slug(identityName string) string {
-	if identityName == "claude-code" {
-		return "claudecode"
-	}
-	return identityName
-}
+// Note it is NOT viewer.normalizeAdapter, which additionally maps "" to
+// claudecode so pre-#319 recordings with no adapter field still render a
+// branded icon. That fallback is right on the recording path and wrong here —
+// it would invent an adapter for an unattributed name — so the viewer keeps it
+// as a local wrapper around the shared map rather than the two forking.
+func slug(identityName string) string { return shard.SlugForAdapter(identityName) }
 
 // Coverage builds the report. catalogAdapters is the onboarded column set
 // (shard.Agents); declares is the registry join (Declared). Both are
@@ -184,11 +178,8 @@ func Coverage(repoRoot string, catalogAdapters []string, declares map[string]boo
 	for _, adapter := range adapterSet(catalogAdapters, declares) {
 		row := AdapterCoverage{Adapter: adapter, DeclaresHooks: declares[adapter]}
 		for _, cell := range shard.LoadAdapterCells(repoRoot, adapter) {
-			if cell == nil || cell.Folder == "" {
-				// Defensive only: LoadAdapterCells always fills Folder from the
-				// directory it scanned and never stores a nil. Kept so a future
-				// loader change degrades to under-counting rather than panicking.
-				continue
+			if cell == nil {
+				continue // LoadAdapterCells never stores one; cheap panic guard
 			}
 			row.Cells++
 			cellDir := shard.AgentCellDir(repoRoot, adapter, cell.Folder)

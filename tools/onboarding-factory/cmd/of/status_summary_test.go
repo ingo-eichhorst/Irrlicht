@@ -46,31 +46,6 @@ func TestStatusSummaryCounts(t *testing.T) {
 	}
 }
 
-// TestStatusSummaryBucketsSumToTotal is a LOCK, not a red-first test: add()
-// always increments Total and exactly one bucket (with a default: catch-all),
-// so this passes by construction. It is worth keeping only as a guard against
-// a future add() that increments Total on a path with no bucket — it does NOT
-// prove states are bucketed *correctly*. Dropping "blocked-driver" from add()
-// keeps this green (the cells fall into Unknown); TestStatusSummaryCounts is
-// what catches that, and TestStatusSummaryAgreesWithFullDump below is what
-// catches a cell going missing entirely.
-func TestStatusSummaryBucketsSumToTotal(t *testing.T) {
-	root := richRepo(t)
-	code, out, errs := runOf("status", "--summary", "--json", "--repo-root", root)
-	if code != exitOK {
-		t.Fatalf("exit=%d stderr=%s", code, errs)
-	}
-	var v summaryView
-	if err := json.Unmarshal([]byte(out), &v); err != nil {
-		t.Fatalf("bad json: %v\n%s", err, out)
-	}
-	for _, a := range append(append([]agentSummary{}, v.Agents...), v.Total) {
-		if sum := a.buckets(); sum != a.Total {
-			t.Errorf("%s: buckets sum to %d but total is %d — Total moved without a bucket", a.Agent, sum, a.Total)
-		}
-	}
-}
-
 // TestStatusSummaryAgreesWithFullDump is the real anti-lossy assertion: it
 // compares the summary against the OTHER command's output rather than against
 // itself. The skill's warning is that "lossy summaries drop cells", and only a

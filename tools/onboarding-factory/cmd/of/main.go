@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"irrlicht/tools/onboarding-factory/internal/matrix"
 	"irrlicht/tools/onboarding-factory/internal/shard"
@@ -77,6 +78,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
 	}
+}
+
+// absRoot resolves --repo-root to an absolute path. Every filesystem reader
+// under internal/validate and internal/replay refuses a path containing ".."
+// (a CodeQL taint barrier) by returning an EMPTY result rather than an error,
+// so a relative root like "--repo-root .." silently reports a catalog in which
+// nothing is recorded — exit 0, no warning. `of status --summary` renders that
+// as a full table of zeros, which reads as a finished measurement rather than
+// a misread path. Resolving once at the flag boundary is what makes the guard
+// a no-op for legitimate callers instead of a trap.
+func absRoot(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
 }
 
 func writeJSON(w io.Writer, v any) error {
@@ -136,6 +152,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
+	*repoRoot = absRoot(*repoRoot)
 
 	if *runs {
 		return runStatusRuns(*repoRoot, *asJSON, stdout, stderr)
@@ -154,16 +171,19 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		}
 		agents = []string{*agent}
 	}
+	view := buildStatusView(m, *repoRoot, agents, *scenario)
+
 	// Validate --scenario the way --agent is validated. An unmatched filter
 	// used to yield a visibly empty listing; under --summary it yields a full
 	// table of zeros that reads as a completed measurement, so a typo has to
-	// fail loudly instead.
-	if *scenario != "" && !hasScenario(*repoRoot, *scenario) {
+	// fail loudly instead. Checked on the built view rather than by a second
+	// catalog walk, so the guard and the filter are literally the same
+	// predicate — buildStatusView emits a row for every matching shard, so an
+	// empty result means nothing matched.
+	if *scenario != "" && len(view.Scenarios) == 0 {
 		fmt.Fprintf(stderr, "of status: %q is not a scenario (by name or id)\n", *scenario)
 		return exitUsage
 	}
-
-	view := buildStatusView(m, *repoRoot, agents, *scenario)
 
 	// --summary folds the same view into per-agent counts. Folding the view
 	// (rather than re-reading the matrix) is what keeps the two renderings of
@@ -190,18 +210,6 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	printStatusText(stdout, view)
 	return exitOK
-}
-
-// hasScenario reports whether the filter matches a shard by name or by id —
-// the same two spellings buildStatusView accepts, so the guard and the filter
-// can never disagree about what "matches".
-func hasScenario(repoRoot, filter string) bool {
-	for _, sh := range shard.LoadAll(repoRoot) {
-		if sh.Name == filter || sh.ID == filter {
-			return true
-		}
-	}
-	return false
 }
 
 // buildStatusView projects the matrix + catalog shards (optionally filtered

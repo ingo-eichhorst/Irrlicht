@@ -3,14 +3,16 @@ package main
 import (
 	"fmt"
 	"io"
+	"strconv"
 )
 
 // agentSummary is one agent's cell counts, bucketed by the matrix display
 // state. Every value matrix.DeriveDisplayState can return maps to exactly one
-// bucket, so the buckets always sum to Total — see buckets() and the
-// total-preserving test. That property is the point: a summary that quietly
-// drops a state under-reports how much work is left, which is worse than no
-// summary at all.
+// bucket — add()'s default arm guarantees it — so the buckets always sum to
+// Total. That property is the point: a summary that quietly drops a state
+// under-reports how much work is left, which is worse than no summary at all.
+// TestStatusSummaryAgreesWithFullDump is what enforces it, by cross-checking
+// against `of status --json` rather than against this type itself.
 type agentSummary struct {
 	Agent string `json:"agent"`
 	// Recorded ← "observed": assessed recordable AND has a recording. NOT the
@@ -36,12 +38,6 @@ type agentSummary struct {
 	Total   int `json:"total"`
 }
 
-// buckets returns the sum of every bucket. It must equal Total; a mismatch
-// means matrix gained a display state this summary does not know about.
-func (a agentSummary) buckets() int {
-	return a.Recorded + a.Pending + a.Blocked + a.Unobservable + a.NotApplicable + a.Unknown
-}
-
 // add folds one cell's display state into the right bucket.
 func (a *agentSummary) add(displayState string) {
 	a.Total++
@@ -57,10 +53,10 @@ func (a *agentSummary) add(displayState string) {
 	case "n.a.":
 		a.NotApplicable++
 	default:
-		// "unknown" and anything matrix adds later. Counting an unrecognised
-		// state as unknown keeps the buckets total-preserving instead of
-		// silently discarding the cell; the test that sums them then still
-		// passes, and `of status` remains the place to see the raw state.
+		// "unknown", plus any state matrix adds later. Bucketing an
+		// unrecognised state here rather than dropping it is what keeps the
+		// row total honest; `of status` remains the place to see the raw
+		// state, and TestStatusSummaryCounts is what pins the known ones.
 		a.Unknown++
 	}
 }
@@ -97,12 +93,13 @@ func buildSummaryView(view statusView) summaryView {
 	return out
 }
 
-const summaryRowFormat = "%-14s %9d %8d %8d %13d %6d %8d %6d\n"
+// One column-width spec for header and rows alike, so they cannot drift.
+const summaryRowFormat = "%-14s %9s %8s %8s %13s %6s %8s %6s\n"
 
 func printSummaryText(stdout io.Writer, view summaryView) {
 	fmt.Fprintf(stdout, "per-agent cell counts — %s, %d cells\n\n",
 		plural(len(view.Agents), "agent"), view.Total.Total)
-	fmt.Fprintf(stdout, "%-14s %9s %8s %8s %13s %6s %8s %6s\n",
+	fmt.Fprintf(stdout, summaryRowFormat,
 		"agent", "recorded", "pending", "blocked", "unobservable", "n/a", "unknown", "total")
 	for _, a := range view.Agents {
 		printSummaryRow(stdout, a)
@@ -125,6 +122,7 @@ func plural(n int, noun string) string {
 }
 
 func printSummaryRow(stdout io.Writer, a agentSummary) {
-	fmt.Fprintf(stdout, summaryRowFormat,
-		a.Agent, a.Recorded, a.Pending, a.Blocked, a.Unobservable, a.NotApplicable, a.Unknown, a.Total)
+	n := strconv.Itoa
+	fmt.Fprintf(stdout, summaryRowFormat, a.Agent,
+		n(a.Recorded), n(a.Pending), n(a.Blocked), n(a.Unobservable), n(a.NotApplicable), n(a.Unknown), n(a.Total))
 }

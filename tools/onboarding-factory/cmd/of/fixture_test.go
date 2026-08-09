@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -86,10 +87,8 @@ func cell(t *testing.T, root, agent, folder, supports, daemon, driver string) {
 // scenarioNameOf maps the on-disk folder "<dashed-id>_<name>" to the scenario
 // name the shard loader keys cells by.
 func scenarioNameOf(folder string) string {
-	for i := 0; i < len(folder); i++ {
-		if folder[i] == '_' {
-			return folder[i+1:]
-		}
+	if _, name, ok := strings.Cut(folder, "_"); ok {
+		return name
 	}
 	return folder
 }
