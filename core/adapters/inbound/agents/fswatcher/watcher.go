@@ -20,6 +20,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	"irrlicht/core/adapters/inbound/agents/agentpaths"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/ports/outbound"
 )
@@ -260,18 +261,15 @@ func (w *Watcher) eventFor(typ agent.EventType, sessionID, projectDir, path stri
 // maxAge controls the maximum file age — transcript files not modified within
 // this window are silently ignored. A zero value disables the filter.
 func New(dir, adapter string, maxAge time.Duration) *Watcher {
-	if filepath.IsAbs(dir) {
-		return &Watcher{root: filepath.Clean(dir), adapter: adapter, maxAge: maxAge}
-	}
-	home, err := os.UserHomeDir()
+	// agentpaths.AbsRoot owns the absolute-or-$HOME-relative rule. The hook
+	// receivers confine caller-supplied paths against the same declared roots
+	// (issue #1361), and a second copy of this resolution here would let the
+	// guarded tree drift from the watched one.
+	root, err := agentpaths.AbsRoot(dir)
 	if err != nil {
 		return &Watcher{adapter: adapter, maxAge: maxAge}
 	}
-	return &Watcher{
-		root:    filepath.Join(home, dir),
-		adapter: adapter,
-		maxAge:  maxAge,
-	}
+	return &Watcher{root: root, adapter: adapter, maxAge: maxAge}
 }
 
 // NewWithRoot creates a Watcher targeting a custom absolute root, bypassing

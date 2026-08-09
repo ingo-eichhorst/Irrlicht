@@ -128,7 +128,7 @@ func TestHookHandler_PermissionRequest(t *testing.T) {
 	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-123.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess-123"),
 		HookEventName:  "PermissionRequest",
 		ToolName:       "Bash",
 	}
@@ -159,7 +159,7 @@ func TestHookHandler_PostToolUse(t *testing.T) {
 	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-456.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess-456"),
 		HookEventName:  "PostToolUse",
 		ToolName:       "Write",
 		ToolUseID:      "toolu_abc",
@@ -184,7 +184,7 @@ func TestHookHandler_PreToolUse(t *testing.T) {
 	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-pre.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess-pre"),
 		HookEventName:  "PreToolUse",
 		ToolName:       "AskUserQuestion",
 		ToolUseID:      "toolu_pre",
@@ -219,7 +219,7 @@ func TestHookHandler_PreToolUse_RejectsUnexpectedTool(t *testing.T) {
 	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-x.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess-x"),
 		HookEventName:  "PreToolUse",
 		ToolName:       "Bash",
 		ToolUseID:      "toolu_bash",
@@ -246,7 +246,7 @@ func TestHookHandler_PreCompactManual(t *testing.T) {
 	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-comp.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess-comp"),
 		HookEventName:  "PreCompact",
 		Trigger:        "manual",
 	}
@@ -282,7 +282,7 @@ func TestHookHandler_PreCompactAuto(t *testing.T) {
 	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-auto.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess-auto"),
 		HookEventName:  "PreCompact",
 		Trigger:        "auto",
 	}
@@ -309,7 +309,7 @@ func TestHookHandler_Stop(t *testing.T) {
 	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
-		TranscriptPath:       "/Users/u/.claude/projects/p/sess-stop.jsonl",
+		TranscriptPath:       inTreeTranscript(t, "sess-stop"),
 		HookEventName:        "Stop",
 		LastAssistantMessage: "All tests pass. The refactor is complete.",
 	}
@@ -349,7 +349,7 @@ func TestHookHandler_StopEndingInQuestion(t *testing.T) {
 	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
-		TranscriptPath:       "/Users/u/.claude/projects/p/sess-q.jsonl",
+		TranscriptPath:       inTreeTranscript(t, "sess-q"),
 		HookEventName:        "Stop",
 		LastAssistantMessage: "I can take either approach. Which option do you prefer?",
 	}
@@ -374,9 +374,10 @@ func TestHookHandler_StopEndingInQuestion(t *testing.T) {
 func TestHookHandler_NotificationIdlePrompt(t *testing.T) {
 	target := &mockTarget{}
 	handler := NewHookHandler(target, nil, nil, mockLogger{})
+	idlePath := inTreeTranscript(t, "sess-idle")
 
 	rec := postHook(t, handler, hookPayload{
-		TranscriptPath:   "/Users/u/.claude/projects/p/sess-idle.jsonl",
+		TranscriptPath:   idlePath,
 		HookEventName:    "Notification",
 		NotificationType: "idle_prompt",
 	})
@@ -394,7 +395,7 @@ func TestHookHandler_NotificationIdlePrompt(t *testing.T) {
 	if idles[0].sessionID != "sess-idle" {
 		t.Errorf("sessionID = %q, want %q", idles[0].sessionID, "sess-idle")
 	}
-	if idles[0].transcriptPath != "/Users/u/.claude/projects/p/sess-idle.jsonl" {
+	if idles[0].transcriptPath != idlePath {
 		t.Errorf("transcriptPath = %q, want the payload path", idles[0].transcriptPath)
 	}
 }
@@ -408,7 +409,7 @@ func TestHookHandler_NotificationNonIdleType(t *testing.T) {
 		handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 		rec := postHook(t, handler, hookPayload{
-			TranscriptPath:   "/Users/u/.claude/projects/p/sess-n.jsonl",
+			TranscriptPath:   inTreeTranscript(t, "sess-n"),
 			HookEventName:    "Notification",
 			NotificationType: ntype,
 		})
@@ -430,7 +431,7 @@ func TestHookHandler_NotificationConsentGated(t *testing.T) {
 	handler := NewHookHandler(target, nil, fakeGate(false), mockLogger{})
 
 	rec := postHook(t, handler, hookPayload{
-		TranscriptPath:   "/Users/u/.claude/projects/p/sess-gated.jsonl",
+		TranscriptPath:   inTreeTranscript(t, "sess-gated"),
 		HookEventName:    "Notification",
 		NotificationType: "idle_prompt",
 	})
@@ -448,7 +449,7 @@ func TestHookHandler_PostToolUseFailure(t *testing.T) {
 	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-789.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess-789"),
 		HookEventName:  "PostToolUseFailure",
 		ToolName:       "Bash",
 		IsInterrupt:    true,
@@ -473,7 +474,7 @@ func TestHookHandler_UnrecognizedEvent(t *testing.T) {
 	handler := NewHookHandler(target, nil, nil, mockLogger{})
 
 	payload := hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess"),
 		HookEventName:  "SessionStart",
 		ToolName:       "",
 	}
@@ -566,7 +567,7 @@ func TestHookHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 	handler := NewHookHandler(target, nil, fakeGate(false), mockLogger{})
 
 	payload := hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-123.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess-123"),
 		HookEventName:  "PermissionRequest",
 		ToolName:       "Bash",
 	}
@@ -589,7 +590,7 @@ func TestHookHandler_ConsentGatePassesWhenGranted(t *testing.T) {
 	handler := NewHookHandler(target, nil, fakeGate(true), mockLogger{})
 
 	payload := hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-123.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess-123"),
 		HookEventName:  "PermissionRequest",
 		ToolName:       "Bash",
 	}
@@ -665,9 +666,10 @@ func TestHookHandler_PreToolUse_MarkerInBashDescription(t *testing.T) {
 	target := &mockTarget{}
 	markers := &mockMarkerTarget{}
 	handler := NewHookHandler(target, markers, nil, mockLogger{})
+	etaPath := inTreeTranscript(t, "sess-eta")
 
 	rec := postHook(t, handler, hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-eta.jsonl",
+		TranscriptPath: etaPath,
 		HookEventName:  "PreToolUse",
 		ToolName:       "Bash",
 		ToolInput:      json.RawMessage(`{"command":"go test ./...","description":"Run tests <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":7,\"completed_rounds\":3} -->"}`),
@@ -679,7 +681,7 @@ func TestHookHandler_PreToolUse_MarkerInBashDescription(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("got %d IngestTaskEstimate calls, want 1", len(calls))
 	}
-	if calls[0].transcriptPath != "/Users/u/.claude/projects/p/sess-eta.jsonl" {
+	if calls[0].transcriptPath != etaPath {
 		t.Errorf("transcriptPath = %q", calls[0].transcriptPath)
 	}
 	if calls[0].est.TotalRounds != 7 || calls[0].est.CompletedRounds != 3 {
@@ -701,9 +703,10 @@ func TestHookHandler_PreToolUse_SummaryInBashDescription(t *testing.T) {
 	target := &mockTarget{}
 	markers := &mockMarkerTarget{}
 	handler := NewHookHandler(target, markers, nil, mockLogger{})
+	sumPath := inTreeTranscript(t, "sess-sum")
 
 	rec := postHook(t, handler, hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-sum.jsonl",
+		TranscriptPath: sumPath,
 		HookEventName:  "PreToolUse",
 		ToolName:       "Bash",
 		ToolInput:      json.RawMessage(`{"command":"go build ./...","description":"Build core <!-- {\"marker\":\"irrlicht-summary\",\"summary\":\"add the logout button\"} -->"}`),
@@ -715,7 +718,7 @@ func TestHookHandler_PreToolUse_SummaryInBashDescription(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d IngestTaskSummary calls, want 1", len(got))
 	}
-	if got[0].transcriptPath != "/Users/u/.claude/projects/p/sess-sum.jsonl" {
+	if got[0].transcriptPath != sumPath {
 		t.Errorf("transcriptPath = %q", got[0].transcriptPath)
 	}
 	if got[0].text != "add the logout button" {
@@ -734,14 +737,14 @@ func TestHookHandler_PreToolUse_NoMarkerNoIngest(t *testing.T) {
 	handler := NewHookHandler(&mockTarget{}, markers, nil, mockLogger{})
 
 	postHook(t, handler, hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-1.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess-1"),
 		HookEventName:  "PreToolUse",
 		ToolName:       "Bash",
 		ToolInput:      json.RawMessage(`{"command":"ls","description":"List files"}`),
 	})
 	// A plain HTML comment without the marker key must not ingest either.
 	postHook(t, handler, hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-1.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess-1"),
 		HookEventName:  "PreToolUse",
 		ToolName:       "Write",
 		ToolInput:      json.RawMessage(`{"file_path":"/tmp/x.html","content":"<!-- a comment -->"}`),
@@ -762,7 +765,7 @@ func TestHookHandler_PreToolUse_UserInputToolStillDispatchesWithMarkerScan(t *te
 	handler := NewHookHandler(target, markers, nil, mockLogger{})
 
 	postHook(t, handler, hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-q.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess-q"),
 		HookEventName:  "PreToolUse",
 		ToolName:       "AskUserQuestion",
 		ToolInput:      json.RawMessage(`{"questions":[{"question":"Proceed? <!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":4,\"completed_rounds\":2} -->"}]}`),
@@ -787,7 +790,7 @@ func TestHookHandler_PermissionGateContract(t *testing.T) {
 	gate := &mutableGate{}
 	handler := NewHookHandler(target, nil, gate, mockLogger{})
 	payload := hookPayload{
-		TranscriptPath: "/Users/u/.claude/projects/p/sess-gate.jsonl",
+		TranscriptPath: inTreeTranscript(t, "sess-gate"),
 		HookEventName:  "PermissionRequest",
 		ToolName:       "Bash",
 	}

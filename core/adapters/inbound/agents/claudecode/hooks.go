@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -65,6 +66,11 @@ const compactTriggerManual = "manual"
 // logComponentHookReceiver is the Logger component tag for every log line
 // emitted by the hook HTTP handler below.
 const logComponentHookReceiver = "hook-receiver"
+
+// transcriptExt is the file extension of a Claude Code transcript. The hook
+// receiver confines caller-supplied paths to this extension, and the session id
+// is the filename stem once it is stripped.
+const transcriptExt = ".jsonl"
 
 // Tool names that suspend the agent waiting for user input. PreToolUse hooks
 // must match one of these — anything else is rejected by the handler, even
@@ -212,7 +218,7 @@ func sessionIDFromTranscriptPath(p string) string {
 	if p == "" {
 		return ""
 	}
-	return strings.TrimSuffix(filepath.Base(p), ".jsonl")
+	return strings.TrimSuffix(filepath.Base(p), transcriptExt)
 }
 
 // NewHookHandler returns an http.HandlerFunc that receives Claude Code
@@ -233,8 +239,23 @@ func sessionIDFromTranscriptPath(p string) string {
 // the payload is dropped with 200 (so the curl hook stays quiet). A nil
 // gate means no gating — used by tests.
 func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger) http.HandlerFunc {
+	return NewHookHandlerWithConfiner(target, markers, gate, log, TranscriptConfiner())
+}
+
+// TranscriptConfiner returns the confiner this adapter's hook receiver guards
+// caller-supplied transcript paths with, rooted in the adapter's own
+// agent.Source declaration so it cannot drift from the tree the daemon watches
+// (issue #1361).
+func TranscriptConfiner() *hookjson.PathConfiner {
+	return hookjson.ConfinerForSource(Source, runtime.GOOS, transcriptExt)
+}
+
+// NewHookHandlerWithConfiner is NewHookHandler with an explicit confiner, for
+// tests that need to drive a receiver rooted somewhere other than the real
+// transcript tree and to read back what it refused.
+func NewHookHandlerWithConfiner(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		serveHookRequest(target, markers, gate, log, w, r)
+		serveHookRequest(target, markers, gate, log, confiner, w, r)
 	}
 }
 
@@ -242,7 +263,7 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter
 // returned closure so its branching isn't counted at the closure's extra
 // nesting depth (go:S3776 — this dropped the reported complexity from 31 to
 // within the 15-point budget without changing any behavior).
-func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger, w http.ResponseWriter, r *http.Request) {
+func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -259,9 +280,24 @@ func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGrant
 		return
 	}
 
-	sessionID := sessionIDFromTranscriptPath(payload.TranscriptPath)
+	// transcript_path arrives in an HTTP body on a local, unauthenticated
+	// endpoint, so it is untrusted: every dispatch below hands it to the
+	// detector, which opens it. Confine it to the adapter's declared transcript
+	// roots before anything downstream sees it, and carry the confined path —
+	// not the caller's string — onward (issue #1361).
+	transcriptPath, reason := confiner.Confine(payload.TranscriptPath)
+	if reason != hookjson.RejectNone {
+		hookjson.RejectPath(w, log, logComponentHookReceiver, payload.TranscriptPath, reason)
+		return
+	}
+	payload.TranscriptPath = transcriptPath
+
+	// Confinement already rejected an empty or non-.jsonl path, so the only
+	// input still reaching this is a basename that is bare ".jsonl" — an empty
+	// session id, which nothing downstream can key on.
+	sessionID := sessionIDFromTranscriptPath(transcriptPath)
 	if sessionID == "" {
-		http.Error(w, "bad request: missing transcript_path", http.StatusBadRequest)
+		http.Error(w, "bad request: transcript_path has no session id", http.StatusBadRequest)
 		return
 	}
 

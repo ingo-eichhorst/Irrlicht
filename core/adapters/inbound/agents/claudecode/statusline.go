@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"time"
 
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 )
@@ -62,6 +63,10 @@ type RateLimitIngester interface {
 	IngestRateLimit(transcriptPath string, snap *session.RateLimitSnapshot)
 }
 
+// logComponentStatuslineReceiver is the Logger component tag for the
+// statusline HTTP handler below.
+const logComponentStatuslineReceiver = "statusline-receiver"
+
 // NewStatuslineHandler returns the HTTP handler for
 // POST /api/v1/hooks/claudecode/statusline. The handler returns 200 with an
 // empty body on success; on bad input or missing transcript_path it returns
@@ -72,6 +77,12 @@ type RateLimitIngester interface {
 // granted the payload is dropped with 200. A nil gate means no gating —
 // used by tests.
 func NewStatuslineHandler(target RateLimitIngester, gate ConsentGranter, log outbound.Logger) http.HandlerFunc {
+	return NewStatuslineHandlerWithConfiner(target, gate, log, TranscriptConfiner())
+}
+
+// NewStatuslineHandlerWithConfiner is NewStatuslineHandler with an explicit
+// confiner, for tests that drive the receiver against a temp root.
+func NewStatuslineHandlerWithConfiner(target RateLimitIngester, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -89,22 +100,31 @@ func NewStatuslineHandler(target RateLimitIngester, gate ConsentGranter, log out
 			return
 		}
 
-		if payload.TranscriptPath == "" {
-			http.Error(w, "bad request: missing transcript_path", http.StatusBadRequest)
+		// The statusline endpoint sits on the same local, unauthenticated mux
+		// as the hook receivers and takes the same caller-supplied path, so it
+		// is confined by the same rule (issue #1361). Its sink is a map lookup
+		// rather than an open, so this is not an arbitrary-read guard — it is
+		// what keeps this receiver keying the tailer map with the SAME spelling
+		// the hook receiver now uses. Two spellings of one file are two
+		// sessions, and the rate-limit snapshot would land on neither.
+		transcriptPath, reason := confiner.Confine(payload.TranscriptPath)
+		if reason != hookjson.RejectNone {
+			hookjson.RejectPath(w, log, logComponentStatuslineReceiver, payload.TranscriptPath, reason)
 			return
 		}
+		payload.TranscriptPath = transcriptPath
 
-		sessionID := sessionIDFromTranscriptPath(payload.TranscriptPath)
+		sessionID := sessionIDFromTranscriptPath(transcriptPath)
 		snap := statuslineToSnapshot(payload.RateLimits)
 		if snap == nil {
 			// API-key / Bedrock / Vertex users — nothing to record. Ack and move on.
-			log.LogInfo("statusline-receiver", sessionID, "received statusline tick with no rate_limits block")
+			log.LogInfo(logComponentStatuslineReceiver, sessionID, "received statusline tick with no rate_limits block")
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
 		target.IngestRateLimit(payload.TranscriptPath, snap)
-		log.LogInfo("statusline-receiver", sessionID, "ingested rate-limit snapshot")
+		log.LogInfo(logComponentStatuslineReceiver, sessionID, "ingested rate-limit snapshot")
 		w.WriteHeader(http.StatusOK)
 	}
 }
