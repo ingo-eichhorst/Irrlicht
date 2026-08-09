@@ -233,14 +233,23 @@ func TestHookVersionGate_RealCodexDeclarationRefusesOldCLI(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
+	// Selected by KEY, not by "declares a managed file". Since #1383 every
+	// file-writing permission declares one, so `p.Writes != nil` no longer
+	// identifies the hooks permission — a second one on codex would silently
+	// retarget this test and nil-deref on Version below. The two hookversion
+	// contract tests select the same way.
 	var hooks agent.Permission
 	for _, p := range codex.Agent().Permissions {
-		if p.Writes != nil {
+		if p.Key == codex.PermissionKeyHooks {
 			hooks = p
+			break
 		}
 	}
 	if hooks.Key == "" {
 		t.Fatal("codex declares no hooks permission")
+	}
+	if hooks.Writes == nil || hooks.Writes.Version == nil {
+		t.Fatal("codex's hooks permission declares no version gate")
 	}
 	if len(hooks.Writes.Version.Probe) == 0 {
 		t.Fatal("codex declares no probe; the line below would be hiding its absence")
@@ -249,7 +258,7 @@ func TestHookVersionGate_RealCodexDeclarationRefusesOldCLI(t *testing.T) {
 	// path would confirm against the real `codex` on the developer's machine
 	// (shouldConfirmByProbe, and correctly so — it is newer than 0.100.0), which
 	// makes the outcome depend on what happens to be installed. Everything else
-	// here is the real declaration: floor, Observed, ConfigPath, Apply.
+	// here is the real declaration: floor, Observed, Path, Apply.
 	hooks.Writes.Version.Probe = nil
 
 	svc, log := newGateService()

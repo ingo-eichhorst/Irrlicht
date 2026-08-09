@@ -88,6 +88,35 @@ managed_file_paths() {
   return 0
 }
 
+# record_absent_dirs <manifest> <slot> <path> appends one 'absentdir' line per
+# ancestor directory of <path> that does not exist yet, deepest first.
+#
+# A declared file's Apply closure creates its parent directories on the way to
+# writing it, and moving the file back out at teardown leaves them behind. For
+# most paths that residue is inert; for kitty it is not. `KittyDetected` returns
+# true on the mere EXISTENCE of the config directory (it stats the dir before
+# falling back to pgrep), and a recording daemon under grant-all runs every
+# Apply whether or not the user has kitty — so one recording on a kitty-less
+# machine would leave an empty ~/.config/kitty behind and the user's production
+# daemon would offer the kitty permission in the wizard from then on. That is a
+# recording outliving its own edits, which is the whole point of this lib
+# (#1383).
+#
+# The walk stops at the first ancestor that already exists, so nothing a
+# pre-existing tree contains is ever recorded, and at the filesystem root, so it
+# cannot run away on a path with no existing ancestor at all.
+record_absent_dirs() {
+  local manifest="$1" slot="$2" path="$3" dir parent
+  dir="$(dirname "$path")"
+  while [[ -n "$dir" && "$dir" != "/" && "$dir" != "." && ! -d "$dir" ]]; do
+    printf 'absentdir\t%s\t%s\n' "$slot" "$dir" >> "$manifest"
+    parent="$(dirname "$dir")"
+    [[ "$parent" == "$dir" ]] && break
+    dir="$parent"
+  done
+  return 0
+}
+
 # snapshot_managed_files <backup-dir> <daemon-bin> copies each declared agent
 # config aside and records, per file, whether it existed. Returns non-zero
 # without publishing any state if the daemon cannot be asked, if a path looks
@@ -163,6 +192,9 @@ snapshot_managed_files() {
       printf 'saved\t%s\t%s\n' "$i" "$p" >> "$manifest_tmp"
     else
       printf 'absent\t%s\t%s\n' "$i" "$p" >> "$manifest_tmp"
+      # AFTER the file's own line, deepest-first, so restore moves the file out
+      # before trying to remove the directory holding it.
+      record_absent_dirs "$manifest_tmp" "$i" "$p"
     fi
     i=$((i + 1))
   done
@@ -177,12 +209,39 @@ snapshot_managed_files() {
   return 0
 }
 
+# preserve_replaced <slot> <path> keeps a copy of whatever is at <path> now,
+# when it differs from the backup that is about to overwrite it.
+#
+# The `absent` branch below already refuses to destroy a file the AGENT created
+# mid-run, on the grounds that a shared config is not irrlicht's to delete. A
+# file that EXISTED before the run can gain exactly the same kind of content —
+# and since #1383 widened the protected set, one of them is the user's own
+# CLAUDE.md — prose written by the very agent the rig drives. Restoring the pre-run
+# bytes is still what the snapshot promises, so <path> ends up identical either
+# way; this only stops the pre-run copy from being the ONLY copy left.
+#
+# Symmetric with created/, and deliberately quiet when the file is unchanged:
+# the common case is a config the daemon rewrote with content we are discarding
+# on purpose, and a stderr line per file would bury the one that matters.
+preserve_replaced() {
+  local slot="$1" path="$2" dir="$MANAGED_FILE_BACKUP_DIR/replaced"
+  [[ -f "$path" ]] || return 0
+  cmp -s "$path" "$MANAGED_FILE_BACKUP_DIR/$slot" && return 0
+  if mkdir -p "$dir" && cp "$path" "$dir/$slot"; then
+    echo "managed-file-snapshot: $path changed during the run; its run-time version is kept at $dir/$slot" >&2
+  else
+    echo "managed-file-snapshot: could not keep a copy of $path before restoring it" >&2
+  fi
+  return 0
+}
+
 # restore_managed_files puts each snapshotted file back exactly as it was.
 # Every action is driven by the manifest the snapshot wrote: "saved" means copy
-# the backup back, "absent" means the file did not exist before the run. A file
-# is never removed on the strength of a MISSING record — that inference is what
-# made widening the file list dangerous, because a config the snapshot failed to
-# save reads identically to one that was never there (#1357).
+# the backup back, "absent" means the file did not exist before the run, and
+# "absentdir" is a directory the run created on the way to writing an absent
+# file. A file is never removed on the strength of a MISSING record — that
+# inference is what made widening the file list dangerous, because a config the
+# snapshot failed to save reads identically to one that was never there (#1357).
 restore_managed_files() {
   [[ -n "$MANAGED_FILE_BACKUP_DIR" ]] || return 0
   local manifest="$MANAGED_FILE_BACKUP_DIR/manifest"
@@ -198,6 +257,7 @@ restore_managed_files() {
       case "$state" in
         saved)
           if [[ -f "$MANAGED_FILE_BACKUP_DIR/$slot" ]]; then
+            preserve_replaced "$slot" "$path"
             cp "$MANAGED_FILE_BACKUP_DIR/$slot" "$path" ||
               echo "managed-file-snapshot: could not restore $path" >&2
           else
@@ -223,6 +283,16 @@ restore_managed_files() {
             else
               echo "managed-file-snapshot: could not move $path aside" >&2
             fi
+          fi
+          ;;
+        absentdir)
+          # A directory the run created on the way to writing a file that was
+          # absent. rmdir REFUSES a non-empty directory, so one that has since
+          # gained content of its own is left alone by construction — there is
+          # no -e/-f inference to get wrong here, and a failure is the correct
+          # outcome rather than an error to report.
+          if rmdir "$path" 2>/dev/null; then
+            echo "managed-file-snapshot: removed $path, created during the run" >&2
           fi
           ;;
         *)

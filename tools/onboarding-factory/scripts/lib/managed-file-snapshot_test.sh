@@ -322,6 +322,66 @@ assert_eq "the pre-run state (absent) is restored" "absent" "$got"
 assert_eq "the user's mid-run content is recoverable" "a rule the user added during the run" \
   "$(tail -1 "$ROOT/backup/created/1" 2>/dev/null)"
 
+echo "== a directory the run created for an absent file is removed too (#1383) =="
+# The residue that survived moving the file aside. grant-all runs the kitty
+# Apply on a machine with no kitty, whose atomicWriteFile mkdir -p's
+# ~/.config/kitty on the way to the file; KittyDetected() returns true on the
+# mere EXISTENCE of that directory, so leaving it behind makes the user's
+# production daemon offer the kitty permission in the wizard from then on.
+fresh_env createddir
+fake_managed_file_daemon "$DAEMON" \
+  "$HOME/.claude/settings.json" "$HOME/.config/kitty/kitty.conf"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+mkdir -p "$HOME/.config/kitty"                                # the Apply closure creates both levels
+printf 'allow_remote_control yes\n' > "$HOME/.config/kitty/kitty.conf"
+restore_managed_files
+[[ -d "$HOME/.config/kitty" ]] && got=present || got=absent
+assert_eq "the created config dir is gone" "absent" "$got"
+[[ -d "$HOME/.config" ]] && got=present || got=absent
+assert_eq "its created parent is gone too" "absent" "$got"
+
+echo "== a created directory the user has since filled is left alone (#1383) =="
+# rmdir refuses a non-empty directory, so "the run made this dir" never becomes
+# licence to delete what someone else put in it. This is the safety half of the
+# case above and the reason no -e/-f inference is needed there.
+fresh_env createddir_inuse
+fake_managed_file_daemon "$DAEMON" "$HOME/.config/kitty/kitty.conf"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+mkdir -p "$HOME/.config/kitty"
+printf 'allow_remote_control yes\n' > "$HOME/.config/kitty/kitty.conf"
+printf 'my own theme\n' > "$HOME/.config/kitty/theme.conf"    # the user's file, same dir
+restore_managed_files
+assert_eq "the user's own file in that dir survives" "my own theme" \
+  "$(cat "$HOME/.config/kitty/theme.conf" 2>/dev/null)"
+
+echo "== a pre-existing file changed during the run stays recoverable (#1383) =="
+# The asymmetry the widening exposed: 'absent' refuses to destroy content the
+# AGENT wrote mid-run, but 'saved' used to cp straight over it. ~/.claude/CLAUDE.md
+# is prose written by the very agent the rig drives, so the run-time version has
+# to survive somewhere even though the pre-run bytes are what goes back.
+fresh_env replaced
+fake_managed_file_daemon "$DAEMON" "$HOME/.claude/CLAUDE.md"
+printf 'the user rules\n' > "$HOME/.claude/CLAUDE.md"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf 'the user rules\na rule the agent added during the run\n' > "$HOME/.claude/CLAUDE.md"
+restore_managed_files
+assert_eq "the pre-run bytes are what goes back" "the user rules" \
+  "$(cat "$HOME/.claude/CLAUDE.md" 2>/dev/null)"
+assert_eq "the run-time version is recoverable" "a rule the agent added during the run" \
+  "$(tail -1 "$ROOT/backup/replaced/0" 2>/dev/null)"
+
+echo "== an unchanged file is not copied aside on restore (#1383) =="
+# LOCK: the common case is a config the daemon rewrote with content we discard
+# on purpose. Keeping a copy of every restored file would bury the one that
+# matters under a stderr line per file.
+fresh_env unchanged_norestore
+fake_managed_file_daemon "$DAEMON" "$HOME/.claude/CLAUDE.md"
+printf 'the user rules\n' > "$HOME/.claude/CLAUDE.md"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+restore_managed_files
+[[ -e "$ROOT/backup/replaced" ]] && got=present || got=absent
+assert_eq "nothing was copied aside" "absent" "$got"
+
 echo "== the lib names no agent config path of its own (#1357) =="
 # The literal list is the defect. A path spelled out here is one the daemon
 # does not have to agree with, which is how the two drifted in the first place.

@@ -3,6 +3,11 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -312,6 +317,10 @@ func TestPrintManagedFilesNamesTheFilesTheIssueFound(t *testing.T) {
 // Lock: it passes by construction as long as both callers go through
 // consentCatalog. It was seen red by giving the flag path its own
 // agents.All()-only list (see the PR body).
+//
+// Its companion below is what actually binds setupPermissionService to this
+// composition; on its own, this test only checks the names the flag path
+// happens to produce.
 func TestConsentCatalogMatchesThePermissionWizard(t *testing.T) {
 	got := map[string]bool{}
 	for _, a := range declaredConsentCatalog() {
@@ -365,4 +374,83 @@ func TestUninstallHooksReadsOnlyTheHooksSlice(t *testing.T) {
 		t.Errorf("ManagedUserFiles returned %d entries and HookConfigs %d — the projection is still hooks-only (#1383)",
 			len(all), len(hooks))
 	}
+}
+
+// TestPermissionWizardIsBuiltFromConsentCatalog closes the gap the test above
+// leaves open: it asserts the list the permission SERVICE receives is built by
+// consentCatalog, rather than trusting the doc comment that says so.
+//
+// The projections are only as complete as the catalog they run over, and
+// nothing else in the tree connects the two. A future daemon-wide declaration
+// appended at the call site — `append(consentCatalog(...), somethingNew())`, or
+// a second inline literal, which is exactly how the kitty entry lived before
+// this PR — would be offered by the wizard, granted by grant-all, and written by its
+// Apply closure, while every other test here stayed green because they all read
+// the same incomplete declaredConsentCatalog().
+//
+// Scanning the source is the same technique TestAllHookEvents_CoversEveryConstant
+// uses, and for the same reason: a hand-kept restatement of "these two lists
+// agree" is what the issue is about. There is no runtime handle to assert on —
+// PermissionService does not expose the slice it was constructed with.
+func TestPermissionWizardIsBuiltFromConsentCatalog(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse package source: %v", err)
+	}
+
+	var rhs []string
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			ast.Inspect(file, func(n ast.Node) bool {
+				assign, ok := n.(*ast.AssignStmt)
+				if !ok {
+					return true
+				}
+				for i, lhs := range assign.Lhs {
+					id, ok := lhs.(*ast.Ident)
+					if !ok || id.Name != permissionAgentsVar {
+						continue
+					}
+					if i < len(assign.Rhs) {
+						rhs = append(rhs, callee(assign.Rhs[i]))
+					}
+				}
+				return true
+			})
+		}
+	}
+
+	if len(rhs) != 1 {
+		t.Fatalf("found %d assignments to %s (%v), want exactly 1 — the list handed to "+
+			"PermissionService must have one origin, or --print-managed-files projects a "+
+			"different catalog than the wizard offers (#1383)", len(rhs), permissionAgentsVar, rhs)
+	}
+	if rhs[0] != "consentCatalog" {
+		t.Errorf("%s is assigned from %q, want a bare consentCatalog(...) call — anything "+
+			"wrapping or extending it is a declaration the wizard offers, grant-all grants, "+
+			"and the recording rig never protects (#1383)", permissionAgentsVar, rhs[0])
+	}
+}
+
+// permissionAgentsVar is the local in setupPermissionService holding the
+// catalog handed to PermissionService. Named here so a rename breaks this test
+// loudly (zero assignments found) rather than silently making it vacuous.
+const permissionAgentsVar = "permissionAgents"
+
+// callee renders the shape of an expression for the assertion above: the
+// function name for a plain call, and something deliberately unmatchable for
+// anything else, so a wrapped or extended call cannot read as a bare one.
+func callee(e ast.Expr) string {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return fmt.Sprintf("%T (not a call)", e)
+	}
+	id, ok := call.Fun.(*ast.Ident)
+	if !ok {
+		return fmt.Sprintf("%T (not a plain function call)", call.Fun)
+	}
+	return id.Name
 }

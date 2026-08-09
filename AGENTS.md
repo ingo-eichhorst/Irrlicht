@@ -261,7 +261,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   gastown, launcher, kitty — are appended outside the adapter registry, and
   projecting only the registry is exactly how the kitty config patch was
   offered by the wizard while being invisible to both lists (#1383). The
-  registry-wide tripwire is
+  catalog-wide tripwire is
   `TestEveryModifyPermissionDeclaresTheFileItWrites`
   (`core/cmd/irrlichd/managedfiles_test.go`); a new modify permission is
   covered by existing rather than by remembering. A permission whose `Apply`
