@@ -16,6 +16,7 @@
 package claudecode
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -169,6 +170,11 @@ characters, and when clarity and brevity conflict, choose clarity.
 - Bad "Yes or no?" → Good "PR #482 review: 1 blocking finding left — fix now or merge and follow up?"
 ` + taskQuestionEndSentinel
 
+// claudeMemoryDisplayPath is the instruction file as the consent copy shows it
+// — tilde-form, not the resolved absolute path, because the wizard text is read
+// by a human and claudeMemoryPath() expands to whatever $HOME happens to be.
+const claudeMemoryDisplayPath = "~/.claude/CLAUDE.md"
+
 // claudeMemoryPath returns the user-level Claude Code instruction file path.
 func claudeMemoryPath() (string, error) {
 	home, err := os.UserHomeDir()
@@ -247,34 +253,150 @@ func UninstallTaskQuestionBlock() (bool, error) {
 	return uninstallBlock(taskQuestionBeginSentinel, taskQuestionEndSentinel)
 }
 
+// managedInstructionBlock is one irrlicht-managed block in ~/.claude/CLAUDE.md:
+// the sentinels that delimit it, the content written between them, and the
+// clause the consent copy uses to disclose it.
+type managedInstructionBlock struct {
+	// name is the identifier inside the sentinels, e.g. "task-eta" — the same
+	// string a user finds in their own CLAUDE.md, so the copy can name the
+	// block by what they will actually see there.
+	name  string
+	begin string
+	end   string
+	// content is the block written verbatim. Empty for a retired block: it is
+	// removed, never written.
+	content string
+	// discloses says what this block asks the agent to emit, in consent prose.
+	discloses string
+}
+
+// installedInstructionBlocks is the single declaration of what the instructions
+// permission's Apply writes. applyInstructionBlocks iterates it and the consent
+// copy is rendered from it (instructionsTouched/instructionsDetail), so the text
+// the user grants against cannot come to describe a different set of blocks than
+// the installer writes. Issue #1377 was exactly that drift — the hand-written
+// copy named the retired task-summary block and never named task-question —
+// arriving on the permission next door to #1356's, which is why the count and
+// the list are derived here rather than restated there.
+var installedInstructionBlocks = []managedInstructionBlock{
+	{
+		name:      "task-eta",
+		begin:     taskEtaBeginSentinel,
+		end:       taskEtaEndSentinel,
+		content:   managedTaskEtaBlock,
+		discloses: "a task-progress marker, which irrlicht reads to project a completion ETA",
+	},
+	{
+		name:    "task-question",
+		begin:   taskQuestionBeginSentinel,
+		end:     taskQuestionEndSentinel,
+		content: managedTaskQuestionBlock,
+		discloses: "a one-line version of the question it is waiting on, so a human can tell " +
+			"what a session is blocked on",
+	},
+}
+
+// retiredInstructionBlocks are blocks an earlier version installed that this one
+// no longer uses. Apply removes them instead of writing them, which is why they
+// are a separate list and carry no disclosure clause: the copy is rendered from
+// the installed list alone, so a retired block cannot be presented as something
+// irrlicht writes.
+var retiredInstructionBlocks = []managedInstructionBlock{
+	{name: "task-summary", begin: taskSummaryBeginSentinel, end: taskSummaryEndSentinel},
+}
+
+// instructionsTouched renders the Touches line of the instructions permission —
+// the one-line summary the wizard row shows.
+func instructionsTouched() string {
+	var names []string
+	for _, b := range installedInstructionBlocks {
+		names = append(names, b.name)
+	}
+	return fmt.Sprintf("Maintains %d managed %s (%s) in %s",
+		len(installedInstructionBlocks), blockNoun(len(installedInstructionBlocks)),
+		joinProse(names), claudeMemoryDisplayPath)
+}
+
+// instructionsDetail renders the Detail text behind the wizard's (i) expander.
+// The retired-block cleanup is disclosed as a removal without naming the block:
+// what the user needs to know is that Apply may delete an irrlicht block it did
+// not write in this version, not which historical marker it was.
+func instructionsDetail() string {
+	var clauses []string
+	for _, b := range installedInstructionBlocks {
+		clauses = append(clauses, b.name+" — "+b.discloses)
+	}
+	return fmt.Sprintf(
+		"Writes %d irrlicht-managed %s (each between BEGIN/END sentinels) to %s, "+
+			"instructing the agent to emit hidden markers: %s. All surrounding file "+
+			"content is preserved byte-for-byte, and a managed block an earlier "+
+			"irrlicht version wrote but this one no longer uses is removed on the same "+
+			"pass. Toggling off removes exactly these blocks (also available via the "+
+			"macOS Settings toggle).",
+		len(installedInstructionBlocks), blockNoun(len(installedInstructionBlocks)),
+		claudeMemoryDisplayPath, strings.Join(clauses, "; "))
+}
+
+// blockNoun agrees the noun with the count so a future single-block install
+// does not ship broken grammar in the copy the user consents to.
+func blockNoun(n int) string {
+	if n == 1 {
+		return "block"
+	}
+	return "blocks"
+}
+
+// joinProse renders items as "A", "A and B", "A, B, and C". The serial comma is
+// deliberate and matches hookjson.EventList: the disclosure assertions read
+// names back out of the copy, so the punctuation must not be tuned per caller.
+func joinProse(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	case 2:
+		return items[0] + " and " + items[1]
+	default:
+		return strings.Join(items[:len(items)-1], ", ") + ", and " + items[len(items)-1]
+	}
+}
+
 // applyInstructionBlocks installs the managed instruction blocks — the grant
 // effect of the instructions permission. All are governed by a single toggle
-// so it covers every irrlicht-managed instruction. The retired irrlicht-summary
-// block (issue #1186) is actively uninstalled here rather than installed, so a
-// CLAUDE.md a prior version wrote is cleaned up on the next granted daemon
-// start. Returns on the first error.
+// so it covers every irrlicht-managed instruction. Retired blocks (the
+// irrlicht-summary one, issue #1186) are actively uninstalled here rather than
+// installed, so a CLAUDE.md a prior version wrote is cleaned up on the next
+// granted daemon start. Returns on the first error.
 func applyInstructionBlocks() error {
-	if _, err := EnsureTaskEtaBlockInstalled(); err != nil {
-		return err
+	for _, b := range installedInstructionBlocks {
+		if _, err := ensureBlockInstalled(b.begin, b.end, b.content); err != nil {
+			return err
+		}
 	}
-	if _, err := UninstallTaskSummaryBlock(); err != nil {
-		return err
+	for _, b := range retiredInstructionBlocks {
+		if _, err := uninstallBlock(b.begin, b.end); err != nil {
+			return err
+		}
 	}
-	_, err := EnsureTaskQuestionBlockInstalled()
-	return err
+	return nil
 }
 
 // removeInstructionBlocks removes all managed blocks — the revoke effect of
-// the instructions permission.
+// the instructions permission. Retired blocks are swept here too, so revoking
+// leaves nothing behind whichever version installed it.
 func removeInstructionBlocks() error {
-	if _, err := UninstallTaskEtaBlock(); err != nil {
-		return err
+	for _, b := range installedInstructionBlocks {
+		if _, err := uninstallBlock(b.begin, b.end); err != nil {
+			return err
+		}
 	}
-	if _, err := UninstallTaskSummaryBlock(); err != nil {
-		return err
+	for _, b := range retiredInstructionBlocks {
+		if _, err := uninstallBlock(b.begin, b.end); err != nil {
+			return err
+		}
 	}
-	_, err := UninstallTaskQuestionBlock()
-	return err
+	return nil
 }
 
 // patchManagedBlock returns existing with the managed block inserted or
