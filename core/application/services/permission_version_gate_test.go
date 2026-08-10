@@ -90,9 +90,12 @@ func gatedHooksPermission(min, observed string, applied *bool) agent.Permission 
 
 func newGateService() (*PermissionService, *gateLog) {
 	log := &gateLog{}
-	// effectErrs must exist: runClosureEffect records every outcome there
-	// (#1362), so a bare struct panics on the first effect.
-	return &PermissionService{log: log, effectErrs: map[string]string{}}, log
+	// newPermissionService rather than a struct literal: it owns every map
+	// allocation, so this helper does not have to keep a hand-written list of
+	// which ones the service happens to write to today (#1400).
+	svc := newPermissionService()
+	svc.log = log
+	return svc, log
 }
 
 func grant(svc *PermissionService, p agent.Permission) {
