@@ -107,6 +107,60 @@ func unwrapElement(e ast.Expr) ast.Expr {
 	return e
 }
 
+// allocatorDecl returns the allowed allocator's declaration in this file, or
+// nil. Its extent is what tells a legitimate literal from a bypass: the check
+// is positional rather than "which function body am I walking", because walking
+// only function bodies would skip every package-scope declaration, and
+// `var x = &PermissionService{}` at package scope is a perfectly ordinary shape
+// for a shared test fixture — which is exactly where the original offender
+// lived.
+func allocatorDecl(file *ast.File) *ast.FuncDecl {
+	for _, d := range file.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == permissionServiceAllocator {
+			return fn
+		}
+	}
+	return nil
+}
+
+// scanFileForServiceLiterals reports every PermissionService composite literal
+// in one file that is not inside the allocator, and whether the allocator's own
+// literal was seen (the caller's vacuity guard).
+func scanFileForServiceLiterals(fset *token.FileSet, path string, file *ast.File) (offenders []string, sawAllocator bool) {
+	alloc := allocatorDecl(file)
+
+	report := func(n ast.Node) {
+		if alloc != nil && n.Pos() >= alloc.Pos() && n.End() <= alloc.End() {
+			sawAllocator = true
+			return
+		}
+		offenders = append(offenders, fmt.Sprintf("%s:%d",
+			filepath.Base(path), fset.Position(n.Pos()).Line))
+	}
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok || lit.Type == nil {
+			return true
+		}
+		switch {
+		case namesPermissionServiceDirectly(lit.Type):
+			report(lit)
+		case containerElementNamesPermissionService(lit.Type):
+			// Each element literal constructs one service, and an element
+			// written with an elided type carries no type of its own to match,
+			// so it is only reachable from its container.
+			for _, el := range lit.Elts {
+				if inner, ok := unwrapElement(el).(*ast.CompositeLit); ok {
+					report(inner)
+				}
+			}
+		}
+		return true
+	})
+	return offenders, sawAllocator
+}
+
 // TestPermissionServiceIsNeverBuiltByBareLiteral fails on any PermissionService
 // composite literal in this package outside the allocator.
 //
@@ -130,50 +184,9 @@ func TestPermissionServiceIsNeverBuiltByBareLiteral(t *testing.T) {
 
 	for _, pkg := range pkgs {
 		for path, file := range pkg.Files {
-			// Find the allowed allocator's extent first, then walk the WHOLE
-			// file and decide by position containment. Walking only FuncDecl
-			// bodies would skip every package-scope declaration, and
-			// `var x = &PermissionService{}` at package scope is a perfectly
-			// ordinary shape for a shared test fixture — which is exactly where
-			// the original offender lived.
-			var alloc *ast.FuncDecl
-			for _, d := range file.Decls {
-				if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == permissionServiceAllocator {
-					alloc = fn
-				}
-			}
-
-			report := func(n ast.Node) {
-				if alloc != nil && n.Pos() >= alloc.Pos() && n.End() <= alloc.End() {
-					seenAllocator = true
-					return
-				}
-				offenders = append(offenders, fmt.Sprintf("%s:%d",
-					filepath.Base(path), fset.Position(n.Pos()).Line))
-			}
-
-			ast.Inspect(file, func(n ast.Node) bool {
-				lit, ok := n.(*ast.CompositeLit)
-				if !ok || lit.Type == nil {
-					return true
-				}
-				if namesPermissionServiceDirectly(lit.Type) {
-					report(lit)
-					return true
-				}
-				if !containerElementNamesPermissionService(lit.Type) {
-					return true
-				}
-				// A container of services: each element literal constructs one,
-				// and an element written with an elided type carries no type of
-				// its own to match, so it is only reachable from here.
-				for _, el := range lit.Elts {
-					if inner, ok := unwrapElement(el).(*ast.CompositeLit); ok {
-						report(inner)
-					}
-				}
-				return true
-			})
+			found, sawAllocator := scanFileForServiceLiterals(fset, path, file)
+			offenders = append(offenders, found...)
+			seenAllocator = seenAllocator || sawAllocator
 		}
 	}
 
