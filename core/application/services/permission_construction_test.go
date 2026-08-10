@@ -5,11 +5,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"irrlicht/core/domain/permission"
 )
 
 // This file covers issue #1400: a PermissionService built by a bare composite
@@ -34,14 +35,77 @@ import (
 // issue floated an unexported zero-width field to make the literal
 // uncompilable, but it would be inert here: every field of PermissionService is
 // already unexported, so Go already forbids another package from setting one in
-// a literal (only `&services.PermissionService{}` with no fields at all
-// compiles, which populates nothing and is useless). The literal this issue was
-// actually filed about lives in THIS package, where unexported fields are
-// freely settable and no unexported marker field can reach it.
+// a literal. The one spelling that still compiles from outside is
+// `&services.PermissionService{}` with no fields at all — which is not harmless
+// just because it populates nothing: it is a fully-nil service that panics on
+// first use, and it is what an external test in this same directory
+// (`package services_test`) would naturally reach for. The scan below matches
+// it. And the literal this issue was actually filed about lives in THIS
+// package, where unexported fields are freely settable and no unexported marker
+// field could ever have reached it.
 
 // permissionServiceAllocator is the one function allowed to write a
 // PermissionService composite literal.
 const permissionServiceAllocator = "newPermissionService"
+
+// permissionServiceTypeName is matched textually because the scan is a source
+// scan: it deliberately has no type information, so that it stays cheap and
+// keeps working on a file that does not compile.
+const permissionServiceTypeName = "PermissionService"
+
+// namesPermissionServiceDirectly reports whether the type expression IS the
+// struct type. The *ast.SelectorExpr arm is what makes the scan see
+// `services.PermissionService{}` — the spelling the `package services_test`
+// files in this same directory would use, and the only literal an external
+// package can still write now that every field is unexported.
+func namesPermissionServiceDirectly(t ast.Expr) bool {
+	switch v := t.(type) {
+	case *ast.Ident:
+		return v.Name == permissionServiceTypeName
+	case *ast.StarExpr:
+		return namesPermissionServiceDirectly(v.X)
+	case *ast.SelectorExpr:
+		return v.Sel.Name == permissionServiceTypeName
+	}
+	return false
+}
+
+// containerElementNamesPermissionService reports whether the type expression is
+// a slice, array or map whose ELEMENT is the service — the case where the
+// constructions are the container's elements rather than the container itself,
+// and where each element may elide its type (`[]*PermissionService{{...}}`) and
+// so carry nothing of its own for the scan to match.
+//
+// Deliberately narrower than "the type expression mentions PermissionService
+// anywhere": a table-driven test's `[]struct{ svc *PermissionService }{...}`
+// mentions it too, while its elements hold values that came FROM a constructor.
+// Matching that would be a false positive on ordinary, correct test code — and
+// a guard that cries wolf on the right thing gets deleted.
+func containerElementNamesPermissionService(t ast.Expr) bool {
+	switch v := t.(type) {
+	case *ast.ArrayType:
+		return namesPermissionServiceDirectly(v.Elt)
+	case *ast.MapType:
+		return namesPermissionServiceDirectly(v.Value)
+	}
+	return false
+}
+
+// unwrapElement strips the `&` and the `key:` a container element may carry, so
+// that both `[]*PermissionService{{...}}` and
+// `map[string]*PermissionService{"a": {...}}` reach the inner literal. An
+// element written with an elided type has CompositeLit.Type == nil, which is
+// precisely why elements are found through their container rather than on their
+// own.
+func unwrapElement(e ast.Expr) ast.Expr {
+	if kv, ok := e.(*ast.KeyValueExpr); ok {
+		e = kv.Value
+	}
+	if u, ok := e.(*ast.UnaryExpr); ok && u.Op == token.AND {
+		e = u.X
+	}
+	return e
+}
 
 // TestPermissionServiceIsNeverBuiltByBareLiteral fails on any PermissionService
 // composite literal in this package outside the allocator.
@@ -66,30 +130,50 @@ func TestPermissionServiceIsNeverBuiltByBareLiteral(t *testing.T) {
 
 	for _, pkg := range pkgs {
 		for path, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil {
-					continue
+			// Find the allowed allocator's extent first, then walk the WHOLE
+			// file and decide by position containment. Walking only FuncDecl
+			// bodies would skip every package-scope declaration, and
+			// `var x = &PermissionService{}` at package scope is a perfectly
+			// ordinary shape for a shared test fixture — which is exactly where
+			// the original offender lived.
+			var alloc *ast.FuncDecl
+			for _, d := range file.Decls {
+				if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == permissionServiceAllocator {
+					alloc = fn
 				}
-				allowed := fn.Recv == nil && fn.Name.Name == permissionServiceAllocator
-				ast.Inspect(fn.Body, func(n ast.Node) bool {
-					lit, ok := n.(*ast.CompositeLit)
-					if !ok {
-						return true
-					}
-					id, ok := lit.Type.(*ast.Ident)
-					if !ok || id.Name != "PermissionService" {
-						return true
-					}
-					if allowed {
-						seenAllocator = true
-						return true
-					}
-					offenders = append(offenders, fmt.Sprintf("%s:%d (in %s)",
-						filepath.Base(path), fset.Position(lit.Pos()).Line, fn.Name.Name))
-					return true
-				})
 			}
+
+			report := func(n ast.Node) {
+				if alloc != nil && n.Pos() >= alloc.Pos() && n.End() <= alloc.End() {
+					seenAllocator = true
+					return
+				}
+				offenders = append(offenders, fmt.Sprintf("%s:%d",
+					filepath.Base(path), fset.Position(n.Pos()).Line))
+			}
+
+			ast.Inspect(file, func(n ast.Node) bool {
+				lit, ok := n.(*ast.CompositeLit)
+				if !ok || lit.Type == nil {
+					return true
+				}
+				if namesPermissionServiceDirectly(lit.Type) {
+					report(lit)
+					return true
+				}
+				if !containerElementNamesPermissionService(lit.Type) {
+					return true
+				}
+				// A container of services: each element literal constructs one,
+				// and an element written with an elided type carries no type of
+				// its own to match, so it is only reachable from here.
+				for _, el := range lit.Elts {
+					if inner, ok := unwrapElement(el).(*ast.CompositeLit); ok {
+						report(inner)
+					}
+				}
+				return true
+			})
 		}
 	}
 
@@ -127,64 +211,81 @@ var nilTolerantFields = map[string]string{
 // or channel-typed field is added to PermissionService and forgotten in the
 // allocator. That is the half of #1400 the source scan cannot reach.
 func TestNewPermissionServiceInitialisesEveryOwnedMap(t *testing.T) {
-	s := newPermissionService()
-	v := reflect.ValueOf(s).Elem()
-	typ := v.Type()
+	// BOTH construction paths, because they can disagree. The allocator makes
+	// every map, and NewPermissionService then overwrites eight fields from
+	// deps — so a future dep-supplied map (the shape `s.factories =
+	// deps.Factories` already has) would re-nil a field the allocator had
+	// allocated, and a walk that only ever saw the allocator would stay green
+	// while production panicked.
+	for _, tc := range []struct {
+		name string
+		svc  *PermissionService
+	}{
+		{permissionServiceAllocator, newPermissionService()},
+		{"NewPermissionService", NewPermissionService(PermissionServiceDeps{
+			Store: emptyPermStore{}, Log: &gateLog{},
+		})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checked := assertNoNilOwnedMaps(t, tc.name, reflect.ValueOf(tc.svc).Elem(), "")
+			if checked == 0 {
+				t.Fatal("no map- or channel-typed fields were checked — the reflection " +
+					"walk is not seeing the struct, so its silence proves nothing")
+			}
 
+			// detectInterval is not a map, but it is the same shape of bug:
+			// Start's time.NewTicker panics outright on a non-positive
+			// interval, so a service that skipped the allocator is unstartable
+			// as well as nil-unsafe. This is why the issue's "a nil-guard makes
+			// the zero value usable" is not quite true for this type.
+			if tc.svc.detectInterval <= 0 {
+				t.Errorf("%s left detectInterval at %v; time.NewTicker panics on a "+
+					"non-positive interval", tc.name, tc.svc.detectInterval)
+			}
+		})
+	}
+}
+
+// emptyPermStore is the smallest thing NewPermissionService will accept: it
+// loads an empty set and reports no error, so the walk sees the constructor's
+// normal path rather than its error path.
+type emptyPermStore struct{}
+
+func (emptyPermStore) Load() (permission.Set, error) { return permission.Set{}, nil }
+func (emptyPermStore) Save(permission.Set) error     { return nil }
+
+// assertNoNilOwnedMaps walks v's map- and channel-typed fields, descending into
+// embedded structs (whose own fields are promoted, so a nil map inside one is
+// indistinguishable at the use site from a nil map on the outer struct). It
+// returns how many fields it actually checked, so the caller can refuse to
+// treat an empty walk as a pass.
+func assertNoNilOwnedMaps(t *testing.T, ctor string, v reflect.Value, prefix string) int {
+	t.Helper()
+	typ := v.Type()
 	checked := 0
 	for i := 0; i < typ.NumField(); i++ {
 		f := typ.Field(i)
+		name := prefix + f.Name
+		if f.Anonymous && f.Type.Kind() == reflect.Struct {
+			checked += assertNoNilOwnedMaps(t, ctor, v.Field(i), name+".")
+			continue
+		}
 		switch f.Type.Kind() {
 		case reflect.Map, reflect.Chan:
 		default:
 			continue
 		}
-		if reason, exempt := nilTolerantFields[f.Name]; exempt {
-			t.Logf("%s: nil tolerated — %s", f.Name, reason)
+		if reason, exempt := nilTolerantFields[name]; exempt {
+			t.Logf("%s: nil tolerated — %s", name, reason)
 			continue
 		}
 		checked++
 		if v.Field(i).IsNil() {
-			t.Errorf("%s() leaves %s (%s) nil. Every write to it panics with "+
+			t.Errorf("%s leaves %s (%s) nil. Every write to it panics with "+
 				"\"assignment to entry in nil map\", far from here. Either allocate it "+
 				"in the allocator, or add it to nilTolerantFields with the reason it is "+
-				"safe to leave nil (#1400).",
-				permissionServiceAllocator, f.Name, f.Type)
+				"safe to leave nil (#1400).", ctor, name, f.Type)
 		}
 	}
-
-	if checked == 0 {
-		t.Fatal("no map- or channel-typed fields were checked — the reflection walk " +
-			"is not seeing the struct, so its silence proves nothing")
-	}
-
-	// detectInterval is not a map, but it is the same shape of bug: Start's
-	// time.NewTicker panics outright on a non-positive interval, so a service
-	// that skipped the allocator is unstartable as well as nil-unsafe. This is
-	// why the issue's "a nil-guard makes the zero value usable" is not quite
-	// true for this type.
-	if s.detectInterval <= 0 {
-		t.Errorf("%s() left detectInterval at %v; time.NewTicker panics on a "+
-			"non-positive interval", permissionServiceAllocator, s.detectInterval)
-	}
-}
-
-// TestPermissionServiceSourceScanReadsRealFiles pins the assumption the source
-// scan rests on: that the test binary's working directory is the package
-// directory, so ParseDir(".") reads this package rather than nothing.
-func TestPermissionServiceSourceScanReadsRealFiles(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("reading the package directory: %v", err)
-	}
-	found := false
-	for _, e := range entries {
-		if e.Name() == "permission_service.go" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("permission_service.go is not in the test's working directory; " +
-			"the source scan above is reading the wrong place")
-	}
+	return checked
 }

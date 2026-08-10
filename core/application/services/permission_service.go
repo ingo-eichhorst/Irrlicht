@@ -207,7 +207,7 @@ type PermissionServiceDeps struct {
 // not fail there: it fails later, in whichever effect first writes a map, with
 // a stack pointing at recordEffectResult and nothing at all pointing at the
 // construction that actually caused it (#1400). Every field added here of map,
-// slice-of-map or channel type re-arms that, which is why the rule is about the
+// or channel type re-arms that, which is why the rule is about the
 // construction site rather than about any one field.
 func newPermissionService() *PermissionService {
 	return &PermissionService{
