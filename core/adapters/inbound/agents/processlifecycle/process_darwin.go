@@ -117,13 +117,29 @@ func (darwinObserver) WriterOf(path string) (int, error) {
 		return 0, nil // file not open by any process
 	}
 
-	for _, e := range parseLsofFDs(string(out), os.Getpid()) {
-		// e.g. "14w", "8299r" — this caller wants write mode only.
-		if e.FD[len(e.FD)-1] == 'w' {
-			return e.PID, nil
+	return writerPIDFromLsof(string(out), os.Getpid()), nil
+}
+
+// writerPIDFromLsof picks the first PID holding the file open for writing out
+// of lsof's table. Split out of WriterOf so the mode predicate — the part that
+// actually decides — is testable without shelling out to lsof.
+//
+// Both 'w' (write-only) and 'u' (read/write) count: a read-write handle IS a
+// writer, and it is what Codex 0.147 uses for its rollout ("59u"). The old
+// test compared the FD column's LAST BYTE against 'w', which missed 'u'
+// entirely and also missed a locked write handle like "59uW", where the last
+// byte is lsof's lock character rather than the mode. Reading the mode via
+// e.Mode() fixes both, and matches the Linux observer, whose fdWritable has
+// always accepted O_WRONLY and O_RDWR alike (flags&3 != 0) — macOS was the
+// outlier, and the disagreement was invisible because no codex recording had
+// been made since the upstream change (#1388).
+func writerPIDFromLsof(out string, self int) int {
+	for _, e := range parseLsofFDs(out, self) {
+		if m := e.Mode(); m == 'w' || m == 'u' {
+			return e.PID
 		}
 	}
-	return 0, nil
+	return 0
 }
 
 // lsofFD is one open-file row of lsof's default table: the process holding the
