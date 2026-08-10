@@ -97,6 +97,81 @@ export function anyEffectFailed(snap, names) {
     .some(a => (a.permissions || []).some(p => !!p.effect_error));
 }
 
+// unappliedGrantSummary describes the daemon's aggregate of permissions
+// the user granted whose effect is not in force, or null when there are
+// none. The daemon computes the list (snapshot.unapplied_grants, #1385) —
+// this only words it, so the dashboard and the macOS app can never
+// disagree about the count.
+//
+// Kept as {count, text, items} rather than a bare number: the headline
+// aggregates, but the click-through has to stay specific. An install that
+// FAILED (#1362) and a refusal because the CLI is below its version floor
+// (#1365) both land here and are told apart by their reason text, exactly
+// as they are in the wizard. Pure; exported for tests.
+export function unappliedGrantSummary(snap) {
+  const items = Array.isArray(snap?.unapplied_grants) ? snap.unapplied_grants : [];
+  if (!items.length) return null;
+  const n = items.length;
+  return {
+    count: n,
+    text: n === 1
+      ? '1 permission is granted but not applied'
+      : `${n} permissions are granted but not applied`,
+    items,
+  };
+}
+
+// renderUnappliedGrantsBanner reconciles the passive dashboard banner with
+// the snapshot. Three things it deliberately does NOT do, all inherited
+// from #1362's reasoning (#1385):
+//   - it never opens the wizard: that is the fail → wizard → retry → fail
+//     loop #1362 avoided. The route on is a button the user clicks.
+//   - it never nags: role="status"/aria-live="polite", announced once, no
+//     modal, no repeat.
+//   - it offers no dismiss. "Dismissible by fixing" is the whole contract:
+//     a hide button would let a live fault be silenced while still broken,
+//     which is the defect, not the cure. Fix it and it disappears by itself.
+export function renderUnappliedGrantsBanner(snap) {
+  const el = document.getElementById('permission-apply-banner');
+  if (!el) return;
+  const summary = unappliedGrantSummary(snap);
+  el.textContent = '';
+  if (!summary) {
+    el.hidden = true;
+    return;
+  }
+  const head = document.createElement('strong');
+  head.textContent = summary.text;
+  el.appendChild(head);
+
+  const list = document.createElement('ul');
+  list.className = 'perm-unapplied-list';
+  for (const g of summary.items) {
+    const li = document.createElement('li');
+    const who = document.createElement('span');
+    who.className = 'perm-unapplied-what';
+    who.textContent = `${g.agent_display_name || g.agent} — ${g.title || g.key}: `;
+    li.appendChild(who);
+    // The reason verbatim: it is what distinguishes a failed install from
+    // a version-floor refusal, and it carries the refusal's own advice.
+    li.appendChild(document.createTextNode(g.reason || ''));
+    list.appendChild(li);
+  }
+  el.appendChild(list);
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'settings-action-btn perm-unapplied-review';
+  btn.textContent = 'Review permissions';
+  btn.addEventListener('click', () => {
+    refreshPermissions().then(() => {
+      if (permissionsSnapshot) openPermissionsWizard('review');
+    });
+  });
+  el.appendChild(btn);
+  el.hidden = false;
+}
+
 // findPermission looks one permission up in a snapshot. Pure; exported
 // for tests.
 export function findPermission(snap, agentName, permKey) {
@@ -134,6 +209,10 @@ export function refreshPermissions() {
     .then(snap => {
       if (!snap) return;
       permissionsSnapshot = snap;
+      // The passive banner is reconciled on every refresh, including the
+      // one at page load — that is what makes a startup re-apply failure
+      // reach a user who never opens Settings (#1385).
+      renderUnappliedGrantsBanner(snap);
       updatePermissionsWizard();
     });
 }

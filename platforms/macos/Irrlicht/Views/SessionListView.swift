@@ -332,6 +332,18 @@ struct SessionListView: View {
                     errorView(error)
                 }
 
+                // #1385: a granted permission whose effect is not in force
+                // is reported here, in the main panel, rather than only in
+                // the wizard — a startup re-apply failure otherwise reaches
+                // nobody who does not open Settings. Review is a button,
+                // never automatic (see UnappliedGrantsBanner).
+                if let summary = sessionManager.permissionsSnapshot?.unappliedGrantSummary {
+                    Divider()
+                    UnappliedGrantsBanner(summary: summary) {
+                        showPermissionsReview = true
+                    }
+                }
+
                 Divider()
                 HStack(spacing: 0) {
                     Button(action: { showHistory = true }) {

@@ -1405,3 +1405,119 @@ describe('CO2 equivalents (issue #952)', () => {
     }
   })
 })
+
+// --- #1385: an aggregate "granted but not applied" signal ----------------
+//
+// #1362 made a failed effect visible inside the WIZARD. A startup re-apply
+// failure therefore reached only a user who opened Settings. These pin the
+// passive dashboard indicator that closes that gap, and the three
+// constraints it inherits: it must not nag, must not auto-open the wizard,
+// and must not change consent.
+//
+// Imported as a namespace on purpose: a missing export then fails the
+// individual test with a readable TypeError instead of breaking the whole
+// module's link and taking every other suite in this file down with it.
+import * as permWizard from './permissionsWizard.js'
+
+describe('aggregate "granted but not applied" indicator (#1385)', () => {
+  const REASON = 'settings.json is malformed: invalid character \'}\''
+  const FLOOR = 'claude 1.2.0 is below the required 2.0.0; upgrade and grant again'
+
+  const snapWith = (...unapplied) => ({
+    mode: 'ask',
+    agents: [{
+      name: 'claude-code', display_name: 'Claude Code', detected: true,
+      permissions: [{ key: 'hooks', kind: 'modify', state: 'granted', title: 'Install hooks' }],
+    }],
+    unapplied_grants: unapplied,
+  })
+  const failedInstall = {
+    agent: 'claude-code', agent_display_name: 'Claude Code',
+    key: 'hooks', title: 'Install hooks', reason: REASON,
+  }
+  const versionRefusal = {
+    agent: 'codex', agent_display_name: 'Codex',
+    key: 'hooks', title: 'Install hooks', reason: FLOOR,
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML =
+      '<div id="permission-apply-banner" role="status" aria-live="polite" hidden></div>'
+  })
+
+  test('a healthy snapshot produces no summary', () => {
+    expect(permWizard.unappliedGrantSummary(snapWith())).toBeNull()
+    expect(permWizard.unappliedGrantSummary({ mode: 'ask', agents: [] })).toBeNull()
+    expect(permWizard.unappliedGrantSummary(null)).toBeNull()
+  })
+
+  test('the headline counts, and reads naturally at one', () => {
+    expect(permWizard.unappliedGrantSummary(snapWith(failedInstall)).text)
+      .toBe('1 permission is granted but not applied')
+    expect(permWizard.unappliedGrantSummary(snapWith(failedInstall, versionRefusal)).text)
+      .toBe('2 permissions are granted but not applied')
+    expect(permWizard.unappliedGrantSummary(snapWith(failedInstall, versionRefusal)).count).toBe(2)
+  })
+
+  test('the two diagnoses in the aggregate stay distinguishable', () => {
+    // The headline is one number; the detail must still say WHICH and WHY,
+    // or an install failure (#1362) and a version-floor refusal (#1365)
+    // collapse into the same undiagnosable warning.
+    const s = permWizard.unappliedGrantSummary(snapWith(failedInstall, versionRefusal))
+    expect(s.items.map(i => i.reason)).toEqual([REASON, FLOOR])
+    expect(s.items.map(i => `${i.agent_display_name}: ${i.title}`))
+      .toEqual(['Claude Code: Install hooks', 'Codex: Install hooks'])
+  })
+
+  // Reachability: assert the REAL banner element the dashboard renders,
+  // not a pure helper beside it.
+  test('the dashboard renders a passive banner naming each cause', () => {
+    permWizard.renderUnappliedGrantsBanner(snapWith(failedInstall, versionRefusal))
+    const el = document.getElementById('permission-apply-banner')
+    expect(el.hidden).toBe(false)
+    expect(el.textContent).toContain('2 permissions are granted but not applied')
+    expect(el.textContent).toContain(REASON)
+    expect(el.textContent).toContain(FLOOR)
+    expect(el.textContent).toContain('Claude Code')
+    expect(el.textContent).toContain('Codex')
+  })
+
+  test('the banner is passive: polite, never an alert, and has no dismiss', () => {
+    // role=status/aria-live=polite is the difference between "told" and
+    // "interrupted". A dismiss button would let a real fault be hidden
+    // while it is still broken; #1385 says dismissible-BY-FIXING only.
+    permWizard.renderUnappliedGrantsBanner(snapWith(failedInstall))
+    const el = document.getElementById('permission-apply-banner')
+    expect(el.getAttribute('role')).toBe('status')
+    expect(el.getAttribute('aria-live')).toBe('polite')
+    expect(el.querySelector('[data-dismiss], .banner-dismiss')).toBeNull()
+  })
+
+  test('fixing it makes the banner go away with no gesture', () => {
+    permWizard.renderUnappliedGrantsBanner(snapWith(failedInstall))
+    expect(document.getElementById('permission-apply-banner').hidden).toBe(false)
+    permWizard.renderUnappliedGrantsBanner(snapWith())
+    const el = document.getElementById('permission-apply-banner')
+    expect(el.hidden).toBe(true)
+    expect(el.textContent).toBe('')
+  })
+
+  test('it never opens the wizard by itself', () => {
+    // The #1362 loop this avoids: fail -> wizard -> retry -> fail. The
+    // route to the wizard is a button the USER clicks.
+    document.body.innerHTML +=
+      '<div id="permissions-backdrop"></div><div id="permissions-body"></div>'
+    permWizard.renderUnappliedGrantsBanner(snapWith(failedInstall))
+    expect(document.getElementById('permissions-backdrop').classList.contains('open')).toBe(false)
+    const btn = document.querySelector('#permission-apply-banner button')
+    expect(btn).not.toBeNull()
+    expect(btn.textContent).toBe('Review permissions')
+  })
+
+  test('the aggregate does not widen the auto wizard', () => {
+    // pendingWizardAgents is what pops the wizard open. An unapplied grant
+    // is answered, so it must not appear there — that is #1362's
+    // deliberate non-widening of needsWizard, and #1385 must not reverse it.
+    expect(pendingWizardAgents(snapWith(failedInstall))).toEqual([])
+  })
+})

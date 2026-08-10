@@ -917,6 +917,41 @@
       color: var(--pressure-high);
     }
 
+    /* Unapplied-grants banner (#1385) — "N permissions are granted but not
+       applied". Deliberately the CALMER of the two banners above: this is a
+       standing condition the user may not be able to fix right now, so it
+       borrows the warning palette rather than the error one, and visibility
+       is driven by the [hidden] attribute (set from the snapshot) rather
+       than by a class the user can toggle — there is no dismiss. Mirrors
+       unappliedGrantsView in SessionListView.swift. */
+    #permission-apply-banner {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 6px 10px;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      background: var(--waiting-dim);
+      border: 1px solid rgba(255, 149, 0, 0.4);
+      color: var(--waiting);
+    }
+    #permission-apply-banner[hidden] {
+      display: none;
+    }
+    .perm-unapplied-list {
+      margin: 4px 0 6px;
+      padding-left: 16px;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    .perm-unapplied-what {
+      color: var(--waiting);
+    }
+    .perm-unapplied-review {
+      border-color: rgba(255, 149, 0, 0.4);
+      color: var(--waiting);
+      padding: 2px 8px;
+    }
+
     /* Pressure alert row */
     .pressure-alert-row {
       padding: 2px 10px 2px 30px;
