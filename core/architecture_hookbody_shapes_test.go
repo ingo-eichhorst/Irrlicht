@@ -255,6 +255,40 @@ func (s *requestHolder) Decode() map[string]string {
 `,
 		},
 		{
+			file:   "embedded_request.go",
+			want:   true,
+			needle: "struct {\n\t*http.Request",
+			why: "a request-wrapper struct EMBEDDING *http.Request, so Body and FormValue are promoted: " +
+				"the selector base types as the wrapper, not as the request. Found by review of #1389 — " +
+				"the detector's first cut typed sel.X and missed both, which is a bypass INSIDE the governed " +
+				"tree (a receiver written as `type hookCtx struct{ *http.Request }` would decode its own body " +
+				"and keep the build green)",
+			src: `package inscope
+
+import (
+	"encoding/json"
+	"net/http"
+)
+
+type embeddedCtx struct {
+	*http.Request
+	extra string
+}
+
+func ServeEmbeddedField(w http.ResponseWriter, r *http.Request) map[string]string {
+	c := embeddedCtx{Request: r}
+	var p map[string]string
+	_ = json.NewDecoder(c.Body).Decode(&p)
+	return p
+}
+
+func ServeEmbeddedMethod(w http.ResponseWriter, r *http.Request) string {
+	c := embeddedCtx{Request: r}
+	return c.FormValue("transcript_path")
+}
+`,
+		},
+		{
 			file:   "escape_via_outside_helper.go",
 			want:   false,
 			needle: "outofscope.ReadBody(r)",

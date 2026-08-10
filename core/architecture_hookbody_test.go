@@ -229,10 +229,10 @@ func loadAgentAdapterPackages(t *testing.T) []*packages.Package {
 		t.Fatalf("packages.Load returned no packages for pattern %q", agentAdapterPattern)
 	}
 
-	loaded := map[string]bool{}
+	loaded := map[string]int{}
 	files := 0
 	for _, pkg := range pkgs {
-		loaded[pkg.PkgPath] = true
+		loaded[pkg.PkgPath] = len(pkg.Syntax)
 		files += len(pkg.Syntax)
 		if pkg.TypesInfo == nil {
 			t.Fatalf("package %q loaded without type information; the detector cannot tell "+
@@ -240,9 +240,17 @@ func loadAgentAdapterPackages(t *testing.T) []*packages.Package {
 		}
 	}
 	for _, want := range knownAgentPackages {
-		if !loaded[want] {
+		n, ok := loaded[want]
+		if !ok {
 			t.Fatalf("package %q was not loaded by pattern %q — the rule would pass having never read it",
 				want, agentAdapterPattern)
+		}
+		// Per-package, not just the aggregate below: a package can load with
+		// zero parsed files while the total stays comfortably non-zero, and
+		// that is indistinguishable from a clean scan of it.
+		if n == 0 {
+			t.Fatalf("package %q loaded with zero parsed files — the rule would pass having never read it",
+				want)
 		}
 	}
 	if files == 0 {
@@ -298,6 +306,18 @@ func requestBodyReadsIn(fset *token.FileSet, files []*ast.File, info *types.Info
 // that happens to call its request something other than "r" must still be
 // caught. That is the whole reason this rule needs NeedTypesInfo rather than a
 // grep.
+//
+// It resolves the SELECTION before falling back to the type of the base
+// expression, and that order is the correction rather than a refinement. A
+// field or method PROMOTED from an embedded *http.Request — the ordinary Go
+// request-wrapper idiom, `type hookCtx struct{ *http.Request; … }` — has a base
+// expression whose type is the wrapper, so typing sel.X alone reports nothing
+// for c.Body and c.FormValue alike. That is a bypass inside the governed tree,
+// not merely a missed spelling: a receiver written that way would decode its
+// own body, forward an unconfined transcript_path, and leave the build green —
+// the #1361 failure this rule exists to make impossible. Caught in review of
+// #1389; pinned by the embedded_request.go corpus case, which was seen red
+// against the sel.X-only version.
 func readsRequestBody(sel *ast.SelectorExpr, info *types.Info) bool {
 	if sel.Sel == nil {
 		return false
@@ -305,7 +325,60 @@ func readsRequestBody(sel *ast.SelectorExpr, info *types.Info) bool {
 	if sel.Sel.Name != "Body" && !bodyConsumingMethods[sel.Sel.Name] {
 		return false
 	}
+	if s, ok := info.Selections[sel]; ok && isHTTPRequest(selectionOwner(s)) {
+		return true
+	}
+	// Fallback for selections types.Info does not record — notably a method
+	// EXPRESSION like (*http.Request).ParseForm, and a qualified identifier.
 	return isHTTPRequest(info.TypeOf(sel.X))
+}
+
+// selectionOwner returns the type that actually declares the selected field or
+// method, walking through any embedded fields the selection was promoted
+// across. Returns nil when the shape is not one it can resolve, which the
+// caller treats as "not a request body read" and covers with the sel.X
+// fallback.
+func selectionOwner(s *types.Selection) types.Type {
+	switch s.Kind() {
+	case types.MethodVal, types.MethodExpr:
+		fn, ok := s.Obj().(*types.Func)
+		if !ok {
+			return nil
+		}
+		recv := fn.Signature().Recv()
+		if recv == nil {
+			return nil
+		}
+		return recv.Type()
+	case types.FieldVal:
+		// Index() is the path of field indices from the receiver down to the
+		// selected field; every element but the last steps through an embedded
+		// field. Walking it yields the type the final field belongs to, which
+		// for a promoted Body is *http.Request however deeply it was embedded.
+		t := s.Recv()
+		path := s.Index()
+		for _, i := range path[:len(path)-1] {
+			st, ok := structUnder(t)
+			if !ok || i >= st.NumFields() {
+				return nil
+			}
+			t = st.Field(i).Type()
+		}
+		return t
+	}
+	return nil
+}
+
+// structUnder returns the struct underlying t, dereferencing one pointer.
+func structUnder(t types.Type) (*types.Struct, bool) {
+	if t == nil {
+		return nil, false
+	}
+	if ptr, ok := types.Unalias(t).Underlying().(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+	st, ok := types.Unalias(t).Underlying().(*types.Struct)
+	return st, ok
 }
 
 // isHTTPRequest reports whether t is net/http.Request or a pointer to it.
