@@ -186,7 +186,9 @@ func TestSessionDetector_HoldCeilingExpiryIsLoggedAndRecorded(t *testing.T) {
 
 	lg := &capturingLogger{}
 	rec := &ceilingRecorder{}
-	d := &SessionDetector{log: lg, recorder: rec, signals: session.NewSignalHolds()}
+	d := newSessionDetector()
+	d.log = lg
+	d.recorder = rec
 
 	state := &session.SessionState{
 		SessionID: "s",
@@ -247,7 +249,9 @@ func TestSessionDetector_HoldCeilingExpiryIsLoggedAndRecorded(t *testing.T) {
 func TestSessionDetector_NormalHoldReleaseIsNotReported(t *testing.T) {
 	lg := &capturingLogger{}
 	rec := &ceilingRecorder{}
-	d := &SessionDetector{log: lg, recorder: rec, signals: session.NewSignalHolds()}
+	d := newSessionDetector()
+	d.log = lg
+	d.recorder = rec
 
 	state := &session.SessionState{
 		SessionID: "s",

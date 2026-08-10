@@ -53,7 +53,9 @@ type livenessDetector struct {
 func newLivenessDetector(threshold int) *livenessDetector {
 	lg := &livenessLogger{}
 	rec := &ceilingRecorder{}
-	d := &SessionDetector{log: lg, recorder: rec, signals: session.NewSignalHolds()}
+	d := newSessionDetector()
+	d.log = lg
+	d.recorder = rec
 	h := newLivenessHarness(threshold)
 	d.SetHookLivenessWatchdog(h.w)
 	return &livenessDetector{d: d, h: h, lg: lg, rec: rec}

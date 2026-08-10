@@ -28,7 +28,7 @@ func TestArmStalledEditTool(t *testing.T) {
 	}
 
 	t.Run("an open edit tool arms the hold", func(t *testing.T) {
-		d := &SessionDetector{signals: session.NewSignalHolds()}
+		d := newSessionDetector()
 		d.armStalledEditTool(&session.SessionState{SessionID: "s", Metrics: editOpen()}, holdT0)
 		if !armed(d) {
 			t.Fatal("an open permission-gated edit tool must arm the hold")
@@ -36,7 +36,7 @@ func TestArmStalledEditTool(t *testing.T) {
 	})
 
 	t.Run("a non-edit tool arms nothing", func(t *testing.T) {
-		d := &SessionDetector{signals: session.NewSignalHolds()}
+		d := newSessionDetector()
 		m := &session.SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}}
 		d.armStalledEditTool(&session.SessionState{SessionID: "s", Metrics: m}, holdT0)
 		if armed(d) {
@@ -45,7 +45,7 @@ func TestArmStalledEditTool(t *testing.T) {
 	})
 
 	t.Run("nil metrics is safe and arms nothing", func(t *testing.T) {
-		d := &SessionDetector{signals: session.NewSignalHolds()}
+		d := newSessionDetector()
 		d.armStalledEditTool(&session.SessionState{SessionID: "s"}, holdT0)
 		if armed(d) {
 			t.Fatal("a pass with no metrics must not arm the hold")
@@ -64,7 +64,7 @@ func TestArmStalledEditTool(t *testing.T) {
 	// ~1ns (re-armed — ripe under none). Retuning the threshold cannot make
 	// this test lie in either direction.
 	t.Run("re-observing an open tool does not restart the clock", func(t *testing.T) {
-		d := &SessionDetector{signals: session.NewSignalHolds()}
+		d := newSessionDetector()
 		state := &session.SessionState{SessionID: "s", Metrics: editOpen()}
 
 		d.armStalledEditTool(state, holdT0)
