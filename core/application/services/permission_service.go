@@ -195,30 +195,55 @@ type PermissionServiceDeps struct {
 	HasLive   HasLiveProcessFunc
 }
 
+// newPermissionService allocates a PermissionService with every field the
+// service OWNS already usable: the five maps it writes to, and the detection
+// cadence (time.NewTicker panics on a zero interval, so the zero value is not
+// merely nil-unsafe, it is unstartable). Dependencies are left to the caller.
+//
+// This is the ONLY place a PermissionService composite literal may appear, and
+// that is enforced mechanically rather than by memory —
+// TestPermissionServiceIsNeverBuiltByBareLiteral scans this package's source
+// for any other one. A bypass is worth catching at the literal because it does
+// not fail there: it fails later, in whichever effect first writes a map, with
+// a stack pointing at recordEffectResult and nothing at all pointing at the
+// construction that actually caused it (#1400). Every field added here of map,
+// slice-of-map or channel type re-arms that, which is why the rule is about the
+// construction site rather than about any one field.
+func newPermissionService() *PermissionService {
+	return &PermissionService{
+		detectInterval: detectionPollInterval,
+		probes:         make(map[string]func() bool),
+		set:            permission.Set{},
+		detected:       make(map[string]bool),
+		watching:       make(map[string]context.CancelFunc),
+		effectErrs:     make(map[string]string),
+	}
+}
+
 // NewPermissionService loads the persisted consent state and returns the
 // service.
 func NewPermissionService(deps PermissionServiceDeps) *PermissionService {
 	set, err := deps.Store.Load()
 	if err != nil {
 		deps.Log.LogError("permissions", "", fmt.Sprintf("failed to load permission state (treating all as pending): %v", err))
-		set = permission.Set{}
+		set = nil
 	}
-	return &PermissionService{
-		agents:         deps.Agents,
-		store:          deps.Store,
-		push:           deps.Push,
-		log:            deps.Log,
-		mode:           deps.Mode,
-		registrar:      deps.Registrar,
-		factories:      deps.Factories,
-		hasLive:        deps.HasLive,
-		detectInterval: detectionPollInterval,
-		probes:         make(map[string]func() bool),
-		set:            set,
-		detected:       make(map[string]bool),
-		watching:       make(map[string]context.CancelFunc),
-		effectErrs:     make(map[string]string),
+	s := newPermissionService()
+	s.agents = deps.Agents
+	s.store = deps.Store
+	s.push = deps.Push
+	s.log = deps.Log
+	s.mode = deps.Mode
+	s.registrar = deps.Registrar
+	s.factories = deps.Factories
+	s.hasLive = deps.HasLive
+	// permission.Set is itself map-backed and Put writes to it, so a nil Set —
+	// which a store may return alongside a nil error — is the same nil-map trap
+	// one level down. Keep the allocator's empty one rather than adopting it.
+	if set != nil {
+		s.set = set
 	}
+	return s
 }
 
 // effectKey is the composite key for the effectErrs map.
