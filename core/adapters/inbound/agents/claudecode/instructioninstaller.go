@@ -24,12 +24,32 @@ import (
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 )
 
+// ManagedBlockSentinelPrefix is the opening text every irrlicht-managed block
+// in ~/.claude/CLAUDE.md begins with. Exported because CLAUDE.md is a file the
+// USER writes in: "is any irrlicht block still in there" is a question asked
+// from outside this package — by `irrlichd --uninstall-task-eta`'s end-to-end
+// test, and by anyone auditing what irrlicht left behind — and the honest
+// answer is the installer's own string rather than a second copy of it.
+//
+// Every sentinel below is built from it, so the two cannot drift; a hand-copied
+// literal that fell behind would report "no irrlicht blocks" over a file that
+// still had them.
+const ManagedBlockSentinelPrefix = "<!-- BEGIN IRRLICHT MANAGED BLOCK ("
+
+// managedBlockEndPrefix is the closing counterpart. Unexported: nothing outside
+// needs to recognize an end sentinel on its own, since a well-formed block is
+// always found by its begin.
+const managedBlockEndPrefix = "<!-- END IRRLICHT MANAGED BLOCK ("
+
+// sentinelSuffix closes both forms.
+const sentinelSuffix = ") -->"
+
 // Sentinels delimiting the managed block. Detection keys on these full
 // strings — never on a generic `<!--` scan — so the marker example comment
 // nested inside the block can't confuse block detection.
 const (
-	taskEtaBeginSentinel = "<!-- BEGIN IRRLICHT MANAGED BLOCK (task-eta) -->"
-	taskEtaEndSentinel   = "<!-- END IRRLICHT MANAGED BLOCK (task-eta) -->"
+	taskEtaBeginSentinel = ManagedBlockSentinelPrefix + "task-eta" + sentinelSuffix
+	taskEtaEndSentinel   = managedBlockEndPrefix + "task-eta" + sentinelSuffix
 )
 
 // descriptionFieldLiteral is the backtick-quoted "`description`" carrier name
@@ -101,16 +121,16 @@ response text when no Bash call is coming.
 // start. The tailer's ScanTaskSummary is left tolerant so an older marker in a
 // live transcript still parses harmlessly.
 const (
-	taskSummaryBeginSentinel = "<!-- BEGIN IRRLICHT MANAGED BLOCK (task-summary) -->"
-	taskSummaryEndSentinel   = "<!-- END IRRLICHT MANAGED BLOCK (task-summary) -->"
+	taskSummaryBeginSentinel = ManagedBlockSentinelPrefix + "task-summary" + sentinelSuffix
+	taskSummaryEndSentinel   = managedBlockEndPrefix + "task-summary" + sentinelSuffix
 )
 
 // Sentinels delimiting the task-question managed block (issue #759). Distinct
 // from the eta/summary pairs so all three blocks coexist and are patched or
 // removed independently.
 const (
-	taskQuestionBeginSentinel = "<!-- BEGIN IRRLICHT MANAGED BLOCK (task-question) -->"
-	taskQuestionEndSentinel   = "<!-- END IRRLICHT MANAGED BLOCK (task-question) -->"
+	taskQuestionBeginSentinel = ManagedBlockSentinelPrefix + "task-question" + sentinelSuffix
+	taskQuestionEndSentinel   = managedBlockEndPrefix + "task-question" + sentinelSuffix
 )
 
 // managedTaskQuestionBlock instructs the agent to emit a terse one-line version

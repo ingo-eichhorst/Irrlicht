@@ -89,13 +89,43 @@ func ManagedUserFiles(catalog []agent.Agent) ([]ManagedUserFile, error) {
 // it to touch. The recorder, whose job is the opposite — protect everything a
 // grant-all daemon can write — reads ManagedUserFiles directly.
 func HookConfigs(catalog []agent.Agent) ([]ManagedUserFile, error) {
+	return configsForKey(catalog, agent.HooksPermissionKey)
+}
+
+// InstructionConfigs is the instructions slice of ManagedUserFiles — the
+// user-level instruction files irrlicht writes managed blocks into, and nothing
+// else. It is what `irrlichd --uninstall-task-eta` reads (#1437).
+//
+// It is a projection rather than a call to claudecode.UninstallInstructionBlocks
+// for two reasons, and the second is the one that matters. The obvious one: a
+// second adapter that grows an instruction block is covered by existing instead
+// of by remembering. The load-bearing one: the projection carries the
+// (Adapter, Key) pair, which is what lets the command record the matching
+// consent as DENIED. Calling the uninstaller directly is exactly what the
+// command did before #1437 — it removed the blocks and left the permission
+// reading "granted", so PermissionService.Start's Apply re-run wrote them back
+// on the next daemon start.
+//
+// Narrowed for the same reason HookConfigs is, and symmetrically: running the
+// hook uninstallers from a command named --uninstall-task-eta would revoke a
+// capability the user never asked it to touch.
+func InstructionConfigs(catalog []agent.Agent) ([]ManagedUserFile, error) {
+	return configsForKey(catalog, agent.InstructionsPermissionKey)
+}
+
+// configsForKey is the shared narrowing behind HookConfigs and
+// InstructionConfigs. One implementation, so the two commands cannot come to
+// disagree about what "the files this key writes" means — the divergence #1437
+// was: --uninstall-hooks projected the catalog while --uninstall-task-eta
+// called one adapter function by hand.
+func configsForKey(catalog []agent.Agent, key string) ([]ManagedUserFile, error) {
 	all, err := ManagedUserFiles(catalog)
 	if err != nil {
 		return nil, err
 	}
 	var out []ManagedUserFile
 	for _, f := range all {
-		if f.Key == agent.HooksPermissionKey {
+		if f.Key == key {
 			out = append(out, f)
 		}
 	}

@@ -320,23 +320,62 @@ func uninstallHooks() {
 // regression this function exists to prevent, and the registry projection only
 // widens the window as adapters are added.
 func uninstallHookConfigs(w io.Writer, configs []agents.ManagedUserFile, store outbound.PermissionStore) int {
+	return uninstallManagedFiles(w, configs, store, hooksNoun)
+}
+
+// managedFileNoun is what one uninstall command calls the thing it removes, in
+// the two sentences that name it. It exists so uninstallManagedFiles can be
+// shared by --uninstall-hooks and --uninstall-task-eta without either of them
+// telling the user it removed the other one's content.
+type managedFileNoun struct {
+	// content names what comes OUT of the file: "hooks", "managed blocks".
+	content string
+	// permissions names the consent being withdrawn, in the "Recorded the …
+	// permission(s) as denied" line: "hooks", "instructions".
+	permissions string
+}
+
+var (
+	hooksNoun        = managedFileNoun{content: "hooks", permissions: "hooks"}
+	instructionsNoun = managedFileNoun{content: "managed blocks", permissions: "instructions"}
+)
+
+// uninstallManagedFiles runs every declared uninstaller for one permission key
+// and then records the matching permissions as denied. It returns how many
+// uninstallers failed.
+//
+// One adapter's failure must not end the run. `hookjson` deliberately refuses
+// to rewrite a config file it cannot parse, so a single hand-edited
+// ~/.claude/settings.json used to abort the whole command — leaving every LATER
+// adapter's entries firing at a dead port, and (because the consent block never
+// ran) leaving their permissions still granted, so the next daemon start
+// re-installed them via the Apply closure. That is precisely the #570
+// regression this function exists to prevent, and the registry projection only
+// widens the window as adapters are added.
+func uninstallManagedFiles(w io.Writer, configs []agents.ManagedUserFile, store outbound.PermissionStore, noun managedFileNoun) int {
 	failed := 0
 	for _, c := range configs {
-		if !reportUninstall(w, c.Path, c.Uninstall) {
+		if !reportUninstall(w, c.Path, c.Uninstall, noun.content) {
 			failed++
 		}
 	}
 
-	denyHooksPermissions(w, configs, store)
+	denyGrantedPermissions(w, configs, store, noun.permissions)
 	return failed
 }
 
-// denyHooksPermissions records every hooks permission that had been granted as
-// explicitly denied. Without it a persisted "granted" re-installs the hooks on
-// the next daemon start via the Apply closure, silently undoing the uninstall
-// (#570). A permission that was never granted is left alone — turning a pending
-// answer into a denial would stop the wizard ever asking about it.
-func denyHooksPermissions(w io.Writer, configs []agents.ManagedUserFile, store outbound.PermissionStore) {
+// denyGrantedPermissions records every permission in configs that had been
+// granted as explicitly denied. Without it a persisted "granted" re-runs the
+// Apply closure on the next daemon start and silently undoes the uninstall
+// (#570) — for hooks that is the entries back in the agent's config, for
+// instructions the managed blocks back in the user's own CLAUDE.md. A
+// permission that was never granted is left alone: turning a pending answer
+// into a denial would stop the wizard ever asking about it.
+//
+// It writes only the (Adapter, Key) pairs it was handed, which is why the
+// caller passes a NARROWED projection. Handing it agents.ManagedUserFiles would
+// make either uninstall command revoke every capability irrlicht has.
+func denyGrantedPermissions(w io.Writer, configs []agents.ManagedUserFile, store outbound.PermissionStore, noun string) {
 	set, err := store.Load()
 	if err != nil {
 		return
@@ -352,10 +391,10 @@ func denyHooksPermissions(w io.Writer, configs []agents.ManagedUserFile, store o
 		return
 	}
 	if err := store.Save(set); err != nil {
-		fmt.Fprintf(w, "warning: failed to record hooks permission(s) as denied: %v\n", err)
+		fmt.Fprintf(w, "warning: failed to record %s permission(s) as denied: %v\n", noun, err)
 		return
 	}
-	fmt.Fprintln(w, "Recorded the hooks permission(s) as denied (re-grant via the permission wizard)")
+	fmt.Fprintf(w, "Recorded the %s permission(s) as denied (re-grant via the permission wizard)\n", noun)
 }
 
 // printManagedFiles writes the resolved absolute path of every shared,
@@ -416,33 +455,61 @@ func writeManagedFilePaths(w io.Writer, configs []agents.ManagedUserFile) {
 //
 // It reports whether the uninstall succeeded; a failure is printed and returned
 // rather than fatal, so the caller can still clean up every other adapter.
-func reportUninstall(w io.Writer, path string, uninstall func() (bool, error)) bool {
+func reportUninstall(w io.Writer, path string, uninstall func() (bool, error), noun string) bool {
 	modified, err := uninstall()
 	if err != nil {
-		fmt.Fprintf(w, "warning: failed to uninstall hooks from %s: %v\n", path, err)
+		fmt.Fprintf(w, "warning: failed to uninstall %s from %s: %v\n", noun, path, err)
 		return false
 	}
 	if modified {
-		fmt.Fprintf(w, "Removed irrlicht hooks from %s\n", path)
+		fmt.Fprintf(w, "Removed irrlicht %s from %s\n", noun, path)
 	} else {
-		fmt.Fprintf(w, "No irrlicht hooks found in %s\n", path)
+		fmt.Fprintf(w, "No irrlicht %s found in %s\n", noun, path)
 	}
 	return true
 }
 
 // uninstallTaskEtaBlocks removes every irrlicht-managed instruction block from
-// ~/.claude/CLAUDE.md. The set is the adapter's, not restated here: this used to
-// name task-eta and task-summary by hand and so silently left the task-question
-// block behind (#1377).
+// the user's own instruction file (~/.claude/CLAUDE.md) and records the
+// matching consent as denied. The set of blocks is the adapter's, not restated
+// here: this used to name task-eta and task-summary by hand and so silently
+// left the task-question block behind (#1377).
+//
+// The deny is the whole of #1437, and it is the sibling of the one
+// --uninstall-hooks does. Removing the blocks alone left claude-code/instructions
+// reading "granted", and PermissionService.Start re-runs Apply for every granted
+// permission at boot — so the blocks were written straight back into the user's
+// file on the next daemon start. That is #570's regression on the flag next
+// door to the one #1425 fixed.
+//
+// It goes through the InstructionConfigs projection rather than calling
+// claudecode.UninstallInstructionBlocks directly for the reason the projection's
+// own doc gives: the projection carries the (Adapter, Key) pair the deny needs,
+// and calling the adapter by hand is precisely what let the two commands
+// diverge. The narrowing keeps the name true — a command called
+// --uninstall-task-eta must not take the hook entries with it.
+//
+// The remaining asymmetry with --uninstall-hooks is the file, and it is why
+// nothing here widens: CLAUDE.md is USER-AUTHORED. UninstallInstructionBlocks
+// cuts only well-formed BEGIN/END sentinel pairs and preserves surrounding
+// content byte-for-byte, so a wrong removal here would cost the user their own
+// prose rather than a config entry we wrote.
 func uninstallTaskEtaBlocks() {
-	modified, err := claudecode.UninstallInstructionBlocks()
+	configs, err := agents.InstructionConfigs(declaredConsentCatalog())
 	if err != nil {
-		log.Fatalf("failed to uninstall irrlicht instruction blocks: %v", err)
+		log.Fatalf("failed to resolve the instruction files to uninstall from: %v", err)
 	}
-	if modified {
-		fmt.Println("Removed irrlicht managed blocks from ~/.claude/CLAUDE.md")
-	} else {
-		fmt.Println("No irrlicht managed blocks found in ~/.claude/CLAUDE.md")
+	home, _ := os.UserHomeDir()
+	failed := uninstallManagedFiles(os.Stdout, configs, filesystem.NewPermissionStore(dataDir(home)), instructionsNoun)
+	// Tell a daemon that is already running to re-read the store (#1425).
+	// Without it the store says "denied" while the live daemon's in-memory
+	// consent still says "granted" — and unlike the hooks path there is no
+	// re-verification loop to make that visible, so the blocks simply return at
+	// the next start with nothing having reported a disagreement. Runs even
+	// when an uninstaller failed, for the reason uninstallHooks gives.
+	notifyDaemonConsentChanged(os.Stdout)
+	if failed > 0 {
+		os.Exit(1)
 	}
 }
 

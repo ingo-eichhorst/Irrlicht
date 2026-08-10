@@ -125,6 +125,18 @@ type Permission struct {
 // spelling is a string two packages have to agree on by convention (#1383).
 const HooksPermissionKey = "hooks"
 
+// InstructionsPermissionKey is the permission key under which an adapter writes
+// irrlicht's managed instruction blocks into an agent's user-level instruction
+// file (~/.claude/CLAUDE.md today). Declared here for the same reason
+// HooksPermissionKey is: `irrlichd --uninstall-task-eta` narrows the
+// managed-file projection to it from OUTSIDE the adapter, so a per-adapter
+// spelling would be a string two packages agree on by convention.
+//
+// The narrowing is what keeps that command's name true in both directions — it
+// must not revoke the hook entries, and --uninstall-hooks must not revoke this
+// (#1437, the sibling of #1425).
+const InstructionsPermissionKey = "instructions"
+
 // ManagedUserFile is the outside-the-adapter half of a permission that writes a
 // shared user-owned file (#1357, widened by #1383).
 //

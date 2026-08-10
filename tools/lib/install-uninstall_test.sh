@@ -304,7 +304,8 @@ assert_file_absent "$root/home/.config/systemd/user/irrlichd.service" \
 #    uninstall_previous() has two call sites: the real --uninstall, and the
 #    upgrade path that clears the old install before laying down the new one.
 #    --uninstall-hooks also records the hooks permissions as DENIED (#570,
-#    denyHooksPermissions in core/cmd/irrlichd/main.go) so a persisted "granted"
+#    denyGrantedPermissions in core/cmd/irrlichd/main.go — shared with
+#    --uninstall-task-eta since #1437) so a persisted "granted"
 #    cannot re-install them on the next daemon start. That denial lives in the
 #    user data an uninstall deliberately KEEPS — so sweeping on the upgrade path
 #    would silently switch hook-based monitoring off for a user who only asked
