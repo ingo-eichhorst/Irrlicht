@@ -56,8 +56,13 @@ func newHeldWaitingSession(t *testing.T, repo *mockRepo, sessionID string) {
 //
 // The observable asserted here is the recorded hold_expired event rather than
 // the session's new state, and deliberately: this harness's metrics collector
-// is a mock that leaves state.Metrics nil, so the classifier has nothing to
-// re-decide from and any state assertion would be measuring the mock. The
+// returns nothing (mockMetrics.ComputeMetrics gives (nil, nil), and
+// RefreshOnActivity skips a nil result), so state.Metrics stays frozen at the
+// value newHeldWaitingSession seeded and a state assertion would be re-reading
+// that fixture rather than anything the classifier decided. (This sentence
+// used to say the mock leaves state.Metrics *nil*, corrected in #1387: that
+// was self-refuting, since Overlay returns early on nil metrics and the test
+// could never have passed.) The
 // recorded event is the sharper claim anyway — it can only be emitted by a
 // real Overlay call inside a real classify pass, which is precisely the thing
 // that was not happening. The user-visible "no longer pinned at waiting" half
@@ -105,6 +110,15 @@ func TestSessionDetector_StaleRefreshExpiresAHookHoldOnAWaitingSession(t *testin
 // TestSessionDetector_StaleRefreshExpiresAnOrphanedCompactHoldOnAnIdleSession
 // is #1387, and it pins the one row the test above does not reach.
 //
+// A LOCK on current main, not a defect test: #1376 had already closed the gap
+// by the time it was written, so it passes by construction here. It was seen
+// red only under a deliberate mutation — pre-#1376's idle arm restored verbatim
+// — and independently under a sharper one, deleting `ceiling: compactHoldTimeout`
+// from the policy row, where it is the only test in the repo that fails. Both
+// are recorded in PR #1434. Saying which category it belongs to matters because
+// the name reads like a defect test, and the next reader applying the red-first
+// rule would otherwise go looking for a fix this PR does not contain.
+//
 // compactHoldTimeout has bounded SignalCompactInProgress since #657 and was,
 // until #1360, the only ceiling in the table — so it reads as the proof that
 // the mechanism worked. It was not. A ceiling is only evaluated inside
@@ -130,12 +144,25 @@ func TestSessionDetector_StaleRefreshExpiresAHookHoldOnAWaitingSession(t *testin
 // ceiling could not be evaluated from. Absorbing a dropped dispatch is what
 // refreshStaleSessions is for; see its doc comment.
 //
+// Scope the pre-#1376 harm honestly, because overstating it invites a fix for
+// a symptom nobody had: this row's orphaned hold was *inert*, not visibly
+// stuck. Overlay evaluates stale and then the ceiling BEFORE apply, so a hold
+// on a non-working session pins nothing until some pass arrives, and the first
+// one that does expires it rather than applying it. That is unlike #1360's
+// permission_prompt row, which held a session visibly at waiting for the life
+// of the process. What was unbounded here was the map entry and the ticker's
+// blindness to it — which is precisely why the defect stayed invisible, and
+// why it is worth a lock now rather than a fix.
+//
 // Observable and clock follow the sibling above: the recorded hold_expired
-// event, because this harness's mock metrics collector leaves state.Metrics
-// nil so any state assertion would be measuring the mock; and a hold backdated
-// far past any defensible ceiling rather than just past the current five
-// minutes, so retuning compactHoldTimeout cannot break a test that is about
-// the ticker reaching the session at all.
+// event, because this harness's metrics collector returns nothing
+// (mockMetrics.ComputeMetrics gives (nil, nil), and RefreshOnActivity skips a
+// nil result), so state.Metrics stays frozen at the value the fixture seeded
+// and a state assertion would be re-reading that fixture rather than anything
+// the classifier decided; and a hold backdated far past any defensible ceiling
+// rather than just past the current five minutes, so retuning
+// compactHoldTimeout cannot break a test that is about the ticker reaching the
+// session at all.
 func TestSessionDetector_StaleRefreshExpiresAnOrphanedCompactHoldOnAnIdleSession(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
@@ -163,7 +190,9 @@ func TestSessionDetector_StaleRefreshExpiresAnOrphanedCompactHoldOnAnIdleSession
 	}
 	if expired == nil {
 		t.Fatalf("no %q event — the ticker never ran a classify pass for the idle session holding "+
-			"compact_in_progress, so compactHoldTimeout could not fire and the orphaned hold is unbounded",
+			"compact_in_progress, so compactHoldTimeout could not fire and the orphaned hold is "+
+			"unbounded in the ticker (inert until some other pass arrives, unlike #1360's row, "+
+			"which pinned the badge)",
 			lifecycle.KindHoldExpired)
 	}
 	if expired.SessionID != "compact1" {

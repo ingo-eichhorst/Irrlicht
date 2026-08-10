@@ -1716,15 +1716,16 @@ func (d *SessionDetector) refreshStaleSessions() {
 //
 //   - A HELD SIGNAL (#1360). A ceiling is only evaluated inside
 //     SignalHolds.Overlay, Overlay is only reached from the classify pipeline,
-//     and both hook holds that declare a ceiling pin the session at *waiting*
+//     and both of the hook holds #1360 bounds pin the session at *waiting*
 //     — the state this loop used to skip. Without this the pinned session was
 //     precisely the one never revisited, so a lost release stayed lost for the
 //     life of the process. (That asymmetry is also why compactHoldTimeout
 //     appeared to prove the mechanism worked: it pins at working, the state
 //     already being re-read. #1387 records that older defect and is pinned by
 //     TestSessionDetector_StaleRefreshExpiresAnOrphanedCompactHoldOnAnIdleSession,
-//     since a compact hold does reach a non-working session whenever
-//     HandleCompactHook's working-flip dispatch is dropped.)
+//     since a compact hold does reach a non-working session when
+//     HandleCompactHook's working-flip dispatch is dropped while the session is
+//     not already working.)
 //   - A DWELL OUTSTANDING (#1366). The same argument one turn deeper: a grace
 //     timer is a *delay* only if a later pass arrives to end it, and on a
 //     session nothing else revisits it silently becomes a drop. The case that
