@@ -128,6 +128,16 @@ fi
 CODEX_SESSIONS_DIR="$CODEX_HOME_RESOLVED/sessions"
 mkdir -p "$CODEX_SESSIONS_DIR"
 
+# codex records its hook-trust keys under the PHYSICAL path — on macOS /tmp is
+# a symlink to /private/tmp, so a home under /tmp is written as
+# [hooks.state."/private/tmp/…/hooks.json:stop:0:0"]. Resolve ours the same way
+# or the trust lookup at the end of boot_session reports a false "NOT trusted"
+# for an install that is perfectly trusted (observed on a run whose hooks did
+# fire). A false alarm here is nearly as costly as the false reassurance it
+# replaced, so keep both spellings and match either.
+CODEX_HOME_PHYS="$(cd "$CODEX_HOME_RESOLVED" 2>/dev/null && pwd -P)"
+CODEX_HOME_PHYS="${CODEX_HOME_PHYS:-$CODEX_HOME_RESOLVED}"
+
 # Extra argv for the `codex` boot line, from the cell's settings blob:
 #   "settings": { "launch_args": ["-a", "untrusted", "-s", "read-only"] }
 # The tool-gate cell needs codex launched with an approval policy that makes
@@ -373,7 +383,8 @@ boot_session() {
     echo "[driver] hook trust: granted this boot" >&2
   elif [[ ! -f "$CODEX_HOME_RESOLVED/hooks.json" ]]; then
     echo "[driver] hook trust: n/a — no $CODEX_HOME_RESOLVED/hooks.json installed" >&2
-  elif grep -q "hooks.state.\"$CODEX_HOME_RESOLVED/hooks.json:" \
+  elif grep -qF -e "hooks.state.\"$CODEX_HOME_PHYS/hooks.json:" \
+                -e "hooks.state.\"$CODEX_HOME_RESOLVED/hooks.json:" \
          "$CODEX_HOME_RESOLVED/config.toml" 2>/dev/null; then
     echo "[driver] hook trust: already trusted (trusted_hash present in config.toml)" >&2
   else
