@@ -345,7 +345,7 @@ if [[ "$ATTACH" == "1" ]]; then
     UNAPPLIED="$(jq -r --arg a "$ADAPTER" "$UNAPPLIED_FILTER" <<<"$PERM_JSON" 2>/dev/null || echo "")" # NOSONAR (shell:S5332) — reads the loopback response above
     if [[ -n "$UNAPPLIED" ]]; then
       echo "attach: daemon at $ONBOARD_BIND has grants that were NOT applied — it would record a fixture missing those signals" >&2 # NOSONAR (shell:S5332) — names the loopback daemon above
-      echo "        $UNAPPLIED" >&2
+      echo "        $UNAPPLIED" >&2 # NOSONAR (shell:S5332) — echoes the loopback response above
       echo "        if this is the #1449 shared-config refusal: back up the files that irrlichd --print-managed-files names," >&2
       echo "        then restart the daemon with IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1 (or record without --attach, which snapshots them for you)" >&2
       exit 1
