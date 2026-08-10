@@ -1755,6 +1755,15 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         if (src.kind === 'relay' && settings.relayToken) hello.token = settings.relayToken;
         try { ws.send(JSON.stringify(hello)); } catch (e) { console.debug('irrlicht: failed to send hello frame', e); }
         updateWsStatus();
+        // Re-read consent on every (re)connect, mirroring the macOS app's
+        // connect() (#1385). A daemon restart re-runs every granted effect
+        // at boot, and a failure there is broadcast by nobody: Start emits
+        // no permissions_updated, and the detection poller that would is
+        // only started while something is still unanswered. Without this an
+        // open dashboard shows a stale, healthy-looking picture until the
+        // user reloads by hand — which is exactly the restart scenario the
+        // aggregate exists for.
+        refreshPermissions();
       };
       ws.onmessage = function(evt) {
         let msg;

@@ -97,10 +97,76 @@ type AgentPermissions struct {
 	Permissions []PermissionView `json:"permissions"`
 }
 
+// UnappliedGrant is one permission the user GRANTED whose consent effect
+// is not in force: the consent stands, the modification is absent. It is
+// the element of PermissionsSnapshot.UnappliedGrants — see that field for
+// what is and is not counted.
+//
+// It carries the reason verbatim rather than a classification code. The
+// "granted but not applied" family already contains more than one
+// diagnosis — a failed install (#1362) and a refusal because the upstream
+// CLI is below the declared version floor (#1365), which rides the same
+// effect-error path on purpose — and the reason string is what tells them
+// apart today, in both wizards. An aggregate that replaced it with a
+// single enum would be the collapse this field exists to avoid.
+type UnappliedGrant struct {
+	Agent            string `json:"agent"`
+	AgentDisplayName string `json:"agent_display_name"`
+	Key              string `json:"key"`
+	Title            string `json:"title"`
+	// Reason is the verbatim effect error, identical to the matching
+	// PermissionView.EffectError. Duplicated rather than referenced so a
+	// passive surface can render the whole list without walking Agents.
+	Reason string `json:"reason"`
+}
+
 // PermissionsSnapshot is the GET /api/v1/permissions response body.
 type PermissionsSnapshot struct {
 	Mode   string             `json:"mode"`
 	Agents []AgentPermissions `json:"agents"`
+
+	// UnappliedGrants is the aggregate a surface renders PASSIVELY as
+	// "N permissions are granted but not applied" (#1385). Before it,
+	// #1362's per-permission EffectError reached only a user who opened
+	// the wizard — so a re-apply failure at Start, when every granted
+	// effect is re-run at once, was invisible to everyone else. Both the
+	// web dashboard and the macOS app read this one daemon-computed list
+	// rather than each re-deriving it.
+	//
+	// It is deliberately a LIST, not a count: the headline aggregates, but
+	// a user who clicks through has to be able to tell which permission
+	// and why. len() is the count.
+	//
+	// Scope — a permission is here when it is GRANTED and its last effect
+	// failed, and only then:
+	//   - a denied permission whose Remove failed is the opposite fault
+	//     ("revoked, but not undone") and would make this headline lie;
+	//   - a pending permission is not a grant, so it cannot be a GRANTED-
+	//     but-unapplied one. Note it is not true that pending never ran an
+	//     effect: ReloadFromStore moves a permission whose pair vanished
+	//     from the store back to pending and runs Remove for that move, and
+	//     recordEffectResult stores the outcome either way.
+	//
+	// Scope against the other "silently unapplied" diagnoses, which are
+	// NOT folded in and must stay distinguishable:
+	//   - #1362 install FAILED, and #1365 refused below the version floor:
+	//     both are here, told apart by Reason.
+	//   - #1372 entries went MISSING and are re-installed on a timer:
+	//     reported in the diagnostics bundle's hooks.json
+	//     (entry_reverification). A repair that itself fails becomes an
+	//     ordinary effect error and does arrive here; a successful repair
+	//     never does, because nothing is unapplied afterwards.
+	//   - #1368 entries present but nothing ARRIVING: the liveness
+	//     watchdog, reported in hooks.json (channels). The entries exist,
+	//     so the grant IS applied — counting it here would accuse the
+	//     install of a fault it does not have.
+	//   - #1425 in-memory consent STALE relative to the store: a
+	//     reconciliation, not a standing fault. After ReloadFromStore any
+	//     resulting failure arrives here through the ordinary path.
+	//
+	// Omitted from the JSON when empty, so a healthy daemon's response is
+	// byte-identical to what it was before this field existed.
+	UnappliedGrants []UnappliedGrant `json:"unapplied_grants,omitempty"`
 }
 
 // PermissionService gates every agent-monitoring capability behind user
@@ -468,26 +534,51 @@ func (s *PermissionService) Snapshot() PermissionsSnapshot {
 		if len(a.Permissions) == 0 {
 			continue
 		}
-		ap := AgentPermissions{
-			Name:        a.Identity.Name,
-			DisplayName: a.Identity.DisplayName,
-			Detected:    s.detected[a.Identity.Name],
-		}
-		for _, p := range a.Permissions {
-			ap.Permissions = append(ap.Permissions, PermissionView{
-				Key:             p.Key,
-				Kind:            string(p.Kind),
-				State:           string(s.set.Get(a.Identity.Name, p.Key)),
-				Title:           p.Title,
-				FeatureUnlocked: p.FeatureUnlocked,
-				Touches:         p.Touches,
-				Detail:          p.Detail,
-				EffectError:     s.effectErrs[effectKey(a.Identity.Name, p.Key)],
-			})
-		}
+		ap, unapplied := s.agentViewLocked(a)
 		out.Agents = append(out.Agents, ap)
+		out.UnappliedGrants = append(out.UnappliedGrants, unapplied...)
 	}
 	return out
+}
+
+// agentViewLocked projects one agent's permissions, returning both the
+// per-agent view and that agent's contribution to the snapshot-wide
+// UnappliedGrants aggregate. The two are built in one pass because they read
+// the same two lookups per permission. Caller holds s.mu.
+func (s *PermissionService) agentViewLocked(a agent.Agent) (AgentPermissions, []UnappliedGrant) {
+	ap := AgentPermissions{
+		Name:        a.Identity.Name,
+		DisplayName: a.Identity.DisplayName,
+		Detected:    s.detected[a.Identity.Name],
+	}
+	var unapplied []UnappliedGrant
+	for _, p := range a.Permissions {
+		state := s.set.Get(a.Identity.Name, p.Key)
+		reason := s.effectErrs[effectKey(a.Identity.Name, p.Key)]
+		ap.Permissions = append(ap.Permissions, PermissionView{
+			Key:             p.Key,
+			Kind:            string(p.Kind),
+			State:           string(state),
+			Title:           p.Title,
+			FeatureUnlocked: p.FeatureUnlocked,
+			Touches:         p.Touches,
+			Detail:          p.Detail,
+			EffectError:     reason,
+		})
+		// Granted-only: see UnappliedGrants for why a failed Remove and a
+		// pending permission (which CAN carry an effect error) are both
+		// excluded.
+		if state == permission.StateGranted && reason != "" {
+			unapplied = append(unapplied, UnappliedGrant{
+				Agent:            a.Identity.Name,
+				AgentDisplayName: a.Identity.DisplayName,
+				Key:              p.Key,
+				Title:            p.Title,
+				Reason:           reason,
+			})
+		}
+	}
+	return ap, unapplied
 }
 
 // Answer applies a batch of user decisions: state is recorded, modify

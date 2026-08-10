@@ -267,6 +267,8 @@ curl "http://127.0.0.1:7837/api/v1/history?chart=state&granularity=24h" | jq</co
       <h3>GET /api/v1/permissions</h3>
       <p>Returns the consent-first permission snapshot: the permission mode (<code>ask</code> or <code>grant-all</code>), and for every agent its detection status plus each declared permission with its state (<code>pending</code> / <code>granted</code> / <code>denied</code>), title, what it touches, and the feature it unlocks. The macOS app and web dashboard drive the permission wizard from this endpoint.</p>
 
+      <p>Two fields report a permission whose consent stands but whose effect is <em>not in force</em> &mdash; the user said yes and the modification did not happen. <code>effect_error</code> on a permission carries the reason; the top-level <code>unapplied_grants</code> is the aggregate of every <em>granted</em> one, so a surface can show &ldquo;N permissions are granted but not applied&rdquo; without walking the tree. Both are omitted when nothing is wrong. An install that failed and a refusal because the agent&rsquo;s CLI is below its required version are told apart by the reason text, not by a separate code.</p>
+
       <pre><code>curl http://127.0.0.1:7837/api/v1/permissions | jq</code></pre>
 
       <pre><code>{
@@ -276,8 +278,22 @@ curl "http://127.0.0.1:7837/api/v1/history?chart=state&granularity=24h" | jq</co
       "name": "claude-code",
       "detected": true,
       "permissions": [
-        { "key": "hooks", "state": "granted", "title": "Install Claude Code hooks" }
+        {
+          "key": "hooks",
+          "state": "granted",
+          "title": "Install Claude Code hooks",
+          "effect_error": "settings.json is malformed: invalid character '}'"
+        }
       ]
+    }
+  ],
+  "unapplied_grants": [
+    {
+      "agent": "claude-code",
+      "agent_display_name": "Claude Code",
+      "key": "hooks",
+      "title": "Install Claude Code hooks",
+      "reason": "settings.json is malformed: invalid character '}'"
     }
   ]
 }</code></pre>

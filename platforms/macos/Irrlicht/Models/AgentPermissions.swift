@@ -9,6 +9,96 @@ struct PermissionsSnapshot: Decodable, Equatable {
     /// wizard suppressed).
     let mode: String
     let agents: [AgentPermissions]
+
+    /// Permissions the user GRANTED whose effect is not in force (#1385).
+    ///
+    /// Computed by the daemon, not here: the web dashboard reads the same
+    /// list, and the two surfaces must never disagree about the count. The
+    /// daemon omits the key entirely when the list is empty, so this
+    /// defaults to `[]` rather than being optional — an absent key means
+    /// "nothing wrong", not "unknown".
+    let unappliedGrants: [UnappliedGrant]
+
+    /// The passive indicator's content, or nil when there is nothing to
+    /// say. Pure — unit-tested without rendering the view.
+    var unappliedGrantSummary: UnappliedGrantSummary? {
+        UnappliedGrantSummary(items: unappliedGrants)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case agents
+        case unappliedGrants = "unapplied_grants"
+    }
+
+    // Written out rather than synthesized: synthesized decoding requires
+    // every non-optional key to be present, and `unapplied_grants` is
+    // omitempty on the wire.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try c.decode(String.self, forKey: .mode)
+        // `agents` is decodeIfPresent deliberately, not incidentally: the Go
+        // field has no omitempty, so a daemon with no permission-carrying
+        // agents emits `"agents": null` — which the synthesized decoder this
+        // replaced would have thrown on.
+        agents = try c.decodeIfPresent([AgentPermissions].self, forKey: .agents) ?? []
+        unappliedGrants = try c.decodeIfPresent([UnappliedGrant].self, forKey: .unappliedGrants) ?? []
+    }
+
+    /// Memberwise init for tests and previews; the custom `init(from:)`
+    /// above suppresses the synthesized one.
+    init(mode: String, agents: [AgentPermissions], unappliedGrants: [UnappliedGrant] = []) {
+        self.mode = mode
+        self.agents = agents
+        self.unappliedGrants = unappliedGrants
+    }
+}
+
+/// One permission the user granted whose consent effect is not in force
+/// (#1385): the consent stands, the modification is absent.
+///
+/// `reason` is the daemon's effect error verbatim, and it is what keeps the
+/// diagnoses apart — an install that FAILED (#1362) and a refusal because
+/// the CLI is below its declared version floor (#1365) both arrive here,
+/// and the refusal's reason carries its own advice ("upgrade and grant
+/// again"). Replacing it with a classification code would be the collapse
+/// the aggregate exists to avoid.
+struct UnappliedGrant: Decodable, Equatable, Identifiable {
+    let agent: String
+    let agentDisplayName: String
+    let key: String
+    let title: String
+    let reason: String
+
+    var id: String { agent + "/" + key }
+
+    enum CodingKeys: String, CodingKey {
+        case agent
+        case agentDisplayName = "agent_display_name"
+        case key
+        case title
+        case reason
+    }
+}
+
+/// The rendered form of the aggregate. Mirrors the web's
+/// `unappliedGrantSummary` word for word so the two surfaces read
+/// identically.
+struct UnappliedGrantSummary: Equatable {
+    let text: String
+    let items: [UnappliedGrant]
+
+    /// Derived, not stored: a second copy of the length is state that has to
+    /// be kept in sync with `items` by hand.
+    var count: Int { items.count }
+
+    init?(items: [UnappliedGrant]) {
+        guard !items.isEmpty else { return nil }
+        self.items = items
+        text = items.count == 1
+            ? "1 permission is granted but not applied"
+            : "\(items.count) permissions are granted but not applied"
+    }
 }
 
 struct AgentPermissions: Decodable, Equatable, Identifiable {

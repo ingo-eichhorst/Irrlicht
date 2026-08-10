@@ -162,6 +162,11 @@
   <main>
     <div id="connection-banner" role="alert" aria-live="polite"></div>
 
+    <!-- #1385: "N permissions are granted but not applied". role=status,
+         not alert — this reports a standing condition the user may not be
+         able to fix right now, so it must inform without interrupting. -->
+    <div id="permission-apply-banner" role="status" aria-live="polite" hidden></div>
+
     <div id="view-live">
       <div id="empty-state">
         <div class="empty-dot"></div>
