@@ -70,6 +70,21 @@ description: >
    daemon monitoring nothing until its wizard is answered. (run-cell.sh /
    run-cell-multi.sh set it on the daemons they spawn.)
 
+   **On the attach path you must set `IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1`
+   too, and back the files up yourself first.** Since #1449 a grant-all daemon
+   refuses by default to write the shared agent configs it manages
+   (`~/.claude/settings.json`, `~/.codex/hooks.json`, …), because a dev daemon
+   on a throwaway port doing that is what left a real machine's hook channel
+   silently dead. The spawn path needs nothing from you — `spawn_record_daemon`
+   snapshots every managed file and restores it on exit, which is what earns it
+   the override. Attach reuses a daemon **you** started, so the snapshot is
+   yours to make: run `irrlichd --print-managed-files`, copy those files
+   somewhere, start the daemon with both variables, and put them back after.
+   Skipping it does not fail loudly at the daemon — the permission still reads
+   `granted` — so `run-cell.sh` checks the daemon's `unapplied_grants` before
+   driving anything and refuses rather than recording a fixture in which the
+   adapter merely looks incapable of reporting state.
+
 ## Steps
 
 ### 1. Driver-gap → port the missing step (only if route is `driver-gap`)

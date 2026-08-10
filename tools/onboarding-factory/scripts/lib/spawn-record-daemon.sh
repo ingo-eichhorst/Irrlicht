@@ -68,6 +68,14 @@ record_daemon_sock() {
 # grant-all: the consent-first permission gate (#570) would otherwise leave a
 # fresh recording daemon monitoring nothing until a wizard is answered —
 # fixtures must never hang on consent.
+# IRRLICHT_ALLOW_SHARED_CONFIG_WRITES: since #1449 a grant-all daemon refuses,
+# by default, to run an Apply that writes a shared user config outside its own
+# isolated home — because a hand-started dev daemon doing that is what left the
+# reporter's ~/.claude/settings.json pointing at three dead ports. This rig is
+# the one caller entitled to lift it, and the entitlement is earned two lines
+# down in spawn_record_daemon: snapshot_managed_files backs up every one of
+# those files first and the EXIT trap hands them back. Keep the two together —
+# if the snapshot ever stops running, this must stop being set.
 # IRRLICHT_HOME is emitted only in coexist mode; IRRLICHT_READY_SESSION_TTL only
 # when the caller set one (idle-survival cells shrink the 30-min production
 # default to a recordable window), because an explicit env array would otherwise
@@ -77,6 +85,7 @@ record_daemon_env() {
   printf '%s\n' "IRRLICHT_RECORDINGS_DIR=$recordings"
   printf '%s\n' "IRRLICHT_BIND_ADDR=$bind"
   printf '%s\n' "IRRLICHT_PERMISSION_MODE=grant-all"
+  printf '%s\n' "IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1"
   [[ -n "$home" ]] && printf '%s\n' "IRRLICHT_HOME=$home"
   [[ -n "${IRRLICHT_READY_SESSION_TTL:-}" ]] && printf '%s\n' "IRRLICHT_READY_SESSION_TTL=$IRRLICHT_READY_SESSION_TTL"
   return 0

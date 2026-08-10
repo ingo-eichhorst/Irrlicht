@@ -26,6 +26,11 @@
 #        tools/build-dev.sh && IRRLICHT_HOME=$(mktemp -d) \
 #          IRRLICHT_PERMISSION_MODE=grant-all \
 #          IRRLICHT_DAEMON_PORT=7838 core/bin/irrlichd --record &
+#      That daemon will refuse to install hooks into your real ~/.claude and
+#      ~/.codex (#1449); transcript-tailed signals record fine without them.
+#      For a cell that needs hook-delivered signals, back those files up
+#      (irrlichd --print-managed-files) and add
+#      IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1.
 #   2. Drive the cell's recipe (tmux send-keys; never human-in-loop) so the
 #      live Linux sensor emits the event stream into /tmp/rec/.../events.jsonl.
 #   3. Run this script: macOS golden vs the fresh Linux events.jsonl.

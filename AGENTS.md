@@ -308,6 +308,25 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `applyWritesNoUserFile` with its reason rather than falling out silently.
   `agent.ControlPermission` needs no entry: its `Apply` is nil, which is the
   shape to prefer.
+  Since #1449 the declaration is also what a **grant-all daemon refuses to
+  write**. `PermissionService.sharedConfigRefusal` — the same call site as
+  #1365's version gate, so #1362's "granted but NOT applied" surfacing and the
+  re-answer retry carry it for free — refuses any `Apply` whose `Writes.Path`
+  resolves outside the daemon's own `IRRLICHT_HOME`, with an error naming the
+  file. Note what "isolated" does NOT mean: "`IRRLICHT_HOME` is set and differs
+  from `$HOME`" is vacuous here, because the daemon that caused the incident had
+  it set and so does the recording rig. A `ManagedUserFile` follows `$HOME` by
+  definition, so isolation is asked of the FILE — it is inside an isolated home
+  only when its resolved path is inside `IRRLICHT_HOME`, which happens only when
+  `$HOME` or a per-agent override (`CODEX_HOME`, `COPILOT_HOME`,
+  `XDG_CONFIG_HOME`) points in there too. Containment is deliberately lexical,
+  unlike `hookjson`'s confiner: the input is our own resolver's output, not a
+  caller's, and the asymmetry runs the other way — a false "outside" refuses,
+  which is fail-closed. `IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1` lifts it, and
+  the recording rig is the one caller that sets it, in
+  `spawn-record-daemon.sh`, immediately beside the `snapshot_managed_files`
+  call that earns the entitlement. **`ir:test-mac`'s separate mode therefore no
+  longer installs hooks** — that was the damage, not a regression.
   All seven contract families pass by construction against a correct adapter, so
   their whole value is that they *can* fail: a new or reworked contract
   assertion lands with the deliberate mutation that was seen red for each

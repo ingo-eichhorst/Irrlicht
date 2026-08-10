@@ -328,6 +328,19 @@ independent axes:
    itself. In **replace** mode `IRRLICHT_HOME` is omitted so it reads/writes
    the production state dir — including the user's real permission answers
    (no grant-all there).
+
+   **Separate mode does NOT install hooks, by design (#1449).** `IRRLICHT_HOME`
+   isolates daemon state; it does not move `~/.claude/settings.json`,
+   `~/.codex/hooks.json` or `~/.config/kitty/kitty.conf`, which follow `$HOME`.
+   A grant-all daemon on port 7838 that installed hooks would repoint your
+   REAL config at 7838 and leave it there when the dev daemon dies — that is
+   the incident #1449 was filed for, and it had already happened three times.
+   So those installs are now refused, with an error naming each file, and the
+   permission shows as "granted but NOT applied" in the wizard. Everything not
+   backed by a shared config file (transcripts, watchers, control) works
+   normally. To test hook installation itself, back the files up
+   (`irrlichd --print-managed-files` lists them) and add
+   `IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1` — then restore them afterwards.
    ```bash
    if [ "$TARGET" = "daemon" ] || [ "$TARGET" = "full" ]; then
      if [ "$MODE" = "replace" ]; then

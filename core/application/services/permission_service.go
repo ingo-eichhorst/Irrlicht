@@ -11,6 +11,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -179,6 +181,15 @@ type PermissionService struct {
 	log       outbound.Logger
 	mode      string
 	registrar watcherRegisterer
+
+	// isolatedHome is the directory this daemon was GIVEN as its own
+	// (IRRLICHT_HOME), or "" when it was given none. Together with
+	// allowSharedConfigWrites it is everything sharedConfigRefusal needs; see
+	// that method for what "isolated" means here and why it is not the same
+	// question as "is IRRLICHT_HOME set".
+	isolatedHome            string
+	allowSharedConfigWrites bool
+
 	factories map[string]WatcherFactory
 	hasLive   HasLiveProcessFunc
 
@@ -259,6 +270,12 @@ type PermissionServiceDeps struct {
 	Registrar watcherRegisterer
 	Factories map[string]WatcherFactory
 	HasLive   HasLiveProcessFunc
+
+	// IsolatedHome is IRRLICHT_HOME, "" when unset, and
+	// AllowSharedConfigWrites is IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1. Both
+	// feed the grant-all shared-config guard (#1449) and are inert in ask mode.
+	IsolatedHome            string
+	AllowSharedConfigWrites bool
 }
 
 // newPermissionService allocates a PermissionService with every field the
@@ -303,6 +320,8 @@ func NewPermissionService(deps PermissionServiceDeps) *PermissionService {
 	s.registrar = deps.Registrar
 	s.factories = deps.Factories
 	s.hasLive = deps.HasLive
+	s.isolatedHome = deps.IsolatedHome
+	s.allowSharedConfigWrites = deps.AllowSharedConfigWrites
 	// permission.Set is itself map-backed and Put writes to it, so a nil Set —
 	// which a store may return alongside a nil error — is the same nil-map trap
 	// one level down. Keep the allocator's empty one rather than adopting it.
@@ -844,7 +863,12 @@ func (s *PermissionService) runClosureEffect(e pendingEffect) {
 		// understood them in the first place.
 		err := error(nil)
 		if e.target == permission.StateGranted {
-			err = s.hookVersionRefusal(e.perm)
+			// Home guard before version gate: the version gate may shell out to
+			// probe the CLI, and there is no reason to pay for that on an
+			// install that is about to be refused anyway.
+			if err = s.sharedConfigRefusal(e.perm); err == nil {
+				err = s.hookVersionRefusal(e.perm)
+			}
 		}
 		if err == nil {
 			err = effect()
@@ -874,6 +898,91 @@ func (s *PermissionService) recordEffectResult(e pendingEffect, reason string) {
 // Caller holds s.mu.
 func (s *PermissionService) effectFailedLocked(agentName, permKey string) bool {
 	return s.effectErrs[effectKey(agentName, permKey)] != ""
+}
+
+// sharedConfigRefusal returns a non-nil error when a grant-all daemon must not
+// run this permission's Apply, because the file that Apply writes is the user's
+// real, shared agent config rather than something inside the home this daemon
+// was given (issue #1449).
+//
+// Why grant-all specifically. In ask mode a human answered this exact
+// permission in the wizard, which is the whole #570 contract; the guard would
+// be wrong there and is inert. grant-all answers on the user's behalf for
+// EVERY declared permission, so it runs installers nobody chose to run —
+// including, in the reported incident, hook installs that repointed
+// ~/.claude/settings.json and ~/.codex/hooks.json at a dev daemon's port and
+// left them pointing there after it died. The permissions still read "granted",
+// the entries were still present, and nothing arrived.
+//
+// What "isolated" means, and what it does NOT mean. The obvious reading —
+// "IRRLICHT_HOME is set and differs from $HOME" — is VACUOUS against this
+// defect, and checking it would have shipped a guard that never fires: the
+// daemon that caused the incident had IRRLICHT_HOME set (that is what
+// ir:test-mac's separate mode and every dev daemon do), and so does the
+// recording rig. IRRLICHT_HOME isolates the daemon's OWN state — socket, addr
+// file, stores — and a ManagedUserFile is by definition the other thing: a file
+// that follows $HOME and outlives the daemon (agent.Permission.Writes). So
+// isolation is asked of the FILE, not of the daemon: a managed file is inside
+// an isolated home only when its resolved path is inside IRRLICHT_HOME, which
+// happens only when $HOME — or a per-agent override the adapter honors, like
+// CODEX_HOME, COPILOT_HOME or XDG_CONFIG_HOME — points in there too. That is a
+// real configuration (a fully sandboxed integration daemon) and it is allowed;
+// everything else is the user's own config and is refused.
+//
+// Containment is deliberately LEXICAL, unlike hookjson's confiner. That one
+// resolves symlinks before comparing because its input is caller-supplied on an
+// unauthenticated endpoint and an unresolved compare is a security hole. Here
+// the path is our own adapter's resolver output, and the two error directions
+// are not symmetric: a false "outside" refuses an install (safe, and says why),
+// while a false "inside" would permit one. Lexical comparison can only err
+// toward refusing, so it is the fail-closed choice rather than a shortcut.
+func (s *PermissionService) sharedConfigRefusal(p agent.Permission) error {
+	if s.mode != config.PermissionModeGrantAll || p.Writes == nil || p.Writes.Path == nil {
+		return nil
+	}
+	if s.allowSharedConfigWrites {
+		return nil
+	}
+	path, err := p.Writes.Path()
+	if err != nil {
+		// Fail closed. An unresolvable path is not a licence to write: we cannot
+		// name the file, so we certainly cannot say it is safe to modify.
+		return fmt.Errorf("refusing to write %s's shared config in IRRLICHT_PERMISSION_MODE=grant-all: "+
+			"cannot resolve which file it writes (%v)", p.Key, err)
+	}
+	if s.isolatedHome != "" && pathInsideRoot(s.isolatedHome, path) {
+		return nil
+	}
+	return fmt.Errorf("refusing to modify %s in IRRLICHT_PERMISSION_MODE=grant-all: "+
+		"it is a shared config file outside this daemon's isolated home (IRRLICHT_HOME=%s), "+
+		"and grant-all answered this permission without asking anyone. "+
+		"Back the file up and set IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1 to allow it "+
+		"(the onboarding recording rig does exactly that), or run the daemon in the default ask mode",
+		path, isolatedHomeForMessage(s.isolatedHome))
+}
+
+// isolatedHomeForMessage renders IRRLICHT_HOME for the refusal text, naming the
+// unset case rather than printing an empty string the reader has to interpret.
+func isolatedHomeForMessage(root string) string {
+	if root == "" {
+		return "<unset>"
+	}
+	return root
+}
+
+// pathInsideRoot reports whether path is root itself or lies beneath it,
+// comparing cleaned absolute paths. A relative or unresolvable pair reports
+// false, which refuses — see sharedConfigRefusal for why that direction is the
+// safe one here.
+func pathInsideRoot(root, path string) bool {
+	if !filepath.IsAbs(root) || !filepath.IsAbs(path) {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 // hookVersionRefusal resolves the installed upstream CLI version for a

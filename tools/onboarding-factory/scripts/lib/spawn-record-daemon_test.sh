@@ -99,12 +99,17 @@ echo "== the socket path follows coexist isolation =="
 assert_eq "coexist home owns the socket" "/tmp/onboard/irrlichd.sock" "$(record_daemon_sock /tmp/onboard)"
 assert_eq "no home means the production layout" "$HOME/.local/share/irrlicht/irrlichd.sock" "$(record_daemon_sock "")"
 
-echo "== the daemon env always carries the three recording knobs =="
+echo "== the daemon env always carries the four recording knobs =="
+# IRRLICHT_ALLOW_SHARED_CONFIG_WRITES is asserted here, not merely allowed:
+# without it a grant-all daemon refuses every hook install (#1449) and the rig
+# records fixtures with no hook-delivered observations at all — which looks like
+# an adapter that cannot report state rather than a rig that was refused.
 unset IRRLICHT_READY_SESSION_TTL
 assert_eq "production env" \
   "IRRLICHT_RECORDINGS_DIR=/s/recordings
 IRRLICHT_BIND_ADDR=127.0.0.1:7837
-IRRLICHT_PERMISSION_MODE=grant-all" \
+IRRLICHT_PERMISSION_MODE=grant-all
+IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1" \
   "$(record_daemon_env /s/recordings 127.0.0.1:7837 "")"
 
 echo "== coexist adds IRRLICHT_HOME, and only then =="
@@ -112,6 +117,7 @@ assert_eq "coexist env" \
   "IRRLICHT_RECORDINGS_DIR=/s/recordings
 IRRLICHT_BIND_ADDR=127.0.0.1:7838
 IRRLICHT_PERMISSION_MODE=grant-all
+IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1
 IRRLICHT_HOME=/tmp/onboard" \
   "$(record_daemon_env /s/recordings 127.0.0.1:7838 /tmp/onboard)"
 
@@ -119,7 +125,7 @@ echo "== a home containing spaces stays a single env entry =="
 entries=0
 while IFS= read -r _; do entries=$((entries + 1)); done \
   < <(record_daemon_env "/s/recordings" "127.0.0.1:7838" "/tmp/my onboard home")
-assert_eq "four entries, not five" "4" "$entries"
+assert_eq "five entries, not six" "5" "$entries"
 
 echo "== a caller-set ready-session TTL is forwarded, absent otherwise =="
 IRRLICHT_READY_SESSION_TTL=45s

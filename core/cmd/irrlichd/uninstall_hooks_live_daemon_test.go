@@ -160,6 +160,9 @@ func sanitizedChildEnv(homeDir, stateDir string) []string {
 		"IRRLICHT_HOME="+stateDir,
 		"IRRLICHT_BIND_ADDR=",
 		"IRRLICHT_PERMISSION_MODE=",
+		// #1449: a developer with this exported would let a child daemon write
+		// the real ~/.claude even under a temp HOME, if HOME ever leaked.
+		"IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=",
 		"IRRLICHT_DEMO_MODE=",
 		"IRRLICHT_RECORD=",
 		"IRRLICHT_HOOK_REVERIFY_INTERVAL=",
