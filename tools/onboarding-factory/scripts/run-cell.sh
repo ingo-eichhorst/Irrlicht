@@ -352,7 +352,14 @@ ACTUAL_UUID="$(cat "$STAGING/session.uuid" 2>/dev/null || true)"
 # the fixture's events.jsonl filter includes all sessions and the
 # transcript output concatenates them in order.
 if [[ -f "$STAGING/session.uuids" ]]; then
-  uuid_count=$(grep -c . "$STAGING/session.uuids" || echo 0)
+  # `|| true`, never `|| echo 0`: grep -c ALREADY prints 0 when it matches
+  # nothing, and exits 1 for the same reason — so the fallback appended a
+  # SECOND zero and the variable became the two-line string "0\n0", which
+  # `[[ … -gt 1 ]]` rejects with a syntax error. It fires only when
+  # session.uuids exists but is empty, i.e. when the driver resolved no
+  # session at all — so the bug corrupted the diagnostics of exactly the
+  # runs that had already gone wrong (#1388).
+  uuid_count=$(grep -c . "$STAGING/session.uuids" || true)
   if [[ "$uuid_count" -gt 1 ]]; then
     EXTRA_IDS=""
     while IFS= read -r u; do

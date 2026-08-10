@@ -275,7 +275,27 @@ boot_session() {
   cwd_already_trusted && dir_done=1
   while [[ $waited -lt 60 ]]; do
     pane="$(tmux capture-pane -t "$sess" -p -S -40 2>/dev/null || true)"
-    if [[ $hooks_done -eq 0 ]] && grep -q 'Trust all and continue' <<<"$pane"; then
+    # Codex's self-update offer — "✨ Update available! ... 1. Update now
+    # (runs `npm install -g @openai/codex`) / 2. Skip / 3. Skip until next
+    # version" — renders BEFORE the banner and swallows the boot.
+    #
+    # This is not a cosmetic case. With no handler the menu simply sits
+    # there: the trust poll and the banner wait both time out, and the first
+    # step_send then types its prompt and presses Enter INTO THE MENU, whose
+    # default is option 1. That silently runs a global `npm install -g` and
+    # upgrades the operator's codex CLI mid-recording — observed doing
+    # exactly that during #1388 (0.146.1 → 0.147.0), which also invalidates
+    # the agent_cli_version the run is about to stamp into the fixture.
+    # Answer "2" (Skip): a recording must never mutate the toolchain it is
+    # measuring.
+    if grep -q 'Update available' <<<"$pane"; then
+      tmux send-keys -t "$sess" "2"
+      sleep 0.3
+      tmux send-keys -t "$sess" Enter
+      stable=0
+      echo "[driver] declined codex self-update offer (2 = Skip)" >&2
+      sleep 1
+    elif [[ $hooks_done -eq 0 ]] && grep -q 'Trust all and continue' <<<"$pane"; then
       tmux send-keys -t "$sess" "2"
       sleep 0.3
       tmux send-keys -t "$sess" Enter
@@ -313,14 +333,26 @@ boot_session() {
   # keyed on hooks.json, not on the cwd.
   TRUSTED_CWDS+=("$cwd")
 
-  local waited=0
+  local waited=0 banner_seen=0
   while [[ $waited -lt 180 ]]; do
     if [[ -f "$slot_stdout" ]] && grep -aq 'OpenAI Codex' "$slot_stdout" 2>/dev/null; then
+      banner_seen=1
       break
     fi
     sleep 0.5
     waited=$((waited + 1))
   done
+  if [[ $banner_seen -eq 0 ]]; then
+    # Say so LOUDLY rather than falling through. Everything after this types
+    # text and presses Enter; if the banner never came, something else owns
+    # the screen — an unrecognized modal — and those keystrokes land in it.
+    # That is how the self-update offer above got accepted before it had a
+    # handler, so an unexplained boot deserves a line in the log naming the
+    # pane's actual contents rather than a silent continue.
+    echo "[driver] WARNING: codex banner never appeared after 90s on slot $ACTIVE." >&2
+    echo "[driver] WARNING: an unhandled prompt may be holding the pane; last 15 lines:" >&2
+    tmux capture-pane -t "$sess" -p -S -15 2>/dev/null | sed 's/^/[driver]   | /' >&2
+  fi
 
   waited=0
   while [[ $waited -lt 60 ]]; do
