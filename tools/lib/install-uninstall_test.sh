@@ -325,8 +325,9 @@ assert_eq "$sweeping" "1" "callsites: exactly one of them opts into the hook swe
 # ===========================================================================
 # 8. A BINARY THAT NEVER RETURNS must not hang the uninstall.
 #
-#    irrlichd has no argument parser: an unknown flag falls through to starting
-#    a DAEMON (#1417, pinned deliberately by core/cmd/irrlichd/dispatch_test.go).
+#    An irrlichd predating #1417 has no argument parser: an unknown flag falls
+#    through to starting a DAEMON. Current binaries exit 2 naming the flag, so
+#    this case now covers only the older ones the installer still has to survive.
 #    --uninstall-hooks has existed since v0.3.4 — the earliest tag containing
 #    5f95c1d5 — so a current binary is fine, but uninstalling an older one would
 #    boot a daemon here, bind the port the uninstall just freed, and block

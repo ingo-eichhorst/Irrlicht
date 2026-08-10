@@ -121,9 +121,10 @@ uninstall_agent_hooks() {
 
     # Run the sweep detached from our stdin and under a bounded wait.
     #
-    # irrlichd has no argument parser: an unknown flag falls through to STARTING
-    # A DAEMON (#1417 — core/cmd/irrlichd/dispatch_test.go pins that as
-    # deliberate). --uninstall-hooks has existed since v0.3.4, so a current
+    # An irrlichd predating #1417 has no argument parser: an unknown flag falls
+    # through to STARTING A DAEMON. Current binaries exit 2 naming the flag, but
+    # this wait protects the ones that don't, and cannot be removed until the
+    # supported floor passes #1417. --uninstall-hooks has existed since v0.3.4, so a current
     # binary is fine, but someone uninstalling an older one would otherwise boot
     # a daemon right here — binding the port this function just freed — and
     # block the script forever reading its output. An uninstall that hangs is

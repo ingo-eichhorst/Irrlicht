@@ -15,11 +15,16 @@ import "testing"
 //     check were ever moved back in front of the verb, every installed beacon
 //     would become a version banner: exit 0, nothing delivered, no error
 //     anywhere, and session state would simply stop arriving.
-//   - "an unknown flag still starts the daemon". That is the behaviour every
-//     irrlichd has had, and the #1373 change deliberately narrows the new
-//     rejection to POSITIONAL tokens so it cannot break an existing invocation.
-//     It is a LOCK: it passes on main by construction and exists so a later
-//     tightening of the parser has to be a deliberate decision.
+//   - "an unknown flag is rejected". This row was the inverse until #1417 — it
+//     asserted that an unknown flag STARTS THE DAEMON, the behaviour every
+//     irrlichd had had, and it was written as a LOCK so that a later tightening
+//     of the parser would have to be a deliberate decision rather than a
+//     side effect. #1417 is that deliberate decision, and flipping this row is
+//     the visible form of it: `irrlichd --recrod` now exits 2 naming --recrod
+//     instead of silently starting a daemon with recording off. The lock did its
+//     job — it made the change reviewable — so what replaces it is a lock in the
+//     other direction, and the call-site sweep in the #1417 PR is the evidence
+//     that no real invocation relied on the old fall-through.
 func TestSelectActionOrder(t *testing.T) {
 	tests := map[string]struct {
 		args []string
@@ -27,7 +32,11 @@ func TestSelectActionOrder(t *testing.T) {
 	}{
 		"no arguments starts the daemon":            {nil, actionRunDaemon},
 		"--record starts the daemon":                {[]string{"--record"}, actionRunDaemon},
-		"an unknown flag still starts the daemon":   {[]string{"--not-a-real-flag"}, actionRunDaemon},
+		"an unknown flag is rejected":               {[]string{"--not-a-real-flag"}, actionUnknownFlag},
+		"a typo of a known flag is rejected":        {[]string{"--recrod"}, actionUnknownFlag},
+		"a value form of a boolean flag":            {[]string{"--record=1"}, actionUnknownFlag},
+		"an unknown flag beats a known one":         {[]string{"--diagnose", "--recrod"}, actionUnknownFlag},
+		"an empty argument is not a flag":           {[]string{""}, actionRunDaemon},
 		"--version prints the version":              {[]string{"--version"}, actionVersion},
 		"-v prints the version":                     {[]string{"-v"}, actionVersion},
 		"--uninstall-hooks":                         {[]string{"--uninstall-hooks"}, actionUninstallHooks},
@@ -66,6 +75,24 @@ func TestUnknownSubcommandNeverReachesTheDaemon(t *testing.T) {
 	} {
 		if got := selectAction(args); got == actionRunDaemon {
 			t.Errorf("selectAction(%q) = actionRunDaemon; an unrecognized subcommand must never start a daemon", args)
+		}
+	}
+}
+
+// TestUnknownFlagNeverStartsTheDaemon is #1417's defect test. Until this ticket
+// an unknown FLAG fell through to runDaemon(), so `irrlichd --recrod` started a
+// daemon with recording off and said nothing — the worst shape available,
+// because it looks like success.
+func TestUnknownFlagNeverStartsTheDaemon(t *testing.T) {
+	for _, args := range [][]string{
+		{"--recrod"},              // the issue's literal typo
+		{"--not-a-real-flag"},     // #1412's row, now inverted
+		{"--record=1"},            // a value form of a boolean flag: silently ignored before
+		{"--record", "--diagnos"}, // a typo alongside a good flag
+		{"--uninstall-hook"},      // a near-miss of a destructive flag
+	} {
+		if got := selectAction(args); got == actionRunDaemon {
+			t.Errorf("selectAction(%q) = actionRunDaemon; an unknown flag must never start a daemon", args)
 		}
 	}
 }

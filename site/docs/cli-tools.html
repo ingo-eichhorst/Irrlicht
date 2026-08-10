@@ -109,6 +109,8 @@
         <li><code>--record</code> &mdash; Enable lifecycle recording of session events to <code>&lt;dataDir&gt;/recordings</code> (equivalent to <code>IRRLICHT_RECORD=1</code>); the daemon starts normally otherwise</li>
       </ul>
 
+      <p>That list is exhaustive, and it is enforced. An unrecognized flag makes <code>irrlichd</code> print a message naming it to stderr and exit <code>2</code> <em>without</em> starting the daemon. Earlier versions ignored the unknown flag and started anyway, so a typo such as <code>irrlichd --recrod</code> produced a running daemon with recording silently off &mdash; a failure that looked exactly like success. None of these flags takes a value, so a <code>--flag=value</code> form is rejected too.</p>
+
       <h3>Flag Examples</h3>
 
       <pre><code># Print version and exit

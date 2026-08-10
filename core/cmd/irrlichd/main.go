@@ -74,6 +74,81 @@ func hasFlagIn(args []string, name string) bool {
 	return false
 }
 
+// knownFlags is the complete set of flags irrlichd accepts, and it IS the
+// parser: selectAction rejects any flag-shaped argument absent from this list
+// rather than falling through to the daemon, so a typo fails loudly instead of
+// starting a daemon in a subtly wrong configuration (#1417). `irrlichd --recrod`
+// used to start a daemon with recording off and say nothing.
+//
+// Two entries do not appear in selectAction's dispatch switch: --record is read
+// much later, by runDaemon via hasFlag, and -v is an alias of --version. Any
+// future flag read by a bare hasFlag() call must be added here too, or it will
+// be rejected before its reader ever runs —
+// TestKnownFlagsCoversEveryFlagTheDaemonReads is the tripwire for that, and it
+// reads main.go's source rather than trusting a second hand-kept list.
+var knownFlags = []string{
+	"--record",
+	"--version",
+	"-v",
+	"--diagnose",
+	"--uninstall-hooks",
+	"--print-managed-files",
+	"--uninstall-task-eta",
+}
+
+// isFlagShaped classifies one argument, and it is deliberately the ONLY place
+// that classification is written.
+//
+// firstUnknownFlag and firstPositional are exact complements over this
+// predicate: every argument is empty (skipped by both), flag-shaped, or a
+// positional. Two hand-kept copies of the test could drift, and the failure
+// would be silent in the worst direction — an argument that is neither, and so
+// reaches the daemon unexamined, which is the whole of what #1417 closed.
+func isFlagShaped(arg string) bool {
+	return strings.HasPrefix(arg, "-")
+}
+
+// firstUnknownFlag returns the first flag-shaped argument absent from knownFlags.
+//
+// This is what makes --record=1 an unknown FLAG rather than a silently ignored
+// one: no irrlichd flag takes a value, so the = form has never done anything.
+func firstUnknownFlag(args []string) (string, bool) {
+	for _, arg := range args {
+		if arg == "" || !isFlagShaped(arg) {
+			continue
+		}
+		if !hasFlagIn(knownFlags, arg) {
+			return arg, true
+		}
+	}
+	return "", false
+}
+
+// unknownFlagMessage is the whole of what an unknown flag prints. Pure, so the
+// wording — which must NAME the offending flag, the point of #1417 — is testable
+// without building a binary.
+func unknownFlagMessage(name string) string {
+	return fmt.Sprintf("irrlichd: unknown flag %q\nknown flags: %s\n", name, strings.Join(knownFlags, " "))
+}
+
+// unknownSubcommandMessage is its counterpart for a positional token (#1373).
+func unknownSubcommandMessage(name string) string {
+	return fmt.Sprintf("irrlichd: unknown subcommand %q\n", name)
+}
+
+// reject is the shared tail of the two branches that refuse a command line.
+//
+// The message goes to stderr and NOTHING goes to stdout, which is a contract
+// rather than a style choice. Either branch can be reached by a hook-shaped
+// invocation on a future binary that renamed the verb or the flag out from
+// under an installed hook line, and there an empty stdout is what keeps the
+// non-zero exit from reading as a "deny" decision to a fail-closed pre-tool
+// hook. Stated once here so the two callers cannot drift apart on it.
+func reject(msg string) int {
+	fmt.Fprint(os.Stderr, msg)
+	return 2
+}
+
 // cliAction is what one irrlichd command line selects.
 type cliAction int
 
@@ -84,6 +159,7 @@ const (
 	actionPrintManagedFiles
 	actionUninstallTaskEta
 	actionDiagnose
+	actionUnknownFlag
 	actionUnknownSubcommand
 	actionRunDaemon
 )
@@ -100,16 +176,26 @@ const (
 //     check back in front would turn every installed beacon into a version
 //     banner — silently, since the beacon is not supposed to say anything on a
 //     healthy path either.
+//   - actionUnknownFlag is checked AFTER the beacon and BEFORE every other
+//     branch. After the beacon because a beacon command line carries tokens no
+//     allow-list should judge — the installed form ends in a literal
+//     `>/dev/null`, and the adapter segment is arbitrary. Before the rest so a
+//     typo is reported even alongside a flag that would otherwise have won:
+//     `irrlichd --diagnose --recrod` names --recrod rather than quietly
+//     diagnosing. #1412 left this fall-through open deliberately, as out of
+//     scope; #1417 closed it.
 //   - actionUnknownSubcommand is LAST, and it only fires on a positional token.
-//     Unknown FLAGS still fall through to the daemon, which is the behaviour
-//     every irrlichd has had; narrowing the change to positionals keeps it from
-//     touching any existing invocation while still closing the fall-through that
-//     makes a beacon-shaped command line start a daemon on a future binary that
-//     renames the verb.
+//     Between the two, every argument irrlichd receives is now classified: empty,
+//     a known flag, an unknown flag, or a positional. Nothing reaches the daemon
+//     unexamined, which is the property #1417 asked for.
 func selectAction(args []string) cliAction {
-	switch {
-	case hookbeacon.IsInvocation(args):
+	if hookbeacon.IsInvocation(args) {
 		return actionBeacon
+	}
+	if _, ok := firstUnknownFlag(args); ok {
+		return actionUnknownFlag
+	}
+	switch {
 	case hasFlagIn(args, "--version"), hasFlagIn(args, "-v"):
 		return actionVersion
 	case hasFlagIn(args, "--uninstall-hooks"):
@@ -130,7 +216,7 @@ func selectAction(args []string) cliAction {
 // firstPositional returns the first argument that is not flag-shaped.
 func firstPositional(args []string) (string, bool) {
 	for _, arg := range args {
-		if arg == "" || strings.HasPrefix(arg, "-") {
+		if arg == "" || isFlagShaped(arg) {
 			continue
 		}
 		return arg, true
@@ -173,14 +259,12 @@ func runCLIAction(action cliAction, args []string) int {
 		uninstallTaskEtaBlocks()
 	case actionDiagnose:
 		runDiagnose()
+	case actionUnknownFlag:
+		name, _ := firstUnknownFlag(args)
+		return reject(unknownFlagMessage(name))
 	case actionUnknownSubcommand:
-		// stderr, never stdout, and the message is the only output: if this is
-		// ever reached by a hook-shaped invocation on a future binary that
-		// renamed the verb, an empty stdout is what keeps a non-zero exit from
-		// reading as a "deny" decision to a fail-closed pre-tool hook.
 		name, _ := firstPositional(args)
-		fmt.Fprintf(os.Stderr, "irrlichd: unknown subcommand %q\n", name)
-		return 2
+		return reject(unknownSubcommandMessage(name))
 	}
 	return 0
 }
