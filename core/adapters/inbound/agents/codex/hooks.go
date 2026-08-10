@@ -88,8 +88,10 @@ type HookTarget interface {
 // shared the same way.
 type ConsentGranter = hookjson.ConsentGranter
 
-// NewHookHandler returns an http.HandlerFunc that receives Codex hook events
-// (PermissionRequest, PostToolUse, Stop) and dispatches them to the target.
+// NewHookHandler returns the hook receiver for Codex hook events
+// (PermissionRequest, PostToolUse, Stop), which dispatches them to the target.
+// The returned hookjson.HookHandler is an http.Handler carrying the confiner it
+// guards caller-supplied transcript paths with (issue #1390).
 //
 // The handler returns 200 with an empty body for recognized events. For
 // PermissionRequest, an empty response means Codex shows its normal approval
@@ -100,10 +102,8 @@ type ConsentGranter = hookjson.ConsentGranter
 // the session id reads the transcript file, so that read is additionally gated
 // behind the "transcripts" permission. A nil gate means no gating — used by
 // tests.
-// The returned hookjson.HookHandler is an http.Handler carrying the confiner it
-// guards caller-supplied transcript paths with (issue #1390).
 func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
-	confiner := TranscriptConfiner()
+	confiner := transcriptConfiner()
 	return hookjson.HookHandler{
 		HandlerFunc: func(w http.ResponseWriter, r *http.Request) {
 			serveHookRequest(target, gate, log, confiner, w, r)
@@ -112,12 +112,12 @@ func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger)
 	}
 }
 
-// TranscriptConfiner returns the confiner this adapter's hook receiver guards
+// transcriptConfiner returns the confiner this adapter's hook receiver guards
 // caller-supplied transcript paths with, rooted in the adapter's own
 // agent.Source declaration (issue #1361). It replaces the adapter-local
 // confineToSessionsDir, which re-derived $CODEX_HOME/sessions from its own
 // constants and so could guard a different tree than the one being watched.
-func TranscriptConfiner() *hookjson.PathConfiner {
+func transcriptConfiner() *hookjson.PathConfiner {
 	return hookjson.ConfinerForSource(Source, runtime.GOOS, transcriptExt)
 }
 

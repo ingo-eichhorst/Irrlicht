@@ -240,7 +240,7 @@ func sessionIDFromTranscriptPath(p string) string {
 // the payload is dropped with 200 (so the curl hook stays quiet). A nil
 // gate means no gating — used by tests.
 func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
-	confiner := TranscriptConfiner()
+	confiner := transcriptConfiner()
 	return hookjson.HookHandler{
 		HandlerFunc: func(w http.ResponseWriter, r *http.Request) {
 			serveHookRequest(target, markers, gate, log, confiner, w, r)
@@ -249,11 +249,11 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter
 	}
 }
 
-// TranscriptConfiner returns the confiner this adapter's hook receiver guards
+// transcriptConfiner returns the confiner this adapter's hook receiver guards
 // caller-supplied transcript paths with, rooted in the adapter's own
 // agent.Source declaration so it cannot drift from the tree the daemon watches
 // (issue #1361).
-func TranscriptConfiner() *hookjson.PathConfiner {
+func transcriptConfiner() *hookjson.PathConfiner {
 	return hookjson.ConfinerForSource(Source, runtime.GOOS, transcriptExt)
 }
 

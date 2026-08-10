@@ -58,9 +58,8 @@ func TestHookPathConfined(t *testing.T) {
 			target := &mockTarget{}
 			h := NewHookHandler(target, nil, mockLogger{})
 			return contracttesting.HookReceiverUnderTest{
-				Handler:    h,
-				Observed:   func() bool { return target.totalCalls() > 0 },
-				Rejections: h.Confiner.RejectionCount,
+				Handler:  h,
+				Observed: func() bool { return target.totalCalls() > 0 },
 			}
 		},
 		WriteTranscript: writeContractTranscript,

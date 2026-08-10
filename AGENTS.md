@@ -156,7 +156,10 @@ Before marking a ticket done, run the full suite — every layer must pass:
   — the handler together with the confiner it actually uses — so the counter
   the contract reads is taken off the handler under test, and "this handler
   confines" and "the counter proving it" stop being two objects that could
-  disagree. A contract that grows a sub-test to police an API the same PR
+  disagree. `HookReceiverUnderTest.Handler` is typed as that concrete struct
+  rather than `http.Handler`, and the count is derived from it rather than
+  declared beside it, so the wiring cannot name two different confiners even
+  by accident. A contract that grows a sub-test to police an API the same PR
   invented is a signal to remove the API, not to test it. What obligation 6
   never covered, and still does not, is an adapter wiring `New` to a hand-rolled
   handler instead of its constructor — `NewProduction` was adapter-supplied too.
