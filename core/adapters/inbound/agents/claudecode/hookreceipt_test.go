@@ -23,11 +23,11 @@ func TestHookReceiptObserved(t *testing.T) {
 		WriteTranscript: writeContractTranscript,
 		New: func(t *testing.T, log outbound.Logger) http.Handler {
 			t.Helper()
-			return NewHookHandlerWithConfiner(&mockTarget{}, nil, fakeGate(true), log, TranscriptConfiner())
+			return NewHookHandler(&mockTarget{}, nil, fakeGate(true), log)
 		},
 		NewDenied: func(t *testing.T, log outbound.Logger) http.Handler {
 			t.Helper()
-			return NewHookHandlerWithConfiner(&mockTarget{}, nil, fakeGate(false), log, TranscriptConfiner())
+			return NewHookHandler(&mockTarget{}, nil, fakeGate(false), log)
 		},
 		PayloadFor:   contractPayload,
 		KnownEvent:   HookPermissionRequest,

@@ -152,31 +152,27 @@ type HookTarget interface {
 type ConsentGranter = hookjson.ConsentGranter
 
 // NewHookHandler returns an http.HandlerFunc that receives Copilot hook events
-// and dispatches them to the target.
+// and dispatches them to the target. The returned hookjson.HookHandler is an
+// http.Handler carrying the confiner it guards caller-supplied transcript paths
+// with (issue #1390).
 //
 // gate is the consent check; while the "hooks" permission is not granted the
 // payload is dropped with 200, so the installed hook stays quiet. A nil gate
 // means no gating — used by tests.
-func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger) http.HandlerFunc {
-	return NewHookHandlerWithConfiner(target, gate, log, TranscriptConfiner())
+func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
+	return hookjson.NewHandler(transcriptConfiner(),
+		func(c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+			serveHookRequest(target, gate, log, c, w, r)
+		})
 }
 
-// TranscriptConfiner returns the confiner this adapter's hook receiver guards
+// transcriptConfiner returns the confiner this adapter's hook receiver guards
 // caller-supplied transcript paths with, rooted in the adapter's own
 // agent.Source declaration (issue #1361) rather than re-derived from the
 // adapter's constants — so the tree the receiver confines to cannot drift from
 // the one the daemon watches.
-func TranscriptConfiner() *hookjson.PathConfiner {
+func transcriptConfiner() *hookjson.PathConfiner {
 	return hookjson.ConfinerForSource(Source, runtime.GOOS, transcriptExt)
-}
-
-// NewHookHandlerWithConfiner is NewHookHandler with an explicit confiner, for
-// tests that need to drive a receiver rooted somewhere other than the real
-// session-state tree and to read back what it refused.
-func NewHookHandlerWithConfiner(target HookTarget, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		serveHookRequest(target, gate, log, confiner, w, r)
-	}
 }
 
 // serveHookRequest is NewHookHandler's request logic, pulled out of the

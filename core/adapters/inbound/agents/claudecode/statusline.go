@@ -73,60 +73,66 @@ const logComponentStatuslineReceiver = "statusline-receiver"
 // the appropriate 4xx. It never blocks: target.IngestRateLimit is a no-op
 // when the session hasn't been seen yet, so the handler returns immediately.
 //
+// The returned hookjson.HookHandler is an http.Handler carrying the confiner it
+// guards caller-supplied transcript paths with (issue #1390).
+//
 // gate is the consent check for the "statusline" permission; while not
 // granted the payload is dropped with 200. A nil gate means no gating —
 // used by tests.
-func NewStatuslineHandler(target RateLimitIngester, gate ConsentGranter, log outbound.Logger) http.HandlerFunc {
-	return NewStatuslineHandlerWithConfiner(target, gate, log, TranscriptConfiner())
+func NewStatuslineHandler(target RateLimitIngester, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
+	return hookjson.NewHandler(transcriptConfiner(),
+		func(c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+			serveStatuslineRequest(target, gate, log, c, w, r)
+		})
 }
 
-// NewStatuslineHandlerWithConfiner is NewStatuslineHandler with an explicit
-// confiner, for tests that drive the receiver against a temp root.
-func NewStatuslineHandlerWithConfiner(target RateLimitIngester, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		if gate != nil && !gate.Granted(AdapterName, PermissionKeyStatusline) {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		var payload statuslinePayload
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)
-			return
-		}
-
-		// The statusline endpoint sits on the same local, unauthenticated mux
-		// as the hook receivers and takes the same caller-supplied path, so it
-		// is confined by the same rule (issue #1361). Its sink is a map lookup
-		// rather than an open, so this is not an arbitrary-read guard — it is
-		// what keeps this receiver keying the tailer map with the SAME spelling
-		// the hook receiver now uses. Two spellings of one file are two
-		// sessions, and the rate-limit snapshot would land on neither.
-		transcriptPath, reason := confiner.Confine(payload.TranscriptPath)
-		if reason != hookjson.RejectNone {
-			hookjson.RejectPath(w, log, logComponentStatuslineReceiver, payload.TranscriptPath, reason)
-			return
-		}
-		payload.TranscriptPath = transcriptPath
-
-		sessionID := sessionIDFromTranscriptPath(transcriptPath)
-		snap := statuslineToSnapshot(payload.RateLimits)
-		if snap == nil {
-			// API-key / Bedrock / Vertex users — nothing to record. Ack and move on.
-			log.LogInfo(logComponentStatuslineReceiver, sessionID, "received statusline tick with no rate_limits block")
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		target.IngestRateLimit(payload.TranscriptPath, snap)
-		log.LogInfo(logComponentStatuslineReceiver, sessionID, "ingested rate-limit snapshot")
-		w.WriteHeader(http.StatusOK)
+// serveStatuslineRequest is NewStatuslineHandler's request logic, pulled out of
+// the returned closure so the constructor reads like its two siblings in
+// hooks.go and the branching isn't counted at the closure's extra nesting
+// depth.
+func serveStatuslineRequest(target RateLimitIngester, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
+
+	if gate != nil && !gate.Granted(AdapterName, PermissionKeyStatusline) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	var payload statuslinePayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// The statusline endpoint sits on the same local, unauthenticated mux
+	// as the hook receivers and takes the same caller-supplied path, so it
+	// is confined by the same rule (issue #1361). Its sink is a map lookup
+	// rather than an open, so this is not an arbitrary-read guard — it is
+	// what keeps this receiver keying the tailer map with the SAME spelling
+	// the hook receiver now uses. Two spellings of one file are two
+	// sessions, and the rate-limit snapshot would land on neither.
+	transcriptPath, reason := confiner.Confine(payload.TranscriptPath)
+	if reason != hookjson.RejectNone {
+		hookjson.RejectPath(w, log, logComponentStatuslineReceiver, payload.TranscriptPath, reason)
+		return
+	}
+	payload.TranscriptPath = transcriptPath
+
+	sessionID := sessionIDFromTranscriptPath(transcriptPath)
+	snap := statuslineToSnapshot(payload.RateLimits)
+	if snap == nil {
+		// API-key / Bedrock / Vertex users — nothing to record. Ack and move on.
+		log.LogInfo(logComponentStatuslineReceiver, sessionID, "received statusline tick with no rate_limits block")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	target.IngestRateLimit(payload.TranscriptPath, snap)
+	log.LogInfo(logComponentStatuslineReceiver, sessionID, "ingested rate-limit snapshot")
+	w.WriteHeader(http.StatusOK)
 }
 
 // statuslineToSnapshot converts Claude Code's two-window statusline payload
