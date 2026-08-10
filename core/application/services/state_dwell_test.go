@@ -17,10 +17,7 @@ import (
 // is only observable across passes: the whole mechanism is "what the second
 // pass decides about what the first pass proposed".
 func dwellDetector(clock *time.Time) (*SessionDetector, *ceilingRecorder) {
-	rec := &ceilingRecorder{}
-	d := newSessionDetector()
-	d.log = &capturingLogger{}
-	d.recorder = rec
+	d, _, rec := detectorWithSinks()
 	d.now = func() time.Time { return *clock }
 	return d, rec
 }
@@ -258,20 +255,17 @@ func TestClassify_CeilingExpiryIsNotSwallowedByTheDwell(t *testing.T) {
 // it — so a dwell started on the last pass a session ever receives would be a
 // drop rather than a delay. Pending() is what closes that.
 func TestClassify_ADwellOutstandingKeepsTheTickerComing(t *testing.T) {
-	newDet := func() *SessionDetector {
-		return newSessionDetector()
-	}
 
 	t.Run("nothing outstanding is still left alone", func(t *testing.T) {
 		// LOCK on the scoping #1376 introduced: widening this to every idle
 		// session is a per-tick transcript re-read of the whole machine.
-		if newDet().shouldRevisitIdleSession("s") {
+		if newSessionDetector().shouldRevisitIdleSession("s") {
 			t.Error("a session with neither a hold nor a dwell must not be revisited")
 		}
 	})
 
 	t.Run("a hold alone selects the session", func(t *testing.T) {
-		d := newDet()
+		d := newSessionDetector()
 		d.signals.Hold("s", session.SignalPermissionPrompt, session.SignalPayload{}, holdT0)
 		if !d.shouldRevisitIdleSession("s") {
 			t.Error("the #1360 arm must still select a held session")
@@ -279,7 +273,7 @@ func TestClassify_ADwellOutstandingKeepsTheTickerComing(t *testing.T) {
 	})
 
 	t.Run("a dwell alone selects the session", func(t *testing.T) {
-		d := newDet()
+		d := newSessionDetector()
 		d.dwell.Admit("s", session.StateWaiting, session.StateWorking, holdT0)
 
 		if d.signals.HasAny("s") {
@@ -292,7 +286,7 @@ func TestClassify_ADwellOutstandingKeepsTheTickerComing(t *testing.T) {
 	})
 
 	t.Run("publishing the dwell stops the extra work", func(t *testing.T) {
-		d := newDet()
+		d := newSessionDetector()
 		d.dwell.Admit("s", session.StateWaiting, session.StateWorking, holdT0)
 		d.dwell.Admit("s", session.StateWaiting, session.StateWorking, holdT0.Add(time.Minute))
 
@@ -406,10 +400,18 @@ func TestSessionDetector_ReapingASessionEvictsItsDwellAndHolds(t *testing.T) {
 	}
 }
 
-// TestSessionDetector_WiresAStateDwell exists because a nil *StateDwell is
-// deliberately usable and silently disables hysteresis — catastrophic in
-// production, and nothing else in the suite would notice the constructor
-// dropping it.
+// TestSessionDetector_WiresAStateDwell pins the CALLER's side of the nil-dwell
+// contract: that a detector on the nil path publishes immediately rather than
+// panicking.
+//
+// Since #1450 the "constructor must wire one" half is also covered, by
+// mustBeNonZero["dwell"] over both construction paths — so this test is no
+// longer the only thing that would notice. It is kept anyway, because the two
+// assert different things: the guard asserts the field is set, this asserts
+// what happens when it deliberately is not, which is the property that makes
+// opting out safe at all. (core/domain/session's own state_dwell_test.go pins
+// the same transparency from inside the domain type; this is the detector-side
+// lock on it.)
 //
 // The nil is now written by hand rather than obtained by skipping the
 // allocator: since #1450 there are no bare SessionDetector literals left in

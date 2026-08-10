@@ -14,6 +14,21 @@ import (
 // and so does not satisfy outbound.EventRecorder.
 type ceilingRecorder struct{ events []lifecycle.Event }
 
+// detectorWithSinks builds a detector wired for the classify pipeline and
+// nothing else, with both observation sinks attached. Three tests in this
+// package need exactly this, and #1450 made open-coding it worse rather than
+// better: routing construction through the allocator turned one composite
+// literal into three statements, so the duplication grew a line at each site
+// and would grow another for every sink added later.
+func detectorWithSinks() (*SessionDetector, *capturingLogger, *ceilingRecorder) {
+	lg := &capturingLogger{}
+	rec := &ceilingRecorder{}
+	d := newSessionDetector()
+	d.log = lg
+	d.recorder = rec
+	return d, lg, rec
+}
+
 func (r *ceilingRecorder) Record(ev lifecycle.Event) { r.events = append(r.events, ev) }
 func (r *ceilingRecorder) Close() error              { return nil }
 
@@ -184,11 +199,7 @@ func TestClassify_WhatTheUserSeesAfterAPermissionCeilingExpires(t *testing.T) {
 func TestSessionDetector_HoldCeilingExpiryIsLoggedAndRecorded(t *testing.T) {
 	const beyondAnyHookCeiling = 48 * time.Hour
 
-	lg := &capturingLogger{}
-	rec := &ceilingRecorder{}
-	d := newSessionDetector()
-	d.log = lg
-	d.recorder = rec
+	d, lg, rec := detectorWithSinks()
 
 	state := &session.SessionState{
 		SessionID: "s",
@@ -247,11 +258,7 @@ func TestSessionDetector_HoldCeilingExpiryIsLoggedAndRecorded(t *testing.T) {
 // actually indicates a lost release would be buried, which defeats the purpose
 // of recording it at all.
 func TestSessionDetector_NormalHoldReleaseIsNotReported(t *testing.T) {
-	lg := &capturingLogger{}
-	rec := &ceilingRecorder{}
-	d := newSessionDetector()
-	d.log = lg
-	d.recorder = rec
+	d, lg, rec := detectorWithSinks()
 
 	state := &session.SessionState{
 		SessionID: "s",

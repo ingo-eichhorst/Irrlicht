@@ -44,7 +44,10 @@ import (
 // `&services.T{}` with no fields at all — which is not harmless just because it
 // populates nothing: it is a fully-nil service that panics on first use, and it
 // is what an external test in this same directory (`package services_test`)
-// would naturally reach for. The scan below matches it. And the literals these
+// would naturally reach for. The scan below matches it — but only in THIS
+// directory: the walk is `ParseDir(".")`, so it reaches the `package
+// services_test` files beside it and nothing in core/e2e or core/cmd. Such a
+// literal would compile there and go unseen; none exists today. And the literals these
 // issues were actually filed about live in THIS package, where unexported
 // fields are freely settable and no unexported marker field could ever have
 // reached them.
@@ -78,6 +81,20 @@ type guardedConstruction struct {
 	// needed detectInterval, because time.NewTicker panics outright on a
 	// non-positive interval. SessionDetector needs five more, and none of them
 	// panics: they fail silently, which is worse.
+	//
+	// Note the POLARITY, which is the opposite of nilTolerant's and is a
+	// deliberate trade rather than an oversight. nilTolerant is an opt-OUT, so
+	// a new map is covered by default. This is an opt-IN, so a new
+	// unusable-at-zero field is NOT covered until someone lists it. Inverting
+	// it — "every non-map/chan field must be non-zero unless declared" — was
+	// considered and rejected: the zero value of most fields here is not merely
+	// legal but the documented intent (`costTracker`, `historyTracker`,
+	// `cacheBloat`, `hookLiveness`, `recorder`, `consentGate` and `now` are all
+	// "nil = disabled"), so the flip costs ~30 exemption entries across the two
+	// types whose reason is uniformly "optional dependency" and drowns the five
+	// that carry real information. Deriving the set from the AST does not help
+	// either: a field forgotten everywhere is precisely one that is assigned
+	// nowhere, which is indistinguishable from an optional one.
 	mustBeNonZero map[string]string
 
 	// paths returns the constructions to walk by reflection: the allocator
@@ -94,8 +111,27 @@ type constructionPath struct {
 	value reflect.Value // the constructed *T
 }
 
+// guardedFor returns the table row for a type name, and fails loudly if there
+// is none.
+//
+// The live guards look their row up BY NAME rather than by position. An earlier
+// draft indexed the slice (`guardedConstructions()[0]`) and needed a third test
+// whose only job was to pin the row order — coverage of nothing, defending a
+// hazard that a lookup simply does not have, and a regression against the
+// named-row table #1444 already had.
+func guardedFor(t *testing.T, typeName string) guardedConstruction {
+	t.Helper()
+	for _, g := range guardedConstructions() {
+		if g.typeName == typeName {
+			return g
+		}
+	}
+	t.Fatalf("no guardedConstructions row for %s — the guard below would check nothing", typeName)
+	return guardedConstruction{}
+}
+
 // guardedConstructions is the table both guards run over. A third type joins by
-// adding a row.
+// adding a row here plus the two one-line tests that name it.
 func guardedConstructions() []guardedConstruction {
 	return []guardedConstruction{
 		{
@@ -123,7 +159,6 @@ func guardedConstructions() []guardedConstruction {
 			allocator: "newSessionDetector",
 			// Every map and channel on SessionDetector is allocator-owned;
 			// nothing is dependency-supplied, so there is nothing to exempt.
-			nilTolerant: map[string]string{},
 			mustBeNonZero: map[string]string{
 				"deletedCooldown": "at zero every tombstoned session is immediately re-creatable from " +
 					"the late-arriving writes of a dying process — the exact ghost-session bug the " +
@@ -200,27 +235,38 @@ type literalScan struct {
 	report   func(ast.Node)
 }
 
-// underlying strips the spellings that stand between a type expression and its
+// resolve strips the spellings that stand between a type expression and its
 // structure — parentheses, pointers, and chains of type declarations — until it
-// reaches something the caller can switch on.
+// reaches something the caller can switch on. It is the ONE place any
+// resolution rule lives, so a hardening cannot reach some callers and not
+// others; `deref` is the single axis its two callers disagree on.
 //
 // Pointers are stripped HERE, inside the bounded loop, rather than by a
-// recursive arm in names(). That placement does three jobs at once: it makes
-// names() total (a recursive arm would run forever on `type a *a`, which
-// compiles); it lets the container switch in visit() see through a
-// pointer-to-container element type such as `[]*[]*SessionDetector{{{}}}`; and
-// it keeps every resolution rule in one place.
+// recursive arm in names(). That placement does two jobs: it makes names()
+// total (a recursive arm would run forever on `type a *a`, which compiles), and
+// it lets the container switch in visit() see through a pointer-to-container
+// element type such as `[]*[]*SessionDetector{{{}}}`.
 //
 // It stops at the guarded type's own name, which is load-bearing: the
 // declaration table holds `SessionDetector` too, mapped to its *ast.StructType,
 // and chasing that far would resolve every literal of the guarded type into an
 // anonymous struct that names nothing.
-func (s *literalScan) underlying(t ast.Expr) ast.Expr {
+// derefPointers / keepPointers name resolve's second argument at its call
+// sites, because `resolve(t, true)` says nothing about what is being decided.
+const (
+	derefPointers = true
+	keepPointers  = false
+)
+
+func (s *literalScan) resolve(t ast.Expr, deref bool) ast.Expr {
 	for range typeResolutionDepth {
 		switch v := t.(type) {
 		case *ast.ParenExpr:
 			t = v.X
 		case *ast.StarExpr:
+			if !deref {
+				return t
+			}
 			t = v.X
 		case *ast.Ident:
 			if v.Name == s.typeName {
@@ -238,25 +284,31 @@ func (s *literalScan) underlying(t ast.Expr) ast.Expr {
 	return t
 }
 
-// names reports whether the type expression IS the guarded struct type, seeing
-// through pointers, parentheses and a chain of type declarations.
+// isGuarded reports whether an already-resolved expression names the guarded
+// struct.
 //
 // The *ast.SelectorExpr arm is what makes the scan see
 // `services.SessionDetector{}` — the spelling the `package services_test` files
 // in this same directory use, and the only literal an external package can
-// still write now that every field is unexported. It matches on the selector
-// alone rather than on `pkg.Type`, so an import alias cannot slip past. That is
-// a deliberate trade: a same-named type in some other package would be reported
+// write now that every field is unexported. It matches on the selector alone
+// rather than on `pkg.Type`, so an import alias cannot slip past. That is a
+// deliberate trade: a same-named type in some other package would be reported
 // too, which repo-wide is not a live risk (these two declarations are the only
 // ones) and would be a false positive worth taking over an alias bypass.
-func (s *literalScan) names(t ast.Expr) bool {
-	switch v := s.underlying(t).(type) {
+func (s *literalScan) isGuarded(t ast.Expr) bool {
+	switch v := t.(type) {
 	case *ast.Ident:
 		return v.Name == s.typeName
 	case *ast.SelectorExpr:
 		return v.Sel.Name == s.typeName
 	}
 	return false
+}
+
+// names reports whether the type expression denotes the guarded struct, through
+// any number of pointers.
+func (s *literalScan) names(t ast.Expr) bool {
+	return s.isGuarded(s.resolve(t, derefPointers))
 }
 
 // namesValueType is names() minus the pointer stripping: it reports whether the
@@ -267,26 +319,7 @@ func (s *literalScan) names(t ast.Expr) bool {
 // while `new(*SessionDetector)` and `var d *SessionDetector` produce a harmless
 // nil pointer — and `core/cmd/irrlichd/main.go` holds one of the latter.
 func (s *literalScan) namesValueType(t ast.Expr) bool {
-	for range typeResolutionDepth {
-		switch v := t.(type) {
-		case *ast.ParenExpr:
-			t = v.X
-		case *ast.SelectorExpr:
-			return v.Sel.Name == s.typeName
-		case *ast.Ident:
-			if v.Name == s.typeName {
-				return true
-			}
-			next, ok := s.decls[v.Name]
-			if !ok {
-				return false
-			}
-			t = next
-		default:
-			return false
-		}
-	}
-	return false
+	return s.isGuarded(s.resolve(t, keepPointers))
 }
 
 // visit reports lit if the type it is KNOWN to have is the guarded type, and
@@ -311,7 +344,7 @@ func (s *literalScan) visit(lit *ast.CompositeLit, typ ast.Expr) {
 		s.report(lit)
 		return
 	}
-	switch v := s.underlying(typ).(type) {
+	switch v := s.resolve(typ, derefPointers).(type) {
 	case *ast.ArrayType:
 		// Covers slices and arrays alike; Len distinguishes them and the
 		// elision rule is the same for both.
@@ -491,30 +524,11 @@ func assertNeverBuiltByBareLiteral(t *testing.T, g guardedConstruction) {
 }
 
 func TestPermissionServiceIsNeverBuiltByBareLiteral(t *testing.T) {
-	assertNeverBuiltByBareLiteral(t, guardedConstructions()[0])
+	assertNeverBuiltByBareLiteral(t, guardedFor(t, "PermissionService"))
 }
 
 func TestSessionDetectorIsNeverBuiltByBareLiteral(t *testing.T) {
-	assertNeverBuiltByBareLiteral(t, guardedConstructions()[1])
-}
-
-// TestGuardedConstructionTableMatchesItsTests pins the two indexes above to the
-// rows they are meant to name. Without it, inserting a row at the top would
-// silently point both tests at the wrong type — and both would still pass,
-// because each row's guard is satisfied by its own allocator.
-func TestGuardedConstructionTableMatchesItsTests(t *testing.T) {
-	want := []string{"PermissionService", "SessionDetector"}
-	got := guardedConstructions()
-	if len(got) != len(want) {
-		t.Fatalf("guardedConstructions has %d rows, the tests below name %d — "+
-			"a new row needs its own Test…IsNeverBuiltByBareLiteral and "+
-			"Test…InitialisesEveryOwnedMap", len(got), len(want))
-	}
-	for i, name := range want {
-		if got[i].typeName != name {
-			t.Errorf("row %d is %s, but the tests index it as %s", i, got[i].typeName, name)
-		}
-	}
+	assertNeverBuiltByBareLiteral(t, guardedFor(t, "SessionDetector"))
 }
 
 // ---------------------------------------------------------------------------
@@ -549,11 +563,11 @@ func assertAllocatorLeavesNothingUnusable(t *testing.T, g guardedConstruction) {
 }
 
 func TestNewPermissionServiceInitialisesEveryOwnedMap(t *testing.T) {
-	assertAllocatorLeavesNothingUnusable(t, guardedConstructions()[0])
+	assertAllocatorLeavesNothingUnusable(t, guardedFor(t, "PermissionService"))
 }
 
 func TestNewSessionDetectorInitialisesEveryOwnedMap(t *testing.T) {
-	assertAllocatorLeavesNothingUnusable(t, guardedConstructions()[1])
+	assertAllocatorLeavesNothingUnusable(t, guardedFor(t, "SessionDetector"))
 }
 
 // emptyPermStore is the smallest thing NewPermissionService will accept: it
@@ -662,100 +676,105 @@ func TestSourceScanCatchesEveryKnownShape(t *testing.T) {
 	}{
 		// ---- caught: the plain spellings -------------------------------
 		{"bare pointer in a function", `package p
-func f() { _ = &SessionDetector{} }`, 1},
+func f() { _ = &__TYPE__{} }`, 1},
 		{"bare value literal in a function", `package p
-func f() { _ = SessionDetector{} }`, 1},
+func f() { _ = __TYPE__{} }`, 1},
 		{"package-scope var", `package p
-var x = &SessionDetector{}`, 1},
+var x = &__TYPE__{}`, 1},
 		{"struct field value spelling its own type", `package p
-var x = struct{ d *SessionDetector }{d: &SessionDetector{}}`, 1},
+var x = struct{ d *__TYPE__ }{d: &__TYPE__{}}`, 1},
 		{"returned from a package-scope closure", `package p
-var x = func() *SessionDetector { return &SessionDetector{} }`, 1},
+var x = func() *__TYPE__ { return &__TYPE__{} }`, 1},
 
 		// ---- caught: elision, one level (#1444's cases, as locks) ------
 		{"slice element, type elided", `package p
-var x = []*SessionDetector{{}}`, 1},
+var x = []*__TYPE__{{}}`, 1},
 		{"map value, type elided", `package p
-var x = map[string]*SessionDetector{"a": {}}`, 1},
+var x = map[string]*__TYPE__{"a": {}}`, 1},
 		{"array element, type elided", `package p
-var x = [2]*SessionDetector{{}, {}}`, 2},
+var x = [2]*__TYPE__{{}, {}}`, 2},
 		{"map key, type elided", `package p
-var x = map[*SessionDetector]bool{{}: true}`, 1},
+var x = map[*__TYPE__]bool{{}: true}`, 1},
 
 		// ---- caught: elision behind an INDEX KEY (the #1450 regression) --
 		{"keyed slice element", `package p
-var x = []*SessionDetector{0: {}}`, 1},
+var x = []*__TYPE__{0: {}}`, 1},
 		{"keyed array element", `package p
-var x = [3]*SessionDetector{1: {}}`, 1},
+var x = [3]*__TYPE__{1: {}}`, 1},
 
 		// ---- caught: elision, more than one level ----------------------
 		{"slice of slice, elided twice", `package p
-var x = [][]*SessionDetector{{{}}}`, 1},
+var x = [][]*__TYPE__{{{}}}`, 1},
 		{"map of slice, elided twice", `package p
-var x = map[string][]*SessionDetector{"a": {{}}}`, 1},
+var x = map[string][]*__TYPE__{"a": {{}}}`, 1},
 		{"pointer to a container element", `package p
-var x = []*[]*SessionDetector{{{}}}`, 1},
+var x = []*[]*__TYPE__{{{}}}`, 1},
 
 		// ---- caught: through type declarations -------------------------
 		{"defined container type, package scope", `package p
-type detList []*SessionDetector
+type detList []*__TYPE__
 var x = detList{{}}`, 1},
 		{"type alias, package scope", `package p
-type detAlias = SessionDetector
+type detAlias = __TYPE__
 var x = &detAlias{}`, 1},
 		{"defined container type, FUNCTION scope", `package p
 func f() {
-	type detList []*SessionDetector
+	type detList []*__TYPE__
 	_ = detList{{}}
 }`, 1},
 		{"type alias, FUNCTION scope", `package p
 func f() {
-	type detAlias = SessionDetector
+	type detAlias = __TYPE__
 	_ = detAlias{}
 }`, 1},
 
 		// ---- caught: qualified from outside the package ----------------
 		{"qualified selector", `package p
-var x = &services.SessionDetector{}`, 1},
+var x = &services.__TYPE__{}`, 1},
 		{"qualified selector under an import alias", `package p
-var x = &svc.SessionDetector{}`, 1},
+var x = &svc.__TYPE__{}`, 1},
 
 		// ---- caught: the zero value without any literal at all ---------
 		{"new(T)", `package p
-func f() { _ = new(SessionDetector) }`, 1},
+func f() { _ = new(__TYPE__) }`, 1},
 		{"var of the struct type, no initialiser", `package p
-func f() { var d SessionDetector; _ = d }`, 1},
+func f() { var d __TYPE__; _ = d }`, 1},
 
 		// ---- reported exactly once, not twice --------------------------
 		{"explicit element type inside a container", `package p
-var x = []*SessionDetector{&SessionDetector{}}`, 1},
+var x = []*__TYPE__{&__TYPE__{}}`, 1},
 
 		// ---- NOT reported: ordinary, correct code ----------------------
 		{"table-driven struct holding constructor results", `package p
-var x = []struct{ d *SessionDetector }{{d: newSessionDetector()}}`, 0},
+var x = []struct{ d *__TYPE__ }{{d: __ALLOC__()}}`, 0},
 		{"map holding constructor results", `package p
-var x = map[string]*SessionDetector{"a": newSessionDetector()}`, 0},
+var x = map[string]*__TYPE__{"a": __ALLOC__()}`, 0},
 		{"slice holding constructor results", `package p
-var x = []*SessionDetector{newSessionDetector()}`, 0},
+var x = []*__TYPE__{__ALLOC__()}`, 0},
 		{"empty elided containers", `package p
-var x = [][]*SessionDetector{{}}
-var y = map[string][]*SessionDetector{"a": {}}`, 0},
+var x = [][]*__TYPE__{{}}
+var y = map[string][]*__TYPE__{"a": {}}`, 0},
 		{"new of a POINTER to the struct", `package p
-func f() { _ = new(*SessionDetector) }`, 0},
+func f() { _ = new(*__TYPE__) }`, 0},
 		{"var of a POINTER to the struct", `package p
-func f() { var d *SessionDetector; _ = d }`, 0},
+func f() { var d *__TYPE__; _ = d }`, 0},
 		{"a var of the struct type WITH an initialiser", `package p
-func f() { var d *SessionDetector = newSessionDetector(); _ = d }`, 0},
+func f() { var d *__TYPE__ = __ALLOC__(); _ = d }`, 0},
 		{"a differently-named type", `package p
-var x = &SessionDetectorStub{}`, 0},
+var x = &__TYPE__Stub{}`, 0},
 	}
 
 	total := 0
 	for _, g := range guardedConstructions() {
 		for _, tc := range cases {
 			t.Run(g.typeName+"/"+tc.name, func(t *testing.T) {
-				src := strings.ReplaceAll(tc.src, "SessionDetector", g.typeName)
-				src = strings.ReplaceAll(src, "newSessionDetector", g.allocator)
+				// Distinct tokens, not the literal type name: substituting
+				// "SessionDetector" first would also rewrite the substring
+				// inside "newSessionDetector", so the allocator substitution
+				// silently became a no-op that only looked correct because
+				// both allocators happen to be spelled new+TypeName.
+				src := strings.ReplaceAll(tc.src, "__TYPE__", g.typeName)
+				src = strings.ReplaceAll(src, "__ALLOC__", g.allocator)
 				fset := token.NewFileSet()
 				file, err := parser.ParseFile(fset, "shape.go", src, 0)
 				if err != nil {
