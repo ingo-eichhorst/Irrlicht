@@ -253,17 +253,23 @@ func readFileForMessage(path string) string {
 func livePermissionState(t *testing.T, addr, agentName, key string) string {
 	t.Helper()
 	snap := fetchPermissionsSnapshot(t, http.DefaultClient, "http://"+addr+"/api/v1/permissions")
-	for _, a := range snap.Agents {
-		if a.Name != agentName {
-			continue
-		}
-		for _, p := range a.Permissions {
-			if p.Key == key {
-				return p.State
-			}
+	for _, p := range snapshotAgent(snap, agentName).Permissions {
+		if p.Key == key {
+			return p.State
 		}
 	}
 	return "<absent>"
+}
+
+// snapshotAgent picks one agent out of a permissions snapshot, or a zero value
+// when it is absent — so callers loop once instead of nesting.
+func snapshotAgent(snap permissionsSnapshot, agentName string) permissionsSnapshotAgent {
+	for _, a := range snap.Agents {
+		if a.Name == agentName {
+			return a
+		}
+	}
+	return permissionsSnapshotAgent{}
 }
 
 // storedPermissionState reads one permission's state straight out of the

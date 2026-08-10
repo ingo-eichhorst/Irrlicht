@@ -3,6 +3,7 @@ package permissions
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -117,28 +118,53 @@ func TestAnswerHandlerUnknownPermissionIs400(t *testing.T) {
 
 func TestAnswerHandlerRejectsCrossSiteRequests(t *testing.T) {
 	body := `{"answers":[{"agent":"claude-code","permission":"hooks","grant":true}]}`
+	assertCrossOriginGuard(t, "/api/v1/permissions/answer",
+		func() io.Reader { return strings.NewReader(body) },
+		func(target *fakeTarget) http.HandlerFunc { return NewAnswerHandler(target, silentLogger{}) },
+		func(t *testing.T, site string, target *fakeTarget) {
+			t.Helper()
+			if len(target.answered) != 0 {
+				t.Errorf("Sec-Fetch-Site=%s: cross-origin answer must not be applied, got %+v", site, target.answered)
+			}
+		})
+}
+
+// assertCrossOriginGuard is the shared shape of both mutating routes' guard:
+// "cross-site" and "same-site" are refused 403 with no side effect, while
+// same-origin (the dashboard) and a missing header (native clients) pass.
+//
+// Shared rather than copied because the two routes must agree — the reload
+// route can run the same Apply closures the answer route can, so a divergence
+// between these two tests would mean a divergence in what a webpage the user
+// visits is able to reach. notApplied asserts the route-specific "and nothing
+// happened" half.
+func assertCrossOriginGuard(
+	t *testing.T,
+	path string,
+	body func() io.Reader,
+	handler func(*fakeTarget) http.HandlerFunc,
+	notApplied func(*testing.T, string, *fakeTarget),
+) {
+	t.Helper()
 	for _, site := range []string{"cross-site", "same-site"} {
 		target := &fakeTarget{snapshot: testSnapshot()}
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/permissions/answer", strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, path, body())
 		req.Header.Set("Sec-Fetch-Site", site)
 		rec := httptest.NewRecorder()
-		NewAnswerHandler(target, silentLogger{})(rec, req)
+		handler(target)(rec, req)
 		if rec.Code != http.StatusForbidden {
 			t.Errorf("Sec-Fetch-Site=%s: status = %d, want 403", site, rec.Code)
 		}
-		if len(target.answered) != 0 {
-			t.Errorf("Sec-Fetch-Site=%s: cross-origin answer must not be applied, got %+v", site, target.answered)
-		}
+		notApplied(t, site, target)
 	}
-	// same-origin (the dashboard) and a missing header (native clients) pass.
 	for _, site := range []string{"same-origin", "none", ""} {
 		target := &fakeTarget{snapshot: testSnapshot()}
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/permissions/answer", strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, path, body())
 		if site != "" {
 			req.Header.Set("Sec-Fetch-Site", site)
 		}
 		rec := httptest.NewRecorder()
-		NewAnswerHandler(target, silentLogger{})(rec, req)
+		handler(target)(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Errorf("Sec-Fetch-Site=%q: status = %d, want 200", site, rec.Code)
 		}
@@ -179,29 +205,13 @@ func TestReloadHandlerStoreFailureIs500(t *testing.T) {
 // needs the same cross-origin guard the answer handler has. A bodyless POST is
 // exactly the shape a drive-by form can produce.
 func TestReloadHandlerRejectsCrossSiteRequests(t *testing.T) {
-	for _, site := range []string{"cross-site", "same-site"} {
-		target := &fakeTarget{snapshot: testSnapshot()}
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/permissions/reload", nil)
-		req.Header.Set("Sec-Fetch-Site", site)
-		rec := httptest.NewRecorder()
-		NewReloadHandler(target, silentLogger{})(rec, req)
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("Sec-Fetch-Site=%s: status = %d, want 403", site, rec.Code)
-		}
-		if target.reloads != 0 {
-			t.Errorf("Sec-Fetch-Site=%s: cross-origin reload must not run, reloads = %d", site, target.reloads)
-		}
-	}
-	for _, site := range []string{"same-origin", "none", ""} {
-		target := &fakeTarget{snapshot: testSnapshot()}
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/permissions/reload", nil)
-		if site != "" {
-			req.Header.Set("Sec-Fetch-Site", site)
-		}
-		rec := httptest.NewRecorder()
-		NewReloadHandler(target, silentLogger{})(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Errorf("Sec-Fetch-Site=%q: status = %d, want 200", site, rec.Code)
-		}
-	}
+	assertCrossOriginGuard(t, "/api/v1/permissions/reload",
+		func() io.Reader { return nil },
+		func(target *fakeTarget) http.HandlerFunc { return NewReloadHandler(target, silentLogger{}) },
+		func(t *testing.T, site string, target *fakeTarget) {
+			t.Helper()
+			if target.reloads != 0 {
+				t.Errorf("Sec-Fetch-Site=%s: cross-origin reload must not run, reloads = %d", site, target.reloads)
+			}
+		})
 }

@@ -180,7 +180,10 @@ func envDuration(key string, def, min time.Duration) time.Duration {
 		return def
 	}
 	parsed, err := time.ParseDuration(raw)
-	if err != nil || parsed <= 0 || parsed < min {
+	if err != nil {
+		return def
+	}
+	if parsed <= 0 || parsed < min {
 		return def
 	}
 	return parsed
