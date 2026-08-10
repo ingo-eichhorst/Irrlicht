@@ -86,9 +86,9 @@ var errNoSafeSplice = errors.New("hookjson: cannot splice safely")
 // a valid document is (#1391). Only the blanker moved; every span-parsing and
 // splicing symbol below stays here, where its only caller is.
 //
-// These two remain as package-local aliases so the ~40 call sites and tests
-// below read unchanged, and so this package keeps naming the operation in its
-// own vocabulary.
+// These two remain as package-local aliases so the nine call sites in this
+// package and its tests read unchanged, and so this package keeps naming the
+// operation in its own vocabulary.
 
 // blankComments returns a copy of src with every JSONC comment overwritten by
 // spaces.

@@ -75,8 +75,8 @@ Before marking a ticket done, run the full suite — every layer must pass:
   from Key Conventions — `domain/` and `ports/` packages may not import
   outward into `adapters/` or `application/`, `application/services/`
   may only reach `adapters/inbound/` through `ports/`, and `pkg/` — the
-  shared leaf layer that every other layer depends on, `domain/agent`
-  included — may not import `adapters/` or `application/` at all. It checks
+  shared leaf layer depended on from domain, adapters, application and
+  cmd alike — may not import `adapters/` or `application/` at all. It checks
   **direct** imports only, so a rule constrains the edges a package declares,
   not what those edges drag in transitively. `pkg/` was unbound until #1391,
   where the natural fix for a decode shared between `pkg/tailer` and the

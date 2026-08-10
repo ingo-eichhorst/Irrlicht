@@ -90,9 +90,16 @@ func TestGetClaudeModel_CommentDelimitersInsideStringsAreNotComments(t *testing.
 // TestMalformedInput_StillErrors). Blanking comments must not make this reader
 // any more permissive than that one: the shapes below are exactly the JSONC-
 // adjacent ones hookjson still rejects, and getClaudeModel must keep yielding
-// "" for each. If the two readers ever disagree about whether a file is valid,
-// irrlicht will install hooks into a config it cannot read, or refuse one it
-// can — which is the class of bug #1391 itself is.
+// "" for each. If the two readers disagree about whether a NON-EMPTY document
+// is valid, irrlicht will install hooks into a config it cannot read, or
+// refuse one it can — which is the class of bug #1391 itself is.
+//
+// They do already differ on the trivial cases, harmlessly and by design:
+// hookjson short-circuits a missing or whitespace-only file to an empty map
+// with no error (it is about to write one), while getClaudeModel just fails
+// its decode. Both converge on "no model", so nothing observable diverges.
+// The direction that would matter is tailer accepting what hookjson rejects,
+// and that is what the table below pins.
 func TestGetClaudeModel_MalformedStaysEmpty(t *testing.T) {
 	cases := map[string]string{
 		"trailing comma":   "{\n  \"model\": \"claude-sonnet-4-20250514\",\n}\n",

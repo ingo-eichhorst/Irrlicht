@@ -125,10 +125,18 @@ func TestBlankMask_BlockCommentKeepsNewlinesButMarksThem(t *testing.T) {
 	}
 }
 
-// TestBlank_EmptyInput is the boundary the byte loops are easiest to get wrong.
+// TestBlank_EmptyInput is the boundary the byte loops are easiest to get
+// wrong. Both entry points are exercised: Blank delegates to BlankMask today,
+// but it is the one core/pkg/tailer calls, so a refactor that gives it its own
+// loop must not find this boundary uncovered.
 func TestBlank_EmptyInput(t *testing.T) {
-	blanked, mask := BlankMask(nil)
-	if len(blanked) != 0 || len(mask) != 0 {
-		t.Errorf("BlankMask(nil) = %q, %v; want empty, empty", blanked, mask)
+	for _, src := range [][]byte{nil, {}} {
+		if got := Blank(src); len(got) != 0 {
+			t.Errorf("Blank(%q) = %q; want empty", src, got)
+		}
+		blanked, mask := BlankMask(src)
+		if len(blanked) != 0 || len(mask) != 0 {
+			t.Errorf("BlankMask(%q) = %q, %v; want empty, empty", src, blanked, mask)
+		}
 	}
 }

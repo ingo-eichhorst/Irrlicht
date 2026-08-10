@@ -48,10 +48,13 @@ func TestArchitectureLayerImportDirection(t *testing.T) {
 			forbiddenPrefixes: []string{"irrlicht/core/adapters/inbound/"},
 		},
 		// pkg/ is the shared leaf layer: stdlib, other pkg/ packages, and
-		// domain types. It is depended ON by every other layer — including
-		// domain/agent, which imports pkg/tailer — so an edge out of pkg/ into
-		// adapters/ or application/ inverts the direction for everything above
-		// it at once.
+		// domain types. It is depended on from every layer that imports
+		// anything at all — domain (2 packages), adapters (62), application
+		// (6), cmd (4) — so an edge out of pkg/ into adapters/ or
+		// application/ inverts the direction for all of them at once. The
+		// domain edge is the sharpest: domain/agent imports pkg/tailer, so
+		// pkg/ reaching outward would put adapters transitively underneath
+		// domain.
 		//
 		// Added by #1391, where the obvious fix for a shared JSONC decode was
 		// to have pkg/tailer import the hookjson adapter. Nothing in this table
@@ -63,10 +66,17 @@ func TestArchitectureLayerImportDirection(t *testing.T) {
 		// rule. An adapter that imports no domain package would have compiled
 		// fine.
 		//
-		// ports/ is deliberately absent from the forbidden list: no pkg/
-		// package imports it today, but a leaf implementing a port interface
-		// would be legitimate, and this rule is meant to pin the direction that
-		// is actually wrong rather than the widest one available.
+		// ports/ is deliberately absent from the forbidden list. Today the two
+		// do not touch in either direction — no pkg/ package imports ports/,
+		// and no ports/ package imports pkg/ — but a leaf implementing a port
+		// interface would be legitimate, and this rule is meant to pin the
+		// direction that is actually wrong rather than the widest one
+		// available.
+		//
+		// Like every rule here it sees only non-test imports: packages.Load
+		// runs without Tests, so a pkg/**/*_test.go importing an adapter would
+		// pass. None does today. That gap is pre-existing and shared by all
+		// four rules, not introduced with this one.
 		{
 			name:              "pkg must not import adapters or application",
 			sourcePrefix:      "irrlicht/core/pkg/",

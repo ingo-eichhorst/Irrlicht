@@ -1,8 +1,6 @@
 package tailer
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -12,17 +10,7 @@ import (
 // expected value (e.g. via getClaudeModel) can do so.
 func writeClaudeSettingsFixture(t *testing.T, model string) string {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	claudeDir := filepath.Join(home, ".claude")
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"),
-		[]byte(`{"model":"`+model+`"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return home
+	return writeClaudeSettingsRaw(t, `{"model":"`+model+`"}`)
 }
 
 // noInBandModelLines is a minimal user/assistant transcript that carries no
