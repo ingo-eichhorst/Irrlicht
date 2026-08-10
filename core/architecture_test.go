@@ -1,6 +1,15 @@
 // architecture_test.go lives at the module root, not in a subpackage, so
 // packages.Load's "./..." pattern can see every package in the module from
 // a single load.
+//
+// It is not the only architecture rule in this directory. The rule table below
+// is about the IMPORT GRAPH — which packages a package may depend on — and
+// loads with NeedName|NeedImports. architecture_hookbody_test.go asks a
+// different kind of question, about which EXPRESSIONS a function may contain
+// (#1389: only hookjson.DecodeConfined may read an inbound request body), and
+// needs syntax and type information over a narrow pattern. Adding a rule of the
+// first kind means adding a row here; a rule of the second kind does not fit
+// this table at all.
 package core_test
 
 import (

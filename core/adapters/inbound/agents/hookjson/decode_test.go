@@ -22,7 +22,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -35,30 +35,19 @@ type decodeTestPayload struct {
 func getDecodePath(p *decodeTestPayload) string           { return p.TranscriptPath }
 func setDecodePath(p *decodeTestPayload, confined string) { p.TranscriptPath = confined }
 
-// decodeLogger records LogError calls so a refusal can be asserted to have been
-// reported, not merely to have happened.
-type decodeLogger struct{ errs []string }
-
-func (l *decodeLogger) LogInfo(eventType, sessionID, msg string)  {}
-func (l *decodeLogger) LogError(eventType, sessionID, msg string) { l.errs = append(l.errs, msg) }
-func (l *decodeLogger) LogProcessingTime(eventType, sessionID string, ms int64, size int, result string) {
-}
-func (l *decodeLogger) Close() error { return nil }
-
 // decodeConfinerRooted builds a confiner over a real temp root, matching how
 // the adapters build theirs (an absolute root, ".jsonl" leaves).
+//
+// No symlink pre-resolution of the root: containedIn resolves the DECLARED root
+// itself and rebuilds the accepted path on the unresolved spelling, so a bare
+// t.TempDir() confines correctly on darwin despite /var -> /private/var. The
+// first draft carried an EvalSymlinks block here whose comment claimed the
+// opposite; confine_test.go has passed a raw t.TempDir() to staticRoots all
+// along, which is the evidence it was never needed.
 func decodeConfinerRooted(t *testing.T) (*PathConfiner, string) {
 	t.Helper()
 	root := t.TempDir()
-	if runtime.GOOS == "darwin" {
-		// /var is a symlink to /private/var; the confiner resolves symlinks
-		// before containment, so the declared root must be the resolved one or
-		// every in-tree path reads as an escape.
-		if resolved, err := filepath.EvalSymlinks(root); err == nil {
-			root = resolved
-		}
-	}
-	return NewPathConfiner(func() []string { return []string{root} }, ".jsonl"), root
+	return staticRoots(root), root
 }
 
 func postDecode(t *testing.T, body string) *http.Request {
@@ -84,13 +73,13 @@ func TestDecodeConfined_AcceptsInTreePathAndErasesTheRawString(t *testing.T) {
 	raw := root + "/./session.jsonl"
 	rec := httptest.NewRecorder()
 	var p decodeTestPayload
-	log := &decodeLogger{}
+	log := &countingLogger{}
 
-	ok := DecodeConfined(rec, postDecode(t, `{"transcript_path":`+quote(raw)+`,"hook_event_name":"Stop"}`),
+	ok := DecodeConfined(rec, postDecode(t, `{"transcript_path":`+strconv.Quote(raw)+`,"hook_event_name":"Stop"}`),
 		log, "test-receiver", confiner, &p, getDecodePath, setDecodePath)
 
 	if !ok {
-		t.Fatalf("in-tree transcript refused; status=%d logs=%v", rec.Code, log.errs)
+		t.Fatalf("in-tree transcript refused; status=%d, logged %d line(s)", rec.Code, len(log.lines))
 	}
 	if p.Event != "Stop" {
 		t.Errorf("hook_event_name = %q, want %q — the payload was not decoded", p.Event, "Stop")
@@ -111,7 +100,7 @@ func TestDecodeConfined_UndecodableBodyIs400(t *testing.T) {
 	var p decodeTestPayload
 
 	ok := DecodeConfined(rec, postDecode(t, `{"transcript_path": NOT JSON`),
-		&decodeLogger{}, "test-receiver", confiner, &p, getDecodePath, setDecodePath)
+		&countingLogger{}, "test-receiver", confiner, &p, getDecodePath, setDecodePath)
 
 	if ok {
 		t.Fatal("undecodable body reported as decoded")
@@ -133,9 +122,9 @@ func TestDecodeConfined_OutOfTreePathIsRefusedCountedAnd2xx(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	var p decodeTestPayload
-	log := &decodeLogger{}
+	log := &countingLogger{}
 
-	ok := DecodeConfined(rec, postDecode(t, `{"transcript_path":`+quote(outside)+`}`),
+	ok := DecodeConfined(rec, postDecode(t, `{"transcript_path":`+strconv.Quote(outside)+`}`),
 		log, "test-receiver", confiner, &p, getDecodePath, setDecodePath)
 
 	if ok {
@@ -148,8 +137,11 @@ func TestDecodeConfined_OutOfTreePathIsRefusedCountedAnd2xx(t *testing.T) {
 	if n := confiner.RejectionCount(); n != 1 {
 		t.Errorf("counted %d rejection(s), want 1", n)
 	}
-	if len(log.errs) == 0 {
-		t.Error("refusal was not logged")
+	// Which message, not merely that one exists: the log is the only record of
+	// what a local process tried, so a refusal reported under some other line
+	// would leave the counter as the sole evidence.
+	if n := log.mentioning("rejected hook transcript_path"); n != 1 {
+		t.Errorf("refusal logged %d time(s) naming the path, want 1", n)
 	}
 	// The decode ran before the confinement, so the payload still holds the
 	// CALLER'S RAW string here — set deliberately did not run. That is safe
@@ -170,7 +162,7 @@ func TestDecodeConfined_OutOfTreePathIsRefusedCountedAnd2xx(t *testing.T) {
 func TestDecodeConfined_NilConfinerFailsClosed(t *testing.T) {
 	rec := httptest.NewRecorder()
 	var p decodeTestPayload
-	log := &decodeLogger{}
+	log := &countingLogger{}
 
 	ok := DecodeConfined(rec, postDecode(t, `{"transcript_path":"/anywhere/at/all.jsonl"}`),
 		log, "test-receiver", nil, &p, getDecodePath, setDecodePath)
@@ -185,15 +177,82 @@ func TestDecodeConfined_NilConfinerFailsClosed(t *testing.T) {
 	if p.TranscriptPath != "" {
 		t.Errorf("payload path = %q, want empty — nothing may be decoded without a confiner", p.TranscriptPath)
 	}
-	if len(log.errs) == 0 {
-		t.Error("a dropped body was not reported; a silent drop is indistinguishable from health")
+	if n := log.mentioning("no path confiner"); n != 1 {
+		t.Errorf("the drop was reported %d time(s) naming the missing confiner, want 1 — "+
+			"a silent drop is indistinguishable from health", n)
 	}
 }
 
-// quote renders s as a JSON string literal without pulling encoding/json into
-// this file — the architecture rule in core/architecture_hookbody_test.go does
-// not read test files, but keeping the import out avoids any suggestion that
-// this test is a second decode path.
-func quote(s string) string {
-	return `"` + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), `"`, `\"`) + `"`
+// TestDecodeConfined_DisagreeingGetSetFailsClosed pins the postcondition.
+//
+// A receiver whose set writes a field its get never reads — or a no-op set,
+// which is a one-character edit — leaves the caller's raw string in the payload
+// while DecodeConfined reports success. Review of #1389 demonstrated exactly
+// that against claudecode and the whole suite stayed green, because
+// AssertHookPathConfined asserts THAT a receiver dispatched, never WHICH
+// spelling. The chokepoint checks it so no call site has to be trusted.
+func TestDecodeConfined_DisagreeingGetSetFailsClosed(t *testing.T) {
+	confiner, root := decodeConfinerRooted(t)
+	transcript := filepath.Join(root, "session.jsonl")
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	raw := root + "/./session.jsonl"
+
+	rec := httptest.NewRecorder()
+	var p decodeTestPayload
+	log := &countingLogger{}
+
+	ok := DecodeConfined(rec, postDecode(t, `{"transcript_path":`+strconv.Quote(raw)+`}`),
+		log, "test-receiver", confiner, &p, getDecodePath,
+		func(*decodeTestPayload, string) {}) // the no-op set
+
+	if ok {
+		t.Fatal("a receiver whose set does not write the field its get reads reported success — " +
+			"the payload still holds the caller's unconfined string and the receiver would forward it")
+	}
+	if rec.Code < 200 || rec.Code > 299 {
+		t.Errorf("status = %d, want 2xx — same rule as any other refusal", rec.Code)
+	}
+	if n := log.mentioning("get/set pair"); n != 1 {
+		t.Errorf("mismatch reported %d time(s), want 1 — a silent drop is indistinguishable from health", n)
+	}
+}
+
+// TestDecodeConfined_OversizedBodyIsRefused pins the MaxBytesReader bound: these
+// endpoints are unauthenticated and local, so an unbounded decode lets any local
+// process make the daemon allocate without limit.
+func TestDecodeConfined_OversizedBodyIsRefused(t *testing.T) {
+	confiner, root := decodeConfinerRooted(t)
+	transcript := filepath.Join(root, "session.jsonl")
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	// Valid JSON naming an in-tree path, padded past the limit with a field the
+	// payload ignores — so the ONLY reason it can fail is the size bound.
+	body := `{"transcript_path":` + strconv.Quote(transcript) +
+		`,"pad":"` + strings.Repeat("x", maxHookBodyBytes+1) + `"}`
+	rec := httptest.NewRecorder()
+	var p decodeTestPayload
+
+	ok := DecodeConfined(rec, postDecode(t, body), &countingLogger{}, "test-receiver",
+		confiner, &p, getDecodePath, setDecodePath)
+
+	if ok {
+		t.Fatalf("a %d-byte body was accepted; the %d-byte bound did not apply", len(body), maxHookBodyBytes)
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 — an over-long body is a malformed request", rec.Code)
+	}
+
+	// The vacuity guard: the same body under the limit must be ACCEPTED, or
+	// this test would pass against a decoder that refuses everything.
+	small := `{"transcript_path":` + strconv.Quote(transcript) + `,"pad":"` + strings.Repeat("x", 32) + `"}`
+	rec2 := httptest.NewRecorder()
+	var p2 decodeTestPayload
+	if !DecodeConfined(rec2, postDecode(t, small), &countingLogger{}, "test-receiver",
+		confiner, &p2, getDecodePath, setDecodePath) {
+		t.Fatalf("an in-tree body well under the bound was refused (status %d)", rec2.Code)
+	}
 }

@@ -385,7 +385,7 @@ func TestRequestBodyReadDetectorCatchesEveryKnownShape(t *testing.T) {
 		switch pkg.PkgPath {
 		case shapesInScopePkg:
 			for _, read := range reads {
-				hits[filepath.Base(strings.SplitN(read.Pos, ":", 2)[0])]++
+				hits[filepath.Base(read.File)]++
 			}
 		case shapesOutOfScopePkg:
 			outOfScopeHits += len(reads)
@@ -465,7 +465,7 @@ func loadShapeCorpus(t *testing.T, dir string) []*packages.Package {
 	t.Helper()
 
 	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+		Mode: packages.NeedName | packages.NeedSyntax |
 			packages.NeedTypes | packages.NeedTypesInfo,
 		Dir: dir,
 		// GOWORK=off: the corpus is a standalone module in a temp dir, and an

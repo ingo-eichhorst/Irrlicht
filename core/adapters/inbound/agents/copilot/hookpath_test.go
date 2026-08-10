@@ -19,6 +19,15 @@ func TestHookPathConfined(t *testing.T) {
 			return contracttesting.HookReceiverUnderTest{
 				Handler:  NewHookHandler(target, nil, mockLogger{}),
 				Observed: func() bool { return target.totalCalls() > 0 },
+				ObservedPath: func() string {
+					if stops := target.stops(); len(stops) > 0 {
+						return stops[len(stops)-1].transcriptPath
+					}
+					if perms := target.perms(); len(perms) > 0 {
+						return perms[len(perms)-1].transcriptPath
+					}
+					return ""
+				},
 			}
 		},
 		WriteTranscript: writeContractTranscript,

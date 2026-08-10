@@ -77,8 +77,8 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"sort"
-	"strings"
+	"maps"
+	"slices"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
@@ -129,7 +129,12 @@ var bodyConsumingMethods = map[string]bool{
 // requestBodyRead is one place source code reads the body of an inbound
 // *http.Request.
 type requestBodyRead struct {
-	Pkg  string // package path
+	Pkg string // package path
+	// File and Pos are kept separately rather than only as a formatted string:
+	// the corpus indexes findings by file, and recovering a filename by
+	// splitting "file:line:col" on the first colon is wrong for any path that
+	// contains one (a Windows drive letter puts every finding under "C").
+	File string
 	Pos  string // file:line:col
 	Func string // enclosing top-level func or method, "" at file scope
 	How  string // the expression as written, e.g. "r.Body" or "r.FormValue"
@@ -194,7 +199,7 @@ func assertChokepointIsSingular(t *testing.T, inside []requestBodyRead) {
 	for _, read := range inside {
 		funcs[read.Func] = append(funcs[read.Func], read)
 	}
-	for _, name := range sortedKeys(funcs) {
+	for _, name := range slices.Sorted(maps.Keys(funcs)) {
 		if name == chokepointFunc {
 			continue
 		}
@@ -214,7 +219,7 @@ func loadAgentAdapterPackages(t *testing.T) []*packages.Package {
 	t.Helper()
 
 	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+		Mode: packages.NeedName | packages.NeedSyntax |
 			packages.NeedTypes | packages.NeedTypesInfo,
 		Dir: ".",
 	}
@@ -225,15 +230,13 @@ func loadAgentAdapterPackages(t *testing.T) []*packages.Package {
 	if n := packages.PrintErrors(pkgs); n > 0 {
 		t.Fatalf("packages.Load reported %d package error(s); build is broken", n)
 	}
-	if len(pkgs) == 0 {
-		t.Fatalf("packages.Load returned no packages for pattern %q", agentAdapterPattern)
-	}
-
+	// No separate "zero packages" or "zero files in total" guard: the
+	// knownAgentPackages loop below subsumes both. An empty load fails it on the
+	// first entry, and every named package is required to have parsed files, so
+	// an aggregate count could not be zero without that firing first.
 	loaded := map[string]int{}
-	files := 0
 	for _, pkg := range pkgs {
 		loaded[pkg.PkgPath] = len(pkg.Syntax)
-		files += len(pkg.Syntax)
 		if pkg.TypesInfo == nil {
 			t.Fatalf("package %q loaded without type information; the detector cannot tell "+
 				"an *http.Request body from an *http.Response body without it", pkg.PkgPath)
@@ -252,9 +255,6 @@ func loadAgentAdapterPackages(t *testing.T) []*packages.Package {
 			t.Fatalf("package %q loaded with zero parsed files — the rule would pass having never read it",
 				want)
 		}
-	}
-	if files == 0 {
-		t.Fatalf("pattern %q matched %d package(s) but zero parsed files", agentAdapterPattern, len(pkgs))
 	}
 	return pkgs
 }
@@ -287,9 +287,10 @@ func requestBodyReadsIn(fset *token.FileSet, files []*ast.File, info *types.Info
 				}
 				found = append(found, requestBodyRead{
 					Pkg:  pkgPath,
+					File: fset.Position(sel.Sel.Pos()).Filename,
 					Pos:  fset.Position(sel.Sel.Pos()).String(),
 					Func: name,
-					How:  exprText(sel),
+					How:  types.ExprString(sel),
 				})
 				return true
 			})
@@ -407,37 +408,5 @@ func funcDeclName(decl *ast.FuncDecl) string {
 	if decl.Recv == nil || len(decl.Recv.List) == 0 {
 		return decl.Name.Name
 	}
-	return "(" + exprText(decl.Recv.List[0].Type) + ")." + decl.Name.Name
-}
-
-// exprText renders a selector or type expression back to source-ish text for
-// the failure message. Only the shapes this file reports on are handled; the
-// fallback keeps a message readable rather than empty.
-func exprText(e ast.Expr) string {
-	switch v := e.(type) {
-	case *ast.Ident:
-		return v.Name
-	case *ast.StarExpr:
-		return "*" + exprText(v.X)
-	case *ast.SelectorExpr:
-		return exprText(v.X) + "." + v.Sel.Name
-	case *ast.IndexExpr:
-		return exprText(v.X)
-	case *ast.IndexListExpr:
-		return exprText(v.X)
-	case *ast.CallExpr:
-		return exprText(v.Fun) + "(…)"
-	case *ast.ParenExpr:
-		return "(" + exprText(v.X) + ")"
-	}
-	return strings.TrimSpace(fmt.Sprintf("%T", e))
-}
-
-func sortedKeys(m map[string][]requestBodyRead) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return "(" + types.ExprString(decl.Recv.List[0].Type) + ")." + decl.Name.Name
 }

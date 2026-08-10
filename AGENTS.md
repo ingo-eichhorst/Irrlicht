@@ -158,12 +158,14 @@ Before marking a ticket done, run the full suite — every layer must pass:
   inbound hook body is caller-supplied on a local, unauthenticated endpoint, so
   a receiver confines it to the adapter's own declared transcript roots
   (`agent.Source`'s `FilesUnderRoot.AllRootsFor`, never a second list that can
-  drift) before anything downstream opens it. Five obligations: an in-tree path
-  is still accepted (the vacuity guard); and an out-of-tree path, a `..`
+  drift) before anything downstream opens it. Six obligations: an in-tree path
+  is still accepted (the vacuity guard); an out-of-tree path, a `..`
   traversal, a symlink planted inside the root and a *dangling* symlink inside
-  the root are each refused, logged and counted.
-  A sixth — "the adapter's production constructor confines, not merely the
-  handler the test assembled" — was retired in #1390, and how it went is the
+  the root are each refused, logged and counted; and for a path that IS
+  accepted, the string dispatched downstream is the confined spelling rather
+  than the caller's (#1389 — see the end of this bullet).
+  A DIFFERENT sixth — "the adapter's production constructor confines, not merely
+  the handler the test assembled" — was retired in #1390, and how it went is the
   point rather than that it went. It existed because reaching the rejection
   counter meant calling a second, test-shaped constructor
   (`NewHookHandlerWithConfiner` and friends), so the handler the other five
@@ -200,44 +202,41 @@ Before marking a ticket done, run the full suite — every layer must pass:
   contract asserts the 2xx so a new receiver inherits the rule instead of
   re-deciding it (#1361, #1364). `hookjson.RejectPath` is the single place it
   is implemented, and its doc comment records what was and was not observed.
-  Since #1389 the contract is only half the enforcement, and the weaker half:
-  a contract can fail only for an adapter that WIRED it, so a receiver nobody
-  wired it for is invisible to it — which is exactly how the statusline
-  endpoint shipped unconfined. `hookjson.DecodeConfined` welds the decode to
-  the confinement (the confiner is an argument to the decode, so a receiver
+  Since #1389 the contract is only half the enforcement, and the weaker half: a
+  contract can fail only for an adapter that WIRED it, so a receiver nobody
+  wired it for is invisible to it — which is how the statusline endpoint shipped
+  unconfined in the first place. `hookjson.DecodeConfined` welds the body decode
+  to the confinement (the confiner is an argument to the decode, so a receiver
   cannot reach its payload without supplying one), and
   `core/architecture_hookbody_test.go` fails the build if anything else under
   `core/adapters/inbound/agents/...` reads an inbound request body. Two arms:
-  zero body reads outside `hookjson`, and — the part that keeps the exemption
-  from being a hole — **exactly one** inside it, in `DecodeConfined`. The
-  second arm is also the vacuity guard: if the detector stops matching, that
-  count goes to zero and fails rather than reporting a clean tree. **The
-  proposal in #1389 is not what shipped**: it keyed on "a file referencing a
-  `HookEndpointPath` may not call `json.NewDecoder(r.Body)`", and that
-  selects nothing — `HookEndpointPath` appears only in the three
-  `hookinstaller.go` files, which never touch `r.Body`, and statusline's
-  constant is `StatuslineEndpointPath`. It would have passed vacuously on day
-  one and against the very bug it was written for. The repair was to stop
-  trying to recognize "a hook-receiving file" at all: with no file pattern
-  there is no file a new receiver can hide in, because the predicate is the
-  untrusted-input operation itself. What it does **not** cover: a receiver
-  defined outside the agents tree, one that hands the whole `*http.Request`
-  to a package outside it (handing out `r.Body` IS caught; handing out `r` is
-  not), and `_test.go` files — that last being near-harmless here, unlike for
-  the layering rules, since a receiver declared in a test file is never on the
-  production mux. A rule with no exemption list is the deliberate choice
-  (`architecture_test.go` has none either): a future endpoint that genuinely
-  carries no path amends the rule in a reviewable diff rather than being
-  waved through by an allowlist with no test behind it.
-  One ordering moved with it. codex and copilot checked the `transcripts`
-  consent BETWEEN the decode and the confinement; welding those two put that
-  check above the pair. Consent gates reading the USER's data and a POST body
-  is not that, so the only behavioural difference is that a malformed body
-  from a transcripts-denied session now gets the same quiet 200 as a
-  well-formed one instead of a 400. The receipt observation deliberately did
-  NOT move: it is counted against the `hooks` consent only, because a
-  hooks-granted / transcripts-denied install has a working channel the
-  liveness watchdog must not call dead (#1368).
+  none outside `hookjson`, and **exactly one** inside it, in `DecodeConfined` —
+  the second is what stops the exemption being a hole, and doubles as the
+  vacuity guard. There is deliberately **no exemption list** (neither has
+  `architecture_test.go`): an endpoint that genuinely carries no path amends the
+  rule in a reviewable diff. The archaeology — why the rule #1389 proposed
+  (keying on files referencing a `HookEndpointPath`) selects zero receiver files
+  and would have passed against the very bug it was written for, and the four
+  things the implemented rule does not cover — is in that file's header, next to
+  the code it constrains, rather than restated here.
+  Obligation 6 is #1389's too, and note it is NOT the #1390 one described above:
+  that one policed WIRING and was replaced by a type guarantee, this one polices
+  the VALUE that travels and cannot be. Obligations 1-5 are all about the
+  accept/refuse DECISION, and every one of them is satisfied by a receiver that
+  decides correctly and then forwards the caller's own string anyway — measured,
+  by replacing a receiver's write-back with a no-op and watching the whole suite
+  stay green. Two independent layers now catch it, and each was seen red with
+  the other disabled: `DecodeConfined` verifies its own postcondition (the
+  caller's `get`/`set` pair must address the same field, else fail closed), and
+  the contract posts an in-tree path spelled with a redundant `/./` and asserts
+  the dispatched string is not the caller's. The contract checks the *spelling*
+  rather than string-equality with the fixture, because the confiner rebuilds an
+  accepted path on the adapter's DECLARED root — which on macOS is the `/var`
+  spelling of a `/private/var` temp dir, and a naive comparison fails there for
+  a reason unrelated to the obligation.
+  `DecodeConfined` also bounds the body (`http.MaxBytesReader`, 1 MiB): these
+  endpoints are unauthenticated and local, and sharing one decode is what lets
+  every receiver, present and future, inherit the bound.
 - Hook version floors: `contracttesting.AssertHookVersionGate`
   (`core/internal/contracttesting/hook_version.go`) is the static half of
   #1365 — a hooks permission declares the minimum upstream CLI version its

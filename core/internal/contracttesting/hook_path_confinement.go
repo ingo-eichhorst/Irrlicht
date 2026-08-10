@@ -47,6 +47,18 @@ type HookReceiverUnderTest struct {
 	// the assertion that actually matters; the status code is how the refusal
 	// is reported, but a 400 alongside a dispatch would still be a breach.
 	Observed func() bool
+
+	// ObservedPath is the transcript path the receiver most recently dispatched,
+	// or "" if it dispatched nothing.
+	//
+	// Observed answers WHETHER something was forwarded; this answers WHICH
+	// STRING. The gap between those two is a whole class of defect the contract
+	// could not see: a receiver that confines correctly, computes the confined
+	// path, and then forwards the caller's original spelling anyway. Every
+	// obligation below was green against exactly that, because each one only
+	// ever asked whether a dispatch happened (found in review of #1389, by
+	// replacing a receiver's write-back with a no-op).
+	ObservedPath func() string
 }
 
 // HookReceiver wires one adapter's hook receiver into AssertHookPathConfined.
@@ -88,7 +100,7 @@ type HookReceiver struct {
 	EndpointPath string
 }
 
-// AssertHookPathConfined runs the issue #1361 contract against r. Five
+// AssertHookPathConfined runs the issue #1361 contract against r. Six
 // obligations, each independently failable:
 //
 //  1. a transcript inside the declared root is still ACCEPTED — the vacuity
@@ -105,17 +117,28 @@ type HookReceiver struct {
 //     that has not been written yet, so a receiver that waves through an
 //     unresolvable leaf (a reasonable allowance — the hook fires around the
 //     write) hands the attacker an escape needing no race at all: plant the
-//     broken link, get the path accepted, then create the target.
+//     broken link, get the path accepted, then create the target;
+//  6. for a path that IS accepted, the string dispatched downstream is the
+//     CONFINED spelling and not the caller's — see
+//     assertConfinedSpellingDispatches. Added by #1389, because 1-5 are all
+//     about the accept/refuse DECISION and every one of them is satisfied by a
+//     receiver that decides correctly and then forwards the caller's string
+//     anyway.
 //
 // Obligations 2–5 additionally require the refusal to be VISIBLE — counted by
 // the confiner, so an operator can see it — and to answer 2xx.
 //
-// A sixth obligation, "the adapter's PRODUCTION constructor confines too", was
-// retired in #1390: the count is now read off Handler.Confiner, so a handler
-// that confines and the counter proving it can no longer be two objects that
-// disagree, and obligations 2-5 fail directly when the production constructor
-// stops confining. The full argument, including what obligation 6 never
-// covered either, is in AGENTS.md under "Hook path confinement".
+// Note the numbering: an EARLIER sixth obligation, "the adapter's PRODUCTION
+// constructor confines too", was retired in #1390 and is unrelated to the one
+// above. It went because the count is now read off Handler.Confiner, so a
+// handler that confines and the counter proving it can no longer be two objects
+// that disagree, and obligations 2-5 fail directly when the production
+// constructor stops confining. The full argument, including what that
+// obligation never covered either, is in AGENTS.md under "Hook path
+// confinement". The two are near-opposites in spirit: the retired one policed
+// WIRING and was replaced by a type guarantee, while #1389's polices the
+// VALUE that travels and could not be replaced by one — nothing in the type
+// system distinguishes a confined string from an unconfined one.
 //
 // The 2xx is asserted, not merely tolerated. A refused path is already fully
 // contained by not being forwarded, so the status code buys no security; what
@@ -132,6 +155,55 @@ func AssertHookPathConfined(t *testing.T, r HookReceiver) {
 	t.Run("parent_traversal_rejected", func(t *testing.T) { assertTraversalRejected(t, r) })
 	t.Run("symlink_escape_rejected", func(t *testing.T) { assertSymlinkEscapeRejected(t, r) })
 	t.Run("dangling_symlink_rejected", func(t *testing.T) { assertDanglingSymlinkRejected(t, r) })
+	t.Run("confined_spelling_is_what_dispatches", func(t *testing.T) { assertConfinedSpellingDispatches(t, r) })
+}
+
+// assertConfinedSpellingDispatches is obligation 6: for a path that IS accepted,
+// the string handed downstream is the confined one, not the caller's.
+//
+// Obligations 1-5 are all about the accept/refuse decision, and every one of
+// them is satisfied by a receiver that decides correctly and then forwards the
+// caller's own string. That receiver is not hypothetical: confinement produces
+// a NEW string, so using it is a separate act from computing it, and the
+// #1389 chokepoint expresses that act as a caller-supplied write-back — a
+// no-op version of which passed this entire contract.
+//
+// It matters beyond tidiness for the same reason claudecode's statusline
+// receiver confines at all: the transcript path is the tailer's map key, so two
+// spellings of one file are two sessions. And where the accepted path reached
+// the root through a symlink, the caller's spelling names the link while the
+// confined one names the target.
+func assertConfinedSpellingDispatches(t *testing.T, r HookReceiver) {
+	t.Helper()
+	root := r.Root(t)
+	inTree := r.WriteTranscript(t, mkSubdir(t, root, "spelling"))
+
+	// The same in-tree file, spelled with a redundant "./". Concatenated rather
+	// than filepath.Join'd because Join cleans, and a pre-cleaned path cannot
+	// tell "the confined string was used" from "the caller's was echoed".
+	dir, base := filepath.Split(inTree)
+	noisy := dir + "./" + base
+
+	rut := r.New(t)
+	rec := postHookPath(t, r, rut, noisy)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("in-tree transcript spelled %s: status = %d, want 200 — a redundant \"./\" is still inside the root",
+			noisy, rec.Code)
+	}
+	got := rut.ObservedPath()
+	if got == "" {
+		t.Fatal("nothing was dispatched, so this obligation would pass vacuously")
+	}
+	// Asserted as "cleaned", not as equal to inTree: the confiner rebuilds an
+	// accepted path on the adapter's DECLARED root, which on macOS can be the
+	// /var spelling of the /private/var directory the test created. Comparing
+	// strings would fail there for a reason that has nothing to do with the
+	// obligation. Whether the noisy segment survived is the actual question.
+	if got == noisy || strings.Contains(got, string(filepath.Separator)+"."+string(filepath.Separator)) {
+		t.Errorf("dispatched %q, which is the caller's own spelling — the receiver confined the path and then "+
+			"forwarded the unconfined string anyway. Confinement must not only decide; its result must be what travels",
+			got)
+	}
 }
 
 // assertInTreeAccepted is obligation 1. It runs first because every assertion

@@ -29,10 +29,14 @@ package hookjson
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"irrlicht/core/ports/outbound"
 )
+
+// maxHookBodyBytes bounds an inbound hook envelope. See DecodeConfined.
+const maxHookBodyBytes = 1 << 20
 
 // DecodeConfined decodes an inbound hook body into p and confines the
 // transcript path that body names, in one step neither half of which can be
@@ -86,6 +90,14 @@ func DecodeConfined[T any](
 		return false
 	}
 
+	// Bound the body. These endpoints are unauthenticated and local, so an
+	// unbounded decode is a local process's way to make the daemon allocate
+	// without limit. The daemon's other inbound decoders already do this; the
+	// hook receivers now share one decode, so they get it in one place and a
+	// fifth receiver inherits it. 1 MiB is far above any real hook envelope —
+	// the largest field is a truncated last_assistant_message.
+	r.Body = http.MaxBytesReader(w, r.Body, maxHookBodyBytes)
+
 	if err := json.NewDecoder(r.Body).Decode(p); err != nil {
 		http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)
 		return false
@@ -98,5 +110,26 @@ func DecodeConfined[T any](
 		return false
 	}
 	set(p, confined)
+
+	// Postcondition: get and set must name the SAME location, or the payload
+	// still holds the caller's raw string while this function reports success.
+	//
+	// This is not defensive clutter — it is the one failure this design could
+	// otherwise not detect, and it was found green by review. Passing behaviour
+	// as two closures puts the obligation at each call site, where no checker
+	// can see it: a receiver whose set writes a field its get never reads (or a
+	// no-op set, which is a one-character edit away) forwards the unconfined
+	// path, and every test in the tree still passes — including
+	// AssertHookPathConfined, which asserts THAT the receiver dispatched, never
+	// WHICH spelling it dispatched. Verifying it here fails closed once, for
+	// every present and future receiver, instead of asking four contract
+	// wirings to each notice.
+	if got := get(p); got != confined {
+		log.LogError(component, "", fmt.Sprintf(
+			"hook body dropped: payload still names %q after confinement to %q — "+
+				"this receiver's get/set pair do not address the same field", got, confined))
+		w.WriteHeader(http.StatusOK)
+		return false
+	}
 	return true
 }

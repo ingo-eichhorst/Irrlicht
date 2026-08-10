@@ -53,6 +53,13 @@ func TestHookPathConfined(t *testing.T) {
 			return contracttesting.HookReceiverUnderTest{
 				Handler:  NewHookHandler(target, nil, nil, mockLogger{}),
 				Observed: func() bool { return len(target.getCalls()) > 0 },
+				ObservedPath: func() string {
+					calls := target.getCalls()
+					if len(calls) == 0 {
+						return ""
+					}
+					return calls[len(calls)-1].transcriptPath
+				},
 			}
 		},
 		PayloadFor: func(transcriptPath string) string {
@@ -85,6 +92,12 @@ func TestStatuslinePathConfined(t *testing.T) {
 			return contracttesting.HookReceiverUnderTest{
 				Handler:  NewStatuslineHandler(target, nil, silentLogger{}),
 				Observed: func() bool { return len(target.calls) > 0 },
+				ObservedPath: func() string {
+					if len(target.calls) == 0 {
+						return ""
+					}
+					return target.calls[len(target.calls)-1].path
+				},
 			}
 		},
 		// A rate_limits block is required or the handler acks and returns
