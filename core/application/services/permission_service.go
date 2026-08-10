@@ -534,40 +534,51 @@ func (s *PermissionService) Snapshot() PermissionsSnapshot {
 		if len(a.Permissions) == 0 {
 			continue
 		}
-		ap := AgentPermissions{
-			Name:        a.Identity.Name,
-			DisplayName: a.Identity.DisplayName,
-			Detected:    s.detected[a.Identity.Name],
-		}
-		for _, p := range a.Permissions {
-			state := s.set.Get(a.Identity.Name, p.Key)
-			reason := s.effectErrs[effectKey(a.Identity.Name, p.Key)]
-			ap.Permissions = append(ap.Permissions, PermissionView{
-				Key:             p.Key,
-				Kind:            string(p.Kind),
-				State:           string(state),
-				Title:           p.Title,
-				FeatureUnlocked: p.FeatureUnlocked,
-				Touches:         p.Touches,
-				Detail:          p.Detail,
-				EffectError:     reason,
-			})
-			// Granted-only: see UnappliedGrants for why a failed Remove
-			// and a pending permission (which CAN carry an effect error)
-			// are both excluded.
-			if state == permission.StateGranted && reason != "" {
-				out.UnappliedGrants = append(out.UnappliedGrants, UnappliedGrant{
-					Agent:            a.Identity.Name,
-					AgentDisplayName: a.Identity.DisplayName,
-					Key:              p.Key,
-					Title:            p.Title,
-					Reason:           reason,
-				})
-			}
-		}
+		ap, unapplied := s.agentViewLocked(a)
 		out.Agents = append(out.Agents, ap)
+		out.UnappliedGrants = append(out.UnappliedGrants, unapplied...)
 	}
 	return out
+}
+
+// agentViewLocked projects one agent's permissions, returning both the
+// per-agent view and that agent's contribution to the snapshot-wide
+// UnappliedGrants aggregate. The two are built in one pass because they read
+// the same two lookups per permission. Caller holds s.mu.
+func (s *PermissionService) agentViewLocked(a agent.Agent) (AgentPermissions, []UnappliedGrant) {
+	ap := AgentPermissions{
+		Name:        a.Identity.Name,
+		DisplayName: a.Identity.DisplayName,
+		Detected:    s.detected[a.Identity.Name],
+	}
+	var unapplied []UnappliedGrant
+	for _, p := range a.Permissions {
+		state := s.set.Get(a.Identity.Name, p.Key)
+		reason := s.effectErrs[effectKey(a.Identity.Name, p.Key)]
+		ap.Permissions = append(ap.Permissions, PermissionView{
+			Key:             p.Key,
+			Kind:            string(p.Kind),
+			State:           string(state),
+			Title:           p.Title,
+			FeatureUnlocked: p.FeatureUnlocked,
+			Touches:         p.Touches,
+			Detail:          p.Detail,
+			EffectError:     reason,
+		})
+		// Granted-only: see UnappliedGrants for why a failed Remove and a
+		// pending permission (which CAN carry an effect error) are both
+		// excluded.
+		if state == permission.StateGranted && reason != "" {
+			unapplied = append(unapplied, UnappliedGrant{
+				Agent:            a.Identity.Name,
+				AgentDisplayName: a.Identity.DisplayName,
+				Key:              p.Key,
+				Title:            p.Title,
+				Reason:           reason,
+			})
+		}
+	}
+	return ap, unapplied
 }
 
 // Answer applies a batch of user decisions: state is recorded, modify
