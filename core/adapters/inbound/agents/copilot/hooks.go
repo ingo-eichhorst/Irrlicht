@@ -41,7 +41,6 @@
 package copilot
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -196,33 +195,39 @@ func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logge
 	// install has a working channel this counter must not call dead.
 	hookjson.ObserveHookReceipt(AdapterName)
 
-	var payload copilotHookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)
-		return
-	}
-
 	// Dispatching makes the detector read the transcript, so it is gated
 	// behind the "transcripts" consent, not merely the "hooks" write consent.
-	// The check comes BEFORE confinement so a denied session still yields a
-	// quiet 200 and the path is never resolved on that branch.
+	// The check comes BEFORE the decode, and so before confinement, so a denied
+	// session still yields a quiet 200 and the path is never resolved on that
+	// branch. It used to sit between the decode and the confinement; #1389
+	// welded those two into one call, and this moved above the pair rather than
+	// being folded into it — see codex's receiver for the full argument, which
+	// this one mirrors step for step.
 	if gate != nil && !gate.Granted(AdapterName, PermissionKeyTranscripts) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	raw := resolveTranscriptPath(payload)
-
 	// The path arrives in an HTTP body on a local, unauthenticated endpoint, so
 	// it is untrusted even when we assembled it ourselves from a caller-supplied
 	// session id: any local process could otherwise steer the daemon into
-	// opening a file of its choosing by sending "../../..". Confine before any
-	// read and carry the confined path downstream (issue #1361).
-	transcriptPath, reason := confiner.Confine(raw)
-	if reason != hookjson.RejectNone {
-		hookjson.RejectPath(w, log, logComponentHookReceiver, raw, reason)
+	// opening a file of its choosing by sending "../../..". DecodeConfined
+	// reads the body and confines in one step (issues #1361, #1389).
+	//
+	// This receiver is why DecodeConfined takes a get FUNCTION rather than a
+	// field name: on Notification there is no transcript path in the envelope
+	// at all, and resolveTranscriptPath synthesizes one from the session id.
+	// Synthesized or not, it goes through the same confiner — and the write-back
+	// then leaves payload.TranscriptPath holding the confined path on BOTH
+	// branches, where before it kept the caller's raw string on Stop.
+	var payload copilotHookPayload
+	if !hookjson.DecodeConfined(w, r, log, logComponentHookReceiver, confiner, &payload,
+		func(p *copilotHookPayload) string { return resolveTranscriptPath(*p) },
+		func(p *copilotHookPayload, confined string) { p.TranscriptPath = confined },
+	) {
 		return
 	}
+	transcriptPath := payload.TranscriptPath
 
 	sessionID := sessionIDFromPath(transcriptPath)
 	if sessionID == "" {

@@ -276,23 +276,21 @@ func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGrant
 	// counts and why a consent-denied request must not.
 	hookjson.ObserveHookReceipt(AdapterName)
 
-	var payload hookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)
-		return
-	}
-
 	// transcript_path arrives in an HTTP body on a local, unauthenticated
 	// endpoint, so it is untrusted: every dispatch below hands it to the
-	// detector, which opens it. Confine it to the adapter's declared transcript
-	// roots before anything downstream sees it, and carry the confined path —
-	// not the caller's string — onward (issue #1361).
-	transcriptPath, reason := confiner.Confine(payload.TranscriptPath)
-	if reason != hookjson.RejectNone {
-		hookjson.RejectPath(w, log, logComponentHookReceiver, payload.TranscriptPath, reason)
+	// detector, which opens it. DecodeConfined reads the body and confines the
+	// path in one step, so this receiver cannot reach its payload without
+	// having supplied the confiner — and the caller's raw string is overwritten
+	// with the confined one, so nothing below can pick it back up (issues
+	// #1361, #1389). It has already answered the request when it returns false.
+	var payload hookPayload
+	if !hookjson.DecodeConfined(w, r, log, logComponentHookReceiver, confiner, &payload,
+		func(p *hookPayload) string { return p.TranscriptPath },
+		func(p *hookPayload, confined string) { p.TranscriptPath = confined },
+	) {
 		return
 	}
-	payload.TranscriptPath = transcriptPath
+	transcriptPath := payload.TranscriptPath
 
 	// Confinement already rejected an empty or non-.jsonl path, so the only
 	// input still reaching this is a basename that is bare ".jsonl" — an empty

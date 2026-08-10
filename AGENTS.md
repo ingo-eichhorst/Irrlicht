@@ -83,6 +83,22 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `hookjson` adapter was an import that no rule in the table forbade; the
   shared code went to a new leaf (`core/pkg/jsonc`) and the missing rule was
   added with it.
+  A second architecture rule lives beside it in
+  `core/architecture_hookbody_test.go` (#1389) and is deliberately a separate
+  file: the layering table asks a question about the IMPORT GRAPH, while that
+  one asks which EXPRESSIONS a function may contain, and needs
+  `NeedSyntax|NeedTypes|NeedTypesInfo` over a narrow pattern rather than
+  `NeedName|NeedImports` over the module. It enforces that inside
+  `core/adapters/inbound/agents/...` an inbound `*http.Request`'s body may be
+  read only by `hookjson.DecodeConfined` — see "Hook path confinement" below
+  for why. Its corpus is `core/architecture_hookbody_shapes_test.go`: one file
+  per spelling (decoder in a variable, `io.ReadAll`, an aliased body, a helper
+  in another file, `r.FormValue`, a request stashed in a struct field) pinned
+  to the verdict the detector must return, plus two `want:false` cases —
+  `*http.Response.Body` and `r.Method` — that pin the false positives a
+  name-based rule would produce. Every case asserts the construct it plants is
+  actually present in its own source before any verdict is checked, because a
+  corpus that quietly stops containing its own test cases reads as a pass.
 - Architecture score: `tools/ars-gate.sh` flags it when the Agent Readiness
   Score (composite or any category) regresses vs `origin/main` — advisory,
   not a merge gate: it runs as a PR check (`.github/workflows/ars-gate.yml`,
@@ -184,6 +200,44 @@ Before marking a ticket done, run the full suite — every layer must pass:
   contract asserts the 2xx so a new receiver inherits the rule instead of
   re-deciding it (#1361, #1364). `hookjson.RejectPath` is the single place it
   is implemented, and its doc comment records what was and was not observed.
+  Since #1389 the contract is only half the enforcement, and the weaker half:
+  a contract can fail only for an adapter that WIRED it, so a receiver nobody
+  wired it for is invisible to it — which is exactly how the statusline
+  endpoint shipped unconfined. `hookjson.DecodeConfined` welds the decode to
+  the confinement (the confiner is an argument to the decode, so a receiver
+  cannot reach its payload without supplying one), and
+  `core/architecture_hookbody_test.go` fails the build if anything else under
+  `core/adapters/inbound/agents/...` reads an inbound request body. Two arms:
+  zero body reads outside `hookjson`, and — the part that keeps the exemption
+  from being a hole — **exactly one** inside it, in `DecodeConfined`. The
+  second arm is also the vacuity guard: if the detector stops matching, that
+  count goes to zero and fails rather than reporting a clean tree. **The
+  proposal in #1389 is not what shipped**: it keyed on "a file referencing a
+  `HookEndpointPath` may not call `json.NewDecoder(r.Body)`", and that
+  selects nothing — `HookEndpointPath` appears only in the three
+  `hookinstaller.go` files, which never touch `r.Body`, and statusline's
+  constant is `StatuslineEndpointPath`. It would have passed vacuously on day
+  one and against the very bug it was written for. The repair was to stop
+  trying to recognize "a hook-receiving file" at all: with no file pattern
+  there is no file a new receiver can hide in, because the predicate is the
+  untrusted-input operation itself. What it does **not** cover: a receiver
+  defined outside the agents tree, one that hands the whole `*http.Request`
+  to a package outside it (handing out `r.Body` IS caught; handing out `r` is
+  not), and `_test.go` files — that last being near-harmless here, unlike for
+  the layering rules, since a receiver declared in a test file is never on the
+  production mux. A rule with no exemption list is the deliberate choice
+  (`architecture_test.go` has none either): a future endpoint that genuinely
+  carries no path amends the rule in a reviewable diff rather than being
+  waved through by an allowlist with no test behind it.
+  One ordering moved with it. codex and copilot checked the `transcripts`
+  consent BETWEEN the decode and the confinement; welding those two put that
+  check above the pair. Consent gates reading the USER's data and a POST body
+  is not that, so the only behavioural difference is that a malformed body
+  from a transcripts-denied session now gets the same quiet 200 as a
+  well-formed one instead of a 400. The receipt observation deliberately did
+  NOT move: it is counted against the `hooks` consent only, because a
+  hooks-granted / transcripts-denied install has a working channel the
+  liveness watchdog must not call dead (#1368).
 - Hook version floors: `contracttesting.AssertHookVersionGate`
   (`core/internal/contracttesting/hook_version.go`) is the static half of
   #1365 — a hooks permission declares the minimum upstream CLI version its

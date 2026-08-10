@@ -21,7 +21,6 @@
 package claudecode
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -101,12 +100,6 @@ func serveStatuslineRequest(target RateLimitIngester, gate ConsentGranter, log o
 		return
 	}
 
-	var payload statuslinePayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)
-		return
-	}
-
 	// The statusline endpoint sits on the same local, unauthenticated mux
 	// as the hook receivers and takes the same caller-supplied path, so it
 	// is confined by the same rule (issue #1361). Its sink is a map lookup
@@ -114,12 +107,18 @@ func serveStatuslineRequest(target RateLimitIngester, gate ConsentGranter, log o
 	// what keeps this receiver keying the tailer map with the SAME spelling
 	// the hook receiver now uses. Two spellings of one file are two
 	// sessions, and the rate-limit snapshot would land on neither.
-	transcriptPath, reason := confiner.Confine(payload.TranscriptPath)
-	if reason != hookjson.RejectNone {
-		hookjson.RejectPath(w, log, logComponentStatuslineReceiver, payload.TranscriptPath, reason)
+	//
+	// This is the receiver #1361's first cut forgot, three lines from the one
+	// it was fixing. Going through DecodeConfined is what makes forgetting it
+	// a build failure rather than a review catch (issue #1389).
+	var payload statuslinePayload
+	if !hookjson.DecodeConfined(w, r, log, logComponentStatuslineReceiver, confiner, &payload,
+		func(p *statuslinePayload) string { return p.TranscriptPath },
+		func(p *statuslinePayload, confined string) { p.TranscriptPath = confined },
+	) {
 		return
 	}
-	payload.TranscriptPath = transcriptPath
+	transcriptPath := payload.TranscriptPath
 
 	sessionID := sessionIDFromTranscriptPath(transcriptPath)
 	snap := statuslineToSnapshot(payload.RateLimits)
