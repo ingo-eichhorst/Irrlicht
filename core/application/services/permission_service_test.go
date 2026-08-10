@@ -23,13 +23,26 @@ type mockPermStore struct {
 	saves int
 }
 
+// Load clones on the way out, like the real store (which unmarshals a fresh
+// map from disk every time). Handing out the live map would alias the
+// service's in-memory set to the store's, which quietly defeats any test that
+// mutates the store to simulate another process writing to it: the service
+// would appear to have "reloaded" without a reload existing at all.
 func (s *mockPermStore) Load() (permission.Set, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.set == nil {
 		return permission.Set{}, nil
 	}
-	return s.set, nil
+	return s.set.Clone(), nil
+}
+
+// writeExternally replaces the stored set the way another PROCESS would — a
+// whole-file rewrite, not an in-place edit of a map the service might share.
+func (s *mockPermStore) writeExternally(set permission.Set) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.set = set.Clone()
 }
 
 func (s *mockPermStore) Save(set permission.Set) error {

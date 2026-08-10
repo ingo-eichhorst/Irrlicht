@@ -179,11 +179,34 @@ func ClientConfigWarning() string {
 	return resolveClient().warning
 }
 
+// ClientTargetsANamedDaemon reports whether client resolution found a daemon
+// somebody actually named — an explicit IRRLICHT_BIND_ADDR, or an address a
+// running daemon published under this IRRLICHT_HOME — rather than falling
+// through to the default port.
+//
+// It exists for callers whose request must not go to a stranger. The default
+// fallback is the right behaviour for a hook beacon (a missed observation is
+// cheaper than a dropped one), but wrong for a request that acts on the
+// caller's own state tree: an `irrlichd --uninstall-hooks` run against an
+// isolated IRRLICHT_HOME would otherwise POST to whatever is listening on the
+// default port, which is a different daemon with a different consent store
+// (#1425).
+//
+// Read it before ClientURL, not instead of it — it answers "should I dial at
+// all", the URL answers "where".
+func ClientTargetsANamedDaemon() bool { return resolveClient().named }
+
 // clientResolution is the outcome of the client ladder: the port to dial, plus
-// what had to be ignored to get there.
+// what had to be ignored to get there, plus whether anything actually named
+// the daemon being dialed.
 type clientResolution struct {
 	port    int
 	warning string
+	// named reports that the port came from configuration or from a running
+	// daemon's own addr file, rather than from the default fallback. A caller
+	// whose request should only go to a daemon somebody pointed it at reads
+	// this instead of re-deriving it — see ClientTargetsANamedDaemon.
+	named bool
 }
 
 // resolveClient walks the client ladder in order of how much each source can
@@ -191,12 +214,12 @@ type clientResolution struct {
 func resolveClient() clientResolution {
 	bind := os.Getenv(EnvBindAddr)
 	if p, ok := fixedPortOf(bind); ok {
-		return clientResolution{port: p}
+		return clientResolution{port: p, named: true}
 	}
 	warning := malformedBindWarning(bind)
 
 	if p, ok := fixedPortOf(publishedAddr()); ok {
-		return clientResolution{port: p, warning: warning}
+		return clientResolution{port: p, warning: warning, named: true}
 	}
 
 	// Falling all the way through means dialing a daemon nobody named. Say

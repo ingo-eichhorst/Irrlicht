@@ -205,6 +205,12 @@
             <td>How often the yield sweep correlates <code>git revert</code> commits back to the sessions that authored the reverted work, feeding the History view's productive-vs-reverted ratio</td>
           </tr>
           <tr>
+            <td><code>IRRLICHT_HOOK_REVERIFY_INTERVAL</code></td>
+            <td>Duration</td>
+            <td><code>5m</code></td>
+            <td>How often the daemon re-reads every granted hook install to check its entries are still present, re-installing them if an agent's own settings UI removed them. Lower values write to your agent config files more often; used by test harnesses to observe a pass in seconds rather than five minutes</td>
+          </tr>
+          <tr>
             <td><code>IRRLICHT_HOME</code></td>
             <td>Path</td>
             <td><code>~/.local/share/irrlicht</code></td>

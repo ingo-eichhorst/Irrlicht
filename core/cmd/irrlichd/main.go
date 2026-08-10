@@ -209,7 +209,16 @@ func uninstallHooks() {
 		log.Fatalf("failed to resolve the agent config files to uninstall from: %v", err)
 	}
 	home, _ := os.UserHomeDir()
-	if failed := uninstallHookConfigs(os.Stdout, configs, filesystem.NewPermissionStore(dataDir(home))); failed > 0 {
+	failed := uninstallHookConfigs(os.Stdout, configs, filesystem.NewPermissionStore(dataDir(home)))
+	// Tell a daemon that is already running to re-read the store (#1425).
+	// Without it the store says "denied" while the live daemon's in-memory
+	// consent still says "granted", and #1372's re-verification loop puts the
+	// entries back within one interval. Runs even when an uninstaller failed:
+	// denyHooksPermissions has already written whatever it was going to write,
+	// and a partially-uninstalled config is exactly the state in which a stale
+	// daemon re-installing the rest is most confusing.
+	notifyDaemonConsentChanged(os.Stdout)
+	if failed > 0 {
 		os.Exit(1)
 	}
 }
@@ -473,8 +482,9 @@ func runDaemon() {
 	// entries still there" by re-reading the file, and collapsing them would
 	// merge two diagnoses whose whole value is being distinguishable.
 	hookVerifier := services.NewHookEntryVerifier(services.HookEntryReverifyConfig{
-		Agents: allAgents,
-		Log:    logger,
+		Agents:   allAgents,
+		Log:      logger,
+		Interval: cfg.HookReverifyInterval,
 	})
 
 	mux := http.NewServeMux()
