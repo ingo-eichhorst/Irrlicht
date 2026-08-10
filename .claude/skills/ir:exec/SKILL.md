@@ -877,24 +877,29 @@ either step.
     already narrating "done".
 14b. **Confirm the checks that ran actually ran on the current head — absence
     is not the same as passing, and reads as "still queued" on a casual
-    glance.** A PR that goes `CONFLICTING` (main moved into files it touches,
-    step 12's rebase notwithstanding — it can happen again after step 12
-    pushes) silently stops GitHub dispatching every `pull_request`-triggered
-    workflow: `Tests`, `Linux`, `ars-gate` simply vanish from the checks list,
-    while a push-triggered workflow (`web-test`) keeps running and passing.
+    glance.** A PR that goes `CONFLICTING` (main moved into files it touches;
+    it can happen again any time after Phase 5's rebase, including after
+    step 12 pushes) silently stops GitHub dispatching every
+    `pull_request`-triggered workflow — the `test.yml`/`ars-gate.yml`/
+    `linux.yml` checks simply vanish from the checks list, while a
+    push-triggered workflow (`web-test.yml`) keeps running and passing.
     ```bash
     gh pr view <PR> --json mergeable,mergeStateStatus,headRefOid
     gh pr checks <PR>
     ```
-    Enumerate the checks you *expect* to be required — `Tests`, `Linux`,
-    `ars-gate`, `web-test`, from `.github/workflows/` — by name against the
-    exact head SHA, rather than reading whatever the list happens to contain.
+    Enumerate the checks you *expect* — `go-test` (test.yml), `ars-gate`
+    (ars-gate.yml), `build-test` (linux.yml), and `web-test.yml`'s per-tree
+    `test (platforms/web)` / `test (tools/onboarding-factory/…/web)` entries —
+    by name against `gh pr checks`' actual output for the exact head SHA,
+    rather than reading whatever the list happens to contain (the job names
+    `gh pr checks` prints are the job IDs and matrix labels, not the
+    workflows' own `name:` fields — confirm against a real PR if unsure).
     If `mergeStateStatus` reads `DIRTY`/`CONFLICTING`, or an expected check is
     simply absent rather than red, the fix is to rebase (Phase 5's collision
     handling above) — not to wait for a check that will never dispatch. (Real
-    incident, #1382/#1361: a PR sat with `Tests`/`Linux`/`ars-gate` absent —
-    not failing — for two commits while `CONFLICTING`, and the checks list
-    alone read as healthy.)
+    incident, #1382/#1361: a PR sat with `test.yml`/`linux.yml`/`ars-gate.yml`
+    absent — not failing — for two commits while `CONFLICTING`, and the
+    checks list alone read as healthy.)
 
 ## Phase 6 — Hand back
 
