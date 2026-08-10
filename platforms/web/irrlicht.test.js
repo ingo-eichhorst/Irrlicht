@@ -1419,26 +1419,34 @@ describe('CO2 equivalents (issue #952)', () => {
 // module's link and taking every other suite in this file down with it.
 import * as permWizard from './permissionsWizard.js'
 
-describe('aggregate "granted but not applied" indicator (#1385)', () => {
-  const REASON = 'settings.json is malformed: invalid character \'}\''
-  const FLOOR = 'claude 1.2.0 is below the required 2.0.0; upgrade and grant again'
+// Shared #1385 fixture, used by both blocks below: the aggregate helpers
+// and the wiring reachability tests read the same wire shape, so the shape
+// is written once.
+const UNAPPLIED_REASON = 'settings.json is malformed: invalid character \'}\''
+const UNAPPLIED_FLOOR = 'claude 1.2.0 is below the required 2.0.0; upgrade and grant again'
+const unappliedSnap = (...unapplied) => ({
+  mode: 'ask',
+  agents: [{
+    name: 'claude-code', display_name: 'Claude Code', detected: true,
+    permissions: [{ key: 'hooks', kind: 'modify', state: 'granted', title: 'Install hooks' }],
+  }],
+  unapplied_grants: unapplied,
+})
+const unappliedInstallFailure = {
+  agent: 'claude-code', agent_display_name: 'Claude Code',
+  key: 'hooks', title: 'Install hooks', reason: UNAPPLIED_REASON,
+}
+const unappliedVersionRefusal = {
+  agent: 'codex', agent_display_name: 'Codex',
+  key: 'hooks', title: 'Install hooks', reason: UNAPPLIED_FLOOR,
+}
 
-  const snapWith = (...unapplied) => ({
-    mode: 'ask',
-    agents: [{
-      name: 'claude-code', display_name: 'Claude Code', detected: true,
-      permissions: [{ key: 'hooks', kind: 'modify', state: 'granted', title: 'Install hooks' }],
-    }],
-    unapplied_grants: unapplied,
-  })
-  const failedInstall = {
-    agent: 'claude-code', agent_display_name: 'Claude Code',
-    key: 'hooks', title: 'Install hooks', reason: REASON,
-  }
-  const versionRefusal = {
-    agent: 'codex', agent_display_name: 'Codex',
-    key: 'hooks', title: 'Install hooks', reason: FLOOR,
-  }
+describe('aggregate "granted but not applied" indicator (#1385)', () => {
+  const REASON = UNAPPLIED_REASON
+  const FLOOR = UNAPPLIED_FLOOR
+  const snapWith = unappliedSnap
+  const failedInstall = unappliedInstallFailure
+  const versionRefusal = unappliedVersionRefusal
 
   beforeEach(() => {
     document.body.innerHTML =
@@ -1519,5 +1527,56 @@ describe('aggregate "granted but not applied" indicator (#1385)', () => {
     // is answered, so it must not appear there — that is #1362's
     // deliberate non-widening of needsWizard, and #1385 must not reverse it.
     expect(pendingWizardAgents(snapWith(failedInstall))).toEqual([])
+  })
+})
+
+// Reachability for #1385, and the counterpart of the "#1362 auto wizard"
+// suite above: the seven tests in the block before this one call
+// renderUnappliedGrantsBanner DIRECTLY, so deleting the call inside
+// refreshPermissions left every one of them green (verified by mutation in
+// review). This drives the REAL path — fetch → refreshPermissions →
+// renderUnappliedGrantsBanner — which is the one a refactor can break.
+describe('the dashboard actually wires the aggregate banner up (#1385)', () => {
+  const REASON = UNAPPLIED_REASON
+  const snapWith = unappliedSnap
+  const failed = unappliedInstallFailure
+
+  let realFetch
+  const serve = (snap) => {
+    globalThis.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve(snap) })
+    return refreshPermissions()
+  }
+  const banner = () => document.getElementById('permission-apply-banner')
+
+  beforeAll(() => { realFetch = globalThis.fetch })
+  afterAll(() => { globalThis.fetch = realFetch })
+  beforeEach(() => {
+    document.body.innerHTML +=
+      '<div id="permission-apply-banner" role="status" aria-live="polite" hidden></div>'
+  })
+  afterEach(() => { banner()?.remove() })
+
+  test('a snapshot fetched from the daemon reaches the banner', async () => {
+    await serve(snapWith(failed))
+    expect(banner().hidden).toBe(false)
+    expect(banner().textContent).toContain('1 permission is granted but not applied')
+    expect(banner().textContent).toContain(REASON)
+  })
+
+  test('the next fetch clears it once the install is repaired', async () => {
+    await serve(snapWith(failed))
+    expect(banner().hidden).toBe(false)
+    await serve(snapWith())
+    expect(banner().hidden).toBe(true)
+  })
+
+  test('an unchanged banner is not rebuilt, so role=status stops re-announcing', async () => {
+    // aria-atomic re-reads the whole strip on every rebuild, and this path
+    // runs on every push AND every websocket reconnect. Identity of the
+    // button node is the observable proxy for "was it rebuilt".
+    await serve(snapWith(failed))
+    const first = banner().querySelector('button')
+    await serve(snapWith(failed))
+    expect(banner().querySelector('button')).toBe(first)
   })
 })

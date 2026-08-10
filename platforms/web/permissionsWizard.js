@@ -135,6 +135,17 @@ export function renderUnappliedGrantsBanner(snap) {
   const el = document.getElementById('permission-apply-banner');
   if (!el) return;
   const summary = unappliedGrantSummary(snap);
+  // role="status" is aria-atomic by default, so a rebuild re-announces the
+  // whole banner to a screen reader. This runs on every permissions_updated
+  // push and on every websocket reconnect, so an unchanged banner would be
+  // read out repeatedly — which is the nagging #1385 forbids. Re-render only
+  // when the content actually changed. The key lives on the ELEMENT, not in
+  // a module variable, so a replaced DOM starts clean.
+  const key = summary
+    ? JSON.stringify([summary.text, summary.items.map(g => [g.agent, g.key, g.reason])])
+    : '';
+  if (el.dataset.bannerKey === key) return;
+  el.dataset.bannerKey = key;
   el.textContent = '';
   if (!summary) {
     el.hidden = true;

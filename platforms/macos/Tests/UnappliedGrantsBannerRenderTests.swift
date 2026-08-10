@@ -70,3 +70,49 @@ final class UnappliedGrantsBannerAbsenceTests: XCTestCase {
                      "a healthy daemon must render no banner at all")
     }
 }
+
+/// Reachability for the macOS WIRING, not the banner view.
+///
+/// The two render tests above host `UnappliedGrantsBanner` directly, so
+/// deleting the block in `SessionListView.mainPanel` that puts it on screen
+/// leaves all of them green — the same gap review found on the web side by
+/// mutation. This hosts the REAL `SessionListView` and photographs the
+/// panel with and without an unapplied grant; the difference between the
+/// two references is the wiring.
+@MainActor
+final class SessionListUnappliedGrantsWiringTests: XCTestCase {
+
+    private func host(_ snap: PermissionsSnapshot?) -> NSView {
+        let manager = SessionManager()
+        manager.permissionsSnapshot = snap
+        let view = SessionListView()
+            .environmentObject(manager)
+            .environmentObject(GasTownProvider())
+            .environmentObject(UpdateManager())
+        let hosting = NSHostingView(rootView: view)
+        hosting.appearance = NSAppearance(named: .darkAqua)
+        hosting.frame = CGRect(x: 0, y: 0, width: SessionListView.panelWidth, height: 420)
+        hosting.layoutSubtreeIfNeeded()
+        return hosting
+    }
+
+    private var unapplied: PermissionsSnapshot {
+        PermissionsSnapshot(mode: "ask", agents: [], unappliedGrants: [
+            UnappliedGrant(agent: "claude-code", agentDisplayName: "Claude Code",
+                           key: "hooks", title: "Install hooks",
+                           reason: "settings.json is malformed: invalid character '}'"),
+        ])
+    }
+
+    func testPanelShowsTheBannerWhenAGrantIsUnapplied() {
+        assertSnapshot(of: host(unapplied), as: .image, named: "panel-with-banner")
+    }
+
+    /// Control: the same panel with a healthy snapshot draws no strip at
+    /// all. Diffing the two is what shows the banner is driven by the
+    /// aggregate and nothing else.
+    func testPanelShowsNoBannerWhenHealthy() {
+        assertSnapshot(of: host(PermissionsSnapshot(mode: "ask", agents: [])),
+                       as: .image, named: "panel-healthy")
+    }
+}

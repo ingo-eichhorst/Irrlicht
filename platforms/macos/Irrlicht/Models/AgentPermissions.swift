@@ -37,6 +37,10 @@ struct PermissionsSnapshot: Decodable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         mode = try c.decode(String.self, forKey: .mode)
+        // `agents` is decodeIfPresent deliberately, not incidentally: the Go
+        // field has no omitempty, so a daemon with no permission-carrying
+        // agents emits `"agents": null` — which the synthesized decoder this
+        // replaced would have thrown on.
         agents = try c.decodeIfPresent([AgentPermissions].self, forKey: .agents) ?? []
         unappliedGrants = try c.decodeIfPresent([UnappliedGrant].self, forKey: .unappliedGrants) ?? []
     }
@@ -81,17 +85,19 @@ struct UnappliedGrant: Decodable, Equatable, Identifiable {
 /// `unappliedGrantSummary` word for word so the two surfaces read
 /// identically.
 struct UnappliedGrantSummary: Equatable {
-    let count: Int
     let text: String
     let items: [UnappliedGrant]
+
+    /// Derived, not stored: a second copy of the length is state that has to
+    /// be kept in sync with `items` by hand.
+    var count: Int { items.count }
 
     init?(items: [UnappliedGrant]) {
         guard !items.isEmpty else { return nil }
         self.items = items
-        count = items.count
-        text = count == 1
+        text = items.count == 1
             ? "1 permission is granted but not applied"
-            : "\(count) permissions are granted but not applied"
+            : "\(items.count) permissions are granted but not applied"
     }
 }
 

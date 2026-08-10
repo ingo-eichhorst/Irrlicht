@@ -141,7 +141,11 @@ type PermissionsSnapshot struct {
 	// failed, and only then:
 	//   - a denied permission whose Remove failed is the opposite fault
 	//     ("revoked, but not undone") and would make this headline lie;
-	//   - a pending permission never ran an effect.
+	//   - a pending permission is not a grant, so it cannot be a GRANTED-
+	//     but-unapplied one. Note it is not true that pending never ran an
+	//     effect: ReloadFromStore moves a permission whose pair vanished
+	//     from the store back to pending and runs Remove for that move, and
+	//     recordEffectResult stores the outcome either way.
 	//
 	// Scope against the other "silently unapplied" diagnoses, which are
 	// NOT folded in and must stay distinguishable:
@@ -549,7 +553,8 @@ func (s *PermissionService) Snapshot() PermissionsSnapshot {
 				EffectError:     reason,
 			})
 			// Granted-only: see UnappliedGrants for why a failed Remove
-			// and a pending permission are both excluded.
+			// and a pending permission (which CAN carry an effect error)
+			// are both excluded.
 			if state == permission.StateGranted && reason != "" {
 				out.UnappliedGrants = append(out.UnappliedGrants, UnappliedGrant{
 					Agent:            a.Identity.Name,

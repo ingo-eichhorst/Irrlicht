@@ -923,7 +923,8 @@
        borrows the warning palette rather than the error one, and visibility
        is driven by the [hidden] attribute (set from the snapshot) rather
        than by a class the user can toggle — there is no dismiss. Mirrors
-       unappliedGrantsView in SessionListView.swift. */
+       UnappliedGrantsBanner in
+       platforms/macos/Irrlicht/Views/UnappliedGrantsBanner.swift. */
     #permission-apply-banner {
       font-family: var(--font-mono);
       font-size: 11px;
@@ -940,16 +941,33 @@
     .perm-unapplied-list {
       margin: 4px 0 6px;
       padding-left: 16px;
-      color: var(--muted);
+      /* --text, not --muted: the reason is the longest and most important
+         text on the strip, and --muted over the 12% warm wash measures
+         under 4.5:1 in the light theme. Matches the macOS banner, which
+         draws the reason in native primary for the same reason. */
+      color: var(--text);
       overflow-wrap: anywhere;
     }
     .perm-unapplied-what {
       color: var(--waiting);
     }
+    /* Fully styled rather than inheriting: unlike .perm-retry, this button
+       lives in <main>, OUTSIDE the .settings-modal scope that carries
+       .settings-action-btn — so with only colour overrides it would render
+       as a UA-default button (light grey face) and put orange text at
+       ~1.9:1 on it in the default dark theme. */
     .perm-unapplied-review {
-      border-color: rgba(255, 149, 0, 0.4);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      background: transparent;
+      border: 1px solid rgba(255, 149, 0, 0.4);
+      border-radius: 4px;
+      cursor: pointer;
       color: var(--waiting);
       padding: 2px 8px;
+    }
+    .perm-unapplied-review:hover {
+      background: var(--waiting-dim);
     }
 
     /* Pressure alert row */
