@@ -259,6 +259,28 @@ if [[ "$ADAPTER" == "copilot" ]]; then
   echo "copilot: COPILOT_HOME=$COPILOT_HOME (daemon + driver share this store)"
 fi
 
+# Codex resolves its config dir from CODEX_HOME the same way — the daemon's
+# codexHome() and both codex drivers honour it — but it deliberately does NOT
+# get copilot's staging default. Codex keeps its CREDENTIALS in that directory
+# (auth.json), so defaulting to an empty staging dir would leave every codex
+# recording unauthenticated. Isolation is therefore opt-in: export an absolute
+# CODEX_HOME (seeded with a copy of auth.json) to keep the run off the real
+# ~/.codex entirely. Exported here so the DAEMON inherits the same value the
+# drivers will use — codexHome() decides where hooks.json is installed, and
+# hence which file `--print-managed-files` tells the recorder to protect.
+# Absolute-only, because codexHome() ignores a relative value and silently
+# falls back to $HOME/.codex (#1388).
+if [[ "$ADAPTER" == "codex" && -n "${CODEX_HOME:-}" ]]; then
+  if [[ "$CODEX_HOME" != /* ]]; then
+    echo "codex: CODEX_HOME must be absolute (got '$CODEX_HOME') — the daemon" >&2
+    echo "       ignores relative values, so it and the driver would disagree" >&2
+    exit 1
+  fi
+  export CODEX_HOME
+  mkdir -p "$CODEX_HOME"
+  echo "codex: CODEX_HOME=$CODEX_HOME (daemon + driver share this home)"
+fi
+
 if [[ "$ATTACH" == "1" ]]; then
   ATTACHED_RECORDINGS_DIR="${IRRLICHT_RECORDINGS_DIR:-$HOME/.local/share/irrlicht/recordings}"
   if [[ ! -d "$ATTACHED_RECORDINGS_DIR" ]]; then
@@ -352,7 +374,14 @@ ACTUAL_UUID="$(cat "$STAGING/session.uuid" 2>/dev/null || true)"
 # the fixture's events.jsonl filter includes all sessions and the
 # transcript output concatenates them in order.
 if [[ -f "$STAGING/session.uuids" ]]; then
-  uuid_count=$(grep -c . "$STAGING/session.uuids" || echo 0)
+  # `|| true`, never `|| echo 0`: grep -c ALREADY prints 0 when it matches
+  # nothing, and exits 1 for the same reason — so the fallback appended a
+  # SECOND zero and the variable became the two-line string "0\n0", which
+  # `[[ … -gt 1 ]]` rejects with a syntax error. It fires only when
+  # session.uuids exists but is empty, i.e. when the driver resolved no
+  # session at all — so the bug corrupted the diagnostics of exactly the
+  # runs that had already gone wrong (#1388).
+  uuid_count=$(grep -c . "$STAGING/session.uuids" || true)
   if [[ "$uuid_count" -gt 1 ]]; then
     EXTRA_IDS=""
     while IFS= read -r u; do

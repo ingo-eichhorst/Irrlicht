@@ -88,16 +88,72 @@ if [[ $# -ne 5 ]]; then
 fi
 
 STAGING="$1"
-# $2 (preferred-uuid) and $4 (settings-path) are accepted for ABI parity
-# with the other interactive drivers; codex assigns its own UUID and has
-# no --settings flag, so both are unused here.
+# $2 (preferred-uuid) is accepted for ABI parity with the other interactive
+# drivers; codex assigns its own UUID, so it is unused here. $4 (settings
+# path) IS read: codex has no --settings flag, but the blob carries this
+# driver's launch_args (see CODEX_LAUNCH_ARGS below).
 TIMEOUT_S="$3"
+SETTINGS_PATH="$4"
 SCRIPT_JSON="$5"
 
 mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
-CODEX_SESSIONS_DIR="$HOME/.codex/sessions"
+
+# Codex resolves its entire config dir — sessions included — from CODEX_HOME,
+# and so does the DAEMON (codexHome() in
+# core/adapters/inbound/agents/codex/hookinstaller.go, which is also what
+# `irrlichd --print-managed-files` reports and therefore what the recorder
+# snapshots). Hardcoding $HOME here split the two halves apart: with
+# CODEX_HOME set, codex wrote rollouts into the isolated home while this
+# driver hunted them under the real one, so resolve_transcript found nothing
+# and every cell died at readiness_timeout. Resolve it the same way the
+# daemon does, so an isolated recording home leaves the user's real ~/.codex
+# untouched (#1388).
+#
+# Mirror codexHome()'s rule EXACTLY, including that it honors the override
+# only when it is ABSOLUTE and otherwise falls back to $HOME/.codex. A
+# `${CODEX_HOME:-…}` default would accept a relative value that the daemon
+# silently ignores, re-creating the very split this resolves — so refuse it
+# loudly instead of resolving differently from the daemon.
+CODEX_HOME_RESOLVED="$HOME/.codex"
+if [[ -n "${CODEX_HOME:-}" ]]; then
+  if [[ "$CODEX_HOME" != /* ]]; then
+    echo "[driver] CODEX_HOME must be absolute — the daemon's codexHome() ignores" >&2
+    echo "[driver] relative values, so the driver and daemon would use different" >&2
+    echo "[driver] homes. Got: '$CODEX_HOME'" >&2
+    exit 2
+  fi
+  CODEX_HOME_RESOLVED="$CODEX_HOME"
+fi
+CODEX_SESSIONS_DIR="$CODEX_HOME_RESOLVED/sessions"
 mkdir -p "$CODEX_SESSIONS_DIR"
+
+# codex records its hook-trust keys under the PHYSICAL path — on macOS /tmp is
+# a symlink to /private/tmp, so a home under /tmp is written as
+# [hooks.state."/private/tmp/…/hooks.json:stop:0:0"]. Resolve ours the same way
+# or the trust lookup at the end of boot_session reports a false "NOT trusted"
+# for an install that is perfectly trusted (observed on a run whose hooks did
+# fire). A false alarm here is nearly as costly as the false reassurance it
+# replaced, so keep both spellings and match either.
+CODEX_HOME_PHYS="$(cd "$CODEX_HOME_RESOLVED" 2>/dev/null && pwd -P)"
+CODEX_HOME_PHYS="${CODEX_HOME_PHYS:-$CODEX_HOME_RESOLVED}"
+
+# Extra argv for the `codex` boot line, from the cell's settings blob:
+#   "settings": { "launch_args": ["-a", "untrusted", "-s", "read-only"] }
+# The tool-gate cell needs codex launched with an approval policy that makes
+# a model-proposed write escalate to the blocking approval overlay; other
+# cells must NOT get those flags (read-only would break every cell that
+# writes). Per-cell rather than a driver-wide constant for exactly that
+# reason.
+CODEX_LAUNCH_ARGS=()
+if [[ -f "$SETTINGS_PATH" ]]; then
+  while IFS= read -r _arg; do
+    [[ -n "$_arg" ]] && CODEX_LAUNCH_ARGS+=("$_arg")
+  done < <(jq -r '(.launch_args // [])[]' "$SETTINGS_PATH" 2>/dev/null || true)
+fi
+if [[ ${#CODEX_LAUNCH_ARGS[@]} -gt 0 ]]; then
+  echo "[driver] launch_args: ${CODEX_LAUNCH_ARGS[*]}" >&2
+fi
 
 # Per-run CWD so codex creates sessions under a fresh path, isolating the
 # trust dialog to this run. run-cell.sh's cross-adapter mode overrides
@@ -206,41 +262,161 @@ boot_session() {
   : > "$slot_stdout"
   mkdir -p "$cwd"
   tmux kill-session -t "$sess" 2>/dev/null || true
-  tmux new-session -d -s "$sess" -c "$cwd" "$@"
+  # Prefix with `env CODEX_HOME=…`: the pane's command is spawned by the tmux
+  # SERVER, which may already have been running with a different (or absent)
+  # CODEX_HOME long before this driver exported one — so inheriting it is not
+  # something we can assume. Passing it on the command line pins the codex
+  # process to the same home the daemon and CODEX_SESSIONS_DIR resolved.
+  tmux new-session -d -s "$sess" -c "$cwd" env "CODEX_HOME=$CODEX_HOME_RESOLVED" "$@"
   tmux pipe-pane -t "$sess" -o "cat >> '$slot_stdout'"
   echo "[driver] tmux started: $sess (slot=$ACTIVE, cwd=$cwd, argv: $*)" >&2
 
-  # codex caches trust per-directory, so a second boot in an
-  # already-trusted cwd (concurrent slot OR resume relaunch) never sees the
-  # prompt — skip the wait so we don't stall ~15s for a dialog that will
-  # never appear.
-  if cwd_already_trusted; then
-    echo "[driver] trust: cwd already trusted this run — skipping prompt" >&2
-  else
-    local waited=0
-    while [[ $waited -lt 30 ]]; do
-      if tmux capture-pane -t "$sess" -p -S -40 2>/dev/null | grep -q 'Do you trust'; then
-        tmux send-keys -t "$sess" "1"
+  # Codex has TWO independent startup gates. They look alike, they need
+  # DIFFERENT answers, and conflating them is why codex had zero
+  # hook-bearing recordings (#1388):
+  #
+  #   1. DIRECTORY trust — "Do you trust the contents of this directory?".
+  #      Cached per-cwd in config.toml as [projects."<cwd>"].trust_level.
+  #      The answer is "1" (yes).
+  #   2. HOOK trust — a menu over the entries irrlicht installed into
+  #      hooks.json. Cached per ENTRY in config.toml as
+  #      [hooks.state."<abs hooks.json>:<event>:<group>:<index>"].trusted_hash.
+  #      The answer is "2" — "Trust all and continue".
+  #
+  # Answering the hook menu with the directory dialog's "1" selects
+  # "1. Review hooks", a submenu, and the boot stalls there. Leaving it
+  # unanswered is worse than stalling: the menu's third option is
+  # "3. Continue without trusting (hooks won't run)", so a timed-out boot
+  # yields a completely normal-looking session that simply never fires a
+  # hook — a recording with zero hook_received and nothing to say why.
+  # That silent branch is the exact hole this cell is meant to close.
+  #
+  # The hook gate keys on the hooks.json PATH + CONTENT, not on the cwd, so
+  # cwd_already_trusted must not skip it: the recorder installs its own
+  # resolved port into hooks.json (#1178), and a different port — or an
+  # isolated CODEX_HOME — is new content under a new key, which re-prompts
+  # even in a directory codex already trusts.
+  # Every branch below is fire-once. `capture-pane` returns SCROLLBACK, not
+  # just the live screen, so a menu's text keeps matching long after it has
+  # been answered and scrolled away — an ungated branch therefore re-fires on
+  # every poll, sends its keystroke again (the second Enter submitting the
+  # digit as a user turn), starves the later branches in this if/elif chain,
+  # and never lets `stable` climb, so the loop burns its full budget and the
+  # hook menu falls through to "3. Continue without trusting". Measured with
+  # the update branch ungated: it fired 40/40 iterations, the hook branch 0.
+  local waited=0 dir_done=0 hooks_done=0 upd_done=0 stable=0 pane=""
+  cwd_already_trusted && dir_done=1
+  while [[ $waited -lt 60 ]]; do
+    pane="$(tmux capture-pane -t "$sess" -p -S -40 2>/dev/null || true)"
+    # Codex's self-update offer — "✨ Update available! ... 1. Update now
+    # (runs `npm install -g @openai/codex`) / 2. Skip / 3. Skip until next
+    # version" — renders BEFORE the banner and swallows the boot.
+    #
+    # This is not a cosmetic case. With no handler the menu simply sits
+    # there: the trust poll and the banner wait both time out, and the first
+    # step_send then types its prompt and presses Enter INTO THE MENU, whose
+    # default is option 1. That silently runs a global `npm install -g` and
+    # upgrades the operator's codex CLI mid-recording — observed doing
+    # exactly that during #1388 (0.146.1 → 0.147.0), which also invalidates
+    # the agent_cli_version the run is about to stamp into the fixture.
+    # Answer "2" (Skip): a recording must never mutate the toolchain it is
+    # measuring. Match on "Update now", the MENU's own line, rather than the
+    # "Update available!" notice, which codex also prints non-interactively.
+    if [[ $upd_done -eq 0 ]] && grep -q 'Update now' <<<"$pane"; then
+      tmux send-keys -t "$sess" "2"
+      sleep 0.3
+      tmux send-keys -t "$sess" Enter
+      upd_done=1
+      stable=0
+      echo "[driver] declined codex self-update offer (2 = Skip)" >&2
+      sleep 1
+    elif [[ $hooks_done -eq 0 ]] && grep -q 'Trust all and continue' <<<"$pane"; then
+      # Confirm the menu actually CLOSED before believing it. codex swallows
+      # keystrokes during the boot/MCP phase (see step_send's render delay),
+      # so a send that silently dropped would otherwise set hooks_done=1, hide
+      # the still-open menu from this loop, and let the run continue with
+      # hooks disabled — the healthy-looking zero-hook recording #1388 is about.
+      local try=0
+      while [[ $try -lt 5 ]]; do
+        tmux send-keys -t "$sess" "2"
         sleep 0.3
         tmux send-keys -t "$sess" Enter
-        echo "[driver] accepted trust dialog" >&2
-        break
+        sleep 1.2
+        if ! tmux capture-pane -t "$sess" -p -S -5 2>/dev/null | grep -q 'Trust all and continue'; then
+          hooks_done=1
+          break
+        fi
+        try=$((try + 1))
+      done
+      stable=0
+      if [[ $hooks_done -eq 1 ]]; then
+        echo "[driver] accepted hook-trust menu (2 = Trust all and continue)" >&2
+      else
+        echo "[driver] WARNING: hook-trust menu still on screen after 5 attempts" >&2
       fi
-      sleep 0.5
-      waited=$((waited + 1))
-    done
-    # Remember this cwd so a later resume/concurrent boot here skips the poll.
-    TRUSTED_CWDS+=("$cwd")
+    elif [[ $dir_done -eq 0 ]] && grep -q 'Do you trust' <<<"$pane"; then
+      tmux send-keys -t "$sess" "1"
+      sleep 0.3
+      tmux send-keys -t "$sess" Enter
+      dir_done=1
+      stable=0
+      echo "[driver] accepted directory trust dialog (1 = yes)" >&2
+      sleep 1
+    elif grep -aq 'OpenAI Codex' "$slot_stdout" 2>/dev/null; then
+      # Banner is up and no gate is on screen. Require a few consecutive
+      # clear polls before believing it: the hook menu can render AFTER the
+      # banner (it is gated on config load, not on the splash), so breaking
+      # on the first clear poll would walk past it and silently disable
+      # hooks for the whole run.
+      stable=$((stable + 1))
+      [[ $stable -ge 8 ]] && break
+    fi
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  # Report hook-trust standing with EVIDENCE, never as a bare reassurance.
+  # "no menu appeared" has two very different causes — already trusted, or
+  # the menu was missed — and only one of them records hooks. codex writes a
+  # trusted_hash per entry under [hooks.state]."<abs hooks.json>:<event>:…",
+  # so the config is the thing that actually knows.
+  if [[ $hooks_done -eq 1 ]]; then
+    echo "[driver] hook trust: granted this boot" >&2
+  elif [[ ! -f "$CODEX_HOME_RESOLVED/hooks.json" ]]; then
+    echo "[driver] hook trust: n/a — no $CODEX_HOME_RESOLVED/hooks.json installed" >&2
+  elif grep -qF -e "hooks.state.\"$CODEX_HOME_PHYS/hooks.json:" \
+                -e "hooks.state.\"$CODEX_HOME_RESOLVED/hooks.json:" \
+         "$CODEX_HOME_RESOLVED/config.toml" 2>/dev/null; then
+    echo "[driver] hook trust: already trusted (trusted_hash present in config.toml)" >&2
+  else
+    echo "[driver] WARNING: hooks.json is installed but NOT trusted and no menu was" >&2
+    echo "[driver] WARNING: answered — codex will not fire hooks this run (#1388)." >&2
+    tmux capture-pane -t "$sess" -p -S -15 2>/dev/null | sed 's/^/[driver]   | /' >&2
   fi
+  # Remember this cwd so a later resume/concurrent boot here skips the
+  # DIRECTORY dialog. Hook trust is deliberately not cached here — it is
+  # keyed on hooks.json, not on the cwd.
+  TRUSTED_CWDS+=("$cwd")
 
-  local waited=0
+  local waited=0 banner_seen=0
   while [[ $waited -lt 180 ]]; do
     if [[ -f "$slot_stdout" ]] && grep -aq 'OpenAI Codex' "$slot_stdout" 2>/dev/null; then
+      banner_seen=1
       break
     fi
     sleep 0.5
     waited=$((waited + 1))
   done
+  if [[ $banner_seen -eq 0 ]]; then
+    # Say so LOUDLY rather than falling through. Everything after this types
+    # text and presses Enter; if the banner never came, something else owns
+    # the screen — an unrecognized modal — and those keystrokes land in it.
+    # That is how the self-update offer above got accepted before it had a
+    # handler, so an unexplained boot deserves a line in the log naming the
+    # pane's actual contents rather than a silent continue.
+    echo "[driver] WARNING: codex banner never appeared after 90s on slot $ACTIVE." >&2
+    echo "[driver] WARNING: an unhandled prompt may be holding the pane; last 15 lines:" >&2
+    tmux capture-pane -t "$sess" -p -S -15 2>/dev/null | sed 's/^/[driver]   | /' >&2
+  fi
 
   waited=0
   while [[ $waited -lt 60 ]]; do
@@ -431,10 +607,10 @@ step_resume() {
   # reopens the rollout). Keep TRANSCRIPT/UUID/EXPECTED_TURNS as-is.
   if [[ -n "$resume_uuid" ]]; then
     echo "[driver] resume[s$ACTIVE]: relaunch codex resume $resume_uuid (same rollout=$saved_transcript)" >&2
-    boot_session codex resume "$resume_uuid" --no-alt-screen
+    boot_session codex resume "$resume_uuid" ${CODEX_LAUNCH_ARGS[@]+"${CODEX_LAUNCH_ARGS[@]}"} --no-alt-screen
   else
     echo "[driver] resume[s$ACTIVE]: UUID unknown — relaunch codex resume --last" >&2
-    boot_session codex resume --last --no-alt-screen
+    boot_session codex resume --last ${CODEX_LAUNCH_ARGS[@]+"${CODEX_LAUNCH_ARGS[@]}"} --no-alt-screen
   fi
 }
 
@@ -453,9 +629,14 @@ step_sigkill() {
   resolve_transcript || true
   local pid=""
   if [[ -n "$TRANSCRIPT" ]]; then
-    # Same lsof write-FD match as the daemon: COMMAND PID USER FD …; the
-    # FD column ends in 'w' for a writer.
-    pid=$(lsof "$TRANSCRIPT" 2>/dev/null | awk 'NR>1 && $4 ~ /w$/ {print $2; exit}')
+    # Same lsof write-FD match as the daemon: COMMAND PID USER FD …. Accept
+    # 'w' (write-only) AND 'u' (read/write) — codex 0.147 holds its rollout
+    # as "59u", so a /w$/ match finds nothing, and a locked handle ("59uW")
+    # ends in the lock character rather than the mode. This mirrors
+    # processlifecycle.WriterOf, which had the same bug (#1388); keep the two
+    # in step, or this falls back to the pane pid and can SIGKILL the wrong
+    # process.
+    pid=$(lsof "$TRANSCRIPT" 2>/dev/null | awk 'NR>1 && $4 ~ /^[0-9]+[wu]/ {print $2; exit}')
   fi
   # Fallback: the codex process in this slot's tmux pane. Resolve the codex
   # descendant of the pane (in case tmux wrapped the command in a shell) so
@@ -498,7 +679,7 @@ step_restart() {
   local idx=$(( N_SLOTS + 1 ))
   alloc_slot "codex-onboard-$(date +%s)-$$-${idx}" "${RUN_CWD}-${idx}"
   echo "[driver] restart: new session slot #${ACTIVE} (cwd=${RUN_CWD}-${idx})" >&2
-  boot_session codex --no-alt-screen
+  boot_session codex ${CODEX_LAUNCH_ARGS[@]+"${CODEX_LAUNCH_ARGS[@]}"} --no-alt-screen
 }
 
 step_start_session() {
@@ -520,13 +701,13 @@ step_start_session() {
   local new_cwd="${req_cwd:-$RUN_CWD}"
   alloc_slot "codex-onboard-$(date +%s)-$$-${idx}" "$new_cwd"
   echo "[driver] start_session: concurrent session slot #${ACTIVE} (cwd=$new_cwd)" >&2
-  boot_session codex --no-alt-screen
+  boot_session codex ${CODEX_LAUNCH_ARGS[@]+"${CODEX_LAUNCH_ARGS[@]}"} --no-alt-screen
 }
 
 # Bring up the first session as slot 1. SCRIPT_JSON's reset_session/fork/
 # start_session steps allocate further slots; resume relaunches in place.
 alloc_slot "codex-onboard-$(date +%s)-$$" "$RUN_CWD"
-boot_session codex --no-alt-screen
+boot_session codex ${CODEX_LAUNCH_ARGS[@]+"${CODEX_LAUNCH_ARGS[@]}"} --no-alt-screen
 
 # Iterate steps. EXIT_REASON / array updates persist via the parent shell
 # (process substitution feeds the loop — the body is NOT subshelled).
