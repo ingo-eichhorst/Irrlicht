@@ -13,11 +13,38 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
+	"irrlicht/core/adapters/outbound/metrics"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 )
+
+// TestMain redirects the metrics ledger away from the developer's real
+// ~/.local/share/irrlicht/sessions before any test runs.
+//
+// Every ComputeMetrics pass calls saveLedger, and ledgerPath falls back to
+// $HOME unless SetLedgerDir was called — which only the daemon does, in
+// cmd/irrlichd/paths.go. This package's tests hash t.TempDir() names into
+// those filenames, so each run left orphaned ledgers behind that nothing ever
+// reads again (measured: 493 -> 499 across one run of codex_birth_test.go
+// alone, and 510 accumulated before this was added).
+//
+// It has to be TestMain rather than a per-test helper: ensureLedgerDir is a
+// sync.Once, so the override must land before the FIRST ledger operation
+// anywhere in the package. Tests that use stubMetrics never reach it, but any
+// future test wiring the production metrics adapter — codex_birth_test.go is
+// the first — silently would.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "irrlicht-e2e-ledger-")
+	if err != nil {
+		panic("e2e TestMain: cannot create temp ledger dir: " + err.Error())
+	}
+	metrics.SetLedgerDir(dir)
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 // defaultSessionDetectorDeps returns the SessionDetectorDeps every e2e test in
 // this package builds identically (nopLogger/stubGit/stubMetrics, no

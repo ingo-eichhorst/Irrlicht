@@ -20,17 +20,31 @@ import (
 // the daemon first sees the file, transcribed from recordings of two codex
 // releases fourteen weeks apart.
 //
-// They are here as a PAIR on purpose. Issue #1447 offered two candidate
-// causes for codex sessions being born `working`: upstream drift (codex 0.147
-// materialising its rollout differently than 0.130 did) or a daemon
-// regression. Pinning both versions through the same assertion is what
-// separates them — if the verdict tracked the CLI version, these two subtests
-// would disagree.
+// They are here as a PAIR to pin both shapes, but be precise about what that
+// does and does not prove. Issue #1447 offered two candidate causes for codex
+// sessions being born `working`: upstream drift (codex 0.147 materialising its
+// rollout differently than 0.130 did) or a daemon regression.
 //
-// Shapes verified against:
-//   - 0.130.0: replaydata/agents/codex/scenarios/2-13_turn-end-terminal-text/
-//     recordings/2026-05-23-21-44-53_irrlichd-0.4.7+f83dc27/transcript.jsonl
-//   - 0.147.0: the 2026-08-10 staged re-record of the same cell (#1388)
+// These two subtests CANNOT discriminate between them on their own, and the
+// earlier version of this comment wrongly claimed they could. The only field
+// that differs between the heads is payload.cli_version, which codex's parser
+// turns into ev.AgentVersion on a Skip=true session_meta — and no rule in
+// stateRules reads AgentVersion. The two subtests are therefore incapable of
+// disagreeing. The discrimination happened when these bytes were transcribed
+// and compared, not here.
+//
+// What they DO pin is that both shapes are insubstantial at birth, so a future
+// parser change that starts finding signal in either one is caught.
+//
+// Provenance, which is asymmetric and worth knowing before trusting them:
+//   - 0.130.0 is verifiable from this repo, field-by-field against
+//     replaydata/agents/codex/scenarios/2-13_turn-end-terminal-text/
+//     recordings/2026-05-23-21-44-53_irrlichd-0.4.7+f83dc27/transcript.jsonl.
+//   - 0.147.0 is NOT in the repo. It was transcribed from the 2026-08-10
+//     staged re-record of the same cell, which lives under .build/ in #1388's
+//     worktree and is unpromotable (it was recorded by the very daemon this
+//     fix repairs). A reader cannot check it here. When #1388 lands a
+//     re-recorded fixture, read the head off disk and delete this constant.
 //
 // Both emit session_meta, then event_msg/task_started, 1-3ms apart. The
 // payloads are trimmed to the fields codex's parser dispatches on — it keys
@@ -44,6 +58,46 @@ const (
 {"timestamp":"2026-08-10T00:51:56.769Z","type":"event_msg","payload":{"type":"task_started"}}
 `
 )
+
+// bornState drives one EventNewSession through a real SessionDetector wired
+// to the PRODUCTION metrics adapter, and returns the session as it was first
+// persisted. Both tests below assert on nothing but its State, so the wiring
+// is factored out here rather than repeated around each assertion.
+//
+// The production adapter is the point: the birth path trusts whatever the
+// real collector hands back, and a stub returning nil is exactly what hid
+// #1447 for as long as it hid.
+func bornState(t *testing.T, adapterName, sessionID, transcriptPath, cwd string) *session.SessionState {
+	t.Helper()
+
+	repo := newMemRepo()
+	deps := defaultSessionDetectorDeps(repo)
+	deps.Metrics = realCodexMetrics()
+
+	w := newMockWatcher(1)
+	w.identity = agent.Identity{Name: adapterName}
+	detector := services.NewSessionDetector([]inbound.Watcher{w}, deps)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go detector.Run(ctx)
+
+	w.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      sessionID,
+		TranscriptPath: transcriptPath,
+		CWD:            cwd,
+	}
+
+	if !waitForSession(repo, sessionID, 5*time.Second) {
+		t.Fatalf("session %s never reached the repo", sessionID)
+	}
+	got, err := repo.Load(sessionID)
+	if err != nil {
+		t.Fatalf("load session %s: %v", sessionID, err)
+	}
+	return got
+}
 
 // realCodexMetrics builds the production metrics adapter over the real
 // adapter registry, so ComputeMetrics runs codex's own parser rather than a
@@ -123,35 +177,7 @@ func TestCodexSession_BornReadyOnAnInsubstantialRolloutHead(t *testing.T) {
 					m.LastEventType)
 			}
 
-			mc := realCodexMetrics()
-
-			repo := newMemRepo()
-			deps := defaultSessionDetectorDeps(repo)
-			deps.Metrics = mc
-
-			w := newMockWatcher(1)
-			w.identity = agent.Identity{Name: "codex"}
-			detector := services.NewSessionDetector([]inbound.Watcher{w}, deps)
-
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			go detector.Run(ctx)
-
-			const sessionID = "019fe927-889e-73d1-98c8-4f1ed0c064a5"
-			w.ch <- agent.Event{
-				Type:           agent.EventNewSession,
-				SessionID:      sessionID,
-				TranscriptPath: rollout,
-				CWD:            dir,
-			}
-
-			if !waitForSession(repo, sessionID, 5*time.Second) {
-				t.Fatalf("session %s never reached the repo", sessionID)
-			}
-			got, err := repo.Load(sessionID)
-			if err != nil {
-				t.Fatalf("load session: %v", err)
-			}
+			got := bornState(t, "codex", "019fe927-889e-73d1-98c8-4f1ed0c064a5", rollout, dir)
 			if got.State != session.StateReady {
 				t.Errorf("born %q, want %q — the rollout head holds only session_meta and "+
 					"task_started, both of which codex's own parser skips, so nothing "+
@@ -195,37 +221,18 @@ func TestSession_BornReadyOnAZeroByteTranscript(t *testing.T) {
 	if m, err := realCodexMetrics().ComputeMetrics(probe, "claude-code"); err != nil {
 		t.Fatalf("ComputeMetrics: %v", err)
 	} else if m == nil {
-		t.Skipf("a zero-byte transcript now yields nil metrics — this arm of #1447 " +
-			"is no longer reachable and this test would pass vacuously")
+		// Fatal, not Skip. This test is the ONLY lock on the
+		// LastEventType-vs-NoSubstantiveActivity choice: mutate the guard to
+		// NoSubstantiveActivity and every other test in this PR stays green
+		// while this one fails. A skip reads as a pass, which would retire
+		// that lock silently — the same reasoning AGENTS.md applies to
+		// posix-lint.sh's three refusals.
+		t.Fatalf("a zero-byte transcript now yields nil metrics — this arm of #1447 is no " +
+			"longer reachable, so this test would pass vacuously and stop locking the " +
+			"guard choice; re-derive it rather than deleting it")
 	}
 
-	repo := newMemRepo()
-	deps := defaultSessionDetectorDeps(repo)
-	deps.Metrics = realCodexMetrics()
-
-	w := newMockWatcher(1)
-	w.identity = agent.Identity{Name: "claude-code"}
-	detector := services.NewSessionDetector([]inbound.Watcher{w}, deps)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go detector.Run(ctx)
-
-	const sessionID = "zero-byte-session"
-	w.ch <- agent.Event{
-		Type:           agent.EventNewSession,
-		SessionID:      sessionID,
-		TranscriptPath: transcript,
-		CWD:            dir,
-	}
-
-	if !waitForSession(repo, sessionID, 5*time.Second) {
-		t.Fatalf("session %s never reached the repo", sessionID)
-	}
-	got, err := repo.Load(sessionID)
-	if err != nil {
-		t.Fatalf("load session: %v", err)
-	}
+	got := bornState(t, "claude-code", "zero-byte-session", transcript, dir)
 	if got.State != session.StateReady {
 		t.Errorf("born %q, want %q — the transcript is zero bytes, so no event has been "+
 			"observed at all; only an ABSENT file yields nil metrics, and it is that gap "+

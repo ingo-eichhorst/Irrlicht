@@ -133,11 +133,22 @@ func TestNewTopLevelSession_StaysReadyWhenNothingToClassify(t *testing.T) {
 // `event_msg`/`task_started`, are explicitly `Skip = true` in its parser, so
 // the metrics that reach the ladder describe nothing at all.
 //
-// The other three classification sites all guard on exactly this flag —
-// session_detector_activity.go's activity path and PID path, and
-// replayengine/engine.go — which is why replaying the same transcript offline
-// still produces the correct `ready` while the live daemon says `working`.
-// The birth path was the only one without the guard.
+// Replaying the same transcript offline still produces the correct `ready`
+// while the live daemon says `working`, because the replay engine bails on
+// insubstantial metrics and the birth path did not.
+//
+// The guard this fix uses is deliberately NOT the one those other sites use,
+// and the asymmetry is the point rather than an oversight. The activity path's
+// skipClassification and replayengine.Engine both gate on
+// NoSubstantiveActivity, a PER-PASS flag (`linesParsed > 0 && !substantive`),
+// so an EMPTY pass leaves it false. The only pre-existing `LastEventType != ""`
+// bails are forceReadyToWorkingIfActive and the replay engine's force-bounce,
+// and birth follows those: the question at birth is cumulative ("has anything
+// ever been parsed off this transcript") rather than per-pass, and
+// applySkippedEvent can mark a pass substantive without ever setting
+// LastEventType. Do not "restore consistency" by switching this to
+// NoSubstantiveActivity — TestSession_BornReadyOnAZeroByteTranscript in
+// core/e2e is the lock that fails when you do.
 func TestNewTopLevelSession_StaysReadyWhenParsedLinesAreAllInsubstantial(t *testing.T) {
 	d := NewSessionDetector(nil, SessionDetectorDeps{
 		Log:     bornLog{},
@@ -155,5 +166,52 @@ func TestNewTopLevelSession_StaysReadyWhenParsedLinesAreAllInsubstantial(t *test
 		t.Errorf("State = %q, want %q — every parsed line was insubstantial, so there is no "+
 			"evidence of an open turn; birthing `working` reports an idle agent as generating",
 			state.State, session.StateReady)
+	}
+}
+
+// TestNewChildSession_StillBornWorkingOnInsubstantialMetrics is a LOCK, not a
+// defect test: it passes on main by construction, because on main every
+// session is classified at birth. It exists because the #1447 fix's first
+// draft broke it, and nothing else in the suite noticed.
+//
+// A child is classified at birth for a reason that has nothing to do with
+// evidence — it is about being COUNTED. hasActiveChildren ignores a child
+// sitting in `ready`, so a parent whose own turn-done metrics are unchanged
+// has nothing holding it, and RunStaleSessionRefresh flips it back to `ready`
+// while the subagent is still running. That is #889 verbatim, and
+// holdParentWorkingForNewChild does not cover it: that hold only moves the
+// parent in memory for an instant, and it is the child's PERSISTED `working`
+// that survives the sweep.
+//
+// The existing #889 tests cannot catch this, which is the whole reason this
+// one is here: workflowChildMetrics hands its child LastEventType "tool_use",
+// so an evidence-based guard passes and they stay green. The population at
+// risk is the child whose transcript is empty or all-skip at discovery — and
+// that is the common case, because the fswatcher parks a zero-byte create only
+// for header-linked adapters and codex is the only one, so a Claude Code
+// subagent transcript emits its birth event at size zero.
+func TestNewChildSession_StillBornWorkingOnInsubstantialMetrics(t *testing.T) {
+	d := NewSessionDetector(nil, SessionDetectorDeps{
+		Log:     bornLog{},
+		Git:     bornGit{},
+		Metrics: insubstantialMetrics{},
+	})
+
+	state := d.buildNewSessionState(
+		agent.Identity{Name: "claude-code"},
+		agent.Event{
+			SessionID:       "child1",
+			ParentSessionID: "parent1",
+			TranscriptPath:  "/tmp/w/child.jsonl",
+			CWD:             "/tmp/w",
+		},
+		1000,
+	)
+
+	if state.State != session.StateWorking {
+		t.Errorf("State = %q, want %q — a child born `ready` does not count in "+
+			"hasActiveChildren, so the stale-session sweep releases its parent while the "+
+			"subagent is still running (#889)",
+			state.State, session.StateWorking)
 	}
 }

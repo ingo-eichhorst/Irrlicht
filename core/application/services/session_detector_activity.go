@@ -321,10 +321,23 @@ func (d *SessionDetector) buildNewSessionState(id agent.Identity, ev agent.Event
 	// With no substantive event on record, every rule in the ladder is
 	// reasoning from absence, so the bootstrap `ready` stands.
 	//
+	// CHILDREN ARE EXEMPT, which is why this is an `||` and not one condition.
+	// The child arm above is not about evidence — it is about a child being
+	// COUNTED. A child born `ready` does not count in hasActiveChildren, so a
+	// parent whose own turn-done metrics are unchanged has nothing holding it
+	// and the stale-session sweep flips it back to `ready` while the subagent
+	// is still running (#889). Zero-byte-create parking is gated on
+	// header-linkage and codex is the only adapter that declares it, so a
+	// Claude Code subagent transcript really does emit its birth event at size
+	// zero — exactly the population #889 is about, and exactly the one an
+	// evidence-only guard would drop. Applying the guard to children too was
+	// this fix's own first draft; it silently re-opened #889 and is what the
+	// child case in session_detector_bornready_test.go now pins.
+	//
 	// The #1256 copilot case is untouched: its events.jsonl already holds a
 	// real user message at discovery, so LastEventType is set and the open
 	// turn is still caught here.
-	if state.Metrics != nil && state.Metrics.LastEventType != "" {
+	if state.Metrics != nil && (state.ParentSessionID != "" || state.Metrics.LastEventType != "") {
 		if newState, _ := ClassifyState(state.State, state.Metrics); newState != state.State {
 			state.State = newState
 		}
