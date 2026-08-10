@@ -131,23 +131,56 @@ func TestAgent_Process_ExactName(t *testing.T) {
 	}
 }
 
-// TestAgent_Permissions pins the consent surface. Copilot is observe-only: it
-// installs nothing, so it declares exactly one observe permission and no
-// modify permission — which is also why no contracttesting.AssertPermissionGated
-// call is owed here (that contract covers modify-kind permissions, and the
-// observe gate is enforced daemon-side by startWatching/stopWatching).
+// TestAgent_Permissions pins the consent surface: one observe permission for
+// reading transcripts, and — since #1378 — one modify permission for the hook
+// install.
 //
-// The count matters beyond tidiness: PermissionService resolves an adapter to
-// its FIRST observe-kind entry and stops, so a second one would be silently
-// unreachable.
-func TestAgent_Permissions(t *testing.T) {
+// The ONE-observe count matters beyond tidiness: PermissionService resolves an
+// adapter to its FIRST observe-kind entry and stops, so a second observe entry
+// would be silently unreachable. The hooks entry must therefore be
+// modify-kind, which is asserted rather than assumed.
+//
+// Both entries are checked for the four prose fields because the consent
+// wizard renders all of them; the hooks entry's copy is additionally bound to
+// what the installer actually writes by AssertHookDisclosureMatchesInstalled
+// (hookdisclosure_test.go), which is the check that would catch a stale event
+// list here.
+// permissionsByKey indexes the real registration once for the subtests below.
+func permissionsByKey(t *testing.T) map[string]agent.Permission {
+	t.Helper()
 	perms := Agent().Permissions
-	if len(perms) != 1 {
-		t.Fatalf("got %d permissions, want exactly 1 (observe-only adapter)", len(perms))
+	if len(perms) != 2 {
+		t.Fatalf("got %d permissions, want exactly 2 (transcripts + hooks)", len(perms))
 	}
-	p := perms[0]
-	if p.Key != PermissionKeyTranscripts {
-		t.Errorf("Key = %q, want %q", p.Key, PermissionKeyTranscripts)
+	byKey := make(map[string]agent.Permission, len(perms))
+	for _, p := range perms {
+		byKey[p.Key] = p
+	}
+	return byKey
+}
+
+// Split into four top-level tests rather than subtests: a t.Run closure's body
+// counts toward its ENCLOSING function's cognitive complexity, so grouping
+// them made one function measurably harder to read, not easier.
+
+func TestAgent_Permissions_ExactlyOneObserveEntry(t *testing.T) {
+	observes := 0
+	for _, p := range permissionsByKey(t) {
+		if p.Kind == permission.KindObserve {
+			observes++
+		}
+	}
+	if observes != 1 {
+		t.Errorf("got %d observe-kind permissions, want exactly 1 — PermissionService "+
+			"resolves an adapter to its first observe entry and stops, so any second "+
+			"one is unreachable", observes)
+	}
+}
+
+func TestAgent_Permissions_TranscriptsIsObserveOnly(t *testing.T) {
+	p, ok := permissionsByKey(t)[PermissionKeyTranscripts]
+	if !ok {
+		t.Fatalf("no %q permission declared", PermissionKeyTranscripts)
 	}
 	if p.Kind != permission.KindObserve {
 		t.Errorf("Kind = %v, want %v", p.Kind, permission.KindObserve)
@@ -155,12 +188,41 @@ func TestAgent_Permissions(t *testing.T) {
 	if p.Apply != nil || p.Remove != nil {
 		t.Error("observe-kind permission must not carry Apply/Remove effects")
 	}
-	for name, field := range map[string]string{
-		"Title": p.Title, "FeatureUnlocked": p.FeatureUnlocked,
-		"Touches": p.Touches, "Detail": p.Detail,
-	} {
-		if strings.TrimSpace(field) == "" {
-			t.Errorf("%s is empty — the consent wizard renders this to the user", name)
+	if p.Writes != nil {
+		t.Error("an observe-kind permission must not declare a ManagedUserFile")
+	}
+}
+
+// TestAgent_Permissions_HooksIsModifyKind checks only what is adapter-specific.
+// Writes' sub-fields (absolute Path, Uninstall, Verify, Version) are asserted
+// registry-wide for every adapter by cmd/irrlichd/managedfiles_test.go,
+// agents/hookverify_test.go and agents/hookversion_test.go; copilot is in
+// All() and inherits all three.
+func TestAgent_Permissions_HooksIsModifyKind(t *testing.T) {
+	p, ok := permissionsByKey(t)[PermissionKeyHooks]
+	if !ok {
+		t.Fatalf("no %q permission declared", PermissionKeyHooks)
+	}
+	if p.Kind != permission.KindModify {
+		t.Errorf("Kind = %v, want %v — an install writes a file", p.Kind, permission.KindModify)
+	}
+	if p.Apply == nil || p.Remove == nil {
+		t.Error("the hooks permission must carry both Apply and Remove effects")
+	}
+	if p.Writes == nil {
+		t.Error("the hooks permission must declare the file it writes")
+	}
+}
+
+func TestAgent_Permissions_ConsentProseIsComplete(t *testing.T) {
+	for _, p := range permissionsByKey(t) {
+		for name, field := range map[string]string{
+			"Title": p.Title, "FeatureUnlocked": p.FeatureUnlocked,
+			"Touches": p.Touches, "Detail": p.Detail,
+		} {
+			if strings.TrimSpace(field) == "" {
+				t.Errorf("%s/%s is empty — the consent wizard renders this to the user", p.Key, name)
+			}
 		}
 	}
 }
