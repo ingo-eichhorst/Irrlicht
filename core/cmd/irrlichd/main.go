@@ -301,24 +301,16 @@ func uninstallHooks() {
 	// denyHooksPermissions has already written whatever it was going to write,
 	// and a partially-uninstalled config is exactly the state in which a stale
 	// daemon re-installing the rest is most confusing.
-	notifyDaemonConsentChanged(os.Stdout)
+	notifyDaemonConsentChanged(os.Stdout, hooksNoun)
 	if failed > 0 {
 		os.Exit(1)
 	}
 }
 
-// uninstallHookConfigs runs every declared uninstaller and then records the
-// matching hooks permissions as denied. It returns how many uninstallers
-// failed.
-//
-// One adapter's failure must not end the run. `hookjson` deliberately refuses
-// to rewrite a config file it cannot parse, so a single hand-edited
-// ~/.claude/settings.json used to abort the whole command — leaving every LATER
-// adapter's entries firing at a dead port, and (because the consent block never
-// ran) leaving their hooks permissions still granted, so the next daemon start
-// re-installed them via the Apply closure. That is precisely the #570
-// regression this function exists to prevent, and the registry projection only
-// widens the window as adapters are added.
+// uninstallHookConfigs is uninstallManagedFiles bound to the hooks noun — see
+// there for why one adapter's failure must not end the run. Kept as a named
+// seam because managedfiles_test.go's cases drive the hooks path through it
+// with a fake store.
 func uninstallHookConfigs(w io.Writer, configs []agents.ManagedUserFile, store outbound.PermissionStore) int {
 	return uninstallManagedFiles(w, configs, store, hooksNoun)
 }
@@ -506,8 +498,10 @@ func uninstallTaskEtaBlocks() {
 	// consent still says "granted" — and unlike the hooks path there is no
 	// re-verification loop to make that visible, so the blocks simply return at
 	// the next start with nothing having reported a disagreement. Runs even
-	// when an uninstaller failed, for the reason uninstallHooks gives.
-	notifyDaemonConsentChanged(os.Stdout)
+	// when an uninstaller failed, for the reason uninstallHooks gives. The noun
+	// travels with it so the advisory lines name the managed blocks rather than
+	// sending the user off to inspect their hook config.
+	notifyDaemonConsentChanged(os.Stdout, instructionsNoun)
 	if failed > 0 {
 		os.Exit(1)
 	}

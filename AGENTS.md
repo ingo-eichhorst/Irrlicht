@@ -277,7 +277,13 @@ Before marking a ticket done, run the full suite — every layer must pass:
   CLAUDE.md instruction blocks or the kitty patch nobody asked it to touch.
   Since #1437 there is a third, `agents.InstructionConfigs`, narrowed to
   `agent.InstructionsPermissionKey` for `--uninstall-task-eta`; both narrowings
-  share one `configsForKey`. Every uninstall command runs over a narrowed
+  share one `configsForKey`, which narrows **before** resolving. That order is
+  the rule, not an optimization: a narrowed projection validates exactly the set
+  it collects, so a command cannot die on a declaration outside its own blast
+  radius. Resolving first made `--uninstall-task-eta` abort and remove *nothing*
+  from the user's CLAUDE.md because kitty's path did not resolve. The full
+  projection keeps the opposite semantics on purpose — for the recorder a
+  short list reads as "nothing to protect". Every uninstall command runs over a narrowed
   projection because it does not only remove content — it records the matching
   consent as **denied**, and without that the Apply closure rewrites the file at
   the next daemon start (#570). `--uninstall-task-eta` did exactly that for its

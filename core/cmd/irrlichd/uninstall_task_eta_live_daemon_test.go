@@ -207,6 +207,16 @@ func TestUninstallTaskEtaLeavesHooksConsentAlone(t *testing.T) {
 		t.Fatalf("--uninstall-task-eta exited %v\n%s", err, out)
 	}
 
+	// The positive half, and it is not optional. Asserting only that hooks
+	// stayed granted passes just as well when the deny disappears ENTIRELY —
+	// which is the state of main, where it passes today. "Denied exactly this,
+	// and nothing else" is one assertion pair; splitting it leaves a lock that
+	// survives the collapse it is supposed to catch.
+	if got := storedPermissionState(t, stateDir, claudecode.AdapterName, claudecode.PermissionKeyInstructions); got != permission.StateDenied {
+		t.Errorf("--uninstall-task-eta recorded %s/%s = %q, want \"denied\" — the narrowing assertion below "+
+			"would otherwise pass vacuously against a command that denies nothing at all",
+			claudecode.AdapterName, claudecode.PermissionKeyInstructions, got)
+	}
 	if got := storedPermissionState(t, stateDir, claudecode.AdapterName, claudecode.PermissionKeyHooks); got != permission.StateGranted {
 		t.Errorf("--uninstall-task-eta changed %s/%s to %q — it must touch the instructions permission and nothing else",
 			claudecode.AdapterName, claudecode.PermissionKeyHooks, got)

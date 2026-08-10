@@ -52,10 +52,35 @@ type ManagedUserFile struct {
 // processlifecycle, which imports it back. consentCatalog there is the one
 // place that composition lives.
 func ManagedUserFiles(catalog []agent.Agent) ([]ManagedUserFile, error) {
+	return collectManagedFiles(catalog, func(string) bool { return true })
+}
+
+// collectManagedFiles is the shared walk behind the full projection and the
+// narrowed ones. `want` decides which keys are collected AND which are
+// validated, and those being the same set is the point.
+//
+// A narrowed command must not fail on a declaration outside its narrowing.
+// Resolving the whole catalog and filtering afterwards made `--uninstall-task-eta`
+// abort — removing nothing from the user's CLAUDE.md — because kitty's
+// remote-control path did not resolve, a permission that command never touches.
+// It is the one command pointed at a user-authored file, and before #1437 it
+// was immune to this because it called the adapter directly.
+//
+// The full projection keeps the opposite semantics deliberately: for
+// `--print-managed-files` and the onboarding recorder, whose job IS
+// completeness, a declaration that is present but unusable must be an error
+// rather than a skip — an empty or short list there reads as "nothing to
+// protect" and the recorder writes over the user's real files unprotected.
+//
+// Note this does not weaken the existing lock in
+// TestManagedUserFilesRejectsUnusableDeclarations: a broken HOOKS declaration
+// is still rejected by HookConfigs, because it is inside that filter. What
+// changes is only whether one command dies on another command's declaration.
+func collectManagedFiles(catalog []agent.Agent, want func(key string) bool) ([]ManagedUserFile, error) {
 	var out []ManagedUserFile
 	for _, a := range catalog {
 		for _, p := range a.Permissions {
-			if p.Writes == nil {
+			if p.Writes == nil || !want(p.Key) {
 				continue
 			}
 			if p.Writes.Path == nil || p.Writes.Uninstall == nil {
@@ -79,8 +104,8 @@ func ManagedUserFiles(catalog []agent.Agent) ([]ManagedUserFile, error) {
 	return out, nil
 }
 
-// HookConfigs is the hooks slice of ManagedUserFiles — the agent config files
-// irrlicht installs hooks into, and nothing else.
+// HookConfigs is the hooks slice of the managed-file declaration — the agent
+// config files irrlicht installs hooks into, and nothing else.
 //
 // The narrowing is what keeps `irrlichd --uninstall-hooks` meaning what its
 // name says after #1383 widened the declaration. That command removes hook
@@ -92,9 +117,9 @@ func HookConfigs(catalog []agent.Agent) ([]ManagedUserFile, error) {
 	return configsForKey(catalog, agent.HooksPermissionKey)
 }
 
-// InstructionConfigs is the instructions slice of ManagedUserFiles — the
-// user-level instruction files irrlicht writes managed blocks into, and nothing
-// else. It is what `irrlichd --uninstall-task-eta` reads (#1437).
+// InstructionConfigs is the instructions slice of the managed-file declaration
+// — the user-level instruction files irrlicht writes managed blocks into, and
+// nothing else. It is what `irrlichd --uninstall-task-eta` reads (#1437).
 //
 // It is a projection rather than a call to claudecode.UninstallInstructionBlocks
 // for two reasons, and the second is the one that matters. The obvious one: a
@@ -118,16 +143,9 @@ func InstructionConfigs(catalog []agent.Agent) ([]ManagedUserFile, error) {
 // disagree about what "the files this key writes" means — the divergence #1437
 // was: --uninstall-hooks projected the catalog while --uninstall-task-eta
 // called one adapter function by hand.
+//
+// It narrows BEFORE resolving, so a command's failure domain is the same set as
+// its blast radius. See collectManagedFiles.
 func configsForKey(catalog []agent.Agent, key string) ([]ManagedUserFile, error) {
-	all, err := ManagedUserFiles(catalog)
-	if err != nil {
-		return nil, err
-	}
-	var out []ManagedUserFile
-	for _, f := range all {
-		if f.Key == key {
-			out = append(out, f)
-		}
-	}
-	return out, nil
+	return collectManagedFiles(catalog, func(k string) bool { return k == key })
 }

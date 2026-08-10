@@ -812,8 +812,9 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 		permissionshandler.NewGetHandler(permService, logger))
 	mux.HandleFunc("POST /api/v1/permissions/answer",
 		permissionshandler.NewAnswerHandler(permService, logger))
-	// Consent-changed nudge (#1425): another local process — today only
-	// `irrlichd --uninstall-hooks` — has written to permissions.json, and the
+	// Consent-changed nudge (#1425): another local process — today
+	// `irrlichd --uninstall-hooks` and `irrlichd --uninstall-task-eta` (#1437) —
+	// has written to permissions.json, and the
 	// running daemon otherwise reads that file exactly once, at startup.
 	// localhostOnly for the same reason the activation alias is: adopting a
 	// stored grant can run an Apply closure that rewrites a sensitive user
