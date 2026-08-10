@@ -418,10 +418,11 @@ func TestSessionDetector_ReapingASessionEvictsItsDwellAndHolds(t *testing.T) {
 // in fourteen places that had not chosen it.
 func TestSessionDetector_WiresAStateDwell(t *testing.T) {
 	bare := newSessionDetector()
-	bare.dwell = nil
-	if bare.dwell != nil {
-		t.Fatal("precondition: this detector must have no dwell")
+	if bare.dwell == nil {
+		t.Fatal("precondition: the allocator is supposed to wire a dwell, so " +
+			"clearing it below is what puts this detector on the nil path")
 	}
+	bare.dwell = nil
 	// The nil path must be transparent rather than panicking — session.StateDwell
 	// promises nil-receiver safety, and this is what pins it from the caller's
 	// side.

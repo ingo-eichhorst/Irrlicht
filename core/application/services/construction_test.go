@@ -150,33 +150,47 @@ func guardedConstructions() []guardedConstruction {
 // Guard 1 — the source scan
 // ---------------------------------------------------------------------------
 
-// packageTypeDecls maps every package-level type name in the parsed package to
-// the type expression it names, so the scan can see through
+// collectTypeDecls maps every type name declared in the given files to the type
+// expression it names, so the scan can see through
 // `type detList []*SessionDetector`. Without it a defined container type is a
 // bare *ast.Ident that matches nothing, and `detList{{}}` constructs a service
 // the scan reports as clean.
-func packageTypeDecls(pkg *ast.Package) map[string]ast.Expr {
+//
+// It walks with ast.Inspect rather than over file.Decls, so a type declared
+// INSIDE a function body is collected too. Package scope alone was an
+// asymmetry, not a policy: a table-driven test declaring `type tc struct{…}`
+// beside its table is ordinary Go, and identical source being caught at package
+// scope but silent one indent deeper is the kind of hole that gets found by
+// accident years later. Scope is deliberately ignored — a local type shadowing
+// a package-level one of the same name is vanishingly rare, and the only
+// consequence of over-resolving is a report on a literal that elided its type,
+// which is always a construction of whatever the container says it is.
+func collectTypeDecls(files map[string]*ast.File) map[string]ast.Expr {
 	decls := map[string]ast.Expr{}
-	for _, file := range pkg.Files {
-		for _, d := range file.Decls {
-			gd, ok := d.(*ast.GenDecl)
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			gd, ok := n.(*ast.GenDecl)
 			if !ok || gd.Tok != token.TYPE {
-				continue
+				return true
 			}
 			for _, spec := range gd.Specs {
 				if ts, ok := spec.(*ast.TypeSpec); ok {
 					decls[ts.Name.Name] = ts.Type
 				}
 			}
-		}
+			return true
+		})
 	}
 	return decls
 }
 
-// typeResolutionDepth bounds the declaration chase below. Bounded rather than
-// cycle-detected: a cyclic type declaration does not compile, so the only thing
-// the bound protects against is this scan hanging on source that was already
-// broken.
+// typeResolutionDepth bounds the declaration chase below.
+//
+// Bounded rather than cycle-detected, but NOT for the reason it is tempting to
+// give: `type a *a` and the mutual pair `type p *q; type q *p` both compile, so
+// "a cycle would not have compiled" is simply false. The bound is what makes
+// resolution total on any input, compiling or not — which matters because this
+// is a source scan and is meant to keep working on a file mid-edit.
 const typeResolutionDepth = 10
 
 // literalScan carries the per-package state the recursive walk needs.
@@ -186,11 +200,16 @@ type literalScan struct {
 	report   func(ast.Node)
 }
 
-// underlying follows package-level type declarations until it reaches a type
-// expression that is not a bare identifier, so the scan can see through
-// `type detList []*SessionDetector`. Without it a defined container type is an
-// *ast.Ident that matches nothing structural, and `detList{{}}` constructs a
-// service the scan reports as clean.
+// underlying strips the spellings that stand between a type expression and its
+// structure — parentheses, pointers, and chains of type declarations — until it
+// reaches something the caller can switch on.
+//
+// Pointers are stripped HERE, inside the bounded loop, rather than by a
+// recursive arm in names(). That placement does three jobs at once: it makes
+// names() total (a recursive arm would run forever on `type a *a`, which
+// compiles); it lets the container switch in visit() see through a
+// pointer-to-container element type such as `[]*[]*SessionDetector{{{}}}`; and
+// it keeps every resolution rule in one place.
 //
 // It stops at the guarded type's own name, which is load-bearing: the
 // declaration table holds `SessionDetector` too, mapped to its *ast.StructType,
@@ -200,6 +219,8 @@ func (s *literalScan) underlying(t ast.Expr) ast.Expr {
 	for range typeResolutionDepth {
 		switch v := t.(type) {
 		case *ast.ParenExpr:
+			t = v.X
+		case *ast.StarExpr:
 			t = v.X
 		case *ast.Ident:
 			if v.Name == s.typeName {
@@ -218,22 +239,52 @@ func (s *literalScan) underlying(t ast.Expr) ast.Expr {
 }
 
 // names reports whether the type expression IS the guarded struct type, seeing
-// through pointers, parentheses, a qualified package selector and a chain of
-// package-level type declarations.
+// through pointers, parentheses and a chain of type declarations.
 //
 // The *ast.SelectorExpr arm is what makes the scan see
 // `services.SessionDetector{}` — the spelling the `package services_test` files
 // in this same directory use, and the only literal an external package can
 // still write now that every field is unexported. It matches on the selector
-// alone rather than on `pkg.Type`, so an import alias cannot slip past.
+// alone rather than on `pkg.Type`, so an import alias cannot slip past. That is
+// a deliberate trade: a same-named type in some other package would be reported
+// too, which repo-wide is not a live risk (these two declarations are the only
+// ones) and would be a false positive worth taking over an alias bypass.
 func (s *literalScan) names(t ast.Expr) bool {
 	switch v := s.underlying(t).(type) {
 	case *ast.Ident:
 		return v.Name == s.typeName
-	case *ast.StarExpr:
-		return s.names(v.X)
 	case *ast.SelectorExpr:
 		return v.Sel.Name == s.typeName
+	}
+	return false
+}
+
+// namesValueType is names() minus the pointer stripping: it reports whether the
+// expression denotes the guarded struct BY VALUE.
+//
+// The distinction only matters for the two non-literal spellings below.
+// `new(SessionDetector)` and `var d SessionDetector` both produce the trap,
+// while `new(*SessionDetector)` and `var d *SessionDetector` produce a harmless
+// nil pointer — and `core/cmd/irrlichd/main.go` holds one of the latter.
+func (s *literalScan) namesValueType(t ast.Expr) bool {
+	for range typeResolutionDepth {
+		switch v := t.(type) {
+		case *ast.ParenExpr:
+			t = v.X
+		case *ast.SelectorExpr:
+			return v.Sel.Name == s.typeName
+		case *ast.Ident:
+			if v.Name == s.typeName {
+				return true
+			}
+			next, ok := s.decls[v.Name]
+			if !ok {
+				return false
+			}
+			t = next
+		default:
+			return false
+		}
 	}
 	return false
 }
@@ -281,19 +332,64 @@ func (s *literalScan) visit(lit *ast.CompositeLit, typ ast.Expr) {
 	// its element type while its elements hold values that came FROM a
 	// constructor, and reporting that would be a false positive on ordinary,
 	// correct test code. A guard that cries wolf on the right thing gets
-	// deleted. Nothing is lost: a struct field value cannot elide its type, so
-	// any literal in there spells its own and is found by the top-level walk.
+	// deleted. Nothing is lost to elision: a struct field value cannot elide
+	// its type, so any literal in there spells its own and is found by the
+	// top-level walk.
+	//
+	// Two shapes are knowingly outside this: a struct that EMBEDS the guarded
+	// type by value (`type w struct{ SessionDetector }; w{}` really does
+	// construct one), and a generic instantiation (`box[*SessionDetector]{{}}`,
+	// an *ast.IndexExpr this resolves nothing for). Neither is reachable in
+	// this package today — SessionDetector carries three sync.Mutex, so
+	// embedding it by value invites vet's copylocks on the first copy, and
+	// there are no generics here — and both are named rather than left for the
+	// next reader to discover.
 }
 
 // descend follows one container edge into an element that ELIDED its type.
 // An element that spells its own type is skipped here and found by the
 // top-level walk instead, so nothing is reported twice.
+//
+// The *ast.KeyValueExpr strip is not only for maps: Go permits INDEX keys in
+// slice and array literals, so `[]*SessionDetector{0: {}}` and
+// `[3]*SessionDetector{1: {}}` are elided constructions whose element is a
+// key-value pair. #1444's matcher stripped these and this one initially did
+// not, which made the rewrite quietly narrower than what it replaced — the one
+// regression its own eighteen planted shapes could not have caught, because
+// every one of them was an ADDITION to coverage. The corpus below now pins the
+// predecessor's cases as locks for exactly that reason.
 func (s *literalScan) descend(e ast.Expr, typ ast.Expr) {
-	if u, ok := e.(*ast.UnaryExpr); ok && u.Op == token.AND {
-		e = u.X
+	if kv, ok := e.(*ast.KeyValueExpr); ok {
+		e = kv.Value
 	}
 	if lit, ok := e.(*ast.CompositeLit); ok && lit.Type == nil {
 		s.visit(lit, typ)
+	}
+}
+
+// reportNonLiteralZeroValues covers the two spellings that produce the very
+// same fully-nil struct without ever writing a composite literal:
+// `new(SessionDetector)` and `var d SessionDetector`. Both were verified to
+// panic identically ("assignment to entry in nil map"), and `new(T)` in
+// particular is idiomatic Go that an unfamiliar author is likelier to reach for
+// than any of the nested-elision shapes.
+//
+// Only the by-value spellings count. `new(*SessionDetector)` and
+// `var d *SessionDetector` are nil pointers, harmless, and the latter is live
+// in core/cmd/irrlichd/main.go.
+func (s *literalScan) reportNonLiteralZeroValues(n ast.Node) {
+	switch v := n.(type) {
+	case *ast.CallExpr:
+		id, ok := v.Fun.(*ast.Ident)
+		if ok && id.Name == "new" && len(v.Args) == 1 && s.namesValueType(v.Args[0]) {
+			s.report(v)
+		}
+	case *ast.ValueSpec:
+		// `var d SessionDetector` with no initialiser. With one, the value
+		// came from somewhere the scan already judges on its own merits.
+		if v.Type != nil && len(v.Values) == 0 && s.namesValueType(v.Type) {
+			s.report(v)
+		}
 	}
 }
 
@@ -332,9 +428,11 @@ func scanFileForLiterals(fset *token.FileSet, path string, file *ast.File, g gua
 	ast.Inspect(file, func(n ast.Node) bool {
 		lit, ok := n.(*ast.CompositeLit)
 		if !ok || lit.Type == nil {
-			// A literal with no type of its own is an elided container element.
-			// It is unreachable from here — only its container knows what type
-			// it has — so it is visited through scan.descend instead.
+			// Not a literal at all, or a literal with no type of its own. The
+			// latter is an elided container element: unreachable from here,
+			// because only its container knows what type it has, so it is
+			// visited through scan.descend instead.
+			scan.reportNonLiteralZeroValues(n)
 			return true
 		}
 		scan.visit(lit, lit.Type)
@@ -366,7 +464,7 @@ func assertNeverBuiltByBareLiteral(t *testing.T, g guardedConstruction) {
 	var offenders []string
 
 	for _, pkg := range pkgs {
-		decls := packageTypeDecls(pkg)
+		decls := collectTypeDecls(pkg.Files)
 		for path, file := range pkg.Files {
 			found, sawAllocator := scanFileForLiterals(fset, path, file, g, decls)
 			offenders = append(offenders, found...)
@@ -432,10 +530,18 @@ func assertAllocatorLeavesNothingUnusable(t *testing.T, g guardedConstruction) {
 	for _, path := range g.paths() {
 		t.Run(path.name, func(t *testing.T) {
 			v := path.value.Elem()
-			checked := assertNoNilOwnedMaps(t, g, path.name, v, "")
+			seen := map[string]bool{}
+			checked := assertNoNilOwnedMaps(t, g, path.name, v, "", seen)
 			if checked == 0 {
 				t.Fatal("no map- or channel-typed fields were checked — the reflection " +
 					"walk is not seeing the struct, so its silence proves nothing")
+			}
+			for name := range g.nilTolerant {
+				if !seen[name] {
+					t.Errorf("nilTolerant names %s.%s, which is not a map- or channel-typed "+
+						"field of this struct — the exemption grants nothing. Rename or "+
+						"remove it.", g.typeName, name)
+				}
 			}
 			assertNonZeroFields(t, g, path.name, v)
 		})
@@ -460,10 +566,17 @@ func (emptyPermStore) Save(permission.Set) error     { return nil }
 
 // assertNoNilOwnedMaps walks v's map- and channel-typed fields, descending into
 // embedded structs (whose own fields are promoted, so a nil map inside one is
-// indistinguishable at the use site from a nil map on the outer struct). It
-// returns how many fields it actually checked, so the caller can refuse to
-// treat an empty walk as a pass.
-func assertNoNilOwnedMaps(t *testing.T, g guardedConstruction, ctor string, v reflect.Value, prefix string) int {
+// indistinguishable at the use site from a nil map on the outer struct).
+//
+// It records every field name it reached in seen, so the caller can refuse to
+// treat an empty walk as a pass AND can check that every nilTolerant entry
+// actually named a field it walked past. A stale nilTolerant key fails safe on
+// its own — the field simply starts being checked — but it is still a claim
+// about this struct that quietly stopped being true, and the neighbouring
+// mustBeNonZero polices exactly that. Two maps in one table disagreeing about
+// whether their keys are verified is the kind of asymmetry that reads as a
+// decision when it is an omission.
+func assertNoNilOwnedMaps(t *testing.T, g guardedConstruction, ctor string, v reflect.Value, prefix string, seen map[string]bool) int {
 	t.Helper()
 	typ := v.Type()
 	checked := 0
@@ -471,7 +584,7 @@ func assertNoNilOwnedMaps(t *testing.T, g guardedConstruction, ctor string, v re
 		f := typ.Field(i)
 		name := prefix + f.Name
 		if f.Anonymous && f.Type.Kind() == reflect.Struct {
-			checked += assertNoNilOwnedMaps(t, g, ctor, v.Field(i), name+".")
+			checked += assertNoNilOwnedMaps(t, g, ctor, v.Field(i), name+".", seen)
 			continue
 		}
 		switch f.Type.Kind() {
@@ -479,6 +592,7 @@ func assertNoNilOwnedMaps(t *testing.T, g guardedConstruction, ctor string, v re
 		default:
 			continue
 		}
+		seen[name] = true
 		if reason, exempt := g.nilTolerant[name]; exempt {
 			t.Logf("%s: nil tolerated — %s", name, reason)
 			continue
@@ -514,5 +628,155 @@ func assertNonZeroFields(t *testing.T, g guardedConstruction, ctor string, v ref
 			t.Errorf("%s leaves %s (%s) at its zero value: %s (#1400, #1450).",
 				ctor, name, f.Type, reason)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The shape corpus — locks on what the source scan must and must not report
+// ---------------------------------------------------------------------------
+
+// TestSourceScanCatchesEveryKnownShape is the permanent record of every
+// construction spelling the scan is required to catch, and every ordinary shape
+// it is required to leave alone.
+//
+// It exists because of how #1450's own regression was found. That PR planted
+// eighteen shapes against the rewritten scanner and all eighteen were caught —
+// but every one of them was an ADDITION to coverage, so none could notice that
+// the rewrite had silently DROPPED a case #1444 handled (an index-keyed slice
+// element, `[]*T{0: {}}`). A rewritten guard needs its predecessor's cases
+// replayed against it as locks, not just its own new ones, and a probe planted
+// by hand during one PR is evidence that expires the moment the PR merges.
+//
+// Each case is parsed from source rather than planted in a real file, so the
+// corpus costs nothing at runtime, cannot perturb the package it guards, and
+// records shapes that would not compile in place.
+//
+// The corpus is run against BOTH guarded types by substituting the type name,
+// which is what keeps the two rows honestly symmetric: a hardening that only
+// reached one of them fails here.
+func TestSourceScanCatchesEveryKnownShape(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want int // offenders the scan must report
+	}{
+		// ---- caught: the plain spellings -------------------------------
+		{"bare pointer in a function", `package p
+func f() { _ = &SessionDetector{} }`, 1},
+		{"bare value literal in a function", `package p
+func f() { _ = SessionDetector{} }`, 1},
+		{"package-scope var", `package p
+var x = &SessionDetector{}`, 1},
+		{"struct field value spelling its own type", `package p
+var x = struct{ d *SessionDetector }{d: &SessionDetector{}}`, 1},
+		{"returned from a package-scope closure", `package p
+var x = func() *SessionDetector { return &SessionDetector{} }`, 1},
+
+		// ---- caught: elision, one level (#1444's cases, as locks) ------
+		{"slice element, type elided", `package p
+var x = []*SessionDetector{{}}`, 1},
+		{"map value, type elided", `package p
+var x = map[string]*SessionDetector{"a": {}}`, 1},
+		{"array element, type elided", `package p
+var x = [2]*SessionDetector{{}, {}}`, 2},
+		{"map key, type elided", `package p
+var x = map[*SessionDetector]bool{{}: true}`, 1},
+
+		// ---- caught: elision behind an INDEX KEY (the #1450 regression) --
+		{"keyed slice element", `package p
+var x = []*SessionDetector{0: {}}`, 1},
+		{"keyed array element", `package p
+var x = [3]*SessionDetector{1: {}}`, 1},
+
+		// ---- caught: elision, more than one level ----------------------
+		{"slice of slice, elided twice", `package p
+var x = [][]*SessionDetector{{{}}}`, 1},
+		{"map of slice, elided twice", `package p
+var x = map[string][]*SessionDetector{"a": {{}}}`, 1},
+		{"pointer to a container element", `package p
+var x = []*[]*SessionDetector{{{}}}`, 1},
+
+		// ---- caught: through type declarations -------------------------
+		{"defined container type, package scope", `package p
+type detList []*SessionDetector
+var x = detList{{}}`, 1},
+		{"type alias, package scope", `package p
+type detAlias = SessionDetector
+var x = &detAlias{}`, 1},
+		{"defined container type, FUNCTION scope", `package p
+func f() {
+	type detList []*SessionDetector
+	_ = detList{{}}
+}`, 1},
+		{"type alias, FUNCTION scope", `package p
+func f() {
+	type detAlias = SessionDetector
+	_ = detAlias{}
+}`, 1},
+
+		// ---- caught: qualified from outside the package ----------------
+		{"qualified selector", `package p
+var x = &services.SessionDetector{}`, 1},
+		{"qualified selector under an import alias", `package p
+var x = &svc.SessionDetector{}`, 1},
+
+		// ---- caught: the zero value without any literal at all ---------
+		{"new(T)", `package p
+func f() { _ = new(SessionDetector) }`, 1},
+		{"var of the struct type, no initialiser", `package p
+func f() { var d SessionDetector; _ = d }`, 1},
+
+		// ---- reported exactly once, not twice --------------------------
+		{"explicit element type inside a container", `package p
+var x = []*SessionDetector{&SessionDetector{}}`, 1},
+
+		// ---- NOT reported: ordinary, correct code ----------------------
+		{"table-driven struct holding constructor results", `package p
+var x = []struct{ d *SessionDetector }{{d: newSessionDetector()}}`, 0},
+		{"map holding constructor results", `package p
+var x = map[string]*SessionDetector{"a": newSessionDetector()}`, 0},
+		{"slice holding constructor results", `package p
+var x = []*SessionDetector{newSessionDetector()}`, 0},
+		{"empty elided containers", `package p
+var x = [][]*SessionDetector{{}}
+var y = map[string][]*SessionDetector{"a": {}}`, 0},
+		{"new of a POINTER to the struct", `package p
+func f() { _ = new(*SessionDetector) }`, 0},
+		{"var of a POINTER to the struct", `package p
+func f() { var d *SessionDetector; _ = d }`, 0},
+		{"a var of the struct type WITH an initialiser", `package p
+func f() { var d *SessionDetector = newSessionDetector(); _ = d }`, 0},
+		{"a differently-named type", `package p
+var x = &SessionDetectorStub{}`, 0},
+	}
+
+	total := 0
+	for _, g := range guardedConstructions() {
+		for _, tc := range cases {
+			t.Run(g.typeName+"/"+tc.name, func(t *testing.T) {
+				src := strings.ReplaceAll(tc.src, "SessionDetector", g.typeName)
+				src = strings.ReplaceAll(src, "newSessionDetector", g.allocator)
+				fset := token.NewFileSet()
+				file, err := parser.ParseFile(fset, "shape.go", src, 0)
+				if err != nil {
+					t.Fatalf("corpus case does not parse — fix the case, not the scan: %v\n%s", err, src)
+				}
+				decls := collectTypeDecls(map[string]*ast.File{"shape.go": file})
+				got, _ := scanFileForLiterals(fset, "shape.go", file, g, decls)
+				if len(got) != tc.want {
+					t.Errorf("scan reported %d construction(s), want %d: %v\n--- source ---\n%s",
+						len(got), tc.want, got, src)
+				}
+				total += len(got)
+			})
+		}
+	}
+
+	// Vacuity guard, the same shape the two live guards carry: a scanner that
+	// reported nothing at all would otherwise satisfy every want-0 case and
+	// look like a pass.
+	if total == 0 {
+		t.Fatal("the corpus reported no constructions at all — the scan is inert, " +
+			"so every want-0 case above proves nothing")
 	}
 }
