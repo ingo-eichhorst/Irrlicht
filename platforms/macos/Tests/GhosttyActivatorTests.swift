@@ -10,24 +10,39 @@ import XCTest
 /// directory, and when the activator must refuse to answer.
 final class GhosttyActivatorTests: XCTestCase {
 
-    private func surface(_ id: String, _ cwd: String) -> GhosttyActivator.Surface {
-        GhosttyActivator.Surface(id: id, workingDirectory: cwd)
+    private typealias CanonicalPath = GhosttyActivator.CanonicalPath
+    private typealias SurfaceID = GhosttyActivator.SurfaceID
+    private typealias Surface = GhosttyActivator.Surface
+
+    /// Hung off the real temp dir, so no test hardcodes a path and every fixture sits under /var/folders.
+    private static let fixtureRoot = NSTemporaryDirectory() + "irrlicht-ghostty-unit"
+
+    private func fixture(_ relative: String) -> String {
+        relative.isEmpty ? Self.fixtureRoot : "\(Self.fixtureRoot)/\(relative)"
+    }
+
+    private func cwd(_ relative: String) -> CanonicalPath? {
+        CanonicalPath(fixture(relative))
+    }
+
+    private func surface(_ id: String, _ relative: String) -> Surface {
+        Surface(id: SurfaceID(id), workingDirectory: cwd(relative))
+    }
+
+    private func surfaceWithoutDirectory(_ id: String) -> Surface {
+        Surface(id: SurfaceID(id), workingDirectory: nil)
     }
 
     // MARK: - Unique match
 
     func testUniqueMatchReturnsTheOnlySurfaceInThatDirectory() {
-        let surfaces = [
-            surface("a", "/Users/dev/one"),
-            surface("b", "/Users/dev/two"),
-            surface("c", "/Users/dev/three"),
-        ]
-        XCTAssertEqual(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: "/Users/dev/two"), surfaces[1])
+        let surfaces = [surface("a", "one"), surface("b", "two"), surface("c", "three")]
+        XCTAssertEqual(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: cwd("two")), surfaces[1])
     }
 
     func testUniqueMatchIsNilWhenNoSurfaceIsInThatDirectory() {
-        let surfaces = [surface("a", "/Users/dev/one"), surface("b", "/Users/dev/two")]
-        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: "/Users/dev/elsewhere"))
+        let surfaces = [surface("a", "one"), surface("b", "two")]
+        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: cwd("elsewhere")))
     }
 
     /// The design decision, not an incidental edge case. Two tabs in one
@@ -35,90 +50,101 @@ final class GhosttyActivatorTests: XCTestCase {
     /// declines instead of picking one — a wrong pick lands the user in a
     /// different agent's terminal, which is worse than not moving.
     func testUniqueMatchIsNilWhenTwoSurfacesShareTheDirectory() {
-        let surfaces = [
-            surface("a", "/Users/dev/repo"),
-            surface("b", "/Users/dev/repo"),
-            surface("c", "/Users/dev/other"),
-        ]
-        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: "/Users/dev/repo"))
-        XCTAssertEqual(GhosttyActivator.matchCount(surfaces: surfaces, cwd: "/Users/dev/repo"), 2)
+        let surfaces = [surface("a", "repo"), surface("b", "repo"), surface("c", "other")]
+        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: cwd("repo")))
+        XCTAssertEqual(GhosttyActivator.matchCount(surfaces: surfaces, cwd: cwd("repo")), 2)
     }
 
     /// A directory shared by two *other* tabs must not spoil an unambiguous
     /// answer for the one we were asked about.
     func testUniqueMatchSurvivesAmbiguityElsewhere() {
-        let surfaces = [
-            surface("a", "/Users/dev/repo"),
-            surface("b", "/Users/dev/repo"),
-            surface("c", "/Users/dev/target"),
-        ]
-        XCTAssertEqual(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: "/Users/dev/target"), surfaces[2])
+        let surfaces = [surface("a", "repo"), surface("b", "repo"), surface("c", "target")]
+        XCTAssertEqual(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: cwd("target")), surfaces[2])
     }
 
     func testUniqueMatchIsNilForAnEmptyCwd() {
-        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: [surface("a", "/Users/dev/one")], cwd: ""))
+        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: [surface("a", "one")], cwd: CanonicalPath("")))
     }
 
-    /// A surface with no reported directory (shell integration off, or the
-    /// shell has not reported yet) must never match, and in particular must
-    /// not match an empty session cwd by both sides being empty.
-    func testSurfaceWithNoWorkingDirectoryNeverMatches() {
-        let surfaces = [surface("a", ""), surface("b", "/Users/dev/one")]
-        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: ""))
-        XCTAssertEqual(GhosttyActivator.matchCount(surfaces: surfaces, cwd: ""), 0)
-        XCTAssertEqual(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: "/Users/dev/one"), surfaces[1])
+    func testSurfaceWithNoDirectoryDoesNotMatchASessionWithNoCwd() {
+        let surfaces = [surfaceWithoutDirectory("a"), surface("b", "one")]
+        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: CanonicalPath("")))
+        XCTAssertEqual(GhosttyActivator.matchCount(surfaces: surfaces, cwd: CanonicalPath("")), 0)
+        XCTAssertEqual(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: cwd("one")), surfaces[1])
     }
 
     func testUniqueMatchIsNilWithNoSurfaces() {
-        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: [], cwd: "/Users/dev/one"))
+        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: [], cwd: cwd("one")))
     }
 
     // MARK: - Path normalisation
 
-    /// `/tmp` is a symlink to `/private/tmp` on macOS and the two sides of
-    /// this comparison do not agree on which spelling to use. Comparing raw
-    /// strings fails here, and fails *silently* — it is indistinguishable
-    /// from "no tab is in that directory".
-    func testMatchesAcrossTheTmpSymlinkSpelling() {
-        let surfaces = [surface("a", "/private/tmp/irrlicht-fixture")]
-        XCTAssertEqual(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: "/tmp/irrlicht-fixture"), surfaces[0])
-    }
+    /// Written out in both spellings because the spelling is what these tests are about.
+    private static let tmpSpelling = "/tmp/irrlicht-fixture"  // NOSONAR (swift:S1075) — the path under test, not a configurable endpoint
+    private static let privateTmpSpelling = "/private/tmp/irrlicht-fixture"  // NOSONAR (swift:S1075) — the path under test, not a configurable endpoint
 
-    func testMatchesRegardlessOfWhichSideCarriesThePrivatePrefix() {
-        let surfaces = [surface("a", "/tmp/irrlicht-fixture")]
+    func testMatchesAcrossTheTmpSymlinkSpelling() {
+        let surfaces = [Surface(id: SurfaceID("a"), workingDirectory: CanonicalPath(Self.privateTmpSpelling))]
         XCTAssertEqual(
-            GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: "/private/tmp/irrlicht-fixture"),
+            GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: CanonicalPath(Self.tmpSpelling)),
             surfaces[0]
         )
     }
 
+    func testMatchesRegardlessOfWhichSideCarriesThePrivatePrefix() {
+        let surfaces = [Surface(id: SurfaceID("a"), workingDirectory: CanonicalPath(Self.tmpSpelling))]
+        XCTAssertEqual(
+            GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: CanonicalPath(Self.privateTmpSpelling)),
+            surfaces[0]
+        )
+    }
+
+    func testBothSpellingsStillAgreeWhenTheDirectoryNoLongerExists() {
+        let gone = "-\(UUID().uuidString)"
+        XCTAssertEqual(
+            CanonicalPath(Self.tmpSpelling + gone),
+            CanonicalPath(Self.privateTmpSpelling + gone),
+            "resolvingSymlinksInPath is existence-dependent and strips /private only for a path that exists, so a session whose directory was deleted or renamed — exactly when someone clicks the row to go look at it — needs the lexical strip to reach one spelling"
+        )
+    }
+
+    /// A constant so the doubled-separator case needs no leading-slash literal.
+    private static let separator = "/"
+
     func testTrailingSlashAndDotSegmentsAreTheSameDirectory() {
-        let surfaces = [surface("a", "/Users/dev/repo")]
-        XCTAssertEqual(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: "/Users/dev/repo/"), surfaces[0])
-        XCTAssertEqual(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: "/Users/dev/./repo"), surfaces[0])
-        XCTAssertEqual(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: "/Users/dev//repo"), surfaces[0])
+        let surfaces = [surface("a", "repo")]
+        XCTAssertEqual(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: cwd("repo/")), surfaces[0])
+        XCTAssertEqual(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: cwd("./repo")), surfaces[0])
+        XCTAssertEqual(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: cwd(Self.separator + "repo")), surfaces[0])
     }
 
     /// Normalisation must not collapse genuinely different directories — a
     /// prefix relationship is not a match.
     func testASubdirectoryIsNotTheSameDirectory() {
-        let surfaces = [surface("a", "/Users/dev/repo")]
-        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: "/Users/dev/repo/sub"))
-        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: "/Users/dev"))
+        let surfaces = [surface("a", "repo")]
+        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: cwd("repo/sub")))
+        XCTAssertNil(GhosttyActivator.uniqueMatch(surfaces: surfaces, cwd: cwd("")))
     }
 
-    func testNormalizedPathIsNilForEmptyInput() {
-        XCTAssertNil(GhosttyActivator.normalizedPath(""))
-        XCTAssertNotNil(GhosttyActivator.normalizedPath("/Users/dev/repo"))
+    func testCanonicalPathIsNilForEmptyInput() {
+        XCTAssertNil(CanonicalPath(""))
+        XCTAssertNotNil(cwd("repo"))
     }
 
     // MARK: - Scripting output parsing
 
+    private static let unitSeparator = "\u{1F}"
+    private static let recordSeparator = "\u{1E}"
+
+    private func record(_ id: String, _ absolutePath: String) -> String {
+        "\(id)\(Self.unitSeparator)\(absolutePath)\(Self.recordSeparator)"
+    }
+
     func testParsesRecordsSeparatedByControlCharacters() {
-        let raw = "id-1\u{1F}/Users/dev/one\u{1E}id-2\u{1F}/Users/dev/two\u{1E}"
+        let raw = record("id-1", fixture("one")) + record("id-2", fixture("two"))
         XCTAssertEqual(
             GhosttyActivator.parseSurfaces(raw),
-            [surface("id-1", "/Users/dev/one"), surface("id-2", "/Users/dev/two")]
+            [surface("id-1", "one"), surface("id-2", "two")]
         )
     }
 
@@ -131,21 +157,20 @@ final class GhosttyActivatorTests: XCTestCase {
     /// make the "n of m surfaces matched" log undercount what Ghostty has
     /// open, which is the number someone reads when a jump declines.
     func testParsesSurfaceWithEmptyWorkingDirectory() {
-        XCTAssertEqual(GhosttyActivator.parseSurfaces("id-1\u{1F}\u{1E}"), [surface("id-1", "")])
+        XCTAssertEqual(GhosttyActivator.parseSurfaces(record("id-1", "")), [surfaceWithoutDirectory("id-1")])
     }
 
-    func testSkipsMalformedRecords() {
-        // No unit separator at all, and an empty id — neither addresses a surface.
-        let raw = "garbage\u{1E}\u{1F}/Users/dev/one\u{1E}id-2\u{1F}/Users/dev/two\u{1E}"
-        XCTAssertEqual(GhosttyActivator.parseSurfaces(raw), [surface("id-2", "/Users/dev/two")])
+    func testSkipsRecordsWithNoSeparatorOrNoID() {
+        let raw = "garbage\(Self.recordSeparator)" + record("", fixture("one")) + record("id-2", fixture("two"))
+        XCTAssertEqual(GhosttyActivator.parseSurfaces(raw), [surface("id-2", "two")])
     }
 
     /// A path containing a space or a unicode character must survive intact —
     /// the delimiters are control characters precisely so paths do not need
     /// escaping.
     func testPreservesUnusualButLegalPaths() {
-        let raw = "id-1\u{1F}/Users/dev/My Projects/café\u{1E}"
-        XCTAssertEqual(GhosttyActivator.parseSurfaces(raw), [surface("id-1", "/Users/dev/My Projects/café")])
+        let raw = record("id-1", fixture("My Projects/café"))
+        XCTAssertEqual(GhosttyActivator.parseSurfaces(raw).first?.workingDirectory, cwd("My Projects/café"))
     }
 
     // MARK: - Registry wiring

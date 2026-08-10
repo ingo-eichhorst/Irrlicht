@@ -54,17 +54,50 @@ struct GhosttyActivator: HostActivator {
     let termProgram = "ghostty"
     let bundleID = "com.mitchellh.ghostty"
 
+    /// An opaque scripting handle for one surface, typed so it cannot be swapped with a path.
+    struct SurfaceID: Equatable {
+        let value: String
+
+        init(_ value: String) {
+            self.value = value
+        }
+    }
+
+    /// A path in the one spelling both sides of a comparison agree on. Only this initialiser can make one.
+    struct CanonicalPath: Equatable {
+        let value: String
+
+        init?(_ path: String) {
+            guard !path.isEmpty else { return nil }
+            let resolved = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+            value = Self.withoutPrivatePrefix(resolved)
+        }
+
+        /// The roots macOS reaches through /private, canonicalised to the short spelling users type.
+        private static let reachableRoots = ["tmp", "var", "etc"]
+        private static let privatePrefix = "/private/"  // NOSONAR (swift:S1075) — a macOS firmlink root, not a configurable endpoint
+
+        private static func withoutPrivatePrefix(_ path: String) -> String {
+            guard path.hasPrefix(privatePrefix) else { return path }
+            let tail = String(path.dropFirst(privatePrefix.count))
+            for root in reachableRoots where tail == root || tail.hasPrefix(root + "/") {
+                return "/" + tail
+            }
+            return path
+        }
+    }
+
     /// One Ghostty terminal surface as reported by the scripting dictionary.
     /// A "surface" is a single pane: a tab holds one or more of them, so this
     /// is a finer unit than a tab and `focus` on it selects the owning tab.
     struct Surface: Equatable {
-        let id: String
-        let workingDirectory: String
+        let id: SurfaceID
+        /// Nil when Ghostty reports no directory, so such a surface can never match.
+        let workingDirectory: CanonicalPath?
     }
 
     func activate(_ session: SessionState) -> Bool {
-        let cwd = session.cwd
-        guard !cwd.isEmpty else {
+        guard let cwd = CanonicalPath(session.cwd) else {
             Self.logger.info("ghostty: no cwd for session \(session.id, privacy: .public)")
             return false
         }
@@ -80,7 +113,7 @@ struct GhosttyActivator: HostActivator {
 
     // MARK: - Selection
 
-    private static func selectSurface(cwd: String) {
+    private static func selectSurface(cwd: CanonicalPath) {
         guard let raw = AppleScriptRunner.run(enumerateSurfacesSource, tag: "Ghostty") else {
             // Either Ghostty predates the scripting dictionary, or Automation
             // consent for Ghostty was denied. Both are the user's environment
@@ -93,20 +126,20 @@ struct GhosttyActivator: HostActivator {
         let surfaces = parseSurfaces(raw)
         let matches = matchCount(surfaces: surfaces, cwd: cwd)
         if matches == 1, let hit = uniqueMatch(surfaces: surfaces, cwd: cwd) {
-            focus(surfaceID: hit.id, cwd: cwd)
+            focus(hit)
             return
         }
         if matches == 0 {
-            logger.info("ghostty: no surface reports cwd \(cwd, privacy: .public) (of \(surfaces.count)) — raising the window without changing the selection. If Ghostty's shell-integration 'path' feature is off it reports a stale directory and nothing here can match.")
+            logger.info("ghostty: no surface reports cwd \(cwd.value, privacy: .public) (of \(surfaces.count)) — raising the window without changing the selection. If Ghostty's shell-integration 'path' feature is off it reports a stale directory and nothing here can match.")
             raiseWithoutChangingSelection()
             return
         }
-        logger.info("ghostty: \(matches) surfaces share cwd \(cwd, privacy: .public) — nothing Ghostty exposes can tell them apart, so the tab selection is left alone")
+        logger.info("ghostty: \(matches) surfaces share cwd \(cwd.value, privacy: .public) — nothing Ghostty exposes can tell them apart, so the tab selection is left alone")
         raiseWithoutChangingSelection()
     }
 
-    private static func focus(surfaceID: String, cwd: String) {
-        let safe = AppleScriptRunner.escape(surfaceID)
+    private static func focus(_ surface: Surface) {
+        let safe = AppleScriptRunner.escape(surface.id.value)
         let source = """
         tell application "Ghostty"
             try
@@ -119,7 +152,8 @@ struct GhosttyActivator: HostActivator {
         end tell
         """
         if AppleScriptRunner.run(source, tag: "Ghostty") != "1" {
-            logger.info("ghostty: focus failed for surface \(surfaceID, privacy: .public) (cwd \(cwd, privacy: .public))")
+            let cwd = surface.workingDirectory?.value ?? "unknown"
+            logger.info("ghostty: focus failed for surface \(surface.id.value, privacy: .public) (cwd \(cwd, privacy: .public))")
         }
     }
 
@@ -159,57 +193,19 @@ struct GhosttyActivator: HostActivator {
     /// deliberately: neither is answerable from what Ghostty exposes, and the
     /// caller's response to both is the same — raise the window, leave the
     /// selection alone.
-    static func uniqueMatch(surfaces: [Surface], cwd: String) -> Surface? {
+    static func uniqueMatch(surfaces: [Surface], cwd: CanonicalPath?) -> Surface? {
         let matches = matching(surfaces: surfaces, cwd: cwd)
         return matches.count == 1 ? matches[0] : nil
     }
 
-    static func matchCount(surfaces: [Surface], cwd: String) -> Int {
+    static func matchCount(surfaces: [Surface], cwd: CanonicalPath?) -> Int {
         matching(surfaces: surfaces, cwd: cwd).count
     }
 
-    private static func matching(surfaces: [Surface], cwd: String) -> [Surface] {
-        guard let want = normalizedPath(cwd) else { return [] }
-        return surfaces.filter { normalizedPath($0.workingDirectory) == want }
-    }
-
-    /// Canonical form of a filesystem path, or nil when there isn't one.
-    ///
-    /// Resolving symlinks is not cosmetic here: macOS hands out temp
-    /// directories as `/var/folders/…` while the same directory reports as
-    /// `/private/var/folders/…`, and `/tmp` vs `/private/tmp` is the same
-    /// story. A raw string compare misses those, and the miss is silent — it
-    /// looks exactly like "no tab is in that directory".
-    ///
-    /// `resolvingSymlinksInPath()` alone does **not** settle it, which is the
-    /// non-obvious part. It is existence-dependent in both directions: it
-    /// leaves a path untouched when the file does not exist, and it strips a
-    /// leading `/private` only "provided the result is the name of an existing
-    /// file". So `/tmp/x` and `/private/tmp/x` normalise to *different*
-    /// strings when `x` is gone — a session whose directory was deleted or
-    /// renamed, which is exactly when someone is clicking the row to go look
-    /// at it. The lexical strip below runs last so both spellings land on the
-    /// same answer whether or not the directory is still there.
-    static func normalizedPath(_ path: String) -> String? {
-        guard !path.isEmpty else { return nil }
-        let resolved = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
-        return withoutPrivatePrefix(resolved)
-    }
-
-    /// The three roots macOS reaches through `/private`. Both spellings are in
-    /// everyday circulation — `NSTemporaryDirectory()` hands back `/var/…`
-    /// while a shell in the same directory reports `/private/var/…` — so one
-    /// of them has to be chosen as canonical, and it may as well be the short
-    /// one users type.
-    private static let privateRoots = ["/tmp", "/var", "/etc"]
-
-    private static func withoutPrivatePrefix(_ path: String) -> String {
-        guard path.hasPrefix("/private/") else { return path }
-        let tail = String(path.dropFirst("/private".count))
-        for root in privateRoots where tail == root || tail.hasPrefix(root + "/") {
-            return tail
-        }
-        return path
+    /// A nil cwd matches nothing, and must not match a surface that also has none.
+    private static func matching(surfaces: [Surface], cwd: CanonicalPath?) -> [Surface] {
+        guard let cwd else { return [] }
+        return surfaces.filter { $0.workingDirectory == cwd }
     }
 
     // MARK: - Scripting bridge
@@ -238,7 +234,7 @@ struct GhosttyActivator: HostActivator {
             guard parts.count == 2 else { return nil }
             let id = String(parts[0])
             guard !id.isEmpty else { return nil }
-            return Surface(id: id, workingDirectory: String(parts[1]))
+            return Surface(id: SurfaceID(id), workingDirectory: CanonicalPath(String(parts[1])))
         }
     }
 }
