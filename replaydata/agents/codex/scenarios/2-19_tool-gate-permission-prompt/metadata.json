@@ -94,7 +94,7 @@
         },
         {
           "type": "sleep",
-          "seconds": 20
+          "seconds": 75
         }
       ],
       "verify": [
