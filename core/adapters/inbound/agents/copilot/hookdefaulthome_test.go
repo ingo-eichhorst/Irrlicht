@@ -32,9 +32,8 @@ func TestNotification_DispatchesWithDefaultHome(t *testing.T) {
 	want := writeSessionTranscript(t, root, "sess-default")
 
 	target := &mockTarget{}
-	confiner := TranscriptConfiner()
-	h := NewHookHandlerWithConfiner(target,
-		keyedGate{PermissionKeyHooks: true, PermissionKeyTranscripts: true}, mockLogger{}, confiner)
+	h := NewHookHandler(target,
+		keyedGate{PermissionKeyHooks: true, PermissionKeyTranscripts: true}, mockLogger{})
 
 	rec := post(t, h, notificationBody("sess-default", "permission_prompt"))
 	if rec.Code != http.StatusOK {
@@ -46,15 +45,15 @@ func TestNotification_DispatchesWithDefaultHome(t *testing.T) {
 		t.Fatalf("got %d permission dispatches with COPILOT_HOME unset, want 1 "+
 			"(confiner rejections: %v) — the reconstructed path must be absolute, or the "+
 			"permission-prompt half of the channel is dead for every default install",
-			len(perms), confiner.Rejections())
+			len(perms), h.Confiner.Rejections())
 	}
 	if perms[0].transcriptPath != want {
 		t.Errorf("transcriptPath = %q, want %q", perms[0].transcriptPath, want)
 	}
-	if n := confiner.RejectionCount(); n != 0 {
+	if n := h.Confiner.RejectionCount(); n != 0 {
 		t.Errorf("confiner counted %d rejection(s) for a legitimate prompt (%v) — this "+
 			"pollutes the counter whose purpose is to signal local probing",
-			n, confiner.Rejections())
+			n, h.Confiner.Rejections())
 	}
 }
 
@@ -73,8 +72,8 @@ func TestStop_DispatchesWithDefaultHome(t *testing.T) {
 	tp := writeSessionTranscript(t, root, "sess-default")
 
 	target := &mockTarget{}
-	h := NewHookHandlerWithConfiner(target,
-		keyedGate{PermissionKeyHooks: true, PermissionKeyTranscripts: true}, mockLogger{}, TranscriptConfiner())
+	h := NewHookHandler(target,
+		keyedGate{PermissionKeyHooks: true, PermissionKeyTranscripts: true}, mockLogger{})
 
 	post(t, h, contractPayload(tp, HookStop))
 	if n := len(target.stops()); n != 1 {

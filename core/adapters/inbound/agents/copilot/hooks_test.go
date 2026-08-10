@@ -141,7 +141,7 @@ func newReceiver(t *testing.T) (http.Handler, *mockTarget) {
 	t.Helper()
 	target := &mockTarget{}
 	gate := keyedGate{PermissionKeyHooks: true, PermissionKeyTranscripts: true}
-	return NewHookHandlerWithConfiner(target, gate, mockLogger{}, TranscriptConfiner()), target
+	return NewHookHandler(target, gate, mockLogger{}), target
 }
 
 // --- behaviour ---
@@ -327,7 +327,7 @@ func TestHookReceiver_DeniedHooksConsentDropsQuietly(t *testing.T) {
 	root := copilotSessionRoot(t)
 	tp := writeSessionTranscript(t, root, "sess-stop")
 	target := &mockTarget{}
-	h := NewHookHandlerWithConfiner(target, keyedGate{}, mockLogger{}, TranscriptConfiner())
+	h := NewHookHandler(target, keyedGate{}, mockLogger{})
 
 	rec := post(t, h, contractPayload(tp, HookStop))
 
@@ -346,7 +346,7 @@ func TestHookReceiver_DeniedTranscriptsConsentDropsQuietly(t *testing.T) {
 	root := copilotSessionRoot(t)
 	tp := writeSessionTranscript(t, root, "sess-stop")
 	target := &mockTarget{}
-	h := NewHookHandlerWithConfiner(target, keyedGate{PermissionKeyHooks: true}, mockLogger{}, TranscriptConfiner())
+	h := NewHookHandler(target, keyedGate{PermissionKeyHooks: true}, mockLogger{})
 
 	rec := post(t, h, contractPayload(tp, HookStop))
 

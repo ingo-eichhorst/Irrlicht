@@ -929,7 +929,7 @@ func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, 
 		claudecode.NewStatuslineHandler(metricsCollector, permService, logger))
 	mux.Handle("POST "+codex.HookEndpointPath,
 		codex.NewHookHandler(detector, permService, logger))
-	mux.HandleFunc("POST "+copilot.HookEndpointPath,
+	mux.Handle("POST "+copilot.HookEndpointPath,
 		copilot.NewHookHandler(detector, permService, logger))
 }
 
