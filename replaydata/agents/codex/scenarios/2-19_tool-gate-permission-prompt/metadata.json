@@ -7,7 +7,7 @@
     "agent_cli_version": "0.146.1",
     "daemon_version": "0.5.9+fd771c1",
     "confidence": 0.9,
-    "notes": "RE-ASSESSED after PR #1171: codex has an HTTP hook channel (POST /api/v1/hooks/codex). PermissionRequest → HandlePermissionHook → PermissionPending → state_classifier rule 0 → waiting; Stop → ready. LIVE-CONFIRMED under codex 0.144.4 and RE-CONFIRMED under 0.146.1. RECORDED (#1388) on a coexist recorder: the prior \"hardcoded :7837\" deferral is obsolete — #1178/#1207 made the installer write the resolved port (daemonaddr.LocalURL), verified by a live Stop delivery to an alternate port. The real blocker turned out to be codexs interactive hook-trust menu, now answered by driver-interactive.sh."
+    "notes": "RE-ASSESSED after PR #1171: codex has an HTTP hook channel (POST /api/v1/hooks/codex). PermissionRequest → HandlePermissionHook → PermissionPending → state_classifier rule 0 → waiting; Stop → ready. LIVE-CONFIRMED under codex 0.144.4 and RE-CONFIRMED under 0.147.0. The old \"hardcoded :7837\" deferral is OBSOLETE — #1178/#1207 made the installer write the resolved port, and a live PermissionRequest hook was captured on a :7838 coexist recorder during #1388. STILL PENDING-RECORD for one remaining reason: the rollout session is now born directly in working, so this cells session_birth phase (expected_state ready on a NEW session) no longer matches and promotion is refused (1/6; the sibling 2-13 scores 5/6, failing only the same phase). That born-ready invariant is shared by every codex cell and predates codex changing when it materializes the rollout, so it needs a re-assessment rather than a per-cell edit."
   },
   "details": {
     "assessment": {
