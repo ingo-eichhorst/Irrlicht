@@ -351,18 +351,9 @@ func (s *literalScan) visit(lit *ast.CompositeLit, typ ast.Expr) {
 	}
 	switch v := s.resolve(typ, derefPointers).(type) {
 	case *ast.ArrayType:
-		// Covers slices and arrays alike; Len distinguishes them and the
-		// elision rule is the same for both.
-		for _, el := range lit.Elts {
-			s.descend(el, v.Elt)
-		}
+		s.descendSequence(lit, v)
 	case *ast.MapType:
-		for _, el := range lit.Elts {
-			if kv, ok := el.(*ast.KeyValueExpr); ok {
-				s.descend(kv.Key, v.Key)
-				s.descend(kv.Value, v.Value)
-			}
-		}
+		s.descendMap(lit, v)
 	}
 	// Any other type — most importantly *ast.StructType — is deliberately not
 	// descended into. A table-driven test's
@@ -382,6 +373,28 @@ func (s *literalScan) visit(lit *ast.CompositeLit, typ ast.Expr) {
 	// embedding it by value invites vet's copylocks on the first copy, and
 	// there are no generics here — and both are named rather than left for the
 	// next reader to discover.
+}
+
+// descendSequence follows a slice or array literal's elements. Len is what
+// distinguishes the two and the elision rule is identical for both, so one arm
+// covers them.
+func (s *literalScan) descendSequence(lit *ast.CompositeLit, typ *ast.ArrayType) {
+	for _, el := range lit.Elts {
+		s.descend(el, typ.Elt)
+	}
+}
+
+// descendMap follows a map literal's keys AND values — a key can be an elided
+// construction too (`map[*SessionDetector]bool{{}: true}`).
+func (s *literalScan) descendMap(lit *ast.CompositeLit, typ *ast.MapType) {
+	for _, el := range lit.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		s.descend(kv.Key, typ.Key)
+		s.descend(kv.Value, typ.Value)
+	}
 }
 
 // descend follows one container edge into an element that ELIDED its type.
@@ -431,7 +444,10 @@ func (s *literalScan) reportNonLiteralZeroValues(n ast.Node) {
 // isNewOfGuardedType matches `new(SessionDetector)`.
 func (s *literalScan) isNewOfGuardedType(call *ast.CallExpr) bool {
 	id, ok := call.Fun.(*ast.Ident)
-	if !ok || id.Name != "new" || len(call.Args) != 1 {
+	if !ok || id.Name != "new" {
+		return false
+	}
+	if len(call.Args) != 1 {
 		return false
 	}
 	return s.namesValueType(call.Args[0])
