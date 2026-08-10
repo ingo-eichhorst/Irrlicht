@@ -337,12 +337,30 @@ func (d *SessionDetector) buildNewSessionState(id agent.Identity, ev agent.Event
 	// The #1256 copilot case is untouched: its events.jsonl already holds a
 	// real user message at discovery, so LastEventType is set and the open
 	// turn is still caught here.
-	if state.Metrics != nil && (state.ParentSessionID != "" || state.Metrics.LastEventType != "") {
+	if shouldClassifyAtBirth(state) {
 		if newState, _ := ClassifyState(state.State, state.Metrics); newState != state.State {
 			state.State = newState
 		}
 	}
 	return state
+}
+
+// shouldClassifyAtBirth reports whether a just-built session should be run
+// through ClassifyState instead of keeping its bootstrap `ready`.
+//
+// Two independent reasons to say yes, spelled out separately because they are
+// answering different questions — see the commentary in buildNewSessionState
+// for why each exists:
+//
+//   - it is a CHILD, which must be born `working` so hasActiveChildren counts
+//     it and the stale-session sweep cannot release its parent (#889); or
+//   - something substantive has actually been parsed off the transcript, so
+//     the ladder has evidence to reason from rather than defaulting (#1447).
+func shouldClassifyAtBirth(state *session.SessionState) bool {
+	if state.Metrics == nil {
+		return false
+	}
+	return state.ParentSessionID != "" || state.Metrics.LastEventType != ""
 }
 
 // finalizeNewSession persists a freshly built session, records its creation

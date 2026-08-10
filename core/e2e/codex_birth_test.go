@@ -62,12 +62,14 @@ const (
 // bornState drives one EventNewSession through a real SessionDetector wired
 // to the PRODUCTION metrics adapter, and returns the session as it was first
 // persisted. Both tests below assert on nothing but its State, so the wiring
-// is factored out here rather than repeated around each assertion.
+// is factored out here rather than repeated around each assertion. The
+// session's CWD is derived from the transcript's own directory — what both
+// callers want, and one fewer argument for them to keep in sync.
 //
 // The production adapter is the point: the birth path trusts whatever the
 // real collector hands back, and a stub returning nil is exactly what hid
 // #1447 for as long as it hid.
-func bornState(t *testing.T, adapterName, sessionID, transcriptPath, cwd string) *session.SessionState {
+func bornState(t *testing.T, adapterName, sessionID, transcriptPath string) *session.SessionState {
 	t.Helper()
 
 	repo := newMemRepo()
@@ -86,7 +88,7 @@ func bornState(t *testing.T, adapterName, sessionID, transcriptPath, cwd string)
 		Type:           agent.EventNewSession,
 		SessionID:      sessionID,
 		TranscriptPath: transcriptPath,
-		CWD:            cwd,
+		CWD:            filepath.Dir(transcriptPath),
 	}
 
 	if !waitForSession(repo, sessionID, 5*time.Second) {
@@ -177,7 +179,7 @@ func TestCodexSession_BornReadyOnAnInsubstantialRolloutHead(t *testing.T) {
 					m.LastEventType)
 			}
 
-			got := bornState(t, "codex", "019fe927-889e-73d1-98c8-4f1ed0c064a5", rollout, dir)
+			got := bornState(t, "codex", "019fe927-889e-73d1-98c8-4f1ed0c064a5", rollout)
 			if got.State != session.StateReady {
 				t.Errorf("born %q, want %q — the rollout head holds only session_meta and "+
 					"task_started, both of which codex's own parser skips, so nothing "+
@@ -232,7 +234,7 @@ func TestSession_BornReadyOnAZeroByteTranscript(t *testing.T) {
 			"guard choice; re-derive it rather than deleting it")
 	}
 
-	got := bornState(t, "claude-code", "zero-byte-session", transcript, dir)
+	got := bornState(t, "claude-code", "zero-byte-session", transcript)
 	if got.State != session.StateReady {
 		t.Errorf("born %q, want %q — the transcript is zero bytes, so no event has been "+
 			"observed at all; only an ABSENT file yields nil metrics, and it is that gap "+
