@@ -190,7 +190,7 @@
             <td><code>IRRLICHT_PERMISSION_MODE</code></td>
             <td><code>ask</code> | <code>grant-all</code></td>
             <td><code>ask</code></td>
-            <td>Consent behavior. <code>ask</code> (production default) keeps every per-agent permission pending until answered via the wizard &mdash; nothing is read or modified before a grant. <code>grant-all</code> auto-grants everything in-memory for demo / recording / test daemons; it is never persisted. Since 0.6.x a <code>grant-all</code> daemon <strong>refuses</strong> to modify shared agent config files outside its own <code>IRRLICHT_HOME</code> &mdash; see <code>IRRLICHT_ALLOW_SHARED_CONFIG_WRITES</code></td>
+            <td>Consent behavior. <code>ask</code> (production default) keeps every per-agent permission pending until answered via the wizard &mdash; nothing is read or modified before a grant. <code>grant-all</code> auto-grants everything in-memory for demo / recording / test daemons; it is never persisted. A <code>grant-all</code> daemon <strong>refuses</strong> to modify shared agent config files outside its own <code>IRRLICHT_HOME</code> &mdash; see <code>IRRLICHT_ALLOW_SHARED_CONFIG_WRITES</code></td>
           </tr>
           <tr>
             <td><code>IRRLICHT_ALLOW_SHARED_CONFIG_WRITES</code></td>

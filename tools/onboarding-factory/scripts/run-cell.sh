@@ -329,7 +329,15 @@ if [[ "$ATTACH" == "1" ]]; then
     # adapter looks incapable of reporting state, which is worse than not
     # recording at all. unapplied_grants is the daemon's own list of exactly
     # this (an older daemon omits the field → empty → skipped).
-    UNAPPLIED="$(jq -r '[.unapplied_grants // [] | .[] | "\(.agent)/\(.key): \(.reason)"] | join("; ")' <<<"$PERM_JSON" 2>/dev/null || echo "")" # NOSONAR (shell:S5332) — reads the loopback response above
+    # Scoped to THIS cell's adapters, not the whole list. unapplied_grants is
+    # daemon-wide and carries every adapter's #1362 install failures and #1365
+    # version-floor refusals — so an unrelated old codex CLI would otherwise
+    # block a claude-code recording, with advice (set the override) that cannot
+    # fix a version floor. Only a refusal on an adapter this cell records can
+    # damage this cell's fixture.
+    UNAPPLIED="$(jq -r --arg a "$ADAPTER" --arg p "${PARTNER_ADAPTER:-}" \
+      '[.unapplied_grants // [] | .[] | select(.agent == $a or (.agent == $p and $p != "")) | "\(.agent)/\(.key): \(.reason)"] | join("; ")' \
+      <<<"$PERM_JSON" 2>/dev/null || echo "")" # NOSONAR (shell:S5332) — reads the loopback response above
     if [[ -n "$UNAPPLIED" ]]; then
       echo "attach: daemon at $ONBOARD_BIND has grants that were NOT applied — it would record a fixture missing those signals" >&2
       echo "        $UNAPPLIED" >&2

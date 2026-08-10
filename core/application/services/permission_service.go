@@ -937,11 +937,20 @@ func (s *PermissionService) effectFailedLocked(agentName, permKey string) bool {
 // while a false "inside" would permit one. Lexical comparison can only err
 // toward refusing, so it is the fail-closed choice rather than a shortcut.
 func (s *PermissionService) sharedConfigRefusal(p agent.Permission) error {
-	if s.mode != config.PermissionModeGrantAll || p.Writes == nil || p.Writes.Path == nil {
+	if s.mode != config.PermissionModeGrantAll || p.Writes == nil {
 		return nil
 	}
 	if s.allowSharedConfigWrites {
 		return nil
+	}
+	// A nil resolver is a malformed declaration, not a permission that writes
+	// nothing — that shape is Writes == nil above. Same direction as an erroring
+	// resolver: a file we cannot name is not one we can call safe. Unreachable
+	// in a CI-green tree (agents.ManagedUserFiles rejects it), but the guard's
+	// correctness must not rest on a test in another package.
+	if p.Writes.Path == nil {
+		return fmt.Errorf("refusing to run %s's install in IRRLICHT_PERMISSION_MODE=grant-all: "+
+			"it declares a managed user file with no Path resolver", p.Key)
 	}
 	path, err := p.Writes.Path()
 	if err != nil {
@@ -953,11 +962,12 @@ func (s *PermissionService) sharedConfigRefusal(p agent.Permission) error {
 	if s.isolatedHome != "" && pathInsideRoot(s.isolatedHome, path) {
 		return nil
 	}
-	return fmt.Errorf("refusing to modify %s in IRRLICHT_PERMISSION_MODE=grant-all: "+
-		"it is a shared config file outside this daemon's isolated home (IRRLICHT_HOME=%s), "+
-		"and grant-all answered this permission without asking anyone. "+
-		"Back the file up and set IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1 to allow it "+
-		"(the onboarding recording rig does exactly that), or run the daemon in the default ask mode",
+	// Kept short on purpose: this string is rendered verbatim as the
+	// permission's EffectError in both wizards, beside #1365's one-line
+	// refusals. It has to name the file and the way forward, and stop there.
+	return fmt.Errorf("refusing to modify %s: a shared config file outside this daemon's "+
+		"isolated home (IRRLICHT_HOME=%s), and grant-all answered for you. Back it up, "+
+		"then set IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1",
 		path, isolatedHomeForMessage(s.isolatedHome))
 }
 

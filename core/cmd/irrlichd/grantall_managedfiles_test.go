@@ -49,9 +49,11 @@ func printManagedFilesFor(t *testing.T, bin, homeDir, stateDir string) []string 
 	t.Helper()
 	cmd := exec.Command(bin, "--print-managed-files")
 	cmd.Env = sanitizedChildEnv(homeDir, stateDir)
-	out, err := cmd.Output()
+	// CombinedOutput, not Output: a non-zero exit otherwise reports a bare
+	// "exit status 1" with the daemon's own explanation discarded.
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("--print-managed-files exited %v", err)
+		t.Fatalf("--print-managed-files exited %v\n%s", err, out)
 	}
 	var paths []string
 	sc := bufio.NewScanner(bytes.NewReader(out))
@@ -81,15 +83,18 @@ func assertUnderTempHome(t *testing.T, paths []string, homeDir string) {
 	}
 }
 
-func snapshotManagedFiles(t *testing.T, paths []string) []managedFileState {
-	t.Helper()
+func readManagedFile(path string) managedFileState {
+	st := managedFileState{path: path}
+	if b, err := os.ReadFile(path); err == nil {
+		st.exists, st.data = true, b
+	}
+	return st
+}
+
+func snapshotManagedFiles(paths []string) []managedFileState {
 	states := make([]managedFileState, 0, len(paths))
 	for _, p := range paths {
-		st := managedFileState{path: p}
-		if b, err := os.ReadFile(p); err == nil {
-			st.exists, st.data = true, b
-		}
-		states = append(states, st)
+		states = append(states, readManagedFile(p))
 	}
 	return states
 }
@@ -125,21 +130,25 @@ func TestGrantAllLeavesAgentConfigsAlone(t *testing.T) {
 	if !containsPath(paths, sentinelPath) {
 		t.Fatalf("--print-managed-files did not name %s; it named %v — the sentinel would prove nothing", sentinelPath, paths)
 	}
-	before := snapshotManagedFiles(t, paths)
+	before := snapshotManagedFiles(paths)
 
 	d := bootSmokeDaemonIn(t, bin, homeDir, stateDir, "IRRLICHT_PERMISSION_MODE=grant-all")
 	snap := fetchPermissionsSnapshot(t, http.DefaultClient, "http://"+d.addr+"/api/v1/permissions")
 	if snap.Mode != "grant-all" {
 		t.Fatalf("daemon reports permission mode %q, want grant-all — the test did not exercise the defect", snap.Mode)
 	}
-	// Claude Code's hooks install is the effect that damaged the reporter's
-	// machine, and it writes the sentinel. Wait for it to have RUN before
-	// judging the file it writes.
-	waitForConsentEffect(t, homeDir, "claude-code/hooks", 15*time.Second)
+	// kitty/remote-control, not claude-code/hooks: the kitty patch is the LAST
+	// managed-file effect in consent-catalog order (consentCatalog appends
+	// gastown, launcher and kitty after the adapter registry), so waiting for it
+	// means every managed file this test asserts on has had its effect run.
+	// Waiting on the FIRST one would leave the later assertions racing an effect
+	// that had not happened yet — measured as sub-millisecond in practice
+	// against a 20ms poll, but "too fast to lose" is not the same as ordered.
+	waitForConsentEffect(t, homeDir, "kitty/remote-control", 15*time.Second)
 	d.shutdown(t)
 
 	for _, was := range before {
-		now := snapshotManagedFiles(t, []string{was.path})[0]
+		now := readManagedFile(was.path)
 		switch {
 		case !was.exists && now.exists:
 			t.Errorf("grant-all daemon CREATED the shared user file %s, which the user did not have:\n%s", was.path, now.data)
