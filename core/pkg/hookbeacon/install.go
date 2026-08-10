@@ -35,9 +35,12 @@ import (
 // LegacyGuardToken leads every installed beacon command line, and it is the
 // reason this file exists rather than a one-line fmt.Sprintf.
 //
-// irrlichd does not parse its arguments, and never has. An irrlichd predating
-// this subcommand, handed `hook-post gemini-cli`, does not error — it STARTS A
-// DAEMON. On every tool call. And that is not merely wasteful: the startup path
+// irrlichd did not parse its arguments until #1417. An irrlichd predating this
+// subcommand, handed `hook-post gemini-cli`, does not error — it STARTS A
+// DAEMON. On every tool call. (A current binary rejects an unknown flag and an
+// unknown positional, but that cannot help here: the binary in the field is
+// whichever one the user already has, which is the whole reason for the guard.)
+// And that is not merely wasteful: the startup path
 // calls os.Remove on the unix socket before listening (setupUnixSocket), so a
 // rogue start actively breaks the live daemon's socket before failing to bind
 // the TCP port.

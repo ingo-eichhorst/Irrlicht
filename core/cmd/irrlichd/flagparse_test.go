@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
-	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,25 +40,66 @@ func TestUnknownFlagMessageNamesTheFlag(t *testing.T) {
 // at the bottom of runDaemon — but never added to knownFlags would be rejected
 // with exit 2 before its reader ever ran. The new feature would simply not
 // exist, and its author would have no reason to look at this file. So the test
-// scans main.go's source for the flags the daemon actually reads rather than
-// trusting a second hand-kept list, the same way
-// TestAllHookEvents_CoversEveryConstant does for hook events.
+// scans the source for the flags the daemon actually reads rather than trusting
+// a second hand-kept list, the same way TestAllHookEvents_CoversEveryConstant
+// does for hook events.
+//
+// It parses the WHOLE PACKAGE, not main.go, and that is the point rather than
+// thoroughness for its own sake: hasFlag is an unexported package-level
+// function, so any of these files can call it — startup.go alone is over a
+// thousand lines and holds the phases runDaemon() calls. A single-file scan
+// leaves exactly the hole the test claims to close, and it fails OPEN. Reading
+// the AST rather than matching text closes the second half of the same hole: a
+// regexp has to hard-code the argument spelling, so hasFlagIn(argv, "--x")
+// would slip past a pattern written for hasFlagIn(args, "--x"). Same technique,
+// and for the same reason, as TestPermissionWizardIsBuiltFromConsentCatalog.
 func TestKnownFlagsCoversEveryFlagTheDaemonReads(t *testing.T) {
-	src, err := os.ReadFile("main.go")
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
 	if err != nil {
-		t.Fatalf("read main.go: %v", err)
+		t.Fatalf("parse package source: %v", err)
 	}
-	// Matches hasFlag("--x") and hasFlagIn(args, "--x"). The one hasFlagIn call
-	// with a non-literal list — firstUnknownFlag's hasFlagIn(knownFlags, arg) —
-	// deliberately does not match: it is the lookup, not a read.
-	re := regexp.MustCompile(`hasFlag(?:In)?\((?:args, )?"([^"]*)"\)`)
-	matches := re.FindAllStringSubmatch(string(src), -1)
-	if len(matches) == 0 {
-		t.Fatal("scanned main.go and found no hasFlag call at all; the scanner has drifted from the source, so this test is passing vacuously")
+
+	var read []string
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				fn, ok := call.Fun.(*ast.Ident)
+				if !ok || (fn.Name != "hasFlag" && fn.Name != "hasFlagIn") {
+					return true
+				}
+				// Every string LITERAL passed to either function is a flag the
+				// daemon reads. firstUnknownFlag's own hasFlagIn(knownFlags,
+				// arg) contributes nothing, which is right: it is the lookup,
+				// not a read.
+				for _, arg := range call.Args {
+					lit, ok := arg.(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+					name, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						continue
+					}
+					read = append(read, name)
+				}
+				return true
+			})
+		}
 	}
-	for _, m := range matches {
-		if !hasFlagIn(knownFlags, m[1]) {
-			t.Errorf("main.go reads flag %q but knownFlags does not list it: selectAction will reject it with exit 2 before its reader ever runs", m[1])
+
+	if len(read) == 0 {
+		t.Fatal("parsed the package and found no hasFlag call with a literal flag at all; the scanner has drifted from the source, so this test is passing vacuously")
+	}
+	for _, name := range read {
+		if !hasFlagIn(knownFlags, name) {
+			t.Errorf("the daemon reads flag %q but knownFlags does not list it: selectAction will reject it with exit 2 before its reader ever runs", name)
 		}
 	}
 }
@@ -63,11 +107,13 @@ func TestKnownFlagsCoversEveryFlagTheDaemonReads(t *testing.T) {
 // runIrrlichd runs the real binary with args under a timeout and returns its
 // exit code, stdout and stderr.
 //
-// The timeout is load-bearing rather than hygiene. The defect being fixed is
-// "an unknown flag starts a daemon", and a daemon does not exit — so on a
-// regression this test HANGS rather than failing, which is the same trap #1357
-// and #1416 had to put watchdogs around in the shell. Bounding it here turns
-// that back into an ordinary red.
+// Two things keep a regression from hanging this test, and they are layered
+// deliberately, because the defect being fixed is "an unknown flag starts a
+// daemon" and a daemon does not exit. The dead bind address below is the
+// first: a regression that reaches runDaemon fails to listen and exits 1, so
+// the assertion goes red in the ordinary way. The timeout is the backstop for
+// a future daemon that survives a failed bind — the same trap #1357 and #1416
+// had to put watchdogs around in the shell.
 func runIrrlichd(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	bin := buildIrrlichd(t)

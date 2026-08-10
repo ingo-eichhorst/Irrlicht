@@ -96,16 +96,25 @@ var knownFlags = []string{
 	"--uninstall-task-eta",
 }
 
+// isFlagShaped classifies one argument, and it is deliberately the ONLY place
+// that classification is written.
+//
+// firstUnknownFlag and firstPositional are exact complements over this
+// predicate: every argument is empty (skipped by both), flag-shaped, or a
+// positional. Two hand-kept copies of the test could drift, and the failure
+// would be silent in the worst direction — an argument that is neither, and so
+// reaches the daemon unexamined, which is the whole of what #1417 closed.
+func isFlagShaped(arg string) bool {
+	return strings.HasPrefix(arg, "-")
+}
+
 // firstUnknownFlag returns the first flag-shaped argument absent from knownFlags.
 //
-// "Flag-shaped" is firstPositional's test inverted, so every argument is exactly
-// one of: empty (ignored by both), a flag, or a positional — no token can fall
-// between the two checks and reach the daemon unexamined. That also makes
-// --record=1 an unknown FLAG rather than a silently ignored one: no irrlichd
-// flag takes a value, so the = form has never done anything.
+// This is what makes --record=1 an unknown FLAG rather than a silently ignored
+// one: no irrlichd flag takes a value, so the = form has never done anything.
 func firstUnknownFlag(args []string) (string, bool) {
 	for _, arg := range args {
-		if arg == "" || !strings.HasPrefix(arg, "-") {
+		if arg == "" || !isFlagShaped(arg) {
 			continue
 		}
 		if !hasFlagIn(knownFlags, arg) {
@@ -189,7 +198,7 @@ func selectAction(args []string) cliAction {
 // firstPositional returns the first argument that is not flag-shaped.
 func firstPositional(args []string) (string, bool) {
 	for _, arg := range args {
-		if arg == "" || strings.HasPrefix(arg, "-") {
+		if arg == "" || isFlagShaped(arg) {
 			continue
 		}
 		return arg, true
