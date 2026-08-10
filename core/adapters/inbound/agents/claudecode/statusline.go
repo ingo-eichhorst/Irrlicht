@@ -80,13 +80,10 @@ const logComponentStatuslineReceiver = "statusline-receiver"
 // granted the payload is dropped with 200. A nil gate means no gating —
 // used by tests.
 func NewStatuslineHandler(target RateLimitIngester, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
-	confiner := transcriptConfiner()
-	return hookjson.HookHandler{
-		HandlerFunc: func(w http.ResponseWriter, r *http.Request) {
-			serveStatuslineRequest(target, gate, log, confiner, w, r)
-		},
-		Confiner: confiner,
-	}
+	return hookjson.NewHandler(transcriptConfiner(),
+		func(c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+			serveStatuslineRequest(target, gate, log, c, w, r)
+		})
 }
 
 // serveStatuslineRequest is NewStatuslineHandler's request logic, pulled out of

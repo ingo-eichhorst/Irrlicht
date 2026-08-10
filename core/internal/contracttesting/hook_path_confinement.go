@@ -35,14 +35,11 @@ import (
 type HookReceiverUnderTest struct {
 	// Handler is the adapter's hook receiver, as its constructor returns it.
 	//
-	// Typed as the concrete hookjson.HookHandler rather than http.Handler on
-	// purpose: it carries the confiner the handler itself uses, so the contract
-	// reads the rejection count off THIS value (see rejections) instead of
-	// taking it as a second, adapter-supplied func that could be bound to a
-	// different instance. That is what makes "rejected and counted" evidence
-	// about the handler under test rather than about whatever the wiring
-	// happened to hand over, and it is the type-level residue of retired
-	// obligation 6 — see AssertHookPathConfined.
+	// Typed as the concrete hookjson.HookHandler rather than http.Handler so the
+	// rejection count can be read off THIS value — Handler.Confiner — instead of
+	// arriving as a second, separately-supplied func that could name a different
+	// instance. That is what makes "rejected and counted" evidence about the
+	// handler under test.
 	Handler hookjson.HookHandler
 
 	// Observed reports whether the receiver dispatched anything downstream —
@@ -50,14 +47,6 @@ type HookReceiverUnderTest struct {
 	// the assertion that actually matters; the status code is how the refusal
 	// is reported, but a 400 alongside a dispatch would still be a breach.
 	Observed func() bool
-}
-
-// rejections is the receiver's confinement rejection count, so "rejected and
-// counted" is checked rather than assumed. A receiver that refuses without
-// counting fails on it. Derived from the handler rather than declared beside
-// it, so the two cannot name different confiners.
-func (rut HookReceiverUnderTest) rejections() uint64 {
-	return rut.Handler.Confiner.RejectionCount()
 }
 
 // HookReceiver wires one adapter's hook receiver into AssertHookPathConfined.
@@ -74,13 +63,8 @@ type HookReceiver struct {
 	// the rejection count starts at zero and Observed cannot carry over.
 	//
 	// There is nothing else to call: since #1390 each receiver has exactly one
-	// exported constructor, returning a hookjson.HookHandler that carries the
-	// confiner the handler itself uses. So the rejection count is read OFF the
-	// handler under test rather than off an instance the test built alongside
-	// it, and every obligation here binds the production path by construction.
-	// A separate NewProduction obligation existed until #1390 to re-anchor
-	// exactly that, back when reaching the counter meant calling a second,
-	// test-only constructor that could confine differently from the real one.
+	// exported constructor, so every obligation here binds the production path
+	// rather than a handler the test assembled.
 	New func(t *testing.T) HookReceiverUnderTest
 
 	// WriteTranscript writes a transcript the adapter would dispatch on into
@@ -126,20 +110,12 @@ type HookReceiver struct {
 // Obligations 2–5 additionally require the refusal to be VISIBLE — counted by
 // the confiner, so an operator can see it — and to answer 2xx.
 //
-// A sixth obligation, "the adapter's PRODUCTION constructor confines too",
-// was retired in #1390 and is not merely dropped. It existed because reaching
-// the rejection counter meant calling a second, test-only constructor, so the
-// handler these five obligations ran against was not provably the one the
-// daemon builds. Each receiver now has ONE exported constructor, returning a
-// hookjson.HookHandler that carries its own confiner — so the count is read off
-// Handler.Confiner, i.e. obtained FROM the handler under test. Typing Handler as
-// that concrete struct rather than http.Handler is what stops the two from
-// being separately supplied. A handler that confines
-// and a counter that proves it can no longer be two different objects, which
-// is the property obligation 6 was checking. What it never covered, and still
-// does not, is an adapter wiring New to a hand-rolled handler instead of its
-// constructor: NewProduction was adapter-supplied too, so that gap is
-// unchanged rather than newly opened.
+// A sixth obligation, "the adapter's PRODUCTION constructor confines too", was
+// retired in #1390: the count is now read off Handler.Confiner, so a handler
+// that confines and the counter proving it can no longer be two objects that
+// disagree, and obligations 2-5 fail directly when the production constructor
+// stops confining. The full argument, including what obligation 6 never
+// covered either, is in AGENTS.md under "Hook path confinement".
 //
 // The 2xx is asserted, not merely tolerated. A refused path is already fully
 // contained by not being forwarded, so the status code buys no security; what
@@ -174,7 +150,7 @@ func assertInTreeAccepted(t *testing.T, r HookReceiver) {
 	if !rut.Observed() {
 		t.Fatal("in-tree transcript was not dispatched — the rejection assertions below would pass vacuously")
 	}
-	if n := rut.rejections(); n != 0 {
+	if n := rut.Handler.Confiner.RejectionCount(); n != 0 {
 		t.Errorf("in-tree transcript counted %d rejection(s), want 0", n)
 	}
 }
@@ -243,7 +219,7 @@ func assertRefused(t *testing.T, r HookReceiver, path, what string) {
 		t.Errorf("%s was dispatched downstream: %s", what, path)
 	}
 	assertHookStatus2xx(t, rec, what)
-	if n := rut.rejections(); n != 1 {
+	if n := rut.Handler.Confiner.RejectionCount(); n != 1 {
 		t.Errorf("%s: counted %d rejection(s), want 1 — a refusal has to be countable, not just returned", what, n)
 	}
 }

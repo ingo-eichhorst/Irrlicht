@@ -103,13 +103,10 @@ type ConsentGranter = hookjson.ConsentGranter
 // behind the "transcripts" permission. A nil gate means no gating — used by
 // tests.
 func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
-	confiner := transcriptConfiner()
-	return hookjson.HookHandler{
-		HandlerFunc: func(w http.ResponseWriter, r *http.Request) {
-			serveHookRequest(target, gate, log, confiner, w, r)
-		},
-		Confiner: confiner,
-	}
+	return hookjson.NewHandler(transcriptConfiner(),
+		func(c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+			serveHookRequest(target, gate, log, c, w, r)
+		})
 }
 
 // transcriptConfiner returns the confiner this adapter's hook receiver guards

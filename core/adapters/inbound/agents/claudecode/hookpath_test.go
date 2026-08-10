@@ -50,9 +50,8 @@ func TestHookPathConfined(t *testing.T) {
 		New: func(t *testing.T) contracttesting.HookReceiverUnderTest {
 			t.Helper()
 			target := &mockTarget{}
-			h := NewHookHandler(target, nil, nil, mockLogger{})
 			return contracttesting.HookReceiverUnderTest{
-				Handler:  h,
+				Handler:  NewHookHandler(target, nil, nil, mockLogger{}),
 				Observed: func() bool { return len(target.getCalls()) > 0 },
 			}
 		},
@@ -83,9 +82,8 @@ func TestStatuslinePathConfined(t *testing.T) {
 		New: func(t *testing.T) contracttesting.HookReceiverUnderTest {
 			t.Helper()
 			target := &fakeRateLimitIngester{}
-			h := NewStatuslineHandler(target, nil, silentLogger{})
 			return contracttesting.HookReceiverUnderTest{
-				Handler:  h,
+				Handler:  NewStatuslineHandler(target, nil, silentLogger{}),
 				Observed: func() bool { return len(target.calls) > 0 },
 			}
 		},
