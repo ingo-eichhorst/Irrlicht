@@ -572,6 +572,20 @@ tools/preflight.sh --only arch    # just the ARS architecture gate
 tools/preflight.sh --only skills  # just the .claude/skills/**/*.md linter
 ```
 
+**For an automated caller (an agent), `--only` chunking is the recipe, not a
+debugging convenience — the unscoped run does not reliably fit a foreground
+`Bash` call's 600s budget** (it reliably exceeds it on this machine; the long
+pole is the `go` group's core suite + replay fixtures). Run each group as its
+own **foreground** invocation instead of the single unscoped command:
+`tools/preflight.sh --only go|web|arch|tools|skills|posix|security` (see
+`tools/preflight.sh --help` for the current group list; `linux` stays opt-in
+and needs Docker). Every gate still runs — chunking only changes how many
+invocations it takes. **Do not background the unscoped run to make it fit**:
+a subagent is not woken by its own background job, so the run stalls silently
+with the work committed but never pushed
+(`.claude/skills/ir:exec/SKILL.md` Phase 4 step 11 has the incident and the
+same recipe).
+
 `tools/install-git-hooks.sh` (run once per clone; worktrees share the parent
 repo's hooks automatically) wires `tools/preflight.sh`'s fast gates as a
 pre-push hook, so a push that would fail CI is rejected locally instead. The

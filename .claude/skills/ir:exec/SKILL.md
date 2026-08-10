@@ -383,13 +383,74 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
       them in order (as you naturally would). For a small change, just implement it.
     - Follow the repo's conventions (AGENTS.md): surgical changes, match surrounding
       style, three-state model, hexagonal layering, etc.
-11. **Verify** before declaring done: run the test suites relevant to what you touched
-    (per AGENTS.md — `go test ./core/... -race -count=1`, the factory/web suites, replay
-    fixtures, `swift build`/`swift test`, as applicable). Fix what you broke. **For a
-    UI-facing change, also confirm it's actually reachable in every frontend the plan
-    scoped it to** — open the macOS app (`/ir:test-mac`) and/or the web dashboard and
-    look. A passing test suite in the same area is not evidence the specific feature
-    exists on a specific platform — name the exact test that covers the claim, or look.
+11. **Verify** before declaring done. Run **`tools/preflight.sh`** — the Local CI
+    parity gate (AGENTS.md's "Local CI parity" section) that mirrors every
+    PR-gating check (test.yml + web-test.yml + ars-gate.yml + linux.yml's
+    replay-fixtures step) — rather than inventing your own check; nothing else
+    in this repo verifies the same set.
+
+    **The unscoped run does not reliably fit an automated caller's foreground
+    command budget** (`Bash`'s cap is 600s/10 minutes) — on this machine it
+    routinely exceeds it, killed mid-gate with no summary printed. The fix is
+    **not** to background it (see the rule below) — it's to chunk: run each
+    `--only <group>` invocation separately, **in the foreground**:
+    ```bash
+    tools/preflight.sh --only go        # core suite + replay fixtures — the long pole, closest to the cap itself
+    tools/preflight.sh --only web
+    tools/preflight.sh --only arch
+    tools/preflight.sh --only tools
+    tools/preflight.sh --only skills
+    tools/preflight.sh --only posix
+    tools/preflight.sh --only security
+    ```
+    (`tools/preflight.sh --help` lists the current group set — `--only linux`
+    is separately opt-in and needs Docker; skip it unless the change is
+    Linux-specific.) Every gate still runs; chunking only changes how many
+    `Bash` calls it takes. If `--only go` alone is close to timing out here,
+    that's expected — it's the long pole and there's no finer selector to fall
+    back to. AGENTS.md's Local CI parity section carries the same recipe.
+
+    **Never end a turn waiting on your own background or monitored work** — not
+    `run_in_background: true`, not `Monitor`, not tailing a log file. A
+    subagent is not woken by its own background job: no notification fires,
+    the harness sees a completed turn, and the run stalls silently —
+    indistinguishable from an agent that finished, until someone finds the
+    unpushed commit sitting in the worktree. Blocking in the foreground is the
+    correct move even when it's slow; chunking (above) is what makes that
+    tractable instead of fighting the timeout by backgrounding. Phrase the rule
+    around **ending the turn**, not around a specific tool, or the next agent
+    finds a third mechanism. (Real incident, #1382: in one fleet run, multiple
+    concurrent `ir:exec full` agents hit the unscoped run exceeding the
+    foreground budget. Several stalled for good after ending their turn to
+    wait — twice via `run_in_background`, once via `Monitor`, confirming the
+    rule can't be scoped to one tool — while others avoided the stall by
+    independently reinventing `--only` chunking instead.)
+
+    Beyond `preflight.sh`, also run whatever it doesn't cover for what you
+    touched (`swift build`/`swift test` for a macOS-app change). Fix what you
+    broke. **For a UI-facing change, also confirm it's actually reachable in
+    every frontend the plan scoped it to** — open the macOS app (`/ir:test-mac`)
+    and/or the web dashboard and look. A passing test suite in the same area is
+    not evidence the specific feature exists on a specific platform — name the
+    exact test that covers the claim, or look.
+
+    **A readiness signal that fires before the code under test runs makes an
+    e2e test silently green over a broken binary.** A test that boots a real
+    daemon and asserts once its addr file exists can pass against a broken
+    binary if the file is published before the behavior under test (e.g.
+    consent effects) runs — the process is killed mid-startup and the
+    assertion never observes the code path it exists to cover. That is the
+    same shape as a linter that fails to run and returns empty, which then
+    reads as clean, or a mutation harness that silently stops mutating: **a
+    verification mechanism must fail loudly when it cannot run** — untested is
+    the most expensive way to fail, because its output is indistinguishable
+    from success. When an e2e test's "ready" signal and the behavior it means
+    to exercise are not obviously the same event, wait on the narrower one (a
+    dedicated readiness marker, or a bespoke poll for the specific side
+    effect) rather than the broad one. (Real incident, #1382/#1449: a daemon
+    e2e test came back green against a deliberately-broken binary this way —
+    the addr file publishes before consent effects run, so SIGTERM landed
+    mid-startup and the test never observed the code path under test.)
 11a. **Prove red-first.** For every test asserting a claimed defect, run it
     **before** the fix exists and confirm it **fails**. Paste the failure — in
     the PR body, or the issue if you're reporting back there. Do this during
@@ -556,6 +617,20 @@ the rebase (step 2b).
   thing. Where the reconciliation is semantic rather than textual and you can't
   verify it yourself, **surface it and pause** — the idiom step 1a, step 9, and
   step 18 use.
+
+  **Then read the colliding commit's own PR — body and review findings, not
+  only the files that textually overlap.** A fix landed in a file this branch
+  never touches can still describe a hazard this branch shares (a shared
+  helper's failure mode, an environment-leak pattern, a hardcoded assumption) —
+  and a review finding is exactly where that kind of hazard gets written down.
+  The colliding PR number is in the commit subject (squash merges land as
+  `<subject> (#N)`); `gh pr view <N> --json body,comments` plus its review
+  thread is one more read for a collision already worth pausing on. (Real
+  incident, #1382/#1417: the colliding PR's own review had found that
+  subprocess tests inheriting the environment could reach the real daemon on
+  :7837, and added a sanitizing helper for it. The branch under rebase had the
+  identical unsanitized pattern in a file the collision never touched — found
+  only by reading the colliding PR's message, not its diff.)
 - **The rebase stops with a conflict** — expected on this path, not an anomaly;
   the incident below hit exactly that. Resolve each conflicted hunk on its merits
   (both sides deliberate, so neither `--ours` nor `--theirs` wholesale is an
@@ -644,6 +719,20 @@ anchors, not hard gates — use judgment at the boundaries:
 | **Medium** | 2–5 files / one slice / some new logic | `medium` | run `/simplify` (fan-out is fine) |
 | **Large / risky** | multi-package, schema, cross-adapter, logic-heavy, >~400 lines | `high` | run `/simplify` (fan-out) |
 
+**A widened caller set is a size-blind risk multiplier — review it one tier
+above what the line count suggests.** A diff that adds a new caller to an
+existing shared helper, or replaces a direct call with a projection over a
+collection, inherits every failure mode the helper already had, and nobody
+re-reads those failure modes for the new context by default. Read the
+helper's error paths from the *new* caller's perspective, not the old one's.
+Diff size is a proxy for risk and fails in exactly this direction: by line
+count the change is trivial, by blast radius it is a user-facing command that
+can end up silently doing nothing. (Real incident, reported against #1382 from
+work on #1437: replacing a single-key lookup with a projection over the whole
+catalog meant an unrelated adapter's unresolvable path aborted an uninstall
+command before it narrowed to its own key — silently removing nothing from the
+user's `~/.claude/CLAUDE.md`. By line count the change was trivial.)
+
 **The two columns are read independently.** A diff can legitimately land on
 different rows for review and for simplify, and forcing one row on both is a
 misread, not consistency. Take each column from whichever row describes that
@@ -714,6 +803,21 @@ either step.
     fall through to step 14 — the idiom step 9 uses for a failed self-assign
     and step 18 for an unmergeable PR.
 
+    **Re-assert a clean tree immediately before dispatch** — the same
+    porcelain check step 11b already ran, repeated here because it can go
+    stale between there and here: a run that paused for anything (a `MISSING`
+    reviewer, a failing suite, a manual fix) can resume with edits sitting
+    uncommitted in the worktree, and `origin/main...HEAD` cannot see them. A
+    reviewer reading committed state while the author has already fixed
+    something in the working tree produces a finding that is wrong at the
+    moment it's written — reporting an already-fixed defect, which trains the
+    next report to be discounted.
+    ```bash
+    git status --porcelain   # MUST be empty — commit first if not
+    ```
+    (Real incident, #1382/#1367: three of five review subagents in one pass
+    independently flagged this; one nearly filed a finding already fixed.)
+
     Then spawn one `Agent` (`subagent_type: general-purpose`,
     `run_in_background: false` so Phase 5 can't race past its own gate) whose
     prompt names:
@@ -748,7 +852,10 @@ either step.
     fallback either; it parses its first argument as a PR number, so
     `/review low origin/main...HEAD` runs `gh pr view low` and reviews a PR
     that doesn't exist. A *human* can still run `/code-review` — see step 15.
-14. **Simplify per the tier.** For **Medium/Large** diffs run the `/simplify`
+14. **Simplify per the tier.** Re-assert the clean-tree check from step 13
+    first — the same staleness reasoning applies: `/simplify`'s base is also
+    `origin/main...HEAD`, and it cannot see an edit sitting uncommitted since
+    the review fixes went in. For **Medium/Large** diffs run the `/simplify`
     skill with the same explicit base (`/simplify origin/main...HEAD`, for the
     reason in step 13); for **Trivial/Small** diffs skip its 4-agent fan-out
     and do the reuse/simplification/efficiency/altitude review inline, stating
@@ -768,10 +875,44 @@ either step.
     describes for a leftover `wip` commit, arriving by a different route. The
     read-back is there because both commands are easy to skip when the run is
     already narrating "done".
+14b. **Confirm the checks that ran actually ran on the current head — absence
+    is not the same as passing, and reads as "still queued" on a casual
+    glance.** A PR that goes `CONFLICTING` (main moved into files it touches,
+    step 12's rebase notwithstanding — it can happen again after step 12
+    pushes) silently stops GitHub dispatching every `pull_request`-triggered
+    workflow: `Tests`, `Linux`, `ars-gate` simply vanish from the checks list,
+    while a push-triggered workflow (`web-test`) keeps running and passing.
+    ```bash
+    gh pr view <PR> --json mergeable,mergeStateStatus,headRefOid
+    gh pr checks <PR>
+    ```
+    Enumerate the checks you *expect* to be required — `Tests`, `Linux`,
+    `ars-gate`, `web-test`, from `.github/workflows/` — by name against the
+    exact head SHA, rather than reading whatever the list happens to contain.
+    If `mergeStateStatus` reads `DIRTY`/`CONFLICTING`, or an expected check is
+    simply absent rather than red, the fix is to rebase (Phase 5's collision
+    handling above) — not to wait for a check that will never dispatch. (Real
+    incident, #1382/#1361: a PR sat with `Tests`/`Linux`/`ars-gate` absent —
+    not failing — for two commits while `CONFLICTING`, and the checks list
+    alone read as healthy.)
 
 ## Phase 6 — Hand back
 
-15. **Present the final PR link** and ask whether the user wants to **test** or **merge**.
+15. **Print a staleness line, then present the final PR link** and ask whether
+    the user wants to **test** or **merge**. The staleness line is not a gate —
+    just a fact the human otherwise has no cue about. A PR can sit green and
+    idle while `main` accumulates commits that touch the same machinery its
+    checks never ran against; being behind is normal and not itself a reason
+    to block, but nothing tells the human that unless this line does:
+    ```bash
+    git fetch origin main
+    echo "base: $(git rev-parse origin/main) — $(git rev-list --count HEAD..origin/main) commits behind origin/main; required checks last ran $(gh pr view <PR> --json statusCheckRollup -q '[.statusCheckRollup[].startedAt] | max') on $(gh pr view <PR> --json headRefOid -q .headRefOid)"
+    ```
+    (Real incidents, #1382/#1409/#1411: one PR sat 14 commits behind with two
+    contract families that did not exist at its head; another flipped
+    green→`CONFLICTING` while idle. Both looked, from the checks list alone,
+    like proof about a tree that was actually stale.)
+
     Make a recommendation, and let your **confidence** decide which you lead with:
     - **Lean merge** when: the review subagent came back clean (no unresolved
       findings), all relevant suites are green, and the diff is small/low-risk and
@@ -800,6 +941,15 @@ Phase 6.
 18. **Confirm the PR is mergeable**: `gh pr view <N> --json mergeable,state,isDraft,title`.
     If checks are pending or failing, **surface that and pause** rather than forcing
     the merge.
+
+    **Before merging a PR that has sat idle, re-confirm its checks ran on a
+    base that still resembles `main`** — step 15's staleness line is printed
+    once at hand-back and can itself be stale by the time a human replies
+    "merge" (in a fleet where several agents merge within the same hour,
+    "green" has a shelf life). Re-run the `git rev-list --count` half of that
+    line now; a PR that has gone from a handful of commits behind to dozens is
+    worth a fresh look at Phase 5's collision handling before this step's
+    squash, not an assumption that the earlier green still applies.
 
     A still-draft or still-`WIP:`-titled PR means step 14a never ran — this
     phase is self-sufficient and may be entered standalone, so it cannot assume
@@ -851,3 +1001,14 @@ Phase 6.
 - A defect test proves nothing until it has been seen red (Phase 4 step 11a). This
   binds regardless of where the test came from — the issue, `/ir:triage`, or your
   own diagnosis; a green that was never red is the failure mode, not the author.
+- **Verification is `tools/preflight.sh`, chunked by `--only` group in the
+  foreground — never the unscoped run backgrounded** (Phase 4 step 11). The
+  unscoped run reliably exceeds an automated caller's 600s command budget;
+  backgrounding it to dodge that is the specific failure this skill exists to
+  prevent, not a workaround for it.
+- **Never end a turn waiting on your own background or monitored work** — not
+  `run_in_background`, not `Monitor`, not tailing a log (Phase 4 step 11, and
+  the same reasoning behind step 13's `run_in_background: false`). No
+  notification wakes a subagent from its own background job; the run stalls
+  silently, indistinguishable from having finished. Block in the foreground
+  instead, however slow.
