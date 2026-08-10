@@ -160,6 +160,21 @@ func sanitizedChildEnv(homeDir, stateDir string) []string {
 		"IRRLICHT_HOME="+stateDir,
 		"IRRLICHT_BIND_ADDR=",
 		"IRRLICHT_PERMISSION_MODE=",
+		// #1449: a developer with this exported would let a child daemon write
+		// the real ~/.claude even under a temp HOME, if HOME ever leaked.
+		"IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=",
+		// The per-agent home overrides ManagedUserFile.Path honors. Overriding
+		// HOME is NOT enough to keep a child's managed files inside a temp home:
+		// each of these relocates one of them on its own, so an ambient
+		// XDG_CONFIG_HOME (a standard freedesktop variable) or CODEX_HOME points
+		// the child at the developer's real config. Measured: with either set,
+		// --print-managed-files under a temp HOME still names a path outside it.
+		"CODEX_HOME=",
+		"COPILOT_HOME=",
+		"XDG_CONFIG_HOME=",
+		// Does not move claudeSettingsPath today; cleared for symmetry so the
+		// next adapter that honors it does not reopen this quietly.
+		"CLAUDE_CONFIG_DIR=",
 		"IRRLICHT_DEMO_MODE=",
 		"IRRLICHT_RECORD=",
 		"IRRLICHT_HOOK_REVERIFY_INTERVAL=",

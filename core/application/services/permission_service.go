@@ -179,6 +179,15 @@ type PermissionService struct {
 	log       outbound.Logger
 	mode      string
 	registrar watcherRegisterer
+
+	// isolatedHome is the directory this daemon was GIVEN as its own
+	// (IRRLICHT_HOME), or "" when it was given none. Together with
+	// allowSharedConfigWrites it is everything sharedConfigRefusal needs; see
+	// that method for what "isolated" means here and why it is not the same
+	// question as "is IRRLICHT_HOME set".
+	isolatedHome            string
+	allowSharedConfigWrites bool
+
 	factories map[string]WatcherFactory
 	hasLive   HasLiveProcessFunc
 
@@ -259,6 +268,12 @@ type PermissionServiceDeps struct {
 	Registrar watcherRegisterer
 	Factories map[string]WatcherFactory
 	HasLive   HasLiveProcessFunc
+
+	// IsolatedHome is IRRLICHT_HOME, "" when unset, and
+	// AllowSharedConfigWrites is IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1. Both
+	// feed the grant-all shared-config guard (#1449) and are inert in ask mode.
+	IsolatedHome            string
+	AllowSharedConfigWrites bool
 }
 
 // newPermissionService allocates a PermissionService with every field the
@@ -303,6 +318,8 @@ func NewPermissionService(deps PermissionServiceDeps) *PermissionService {
 	s.registrar = deps.Registrar
 	s.factories = deps.Factories
 	s.hasLive = deps.HasLive
+	s.isolatedHome = deps.IsolatedHome
+	s.allowSharedConfigWrites = deps.AllowSharedConfigWrites
 	// permission.Set is itself map-backed and Put writes to it, so a nil Set —
 	// which a store may return alongside a nil error — is the same nil-map trap
 	// one level down. Keep the allocator's empty one rather than adopting it.
@@ -844,7 +861,12 @@ func (s *PermissionService) runClosureEffect(e pendingEffect) {
 		// understood them in the first place.
 		err := error(nil)
 		if e.target == permission.StateGranted {
-			err = s.hookVersionRefusal(e.perm)
+			// Home guard before version gate: the version gate may shell out to
+			// probe the CLI, and there is no reason to pay for that on an
+			// install that is about to be refused anyway.
+			if err = s.sharedConfigRefusal(e.perm); err == nil {
+				err = s.hookVersionRefusal(e.perm)
+			}
 		}
 		if err == nil {
 			err = effect()

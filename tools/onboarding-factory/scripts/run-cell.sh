@@ -321,6 +321,35 @@ if [[ "$ATTACH" == "1" ]]; then
       echo "        restart it with IRRLICHT_PERMISSION_MODE=grant-all (or grant every permission via the wizard)" >&2
       exit 1
     fi
+    # Granted is not applied (#1385, #1449). A grant-all daemon started by hand
+    # now REFUSES to install hooks into the user's real config unless the
+    # operator took responsibility for those files, and the refusal leaves the
+    # permission reading "granted" — so the check above passes while every
+    # hook-delivered observation is missing. That records a fixture in which the
+    # adapter looks incapable of reporting state, which is worse than not
+    # recording at all. unapplied_grants is the daemon's own list of exactly
+    # this (an older daemon omits the field → empty → skipped).
+    # Scoped to THIS cell's adapter, not the whole list. unapplied_grants is
+    # daemon-wide and carries every adapter's #1362 install failures and #1365
+    # version-floor refusals — so an unrelated old codex CLI would otherwise
+    # block a claude-code recording, with advice (set the override) that cannot
+    # fix a version floor. Only a refusal on the adapter this cell records can
+    # damage this cell's fixture.
+    # $ADAPTER alone, with no partner: a cross-adapter cell never reaches this
+    # point — a non-empty partner_adapter exits above, pointing at
+    # run-cell-multi.sh, which has no attach path at all.
+    # The filter is a variable so the jq call stays one physical line: a
+    # NOSONAR annotation only suppresses the line it sits on, and Sonar's taint
+    # tracking carries S5332 from the curl above into every reader of $PERM_JSON.
+    UNAPPLIED_FILTER='[.unapplied_grants // [] | .[] | select(.agent == $a) | "\(.agent)/\(.key): \(.reason)"] | join("; ")'
+    UNAPPLIED="$(jq -r --arg a "$ADAPTER" "$UNAPPLIED_FILTER" <<<"$PERM_JSON" 2>/dev/null || echo "")" # NOSONAR (shell:S5332) — reads the loopback response above
+    if [[ -n "$UNAPPLIED" ]]; then
+      echo "attach: daemon at $ONBOARD_BIND has grants that were NOT applied — it would record a fixture missing those signals" >&2 # NOSONAR (shell:S5332) — names the loopback daemon above
+      echo "        $UNAPPLIED" >&2 # NOSONAR (shell:S5332) — echoes the loopback response above
+      echo "        if this is the #1449 shared-config refusal: back up the files that irrlichd --print-managed-files names," >&2
+      echo "        then restart the daemon with IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1 (or record without --attach, which snapshots them for you)" >&2
+      exit 1
+    fi
   fi
   echo "attach: using running daemon's recordings at $ATTACHED_RECORDINGS_DIR"
 else

@@ -134,6 +134,18 @@ type Config struct {
 	// overridable via IRRLICHT_HOOK_SILENT_TURNS. 0 disables the watchdog.
 	HookSilentTurns int
 
+	// AllowSharedConfigWrites lifts the grant-all shared-config guard (#1449),
+	// via IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1.
+	//
+	// It exists for callers that have taken responsibility for the files
+	// themselves — today exactly one, the onboarding recording rig, which
+	// snapshots every managed user file and restores it on exit
+	// (tools/onboarding-factory/scripts/lib/managed-file-snapshot.sh). A
+	// developer who genuinely wants a grant-all daemon writing their real
+	// ~/.claude and ~/.codex can set it too; the point of #1449 is only that
+	// it stops being what happens by default.
+	AllowSharedConfigWrites bool
+
 	// HookReverifyInterval is the hook-entry re-verification cadence (#1372),
 	// overridable via IRRLICHT_HOOK_REVERIFY_INTERVAL. **Zero when unset**, and
 	// that is deliberate: services.NewHookEntryVerifier already treats a
@@ -161,6 +173,8 @@ func Default() Config {
 		CacheBloatThreshold:          envFloat("IRRLICHT_CACHE_BLOAT_THRESHOLD", defaultCacheBloatThreshold),
 		CacheBloatVersionDeltaTokens: int64(envInt("IRRLICHT_CACHE_BLOAT_VERSION_DELTA", defaultCacheBloatVersionDeltaToken)),
 		CacheBloatMinTurns:           envInt("IRRLICHT_CACHE_BLOAT_MIN_TURNS", defaultCacheBloatMinTurns),
+
+		AllowSharedConfigWrites: os.Getenv("IRRLICHT_ALLOW_SHARED_CONFIG_WRITES") == "1",
 
 		HookSilentTurns:      envInt("IRRLICHT_HOOK_SILENT_TURNS", defaultHookSilentTurns),
 		HookReverifyInterval: envDuration("IRRLICHT_HOOK_REVERIFY_INTERVAL", 0, minHookReverifyInterval),

@@ -190,7 +190,13 @@
             <td><code>IRRLICHT_PERMISSION_MODE</code></td>
             <td><code>ask</code> | <code>grant-all</code></td>
             <td><code>ask</code></td>
-            <td>Consent behavior. <code>ask</code> (production default) keeps every per-agent permission pending until answered via the wizard &mdash; nothing is read or modified before a grant. <code>grant-all</code> auto-grants everything in-memory for demo / recording / test daemons; it is never persisted</td>
+            <td>Consent behavior. <code>ask</code> (production default) keeps every per-agent permission pending until answered via the wizard &mdash; nothing is read or modified before a grant. <code>grant-all</code> auto-grants everything in-memory for demo / recording / test daemons; it is never persisted. A <code>grant-all</code> daemon <strong>refuses</strong> to modify shared agent config files outside its own <code>IRRLICHT_HOME</code> &mdash; see <code>IRRLICHT_ALLOW_SHARED_CONFIG_WRITES</code></td>
+          </tr>
+          <tr>
+            <td><code>IRRLICHT_ALLOW_SHARED_CONFIG_WRITES</code></td>
+            <td><code>1</code></td>
+            <td>unset</td>
+            <td>Lets a <code>grant-all</code> daemon write the shared agent config files it manages (<code>~/.claude/settings.json</code>, <code>~/.claude/CLAUDE.md</code>, <code>~/.codex/hooks.json</code>, <code>~/.config/kitty/kitty.conf</code>, &hellip;) even though they live outside its <code>IRRLICHT_HOME</code>. Without it those installs are refused with an error naming the file, because <code>grant-all</code> answers every permission on your behalf and a dev daemon on a throwaway port otherwise repoints your real config at a port that dies with it. Those files follow <code>$HOME</code>, so <code>IRRLICHT_HOME</code> alone does <em>not</em> isolate them. Back them up first &mdash; <code>irrlichd --print-managed-files</code> lists exactly which ones</td>
           </tr>
           <tr>
             <td><code>IRRLICHT_READY_SESSION_TTL</code></td>

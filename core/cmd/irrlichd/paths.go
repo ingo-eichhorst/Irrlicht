@@ -55,6 +55,22 @@ func stateStoreDir(sub string) string {
 	return ""
 }
 
+// isolatedHome returns the directory this daemon was GIVEN as its own —
+// IRRLICHT_HOME — or "" when it was given none.
+//
+// Read this next to dataDir's comment above, which says a daemon with
+// IRRLICHT_HOME set is "fully isolated from the production install". That is
+// true of everything routed through dataDir and stateStoreDir, and it is
+// exactly the sentence that made #1449 easy to get wrong: the agent config
+// files irrlicht writes on grant — ~/.claude/settings.json, ~/.codex/hooks.json,
+// ~/.config/kitty/kitty.conf — follow $HOME and do NOT move with IRRLICHT_HOME.
+// So this value is not "the daemon is isolated"; it is the one root a managed
+// user file could live under and still be the daemon's own to write. The
+// judgment is PermissionService.sharedConfigRefusal's.
+func isolatedHome() string {
+	return os.Getenv("IRRLICHT_HOME")
+}
+
 // resolveRecordingsDir returns where lifecycle recordings live: the
 // IRRLICHT_RECORDINGS_DIR override when set, else <dir-of-socket>/recordings
 // (IRRLICHT_HOME-relative via sockPath). Shared by the recorder writer and the

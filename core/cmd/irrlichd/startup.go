@@ -741,6 +741,10 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 		Registrar: detector,
 		Factories: deps.WatcherFactories,
 		HasLive:   hasLive,
+		// #1449: in grant-all these two decide whether an Apply may write the
+		// user's real agent configs. Nothing here is consulted in ask mode.
+		IsolatedHome:            isolatedHome(),
+		AllowSharedConfigWrites: deps.Cfg.AllowSharedConfigWrites,
 	})
 	// Gas Town is detected by root-directory presence (stat-only), not by
 	// a live process matcher.
