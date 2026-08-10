@@ -75,12 +75,22 @@ func printManagedFilesFor(t *testing.T, bin, homeDir, stateDir string) []string 
 func assertUnderTempHome(t *testing.T, paths []string, homeDir string) {
 	t.Helper()
 	for _, p := range paths {
-		rel, err := filepath.Rel(homeDir, p)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if escapesRoot(homeDir, p) {
 			t.Fatalf("managed file %q resolves outside the test's temp HOME %q — refusing to run, "+
 				"this test must never touch the real ~/.claude, ~/.codex or ~/.config/kitty", p, homeDir)
 		}
 	}
+}
+
+// escapesRoot reports whether path lies outside root. An unrelatable pair
+// counts as escaping: this decides whether the test is allowed to proceed, so
+// "cannot tell" must mean "stop".
+func escapesRoot(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return true
+	}
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func readManagedFile(path string) managedFileState {
@@ -148,15 +158,24 @@ func TestGrantAllLeavesAgentConfigsAlone(t *testing.T) {
 	d.shutdown(t)
 
 	for _, was := range before {
-		now := readManagedFile(was.path)
-		switch {
-		case !was.exists && now.exists:
-			t.Errorf("grant-all daemon CREATED the shared user file %s, which the user did not have:\n%s", was.path, now.data)
-		case was.exists && !now.exists:
-			t.Errorf("grant-all daemon DELETED the shared user file %s", was.path)
-		case was.exists && !bytes.Equal(was.data, now.data):
-			t.Errorf("grant-all daemon rewrote the shared user file %s\nbefore:\n%s\nafter:\n%s", was.path, was.data, now.data)
-		}
+		assertManagedFileUnchanged(t, was)
+	}
+}
+
+// assertManagedFileUnchanged compares one managed file against how it looked
+// before the daemon ran. Creating a config the user never had is reported
+// separately from rewriting one they did: they are different damage, and the
+// incident produced both.
+func assertManagedFileUnchanged(t *testing.T, was managedFileState) {
+	t.Helper()
+	now := readManagedFile(was.path)
+	switch {
+	case !was.exists && now.exists:
+		t.Errorf("grant-all daemon CREATED the shared user file %s, which the user did not have:\n%s", was.path, now.data)
+	case was.exists && !now.exists:
+		t.Errorf("grant-all daemon DELETED the shared user file %s", was.path)
+	case was.exists && !bytes.Equal(was.data, now.data):
+		t.Errorf("grant-all daemon rewrote the shared user file %s\nbefore:\n%s\nafter:\n%s", was.path, was.data, now.data)
 	}
 }
 
