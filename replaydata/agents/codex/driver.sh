@@ -82,7 +82,17 @@ UUID="$(jq -r 'select(.type == "thread.started") | .thread_id' \
 # the entries are ALREADY trusted for this CODEX_HOME. Cells that need to
 # observe a hook must route through driver-interactive.sh, which answers
 # that menu during boot.
-CODEX_HOME_RESOLVED="${CODEX_HOME:-$HOME/.codex}"
+# Absolute-only, mirroring codexHome(): the daemon ignores a relative
+# CODEX_HOME and falls back to $HOME/.codex, so accepting one here would put
+# the driver and the daemon on different homes.
+CODEX_HOME_RESOLVED="$HOME/.codex"
+if [[ -n "${CODEX_HOME:-}" ]]; then
+  if [[ "$CODEX_HOME" != /* ]]; then
+    echo "drive-codex: CODEX_HOME must be absolute (got '$CODEX_HOME')" >&2
+    exit 2
+  fi
+  CODEX_HOME_RESOLVED="$CODEX_HOME"
+fi
 TRANSCRIPT=""
 if [[ -n "$UUID" ]]; then
   for _ in $(seq 1 60); do

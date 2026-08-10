@@ -105,7 +105,9 @@ func (darwinObserver) CWDOf(pid int) (string, error) {
 //	COMMAND  PID USER  FD   TYPE DEVICE SIZE/OFF NODE NAME
 //	codex  24454 ingo  14w  REG  1,18   3330     ...  /path/to/transcript.jsonl
 //
-// The FD column ends with 'w' for write mode, 'r' for read.
+// The FD column carries the access mode — 'r' (read), 'w' (write) or 'u'
+// (read/write) — optionally followed by a lock character, e.g. "59uW". Both
+// 'w' and 'u' are writers; see writerPIDFromLsof.
 func (darwinObserver) WriterOf(path string) (int, error) {
 	if path == "" {
 		return 0, nil
@@ -167,9 +169,11 @@ func (e lsofFD) Mode() byte {
 
 // parseLsofFDs tokenizes lsof's default table, dropping the header row, rows
 // too short to carry an FD column, and self. It deliberately applies no mode
-// filter: WriterOf wants the first pure writer, while herdr client discovery
-// (osutil_darwin.go) also counts read/write handles, and keeping the predicate
-// at the call site is what stops those two rules from being confused for one.
+// filter, leaving the predicate at each call site. Both current callers —
+// WriterOf here and herdr client discovery (osutil_darwin.go) — happen to
+// count 'w' and 'u' alike, since a read/write handle is a writer; keeping the
+// filter out of the parser is what lets either change without silently
+// redefining the other.
 func parseLsofFDs(out string, self int) []lsofFD {
 	var entries []lsofFD
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
