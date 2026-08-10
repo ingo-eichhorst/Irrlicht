@@ -173,7 +173,7 @@ final class LauncherHarnessTests: XCTestCase {
 
     // MARK: - Ghostty tab selection
 
-    /// Seen red before `GhosttyActivator` existed, with exactly this arrangement.
+    /// NOT yet seen red: `titleMatchScore` returns 0 for these titles by calculation, never by a recorded run.
     func testGhosttyJumpSelectsTheTabMatchingSessionCwd() throws {
         try XCTSkipUnless(Self.harnessEnabled, "requires TEST_HARNESS=1, a display, and Ghostty installed")
         guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.ghosttyBundleID) != nil else {
