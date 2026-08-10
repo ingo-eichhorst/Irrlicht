@@ -20,7 +20,7 @@ func TestUnknownHookEventObserved(t *testing.T) {
 			t.Helper()
 			target := &mockTarget{}
 			return contracttesting.UnknownEventReceiverUnderTest{
-				Handler:  NewHookHandlerWithConfiner(target, nil, nil, log, TranscriptConfiner()),
+				Handler:  NewHookHandler(target, nil, nil, log),
 				Observed: func() bool { return len(target.getCalls()) > 0 },
 			}
 		},

@@ -56,19 +56,11 @@ func TestHookPathConfined(t *testing.T) {
 		New: func(t *testing.T) contracttesting.HookReceiverUnderTest {
 			t.Helper()
 			target := &mockTarget{}
-			confiner := TranscriptConfiner()
+			h := NewHookHandler(target, nil, mockLogger{})
 			return contracttesting.HookReceiverUnderTest{
-				Handler:    NewHookHandlerWithConfiner(target, nil, mockLogger{}, confiner),
+				Handler:    h,
 				Observed:   func() bool { return target.totalCalls() > 0 },
-				Rejections: confiner.RejectionCount,
-			}
-		},
-		NewProduction: func(t *testing.T) contracttesting.HookReceiverUnderTest {
-			t.Helper()
-			target := &mockTarget{}
-			return contracttesting.HookReceiverUnderTest{
-				Handler:  NewHookHandler(target, nil, mockLogger{}),
-				Observed: func() bool { return target.totalCalls() > 0 },
+				Rejections: h.Confiner.RejectionCount,
 			}
 		},
 		WriteTranscript: writeContractTranscript,

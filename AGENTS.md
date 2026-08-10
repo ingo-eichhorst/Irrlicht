@@ -142,11 +142,24 @@ Before marking a ticket done, run the full suite — every layer must pass:
   inbound hook body is caller-supplied on a local, unauthenticated endpoint, so
   a receiver confines it to the adapter's own declared transcript roots
   (`agent.Source`'s `FilesUnderRoot.AllRootsFor`, never a second list that can
-  drift) before anything downstream opens it. Six obligations: an in-tree path
-  is still accepted (the vacuity guard); an out-of-tree path, a `..` traversal,
-  a symlink planted inside the root and a *dangling* symlink inside the root
-  are each refused, logged and counted; and the adapter's production
-  constructor confines, not merely the handler the test assembled.
+  drift) before anything downstream opens it. Five obligations: an in-tree path
+  is still accepted (the vacuity guard); and an out-of-tree path, a `..`
+  traversal, a symlink planted inside the root and a *dangling* symlink inside
+  the root are each refused, logged and counted.
+  A sixth — "the adapter's production constructor confines, not merely the
+  handler the test assembled" — was retired in #1390, and how it went is the
+  point rather than that it went. It existed because reaching the rejection
+  counter meant calling a second, test-shaped constructor
+  (`NewHookHandlerWithConfiner` and friends), so the handler the other five
+  obligations ran against was not provably the one the daemon builds. Each
+  receiver now has ONE exported constructor returning a `hookjson.HookHandler`
+  — the handler together with the confiner it actually uses — so the counter
+  the contract reads is taken off the handler under test, and "this handler
+  confines" and "the counter proving it" stop being two objects that could
+  disagree. A contract that grows a sub-test to police an API the same PR
+  invented is a signal to remove the API, not to test it. What obligation 6
+  never covered, and still does not, is an adapter wiring `New` to a hand-rolled
+  handler instead of its constructor — `NewProduction` was adapter-supplied too.
   Two are load-bearing and neither is obvious. **Symlinks are resolved BEFORE
   the containment check** — a guard with that order reversed passes every
   lexical traversal test and confines nothing (#1361, where claudecode

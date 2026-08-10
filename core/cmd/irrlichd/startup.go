@@ -920,11 +920,14 @@ func setupBackchannel(mux *http.ServeMux, deps setupBackchannelDeps) (*services.
 // pre-consent daemon keep firing until the wizard is answered, so payloads are
 // dropped while pending.
 func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, metricsCollector outbound.MetricsCollector, permService *services.PermissionService, logger outbound.Logger) {
-	mux.HandleFunc("POST "+claudecode.HookEndpointPath,
+	// mux.Handle, not HandleFunc: each constructor returns a hookjson.HookHandler
+	// — the handler together with the confiner it enforces #1361 with — which
+	// satisfies http.Handler through its embedded HandlerFunc (issue #1390).
+	mux.Handle("POST "+claudecode.HookEndpointPath,
 		claudecode.NewHookHandler(detector, metricsCollector, permService, logger))
-	mux.HandleFunc("POST "+claudecode.StatuslineEndpointPath,
+	mux.Handle("POST "+claudecode.StatuslineEndpointPath,
 		claudecode.NewStatuslineHandler(metricsCollector, permService, logger))
-	mux.HandleFunc("POST "+codex.HookEndpointPath,
+	mux.Handle("POST "+codex.HookEndpointPath,
 		codex.NewHookHandler(detector, permService, logger))
 	mux.HandleFunc("POST "+copilot.HookEndpointPath,
 		copilot.NewHookHandler(detector, permService, logger))

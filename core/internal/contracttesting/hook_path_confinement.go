@@ -42,7 +42,10 @@ type HookReceiverUnderTest struct {
 
 	// Rejections is the receiver's confinement rejection count, so "rejected
 	// and counted" is checked rather than assumed. A receiver that returns 400
-	// without counting fails here.
+	// without counting fails here. Required — take it off the Confiner the
+	// constructor handed back with Handler (h.Confiner.RejectionCount), never
+	// off a confiner built separately, or the count stops being evidence about
+	// this handler.
 	Rejections func() uint64
 }
 
@@ -55,20 +58,19 @@ type HookReceiver struct {
 	// FIRST in every sub-test, before New.
 	Root func(t *testing.T) string
 
-	// New builds a fresh receiver, after Root has run. Fresh per sub-test so
+	// New builds a fresh receiver, after Root has run, THROUGH THE ADAPTER'S
+	// PRODUCTION CONSTRUCTOR — the one the daemon calls. Fresh per sub-test so
 	// the rejection count starts at zero and Observed cannot carry over.
-	New func(t *testing.T) HookReceiverUnderTest
-
-	// NewProduction builds the receiver through the adapter's DEFAULT exported
-	// constructor — the one the daemon actually calls — rather than any
-	// test-only variant New may use to reach the rejection counter.
 	//
-	// Without it the contract only ever inspects a handler the test assembled,
-	// so an adapter could satisfy every obligation with a correctly wired test
-	// handler while its real constructor confines nothing: the #1361 hole,
-	// shipped past a green contract. Rejections may be nil here; the
-	// obligation this field serves is about reachability, not counting.
-	NewProduction func(t *testing.T) HookReceiverUnderTest
+	// There is nothing else to call: since #1390 each receiver has exactly one
+	// exported constructor, returning a hookjson.HookHandler that carries the
+	// confiner the handler itself uses. So Rejections below is read OFF the
+	// handler under test rather than off an instance the test built alongside
+	// it, and every obligation here binds the production path by construction.
+	// A separate NewProduction obligation existed until #1390 to re-anchor
+	// exactly that, back when reaching the counter meant calling a second,
+	// test-only constructor that could confine differently from the real one.
+	New func(t *testing.T) HookReceiverUnderTest
 
 	// WriteTranscript writes a transcript the adapter would dispatch on into
 	// dir, and returns its absolute path. The contract uses it for the in-tree
@@ -91,7 +93,7 @@ type HookReceiver struct {
 	EndpointPath string
 }
 
-// AssertHookPathConfined runs the issue #1361 contract against r. Four
+// AssertHookPathConfined runs the issue #1361 contract against r. Five
 // obligations, each independently failable:
 //
 //  1. a transcript inside the declared root is still ACCEPTED — the vacuity
@@ -108,12 +110,23 @@ type HookReceiver struct {
 //     that has not been written yet, so a receiver that waves through an
 //     unresolvable leaf (a reasonable allowance — the hook fires around the
 //     write) hands the attacker an escape needing no race at all: plant the
-//     broken link, get the path accepted, then create the target;
-//  6. the adapter's PRODUCTION constructor confines too, not merely whatever
-//     handler the test assembled.
+//     broken link, get the path accepted, then create the target.
 //
 // Obligations 2–5 additionally require the refusal to be VISIBLE — counted by
 // the confiner, so an operator can see it — and to answer 2xx.
+//
+// A sixth obligation, "the adapter's PRODUCTION constructor confines too",
+// was retired in #1390 and is not merely dropped. It existed because reaching
+// the rejection counter meant calling a second, test-only constructor, so the
+// handler these five obligations ran against was not provably the one the
+// daemon builds. Each receiver now has ONE exported constructor, returning a
+// hookjson.HookHandler that carries its own confiner — so the counter read by
+// Rejections is obtained FROM the handler under test. A handler that confines
+// and a counter that proves it can no longer be two different objects, which
+// is the property obligation 6 was checking. What it never covered, and still
+// does not, is an adapter wiring New to a hand-rolled handler instead of its
+// constructor: NewProduction was adapter-supplied too, so that gap is
+// unchanged rather than newly opened.
 //
 // The 2xx is asserted, not merely tolerated. A refused path is already fully
 // contained by not being forwarded, so the status code buys no security; what
@@ -130,7 +143,6 @@ func AssertHookPathConfined(t *testing.T, r HookReceiver) {
 	t.Run("parent_traversal_rejected", func(t *testing.T) { assertTraversalRejected(t, r) })
 	t.Run("symlink_escape_rejected", func(t *testing.T) { assertSymlinkEscapeRejected(t, r) })
 	t.Run("dangling_symlink_rejected", func(t *testing.T) { assertDanglingSymlinkRejected(t, r) })
-	t.Run("production_constructor_confines", func(t *testing.T) { assertProductionConfines(t, r) })
 }
 
 // assertInTreeAccepted is obligation 1. It runs first because every assertion
@@ -205,18 +217,6 @@ func assertDanglingSymlinkRejected(t *testing.T, r HookReceiver) {
 	assertRefused(t, r, link, "a dangling symlink inside the declared root (an unresolvable leaf must not be assumed to be an unflushed write)")
 }
 
-// assertProductionConfines is obligation 6: the confinement is reachable
-// through the constructor the daemon calls, not only the one the test wires.
-func assertProductionConfines(t *testing.T, r HookReceiver) {
-	t.Helper()
-	r.Root(t)
-	outside := r.WriteTranscript(t, t.TempDir())
-	rut := r.NewProduction(t)
-
-	assertRefusedBy(t, r, rut, outside,
-		"an out-of-tree transcript at the adapter's PRODUCTION constructor (confinement must be wired into the handler the daemon builds, not only the one the test assembles)")
-}
-
 // --- helpers ---
 
 // assertRefused drives one escape attempt against a fresh receiver and checks
@@ -224,22 +224,12 @@ func assertProductionConfines(t *testing.T, r HookReceiver) {
 // counted reason.
 func assertRefused(t *testing.T, r HookReceiver, path, what string) {
 	t.Helper()
-	assertRefusedBy(t, r, r.New(t), path, what)
-}
-
-// assertRefusedBy is assertRefused against an already-built receiver. The count
-// check is skipped when Rejections is nil, which is how NewProduction is
-// allowed to supply a receiver with no handle on the confiner.
-func assertRefusedBy(t *testing.T, r HookReceiver, rut HookReceiverUnderTest, path, what string) {
-	t.Helper()
+	rut := r.New(t)
 	rec := postHookPath(t, r, rut, path)
 	if rut.Observed() {
 		t.Errorf("%s was dispatched downstream: %s", what, path)
 	}
 	assertHookStatus2xx(t, rec, what)
-	if rut.Rejections == nil {
-		return
-	}
 	if n := rut.Rejections(); n != 1 {
 		t.Errorf("%s: counted %d rejection(s), want 1 — a refusal has to be countable, not just returned", what, n)
 	}

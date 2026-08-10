@@ -76,14 +76,11 @@ const logComponentStatuslineReceiver = "statusline-receiver"
 // gate is the consent check for the "statusline" permission; while not
 // granted the payload is dropped with 200. A nil gate means no gating —
 // used by tests.
-func NewStatuslineHandler(target RateLimitIngester, gate ConsentGranter, log outbound.Logger) http.HandlerFunc {
-	return NewStatuslineHandlerWithConfiner(target, gate, log, TranscriptConfiner())
-}
-
-// NewStatuslineHandlerWithConfiner is NewStatuslineHandler with an explicit
-// confiner, for tests that drive the receiver against a temp root.
-func NewStatuslineHandlerWithConfiner(target RateLimitIngester, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// The returned hookjson.HookHandler is an http.Handler carrying the confiner it
+// guards caller-supplied transcript paths with (issue #1390).
+func NewStatuslineHandler(target RateLimitIngester, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
+	confiner := TranscriptConfiner()
+	return hookjson.HookHandler{Confiner: confiner, HandlerFunc: func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -126,7 +123,7 @@ func NewStatuslineHandlerWithConfiner(target RateLimitIngester, gate ConsentGran
 		target.IngestRateLimit(payload.TranscriptPath, snap)
 		log.LogInfo(logComponentStatuslineReceiver, sessionID, "ingested rate-limit snapshot")
 		w.WriteHeader(http.StatusOK)
-	}
+	}}
 }
 
 // statuslineToSnapshot converts Claude Code's two-window statusline payload

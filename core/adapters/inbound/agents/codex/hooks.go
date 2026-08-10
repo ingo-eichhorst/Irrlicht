@@ -100,8 +100,16 @@ type ConsentGranter = hookjson.ConsentGranter
 // the session id reads the transcript file, so that read is additionally gated
 // behind the "transcripts" permission. A nil gate means no gating — used by
 // tests.
-func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger) http.HandlerFunc {
-	return NewHookHandlerWithConfiner(target, gate, log, TranscriptConfiner())
+// The returned hookjson.HookHandler is an http.Handler carrying the confiner it
+// guards caller-supplied transcript paths with (issue #1390).
+func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
+	confiner := TranscriptConfiner()
+	return hookjson.HookHandler{
+		HandlerFunc: func(w http.ResponseWriter, r *http.Request) {
+			serveHookRequest(target, gate, log, confiner, w, r)
+		},
+		Confiner: confiner,
+	}
 }
 
 // TranscriptConfiner returns the confiner this adapter's hook receiver guards
@@ -111,15 +119,6 @@ func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger)
 // constants and so could guard a different tree than the one being watched.
 func TranscriptConfiner() *hookjson.PathConfiner {
 	return hookjson.ConfinerForSource(Source, runtime.GOOS, transcriptExt)
-}
-
-// NewHookHandlerWithConfiner is NewHookHandler with an explicit confiner, for
-// tests that need to drive a receiver rooted somewhere other than the real
-// sessions tree and to read back what it refused.
-func NewHookHandlerWithConfiner(target HookTarget, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		serveHookRequest(target, gate, log, confiner, w, r)
-	}
 }
 
 // serveHookRequest is NewHookHandler's request logic, pulled out of the

@@ -53,7 +53,7 @@ func TestStatuslineHandler_IngestsRateLimits(t *testing.T) {
 	}`
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/hooks/claudecode/statusline", bytes.NewBufferString(body))
 	rr := httptest.NewRecorder()
-	h(rr, req)
+	h.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", rr.Code, rr.Body.String())
@@ -83,7 +83,7 @@ func TestStatuslineHandler_NoRateLimitsBlockIsOk(t *testing.T) {
 	body := `{"session_id":"abc","transcript_path":"` + inTreeTranscript(t, "abc") + `"}`
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", bytes.NewBufferString(body))
 	rr := httptest.NewRecorder()
-	h(rr, req)
+	h.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200 for API-key path (no rate_limits), got %d", rr.Code)
@@ -98,7 +98,7 @@ func TestStatuslineHandler_RejectsMissingTranscriptPath(t *testing.T) {
 	body := `{"session_id":"abc"}`
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", bytes.NewBufferString(body))
 	rr := httptest.NewRecorder()
-	h(rr, req)
+	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
 	}
@@ -108,7 +108,7 @@ func TestStatuslineHandler_RejectsNonPost(t *testing.T) {
 	h := NewStatuslineHandler(&fakeRateLimitIngester{}, nil, silentLogger{})
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", nil)
 	rr := httptest.NewRecorder()
-	h(rr, req)
+	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rr.Code)
 	}
@@ -125,7 +125,7 @@ func TestStatuslineHandler_SampledAtUsesClock(t *testing.T) {
 	body := `{"transcript_path":"` + inTreeTranscript(t, "x") + `","rate_limits":{"five_hour":{"used_percentage":1,"resets_at":2}}}`
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", bytes.NewBufferString(body))
 	rr := httptest.NewRecorder()
-	h(rr, req)
+	h.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatal(rr.Body.String())
@@ -279,7 +279,7 @@ func TestStatuslineHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode/statusline", strings.NewReader(body))
 	rec := httptest.NewRecorder()
-	h(rec, req)
+	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -312,7 +312,7 @@ func TestStatuslineHandler_PermissionGateContract(t *testing.T) {
 			target.reset()
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode/statusline", strings.NewReader(body))
 			rec := httptest.NewRecorder()
-			h(rec, req)
+			h.ServeHTTP(rec, req)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200", rec.Code)
 			}

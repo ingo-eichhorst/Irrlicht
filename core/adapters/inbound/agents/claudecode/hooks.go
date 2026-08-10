@@ -221,9 +221,10 @@ func sessionIDFromTranscriptPath(p string) string {
 	return strings.TrimSuffix(filepath.Base(p), transcriptExt)
 }
 
-// NewHookHandler returns an http.HandlerFunc that receives Claude Code
-// hook events (PermissionRequest, PostToolUse, PostToolUseFailure) and
-// dispatches them to the target.
+// NewHookHandler returns the hook receiver for Claude Code hook events
+// (PermissionRequest, PostToolUse, PostToolUseFailure), which dispatches them
+// to the target. The returned hookjson.HookHandler is an http.Handler carrying
+// the confiner it guards caller-supplied transcript paths with (issue #1390).
 //
 // The handler returns 200 with an empty body for recognized events. For
 // PermissionRequest, an empty response means Claude Code shows its normal
@@ -238,8 +239,14 @@ func sessionIDFromTranscriptPath(p string) string {
 // gate is the consent check for the "hooks" permission; while not granted
 // the payload is dropped with 200 (so the curl hook stays quiet). A nil
 // gate means no gating — used by tests.
-func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger) http.HandlerFunc {
-	return NewHookHandlerWithConfiner(target, markers, gate, log, TranscriptConfiner())
+func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
+	confiner := TranscriptConfiner()
+	return hookjson.HookHandler{
+		HandlerFunc: func(w http.ResponseWriter, r *http.Request) {
+			serveHookRequest(target, markers, gate, log, confiner, w, r)
+		},
+		Confiner: confiner,
+	}
 }
 
 // TranscriptConfiner returns the confiner this adapter's hook receiver guards
@@ -248,15 +255,6 @@ func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter
 // (issue #1361).
 func TranscriptConfiner() *hookjson.PathConfiner {
 	return hookjson.ConfinerForSource(Source, runtime.GOOS, transcriptExt)
-}
-
-// NewHookHandlerWithConfiner is NewHookHandler with an explicit confiner, for
-// tests that need to drive a receiver rooted somewhere other than the real
-// transcript tree and to read back what it refused.
-func NewHookHandlerWithConfiner(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		serveHookRequest(target, markers, gate, log, confiner, w, r)
-	}
 }
 
 // serveHookRequest is NewHookHandler's request logic, pulled out of the

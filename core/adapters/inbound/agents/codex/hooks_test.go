@@ -139,7 +139,7 @@ func writeRolloutInto(t *testing.T, dir, id string) string {
 	return path
 }
 
-func postHook(t *testing.T, handler http.HandlerFunc, payload codexHookPayload) *httptest.ResponseRecorder {
+func postHook(t *testing.T, handler http.Handler, payload codexHookPayload) *httptest.ResponseRecorder {
 	t.Helper()
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -147,7 +147,7 @@ func postHook(t *testing.T, handler http.HandlerFunc, payload codexHookPayload) 
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/codex", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	handler.ServeHTTP(rec, req)
 	return rec
 }
 
@@ -262,7 +262,7 @@ func TestHookHandler_MethodNotAllowed(t *testing.T) {
 	handler := NewHookHandler(&mockTarget{}, nil, mockLogger{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/hooks/codex", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status: got %d, want 405", rec.Code)
 	}
@@ -273,7 +273,7 @@ func TestHookHandler_BadJSON(t *testing.T) {
 	handler := NewHookHandler(target, nil, mockLogger{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/codex", bytes.NewReader([]byte("{not json")))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status: got %d, want 400", rec.Code)
 	}
