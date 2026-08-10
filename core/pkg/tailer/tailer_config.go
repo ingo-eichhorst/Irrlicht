@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"irrlicht/core/pkg/jsonc"
 )
 
 // surviveTurnDone returns true for tools whose tool_result arrives after the
@@ -77,13 +79,24 @@ func getDefaultModelFromConfig(adapter string) string {
 	}
 }
 
+// getClaudeModel recovers the operator's configured default model from
+// ~/.claude/settings.json.
+//
+// Comments are blanked before decoding because that same file is the one
+// hookjson installs hooks into, and since #1371 hookjson reads it as JSONC. A
+// reader that is stricter than the writer is silently wrong: the user gets a
+// successful hook install and an empty model, with no error on either side
+// (#1391). Both now go through core/pkg/jsonc so they cannot drift again.
+//
+// Blanking widens nothing beyond comments — a trailing comma or a bare key is
+// still a decode failure here, exactly as it is in hookjson.ReadSettings.
 func getClaudeModel(homeDir string) string {
 	data, err := os.ReadFile(filepath.Join(homeDir, ".claude", "settings.json"))
 	if err != nil {
 		return ""
 	}
 	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
+	if err := json.Unmarshal(jsonc.Blank(data), &settings); err != nil {
 		return ""
 	}
 	if model, ok := settings["model"].(string); ok {

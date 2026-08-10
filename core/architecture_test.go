@@ -47,6 +47,41 @@ func TestArchitectureLayerImportDirection(t *testing.T) {
 			sourcePrefix:      "irrlicht/core/application/services/",
 			forbiddenPrefixes: []string{"irrlicht/core/adapters/inbound/"},
 		},
+		// pkg/ is the shared leaf layer: stdlib, other pkg/ packages, and
+		// domain types. It is depended on from every layer that imports
+		// anything at all — domain (2 packages), adapters (62), application
+		// (6), cmd (4) — so an edge out of pkg/ into adapters/ or
+		// application/ inverts the direction for all of them at once. The
+		// domain edge is the sharpest: domain/agent imports pkg/tailer, so
+		// pkg/ reaching outward would put adapters transitively underneath
+		// domain.
+		//
+		// Added by #1391, where the obvious fix for a shared JSONC decode was
+		// to have pkg/tailer import the hookjson adapter. Nothing in this table
+		// bound pkg/ at the time, so that import would have passed this test
+		// and quietly established the repo's first pkg -> adapters edge. It
+		// happens to be caught today by the compiler — domain/agent imports
+		// pkg/tailer and hookjson imports domain/agent, so the edge closes an
+		// import cycle — but that is an accident of which adapter it was, not a
+		// rule. An adapter that imports no domain package would have compiled
+		// fine.
+		//
+		// ports/ is deliberately absent from the forbidden list. Today the two
+		// do not touch in either direction — no pkg/ package imports ports/,
+		// and no ports/ package imports pkg/ — but a leaf implementing a port
+		// interface would be legitimate, and this rule is meant to pin the
+		// direction that is actually wrong rather than the widest one
+		// available.
+		//
+		// Like every rule here it sees only non-test imports: packages.Load
+		// runs without Tests, so a pkg/**/*_test.go importing an adapter would
+		// pass. None does today. That gap is pre-existing and shared by all
+		// four rules, not introduced with this one.
+		{
+			name:              "pkg must not import adapters or application",
+			sourcePrefix:      "irrlicht/core/pkg/",
+			forbiddenPrefixes: []string{"irrlicht/core/adapters/", "irrlicht/core/application/"},
+		},
 	}
 
 	for _, pkg := range pkgs {
