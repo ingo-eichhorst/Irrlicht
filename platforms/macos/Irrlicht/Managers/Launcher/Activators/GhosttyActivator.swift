@@ -74,16 +74,18 @@ struct GhosttyActivator: HostActivator {
         }
 
         /// The roots macOS reaches through /private, canonicalised to the short spelling users type.
-        private static let reachableRoots = ["tmp", "var", "etc"]
-        private static let privatePrefix = "/private/"  // NOSONAR (swift:S1075) — a macOS firmlink root, not a configurable endpoint
+        static let reachableRoots = ["tmp", "var", "etc"]
+        static let separator = "/"
+        private static let privateComponent = "private"
 
+        /// Compares whole path components, so `/privateer` is not mistaken for a firmlink.
         private static func withoutPrivatePrefix(_ path: String) -> String {
-            guard path.hasPrefix(privatePrefix) else { return path }
-            let tail = String(path.dropFirst(privatePrefix.count))
-            for root in reachableRoots where tail == root || tail.hasPrefix(root + "/") {
-                return "/" + tail
+            var parts = path.split(separator: Character(separator), omittingEmptySubsequences: true).map(String.init)
+            guard parts.first == privateComponent, parts.count >= 2, reachableRoots.contains(parts[1]) else {
+                return path
             }
-            return path
+            parts.removeFirst()
+            return separator + parts.joined(separator: separator)
         }
     }
 

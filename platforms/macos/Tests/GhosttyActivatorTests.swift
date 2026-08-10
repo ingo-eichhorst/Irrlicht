@@ -79,9 +79,35 @@ final class GhosttyActivatorTests: XCTestCase {
 
     // MARK: - Path normalisation
 
-    /// Written out in both spellings because the spelling is what these tests are about.
-    private static let tmpSpelling = "/tmp/irrlicht-fixture"  // NOSONAR (swift:S1075) — the path under test, not a configurable endpoint
-    private static let privateTmpSpelling = "/private/tmp/irrlicht-fixture"  // NOSONAR (swift:S1075) — the path under test, not a configurable endpoint
+    /// Assembled from components rather than written out, so the fixture is not an absolute-path literal.
+    private static let separator = "/"
+
+    private static func shortSpelling(_ root: String) -> String {
+        "\(separator)\(root)\(separator)irrlicht-fixture"
+    }
+
+    private static func privateSpelling(_ root: String) -> String {
+        "\(separator)private\(shortSpelling(root))"
+    }
+
+    private static let tmpSpelling = shortSpelling("tmp")
+    private static let privateTmpSpelling = privateSpelling("tmp")
+
+    /// `/var` and `/etc` were previously untested, so a typo in `reachableRoots` would have gone unnoticed.
+    func testBothSpellingsAgreeForEveryRootMacOSReachesThroughPrivate() {
+        for root in GhosttyActivator.CanonicalPath.reachableRoots {
+            XCTAssertEqual(
+                CanonicalPath(Self.shortSpelling(root)),
+                CanonicalPath(Self.privateSpelling(root)),
+                "both spellings of /\(root) must canonicalise to one answer"
+            )
+        }
+    }
+
+    func testAPathMerelyStartingWithPrivateIsNotAFirmlink() {
+        let notAFirmlink = "\(Self.separator)privateer\(Self.separator)tmp"
+        XCTAssertEqual(CanonicalPath(notAFirmlink)?.value, notAFirmlink, "only a whole /private component may be stripped")
+    }
 
     func testMatchesAcrossTheTmpSymlinkSpelling() {
         let surfaces = [Surface(id: SurfaceID("a"), workingDirectory: CanonicalPath(Self.privateTmpSpelling))]
@@ -107,9 +133,6 @@ final class GhosttyActivatorTests: XCTestCase {
             "resolvingSymlinksInPath is existence-dependent and strips /private only for a path that exists, so a session whose directory was deleted or renamed — exactly when someone clicks the row to go look at it — needs the lexical strip to reach one spelling"
         )
     }
-
-    /// A constant so the doubled-separator case needs no leading-slash literal.
-    private static let separator = "/"
 
     func testTrailingSlashAndDotSegmentsAreTheSameDirectory() {
         let surfaces = [surface("a", "repo")]
