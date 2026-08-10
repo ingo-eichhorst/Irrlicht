@@ -283,12 +283,84 @@ func (d *SessionDetector) buildNewSessionState(id agent.Identity, ev agent.Event
 	// produced the correct ready->working, which is what identified it as a
 	// live-path-only gap rather than a parser one (#1256).
 	//
-	// Sessions with nothing to classify are unaffected: ClassifyState against
-	// nil/empty metrics returns ready, which is where they already start.
-	if newState, _ := ClassifyState(state.State, state.Metrics); newState != state.State {
-		state.State = newState
+	// Sessions with nothing to classify are unaffected — but "nothing to
+	// classify" has TWO shapes and only one of them is nil.
+	//
+	// ClassifyState short-circuits on a nil *SessionMetrics, so an adapter
+	// whose transcript does not exist or is empty at discovery is safe. An
+	// adapter whose transcript exists and was PARSED, but whose every line so
+	// far carries no observable signal, gets non-nil metrics that describe
+	// nothing — and non-nil metrics enter the rule ladder, which is
+	// deliberately total: its last rung (`transcript_activity`) has a nil
+	// `when` and always fires, returning `working`. So the insubstantial case
+	// was decided as "generating" on zero evidence.
+	//
+	// Codex hit this on every session (#1447). It is header-linked (#1055),
+	// so the fswatcher parks the zero-byte create and emits EventNewSession
+	// only once the first line is readable — its birth event therefore ALWAYS
+	// carries a parseable file. The two lines present at that moment,
+	// `session_meta` and `event_msg`/`task_started`, are both Skip=true in its
+	// parser. Result: every codex session was born `working` and stayed there
+	// until its first real turn boundary.
+	//
+	// The guard is LastEventType, not NoSubstantiveActivity. Both describe
+	// "nothing happened", but they answer different questions and only one of
+	// them is the question being asked here:
+	//
+	//   - NoSubstantiveActivity is PER-PASS (`linesParsed > 0 && !substantive`).
+	//     An EMPTY pass — zero lines read, e.g. a birth event re-emitted by the
+	//     fswatcher's reconcile sweep (#1286) for a file already tailed — leaves
+	//     it FALSE, which would wave the insubstantial session straight through
+	//     this guard and back to `working`. It is the right flag for the
+	//     activity path below, which asks "did THIS pass change anything".
+	//   - LastEventType is CUMULATIVE: non-empty exactly when at least one
+	//     substantive event has ever been parsed off this transcript. That is
+	//     the birth question — "is there anything at all to classify" — and it
+	//     is the same bail forceReadyToWorkingIfActive already uses.
+	//
+	// With no substantive event on record, every rule in the ladder is
+	// reasoning from absence, so the bootstrap `ready` stands.
+	//
+	// CHILDREN ARE EXEMPT, which is why this is an `||` and not one condition.
+	// The child arm above is not about evidence — it is about a child being
+	// COUNTED. A child born `ready` does not count in hasActiveChildren, so a
+	// parent whose own turn-done metrics are unchanged has nothing holding it
+	// and the stale-session sweep flips it back to `ready` while the subagent
+	// is still running (#889). Zero-byte-create parking is gated on
+	// header-linkage and codex is the only adapter that declares it, so a
+	// Claude Code subagent transcript really does emit its birth event at size
+	// zero — exactly the population #889 is about, and exactly the one an
+	// evidence-only guard would drop. Applying the guard to children too was
+	// this fix's own first draft; it silently re-opened #889 and is what the
+	// child case in session_detector_bornready_test.go now pins.
+	//
+	// The #1256 copilot case is untouched: its events.jsonl already holds a
+	// real user message at discovery, so LastEventType is set and the open
+	// turn is still caught here.
+	if shouldClassifyAtBirth(state) {
+		if newState, _ := ClassifyState(state.State, state.Metrics); newState != state.State {
+			state.State = newState
+		}
 	}
 	return state
+}
+
+// shouldClassifyAtBirth reports whether a just-built session should be run
+// through ClassifyState instead of keeping its bootstrap `ready`.
+//
+// Two independent reasons to say yes, spelled out separately because they are
+// answering different questions — see the commentary in buildNewSessionState
+// for why each exists:
+//
+//   - it is a CHILD, which must be born `working` so hasActiveChildren counts
+//     it and the stale-session sweep cannot release its parent (#889); or
+//   - something substantive has actually been parsed off the transcript, so
+//     the ladder has evidence to reason from rather than defaulting (#1447).
+func shouldClassifyAtBirth(state *session.SessionState) bool {
+	if state.Metrics == nil {
+		return false
+	}
+	return state.ParentSessionID != "" || state.Metrics.LastEventType != ""
 }
 
 // finalizeNewSession persists a freshly built session, records its creation
