@@ -37,6 +37,21 @@ func (emptyMetrics) ComputeMetrics(_, _ string) (*session.SessionMetrics, error)
 	return nil, nil
 }
 
+// insubstantialMetrics is what the collector actually returns for an agent
+// whose transcript exists and has been parsed at discovery but whose every
+// line so far carries no observable signal — the tailer's own
+// NoSubstantiveActivity verdict (`linesParsed > 0 && !substantive`).
+//
+// This is NOT the same as emptyMetrics above, and the difference is the whole
+// of issue #1447: emptyMetrics returns a nil pointer, which ClassifyState
+// short-circuits on, so it can never reach the rule ladder. Non-nil metrics
+// always reach the ladder, and the ladder is total.
+type insubstantialMetrics struct{ outbound.MetricsCollector }
+
+func (insubstantialMetrics) ComputeMetrics(_, _ string) (*session.SessionMetrics, error) {
+	return &session.SessionMetrics{NoSubstantiveActivity: true}, nil
+}
+
 // TestNewTopLevelSession_ClassifiedAgainstItsOwnMetrics pins the "born ready"
 // bug found by recording GitHub Copilot's session-end cell (#1256).
 //
@@ -93,6 +108,52 @@ func TestNewTopLevelSession_StaysReadyWhenNothingToClassify(t *testing.T) {
 
 	if state.State != session.StateReady {
 		t.Errorf("State = %q, want %q — a session with no metrics to classify must stay ready",
+			state.State, session.StateReady)
+	}
+}
+
+// TestNewTopLevelSession_StaysReadyWhenParsedLinesAreAllInsubstantial is the
+// defect test for issue #1447: codex sessions became born `working`.
+//
+// The sibling lock above passes only because its collector returns a NIL
+// pointer, and ClassifyState short-circuits on nil (state_classifier.go:
+// `if metrics == nil { return currentState }`). That leaves the
+// non-nil-but-insubstantial case — the one every header-linked adapter
+// actually produces — completely uncovered, and it does not behave the same
+// way at all: non-nil metrics enter the rule ladder, the ladder is
+// deliberately TOTAL (its last rung `transcript_activity` has a nil `when`
+// and always fires), so the verdict is `working` no matter how little
+// evidence there is.
+//
+// Codex hits this on every single session. It is a header-linked adapter
+// (#1055), so the fswatcher parks the zero-byte create and emits
+// EventNewSession only once the rollout's first line is readable — which
+// guarantees the birth event always carries a parseable file and therefore
+// non-nil metrics. Both lines codex has written by then, `session_meta` and
+// `event_msg`/`task_started`, are explicitly `Skip = true` in its parser, so
+// the metrics that reach the ladder describe nothing at all.
+//
+// The other three classification sites all guard on exactly this flag —
+// session_detector_activity.go's activity path and PID path, and
+// replayengine/engine.go — which is why replaying the same transcript offline
+// still produces the correct `ready` while the live daemon says `working`.
+// The birth path was the only one without the guard.
+func TestNewTopLevelSession_StaysReadyWhenParsedLinesAreAllInsubstantial(t *testing.T) {
+	d := NewSessionDetector(nil, SessionDetectorDeps{
+		Log:     bornLog{},
+		Git:     bornGit{},
+		Metrics: insubstantialMetrics{},
+	})
+
+	state := d.buildNewSessionState(
+		agent.Identity{Name: "codex"},
+		agent.Event{SessionID: "s3", TranscriptPath: "/tmp/z/rollout.jsonl", CWD: "/tmp/z"},
+		1000,
+	)
+
+	if state.State != session.StateReady {
+		t.Errorf("State = %q, want %q — every parsed line was insubstantial, so there is no "+
+			"evidence of an open turn; birthing `working` reports an idle agent as generating",
 			state.State, session.StateReady)
 	}
 }
