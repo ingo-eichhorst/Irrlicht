@@ -170,4 +170,192 @@ final class LauncherHarnessTests: XCTestCase {
         XCTAssertEqual(session.launcher?.kittyListenOn, "unix:/tmp/kitty-12345")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         XCTAssertEqual(session.launcher?.kittyWindowID, "2")
     }
+
+    // MARK: - Ghostty tab selection
+
+    /// Seen red before `GhosttyActivator` existed, with exactly this arrangement.
+    func testGhosttyJumpSelectsTheTabMatchingSessionCwd() throws {
+        try XCTSkipUnless(Self.harnessEnabled, "requires TEST_HARNESS=1, a display, and Ghostty installed")
+        guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.ghosttyBundleID) != nil else {
+            throw XCTSkip("Ghostty not installed")
+        }
+        guard Self.ghosttyIsRunningWithAWindow() else {
+            throw XCTSkip("Ghostty has no open window; this test adds tabs to an existing one rather than cold-launching over the user's own session")
+        }
+
+        let target = try Self.makeSymlinkResolvedTempDir("ghostty-target")
+        let decoy = try Self.makeSymlinkResolvedTempDir("ghostty-decoy")
+        defer { Self.removeDirectories(target, decoy) }
+
+        guard let targetID = Self.openGhosttyTabTitledLikeAnAgent(cwd: target, title: "Fix the flaky test"),
+              let decoyID = Self.openGhosttyTabTitledLikeAnAgent(cwd: decoy, title: "Add pagination to the list")
+        else {
+            throw XCTSkip("could not open Ghostty tabs via AppleScript")
+        }
+        defer { Self.closeGhosttyTerminals(targetID, decoyID) }
+
+        Self.parkSelectionOn(decoyID)
+        XCTAssertTrue(
+            Self.samePath(Self.selectedGhosttyCwd(), decoy),
+            "arrange: the decoy must hold the selection, else a jump that moves nothing would pass; got \(Self.selectedGhosttyCwd() ?? "nil")"
+        )
+
+        SessionLauncher.jump(try makeSession(termProgram: "ghostty", cwd: target))
+
+        XCTAssertTrue(
+            Self.waitUntil(timeout: 5) { Self.samePath(Self.selectedGhosttyCwd(), target) },
+            "jump should select the tab whose working directory is \(target); selected is \(Self.selectedGhosttyCwd() ?? "nil")"
+        )
+    }
+
+    func testGhosttyJumpDeclinesWhenTwoTabsShareTheCwd() throws {
+        try XCTSkipUnless(Self.harnessEnabled, "requires TEST_HARNESS=1, a display, and Ghostty installed")
+        guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.ghosttyBundleID) != nil else {
+            throw XCTSkip("Ghostty not installed")
+        }
+        guard Self.ghosttyIsRunningWithAWindow() else {
+            throw XCTSkip("Ghostty has no open window")
+        }
+
+        let shared = try Self.makeSymlinkResolvedTempDir("ghostty-ambiguous")
+        let parked = try Self.makeSymlinkResolvedTempDir("ghostty-parked")
+        defer { Self.removeDirectories(shared, parked) }
+
+        guard let firstID = Self.openGhosttyTabTitledLikeAnAgent(cwd: shared, title: "Agent one"),
+              let secondID = Self.openGhosttyTabTitledLikeAnAgent(cwd: shared, title: "Agent two"),
+              let parkedID = Self.openGhosttyTabTitledLikeAnAgent(cwd: parked, title: "Somewhere else")
+        else {
+            throw XCTSkip("could not open Ghostty tabs via AppleScript")
+        }
+        defer { Self.closeGhosttyTerminals(firstID, secondID, parkedID) }
+
+        Self.parkSelectionOn(parkedID)
+        XCTAssertTrue(Self.samePath(Self.selectedGhosttyCwd(), parked), "arrange: parked tab holds the selection")
+
+        SessionLauncher.jump(try makeSession(termProgram: "ghostty", cwd: shared))
+        Self.settleAsyncActivation()
+
+        XCTAssertTrue(
+            Self.samePath(Self.selectedGhosttyCwd(), parked),
+            "two tabs share \(shared) and nothing Ghostty exposes tells them apart, so the selection must not move; selected is \(Self.selectedGhosttyCwd() ?? "nil")"
+        )
+    }
+
+    // MARK: - Ghostty harness helpers
+
+    private static let ghosttyBundleID = "com.mitchellh.ghostty"
+
+    private static func ghosttyScript(_ source: String) -> String? {
+        AppleScriptRunner.run(source, tag: "harness-ghostty")
+    }
+
+    private static func ghosttyIsRunningWithAWindow() -> Bool {
+        guard !NSRunningApplication.runningApplications(withBundleIdentifier: ghosttyBundleID).isEmpty else {
+            return false
+        }
+        let count = ghosttyScript(#"tell application "Ghostty" to return (count of windows) as text"#)
+        return (count.flatMap(Int.init) ?? 0) > 0
+    }
+
+    private static func makeSymlinkResolvedTempDir(_ prefix: String) throws -> String {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("irrlicht-harness-\(prefix)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url.resolvingSymlinksInPath().path
+    }
+
+    private static func removeDirectories(_ paths: String...) {
+        for path in paths { try? FileManager.default.removeItem(atPath: path) }
+    }
+
+    /// Overwrites Ghostty's default path-shaped title the way a real agent does.
+    private static func openGhosttyTabTitledLikeAnAgent(cwd: String, title: String) -> String? {
+        let safeCwd = AppleScriptRunner.escape(cwd)
+        let id = ghosttyScript("""
+        tell application "Ghostty"
+            set t to new tab in front window with configuration {initial working directory:"\(safeCwd)"}
+            return id of (focused terminal of t)
+        end tell
+        """)
+        guard let id else { return nil }
+        _ = waitUntil(timeout: 5) { cwdOfGhosttyTerminal(id: id) != nil }
+        _ = ghosttyScript("""
+        tell application "Ghostty"
+            try
+                perform action "set_tab_title:\(AppleScriptRunner.escape(title))" on (first terminal whose id is "\(AppleScriptRunner.escape(id))")
+            end try
+        end tell
+        """)
+        return id
+    }
+
+    private static func closeGhosttyTerminals(_ ids: String...) {
+        for id in ids {
+            _ = ghosttyScript("""
+            tell application "Ghostty"
+                try
+                    close (first terminal whose id is "\(AppleScriptRunner.escape(id))")
+                end try
+            end tell
+            """)
+        }
+    }
+
+    private static func parkSelectionOn(_ id: String) {
+        _ = ghosttyScript("""
+        tell application "Ghostty"
+            focus (first terminal whose id is "\(AppleScriptRunner.escape(id))")
+        end tell
+        """)
+        Thread.sleep(forTimeInterval: 0.4)
+    }
+
+    /// Waiting out the whole budget, because polling for "nothing happened" returns instantly.
+    private static func settleAsyncActivation() {
+        Thread.sleep(forTimeInterval: 5)
+    }
+
+    private static func cwdOfGhosttyTerminal(id: String) -> String? {
+        let cwd = ghosttyScript("""
+        tell application "Ghostty"
+            try
+                return working directory of (first terminal whose id is "\(AppleScriptRunner.escape(id))")
+            on error
+                return ""
+            end try
+        end tell
+        """)
+        guard let cwd, !cwd.isEmpty else { return nil }
+        return cwd
+    }
+
+    private static func selectedGhosttyCwd() -> String? {
+        let cwd = ghosttyScript("""
+        tell application "Ghostty"
+            try
+                return working directory of (focused terminal of (selected tab of front window))
+            on error
+                return ""
+            end try
+        end tell
+        """)
+        guard let cwd, !cwd.isEmpty else { return nil }
+        return cwd
+    }
+
+    /// `/var` and `/private/var` name one directory; the assertions are about which one, not how it is spelled.
+    private static func samePath(_ lhs: String?, _ rhs: String?) -> Bool {
+        guard let lhs, let rhs, !lhs.isEmpty, !rhs.isEmpty else { return false }
+        return URL(fileURLWithPath: lhs).resolvingSymlinksInPath().path
+            == URL(fileURLWithPath: rhs).resolvingSymlinksInPath().path
+    }
+
+    private static func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        return condition()
+    }
 }

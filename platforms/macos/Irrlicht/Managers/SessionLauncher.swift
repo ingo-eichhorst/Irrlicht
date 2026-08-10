@@ -24,7 +24,7 @@ enum SessionLauncher {
         AXTitleMatchActivator(termProgram: "vscode",    bundleID: "com.microsoft.VSCode"),
         AXTitleMatchActivator(termProgram: "cursor",    bundleID: "com.todesktop.230313mzl4w4u92"),
         AXTitleMatchActivator(termProgram: "windsurf",  bundleID: "com.exafunction.windsurf"),
-        AXTitleMatchActivator(termProgram: "ghostty",   bundleID: "com.mitchellh.ghostty"),
+        GhosttyActivator(),
         AXTitleMatchActivator(termProgram: "WezTerm",   bundleID: "com.github.wez.wezterm"),
         AXTitleMatchActivator(termProgram: "Hyper",     bundleID: "co.zeit.hyper"),
         AXTitleMatchActivator(termProgram: "Warp",      bundleID: "dev.warp.Warp-Stable"),
