@@ -48,7 +48,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
+	"irrlicht/core/adapters/inbound/agents/agentpaths"
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
@@ -248,6 +250,24 @@ func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logge
 // never from anything the caller sent. The result is still confined by the
 // caller, which is what makes a hostile session id ("../../etc") harmless: it
 // is the confiner, not this function, that decides the path is in-tree.
+//
+// The root MUST be absolutised. sessionsDir() returns the $HOME-relative
+// literal ".copilot/session-state" whenever COPILOT_HOME is unset — the
+// configuration every ordinary user is in — and PathConfiner.Confine refuses a
+// non-absolute path outright (RejectRelativePath) before it ever consults the
+// roots. Without AbsRoot the whole Notification branch is therefore dead in the
+// default install: nothing dispatches, an error-level line is logged per
+// prompt, and the confiner's rejection counter — whose job is to signal a local
+// process probing the endpoint — accrues one false positive per legitimate
+// permission prompt. Every hook test in this package relocates COPILOT_HOME to
+// an absolute temp dir, which is exactly the spelling that hides it;
+// hookdefaulthome_test.go is the one that does not.
+//
+// AbsRoot rather than copilotSessionsDir(): the confiner rebuilds the accepted
+// path on the DECLARED root, deliberately un-symlink-resolved, so that the hook's
+// key and the fswatcher's key are the same string (see confine.go). Handing it a
+// pre-resolved root would reintroduce the two-spellings-one-session problem that
+// comment exists to prevent.
 func resolveTranscriptPath(payload copilotHookPayload) string {
 	if payload.TranscriptPath != "" {
 		return payload.TranscriptPath
@@ -256,7 +276,13 @@ func resolveTranscriptPath(payload copilotHookPayload) string {
 	if id == "" {
 		return ""
 	}
-	return filepath.Join(sessionsDir(), id, transcriptFilename)
+	root, err := agentpaths.AbsRoot(sessionsDir())
+	if err != nil {
+		// No resolvable root — fail closed. An empty path is refused as
+		// RejectEmptyPath, which is the honest reason.
+		return ""
+	}
+	return filepath.Join(root, id, transcriptFilename)
 }
 
 // dispatchHookEvent routes a decoded, consent-passed, confined, session-
@@ -312,6 +338,17 @@ func handleNotificationHook(target HookTarget, log outbound.Logger, sessionID, t
 // writes, and an unbounded scan of a large transcript at install time would be
 // paid for nothing.
 func sessionStartVersion(path string) string {
+	// Sink-local traversal guard. The only caller hands over a path produced by
+	// WalkDir over a self-resolved root, so this is not reachable in practice —
+	// but the plain ".." check is the form CodeQL's go/path-injection query
+	// recognizes as a sanitizer (the root derives from COPILOT_HOME, a taint
+	// source), and both sibling adapters carry it for exactly that reason: see
+	// codex/session_meta.go and claudecode/hookinstaller.go. A rejected path
+	// falls through to the same "unknown version" result an unreadable file
+	// already produces, which fails OPEN to the version gate's Probe.
+	if strings.Contains(path, "..") {
+		return ""
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return ""

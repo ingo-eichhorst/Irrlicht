@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"irrlicht/core/domain/permission"
@@ -200,18 +201,37 @@ func TestUninstallLeavesForeignEntriesAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("file gone after uninstall, user entry lost: %v", err)
 	}
-	if !contains(string(data), "example.invalid/mine") {
+	if !strings.Contains(string(data), "example.invalid/mine") {
 		t.Error("uninstall removed a hook entry irrlicht did not install")
 	}
 }
 
-func contains(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && (func() bool {
-		for i := 0; i+len(needle) <= len(haystack); i++ {
-			if haystack[i:i+len(needle)] == needle {
-				return true
-			}
-		}
-		return false
-	})()
+// TestUninstallGivesTheDirectoryBack pins the consent-hygiene half of
+// uninstall. This hook file is one irrlicht created and nothing else writes,
+// so leaving an empty `{}` behind after a revoke is the same failure #1371
+// fixed one level up: the user does not get their directory back.
+func TestUninstallGivesTheDirectoryBack(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(copilotHomeEnvVar, home)
+
+	if _, err := EnsureHooksInstalled(); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	path, err := copilotHooksPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("install did not create %s: %v", path, err)
+	}
+
+	if _, err := UninstallHooks(); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		data, _ := os.ReadFile(path)
+		t.Errorf("uninstall left %s behind (content %q) — irrlicht created this file "+
+			"and nothing else writes it, so revoking consent must remove it", path, string(data))
+	}
 }

@@ -50,10 +50,17 @@ const hookSentinel = HookEndpointPath
 // installing this exact hook file and running a session both ways:
 //
 //	without the variable, every delivery is refused and logged as
-//	  HTTP hook URL "http://127.0.0.1:<port>/api/v1/hooks/copilot" resolves to
+//	  HTTP hook URL "http://localhost:<port>/api/v1/hooks/copilot" resolves to
 //	  blocked address 127.0.0.1. URLs must not target loopback, private, or
 //	  link-local addresses.
 //	with COPILOT_HOOK_ALLOW_LOCALHOST=1, the same file delivers normally.
+//
+// The quoted refusal uses the "localhost" spelling this installer actually
+// writes (daemonaddr.LocalURL), not a 127.0.0.1 literal — the guard resolves
+// the host before judging it, so both spellings are refused identically. That
+// distinction is deliberate evidence, because the consent copy makes an
+// absolute claim about the channel being inert without the variable, and a
+// literal-IP-only guard would have made that claim wrong.
 //
 // The daemon cannot set this for the user: Copilot reads it from its own
 // process environment, and irrlicht does not launch Copilot. It therefore has
@@ -66,8 +73,16 @@ const RequiresLocalhostOptIn = "COPILOT_HOOK_ALLOW_LOCALHOST"
 //
 // 1.0.26 is the notification event's guarantee boundary: below 1.0.18 there is
 // no notification event at all, and 1.0.18–1.0.25 fires it even when no prompt
-// was actually shown, which would manufacture false waiting states. From
-// 1.0.26 the event fires only when a prompt is really displayed.
+// was actually shown. From 1.0.26 the event fires only when a prompt is really
+// displayed.
+//
+// Note what a spurious notification would and would not cost HERE. It could not
+// manufacture a false waiting state — this adapter's notification branch takes
+// no hold at all (see hooks.go) — but it would inject a synthetic activity
+// event, and forceReadyToWorkingIfActive can bounce a ready session to WORKING
+// on one. That is the concrete harm the floor prevents; stating it accurately
+// matters because a floor defended by a reason someone can disprove is a floor
+// that gets lowered.
 const minCLIVersion = "1.0.26"
 
 // hookEventSince records the Copilot version each installed event is proven to
@@ -180,12 +195,40 @@ func VerifyHooksInstalled() (agent.HookEntryStatus, error) {
 
 // UninstallHooks removes irrlicht hook entries from the hooks file. Returns
 // true if the file was modified.
+//
+// Unlike claudecode's settings.json and codex's hooks.json, this file is one
+// irrlicht CREATED and nothing else writes — so removing our entries and
+// leaving an empty document behind is the same failure #1371 fixed one level
+// up: revoking consent has to give the user their directory back, not leave a
+// stray file they never made. hookjson.Uninstall drops the "hooks" key; if
+// that empties the document entirely, the file itself goes too.
+//
+// Gated on the document being empty, so a hook the user hand-added to our file
+// keeps it alive (Copilot unions every *.json in the directory, so that is a
+// legitimate thing for them to have done) — TestUninstallLeavesForeignEntriesAlone
+// covers that side.
 func UninstallHooks() (bool, error) {
 	path, err := copilotHooksPath()
 	if err != nil {
 		return false, err
 	}
-	return hookjson.Uninstall(hookConfig(path))
+	modified, err := hookjson.Uninstall(hookConfig(path))
+	if err != nil || !modified {
+		return modified, err
+	}
+	removeIfEmpty(path)
+	return true, nil
+}
+
+// removeIfEmpty deletes path when it holds no keys at all. Best-effort: a
+// failure to remove leaves an inert empty file, which is strictly better than
+// failing an uninstall that already succeeded.
+func removeIfEmpty(path string) {
+	settings, err := hookjson.ReadSettings(path)
+	if err != nil || len(settings) > 0 {
+		return
+	}
+	_ = os.Remove(path)
 }
 
 // newestObservedCLIVersion returns the copilotVersion recorded in the most
@@ -226,9 +269,14 @@ func copilotHome() (string, error) {
 }
 
 // copilotSessionsDir resolves the absolute session-state tree with symlinks
-// resolved, so containment checks against it compare like with like (on macOS
-// both /tmp and a home directory routinely reach the real path through a
-// symlink).
+// resolved, so the WalkDir below is handed a real directory and a
+// "no sessions yet" tree fails cleanly to "" rather than to an error.
+//
+// It is NOT the receiver's confinement root: hookjson.PathConfiner resolves its
+// own roots (see confine.go), and the receiver deliberately confines against
+// the DECLARED, un-resolved root so its path key matches the fswatcher's. Said
+// explicitly because assuming otherwise is what makes the $HOME-relative
+// hazard in resolveTranscriptPath easy to miss.
 //
 // Derived from the adapter's own declared root rather than re-assembled from
 // constants: that second derivation is exactly what issue #1361 removed from
