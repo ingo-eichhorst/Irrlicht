@@ -90,7 +90,15 @@ const RequiresLocalhostOptIn = "COPILOT_HOOK_ALLOW_LOCALHOST"
 // on one. That is the concrete harm the floor prevents; stating it accurately
 // matters because a floor defended by a reason someone can disprove is a floor
 // that gets lowered.
-const minCLIVersion = "1.0.26"
+const minCLIVersion = notificationGuaranteeSince
+
+// notificationGuaranteeSince is the Copilot version from which the
+// notification event is guaranteed to fire ONLY when a prompt was really
+// shown. Named once and referenced by both the floor above and every
+// hookEventSince entry below, which is honest rather than merely DRY: the two
+// installed events are pinned to this one boundary, and a future event with
+// its own arrival version gets its own constant rather than reusing this.
+const notificationGuaranteeSince = "1.0.26"
 
 // hookEventSince records the Copilot version each installed event is proven to
 // exist at. minCLIVersion must be >= every value here, which
@@ -105,8 +113,8 @@ const minCLIVersion = "1.0.26"
 // in-between CLI receive an entry it ignores, which costs a missing turn-end
 // push and nothing else — the transcript already covers turn end.
 var hookEventSince = map[string]string{
-	HookNotification: "1.0.26",
-	HookStop:         "1.0.26",
+	HookNotification: notificationGuaranteeSince,
+	HookStop:         notificationGuaranteeSince,
 }
 
 // installedHookEvents are the Copilot hook events we install handlers for.

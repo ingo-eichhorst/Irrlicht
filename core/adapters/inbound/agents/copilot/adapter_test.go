@@ -145,70 +145,86 @@ func TestAgent_Process_ExactName(t *testing.T) {
 // what the installer actually writes by AssertHookDisclosureMatchesInstalled
 // (hookdisclosure_test.go), which is the check that would catch a stale event
 // list here.
-func TestAgent_Permissions(t *testing.T) {
+// permissionsByKey indexes the real registration once for the subtests below.
+func permissionsByKey(t *testing.T) map[string]agent.Permission {
+	t.Helper()
 	perms := Agent().Permissions
 	if len(perms) != 2 {
 		t.Fatalf("got %d permissions, want exactly 2 (transcripts + hooks)", len(perms))
 	}
-
-	byKey := map[string]agent.Permission{}
-	observes := 0
+	byKey := make(map[string]agent.Permission, len(perms))
 	for _, p := range perms {
 		byKey[p.Key] = p
-		if p.Kind == permission.KindObserve {
-			observes++
-		}
 	}
-	if observes != 1 {
-		t.Errorf("got %d observe-kind permissions, want exactly 1 — "+
-			"PermissionService resolves an adapter to its first observe entry and stops, "+
-			"so any second one is unreachable", observes)
-	}
+	return byKey
+}
 
-	transcripts, ok := byKey[PermissionKeyTranscripts]
-	if !ok {
-		t.Fatalf("no %q permission declared", PermissionKeyTranscripts)
-	}
-	if transcripts.Kind != permission.KindObserve {
-		t.Errorf("transcripts Kind = %v, want %v", transcripts.Kind, permission.KindObserve)
-	}
-	if transcripts.Apply != nil || transcripts.Remove != nil {
-		t.Error("observe-kind permission must not carry Apply/Remove effects")
-	}
-	if transcripts.Writes != nil {
-		t.Error("the transcripts permission must not carry a ManagedUserFile")
-	}
+func TestAgent_Permissions(t *testing.T) {
+	byKey := permissionsByKey(t)
 
-	hooks, ok := byKey[PermissionKeyHooks]
-	if !ok {
-		t.Fatalf("no %q permission declared", PermissionKeyHooks)
-	}
-	if hooks.Kind != permission.KindModify {
-		t.Errorf("hooks Kind = %v, want %v — an install writes a file", hooks.Kind, permission.KindModify)
-	}
-	if hooks.Apply == nil || hooks.Remove == nil {
-		t.Error("the hooks permission must carry both Apply and Remove effects")
-	}
-	if hooks.Writes == nil {
-		t.Fatal("the hooks permission must carry a ManagedUserFile")
-	}
-	if hooks.Writes.Path == nil || hooks.Writes.Uninstall == nil || hooks.Writes.Verify == nil {
-		t.Error("ManagedUserFile must declare Path, Uninstall and Verify")
-	}
-	if hooks.Writes.Version == nil {
-		t.Error("ManagedUserFile must declare a version floor")
-	}
-
-	for _, p := range perms {
-		for name, field := range map[string]string{
-			"Title": p.Title, "FeatureUnlocked": p.FeatureUnlocked,
-			"Touches": p.Touches, "Detail": p.Detail,
-		} {
-			if strings.TrimSpace(field) == "" {
-				t.Errorf("%s/%s is empty — the consent wizard renders this to the user", p.Key, name)
+	t.Run("exactly one observe-kind entry", func(t *testing.T) {
+		observes := 0
+		for _, p := range byKey {
+			if p.Kind == permission.KindObserve {
+				observes++
 			}
 		}
-	}
+		if observes != 1 {
+			t.Errorf("got %d observe-kind permissions, want exactly 1 — PermissionService "+
+				"resolves an adapter to its first observe entry and stops, so any second "+
+				"one is unreachable", observes)
+		}
+	})
+
+	t.Run("transcripts is observe-only", func(t *testing.T) {
+		p, ok := byKey[PermissionKeyTranscripts]
+		if !ok {
+			t.Fatalf("no %q permission declared", PermissionKeyTranscripts)
+		}
+		if p.Kind != permission.KindObserve {
+			t.Errorf("Kind = %v, want %v", p.Kind, permission.KindObserve)
+		}
+		if p.Apply != nil || p.Remove != nil {
+			t.Error("observe-kind permission must not carry Apply/Remove effects")
+		}
+		if p.Writes != nil {
+			t.Error("an observe-kind permission must not declare a ManagedUserFile")
+		}
+	})
+
+	t.Run("hooks is modify-kind with both effects", func(t *testing.T) {
+		p, ok := byKey[PermissionKeyHooks]
+		if !ok {
+			t.Fatalf("no %q permission declared", PermissionKeyHooks)
+		}
+		if p.Kind != permission.KindModify {
+			t.Errorf("Kind = %v, want %v — an install writes a file", p.Kind, permission.KindModify)
+		}
+		if p.Apply == nil || p.Remove == nil {
+			t.Error("the hooks permission must carry both Apply and Remove effects")
+		}
+		// Writes' own sub-fields (Path absolute, Uninstall, Verify, Version)
+		// are asserted registry-wide for every adapter by
+		// cmd/irrlichd/managedfiles_test.go, agents/hookverify_test.go and
+		// agents/hookversion_test.go, so they are deliberately not restated
+		// here — copilot is in All() and inherits all three.
+		if p.Writes == nil {
+			t.Error("the hooks permission must declare the file it writes")
+		}
+	})
+
+	t.Run("consent prose is complete", func(t *testing.T) {
+		for _, p := range byKey {
+			for name, field := range map[string]string{
+				"Title": p.Title, "FeatureUnlocked": p.FeatureUnlocked,
+				"Touches": p.Touches, "Detail": p.Detail,
+			} {
+				if strings.TrimSpace(field) == "" {
+					t.Errorf("%s/%s is empty — the consent wizard renders this to the user", p.Key, name)
+				}
+			}
+		}
+	})
 }
 
 // TestAgent_NoControlDeclared pins the deliberate omission: backchannel input
