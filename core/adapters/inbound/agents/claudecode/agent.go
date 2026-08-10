@@ -14,10 +14,13 @@ const (
 	// Aliased rather than spelled out: `irrlichd --uninstall-hooks` narrows the
 	// managed-file projection to this key from outside the adapter (#1383), so
 	// a local literal is a string two packages agree on by convention.
-	PermissionKeyHooks        = agent.HooksPermissionKey
-	PermissionKeyStatusline   = "statusline"
-	PermissionKeyTranscripts  = "transcripts"
-	PermissionKeyInstructions = "instructions"
+	PermissionKeyHooks       = agent.HooksPermissionKey
+	PermissionKeyStatusline  = "statusline"
+	PermissionKeyTranscripts = "transcripts"
+	// Aliased for the same reason PermissionKeyHooks is: `irrlichd
+	// --uninstall-task-eta` narrows the managed-file projection to this key
+	// from outside the adapter (#1437).
+	PermissionKeyInstructions = agent.InstructionsPermissionKey
 )
 
 // Claude Code mascot — pixel-art rectangular creature with eyes and legs.

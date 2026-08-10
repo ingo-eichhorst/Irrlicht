@@ -404,6 +404,66 @@ func TestUninstallHooksReadsOnlyTheHooksSlice(t *testing.T) {
 	}
 }
 
+// TestUninstallTaskEtaReadsOnlyTheInstructionsSlice is the mirror image, and
+// the reason InstructionConfigs is a projection rather than a direct call to
+// claudecode.UninstallInstructionBlocks (#1437): now that --uninstall-task-eta
+// records consent as denied, reaching for the wrong slice would silently revoke
+// the hook installs and the kitty patch too.
+//
+// A LOCK on the narrowing. It passes by construction against a correct
+// projection; its value is that it fails the moment somebody widens the filter.
+func TestUninstallTaskEtaReadsOnlyTheInstructionsSlice(t *testing.T) {
+	catalog := declaredConsentCatalog()
+	instructions, err := agents.InstructionConfigs(catalog)
+	if err != nil {
+		t.Fatalf("agents.InstructionConfigs: %v", err)
+	}
+	if len(instructions) == 0 {
+		t.Fatal("no instructions permission in the catalog — every check below would pass vacuously")
+	}
+
+	t.Run("every entry is an instructions permission", func(t *testing.T) {
+		for _, c := range instructions {
+			if c.Key != agent.InstructionsPermissionKey {
+				t.Errorf("InstructionConfigs returned %s/%s, which is not an instructions permission — "+
+					"--uninstall-task-eta would revoke something the user never asked it to", c.Adapter, c.Key)
+			}
+		}
+	})
+
+	t.Run("it is strictly narrower than the full projection", func(t *testing.T) {
+		all, err := agents.ManagedUserFiles(catalog)
+		if err != nil {
+			t.Fatalf("agents.ManagedUserFiles: %v", err)
+		}
+		if len(all) <= len(instructions) {
+			t.Errorf("ManagedUserFiles returned %d entries and InstructionConfigs %d — the narrowing is not narrowing",
+				len(all), len(instructions))
+		}
+	})
+
+	// Disjointness is asserted rather than assumed. Each command denies exactly
+	// the permissions its projection names, so an overlap would mean one of them
+	// revokes the other's capability — the failure both narrowings exist to
+	// prevent, in the one shape neither single-sided check above can see.
+	t.Run("it is disjoint from the hooks slice", func(t *testing.T) {
+		hooks, err := agents.HookConfigs(catalog)
+		if err != nil {
+			t.Fatalf("agents.HookConfigs: %v", err)
+		}
+		inHooks := make(map[string]bool, len(hooks))
+		for _, h := range hooks {
+			inHooks[h.Adapter+"/"+h.Key] = true
+		}
+		for _, c := range instructions {
+			if inHooks[c.Adapter+"/"+c.Key] {
+				t.Errorf("%s/%s is in BOTH HookConfigs and InstructionConfigs — "+
+					"the two uninstall commands would revoke each other's consent", c.Adapter, c.Key)
+			}
+		}
+	})
+}
+
 // TestPermissionWizardIsBuiltFromConsentCatalog closes the gap the test above
 // leaves open: it asserts the list the permission SERVICE receives is built by
 // consentCatalog, rather than trusting the doc comment that says so.

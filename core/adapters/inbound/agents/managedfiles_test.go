@@ -134,6 +134,52 @@ func TestManagedUserFilesRejectsUnusableDeclarations(t *testing.T) {
 	}
 }
 
+// TestNarrowedProjectionsSurviveABrokenDeclarationOnAnotherKey is the other
+// half of the test above, and the two together are the whole rule: a narrowed
+// projection validates exactly what it collects — no less (above) and no more
+// (here).
+//
+// It exists because the first cut of #1437's shared narrowing resolved the
+// whole catalog and filtered afterwards, which made `--uninstall-task-eta`
+// log.Fatalf and remove NOTHING from the user's own CLAUDE.md when an unrelated
+// adapter's path failed to resolve. Reproduced with built binaries against a
+// relative XDG_CONFIG_HOME: kitty's remote-control path came back
+// "relconf/kitty/kitty.conf", not absolute, and the command that exists to get
+// irrlicht out of the user's prose file refused, citing kitty.
+//
+// A defect test: red before the fix, with `configsForKey` implemented as
+// ManagedUserFiles-then-filter.
+func TestNarrowedProjectionsSurviveABrokenDeclarationOnAnotherKey(t *testing.T) {
+	broken := &agent.ManagedUserFile{
+		Path:      func() (string, error) { return "relative/kitty.conf", nil },
+		Uninstall: func() (bool, error) { return false, nil },
+	}
+	good := &agent.ManagedUserFile{
+		Path:      func() (string, error) { return "/tmp/x/CLAUDE.md", nil },
+		Uninstall: func() (bool, error) { return false, nil },
+	}
+	catalog := []agent.Agent{
+		writerAdapter("kitty", "remote-control", broken),
+		writerAdapter("alpha", agent.InstructionsPermissionKey, good),
+	}
+
+	got, err := InstructionConfigs(catalog)
+	if err != nil {
+		t.Fatalf("InstructionConfigs() failed on a broken declaration it does not collect: %v — "+
+			"--uninstall-task-eta would abort without removing anything from the user's CLAUDE.md", err)
+	}
+	if len(got) != 1 || got[0].Adapter != "alpha" {
+		t.Fatalf("InstructionConfigs() = %v, want exactly alpha/instructions", got)
+	}
+
+	// The full projection must still refuse it: --print-managed-files and the
+	// recorder need completeness, and a short list there means the recorder
+	// writes over the user's real files unprotected.
+	if _, err := ManagedUserFiles(catalog); err == nil {
+		t.Error("ManagedUserFiles() accepted a broken declaration — the recorder would read a short list as success")
+	}
+}
+
 // TestManagedUserFilesIgnoresPermissionsThatDeclareNoFile is a lock: only a
 // permission that actually declares a file contributes one. A transcripts
 // permission (read-only) and the shared control permission (modify-kind, but

@@ -78,10 +78,12 @@ func NewAnswerHandler(t target, log outbound.Logger) http.HandlerFunc {
 // NewReloadHandler returns the handler for POST /api/v1/permissions/reload —
 // the "consent changed underneath you" nudge from another process (#1425).
 //
-// `irrlichd --uninstall-hooks` runs in a separate process; it writes "denied"
-// into permissions.json, which the running daemon has no other way to notice.
-// Without this, #1372's re-verification loop keeps asking a stale in-memory
-// gate and re-installs the entries the user just removed.
+// `irrlichd --uninstall-hooks` and `irrlichd --uninstall-task-eta` (#1437) each
+// run in a separate process; they write "denied" into permissions.json, which
+// the running daemon has no other way to notice. Without this, #1372's
+// re-verification loop keeps asking a stale in-memory gate and re-installs the
+// hook entries the user just removed — and the instruction blocks come back in
+// the user's own CLAUDE.md at the next start.
 //
 // It carries no body and names no permission: the caller does not get to say
 // what the daemon should believe, only that it should go and re-read the store
@@ -90,7 +92,8 @@ func NewAnswerHandler(t target, log outbound.Logger) http.HandlerFunc {
 //
 // Guarded the same way the answer handler is, and for the same reason: adopting
 // a "granted" from the store can run an Apply closure that rewrites
-// ~/.claude/settings.json, so a cross-origin POST from any page the user
+// ~/.claude/settings.json — or ~/.claude/CLAUDE.md, which is user-authored and
+// the more sensitive of the two — so a cross-origin POST from any page the user
 // happens to visit must be rejected. The route is additionally registered
 // behind localhostOnly.
 //

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"irrlicht/core/domain/config"
 )
 
 // TestConsentSignalReachesARunningDaemon: the happy path — the nudge is a POST
@@ -24,7 +26,7 @@ func TestConsentSignalReachesARunningDaemon(t *testing.T) {
 	defer srv.Close()
 
 	var out bytes.Buffer
-	postConsentReload(&out, srv.URL+consentReloadPath, consentSignalTimeout)
+	postConsentReload(&out, srv.URL+consentReloadPath, consentSignalTimeout, hooksNoun)
 
 	if gotMethod != http.MethodPost {
 		t.Errorf("method = %q, want POST", gotMethod)
@@ -47,7 +49,7 @@ func TestConsentSignalWithNoDaemonIsNotAnError(t *testing.T) {
 	url := "http://" + closedLoopbackAddr(t) + consentReloadPath
 
 	var out bytes.Buffer
-	postConsentReload(&out, url, 500*time.Millisecond)
+	postConsentReload(&out, url, 500*time.Millisecond, hooksNoun)
 
 	got := out.String()
 	if !strings.Contains(got, "No running daemon to notify") {
@@ -71,11 +73,60 @@ func TestConsentSignalNonSuccessStatusIsReported(t *testing.T) {
 	defer srv.Close()
 
 	var out bytes.Buffer
-	postConsentReload(&out, srv.URL+consentReloadPath, consentSignalTimeout)
+	postConsentReload(&out, srv.URL+consentReloadPath, consentSignalTimeout, hooksNoun)
 
 	got := out.String()
 	if !strings.Contains(got, "403") || !strings.Contains(got, "restart it") {
 		t.Errorf("output = %q, want the status and the remedy", got)
+	}
+}
+
+// TestConsentSignalNamesTheContentTheCallerRemoved is #1437's copy regression.
+// Both uninstall commands reach this one endpoint, and its two advisory lines
+// tell the user what to go and check — so a --uninstall-task-eta run that says
+// "hooks" points them at ~/.claude/settings.json when the content at risk is
+// the managed blocks in their own CLAUDE.md.
+//
+// Red before the noun was threaded through: the grant-all arm printed "it will
+// re-install these hooks" verbatim on the instructions path, reproduced against
+// a live grant-all daemon.
+//
+// Table-driven over both arms, because they are two separate hardcoded strings
+// and fixing one is the easy way to miss the other.
+func TestConsentSignalNamesTheContentTheCallerRemoved(t *testing.T) {
+	grantAll := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"mode":"` + config.PermissionModeGrantAll + `"}`))
+	})
+	refuse := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	})
+
+	for _, arm := range []struct {
+		name    string
+		handler http.Handler
+	}{
+		{"grant-all warning", grantAll},
+		{"non-success status", refuse},
+	} {
+		t.Run(arm.name, func(t *testing.T) {
+			srv := httptest.NewServer(arm.handler)
+			defer srv.Close()
+
+			var out bytes.Buffer
+			postConsentReload(&out, srv.URL+consentReloadPath, consentSignalTimeout, instructionsNoun)
+
+			got := out.String()
+			if !strings.Contains(got, instructionsNoun.content) {
+				t.Errorf("output = %q, want it to name %q", got, instructionsNoun.content)
+			}
+			// The specific wrong answer, named: the shared endpoint's copy used
+			// to be hooks-only, and "does not say hooks" is the assertion that
+			// fails if somebody hardcodes it back.
+			if strings.Contains(got, "hooks") {
+				t.Errorf("output = %q — --uninstall-task-eta must not send the user to inspect their hook config", got)
+			}
+		})
 	}
 }
 
@@ -117,7 +168,7 @@ func TestConsentSignalDoesNotHangOnAnUnresponsiveDaemon(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		var out bytes.Buffer
-		postConsentReload(&out, "http://"+ln.Addr().String()+consentReloadPath, 300*time.Millisecond)
+		postConsentReload(&out, "http://"+ln.Addr().String()+consentReloadPath, 300*time.Millisecond, hooksNoun)
 		close(done)
 	}()
 	select {
@@ -156,7 +207,7 @@ func TestConsentSignalWarnsWhenTheDaemonIsInGrantAllMode(t *testing.T) {
 	defer srv.Close()
 
 	var out bytes.Buffer
-	postConsentReload(&out, srv.URL+consentReloadPath, consentSignalTimeout)
+	postConsentReload(&out, srv.URL+consentReloadPath, consentSignalTimeout, hooksNoun)
 
 	got := out.String()
 	if strings.Contains(got, "Notified the running daemon to reload consent") {
@@ -178,7 +229,7 @@ func TestConsentSignalAskModeStillReportsSuccess(t *testing.T) {
 	defer srv.Close()
 
 	var out bytes.Buffer
-	postConsentReload(&out, srv.URL+consentReloadPath, consentSignalTimeout)
+	postConsentReload(&out, srv.URL+consentReloadPath, consentSignalTimeout, hooksNoun)
 
 	if !strings.Contains(out.String(), "Notified the running daemon to reload consent") {
 		t.Errorf("ask mode did not report success: %q", out.String())
@@ -204,7 +255,7 @@ func TestConsentSignalSkipsWhenNothingNamesADaemon(t *testing.T) {
 	t.Setenv("IRRLICHT_BIND_ADDR", "")
 
 	var out bytes.Buffer
-	notifyDaemonConsentChanged(&out)
+	notifyDaemonConsentChanged(&out, hooksNoun)
 
 	if !strings.Contains(out.String(), "No running daemon to notify") {
 		t.Errorf("output = %q, want the no-daemon note", out.String())
@@ -224,7 +275,7 @@ func TestConsentSignalSendsWhenAnAddressIsPublished(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	notifyDaemonConsentChanged(&out)
+	notifyDaemonConsentChanged(&out, hooksNoun)
 
 	select {
 	case <-hit:
@@ -248,7 +299,7 @@ func TestConsentSignalSendsWhenBindAddrNamesADaemon(t *testing.T) {
 	t.Setenv("IRRLICHT_BIND_ADDR", strings.TrimPrefix(srv.URL, "http://"))
 
 	var out bytes.Buffer
-	notifyDaemonConsentChanged(&out)
+	notifyDaemonConsentChanged(&out, hooksNoun)
 
 	select {
 	case <-hit:
