@@ -204,19 +204,24 @@ func collectTypeDecls(files map[string]*ast.File) map[string]ast.Expr {
 	decls := map[string]ast.Expr{}
 	for _, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
-			gd, ok := n.(*ast.GenDecl)
-			if !ok || gd.Tok != token.TYPE {
-				return true
-			}
-			for _, spec := range gd.Specs {
-				if ts, ok := spec.(*ast.TypeSpec); ok {
-					decls[ts.Name.Name] = ts.Type
-				}
-			}
+			recordTypeSpecs(n, decls)
 			return true
 		})
 	}
 	return decls
+}
+
+// recordTypeSpecs adds every type this node declares, if it declares any.
+func recordTypeSpecs(n ast.Node, into map[string]ast.Expr) {
+	gd, ok := n.(*ast.GenDecl)
+	if !ok || gd.Tok != token.TYPE {
+		return
+	}
+	for _, spec := range gd.Specs {
+		if ts, ok := spec.(*ast.TypeSpec); ok {
+			into[ts.Name.Name] = ts.Type
+		}
+	}
 }
 
 // typeResolutionDepth bounds the declaration chase below.
@@ -413,17 +418,32 @@ func (s *literalScan) descend(e ast.Expr, typ ast.Expr) {
 func (s *literalScan) reportNonLiteralZeroValues(n ast.Node) {
 	switch v := n.(type) {
 	case *ast.CallExpr:
-		id, ok := v.Fun.(*ast.Ident)
-		if ok && id.Name == "new" && len(v.Args) == 1 && s.namesValueType(v.Args[0]) {
+		if s.isNewOfGuardedType(v) {
 			s.report(v)
 		}
 	case *ast.ValueSpec:
-		// `var d SessionDetector` with no initialiser. With one, the value
-		// came from somewhere the scan already judges on its own merits.
-		if v.Type != nil && len(v.Values) == 0 && s.namesValueType(v.Type) {
+		if s.isZeroValueVarDecl(v) {
 			s.report(v)
 		}
 	}
+}
+
+// isNewOfGuardedType matches `new(SessionDetector)`.
+func (s *literalScan) isNewOfGuardedType(call *ast.CallExpr) bool {
+	id, ok := call.Fun.(*ast.Ident)
+	if !ok || id.Name != "new" || len(call.Args) != 1 {
+		return false
+	}
+	return s.namesValueType(call.Args[0])
+}
+
+// isZeroValueVarDecl matches `var d SessionDetector` with no initialiser. With
+// one, the value came from somewhere the scan already judges on its own merits.
+func (s *literalScan) isZeroValueVarDecl(spec *ast.ValueSpec) bool {
+	if spec.Type == nil || len(spec.Values) != 0 {
+		return false
+	}
+	return s.namesValueType(spec.Type)
 }
 
 // allocatorDecl returns the allowed allocator's declaration in this file, or
@@ -544,14 +564,14 @@ func assertAllocatorLeavesNothingUnusable(t *testing.T, g guardedConstruction) {
 	for _, path := range g.paths() {
 		t.Run(path.name, func(t *testing.T) {
 			v := path.value.Elem()
-			seen := map[string]bool{}
-			checked := assertNoNilOwnedMaps(t, g, path.name, v, "", seen)
+			w := &nilMapWalk{t: t, g: g, ctor: path.name, seen: map[string]bool{}}
+			checked := w.walk(v, "")
 			if checked == 0 {
 				t.Fatal("no map- or channel-typed fields were checked — the reflection " +
 					"walk is not seeing the struct, so its silence proves nothing")
 			}
 			for name := range g.nilTolerant {
-				if !seen[name] {
+				if !w.seen[name] {
 					t.Errorf("nilTolerant names %s.%s, which is not a map- or channel-typed "+
 						"field of this struct — the exemption grants nothing. Rename or "+
 						"remove it.", g.typeName, name)
@@ -578,7 +598,7 @@ type emptyPermStore struct{}
 func (emptyPermStore) Load() (permission.Set, error) { return permission.Set{}, nil }
 func (emptyPermStore) Save(permission.Set) error     { return nil }
 
-// assertNoNilOwnedMaps walks v's map- and channel-typed fields, descending into
+// nilMapWalk walks a construction's map- and channel-typed fields, descending into
 // embedded structs (whose own fields are promoted, so a nil map inside one is
 // indistinguishable at the use site from a nil map on the outer struct).
 //
@@ -590,33 +610,38 @@ func (emptyPermStore) Save(permission.Set) error     { return nil }
 // mustBeNonZero polices exactly that. Two maps in one table disagreeing about
 // whether their keys are verified is the kind of asymmetry that reads as a
 // decision when it is an omission.
-func assertNoNilOwnedMaps(t *testing.T, g guardedConstruction, ctor string, v reflect.Value, prefix string, seen map[string]bool) int {
-	t.Helper()
+type nilMapWalk struct {
+	t    *testing.T
+	g    guardedConstruction
+	ctor string
+	seen map[string]bool // every map/chan field name reached, at any depth
+}
+
+func (w *nilMapWalk) walk(v reflect.Value, prefix string) int {
+	w.t.Helper()
 	typ := v.Type()
 	checked := 0
 	for i := range typ.NumField() {
 		f := typ.Field(i)
 		name := prefix + f.Name
 		if f.Anonymous && f.Type.Kind() == reflect.Struct {
-			checked += assertNoNilOwnedMaps(t, g, ctor, v.Field(i), name+".", seen)
+			checked += w.walk(v.Field(i), name+".")
 			continue
 		}
-		switch f.Type.Kind() {
-		case reflect.Map, reflect.Chan:
-		default:
+		if f.Type.Kind() != reflect.Map && f.Type.Kind() != reflect.Chan {
 			continue
 		}
-		seen[name] = true
-		if reason, exempt := g.nilTolerant[name]; exempt {
-			t.Logf("%s: nil tolerated — %s", name, reason)
+		w.seen[name] = true
+		if reason, exempt := w.g.nilTolerant[name]; exempt {
+			w.t.Logf("%s: nil tolerated — %s", name, reason)
 			continue
 		}
 		checked++
 		if v.Field(i).IsNil() {
-			t.Errorf("%s leaves %s (%s) nil. Every write to it panics with "+
+			w.t.Errorf("%s leaves %s (%s) nil. Every write to it panics with "+
 				"\"assignment to entry in nil map\", far from here. Either allocate it "+
 				"in the allocator, or add it to nilTolerant with the reason it is "+
-				"safe to leave nil (#1400, #1450).", ctor, name, f.Type)
+				"safe to leave nil (#1400, #1450).", w.ctor, name, f.Type)
 		}
 	}
 	return checked
@@ -649,6 +674,112 @@ func assertNonZeroFields(t *testing.T, g guardedConstruction, ctor string, v ref
 // The shape corpus — locks on what the source scan must and must not report
 // ---------------------------------------------------------------------------
 
+// literalShapes is the corpus itself, lifted out of the test body so the
+// assertions stay readable beside it rather than under a hundred lines of
+// data. Each case is a whole Go file: __TYPE__ is substituted with the guarded
+// type's name and __ALLOC__ with its allocator's, so every shape runs against
+// both rows of the table.
+func literalShapes() []struct {
+	name string
+	src  string
+	want int // offenders the scan must report
+} {
+	return []struct {
+		name string
+		src  string
+		want int // offenders the scan must report
+	}{
+		// ---- caught: the plain spellings -------------------------------
+		{"bare pointer in a function", `package p
+	func f() { _ = &__TYPE__{} }`, 1},
+		{"bare value literal in a function", `package p
+	func f() { _ = __TYPE__{} }`, 1},
+		{"package-scope var", `package p
+	var x = &__TYPE__{}`, 1},
+		{"struct field value spelling its own type", `package p
+	var x = struct{ d *__TYPE__ }{d: &__TYPE__{}}`, 1},
+		{"returned from a package-scope closure", `package p
+	var x = func() *__TYPE__ { return &__TYPE__{} }`, 1},
+
+		// ---- caught: elision, one level (#1444's cases, as locks) ------
+		{"slice element, type elided", `package p
+	var x = []*__TYPE__{{}}`, 1},
+		{"map value, type elided", `package p
+	var x = map[string]*__TYPE__{"a": {}}`, 1},
+		{"array element, type elided", `package p
+	var x = [2]*__TYPE__{{}, {}}`, 2},
+		{"map key, type elided", `package p
+	var x = map[*__TYPE__]bool{{}: true}`, 1},
+
+		// ---- caught: elision behind an INDEX KEY (the #1450 regression) --
+		{"keyed slice element", `package p
+	var x = []*__TYPE__{0: {}}`, 1},
+		{"keyed array element", `package p
+	var x = [3]*__TYPE__{1: {}}`, 1},
+
+		// ---- caught: elision, more than one level ----------------------
+		{"slice of slice, elided twice", `package p
+	var x = [][]*__TYPE__{{{}}}`, 1},
+		{"map of slice, elided twice", `package p
+	var x = map[string][]*__TYPE__{"a": {{}}}`, 1},
+		{"pointer to a container element", `package p
+	var x = []*[]*__TYPE__{{{}}}`, 1},
+
+		// ---- caught: through type declarations -------------------------
+		{"defined container type, package scope", `package p
+	type detList []*__TYPE__
+	var x = detList{{}}`, 1},
+		{"type alias, package scope", `package p
+	type detAlias = __TYPE__
+	var x = &detAlias{}`, 1},
+		{"defined container type, FUNCTION scope", `package p
+	func f() {
+		type detList []*__TYPE__
+		_ = detList{{}}
+	}`, 1},
+		{"type alias, FUNCTION scope", `package p
+	func f() {
+		type detAlias = __TYPE__
+		_ = detAlias{}
+	}`, 1},
+
+		// ---- caught: qualified from outside the package ----------------
+		{"qualified selector", `package p
+	var x = &services.__TYPE__{}`, 1},
+		{"qualified selector under an import alias", `package p
+	var x = &svc.__TYPE__{}`, 1},
+
+		// ---- caught: the zero value without any literal at all ---------
+		{"new(T)", `package p
+	func f() { _ = new(__TYPE__) }`, 1},
+		{"var of the struct type, no initialiser", `package p
+	func f() { var d __TYPE__; _ = d }`, 1},
+
+		// ---- reported exactly once, not twice --------------------------
+		{"explicit element type inside a container", `package p
+	var x = []*__TYPE__{&__TYPE__{}}`, 1},
+
+		// ---- NOT reported: ordinary, correct code ----------------------
+		{"table-driven struct holding constructor results", `package p
+	var x = []struct{ d *__TYPE__ }{{d: __ALLOC__()}}`, 0},
+		{"map holding constructor results", `package p
+	var x = map[string]*__TYPE__{"a": __ALLOC__()}`, 0},
+		{"slice holding constructor results", `package p
+	var x = []*__TYPE__{__ALLOC__()}`, 0},
+		{"empty elided containers", `package p
+	var x = [][]*__TYPE__{{}}
+	var y = map[string][]*__TYPE__{"a": {}}`, 0},
+		{"new of a POINTER to the struct", `package p
+	func f() { _ = new(*__TYPE__) }`, 0},
+		{"var of a POINTER to the struct", `package p
+	func f() { var d *__TYPE__; _ = d }`, 0},
+		{"a var of the struct type WITH an initialiser", `package p
+	func f() { var d *__TYPE__ = __ALLOC__(); _ = d }`, 0},
+		{"a differently-named type", `package p
+	var x = &__TYPE__Stub{}`, 0},
+	}
+}
+
 // TestSourceScanCatchesEveryKnownShape is the permanent record of every
 // construction spelling the scan is required to catch, and every ordinary shape
 // it is required to leave alone.
@@ -669,100 +800,7 @@ func assertNonZeroFields(t *testing.T, g guardedConstruction, ctor string, v ref
 // which is what keeps the two rows honestly symmetric: a hardening that only
 // reached one of them fails here.
 func TestSourceScanCatchesEveryKnownShape(t *testing.T) {
-	cases := []struct {
-		name string
-		src  string
-		want int // offenders the scan must report
-	}{
-		// ---- caught: the plain spellings -------------------------------
-		{"bare pointer in a function", `package p
-func f() { _ = &__TYPE__{} }`, 1},
-		{"bare value literal in a function", `package p
-func f() { _ = __TYPE__{} }`, 1},
-		{"package-scope var", `package p
-var x = &__TYPE__{}`, 1},
-		{"struct field value spelling its own type", `package p
-var x = struct{ d *__TYPE__ }{d: &__TYPE__{}}`, 1},
-		{"returned from a package-scope closure", `package p
-var x = func() *__TYPE__ { return &__TYPE__{} }`, 1},
-
-		// ---- caught: elision, one level (#1444's cases, as locks) ------
-		{"slice element, type elided", `package p
-var x = []*__TYPE__{{}}`, 1},
-		{"map value, type elided", `package p
-var x = map[string]*__TYPE__{"a": {}}`, 1},
-		{"array element, type elided", `package p
-var x = [2]*__TYPE__{{}, {}}`, 2},
-		{"map key, type elided", `package p
-var x = map[*__TYPE__]bool{{}: true}`, 1},
-
-		// ---- caught: elision behind an INDEX KEY (the #1450 regression) --
-		{"keyed slice element", `package p
-var x = []*__TYPE__{0: {}}`, 1},
-		{"keyed array element", `package p
-var x = [3]*__TYPE__{1: {}}`, 1},
-
-		// ---- caught: elision, more than one level ----------------------
-		{"slice of slice, elided twice", `package p
-var x = [][]*__TYPE__{{{}}}`, 1},
-		{"map of slice, elided twice", `package p
-var x = map[string][]*__TYPE__{"a": {{}}}`, 1},
-		{"pointer to a container element", `package p
-var x = []*[]*__TYPE__{{{}}}`, 1},
-
-		// ---- caught: through type declarations -------------------------
-		{"defined container type, package scope", `package p
-type detList []*__TYPE__
-var x = detList{{}}`, 1},
-		{"type alias, package scope", `package p
-type detAlias = __TYPE__
-var x = &detAlias{}`, 1},
-		{"defined container type, FUNCTION scope", `package p
-func f() {
-	type detList []*__TYPE__
-	_ = detList{{}}
-}`, 1},
-		{"type alias, FUNCTION scope", `package p
-func f() {
-	type detAlias = __TYPE__
-	_ = detAlias{}
-}`, 1},
-
-		// ---- caught: qualified from outside the package ----------------
-		{"qualified selector", `package p
-var x = &services.__TYPE__{}`, 1},
-		{"qualified selector under an import alias", `package p
-var x = &svc.__TYPE__{}`, 1},
-
-		// ---- caught: the zero value without any literal at all ---------
-		{"new(T)", `package p
-func f() { _ = new(__TYPE__) }`, 1},
-		{"var of the struct type, no initialiser", `package p
-func f() { var d __TYPE__; _ = d }`, 1},
-
-		// ---- reported exactly once, not twice --------------------------
-		{"explicit element type inside a container", `package p
-var x = []*__TYPE__{&__TYPE__{}}`, 1},
-
-		// ---- NOT reported: ordinary, correct code ----------------------
-		{"table-driven struct holding constructor results", `package p
-var x = []struct{ d *__TYPE__ }{{d: __ALLOC__()}}`, 0},
-		{"map holding constructor results", `package p
-var x = map[string]*__TYPE__{"a": __ALLOC__()}`, 0},
-		{"slice holding constructor results", `package p
-var x = []*__TYPE__{__ALLOC__()}`, 0},
-		{"empty elided containers", `package p
-var x = [][]*__TYPE__{{}}
-var y = map[string][]*__TYPE__{"a": {}}`, 0},
-		{"new of a POINTER to the struct", `package p
-func f() { _ = new(*__TYPE__) }`, 0},
-		{"var of a POINTER to the struct", `package p
-func f() { var d *__TYPE__; _ = d }`, 0},
-		{"a var of the struct type WITH an initialiser", `package p
-func f() { var d *__TYPE__ = __ALLOC__(); _ = d }`, 0},
-		{"a differently-named type", `package p
-var x = &__TYPE__Stub{}`, 0},
-	}
+	cases := literalShapes()
 
 	total := 0
 	for _, g := range guardedConstructions() {
