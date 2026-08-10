@@ -83,6 +83,22 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `hookjson` adapter was an import that no rule in the table forbade; the
   shared code went to a new leaf (`core/pkg/jsonc`) and the missing rule was
   added with it.
+  A second architecture rule lives beside it in
+  `core/architecture_hookbody_test.go` (#1389) and is deliberately a separate
+  file: the layering table asks a question about the IMPORT GRAPH, while that
+  one asks which EXPRESSIONS a function may contain, and needs
+  `NeedSyntax|NeedTypes|NeedTypesInfo` over a narrow pattern rather than
+  `NeedName|NeedImports` over the module. It enforces that inside
+  `core/adapters/inbound/agents/...` an inbound `*http.Request`'s body may be
+  read only by `hookjson.DecodeConfined` — see "Hook path confinement" below
+  for why. Its corpus is `core/architecture_hookbody_shapes_test.go`: one file
+  per spelling (decoder in a variable, `io.ReadAll`, an aliased body, a helper
+  in another file, `r.FormValue`, a request stashed in a struct field) pinned
+  to the verdict the detector must return, plus two `want:false` cases —
+  `*http.Response.Body` and `r.Method` — that pin the false positives a
+  name-based rule would produce. Every case asserts the construct it plants is
+  actually present in its own source before any verdict is checked, because a
+  corpus that quietly stops containing its own test cases reads as a pass.
 - Architecture score: `tools/ars-gate.sh` flags it when the Agent Readiness
   Score (composite or any category) regresses vs `origin/main` — advisory,
   not a merge gate: it runs as a PR check (`.github/workflows/ars-gate.yml`,
@@ -142,12 +158,14 @@ Before marking a ticket done, run the full suite — every layer must pass:
   inbound hook body is caller-supplied on a local, unauthenticated endpoint, so
   a receiver confines it to the adapter's own declared transcript roots
   (`agent.Source`'s `FilesUnderRoot.AllRootsFor`, never a second list that can
-  drift) before anything downstream opens it. Five obligations: an in-tree path
-  is still accepted (the vacuity guard); and an out-of-tree path, a `..`
+  drift) before anything downstream opens it. Six obligations: an in-tree path
+  is still accepted (the vacuity guard); an out-of-tree path, a `..`
   traversal, a symlink planted inside the root and a *dangling* symlink inside
-  the root are each refused, logged and counted.
-  A sixth — "the adapter's production constructor confines, not merely the
-  handler the test assembled" — was retired in #1390, and how it went is the
+  the root are each refused, logged and counted; and for a path that IS
+  accepted, the string dispatched downstream is the confined spelling rather
+  than the caller's (#1389 — see the end of this bullet).
+  A DIFFERENT sixth — "the adapter's production constructor confines, not merely
+  the handler the test assembled" — was retired in #1390, and how it went is the
   point rather than that it went. It existed because reaching the rejection
   counter meant calling a second, test-shaped constructor
   (`NewHookHandlerWithConfiner` and friends), so the handler the other five
@@ -184,6 +202,41 @@ Before marking a ticket done, run the full suite — every layer must pass:
   contract asserts the 2xx so a new receiver inherits the rule instead of
   re-deciding it (#1361, #1364). `hookjson.RejectPath` is the single place it
   is implemented, and its doc comment records what was and was not observed.
+  Since #1389 the contract is only half the enforcement, and the weaker half: a
+  contract can fail only for an adapter that WIRED it, so a receiver nobody
+  wired it for is invisible to it — which is how the statusline endpoint shipped
+  unconfined in the first place. `hookjson.DecodeConfined` welds the body decode
+  to the confinement (the confiner is an argument to the decode, so a receiver
+  cannot reach its payload without supplying one), and
+  `core/architecture_hookbody_test.go` fails the build if anything else under
+  `core/adapters/inbound/agents/...` reads an inbound request body. Two arms:
+  none outside `hookjson`, and **exactly one** inside it, in `DecodeConfined` —
+  the second is what stops the exemption being a hole, and doubles as the
+  vacuity guard. There is deliberately **no exemption list** (neither has
+  `architecture_test.go`): an endpoint that genuinely carries no path amends the
+  rule in a reviewable diff. The archaeology — why the rule #1389 proposed
+  (keying on files referencing a `HookEndpointPath`) selects zero receiver files
+  and would have passed against the very bug it was written for, and the four
+  things the implemented rule does not cover — is in that file's header, next to
+  the code it constrains, rather than restated here.
+  Obligation 6 is #1389's too, and note it is NOT the #1390 one described above:
+  that one policed WIRING and was replaced by a type guarantee, this one polices
+  the VALUE that travels and cannot be. Obligations 1-5 are all about the
+  accept/refuse DECISION, and every one of them is satisfied by a receiver that
+  decides correctly and then forwards the caller's own string anyway — measured,
+  by replacing a receiver's write-back with a no-op and watching the whole suite
+  stay green. Two independent layers now catch it, and each was seen red with
+  the other disabled: `DecodeConfined` verifies its own postcondition (the
+  caller's `get`/`set` pair must address the same field, else fail closed), and
+  the contract posts an in-tree path spelled with a redundant `/./` and asserts
+  the dispatched string is not the caller's. The contract checks the *spelling*
+  rather than string-equality with the fixture, because the confiner rebuilds an
+  accepted path on the adapter's DECLARED root — which on macOS is the `/var`
+  spelling of a `/private/var` temp dir, and a naive comparison fails there for
+  a reason unrelated to the obligation.
+  `DecodeConfined` also bounds the body (`http.MaxBytesReader`, 1 MiB): these
+  endpoints are unauthenticated and local, and sharing one decode is what lets
+  every receiver, present and future, inherit the bound.
 - Hook version floors: `contracttesting.AssertHookVersionGate`
   (`core/internal/contracttesting/hook_version.go`) is the static half of
   #1365 — a hooks permission declares the minimum upstream CLI version its

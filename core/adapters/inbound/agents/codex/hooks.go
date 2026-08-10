@@ -24,7 +24,6 @@
 package codex
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"runtime"
@@ -138,37 +137,43 @@ func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logge
 	// install has a working channel that this counter must not call dead.
 	hookjson.ObserveHookReceipt(AdapterName)
 
-	var payload codexHookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)
-		return
-	}
-
 	// Resolving the session id opens and parses the Codex transcript file — a
 	// transcript read, so it must be gated behind the "transcripts" consent,
 	// not merely the "hooks" write consent (issue #1174). A hooks-granted /
 	// transcripts-denied session is not monitored anyway, so dropping the hook
 	// here is both consent-correct and behaviourally harmless.
 	//
-	// The consent check comes BEFORE confinement so a denied session still
-	// yields a quiet 200: a user who has not granted transcript access should
-	// not have hooks failing at them, and the path is never resolved on that
-	// branch anyway.
+	// The consent check comes BEFORE the decode, and so before confinement, so
+	// a denied session still yields a quiet 200: a user who has not granted
+	// transcript access should not have hooks failing at them, and the path is
+	// never resolved on that branch. It used to sit between the decode and the
+	// confinement; #1389 welded those two into one call, and this moved above
+	// the pair rather than being folded into it. What consent gates is reading
+	// the USER's data, and a POST body is not that — the only behavioural
+	// difference is that a malformed body from a transcripts-denied session now
+	// gets the same quiet 200 as a well-formed one instead of a 400. The
+	// receipt above deliberately stays put: it is counted against the "hooks"
+	// consent only, since a hooks-granted / transcripts-denied install has a
+	// working channel this counter must not call dead (#1368).
 	if gate != nil && !gate.Granted(AdapterName, PermissionKeyTranscripts) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+
 	// transcript_path arrives in an HTTP body on a local, unauthenticated
 	// endpoint, so it is untrusted: any local process could otherwise steer the
-	// daemon into opening a file of its choosing. Confine it to the declared
-	// sessions tree before any read, and carry the confined path downstream so
-	// the target reads that and not the caller's string (issue #1361).
-	transcriptPath, reason := confiner.Confine(payload.TranscriptPath)
-	if reason != hookjson.RejectNone {
-		hookjson.RejectPath(w, log, logComponentHookReceiver, payload.TranscriptPath, reason)
+	// daemon into opening a file of its choosing. DecodeConfined reads the body
+	// and confines the path in one step that cannot be half-taken, and
+	// overwrites the caller's string with the confined one so the target reads
+	// that (issues #1361, #1389). It has already answered when it returns false.
+	var payload codexHookPayload
+	if !hookjson.DecodeConfined(w, r, log, logComponentHookReceiver, confiner, &payload,
+		func(p *codexHookPayload) string { return p.TranscriptPath },
+		func(p *codexHookPayload, confined string) { p.TranscriptPath = confined },
+	) {
 		return
 	}
-	payload.TranscriptPath = transcriptPath
+	transcriptPath := payload.TranscriptPath
 
 	sessionID := sessionIDFromPath(transcriptPath)
 	if sessionID == "" {
