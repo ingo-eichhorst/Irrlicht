@@ -72,16 +72,15 @@ struct GhosttyActivator: HostActivator {
             Self.logger.info("ghostty: no installed app for bundle id \(self.bundleID, privacy: .public)")
             return false
         }
-        let bid = bundleID
         DispatchQueue.global(qos: .userInitiated).async {
-            Self.selectSurface(cwd: cwd, bundleID: bid)
+            Self.selectSurface(cwd: cwd)
         }
         return true
     }
 
     // MARK: - Selection
 
-    private static func selectSurface(cwd: String, bundleID: String) {
+    private static func selectSurface(cwd: String) {
         guard let raw = AppleScriptRunner.run(enumerateSurfacesSource, tag: "Ghostty") else {
             // Either Ghostty predates the scripting dictionary, or Automation
             // consent for Ghostty was denied. Both are the user's environment
