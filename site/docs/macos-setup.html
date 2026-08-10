@@ -178,6 +178,28 @@ listen_on unix:/tmp/kitty-{kitty_pid}</code></pre>
         macOS does not support Linux-style abstract sockets, so a filesystem path (<code>unix:/tmp/kitty</code>) is required &mdash; the <code>unix:@</code> syntax used on Linux will not work here.
       </div>
 
+      <!-- ── Ghostty terminal ── -->
+      <h2 id="ghostty">Ghostty Terminal &mdash; Tab Focus by Directory</h2>
+
+      <p>Ghostty needs no configuration, but it is worth knowing how it picks the tab, because it works differently from every other terminal Irrlicht supports.</p>
+
+      <p>iTerm2, Terminal.app and Kitty each hand every tab a stable identifier that Irrlicht captures when a session starts (<code>$ITERM_SESSION_ID</code>, the controlling TTY, <code>$KITTY_WINDOW_ID</code>), so the jump lands on exactly the right tab every time. Ghostty publishes no such identifier &mdash; not to the shell, and not through its scripting interface. What it does publish is each tab's <strong>current working directory</strong>, so that is what Irrlicht matches the session against.</p>
+
+      <div class="callout callout-info">
+        <strong>First click asks for permission</strong>
+        macOS shows an <strong>Automation</strong> prompt the first time Irrlicht controls Ghostty, the same as it does for iTerm2 and Terminal.app. Allow it, or the click will only bring Ghostty to the front. You can change the answer later in <em>System Settings &rarr; Privacy &amp; Security &rarr; Automation</em>.
+      </div>
+
+      <div class="callout">
+        <strong>Two agents in one directory</strong>
+        A working directory is not unique. If two Ghostty tabs sit in the same folder &mdash; two agents on one repo, say &mdash; nothing Ghostty exposes can tell them apart, so Irrlicht brings the window forward and leaves the tab selection alone rather than guessing and dropping you into the other agent's session.
+      </div>
+
+      <div class="callout">
+        <strong>Requires shell integration</strong>
+        Ghostty reports a tab's directory through its shell integration, which is on by default. If you have disabled the <code>path</code> feature (via <code>shell-integration-features</code> in <code>~/.config/ghostty/config</code>), tabs report a stale directory and clicks fall back to raising the window. Tab focus was verified against Ghostty 1.3.1; older releases without a scripting dictionary fall back the same way.
+      </div>
+
       <!-- ── Bottom nav ── -->
       <nav class="docs-nav-bottom" aria-label="Previous and next page">
         <a href="configuration.html">
