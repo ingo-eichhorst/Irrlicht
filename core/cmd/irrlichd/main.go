@@ -131,6 +131,24 @@ func unknownFlagMessage(name string) string {
 	return fmt.Sprintf("irrlichd: unknown flag %q\nknown flags: %s\n", name, strings.Join(knownFlags, " "))
 }
 
+// unknownSubcommandMessage is its counterpart for a positional token (#1373).
+func unknownSubcommandMessage(name string) string {
+	return fmt.Sprintf("irrlichd: unknown subcommand %q\n", name)
+}
+
+// reject is the shared tail of the two branches that refuse a command line.
+//
+// The message goes to stderr and NOTHING goes to stdout, which is a contract
+// rather than a style choice. Either branch can be reached by a hook-shaped
+// invocation on a future binary that renamed the verb or the flag out from
+// under an installed hook line, and there an empty stdout is what keeps the
+// non-zero exit from reading as a "deny" decision to a fail-closed pre-tool
+// hook. Stated once here so the two callers cannot drift apart on it.
+func reject(msg string) int {
+	fmt.Fprint(os.Stderr, msg)
+	return 2
+}
+
 // cliAction is what one irrlichd command line selects.
 type cliAction int
 
@@ -242,20 +260,11 @@ func runCLIAction(action cliAction, args []string) int {
 	case actionDiagnose:
 		runDiagnose()
 	case actionUnknownFlag:
-		// stderr and exit 2, exactly like actionUnknownSubcommand below and for
-		// the same reason: stdout stays empty so a non-zero exit can never read
-		// as a "deny" decision to a fail-closed pre-tool hook.
 		name, _ := firstUnknownFlag(args)
-		fmt.Fprint(os.Stderr, unknownFlagMessage(name))
-		return 2
+		return reject(unknownFlagMessage(name))
 	case actionUnknownSubcommand:
-		// stderr, never stdout, and the message is the only output: if this is
-		// ever reached by a hook-shaped invocation on a future binary that
-		// renamed the verb, an empty stdout is what keeps a non-zero exit from
-		// reading as a "deny" decision to a fail-closed pre-tool hook.
 		name, _ := firstPositional(args)
-		fmt.Fprintf(os.Stderr, "irrlichd: unknown subcommand %q\n", name)
-		return 2
+		return reject(unknownSubcommandMessage(name))
 	}
 	return 0
 }

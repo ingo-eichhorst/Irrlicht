@@ -54,6 +54,21 @@ func TestUnknownFlagMessageNamesTheFlag(t *testing.T) {
 // would slip past a pattern written for hasFlagIn(args, "--x"). Same technique,
 // and for the same reason, as TestPermissionWizardIsBuiltFromConsentCatalog.
 func TestKnownFlagsCoversEveryFlagTheDaemonReads(t *testing.T) {
+	read := flagsTheDaemonReads(t)
+	if len(read) == 0 {
+		t.Fatal("parsed the package and found no hasFlag call with a literal flag at all; the scanner has drifted from the source, so this test is passing vacuously")
+	}
+	for _, name := range read {
+		if !hasFlagIn(knownFlags, name) {
+			t.Errorf("the daemon reads flag %q but knownFlags does not list it: selectAction will reject it with exit 2 before its reader ever runs", name)
+		}
+	}
+}
+
+// flagsTheDaemonReads parses every non-test file in this package and returns
+// the flag names passed as literals to hasFlag / hasFlagIn.
+func flagsTheDaemonReads(t *testing.T) []string {
+	t.Helper()
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
 		return !strings.HasSuffix(fi.Name(), "_test.go")
@@ -66,42 +81,40 @@ func TestKnownFlagsCoversEveryFlagTheDaemonReads(t *testing.T) {
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Files {
 			ast.Inspect(file, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				fn, ok := call.Fun.(*ast.Ident)
-				if !ok || (fn.Name != "hasFlag" && fn.Name != "hasFlagIn") {
-					return true
-				}
-				// Every string LITERAL passed to either function is a flag the
-				// daemon reads. firstUnknownFlag's own hasFlagIn(knownFlags,
-				// arg) contributes nothing, which is right: it is the lookup,
-				// not a read.
-				for _, arg := range call.Args {
-					lit, ok := arg.(*ast.BasicLit)
-					if !ok || lit.Kind != token.STRING {
-						continue
-					}
-					name, err := strconv.Unquote(lit.Value)
-					if err != nil {
-						continue
-					}
-					read = append(read, name)
-				}
+				read = append(read, literalFlagArgs(n)...)
 				return true
 			})
 		}
 	}
+	return read
+}
 
-	if len(read) == 0 {
-		t.Fatal("parsed the package and found no hasFlag call with a literal flag at all; the scanner has drifted from the source, so this test is passing vacuously")
+// literalFlagArgs returns the string literals passed to a hasFlag / hasFlagIn
+// call, and nil for any other node.
+//
+// Only literals count, which is what keeps firstUnknownFlag's own
+// hasFlagIn(knownFlags, arg) out of the result: that call is the lookup, not a
+// read, and it passes no flag name.
+func literalFlagArgs(n ast.Node) []string {
+	call, ok := n.(*ast.CallExpr)
+	if !ok {
+		return nil
 	}
-	for _, name := range read {
-		if !hasFlagIn(knownFlags, name) {
-			t.Errorf("the daemon reads flag %q but knownFlags does not list it: selectAction will reject it with exit 2 before its reader ever runs", name)
+	fn, ok := call.Fun.(*ast.Ident)
+	if !ok || (fn.Name != "hasFlag" && fn.Name != "hasFlagIn") {
+		return nil
+	}
+	var names []string
+	for _, arg := range call.Args {
+		lit, ok := arg.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			continue
+		}
+		if name, err := strconv.Unquote(lit.Value); err == nil {
+			names = append(names, name)
 		}
 	}
+	return names
 }
 
 // runIrrlichd runs the real binary with args under a timeout and returns its
