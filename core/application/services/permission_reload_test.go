@@ -3,7 +3,9 @@ package services_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
@@ -30,7 +32,7 @@ func grantedStore(agentName, key string) *mockPermStore {
 }
 
 // reloadService builds a started service over the given store.
-func reloadService(t *testing.T, store *mockPermStore, c *effectCounter, mode string) (*services.PermissionService, *mockPush) {
+func reloadService(t *testing.T, store outbound.PermissionStore, c *effectCounter, mode string) (*services.PermissionService, *mockPush) {
 	t.Helper()
 	push := &mockPush{}
 	svc := services.NewPermissionService(services.PermissionServiceDeps{
@@ -172,6 +174,9 @@ func TestReloadNeverGrantsWhatTheStoreDoesNotSay(t *testing.T) {
 			set: grantedStore("testagent", "config").set,
 			err: errors.New("permissions.json is not valid JSON"),
 		}
+		// NewPermissionService loads cleanly; the file goes bad afterwards, so
+		// the flip has to happen between construction and the reload. That is
+		// why this cannot use reloadService, which does both.
 		svc := services.NewPermissionService(services.PermissionServiceDeps{
 			Agents:    []agent.Agent{testAgentDecl(c)},
 			Store:     store,
@@ -180,7 +185,6 @@ func TestReloadNeverGrantsWhatTheStoreDoesNotSay(t *testing.T) {
 			Mode:      config.PermissionModeAsk,
 			Registrar: &mockRegistrar{},
 		})
-		// Loaded cleanly at construction, then the file went bad.
 		store.failing = true
 		svc.Start(context.Background())
 
@@ -291,5 +295,88 @@ func TestReloadWithNothingChangedIsSilent(t *testing.T) {
 	}
 	if n := push.count(outbound.PushTypePermissionsUpdated); n != 0 {
 		t.Errorf("broadcast %d permissions_updated for a no-op reload, want 0", n)
+	}
+}
+
+// slowSaveStore delays between serving a Load and accepting the Save, widening
+// the window in which Answer has moved memory but not yet persisted. That
+// window is real in production — Answer runs a `claude --version` probe and a
+// settings.json rewrite between its unlock and its Save — this just makes it
+// deterministic.
+type slowSaveStore struct {
+	mu       sync.Mutex
+	set      permission.Set
+	saveHold time.Duration
+}
+
+func (s *slowSaveStore) Load() (permission.Set, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.set.Clone(), nil
+}
+
+func (s *slowSaveStore) Save(set permission.Set) error {
+	time.Sleep(s.saveHold)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.set = set.Clone()
+	return nil
+}
+
+func (s *slowSaveStore) current() permission.Set {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.set.Clone()
+}
+
+// TestReloadDoesNotResurrectAConcurrentDenial is the #570 arm of the race a
+// reviewer found in the first version of ReloadFromStore.
+//
+// A reload that reads the store while an Answer has moved memory to denied but
+// not yet saved would adopt the stale "granted" straight back — re-running
+// Apply on a permission the user had just refused, and leaving memory and disk
+// permanently disagreeing. Not writing to the store is not sufficient to
+// prevent that; serializing the two whole sequences is.
+func TestReloadDoesNotResurrectAConcurrentDenial(t *testing.T) {
+	granted := permission.Set{}
+	granted.Put("testagent", "config", permission.StateGranted)
+	store := &slowSaveStore{set: granted, saveHold: 150 * time.Millisecond}
+
+	c := &effectCounter{}
+	svc, _ := reloadService(t, store, c, config.PermissionModeAsk)
+	if !svc.Granted("testagent", "config") {
+		t.Fatal("precondition: the stored grant is in memory")
+	}
+
+	// The user denies it in the wizard...
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := svc.Answer([]services.PermissionAnswer{
+			{Agent: "testagent", Permission: "config", Grant: false},
+		}); err != nil {
+			t.Errorf("Answer: %v", err)
+		}
+	}()
+
+	// ...while another process nudges the daemon to re-read the store, landing
+	// inside Answer's not-yet-saved window.
+	time.Sleep(40 * time.Millisecond)
+	if _, err := svc.ReloadFromStore(); err != nil {
+		t.Fatalf("ReloadFromStore: %v", err)
+	}
+	wg.Wait()
+
+	if svc.Granted("testagent", "config") {
+		t.Error("a reload racing a denial resurrected the grant — the user's refusal was undone (#570)")
+	}
+	if got := store.current().Get("testagent", "config"); got != permission.StateDenied {
+		t.Errorf("store holds %q, want denied", got)
+	}
+	// The end state must be self-consistent: memory and disk agreeing, and the
+	// permission's effect removed rather than re-applied.
+	if c.lastEffect() != "remove" {
+		t.Errorf("last effect was %q, want remove — a denied permission must not end up applied", c.lastEffect())
 	}
 }

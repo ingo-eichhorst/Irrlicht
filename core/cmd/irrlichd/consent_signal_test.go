@@ -5,7 +5,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -86,15 +89,30 @@ func TestConsentSignalDoesNotHangOnAnUnresponsiveDaemon(t *testing.T) {
 	}
 	defer ln.Close()
 	// Accept and never answer.
+	var conns []net.Conn
+	var connMu sync.Mutex
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			defer conn.Close()
+			// Held, not closed per-iteration: the point is a daemon that
+			// accepts and never answers. Closed in the cleanup below rather
+			// than by a defer inside the loop, which would only run at
+			// goroutine exit anyway.
+			connMu.Lock()
+			conns = append(conns, conn)
+			connMu.Unlock()
 		}
 	}()
+	t.Cleanup(func() {
+		connMu.Lock()
+		defer connMu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	})
 
 	done := make(chan struct{})
 	go func() {
@@ -122,4 +140,138 @@ func closedLoopbackAddr(t *testing.T) string {
 		t.Fatalf("close listener: %v", err)
 	}
 	return addr
+}
+
+// TestConsentSignalWarnsWhenTheDaemonIsInGrantAllMode: grant-all is the one
+// mode where ReloadFromStore is a deliberate no-op, so the daemon will
+// re-install the entries the user just removed. The CLI must say so instead of
+// printing its success line — this is the mode in which the mechanism cannot
+// work, and it is also the mode the onboarding recording rig runs in against
+// the user's real home.
+func TestConsentSignalWarnsWhenTheDaemonIsInGrantAllMode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"mode":"grant-all","agents":[]}`))
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	postConsentReload(&out, srv.URL+consentReloadPath, consentSignalTimeout)
+
+	got := out.String()
+	if strings.Contains(got, "Notified the running daemon to reload consent") {
+		t.Errorf("grant-all reported as a successful reload: %q", got)
+	}
+	if !strings.Contains(got, "IRRLICHT_PERMISSION_MODE") || !strings.Contains(got, "re-install") {
+		t.Errorf("output = %q, want a warning naming the mode and the consequence", got)
+	}
+}
+
+// TestConsentSignalAskModeStillReportsSuccess is the vacuity guard for the
+// test above: a handler that answered anything at all would otherwise satisfy
+// "did not print success".
+func TestConsentSignalAskModeStillReportsSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"mode":"ask","agents":[]}`))
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	postConsentReload(&out, srv.URL+consentReloadPath, consentSignalTimeout)
+
+	if !strings.Contains(out.String(), "Notified the running daemon to reload consent") {
+		t.Errorf("ask mode did not report success: %q", out.String())
+	}
+}
+
+// TestConsentSignalSkipsWhenNothingNamesADaemon pins the gate that keeps an
+// uninstall in an isolated tree from reaching into an unrelated daemon.
+//
+// Without it the address ladder falls through to the default port 7837 — so a
+// test, or a user running against a temp IRRLICHT_HOME, POSTed to whatever
+// production daemon happened to be listening. The gate is what makes the
+// hermeticity claim in uninstall_hooks_live_daemon_test.go true.
+//
+// It asserts the reported outcome rather than "nothing was hit", deliberately:
+// the only way to observe the ungated behaviour is to have something listening
+// on the default port, and standing a listener up there is the very thing this
+// test exists to stop happening. The gate's own three-rung logic is covered in
+// daemonaddr (TestClientTargetsANamedDaemon); the two tests below are the
+// vacuity guards that it does not simply always skip.
+func TestConsentSignalSkipsWhenNothingNamesADaemon(t *testing.T) {
+	t.Setenv("IRRLICHT_HOME", t.TempDir()) // no addr file under it
+	t.Setenv("IRRLICHT_BIND_ADDR", "")
+
+	var out bytes.Buffer
+	notifyDaemonConsentChanged(&out)
+
+	if !strings.Contains(out.String(), "No running daemon to notify") {
+		t.Errorf("output = %q, want the no-daemon note", out.String())
+	}
+}
+
+// TestConsentSignalSendsWhenAnAddressIsPublished — the addr-file rung.
+func TestConsentSignalSendsWhenAnAddressIsPublished(t *testing.T) {
+	srv, hit := reloadStubDaemon(t)
+
+	home := t.TempDir()
+	t.Setenv("IRRLICHT_HOME", home)
+	t.Setenv("IRRLICHT_BIND_ADDR", "")
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	if err := os.WriteFile(filepath.Join(home, "irrlichd.addr"), []byte(addr+"\n"), 0o600); err != nil {
+		t.Fatalf("write addr file: %v", err)
+	}
+
+	var out bytes.Buffer
+	notifyDaemonConsentChanged(&out)
+
+	select {
+	case <-hit:
+	default:
+		t.Fatalf("the nudge was not delivered to the daemon that published an address; output = %q", out.String())
+	}
+}
+
+// TestConsentSignalSendsWhenBindAddrNamesADaemon — the explicit-configuration
+// rung, which daemonaddr documents as the HIGHEST-trust source.
+//
+// An earlier version of the gate stat'd the addr file directly and so silently
+// discarded IRRLICHT_BIND_ADDR: a developer pointing the CLI at a dev daemon
+// got "No running daemon to notify" from a daemon that was listening and would
+// have answered. Reading the resolution's own provenance instead of
+// re-deriving one rung of it is what fixes that.
+func TestConsentSignalSendsWhenBindAddrNamesADaemon(t *testing.T) {
+	srv, hit := reloadStubDaemon(t)
+
+	t.Setenv("IRRLICHT_HOME", t.TempDir()) // deliberately no addr file
+	t.Setenv("IRRLICHT_BIND_ADDR", strings.TrimPrefix(srv.URL, "http://"))
+
+	var out bytes.Buffer
+	notifyDaemonConsentChanged(&out)
+
+	select {
+	case <-hit:
+	default:
+		t.Fatalf("an explicitly configured IRRLICHT_BIND_ADDR was ignored; output = %q", out.String())
+	}
+}
+
+// reloadStubDaemon stands up a daemon that answers the reload route with an
+// ask-mode snapshot, and a channel that receives once it is hit.
+func reloadStubDaemon(t *testing.T) (*httptest.Server, <-chan struct{}) {
+	t.Helper()
+	hit := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == consentReloadPath {
+			select {
+			case hit <- struct{}{}:
+			default:
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"mode":"ask","agents":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, hit
 }

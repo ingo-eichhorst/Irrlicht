@@ -2,8 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,18 +11,22 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/outbound/filesystem"
+	"irrlicht/core/domain/permission"
 )
 
 // reverifyIntervalForTest is the hook re-verification cadence the child daemon
 // runs at. Short enough that "advance past one interval" is a wait a test can
 // afford, long enough that the loop is not hot-spinning on the config file for
 // the seconds the test lives.
-const reverifyIntervalForTest = 200 * time.Millisecond
+const reverifyIntervalForTest = time.Second
 
 // reinstallWatchWindow is how long the test watches for the entries to come
-// back. Many multiples of the interval, because the failure it is looking for
-// is "the loop repaired them" and one missed tick would read as a pass.
-const reinstallWatchWindow = 3 * time.Second
+// back — three re-verification intervals, because the failure it looks for is
+// "the loop repaired them" and one missed tick would read as a pass. The
+// interval cannot go below config's floor (that timer writes to the user's
+// agent config files), so this is the shortest honest window available.
+const reinstallWatchWindow = 3 * reverifyIntervalForTest
 
 // TestUninstallHooksAgainstLiveDaemon is #1425's end-to-end regression test:
 // `irrlichd --uninstall-hooks`, run by hand in a SECOND process while a daemon
@@ -61,9 +63,9 @@ func TestUninstallHooksAgainstLiveDaemon(t *testing.T) {
 	// Precondition, and the vacuity guard: a granted permission means the boot
 	// install actually wrote the entries. Without this the assertions below
 	// would pass against a daemon that never installed anything.
-	waitFor(t, 15*time.Second, "hook entries to be installed at boot", func() bool {
-		return hookEntriesPresent(settings)
-	})
+	if !pollUntil(t, 15*time.Second, 25*time.Millisecond, func() bool { return hookEntriesPresent(settings) }) {
+		t.Fatalf("the daemon never installed the hook entries into %s at boot", settings)
+	}
 
 	// The defect's trigger: the flag, by hand, in a second process, against the
 	// live daemon.
@@ -75,14 +77,10 @@ func TestUninstallHooksAgainstLiveDaemon(t *testing.T) {
 
 	// Advance past several re-verification intervals. THIS is the assertion the
 	// issue is about: they must stay gone.
-	deadline := time.Now().Add(reinstallWatchWindow)
-	for time.Now().Before(deadline) {
-		if hookEntriesPresent(settings) {
-			t.Fatalf("the running daemon re-installed the hook entries within %s of --uninstall-hooks — "+
-				"its in-memory consent is stale (#1425). %s now contains %q",
-				reinstallWatchWindow, settings, readFileForMessage(settings))
-		}
-		time.Sleep(reverifyIntervalForTest / 4)
+	if pollUntil(t, reinstallWatchWindow, reverifyIntervalForTest/4, func() bool { return hookEntriesPresent(settings) }) {
+		t.Fatalf("the running daemon re-installed the hook entries within %s of --uninstall-hooks — "+
+			"its in-memory consent is stale (#1425). %s now contains %q",
+			reinstallWatchWindow, settings, readFileForMessage(settings))
 	}
 
 	// The mechanism, asserted directly: the LIVE daemon now reports the hooks
@@ -110,18 +108,18 @@ func TestUninstallHooksWithNoDaemonRunning(t *testing.T) {
 	seedGrantedHooksConsent(t, stateDir)
 
 	cmd := exec.Command(bin, "--uninstall-hooks")
-	cmd.Env = append(os.Environ(),
-		"HOME="+homeDir,
-		"IRRLICHT_HOME="+stateDir,
-	)
+	cmd.Env = sanitizedChildEnv(homeDir, stateDir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("--uninstall-hooks with no daemon running exited %v, want success\n%s", err, out)
 	}
+	if !strings.Contains(string(out), "No running daemon to notify") {
+		t.Errorf("output did not report the missing daemon:\n%s", out)
+	}
 
 	// The store must still record the opt-out (#570): an undeliverable signal
 	// changes nothing about what gets persisted.
-	if got := storedPermissionState(t, stateDir, claudecode.AdapterName, claudecode.PermissionKeyHooks); got != "denied" {
+	if got := storedPermissionState(t, stateDir, claudecode.AdapterName, claudecode.PermissionKeyHooks); got != permission.StateDenied {
 		t.Errorf("permissions.json records %s/%s = %q with no daemon running, want \"denied\"",
 			claudecode.AdapterName, claudecode.PermissionKeyHooks, got)
 	}
@@ -133,15 +131,40 @@ func TestUninstallHooksWithNoDaemonRunning(t *testing.T) {
 func runUninstallHooks(t *testing.T, bin, homeDir, stateDir string) {
 	t.Helper()
 	cmd := exec.Command(bin, "--uninstall-hooks")
-	cmd.Env = append(os.Environ(),
-		"HOME="+homeDir,
-		"IRRLICHT_HOME="+stateDir,
-	)
+	cmd.Env = sanitizedChildEnv(homeDir, stateDir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("--uninstall-hooks exited %v\n%s", err, out)
 	}
 	t.Logf("--uninstall-hooks output:\n%s", out)
+}
+
+// sanitizedChildEnv builds the environment for a child irrlichd, with every
+// variable that could point it at a daemon OTHER than this test's explicitly
+// neutralised.
+//
+// Inheriting os.Environ() wholesale is not hermetic, and both leaks were real.
+// IRRLICHT_BIND_ADDR is first in daemonaddr's client ladder and wins over the
+// addr file, so a developer with it set (ir:test-mac's separate mode exports
+// 7838) sent the CLI's nudge to the wrong daemon and the live test failed for
+// a reason unrelated to the code under test. IRRLICHT_PERMISSION_MODE=grant-all
+// makes the daemon ignore the store entirely. The rest are cleared on the same
+// principle rather than because a failure was observed: the child must be a
+// function of what this test sets, not of the machine it runs on.
+//
+// Clearing rather than filtering, because os/exec keeps the LAST occurrence of
+// a duplicate key — the same mechanism the HOME override already relies on.
+func sanitizedChildEnv(homeDir, stateDir string) []string {
+	return append(os.Environ(),
+		"HOME="+homeDir,
+		"IRRLICHT_HOME="+stateDir,
+		"IRRLICHT_BIND_ADDR=",
+		"IRRLICHT_PERMISSION_MODE=",
+		"IRRLICHT_DEMO_MODE=",
+		"IRRLICHT_RECORD=",
+		"IRRLICHT_HOOK_REVERIFY_INTERVAL=",
+		"IRRLICHT_HOOK_SILENT_TURNS=",
+	)
 }
 
 // shortTempDir is t.TempDir() with a short name, for a directory the daemon
@@ -168,11 +191,16 @@ func shortTempDir(t *testing.T) string {
 // re-verification loop watching them.
 func seedGrantedHooksConsent(t *testing.T, stateDir string) {
 	t.Helper()
-	body := fmt.Sprintf(`{"version":1,"agents":{%q:{%q:"granted"}}}`+"\n",
-		claudecode.AdapterName, claudecode.PermissionKeyHooks)
-	path := filepath.Join(stateDir, "permissions.json")
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatalf("seed %s: %v", path, err)
+	// Through the daemon's own store, not a hand-written JSON literal: the
+	// on-disk shape (the filename, the version field, the nesting) belongs to
+	// filesystem.PermissionStore and is documented as bumpable. A literal here
+	// would keep parsing as valid-but-empty after such a bump, and the test
+	// would then fail at its vacuity guard complaining about hook entries
+	// rather than about the schema.
+	set := permission.Set{}
+	set.Put(claudecode.AdapterName, claudecode.PermissionKeyHooks, permission.StateGranted)
+	if err := filesystem.NewPermissionStore(stateDir).Save(set); err != nil {
+		t.Fatalf("seed permissions store in %s: %v", stateDir, err)
 	}
 }
 
@@ -224,17 +252,7 @@ func readFileForMessage(path string) string {
 // one permission — the in-memory set, not the file on disk.
 func livePermissionState(t *testing.T, addr, agentName, key string) string {
 	t.Helper()
-	resp, err := http.Get("http://" + addr + "/api/v1/permissions")
-	if err != nil {
-		t.Fatalf("GET /api/v1/permissions: %v", err)
-	}
-	defer resp.Body.Close()
-	var snap struct {
-		Agents []permissionsSnapshotAgent `json:"agents"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
-		t.Fatalf("decode permissions snapshot: %v", err)
-	}
+	snap := fetchPermissionsSnapshot(t, http.DefaultClient, "http://"+addr+"/api/v1/permissions")
 	for _, a := range snap.Agents {
 		if a.Name != agentName {
 			continue
@@ -250,31 +268,11 @@ func livePermissionState(t *testing.T, addr, agentName, key string) string {
 
 // storedPermissionState reads one permission's state straight out of the
 // on-disk store.
-func storedPermissionState(t *testing.T, stateDir, agentName, key string) string {
+func storedPermissionState(t *testing.T, stateDir, agentName, key string) permission.State {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(stateDir, "permissions.json"))
+	set, err := filesystem.NewPermissionStore(stateDir).Load()
 	if err != nil {
-		t.Fatalf("read permissions.json: %v", err)
+		t.Fatalf("load permissions store from %s: %v", stateDir, err)
 	}
-	var file struct {
-		Agents map[string]map[string]string `json:"agents"`
-	}
-	if err := json.Unmarshal(b, &file); err != nil {
-		t.Fatalf("permissions.json is not valid JSON: %v\n%s", err, b)
-	}
-	return file.Agents[agentName][key]
-}
-
-// waitFor polls cond until it holds or the timeout expires, failing with what
-// it was waiting for.
-func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	t.Fatalf("timed out after %s waiting for %s", timeout, strings.TrimSpace(what))
+	return set.Get(agentName, key)
 }

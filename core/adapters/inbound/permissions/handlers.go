@@ -104,8 +104,10 @@ func NewReloadHandler(t target, log outbound.Logger) http.HandlerFunc {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		// ReloadFromStore already logs the store failure with its own
+		// context, so this only maps it to a status — logging it twice would
+		// put the same line in events.log under two different framings.
 		if _, err := t.ReloadFromStore(); err != nil {
-			log.LogError("permissions", "", err.Error())
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}

@@ -28,18 +28,16 @@ const defaultReadySessionTTL = 30 * time.Minute
 // Overridable via IRRLICHT_YIELD_SWEEP_INTERVAL (Go duration string).
 const defaultYieldSweepInterval = 30 * time.Minute
 
-// defaultHookReverifyInterval is how often the hook-entry re-verification loop
-// (#1372) re-reads every granted install to see whether its entries are still
-// present. It mirrors services.defaultReverifyInterval, which stays as the
-// fallback for callers that construct the verifier directly (its unit tests).
+// minHookReverifyInterval is the floor on IRRLICHT_HOOK_REVERIFY_INTERVAL.
 //
-// Overridable via IRRLICHT_HOOK_REVERIFY_INTERVAL (Go duration string) for the
-// same reason IRRLICHT_READY_SESSION_TTL is: a test that has to observe what
-// the loop does on its *next* pass cannot wait five minutes for one. The
-// production cadence is deliberately unhurried — see the rationale on
-// services.defaultReverifyInterval — so this is a shortening knob, not a
-// tuning invitation.
-const defaultHookReverifyInterval = 5 * time.Minute
+// Unlike the other duration knobs, this timer can WRITE to the user's agent
+// config files: a pass that finds entries missing re-installs them. An
+// unfloored override therefore buys a `~/.claude/settings.json` rewrite loop,
+// so a value below this reads as a typo and takes the default instead. One
+// second is well under any plausible production cadence and still lets a test
+// observe several passes in a few seconds, which is the only reason the knob
+// exists.
+const minHookReverifyInterval = time.Second
 
 // Permission-wizard modes (issue #570). Ask is the production default:
 // nothing is read or written until the user grants each permission.
@@ -137,40 +135,26 @@ type Config struct {
 	HookSilentTurns int
 
 	// HookReverifyInterval is the hook-entry re-verification cadence (#1372),
-	// overridable via IRRLICHT_HOOK_REVERIFY_INTERVAL.
+	// overridable via IRRLICHT_HOOK_REVERIFY_INTERVAL. **Zero when unset**, and
+	// that is deliberate: services.NewHookEntryVerifier already treats a
+	// non-positive interval as "take the production default", so writing the
+	// default here too would be a second copy of 5m in a second package that
+	// has to agree with the first forever.
 	HookReverifyInterval time.Duration
 }
 
-// Default returns a Config populated with production defaults, with the
-// IRRLICHT_READY_SESSION_TTL and IRRLICHT_PERMISSION_MODE env overrides
-// applied if set.
+// Default returns a Config populated with production defaults, with every
+// IRRLICHT_* env override below applied if set. The list is deliberately not
+// restated here — it drifted once already — read the body.
 func Default() Config {
-	ttl := defaultReadySessionTTL
-	if raw := os.Getenv("IRRLICHT_READY_SESSION_TTL"); raw != "" {
-		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
-			ttl = parsed
-		}
-	}
-	yieldInterval := defaultYieldSweepInterval
-	if raw := os.Getenv("IRRLICHT_YIELD_SWEEP_INTERVAL"); raw != "" {
-		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
-			yieldInterval = parsed
-		}
-	}
-	reverifyInterval := defaultHookReverifyInterval
-	if raw := os.Getenv("IRRLICHT_HOOK_REVERIFY_INTERVAL"); raw != "" {
-		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
-			reverifyInterval = parsed
-		}
-	}
 	mode := PermissionModeAsk
 	if os.Getenv("IRRLICHT_PERMISSION_MODE") == PermissionModeGrantAll {
 		mode = PermissionModeGrantAll
 	}
 	return Config{
 		MaxSessionAge:      defaultMaxSessionAge,
-		ReadySessionTTL:    ttl,
-		YieldSweepInterval: yieldInterval,
+		ReadySessionTTL:    envDuration("IRRLICHT_READY_SESSION_TTL", defaultReadySessionTTL, 0),
+		YieldSweepInterval: envDuration("IRRLICHT_YIELD_SWEEP_INTERVAL", defaultYieldSweepInterval, 0),
 		PermissionMode:     mode,
 
 		CacheBloatBaselineDays:       envInt("IRRLICHT_CACHE_BLOAT_BASELINE_DAYS", defaultCacheBloatBaselineDays),
@@ -179,8 +163,27 @@ func Default() Config {
 		CacheBloatMinTurns:           envInt("IRRLICHT_CACHE_BLOAT_MIN_TURNS", defaultCacheBloatMinTurns),
 
 		HookSilentTurns:      envInt("IRRLICHT_HOOK_SILENT_TURNS", defaultHookSilentTurns),
-		HookReverifyInterval: reverifyInterval,
+		HookReverifyInterval: envDuration("IRRLICHT_HOOK_REVERIFY_INTERVAL", 0, minHookReverifyInterval),
 	}
+}
+
+// envDuration reads a Go duration env override, falling back to def when the
+// variable is unset, unparseable, non-positive, or below min. A min of 0 means
+// "any positive value".
+//
+// Rejecting rather than clamping a too-small value is the same choice envInt
+// makes for a negative: a value that cannot have been meant is a typo, and
+// honouring half of it is worse than ignoring it.
+func envDuration(key string, def, min time.Duration) time.Duration {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 || parsed < min {
+		return def
+	}
+	return parsed
 }
 
 // envInt reads a non-negative integer env override, falling back to def when

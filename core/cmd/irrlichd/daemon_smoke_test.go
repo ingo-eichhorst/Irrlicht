@@ -113,11 +113,12 @@ func bootSmokeDaemonIn(t *testing.T, bin, homeDir, stateDir string, extraEnv ...
 		exited:   make(chan struct{}),
 	}
 	d.cmd = exec.Command(bin)
-	d.cmd.Env = append(os.Environ(),
-		"HOME="+d.homeDir,
-		"IRRLICHT_HOME="+d.stateDir,
-		"IRRLICHT_BIND_ADDR=127.0.0.1:0",
-	)
+	// Sanitized, not merely extended: TestDaemonStartupSmoke's "ask" boot
+	// asserts the permission mode IS "ask", so an ambient
+	// IRRLICHT_PERMISSION_MODE=grant-all — which the onboarding recording rig
+	// exports — failed it for the machine's reasons rather than the code's.
+	// See sanitizedChildEnv.
+	d.cmd.Env = append(sanitizedChildEnv(d.homeDir, d.stateDir), "IRRLICHT_BIND_ADDR=127.0.0.1:0")
 	d.cmd.Env = append(d.cmd.Env, extraEnv...)
 	if err := d.cmd.Start(); err != nil {
 		t.Fatalf("start daemon: %v", err)
@@ -347,10 +348,15 @@ func assertAllPermissionsPending(t *testing.T, snapAgents []permissionsSnapshotA
 	}
 }
 
-// assertPermissionsAllPending GETs /api/v1/permissions and checks that every
-// agent with declared permissions appears and every permission is pending —
-// the consent-first fresh-install state.
-func assertPermissionsAllPending(t *testing.T, client *http.Client, url string) {
+// permissionsSnapshot mirrors GET /api/v1/permissions' response body.
+type permissionsSnapshot struct {
+	Mode   string                     `json:"mode"`
+	Agents []permissionsSnapshotAgent `json:"agents"`
+}
+
+// fetchPermissionsSnapshot GETs and decodes the permissions snapshot, failing
+// the test on any transport, status or decode problem.
+func fetchPermissionsSnapshot(t *testing.T, client *http.Client, url string) permissionsSnapshot {
 	t.Helper()
 	resp, err := client.Get(url)
 	if err != nil {
@@ -360,13 +366,19 @@ func assertPermissionsAllPending(t *testing.T, client *http.Client, url string) 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET %s: status %d, want 200", url, resp.StatusCode)
 	}
-	var snap struct {
-		Mode   string                     `json:"mode"`
-		Agents []permissionsSnapshotAgent `json:"agents"`
-	}
+	var snap permissionsSnapshot
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode %s: %v", url, err)
 	}
+	return snap
+}
+
+// assertPermissionsAllPending GETs /api/v1/permissions and checks that every
+// agent with declared permissions appears and every permission is pending —
+// the consent-first fresh-install state.
+func assertPermissionsAllPending(t *testing.T, client *http.Client, url string) {
+	t.Helper()
+	snap := fetchPermissionsSnapshot(t, client, url)
 	if snap.Mode != "ask" {
 		t.Fatalf("permission mode = %q, want ask", snap.Mode)
 	}

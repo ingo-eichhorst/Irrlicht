@@ -125,6 +125,20 @@ type PermissionService struct {
 	// SetDetectionProbe before Start.
 	probes map[string]func() bool
 
+	// storeMu serializes a whole read-modify-write of the consent store
+	// against a whole read-adopt of it: Answer's mutate-then-Save and
+	// ReloadFromStore's Load-then-adopt. Neither is atomic on its own, and
+	// interleaving them can resurrect a grant the user just refused —
+	// Answer moves memory to denied and has not saved yet when a reload
+	// Loads the still-granted file and writes it back over the top, leaving
+	// memory granted, disk denied, and the effect re-applied (#1425/#570).
+	//
+	// Deliberately coarser and OUTSIDE mu: it is held across file I/O, which
+	// mu must never be, so Granted() on the hook hot path never waits on it.
+	// Lock order: storeMu before effectMu before mu. Nothing taken under
+	// either of the inner two may take storeMu.
+	storeMu sync.Mutex
+
 	// effectMu serializes effect execution (hook installs, watcher
 	// start/stop). Effects run OUTSIDE mu so the hot Granted() gate never
 	// blocks on file I/O; this mutex keeps two concurrent Answer batches
@@ -470,6 +484,12 @@ func (s *PermissionService) Answer(answers []PermissionAnswer) error {
 	if len(answers) == 0 {
 		return nil
 	}
+	// Held for the whole mutate-then-Save, so a concurrent ReloadFromStore
+	// cannot read the pre-answer file and adopt it back over this decision.
+	// See the storeMu field comment.
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+
 	s.mu.Lock()
 
 	// Validate the whole batch before mutating so a malformed entry can't
@@ -538,8 +558,10 @@ func (s *PermissionService) Answer(answers []PermissionAnswer) error {
 // there is no third state to reason about, and nothing here can be reached by
 // a caller that could not equally have restarted the daemon.
 //
-// It does NOT write. The store is the input, never the output — which is what
-// keeps it from racing Answer's memory-then-disk ordering into a lost update.
+// It does NOT write — the store is the input, never the output — and it is
+// serialized against Answer by storeMu, held across both the Load and the
+// adopt. Not writing is on its own NOT enough to make the two safe together;
+// see the storeMu field comment for the interleaving and the lock order.
 //
 // #570 is not weakened, in three separate ways. Every "granted" it can produce
 // came out of the store, i.e. out of an answer the user actually gave and the
@@ -555,6 +577,9 @@ func (s *PermissionService) ReloadFromStore() (int, error) {
 	if s.mode == config.PermissionModeGrantAll {
 		return 0, nil
 	}
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+
 	stored, err := s.store.Load()
 	if err != nil {
 		s.log.LogError("permissions", "", fmt.Sprintf("failed to reload permission state (keeping the state in memory): %v", err))
@@ -562,7 +587,6 @@ func (s *PermissionService) ReloadFromStore() (int, error) {
 	}
 
 	var effects []pendingEffect
-	changed := 0
 	s.mu.Lock()
 	for _, a := range s.agents {
 		for _, p := range a.Permissions {
@@ -571,23 +595,24 @@ func (s *PermissionService) ReloadFromStore() (int, error) {
 				continue
 			}
 			s.set.Put(a.Identity.Name, p.Key, want)
-			changed++
-			// A move to pending runs the Remove closure and stops watchers,
-			// same as a denial — runClosureEffect treats every non-granted
-			// target as "remove", which is the fail-safe direction for a
-			// permission that has stopped saying yes.
+			// One effect per moved permission, so len(effects) IS the change
+			// count — no second running total to keep in step. A move to
+			// pending runs the Remove closure and stops watchers, same as a
+			// denial: runClosureEffect treats every non-granted target as
+			// "remove", the fail-safe direction for a permission that has
+			// stopped saying yes.
 			effects = append(effects, pendingEffect{a.Identity.Name, p, want})
 		}
 	}
 	s.mu.Unlock()
 
-	if changed == 0 {
+	if len(effects) == 0 {
 		return 0, nil
 	}
 	s.runEffects(effects)
 	s.push.Broadcast(outbound.PushMessage{Type: outbound.PushTypePermissionsUpdated})
-	s.log.LogInfo("permissions", "", fmt.Sprintf("reloaded consent from the store: %d permission(s) changed", changed))
-	return changed, nil
+	s.log.LogInfo("permissions", "", fmt.Sprintf("reloaded consent from the store: %d permission(s) changed", len(effects)))
+	return len(effects), nil
 }
 
 // planAnswerLocked records one answer and reports (stateMoved, runEffect).
