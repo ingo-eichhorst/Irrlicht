@@ -232,6 +232,17 @@ func TestNotification_ReconstructsTranscriptPathFromSessionID(t *testing.T) {
 // looks like a harmless normalization — would take a hold that Copilot can
 // never release on a denied prompt, pinning the session waiting until the
 // 12-hour ceiling.
+//
+// READ THIS IF YOU ARE EDITING core/domain/session/hook_signal.go, NOT THIS
+// FILE. The second half of the assertion below fails on a change made in that
+// package rather than in this one. hookSignalEffects has no HookNotification
+// row today, and its own doc comment invites adding one ("a row here is the
+// right fix, not a bespoke branch") — which is sound for claudecode, whose
+// Notification means idle_prompt. For copilot the same row would silently
+// convert this deliberate no-hold into the 12-hour pin described above,
+// because copilot is the one adapter whose CLI emits nothing at all when the
+// user denies. If this went red from that side: copilot needs a dispatch that
+// takes no hold, so give it one explicitly rather than deleting this check.
 func TestNotification_DispatchesUnderAHookNameThatHoldsNoSignal(t *testing.T) {
 	root := copilotSessionRoot(t)
 	writeSessionTranscript(t, root, "sess-notif")

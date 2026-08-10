@@ -41,14 +41,11 @@
 package copilot
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"irrlicht/core/adapters/inbound/agents/agentpaths"
 	"irrlicht/core/adapters/inbound/agents/hookjson"
@@ -276,7 +273,17 @@ func resolveTranscriptPath(payload copilotHookPayload) string {
 	if id == "" {
 		return ""
 	}
-	root, err := agentpaths.AbsRoot(sessionsDir())
+	// Derived from the SAME declaration the confiner guards, not from
+	// sessionsDir() directly. Those agree today because Source() sets only Dir
+	// — but the moment it grows DirByOS (the declared Windows seam) or DirFunc,
+	// a second derivation would reconstruct against one root while the confiner
+	// guarded another, and every Notification would come back RejectEscapesRoot
+	// silently. That is exactly the drift #1361 removed from the receivers.
+	src, ok := Source().(agent.FilesUnderRoot)
+	if !ok {
+		return ""
+	}
+	root, err := agentpaths.AbsRoot(src.RootDirFor(runtime.GOOS))
 	if err != nil {
 		// No resolvable root — fail closed. An empty path is refused as
 		// RejectEmptyPath, which is the honest reason.
@@ -330,54 +337,3 @@ func handleNotificationHook(target HookTarget, log outbound.Logger, sessionID, t
 		fmt.Sprintf("received Notification (%s)", payload.NotificationType))
 	target.HandlePermissionHook(sessionID, transcriptPath, HookNotification)
 }
-
-// sessionStartVersion reads copilotVersion from a transcript's session.start
-// header. Returns "" if the header is missing or unreadable.
-//
-// Bounded to the first few lines: session.start is the first event Copilot
-// writes, and an unbounded scan of a large transcript at install time would be
-// paid for nothing.
-func sessionStartVersion(path string) string {
-	// Sink-local traversal guard. The only caller hands over a path produced by
-	// WalkDir over a self-resolved root, so this is not reachable in practice —
-	// but the plain ".." check is the form CodeQL's go/path-injection query
-	// recognizes as a sanitizer (the root derives from COPILOT_HOME, a taint
-	// source), and both sibling adapters carry it for exactly that reason: see
-	// codex/session_meta.go and claudecode/hookinstaller.go. A rejected path
-	// falls through to the same "unknown version" result an unreadable file
-	// already produces, which fails OPEN to the version gate's Probe.
-	if strings.Contains(path, "..") {
-		return ""
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxVersionScanLineBytes)
-	for i := 0; i < maxVersionScanLines && scanner.Scan(); i++ {
-		var line struct {
-			Type string         `json:"type"`
-			Data map[string]any `json:"data"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
-			continue
-		}
-		if line.Type != evSessionStart {
-			continue
-		}
-		return str(line.Data, "copilotVersion")
-	}
-	return ""
-}
-
-const (
-	// maxVersionScanLines bounds how far into a transcript the version probe
-	// reads before giving up.
-	maxVersionScanLines = 20
-	// maxVersionScanLineBytes bounds a single line, so an oversized transcript
-	// line cannot make the probe allocate without limit (cell 2-16).
-	maxVersionScanLineBytes = 1 << 20
-)

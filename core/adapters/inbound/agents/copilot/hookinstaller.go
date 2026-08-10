@@ -14,14 +14,21 @@
 package copilot
 
 import (
+	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"irrlicht/core/adapters/inbound/agents/agentpaths"
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/pkg/daemonaddr"
 )
+
+// copilotHomeDirName is the $HOME-relative Copilot config directory, the
+// parent of both session-state/ (adapter.go's defaultRootDir) and hooks/.
+const copilotHomeDirName = ".copilot"
 
 // HookEndpointPath is the daemon's Copilot hook path. Host and port are
 // resolved at install time from the daemon's own bind address, so a daemon on
@@ -254,18 +261,17 @@ func newestObservedCLIVersion() string {
 
 // --- helpers ---
 
-// copilotHome resolves the absolute Copilot config directory, honoring an
-// absolute COPILOT_HOME override (mirroring sessionsDir's resolution), else
-// $HOME/.copilot.
+// copilotHome resolves the absolute Copilot config directory: $COPILOT_HOME
+// when that override is set and absolute, else $HOME/.copilot.
+//
+// Composed from agentpaths rather than re-deciding the rule with a bare
+// filepath.IsAbs. agentpaths owns "how an agent home override is read" for the
+// whole repo precisely so it is not reimplemented per adapter; the hand-rolled
+// version silently dropped a RELATIVE COPILOT_HOME, so the watcher warned the
+// user their value was ignored while the installer said nothing and wrote to a
+// different directory than the one being watched.
 func copilotHome() (string, error) {
-	if h := os.Getenv(copilotHomeEnvVar); filepath.IsAbs(h) {
-		return h, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".copilot"), nil
+	return agentpaths.AbsRoot(agentpaths.FromEnv("copilot", copilotHomeEnvVar, copilotHomeDirName))
 }
 
 // copilotSessionsDir resolves the absolute session-state tree with symlinks
@@ -341,3 +347,54 @@ func hookEntryIsCanonical(hook map[string]interface{}) bool {
 	url, _ := hook["url"].(string)
 	return t == "http" && url == hookEndpointURL()
 }
+
+// sessionStartVersion reads copilotVersion from a transcript's session.start
+// header. Returns "" if the header is missing or unreadable.
+//
+// Bounded to the first few lines: session.start is the first event Copilot
+// writes, and an unbounded scan of a large transcript at install time would be
+// paid for nothing.
+func sessionStartVersion(path string) string {
+	// Sink-local traversal guard. The only caller hands over a path produced by
+	// WalkDir over a self-resolved root, so this is not reachable in practice —
+	// but the plain ".." check is the form CodeQL's go/path-injection query
+	// recognizes as a sanitizer (the root derives from COPILOT_HOME, a taint
+	// source), and both sibling adapters carry it for exactly that reason: see
+	// codex/session_meta.go and claudecode/hookinstaller.go. A rejected path
+	// falls through to the same "unknown version" result an unreadable file
+	// already produces, which fails OPEN to the version gate's Probe.
+	if strings.Contains(path, "..") {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxVersionScanLineBytes)
+	for i := 0; i < maxVersionScanLines && scanner.Scan(); i++ {
+		var line struct {
+			Type string         `json:"type"`
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
+			continue
+		}
+		if line.Type != evSessionStart {
+			continue
+		}
+		return str(line.Data, "copilotVersion")
+	}
+	return ""
+}
+
+const (
+	// maxVersionScanLines bounds how far into a transcript the version probe
+	// reads before giving up.
+	maxVersionScanLines = 20
+	// maxVersionScanLineBytes bounds a single line, so an oversized transcript
+	// line cannot make the probe allocate without limit (cell 2-16).
+	maxVersionScanLineBytes = 1 << 20
+)

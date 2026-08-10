@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/permission"
 	"irrlicht/core/internal/contracttesting"
 )
@@ -28,18 +29,22 @@ func hooksPermission(t *testing.T) (apply, remove func() error) {
 
 // hooksFileHasOurEntries reports whether the hooks file currently holds an
 // irrlicht entry for every installed event.
+//
+// Uses hookjson's OWN predicates rather than a hand-rolled walk, so the test
+// agrees with the installer by construction. A local copy was both a second
+// encoding of the nested group shape and strictly WEAKER: matching on the
+// url's last path segment alone accepts a foreign entry at
+// https://example.invalid/copilot, and accepts a stale-port entry the
+// installer would rewrite — which would have made the permission-gate and
+// uninstall assertions below pass against entries production considers wrong.
 func hooksFileHasOurEntries(t *testing.T) bool {
 	t.Helper()
 	path, err := copilotHooksPath()
 	if err != nil {
 		t.Fatalf("copilotHooksPath: %v", err)
 	}
-	data, err := os.ReadFile(path)
+	settings, err := hookjson.ReadSettings(path)
 	if err != nil {
-		return false
-	}
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
 		return false
 	}
 	hooks, ok := settings["hooks"].(map[string]interface{})
@@ -47,39 +52,11 @@ func hooksFileHasOurEntries(t *testing.T) bool {
 		return false
 	}
 	for _, ev := range installedHookEvents {
-		if !hooksJSONHasEvent(hooks, ev) {
+		if !hookjson.HasOurHook(hooks, ev, hookSentinel) {
 			return false
 		}
 	}
 	return true
-}
-
-func hooksJSONHasEvent(hooks map[string]interface{}, event string) bool {
-	groups, ok := hooks[event].([]interface{})
-	if !ok {
-		return false
-	}
-	for _, g := range groups {
-		group, ok := g.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		inner, ok := group["hooks"].([]interface{})
-		if !ok {
-			continue
-		}
-		for _, h := range inner {
-			entry, ok := h.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if url, _ := entry["url"].(string); url != "" &&
-				filepath.Base(url) == filepath.Base(HookEndpointPath) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // TestHooksPermission_IsGated wires the install-type flavour of the #797
