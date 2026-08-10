@@ -313,6 +313,37 @@ Before marking a ticket done, run the full suite — every layer must pass:
   assertion lands with the deliberate mutation that was seen red for each
   obligation recorded in its PR — the same bar the red-first rule above sets
   for defect tests.
+- Guarded construction: not a contract family — a package-local pair of guards,
+  `core/application/services/construction_test.go`. A service whose fields
+  include maps, channels, or anything else whose zero value is unusable is
+  built by exactly ONE unexported allocator (`newPermissionService`,
+  `newSessionDetector`), and the exported constructor assigns dependencies onto
+  its result. Two guards of deliberately different kinds enforce it, both
+  table-driven over `guardedConstructions()` — a third type joins by adding a
+  row. The **source scan** walks this package's own AST and fires on a literal
+  no test ever executes, reporting its `file:line`; the panic never does, since
+  it names whichever method wrote first (#1400's stack bottomed out in
+  `recordEffectResult`, #1450's in `removeFromProjectSessions`, neither
+  anywhere near the literal). The **reflection walk** catches the other half —
+  a FUTURE map/chan field added to the struct and forgotten in the allocator,
+  which the source scan cannot see because every construction site stays legal
+  — and it walks both the allocator and the exported constructor, because the
+  latter assigns afterwards and can re-nil what the former allocated. Two
+  exemption maps carry the knowledge neither guard can derive, and their
+  polarities differ on purpose: `nilTolerant` is opt-out (a new map is covered
+  by default), `mustBeNonZero` is opt-in and names the fields that are neither
+  map nor channel yet unusable at zero — `detectInterval`, where
+  `time.NewTicker` panics, and SessionDetector's five that fail *silently*
+  instead, which is worse. Both maps' keys are existence-checked, so an entry
+  that stopped naming a real field is a failure rather than a silent no-op.
+  `TestSourceScanCatchesEveryKnownShape` is the corpus: 31 construction
+  spellings × both types, parsed from source strings, pinning what the scan
+  must report AND what it must leave alone. It exists because #1450's rewrite
+  of #1444's scanner silently dropped a case the original caught (an
+  index-keyed slice element) while eighteen hand-planted probes all passed —
+  every one of them an addition to coverage, none a lock on the predecessor's.
+  A rewritten guard replays its predecessor's cases or it is not known to be a
+  superset.
 - Skill files: `tools/skill-lint.sh` reads every `.md` under
   `.claude/skills/` plus any other tracked `SKILL.md` (there is one under
   `tools/irrlicht-design-system/`) — the files that tell agents how to triage,

@@ -270,29 +270,32 @@ type SessionDetectorDeps struct {
 	LiveCWDs     LiveCWDsFunc
 }
 
-// NewSessionDetector creates a SessionDetector with all required
-// dependencies.
+// newSessionDetector is the one function in this package allowed to write a
+// SessionDetector composite literal, and it owns every field whose zero value
+// is unusable. Callers assign dependencies onto the result.
 //
-// Panics if any supplied watcher has a zero-value Identity. Every
-// downstream session created from that watcher's events would otherwise
-// have an empty Adapter field — a silent partial-failure mode (the
-// adapter-aware code paths fall back gracefully, but logs and the
-// /api/v1/agents endpoint surface "" instead of the real name).
-func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *SessionDetector {
-	for i, w := range watchers {
-		if w.Identity() == (agent.Identity{}) {
-			panic(fmt.Sprintf("session_detector: watchers[%d] (%T) has no Identity — call .WithIdentity() before passing it to NewSessionDetector", i, w))
-		}
-	}
-	det := &SessionDetector{
-		watchers:                 watchers,
+// Three kinds of field live here, and only the first is what "nil maps" would
+// suggest (#1450, the sibling of #1400):
+//
+//   - The eight maps. A write to a nil map panics — and it panics in the
+//     writer, several frames from the literal that caused it: the reproduced
+//     stack for a bare literal bottoms out at removeFromProjectSessions, which
+//     tells you nothing about where the detector was built.
+//   - The three channels. A nil channel never panics, which is worse. The two
+//     senders that carry a `default` arm (debouncedEvents, uiSignals) drop
+//     every event silently and forever, and Run's receive on a nil `merged`
+//     parks for the life of the process, so the detector processes nothing and
+//     reports no error.
+//   - Five fields that are neither. deletedCooldown at zero disables the
+//     ghost-session guard it exists to be; a nil signals is dereferenced
+//     without a guard (session.SignalHolds has no nil-receiver arms); dwell,
+//     bgLiveProbe and bgPIDProbe are nil-guarded but their nil silently
+//     disables state hysteresis and background-process liveness. A reflection
+//     walk over map/chan kinds cannot see any of these, which is exactly why
+//     the allocator, and not a test, is what owns them.
+func newSessionDetector() *SessionDetector {
+	return &SessionDetector{
 		merged:                   make(chan identifiedEvent, 16),
-		repo:                     deps.Repo,
-		log:                      deps.Log,
-		broadcaster:              deps.Broadcaster,
-		version:                  deps.Version,
-		enricher:                 newMetadataEnricher(deps.Git, deps.Metrics),
-		metrics:                  deps.Metrics,
 		projectSessions:          make(map[string]string),
 		deletedSessions:          make(map[string]int64),
 		hostGateRejected:         make(map[string]struct{}),
@@ -309,6 +312,30 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		bgInconclusive:           make(map[string]int),
 		uiSignals:                make(chan terminalUISignal, 64),
 	}
+}
+
+// NewSessionDetector creates a SessionDetector with all required
+// dependencies.
+//
+// Panics if any supplied watcher has a zero-value Identity. Every
+// downstream session created from that watcher's events would otherwise
+// have an empty Adapter field — a silent partial-failure mode (the
+// adapter-aware code paths fall back gracefully, but logs and the
+// /api/v1/agents endpoint surface "" instead of the real name).
+func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *SessionDetector {
+	for i, w := range watchers {
+		if w.Identity() == (agent.Identity{}) {
+			panic(fmt.Sprintf("session_detector: watchers[%d] (%T) has no Identity — call .WithIdentity() before passing it to NewSessionDetector", i, w))
+		}
+	}
+	det := newSessionDetector()
+	det.watchers = watchers
+	det.repo = deps.Repo
+	det.log = deps.Log
+	det.broadcaster = deps.Broadcaster
+	det.version = deps.Version
+	det.enricher = newMetadataEnricher(deps.Git, deps.Metrics)
+	det.metrics = deps.Metrics
 	det.pidMgr = NewPIDManager(PIDManagerDeps{
 		PW:               deps.PW,
 		Repo:             deps.Repo,

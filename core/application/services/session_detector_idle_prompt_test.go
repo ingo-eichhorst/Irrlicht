@@ -18,7 +18,7 @@ import (
 // type through an inert SessionDetector shell would now just duplicate that
 // suite one layer up.
 func TestHasPendingIdlePrompt(t *testing.T) {
-	d := &SessionDetector{signals: session.NewSignalHolds()}
+	d := newSessionDetector()
 	d.signals.Hold("has", session.SignalIdlePrompt, session.SignalPayload{}, holdT0)
 
 	if !d.hasPendingIdlePrompt("has") {

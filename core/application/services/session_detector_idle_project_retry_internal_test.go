@@ -8,7 +8,7 @@ import "testing"
 // each report "retry", and every call after that must report "give up" —
 // forever, not just once past the cap.
 func TestShouldRetryIdleProjectResolution_CapsAtMax(t *testing.T) {
-	d := &SessionDetector{idleProjectRetryAttempts: map[string]int{}}
+	d := newSessionDetector()
 
 	for i := range maxIdleProjectResolveAttempts {
 		if !d.shouldRetryIdleProjectResolution("s") {
@@ -31,9 +31,8 @@ func TestShouldRetryIdleProjectResolution_CapsAtMax(t *testing.T) {
 // retry budget is tracked independently per session, so a capped-out session
 // doesn't starve a different session's retries.
 func TestShouldRetryIdleProjectResolution_PerSessionIndependent(t *testing.T) {
-	d := &SessionDetector{idleProjectRetryAttempts: map[string]int{
-		"exhausted": maxIdleProjectResolveAttempts,
-	}}
+	d := newSessionDetector()
+	d.idleProjectRetryAttempts["exhausted"] = maxIdleProjectResolveAttempts
 
 	if d.shouldRetryIdleProjectResolution("exhausted") {
 		t.Fatal("expected the exhausted session to be refused")
