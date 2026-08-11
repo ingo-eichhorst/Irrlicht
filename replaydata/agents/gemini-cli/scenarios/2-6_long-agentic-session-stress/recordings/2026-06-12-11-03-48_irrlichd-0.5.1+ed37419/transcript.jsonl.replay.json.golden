@@ -12,20 +12,20 @@
     "consumed_events": 22,
     "total_transitions": 9,
     "first_event_time": "2026-06-12T11:03:48.926422+02:00",
-    "last_event_time": "2026-06-12T11:04:44.449322+02:00",
-    "wall_clock_session_duration": 55522900000,
+    "last_event_time": "2026-06-12T11:04:46.449322+02:00",
+    "wall_clock_session_duration": 57522900000,
     "state_durations": {
-      "ready": 43446144000,
-      "working": 14076756000
+      "ready": 27671619000,
+      "working": 29851281000
     },
-    "flicker_count": 5,
+    "flicker_count": 4,
     "flickers_by_category": {
       "ready_between_working": 1,
-      "working_between_ready": 4
+      "working_between_ready": 3
     },
     "flickers_by_reason": {
       "agent finished turn → ready": 1,
-      "force ready→working on first activity": 4
+      "force ready→working on first activity": 3
     },
     "estimated_cost_usd": 0.087387,
     "cum_input_tokens": 58030,
@@ -49,8 +49,8 @@
     },
     {
       "index": 1,
-      "event_index": 1,
-      "virtual_time": "2026-06-12T11:04:04.700947+02:00",
+      "event_index": 0,
+      "virtual_time": "2026-06-12T11:03:48.926422+02:00",
       "cause": "event",
       "prev_state": "ready",
       "new_state": "working",

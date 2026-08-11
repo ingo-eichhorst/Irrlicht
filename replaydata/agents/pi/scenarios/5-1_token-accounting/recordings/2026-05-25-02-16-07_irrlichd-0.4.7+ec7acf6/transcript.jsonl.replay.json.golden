@@ -10,22 +10,22 @@
   "summary": {
     "total_events": 8,
     "consumed_events": 8,
-    "total_transitions": 6,
+    "total_transitions": 7,
     "first_event_time": "2026-05-25T02:16:39.384223+02:00",
-    "last_event_time": "2026-05-25T02:16:48.538687+02:00",
-    "wall_clock_session_duration": 9154464000,
+    "last_event_time": "2026-05-25T02:16:50.538687+02:00",
+    "wall_clock_session_duration": 11154464000,
     "state_durations": {
-      "ready": 6031108000,
-      "working": 3123356000
+      "ready": 4999115000,
+      "working": 6155349000
     },
-    "flicker_count": 3,
+    "flicker_count": 4,
     "flickers_by_category": {
       "ready_between_working": 2,
-      "working_between_ready": 1
+      "working_between_ready": 2
     },
     "flickers_by_reason": {
       "agent finished turn → ready": 2,
-      "force ready→working on first activity": 1
+      "force ready→working on first activity": 2
     },
     "estimated_cost_usd": 0.048603,
     "cum_input_tokens": 8107,
@@ -120,6 +120,21 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 6,
+      "event_index": 7,
+      "virtual_time": "2026-05-25T02:16:50.538687+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ok"
     }
   ],
   "sessions": [
@@ -160,14 +175,9 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 8,
-    "replayed_transition_count": 5,
-    "ordered_matches": 5,
+    "replayed_transition_count": 6,
+    "ordered_matches": 6,
     "ordered_mismatches": [
-      {
-        "index": 5,
-        "kind": "missing_in_replay",
-        "recorded": "working→ready"
-      },
       {
         "index": 6,
         "kind": "missing_in_replay",

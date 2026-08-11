@@ -10,16 +10,21 @@
   "summary": {
     "total_events": 21,
     "consumed_events": 21,
-    "total_transitions": 4,
+    "total_transitions": 5,
     "first_event_time": "2026-05-24T21:42:36.496819+02:00",
-    "last_event_time": "2026-05-24T21:42:54.39295+02:00",
-    "wall_clock_session_duration": 17896131000,
+    "last_event_time": "2026-05-24T21:42:56.39295+02:00",
+    "wall_clock_session_duration": 19896131000,
     "state_durations": {
-      "ready": 17896131000
+      "ready": 13952627000,
+      "working": 5943504000
     },
-    "flicker_count": 0,
-    "flickers_by_category": {},
-    "flickers_by_reason": {},
+    "flicker_count": 2,
+    "flickers_by_category": {
+      "working_between_ready": 2
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 2
+    },
     "estimated_cost_usd": 0.304435,
     "cum_input_tokens": 60821,
     "cum_output_tokens": 11,
@@ -42,18 +47,17 @@
     },
     {
       "index": 1,
-      "event_index": 11,
-      "virtual_time": "2026-05-24T21:42:40.269692+02:00",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-24T21:42:36.496819+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "turn_done",
+      "last_event_type": "user_message",
       "has_open_tool": false,
-      "is_agent_done": true,
+      "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "alpha"
+      "waiting_for_user_input": false
     },
     {
       "index": 2,
@@ -83,6 +87,21 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 4,
+      "event_index": 20,
+      "virtual_time": "2026-05-24T21:42:56.39295+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "alpha2"
     }
   ],
   "sessions": [
@@ -156,15 +175,8 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 4,
-    "replayed_transition_count": 3,
-    "ordered_matches": 3,
-    "ordered_mismatches": [
-      {
-        "index": 3,
-        "kind": "missing_in_replay",
-        "recorded": "working→ready"
-      }
-    ],
+    "replayed_transition_count": 4,
+    "ordered_matches": 4,
     "recorded_unique_kinds": [
       "ready→working",
       "working→ready"

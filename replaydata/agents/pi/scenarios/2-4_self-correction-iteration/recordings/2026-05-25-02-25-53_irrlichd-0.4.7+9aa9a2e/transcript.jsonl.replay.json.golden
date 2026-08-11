@@ -10,16 +10,20 @@
   "summary": {
     "total_events": 8,
     "consumed_events": 8,
-    "total_transitions": 2,
+    "total_transitions": 3,
     "first_event_time": "2026-05-25T02:26:31.932369+02:00",
-    "last_event_time": "2026-05-25T02:26:35.39335+02:00",
-    "wall_clock_session_duration": 3460981000,
+    "last_event_time": "2026-05-25T02:26:37.39335+02:00",
+    "wall_clock_session_duration": 5460981000,
     "state_durations": {
-      "ready": 3460981000
+      "working": 5460981000
     },
-    "flicker_count": 0,
-    "flickers_by_category": {},
-    "flickers_by_reason": {},
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    },
     "estimated_cost_usd": 0.059129,
     "cum_input_tokens": 8391,
     "cum_output_tokens": 325,
@@ -43,17 +47,32 @@
     },
     {
       "index": 1,
-      "event_index": 4,
-      "virtual_time": "2026-05-25T02:26:33.935033+02:00",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-25T02:26:31.932369+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "tool_result",
+      "last_event_type": "user_message",
       "has_open_tool": false,
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 7,
+      "virtual_time": "2026-05-25T02:26:37.39335+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "done"
     }
   ],
   "sessions": [
@@ -94,23 +113,14 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 2,
-    "replayed_transition_count": 1,
-    "ordered_matches": 1,
-    "ordered_mismatches": [
-      {
-        "index": 1,
-        "kind": "missing_in_replay",
-        "recorded": "working→ready"
-      }
-    ],
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
     "recorded_unique_kinds": [
       "ready→working",
       "working→ready"
     ],
     "replayed_unique_kinds": [
-      "ready→working"
-    ],
-    "missing_kinds": [
+      "ready→working",
       "working→ready"
     ]
   }

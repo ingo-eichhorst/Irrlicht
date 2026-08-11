@@ -10,7 +10,7 @@
   "summary": {
     "total_events": 13,
     "consumed_events": 13,
-    "total_transitions": 1,
+    "total_transitions": 2,
     "first_event_time": "2026-04-26T11:29:00.29711+02:00",
     "last_event_time": "2026-04-26T11:29:01.961746+02:00",
     "wall_clock_session_duration": 1664636000,
@@ -35,6 +35,20 @@
       "new_state": "ready",
       "reason": "initial state",
       "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 0,
+      "virtual_time": "2026-04-26T11:29:00.29711+02:00",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
       "has_open_tool": false,
       "is_agent_done": false,
       "needs_user_attention": false,
@@ -77,20 +91,12 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 1,
-    "replayed_transition_count": 0,
-    "ordered_matches": 0,
-    "ordered_mismatches": [
-      {
-        "index": 0,
-        "kind": "missing_in_replay",
-        "recorded": "ready→working"
-      }
-    ],
+    "replayed_transition_count": 1,
+    "ordered_matches": 1,
     "recorded_unique_kinds": [
       "ready→working"
     ],
-    "replayed_unique_kinds": [],
-    "missing_kinds": [
+    "replayed_unique_kinds": [
       "ready→working"
     ]
   }

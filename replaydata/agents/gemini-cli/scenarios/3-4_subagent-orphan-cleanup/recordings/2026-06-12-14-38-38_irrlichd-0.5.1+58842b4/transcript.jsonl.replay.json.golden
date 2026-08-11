@@ -42,8 +42,8 @@
     },
     {
       "index": 1,
-      "event_index": 1,
-      "virtual_time": "2026-06-12T14:38:52.898977+02:00",
+      "event_index": 0,
+      "virtual_time": "2026-06-12T14:38:38.359551+02:00",
       "cause": "event",
       "prev_state": "ready",
       "new_state": "working",

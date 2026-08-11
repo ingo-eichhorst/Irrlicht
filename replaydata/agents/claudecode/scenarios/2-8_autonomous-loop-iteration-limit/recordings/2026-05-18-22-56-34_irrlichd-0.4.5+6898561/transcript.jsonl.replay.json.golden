@@ -17,13 +17,9 @@
     "state_durations": {
       "ready": 24518844000
     },
-    "flicker_count": 1,
-    "flickers_by_category": {
-      "ready_between_working": 1
-    },
-    "flickers_by_reason": {
-      "agent finished turn → ready": 1
-    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
     "estimated_cost_usd": 0.03173865,
     "cum_input_tokens": 3,
     "cum_output_tokens": 373,
@@ -48,8 +44,8 @@
     },
     {
       "index": 1,
-      "event_index": 1,
-      "virtual_time": "2026-05-18T22:56:57.840983+02:00",
+      "event_index": 0,
+      "virtual_time": "2026-05-18T22:56:48.829722+02:00",
       "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
@@ -63,8 +59,8 @@
     },
     {
       "index": 2,
-      "event_index": 1,
-      "virtual_time": "2026-05-18T22:56:57.840983+02:00",
+      "event_index": 0,
+      "virtual_time": "2026-05-18T22:56:48.829722+02:00",
       "cause": "event",
       "prev_state": "working",
       "new_state": "ready",

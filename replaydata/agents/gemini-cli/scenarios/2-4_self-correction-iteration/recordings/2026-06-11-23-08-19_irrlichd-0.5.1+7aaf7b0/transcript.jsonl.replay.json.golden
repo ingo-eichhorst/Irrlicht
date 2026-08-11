@@ -12,19 +12,14 @@
     "consumed_events": 15,
     "total_transitions": 3,
     "first_event_time": "2026-06-11T23:08:19.472687+02:00",
-    "last_event_time": "2026-06-11T23:08:42.421555+02:00",
-    "wall_clock_session_duration": 22948868000,
+    "last_event_time": "2026-06-11T23:08:44.421555+02:00",
+    "wall_clock_session_duration": 24948868000,
     "state_durations": {
-      "ready": 15584602000,
-      "working": 9364266000
+      "working": 24948868000
     },
-    "flicker_count": 1,
-    "flickers_by_category": {
-      "working_between_ready": 1
-    },
-    "flickers_by_reason": {
-      "force ready→working on first activity": 1
-    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
     "estimated_cost_usd": 0.054462,
     "cum_input_tokens": 35870,
     "cum_output_tokens": 73,
@@ -47,8 +42,8 @@
     },
     {
       "index": 1,
-      "event_index": 1,
-      "virtual_time": "2026-06-11T23:08:35.057289+02:00",
+      "event_index": 0,
+      "virtual_time": "2026-06-11T23:08:19.472687+02:00",
       "cause": "event",
       "prev_state": "ready",
       "new_state": "working",

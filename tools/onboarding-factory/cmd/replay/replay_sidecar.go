@@ -114,6 +114,7 @@ func replayWithSidecar(transcriptPath, sidecarPath string, cfg reportSettings) (
 		return nil, err
 	}
 
+	r.extendWindowToLastTransition()
 	r.addDuration(r.state, r.report.Summary.LastEventTime.Sub(r.prevTransitionAt))
 	finalizeSummary(r.report, len(buckets.fswatches), r.stateDurations,
 		summaryMetrics(transcriptPath, cfg, r.lastMetrics), cfg.Adapter)
@@ -331,6 +332,11 @@ type sidecarReplayer struct {
 	// drift unrepresentable.
 	signals *session.SignalHolds
 
+	// fswatches is the primary session's recorded transcript_activity stream,
+	// kept so classifyAt can widen a clamped read to the next stat the daemon
+	// plausibly reached. See readBoundaryFor (#1342).
+	fswatches []lifecycle.Event
+
 	// children carries the subagents discovered via parent_linked. Each
 	// entry's state is updated as child transitions fire on the timeline;
 	// anyChildActive reads the map to decide whether to hold the parent
@@ -395,6 +401,7 @@ func newSidecarReplayer(transcriptPath string, srcBytes []byte, cfg reportSettin
 		stateDurations:   map[string]time.Duration{},
 		children:         children,
 		signals:          session.NewSignalHolds(),
+		fswatches:        fswatches,
 	}
 	r.emit(transition{
 		EventIndex:  -1,
@@ -405,6 +412,34 @@ func newSidecarReplayer(transcriptPath string, srcBytes []byte, cfg reportSettin
 		Reason:      "initial state",
 	})
 	return r, cleanup, nil
+}
+
+// extendWindowToLastTransition widens the reported observation window to cover
+// a transition emitted after the last recorded fs event.
+//
+// A debounce window fires at its DEADLINE, which is one debounce interval past
+// the event that opened it, so the process-exit and end-of-timeline flushes
+// both stamp transitions later than Summary.LastEventTime. emit() charges the
+// interval before each transition to the state it left, so those transitions
+// contribute duration outside the reported window and state_durations sums past
+// wall_clock_session_duration — while the trailing addDuration silently drops
+// its now-negative remainder.
+//
+// The transition's timestamp is the honest one and is NOT clamped: the daemon's
+// timer really did fire there (for codex/2-1_basic-turn, 2ms from the deadline
+// this replayer computes), so it is the window that was too narrow. Left alone
+// the inconsistency would have grown from 10 committed goldens to 100 (#1342).
+func (r *sidecarReplayer) extendWindowToLastTransition() {
+	n := len(r.report.Transitions)
+	if n == 0 {
+		return
+	}
+	last := r.report.Transitions[n-1].VirtualTime
+	if !last.After(r.report.Summary.LastEventTime) {
+		return
+	}
+	r.report.Summary.LastEventTime = last
+	r.report.Summary.WallClockDuration = last.Sub(r.report.Summary.FirstEventTime)
 }
 
 // emit appends a transition to the report and updates the running
@@ -464,6 +499,9 @@ type transitionCtx struct {
 // A zero-growth fswatcher pass — mistral-vibe's content-less slash-command
 // touch — must not force ready back to working on stale LastEventType.
 func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, ctx transitionCtx, grew bool) {
+	// Mirrors the daemon's skipClassification short-circuit (#329) exactly.
+	// classifyAt is responsible for handing this function a pass the daemon
+	// could actually have had — see readBoundaryFor there (#1342).
 	if domainMetrics.NoSubstantiveActivity {
 		return
 	}
@@ -530,22 +568,38 @@ func (r *sidecarReplayer) applyParentHoldAndSynthesizedWaiting(newState, reason 
 	}
 }
 
+// readTo advances the replayed transcript to boundary and re-runs the tailer,
+// reporting whether any new bytes were consumed. Both of classifyAt's reads go
+// through it — the nominal one at the recorded stat, and readBoundaryFor's
+// widening — so the write cursor is maintained in exactly one place.
+func (r *sidecarReplayer) readTo(boundary int64) (*tailer.SessionMetrics, bool, error) {
+	grew := boundary > r.lastSize
+	if grew {
+		if _, err := r.tmp.Write(r.srcBytes[r.lastSize:boundary]); err != nil {
+			return nil, false, err
+		}
+		r.lastSize = boundary
+	}
+	metrics, err := r.tailer.TailAndProcess()
+	return metrics, grew, err
+}
+
 // classifyAt writes transcript bytes up to fileSize, runs the tailer +
 // classifier, and mirrors SessionDetector.processActivity's force-r→w +
 // ClassifyState pattern. Any emitted transition is added to the report.
 func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
-	target := min(fileSize, int64(len(r.srcBytes)))
-	grew := target > r.lastSize
-	if grew {
-		if _, err := r.tmp.Write(r.srcBytes[r.lastSize:target]); err != nil {
-			return err
-		}
-		r.lastSize = target
-	}
-
-	metrics, err := r.tailer.TailAndProcess()
+	metrics, grew, err := r.readTo(min(fileSize, int64(len(r.srcBytes))))
 	if err != nil {
 		return err
+	}
+	// A pass that parsed only non-substantive lines and left LastEventType
+	// empty is the signature of a read boundary the daemon never had — widen
+	// it once and re-tail. See readBoundaryFor (#1342).
+	if wider, ok := r.readBoundaryFor(ctx.eventIdx, r.lastSize, metrics); ok {
+		if metrics, _, err = r.readTo(wider); err != nil {
+			return err
+		}
+		grew = true
 	}
 	r.lastMetrics = metrics
 	domainMetrics := replayengine.TailerToDomain(metrics)
@@ -566,6 +620,87 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 	r.signals.Overlay(replaySessionKey, domainMetrics, ctx.virtTime)
 	r.runClassifier(domainMetrics, ctx, grew)
 	return nil
+}
+
+// readBoundaryFor decides whether a clamped classify pass should be widened,
+// and to where. It returns (boundary, true) only for the one shape that is
+// provably an artifact of the recording rather than something the daemon saw.
+//
+// The sidecar records file_size from the fswatcher's stat at fire time —
+// SessionDetector.handleEvent writes `FileSize: ev.Size` BEFORE calling
+// onActivity, whose RefreshOnActivity then tails to EOF. So the daemon's read
+// always reached at least that stat and usually past it, since the agent keeps
+// appending during the tens of milliseconds the read takes. classifyAt clamps
+// to the stat, which for codex and pi — both of whom open a transcript with a
+// multi-kilobyte session_meta — can land exactly on the end of that header and
+// manufacture a "header line only" pass with no counterpart in the daemon's
+// history. NoSubstantiveActivity is then true by construction, #329's
+// short-circuit fires, and for 7 recordings that was the ONLY classification
+// the replay ever got: every later fs event coalesced into a debounce window
+// that process_exited cancelled before its deadline (correctly — the daemon's
+// timer really was cancelled), so the session's one recorded transition was
+// lost and its golden kept nothing but the synthetic init row (#1342).
+//
+// The widening is to the NEXT recorded stat for this session, or to the whole
+// transcript when there is no next event. That is the daemon's own semantics
+// read back off the recording: its single read absorbed whatever had been
+// written by the time it finished, and the next fswatcher fire is the tightest
+// upper bound the sidecar offers on where that was.
+//
+// Two properties make this safe, and both were measured (see the PR for #1342):
+//
+//   - It widens the BOUNDARY, never the verdict. #329's guard is re-applied
+//     unchanged to the re-tailed metrics, so a pass that is still
+//     non-substantive at the wider boundary still skips — which is what keeps
+//     codex/1-1_session-start replaying the zero transitions its daemon
+//     recorded. An earlier draft narrowed the guard itself instead
+//     (skip only when LastEventType != ""), and that classified on no evidence:
+//     it fabricated a ready→working in exactly those goldens, turning two that
+//     AGREED with their recording into two that disagreed.
+//   - It fires only on the artifact's signature, so it is not the global
+//     one-event lookahead that was also tried and rejected. Widening every
+//     leading-edge pass fixed 3 of the 7 and made overall extended-check
+//     divergence WORSE (146 → 153 recordings).
+//
+// MEASURED over all 309 sidecar-drivable recordings, stating the cost as well
+// as the win, since these two numbers are the whole argument for the change:
+//
+//	                                zero-transition  fabricated  divergent
+//	main                                         20           1        196
+//	debounce fix only                             7           1        146
+//	+ narrowing #329's guard (rejected)           0           3        145
+//	+ readBoundaryFor (shipped)                   4           1        145
+//
+// "fabricated" is recordings replaying a transition the daemon never logged;
+// its single case pre-dates #1342 and neither fix moves it. The rejected draft
+// bought the last 4 by inventing 2 — a golden that asserts the WRONG thing,
+// which is strictly worse than one that asserts nothing and is the failure
+// this whole ticket is about. The 4 that remain need a time-aware boundary
+// rather than a one-step widening: their transcripts are written essentially
+// instantaneously (pi/2-1_basic-turn writes 2556 bytes across 4 fs events
+// spanning 3ms), so the daemon's single read absorbed the whole file while the
+// later fswatcher fires were still queued carrying stale sizes. They are
+// pinned in knownZeroTransition in issue1342_debounce_test.go.
+//
+// consumed is the replayer's current write cursor (r.lastSize), NOT the pass's
+// nominal target: a pass whose fileSize sits BELOW the cursor writes nothing,
+// and comparing against the target there would return a boundary behind the
+// cursor and slice srcBytes backwards.
+func (r *sidecarReplayer) readBoundaryFor(eventIdx int, consumed int64, metrics *tailer.SessionMetrics) (int64, bool) {
+	if eventIdx < 0 || metrics == nil {
+		return 0, false
+	}
+	if !metrics.NoSubstantiveActivity || metrics.LastEventType != "" {
+		return 0, false
+	}
+	wider := int64(len(r.srcBytes))
+	if next := eventIdx + 1; next < len(r.fswatches) {
+		wider = min(r.fswatches[next].FileSize, wider)
+	}
+	if wider <= consumed {
+		return 0, false
+	}
+	return wider, true
 }
 
 // applyHookEvent mirrors SessionDetector.HandlePermissionHook: apply the hook's
@@ -750,9 +885,26 @@ func (r *sidecarReplayer) applyTimelineControlEntry(entry timelineEntry, b sidec
 		d.alive = true
 		return true, nil
 	case timelineProcessExit:
-		// Daemon torn down: pending debounce timer is cancelled (not fired),
-		// and the next lifetime starts a fresh session in ready. Reset state
-		// so lifetime-2 events don't coalesce with lifetime-1 debounce.
+		// A window whose deadline already passed is not "pending" — the
+		// daemon's timer fired it, and the transitions it produced are in the
+		// sidecar. Catch it up before tearing down, exactly as the hook and
+		// orphan branches do (issue #1342). Without this, a recording whose fs
+		// events all land inside one debounce window replayed ZERO transitions:
+		// the single classify pass ran on the first event against a partial
+		// transcript, every later event only extended the window, and this
+		// branch then discarded it — leaving a golden that held nothing but the
+		// synthetic init row and so could not fail when the classifier
+		// regressed. It also explains why relaxing flushPendingDebounce's
+		// early-return measured as no-change: by the time that trailing flush
+		// is reached, the reset below has already zeroed d.pending, d.coalesced
+		// and d.pendingSize, so there is nothing left for it to fire.
+		if err := r.flushDebounceIfExpired(entry.ts, d); err != nil {
+			return true, fmt.Errorf("flush before process exit: %w", err)
+		}
+		// Daemon torn down: a pending timer that has NOT yet expired is
+		// genuinely cancelled (not fired), and the next lifetime starts a fresh
+		// session in ready. Reset state so lifetime-2 events don't coalesce
+		// with lifetime-1 debounce.
 		*d = debounceState{debounceDelay: d.debounceDelay}
 		r.state = session.StateReady
 		return true, nil
