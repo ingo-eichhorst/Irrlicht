@@ -25,10 +25,10 @@
 // really was obtained (the line varies with nothing and carries nothing
 // address-shaped) and that the failure the beacon NEWLY admits is policed: an
 // entry naming a binary path that is no longer the running one must be
-// rewritten in place, exactly as a stale port must be. Only obligation 1
-// differs between the modes; obligations 2-4 are the same code, parameterised
-// by which seed stands in for "what a differently-situated daemon left behind"
-// and which address assertion applies.
+// rewritten in place, exactly as a stale port must be. Only the FIRST of the
+// four sub-tests differs between the modes; the other three are the same code,
+// parameterised by which seed stands in for "what a differently-situated daemon
+// left behind" and which address assertion applies.
 //
 // Declaring the WRONG mode cannot pass quietly, which is the objection
 // hook_receipt.go raises against flag-shaped options ("a wiring that silently
@@ -222,6 +222,7 @@ func assertDeliveryCarriesNoAddress(t *testing.T, h HookInstaller) {
 		t.Fatalf("delivery differs between the default and %s bind addresses (%q vs %q) — an address-free install must not vary with %s, or a daemon on another port writes a different line and the whole point of the mode is lost",
 			AltBindAddr, onDefault, onAlt, daemonaddr.EnvBindAddr)
 	}
+	assertDeliveryIsOurs(t, h, "delivery on the default bind address", onDefault)
 	assertNoAddress(t, "delivery on the default bind address", onDefault)
 	assertNoAddress(t, "delivery on "+AltBindAddr, onAlt)
 }
@@ -238,6 +239,7 @@ func assertEndpointFollowsBindAddr(t *testing.T, h HookInstaller) {
 
 	onDefault := deliveryOn(t, h, "")
 	onAlt := deliveryOn(t, h, AltBindAddr)
+	assertDeliveryIsOurs(t, h, "delivery on the default bind address", onDefault)
 	if onDefault == onAlt {
 		t.Fatalf("delivery is identical on the default and %s bind addresses (%q) — the endpoint does not follow %s",
 			AltBindAddr, onDefault, daemonaddr.EnvBindAddr)
@@ -312,7 +314,7 @@ func assertUninstallIsNotForeignScoped(t *testing.T, h HookInstaller) {
 	hooksMap := readHooksMap(t, path)
 	for _, event := range h.Events {
 		if hookjson.HasOurHook(hooksMap, event, h.Sentinel) {
-			t.Errorf("event %s: a default-port entry survived uninstall", event)
+			t.Errorf("event %s: %s survived uninstall", event, h.foreignDescription())
 		}
 	}
 }
@@ -337,6 +339,7 @@ func assertEveryEventDelivers(t *testing.T, h HookInstaller, path, want string) 
 	hooksMap := readHooksMap(t, path)
 	for _, event := range h.Events {
 		got := h.EndpointOf(onlyEntry(t, hooksMap, event))
+		assertDeliveryIsOurs(t, h, "event "+event, got)
 		if got != want {
 			t.Errorf("event %s: installed delivery = %q, want %q", event, got, want)
 		}
@@ -344,24 +347,69 @@ func assertEveryEventDelivers(t *testing.T, h HookInstaller, path, want string) 
 	}
 }
 
+// assertDeliveryIsOurs fails unless the delivery string carries the sentinel.
+//
+// It is the vacuity guard for EndpointOf, and it is load-bearing in
+// DeliveryAddressFree mode specifically. Inverting obligation 1 from "the two
+// deliveries must DIFFER" to "must be IDENTICAL" removed the only assertion
+// that proved EndpointOf observed anything at all: an EndpointOf reading a key
+// the entry does not carry returns "" for both, and "" is invariant, carries no
+// address, and equals the "" that the next sub-test compares against — so the
+// whole mode passes 4/4 while asserting nothing. That is not a hypothetical
+// slip; the key is the one field that genuinely differs between the wirings
+// already in the tree (claudecode and copilot read `url`, codex reads
+// `command`).
+//
+// The sentinel is the right probe because hookjson identifies OUR entries by
+// finding it in exactly the field EndpointOf is supposed to be reading, so a
+// delivery that does not contain it is either not ours or not being read.
+func assertDeliveryIsOurs(t *testing.T, h HookInstaller, what, delivery string) {
+	t.Helper()
+	if !strings.Contains(delivery, h.Sentinel) {
+		t.Fatalf("%s: %q does not carry Sentinel %q — EndpointOf is not reading the field the installer writes, so every obligation below it is graded against the wrong string",
+			what, delivery, h.Sentinel)
+	}
+}
+
 // assertAddressShape applies whichever address obligation h's mode carries to
-// one delivery string. It is the single place the two modes diverge below
-// obligation 1, which is what keeps obligations 2-4 one implementation.
+// one delivery string. It is the single place the two modes diverge below the
+// first sub-test, which is what keeps the other three one implementation.
 func assertAddressShape(t *testing.T, h HookInstaller, what, delivery string) {
 	t.Helper()
-	if h.Delivery == DeliveryAddressFree {
+	switch h.Delivery {
+	case DeliveryURL:
+		assertResolvedPort(t, what, delivery)
+	case DeliveryAddressFree:
 		assertNoAddress(t, what, delivery)
-		return
+	default:
+		// The switch in AssertHookEndpointFollowsBindAddr forces a new mode to
+		// name its obligations; without this one, it would silently inherit the
+		// URL address check down here and be told to carry a port.
+		t.Fatalf("unhandled DeliveryMode %d in assertAddressShape", h.Delivery)
 	}
-	assertResolvedPort(t, what, delivery)
 }
 
 // addressShaped matches anything that could pin a delivery to one daemon: a
-// scheme, a loopback host, or a port-shaped `:<digits>`. It is deliberately
-// broader than the ":<port>/" fragment assertResolvedPort looks for, because
-// the failure it guards is an adapter reintroducing an address in SOME spelling
-// — including one no daemon of ours currently uses.
-var addressShaped = regexp.MustCompile(`(?i)https?://|\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0)\b|\[::1\]|:\d{2,5}(?:\b|/)`)
+// scheme, a loopback host, a port-shaped `:<digits>`, or a port passed as a
+// flag argument. It is deliberately broader than the ":<port>/" fragment
+// assertResolvedPort looks for, because the failure it guards is an adapter
+// reintroducing an address in SOME spelling — including one no daemon of ours
+// currently uses.
+//
+// The colon-less `port 7837` branch is not decoration. A hardcoded port is
+// invariant across bind addresses, so it slips past the equality half of the
+// first sub-test as well, and `--port 7837` would then have satisfied BOTH
+// halves while writing exactly the #1178 defect into the user's config.
+//
+// It is applied to the WHOLE delivery, which for a beacon begins with a
+// shell-quoted absolute path, so it is fail-closed on two known false
+// positives: a binary path containing `:<digits>` or the literal `localhost`
+// (`/home/localhost-dev/bin/irrlichd`) reads as address-shaped. That is the
+// deliberate direction — the failure message prints the matched fragment and
+// the whole delivery, so the cause is legible — and no layout we ship trips it
+// (`/Applications/Irrlicht.app/...`, `/opt/homebrew/bin/...`, `~/.local/bin/...`
+// and go's `/var/folders/.../go-build.../b001/...` test paths are all clean).
+var addressShaped = regexp.MustCompile(`(?i)https?://|\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0)\b|\[::1\]|:\d{2,5}(?:\b|/)|\bports?\b[\s=:]*\d{2,5}\b`)
 
 // assertNoAddress fails when delivery carries anything address-shaped. This is
 // the DeliveryAddressFree counterpart of assertResolvedPort, and it is what
@@ -395,10 +443,14 @@ func portMarker(bindAddr string) string {
 // foreignDescription names what seedForeignInstall arranged, for the failure
 // messages of the two obligations built on it.
 func (h HookInstaller) foreignDescription() string {
-	if h.Delivery == DeliveryAddressFree {
+	switch h.Delivery {
+	case DeliveryURL:
+		return "a default-port install"
+	case DeliveryAddressFree:
 		return "an install naming a different irrlichd binary"
+	default:
+		return fmt.Sprintf("a foreign install (unhandled DeliveryMode %d)", h.Delivery)
 	}
-	return "a default-port install"
 }
 
 // seedForeignInstall leaves behind exactly what a differently-situated daemon
@@ -413,15 +465,18 @@ func (h HookInstaller) foreignDescription() string {
 // writes.
 func seedForeignInstall(t *testing.T, h HookInstaller, path string) {
 	t.Helper()
-	if h.Delivery == DeliveryAddressFree {
-		if _, err := h.ForeignInstall(); err != nil {
-			t.Fatalf("seeding %s: %v", h.foreignDescription(), err)
-		}
-	} else {
+	switch h.Delivery {
+	case DeliveryURL:
 		t.Setenv(daemonaddr.EnvBindAddr, "")
 		if _, err := h.EnsureInstalled(); err != nil {
 			t.Fatalf("seeding %s: %v", h.foreignDescription(), err)
 		}
+	case DeliveryAddressFree:
+		if _, err := h.ForeignInstall(); err != nil {
+			t.Fatalf("seeding %s: %v", h.foreignDescription(), err)
+		}
+	default:
+		t.Fatalf("unhandled DeliveryMode %d in seedForeignInstall", h.Delivery)
 	}
 
 	// Sentinel is the one field nothing else cross-checks, and a wrong value

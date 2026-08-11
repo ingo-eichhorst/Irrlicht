@@ -11,14 +11,18 @@
 // move when a real adapter is edited.
 //
 // The installer below is deliberately the SHAPE an adapter should have rather
-// than the smallest thing that passes. Note in particular that
-// referenceBeaconConfig returns a hookjson.Config and not a (Config, error):
-// the binary path is resolved ONCE, at install time, so the config builder and
-// its four callers stay infallible. Resolving it per-config instead is what
-// measured +12 lines of error branching when copilot evaluated beacon delivery.
+// than the smallest thing that passes, and that shape is copilot's: hookConfig
+// takes the already-resolved fallible inputs as parameters and returns a
+// hookjson.Config, NOT a (Config, error), so each exported entry point owns its
+// own resolution. copilot parameterises on the settings path; a beacon adapter
+// parameterises on the path AND the rendered command, which is why
+// hookbeacon.InstalledCommand exists and is called once. Resolving the binary
+// per-config instead is what measured +12 lines of error branching when copilot
+// evaluated beacon delivery.
 package contracttesting
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,8 +53,16 @@ var referenceBeaconEvents = []string{"BeforeTool", "Stop"}
 // silently grading an empty command.
 var referenceBeaconCommand, referenceBeaconCommandErr = hookbeacon.InstalledCommand(referenceBeaconAdapter)
 
-func referenceBeaconSettingsPath() string {
-	return filepath.Join(os.Getenv(referenceBeaconHomeEnv), "hooks.json")
+// referenceBeaconHooksPath resolves the settings file, and reports an error
+// rather than a relative path when the home is unset — the shape every real
+// adapter's resolver has (copilotHooksPath, codexHooksPath). filepath.Join on
+// an empty home would yield a bare "hooks.json", i.e. the process CWD.
+func referenceBeaconHooksPath() (string, error) {
+	home := os.Getenv(referenceBeaconHomeEnv)
+	if home == "" {
+		return "", fmt.Errorf("contracttesting: %s is not set", referenceBeaconHomeEnv)
+	}
+	return filepath.Join(home, "hooks.json"), nil
 }
 
 // referenceBeaconEntry is the inner hook object. The timeout is milliseconds,
@@ -65,10 +77,10 @@ func referenceBeaconEntry(command string) map[string]interface{} {
 }
 
 // referenceBeaconConfig returns a Config, not a (Config, error) — see the file
-// comment. command is empty only on the uninstall path, which never needs it.
-func referenceBeaconConfig(command string) hookjson.Config {
+// comment.
+func referenceBeaconConfig(path, command string) hookjson.Config {
 	return hookjson.Config{
-		Path:       referenceBeaconSettingsPath(),
+		Path:       path,
 		Sentinel:   hookbeacon.Sentinel(referenceBeaconAdapter),
 		Events:     referenceBeaconEvents,
 		MatcherFor: func(string) string { return "" },
@@ -87,25 +99,39 @@ func referenceBeaconConfig(command string) hookjson.Config {
 }
 
 func referenceBeaconEnsureInstalled() (bool, error) {
-	return hookjson.EnsureInstalled(referenceBeaconConfig(referenceBeaconCommand))
+	path, err := referenceBeaconHooksPath()
+	if err != nil {
+		return false, err
+	}
+	return hookjson.EnsureInstalled(referenceBeaconConfig(path, referenceBeaconCommand))
 }
 
-// referenceBeaconUninstall passes no command on purpose: our entries are
-// identified by Sentinel, which names neither the binary path nor an address,
-// so removal must not depend on resolving a binary that `site/install.sh
-// --uninstall` has already deleted.
+// referenceBeaconUninstall removes our entries whatever binary they name. It
+// needs no special casing to do that: Sentinel names neither the binary path
+// nor an address, so an entry installed by a since-deleted irrlichd is still
+// matched — which matters because `site/install.sh --uninstall` removes the
+// binary without calling --uninstall-hooks. uninstall_is_not_binary_scoped is
+// what holds that property, rather than this comment.
 func referenceBeaconUninstall() (bool, error) {
-	return hookjson.Uninstall(referenceBeaconConfig(""))
+	path, err := referenceBeaconHooksPath()
+	if err != nil {
+		return false, err
+	}
+	return hookjson.Uninstall(referenceBeaconConfig(path, referenceBeaconCommand))
 }
 
 // referenceBeaconForeignInstall is the address-free counterpart of seeding a
 // default-port install: the same installer, situated on a different irrlichd.
 func referenceBeaconForeignInstall() (bool, error) {
+	path, err := referenceBeaconHooksPath()
+	if err != nil {
+		return false, err
+	}
 	command, err := hookbeacon.Command(referenceForeignBinary, referenceBeaconAdapter)
 	if err != nil {
 		return false, err
 	}
-	return hookjson.EnsureInstalled(referenceBeaconConfig(command))
+	return hookjson.EnsureInstalled(referenceBeaconConfig(path, command))
 }
 
 func TestAddressFreeDeliveryContract(t *testing.T) {
@@ -115,9 +141,12 @@ func TestAddressFreeDeliveryContract(t *testing.T) {
 	AssertHookEndpointFollowsBindAddr(t, HookInstaller{
 		Delivery: DeliveryAddressFree,
 		SettingsPath: func(t *testing.T) string {
-			home := t.TempDir()
-			t.Setenv(referenceBeaconHomeEnv, home)
-			return referenceBeaconSettingsPath()
+			t.Setenv(referenceBeaconHomeEnv, t.TempDir())
+			path, err := referenceBeaconHooksPath()
+			if err != nil {
+				t.Fatalf("resolving the reference hooks path: %v", err)
+			}
+			return path
 		},
 		Sentinel: hookbeacon.Sentinel(referenceBeaconAdapter),
 		Events:   referenceBeaconEvents,
