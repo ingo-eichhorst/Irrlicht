@@ -58,12 +58,82 @@ Use `./.build` for build artifacts.
 
 ## Testing
 
+**A test earns its place by having been seen fail.** A green that was never red is a
+claim, not evidence. How you obtain that red depends on what the test is for.
+
 **A defect test proves nothing until it has been seen red.** Run it before the fix
 exists, confirm it fails, paste the failure. A test that passes on `main` means either
 the diagnosis is wrong or the test doesn't reach the defect (a stub blind to the
 asserted field is the classic) — stop and report rather than shipping the green. Locks
 — tests pinning behavior that must *not* change — pass by construction; say which ones
 those are. `ir:exec` enforces this at Phase 4 step 11a; it binds outside `ir:exec` too.
+
+**Anything a change *adds* has no "before the fix" to run against, and owes a
+deliberate mutation instead.** A new guard, a static `architecture_test.go` rule, a
+linter or registry tripwire, a derived count or score, a schema constraint, a data
+migration, a config rewriter, a contract assertion — every one of them passes the
+moment it is written, which is exactly the condition the red-first rule exists to
+prevent. So break the thing being protected — violate the invariant, perturb the
+derived number, corrupt a migrated value — and confirm the new check goes red. If
+nothing does, it does not reach what it claims to cover, and that is the same
+stop-and-report as a defect test that passes on `main`. Four agents in one fleet run
+arrived at this gap from four directions — a new guard (#1366), derived numbers
+(#1363), a data migration (#1367), a layering rule (#1391) — each because a reviewer
+ran a mutation nobody had asked for. **Prefer committing the mutation to describing
+it**: `tools/lib/testdata/posix-lint/`'s deliberately-broken fixtures are the shape
+("committed rather than improvised so the mutation evidence outlives the PR"), and
+`TestSourceScanCatchesEveryKnownShape`
+(`core/application/services/construction_test.go`) is the same idea as a corpus.
+Evidence living only in a merged PR body is re-run by nothing, which for the
+`contracttesting` families is #1479. A guard that *rewrites* an existing one owes its
+predecessor's cases as locks on top of its own — "Guarded construction" below carries
+that rule and the incident that earned it.
+
+**A verification mechanism must fail loudly when it cannot run.** Absence of a finding
+and inability to look must never produce the same output: "the thing under test never
+executed" is the most expensive way to fail, because it is indistinguishable from
+success. Wherever a check greps, matches, mutates, shells out or waits on a readiness
+signal, assert that the operation actually happened — not merely that it reported
+nothing. The guard is one line each time, and each one caught something real
+immediately after being added: `posix-lint.sh` refusing rather than skipping when it
+finds no POSIX shell, no static linter, or no files (below); the architecture corpus
+asserting every case still contains the construct it plants (below); a mutation
+harness asserting its mutation changed the file, which then caught two more stale
+mutations (#1390) — and the next harness built on that from the start, carrying a
+deliberate no-match row that must report `STALE`, so its integrity check is provably
+not vacuous (#1450); and an e2e test waiting on a signal narrower than "the daemon
+published its addr file", which fires *before* the consent effects under test run, so
+a deliberately-broken binary came back green (#1449; `ir:exec` Phase 4 step 11 carries
+the recipe).
+
+**A validator that cannot parse its input checks MORE, never less.** An input it
+cannot read with confidence is neither a quiet pass nor a skip: it is the case where
+the validator has the least idea what it is looking at, so it is the last place to
+drop checks. `skill-lint.sh`'s fence and frontmatter checks exist for exactly that
+reason (below) — skipping is how it tells "documents a marker" from "has one", and an
+unbalanced delimiter would otherwise silence every check after it.
+
+**Code that emits bytes from a structural diff gets a property test.** Anything that
+computes an edit and writes the result — config rewriters, formatting-preserving
+serializers, patchers, migrators — is tested by generating random inputs and random
+mutations and asserting the output round-trips, not only by hand-written cases, which
+encode what the author already thought of and are therefore the same set they got
+right. `hookjson`'s splicer shipped with seven green round-trip tests and a defect
+writing `,,` into ~11% of randomly shaped documents, because all seven removed the
+*tail* of a container — the one position where the arithmetic was correct.
+`TestSplice_PropertyRandomMutations`
+(`core/adapters/inbound/agents/hookjson/jsonc_test.go`) is the shape to copy: a fixed
+seed so a failure reproduces, the document *and* the mutation printed in the failure
+message, and a committed iteration count small enough to stay in the suite (2000,
+0.07s) with a much larger sweep across several seeds run locally before landing. Two
+things the PR says out loud. **Which structural axes the generator varies** — one
+that varies only the axis you thought of is the same vacuous green wearing a
+different hat: that test's first draft mutated only object members, so it never
+produced a removal run longer than one item and never touched an array, which is
+precisely what the production uninstall path does, and a fourth defect survived until
+the generator was widened. And **which properties survive which mutation** — "every
+comment is preserved" is false for a deletion, since the deleted subtree's comments
+go with it, and asserting it anyway produces false failures that erode the test.
 
 Before marking a ticket done, run the full suite — every layer must pass:
 
@@ -348,7 +418,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
 - Managed user files: every `modify`-kind permission with an `Apply` closure
   declares the shared, user-owned file that closure writes
   (`agent.Permission.Writes`, an `agent.ManagedUserFile` carrying `Path` +
-  `Uninstall`). Two projections read it, and they read deliberately different
+  `Uninstall`). Three projections read it, and they read deliberately different
   slices: `agents.ManagedUserFiles` returns everything — what
   `irrlichd --print-managed-files` prints and the onboarding recorder backs up
   before spawning a `grant-all` daemon against the user's real `$HOME` — while
@@ -373,7 +443,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   (`TestUninstallTaskEtaReadsOnlyTheInstructionsSlice`), because a
   single-sided narrowing check cannot see the one failure that matters most —
   two commands revoking each other's capability.
-  Both project the **full consent catalog** (`consentCatalog` in
+  All three project the **full consent catalog** (`consentCatalog` in
   `core/cmd/irrlichd`), not `agents.All()`: three daemon-wide declarations —
   gastown, launcher, kitty — are appended outside the adapter registry, and
   projecting only the registry is exactly how the kitty config patch was
@@ -409,10 +479,11 @@ Before marking a ticket done, run the full suite — every layer must pass:
   longer installs hooks** — that was the damage, not a regression.
   All seven contract families pass by construction against a correct adapter —
   or, for a delivery route no adapter has adopted yet, against its reference
-  wiring — so their whole value is that they *can* fail: a new or reworked contract
-  assertion lands with the deliberate mutation that was seen red for each
-  obligation recorded in its PR — the same bar the red-first rule above sets
-  for defect tests.
+  wiring — so their whole value is that they *can* fail. A new or reworked
+  contract assertion is therefore the mutation rule at the top of this section
+  in its most literal form: it lands with the deliberate mutation seen red for
+  each obligation. That evidence currently lives in the PR body, where nothing
+  re-runs it — #1479.
 - Guarded construction: not a contract family — a package-local pair of guards,
   `core/application/services/construction_test.go`. A service whose fields
   include maps, channels, or anything else whose zero value is unusable is
@@ -457,8 +528,8 @@ Before marking a ticket done, run the full suite — every layer must pass:
   promotes them, which is how one gets hardened). The fence and frontmatter
   checks exist because skipping is how the linter tells "documents a marker"
   from "has one" — so an unbalanced delimiter would otherwise silence the rest
-  of the file, and the rule is that when a file cannot be parsed with
-  confidence the linter degrades toward *more* checking, never less. Runs as
+  of the file. That is the parse-failure rule at the top of this section in its
+  local form. Runs as
   its own `skill-file lint` gate in `tools/preflight.sh` (scoped to skill
   markdown plus the linter itself) and unscoped as test.yml's "Lint skill
   files" step — first in the job, before `setup-go`. Its own tests are

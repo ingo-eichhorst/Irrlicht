@@ -468,6 +468,22 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
     construction. Say which tests those are explicitly, rather than letting their
     green read as a red-first proof.
 
+    **A check the change *adds* has no "before" to run against — mutate instead.**
+    A new guard, a static architecture rule, a linter or tripwire, a derived count
+    or score, a schema constraint, a migration, a config rewriter, a contract
+    assertion: each passes the moment it is written, so break the thing it
+    protects, confirm it goes red, and paste that failure to the same bar as
+    above. Nothing going red means the check does not reach what it claims to
+    cover — **STOP and report**, exactly as for a defect test that passes on
+    `main`. AGENTS.md's Testing section carries the full rule, the categories, why
+    committing the mutation as a fixture beats describing it in a PR body, and the
+    property-test convention for anything that computes an edit and writes bytes
+    (a config rewriter, a patcher, a migrator), where hand-written cases encode
+    the author's blind spot and cannot substitute. (Real incident, #1382/#1366: a
+    run's two worst findings were both untested *guards* added alongside the fix,
+    caught only because the review subagent ran a mutation battery on its own
+    initiative — this step said nothing about them.)
+
     This applies to test code the *issue itself* pasted. A code block in an issue
     is a proposal, not evidence: `/ir:triage` marks such a test **unproven** on
     its Verifiability axis, and an untriaged one owes you the same run. (Real
@@ -1006,6 +1022,10 @@ Phase 6.
 - A defect test proves nothing until it has been seen red (Phase 4 step 11a). This
   binds regardless of where the test came from — the issue, `/ir:triage`, or your
   own diagnosis; a green that was never red is the failure mode, not the author.
+  The same bar binds a check the change *adds* — a guard, a static rule, a derived
+  number, a migration, a contract assertion — where the equivalent of running it
+  before the fix is mutating what it protects (same step; AGENTS.md's Testing
+  section has the categories).
 - **Verification is `tools/preflight.sh`, chunked by `--only` group in the
   foreground — never the unscoped run backgrounded** (Phase 4 step 11). The
   unscoped run reliably exceeds an automated caller's 600s command budget;
