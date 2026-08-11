@@ -1,0 +1,16 @@
+{
+  "description": "index 1 pairs working→waiting against working→ready — compareOrdered already reports that as state_differs, so subtracting their timestamps would double-count one sequence divergence as a 900s timing divergence. The pair is excluded, and the pairs either side of it are still measured",
+  "recorded": [
+    {"seq": 1, "ts": "2026-04-11T10:00:00.000000Z", "kind": "state_transition", "session_id": "s", "prev_state": "ready", "new_state": "working"},
+    {"seq": 2, "ts": "2026-04-11T10:00:01.000000Z", "kind": "state_transition", "session_id": "s", "prev_state": "working", "new_state": "waiting"},
+    {"seq": 3, "ts": "2026-04-11T10:00:02.000000Z", "kind": "state_transition", "session_id": "s", "prev_state": "waiting", "new_state": "ready"}
+  ],
+  "replayed": [
+    {"virtual_time": "2026-04-11T10:00:00.005000Z", "prev_state": "ready", "new_state": "working"},
+    {"virtual_time": "2026-04-11T10:15:01.000000Z", "prev_state": "working", "new_state": "ready"},
+    {"virtual_time": "2026-04-11T10:00:02.007000Z", "prev_state": "waiting", "new_state": "ready"}
+  ],
+  "want_deltas_ns": [5000000, 7000000],
+  "want_first_drift": null,
+  "want_worst_ns": 7000000
+}

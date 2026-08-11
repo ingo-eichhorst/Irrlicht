@@ -24,6 +24,9 @@ func runExtendedCheck(sidecarPath string, replayed []transition) (*extendedCheck
 		ReplayedCount: len(replayedReal),
 	}
 	check.OrderedMatches, check.OrderedMismatches = compareOrdered(recorded, replayedReal)
+	// Same two slices, same index-by-index pairing — see transitionTimeDeltas
+	// for why that identity is a requirement and not just tidiness (#1480).
+	check.TimeDeltas = transitionTimeDeltas(recorded, replayedReal)
 
 	recordedKinds := uniqueTransitionKinds(recorded, func(e lifecycle.Event) (string, string) { return e.PrevState, e.NewState })
 	replayedKinds := uniqueTransitionKinds(replayedReal, func(t transition) (string, string) { return t.PrevState, t.NewState })
@@ -50,6 +53,13 @@ func dropInitTransitions(replayed []transition) []transition {
 // compareOrdered walks recorded and replayed transitions index-by-index up to
 // the shorter slice's length, then reports the longer slice's tail as
 // missing/extra.
+//
+// It reads prev_state/new_state and NEVER the time. That is by design and is
+// now stated rather than merely true: transitionTimeDeltas is the timing
+// counterpart, riding this exact pairing, so the two figures describe the same
+// set of transitions (#1480). A change to the pairing here must be made there
+// too, or the ordered-divergence figure and the timing figure start disagreeing
+// about which transitions they are talking about.
 func compareOrdered(recorded []lifecycle.Event, replayedReal []transition) (matches int, mismatches []transitionMismatch) {
 	n := min(len(recorded), len(replayedReal))
 	for i := 0; i < n; i++ {

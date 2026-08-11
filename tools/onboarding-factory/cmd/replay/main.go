@@ -397,8 +397,8 @@ func printSummary(report *replayReport) {
 		if len(c.OrderedMismatches) > 0 {
 			orderMark = "FAIL"
 		}
-		fmt.Fprintf(os.Stderr, " [extended-check: kinds %s ordered %d/%d %s]",
-			kindsMark, c.OrderedMatches, c.RecordedCount, orderMark)
+		fmt.Fprintf(os.Stderr, " [extended-check: kinds %s ordered %d/%d %s %s]",
+			kindsMark, c.OrderedMatches, c.RecordedCount, orderMark, driftSummary(c.TimeDeltas))
 	}
 	fmt.Fprintln(os.Stderr)
 }

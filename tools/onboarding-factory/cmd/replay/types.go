@@ -108,6 +108,20 @@ type extendedCheck struct {
 	ReplayedUniqueKinds []string             `json:"replayed_unique_kinds"`
 	MissingKinds        []string             `json:"missing_kinds,omitempty"`
 	ExtraKinds          []string             `json:"extra_kinds,omitempty"`
+
+	// TimeDeltas is #1480's measurement: per kind-matched pair, how far the
+	// replay's virtual_time sits from the ts the daemon logged for the same
+	// transition. See timing_drift.go.
+	//
+	// `json:"-"` is deliberate and is the whole reason this lands as a
+	// measurement rather than a golden change. Goldens ARE this struct (only
+	// SidecarPath, GeneratedAt and SourceTranscript are zeroed before
+	// encoding), so serializing a duration here would rewrite all 399 of them
+	// in the same commit that introduces the thing they would be rewritten to
+	// assert — the reviewer could not tell a correct baseline from a wrong one.
+	// Goldening the delta is the issue's option 3 and is argued, with this
+	// measurement in hand, in the PR rather than assumed here.
+	TimeDeltas []timeDelta `json:"-"`
 }
 
 // transitionMismatch is a single divergence between replayed and recorded

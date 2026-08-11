@@ -62,6 +62,20 @@ found_any=0
 # variable error.
 extended_divergences=""
 extended_divergence_count=0
+# #1480: transition-timing drift — how far each reproduced transition sits from
+# the ts the recording's own daemon logged for it. Reported beside the
+# divergence figure above because they are the two halves of one question:
+# that one asks whether the replay produced the same transitions, this one
+# whether it produced them at the same TIME. Nothing asked the second until
+# #1480, so a transition reproduced 31s early was a full pass.
+#
+# The authoritative implementation is Go (cmd/replay/timing_drift.go, gated by
+# TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog). This block only
+# surfaces the per-recording figure the replay binary already prints, because a
+# `go test` that passes prints nothing without -v, and an unread measurement is
+# the failure mode #1480 is about.
+timing_drifts=""
+timing_drift_count=0
 while IFS= read -r fix; do
   [[ -z "$fix" ]] && continue
   [[ "$fix" == */subagents/* ]] && continue
@@ -112,7 +126,35 @@ while IFS= read -r fix; do
   # `preflight.sh` coexist with a red CI on a fresh checkout, inverting the
   # local-CI-parity contract this script provides.
   rm -f "$json"
-  "./$BIN" --out "$json" --debounce "$DEBOUNCE" "$fix" || true
+  # stderr is captured rather than passed straight through so the per-recording
+  # extended-check line can be tallied; it is echoed on unchanged afterwards, so
+  # the sweep's live output is what it always was.
+  replay_err="$("./$BIN" --out "$json" --debounce "$DEBOUNCE" "$fix" 2>&1 >/dev/null || true)"
+  [[ -n "$replay_err" ]] && printf '%s\n' "$replay_err" >&2
+  # Tally the ordered/kind divergence. These two counters were added with the
+  # reporting block at the end of this script but nothing ever incremented
+  # them, so that block could not print and the "N of 309 diverge" figure it
+  # exists to show had to be recomputed by hand every time (#1480).
+  if printf '%s' "$replay_err" | grep -q 'extended-check:.*FAIL'; then
+    extended_divergences="${extended_divergences}   ${adapter}/${kind}/${name}/${recname}
+"
+    extended_divergence_count=$((extended_divergence_count + 1))
+  fi
+  # Tally the timing drift. The threshold matches driftThreshold in
+  # cmd/replay/timing_drift.go, which is chosen from the measured distribution
+  # (a near-empty decade between 100ms and 1s) rather than picked.
+  timing_worst="$(printf '%s' "$replay_err" | sed -n 's/.*timing \([0-9][0-9]*\) pairs worst \([+-][0-9.][0-9.]*\)s@\([0-9][0-9]*\).*/\1 \2 \3/p' | tail -1)"
+  if [[ -n "$timing_worst" ]]; then
+    tw_pairs="${timing_worst%% *}"
+    tw_rest="${timing_worst#* }"
+    tw_delta="${tw_rest%% *}"
+    tw_index="${tw_rest##* }"
+    if awk "BEGIN{d=$tw_delta; if (d<0) d=-d; exit !(d > 1.0)}"; then
+      timing_drifts="${timing_drifts}   ${adapter}/${kind}/${name}/${recname}: worst ${tw_delta}s at pair ${tw_index} of ${tw_pairs}
+"
+      timing_drift_count=$((timing_drift_count + 1))
+    fi
+  fi
   if [[ ! -s "$json" ]]; then
     echo "replay failed (no report written) for $fix" >&2
     exit 1
@@ -318,6 +360,15 @@ if [[ "$extended_divergence_count" -gt 0 ]]; then
   echo "== extended-check divergences (informational: replay vs the daemon that made the recording) ==" >&2
   printf '%s' "$extended_divergences" >&2
   echo "   $extended_divergence_count recording(s); these do not fail the build — the byte-identity goldens are the gate." >&2
+  echo >&2
+fi
+
+if [[ "$timing_drift_count" -gt 0 ]]; then
+  echo "== transition-timing drift >1s (informational: replay's virtual_time vs the daemon's own ts) ==" >&2
+  printf '%s' "$timing_drifts" >&2
+  echo "   $timing_drift_count recording(s). A NEGATIVE delta means the replay fired EARLY — ahead of" >&2
+  echo "   the daemon. These do not fail the build here; the gate is" >&2
+  echo "   TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog, which ratchets the set (#1480)." >&2
   echo >&2
 fi
 

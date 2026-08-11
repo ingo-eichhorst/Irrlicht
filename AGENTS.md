@@ -597,6 +597,43 @@ Before marking a ticket done, run the full suite — every layer must pass:
   surfaces without Docker. Takes ~3 minutes unscoped; under `--changed` it
   runs only when the diff touches `replaydata/`, the factory, or the
   `core/` parsers and tailer a golden is derived from.
+- Replay transition timing: a golden records a `virtual_time` on every
+  transition, and until #1480 **nothing compared it to anything** — the
+  goldens pin it only against their own previous value, `compareOrdered` walks
+  `prev_state`/`new_state` index-by-index and never reads the time, and the
+  "N of 309 recordings diverge" headline every replay PR quotes is counts and
+  kinds only. So a transition reproduced at the right position in the ORDER but
+  31 seconds from when the daemon made it was a full pass, and the golden then
+  pinned it as correct. `transitionTimeDeltas`
+  (`tools/onboarding-factory/cmd/replay/timing_drift.go`) measures each
+  reproduced transition against the `ts` the recording's own `events.jsonl`
+  carries, riding `compareOrdered`'s exact pairing so the two figures describe
+  the same transitions; a pairing change in one is a change owed to the other.
+  Only KIND-MATCHED pairs are measured — where `compareOrdered` reports
+  `state_differs` the two sides are not the same transition, so their timestamp
+  difference means nothing and counting it would report one sequence divergence
+  twice.
+  It is a **ratchet, not a tolerance gate**, and that is the deliberate
+  shape: 28.7% of the catalog's 818 kind-matched pairs are already more than 1s
+  from their daemon, so a gate failing on all of them would protect nothing.
+  `TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog` walks all 309
+  sidecar-driven recordings, prints the distribution, and fails when a
+  recording NEWLY drifts, when a pinned entry stops drifting and is left to rot,
+  or when the aggregate counts grow — the same idiom `knownZeroTransition`
+  uses. The 1s threshold is read off the measured distribution rather than
+  picked: |delta| is sharply bimodal (70.0% under 100ms, 28.7% over 1s) with a
+  near-empty decade between, so the cut lands where ~1% of the population
+  lives; `driftThreshold`'s doc comment carries the histogram. The 20 goldens
+  #1476 documented as its accepted cost are enumerated by name in
+  `knownFirstTransitionDrift` rather than living in a paragraph of a doc
+  comment, which is what #1480 was filed about. Its mutation evidence is
+  committed, not described: `cmd/replay/testdata/timing/` holds one file per
+  timing shape, carrying both verdicts on purpose — a detector that flags
+  everything and one that flags correctly are indistinguishable without the
+  cases that must stay silent. `tools/replay-fixtures.sh` reports the same
+  figure beside the divergence figure, because a `go test` that passes prints
+  nothing without `-v` and an unread measurement is the failure mode this
+  closes.
 - Replay goldens (when a recording or replay-output change is in play):
   regenerate with `UPDATE_REPLAY_GOLDENS=1 go test
   ./tools/onboarding-factory/cmd/replay/... -count=1` (the `-count=1`
