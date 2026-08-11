@@ -427,8 +427,14 @@ func newSidecarReplayer(transcriptPath string, srcBytes []byte, cfg reportSettin
 //
 // The transition's timestamp is the honest one and is NOT clamped: the daemon's
 // timer really did fire there (for codex/2-1_basic-turn, 2ms from the deadline
-// this replayer computes), so it is the window that was too narrow. Left alone
-// the inconsistency would have grown from 10 committed goldens to 100 (#1342).
+// this replayer computes), so it is the window that was too narrow.
+//
+// Measured by counting goldens whose state_durations sum exceeds
+// wall_clock_session_duration: 42 of 399 on origin/main (all 42 sidecar-driven,
+// none transcript-only; 41 exceed by exactly the 2s debounce window and one by
+// 104s), 132 of 365 with #1342's two fixes but this extension disabled, and 0
+// of 399 with it. So this is not a cosmetic tidy-up — the debounce fix alone
+// would have tripled a pre-existing inconsistency (#1342).
 func (r *sidecarReplayer) extendWindowToLastTransition() {
 	n := len(r.report.Transitions)
 	if n == 0 {
@@ -646,6 +652,37 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 // read back off the recording: its single read absorbed whatever had been
 // written by the time it finished, and the next fswatcher fire is the tightest
 // upper bound the sidecar offers on where that was.
+//
+// KNOWN COST, and it is a real one: the bound is the next stat's SIZE, never
+// its TIME. When the next fswatcher fire is seconds away, the widening reads
+// bytes that provably did not exist at the pass being classified, so the
+// transition is reproduced at the right place in the ORDER but earlier than
+// the daemon made it. Measured over 114 firings (one per recording, every one
+// at eventIdx 0): gap p50=42ms, p75=13.5s, p90=15.9s, max=31.0s — so the
+// "single read absorbs what was written" story above holds for the median and
+// is false for the 42 firings whose gap exceeds 1s. 20 goldens now pin a first
+// transition more than 1s ahead of their own events.jsonl (worst:
+// mistral-vibe/2-12_context-compaction, 30.976s early). The three recordings
+// this actually rescues have gaps of 1ms, 5ms and 60ms — the win comes
+// entirely from the justified regime, the drift entirely from the other one.
+//
+// A gap bound was tried and REJECTED on measurement, not taste. Capping the
+// widening at 200ms keeps all three #1342 tests green with an unchanged
+// knownZeroTransition set and collapses the six worst drifts (-30.976s ->
+// -0.022s), but it breaks 35 gemini-cli recordings that HEAD reproduces
+// exactly (-0.000s -> +10..+28s): there the long gap is idle time AFTER a
+// write the daemon did absorb. The sidecar cannot distinguish "gap is idle
+// after the write" from "gap is before the write happened" — the same
+// limitation the four knownZeroTransition entries concede — so the bounded
+// variant is worse on the aggregate (175/118 vs 146/88 recordings drifting
+// >1s/>5s). Net across the catalog the widening still MOVES TIMES TOWARD the
+// daemon: 46 recordings closer, 20 further; >1s drift 171 -> 146, >5s 117 -> 88.
+//
+// Nothing asserts transition TIMESTAMPS today — not the goldens, not
+// compareOrdered, which walks prev_state/new_state index-by-index and never
+// the time — which is why the cost above is invisible to every gate in this
+// package. Tracked separately; do not read a green replay-fixtures run as
+// evidence that timings are right.
 //
 // Two properties make this safe, and both were measured (see the PR for #1342):
 //
