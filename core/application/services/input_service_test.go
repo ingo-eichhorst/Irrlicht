@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"irrlicht/core/application/services"
-	"irrlicht/core/domain/permission"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/internal/contracttesting"
 )
@@ -33,13 +33,6 @@ func (f *fakeController) Controllable(_ string) bool { return f.controllable }
 type fakeConsent struct{ granted bool }
 
 func (f fakeConsent) Granted(_, _ string) bool { return f.granted }
-
-// mutableConsent is a consentGranter whose answer can change between calls —
-// needed to drive a single InputService instance through all three
-// consent states for contracttesting.AssertPermissionGated.
-type mutableConsent struct{ granted bool }
-
-func (c *mutableConsent) Granted(_, _ string) bool { return c.granted }
 
 func controllableSession() *session.SessionState {
 	return &session.SessionState{SessionID: "abc", Adapter: "claude-code"}
@@ -138,12 +131,18 @@ func TestControllable_ReflectsGate(t *testing.T) {
 // permission is pending or denied, must delegate to the controller once
 // granted, and must stop again once revoked.
 func TestSendInput_PermissionGateContract(t *testing.T) {
-	consent := &mutableConsent{}
+	consent := contracttesting.NewConsentGate()
 	ctrl := &fakeController{controllable: true}
 	svc := services.NewInputService(&stubRepo{state: controllableSession()}, ctrl, consent, func() bool { return true }, stubLog{})
 
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(state permission.State) { consent.granted = state == permission.StateGranted },
+		Key: agent.ControlPermissionKey,
+		// Forwarding must ride on "control" and on nothing else. The two keys
+		// held open beside it are the ones an adapter's own receiver checks —
+		// a gate that answered for any of them would forward input on the
+		// strength of a consent that authorises reading, not writing.
+		OtherKeys: []string{agent.HooksPermissionKey, "transcripts"},
+		SetState:  consent.SetState,
 		Exercise: func() {
 			ctrl.sentData = nil
 			_ = svc.SendInput("abc", []byte("x"))

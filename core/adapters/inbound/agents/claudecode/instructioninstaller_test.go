@@ -548,18 +548,26 @@ func findPermission(t *testing.T, a agent.Agent, key string) agent.Permission {
 func TestInstructionsPermission_GateContract(t *testing.T) {
 	home := withTempHome(t)
 	path := memoryPathFor(home)
-	decl := findPermission(t, Agent(), PermissionKeyInstructions)
 
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(state permission.State) {
+		Key: PermissionKeyInstructions,
+		// The hooks permission writes a different user file (settings.json)
+		// from the same adapter, so the key-isolation arm grants it while
+		// instructions is denied and confirms CLAUDE.md stays untouched.
+		OtherKeys: []string{PermissionKeyHooks},
+		SetState: func(key string, state permission.State) {
+			// Dispatch through the declaration rather than closing over one
+			// permission's closures: an arm that hands this a key it ignored
+			// would be the key-blind wiring issue #1475 exists to reject.
+			decl := findPermission(t, Agent(), key)
 			switch state {
 			case permission.StateGranted:
 				if err := decl.Apply(); err != nil {
-					t.Fatalf("Apply: %v", err)
+					t.Fatalf("Apply %s: %v", key, err)
 				}
 			case permission.StateDenied:
 				if err := decl.Remove(); err != nil {
-					t.Fatalf("Remove: %v", err)
+					t.Fatalf("Remove %s: %v", key, err)
 				}
 			}
 			// Pending: PermissionService never invokes Apply/Remove until

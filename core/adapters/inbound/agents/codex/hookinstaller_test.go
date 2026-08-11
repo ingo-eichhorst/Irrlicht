@@ -172,7 +172,15 @@ func TestHooksPermission_InstallGateContract(t *testing.T) {
 	t.Setenv(codexHomeEnvVar, home)
 
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(state permission.State) {
+		Key: PermissionKeyHooks,
+		// transcripts is the adapter's other declared permission and is
+		// observe-kind — it carries no Apply/Remove, so granting it must leave
+		// hooks.json untouched while hooks itself is denied.
+		OtherKeys: []string{PermissionKeyTranscripts},
+		SetState: func(key string, state permission.State) {
+			if key != PermissionKeyHooks {
+				return // no install effect of its own to drive
+			}
 			var err error
 			if state == permission.StateGranted {
 				_, err = EnsureHooksInstalled()

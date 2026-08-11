@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"irrlicht/core/domain/permission"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/internal/contracttesting"
 )
@@ -296,7 +295,7 @@ func TestStatuslineHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 // revoked.
 func TestStatuslineHandler_PermissionGateContract(t *testing.T) {
 	target := &fakeRateLimitIngester{}
-	gate := &mutableGate{}
+	gate := contracttesting.NewConsentGate()
 	h := NewStatuslineHandler(target, gate, silentLogger{})
 	body := `{
 		"session_id": "abc",
@@ -307,7 +306,14 @@ func TestStatuslineHandler_PermissionGateContract(t *testing.T) {
 	}`
 
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(state permission.State) { gate.setGranted(state == permission.StateGranted) },
+		Key: PermissionKeyStatusline,
+		// This endpoint is a hook receiver too, so the two permissions it must
+		// NOT be gated on are the ones a copy-paste from hooks.go would reach
+		// for. It owes no transcripts consent of its own: the transcript path
+		// it forwards is used as a map key by metrics.IngestRateLimit, never
+		// opened (issue #1466 is about the READ, and there is none here).
+		OtherKeys: []string{PermissionKeyHooks, PermissionKeyTranscripts},
+		SetState:  gate.SetState,
 		Exercise: func() {
 			target.reset()
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode/statusline", strings.NewReader(body))

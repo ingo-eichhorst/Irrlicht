@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"irrlicht/core/domain/session"
+	"irrlicht/core/internal/contracttesting"
 )
 
 // --- test doubles, shared by this file and the contract wirings ---
@@ -355,6 +356,43 @@ func TestHookReceiver_DeniedTranscriptsConsentDropsQuietly(t *testing.T) {
 	}
 	if n := target.totalCalls(); n != 0 {
 		t.Fatalf("dispatched %d times while transcripts consent was denied, want 0", n)
+	}
+}
+
+// TestHookReceiver_PermissionGateContract runs the shared #797 contract once
+// per permission this receiver must honour. The two tests above pin the same
+// two gates by hand and stay as LOCKS — they additionally assert the 200 that
+// a consent refusal answers with, which the contract's opaque Exercise cannot
+// see. What the contract adds is that the obligation is no longer this
+// adapter's to remember: its key-isolation arm (issue #1475) holds one
+// permission denied while the other is granted, which is the state that
+// separates a receiver gated on the right permission from one gated on the
+// other, and it is the state claudecode sat in undetected for its whole life
+// (issue #1466).
+func TestHookReceiver_PermissionGateContract(t *testing.T) {
+	for _, tc := range []struct{ key, other string }{
+		{PermissionKeyHooks, PermissionKeyTranscripts},
+		{PermissionKeyTranscripts, PermissionKeyHooks},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			root := copilotSessionRoot(t)
+			body := contractPayload(writeSessionTranscript(t, root, "sess-gate"), HookStop)
+			target := &mockTarget{}
+			gate := contracttesting.NewConsentGate()
+			h := NewHookHandler(target, gate, mockLogger{})
+
+			before := 0
+			contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
+				Key:       tc.key,
+				OtherKeys: []string{tc.other},
+				SetState:  gate.SetState,
+				Exercise: func() {
+					before = target.totalCalls()
+					post(t, h, body)
+				},
+				Observe: func() bool { return target.totalCalls() > before },
+			})
+		})
 	}
 }
 

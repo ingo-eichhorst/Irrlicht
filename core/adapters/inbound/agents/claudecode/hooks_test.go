@@ -8,7 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"irrlicht/core/domain/permission"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/internal/contracttesting"
 )
@@ -542,26 +541,6 @@ type fakeGate bool
 
 func (g fakeGate) Granted(_, _ string) bool { return bool(g) }
 
-// mutableGate is a ConsentGranter whose answer can change between calls —
-// needed to drive a single handler instance through all three consent
-// states for contracttesting.AssertPermissionGated.
-type mutableGate struct {
-	mu      sync.Mutex
-	granted bool
-}
-
-func (g *mutableGate) Granted(_, _ string) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.granted
-}
-
-func (g *mutableGate) setGranted(v bool) {
-	g.mu.Lock()
-	g.granted = v
-	g.mu.Unlock()
-}
-
 // keyedGate is a ConsentGranter that answers per permission key, so a test can
 // grant one of this adapter's permissions while denying another. The gates
 // above deliberately ignore the key, which is why neither of them can tell a
@@ -786,31 +765,48 @@ func TestHookHandler_PreToolUse_UserInputToolStillDispatchesWithMarkerScan(t *te
 	}
 }
 
-// TestHookHandler_PermissionGateContract wires the hooks permission's live
-// per-request ConsentGranter check into the shared issue #797 contract: while
-// PermissionKeyHooks is pending or denied, an inbound hook payload must
+// TestHookHandler_PermissionGateContract wires this receiver's live
+// per-request ConsentGranter checks into the shared issue #797 contract: while
+// the permission under test is pending or denied, an inbound hook payload must
 // dispatch to nothing; granted, it must dispatch; revoked, dispatch must
 // stop again. TestHookHandler_ConsentGateDropsWhenNotGranted /
 // ConsentGatePassesWhenGranted above cover the same call site by hand —
 // this is the generalized, three-state version.
+//
+// It runs once per permission this receiver must honour. Both are needed and
+// neither subsumes the other: "hooks" authorises writing our entries into
+// settings.json, "transcripts" authorises reading the file those entries point
+// at, and the contract's key-isolation arm holds one denied while the other is
+// granted (issue #1475). A single wiring over a key-blind gate is what let
+// this receiver dispatch with "transcripts" denied for the whole of its life
+// (issue #1466) while this very test was green.
 func TestHookHandler_PermissionGateContract(t *testing.T) {
-	target := &mockTarget{}
-	gate := &mutableGate{}
-	handler := NewHookHandler(target, nil, gate, mockLogger{})
-	payload := hookPayload{
-		TranscriptPath: inTreeTranscript(t, "sess-gate"),
-		HookEventName:  "PermissionRequest",
-		ToolName:       "Bash",
-	}
+	for _, tc := range []struct{ key, other string }{
+		{PermissionKeyHooks, PermissionKeyTranscripts},
+		{PermissionKeyTranscripts, PermissionKeyHooks},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			target := &mockTarget{}
+			gate := contracttesting.NewConsentGate()
+			handler := NewHookHandler(target, nil, gate, mockLogger{})
+			payload := hookPayload{
+				TranscriptPath: inTreeTranscript(t, "sess-gate"),
+				HookEventName:  "PermissionRequest",
+				ToolName:       "Bash",
+			}
 
-	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(state permission.State) { gate.setGranted(state == permission.StateGranted) },
-		Exercise: func() {
-			target.reset()
-			postHook(t, handler, payload)
-		},
-		Observe: func() bool { return len(target.getCalls()) > 0 },
-	})
+			contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
+				Key:       tc.key,
+				OtherKeys: []string{tc.other},
+				SetState:  gate.SetState,
+				Exercise: func() {
+					target.reset()
+					postHook(t, handler, payload)
+				},
+				Observe: func() bool { return len(target.getCalls()) > 0 },
+			})
+		})
+	}
 }
 
 // TestHookHandler_TranscriptsConsentGatesTheRead is the issue #1466 defect
@@ -831,10 +827,14 @@ func TestHookHandler_PermissionGateContract(t *testing.T) {
 // user should not have hooks failing at them. The dispatch assertion is what
 // carries this test.
 //
-// It cannot be folded into TestHookHandler_PermissionGateContract above:
-// that contract drives ONE permission through three states via mutableGate,
-// which ignores the key it is passed and so answers identically for both.
-// Two permissions held at opposite states is exactly what it cannot express.
+// It stays as a LOCK now that the contract above is key-aware (issue #1475).
+// The contract's key-isolation arm covers the dispatch obligation generically
+// — and covers it for every adapter that wires it, which three hand-written
+// per-adapter tests never could. What it does not cover is the status code:
+// AssertPermissionGated's Exercise is opaque to it, so the 200 asserted below
+// is this test's own. Per #1450 a rewritten guard replays its predecessor's
+// cases or it is not known to be a superset; this one is not a superset, so
+// the predecessor stays.
 func TestHookHandler_TranscriptsConsentGatesTheRead(t *testing.T) {
 	target := &mockTarget{}
 	gate := keyedGate{PermissionKeyHooks: true, PermissionKeyTranscripts: false}

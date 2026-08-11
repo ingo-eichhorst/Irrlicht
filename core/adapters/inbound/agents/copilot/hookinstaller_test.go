@@ -68,7 +68,17 @@ func TestHooksPermission_IsGated(t *testing.T) {
 
 	state := permission.StatePending
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(s permission.State) { state = s },
+		Key: PermissionKeyHooks,
+		// transcripts is the adapter's other declared permission and is
+		// observe-kind — it carries no Apply/Remove, so granting it must leave
+		// the hooks file untouched while hooks itself is denied.
+		OtherKeys: []string{PermissionKeyTranscripts},
+		SetState: func(key string, s permission.State) {
+			if key != PermissionKeyHooks {
+				return // no install effect of its own to drive
+			}
+			state = s
+		},
 		Exercise: func() {
 			switch state {
 			case permission.StateGranted:

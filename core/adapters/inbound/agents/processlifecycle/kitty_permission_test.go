@@ -297,7 +297,15 @@ func TestKittyPermission_GateContract(t *testing.T) {
 	decl := findKittyPermission(t, PermissionKeyKittyConfig)
 
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(state permission.State) {
+		Key: PermissionKeyKittyConfig,
+		// This declaration exports exactly one permission, so the key held open
+		// beside it is a foreign one: answering some OTHER permission granted
+		// must not patch kitty.conf.
+		OtherKeys: []string{agent.HooksPermissionKey},
+		SetState: func(key string, state permission.State) {
+			if key != PermissionKeyKittyConfig {
+				return // not this declaration's permission
+			}
 			switch state {
 			case permission.StateGranted:
 				if err := decl.Apply(); err != nil {
