@@ -562,6 +562,14 @@ func (g *mutableGate) setGranted(v bool) {
 	g.mu.Unlock()
 }
 
+// keyedGate is a ConsentGranter that answers per permission key, so a test can
+// grant one of this adapter's permissions while denying another. The gates
+// above deliberately ignore the key, which is why neither of them can tell a
+// receiver gated on "hooks" from one gated on "transcripts" (issue #1466).
+type keyedGate map[string]bool
+
+func (g keyedGate) Granted(_, key string) bool { return g[key] }
+
 func TestHookHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 	target := &mockTarget{}
 	handler := NewHookHandler(target, nil, fakeGate(false), mockLogger{})
@@ -803,4 +811,46 @@ func TestHookHandler_PermissionGateContract(t *testing.T) {
 		},
 		Observe: func() bool { return len(target.getCalls()) > 0 },
 	})
+}
+
+// TestHookHandler_TranscriptsConsentGatesTheRead is the issue #1466 defect
+// test. Every dispatch below the gate hands the transcript path to the
+// detector, which opens it (hooks.go says so in as many words) — so accepting
+// a hook POST authorizes a READ of the user's transcript, and that read is
+// what the observe-kind "transcripts" permission covers. The "hooks" consent
+// authorizes WRITING our entries into settings.json; it is not a licence to
+// read the file those entries point at.
+//
+// With hooks granted and transcripts denied the payload must be dropped and
+// the target never called. codex (hooks.go:158) and copilot (hooks.go:206)
+// have carried this second gate since #1174; claudecode never got one, so a
+// hook POST reached os.Open on a transcript the user had not consented to.
+//
+// The status stays 200 for the same reason a confinement refusal does: a
+// refusal is reported by the log, never on the wire, and a transcripts-denied
+// user should not have hooks failing at them. The dispatch assertion is what
+// carries this test.
+//
+// It cannot be folded into TestHookHandler_PermissionGateContract above:
+// that contract drives ONE permission through three states via mutableGate,
+// which ignores the key it is passed and so answers identically for both.
+// Two permissions held at opposite states is exactly what it cannot express.
+func TestHookHandler_TranscriptsConsentGatesTheRead(t *testing.T) {
+	target := &mockTarget{}
+	gate := keyedGate{PermissionKeyHooks: true, PermissionKeyTranscripts: false}
+	handler := NewHookHandler(target, nil, gate, mockLogger{})
+
+	rec := postHook(t, handler, hookPayload{
+		TranscriptPath: inTreeTranscript(t, "sess-transcripts-gate"),
+		HookEventName:  HookPermissionRequest,
+		ToolName:       "Bash",
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (a consent refusal is not reported on the wire)", rec.Code)
+	}
+	if got := target.getCalls(); len(got) != 0 {
+		t.Errorf("dispatched %d call(s) without transcripts consent: %+v — "+
+			"the detector opens the transcript this path hands it", len(got), got)
+	}
 }
