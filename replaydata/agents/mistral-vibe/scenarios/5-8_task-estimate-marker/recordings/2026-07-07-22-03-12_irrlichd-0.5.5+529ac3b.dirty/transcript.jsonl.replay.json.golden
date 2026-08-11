@@ -10,20 +10,20 @@
   "summary": {
     "total_events": 10,
     "consumed_events": 10,
-    "total_transitions": 10,
+    "total_transitions": 11,
     "first_event_time": "2026-07-07T22:03:16.32978+02:00",
-    "last_event_time": "2026-07-07T22:04:31.282773+02:00",
-    "wall_clock_session_duration": 74952993000,
+    "last_event_time": "2026-07-07T22:04:33.282773+02:00",
+    "wall_clock_session_duration": 76952993000,
     "state_durations": {
-      "ready": 66891232000,
-      "working": 8061761000
+      "ready": 66879665000,
+      "working": 10073328000
     },
-    "flicker_count": 4,
+    "flicker_count": 5,
     "flickers_by_category": {
-      "working_between_ready": 4
+      "working_between_ready": 5
     },
     "flickers_by_reason": {
-      "force ready→working on first activity": 4
+      "force ready→working on first activity": 5
     }
   },
   "transitions": [
@@ -170,6 +170,21 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 10,
+      "event_index": 9,
+      "virtual_time": "2026-07-07T22:04:33.282773+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…ontent will be removed, and formatting will be standardized. The final output…"
     }
   ],
   "sessions": [
@@ -210,14 +225,9 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 20,
-    "replayed_transition_count": 9,
-    "ordered_matches": 9,
+    "replayed_transition_count": 10,
+    "ordered_matches": 10,
     "ordered_mismatches": [
-      {
-        "index": 9,
-        "kind": "missing_in_replay",
-        "recorded": "working→ready"
-      },
       {
         "index": 10,
         "kind": "missing_in_replay",

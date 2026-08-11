@@ -10,16 +10,20 @@
   "summary": {
     "total_events": 5,
     "consumed_events": 5,
-    "total_transitions": 2,
+    "total_transitions": 3,
     "first_event_time": "2026-06-05T03:06:19.512271+02:00",
-    "last_event_time": "2026-06-05T03:06:23.771878+02:00",
-    "wall_clock_session_duration": 4259607000,
+    "last_event_time": "2026-06-05T03:06:25.771878+02:00",
+    "wall_clock_session_duration": 6259607000,
     "state_durations": {
-      "ready": 4259607000
+      "working": 6259607000
     },
-    "flicker_count": 0,
-    "flickers_by_category": {},
-    "flickers_by_reason": {}
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    }
   },
   "transitions": [
     {
@@ -49,6 +53,21 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 4,
+      "virtual_time": "2026-06-05T03:06:25.771878+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "done"
     }
   ],
   "sessions": [
@@ -73,23 +92,14 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 2,
-    "replayed_transition_count": 1,
-    "ordered_matches": 1,
-    "ordered_mismatches": [
-      {
-        "index": 1,
-        "kind": "missing_in_replay",
-        "recorded": "working→ready"
-      }
-    ],
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
     "recorded_unique_kinds": [
       "ready→working",
       "working→ready"
     ],
     "replayed_unique_kinds": [
-      "ready→working"
-    ],
-    "missing_kinds": [
+      "ready→working",
       "working→ready"
     ]
   }

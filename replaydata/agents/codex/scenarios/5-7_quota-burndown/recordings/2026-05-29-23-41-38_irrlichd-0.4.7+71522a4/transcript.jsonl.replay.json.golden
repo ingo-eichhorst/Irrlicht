@@ -10,22 +10,22 @@
   "summary": {
     "total_events": 27,
     "consumed_events": 27,
-    "total_transitions": 6,
+    "total_transitions": 7,
     "first_event_time": "2026-05-29T23:42:25.556611+02:00",
-    "last_event_time": "2026-05-29T23:42:49.895313+02:00",
-    "wall_clock_session_duration": 24338702000,
+    "last_event_time": "2026-05-29T23:42:51.895313+02:00",
+    "wall_clock_session_duration": 26338702000,
     "state_durations": {
-      "ready": 13940510000,
-      "working": 10398192000
+      "ready": 10409593000,
+      "working": 15929109000
     },
-    "flicker_count": 4,
+    "flicker_count": 5,
     "flickers_by_category": {
       "ready_between_working": 2,
-      "working_between_ready": 2
+      "working_between_ready": 3
     },
     "flickers_by_reason": {
       "agent finished turn → ready": 2,
-      "force ready→working on first activity": 2
+      "force ready→working on first activity": 3
     },
     "estimated_cost_usd": 0.459455,
     "cum_input_tokens": 88465,
@@ -118,6 +118,21 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 6,
+      "event_index": 26,
+      "virtual_time": "2026-05-29T23:42:51.895313+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…decrementing scarce inventory during checkout. Because many buyers may compet…"
     }
   ],
   "sessions": [
@@ -158,15 +173,8 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 6,
-    "replayed_transition_count": 5,
-    "ordered_matches": 5,
-    "ordered_mismatches": [
-      {
-        "index": 5,
-        "kind": "missing_in_replay",
-        "recorded": "working→ready"
-      }
-    ],
+    "replayed_transition_count": 6,
+    "ordered_matches": 6,
     "recorded_unique_kinds": [
       "ready→working",
       "working→ready"

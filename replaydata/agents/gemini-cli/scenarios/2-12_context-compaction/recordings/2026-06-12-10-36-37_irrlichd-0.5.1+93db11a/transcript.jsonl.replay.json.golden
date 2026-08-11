@@ -12,18 +12,18 @@
     "consumed_events": 14,
     "total_transitions": 5,
     "first_event_time": "2026-06-12T10:36:37.04718+02:00",
-    "last_event_time": "2026-06-12T10:37:22.529864+02:00",
-    "wall_clock_session_duration": 45482684000,
+    "last_event_time": "2026-06-12T10:37:24.529864+02:00",
+    "wall_clock_session_duration": 47482684000,
     "state_durations": {
-      "ready": 41282025000,
-      "working": 6200659000
+      "ready": 26649673000,
+      "working": 20833011000
     },
-    "flicker_count": 2,
+    "flicker_count": 1,
     "flickers_by_category": {
-      "working_between_ready": 2
+      "working_between_ready": 1
     },
     "flickers_by_reason": {
-      "force ready→working on first activity": 2
+      "force ready→working on first activity": 1
     },
     "estimated_cost_usd": 0.035175,
     "cum_input_tokens": 23426,
@@ -47,13 +47,13 @@
     },
     {
       "index": 1,
-      "event_index": 2,
-      "virtual_time": "2026-06-12T10:36:53.681278+02:00",
-      "cause": "event",
+      "event_index": 1,
+      "virtual_time": "2026-06-12T10:36:39.048926+02:00",
+      "cause": "debounce_coalesce",
       "prev_state": "ready",
       "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "user_message",
+      "reason": "transcript activity (ready → working)",
+      "last_event_type": "",
       "has_open_tool": false,
       "is_agent_done": false,
       "needs_user_attention": false,

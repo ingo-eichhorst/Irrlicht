@@ -15,8 +15,8 @@
     "last_event_time": "2026-06-12T11:36:06.714694+02:00",
     "wall_clock_session_duration": 210299481000,
     "state_durations": {
-      "ready": 162079148000,
-      "working": 48220333000
+      "ready": 145436219000,
+      "working": 64863262000
     },
     "flicker_count": 3,
     "flickers_by_category": {
@@ -47,8 +47,8 @@
     },
     {
       "index": 1,
-      "event_index": 1,
-      "virtual_time": "2026-06-12T11:32:53.058142+02:00",
+      "event_index": 0,
+      "virtual_time": "2026-06-12T11:32:36.415213+02:00",
       "cause": "event",
       "prev_state": "ready",
       "new_state": "working",

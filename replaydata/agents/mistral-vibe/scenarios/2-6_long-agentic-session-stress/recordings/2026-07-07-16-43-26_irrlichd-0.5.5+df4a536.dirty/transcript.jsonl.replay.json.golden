@@ -10,22 +10,22 @@
   "summary": {
     "total_events": 16,
     "consumed_events": 16,
-    "total_transitions": 8,
+    "total_transitions": 9,
     "first_event_time": "2026-07-07T16:43:38.63846+02:00",
-    "last_event_time": "2026-07-07T16:44:07.662936+02:00",
-    "wall_clock_session_duration": 29024476000,
+    "last_event_time": "2026-07-07T16:44:09.662936+02:00",
+    "wall_clock_session_duration": 31024476000,
     "state_durations": {
-      "ready": 15659424000,
-      "working": 13365052000
+      "ready": 15646298000,
+      "working": 15378178000
     },
-    "flicker_count": 6,
+    "flicker_count": 7,
     "flickers_by_category": {
       "ready_between_working": 3,
-      "working_between_ready": 3
+      "working_between_ready": 4
     },
     "flickers_by_reason": {
       "agent finished turn → ready": 3,
-      "force ready→working on first activity": 3
+      "force ready→working on first activity": 4
     }
   },
   "transitions": [
@@ -143,6 +143,21 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 8,
+      "event_index": 15,
+      "virtual_time": "2026-07-07T16:44:09.662936+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "I listed an empty directory (0 files), noted there was no file to read, then ran…"
     }
   ],
   "sessions": [
@@ -183,14 +198,9 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 12,
-    "replayed_transition_count": 7,
-    "ordered_matches": 7,
+    "replayed_transition_count": 8,
+    "ordered_matches": 8,
     "ordered_mismatches": [
-      {
-        "index": 7,
-        "kind": "missing_in_replay",
-        "recorded": "working→ready"
-      },
       {
         "index": 8,
         "kind": "missing_in_replay",

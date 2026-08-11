@@ -10,16 +10,21 @@
   "summary": {
     "total_events": 4,
     "consumed_events": 4,
-    "total_transitions": 4,
+    "total_transitions": 5,
     "first_event_time": "2026-06-05T04:02:22.990638+02:00",
     "last_event_time": "2026-06-05T04:02:46.080275+02:00",
     "wall_clock_session_duration": 23089637000,
     "state_durations": {
-      "ready": 23089637000
+      "ready": 21086242000,
+      "working": 2003395000
     },
-    "flicker_count": 0,
-    "flickers_by_category": {},
-    "flickers_by_reason": {}
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    }
   },
   "transitions": [
     {
@@ -52,6 +57,21 @@
     },
     {
       "index": 2,
+      "event_index": 1,
+      "virtual_time": "2026-06-05T04:02:24.994033+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ok"
+    },
+    {
+      "index": 3,
       "event_index": 3,
       "virtual_time": "2026-06-05T04:02:46.080275+02:00",
       "cause": "event",
@@ -66,7 +86,7 @@
       "last_assistant_text_head": "again"
     },
     {
-      "index": 3,
+      "index": 4,
       "event_index": 3,
       "virtual_time": "2026-06-05T04:02:46.080275+02:00",
       "cause": "event",
@@ -119,26 +139,9 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 6,
-    "replayed_transition_count": 3,
-    "ordered_matches": 1,
+    "replayed_transition_count": 4,
+    "ordered_matches": 4,
     "ordered_mismatches": [
-      {
-        "index": 1,
-        "kind": "state_differs",
-        "recorded": "working→ready",
-        "replayed": "ready→working"
-      },
-      {
-        "index": 2,
-        "kind": "state_differs",
-        "recorded": "ready→working",
-        "replayed": "working→ready"
-      },
-      {
-        "index": 3,
-        "kind": "missing_in_replay",
-        "recorded": "working→ready"
-      },
       {
         "index": 4,
         "kind": "missing_in_replay",

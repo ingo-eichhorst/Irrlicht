@@ -10,22 +10,22 @@
   "summary": {
     "total_events": 39,
     "consumed_events": 39,
-    "total_transitions": 6,
+    "total_transitions": 7,
     "first_event_time": "2026-05-23T23:15:39.816251+02:00",
-    "last_event_time": "2026-05-23T23:16:03.577882+02:00",
-    "wall_clock_session_duration": 23761631000,
+    "last_event_time": "2026-05-23T23:16:05.577882+02:00",
+    "wall_clock_session_duration": 25761631000,
     "state_durations": {
-      "ready": 15208924000,
-      "working": 8552707000
+      "ready": 10646766000,
+      "working": 15114865000
     },
-    "flicker_count": 4,
+    "flicker_count": 5,
     "flickers_by_category": {
       "ready_between_working": 2,
-      "working_between_ready": 2
+      "working_between_ready": 3
     },
     "flickers_by_reason": {
       "agent finished turn → ready": 2,
-      "force ready→working on first activity": 2
+      "force ready→working on first activity": 3
     },
     "estimated_cost_usd": 0.924505,
     "cum_input_tokens": 183239,
@@ -49,9 +49,9 @@
     },
     {
       "index": 1,
-      "event_index": 7,
-      "virtual_time": "2026-05-23T23:15:42.101221+02:00",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-23T23:15:39.816251+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -118,6 +118,21 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 6,
+      "event_index": 38,
+      "virtual_time": "2026-05-23T23:16:05.577882+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Printed `3`.\n\nGoal complete: `1`, `2`, `3` were printed once each in order."
     }
   ],
   "sessions": [
@@ -158,15 +173,8 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 6,
-    "replayed_transition_count": 5,
-    "ordered_matches": 5,
-    "ordered_mismatches": [
-      {
-        "index": 5,
-        "kind": "missing_in_replay",
-        "recorded": "working→ready"
-      }
-    ],
+    "replayed_transition_count": 6,
+    "ordered_matches": 6,
     "recorded_unique_kinds": [
       "ready→working",
       "working→ready"
