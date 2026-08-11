@@ -1,14 +1,18 @@
 // hook_endpoint_addressfree_test.go exercises AssertHookEndpointFollowsBindAddr's
-// DeliveryAddressFree mode against a reference beacon installer, and is the
+// DeliveryAddressFree route against a reference beacon installer, and is the
 // wiring the first beacon-delivered adapter copies (#1453).
 //
 // It lives here rather than in an adapter because no adapter installs the beacon
 // yet: #1373 built the mechanism and adoption is a separate change per adapter,
-// so a mode with no call site would be a branch nothing ever runs — which is
-// precisely the "exemption with no test behind it" the contract-family
-// convention exists to prevent. It is the same split tools/lib's linter suites
-// draw: assertions are pinned against a purpose-built fixture, so they do not
-// move when a real adapter is edited.
+// so a route with no call site would be a branch nothing ever runs — precisely
+// the "exemption with no test behind it" the contract-family convention exists
+// to prevent. It is the same split tools/lib's linter suites draw: assertions
+// are pinned against a purpose-built fixture, so they do not move when a real
+// adapter is edited.
+//
+// It is scaffolding, and it says so: once an adapter declares this route, that
+// adapter's wiring becomes the honest coverage and this file should be reduced
+// to whatever it still uniquely proves, or deleted.
 //
 // The installer below is deliberately the SHAPE an adapter should have rather
 // than the smallest thing that passes, and that shape is copilot's: hookConfig
@@ -16,17 +20,22 @@
 // hookjson.Config, NOT a (Config, error), so each exported entry point owns its
 // own resolution. copilot parameterises on the settings path; a beacon adapter
 // parameterises on the path AND the rendered command, which is why
-// hookbeacon.InstalledCommand exists and is called once. Resolving the binary
-// per-config instead is what measured +12 lines of error branching when copilot
-// evaluated beacon delivery.
+// hookbeacon.InstalledCommand exists and is called once per entry point.
+// Resolving the binary per-config instead is what measured +12 lines of error
+// branching when copilot evaluated beacon delivery.
+//
+// One field is NOT the shape to copy: WriteFile. Every real installer passes an
+// atomic temp-file+rename writer (claudecode, codex, copilot each have one);
+// this one is a plain write, because hookjson deliberately leaves WriteFile
+// adapter-supplied and there is no shared writer to call.
 package contracttesting
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"irrlicht/core/adapters/inbound/agents/agentpaths"
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/pkg/hookbeacon"
 )
@@ -35,8 +44,8 @@ import (
 // adapter exports this as one constant shared with registerHookRoutes.
 const referenceBeaconAdapter = "reference-beacon"
 
-// referenceBeaconHomeEnv relocates the reference installer's config file, the
-// way CODEX_HOME and COPILOT_HOME relocate the real ones.
+// referenceBeaconHomeEnv relocates the fixture's config home, the way
+// CODEX_HOME and COPILOT_HOME relocate the real ones.
 const referenceBeaconHomeEnv = "IRRLICHT_TEST_REFERENCE_BEACON_HOME"
 
 // referenceForeignBinary is the irrlichd a differently-situated daemon would
@@ -47,33 +56,41 @@ const referenceForeignBinary = "/nonexistent-irrlicht-1453/bin/irrlichd"
 
 var referenceBeaconEvents = []string{"BeforeTool", "Stop"}
 
-// referenceBeaconCommand is resolved once, at package init, standing in for an
-// adapter resolving it once at install time. The error is kept beside it rather
-// than swallowed so the contract test can fail on it explicitly instead of
-// silently grading an empty command.
-var referenceBeaconCommand, referenceBeaconCommandErr = hookbeacon.InstalledCommand(referenceBeaconAdapter)
+// referenceBeaconHome composes agentpaths rather than re-deciding how an agent
+// home override is read — the same composition copilotHome uses, and for the
+// reason its doc records: the hand-rolled version silently dropped a RELATIVE
+// override, so the watcher warned while the installer wrote somewhere else.
+//
+// The default dir is deliberately EMPTY, which is the one place this fixture
+// must NOT copy a real adapter. A real adapter passes a $HOME-relative default;
+// AbsRoot refuses an empty root, so here an unset override fails loudly instead
+// of resolving into the developer's own agent config. A fixture must never be
+// one missing env var away from writing to a real $HOME.
+func referenceBeaconHome() (string, error) {
+	return agentpaths.AbsRoot(agentpaths.FromEnv(referenceBeaconAdapter, referenceBeaconHomeEnv, ""))
+}
 
-// referenceBeaconHooksPath resolves the settings file, and reports an error
-// rather than a relative path when the home is unset — the shape every real
-// adapter's resolver has (copilotHooksPath, codexHooksPath). filepath.Join on
-// an empty home would yield a bare "hooks.json", i.e. the process CWD.
 func referenceBeaconHooksPath() (string, error) {
-	home := os.Getenv(referenceBeaconHomeEnv)
-	if home == "" {
-		return "", fmt.Errorf("contracttesting: %s is not set", referenceBeaconHomeEnv)
+	home, err := referenceBeaconHome()
+	if err != nil {
+		return "", err
 	}
 	return filepath.Join(home, "hooks.json"), nil
 }
 
-// referenceBeaconEntry is the inner hook object. The timeout is milliseconds,
-// which is gemini-cli's unit and the one upstream's own `hooks migrate` gets
-// wrong by 1000x.
 func referenceBeaconEntry(command string) map[string]interface{} {
 	return map[string]interface{}{
 		"type":    "command",
 		"command": command,
-		"timeout": 2000,
 	}
+}
+
+// referenceBeaconEntryNow is the contract's Entry: the inner hook object the
+// adapter would install right now. A resolution failure yields an empty
+// command, which assertDeliveryIsOurs reports rather than grading silently.
+func referenceBeaconEntryNow() map[string]interface{} {
+	command, _ := hookbeacon.InstalledCommand(referenceBeaconAdapter)
+	return referenceBeaconEntry(command)
 }
 
 // referenceBeaconConfig returns a Config, not a (Config, error) — see the file
@@ -98,12 +115,22 @@ func referenceBeaconConfig(path, command string) hookjson.Config {
 	}
 }
 
-func referenceBeaconEnsureInstalled() (bool, error) {
+// referenceBeaconRun resolves the settings path and hands the built config to
+// op, so the three entry points below state that branch once between them.
+func referenceBeaconRun(command string, op func(hookjson.Config) (bool, error)) (bool, error) {
 	path, err := referenceBeaconHooksPath()
 	if err != nil {
 		return false, err
 	}
-	return hookjson.EnsureInstalled(referenceBeaconConfig(path, referenceBeaconCommand))
+	return op(referenceBeaconConfig(path, command))
+}
+
+func referenceBeaconEnsureInstalled() (bool, error) {
+	command, err := hookbeacon.InstalledCommand(referenceBeaconAdapter)
+	if err != nil {
+		return false, err
+	}
+	return referenceBeaconRun(command, hookjson.EnsureInstalled)
 }
 
 // referenceBeaconUninstall removes our entries whatever binary they name. It
@@ -113,30 +140,28 @@ func referenceBeaconEnsureInstalled() (bool, error) {
 // binary without calling --uninstall-hooks. uninstall_is_not_binary_scoped is
 // what holds that property, rather than this comment.
 func referenceBeaconUninstall() (bool, error) {
-	path, err := referenceBeaconHooksPath()
+	command, err := hookbeacon.InstalledCommand(referenceBeaconAdapter)
 	if err != nil {
 		return false, err
 	}
-	return hookjson.Uninstall(referenceBeaconConfig(path, referenceBeaconCommand))
+	return referenceBeaconRun(command, hookjson.Uninstall)
 }
 
 // referenceBeaconForeignInstall is the address-free counterpart of seeding a
 // default-port install: the same installer, situated on a different irrlichd.
 func referenceBeaconForeignInstall() (bool, error) {
-	path, err := referenceBeaconHooksPath()
-	if err != nil {
-		return false, err
-	}
 	command, err := hookbeacon.Command(referenceForeignBinary, referenceBeaconAdapter)
 	if err != nil {
 		return false, err
 	}
-	return hookjson.EnsureInstalled(referenceBeaconConfig(path, command))
+	return referenceBeaconRun(command, hookjson.EnsureInstalled)
 }
 
 func TestAddressFreeDeliveryContract(t *testing.T) {
-	if referenceBeaconCommandErr != nil {
-		t.Fatalf("resolving the beacon command: %v", referenceBeaconCommandErr)
+	// Checked up front so a resolution failure reads as itself rather than as
+	// the empty-delivery wiring error assertDeliveryIsOurs would report.
+	if _, err := hookbeacon.InstalledCommand(referenceBeaconAdapter); err != nil {
+		t.Fatalf("resolving the beacon command: %v", err)
 	}
 	AssertHookEndpointFollowsBindAddr(t, HookInstaller{
 		Delivery: DeliveryAddressFree,
@@ -150,7 +175,7 @@ func TestAddressFreeDeliveryContract(t *testing.T) {
 		},
 		Sentinel: hookbeacon.Sentinel(referenceBeaconAdapter),
 		Events:   referenceBeaconEvents,
-		Entry:    func() map[string]interface{} { return referenceBeaconEntry(referenceBeaconCommand) },
+		Entry:    referenceBeaconEntryNow,
 		// Beacon delivery is a `type: command` entry, so the delivery string is
 		// the whole command — there is no url field and nothing address-shaped
 		// inside it.

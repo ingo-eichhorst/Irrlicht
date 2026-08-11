@@ -149,22 +149,22 @@ Before marking a ticket done, run the full suite — every layer must pass:
   rather than an exemption: the beacon makes the whole stale-port class
   INEXPRESSIBLE instead of fixing it once more — the dev daemon that left a
   user's real `~/.claude/settings.json` and `~/.codex/hooks.json` pointing at
-  three dead ports (#1449) could not have — so the mode asserts that the
-  property was actually obtained (the line varies with nothing and carries
-  nothing address-shaped) plus the failure the beacon NEWLY admits: an entry
-  naming a binary path that is no longer the running one, which must be
-  rewritten in place exactly as a stale port must. Only obligation 1 differs
-  between the modes; 2–4 are one implementation parameterised by the seed and
-  by the address check. Declaring the wrong mode cannot pass quietly — the two
-  first obligations are contradictory assertions about the same two strings
-  (URL requires them to DIFFER across bind addresses, address-free requires
-  them IDENTICAL), so a beacon adapter that forgets the field and a URL adapter
-  that sets it both go red. No adapter ships beacon delivery yet, so the
-  address-free call site is the reference wiring in
-  `hook_endpoint_addressfree_test.go`, which is also the shape to copy: it
-  resolves the binary path ONCE through `hookbeacon.InstalledCommand`, keeping
-  its config builder infallible rather than paying the +12 lines of error
-  branching a per-config resolve measured for copilot.
+  three dead ports (#1449) could not have — so the address-free route asserts
+  that the property was actually obtained (the line varies with nothing and
+  carries nothing address-shaped) plus the failure the beacon NEWLY admits: an
+  entry naming a binary path that is no longer the running one, which must be
+  rewritten in place exactly as a stale port must. Declaring the wrong route
+  cannot pass quietly, which is why this is a declaration and not an exemption:
+  the two routes' first obligations are contradictory assertions about the same
+  two strings (URL requires them to DIFFER across bind addresses, address-free
+  requires them IDENTICAL), so a beacon adapter that forgets the field and a URL
+  adapter that sets it both go red. The reasoning, and which obligations each
+  route runs, is on `deliveryRules` in that file rather than restated here.
+  Whichever adapter adopts beacon delivery first replaces
+  `hook_endpoint_addressfree_test.go`, the reference wiring the route is
+  currently exercised by — and that file is also the shape to copy, down to
+  resolving the binary path once through `hookbeacon.InstalledCommand` so the
+  config builder stays infallible.
 - Hook disclosure: `contracttesting.AssertHookDisclosureMatchesInstalled`
   (`core/internal/contracttesting/hook_disclosure.go`) binds a hooks
   permission's consent copy to what the installer actually writes — the

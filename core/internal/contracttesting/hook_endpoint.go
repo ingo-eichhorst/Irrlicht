@@ -78,16 +78,17 @@ const (
 )
 
 // HookInstaller wires one adapter's hook installer into
-// AssertHookEndpointFollowsBindAddr. Every field is required. Between them they
-// cover the only three things that genuinely differ per adapter: where the
+// AssertHookEndpointFollowsBindAddr. Every field is required except Delivery,
+// whose zero value is a route, and ForeignInstall, which only the address-free
+// route uses. Between them they cover the only three things that genuinely
+// differ per adapter: where the
 // config file lives and which env var relocates it (SettingsPath), the
 // install/uninstall entry points, and how an installed entry's endpoint is read
 // back (EndpointOf) — Claude Code writes a native `type: http` entry whose
 // endpoint is its `url`, Codex a `type: command` curl string that embeds it.
 type HookInstaller struct {
-	// Delivery declares how the adapter delivers, and therefore which
-	// obligations apply. The zero value, DeliveryURL, is every adapter wired
-	// before #1453.
+	// Delivery declares the adapter's delivery route, and therefore which
+	// obligations apply. See DeliveryURL / DeliveryAddressFree.
 	Delivery DeliveryMode
 
 	// SettingsPath points the installer at a temp config home — by t.Setenv of
@@ -148,57 +149,112 @@ type HookInstaller struct {
 }
 
 // AssertHookEndpointFollowsBindAddr runs the issue #1178 contract against h, in
-// whichever of the two delivery modes h declares.
+// whichever of the two delivery routes h declares.
 //
-// In DeliveryURL mode, three obligations, each of which a new hook-installing
-// adapter can fail independently:
+// Four sub-tests run in both routes. Only the FIRST differs:
 //
-//  1. an install writes the RESOLVED port, not the default one;
-//  2. an entry left by a daemon on a DIFFERENT port is still recognized as ours
-//     (the sentinel is port-independent) and rewritten IN PLACE, with no
-//     duplicate matcher group appended;
-//  3. uninstall is NOT port-scoped, or `irrlichd --uninstall-hooks` run from a
-//     daemon on one port leaves another port's entries behind.
+//  1. DeliveryURL — the delivery tracks the bind address and carries the
+//     resolved port. DeliveryAddressFree — it does not vary with the bind
+//     address at all and carries nothing address-shaped.
+//  2. an install writes what the adapter would install now, and is idempotent.
+//  3. an entry left by a differently-situated daemon (another port; another
+//     irrlichd binary) is still recognized as ours — the sentinel names neither
+//     — and rewritten IN PLACE, with no duplicate matcher group appended.
+//  4. uninstall is not scoped to the installing daemon, or `irrlichd
+//     --uninstall-hooks` run from one leaves another's entries behind.
 //
-// It assumes the installed endpoint is a URL with a path, since it looks for
-// the ":<port>/" fragment — true of every hook endpoint the daemon serves.
-//
-// In DeliveryAddressFree mode the same three, with the address obligation
-// inverted and the drift re-pointed at the binary path:
-//
-//  1. the delivery does not vary with the bind address AT ALL, and carries
-//     nothing address-shaped — no scheme, no host, no port;
-//  2. an entry naming a DIFFERENT irrlichd binary is still recognized as ours
-//     (the sentinel names neither the path nor the address) and rewritten IN
-//     PLACE, with no duplicate matcher group appended;
-//  3. uninstall is not scoped to the installing binary either.
-//
-// What it deliberately does NOT assert in that mode is that the beacon resolves
-// a live daemon's address at fire time. That is the beacon's own obligation and
-// is covered where the beacon lives, by
+// What it deliberately does NOT assert in address-free mode is that the beacon
+// resolves a live daemon's address at fire time. That is the beacon's own
+// obligation and is covered where the beacon lives, by
 // hookbeacon.TestPostResolvesTheDaemonAddressAtFireTime; this family grades the
 // ADAPTER, and an adapter cannot get it wrong or right.
 func AssertHookEndpointFollowsBindAddr(t *testing.T, h HookInstaller) {
 	t.Helper()
+	r := rulesFor(t, h)
+	t.Run(r.firstName, func(t *testing.T) { r.first(t, h) })
+	t.Run(r.installName, func(t *testing.T) { assertInstallWritesCanonicalDelivery(t, h, r) })
+	t.Run(r.upgradeName, func(t *testing.T) { assertUpgradedInPlace(t, h, r) })
+	t.Run(r.uninstallName, func(t *testing.T) { assertUninstallIsNotForeignScoped(t, h, r) })
+}
+
+// deliveryRules is everything that differs between the two routes, selected
+// ONCE from h.Delivery.
+//
+// It replaced a mode field re-consulted in four separate functions. Three of
+// those needed a defensive `default:` arm that could never actually run —
+// t.Fatalf is runtime.Goexit, so an unrecognized mode terminates the parent
+// before any sub-test is created — so the guards read as safety while being
+// dead. Selecting once makes "only the first sub-test differs" a fact about the
+// code rather than a promise four switches have to keep, and leaves exactly one
+// place a third route has to be taught.
+type deliveryRules struct {
+	// firstName and first are the one obligation that genuinely differs.
+	firstName string
+	first     func(t *testing.T, h HookInstaller)
+
+	// The remaining three sub-tests are the same functions in both routes and
+	// differ only in what they are called.
+	installName, upgradeName, uninstallName string
+
+	// assertAddress is the route's address obligation, applied per event.
+	assertAddress func(t *testing.T, what, delivery string)
+
+	// seed leaves behind what a differently-situated daemon installed, and
+	// foreign names it for the failure messages of the two obligations built
+	// on it.
+	seed    func(t *testing.T, h HookInstaller)
+	foreign string
+}
+
+func rulesFor(t *testing.T, h HookInstaller) deliveryRules {
+	t.Helper()
 	switch h.Delivery {
 	case DeliveryURL:
-		t.Run("endpoint_follows_bind_addr", func(t *testing.T) { assertEndpointFollowsBindAddr(t, h) })
-		t.Run("install_writes_resolved_port", func(t *testing.T) { assertInstallWritesCanonicalDelivery(t, h) })
-		t.Run("default_port_install_upgraded_in_place", func(t *testing.T) { assertUpgradedInPlace(t, h) })
-		t.Run("uninstall_is_not_port_scoped", func(t *testing.T) { assertUninstallIsNotForeignScoped(t, h) })
+		return deliveryRules{
+			firstName:     "endpoint_follows_bind_addr",
+			first:         assertEndpointFollowsBindAddr,
+			installName:   "install_writes_resolved_port",
+			upgradeName:   "default_port_install_upgraded_in_place",
+			uninstallName: "uninstall_is_not_port_scoped",
+			assertAddress: assertResolvedPort,
+			seed:          seedDefaultPortInstall,
+			foreign:       "a default-port install",
+		}
 	case DeliveryAddressFree:
 		if h.ForeignInstall == nil {
 			t.Fatal("DeliveryAddressFree requires ForeignInstall — there is no bind address the contract can vary to produce a drifted install for it")
 		}
-		t.Run("delivery_carries_no_address", func(t *testing.T) { assertDeliveryCarriesNoAddress(t, h) })
-		t.Run("install_writes_address_free_delivery", func(t *testing.T) { assertInstallWritesCanonicalDelivery(t, h) })
-		t.Run("foreign_binary_install_upgraded_in_place", func(t *testing.T) { assertUpgradedInPlace(t, h) })
-		t.Run("uninstall_is_not_binary_scoped", func(t *testing.T) { assertUninstallIsNotForeignScoped(t, h) })
+		return deliveryRules{
+			firstName:     "delivery_carries_no_address",
+			first:         assertDeliveryCarriesNoAddress,
+			installName:   "install_writes_address_free_delivery",
+			upgradeName:   "foreign_binary_install_upgraded_in_place",
+			uninstallName: "uninstall_is_not_binary_scoped",
+			assertAddress: assertNoAddress,
+			seed:          seedForeignBinaryInstall,
+			foreign:       "an install naming a different irrlichd binary",
+		}
 	default:
-		// A mode added to the enum but not wired here would otherwise run no
-		// obligations at all and report a pass.
-		t.Fatalf("unhandled DeliveryMode %d — every mode must name the obligations it runs", h.Delivery)
+		t.Fatalf("unhandled DeliveryMode %d — every route must name the obligations it runs", h.Delivery)
+		return deliveryRules{}
 	}
+}
+
+// deliveriesOnBothAddrs returns what the adapter would install on the default
+// and on the alternate bind address. The two obligation-1 bodies differ only in
+// how they compare the pair.
+//
+// It relocates the config home even though it writes nothing: an Entry() that
+// reads anything home-relative must never be evaluated against the developer's
+// real agent config. And it confirms EndpointOf read something at all before
+// either body compares — see assertDeliveryIsOurs.
+func deliveriesOnBothAddrs(t *testing.T, h HookInstaller) (onDefault, onAlt string) {
+	t.Helper()
+	h.SettingsPath(t)
+	onDefault = deliveryOn(t, h, "")
+	onAlt = deliveryOn(t, h, AltBindAddr)
+	assertDeliveryIsOurs(t, h, "delivery on the default bind address", onDefault)
+	return onDefault, onAlt
 }
 
 // assertDeliveryCarriesNoAddress is DeliveryAddressFree's obligation 1, and the
@@ -211,35 +267,21 @@ func AssertHookEndpointFollowsBindAddr(t *testing.T, h HookInstaller) {
 // reason and so could still be written differently by two daemons.
 func assertDeliveryCarriesNoAddress(t *testing.T, h HookInstaller) {
 	t.Helper()
-	// Relocate the config home even though this sub-test writes nothing: an
-	// Entry() that reads anything home-relative must never be evaluated against
-	// the developer's real agent config.
-	h.SettingsPath(t)
-
-	onDefault := deliveryOn(t, h, "")
-	onAlt := deliveryOn(t, h, AltBindAddr)
+	onDefault, onAlt := deliveriesOnBothAddrs(t, h)
 	if onDefault != onAlt {
-		t.Fatalf("delivery differs between the default and %s bind addresses (%q vs %q) — an address-free install must not vary with %s, or a daemon on another port writes a different line and the whole point of the mode is lost",
+		t.Fatalf("delivery differs between the default and %s bind addresses (%q vs %q) — an address-free install must not vary with %s, or a daemon on another port writes a different line and the whole point of the route is lost",
 			AltBindAddr, onDefault, onAlt, daemonaddr.EnvBindAddr)
 	}
-	assertDeliveryIsOurs(t, h, "delivery on the default bind address", onDefault)
-	assertNoAddress(t, "delivery on the default bind address", onDefault)
-	assertNoAddress(t, "delivery on "+AltBindAddr, onAlt)
+	// onDefault and onAlt are equal past the Fatalf, so one check covers both.
+	assertNoAddress(t, "delivery on both bind addresses", onDefault)
 }
 
-// assertEndpointFollowsBindAddr is obligation 1 at the source: the endpoint the
-// adapter would install is a function of the bind address at all. An installer
-// that hardcodes the port fails here first, and most legibly.
+// assertEndpointFollowsBindAddr is DeliveryURL's obligation 1 at the source:
+// the endpoint the adapter would install is a function of the bind address at
+// all. An installer that hardcodes the port fails here first, and most legibly.
 func assertEndpointFollowsBindAddr(t *testing.T, h HookInstaller) {
 	t.Helper()
-	// Relocate the config home even though this sub-test writes nothing: an
-	// Entry() that reads anything home-relative must never be evaluated against
-	// the developer's real agent config.
-	h.SettingsPath(t)
-
-	onDefault := deliveryOn(t, h, "")
-	onAlt := deliveryOn(t, h, AltBindAddr)
-	assertDeliveryIsOurs(t, h, "delivery on the default bind address", onDefault)
+	onDefault, onAlt := deliveriesOnBothAddrs(t, h)
 	if onDefault == onAlt {
 		t.Fatalf("delivery is identical on the default and %s bind addresses (%q) — the endpoint does not follow %s",
 			AltBindAddr, onDefault, daemonaddr.EnvBindAddr)
@@ -247,11 +289,10 @@ func assertEndpointFollowsBindAddr(t *testing.T, h HookInstaller) {
 	assertResolvedPort(t, "delivery on "+AltBindAddr, onAlt)
 }
 
-// assertInstallWritesCanonicalDelivery is obligation 1 end to end: what
-// actually lands in the settings file, plus idempotency on an unchanged bind
-// address. Shared by both modes — only the per-delivery address check inside
-// assertEveryEventDelivers differs.
-func assertInstallWritesCanonicalDelivery(t *testing.T, h HookInstaller) {
+// assertInstallWritesCanonicalDelivery is obligation 2: what actually lands in
+// the settings file, plus idempotency on an unchanged bind address. Shared by
+// both routes — only r.assertAddress differs.
+func assertInstallWritesCanonicalDelivery(t *testing.T, h HookInstaller, r deliveryRules) {
 	t.Helper()
 	path := h.SettingsPath(t)
 	want := deliveryOn(t, h, AltBindAddr)
@@ -259,7 +300,7 @@ func assertInstallWritesCanonicalDelivery(t *testing.T, h HookInstaller) {
 	if _, err := h.EnsureInstalled(); err != nil {
 		t.Fatalf("EnsureInstalled: %v", err)
 	}
-	assertEveryEventDelivers(t, h, path, want)
+	assertEveryEventDelivers(t, h, r, path, want)
 
 	modified, err := h.EnsureInstalled()
 	if err != nil {
@@ -270,14 +311,13 @@ func assertInstallWritesCanonicalDelivery(t *testing.T, h HookInstaller) {
 	}
 }
 
-// assertUpgradedInPlace is obligation 2: an install left by a differently
+// assertUpgradedInPlace is obligation 3: an install left by a differently
 // situated daemon is recognized as ours and repointed, not orphaned beside a
-// duplicate group. What "differently situated" means is the mode's — another
-// port, or another irrlichd binary — and it is the whole of the difference.
-func assertUpgradedInPlace(t *testing.T, h HookInstaller) {
+// duplicate group. What "differently situated" means is r.seed's business.
+func assertUpgradedInPlace(t *testing.T, h HookInstaller, r deliveryRules) {
 	t.Helper()
 	path := h.SettingsPath(t)
-	seedForeignInstall(t, h, path)
+	seedForeignInstall(t, h, r, path)
 	want := deliveryOn(t, h, AltBindAddr)
 
 	modified, err := h.EnsureInstalled()
@@ -285,23 +325,23 @@ func assertUpgradedInPlace(t *testing.T, h HookInstaller) {
 		t.Fatalf("EnsureInstalled: %v", err)
 	}
 	if !modified {
-		t.Fatalf("expected modified=true when repointing %s — an install left unrepaired here reports healthy while delivering nothing, and no later daemon start converges on it", h.foreignDescription())
+		t.Fatalf("expected modified=true when repointing %s — an install left unrepaired here reports healthy while delivering nothing, and no later daemon start converges on it", r.foreign)
 	}
 	// assertEveryEventDelivers fails on a second matcher group, which is the
 	// "upgraded in place, not duplicated" half of this obligation.
-	assertEveryEventDelivers(t, h, path, want)
+	assertEveryEventDelivers(t, h, r, path, want)
 }
 
-// assertUninstallIsNotForeignScoped is obligation 3: a daemon cleans up entries
+// assertUninstallIsNotForeignScoped is obligation 4: a daemon cleans up entries
 // a differently-situated daemon installed. In DeliveryURL mode that is another
 // port; in DeliveryAddressFree mode another binary path, where it additionally
 // means Uninstall must not depend on resolving a binary path at all —
 // `site/install.sh --uninstall` removes the binary without calling
 // --uninstall-hooks, so the entry commonly outlives the path it names.
-func assertUninstallIsNotForeignScoped(t *testing.T, h HookInstaller) {
+func assertUninstallIsNotForeignScoped(t *testing.T, h HookInstaller, r deliveryRules) {
 	t.Helper()
 	path := h.SettingsPath(t)
-	seedForeignInstall(t, h, path)
+	seedForeignInstall(t, h, r, path)
 	t.Setenv(daemonaddr.EnvBindAddr, AltBindAddr)
 
 	modified, err := h.Uninstall()
@@ -309,12 +349,12 @@ func assertUninstallIsNotForeignScoped(t *testing.T, h HookInstaller) {
 		t.Fatalf("Uninstall: %v", err)
 	}
 	if !modified {
-		t.Fatalf("expected modified=true removing %s from a daemon on %s", h.foreignDescription(), AltBindAddr)
+		t.Fatalf("expected modified=true removing %s from a daemon on %s", r.foreign, AltBindAddr)
 	}
 	hooksMap := readHooksMap(t, path)
 	for _, event := range h.Events {
 		if hookjson.HasOurHook(hooksMap, event, h.Sentinel) {
-			t.Errorf("event %s: %s survived uninstall", event, h.foreignDescription())
+			t.Errorf("event %s: %s survived uninstall", event, r.foreign)
 		}
 	}
 }
@@ -330,11 +370,11 @@ func deliveryOn(t *testing.T, h HookInstaller, bindAddr string) string {
 }
 
 // assertEveryEventDelivers checks each event's installed entry against want and
-// against the mode's address obligation. Both matter: equality catches an
+// against the route's address obligation. Both matter: equality catches an
 // installer writing a stale shape, the address check catches the case want
 // itself is wrong — because the endpoint stopped following the bind address, or
 // because an "address-free" delivery grew an address.
-func assertEveryEventDelivers(t *testing.T, h HookInstaller, path, want string) {
+func assertEveryEventDelivers(t *testing.T, h HookInstaller, r deliveryRules, path, want string) {
 	t.Helper()
 	hooksMap := readHooksMap(t, path)
 	for _, event := range h.Events {
@@ -343,7 +383,7 @@ func assertEveryEventDelivers(t *testing.T, h HookInstaller, path, want string) 
 		if got != want {
 			t.Errorf("event %s: installed delivery = %q, want %q", event, got, want)
 		}
-		assertAddressShape(t, h, "event "+event, got)
+		r.assertAddress(t, "event "+event, got)
 	}
 }
 
@@ -371,35 +411,30 @@ func assertDeliveryIsOurs(t *testing.T, h HookInstaller, what, delivery string) 
 	}
 }
 
-// assertAddressShape applies whichever address obligation h's mode carries to
-// one delivery string. It is the single place the two modes diverge below the
-// first sub-test, which is what keeps the other three one implementation.
-func assertAddressShape(t *testing.T, h HookInstaller, what, delivery string) {
-	t.Helper()
-	switch h.Delivery {
-	case DeliveryURL:
-		assertResolvedPort(t, what, delivery)
-	case DeliveryAddressFree:
-		assertNoAddress(t, what, delivery)
-	default:
-		// The switch in AssertHookEndpointFollowsBindAddr forces a new mode to
-		// name its obligations; without this one, it would silently inherit the
-		// URL address check down here and be told to carry a port.
-		t.Fatalf("unhandled DeliveryMode %d in assertAddressShape", h.Delivery)
-	}
-}
+// hookRoutePrefix is the path every hook receiver the daemon serves is
+// registered under. An address-free delivery must not contain it: an adapter
+// that embeds the daemon's HTTP route is delivering by URL whatever it declares.
+const hookRoutePrefix = "/api/v1/"
 
-// addressShaped matches anything that could pin a delivery to one daemon: a
-// scheme, a loopback host, a port-shaped `:<digits>`, or a port passed as a
-// flag argument. It is deliberately broader than the ":<port>/" fragment
-// assertResolvedPort looks for, because the failure it guards is an adapter
-// reintroducing an address in SOME spelling — including one no daemon of ours
-// currently uses.
+// addressShaped matches anything that could pin a delivery to one daemon — a
+// scheme, a loopback host, a port-shaped `:<digits>`, a port passed as a flag
+// argument, either concrete daemon port as a bare word, or the hook route.
 //
-// The colon-less `port 7837` branch is not decoration. A hardcoded port is
-// invariant across bind addresses, so it slips past the equality half of the
-// first sub-test as well, and `--port 7837` would then have satisfied BOTH
+// It is deliberately broader than the ":<port>/" fragment assertResolvedPort
+// looks for, because the failure it guards is an adapter reintroducing an
+// address in SOME spelling — including one no daemon of ours currently uses.
+//
+// Two of the branches are not decoration. A HARDCODED port is invariant across
+// bind addresses, so it slips past the equality half of obligation 1 as well:
+// `--port 7837` and a bare `7837` would each otherwise have satisfied BOTH
 // halves while writing exactly the #1178 defect into the user's config.
+//
+// This is the superset of hookbeacon's own TestCommandCarriesNoAddress, which
+// states the same rule as a substring list ("7837", "7838", "http://",
+// "https://", "localhost", "127.0.0.1", "/api/v1/") over the rendered command.
+// Two spellings of one rule can disagree, so this one is built to contain that
+// list rather than to parallel it — the ports are taken from daemonaddr instead
+// of retyped, so they cannot drift at all.
 //
 // It is applied to the WHOLE delivery, which for a beacon begins with a
 // shell-quoted absolute path, so it is fail-closed on two known false
@@ -409,7 +444,17 @@ func assertAddressShape(t *testing.T, h HookInstaller, what, delivery string) {
 // the whole delivery, so the cause is legible — and no layout we ship trips it
 // (`/Applications/Irrlicht.app/...`, `/opt/homebrew/bin/...`, `~/.local/bin/...`
 // and go's `/var/folders/.../go-build.../b001/...` test paths are all clean).
-var addressShaped = regexp.MustCompile(`(?i)https?://|\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0)\b|\[::1\]|:\d{2,5}(?:\b|/)|\bports?\b[\s=:]*\d{2,5}\b`)
+// The bare-port branch is word-bounded for that reason: a go-build directory
+// like `go-build17837293` contains "7837" but is not it.
+var addressShaped = regexp.MustCompile(
+	`(?i)https?://` +
+		`|\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0)\b` +
+		`|\[::1\]` +
+		`|:\d{2,5}(?:\b|/)` +
+		`|\bports?\b[\s=:]*\d{2,5}\b` +
+		`|` + regexp.QuoteMeta(hookRoutePrefix) +
+		fmt.Sprintf(`|\b(?:%d|%d)\b`, daemonaddr.PortOf(""), daemonaddr.PortOf(AltBindAddr)),
+)
 
 // assertNoAddress fails when delivery carries anything address-shaped. This is
 // the DeliveryAddressFree counterpart of assertResolvedPort, and it is what
@@ -440,54 +485,45 @@ func portMarker(bindAddr string) string {
 	return fmt.Sprintf(":%d/", daemonaddr.PortOf(bindAddr))
 }
 
-// foreignDescription names what seedForeignInstall arranged, for the failure
-// messages of the two obligations built on it.
-func (h HookInstaller) foreignDescription() string {
-	switch h.Delivery {
-	case DeliveryURL:
-		return "a default-port install"
-	case DeliveryAddressFree:
-		return "an install naming a different irrlichd binary"
-	default:
-		return fmt.Sprintf("a foreign install (unhandled DeliveryMode %d)", h.Delivery)
+// seedDefaultPortInstall is DeliveryURL's seed: the adapter's own installer run
+// under a default-port environment.
+func seedDefaultPortInstall(t *testing.T, h HookInstaller) {
+	t.Helper()
+	t.Setenv(daemonaddr.EnvBindAddr, "")
+	if _, err := h.EnsureInstalled(); err != nil {
+		t.Fatalf("seeding a default-port install: %v", err)
 	}
 }
 
-// seedForeignInstall leaves behind exactly what a differently-situated daemon
-// would have. In DeliveryURL mode that is the adapter's own installer run under
-// a default-port environment; in DeliveryAddressFree mode it is the adapter's
-// ForeignInstall, because no environment variable makes an installer name a
-// different binary.
+// seedForeignBinaryInstall is DeliveryAddressFree's seed. It has to be
+// adapter-supplied because no environment variable makes an installer name a
+// different binary, where the bind address is one the contract can set itself.
+func seedForeignBinaryInstall(t *testing.T, h HookInstaller) {
+	t.Helper()
+	if _, err := h.ForeignInstall(); err != nil {
+		t.Fatalf("seeding an install naming a different irrlichd binary: %v", err)
+	}
+}
+
+// seedForeignInstall runs the route's seed and then cross-checks it.
 //
-// Both go through a real installer. Synthesizing the matcher groups by hand
-// instead would be a second implementation of what hookjson.EnsureInstalled
+// Both seeds go through a real installer. Synthesizing the matcher groups by
+// hand instead would be a second implementation of what hookjson.EnsureInstalled
 // already does, and one that could drift from the shape the adapter actually
 // writes.
-func seedForeignInstall(t *testing.T, h HookInstaller, path string) {
+func seedForeignInstall(t *testing.T, h HookInstaller, r deliveryRules, path string) {
 	t.Helper()
-	switch h.Delivery {
-	case DeliveryURL:
-		t.Setenv(daemonaddr.EnvBindAddr, "")
-		if _, err := h.EnsureInstalled(); err != nil {
-			t.Fatalf("seeding %s: %v", h.foreignDescription(), err)
-		}
-	case DeliveryAddressFree:
-		if _, err := h.ForeignInstall(); err != nil {
-			t.Fatalf("seeding %s: %v", h.foreignDescription(), err)
-		}
-	default:
-		t.Fatalf("unhandled DeliveryMode %d in seedForeignInstall", h.Delivery)
-	}
+	r.seed(t, h)
 
 	// Sentinel is the one field nothing else cross-checks, and a wrong value
 	// makes the uninstall-survival assertion pass vacuously — HasOurHook would
-	// simply find nothing, for the wrong reason. Confirming the adapter's own
-	// install is matched by the declared sentinel turns that silent hole into a
-	// wiring error.
+	// simply find nothing, for the wrong reason. Confirming the seeded install
+	// is matched by the declared sentinel turns that silent hole into a wiring
+	// error.
 	seeded := readHooksMap(t, path)
 	for _, event := range h.Events {
 		if !hookjson.HasOurHook(seeded, event, h.Sentinel) {
-			t.Fatalf("event %s: %s is not matched by Sentinel %q — the contract is wired wrong", event, h.foreignDescription(), h.Sentinel)
+			t.Fatalf("event %s: %s is not matched by Sentinel %q — the contract is wired wrong", event, r.foreign, h.Sentinel)
 		}
 	}
 }
