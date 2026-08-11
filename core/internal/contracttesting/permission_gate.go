@@ -165,24 +165,35 @@ func malformedGateReason(g PermissionGate) string {
 	if g.Key == "" {
 		return "PermissionGate.Key is empty — name the permission this call site must be gated on"
 	}
-	if len(g.OtherKeys) == 0 {
+	return malformedOtherKeysReason(g.Key, g.OtherKeys)
+}
+
+// malformedOtherKeysReason reports why the keys meant to be held open beside
+// key cannot serve that purpose, or "" when they can. Split from the shape
+// checks above because it answers a different question: those ask whether a
+// gate was filled in at all, this asks whether the key set it names can
+// actually produce the isolation arm's state.
+//
+// key is assumed non-empty — its caller has already rejected that.
+func malformedOtherKeysReason(key string, others []string) string {
+	if len(others) == 0 {
 		return fmt.Sprintf("PermissionGate.OtherKeys is empty — the key-isolation arm cannot run, so %q "+
 			"would only be shown to be gated on something rather than on %q (issue #1475). "+
-			"Name at least one permission this call site must NOT be gated on.", g.Key, g.Key)
+			"Name at least one permission this call site must NOT be gated on.", key, key)
 	}
-	for _, k := range g.OtherKeys {
+	for _, k := range others {
 		if k == "" {
-			// g.Key is non-empty by the check above, so the k == g.Key test
-			// below can never catch this. An unfilled constant or a struct
-			// typo would otherwise grant a permission no call site can be
-			// checking, and the isolation arm would pass having proved
-			// nothing — the exact inert-but-green shape this guard exists for.
+			// key is non-empty, so the k == key test below can never catch
+			// this. An unfilled constant or a struct typo would otherwise
+			// grant a permission no call site can be checking, and the
+			// isolation arm would pass having proved nothing — the exact
+			// inert-but-green shape this guard exists for.
 			return "PermissionGate.OtherKeys contains an empty key — name a real permission " +
 				"this call site must NOT be gated on"
 		}
-		if k == g.Key {
+		if k == key {
 			return fmt.Sprintf("PermissionGate.OtherKeys repeats the key under test (%q) — "+
-				"the key-isolation arm would grant and deny the same permission", g.Key)
+				"the key-isolation arm would grant and deny the same permission", key)
 		}
 	}
 	return ""
