@@ -76,35 +76,40 @@ moment it is written, which is exactly the condition the red-first rule exists t
 prevent. So break the thing being protected — violate the invariant, perturb the
 derived number, corrupt a migrated value — and confirm the new check goes red. If
 nothing does, it does not reach what it claims to cover, and that is the same
-stop-and-report as a defect test that passes on `main`. Four agents in one fleet run
-arrived at this gap from four directions — a new guard (#1366), derived numbers
-(#1363), a data migration (#1367), a layering rule (#1391) — each because a reviewer
-ran a mutation nobody had asked for. **Prefer committing the mutation to describing
-it**: `tools/lib/testdata/posix-lint/`'s deliberately-broken fixtures are the shape
-("committed rather than improvised so the mutation evidence outlives the PR"), and
-`TestSourceScanCatchesEveryKnownShape`
+stop-and-report as a defect test that passes on `main`. This includes a **lock the
+change itself adds**: "passes by construction" is the reason the mutation is needed,
+not an exemption from it — the Locks sentence above is about locks over behavior that
+predates the change, where there is nothing new to prove reaches anything. Four agents
+in one fleet run arrived at this gap from four directions — a new guard (#1366),
+derived numbers (#1363), a data migration (#1367), a layering rule (#1391) — each
+because a reviewer, or the agent itself, ran a mutation nobody had asked for.
+
+**Prefer committing that mutation to describing it.** `tools/lib/testdata/posix-lint/`'s
+deliberately-broken fixtures are the shape ("committed rather than improvised so the
+mutation evidence outlives the PR"), and `TestSourceScanCatchesEveryKnownShape`
 (`core/application/services/construction_test.go`) is the same idea as a corpus.
 Evidence living only in a merged PR body is re-run by nothing, which for the
-`contracttesting` families is #1479. A guard that *rewrites* an existing one owes its
-predecessor's cases as locks on top of its own — "Guarded construction" below carries
-that rule and the incident that earned it.
+`contracttesting` families is #1479. And a guard that *rewrites* an existing one owes
+its predecessor's cases as locks on top of its own — "Guarded construction" below
+carries that rule and the incident that earned it.
 
 **A verification mechanism must fail loudly when it cannot run.** Absence of a finding
 and inability to look must never produce the same output: "the thing under test never
 executed" is the most expensive way to fail, because it is indistinguishable from
 success. Wherever a check greps, matches, mutates, shells out or waits on a readiness
 signal, assert that the operation actually happened — not merely that it reported
-nothing. The guard is one line each time, and each one caught something real
-immediately after being added: `posix-lint.sh` refusing rather than skipping when it
-finds no POSIX shell, no static linter, or no files (below); the architecture corpus
-asserting every case still contains the construct it plants (below); a mutation
-harness asserting its mutation changed the file, which then caught two more stale
-mutations (#1390) — and the next harness built on that from the start, carrying a
-deliberate no-match row that must report `STALE`, so its integrity check is provably
-not vacuous (#1450); and an e2e test waiting on a signal narrower than "the daemon
-published its addr file", which fires *before* the consent effects under test run, so
-a deliberately-broken binary came back green (#1449; `ir:exec` Phase 4 step 11 carries
-the recipe).
+nothing. The guard is one line each time. Three of them caught something real the
+moment they were added: `posix-lint.sh` refusing rather than skipping when it finds no
+POSIX shell, no static linter, or no files, after its first draft printed `ALL PASS`
+over an installer carrying a deliberate `[[ ]]` (below); a mutation harness asserting
+its mutation changed the file, which then caught two more stale mutations (#1390); and
+an e2e test waiting on a signal narrower than "the daemon published its addr file",
+which fires *before* the consent effects under test run, so a deliberately-broken
+binary came back green (#1449; `ir:exec` Phase 4 step 11 carries the recipe). Two more
+were added before they could catch anything and carry the weaker evidence that they
+*can* fire: the architecture corpus asserting every case still contains the construct
+it plants (below), and the harness built on #1390's lesson from the start, carrying a
+deliberate no-match row that must report `STALE` (#1450).
 
 **A validator that cannot parse its input checks MORE, never less.** An input it
 cannot read with confidence is neither a quiet pass nor a skip: it is the case where
@@ -125,13 +130,14 @@ writing `,,` into ~11% of randomly shaped documents, because all seven removed t
 (`core/adapters/inbound/agents/hookjson/jsonc_test.go`) is the shape to copy: a fixed
 seed so a failure reproduces, the document *and* the mutation printed in the failure
 message, and a committed iteration count small enough to stay in the suite (2000,
-0.07s) with a much larger sweep across several seeds run locally before landing. Two
-things the PR says out loud. **Which structural axes the generator varies** — one
-that varies only the axis you thought of is the same vacuous green wearing a
-different hat: that test's first draft mutated only object members, so it never
-produced a removal run longer than one item and never touched an array, which is
-precisely what the production uninstall path does, and a fourth defect survived until
-the generator was widened. And **which properties survive which mutation** — "every
+0.07s) with a much larger sweep across several seeds run locally before landing. Such
+a PR says two things out loud. **Which structural axes the generator varies** — one
+that varies only the axis you thought of is the same vacuous green wearing a different
+hat: that test's first draft mutated only object members, so it never produced a
+removal run longer than one item and never touched an array, while multi-item removals
+inside an array are exactly what the production uninstall path performs
+(`hooks[event]`, seven events removed in one pass). A fourth defect survived until the
+generator was widened. And **which properties survive which mutation** — "every
 comment is preserved" is false for a deletion, since the deleted subtree's comments
 go with it, and asserting it anyway produces false failures that erode the test.
 
@@ -447,7 +453,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `core/cmd/irrlichd`), not `agents.All()`: three daemon-wide declarations —
   gastown, launcher, kitty — are appended outside the adapter registry, and
   projecting only the registry is exactly how the kitty config patch was
-  offered by the wizard while being invisible to both lists (#1383). The
+  offered by the wizard while being invisible to every one of them (#1383). The
   catalog-wide tripwire is
   `TestEveryModifyPermissionDeclaresTheFileItWrites`
   (`core/cmd/irrlichd/managedfiles_test.go`); a new modify permission is
