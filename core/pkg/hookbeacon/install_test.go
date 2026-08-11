@@ -298,3 +298,38 @@ func TestSentinelIsNotAPrefixOfAnother(t *testing.T) {
 		t.Error("the sentinel no longer matches its own rendered command")
 	}
 }
+
+// TestInstalledCommandMatchesTheRunningBinary pins InstalledCommand as exactly
+// Command(BinaryPath(), adapter) — the composition an adapter would otherwise
+// write itself, with the two error branches it would otherwise carry (#1453).
+// The equality is the assertion: a helper that resolved a DIFFERENT path than
+// Inspect and IsCanonical judge against would report drift against itself and
+// rewrite the user's config on every daemon start without converging.
+func TestInstalledCommandMatchesTheRunningBinary(t *testing.T) {
+	got, err := InstalledCommand("gemini-cli")
+	if err != nil {
+		t.Fatalf("InstalledCommand: %v", err)
+	}
+
+	live, err := BinaryPath()
+	if err != nil {
+		t.Fatalf("BinaryPath: %v", err)
+	}
+	if want := mustCommand(t, live, "gemini-cli"); got != want {
+		t.Errorf("InstalledCommand = %q, want %q", got, want)
+	}
+	if !IsCanonical(got, "gemini-cli") {
+		t.Error("the line InstalledCommand renders is not the line IsCanonical accepts — an install would be rewritten on every daemon start")
+	}
+}
+
+// TestInstalledCommandRejectsAnUnsafeAdapter confirms the validation Command
+// does is not lost by the convenience wrapper: the rendered text is written
+// into a user's config and executed by a shell.
+func TestInstalledCommandRejectsAnUnsafeAdapter(t *testing.T) {
+	for _, adapter := range []string{"", "../../etc/passwd", "gemini cli", "Gemini-CLI"} {
+		if _, err := InstalledCommand(adapter); err == nil {
+			t.Errorf("InstalledCommand(%q) returned no error", adapter)
+		}
+	}
+}
