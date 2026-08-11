@@ -1300,7 +1300,9 @@ func (pm *PIDManager) touchAndSave(state *session.SessionState) {
 //     and never calls the reader at all.
 //   - A herdr pane skips the process-ancestry walk by construction (see
 //     hostIdentity), which is the `ps` shellout chain the non-herdr path
-//     memoizes precisely because it is the expensive part.
+//     memoizes precisely because it is the expensive part. It still pays one
+//     `ps` for its controlling tty (~2ms measured), which is why the read is
+//     memoized per PID across the pass.
 //   - The one genuinely costly step, the lsof scan that finds the attached
 //     client, is memoized per socket path, so N panes of one herdr server cost
 //     one scan per sweep rather than N.
@@ -1317,11 +1319,16 @@ func (pm *PIDManager) refreshHerdrHosts(snaps []livenessSnapshot) {
 	if pm.launcherEnv == nil {
 		return
 	}
+	// Memoized for the duration of one pass because subagent sessions share
+	// their parent's PID and each carries its own herdr launcher: a parent
+	// with five subagents in one pane would otherwise pay six identical reads,
+	// every one of them a `ps` shellout for the controlling tty.
+	read := memoizedLauncherEnv(pm.launcherEnv)
 	for _, snap := range snaps {
 		if !snap.herdrPane || snap.pid <= 0 {
 			continue
 		}
-		fresh := pm.launcherEnv(snap.pid)
+		fresh := read(snap.pid)
 		if fresh == nil {
 			continue
 		}
@@ -1333,6 +1340,22 @@ func (pm *PIDManager) refreshHerdrHosts(snaps []livenessSnapshot) {
 			fmt.Sprintf("herdr host re-resolved: term_program=%q host_bundle_id=%q tty=%q",
 				state.Launcher.TermProgram, state.Launcher.HostBundleID, state.Launcher.TTY))
 		pm.broadcast(outbound.PushTypeUpdated, state)
+	}
+}
+
+// memoizedLauncherEnv wraps read so repeated calls for the same PID within one
+// pass resolve it once. Deliberately per-pass and not a field: the whole point
+// of the refresh is to observe a change between sweeps, so nothing here may
+// outlive the sweep that created it.
+func memoizedLauncherEnv(read LauncherEnvReader) LauncherEnvReader {
+	seen := map[int]*session.Launcher{}
+	return func(pid int) *session.Launcher {
+		if l, ok := seen[pid]; ok {
+			return l
+		}
+		l := read(pid)
+		seen[pid] = l
+		return l
 	}
 }
 
@@ -1358,6 +1381,19 @@ func (pm *PIDManager) applyHerdrHostRefresh(sessionID string, fresh *session.Lau
 		}
 		needs := launcherBackfillNeedsFor(state.Launcher)
 		if !needs.herdrHost {
+			return
+		}
+		// The fresh read has to still be the same pane. It may not be: a PID
+		// can be reused by an unrelated process, and assignPIDLocked re-binds a
+		// session to a new PID while captureLauncher — set-once — keeps the old
+		// Launcher (the --bg-spare pool re-bind of #727). Either way the reader
+		// sees no HERDR_PANE_ID, so launcherFromEnv skips its herdr
+		// early-return, hostIdentity runs the ancestry fallbacks that resolve
+		// the herdr *server's* terminal, and AdoptHostIdentity would copy that
+		// wholesale — re-introducing the #1348 misroute on a timer, which is
+		// the opposite of what this refresh exists to do. A genuinely detached
+		// pane still carries its own address, so the honest clear survives.
+		if fresh.HerdrPaneID != state.Launcher.HerdrPaneID {
 			return
 		}
 		if applyLauncherBackfill(state.Launcher, needs, fresh) {
@@ -1388,14 +1424,22 @@ func (n launcherBackfillNeeds) any() bool {
 // A herdr pane returns exactly one need, and it is unconditional. Both halves
 // of that matter:
 //
-//   - Exactly one, because a pane owns none of the host fields — they are
-//     adopted wholesale from the attached client (AdoptHostIdentity), which
-//     already carries the kitty fields and the tty. Under the earlier rule the
-//     kitty needs happened to be mutually exclusive with the herdr one, since
-//     they all required TermProgram == "kitty" and the herdr need required it
-//     to be empty. Dropping that precondition would have made a herdr pane
-//     whose client runs *in* kitty satisfy both, so the exclusivity is now by
-//     construction rather than by coincidence.
+//   - None of the kitty ones, because a pane owns no kitty field — they are
+//     adopted wholesale from the attached client (AdoptHostIdentity). Under
+//     the earlier rule the kitty needs happened to be mutually exclusive with
+//     the herdr one, since they all required TermProgram == "kitty" and the
+//     herdr need required it to be empty. Dropping that precondition removes
+//     the coincidence, and a herdr pane whose *client* runs in kitty is exactly
+//     the shape that would satisfy both — so the exclusivity is now by
+//     construction. Letting the per-field kitty copies run first would report
+//     an update for a client that never moved.
+//   - The tty need stays, and it is the one host-ish field that is NOT covered
+//     by the adoption: AdoptHostIdentity deliberately refuses to move the
+//     client's tty onto a pane that has none, because BackgroundAgent.Detached
+//     is derived from it (#744). So a herdr launcher stored without a tty —
+//     processTTY's `ps` timed out at capture, say — has no other route to
+//     acquiring one, and dropping this need would stall Terminal.app's
+//     tab-level targeting for that session permanently.
 //   - Unconditional, because "a host was already resolved" is not a reason to
 //     stop looking. Every other Launcher field is static for a process's
 //     lifetime; the attached client is not — detach-here-reattach-there is the
@@ -1404,7 +1448,7 @@ func (n launcherBackfillNeeds) any() bool {
 //     the user left (#1405).
 func launcherBackfillNeedsFor(l *session.Launcher) launcherBackfillNeeds {
 	if l.HerdrPaneID != "" {
-		return launcherBackfillNeeds{herdrHost: true}
+		return launcherBackfillNeeds{tty: l.TTY == "", herdrHost: true}
 	}
 	isKitty := l.TermProgram == "kitty"
 	return launcherBackfillNeeds{

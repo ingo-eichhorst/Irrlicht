@@ -46,23 +46,34 @@ func TestLauncherBackfillNeedsFor_HerdrHost(t *testing.T) {
 	}
 }
 
-// TestLauncherBackfillNeedsFor_HerdrClientInKittyIsHerdrOnly pins the
-// exclusivity that used to be a coincidence. The kitty needs and the herdr need
-// could never both fire while the herdr one required TermProgram == "" and the
-// kitty ones required TermProgram == "kitty". Dropping that precondition
-// (#1405) removes the coincidence, and a herdr pane whose *client* runs in
-// kitty is exactly the shape that would satisfy both — so the herdr branch now
-// returns before the kitty ones are computed. It has to: a pane owns none of
-// those fields, they are adopted wholesale from the client, and letting the
-// per-field kitty copies run first would report an update for a client that
-// never moved.
-func TestLauncherBackfillNeedsFor_HerdrClientInKittyIsHerdrOnly(t *testing.T) {
-	needs := launcherBackfillNeedsFor(&session.Launcher{
+// TestLauncherBackfillNeedsFor_HerdrClientInKitty pins the exclusivity that
+// used to be a coincidence. The kitty needs and the herdr need could never both
+// fire while the herdr one required TermProgram == "" and the kitty ones
+// required TermProgram == "kitty". Dropping that precondition (#1405) removes
+// the coincidence, and a herdr pane whose *client* runs in kitty is exactly the
+// shape that would satisfy both — so the herdr branch now returns before the
+// kitty ones are computed. It has to: a pane owns no kitty field, they are
+// adopted wholesale from the client, and letting the per-field kitty copies run
+// first would report an update for a client that never moved.
+//
+// The tty need is the deliberate exception and is asserted here rather than
+// left implicit: AdoptHostIdentity refuses to move the client's tty onto a pane
+// that has none (#744), so it is the one field the adoption cannot supply and
+// the only one a herdr launcher still backfills per-field.
+func TestLauncherBackfillNeedsFor_HerdrClientInKitty(t *testing.T) {
+	kittyClient := &session.Launcher{
 		HerdrPaneID: "w1:p1",
 		TermProgram: "kitty", // the attached client's, adopted at capture
-	})
-	if want := (launcherBackfillNeeds{herdrHost: true}); needs != want {
-		t.Errorf("herdr pane must have exactly the herdr need: got %+v, want %+v", needs, want)
+	}
+	if want := (launcherBackfillNeeds{herdrHost: true, tty: true}); launcherBackfillNeedsFor(kittyClient) != want {
+		t.Errorf("no kitty need may fire for a herdr pane: got %+v, want %+v",
+			launcherBackfillNeedsFor(kittyClient), want)
+	}
+
+	kittyClient.TTY = "/dev/ttys077"
+	if want := (launcherBackfillNeeds{herdrHost: true}); launcherBackfillNeedsFor(kittyClient) != want {
+		t.Errorf("a herdr pane with a tty needs only the host: got %+v, want %+v",
+			launcherBackfillNeedsFor(kittyClient), want)
 	}
 }
 

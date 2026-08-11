@@ -146,8 +146,13 @@ func TestCheckPIDLiveness_NonHerdrLauncherNotRefreshed(t *testing.T) {
 // TestCheckPIDLiveness_HerdrSteadyStateDoesNotChurn pins the other half of the
 // cost argument: a session whose client has not moved must produce no Save and
 // therefore no UpdatedAt bump and no websocket push, however often the sweep
-// runs. Without this, a 5s timer would rewrite every herdr session forever —
-// and a bumped UpdatedAt on a `ready` session also defers its own TTL reap.
+// runs. Without this, a 5s timer would rewrite every herdr session forever.
+//
+// A LOCK, not a defect test — the no-save half passes on main by construction,
+// since the sweep reads no launchers there. So it also asserts the session was
+// actually *visited*: "refreshed and correctly declined to write" and "never
+// looked at" are otherwise indistinguishable, and only the first is what this
+// claims to pin.
 func TestCheckPIDLiveness_HerdrSteadyStateDoesNotChurn(t *testing.T) {
 	repo := newMockRepo()
 	stored := &session.Launcher{
@@ -158,8 +163,10 @@ func TestCheckPIDLiveness_HerdrSteadyStateDoesNotChurn(t *testing.T) {
 	}
 	repo.states["s"] = herdrSession(stored)
 
+	calls := 0
 	pm := newPIDManagerForTest(repo)
 	pm.SetLauncherEnvReader(func(int) *session.Launcher {
+		calls++
 		cp := *stored
 		return &cp
 	})
@@ -170,5 +177,111 @@ func TestCheckPIDLiveness_HerdrSteadyStateDoesNotChurn(t *testing.T) {
 
 	if repo.saves != before {
 		t.Errorf("unchanged host still churned the repo: %d saves", repo.saves-before)
+	}
+	if calls != 2 {
+		t.Errorf("the session must be re-read once per sweep: %d reads over 2 sweeps", calls)
+	}
+}
+
+// TestCheckPIDLiveness_HerdrIgnoresAReadThatIsNoLongerThePane guards the way
+// this refresh could re-create the very misroute it removes. It decides "herdr
+// pane" from the *stored* launcher, but the PID it then reads may no longer be
+// that pane: a PID can be reused by an unrelated process, and assignPIDLocked
+// re-binds a session to a new PID while captureLauncher — set-once — keeps the
+// old Launcher (the --bg-spare re-bind of #727). Such a read carries no
+// HERDR_PANE_ID, so hostIdentity runs the ancestry fallbacks and resolves the
+// herdr *server's* terminal; adopting it wholesale would point every sweep at
+// the wrong window (#1348).
+func TestCheckPIDLiveness_HerdrIgnoresAReadThatIsNoLongerThePane(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["s"] = herdrSession(&session.Launcher{
+		HerdrPaneID:     "w1:p1",
+		HerdrSocketPath: "/cfg/herdr/herdr.sock",
+		TermProgram:     "ghostty",
+		TTY:             "/dev/ttys077",
+	})
+
+	pm := newPIDManagerForTest(repo)
+	// What the reader returns for a PID that is no longer the pane: the
+	// ancestry walk resolved the herdr server's own terminal.
+	pm.SetLauncherEnvReader(func(int) *session.Launcher {
+		return &session.Launcher{TermProgram: "kitty", KittyPID: 42, TTY: "/dev/ttys001"}
+	})
+
+	pm.CheckPIDLiveness()
+
+	got := repo.states["s"].Launcher
+	if got.TermProgram != "ghostty" || got.KittyPID != 0 || got.TTY != "/dev/ttys077" {
+		t.Errorf("a read that is not this pane was adopted anyway: %+v", got)
+	}
+}
+
+// TestCheckPIDLiveness_HerdrAcquiresAMissingTTY covers the one host-ish field
+// the client adoption does NOT carry. AdoptHostIdentity deliberately refuses to
+// move the client's tty onto a pane that has none, because
+// BackgroundAgent.Detached is derived from it (#744) — so a herdr launcher
+// stored without a tty (processTTY's `ps` timed out at capture) has no other
+// route to acquiring one, and Terminal.app's tab-level targeting stays broken
+// for that session until it does.
+func TestCheckPIDLiveness_HerdrAcquiresAMissingTTY(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["s"] = herdrSession(&session.Launcher{
+		HerdrPaneID:     "w1:p1",
+		HerdrSocketPath: "/cfg/herdr/herdr.sock",
+		TermProgram:     "iTerm.app",
+	})
+
+	pm := newPIDManagerForTest(repo)
+	pm.SetLauncherEnvReader(func(int) *session.Launcher {
+		return &session.Launcher{
+			HerdrPaneID:     "w1:p1",
+			HerdrSocketPath: "/cfg/herdr/herdr.sock",
+			TermProgram:     "iTerm.app",
+			ITermSessionID:  "w0t0p0",
+			TTY:             "/dev/ttys077",
+		}
+	})
+
+	pm.CheckPIDLiveness()
+
+	if got := repo.states["s"].Launcher.TTY; got != "/dev/ttys077" {
+		t.Errorf("a missing tty was never backfilled: TTY = %q", got)
+	}
+}
+
+// TestCheckPIDLiveness_HerdrSubagentsShareOneRead pins the cost fix for the
+// multiplier the per-socket memo does not cover: subagent sessions share their
+// parent's PID and each carries its own herdr launcher, so without a per-PID
+// memo a parent with subagents pays one identical `ps`-backed read per session,
+// every sweep, forever.
+func TestCheckPIDLiveness_HerdrSubagentsShareOneRead(t *testing.T) {
+	repo := newMockRepo()
+	pane := &session.Launcher{
+		HerdrPaneID:     "w1:p1",
+		HerdrSocketPath: "/cfg/herdr/herdr.sock",
+		TermProgram:     "ghostty",
+		TTY:             "/dev/ttys077",
+	}
+	parent := herdrSession(pane)
+	repo.states["s"] = parent
+	for _, id := range []string{"c1", "c2", "c3"} {
+		child := herdrSession(pane)
+		child.SessionID = id
+		child.ParentSessionID = "s"
+		repo.states[id] = child
+	}
+
+	calls := 0
+	pm := newPIDManagerForTest(repo)
+	pm.SetLauncherEnvReader(func(int) *session.Launcher {
+		calls++
+		cp := *pane
+		return &cp
+	})
+
+	pm.CheckPIDLiveness()
+
+	if calls != 1 {
+		t.Errorf("4 sessions on one PID cost %d reads, want 1", calls)
 	}
 }
