@@ -305,21 +305,18 @@ func TestKittyPermission_GateContract(t *testing.T) {
 		// install-type wiring could take is one a live-gate wiring could take
 		// too, and there it is the whole point.
 		OtherKeys: []string{agent.HooksPermissionKey},
-		SetState: func(key string, state permission.State) {
-			if key != PermissionKeyKittyConfig {
-				return // not this declaration's permission
-			}
+		SetState: contracttesting.OnlyKey(PermissionKeyKittyConfig, func(state permission.State) {
 			switch state {
 			case permission.StateGranted:
 				if err := decl.Apply(); err != nil {
-					t.Fatalf("Apply: %v", err)
+					t.Errorf("Apply: %v", err)
 				}
 			case permission.StateDenied:
 				if err := decl.Remove(); err != nil {
-					t.Fatalf("Remove: %v", err)
+					t.Errorf("Remove: %v", err)
 				}
 			}
-		},
+		}),
 		Exercise: func() {}, // the effect IS the Apply/Remove call above
 		Observe: func() bool {
 			data, err := os.ReadFile(path)

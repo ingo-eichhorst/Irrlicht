@@ -180,10 +180,7 @@ func TestHooksPermission_InstallGateContract(t *testing.T) {
 		// representable — the arm is load-bearing at the live receiver
 		// (hooks_test.go), not here.
 		OtherKeys: []string{PermissionKeyTranscripts},
-		SetState: func(key string, state permission.State) {
-			if key != PermissionKeyHooks {
-				return // no install effect of its own to drive
-			}
+		SetState: contracttesting.OnlyKey(PermissionKeyHooks, func(state permission.State) {
 			var err error
 			if state == permission.StateGranted {
 				_, err = EnsureHooksInstalled()
@@ -191,9 +188,9 @@ func TestHooksPermission_InstallGateContract(t *testing.T) {
 				_, err = UninstallHooks()
 			}
 			if err != nil {
-				t.Fatalf("drive permission to %v: %v", state, err)
+				t.Errorf("drive permission to %v: %v", state, err)
 			}
-		},
+		}),
 		Exercise: func() {},
 		Observe: func() bool {
 			return eventHasSentinel(readHooks(t, home), HookStop)

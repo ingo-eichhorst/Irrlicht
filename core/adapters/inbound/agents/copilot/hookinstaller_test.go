@@ -76,12 +76,7 @@ func TestHooksPermission_IsGated(t *testing.T) {
 		// representable — the arm is load-bearing at the live receiver
 		// (hooks_test.go), not here.
 		OtherKeys: []string{PermissionKeyTranscripts},
-		SetState: func(key string, s permission.State) {
-			if key != PermissionKeyHooks {
-				return // no install effect of its own to drive
-			}
-			state = s
-		},
+		SetState:  contracttesting.OnlyKey(PermissionKeyHooks, func(s permission.State) { state = s }),
 		Exercise: func() {
 			switch state {
 			case permission.StateGranted:

@@ -226,7 +226,14 @@ Before marking a ticket done, run the full suite — every layer must pass:
   whose wiring supplies the fake is a contract whose wiring can supply a
   key-blind one. The static `keyedGate` map literals in the adapter test
   packages are a different thing and stay: they pin a fixed two-permission
-  combination in one-off tests and were never key-blind. The arm is
+  combination in one-off tests and were never key-blind. A receiver gated on
+  more than one permission wires `AssertPermissionGatedOnEachKey` rather than a
+  hand-written table pairing each key with "the other one" — it names its key
+  set once and the pairing is derived, because such a table can silently list
+  only one direction and the direction that already works is
+  indistinguishable from covering both. Install-type wirings use
+  `contracttesting.OnlyKey` instead of re-deciding per adapter that a foreign
+  key is a no-op. The arm is
   load-bearing only for live per-request gates; for an install-type permission
   the wiring holds that permission's own closures, so a wrong key is not
   representable and the arm is weak by construction — and where the other key

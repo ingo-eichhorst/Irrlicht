@@ -542,9 +542,13 @@ type fakeGate bool
 func (g fakeGate) Granted(_, _ string) bool { return bool(g) }
 
 // keyedGate is a ConsentGranter that answers per permission key, so a test can
-// grant one of this adapter's permissions while denying another. The gates
-// above deliberately ignore the key, which is why neither of them can tell a
-// receiver gated on "hooks" from one gated on "transcripts" (issue #1466).
+// grant one of this adapter's permissions while denying another. fakeGate
+// above deliberately ignores the key, which is why it cannot tell a receiver
+// gated on "hooks" from one gated on "transcripts" (issue #1466).
+//
+// For a MUTABLE keyed gate — one driven through states by the shared contract
+// — use contracttesting.ConsentGate instead. This type is for pinning a fixed
+// combination in a one-off test, which is all it has ever been used for.
 type keyedGate map[string]bool
 
 func (g keyedGate) Granted(_, key string) bool { return g[key] }
@@ -781,11 +785,10 @@ func TestHookHandler_PreToolUse_UserInputToolStillDispatchesWithMarkerScan(t *te
 // this receiver dispatch with "transcripts" denied for the whole of its life
 // (issue #1466) while this very test was green.
 func TestHookHandler_PermissionGateContract(t *testing.T) {
-	for _, tc := range []struct{ key, other string }{
-		{PermissionKeyHooks, PermissionKeyTranscripts},
-		{PermissionKeyTranscripts, PermissionKeyHooks},
-	} {
-		t.Run(tc.key, func(t *testing.T) {
+	keys := []string{PermissionKeyHooks, PermissionKeyTranscripts}
+
+	contracttesting.AssertPermissionGatedOnEachKey(t, keys,
+		func(key string, others []string) contracttesting.PermissionGate {
 			target := &mockTarget{}
 			gate := contracttesting.NewConsentGate()
 			handler := NewHookHandler(target, nil, gate, mockLogger{})
@@ -795,18 +798,17 @@ func TestHookHandler_PermissionGateContract(t *testing.T) {
 				ToolName:       "Bash",
 			}
 
-			contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-				Key:       tc.key,
-				OtherKeys: []string{tc.other},
+			return contracttesting.PermissionGate{
+				Key:       key,
+				OtherKeys: others,
 				SetState:  gate.SetState,
 				Exercise: func() {
 					target.reset()
 					postHook(t, handler, payload)
 				},
 				Observe: func() bool { return len(target.getCalls()) > 0 },
-			})
+			}
 		})
-	}
 }
 
 // TestHookHandler_TranscriptsConsentGatesTheRead is the issue #1466 defect

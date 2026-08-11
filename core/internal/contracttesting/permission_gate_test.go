@@ -91,17 +91,41 @@ func (g *keyBlindGate) Granted(_, _ string) bool { return g.state == permission.
 // hook receiver: "hooks" authorises writing our entries, "transcripts"
 // authorises reading the file those entries point at.
 func TestAssertPermissionGated_PassesAgainstACorrectlyGatedReceiver(t *testing.T) {
-	for _, tc := range []struct{ key, other string }{
-		{selfTestTranscripts, selfTestHooks},
-		{selfTestHooks, selfTestTranscripts},
-	} {
-		t.Run(tc.key, func(t *testing.T) {
-			r := &fakeReceiver{
-				gate:    NewConsentGate(),
-				gatedOn: []string{selfTestHooks, selfTestTranscripts},
-			}
-			AssertPermissionGated(t, r.gateFor(tc.key, tc.other))
-		})
+	keys := []string{selfTestHooks, selfTestTranscripts}
+
+	AssertPermissionGatedOnEachKey(t, keys, func(key string, others []string) PermissionGate {
+		r := &fakeReceiver{gate: NewConsentGate(), gatedOn: keys}
+		return r.gateFor(key, others...)
+	})
+}
+
+// TestAssertPermissionGatedOnEachKey_DerivesTheOthers pins the pairing the
+// helper exists to stop adapters hand-maintaining. Three keys, because every
+// wiring in the tree today has exactly two — and with two, "the others" and
+// "the other one" are the same answer, so a two-key case cannot tell a correct
+// derivation from one that just returns the last key.
+func TestAssertPermissionGatedOnEachKey_DerivesTheOthers(t *testing.T) {
+	keys := []string{"a", "b", "c"}
+	got := map[string][]string{}
+
+	AssertPermissionGatedOnEachKey(t, keys, func(key string, others []string) PermissionGate {
+		got[key] = others
+		r := &fakeReceiver{gate: NewConsentGate(), gatedOn: keys}
+		return r.gateFor(key, others...)
+	})
+
+	want := map[string][]string{
+		"a": {"b", "c"},
+		"b": {"a", "c"},
+		"c": {"a", "b"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ran for %d keys, want %d — every key must get a turn under test", len(got), len(want))
+	}
+	for key, wantOthers := range want {
+		if strings.Join(got[key], ",") != strings.Join(wantOthers, ",") {
+			t.Errorf("key %q held open %v, want %v", key, got[key], wantOthers)
+		}
 	}
 }
 

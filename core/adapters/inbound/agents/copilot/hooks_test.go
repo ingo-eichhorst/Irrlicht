@@ -61,6 +61,9 @@ func (m *mockTarget) stops() []stopCall {
 	return append([]stopCall(nil), m.stopCalls...)
 }
 
+// keyedGate pins a fixed permission combination for a one-off test. For a
+// MUTABLE keyed gate driven through states by the shared contract, use
+// contracttesting.ConsentGate instead.
 type keyedGate map[string]bool
 
 func (g keyedGate) Granted(_, key string) bool { return g[key] }
@@ -370,11 +373,10 @@ func TestHookReceiver_DeniedTranscriptsConsentDropsQuietly(t *testing.T) {
 // other, and it is the state claudecode sat in undetected for its whole life
 // (issue #1466).
 func TestHookReceiver_PermissionGateContract(t *testing.T) {
-	for _, tc := range []struct{ key, other string }{
-		{PermissionKeyHooks, PermissionKeyTranscripts},
-		{PermissionKeyTranscripts, PermissionKeyHooks},
-	} {
-		t.Run(tc.key, func(t *testing.T) {
+	keys := []string{PermissionKeyHooks, PermissionKeyTranscripts}
+
+	contracttesting.AssertPermissionGatedOnEachKey(t, keys,
+		func(key string, others []string) contracttesting.PermissionGate {
 			root := copilotSessionRoot(t)
 			body := contractPayload(writeSessionTranscript(t, root, "sess-gate"), HookStop)
 			target := &mockTarget{}
@@ -382,18 +384,17 @@ func TestHookReceiver_PermissionGateContract(t *testing.T) {
 			h := NewHookHandler(target, gate, mockLogger{})
 
 			before := 0
-			contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-				Key:       tc.key,
-				OtherKeys: []string{tc.other},
+			return contracttesting.PermissionGate{
+				Key:       key,
+				OtherKeys: others,
 				SetState:  gate.SetState,
 				Exercise: func() {
 					before = target.totalCalls()
 					post(t, h, body)
 				},
 				Observe: func() bool { return target.totalCalls() > before },
-			})
+			}
 		})
-	}
 }
 
 // TestHookReceiver_NonPostRejected is a LOCK on the shared receiver shape.

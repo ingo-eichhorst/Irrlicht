@@ -68,7 +68,9 @@ func (m *mockTarget) reset() {
 }
 
 // keyedGate grants exactly the permission keys in its set — used to exercise
-// the hooks-granted / transcripts-denied combination.
+// the hooks-granted / transcripts-denied combination. For a MUTABLE keyed gate
+// driven through states by the shared contract, use
+// contracttesting.ConsentGate instead.
 type keyedGate map[string]bool
 
 func (g keyedGate) Granted(_, key string) bool { return g[key] }
@@ -378,11 +380,10 @@ func TestHookHandler_UnrecognizedEvent(t *testing.T) {
 // only state that tells a receiver gated on the right permission from one gated
 // on the other.
 func TestHookHandler_PermissionGateContract(t *testing.T) {
-	for _, tc := range []struct{ key, other string }{
-		{PermissionKeyHooks, PermissionKeyTranscripts},
-		{PermissionKeyTranscripts, PermissionKeyHooks},
-	} {
-		t.Run(tc.key, func(t *testing.T) {
+	keys := []string{PermissionKeyHooks, PermissionKeyTranscripts}
+
+	contracttesting.AssertPermissionGatedOnEachKey(t, keys,
+		func(key string, others []string) contracttesting.PermissionGate {
 			target := &mockTarget{}
 			gate := contracttesting.NewConsentGate()
 			handler := NewHookHandler(target, gate, mockLogger{})
@@ -391,13 +392,12 @@ func TestHookHandler_PermissionGateContract(t *testing.T) {
 				HookEventName:  HookPermissionRequest,
 				ToolName:       "shell",
 			}
-			contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-				Key:       tc.key,
-				OtherKeys: []string{tc.other},
+			return contracttesting.PermissionGate{
+				Key:       key,
+				OtherKeys: others,
 				SetState:  gate.SetState,
 				Exercise:  func() { target.reset(); postHook(t, handler, payload) },
 				Observe:   func() bool { return target.totalCalls() > 0 },
-			})
+			}
 		})
-	}
 }

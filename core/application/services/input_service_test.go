@@ -137,11 +137,14 @@ func TestSendInput_PermissionGateContract(t *testing.T) {
 
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
 		Key: agent.ControlPermissionKey,
-		// Forwarding must ride on "control" and on nothing else. The two keys
-		// held open beside it are the ones an adapter's own receiver checks —
-		// a gate that answered for any of them would forward input on the
-		// strength of a consent that authorises reading, not writing.
-		OtherKeys: []string{agent.HooksPermissionKey, "transcripts"},
+		// Forwarding must ride on "control" and on nothing else. The keys held
+		// open beside it are other permissions the same wizard grants — a gate
+		// that answered for any of them would forward input on the strength of
+		// a consent that authorises writing a config file, not typing into a
+		// session. Both are domain constants rather than literals: an adapter's
+		// own "transcripts" spelling is package-local, and a key nothing
+		// declares would make this arm a no-op that still reads green.
+		OtherKeys: []string{agent.HooksPermissionKey, agent.InstructionsPermissionKey},
 		SetState:  consent.SetState,
 		Exercise: func() {
 			ctrl.sentData = nil

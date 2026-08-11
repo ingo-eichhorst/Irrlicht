@@ -106,6 +106,52 @@ func AssertPermissionGated(t *testing.T, g PermissionGate) {
 	t.Run("gated_on_the_named_key", func(t *testing.T) { assertGatedOnTheNamedKey(t, g) })
 }
 
+// AssertPermissionGatedOnEachKey runs the contract once per key in keys, each
+// time holding the REST of the set open — the shape every receiver gated on
+// more than one permission needs, since a receiver must be shown to honour
+// each of them separately.
+//
+// It exists because the alternative is what three adapters had started doing
+// independently: a hand-written table pairing each key with "the other one".
+// Such a table can silently list only one direction, and listing only the
+// direction that already works is indistinguishable from covering both. Here a
+// wiring names its key set once and the pairing is derived.
+//
+// build receives the key under test and the others, and returns a gate with a
+// FRESH call site — the fixtures must not be shared between keys, or a state
+// left behind by one run decides the next.
+func AssertPermissionGatedOnEachKey(t *testing.T, keys []string, build func(key string, others []string) PermissionGate) {
+	t.Helper()
+	if len(keys) < 2 {
+		t.Fatalf("AssertPermissionGatedOnEachKey needs at least two keys, got %d — "+
+			"with fewer there is nothing to hold open and the key-isolation arm cannot run", len(keys))
+	}
+	for i, key := range keys {
+		others := append(append([]string{}, keys[:i]...), keys[i+1:]...)
+		t.Run(key, func(t *testing.T) { AssertPermissionGated(t, build(key, others)) })
+	}
+}
+
+// OnlyKey adapts a single permission's state-driver to PermissionGate.SetState
+// by ignoring every other key. It is the install-type counterpart to
+// ConsentGate: those wirings hold one permission's own Apply/Remove closures,
+// so a key that is not theirs has nothing to drive.
+//
+// It is here rather than written out at each install wiring for the same
+// reason ConsentGate is: three of them had each hand-rolled the filter, and
+// "a foreign key is a no-op" is a decision about the contract, not about an
+// adapter. Note what it means for the key-isolation arm — with nothing to
+// drive for the other key, that arm repeats the revoked arm exactly. See
+// AssertPermissionGated's doc for why it is kept uniform anyway.
+func OnlyKey(key string, drive func(permission.State)) func(string, permission.State) {
+	return func(k string, state permission.State) {
+		if k != key {
+			return
+		}
+		drive(state)
+	}
+}
+
 // malformedGateReason reports why the contract cannot actually exercise g, or
 // "" when it can. It returns a reason instead of failing so that the shapes it
 // rejects are themselves testable — a guard nobody can drive is the same kind
@@ -217,31 +263,38 @@ func assertGatedOnTheNamedKey(t gateReporter, g PermissionGate) {
 // those were never the problem. SetState has exactly PermissionGate.SetState's
 // signature, so the usual wiring is one line: SetState: gate.SetState.
 //
-// A key never set reads as pending, matching permission.Set.Get.
+// It is backed by permission.Set rather than a bare map so the "never answered
+// reads as pending" rule is INHERITED from the domain instead of restated
+// here. A fake that hand-maintains its own copy of that default would keep
+// answering the old way if the domain ever changed it, and the contract would
+// go on asserting against a consent model production no longer uses.
 type ConsentGate struct {
-	mu     sync.Mutex
-	states map[string]permission.State
+	mu  sync.Mutex
+	set permission.Set
 }
+
+// consentGateAgent is the single agent name a ConsentGate records under. The
+// fake stands in for one adapter's consent at a time, so the agent axis of
+// permission.Set is deliberately collapsed — see Granted.
+const consentGateAgent = "contracttesting"
 
 // NewConsentGate returns a ConsentGate with every key pending.
 func NewConsentGate() *ConsentGate {
-	return &ConsentGate{states: make(map[string]permission.State)}
+	return &ConsentGate{set: permission.Set{}}
 }
 
 // SetState drives one permission key to state.
 func (g *ConsentGate) SetState(key string, state permission.State) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.states == nil {
-		g.states = make(map[string]permission.State)
-	}
-	g.states[key] = state
+	g.set.Put(consentGateAgent, key, state)
 }
 
-// Granted implements the receiver-side consent check. The agent name is
-// ignored: a ConsentGate stands in for one adapter's consent at a time.
+// Granted implements the receiver-side consent check. The agent name a call
+// site passes is ignored: a ConsentGate stands in for one adapter at a time,
+// so every question it is asked is about that adapter.
 func (g *ConsentGate) Granted(_ string, key string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.states[key] == permission.StateGranted
+	return g.set.Get(consentGateAgent, key) == permission.StateGranted
 }
