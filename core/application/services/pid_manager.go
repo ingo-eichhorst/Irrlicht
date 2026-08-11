@@ -1372,11 +1372,16 @@ func memoizedLauncherEnv(read LauncherEnvReader) LauncherEnvReader {
 func (pm *PIDManager) applyHerdrHostRefresh(sessionID string, fresh *session.Launcher) *session.SessionState {
 	var updated *session.SessionState
 	pm.WithSessionStateLock(func() {
+		// Gone: reaped between the snapshot and here — possibly earlier in this
+		// very sweep. Returning rather than saving is what stops a deleted
+		// session being written back out.
 		state, err := pm.repo.Load(sessionID)
-		// Gone, or no longer a herdr pane: reaped or re-bound between the
-		// snapshot and here. Returning early rather than saving is what stops
-		// a session deleted earlier in this same sweep being written back out.
-		if err != nil || state == nil || state.Launcher == nil {
+		if err != nil || state == nil {
+			return
+		}
+		// Present but no longer launcher-bearing: a separate concern from
+		// existing, and the guard launcherBackfillNeedsFor's deref relies on.
+		if state.Launcher == nil {
 			return
 		}
 		needs := launcherBackfillNeedsFor(state.Launcher)

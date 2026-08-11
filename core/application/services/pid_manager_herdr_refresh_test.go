@@ -210,9 +210,18 @@ func TestCheckPIDLiveness_HerdrIgnoresAReadThatIsNoLongerThePane(t *testing.T) {
 
 	pm.CheckPIDLiveness()
 
+	// Asserted per field rather than as one disjunction: which field moved says
+	// which half of the adoption leaked (the term program, a kitty selector the
+	// pane never had, or the tab).
 	got := repo.states["s"].Launcher
-	if got.TermProgram != "ghostty" || got.KittyPID != 0 || got.TTY != "/dev/ttys077" {
-		t.Errorf("a read that is not this pane was adopted anyway: %+v", got)
+	if got.TermProgram != "ghostty" {
+		t.Errorf("the server's terminal was adopted: TermProgram = %q", got.TermProgram)
+	}
+	if got.KittyPID != 0 {
+		t.Errorf("a kitty selector the pane never had leaked in: KittyPID = %d", got.KittyPID)
+	}
+	if got.TTY != "/dev/ttys077" {
+		t.Errorf("the pane's tab was overwritten: TTY = %q", got.TTY)
 	}
 }
 
