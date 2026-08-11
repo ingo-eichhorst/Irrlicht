@@ -1,14 +1,47 @@
 {
   "description": "replay reproduced 1 of the daemon's 3 transitions — only the overlap is measured, exactly as compareOrdered pairs it. The missing tail is ordered_mismatches' business, not timing's",
   "recorded": [
-    {"seq": 1, "ts": "2026-04-11T10:00:00.000000Z", "kind": "state_transition", "session_id": "s", "prev_state": "ready", "new_state": "working"},
-    {"seq": 2, "ts": "2026-04-11T10:00:01.000000Z", "kind": "state_transition", "session_id": "s", "prev_state": "working", "new_state": "waiting"},
-    {"seq": 3, "ts": "2026-04-11T10:00:02.000000Z", "kind": "state_transition", "session_id": "s", "prev_state": "waiting", "new_state": "ready"}
+    {
+      "seq": 1,
+      "ts": "2026-04-11T10:00:00.000000Z",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "ready",
+      "new_state": "working"
+    },
+    {
+      "seq": 2,
+      "ts": "2026-04-11T10:00:01.000000Z",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "working",
+      "new_state": "waiting"
+    },
+    {
+      "seq": 3,
+      "ts": "2026-04-11T10:00:02.000000Z",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "waiting",
+      "new_state": "ready"
+    }
   ],
   "replayed": [
-    {"virtual_time": "2026-04-11T10:00:12.500000Z", "prev_state": "ready", "new_state": "working"}
+    {
+      "virtual_time": "2026-04-11T10:00:12.500000Z",
+      "prev_state": "ready",
+      "new_state": "working"
+    }
   ],
-  "want_deltas_ns": [12500000000],
+  "want_deltas_ns": [
+    12500000000
+  ],
+  "want_indices": [
+    0
+  ],
+  "want_kinds": [
+    "ready→working"
+  ],
   "want_first_drift": 12500000000,
   "want_worst_ns": 12500000000
 }

@@ -1,0 +1,14 @@
+{
+  "description": "the threshold boundary from above: one nanosecond past driftThreshold IS drifted. Paired with threshold-exactly-1s.json this pins the comparison to the exact boundary rather than to a value comfortably either side of it",
+  "recorded": [
+    {"seq": 1, "ts": "2026-04-11T10:00:00.000000000Z", "kind": "state_transition", "session_id": "s", "prev_state": "ready", "new_state": "working"}
+  ],
+  "replayed": [
+    {"virtual_time": "2026-04-11T10:00:01.000000001Z", "prev_state": "ready", "new_state": "working"}
+  ],
+  "want_deltas_ns": [1000000001],
+  "want_indices": [0],
+  "want_kinds": ["ready→working"],
+  "want_first_drift": 1000000001,
+  "want_worst_ns": 1000000001
+}

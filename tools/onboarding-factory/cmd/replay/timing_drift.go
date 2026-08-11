@@ -210,8 +210,15 @@ func newDriftDistribution(deltas []timeDelta) driftDistribution {
 }
 
 // bucketIndex maps a magnitude onto driftBucketLabels. Edges are upper-
-// exclusive, so a delta of exactly 1s lands in "1-5s" rather than "0.1-1s" —
-// consistent with driftThreshold, which treats "drifted" as strictly greater.
+// exclusive, so a delta of exactly 1s lands in "1-5s" rather than "0.1-1s".
+//
+// That is one nanosecond out of step with driftThreshold on purpose: firstDrift
+// treats "drifted" as strictly greater, so a delta of exactly 1s is counted in
+// the histogram's above-the-line population while NOT being reported as drift.
+// The window is a single nanosecond and no recording sits in it, but the
+// disagreement is real, so it is pinned by
+// TestDriftDistribution_BucketsAndPercentiles rather than left to be
+// rediscovered as a bug.
 func bucketIndex(d time.Duration) int {
 	for i, edge := range driftBucketEdges {
 		if d < edge {

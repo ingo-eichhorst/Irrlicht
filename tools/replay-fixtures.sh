@@ -76,6 +76,16 @@ extended_divergence_count=0
 # the failure mode #1480 is about.
 timing_drifts=""
 timing_drift_count=0
+# How many recordings yielded a PARSEABLE timing figure, and how many printed an
+# extended-check line at all. The pair exists so this block cannot fail the way
+# the one above it did: if driftSummary's format ever changes, the sed below
+# matches nothing, timing_drift_count stays 0, the report never prints and the
+# sweep still exits 0 — absence of drift and inability to parse producing byte-
+# identical output. The check at the end of this script refuses that. The Go
+# side pins the same contract from the other direction
+# (TestDriftSummary_FormatIsTheShellContract).
+timing_parsed_count=0
+extcheck_seen_count=0
 while IFS= read -r fix; do
   [[ -z "$fix" ]] && continue
   [[ "$fix" == */subagents/* ]] && continue
@@ -135,16 +145,23 @@ while IFS= read -r fix; do
   # reporting block at the end of this script but nothing ever incremented
   # them, so that block could not print and the "N of 309 diverge" figure it
   # exists to show had to be recomputed by hand every time (#1480).
+  if printf '%s' "$replay_err" | grep -q 'extended-check:'; then
+    extcheck_seen_count=$((extcheck_seen_count + 1))
+  fi
   if printf '%s' "$replay_err" | grep -q 'extended-check:.*FAIL'; then
     extended_divergences="${extended_divergences}   ${adapter}/${kind}/${name}/${recname}
 "
     extended_divergence_count=$((extended_divergence_count + 1))
   fi
-  # Tally the timing drift. The threshold matches driftThreshold in
-  # cmd/replay/timing_drift.go, which is chosen from the measured distribution
-  # (a near-empty decade between 100ms and 1s) rather than picked.
+  # Tally the timing drift. The 1s cut matches driftThreshold in
+  # cmd/replay/timing_drift.go, chosen from the measured distribution (a
+  # near-empty decade between 100ms and 1s) rather than picked. Note this cut is
+  # taken on the %+.3f-ROUNDED figure, so a delta of 1.0004s reads as 1.000 and
+  # is omitted here while the Go gate counts it. That only decides which rows
+  # this informational listing prints; the gate is the Go test.
   timing_worst="$(printf '%s' "$replay_err" | sed -n 's/.*timing \([0-9][0-9]*\) pairs worst \([+-][0-9.][0-9.]*\)s@\([0-9][0-9]*\).*/\1 \2 \3/p' | tail -1)"
   if [[ -n "$timing_worst" ]]; then
+    timing_parsed_count=$((timing_parsed_count + 1))
     tw_pairs="${timing_worst%% *}"
     tw_rest="${timing_worst#* }"
     tw_delta="${tw_rest%% *}"
@@ -370,6 +387,19 @@ if [[ "$timing_drift_count" -gt 0 ]]; then
   echo "   the daemon. These do not fail the build here; the gate is" >&2
   echo "   TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog, which ratchets the set (#1480)." >&2
   echo >&2
+fi
+
+# A verification mechanism must fail loudly when it cannot run (AGENTS.md). If
+# recordings produced extended-check lines but NONE of them yielded a timing
+# figure, the format contract between driftSummary and the sed above has broken
+# and this script's timing report has gone silent — which is indistinguishable
+# from "nothing drifted" without this check.
+if [[ "$extcheck_seen_count" -gt 0 && "$timing_parsed_count" -eq 0 ]]; then
+  echo "timing report is broken: $extcheck_seen_count recording(s) printed an extended-check line" >&2
+  echo "  but none yielded a parseable 'timing N pairs worst ±X.XXXs@I' figure. driftSummary's" >&2
+  echo "  format and this script's parser have diverged — see cmd/replay/timing_drift.go and" >&2
+  echo "  TestDriftSummary_FormatIsTheShellContract (#1480)." >&2
+  exit 1
 fi
 
 echo "done. reports in $REPORTS_DIR/" >&2

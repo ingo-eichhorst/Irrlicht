@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -34,6 +36,8 @@ type timingCase struct {
 	Recorded     []lifecycle.Event `json:"recorded"`
 	Replayed     []transition      `json:"replayed"`
 	WantDeltasNs []int64           `json:"want_deltas_ns"`
+	WantIndices  []int             `json:"want_indices"`
+	WantKinds    []string          `json:"want_kinds"`
 	WantFirstNs  *int64            `json:"want_first_drift"`
 	WantWorstNs  *int64            `json:"want_worst_ns"`
 }
@@ -76,6 +80,19 @@ func TestTransitionTimeDeltas_Corpus(t *testing.T) {
 				t.Fatalf("%s supplies %d recorded / %d replayed — an empty side pins nothing",
 					name, len(tc.Recorded), len(tc.Replayed))
 			}
+			// And a case that expects no pairs asserts nothing either, while
+			// still passing and still counting toward the drift/clean balance
+			// guard below. A probe with kind-mismatched sides and no want_*
+			// fields at all passed and incremented sawClean before this check
+			// existed, which would have satisfied that guard on its own.
+			if len(tc.WantDeltasNs) == 0 {
+				t.Fatalf("%s expects no measured pairs — a corpus row must pin at least one "+
+					"delta, or it passes without asserting anything", name)
+			}
+			if len(tc.WantIndices) != len(tc.WantDeltasNs) || len(tc.WantKinds) != len(tc.WantDeltasNs) {
+				t.Fatalf("%s: want_indices (%d) and want_kinds (%d) must both match want_deltas_ns (%d)",
+					name, len(tc.WantIndices), len(tc.WantKinds), len(tc.WantDeltasNs))
+			}
 
 			got := transitionTimeDeltas(tc.Recorded, tc.Replayed)
 
@@ -88,6 +105,20 @@ func TestTransitionTimeDeltas_Corpus(t *testing.T) {
 					t.Errorf("%s: delta[%d] = %v (%d ns), want %v (%d ns)",
 						tc.Description, i, d.Delta, int64(d.Delta),
 						time.Duration(tc.WantDeltasNs[i]), tc.WantDeltasNs[i])
+				}
+				// Index is the INPUT pair position, not the output slot, and
+				// the two differ exactly where a pair was excluded — which is
+				// the case kind-mismatch-excluded.json exists to pin. Every
+				// "at pair N" in the 65-entry enumeration is this number, so a
+				// regression writing the output slot there would leave the
+				// deltas green and every reported position wrong.
+				if d.Index != tc.WantIndices[i] {
+					t.Errorf("%s: delta[%d].Index = %d, want %d",
+						tc.Description, i, d.Index, tc.WantIndices[i])
+				}
+				if d.Kind != tc.WantKinds[i] {
+					t.Errorf("%s: delta[%d].Kind = %q, want %q",
+						tc.Description, i, d.Kind, tc.WantKinds[i])
 				}
 			}
 
@@ -259,6 +290,23 @@ const (
 	maxRecordingsDriftingOver5s        = 50
 )
 
+// Lower bounds on HOW MUCH is measured. Every ratchet above is an upper bound,
+// and upper bounds alone are satisfied by a measurement that shrinks: a
+// classifier change that shifts replay transitions one position turns
+// kind-matched pairs into state_differs, which are excluded, so the drift
+// counts FALL and every assertion above passes while the population quietly
+// drains. Regenerating goldens then erases the only other trace, since
+// ordered_matches is the serialized field that would have moved.
+//
+// 39 of the 309 recordings already produce zero kind-matched pairs, so
+// "this recording measures nothing" is the current state of an eighth of the
+// catalog rather than a hypothetical — which is exactly why the floor is a
+// number and not merely a non-zero check.
+const (
+	minKindMatchedPairs   = 818
+	minMeasuredRecordings = 270
+)
+
 // TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog is #1480's mechanical
 // report: it walks every sidecar-driven recording in the catalog, measures each
 // reproduced transition against the ts the recording's own daemon logged, and
@@ -270,7 +318,7 @@ const (
 //
 // It is a RATCHET, not a tolerance gate. A transition drifting 900ms is not
 // asserted to be correct; it is asserted not to be NEW. The distinction matters
-// because 24.5% of the committed catalog's transitions are already over 1s from
+// because 28.7% of the committed catalog's transitions are already over 1s from
 // their daemon, and a gate that failed on all of them would be reverted within
 // the day and would protect nothing.
 func TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog(t *testing.T) {
@@ -279,6 +327,8 @@ func TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog(t *testing.T) {
 	var checked int
 	var allDeltas []timeDelta
 	drifted := map[string]timeDelta{}
+	unmeasured := map[string]bool{}
+	measured := 0
 	overThreshold, over5s := 0, 0
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -309,6 +359,23 @@ func TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog(t *testing.T) {
 
 		name := rel(root, transcript)
 		allDeltas = append(allDeltas, ec.TimeDeltas...)
+		if len(ec.TimeDeltas) == 0 {
+			unmeasured[name] = true
+		} else {
+			measured++
+		}
+		// compareOrdered counts a match on exactly the complement of the
+		// condition transitionTimeDeltas skips on, over the same
+		// min(len,len) loop — so "the same pairing" is not a matter of
+		// intent, it is the equality below, and it holds for all 309
+		// recordings today. Asserting it is what stops the two drifting
+		// apart behind three prose comments that a future editor can leave
+		// stale.
+		if len(ec.TimeDeltas) != ec.OrderedMatches {
+			t.Errorf("%s: %d timing pairs but %d ordered matches — transitionTimeDeltas "+
+				"and compareOrdered have stopped pairing identically",
+				name, len(ec.TimeDeltas), ec.OrderedMatches)
+		}
 
 		if first, ok := firstDrift(ec.TimeDeltas); ok {
 			drifted[name] = first
@@ -385,11 +452,34 @@ func TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog(t *testing.T) {
 	}
 	// Stale entries rot the list into a permanent excuse.
 	for n := range knownFirstTransitionDrift {
-		if _, still := drifted[n]; !still {
-			t.Errorf("knownFirstTransitionDrift entry %q no longer drifts — delete it", n)
+		if _, still := drifted[n]; still {
+			continue
 		}
+		// firstDrift returns false for two opposite reasons, and reporting
+		// them the same way tells a developer to DELETE COVERAGE in response
+		// to a regression: the drift genuinely shrank, or the recording
+		// stopped producing kind-matched pairs at all, which means replay no
+		// longer reproduces that transition and the entry is the last thing
+		// that should be removed.
+		if unmeasured[n] {
+			t.Errorf("knownFirstTransitionDrift entry %q stopped producing kind-matched pairs — "+
+				"replay no longer reproduces its transitions at all. Do NOT delete the entry; "+
+				"this is a regression, not a fix", n)
+			continue
+		}
+		t.Errorf("knownFirstTransitionDrift entry %q no longer drifts — delete it", n)
 	}
 
+	if len(allDeltas) < minKindMatchedPairs {
+		t.Errorf("only %d kind-matched pairs measured (floor: %d) — the measurement SHRANK. "+
+			"Every other assertion here is an upper bound and passes when it does, so this is "+
+			"the one that catches a pairing shift draining the population",
+			len(allDeltas), minKindMatchedPairs)
+	}
+	if measured < minMeasuredRecordings {
+		t.Errorf("only %d of %d recordings produced any kind-matched pair (floor: %d)",
+			measured, checked, minMeasuredRecordings)
+	}
 	if overThreshold > maxRecordingsDriftingOverThreshold {
 		t.Errorf("%d recordings have at least one transition drifting >%v (ratchet: %d) — "+
 			"the named list above keys on the FIRST transition only, so this is what catches a "+
@@ -399,6 +489,166 @@ func TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog(t *testing.T) {
 		t.Errorf("%d recordings have at least one transition drifting >5s (ratchet: %d)",
 			over5s, maxRecordingsDriftingOver5s)
 	}
-	t.Logf("aggregate: %d/%d recordings drift >%v somewhere, %d >5s",
-		overThreshold, checked, driftThreshold, over5s)
+	t.Logf("aggregate: %d/%d recordings drift >%v somewhere, %d >5s; "+
+		"%d pairs measured across %d recordings (%d produced none)",
+		overThreshold, checked, driftThreshold, over5s,
+		len(allDeltas), measured, len(unmeasured))
+}
+
+// ---------------------------------------------------------------------------
+// 3. The reporting helpers.
+// ---------------------------------------------------------------------------
+
+// TestDriftDistribution_BucketsAndPercentiles pins the code that produces the
+// histogram, because that histogram IS the stated justification for
+// driftThreshold — it is pasted verbatim into that constant's doc comment and
+// into AGENTS.md. Untested, a bucketing or interpolation bug would silently
+// rewrite the rationale for the constant rather than fail anything.
+func TestDriftDistribution_BucketsAndPercentiles(t *testing.T) {
+	mk := func(ds ...time.Duration) []timeDelta {
+		out := make([]timeDelta, 0, len(ds))
+		for i, d := range ds {
+			out = append(out, timeDelta{Index: i, Kind: "ready→working", Delta: d})
+		}
+		return out
+	}
+
+	t.Run("one delta per bucket lands in its own bucket", func(t *testing.T) {
+		// Deliberately one value strictly inside each of the nine buckets,
+		// plus the two edge values that decide the open/closed question.
+		dist := newDriftDistribution(mk(
+			500*time.Microsecond, // <1ms
+			5*time.Millisecond,   // 1-10ms
+			50*time.Millisecond,  // 10-100ms
+			500*time.Millisecond, // 0.1-1s
+			2*time.Second,        // 1-5s
+			7*time.Second,        // 5-10s
+			20*time.Second,       // 10-30s
+			45*time.Second,       // 30-60s
+			2*time.Minute,        // >60s
+		))
+		if dist.N != 9 {
+			t.Fatalf("N = %d, want 9", dist.N)
+		}
+		for i, label := range driftBucketLabels {
+			if dist.BucketCount[i] != 1 {
+				t.Errorf("bucket %q = %d, want 1 (buckets: %v)", label, dist.BucketCount[i], dist.BucketCount)
+			}
+		}
+	})
+
+	t.Run("bucket edges are upper-exclusive", func(t *testing.T) {
+		// Exactly 1s belongs to "1-5s", not "0.1-1s". This is the one place
+		// the histogram and driftThreshold deliberately disagree — a delta of
+		// exactly 1s is counted above the line here but is NOT drifted by
+		// firstDrift, which compares with >. The disagreement is one
+		// nanosecond wide and is pinned so it stays deliberate.
+		dist := newDriftDistribution(mk(time.Second))
+		if got := dist.BucketCount[bucketIndex(time.Second)]; got != 1 {
+			t.Fatalf("bucket count for exactly 1s = %d, want 1", got)
+		}
+		if driftBucketLabels[bucketIndex(time.Second)] != "1-5s" {
+			t.Errorf("exactly 1s bucketed as %q, want \"1-5s\"", driftBucketLabels[bucketIndex(time.Second)])
+		}
+		if _, drifted := firstDrift(mk(time.Second)); drifted {
+			t.Error("exactly 1s reported as drifted; firstDrift must compare with >, not >=")
+		}
+	})
+
+	t.Run("sign is ignored — buckets are taken over magnitude", func(t *testing.T) {
+		neg := newDriftDistribution(mk(-30 * time.Second))
+		pos := newDriftDistribution(mk(30 * time.Second))
+		if !reflect.DeepEqual(neg.BucketCount, pos.BucketCount) {
+			t.Errorf("negative and positive deltas of equal magnitude bucketed differently: %v vs %v",
+				neg.BucketCount, pos.BucketCount)
+		}
+	})
+
+	t.Run("percentiles", func(t *testing.T) {
+		// 1..10 seconds: p50 interpolates between the 5th and 6th value.
+		var ds []time.Duration
+		for i := 1; i <= 10; i++ {
+			ds = append(ds, time.Duration(i)*time.Second)
+		}
+		dist := newDriftDistribution(mk(ds...))
+		for _, tc := range []struct {
+			p    int
+			want time.Duration
+		}{
+			{50, 5500 * time.Millisecond},
+			{100, 10 * time.Second},
+		} {
+			if got := dist.Percentiles[tc.p]; got != tc.want {
+				t.Errorf("p%d = %v, want %v", tc.p, got, tc.want)
+			}
+		}
+	})
+
+	t.Run("degenerate inputs do not panic", func(t *testing.T) {
+		if got := newDriftDistribution(nil); got.N != 0 {
+			t.Errorf("empty input: N = %d, want 0", got.N)
+		}
+		if got := newDriftDistribution(nil).String(); !strings.Contains(got, "vacuous") {
+			t.Errorf("empty distribution must say so, got %q", got)
+		}
+		single := newDriftDistribution(mk(7 * time.Second))
+		if single.Percentiles[50] != 7*time.Second || single.Percentiles[100] != 7*time.Second {
+			t.Errorf("single-element percentiles = %v", single.Percentiles)
+		}
+	})
+}
+
+// TestDriftSummary_FormatIsTheShellContract pins the exact string
+// tools/replay-fixtures.sh parses out of the replay binary's stderr.
+//
+// Without this, the two sides are coupled by nothing: the sweep's sed would
+// silently stop matching, its counter would stay 0, its reporting block would
+// never print, and the sweep would exit 0 — which is precisely the dead-counter
+// failure this PR is fixing one level up, reintroduced at the new layer. The
+// regexp below is the one in replay-fixtures.sh; if this test is updated, that
+// script must be updated in the same commit.
+func TestDriftSummary_FormatIsTheShellContract(t *testing.T) {
+	sweepRE := regexp.MustCompile(`timing ([0-9]+) pairs worst ([+-][0-9.]+)s@([0-9]+)`)
+
+	t.Run("the sweep's regexp matches, with the right captures", func(t *testing.T) {
+		got := driftSummary([]timeDelta{
+			{Index: 0, Kind: "ready→working", Delta: -30976480 * time.Microsecond},
+			{Index: 1, Kind: "working→ready", Delta: 12 * time.Millisecond},
+		})
+		m := sweepRE.FindStringSubmatch(got)
+		if m == nil {
+			t.Fatalf("replay-fixtures.sh would not parse %q — the sweep's timing report goes silent", got)
+		}
+		if m[1] != "2" || m[2] != "-30.976" || m[3] != "0" {
+			t.Errorf("captures = pairs %q, worst %q, index %q; want \"2\", \"-30.976\", \"0\"", m[1], m[2], m[3])
+		}
+	})
+
+	t.Run("a positive delta keeps its explicit + sign", func(t *testing.T) {
+		// The sweep's character class requires a leading sign, so dropping
+		// the %+ verb would make every late-firing recording unparseable
+		// while every early-firing one still matched.
+		got := driftSummary([]timeDelta{{Index: 3, Delta: 2004 * time.Millisecond}})
+		if !sweepRE.MatchString(got) {
+			t.Fatalf("positive delta unparseable by the sweep: %q", got)
+		}
+		if !strings.Contains(got, "+2.004") {
+			t.Errorf("got %q, want a +2.004 figure", got)
+		}
+	})
+
+	t.Run("no pairs reports n/a rather than a zero figure", func(t *testing.T) {
+		// 39 of the catalog's 309 recordings produce no kind-matched pair, so
+		// this is the common case, not an edge one. Reporting "worst +0.000s"
+		// would make "nothing was measured" indistinguishable from "measured,
+		// and perfect" — in the sweep's output and in the counter.
+		got := driftSummary(nil)
+		if sweepRE.MatchString(got) {
+			t.Errorf("empty input produced a parseable timing figure %q — "+
+				"unmeasured must not read as measured-and-zero", got)
+		}
+		if got != "timing n/a" {
+			t.Errorf("got %q, want \"timing n/a\"", got)
+		}
+	})
 }
