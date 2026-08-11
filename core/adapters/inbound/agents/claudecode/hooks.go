@@ -254,6 +254,49 @@ func transcriptConfiner() *hookjson.PathConfiner {
 	return hookjson.ConfinerForSource(Source, runtime.GOOS, transcriptExt)
 }
 
+// admitHookRequest applies both consents this receiver needs and records the
+// channel receipt between them. It answers the request itself on refusal and
+// returns false; a true means the caller may proceed to read the body.
+//
+// All three steps live here together because their ORDER is the contract, and
+// each boundary is load-bearing in a different direction:
+//
+//   - The "hooks" consent comes first. It authorizes WRITING our entries into
+//     the user's settings.json — which is what makes a POST arrive at all.
+//   - The receipt is counted between them, so a hooks-granted /
+//     transcripts-denied install still reads as a LIVE channel. #1368's
+//     liveness watchdog demotes a channel that produces no receipts and
+//     releases the holds it placed; counting only fully-granted requests would
+//     have it falsely accuse a working install of being dead. See receipt.go
+//     for why each later rejection still counts and why a consent-denied
+//     request must not.
+//   - The "transcripts" consent comes last, and still BEFORE the decode and so
+//     before confinement, so a denied session yields a quiet 200 and the path
+//     is never resolved on that branch. Dispatching makes the detector open
+//     the transcript, so that read needs its own consent: granting "hooks" is
+//     not a licence to read the file those entries point at.
+//
+// codex and copilot have carried the transcripts gate since #1174 and mirror
+// each other step for step; claudecode — the receiver the other two were
+// modelled on — never got it, so a hook POST reached the detector's open on a
+// transcript the user had denied (issue #1466). A hooks-granted /
+// transcripts-denied session is not monitored anyway, so dropping the hook
+// here is both consent-correct and behaviourally harmless.
+func admitHookRequest(gate ConsentGranter, w http.ResponseWriter) bool {
+	if gate != nil && !gate.Granted(AdapterName, PermissionKeyHooks) {
+		w.WriteHeader(http.StatusOK)
+		return false
+	}
+
+	hookjson.ObserveHookReceipt(AdapterName)
+
+	if gate != nil && !gate.Granted(AdapterName, PermissionKeyTranscripts) {
+		w.WriteHeader(http.StatusOK)
+		return false
+	}
+	return true
+}
+
 // serveHookRequest is NewHookHandler's request logic, pulled out of the
 // returned closure so its branching isn't counted at the closure's extra
 // nesting depth (go:S3776 — this dropped the reported complexity from 31 to
@@ -264,34 +307,7 @@ func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGrant
 		return
 	}
 
-	if gate != nil && !gate.Granted(AdapterName, PermissionKeyHooks) {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	// The channel delivered (issue #1368). Counted here — after the consent
-	// gate, before anything can reject the payload — because the question this
-	// answers is "are hooks arriving at all", and a body we then refuse still
-	// proves they are. See receipt.go for why each rejection below still
-	// counts and why a consent-denied request must not.
-	hookjson.ObserveHookReceipt(AdapterName)
-
-	// Dispatching makes the detector read the transcript — the comment below
-	// says so in as many words — so it is gated behind the "transcripts"
-	// consent, not merely the "hooks" write consent. Granting "hooks"
-	// authorizes WRITING our entries into settings.json; it is not a licence to
-	// read the file those entries point at. The check comes BEFORE the decode,
-	// and so before confinement, so a denied session still yields a quiet 200
-	// and the path is never resolved on that branch.
-	//
-	// codex and copilot have carried this since #1174 and mirror each other
-	// step for step; claudecode — the receiver the other two were modelled on —
-	// never got it, so a hook POST reached the detector's open on a transcript
-	// the user had denied (issue #1466). A hooks-granted / transcripts-denied
-	// session is not monitored anyway, so dropping the hook here is both
-	// consent-correct and behaviourally harmless.
-	if gate != nil && !gate.Granted(AdapterName, PermissionKeyTranscripts) {
-		w.WriteHeader(http.StatusOK)
+	if !admitHookRequest(gate, w) {
 		return
 	}
 
