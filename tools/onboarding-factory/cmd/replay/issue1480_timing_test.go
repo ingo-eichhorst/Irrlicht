@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -31,15 +30,22 @@ import (
 // 1. The detector itself, over a committed corpus.
 // ---------------------------------------------------------------------------
 
+// wantPair is one expected (index, kind, delta) triple. One array of these
+// rather than three parallel want_* arrays: the parallel form needs a
+// hand-written same-length guard because the representation permits an
+// inconsistency, and the comparison fans out into three branches.
+type wantPair struct {
+	Index   int    `json:"index"`
+	Kind    string `json:"kind"`
+	DeltaNs int64  `json:"delta_ns"`
+}
+
 type timingCase struct {
-	Description  string            `json:"description"`
-	Recorded     []lifecycle.Event `json:"recorded"`
-	Replayed     []transition      `json:"replayed"`
-	WantDeltasNs []int64           `json:"want_deltas_ns"`
-	WantIndices  []int             `json:"want_indices"`
-	WantKinds    []string          `json:"want_kinds"`
-	WantFirstNs  *int64            `json:"want_first_drift"`
-	WantWorstNs  *int64            `json:"want_worst_ns"`
+	Description string            `json:"description"`
+	Recorded    []lifecycle.Event `json:"recorded"`
+	Replayed    []transition      `json:"replayed"`
+	Want        []wantPair        `json:"want"`
+	WantFirstNs *int64            `json:"want_first_drift"`
 }
 
 // TestTransitionTimeDeltas_Corpus is #1480's mutation evidence. Every case is a
@@ -85,41 +91,28 @@ func TestTransitionTimeDeltas_Corpus(t *testing.T) {
 			// guard below. A probe with kind-mismatched sides and no want_*
 			// fields at all passed and incremented sawClean before this check
 			// existed, which would have satisfied that guard on its own.
-			if len(tc.WantDeltasNs) == 0 {
+			if len(tc.Want) == 0 {
 				t.Fatalf("%s expects no measured pairs — a corpus row must pin at least one "+
-					"delta, or it passes without asserting anything", name)
-			}
-			if len(tc.WantIndices) != len(tc.WantDeltasNs) || len(tc.WantKinds) != len(tc.WantDeltasNs) {
-				t.Fatalf("%s: want_indices (%d) and want_kinds (%d) must both match want_deltas_ns (%d)",
-					name, len(tc.WantIndices), len(tc.WantKinds), len(tc.WantDeltasNs))
+					"pair, or it passes without asserting anything", name)
 			}
 
-			got := transitionTimeDeltas(tc.Recorded, tc.Replayed)
+			// compareOrdered is the production pairing, and since #1480 it is
+			// the only one — the corpus therefore exercises the function the
+			// daemon-comparison actually runs, not a parallel copy of it.
+			got, _ := compareOrdered(tc.Recorded, tc.Replayed)
 
-			if len(got) != len(tc.WantDeltasNs) {
-				t.Fatalf("%s: got %d deltas, want %d\n  got:  %v\n  want: %v",
-					tc.Description, len(got), len(tc.WantDeltasNs), durations(got), tc.WantDeltasNs)
+			want := make([]timeDelta, 0, len(tc.Want))
+			for _, w := range tc.Want {
+				want = append(want, timeDelta{Index: w.Index, Kind: w.Kind, Delta: time.Duration(w.DeltaNs)})
 			}
-			for i, d := range got {
-				if int64(d.Delta) != tc.WantDeltasNs[i] {
-					t.Errorf("%s: delta[%d] = %v (%d ns), want %v (%d ns)",
-						tc.Description, i, d.Delta, int64(d.Delta),
-						time.Duration(tc.WantDeltasNs[i]), tc.WantDeltasNs[i])
-				}
-				// Index is the INPUT pair position, not the output slot, and
-				// the two differ exactly where a pair was excluded — which is
-				// the case kind-mismatch-excluded.json exists to pin. Every
-				// "at pair N" in the 65-entry enumeration is this number, so a
-				// regression writing the output slot there would leave the
-				// deltas green and every reported position wrong.
-				if d.Index != tc.WantIndices[i] {
-					t.Errorf("%s: delta[%d].Index = %d, want %d",
-						tc.Description, i, d.Index, tc.WantIndices[i])
-				}
-				if d.Kind != tc.WantKinds[i] {
-					t.Errorf("%s: delta[%d].Kind = %q, want %q",
-						tc.Description, i, d.Kind, tc.WantKinds[i])
-				}
+			// Index is the INPUT pair position, not the output slot, and the
+			// two differ exactly where a pair was excluded — which is what
+			// kind-mismatch-excluded.json pins. Every "at pair N" in the
+			// 65-entry enumeration is that number, so a regression writing the
+			// output slot there would leave the deltas right and every
+			// reported position wrong.
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s:\n  got  %v\n  want %v", tc.Description, got, want)
 			}
 
 			first, ok := firstDrift(got)
@@ -133,16 +126,6 @@ func TestTransitionTimeDeltas_Corpus(t *testing.T) {
 			case tc.WantFirstNs != nil && int64(first.Delta) != *tc.WantFirstNs:
 				t.Errorf("%s: first drift = %v, want %v",
 					tc.Description, first.Delta, time.Duration(*tc.WantFirstNs))
-			}
-
-			if tc.WantWorstNs != nil {
-				worst, found := worstDrift(got)
-				if !found {
-					t.Errorf("%s: no worst pair, want %v", tc.Description, time.Duration(*tc.WantWorstNs))
-				} else if int64(worst.Delta) != *tc.WantWorstNs {
-					t.Errorf("%s: worst = %v, want %v",
-						tc.Description, worst.Delta, time.Duration(*tc.WantWorstNs))
-				}
 			}
 
 			if tc.WantFirstNs != nil {
@@ -164,14 +147,6 @@ func TestTransitionTimeDeltas_Corpus(t *testing.T) {
 		t.Error("no corpus case expects a clean result — nothing here proves the measurement can stay silent")
 	}
 	t.Logf("corpus: %d cases (%d expect drift, %d expect clean)", ran, sawDrift, sawClean)
-}
-
-func durations(ds []timeDelta) []time.Duration {
-	out := make([]time.Duration, 0, len(ds))
-	for _, d := range ds {
-		out = append(out, d.Delta)
-	}
-	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -322,61 +297,16 @@ const (
 // their daemon, and a gate that failed on all of them would be reverted within
 // the day and would protect nothing.
 func TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog(t *testing.T) {
-	root := replaydataRoot(t)
-
-	var checked int
 	var allDeltas []timeDelta
 	drifted := map[string]timeDelta{}
 	unmeasured := map[string]bool{}
-	measured := 0
 	overThreshold, over5s := 0, 0
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || filepath.Base(path) != eventsSidecarName {
-			return nil
-		}
-		transcript := filepath.Join(filepath.Dir(path), "transcript.jsonl")
-		if _, statErr := os.Stat(transcript); statErr != nil {
-			return nil
-		}
-		tp, sp, useSidecar := resolveInputPaths(transcript)
-		if !useSidecar {
-			return nil
-		}
-		report, runErr := runReplay(tp, sp, useSidecar, replaySettingsForTest(t, tp))
-		if runErr != nil {
-			t.Errorf("runReplay(%s): %v", rel(root, transcript), runErr)
-			return nil
-		}
-		ec := report.ExtendedCheck
-		if ec == nil {
-			return nil
-		}
-		checked++
-
-		name := rel(root, transcript)
+	checked := forEachSidecarRecording(t, func(name string, ec *extendedCheck) {
 		allDeltas = append(allDeltas, ec.TimeDeltas...)
 		if len(ec.TimeDeltas) == 0 {
 			unmeasured[name] = true
-		} else {
-			measured++
 		}
-		// compareOrdered counts a match on exactly the complement of the
-		// condition transitionTimeDeltas skips on, over the same
-		// min(len,len) loop — so "the same pairing" is not a matter of
-		// intent, it is the equality below, and it holds for all 309
-		// recordings today. Asserting it is what stops the two drifting
-		// apart behind three prose comments that a future editor can leave
-		// stale.
-		if len(ec.TimeDeltas) != ec.OrderedMatches {
-			t.Errorf("%s: %d timing pairs but %d ordered matches — transitionTimeDeltas "+
-				"and compareOrdered have stopped pairing identically",
-				name, len(ec.TimeDeltas), ec.OrderedMatches)
-		}
-
 		if first, ok := firstDrift(ec.TimeDeltas); ok {
 			drifted[name] = first
 		}
@@ -395,14 +325,8 @@ func TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog(t *testing.T) {
 		if anyOver5 {
 			over5s++
 		}
-		return nil
 	})
-	if err != nil {
-		t.Fatalf("walk replaydata/agents: %v", err)
-	}
-	if checked == 0 {
-		t.Fatal("no sidecar-driven recording found under replaydata/agents — the measurement is vacuous")
-	}
+	measured := checked - len(unmeasured)
 	// The measurement's own fail-loudly guard (AGENTS.md): a run that reached
 	// every recording but produced no comparable pair is not a clean result,
 	// it is a broken one, and without this it reads as a pass.

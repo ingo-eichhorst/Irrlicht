@@ -604,15 +604,18 @@ Before marking a ticket done, run the full suite — every layer must pass:
   "N of 309 recordings diverge" headline every replay PR quotes is counts and
   kinds only. So a transition reproduced at the right position in the ORDER but
   31 seconds from when the daemon made it was a full pass, and the golden then
-  pinned it as correct. `transitionTimeDeltas`
-  (`tools/onboarding-factory/cmd/replay/timing_drift.go`) measures each
-  reproduced transition against the `ts` the recording's own `events.jsonl`
-  carries, riding `compareOrdered`'s exact pairing so the two figures describe
-  the same transitions; a pairing change in one is a change owed to the other.
-  Only KIND-MATCHED pairs are measured — where `compareOrdered` reports
+  pinned it as correct. `compareOrdered`
+  (`tools/onboarding-factory/cmd/replay/extended_check.go`) now returns the
+  MATCHED pairs rather than a count of them, each carrying how far apart in time
+  the two sides fired — so the ordered-divergence figure and the timing figure
+  are one traversal and cannot describe different transitions. The first draft
+  had a second, identical loop plus three comments and a runtime assertion
+  saying the two must agree; one loop makes that structural instead.
+  Only KIND-MATCHED pairs carry a delta — where `compareOrdered` reports
   `state_differs` the two sides are not the same transition, so their timestamp
   difference means nothing and counting it would report one sequence divergence
-  twice.
+  twice. The reporting side (`timing_drift.go`) buckets and ranks those deltas;
+  it reuses `core/domain/stats.Percentile` rather than carrying its own.
   It is a **ratchet, not a tolerance gate**, and that is the deliberate
   shape: 28.7% of the catalog's 818 kind-matched pairs are already more than 1s
   from their daemon, so a gate failing on all of them would protect nothing.

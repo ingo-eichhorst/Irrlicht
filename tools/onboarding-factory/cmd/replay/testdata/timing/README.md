@@ -1,10 +1,10 @@
-# `transitionTimeDeltas` corpus (#1480)
+# Transition-timing corpus (#1480)
 
 One file per timing shape the measurement must get right, committed rather than
 improvised so the evidence outlives the PR that added it (AGENTS.md: "Prefer
 committing that mutation to describing it").
 
-Each case supplies the two slices `transitionTimeDeltas` takes — already
+Each case supplies the two slices `compareOrdered` takes — already
 filtered, exactly as `runExtendedCheck` hands them over: `recorded` has passed
 `filterStateTransitions` (primary session, non-empty `prev_state`) and
 `replayed` has passed `dropInitTransitions` (no synthetic init row).

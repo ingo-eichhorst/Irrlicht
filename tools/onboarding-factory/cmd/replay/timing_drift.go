@@ -2,11 +2,10 @@ package main
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
-	"irrlicht/core/domain/lifecycle"
+	"irrlicht/core/domain/stats"
 )
 
 // Issue #1480: replay goldens record a virtual_time on every transition and
@@ -40,12 +39,7 @@ type timeDelta struct {
 // Abs is |Delta|, the quantity every bucket and percentile below is taken over.
 // Magnitude rather than signed value because the two directions have different
 // causes but the same cost: a golden pinning a time the daemon never produced.
-func (d timeDelta) Abs() time.Duration {
-	if d.Delta < 0 {
-		return -d.Delta
-	}
-	return d.Delta
-}
+func (d timeDelta) Abs() time.Duration { return d.Delta.Abs() }
 
 // driftThreshold is the boundary this package calls "drifted".
 //
@@ -97,46 +91,11 @@ var driftBucketLabels = []string{
 	"<1ms", "1-10ms", "10-100ms", "0.1-1s", "1-5s", "5-10s", "10-30s", "30-60s", ">60s",
 }
 
-// transitionTimeDeltas measures, per paired transition, how far the replay's
-// virtual_time sits from the timestamp the daemon logged for it.
-//
-// It pairs EXACTLY as compareOrdered does — index by index, up to the shorter
-// slice — and that is a requirement rather than a convenience. A timing figure
-// computed over a different pairing would describe a different set of
-// transitions than the ordered-divergence figure it is reported beside, and the
-// two would disagree in ways no reader could attribute. If compareOrdered's
-// pairing ever changes, this must change with it.
-//
-// Only KIND-MATCHED pairs are measured, and the exclusion is the substantive
-// decision in this function. Where compareOrdered reports state_differs, the
-// two sides are not the same transition — subtracting their timestamps yields a
-// number with no meaning, and counting it as timing drift would report one
-// sequence divergence twice, once in ordered_mismatches and again here. The
-// catalog measurement was run both ways while this was written: including
-// unmatched pairs adds 80 of 898 pairs (8.9%) and leaves the #1476 enumeration
-// below bit-for-bit identical, so the choice costs nothing and buys a figure
-// that means one thing.
-//
-// The recorded side must already be filtered by filterStateTransitions (primary
-// session, non-empty prev_state) and the replayed side by dropInitTransitions,
-// same as compareOrdered's inputs — the synthetic init row has no counterpart
-// in the daemon's log and would pair index 0 against the wrong transition.
-func transitionTimeDeltas(recorded []lifecycle.Event, replayedReal []transition) []timeDelta {
-	n := min(len(recorded), len(replayedReal))
-	out := make([]timeDelta, 0, n)
-	for i := 0; i < n; i++ {
-		r, p := recorded[i], replayedReal[i]
-		if r.PrevState != p.PrevState || r.NewState != p.NewState {
-			continue
-		}
-		out = append(out, timeDelta{
-			Index: i,
-			Kind:  r.PrevState + "→" + r.NewState,
-			Delta: p.VirtualTime.Sub(r.Timestamp),
-		})
-	}
-	return out
-}
+// driftPercentiles is ranged over by both the computation and the rendering.
+// Written twice, the two drift silently: adding one only to the compute side
+// means String never shows it, and only to the print side means it prints 0s
+// from a missing map key.
+var driftPercentiles = []int{50, 75, 90, 95, 99, 100}
 
 // firstDrift reports whether the FIRST kind-matched pair — pair 0, the first
 // transition the replay and the daemon agree happened — is further than
@@ -166,17 +125,22 @@ func firstDrift(deltas []timeDelta) (timeDelta, bool) {
 	return deltas[0], true
 }
 
-// worstDrift returns the pair with the largest |delta|, or false when there are
-// no kind-matched pairs at all.
-func worstDrift(deltas []timeDelta) (timeDelta, bool) {
+// worstDrift returns the pair with the largest |delta|, or the zero timeDelta
+// when there are no kind-matched pairs — the same convention percentile uses,
+// and enough for both callers, which each already branch on len(deltas) first.
+//
+// It stays separate from newDriftDistribution because the distribution keeps
+// magnitudes only, while this needs the SIGNED delta and the pair index: the
+// direction is the diagnosis (early means a read boundary reached bytes that
+// did not exist yet; late means a synthesized debounce deadline).
+func worstDrift(deltas []timeDelta) timeDelta {
 	var worst timeDelta
-	var found bool
 	for _, d := range deltas {
-		if !found || d.Abs() > worst.Abs() {
-			worst, found = d, true
+		if d.Abs() > worst.Abs() {
+			worst = d
 		}
 	}
-	return worst, found
+	return worst
 }
 
 // driftDistribution is the aggregate printed by the catalog measurement.
@@ -189,22 +153,26 @@ type driftDistribution struct {
 // newDriftDistribution buckets and ranks |delta| over every kind-matched pair
 // handed to it.
 func newDriftDistribution(deltas []timeDelta) driftDistribution {
-	abs := make([]time.Duration, 0, len(deltas))
-	for _, d := range deltas {
-		abs = append(abs, d.Abs())
-	}
-	sort.Slice(abs, func(i, j int) bool { return abs[i] < abs[j] })
-
+	abs := make([]float64, 0, len(deltas))
 	dist := driftDistribution{
-		N:           len(abs),
+		N:           len(deltas),
 		BucketCount: make([]int, len(driftBucketLabels)),
 		Percentiles: map[int]time.Duration{},
 	}
-	for _, a := range abs {
+	for _, d := range deltas {
+		a := d.Abs()
+		abs = append(abs, float64(a))
 		dist.BucketCount[bucketIndex(a)]++
 	}
-	for _, p := range []int{50, 75, 90, 95, 99, 100} {
-		dist.Percentiles[p] = percentile(abs, p)
+	// stats.Percentile sorts a copy and is total (it reports false on empty),
+	// so no pre-sort is needed here and an empty population cannot produce a
+	// silently wrong number the way a pre-sort contract can.
+	for _, p := range driftPercentiles {
+		v, ok := stats.Percentile(abs, float64(p)/100)
+		if !ok {
+			continue
+		}
+		dist.Percentiles[p] = time.Duration(v)
 	}
 	return dist
 }
@@ -228,27 +196,6 @@ func bucketIndex(d time.Duration) int {
 	return len(driftBucketLabels) - 1
 }
 
-// percentile returns the p-th percentile of a pre-sorted ascending slice by
-// linear interpolation between ranks. Returns 0 for an empty slice rather than
-// panicking: a catalog with no kind-matched pairs is a vacuity failure the
-// caller reports with a far better message than an index-out-of-range.
-func percentile(sorted []time.Duration, p int) time.Duration {
-	if len(sorted) == 0 {
-		return 0
-	}
-	if len(sorted) == 1 {
-		return sorted[0]
-	}
-	pos := float64(len(sorted)-1) * float64(p) / 100.0
-	lo := int(pos)
-	hi := lo + 1
-	if hi >= len(sorted) {
-		return sorted[len(sorted)-1]
-	}
-	frac := pos - float64(lo)
-	return sorted[lo] + time.Duration(float64(sorted[hi]-sorted[lo])*frac)
-}
-
 // String renders the distribution as the block the catalog measurement prints.
 func (d driftDistribution) String() string {
 	if d.N == 0 {
@@ -256,7 +203,7 @@ func (d driftDistribution) String() string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "|delta| over %d kind-matched paired transitions\n", d.N)
-	for _, p := range []int{50, 75, 90, 95, 99, 100} {
+	for _, p := range driftPercentiles {
 		fmt.Fprintf(&b, "  p%-3d %12s\n", p, d.Percentiles[p])
 	}
 	b.WriteString("  ---- histogram ----\n")
@@ -274,6 +221,6 @@ func driftSummary(deltas []timeDelta) string {
 	if len(deltas) == 0 {
 		return "timing n/a"
 	}
-	worst, _ := worstDrift(deltas)
+	worst := worstDrift(deltas)
 	return fmt.Sprintf("timing %d pairs worst %+.3fs@%d", len(deltas), worst.Delta.Seconds(), worst.Index)
 }

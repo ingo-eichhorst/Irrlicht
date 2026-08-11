@@ -43,21 +43,22 @@
       "new_state": "ready"
     }
   ],
-  "want_deltas_ns": [
-    0,
-    1000000,
-    -2000000
+  "want": [
+    {
+      "index": 0,
+      "kind": "ready→working",
+      "delta_ns": 0
+    },
+    {
+      "index": 1,
+      "kind": "working→waiting",
+      "delta_ns": 1000000
+    },
+    {
+      "index": 2,
+      "kind": "waiting→ready",
+      "delta_ns": -2000000
+    }
   ],
-  "want_indices": [
-    0,
-    1,
-    2
-  ],
-  "want_kinds": [
-    "ready→working",
-    "working→waiting",
-    "waiting→ready"
-  ],
-  "want_first_drift": null,
-  "want_worst_ns": -2000000
+  "want_first_drift": null
 }
