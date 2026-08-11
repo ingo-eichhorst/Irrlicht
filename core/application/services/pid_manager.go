@@ -33,7 +33,18 @@ type LiveCWDsFunc func(processName string) (map[string]struct{}, error)
 // Implementations must never block longer than a couple of seconds and must
 // never prompt the user (no TCC). The real implementation lives in the
 // processlifecycle adapter and is injected to preserve the hexagonal layering.
-type LauncherEnvReader func(pid int) *session.Launcher
+//
+// hostKnown distinguishes "this read established that there is no host window"
+// from "this read could not determine one" (#1485). Only the first is evidence.
+// The distinction exists because a herdr pane's host lives in a separate
+// process found by an external probe, and that probe has three outcomes rather
+// than two: attached, detached, or it never ran. Every caller that MERGES a
+// read into a launcher it already holds must decline to clear host fields on
+// hostKnown == false — their emptiness carries no information. Callers that
+// only CAPTURE a first launcher may ignore it (captureLauncher does, and says
+// why). An implementation that cannot look at all — a platform with no probe,
+// a revoked consent — returns false rather than true.
+type LauncherEnvReader func(pid int) (l *session.Launcher, hostKnown bool)
 
 // BackgroundReader reports adapter-specific background-agent metadata for a PID
 // (e.g. Claude Code's kind:"bg" registry entry for an Agent-View background
@@ -281,7 +292,12 @@ func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 	if pm.launcherEnv == nil || state == nil || state.Launcher != nil || pid <= 0 {
 		return
 	}
-	if l := pm.launcherEnv(pid); l != nil {
+	// hostKnown is deliberately ignored: a first capture has no stored host to
+	// protect, and refusing the read over an unresolved one would leave the
+	// session with no Launcher at all — losing the herdr address, and with it
+	// backchannel routing, to buy nothing. The refresh paths, which do have
+	// something to lose, are where it is honoured (#1485).
+	if l, _ := pm.launcherEnv(pid); l != nil {
 		state.Launcher = l
 	}
 }
@@ -1257,11 +1273,11 @@ func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 	if !needs.any() {
 		return
 	}
-	fresh := pm.launcherEnv(state.PID)
+	fresh, hostKnown := pm.launcherEnv(state.PID)
 	if fresh == nil {
 		return
 	}
-	if applyLauncherBackfill(state.Launcher, needs, fresh) {
+	if applyLauncherBackfill(state.Launcher, needs, fresh, hostKnown) {
 		pm.touchAndSave(state)
 	}
 }
@@ -1328,11 +1344,11 @@ func (pm *PIDManager) refreshHerdrHosts(snaps []livenessSnapshot) {
 		if !snap.herdrPane || snap.pid <= 0 {
 			continue
 		}
-		fresh := read(snap.pid)
+		fresh, hostKnown := read(snap.pid)
 		if fresh == nil {
 			continue
 		}
-		state := pm.applyHerdrHostRefresh(snap.state.SessionID, fresh)
+		state := pm.applyHerdrHostRefresh(snap.state.SessionID, fresh, hostKnown)
 		if state == nil {
 			continue
 		}
@@ -1348,14 +1364,18 @@ func (pm *PIDManager) refreshHerdrHosts(snaps []livenessSnapshot) {
 // of the refresh is to observe a change between sweeps, so nothing here may
 // outlive the sweep that created it.
 func memoizedLauncherEnv(read LauncherEnvReader) LauncherEnvReader {
-	seen := map[int]*session.Launcher{}
-	return func(pid int) *session.Launcher {
-		if l, ok := seen[pid]; ok {
-			return l
+	type result struct {
+		launcher  *session.Launcher
+		hostKnown bool
+	}
+	seen := map[int]result{}
+	return func(pid int) (*session.Launcher, bool) {
+		if r, ok := seen[pid]; ok {
+			return r.launcher, r.hostKnown
 		}
-		l := read(pid)
-		seen[pid] = l
-		return l
+		l, hostKnown := read(pid)
+		seen[pid] = result{launcher: l, hostKnown: hostKnown}
+		return l, hostKnown
 	}
 }
 
@@ -1369,7 +1389,7 @@ func memoizedLauncherEnv(read LauncherEnvReader) LauncherEnvReader {
 // the one assignPIDLocked takes around its own load-modify-save of the same
 // session, which is what keeps a concurrent PID discovery from being clobbered
 // by this one.
-func (pm *PIDManager) applyHerdrHostRefresh(sessionID string, fresh *session.Launcher) *session.SessionState {
+func (pm *PIDManager) applyHerdrHostRefresh(sessionID string, fresh *session.Launcher, hostKnown bool) *session.SessionState {
 	var updated *session.SessionState
 	pm.WithSessionStateLock(func() {
 		// Gone: reaped between the snapshot and here — possibly earlier in this
@@ -1401,7 +1421,7 @@ func (pm *PIDManager) applyHerdrHostRefresh(sessionID string, fresh *session.Lau
 		if fresh.HerdrPaneID != state.Launcher.HerdrPaneID {
 			return
 		}
-		if applyLauncherBackfill(state.Launcher, needs, fresh) {
+		if applyLauncherBackfill(state.Launcher, needs, fresh, hostKnown) {
 			pm.touchAndSave(state)
 			updated = state
 		}
@@ -1466,7 +1486,12 @@ func launcherBackfillNeedsFor(l *session.Launcher) launcherBackfillNeeds {
 
 // applyLauncherBackfill copies each field fresh has that l is missing per
 // needs. Returns true when any field was updated.
-func applyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fresh *session.Launcher) bool {
+//
+// hostKnown gates only the herdr host adoption, not the whole merge: the tty
+// and kitty fields are read from the process itself and are unaffected by a
+// client probe that did not run, so a pane still acquires a missing tty on a
+// sweep where the host is unknown.
+func applyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fresh *session.Launcher, hostKnown bool) bool {
 	updated := false
 	if needs.tty && fresh.TTY != "" {
 		l.TTY = fresh.TTY
@@ -1478,7 +1503,13 @@ func applyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fre
 	// fresh was produced by the same reader, so its host fields are already
 	// the attached client's. A still-detached session yields none and this
 	// reports no change rather than writing empties over empties.
-	if needs.herdrHost && l.AdoptHostIdentity(fresh) {
+	//
+	// Unless the reader could not determine the host at all, in which case
+	// those empties are not "detached" — they are "unknown", and adopting them
+	// clears a resolved host on a probe that never ran (#1485). The stored
+	// host stays until a probe actually answers; a genuine detach still clears
+	// it on the first sweep whose probe runs.
+	if needs.herdrHost && hostKnown && l.AdoptHostIdentity(fresh) {
 		updated = true
 	}
 	return updated

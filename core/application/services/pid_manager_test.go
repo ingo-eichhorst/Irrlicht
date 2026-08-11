@@ -753,9 +753,9 @@ func TestHandlePIDAssigned_LauncherCaptureIsIdempotent(t *testing.T) {
 
 	pm := newPIDManagerForTest(repo)
 	var calls int
-	pm.SetLauncherEnvReader(func(pid int) *session.Launcher {
+	pm.SetLauncherEnvReader(func(pid int) (*session.Launcher, bool) {
 		calls++
-		return &session.Launcher{TermProgram: "iTerm.app"}
+		return &session.Launcher{TermProgram: "iTerm.app"}, true
 	})
 
 	pm.HandlePIDAssigned(42, "s")
@@ -810,14 +810,14 @@ func TestBackfillLauncher_KittyFieldsMergedFromFreshEnv(t *testing.T) {
 	}
 
 	pm := newPIDManagerForTest(repo)
-	pm.SetLauncherEnvReader(func(pid int) *session.Launcher {
+	pm.SetLauncherEnvReader(func(pid int) (*session.Launcher, bool) {
 		return &session.Launcher{
 			TermProgram:   "kitty",
 			TTY:           "/dev/ttys999", // intentionally different — should NOT overwrite
 			KittyPID:      31155,
 			KittyListenOn: "unix:/tmp/kitty-31155",
 			KittyWindowID: "2",
-		}
+		}, true
 	})
 
 	pm.SeedPIDs([]*session.SessionState{repo.states["s"]})
@@ -871,9 +871,9 @@ func TestBackfillLauncher_NoChangeWhenNothingMissing(t *testing.T) {
 
 	pm := newPIDManagerForTest(repo)
 	var calls int
-	pm.SetLauncherEnvReader(func(pid int) *session.Launcher {
+	pm.SetLauncherEnvReader(func(pid int) (*session.Launcher, bool) {
 		calls++
-		return &session.Launcher{TermProgram: "iTerm.app"} // would corrupt if called
+		return &session.Launcher{TermProgram: "iTerm.app"}, true // would corrupt if called
 	})
 
 	pm.SeedPIDs([]*session.SessionState{repo.states["s"]})
@@ -907,12 +907,12 @@ func TestBackfillLauncher_NonKittyUnaffected(t *testing.T) {
 
 	pm := newPIDManagerForTest(repo)
 	var calls int
-	pm.SetLauncherEnvReader(func(pid int) *session.Launcher {
+	pm.SetLauncherEnvReader(func(pid int) (*session.Launcher, bool) {
 		calls++
 		// Even if a fresh read suggested kitty fields, the missing-checks
 		// gate `isKitty := TermProgram == "kitty"` — none of the
 		// missingKitty* flags will be true for an iTerm launcher.
-		return &session.Launcher{TermProgram: "iTerm.app", KittyPID: 9999}
+		return &session.Launcher{TermProgram: "iTerm.app", KittyPID: 9999}, true
 	})
 
 	pm.SeedPIDs([]*session.SessionState{repo.states["s"]})

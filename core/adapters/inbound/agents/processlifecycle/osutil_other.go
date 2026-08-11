@@ -34,4 +34,8 @@ func IsKnownInteractiveHost(pid int) bool { return true }
 // client (#1350). Darwin-only: the identity it produces is only consumed by the
 // macOS click-to-focus path, and resolving it needs the same ancestry walk the
 // stubs above already decline to do.
-func herdrClientLauncher(socketPath string) *session.Launcher { return nil }
+//
+// So the answer here is "not probed" (#1485), not "nothing attached": this
+// platform never looks, and a caller merging the read into a stored launcher
+// must not read that silence as a client having detached.
+func herdrClientLauncher(socketPath string) (*session.Launcher, bool) { return nil, false }

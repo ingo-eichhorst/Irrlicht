@@ -181,10 +181,10 @@ func TestParseProcargs2Argv(t *testing.T) {
 }
 
 func TestReadLauncherEnv_InvalidPID(t *testing.T) {
-	if l := ReadLauncherEnv(0); l != nil {
+	if l, _ := ReadLauncherEnv(0); l != nil {
 		t.Errorf("pid 0: want nil, got %+v", l)
 	}
-	if l := ReadLauncherEnv(-1); l != nil {
+	if l, _ := ReadLauncherEnv(-1); l != nil {
 		t.Errorf("pid -1: want nil, got %+v", l)
 	}
 }
@@ -221,7 +221,7 @@ func TestReadLauncherEnv_Subprocess(t *testing.T) {
 		"TERM_PROGRAM=iTerm.app",
 		"ITERM_SESSION_ID=w0t0p0-test",
 	})
-	l := ReadLauncherEnv(pid)
+	l, _ := ReadLauncherEnv(pid)
 	if l == nil {
 		t.Fatal("expected non-nil launcher")
 	}
@@ -241,7 +241,7 @@ func TestReadLauncherEnv_Subprocess_VSCodePIDImpliesTermProgram(t *testing.T) {
 		"PATH=/usr/bin:/bin",
 		"VSCODE_PID=4242",
 	})
-	l := ReadLauncherEnv(pid)
+	l, _ := ReadLauncherEnv(pid)
 	if l == nil {
 		t.Fatal("expected non-nil launcher when VSCODE_PID present")
 	}
@@ -262,7 +262,7 @@ func TestReadLauncherEnv_Subprocess_NoRelevantEnv(t *testing.T) {
 	// nil — if the test process's host terminal/IDE is on the recognized
 	// list, we'll populate TermProgram from ppid walk. The invariant that
 	// still holds: env-derived fields must be empty (we only set PATH).
-	l := ReadLauncherEnv(pid)
+	l, _ := ReadLauncherEnv(pid)
 	if l == nil {
 		return // legitimate on unknown hosts
 	}
@@ -281,7 +281,7 @@ func TestReadLauncherEnv_Subprocess_Tmux(t *testing.T) {
 		"TMUX=/private/tmp/tmux-501/default,1234,0",
 		"TMUX_PANE=%17",
 	})
-	l := ReadLauncherEnv(pid)
+	l, _ := ReadLauncherEnv(pid)
 	if l == nil {
 		t.Fatal("expected non-nil launcher")
 	}
@@ -375,7 +375,7 @@ func TestReadLauncherEnv_Subprocess_Herdr(t *testing.T) {
 		"HERDR_PANE_ID=w1:p1",
 		"HERDR_SOCKET_PATH=/tmp/herdr-probe.sock",
 	})
-	l := ReadLauncherEnv(pid)
+	l, _ := ReadLauncherEnv(pid)
 	if l == nil {
 		t.Fatal("expected non-nil launcher")
 	}
@@ -426,7 +426,7 @@ func TestReadLauncherEnv_Subprocess_KittyOverridesInheritedTermProgram(t *testin
 		"KITTY_WINDOW_ID=42",
 		"KITTY_PID=4242",
 	})
-	l := ReadLauncherEnv(pid)
+	l, _ := ReadLauncherEnv(pid)
 	if l == nil {
 		t.Fatal("expected non-nil launcher when KITTY_WINDOW_ID present")
 	}
@@ -457,7 +457,7 @@ func TestReadLauncherEnv_Subprocess_JetBrainsImpliesTermProgram(t *testing.T) {
 		"PATH=/usr/bin:/bin",
 		"TERMINAL_EMULATOR=JetBrains-JediTerm",
 	})
-	l := ReadLauncherEnv(pid)
+	l, _ := ReadLauncherEnv(pid)
 	if l == nil {
 		t.Fatal("expected non-nil launcher when TERMINAL_EMULATOR=JetBrains-JediTerm")
 	}
@@ -500,7 +500,7 @@ func TestReadLauncherEnv_Herdr_DetachedSessionResolvesNoHost(t *testing.T) {
 		"TERM_PROGRAM=kitty",
 		"KITTY_WINDOW_ID=42",
 	})
-	l := ReadLauncherEnv(agentPID)
+	l, _ := ReadLauncherEnv(agentPID)
 	if l == nil {
 		t.Fatal("expected non-nil launcher (the herdr address is still identity)")
 	}

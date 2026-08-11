@@ -68,15 +68,25 @@ func herdrClientLogPath(socketPath string) string {
 // ReadLauncherEnv returns the launcher identity captured from the process env
 // of pid. Returns nil if env cannot be read or no interesting vars are present.
 //
+// hostKnown reports whether the host window could be *determined*, which is
+// not the same as being found. It is false only for a herdr pane whose client
+// probe did not run (#1485) — every other read either resolves the host from
+// the process itself or establishes that it has none. A caller merging this
+// read into a launcher it already holds must not clear host fields when
+// hostKnown is false: their absence means "not looked up", not "gone". A
+// caller capturing a session's first launcher may ignore it, because there is
+// nothing to clear and dropping the read would cost the pane its herdr address.
+//
 // Never blocks longer than 2 seconds. Never prompts the user — on macOS we use
 // `sysctl(kern.procargs2)` (no TCC prompt; `ps e` stopped exposing env on
 // modern macOS). On Linux we read /proc/<pid>/environ. Other platforms return
 // nil.
-func ReadLauncherEnv(pid int) *session.Launcher {
+func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 	if pid <= 0 {
-		return nil
+		return nil, false
 	}
-	l := hostIdentity(pid)
+	l = hostIdentity(pid)
+	hostKnown = true
 
 	// A herdr pane's window belongs to the attached client, so its host
 	// identity is resolved from that process instead — one indirection past
@@ -85,13 +95,15 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	// overridden by the client's when something is: AdoptHostIdentity owns
 	// that rule.
 	if l.HerdrPaneID != "" {
-		l.AdoptHostIdentity(herdrClientLauncher(l.HerdrSocketPath))
+		var client *session.Launcher
+		client, hostKnown = herdrClientLauncher(l.HerdrSocketPath)
+		l.AdoptHostIdentity(client)
 	}
 
 	if l.IsEmpty() {
-		return nil
+		return nil, hostKnown
 	}
-	return l
+	return l, hostKnown
 }
 
 // hostIdentity resolves the window-owning identity of pid: its whitelisted

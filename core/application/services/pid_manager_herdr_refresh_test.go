@@ -46,13 +46,13 @@ func TestCheckPIDLiveness_HerdrHostRefreshedOnReattach(t *testing.T) {
 
 	pm := newPIDManagerForTest(repo)
 	// A fresh read now resolves the client the user re-attached in.
-	pm.SetLauncherEnvReader(func(int) *session.Launcher {
+	pm.SetLauncherEnvReader(func(int) (*session.Launcher, bool) {
 		return &session.Launcher{
 			HerdrPaneID:     "w1:p1",
 			HerdrSocketPath: "/cfg/herdr/herdr.sock",
 			TermProgram:     "ghostty",
 			TTY:             "/dev/ttys077",
-		}
+		}, true
 	})
 
 	pm.CheckPIDLiveness()
@@ -94,12 +94,12 @@ func TestCheckPIDLiveness_HerdrHostClearedOnDetach(t *testing.T) {
 	// Nothing attached: the reader resolves no client, so it returns the pane's
 	// own address and its own pty and nothing else (ReadLauncherEnv's herdr
 	// early-return in launcherFromEnv).
-	pm.SetLauncherEnvReader(func(int) *session.Launcher {
+	pm.SetLauncherEnvReader(func(int) (*session.Launcher, bool) {
 		return &session.Launcher{
 			HerdrPaneID:     "w1:p1",
 			HerdrSocketPath: "/cfg/herdr/herdr.sock",
 			TTY:             "/dev/ttys900",
-		}
+		}, true
 	})
 
 	pm.CheckPIDLiveness()
@@ -128,9 +128,9 @@ func TestCheckPIDLiveness_NonHerdrLauncherNotRefreshed(t *testing.T) {
 
 	calls := 0
 	pm := newPIDManagerForTest(repo)
-	pm.SetLauncherEnvReader(func(int) *session.Launcher {
+	pm.SetLauncherEnvReader(func(int) (*session.Launcher, bool) {
 		calls++
-		return &session.Launcher{TermProgram: "ghostty"}
+		return &session.Launcher{TermProgram: "ghostty"}, true
 	})
 
 	pm.CheckPIDLiveness()
@@ -165,10 +165,10 @@ func TestCheckPIDLiveness_HerdrSteadyStateDoesNotChurn(t *testing.T) {
 
 	calls := 0
 	pm := newPIDManagerForTest(repo)
-	pm.SetLauncherEnvReader(func(int) *session.Launcher {
+	pm.SetLauncherEnvReader(func(int) (*session.Launcher, bool) {
 		calls++
 		cp := *stored
-		return &cp
+		return &cp, true
 	})
 
 	before := repo.saves
@@ -204,8 +204,8 @@ func TestCheckPIDLiveness_HerdrIgnoresAReadThatIsNoLongerThePane(t *testing.T) {
 	pm := newPIDManagerForTest(repo)
 	// What the reader returns for a PID that is no longer the pane: the
 	// ancestry walk resolved the herdr server's own terminal.
-	pm.SetLauncherEnvReader(func(int) *session.Launcher {
-		return &session.Launcher{TermProgram: "kitty", KittyPID: 42, TTY: "/dev/ttys001"}
+	pm.SetLauncherEnvReader(func(int) (*session.Launcher, bool) {
+		return &session.Launcher{TermProgram: "kitty", KittyPID: 42, TTY: "/dev/ttys001"}, true
 	})
 
 	pm.CheckPIDLiveness()
@@ -241,14 +241,14 @@ func TestCheckPIDLiveness_HerdrAcquiresAMissingTTY(t *testing.T) {
 	})
 
 	pm := newPIDManagerForTest(repo)
-	pm.SetLauncherEnvReader(func(int) *session.Launcher {
+	pm.SetLauncherEnvReader(func(int) (*session.Launcher, bool) {
 		return &session.Launcher{
 			HerdrPaneID:     "w1:p1",
 			HerdrSocketPath: "/cfg/herdr/herdr.sock",
 			TermProgram:     "iTerm.app",
 			ITermSessionID:  "w0t0p0",
 			TTY:             "/dev/ttys077",
-		}
+		}, true
 	})
 
 	pm.CheckPIDLiveness()
@@ -282,15 +282,64 @@ func TestCheckPIDLiveness_HerdrSubagentsShareOneRead(t *testing.T) {
 
 	calls := 0
 	pm := newPIDManagerForTest(repo)
-	pm.SetLauncherEnvReader(func(int) *session.Launcher {
+	pm.SetLauncherEnvReader(func(int) (*session.Launcher, bool) {
 		calls++
 		cp := *pane
-		return &cp
+		return &cp, true
 	})
 
 	pm.CheckPIDLiveness()
 
 	if calls != 1 {
 		t.Errorf("4 sessions on one PID cost %d reads, want 1", calls)
+	}
+}
+
+// TestCheckPIDLiveness_HerdrHostSurvivesAnUnrunnableProbe is #1485. The
+// detach test above pins the honest clear; this one pins the case that must
+// NOT clear, and the two are indistinguishable to the sweep unless the reader
+// says which it is.
+//
+// The reader's herdr host comes from an `lsof` probe of the client log, and
+// that probe has three outcomes, not two: a client is attached, no client is
+// attached, or the probe never ran (its 2s deadline, a fork failure, a signal,
+// a client log that is not where we looked). #1350 collapsed the last two,
+// which was harmless while the host was write-once-if-empty; #1405 made the
+// refresh re-resolve on every sweep, so a non-answer now overwrites a good
+// host with nothing.
+func TestCheckPIDLiveness_HerdrHostSurvivesAnUnrunnableProbe(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["s"] = herdrSession(&session.Launcher{
+		HerdrPaneID:     "w1:p1",
+		HerdrSocketPath: "/cfg/herdr/herdr.sock",
+		TermProgram:     "iTerm.app",
+		ITermSessionID:  "w0t0p0-OLD",
+		TTY:             "/dev/ttys012",
+	})
+
+	pm := newPIDManagerForTest(repo)
+	// The launcher is byte-identical to the detach test's — that is the point.
+	// Only the second return value separates them, and without it the sweep
+	// has nothing to go on.
+	pm.SetLauncherEnvReader(func(int) (*session.Launcher, bool) {
+		return &session.Launcher{
+			HerdrPaneID:     "w1:p1",
+			HerdrSocketPath: "/cfg/herdr/herdr.sock",
+			TTY:             "/dev/ttys900",
+		}, false
+	})
+
+	before := repo.saves
+	pm.CheckPIDLiveness()
+
+	got := repo.states["s"].Launcher
+	if got.TermProgram != "iTerm.app" || got.ITermSessionID != "w0t0p0-OLD" {
+		t.Errorf("a probe that never ran cleared a resolved host: %+v", got)
+	}
+	if got.TTY != "/dev/ttys012" {
+		t.Errorf("the client's tab was cleared by a non-answer: TTY = %q", got.TTY)
+	}
+	if repo.saves != before {
+		t.Errorf("a non-answer churned the repo and pushed: %d saves", repo.saves-before)
 	}
 }

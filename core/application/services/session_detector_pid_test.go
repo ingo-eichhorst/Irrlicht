@@ -87,12 +87,12 @@ func TestSessionDetector_PIDAssigned_CapturesLauncher(t *testing.T) {
 
 	det := newDetector(tw, pw, repo)
 	var calledPID int
-	det.SetLauncherEnvReader(func(pid int) *session.Launcher {
+	det.SetLauncherEnvReader(func(pid int) (*session.Launcher, bool) {
 		calledPID = pid
 		return &session.Launcher{
 			TermProgram:    "iTerm.app",
 			ITermSessionID: "w0t0p0",
-		}
+		}, true
 	})
 
 	det.HandlePIDAssigned(4242, "s")
