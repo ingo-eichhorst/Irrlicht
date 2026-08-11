@@ -282,6 +282,35 @@ const (
 	minMeasuredRecordings = 270
 )
 
+// reportDriftEnumeration prints the drifted set — the deliverable of #1480,
+// printed whether or not any ratchet trips — as the map literal to paste into
+// knownFirstTransitionDrift when the set legitimately moves. That literal is
+// why the list is machine-generated rather than hand-maintained. Returns the
+// names sorted, which the caller's two ratchets then walk.
+func reportDriftEnumeration(t *testing.T, drifted map[string]timeDelta) []string {
+	t.Helper()
+	names := make([]string, 0, len(drifted))
+	for n := range drifted {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	var literal strings.Builder
+	for _, n := range names {
+		fmt.Fprintf(&literal, "\t%q: %q,\n", n, describeDrift(drifted[n]))
+	}
+	t.Logf("%d recordings drift >%v on their first kind-matched transition:\n%s",
+		len(drifted), driftThreshold, literal.String())
+	return names
+}
+
+// describeDrift is the one spelling of a drift figure, shared by the pasteable
+// literal and the newly-drifted error so a reader comparing the two is looking
+// at the same rendering.
+func describeDrift(d timeDelta) string {
+	return fmt.Sprintf("%+.3fs at pair %d (%s)", d.Delta.Seconds(), d.Index, d.Kind)
+}
+
 // TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog is #1480's mechanical
 // report: it walks every sidecar-driven recording in the catalog, measures each
 // reproduced transition against the ts the recording's own daemon logged, and
@@ -338,20 +367,7 @@ func TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog(t *testing.T) {
 	dist := newDriftDistribution(allDeltas)
 	t.Logf("#1480 transition-timing drift, %d sidecar-driven recordings\n%s", checked, dist)
 
-	// The enumeration is the deliverable, so print it whether or not the
-	// ratchet trips — with the map literal to paste when it legitimately moves.
-	names := make([]string, 0, len(drifted))
-	for n := range drifted {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	var literal strings.Builder
-	for _, n := range names {
-		fmt.Fprintf(&literal, "\t%q: %q,\n", n, fmt.Sprintf("%+.3fs at pair %d (%s)",
-			drifted[n].Delta.Seconds(), drifted[n].Index, drifted[n].Kind))
-	}
-	t.Logf("%d recordings drift >%v on their first kind-matched transition:\n%s",
-		len(drifted), driftThreshold, literal.String())
+	names := reportDriftEnumeration(t, drifted)
 
 	// A catalog where nothing drifts means the comparison stopped comparing —
 	// 20 recordings are known-drifted by #1476's own measurement, and this
@@ -363,8 +379,7 @@ func TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog(t *testing.T) {
 	var appeared []string
 	for _, n := range names {
 		if _, known := knownFirstTransitionDrift[n]; !known {
-			appeared = append(appeared, fmt.Sprintf("%s (%+.3fs at pair %d, %s)",
-				n, drifted[n].Delta.Seconds(), drifted[n].Index, drifted[n].Kind))
+			appeared = append(appeared, fmt.Sprintf("%s (%s)", n, describeDrift(drifted[n])))
 		}
 	}
 	if len(appeared) > 0 {
