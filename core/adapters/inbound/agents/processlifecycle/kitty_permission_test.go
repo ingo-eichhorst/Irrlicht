@@ -297,18 +297,26 @@ func TestKittyPermission_GateContract(t *testing.T) {
 	decl := findKittyPermission(t, PermissionKeyKittyConfig)
 
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(state permission.State) {
+		Key: PermissionKeyKittyConfig,
+		// This declaration exports exactly one permission, so the key held open
+		// beside it is a foreign one with no closure here to drive: the
+		// key-isolation arm is INERT and repeats the revoked arm exactly. It is
+		// wired anyway because the contract admits no opt-out — a flag an
+		// install-type wiring could take is one a live-gate wiring could take
+		// too, and there it is the whole point.
+		OtherKeys: []string{agent.HooksPermissionKey},
+		SetState: contracttesting.OnlyKey(PermissionKeyKittyConfig, func(state permission.State) {
 			switch state {
 			case permission.StateGranted:
 				if err := decl.Apply(); err != nil {
-					t.Fatalf("Apply: %v", err)
+					t.Errorf("Apply: %v", err)
 				}
 			case permission.StateDenied:
 				if err := decl.Remove(); err != nil {
-					t.Fatalf("Remove: %v", err)
+					t.Errorf("Remove: %v", err)
 				}
 			}
-		},
+		}),
 		Exercise: func() {}, // the effect IS the Apply/Remove call above
 		Observe: func() bool {
 			data, err := os.ReadFile(path)

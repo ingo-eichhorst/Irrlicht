@@ -548,18 +548,40 @@ func findPermission(t *testing.T, a agent.Agent, key string) agent.Permission {
 func TestInstructionsPermission_GateContract(t *testing.T) {
 	home := withTempHome(t)
 	path := memoryPathFor(home)
-	decl := findPermission(t, Agent(), PermissionKeyInstructions)
+
+	// Resolved out here, on the main goroutine, because findPermission fails
+	// with t.Fatalf and SetState below runs inside the contract's arm
+	// subtests — a FailNow from there is a FailNow on a parent test from a
+	// child goroutine, which go test reports as a panic instead of the real
+	// reason. Inside SetState only t.Errorf is used, which is goroutine-safe.
+	decls := map[string]agent.Permission{
+		PermissionKeyInstructions: findPermission(t, Agent(), PermissionKeyInstructions),
+		PermissionKeyHooks:        findPermission(t, Agent(), PermissionKeyHooks),
+	}
 
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(state permission.State) {
+		Key: PermissionKeyInstructions,
+		// The hooks permission writes a different user file (settings.json)
+		// from the same adapter, so the key-isolation arm grants it while
+		// instructions is denied and confirms CLAUDE.md stays untouched.
+		OtherKeys: []string{PermissionKeyHooks},
+		SetState: func(key string, state permission.State) {
+			// Dispatch through the declaration rather than closing over one
+			// permission's closures: a wiring that ignored the key it is
+			// handed is what issue #1475 exists to reject.
+			decl, ok := decls[key]
+			if !ok {
+				t.Errorf("contract drove an unexpected key %q", key)
+				return
+			}
 			switch state {
 			case permission.StateGranted:
 				if err := decl.Apply(); err != nil {
-					t.Fatalf("Apply: %v", err)
+					t.Errorf("Apply %s: %v", key, err)
 				}
 			case permission.StateDenied:
 				if err := decl.Remove(); err != nil {
-					t.Fatalf("Remove: %v", err)
+					t.Errorf("Remove %s: %v", key, err)
 				}
 			}
 			// Pending: PermissionService never invokes Apply/Remove until

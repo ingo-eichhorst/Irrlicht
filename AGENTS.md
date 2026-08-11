@@ -207,6 +207,43 @@ Before marking a ticket done, run the full suite — every layer must pass:
   kitty remote-control (install-type `Apply`/`Remove`), and `InputService`'s
   backchannel forwarding (the shared "control" gate) for the three call-site
   shapes it covers.
+  A wiring names the permission under test (`Key`) and at least one the call
+  site must NOT be gated on (`OtherKeys`), and `SetState` takes the key it is
+  driving — because until #1475 it did not, and every live-gate wiring supplied
+  a `Granted(_, _ string) bool` fake that discarded the key. One permission
+  moved through three states says only that a call site is gated on
+  *something*: a receiver gated on the WRONG permission answers identically,
+  and that is not hypothetical — claudecode's hook receiver read transcripts
+  with `transcripts` denied for the whole of its life (#1466) while this
+  contract was wired at that receiver and green. The fourth arm holds `Key`
+  denied while `OtherKeys` are granted, the one state that tells those apart,
+  and it denies `Key` **first**: a wiring that still ignored its key would end
+  up holding everything granted and fail, where the reverse order would let it
+  settle at "denied" and pass. Use `contracttesting.ConsentGate` for a live
+  per-request gate rather than a local fake — it replaces the three key-blind
+  mutable fakes those wirings had each grown (claudecode's and codex's
+  `mutableGate`, the services layer's `mutableConsent`), because a contract
+  whose wiring supplies the fake is a contract whose wiring can supply a
+  key-blind one. The static `keyedGate` map literals in the adapter test
+  packages are a different thing and stay: they pin a fixed two-permission
+  combination in one-off tests and were never key-blind. A receiver gated on
+  more than one permission wires `AssertPermissionGatedOnEachKey` rather than a
+  hand-written table pairing each key with "the other one" — it names its key
+  set once and the pairing is derived, because such a table can silently list
+  only one direction and the direction that already works is
+  indistinguishable from covering both. Install-type wirings use
+  `contracttesting.OnlyKey` instead of re-deciding per adapter that a foreign
+  key is a no-op. The arm is
+  load-bearing only for live per-request gates; for an install-type permission
+  the wiring holds that permission's own closures, so a wrong key is not
+  representable and the arm is weak by construction — and where the other key
+  has no closure at all (an observe-kind sibling, a single-permission
+  declaration) it is inert and repeats the revoked arm, which those three call
+  sites say out loud. It is kept uniform with no opt-out anyway, because a flag
+  an install-type wiring could take is one a live-gate wiring could take too.
+  All of which makes the obligation *assertable*, not unforgettable: a receiver
+  still has to be wired once per permission it must honour (#1488 is the
+  chokepoint move that would remove that remaining act of memory).
 - Hook endpoints: `contracttesting.AssertHookEndpointFollowsBindAddr`
   (`core/internal/contracttesting/hook_endpoint.go`) is the same kind of
   runtime obligation for adapters that install hooks into a JSON config —
@@ -485,7 +522,12 @@ Before marking a ticket done, run the full suite — every layer must pass:
   longer installs hooks** — that was the damage, not a regression.
   All seven contract families pass by construction against a correct adapter —
   or, for a delivery route no adapter has adopted yet, against its reference
-  wiring — so their whole value is that they *can* fail. A new or reworked
+  wiring — so their whole value is that they *can* fail. Seven is a count of
+  *obligations*, not of exported `Assert…` functions: `grep -c "^func Assert"`
+  over the package currently returns eight, because
+  `AssertPermissionGatedOnEachKey` is a driver that runs the permission-gate
+  family once per key, not a family of its own. Check what a function asserts
+  before moving this number. A new or reworked
   contract assertion is therefore the mutation rule at the top of this section
   in its most literal form: it lands with the deliberate mutation seen red for
   each obligation. That evidence currently lives in the PR body, where nothing

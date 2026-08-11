@@ -10,7 +10,6 @@ import (
 	"sync"
 	"testing"
 
-	"irrlicht/core/domain/permission"
 	"irrlicht/core/internal/contracttesting"
 )
 
@@ -68,28 +67,10 @@ func (m *mockTarget) reset() {
 	m.stopCalls = nil
 }
 
-// mutableGate is a ConsentGranter whose grant state can be flipped between
-// permission states for the AssertPermissionGated contract. It grants (or
-// denies) every key uniformly.
-type mutableGate struct {
-	mu      sync.Mutex
-	granted bool
-}
-
-func (g *mutableGate) Granted(string, string) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.granted
-}
-
-func (g *mutableGate) setGranted(v bool) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.granted = v
-}
-
 // keyedGate grants exactly the permission keys in its set — used to exercise
-// the hooks-granted / transcripts-denied combination.
+// the hooks-granted / transcripts-denied combination. For a MUTABLE keyed gate
+// driven through states by the shared contract, use
+// contracttesting.ConsentGate instead.
 type keyedGate map[string]bool
 
 func (g keyedGate) Granted(_, key string) bool { return g[key] }
@@ -392,18 +373,31 @@ func TestHookHandler_UnrecognizedEvent(t *testing.T) {
 	}
 }
 
+// TestHookHandler_PermissionGateContract runs the shared #797 contract once per
+// permission this receiver must honour: "hooks" for accepting the POST at all,
+// "transcripts" for the read the dispatch below it performs. The key-isolation
+// arm (issue #1475) holds one denied while the other is granted, which is the
+// only state that tells a receiver gated on the right permission from one gated
+// on the other.
 func TestHookHandler_PermissionGateContract(t *testing.T) {
-	target := &mockTarget{}
-	gate := &mutableGate{}
-	handler := NewHookHandler(target, gate, mockLogger{})
-	payload := codexHookPayload{
-		TranscriptPath: writeSessionTranscript(t, "sess-gate"),
-		HookEventName:  HookPermissionRequest,
-		ToolName:       "shell",
-	}
-	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(state permission.State) { gate.setGranted(state == permission.StateGranted) },
-		Exercise: func() { target.reset(); postHook(t, handler, payload) },
-		Observe:  func() bool { return target.totalCalls() > 0 },
-	})
+	keys := []string{PermissionKeyHooks, PermissionKeyTranscripts}
+
+	contracttesting.AssertPermissionGatedOnEachKey(t, keys,
+		func(key string, others []string) contracttesting.PermissionGate {
+			target := &mockTarget{}
+			gate := contracttesting.NewConsentGate()
+			handler := NewHookHandler(target, gate, mockLogger{})
+			payload := codexHookPayload{
+				TranscriptPath: writeSessionTranscript(t, "sess-gate"),
+				HookEventName:  HookPermissionRequest,
+				ToolName:       "shell",
+			}
+			return contracttesting.PermissionGate{
+				Key:       key,
+				OtherKeys: others,
+				SetState:  gate.SetState,
+				Exercise:  func() { target.reset(); postHook(t, handler, payload) },
+				Observe:   func() bool { return target.totalCalls() > 0 },
+			}
+		})
 }
