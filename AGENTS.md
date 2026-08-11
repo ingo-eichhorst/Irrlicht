@@ -137,7 +137,34 @@ Before marking a ticket done, run the full suite — every layer must pass:
   an install writes the resolved port not `:7837`, an entry left by a daemon
   on another port is rewritten in place rather than duplicated, and uninstall
   is not port-scoped (#1178). A new hook-installing adapter wires one call
-  (see `claudecode`/`codex` `hookport_test.go`) instead of porting a test file.
+  (see `claudecode`/`codex`/`copilot` `hookport_test.go`) instead of porting a
+  test file. It grades against the delivery route the adapter DECLARES
+  (`HookInstaller.Delivery`, #1453), because there are two ways to satisfy it
+  and the second makes the first unsatisfiable. `DeliveryURL` — the zero value,
+  and all three adapters above — is an entry that CARRIES the daemon's address.
+  `DeliveryAddressFree` is an entry that carries none, because it names the
+  `irrlichd hook-post` beacon (`core/pkg/hookbeacon`, #1373), which reads the
+  addr file at fire time; three of the four port obligations then fail by
+  construction, measured against a working beacon. That is the good outcome
+  rather than an exemption: the beacon makes the whole stale-port class
+  INEXPRESSIBLE instead of fixing it once more — the dev daemon that left a
+  user's real `~/.claude/settings.json` and `~/.codex/hooks.json` pointing at
+  three dead ports (#1449) could not have — so the address-free route asserts
+  that the property was actually obtained (the line varies with nothing and
+  carries nothing address-shaped) plus the failure the beacon NEWLY admits: an
+  entry naming a binary path that is no longer the running one, which must be
+  rewritten in place exactly as a stale port must. Declaring the wrong route
+  cannot pass quietly, which is why this is a declaration and not an exemption:
+  the two routes' first obligations are contradictory assertions about the same
+  two strings (URL requires them to DIFFER across bind addresses, address-free
+  requires them IDENTICAL), so a beacon adapter that forgets the field and a URL
+  adapter that sets it both go red. The reasoning, and which obligations each
+  route runs, is on `deliveryRules` in that file rather than restated here.
+  Whichever adapter adopts beacon delivery first replaces
+  `hook_endpoint_addressfree_test.go`, the reference wiring the route is
+  currently exercised by — and that file is also the shape to copy, down to
+  resolving the binary path once through `hookbeacon.InstalledCommand` so the
+  config builder stays infallible.
 - Hook disclosure: `contracttesting.AssertHookDisclosureMatchesInstalled`
   (`core/internal/contracttesting/hook_disclosure.go`) binds a hooks
   permission's consent copy to what the installer actually writes — the
@@ -380,8 +407,9 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `spawn-record-daemon.sh`, immediately beside the `snapshot_managed_files`
   call that earns the entitlement. **`ir:test-mac`'s separate mode therefore no
   longer installs hooks** — that was the damage, not a regression.
-  All seven contract families pass by construction against a correct adapter, so
-  their whole value is that they *can* fail: a new or reworked contract
+  All seven contract families pass by construction against a correct adapter —
+  or, for a delivery route no adapter has adopted yet, against its reference
+  wiring — so their whole value is that they *can* fail: a new or reworked contract
   assertion lands with the deliberate mutation that was seen red for each
   obligation recorded in its PR — the same bar the red-first rule above sets
   for defect tests.
