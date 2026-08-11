@@ -1308,9 +1308,9 @@ func (pm *PIDManager) touchAndSave(state *session.SessionState) {
 //     one scan per sweep rather than N.
 //   - applyLauncherBackfill reports no change when the client has not moved,
 //     so the steady state writes nothing: no Save, no UpdatedAt bump, no push.
-//     The bump matters beyond churn — UpdatedAt drives the readyTTL reap, so a
-//     refresh that touched it every tick would keep idle sessions alive
-//     forever.
+//     The UpdatedAt bump is churn only, not a lifetime hazard: this runs solely
+//     for pid > 0 sessions, and sweepStaleSnapshot exempts any session with a
+//     live PID from the readyTTL reap before UpdatedAt is ever consulted.
 //
 // The read runs outside assignMu deliberately: ReadLauncherEnv is allowed to
 // block for up to two seconds, and assignMu serializes PID discovery for every
