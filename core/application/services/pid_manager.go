@@ -847,6 +847,10 @@ type livenessSnapshot struct {
 	parentSessionID string
 	transcriptPath  string
 	adapter         string
+	// herdrPane marks a session hosted in a herdr pane — the one Launcher
+	// whose host identity is not static for the process's lifetime, and so
+	// the only one the sweep re-resolves (#1405, refreshHerdrHosts).
+	herdrPane bool
 }
 
 // snapshotLivenessStates reads every session's liveness-relevant fields under
@@ -870,6 +874,7 @@ func (pm *PIDManager) snapshotLivenessStates() []livenessSnapshot {
 			parentSessionID: state.ParentSessionID,
 			transcriptPath:  state.TranscriptPath,
 			adapter:         state.Adapter,
+			herdrPane:       state.Launcher != nil && state.Launcher.HerdrPaneID != "",
 		})
 	}
 	return snaps
@@ -907,6 +912,11 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 			pm.sweepStaleSnapshot(snap)
 		}
 	}
+
+	// Last, so a session reaped above is already gone by the time its refresh
+	// tries to load it — and gets nothing back — rather than being written
+	// out again.
+	pm.refreshHerdrHosts(snaps)
 	return foundDead
 }
 
@@ -1226,14 +1236,12 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 //   - The host identity of a herdr pane (issue #1350), which is resolved from
 //     the attached herdr client rather than from the pane itself. A session
 //     that was detached when its PID was bound has no host to record, so this
-//     is the path by which one attached since then is picked up. Two limits
-//     follow from where this runs, and both are deliberate for now: capture is
-//     once-per-PID-bind and this runs only at seed, so re-attaching a session
-//     to a *different* terminal is not noticed until the daemon restarts; and
-//     because the need is gated on *no* host being recorded, a host that did
-//     resolve is never re-checked afterwards. Refreshing it from the periodic
-//     liveness sweep instead would fix both — the daemon pushes launcher
-//     updates to clients, so nothing on the click path would have to change.
+//     is the path by which one attached since then is picked up at startup.
+//     It is no longer the *only* such path: because a herdr pane's host is the
+//     one Launcher field that is not static for the process's lifetime, it is
+//     also re-resolved on every periodic liveness sweep (refreshHerdrHosts,
+//     #1405). Both share launcherBackfillNeedsFor/applyLauncherBackfill, so
+//     the seed and the sweep cannot drift apart on what a refresh means.
 func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 	if state.Launcher == nil {
 		pm.captureLauncher(state, state.PID)
@@ -1265,6 +1273,101 @@ func (pm *PIDManager) touchAndSave(state *session.SessionState) {
 	_ = pm.repo.Save(state)
 }
 
+// refreshHerdrHosts re-resolves the host window of every herdr-hosted session,
+// on the periodic liveness sweep. Called from CheckPIDLiveness.
+//
+// Why the sweep and not capture time: every other Launcher field describes
+// something fixed for the life of the process, so capturing it once is
+// correct. A herdr pane's host is not — it belongs to whichever client is
+// attached right now, and detaching in one terminal to re-attach in another is
+// the entire point of a persistent multiplexer. Resolved once and never
+// revisited, the session goes on naming the terminal the user walked away
+// from, and a click raises that window: the misroute class #1348 was opened to
+// remove, arriving by a slower route (#1405). The sweep is the only thing that
+// runs while a session sits idle, which is exactly when a user re-attaches.
+//
+// Why not at focus time instead: the macOS row tap (SessionRowView →
+// SessionLauncher.jump) reads the session state the app already holds and
+// never round-trips to the daemon, so resolving there would route the
+// most-used interaction in the app through the daemon. Refreshing here needs
+// no click-path change — the corrected launcher rides the ordinary
+// session_updated push.
+//
+// Why this is affordable on a 5s timer:
+//
+//   - It is gated on the *stored* launcher already being a herdr pane, so a
+//     machine running no herdr sessions pays one bool per session per sweep
+//     and never calls the reader at all.
+//   - A herdr pane skips the process-ancestry walk by construction (see
+//     hostIdentity), which is the `ps` shellout chain the non-herdr path
+//     memoizes precisely because it is the expensive part.
+//   - The one genuinely costly step, the lsof scan that finds the attached
+//     client, is memoized per socket path, so N panes of one herdr server cost
+//     one scan per sweep rather than N.
+//   - applyLauncherBackfill reports no change when the client has not moved,
+//     so the steady state writes nothing: no Save, no UpdatedAt bump, no push.
+//     The bump matters beyond churn — UpdatedAt drives the readyTTL reap, so a
+//     refresh that touched it every tick would keep idle sessions alive
+//     forever.
+//
+// The read runs outside assignMu deliberately: ReadLauncherEnv is allowed to
+// block for up to two seconds, and assignMu serializes PID discovery for every
+// session. Only the merge is taken under the lock.
+func (pm *PIDManager) refreshHerdrHosts(snaps []livenessSnapshot) {
+	if pm.launcherEnv == nil {
+		return
+	}
+	for _, snap := range snaps {
+		if !snap.herdrPane || snap.pid <= 0 {
+			continue
+		}
+		fresh := pm.launcherEnv(snap.pid)
+		if fresh == nil {
+			continue
+		}
+		state := pm.applyHerdrHostRefresh(snap.state.SessionID, fresh)
+		if state == nil {
+			continue
+		}
+		pm.log.LogInfo(logComponentSessionDetector, state.SessionID,
+			fmt.Sprintf("herdr host re-resolved: term_program=%q host_bundle_id=%q tty=%q",
+				state.Launcher.TermProgram, state.Launcher.HostBundleID, state.Launcher.TTY))
+		pm.broadcast(outbound.PushTypeUpdated, state)
+	}
+}
+
+// applyHerdrHostRefresh merges fresh into sessionID's stored launcher and
+// persists it, returning the updated state when something actually changed and
+// nil otherwise — so the caller pushes only on a real move.
+//
+// The load-modify-save under WithSessionStateLock is not ceremony. The sweep's
+// snapshot holds a deep copy (the repository hands those out so callers can
+// mutate freely), so writing through it would persist nothing; and the lock is
+// the one assignPIDLocked takes around its own load-modify-save of the same
+// session, which is what keeps a concurrent PID discovery from being clobbered
+// by this one.
+func (pm *PIDManager) applyHerdrHostRefresh(sessionID string, fresh *session.Launcher) *session.SessionState {
+	var updated *session.SessionState
+	pm.WithSessionStateLock(func() {
+		state, err := pm.repo.Load(sessionID)
+		// Gone, or no longer a herdr pane: reaped or re-bound between the
+		// snapshot and here. Returning early rather than saving is what stops
+		// a session deleted earlier in this same sweep being written back out.
+		if err != nil || state == nil || state.Launcher == nil {
+			return
+		}
+		needs := launcherBackfillNeedsFor(state.Launcher)
+		if !needs.herdrHost {
+			return
+		}
+		if applyLauncherBackfill(state.Launcher, needs, fresh) {
+			pm.touchAndSave(state)
+			updated = state
+		}
+	})
+	return updated
+}
+
 // launcherBackfillNeeds tracks which Launcher fields are missing and should
 // be refreshed from a fresh env read.
 type launcherBackfillNeeds struct {
@@ -1281,17 +1384,34 @@ func (n launcherBackfillNeeds) any() bool {
 // launcherBackfillNeedsFor computes which fields of l are missing and
 // eligible for backfill. The three Kitty-specific fields only ever need
 // backfilling for a kitty launcher.
+//
+// A herdr pane returns exactly one need, and it is unconditional. Both halves
+// of that matter:
+//
+//   - Exactly one, because a pane owns none of the host fields — they are
+//     adopted wholesale from the attached client (AdoptHostIdentity), which
+//     already carries the kitty fields and the tty. Under the earlier rule the
+//     kitty needs happened to be mutually exclusive with the herdr one, since
+//     they all required TermProgram == "kitty" and the herdr need required it
+//     to be empty. Dropping that precondition would have made a herdr pane
+//     whose client runs *in* kitty satisfy both, so the exclusivity is now by
+//     construction rather than by coincidence.
+//   - Unconditional, because "a host was already resolved" is not a reason to
+//     stop looking. Every other Launcher field is static for a process's
+//     lifetime; the attached client is not — detach-here-reattach-there is the
+//     whole point of a persistent multiplexer, and gating on *no* host ever
+//     being recorded meant a session that moved terminals kept naming the one
+//     the user left (#1405).
 func launcherBackfillNeedsFor(l *session.Launcher) launcherBackfillNeeds {
+	if l.HerdrPaneID != "" {
+		return launcherBackfillNeeds{herdrHost: true}
+	}
 	isKitty := l.TermProgram == "kitty"
 	return launcherBackfillNeeds{
 		tty:         l.TTY == "",
 		kittyPID:    isKitty && l.KittyPID == 0,
 		kittyListen: isKitty && l.KittyListenOn == "",
 		kittyWindow: isKitty && l.KittyWindowID == "",
-		// A herdr pane with no host recorded had no client attached when it
-		// was captured. Mutually exclusive with the kitty needs above, which
-		// all require TermProgram == "kitty".
-		herdrHost: l.HerdrPaneID != "" && l.TermProgram == "" && l.HostBundleID == "",
 	}
 }
 
