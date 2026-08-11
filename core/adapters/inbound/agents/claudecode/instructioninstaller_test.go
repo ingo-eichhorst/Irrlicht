@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -525,17 +526,27 @@ func TestRemoveInstructionBlocks_RoundTripsToOriginal(t *testing.T) {
 	}
 }
 
+// lookupPermission returns the declared permission matching key. Separate from
+// findPermission because a caller running inside a subtest cannot use the
+// latter's t.Fatalf — see TestInstructionsPermission_GateContract.
+func lookupPermission(a agent.Agent, key string) (agent.Permission, bool) {
+	for _, p := range a.Permissions {
+		if p.Key == key {
+			return p, true
+		}
+	}
+	return agent.Permission{}, false
+}
+
 // findPermission returns the declared permission matching key, failing the
 // test if the adapter dropped or renamed it.
 func findPermission(t *testing.T, a agent.Agent, key string) agent.Permission {
 	t.Helper()
-	for _, p := range a.Permissions {
-		if p.Key == key {
-			return p
-		}
+	p, ok := lookupPermission(a, key)
+	if !ok {
+		t.Fatalf("no permission %q declared by %s", key, a.Identity.Name)
 	}
-	t.Fatalf("no permission %q declared by %s", key, a.Identity.Name)
-	return agent.Permission{}
+	return p
 }
 
 // TestInstructionsPermission_GateContract drives the real Apply/Remove
@@ -549,6 +560,11 @@ func TestInstructionsPermission_GateContract(t *testing.T) {
 	home := withTempHome(t)
 	path := memoryPathFor(home)
 
+	// SetState runs inside the contract's arm subtests, so a t.Fatalf there
+	// would call FailNow on a parent test from a child goroutine — go test
+	// reports that panic instead of the real reason. Capture and assert after.
+	var driveErr error
+
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
 		Key: PermissionKeyInstructions,
 		// The hooks permission writes a different user file (settings.json)
@@ -559,15 +575,19 @@ func TestInstructionsPermission_GateContract(t *testing.T) {
 			// Dispatch through the declaration rather than closing over one
 			// permission's closures: an arm that hands this a key it ignored
 			// would be the key-blind wiring issue #1475 exists to reject.
-			decl := findPermission(t, Agent(), key)
+			decl, ok := lookupPermission(Agent(), key)
+			if !ok {
+				driveErr = fmt.Errorf("no permission %q declared by %s", key, AdapterName)
+				return
+			}
 			switch state {
 			case permission.StateGranted:
 				if err := decl.Apply(); err != nil {
-					t.Fatalf("Apply %s: %v", key, err)
+					driveErr = fmt.Errorf("Apply %s: %w", key, err)
 				}
 			case permission.StateDenied:
 				if err := decl.Remove(); err != nil {
-					t.Fatalf("Remove %s: %v", key, err)
+					driveErr = fmt.Errorf("Remove %s: %w", key, err)
 				}
 			}
 			// Pending: PermissionService never invokes Apply/Remove until
@@ -582,4 +602,8 @@ func TestInstructionsPermission_GateContract(t *testing.T) {
 			return strings.Contains(string(data), taskEtaBeginSentinel)
 		},
 	})
+
+	if driveErr != nil {
+		t.Fatalf("driving a permission to a state failed: %v", driveErr)
+	}
 }

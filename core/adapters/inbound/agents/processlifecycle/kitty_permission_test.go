@@ -299,8 +299,11 @@ func TestKittyPermission_GateContract(t *testing.T) {
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
 		Key: PermissionKeyKittyConfig,
 		// This declaration exports exactly one permission, so the key held open
-		// beside it is a foreign one: answering some OTHER permission granted
-		// must not patch kitty.conf.
+		// beside it is a foreign one with no closure here to drive: the
+		// key-isolation arm is INERT and repeats the revoked arm exactly. It is
+		// wired anyway because the contract admits no opt-out — a flag an
+		// install-type wiring could take is one a live-gate wiring could take
+		// too, and there it is the whole point.
 		OtherKeys: []string{agent.HooksPermissionKey},
 		SetState: func(key string, state permission.State) {
 			if key != PermissionKeyKittyConfig {

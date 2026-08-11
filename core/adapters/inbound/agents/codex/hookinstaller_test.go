@@ -173,9 +173,12 @@ func TestHooksPermission_InstallGateContract(t *testing.T) {
 
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
 		Key: PermissionKeyHooks,
-		// transcripts is the adapter's other declared permission and is
-		// observe-kind — it carries no Apply/Remove, so granting it must leave
-		// hooks.json untouched while hooks itself is denied.
+		// transcripts is the adapter's only other declared permission and is
+		// observe-kind, so it has no closure to drive: the key-isolation arm is
+		// INERT here and repeats the revoked arm exactly. Install-type wirings
+		// hold their own permission's closures, so a wrong key is not
+		// representable — the arm is load-bearing at the live receiver
+		// (hooks_test.go), not here.
 		OtherKeys: []string{PermissionKeyTranscripts},
 		SetState: func(key string, state permission.State) {
 			if key != PermissionKeyHooks {

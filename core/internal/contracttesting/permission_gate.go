@@ -80,9 +80,13 @@ type gateReporter interface {
 // For an install-type permission it is weak by construction: the wiring holds
 // that permission's own Apply/Remove closures, so "gated on the wrong key" is
 // not representable there, and the arm degenerates to asserting that another
-// permission's effects do not produce this one's. That is worth little, but it
-// is not nothing, and a uniform contract with no opt-out is worth more than a
-// flag a live-gate adapter could also reach for.
+// permission's effects do not produce this one's — and where that other
+// permission has no closures to run at all (an observe-kind sibling, or a
+// declaration exporting a single permission) it degenerates one step further
+// still, to a repeat of the revoked arm. Those wirings say so at the call
+// site. The arm is kept uniform anyway, with no opt-out, because a flag that
+// let an install-type wiring skip it is a flag a live-gate wiring could also
+// reach for, and that is the one place it must not be skippable.
 //
 // What this still does not do is make the obligation unforgettable: a receiver
 // must be wired once per permission it must honour, and nothing fails if an
@@ -121,6 +125,15 @@ func malformedGateReason(g PermissionGate) string {
 			"Name at least one permission this call site must NOT be gated on.", g.Key, g.Key)
 	}
 	for _, k := range g.OtherKeys {
+		if k == "" {
+			// g.Key is non-empty by the check above, so the k == g.Key test
+			// below can never catch this. An unfilled constant or a struct
+			// typo would otherwise grant a permission no call site can be
+			// checking, and the isolation arm would pass having proved
+			// nothing — the exact inert-but-green shape this guard exists for.
+			return "PermissionGate.OtherKeys contains an empty key — name a real permission " +
+				"this call site must NOT be gated on"
+		}
 		if k == g.Key {
 			return fmt.Sprintf("PermissionGate.OtherKeys repeats the key under test (%q) — "+
 				"the key-isolation arm would grant and deny the same permission", g.Key)
@@ -195,10 +208,13 @@ func assertGatedOnTheNamedKey(t gateReporter, g PermissionGate) {
 // while every other is granted. It satisfies hookjson.ConsentGranter (and the
 // identical private interfaces the services layer declares) structurally.
 //
-// It lives here rather than in each adapter's test package because three of
-// them had already re-invented the same map[string]bool after #1466, and
-// because a contract whose wiring supplies the fake is a contract whose wiring
-// can supply a key-blind one. SetState has exactly PermissionGate.SetState's
+// It replaces the three key-blind mutable fakes the live-gate wirings each
+// grew for this contract (claudecode's and codex's mutableGate, the services
+// layer's mutableConsent), and it lives here rather than in an adapter because
+// a contract whose wiring supplies the fake is a contract whose wiring can
+// supply a key-blind one. Adapters keep their own static keyedGate map
+// literals for one-off tests that pin a fixed two-permission combination —
+// those were never the problem. SetState has exactly PermissionGate.SetState's
 // signature, so the usual wiring is one line: SetState: gate.SetState.
 //
 // A key never set reads as pending, matching permission.Set.Get.

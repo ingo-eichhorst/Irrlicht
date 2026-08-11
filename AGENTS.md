@@ -209,27 +209,34 @@ Before marking a ticket done, run the full suite — every layer must pass:
   shapes it covers.
   A wiring names the permission under test (`Key`) and at least one the call
   site must NOT be gated on (`OtherKeys`), and `SetState` takes the key it is
-  driving — because until #1475 it did not, and every adapter supplied a gate
-  shaped `func(_, _ string) bool` that discarded the key. One permission moved
-  through three states says only that a call site is gated on *something*: a
-  receiver gated on the WRONG permission answers identically, and that is not
-  hypothetical — claudecode's hook receiver read transcripts with
-  `transcripts` denied for the whole of its life (#1466) while this contract
-  was wired at that receiver and green. The fourth arm holds `Key` denied while
-  `OtherKeys` are granted, the one state that tells those apart, and it denies
-  `Key` **first**: a wiring that still ignored its key would end up holding
-  everything granted and fail, where the reverse order would let it settle at
-  "denied" and pass. Use `contracttesting.ConsentGate` for a live per-request
-  gate rather than a local fake — three adapters had re-invented the same
-  `map[string]bool` after #1466, and a contract whose wiring supplies the fake
-  is a contract whose wiring can supply a key-blind one. The arm is
+  driving — because until #1475 it did not, and every live-gate wiring supplied
+  a `Granted(_, _ string) bool` fake that discarded the key. One permission
+  moved through three states says only that a call site is gated on
+  *something*: a receiver gated on the WRONG permission answers identically,
+  and that is not hypothetical — claudecode's hook receiver read transcripts
+  with `transcripts` denied for the whole of its life (#1466) while this
+  contract was wired at that receiver and green. The fourth arm holds `Key`
+  denied while `OtherKeys` are granted, the one state that tells those apart,
+  and it denies `Key` **first**: a wiring that still ignored its key would end
+  up holding everything granted and fail, where the reverse order would let it
+  settle at "denied" and pass. Use `contracttesting.ConsentGate` for a live
+  per-request gate rather than a local fake — it replaces the three key-blind
+  mutable fakes those wirings had each grown (claudecode's and codex's
+  `mutableGate`, the services layer's `mutableConsent`), because a contract
+  whose wiring supplies the fake is a contract whose wiring can supply a
+  key-blind one. The static `keyedGate` map literals in the adapter test
+  packages are a different thing and stay: they pin a fixed two-permission
+  combination in one-off tests and were never key-blind. The arm is
   load-bearing only for live per-request gates; for an install-type permission
   the wiring holds that permission's own closures, so a wrong key is not
-  representable and the arm is weak by construction — documented in the doc
-  comment rather than made an opt-out a live-gate adapter could also reach for.
-  It makes the obligation *assertable*, not unforgettable: a receiver still has
-  to be wired once per permission it must honour (#1488 is the chokepoint move
-  that would remove that remaining act of memory).
+  representable and the arm is weak by construction — and where the other key
+  has no closure at all (an observe-kind sibling, a single-permission
+  declaration) it is inert and repeats the revoked arm, which those three call
+  sites say out loud. It is kept uniform with no opt-out anyway, because a flag
+  an install-type wiring could take is one a live-gate wiring could take too.
+  All of which makes the obligation *assertable*, not unforgettable: a receiver
+  still has to be wired once per permission it must honour (#1488 is the
+  chokepoint move that would remove that remaining act of memory).
 - Hook endpoints: `contracttesting.AssertHookEndpointFollowsBindAddr`
   (`core/internal/contracttesting/hook_endpoint.go`) is the same kind of
   runtime obligation for adapters that install hooks into a JSON config —

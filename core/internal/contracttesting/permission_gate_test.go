@@ -105,16 +105,22 @@ func TestAssertPermissionGated_PassesAgainstACorrectlyGatedReceiver(t *testing.T
 	}
 }
 
-// TestKeyIsolationArm_FailsAReceiverGatedOnTheWrongPermission is #1466 itself,
-// reduced to a fixture: a receiver that checks only "hooks" while the effect
-// it produces is a transcript read. Denying "transcripts" with "hooks" held
-// open is the one state that separates it from a correct receiver, and the
-// arm must report it.
-func TestKeyIsolationArm_FailsAReceiverGatedOnTheWrongPermission(t *testing.T) {
+// misGatedReceiver is #1466 itself, reduced to a fixture: a receiver that
+// checks only "hooks" while the effect it produces is a transcript read, wired
+// with "transcripts" as the key under test. One constructor shared by the two
+// tests below, so neither can drift onto a different subject than the other.
+func misGatedReceiver() PermissionGate {
 	r := &fakeReceiver{gate: NewConsentGate(), gatedOn: []string{selfTestHooks}}
+	return r.gateFor(selfTestTranscripts, selfTestHooks)
+}
 
+// TestKeyIsolationArm_FailsAReceiverGatedOnTheWrongPermission drives that
+// fixture through the new arm. Denying "transcripts" with "hooks" held open is
+// the one state that separates it from a correct receiver, and the arm must
+// report it.
+func TestKeyIsolationArm_FailsAReceiverGatedOnTheWrongPermission(t *testing.T) {
 	rec := &recordingReporter{}
-	assertGatedOnTheNamedKey(rec, r.gateFor(selfTestTranscripts, selfTestHooks))
+	assertGatedOnTheNamedKey(rec, misGatedReceiver())
 
 	if !rec.failed() {
 		t.Fatal("key-isolation arm passed a receiver gated on \"hooks\" while the key under test " +
@@ -173,9 +179,16 @@ func TestKeyIsolationArm_FailsAKeyBlindWiring(t *testing.T) {
 // own, RETIRE this test rather than patching it — its subject is a limitation,
 // not a behaviour worth preserving.
 func TestTheLockstepArmsCannotSeeAWrongKeyGate(t *testing.T) {
-	misGated := func() PermissionGate {
-		r := &fakeReceiver{gate: NewConsentGate(), gatedOn: []string{selfTestHooks}}
-		return r.gateFor(selfTestTranscripts, selfTestHooks)
+	// Anchor the fixture before asserting anything about it. This is the only
+	// test in the file that asserts a NEGATIVE, so it is the only one that can
+	// go quietly vacuous: a misGatedReceiver that drifted to correct gating
+	// would satisfy every assertion below while the limitation it documents
+	// went unexamined, and the "retire me" instruction above would never fire.
+	anchor := &recordingReporter{}
+	assertGatedOnTheNamedKey(anchor, misGatedReceiver())
+	if !anchor.failed() {
+		t.Fatal("the fixture is no longer mis-gated — this test would assert nothing about the " +
+			"lockstep arms; fix misGatedReceiver rather than the assertions below")
 	}
 
 	for name, arm := range map[string]func(gateReporter, PermissionGate){
@@ -185,7 +198,7 @@ func TestTheLockstepArmsCannotSeeAWrongKeyGate(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := &recordingReporter{}
-			arm(rec, misGated())
+			arm(rec, misGatedReceiver())
 			if rec.failed() {
 				t.Fatalf("this arm now catches a wrong-key gate (%s) — retire this test, "+
 					"it documents a limitation that no longer holds", rec.report())
@@ -212,6 +225,7 @@ func TestMalformedGateReason(t *testing.T) {
 		"no_key":              func(g *PermissionGate) { g.Key = "" },
 		"no_other_keys":       func(g *PermissionGate) { g.OtherKeys = nil },
 		"other_key_is_theKey": func(g *PermissionGate) { g.OtherKeys = []string{g.Key} },
+		"other_key_is_empty":  func(g *PermissionGate) { g.OtherKeys = []string{""} },
 		"no_set_state":        func(g *PermissionGate) { g.SetState = nil },
 		"no_exercise":         func(g *PermissionGate) { g.Exercise = nil },
 		"no_observe":          func(g *PermissionGate) { g.Observe = nil },
