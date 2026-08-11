@@ -522,7 +522,12 @@ Before marking a ticket done, run the full suite — every layer must pass:
   longer installs hooks** — that was the damage, not a regression.
   All seven contract families pass by construction against a correct adapter —
   or, for a delivery route no adapter has adopted yet, against its reference
-  wiring — so their whole value is that they *can* fail. A new or reworked
+  wiring — so their whole value is that they *can* fail. Seven is a count of
+  *obligations*, not of exported `Assert…` functions: `grep -c "^func Assert"`
+  over the package currently returns eight, because
+  `AssertPermissionGatedOnEachKey` is a driver that runs the permission-gate
+  family once per key, not a family of its own. Check what a function asserts
+  before moving this number. A new or reworked
   contract assertion is therefore the mutation rule at the top of this section
   in its most literal form: it lands with the deliberate mutation seen red for
   each obligation. That evidence currently lives in the PR body, where nothing
