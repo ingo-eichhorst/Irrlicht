@@ -276,6 +276,25 @@ func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGrant
 	// counts and why a consent-denied request must not.
 	hookjson.ObserveHookReceipt(AdapterName)
 
+	// Dispatching makes the detector read the transcript — the comment below
+	// says so in as many words — so it is gated behind the "transcripts"
+	// consent, not merely the "hooks" write consent. Granting "hooks"
+	// authorizes WRITING our entries into settings.json; it is not a licence to
+	// read the file those entries point at. The check comes BEFORE the decode,
+	// and so before confinement, so a denied session still yields a quiet 200
+	// and the path is never resolved on that branch.
+	//
+	// codex and copilot have carried this since #1174 and mirror each other
+	// step for step; claudecode — the receiver the other two were modelled on —
+	// never got it, so a hook POST reached the detector's open on a transcript
+	// the user had denied (issue #1466). A hooks-granted / transcripts-denied
+	// session is not monitored anyway, so dropping the hook here is both
+	// consent-correct and behaviourally harmless.
+	if gate != nil && !gate.Granted(AdapterName, PermissionKeyTranscripts) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	// transcript_path arrives in an HTTP body on a local, unauthenticated
 	// endpoint, so it is untrusted: every dispatch below hands it to the
 	// detector, which opens it. DecodeConfined reads the body and confines the
