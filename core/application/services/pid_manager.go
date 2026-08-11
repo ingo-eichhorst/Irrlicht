@@ -1500,19 +1500,35 @@ func applyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fre
 	if applyKittyLauncherBackfill(l, needs, fresh) {
 		updated = true
 	}
-	// fresh was produced by the same reader, so its host fields are already
-	// the attached client's. A still-detached session yields none and this
-	// reports no change rather than writing empties over empties.
-	//
-	// Unless the reader could not determine the host at all, in which case
-	// those empties are not "detached" — they are "unknown", and adopting them
-	// clears a resolved host on a probe that never ran (#1485). The stored
-	// host stays until a probe actually answers; a genuine detach still clears
-	// it on the first sweep whose probe runs.
-	if needs.herdrHost && hostKnown && l.AdoptHostIdentity(fresh) {
+	if applyHerdrHostBackfill(l, needs, fresh, hostKnown) {
 		updated = true
 	}
 	return updated
+}
+
+// applyHerdrHostBackfill adopts the host identity a fresh read resolved from
+// the attached herdr client. Split out for the same reason
+// applyKittyLauncherBackfill is — applyLauncherBackfill stays one branch per
+// *kind* of backfill — and because the two conditions it ANDs are unrelated
+// facts about different things, which is worth a line each rather than a
+// three-term conditional.
+//
+// needs.herdrHost comes from the STORED launcher: is this a herdr pane at all.
+// hostKnown comes from the FRESH read: did it determine a host. fresh was
+// produced by the same reader, so its host fields are already the attached
+// client's, and a still-detached session yields none — AdoptHostIdentity then
+// reports no change rather than writing empties over empties.
+//
+// Unless the reader could not determine the host at all, in which case those
+// empties are not "detached" — they are "unknown", and adopting them clears a
+// resolved host on a probe that never ran (#1485). The stored host stays until
+// a probe actually answers; a genuine detach still clears it on the first
+// sweep whose probe runs.
+func applyHerdrHostBackfill(l *session.Launcher, needs launcherBackfillNeeds, fresh *session.Launcher, hostKnown bool) bool {
+	if !needs.herdrHost || !hostKnown {
+		return false
+	}
+	return l.AdoptHostIdentity(fresh)
 }
 
 // applyKittyLauncherBackfill copies the three kitty fields fresh has that l is
