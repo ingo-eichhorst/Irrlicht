@@ -90,7 +90,14 @@ Defects first — this skill hunts bugs. Quality cleanups are secondary here
 - **Test coverage** — does a test actually reach the changed behaviour? A
   defect fix needs a test that was **seen red** before the fix existed; a test
   that passes on `main` either doesn't reach the defect or the diagnosis is
-  wrong. Flag a green-that-was-never-red as a finding.
+  wrong. Flag a green-that-was-never-red as a finding. A check the diff *adds*
+  — a guard, a static rule, a linter or tripwire, a derived count, a schema
+  constraint, a migration, a contract assertion — has no "before" to run
+  against and owes the equivalent: a deliberate mutation of what it protects,
+  seen red. Ask for that evidence; its absence is the same finding. (This
+  review pass is where three of the four incidents behind that rule were
+  caught, each time by a mutation nobody had asked for — AGENTS.md's Testing
+  section has the rule and the categories.)
 - **Efficiency** — needless O(n²) over a hot path, repeated work in a loop,
   redundant I/O or process scans.
 - **Simplification / altitude** — only when the diff reimplements something

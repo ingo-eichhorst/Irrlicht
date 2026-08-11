@@ -439,15 +439,15 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
     daemon and asserts once its addr file exists can pass against a broken
     binary if the file is published before the behavior under test (e.g.
     consent effects) runs — the process is killed mid-startup and the
-    assertion never observes the code path it exists to cover. That is the
-    same shape as a linter that fails to run and returns empty, which then
-    reads as clean, or a mutation harness that silently stops mutating: **a
-    verification mechanism must fail loudly when it cannot run** — untested is
-    the most expensive way to fail, because its output is indistinguishable
-    from success. When an e2e test's "ready" signal and the behavior it means
-    to exercise are not obviously the same event, wait on the narrower one (a
-    dedicated readiness marker, or a bespoke poll for the specific side
-    effect) rather than the broad one. (Real incident, #1382/#1449: a daemon
+    assertion never observes the code path it exists to cover. This is the e2e
+    form of AGENTS.md's **"a verification mechanism must fail loudly when it
+    cannot run"** — that section carries the rule, why it is stated at all, and
+    its other instances (a linter that fails to run and returns empty, a
+    mutation harness that silently stops mutating). The local recipe: when an
+    e2e test's "ready" signal and the behavior it means to exercise are not
+    obviously the same event, wait on the narrower one (a dedicated readiness
+    marker, or a bespoke poll for the specific side effect) rather than the
+    broad one. (Real incident, #1382/#1449: a daemon
     e2e test came back green against a deliberately-broken binary this way —
     the addr file publishes before consent effects run, so SIGTERM landed
     mid-startup and the test never observed the code path under test.)
@@ -467,6 +467,24 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
     **Locks** — tests pinning behavior that must *not* change — pass on `main` by
     construction. Say which tests those are explicitly, rather than letting their
     green read as a red-first proof.
+
+    **A check the change *adds* has no "before" to run against — mutate instead.**
+    A new guard, a static architecture rule, a linter or tripwire, a derived count
+    or score, a schema constraint, a migration, a config rewriter, a contract
+    assertion: each passes the moment it is written, so break the thing it
+    protects, confirm it goes red, and paste that failure to the same bar as
+    above. Nothing going red means the check does not reach what it claims to
+    cover — **STOP and report**, exactly as for a defect test that passes on
+    `main`. Where the mutation can live as a committed fixture (a corpus row, a
+    `testdata/` file), commit it rather than only describing it: evidence that
+    exists only in a merged PR body is re-run by nothing. AGENTS.md's Testing
+    section carries the full rule, the categories, and the property-test
+    convention for anything that computes an edit and writes bytes (a config
+    rewriter, a patcher, a migrator), where hand-written cases encode the
+    author's blind spot and cannot substitute. (Real incident, #1382/#1366: a
+    run's two worst findings were both untested *guards* added alongside the fix,
+    caught only because the review subagent ran a mutation battery on its own
+    initiative — this step said nothing about them.)
 
     This applies to test code the *issue itself* pasted. A code block in an issue
     is a proposal, not evidence: `/ir:triage` marks such a test **unproven** on
@@ -1006,6 +1024,10 @@ Phase 6.
 - A defect test proves nothing until it has been seen red (Phase 4 step 11a). This
   binds regardless of where the test came from — the issue, `/ir:triage`, or your
   own diagnosis; a green that was never red is the failure mode, not the author.
+  The same bar binds a check the change *adds* — a guard, a static rule, a derived
+  number, a migration, a contract assertion — where the equivalent of running it
+  before the fix is mutating what it protects (same step; AGENTS.md's Testing
+  section has the categories).
 - **Verification is `tools/preflight.sh`, chunked by `--only` group in the
   foreground — never the unscoped run backgrounded** (Phase 4 step 11). The
   unscoped run reliably exceeds an automated caller's 600s command budget;
