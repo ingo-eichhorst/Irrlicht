@@ -413,10 +413,17 @@ func herdrClientPIDs(socketPath string) (pids []int, probed bool) {
 	// exists and nobody holds it open" and "there is no such file" (measured,
 	// lsof 4.91: the second also writes a "status error on <path>" line to
 	// stderr, which .Output() discards). Only the first is a detach. Without
-	// this, a client log that is not where we looked — herdr moving it between
-	// releases, or a captured socket path that addresses a different session —
-	// reads as a permanent, self-consistent "nobody is attached" rather than
-	// as a probe that never reached the question.
+	// this, a client log that resolves to NOTHING — herdr moving or renaming
+	// it between releases — reads as a permanent, self-consistent "nobody is
+	// attached" rather than as a probe that never reached the question.
+	//
+	// It covers only that case, and deliberately not the neighbouring one: a
+	// socket path addressing a *different, real* herdr session resolves to a
+	// client log that exists, so the stat passes and lsof honestly reports no
+	// holders. Verified live against herdr 0.8.0 — a detached session keeps
+	// its client log (~/.config/herdr/sessions/factory/herdr-client.log, 505
+	// bytes, no holders), so file existence cannot separate "detached" from
+	// "probed somebody else's session". Only deriving the path correctly can.
 	if _, err := os.Stat(logPath); err != nil {
 		return nil, false
 	}
@@ -475,10 +482,21 @@ const maxHerdrClientCandidates = 4
 // herdrClientLauncher resolves the host-window identity of the herdr session
 // addressed by socketPath, by reading it from the attached client exactly the
 // way it would be read from any directly-hosted agent (hostIdentity). Returns
-// (nil, true) when nothing is attached, or when no attached client resolves to
-// a local GUI host — an SSH client has a real tty but no local window, and
-// reporting one anyway is the misroute #1348 removed. Both of those are real
-// answers; (nil, false) is the third state, "the probe did not run" (#1485).
+// (nil, true) when nothing is attached, or when no attached client REPORTED a
+// local GUI host — an SSH client has a real tty but no local window, and
+// reporting one anyway is the misroute #1348 removed. (nil, false) is the
+// third state, "the probe did not run" (#1485).
+//
+// "Reported" rather than "resolves to" is deliberate and is the known residual
+// of #1485: a candidate whose own identity could not be READ is counted as one
+// that has no host. hostIdentity swallows both of its failure modes — EnvOf's
+// error is discarded, and resolveHostFromAncestry returns ("", 0) for a
+// readProcInfo timeout as well as for a genuine miss — so a client attached
+// from kitty (which sets no TERM_PROGRAM upstream, so ancestry is its only
+// source) yields no host on a loaded machine and is indistinguishable here
+// from an SSH client. That is the same conflation one layer up, and closing it
+// needs hostIdentity to report whether its reads ran, which this fix does not
+// do. Tracked as #1492; do not read the tri-state below as covering it.
 //
 // Only ever called with a socket path the daemon captured from the pane's own
 // $HERDR_SOCKET_PATH, so a resolved identity always accompanies a complete

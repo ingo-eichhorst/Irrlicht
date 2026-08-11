@@ -69,13 +69,15 @@ func herdrClientLogPath(socketPath string) string {
 // of pid. Returns nil if env cannot be read or no interesting vars are present.
 //
 // hostKnown reports whether the host window could be *determined*, which is
-// not the same as being found. It is false only for a herdr pane whose client
-// probe did not run (#1485) — every other read either resolves the host from
-// the process itself or establishes that it has none. A caller merging this
-// read into a launcher it already holds must not clear host fields when
-// hostKnown is false: their absence means "not looked up", not "gone". A
-// caller capturing a session's first launcher may ignore it, because there is
-// nothing to clear and dropping the read would cost the pane its herdr address.
+// not the same as being found. It is false whenever this read established
+// nothing: a herdr pane whose client probe did not run (#1485), a pid that
+// cannot be looked at at all (pid <= 0, or a process whose env, ancestry and
+// tty all came back empty), and — at the wiring in cmd/irrlichd — a revoked
+// launcher consent. A caller merging this read into a launcher it already
+// holds must not clear host fields when hostKnown is false: their absence
+// means "not looked up", not "gone". A caller capturing a session's first
+// launcher may ignore it, because there is nothing to clear and dropping the
+// read would cost the pane its herdr address.
 //
 // Never blocks longer than 2 seconds. Never prompts the user — on macOS we use
 // `sysctl(kern.procargs2)` (no TCC prompt; `ps e` stopped exposing env on
@@ -101,7 +103,14 @@ func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 	}
 
 	if l.IsEmpty() {
-		return nil, hostKnown
+		// Nothing was determined, so say so rather than passing hostKnown
+		// through: an empty read is "env, ancestry and tty all came back
+		// blank", which is a hardened-runtime process or one that has already
+		// exited as often as it is a process with genuinely no terminal. Every
+		// consumer today bails on the nil before reading the flag, so this
+		// costs nothing — but a future consumer that reads the flag first
+		// would otherwise be told an unreadable process HAS no host.
+		return nil, false
 	}
 	return l, hostKnown
 }

@@ -517,10 +517,17 @@ func TestLsofFDMode(t *testing.T) {
 
 // TestLsofProbeRan is the committed corpus for the discrimination #1485 adds:
 // which lsof failures mean "ran and found nothing" and which mean "did not
-// run". Every row but the first two is a case the pre-#1485 `if err != nil {
-// return nil }` reported as a detached session, so a revert to that spelling
-// turns them red — which is why they are a table of real, executed failures
-// rather than a sentence in a PR body.
+// run".
+//
+// The two directions are caught by different rows, and it is worth being exact
+// about which, because the obvious summary is wrong. A revert to the pre-#1485
+// `if err != nil { return nil }` turns exactly ONE row red — "exit 1", which
+// that spelling misreports as a failure. Rows 3-6 stay green under it, because
+// it and this classifier agree that those are not answers; they pin the
+// opposite mutation, a classifier that calls every failure a completed probe,
+// and each is a case the pre-#1485 code reported as a detached session.
+// Together they bracket the behaviour, which is why they are a table of real,
+// executed failures rather than a sentence in a PR body.
 //
 // The cases are constructed from a real child process rather than from
 // hand-built *exec.ExitError values, because the classification's whole job is
@@ -591,8 +598,10 @@ func TestHerdrClientPIDs_ProbeTriState(t *testing.T) {
 	t.Run("client log is not where we looked", func(t *testing.T) {
 		// lsof exits 1 for this exactly as it does for a detached session, so
 		// the stat guard is the only thing separating them. Left conflated,
-		// herdr moving its client log — or a socket path addressing another
-		// session — is a permanent, self-consistent "nobody is attached".
+		// herdr moving or renaming its client log is a permanent,
+		// self-consistent "nobody is attached". A socket path addressing
+		// another *real* session is NOT covered — that log exists, so the
+		// stat passes; see herdrClientPIDs.
 		if _, probed := herdrClientPIDs(newHerdrSessionDir(t)); probed {
 			t.Error("a client log that does not exist is not evidence of a detach")
 		}
@@ -612,6 +621,8 @@ func TestHerdrClientPIDs_ProbeTriState(t *testing.T) {
 // seconds — turning the one thing the tri-state buys back into a wider window.
 func TestHerdrClientLauncher_DoesNotCacheANonAnswer(t *testing.T) {
 	socketPath := newHerdrSessionDir(t) // no client log: the probe cannot run
+	// Defensive, and it is the regression this test exists to catch that would
+	// make it necessary: nothing should ever be inserted under this key.
 	t.Cleanup(func() {
 		herdrClientCacheMu.Lock()
 		delete(herdrClientCache, socketPath)
