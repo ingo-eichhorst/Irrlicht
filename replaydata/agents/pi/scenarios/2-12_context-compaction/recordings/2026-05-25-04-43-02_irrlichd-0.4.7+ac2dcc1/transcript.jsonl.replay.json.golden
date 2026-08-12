@@ -18,13 +18,13 @@
       "ready": 17264434000,
       "working": 3712438000
     },
-    "flicker_count": 3,
+    "flicker_count": 2,
     "flickers_by_category": {
-      "ready_between_working": 2,
+      "ready_between_working": 1,
       "working_between_ready": 1
     },
     "flickers_by_reason": {
-      "agent finished turn → ready": 2,
+      "agent finished turn → ready": 1,
       "force ready→working on first activity": 1
     },
     "estimated_cost_usd": 0.006755850000000001,
@@ -50,9 +50,9 @@
     },
     {
       "index": 1,
-      "event_index": 3,
-      "virtual_time": "2026-05-25T04:43:35.643872+02:00",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-25T04:43:33.639031+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
@@ -65,9 +65,9 @@
     },
     {
       "index": 2,
-      "event_index": 3,
-      "virtual_time": "2026-05-25T04:43:35.643872+02:00",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-25T04:43:33.639031+02:00",
+      "cause": "event",
       "prev_state": "working",
       "new_state": "ready",
       "reason": "agent finished turn → ready",

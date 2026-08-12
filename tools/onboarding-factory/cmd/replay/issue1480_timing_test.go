@@ -174,7 +174,7 @@ func TestTransitionTimeDeltas_Corpus(t *testing.T) {
 // about.
 //
 // Everything unmarked PRE-DATES #1476 and is untouched by it. Two families
-// dominate:
+// dominated when #1480 first enumerated this list at 65 entries:
 //
 //   - copilot and antigravity recordings whose first turn opens with a long
 //     tool call: the daemon classified on a read that reached content the
@@ -184,8 +184,18 @@ func TestTransitionTimeDeltas_Corpus(t *testing.T) {
 //     synthesized debounce-deadline stamp, one full window after the last
 //     coalesced fs event, where the daemon's own timer had fired earlier.
 //
-// Neither is #1480's to fix. #1480 is the measurement; what to do about the
-// populations it reveals is argued in the PR with this list in hand.
+// #1478 then removed the SECOND family almost entirely, which is the strongest
+// evidence that its cluster window models something real rather than fitting
+// this catalog. 17 entries left the list and none joined it, and all 17 were
+// pi recordings sitting at +2.002s..+2.045s. The mechanism is direct: those
+// recordings write their first turn in one burst, so the widened first pass
+// now classifies in-pass — at the daemon's own instant — instead of skipping
+// on #329's guard and deferring the transition to the debounce flush 2s later.
+// The +2.00s signature was the deferral, not a timer the daemon actually ran.
+//
+// The remaining 48 are not #1480's to fix and were not #1478's either. #1480
+// is the measurement; what to do about the populations it reveals is argued in
+// each PR with this list in hand.
 var knownFirstTransitionDrift = map[string]string{
 	"antigravity/scenarios/1-1_session-start/recordings/2026-06-20-12-33-40_irrlichd-0.5.2+be45695/transcript.jsonl":                   "pre-dates #1476: -6.609s at pair 0 (ready→working)",
 	"antigravity/scenarios/1-2_session-end/recordings/2026-06-20-12-36-01_irrlichd-0.5.2+a00b826/transcript.jsonl":                     "pre-dates #1476: -4.304s at pair 0 (ready→working)",
@@ -235,23 +245,6 @@ var knownFirstTransitionDrift = map[string]string{
 	"mistral-vibe/scenarios/2-12_context-compaction/recordings/2026-07-07-17-22-57_irrlichd-0.5.5+bc77a37.dirty/transcript.jsonl":      "#1476 accepted: -30.976s at pair 0 (ready→working)",
 	"mistral-vibe/scenarios/2-15_shell-escape-command/recordings/2026-07-07-17-41-58_irrlichd-0.5.5+22a01d2.dirty/transcript.jsonl":    "#1476 accepted: -8.599s at pair 0 (ready→working)",
 	"mistral-vibe/scenarios/6-1_backchannel-control/recordings/2026-07-08-09-15-24_irrlichd-0.5.5+35c4012.dirty/transcript.jsonl":      "#1476 accepted: -27.522s at pair 0 (ready→working)",
-	"pi/regressions/model-switch/recordings/2026-05-25-04-09-10_irrlichd-0.4.7+2a46388/transcript.jsonl":                               "pre-dates #1476: +2.003s at pair 0 (ready→working)",
-	"pi/regressions/multi-turn-conversation/recordings/2026-04-26-12-27-56_irrlichd-unknown/transcript.jsonl":                          "pre-dates #1476: +2.045s at pair 0 (ready→working)",
-	"pi/scenarios/1-2_session-end/recordings/2026-05-25-05-48-26_irrlichd-0.4.7+597f655/transcript.jsonl":                              "pre-dates #1476: +2.003s at pair 0 (ready→working)",
-	"pi/scenarios/1-3_long-idle-live-session/recordings/2026-05-23-11-12-58_irrlichd-0.4.7+d30518a.dirty/transcript.jsonl":             "pre-dates #1476: +2.002s at pair 0 (ready→working)",
-	"pi/scenarios/1-5_session-reset/recordings/2026-05-27-23-52-56_irrlichd-0.4.7+b4e2076-2/transcript.jsonl":                          "pre-dates #1476: +2.004s at pair 0 (ready→working)",
-	"pi/scenarios/1-5_session-reset/recordings/2026-05-27-23-52-56_irrlichd-0.4.7+b4e2076/transcript.jsonl":                            "pre-dates #1476: +2.004s at pair 0 (ready→working)",
-	"pi/scenarios/1-8_model-context-display/recordings/2026-06-05-10-58-09_irrlichd-0.4.8+1f22f6f/transcript.jsonl":                    "pre-dates #1476: +2.005s at pair 0 (ready→working)",
-	"pi/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-25-03-03-21_irrlichd-0.4.7+2f5b484-2/transcript.jsonl":               "pre-dates #1476: +2.002s at pair 0 (ready→working)",
-	"pi/scenarios/2-10_mid-turn-message-queued/recordings/2026-05-25-03-03-21_irrlichd-0.4.7+2f5b484/transcript.jsonl":                 "pre-dates #1476: +2.002s at pair 0 (ready→working)",
-	"pi/scenarios/2-12_context-compaction/recordings/2026-05-25-04-43-02_irrlichd-0.4.7+ac2dcc1/transcript.jsonl":                      "pre-dates #1476: +2.004s at pair 0 (ready→working)",
-	"pi/scenarios/2-13_turn-end-terminal-text/recordings/2026-05-25-02-11-57_irrlichd-0.4.7+327fbc2/transcript.jsonl":                  "pre-dates #1476: +2.003s at pair 0 (ready→working)",
-	"pi/scenarios/2-15_shell-escape-command/recordings/2026-05-25-02-51-25_irrlichd-0.4.7+021b5b0/transcript.jsonl":                    "pre-dates #1476: +2.003s at pair 0 (ready→working)",
-	"pi/scenarios/2-17_agent-question-pending/recordings/2026-05-25-05-28-25_irrlichd-0.4.7+730a676/transcript.jsonl":                  "pre-dates #1476: +2.003s at pair 0 (ready→working)",
-	"pi/scenarios/2-5_synchronous-slash-command/recordings/2026-05-25-02-43-00_irrlichd-0.4.7+3810f2e/transcript.jsonl":                "pre-dates #1476: +2.003s at pair 0 (ready→working)",
-	"pi/scenarios/5-1_token-accounting/recordings/2026-05-25-02-16-07_irrlichd-0.4.7+ec7acf6/transcript.jsonl":                         "pre-dates #1476: +2.006s at pair 0 (ready→working)",
-	"pi/scenarios/5-2_model-identification/recordings/2026-05-25-02-20-47_irrlichd-0.4.7+d379043/transcript.jsonl":                     "pre-dates #1476: +2.004s at pair 0 (ready→working)",
-	"pi/scenarios/5-3_model-switch-midsession/recordings/2026-05-25-04-02-05_irrlichd-0.4.7+4de276d/transcript.jsonl":                  "pre-dates #1476: +2.003s at pair 0 (ready→working)",
 }
 
 // aggregate ratchets. The named list above keys on the FIRST kind-matched pair,
@@ -261,7 +254,7 @@ var knownFirstTransitionDrift = map[string]string{
 // kind-matched pair in every recording — without a second list of names to
 // maintain.
 const (
-	maxRecordingsDriftingOverThreshold = 119
+	maxRecordingsDriftingOverThreshold = 105
 	maxRecordingsDriftingOver5s        = 50
 )
 
@@ -273,13 +266,13 @@ const (
 // drains. Regenerating goldens then erases the only other trace, since
 // ordered_matches is the serialized field that would have moved.
 //
-// 39 of the 309 recordings already produce zero kind-matched pairs, so
+// 36 of the 309 recordings already produce zero kind-matched pairs, so
 // "this recording measures nothing" is the current state of an eighth of the
 // catalog rather than a hypothetical — which is exactly why the floor is a
 // number and not merely a non-zero check.
 const (
-	minKindMatchedPairs   = 818
-	minMeasuredRecordings = 270
+	minKindMatchedPairs   = 826
+	minMeasuredRecordings = 273
 )
 
 // reportDriftEnumeration prints the drifted set — the deliverable of #1480,

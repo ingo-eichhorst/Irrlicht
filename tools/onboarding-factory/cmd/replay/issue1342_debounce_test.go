@@ -136,23 +136,31 @@ func TestReplayWithSidecar_Issue1342_HeaderOnlyFirstPassIsWidened(t *testing.T) 
 }
 
 // knownZeroTransition lists the recordings that still reproduce zero
-// transitions, with the reason each is out of #1342's reach. They are pinned
-// rather than tolerated: the test below fails if the set GROWS, and equally if
-// an entry is fixed and left here to rot.
+// transitions, with the reason each is out of reach. They are pinned rather
+// than tolerated: the test below fails if the set GROWS, and equally if an
+// entry is fixed and left here to rot.
 //
-// All four share one shape that the one-event widening in readBoundaryFor
-// cannot reach. Their transcripts are written essentially instantaneously —
-// pi/2-1_basic-turn's four fs events span 3ms (01:39:59.093→.096) for a
-// 2556-byte file — so the daemon's single read absorbed the WHOLE transcript
-// while the later fswatcher fires were still queued carrying stale sizes.
-// Reproducing that needs a time-aware read boundary rather than a one-step
-// widening, and choosing it is a design decision with its own blast radius, so
-// it is deliberately out of scope here.
+// #1342 left four here; #1478's time-aware cluster extension
+// (readBoundaryClusterWindow) reproduced three of them and they were deleted
+// from this list. The one that remains is NOT a smaller version of the same
+// problem — it is on the far side of a measured wall, and the distinction is
+// the whole finding of #1478.
+//
+// Its burst spans 68.875ms, where the three that were rescued span 2-3ms. A
+// window wide enough to reach it is 2.5x past the point where replay starts
+// FABRICATING: at 28ms codex/2-1_basic-turn's 18-54-06 recording gains a
+// ready→working its daemon never logged, and at 68ms codex/1-1_session-start
+// — the sole recording for a core-twelve scenario, whose daemon correctly held
+// ready for the session's entire life — joins it. Those are precisely the two
+// goldens #1342's rejected guard-narrowing broke, reached here by a completely
+// different mechanism.
+//
+// So the trade is explicit and it is refused: this entry could be cleared
+// today at the cost of two goldens that would then assert something false,
+// which is strictly worse than one that asserts nothing. Clearing it honestly
+// needs a re-recording, not a wider window — see #1478.
 var knownZeroTransition = map[string]string{
-	"codex/regressions/agent-question-pending/recordings/2026-04-26-11-57-03_irrlichd-unknown/transcript.jsonl": "whole transcript written before the daemon's first read completed",
-	"pi/regressions/full-lifecycle-toolcall/recordings/2026-04-26-11-31-28_irrlichd-unknown/transcript.jsonl":   "same",
-	"pi/scenarios/1-2_session-end/recordings/2026-05-25-01-48-39_irrlichd-0.4.7+597f655/transcript.jsonl":       "same",
-	"pi/scenarios/2-1_basic-turn/recordings/2026-05-25-01-39-59_irrlichd-0.4.7+7b5218c/transcript.jsonl":        "same",
+	"codex/regressions/agent-question-pending/recordings/2026-04-26-11-57-03_irrlichd-unknown/transcript.jsonl": "68.875ms burst — unreachable without fabricating in codex/2-1_basic-turn and codex/1-1_session-start (#1478)",
 }
 
 // knownFabricated lists recordings where replay emits transitions the daemon

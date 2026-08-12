@@ -633,8 +633,8 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 // provably an artifact of the recording rather than something the daemon saw.
 //
 // The sidecar records file_size from the fswatcher's stat at fire time —
-// SessionDetector.handleEvent writes `FileSize: ev.Size` BEFORE calling
-// onActivity, whose RefreshOnActivity then tails to EOF. So the daemon's read
+// SessionDetector.handleTranscriptEvent writes `FileSize: ev.Size` BEFORE
+// calling onActivity, whose RefreshOnActivity then tails to EOF. So the daemon's read
 // always reached at least that stat and usually past it, since the agent keeps
 // appending during the tens of milliseconds the read takes. classifyAt clamps
 // to the stat, which for codex and pi — both of whom open a transcript with a
@@ -647,11 +647,22 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 // timer really was cancelled), so the session's one recorded transition was
 // lost and its golden kept nothing but the synthetic init row (#1342).
 //
-// The widening is to the NEXT recorded stat for this session, or to the whole
-// transcript when there is no next event. That is the daemon's own semantics
-// read back off the recording: its single read absorbed whatever had been
-// written by the time it finished, and the next fswatcher fire is the tightest
-// upper bound the sidecar offers on where that was.
+// The widening has two parts, and they answer different halves of the same
+// question:
+//
+//   - A SIZE step, to the NEXT recorded stat for this session, or to the whole
+//     transcript when there is no next event. That is the daemon's own
+//     semantics read back off the recording: its single read absorbed whatever
+//     had been written by the time it finished, and the next fswatcher fire is
+//     the tightest upper bound the sidecar offers on where that was.
+//   - A TIME step, clusterBoundary, which additionally takes every later stat
+//     dequeued within readBoundaryClusterWindow of this pass. #1478 added it;
+//     that constant's doc comment carries the inference, its two measured
+//     walls, and why it is calibrated rather than derived.
+//
+// The time step is strictly additive — it can only widen further, never
+// narrow — which is what keeps it clear of the 35 gemini-cli recordings that a
+// REPLACEMENT time bound broke (see the rejected 200ms variant below).
 //
 // KNOWN COST, and it is a real one: the bound is the next stat's SIZE, never
 // its TIME. When the next fswatcher fire is seconds away, the widening reads
@@ -712,12 +723,28 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 // its single case pre-dates #1342 and neither fix moves it. The rejected draft
 // bought the last 4 by inventing 2 — a golden that asserts the WRONG thing,
 // which is strictly worse than one that asserts nothing and is the failure
-// this whole ticket is about. The 4 that remain need a time-aware boundary
-// rather than a one-step widening: their transcripts are written essentially
-// instantaneously (pi/2-1_basic-turn writes 2556 bytes across 4 fs events
-// spanning 3ms), so the daemon's single read absorbed the whole file while the
-// later fswatcher fires were still queued carrying stale sizes. They are
-// pinned in knownZeroTransition in issue1342_debounce_test.go.
+// this whole ticket is about.
+//
+// #1478 then supplied the time-aware boundary those 4 needed, and reached 3 of
+// them. Measured the same way, over the same population, with #1480's timing
+// harness added to the columns because a boundary change moves WHEN a
+// transition fires and nothing before #1480 could see that:
+//
+//	                          zero  fabricated  divergent  drift>1s  pairs
+//	#1476 as shipped             4           1        144       119    818
+//	+ 2ms cluster window         4           1        142       118    821
+//	+ 10ms cluster (shipped)     1           1        139       105    826
+//	+ 28ms cluster (rejected)    1           2        140       106    826
+//	+ 69ms cluster (rejected)    0           3        141       116    825
+//
+// The shipped row is jointly best on every column, and the plateau it sits on
+// runs 10-25ms. Note what the last two rows cost: clearing the final entry
+// needs 69ms, which fabricates in TWO goldens — and buying that also makes
+// drift worse (105 -> 116) rather than trading one axis for another. That is
+// the trade #1342 refused and #1478 refuses again.
+//
+// The one recording that remains is pinned in knownZeroTransition in
+// issue1342_debounce_test.go, with the wall that keeps it there.
 //
 // consumed is the replayer's current write cursor (r.lastSize), NOT the pass's
 // nominal target: a pass whose fileSize sits BELOW the cursor writes nothing,
@@ -734,10 +761,105 @@ func (r *sidecarReplayer) readBoundaryFor(eventIdx int, consumed int64, metrics 
 	if next := eventIdx + 1; next < len(r.fswatches) {
 		wider = min(r.fswatches[next].FileSize, wider)
 	}
+	if w := r.clusterBoundary(eventIdx); w > wider {
+		wider = w
+	}
 	if wider <= consumed {
 		return 0, false
 	}
 	return wider, true
+}
+
+// readBoundaryClusterWindow is how far past a classify pass's own fswatcher
+// fire a LATER recorded stat is still treated as bytes the SAME daemon read
+// absorbed. It is the time-aware half of the boundary #1478 asked for.
+//
+// WHAT MAKES IT SOUND, AND WHERE THAT STOPS. The sidecar's `ts` is the
+// daemon's DEQUEUE time — SessionDetector.record stamps time.Now() in the
+// processing loop — while `file_size` is the watcher's stat, taken earlier in
+// the watcher goroutine and never recorded. The detector loop is serial, so
+// event j>i is dequeued only after the read for pass i has returned; a j that
+// dequeues microseconds later was therefore ALREADY QUEUED while that read
+// ran, which means its watcher fire — and so the size it observed — preceded
+// the read's completion. That is the inference, and it is why the window is
+// small: it is a bound on how long one read takes, not on how long a session
+// is idle.
+//
+// It is an INFERENCE and not a proof, and the gap is worth stating plainly
+// because it is the whole reason a constant is needed at all. A small
+// inter-dequeue gap is also consistent with "the loop went idle and event j
+// arrived just then", and the recording cannot tell those apart: the watcher's
+// stat time is not a field of lifecycle.Event and is unrecoverable. So the
+// window is CALIBRATED against the committed catalog rather than derived from
+// first principles, and both of its walls are measured facts about that
+// catalog rather than taste:
+//
+//   - FLOOR 3ms. Below it the rescue is incomplete — at 2.7ms only two of the
+//     three #1478 recordings reproduce their transitions, because the third's
+//     four fires span further than that.
+//   - CEILING 28ms. At and above it replay FABRICATES: codex/2-1_basic-turn's
+//     18-54-06 recording gains a transition its daemon never logged. At 68ms
+//     codex/1-1_session-start joins it.
+//
+// The ceiling is the load-bearing number, and it did not have to land where it
+// did: those are EXACTLY the two goldens that #1342's rejected guard-narrowing
+// broke (see readBoundaryFor's table). Two unrelated mechanisms — narrowing
+// #329's guard, and widening this window — fabricate first in the same two
+// recordings, which is independent evidence that the wall is a property of the
+// catalog and not of either heuristic.
+//
+// 10ms is the geometric midpoint of [3ms, 28ms] (9.17ms, rounded), and it sits
+// at the low edge of the plateau where every figure #1480 measures is jointly
+// best (see the table in readBoundaryFor). Low edge rather than middle because
+// the costs are asymmetric: too high fabricates, which is the failure this
+// whole line of work exists to prevent, while too low merely leaves a
+// recording pinned in knownZeroTransition, which is the status quo.
+//
+// It is corroborated by a measurement that does not depend on any of the
+// above. The daemon's own in-pass read+classify latency is directly
+// observable — a state_transition and the transcript_activity that produced it
+// are both stamped by d.record in the same loop iteration — and over the 1157
+// such pairs in the catalog that population has a near-empty decade at 5-10ms
+// (7 pairs, 0.6%) separating a dense sub-5ms mode (47.4%) from the 10-50ms
+// tail. 10ms sits just above the reads that dominate.
+//
+// A var rather than a const so TestReadBoundaryClusterWindow_BothWallsAreMeasured
+// can drive it past each wall and observe the failure — the calibration's own
+// mutation evidence, committed rather than described.
+var readBoundaryClusterWindow = 10 * time.Millisecond
+
+// clusterBoundary returns the largest recorded stat whose dequeue timestamp
+// sits within readBoundaryClusterWindow of the pass at eventIdx, or 0 when no
+// later event qualifies.
+//
+// It is purely ADDITIVE to the one-step widening in readBoundaryFor, which is
+// what keeps it off the 35 gemini-cli recordings that reproduce exactly today:
+// there the next fire is seconds away, so no later stat is within the window
+// and this contributes nothing, leaving the one-step boundary untouched. A
+// variant that REPLACED the one-step widening with a time bound is the 200ms
+// gap bound rejected during #1476's review, and it broke exactly those 35.
+//
+// The scan takes the MAXIMUM rather than the last qualifying stat, and stops
+// at the first event outside the window rather than scanning on. Neither is
+// cosmetic: sizes in a burst are not guaranteed monotonic (a reconcile-sweep
+// fire can re-report an older stat), and continuing past the first gap would
+// make the rule transitive across an idle period — which is the failure mode
+// this window exists to exclude.
+func (r *sidecarReplayer) clusterBoundary(eventIdx int) int64 {
+	if readBoundaryClusterWindow <= 0 {
+		return 0
+	}
+	at := r.fswatches[eventIdx].Timestamp
+	var reach int64
+	for j := eventIdx + 1; j < len(r.fswatches); j++ {
+		if r.fswatches[j].Timestamp.Sub(at) > readBoundaryClusterWindow {
+			break
+		}
+		if v := min(r.fswatches[j].FileSize, int64(len(r.srcBytes))); v > reach {
+			reach = v
+		}
+	}
+	return reach
 }
 
 // applyHookEvent mirrors SessionDetector.HandlePermissionHook: apply the hook's
