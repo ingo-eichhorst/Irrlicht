@@ -498,15 +498,57 @@ func TestLauncherFromEnv_TmuxSuppressionIsScoped(t *testing.T) {
 	}
 }
 
-// TestReadLauncherEnv_Subprocess_TmuxSkipsAncestry is the tmux twin of
-// TestReadLauncherEnv_Subprocess_Herdr: it exercises the real sysctl / /proc
-// read path, and pins that the ancestry fallbacks do not put a host identity
-// back by another route. The walk from a tmux pane leads to the tmux server,
-// which is reparented to PID 1 — so it can only ever rediscover the terminal
-// the server was launched from, which is the value being suppressed. (This
-// test process is itself hosted by some terminal, so without the skip
-// TermProgram/HostBundleID would be populated here.)
-func TestReadLauncherEnv_Subprocess_TmuxSkipsAncestry(t *testing.T) {
+// TestLauncherFromEnv_TmuxSuppressionSparesADescendantsOwnHost is the other
+// half of the blast-radius guard, and the one that is easy to get wrong.
+// $TMUX_PANE is not self-describing: it is inherited by *every* descendant of a
+// pane, including a GUI terminal or IDE launched from inside one (`code .`,
+// `kitty`). Such a process carries the stale pane address AND a correct,
+// self-reported host identity — so keying the suppression on $TMUX_PANE alone
+// throws away a host that click-to-focus could actually have used, turning
+// "raises the right window" into a silent no-op.
+//
+// The discriminator is tmux's own marker: tmux stamps TERM_PROGRAM=tmux onto
+// the panes it spawns, and a descendant that reports a different host reported
+// it itself. A descendant that reports no host of its own (kitty sets no
+// TERM_PROGRAM, upstream #4793) is still suppressed here, and is recovered by
+// the ancestry fallbacks instead — which is why hostIdentity must NOT skip
+// them for tmux. TestReadLauncherEnv_Subprocess_TmuxSkipsAncestry pins the
+// genuine-pane end of that.
+func TestLauncherFromEnv_TmuxSuppressionSparesADescendantsOwnHost(t *testing.T) {
+	l := launcherFromEnv(map[string]string{
+		"TERM_PROGRAM": "vscode",
+		"VSCODE_PID":   "4242",
+		// Inherited from the pane VS Code was launched from — stale, but not a
+		// reason to discard VS Code's own identity below.
+		"TMUX":      "/private/tmp/tmux-501/default,69323,0",
+		"TMUX_PANE": "%4",
+	})
+	if l.TermProgram != "vscode" {
+		t.Errorf("a descendant's own TERM_PROGRAM must survive, got %q", l.TermProgram)
+	}
+	if l.VSCodePID != 4242 {
+		t.Errorf("VSCodePID: want 4242, got %d", l.VSCodePID)
+	}
+}
+
+// TestReadLauncherEnv_Subprocess_TmuxSuppressesInheritedIdentity is the tmux
+// twin of TestReadLauncherEnv_Subprocess_Herdr: it exercises the real sysctl /
+// proc read path rather than launcherFromEnv in isolation.
+//
+// It deliberately does NOT assert TermProgram == "", the way the herdr twin
+// does. The herdr twin can, because hostIdentity skips the ancestry fallbacks
+// for a herdr pane; for tmux they run on purpose (see hostIdentity). In
+// production that walk is inert — a genuine pane's chain reaches the tmux
+// server, which is reparented to PID 1, and terminates there. Here it is not:
+// the subprocess is a child of the test binary, which really is hosted by a
+// terminal, so ancestry legitimately repopulates TermProgram. That is the same
+// recovery path a kitty window launched from a pane depends on, so asserting
+// its absence would pin the bug rather than the fix.
+//
+// What must hold either way is that nothing inherited from the tmux server's
+// launch environment survives, and that tmux's own marker is never kept as if
+// it were a host.
+func TestReadLauncherEnv_Subprocess_TmuxSuppressesInheritedIdentity(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip()
 	}
@@ -516,6 +558,7 @@ func TestReadLauncherEnv_Subprocess_TmuxSkipsAncestry(t *testing.T) {
 		"TMUX=/private/tmp/tmux-501/default,69323,0",
 		"TMUX_PANE=%4",
 		"ITERM_SESSION_ID=w0t0p0:ALPHA-UUID",
+		"TERM_SESSION_ID=ALPHA_TERMSESS",
 	})
 	l, _ := ReadLauncherEnv(pid)
 	if l == nil {
@@ -524,11 +567,11 @@ func TestReadLauncherEnv_Subprocess_TmuxSkipsAncestry(t *testing.T) {
 	if l.TmuxPane != "%4" || l.TmuxSocket != "/private/tmp/tmux-501/default" {
 		t.Errorf("the pane's own address must survive the real read path: %+v", l)
 	}
-	if l.ITermSessionID != "" {
-		t.Errorf("inherited iTerm identity survived the real read path: %+v", l)
+	if l.ITermSessionID != "" || l.TermSessionID != "" {
+		t.Errorf("inherited terminal identity survived the real read path: %+v", l)
 	}
-	if l.TermProgram != "" || l.HostBundleID != "" {
-		t.Errorf("ancestry identity must not be merged into a tmux launcher: %+v", l)
+	if l.TermProgram == "tmux" {
+		t.Errorf("tmux's own marker must never be kept as a host: %+v", l)
 	}
 }
 

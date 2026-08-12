@@ -94,6 +94,14 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 // tmux pane keeps only TmuxPane/TmuxSocket, exactly as a herdr pane keeps only
 // its address.
 //
+// Unlike a herdr pane, though, the address alone does not identify one: every
+// descendant of a pane inherits $TMUX_PANE, so a GUI terminal or IDE launched
+// from inside one carries a stale pane address next to a perfectly good host
+// identity of its own. The capture keys the suppression on tmux's own
+// TERM_PROGRAM marker for that reason, and leaves the ancestry fallbacks
+// enabled so a descendant reporting no host itself is still resolved — see
+// processlifecycle.launcherFromEnv.
+//
 // Note what tmux itself does to $TERM_PROGRAM, because it is the opposite of
 // what the herdr paragraph above would lead you to expect: tmux overwrites it
 // with the literal "tmux" rather than leaking the launching terminal's value.
@@ -103,7 +111,8 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 // ancestry fallbacks. It is a value that can only mask, never resolve, which
 // is why it is dropped rather than kept as a label.
 //
-// The consequence is that a tmux session currently resolves to no host at all
+// The consequence is that a genuine tmux pane currently resolves to no host at
+// all
 // — click-to-focus does nothing rather than raising the wrong window, which is
 // the same honest degradation a herdr session with no attached client gets.
 // Resolving the real host means asking tmux which client is attached
@@ -122,7 +131,7 @@ type Launcher struct {
 	TermProgram    string `json:"term_program,omitempty"`     // $TERM_PROGRAM (e.g. iTerm.app, Apple_Terminal, vscode, cursor, ghostty, WezTerm, Hyper)
 	ITermSessionID string `json:"iterm_session_id,omitempty"` // $ITERM_SESSION_ID
 	TermSessionID  string `json:"term_session_id,omitempty"`  // $TERM_SESSION_ID (Terminal.app)
-	TmuxPane       string `json:"tmux_pane,omitempty"`        // $TMUX_PANE — the pane's own address, and the only host-independent thing its env carries (#1486)
+	TmuxPane       string `json:"tmux_pane,omitempty"`        // $TMUX_PANE — this process's pane when tmux spawned it; inherited, and then a foreign pane's, in any descendant of one (#1486)
 	TmuxSocket     string `json:"tmux_socket,omitempty"`      // first `,`-field of $TMUX
 	VSCodePID      int    `json:"vscode_pid,omitempty"`       // $VSCODE_PID (vscode/cursor/windsurf)
 	TTY            string `json:"tty,omitempty"`              // controlling TTY, e.g. "/dev/ttys021" — Terminal.app AppleScript matches tabs by this. The agent process's own, except on a herdr session with a client attached, where it is the client's: that is the tab actually displaying the pane (#1350)
