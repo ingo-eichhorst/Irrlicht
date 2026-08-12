@@ -14,21 +14,21 @@ import (
 // TestReplayWithSidecar_Issue1478_PiBasicTurn is the issue's own named case:
 // 2556 bytes across 4 fs events spanning 3ms.
 func TestReplayWithSidecar_Issue1478_PiBasicTurn(t *testing.T) {
-	assertReproducesRecordedTransitions(t, pinnedRecording(t,
-		"pi/scenarios/2-1_basic-turn/recordings/2026-05-25-01-39-59_irrlichd-0.4.7+7b5218c/transcript.jsonl"))
+	assertReproducesRecordedTransitions(t,
+		"pi/scenarios/2-1_basic-turn/recordings/2026-05-25-01-39-59_irrlichd-0.4.7+7b5218c/transcript.jsonl")
 }
 
 func TestReplayWithSidecar_Issue1478_PiSessionEnd(t *testing.T) {
-	assertReproducesRecordedTransitions(t, pinnedRecording(t,
-		"pi/scenarios/1-2_session-end/recordings/2026-05-25-01-48-39_irrlichd-0.4.7+597f655/transcript.jsonl"))
+	assertReproducesRecordedTransitions(t,
+		"pi/scenarios/1-2_session-end/recordings/2026-05-25-01-48-39_irrlichd-0.4.7+597f655/transcript.jsonl")
 }
 
 func TestReplayWithSidecar_Issue1478_PiFullLifecycleToolcall(t *testing.T) {
-	assertReproducesRecordedTransitions(t, pinnedRecording(t,
-		"pi/regressions/full-lifecycle-toolcall/recordings/2026-04-26-11-31-28_irrlichd-unknown/transcript.jsonl"))
+	assertReproducesRecordedTransitions(t,
+		"pi/regressions/full-lifecycle-toolcall/recordings/2026-04-26-11-31-28_irrlichd-unknown/transcript.jsonl")
 }
 
-// checkWitness is checkOf plus the guard that gives the ceiling assertion its
+// checkWitness is extendedCheckOf plus the guard that gives the ceiling assertion its
 // meaning. It lives here rather than in one subtest because "the witness
 // fabricates" only means anything while the witness's own daemon recorded
 // NOTHING — and a guard asserted in a sibling subtest is absent when the
@@ -36,32 +36,13 @@ func TestReplayWithSidecar_Issue1478_PiFullLifecycleToolcall(t *testing.T) {
 // staring at it.
 func checkWitness(t *testing.T) *extendedCheck {
 	t.Helper()
-	ec := checkOf(t, ceilingWitness)
+	ec := extendedCheckOf(t, ceilingWitness)
 	if ec.RecordedCount != 0 {
 		t.Fatalf("%s: daemon recorded %d transitions — this recording is the ceiling witness "+
 			"BECAUSE its daemon recorded none; the witness has been replaced and every "+
 			"assertion about it no longer means what it says", ceilingWitness, ec.RecordedCount)
 	}
 	return ec
-}
-
-// checkOf replays one pinned recording at the current readBoundaryClusterWindow
-// and returns its extended check.
-func checkOf(t *testing.T, rel string) *extendedCheck {
-	t.Helper()
-	transcript := pinnedRecording(t, rel)
-	tp, sp, useSidecar := resolveInputPaths(transcript)
-	if !useSidecar {
-		t.Fatalf("resolveInputPaths did not pair %s with its sidecar", rel)
-	}
-	report, err := runReplay(tp, sp, useSidecar, replaySettingsForTest(t, tp))
-	if err != nil {
-		t.Fatalf("runReplay(%s): %v", rel, err)
-	}
-	if report.ExtendedCheck == nil {
-		t.Fatalf("%s produced no extended check", rel)
-	}
-	return report.ExtendedCheck
 }
 
 // withClusterWindow runs fn with readBoundaryClusterWindow set to w.
@@ -98,7 +79,7 @@ func TestReadBoundaryClusterWindow_BothWallsAreMeasured(t *testing.T) {
 	// assertion below is measuring something other than the shipped rule.
 	t.Run("at the shipped window all three rescues hold and nothing fabricates", func(t *testing.T) {
 		for _, rel := range issue1478Rescued {
-			if ec := checkOf(t, rel); ec.ReplayedCount == 0 {
+			if ec := extendedCheckOf(t, rel); ec.ReplayedCount == 0 {
 				t.Errorf("%s reproduces zero transitions at the shipped window (daemon recorded %d)",
 					rel, ec.RecordedCount)
 			}
@@ -115,7 +96,7 @@ func TestReadBoundaryClusterWindow_BothWallsAreMeasured(t *testing.T) {
 		withClusterWindow(t, 2*time.Millisecond, func() {
 			var lost []string
 			for _, rel := range issue1478Rescued {
-				if checkOf(t, rel).ReplayedCount == 0 {
+				if extendedCheckOf(t, rel).ReplayedCount == 0 {
 					lost = append(lost, rel)
 				}
 			}

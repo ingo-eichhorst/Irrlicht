@@ -67,27 +67,42 @@ func pinnedRecording(t *testing.T, rel string) string {
 	return p
 }
 
+// extendedCheckOf replays ONE pinned recording at the current settings and
+// returns its extended check, or fails loudly for each of the three ways that
+// can go wrong without producing one.
+//
+// It is the shared setup behind both assertReproducesRecordedTransitions and
+// #1478's per-window wall assertions, and it lives here rather than beside
+// either caller for the same reason forEachSidecarRecording does: this is the
+// mechanism (how a transcript pairs with its sidecar, what counts as a
+// sidecar-driven run), while the verdict drawn from it is each caller's policy.
+func extendedCheckOf(t *testing.T, rel string) *extendedCheck {
+	t.Helper()
+	transcript := pinnedRecording(t, rel)
+	tp, sp, useSidecar := resolveInputPaths(transcript)
+	if !useSidecar {
+		t.Fatalf("resolveInputPaths did not pair %s with its sibling %s", rel, eventsSidecarName)
+	}
+	report, err := runReplay(tp, sp, useSidecar, replaySettingsForTest(t, tp))
+	if err != nil {
+		t.Fatalf("runReplay(%s): %v", rel, err)
+	}
+	if report.ExtendedCheck == nil {
+		t.Fatalf("%s: ExtendedCheck is nil — the recording did not drive a sidecar replay at all", rel)
+	}
+	return report.ExtendedCheck
+}
+
 // assertReproducesRecordedTransitions is the shared body of the two fixture
 // tests: replay the recording and hold its extended check to the daemon's own
 // log, in BOTH directions. The surplus direction matters as much as the
 // deficit one — an earlier draft of the #1342 fix drove the deficit to zero by
 // classifying on no evidence, and fabricated a ready→working in two goldens
 // whose daemon had recorded none.
-func assertReproducesRecordedTransitions(t *testing.T, transcript string) {
+func assertReproducesRecordedTransitions(t *testing.T, rel string) {
 	t.Helper()
 
-	tp, sp, useSidecar := resolveInputPaths(transcript)
-	if !useSidecar {
-		t.Fatalf("resolveInputPaths did not pair %s with its sibling %s", transcript, eventsSidecarName)
-	}
-	report, err := runReplay(tp, sp, useSidecar, replaySettingsForTest(t, tp))
-	if err != nil {
-		t.Fatalf("runReplay: %v", err)
-	}
-	ec := report.ExtendedCheck
-	if ec == nil {
-		t.Fatal("ExtendedCheck is nil — the recording did not drive a sidecar replay at all")
-	}
+	ec := extendedCheckOf(t, rel)
 	if ec.RecordedCount == 0 {
 		t.Fatal("recorded_transition_count is 0 — this fixture cannot witness the defect (vacuous)")
 	}
@@ -114,8 +129,8 @@ func assertReproducesRecordedTransitions(t *testing.T, transcript string) {
 // process_exited did not arrive until 20:36:44.492 — 3.4s later. The window
 // this branch used to discard had unambiguously already fired.
 func TestReplayWithSidecar_Issue1342_ExpiredWindowSurvivesProcessExit(t *testing.T) {
-	assertReproducesRecordedTransitions(t, pinnedRecording(t,
-		"codex/scenarios/2-1_basic-turn/recordings/2026-05-23-20-36-20_irrlichd-0.4.7+723609a/transcript.jsonl"))
+	assertReproducesRecordedTransitions(t,
+		"codex/scenarios/2-1_basic-turn/recordings/2026-05-23-20-36-20_irrlichd-0.4.7+723609a/transcript.jsonl")
 }
 
 // TestReplayWithSidecar_Issue1342_HeaderOnlyFirstPassIsWidened covers the
@@ -131,8 +146,8 @@ func TestReplayWithSidecar_Issue1342_ExpiredWindowSurvivesProcessExit(t *testing
 // The daemon never had that pass: it read to EOF ~57ms later, by which point
 // the file had reached 28252 bytes and carried a user message.
 func TestReplayWithSidecar_Issue1342_HeaderOnlyFirstPassIsWidened(t *testing.T) {
-	assertReproducesRecordedTransitions(t, pinnedRecording(t,
-		"codex/regressions/baseline-hello/recordings/2026-04-26-11-28-57_irrlichd-unknown/transcript.jsonl"))
+	assertReproducesRecordedTransitions(t,
+		"codex/regressions/baseline-hello/recordings/2026-04-26-11-28-57_irrlichd-unknown/transcript.jsonl")
 }
 
 // knownZeroTransition lists the recordings that still reproduce zero
