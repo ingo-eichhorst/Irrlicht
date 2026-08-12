@@ -89,8 +89,9 @@ deliberately-broken fixtures are the shape ("committed rather than improvised so
 mutation evidence outlives the PR"), and `TestSourceScanCatchesEveryKnownShape`
 (`core/application/services/construction_test.go`) is the same idea as a corpus.
 Evidence living only in a merged PR body is re-run by nothing; for the
-`contracttesting` families #1479 committed it beside each assertion, and the
-"Permission gating" bullet below describes the shape. And a guard that *rewrites* an existing one owes
+`contracttesting` families #1479 committed it beside each assertion, in
+`core/internal/contracttesting/<family>_selftest_test.go` — the paragraph
+closing the contract-family bullets below carries the shape and its limits. And a guard that *rewrites* an existing one owes
 its predecessor's cases as locks on top of its own — "Guarded construction" below
 carries that rule and the incident that earned it.
 
