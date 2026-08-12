@@ -659,17 +659,19 @@ Before marking a ticket done, run the full suite — every layer must pass:
   twice. The reporting side (`timing_drift.go`) buckets and ranks those deltas;
   it reuses `core/domain/stats.Percentile` rather than carrying its own.
   It is a **ratchet, not a tolerance gate**, and that is the deliberate
-  shape: 28.7% of the catalog's 818 kind-matched pairs are already more than 1s
+  shape: 24.3% of the catalog's 826 kind-matched pairs are still more than 1s
   from their daemon, so a gate failing on all of them would protect nothing.
   `TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog` walks all 309
   sidecar-driven recordings, prints the distribution, and fails when a
   recording NEWLY drifts, when a pinned entry stops drifting and is left to rot,
   or when the aggregate counts grow — the same idiom `knownZeroTransition`
   uses. The 1s threshold is read off the measured distribution rather than
-  picked: |delta| is sharply bimodal (70.0% under 100ms, 28.7% over 1s) with a
+  picked: |delta| is sharply bimodal (74.4% under 100ms, 24.3% over 1s) with a
   near-empty decade between, so the cut lands where ~1% of the population
-  lives; `driftThreshold`'s doc comment carries the histogram. The 20 goldens
-  #1476 documented as its accepted cost are enumerated by name in
+  lives; `driftThreshold`'s doc comment carries the histogram. That trough is
+  the same 10 pairs before and after #1478 reshaped both modes around it, which
+  is stronger evidence for the cut than the original measurement was. The
+  goldens #1476 documented as its accepted cost are enumerated by name in
   `knownFirstTransitionDrift` rather than living in a paragraph of a doc
   comment, which is what #1480 was filed about. Its mutation evidence is
   committed, not described: `cmd/replay/testdata/timing/` holds one file per
@@ -679,6 +681,27 @@ Before marking a ticket done, run the full suite — every layer must pass:
   figure beside the divergence figure, because a `go test` that passes prints
   nothing without `-v` and an unread measurement is the failure mode this
   closes.
+- Replay read boundary: the sidecar records `file_size` from the fswatcher's
+  stat at fire time but stamps `ts` at the daemon's **dequeue** time, and the
+  watcher's stat time is not a field of `lifecycle.Event` at all — so "where
+  had the daemon's read reached" is reconstructed, never read off. `#1342`'s
+  `readBoundaryFor` widens a provably-manufactured pass by one recorded stat;
+  `#1478` adds `readBoundaryClusterWindow` (10ms), which additionally takes
+  every later stat dequeued within that window, on the inference that a serial
+  detector loop dequeuing an event microseconds later had it queued while the
+  read ran. **Additive, never narrowing** — that is what keeps it off the 35
+  gemini-cli recordings a *replacement* time bound broke during #1476's review.
+  The constant is CALIBRATED, not derived, and both walls are measured facts
+  about the committed catalog: below 3ms the rescues are incomplete, at 28ms
+  replay fabricates in `codex/2-1_basic-turn` and at 52ms in
+  `codex/1-1_session-start`. Those two are exactly the goldens #1342's rejected
+  guard-narrowing broke — two unrelated mechanisms hitting the same wall, which
+  is why it is treated as a property of the catalog. `TestReadBoundaryClusterWindow_BothWallsAreMeasured`
+  drives the window past each wall and is the calibration's committed mutation
+  evidence; a window justified only from below could be raised to 1s with
+  nothing objecting. One recording remains in `knownZeroTransition` because
+  reaching it needs 69ms, i.e. it can only be bought by making two goldens
+  assert something false — the trade this whole line of work exists to refuse.
 - Replay goldens (when a recording or replay-output change is in play):
   regenerate with `UPDATE_REPLAY_GOLDENS=1 go test
   ./tools/onboarding-factory/cmd/replay/... -count=1` (the `-count=1`

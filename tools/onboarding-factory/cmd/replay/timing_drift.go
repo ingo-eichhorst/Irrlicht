@@ -45,24 +45,32 @@ func (d timeDelta) Abs() time.Duration { return d.Delta.Abs() }
 //
 // It is chosen from the measured distribution rather than picked, because the
 // issue is explicit that a tolerance cannot be chosen for a distribution nobody
-// has printed. Measured over all 818 kind-matched paired transitions in the
+// has printed. Measured over all 826 kind-matched paired transitions in the
 // committed catalog, |delta| is sharply bimodal, and the two modes are
 // separated by a near-empty decade:
 //
-//	<1ms       162   19.8%   ┐
-//	1-10ms     324   39.6%   ├ 70.0% under 100ms — the daemon's own read latency
-//	10-100ms    87   10.6%   ┘
+//	<1ms       190   23.0%   ┐
+//	1-10ms     338   40.9%   ├ 74.4% under 100ms — the daemon's own read latency
+//	10-100ms    87   10.5%   ┘
 //	0.1-1s      10    1.2%   ← the trough: ONE HUNDREDTH of the population
-//	1-5s       119   14.5%   ┐
-//	5-10s       39    4.8%   │
-//	10-30s      58    7.1%   ├ 28.7% above 1s — a different phenomenon entirely
+//	1-5s        85   10.3%   ┐
+//	5-10s       39    4.7%   │
+//	10-30s      58    7.0%   ├ 24.3% above 1s — a different phenomenon entirely
 //	30-60s      13    1.6%   │
 //	>60s         6    0.7%   ┘
 //
-// p50 3.2ms, p75 2.0s, p90 8.8s, p95 20.5s, p99 43.3s, max 1m54.9s. The p75
-// sitting at almost exactly 2s is not a coincidence and is worth knowing
-// before reading any of the above: it is one debounce window, the synthesized
-// deadline stamp a coalesced flush carries.
+// p50 2.7ms, p75 216ms, p90 8.6s, p95 20.3s, p99 43.3s, max 1m54.9s.
+//
+// The p75 is worth reading against its own history. When #1480 first printed
+// this it sat at almost exactly 2s — one debounce window, the synthesized
+// deadline stamp a coalesced flush carries. #1478's cluster window then moved
+// 34 pairs out of the 1-5s bucket by letting those passes classify in-pass
+// instead of deferring to the flush, and the p75 fell to 216ms. The debounce
+// signature was a replay artifact, not a timer the daemon ran.
+//
+// The TROUGH did not move: 10 pairs, 1.2%, before and after. That is the part
+// this constant rests on, and it surviving a change that reshaped both modes
+// around it is better evidence for the cut than the original measurement was.
 //
 // 1s sits in that trough. It is not a claim that 999ms is acceptable — it is
 // the observation that essentially nothing lands between 100ms and 1s, so any

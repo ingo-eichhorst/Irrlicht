@@ -15,8 +15,7 @@
     "last_event_time": "2026-05-25T03:04:06.447756+02:00",
     "wall_clock_session_duration": 4981219000,
     "state_durations": {
-      "ready": 2002265000,
-      "working": 2978954000
+      "working": 4981219000
     },
     "flicker_count": 1,
     "flickers_by_category": {
@@ -48,9 +47,9 @@
     },
     {
       "index": 1,
-      "event_index": 4,
-      "virtual_time": "2026-05-25T03:04:03.468802+02:00",
-      "cause": "debounce_coalesce",
+      "event_index": 0,
+      "virtual_time": "2026-05-25T03:04:01.466537+02:00",
+      "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",

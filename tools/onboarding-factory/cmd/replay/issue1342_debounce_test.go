@@ -67,27 +67,42 @@ func pinnedRecording(t *testing.T, rel string) string {
 	return p
 }
 
+// extendedCheckOf replays ONE pinned recording at the current settings and
+// returns its extended check, or fails loudly for each of the three ways that
+// can go wrong without producing one.
+//
+// It is the shared setup behind both assertReproducesRecordedTransitions and
+// #1478's per-window wall assertions, and it lives here rather than beside
+// either caller for the same reason forEachSidecarRecording does: this is the
+// mechanism (how a transcript pairs with its sidecar, what counts as a
+// sidecar-driven run), while the verdict drawn from it is each caller's policy.
+func extendedCheckOf(t *testing.T, rel string) *extendedCheck {
+	t.Helper()
+	transcript := pinnedRecording(t, rel)
+	tp, sp, useSidecar := resolveInputPaths(transcript)
+	if !useSidecar {
+		t.Fatalf("resolveInputPaths did not pair %s with its sibling %s", rel, eventsSidecarName)
+	}
+	report, err := runReplay(tp, sp, useSidecar, replaySettingsForTest(t, tp))
+	if err != nil {
+		t.Fatalf("runReplay(%s): %v", rel, err)
+	}
+	if report.ExtendedCheck == nil {
+		t.Fatalf("%s: ExtendedCheck is nil — the recording did not drive a sidecar replay at all", rel)
+	}
+	return report.ExtendedCheck
+}
+
 // assertReproducesRecordedTransitions is the shared body of the two fixture
 // tests: replay the recording and hold its extended check to the daemon's own
 // log, in BOTH directions. The surplus direction matters as much as the
 // deficit one — an earlier draft of the #1342 fix drove the deficit to zero by
 // classifying on no evidence, and fabricated a ready→working in two goldens
 // whose daemon had recorded none.
-func assertReproducesRecordedTransitions(t *testing.T, transcript string) {
+func assertReproducesRecordedTransitions(t *testing.T, rel string) {
 	t.Helper()
 
-	tp, sp, useSidecar := resolveInputPaths(transcript)
-	if !useSidecar {
-		t.Fatalf("resolveInputPaths did not pair %s with its sibling %s", transcript, eventsSidecarName)
-	}
-	report, err := runReplay(tp, sp, useSidecar, replaySettingsForTest(t, tp))
-	if err != nil {
-		t.Fatalf("runReplay: %v", err)
-	}
-	ec := report.ExtendedCheck
-	if ec == nil {
-		t.Fatal("ExtendedCheck is nil — the recording did not drive a sidecar replay at all")
-	}
+	ec := extendedCheckOf(t, rel)
 	if ec.RecordedCount == 0 {
 		t.Fatal("recorded_transition_count is 0 — this fixture cannot witness the defect (vacuous)")
 	}
@@ -114,8 +129,8 @@ func assertReproducesRecordedTransitions(t *testing.T, transcript string) {
 // process_exited did not arrive until 20:36:44.492 — 3.4s later. The window
 // this branch used to discard had unambiguously already fired.
 func TestReplayWithSidecar_Issue1342_ExpiredWindowSurvivesProcessExit(t *testing.T) {
-	assertReproducesRecordedTransitions(t, pinnedRecording(t,
-		"codex/scenarios/2-1_basic-turn/recordings/2026-05-23-20-36-20_irrlichd-0.4.7+723609a/transcript.jsonl"))
+	assertReproducesRecordedTransitions(t,
+		"codex/scenarios/2-1_basic-turn/recordings/2026-05-23-20-36-20_irrlichd-0.4.7+723609a/transcript.jsonl")
 }
 
 // TestReplayWithSidecar_Issue1342_HeaderOnlyFirstPassIsWidened covers the
@@ -131,28 +146,36 @@ func TestReplayWithSidecar_Issue1342_ExpiredWindowSurvivesProcessExit(t *testing
 // The daemon never had that pass: it read to EOF ~57ms later, by which point
 // the file had reached 28252 bytes and carried a user message.
 func TestReplayWithSidecar_Issue1342_HeaderOnlyFirstPassIsWidened(t *testing.T) {
-	assertReproducesRecordedTransitions(t, pinnedRecording(t,
-		"codex/regressions/baseline-hello/recordings/2026-04-26-11-28-57_irrlichd-unknown/transcript.jsonl"))
+	assertReproducesRecordedTransitions(t,
+		"codex/regressions/baseline-hello/recordings/2026-04-26-11-28-57_irrlichd-unknown/transcript.jsonl")
 }
 
 // knownZeroTransition lists the recordings that still reproduce zero
-// transitions, with the reason each is out of #1342's reach. They are pinned
-// rather than tolerated: the test below fails if the set GROWS, and equally if
-// an entry is fixed and left here to rot.
+// transitions, with the reason each is out of reach. They are pinned rather
+// than tolerated: the test below fails if the set GROWS, and equally if an
+// entry is fixed and left here to rot.
 //
-// All four share one shape that the one-event widening in readBoundaryFor
-// cannot reach. Their transcripts are written essentially instantaneously —
-// pi/2-1_basic-turn's four fs events span 3ms (01:39:59.093→.096) for a
-// 2556-byte file — so the daemon's single read absorbed the WHOLE transcript
-// while the later fswatcher fires were still queued carrying stale sizes.
-// Reproducing that needs a time-aware read boundary rather than a one-step
-// widening, and choosing it is a design decision with its own blast radius, so
-// it is deliberately out of scope here.
+// #1342 left four here; #1478's time-aware cluster extension
+// (readBoundaryClusterWindow) reproduced three of them and they were deleted
+// from this list. The one that remains is NOT a smaller version of the same
+// problem — it is on the far side of a measured wall, and the distinction is
+// the whole finding of #1478.
+//
+// Its burst spans 68.875ms, where the three that were rescued span 2-3ms. A
+// window wide enough to reach it is 2.5x past the point where replay starts
+// FABRICATING: at 28ms codex/2-1_basic-turn's 18-54-06 recording gains a
+// ready→working its daemon never logged, and at 52ms codex/1-1_session-start
+// — the sole recording for a core-twelve scenario, whose daemon correctly held
+// ready for the session's entire life — joins it. Those are precisely the two
+// goldens #1342's rejected guard-narrowing broke, reached here by a completely
+// different mechanism.
+//
+// So the trade is explicit and it is refused: this entry could be cleared
+// today at the cost of two goldens that would then assert something false,
+// which is strictly worse than one that asserts nothing. Clearing it honestly
+// needs a re-recording, not a wider window — see #1478.
 var knownZeroTransition = map[string]string{
-	"codex/regressions/agent-question-pending/recordings/2026-04-26-11-57-03_irrlichd-unknown/transcript.jsonl": "whole transcript written before the daemon's first read completed",
-	"pi/regressions/full-lifecycle-toolcall/recordings/2026-04-26-11-31-28_irrlichd-unknown/transcript.jsonl":   "same",
-	"pi/scenarios/1-2_session-end/recordings/2026-05-25-01-48-39_irrlichd-0.4.7+597f655/transcript.jsonl":       "same",
-	"pi/scenarios/2-1_basic-turn/recordings/2026-05-25-01-39-59_irrlichd-0.4.7+7b5218c/transcript.jsonl":        "same",
+	"codex/regressions/agent-question-pending/recordings/2026-04-26-11-57-03_irrlichd-unknown/transcript.jsonl": "68.875ms burst — unreachable without fabricating in codex/2-1_basic-turn and codex/1-1_session-start (#1478)",
 }
 
 // knownFabricated lists recordings where replay emits transitions the daemon
@@ -233,7 +256,7 @@ func forEachSidecarRecording(t *testing.T, visit func(name string, ec *extendedC
 // covered by existing rather than by somebody remembering to add it.
 //
 // Scope note: this asserts only the two absolute failures, not
-// replayed >= recorded generally. 145 of 309 sidecar-driven recordings still
+// replayed >= recorded generally. 140 of 309 sidecar-driven recordings still
 // show milder extended-check divergence (dominant kind: a missing terminal
 // working→ready); that is a separate population #1342 does not claim to fix,
 // and asserting on it here would fail for reasons this ticket is not about.
