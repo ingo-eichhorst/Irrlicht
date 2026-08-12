@@ -1,7 +1,6 @@
 package contracttesting
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -23,20 +22,6 @@ const (
 	selfTestHooks       = "hooks"
 	selfTestTranscripts = "transcripts"
 )
-
-// recordingReporter captures what an arm reports instead of failing the
-// enclosing test.
-type recordingReporter struct{ errs []string }
-
-func (r *recordingReporter) Helper() {}
-
-func (r *recordingReporter) Errorf(format string, args ...any) {
-	r.errs = append(r.errs, fmt.Sprintf(format, args...))
-}
-
-func (r *recordingReporter) failed() bool { return len(r.errs) > 0 }
-
-func (r *recordingReporter) report() string { return strings.Join(r.errs, "; ") }
 
 // fakeReceiver stands in for a hook receiver: it dispatches only once the
 // consent gate answers granted for every key in gatedOn. gatedOn is the
@@ -143,13 +128,10 @@ func misGatedReceiver() PermissionGate {
 // the one state that separates it from a correct receiver, and the arm must
 // report it.
 func TestKeyIsolationArm_FailsAReceiverGatedOnTheWrongPermission(t *testing.T) {
-	rec := &recordingReporter{}
-	assertGatedOnTheNamedKey(rec, misGatedReceiver())
+	rec := observe(t, func(at armT) { assertGatedOnTheNamedKey(at, misGatedReceiver()) })
 
-	if !rec.failed() {
-		t.Fatal("key-isolation arm passed a receiver gated on \"hooks\" while the key under test " +
-			"was \"transcripts\" — this is exactly the #1466 defect the arm exists to catch")
-	}
+	mustReport(t, rec, "is gated on some OTHER permission",
+		"a receiver gated on \"hooks\" while the key under test is \"transcripts\" — the #1466 defect itself")
 	if !strings.Contains(rec.report(), selfTestTranscripts) {
 		t.Errorf("failure message does not name the key under test: %s", rec.report())
 	}
@@ -162,12 +144,10 @@ func TestKeyIsolationArm_FailsAReceiverGatedOnTheWrongPermission(t *testing.T) {
 func TestKeyIsolationArm_FailsAnUngatedReceiver(t *testing.T) {
 	r := &fakeReceiver{gate: NewConsentGate(), gatedOn: nil}
 
-	rec := &recordingReporter{}
-	assertGatedOnTheNamedKey(rec, r.gateFor(selfTestTranscripts, selfTestHooks))
+	rec := observe(t, func(at armT) { assertGatedOnTheNamedKey(at, r.gateFor(selfTestTranscripts, selfTestHooks)) })
 
-	if !rec.failed() {
-		t.Fatal("key-isolation arm passed a receiver with no consent check at all")
-	}
+	mustReport(t, rec, "is gated on some OTHER permission",
+		"a receiver with no consent check at all")
 }
 
 // TestKeyIsolationArm_FailsAKeyBlindWiring pins the arm's write order, which
@@ -184,13 +164,11 @@ func TestKeyIsolationArm_FailsAKeyBlindWiring(t *testing.T) {
 		gatedOn: []string{selfTestHooks, selfTestTranscripts},
 	}
 
-	rec := &recordingReporter{}
-	assertGatedOnTheNamedKey(rec, r.gateFor(selfTestTranscripts, selfTestHooks))
+	rec := observe(t, func(at armT) { assertGatedOnTheNamedKey(at, r.gateFor(selfTestTranscripts, selfTestHooks)) })
 
-	if !rec.failed() {
-		t.Fatal("key-isolation arm passed a SetState that ignores the key it is handed — " +
-			"the arm must deny the key under test before opening the others")
-	}
+	mustReport(t, rec, "is gated on some OTHER permission",
+		"a SetState that ignores the key it is handed — the arm must deny the key under "+
+			"test BEFORE opening the others, or such a wiring settles at \"denied\" and passes")
 }
 
 // TestTheLockstepArmsCannotSeeAWrongKeyGate is the measured blind spot: the
@@ -208,22 +186,20 @@ func TestTheLockstepArmsCannotSeeAWrongKeyGate(t *testing.T) {
 	// go quietly vacuous: a misGatedReceiver that drifted to correct gating
 	// would satisfy every assertion below while the limitation it documents
 	// went unexamined, and the "retire me" instruction above would never fire.
-	anchor := &recordingReporter{}
-	assertGatedOnTheNamedKey(anchor, misGatedReceiver())
-	if !anchor.failed() {
+	anchor := observe(t, func(at armT) { assertGatedOnTheNamedKey(at, misGatedReceiver()) })
+	if !anchor.reported() {
 		t.Fatal("the fixture is no longer mis-gated — this test would assert nothing about the " +
 			"lockstep arms; fix misGatedReceiver rather than the assertions below")
 	}
 
-	for name, arm := range map[string]func(gateReporter, PermissionGate){
+	for name, arm := range map[string]func(reporter, PermissionGate){
 		"pending_no_effect":         assertPendingNoEffect,
 		"granted_effect_observable": assertGrantedEffectObservable,
 		"revoked_effect_undone":     assertRevokedEffectUndone,
 	} {
 		t.Run(name, func(t *testing.T) {
-			rec := &recordingReporter{}
-			arm(rec, misGatedReceiver())
-			if rec.failed() {
+			rec := observe(t, func(at armT) { arm(at, misGatedReceiver()) })
+			if rec.reported() {
 				t.Fatalf("this arm now catches a wrong-key gate (%s) — retire this test, "+
 					"it documents a limitation that no longer holds", rec.report())
 			}

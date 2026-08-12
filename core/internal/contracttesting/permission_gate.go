@@ -51,17 +51,6 @@ type PermissionGate struct {
 	Observe func() bool
 }
 
-// gateReporter is the slice of *testing.T the individual arms use. Taking an
-// interface rather than *testing.T is what lets this file's own tests drive an
-// arm against a deliberately mis-gated call site and assert it goes red —
-// a contract assertion passes by construction against a correct adapter, so
-// its whole value is that it can fail, and nothing re-runs evidence that
-// exists only in a merged PR body.
-type gateReporter interface {
-	Helper()
-	Errorf(format string, args ...any)
-}
-
 // AssertPermissionGated runs the issue #797 contract against g: no
 // observable effect while the permission is pending, the effect observable
 // once granted, and the effect undone after a subsequent revoke. Each
@@ -210,7 +199,7 @@ func setEveryKey(g PermissionGate, state permission.State) {
 	}
 }
 
-func assertPendingNoEffect(t gateReporter, g PermissionGate) {
+func assertPendingNoEffect(t reporter, g PermissionGate) {
 	t.Helper()
 	setEveryKey(g, permission.StatePending)
 	g.Exercise()
@@ -219,7 +208,7 @@ func assertPendingNoEffect(t gateReporter, g PermissionGate) {
 	}
 }
 
-func assertGrantedEffectObservable(t gateReporter, g PermissionGate) {
+func assertGrantedEffectObservable(t reporter, g PermissionGate) {
 	t.Helper()
 	setEveryKey(g, permission.StateGranted)
 	g.Exercise()
@@ -228,7 +217,7 @@ func assertGrantedEffectObservable(t gateReporter, g PermissionGate) {
 	}
 }
 
-func assertRevokedEffectUndone(t gateReporter, g PermissionGate) {
+func assertRevokedEffectUndone(t reporter, g PermissionGate) {
 	t.Helper()
 	setEveryKey(g, permission.StateDenied)
 	g.Exercise()
@@ -247,7 +236,7 @@ func assertRevokedEffectUndone(t gateReporter, g PermissionGate) {
 // first would leave such a wiring sitting at "denied" — it would pass, and
 // the contract would once again be satisfiable by exactly the fake that
 // hid #1466.
-func assertGatedOnTheNamedKey(t gateReporter, g PermissionGate) {
+func assertGatedOnTheNamedKey(t reporter, g PermissionGate) {
 	t.Helper()
 	g.SetState(g.Key, permission.StateDenied)
 	for _, k := range g.OtherKeys {

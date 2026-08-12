@@ -14,6 +14,7 @@
 package contracttesting
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -99,17 +100,13 @@ type HookDisclosure struct {
 func AssertHookDisclosureMatchesInstalled(t *testing.T, d HookDisclosure) {
 	t.Helper()
 
-	perm, ok := findPermission(d.Agent, d.PermissionKey)
-	if !ok {
-		t.Fatalf("agent %q declares no permission with key %q", d.Agent.Identity.Name, d.PermissionKey)
+	perm, reason := disclosureUnderTest(d)
+	if reason != "" {
+		t.Fatal(reason)
 	}
-	if perm.Kind != permission.KindModify {
-		t.Errorf("hooks permission %q is %v, want %v — installing hooks writes to the user's config",
-			d.PermissionKey, perm.Kind, permission.KindModify)
-	}
-	if len(d.Installed) == 0 {
-		t.Fatal("HookDisclosure.Installed is empty — pass the installer's event list")
-	}
+	t.Run("permission_is_modify_kind", func(t *testing.T) {
+		assertModifyKind(t, d.PermissionKey, perm.Kind)
+	})
 	disclosure := perm.Touches + "\n" + perm.Detail
 	// One tokenization serves both the "is this name present" and the "what
 	// event-shaped names are present" questions. Whole-word matching is what
@@ -132,6 +129,34 @@ func AssertHookDisclosureMatchesInstalled(t *testing.T, d HookDisclosure) {
 	})
 }
 
+// disclosureUnderTest returns the permission the contract grades, or a reason
+// it cannot grade one. It reports a reason rather than failing so the shapes it
+// rejects are themselves drivable from a negative self-test — the same split
+// malformedGateReason draws, and for the same reason: a guard nobody can
+// exercise is the unverifiable check this package exists to remove.
+func disclosureUnderTest(d HookDisclosure) (agent.Permission, string) {
+	perm, ok := findPermission(d.Agent, d.PermissionKey)
+	if !ok {
+		return agent.Permission{}, fmt.Sprintf("agent %q declares no permission with key %q",
+			d.Agent.Identity.Name, d.PermissionKey)
+	}
+	if len(d.Installed) == 0 {
+		return agent.Permission{}, "HookDisclosure.Installed is empty — pass the installer's event list"
+	}
+	return perm, ""
+}
+
+// assertModifyKind is the kind obligation, split out of the precondition block
+// because it is one: a permission whose Apply writes the user's config while
+// declaring itself observe-kind mislabels the wizard row the user consents at.
+func assertModifyKind(t reporter, key string, kind permission.Kind) {
+	t.Helper()
+	if kind != permission.KindModify {
+		t.Errorf("hooks permission %q is %v, want %v — installing hooks writes to the user's config",
+			key, kind, permission.KindModify)
+	}
+}
+
 // assertStatesVersionFloor extends the #1356 contract along the axis #1365
 // added. The other three arms bind the copy to WHICH entries get written; a
 // declared minimum upstream version makes it conditional whether ANY of them
@@ -148,7 +173,7 @@ func AssertHookDisclosureMatchesInstalled(t *testing.T, d HookDisclosure) {
 // Touches/Detail can keep stating one exact count and one exact list. A gate
 // that filtered events per version would make the count a range, which is the
 // hand-waving #1356 abolished.
-func assertStatesVersionFloor(t *testing.T, perm agent.Permission, disclosure string) {
+func assertStatesVersionFloor(t reporter, perm agent.Permission, disclosure string) {
 	t.Helper()
 	if perm.Writes == nil || perm.Writes.Version == nil || perm.Writes.Version.Min == "" {
 		return
@@ -163,7 +188,7 @@ func assertStatesVersionFloor(t *testing.T, perm agent.Permission, disclosure st
 
 // assertNamesEveryInstalledEvent is the consent-critical arm: an installed
 // event the copy never names is a write the user was not told about.
-func assertNamesEveryInstalledEvent(t *testing.T, installed []string, named map[string]bool) {
+func assertNamesEveryInstalledEvent(t reporter, installed []string, named map[string]bool) {
 	t.Helper()
 	for _, event := range installed {
 		if !named[event] {
@@ -176,7 +201,7 @@ func assertNamesEveryInstalledEvent(t *testing.T, installed []string, named map[
 // assertStatesInstalledCount checks every count the copy states, not just the
 // first: a permission that mentions its entry count twice must not have them
 // disagree.
-func assertStatesInstalledCount(t *testing.T, installed []string, disclosure string) {
+func assertStatesInstalledCount(t reporter, installed []string, disclosure string) {
 	t.Helper()
 	matches := entryCountPattern.FindAllStringSubmatch(disclosure, -1)
 	if len(matches) == 0 {
@@ -199,7 +224,7 @@ func assertStatesInstalledCount(t *testing.T, installed []string, disclosure str
 // sources overlap (every multi-word modelled name is in both), so they are
 // merged before reporting: one wrong name should produce one failure line, not
 // two. The contract's whole value is the message someone reads at 2am.
-func assertNamesNoUninstalledEvent(t *testing.T, d HookDisclosure, named map[string]bool) {
+func assertNamesNoUninstalledEvent(t reporter, d HookDisclosure, named map[string]bool) {
 	t.Helper()
 	exempt := make(map[string]bool, len(d.Installed)+len(d.NonEventTerms))
 	for _, event := range d.Installed {
