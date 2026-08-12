@@ -90,7 +90,7 @@ func TestApplyLauncherBackfill_HerdrHost(t *testing.T) {
 
 	// Still detached: the re-read carries the herdr address and nothing else.
 	stillDetached := &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/cfg/herdr/herdr.sock"}
-	if applyLauncherBackfill(stored, needs, stillDetached) {
+	if applyLauncherBackfill(stored, needs, stillDetached, true) {
 		t.Error("a still-detached session must report no update")
 	}
 	if stored.TermProgram != "" {
@@ -105,7 +105,7 @@ func TestApplyLauncherBackfill_HerdrHost(t *testing.T) {
 		ITermSessionID:  "w0t0p0-CLIENT",
 		TTY:             "/dev/ttys012",
 	}
-	if !applyLauncherBackfill(stored, needs, fresh) {
+	if !applyLauncherBackfill(stored, needs, fresh, true) {
 		t.Fatal("a newly attached client must report an update")
 	}
 	if stored.TermProgram != "iTerm.app" || stored.ITermSessionID != "w0t0p0-CLIENT" {

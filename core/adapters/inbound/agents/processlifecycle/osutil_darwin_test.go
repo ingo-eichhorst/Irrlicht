@@ -3,9 +3,11 @@
 package processlifecycle
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -374,7 +376,8 @@ func spawnHerdrClient(t *testing.T, socketPath string, env ...string) int {
 	}, env...))
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		for _, got := range herdrClientPIDs(socketPath) {
+		pids, _ := herdrClientPIDs(socketPath)
+		for _, got := range pids {
 			if got == pid {
 				return pid
 			}
@@ -408,7 +411,7 @@ func TestReadLauncherEnv_Herdr_ResolvesHostFromAttachedClient(t *testing.T) {
 		"TMUX_PANE=%0",
 	})
 
-	l := ReadLauncherEnv(agentPID)
+	l, _ := ReadLauncherEnv(agentPID)
 	if l == nil {
 		t.Fatal("expected non-nil launcher")
 	}
@@ -442,7 +445,7 @@ func TestHerdrClientPIDs_MultipleClientsAreOrderedNewestFirst(t *testing.T) {
 	first := spawnHerdrClient(t, socketPath)
 	second := spawnHerdrClient(t, socketPath)
 
-	pids := herdrClientPIDs(socketPath)
+	pids, _ := herdrClientPIDs(socketPath)
 	if len(pids) < 2 {
 		t.Fatalf("want both attached clients, got %v (first=%d second=%d)", pids, first, second)
 	}
@@ -507,5 +510,162 @@ func TestLsofFDMode(t *testing.T) {
 		if got := (lsofFD{FD: fd}).Mode(); got != want {
 			t.Errorf("lsofFD{FD: %q}.Mode() = %q, want %q", fd, got, want)
 		}
+	}
+}
+
+// --- probe tri-state (#1485) -------------------------------------------------
+
+// TestLsofProbeRan is the committed corpus for the discrimination #1485 adds:
+// which lsof failures mean "ran and found nothing" and which mean "did not
+// run".
+//
+// The two directions are caught by different rows, and it is worth being exact
+// about which, because the obvious summary is wrong. A revert to the pre-#1485
+// `if err != nil { return nil }` turns exactly ONE row red — "exit 1", which
+// that spelling misreports as a failure. Rows 3-6 stay green under it, because
+// it and this classifier agree that those are not answers; they pin the
+// opposite mutation, a classifier that calls every failure a completed probe,
+// and each is a case the pre-#1485 code reported as a detached session.
+// Together they bracket the behaviour, which is why they are a table of real,
+// executed failures rather than a sentence in a PR body.
+//
+// The cases are constructed from a real child process rather than from
+// hand-built *exec.ExitError values, because the classification's whole job is
+// to be right about what os/exec actually hands back: a context deadline in
+// particular is not obviously an ExitError at all (it depends on whether the
+// kill or the deadline is observed first), and asserting the *verdict* rather
+// than the error type is what keeps this honest across Go versions.
+func TestLsofProbeRan(t *testing.T) {
+	run := func(ctx context.Context, name string, args ...string) error {
+		_, err := exec.CommandContext(ctx, name, args...).Output()
+		return err
+	}
+	deadline, cancelDeadline := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancelDeadline()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"success", nil, true},
+		{"exit 1 — lsof's nothing-to-report", run(context.Background(), "/bin/sh", "-c", "exit 1"), true},
+		{"exit 152 — killed under an exhausted CPU limit", run(context.Background(), "/bin/sh", "-c", "exit 152"), false},
+		{"killed by a signal", run(context.Background(), "/bin/sh", "-c", "kill -9 $$"), false},
+		{"context deadline", run(deadline, "/bin/sleep", "5"), false},
+		{"binary missing", run(context.Background(), "/nonexistent/lsof-1485"), false},
+	}
+	for _, tc := range cases {
+		if got := lsofProbeRan(tc.err); got != tc.want {
+			t.Errorf("%s: lsofProbeRan(%v) = %v, want %v", tc.name, tc.err, got, tc.want)
+		}
+	}
+}
+
+// TestHerdrClientPIDs_ProbeTriState pins the three outcomes end to end,
+// through the real lsof. The detached row is the vacuity guard: a probe that
+// reported "did not run" for everything would satisfy the other two rows and
+// protect a stale host forever, so "the file exists and nobody holds it open"
+// must still come back as an authoritative empty answer.
+func TestHerdrClientPIDs_ProbeTriState(t *testing.T) {
+	t.Run("attached", func(t *testing.T) {
+		socketPath := newHerdrSessionDir(t)
+		client := spawnHerdrClient(t, socketPath)
+		pids, probed := herdrClientPIDs(socketPath)
+		if !probed {
+			t.Fatal("a successful lsof must report a probe that ran")
+		}
+		if len(pids) == 0 || pids[0] != client {
+			t.Errorf("attached client %d not reported: %v", client, pids)
+		}
+	})
+
+	t.Run("detached", func(t *testing.T) {
+		socketPath := newHerdrSessionDir(t)
+		// The session ran once, so the log is there; nobody holds it open.
+		if err := os.WriteFile(herdrClientLogPath(socketPath), []byte("detached\n"), 0o600); err != nil {
+			t.Fatalf("seed client log: %v", err)
+		}
+		pids, probed := herdrClientPIDs(socketPath)
+		if !probed {
+			t.Fatal("a detach is an answer, not a failure — reporting it as unknown would freeze the last host forever")
+		}
+		if len(pids) != 0 {
+			t.Errorf("nobody holds the log open: %v", pids)
+		}
+	})
+
+	t.Run("client log is not where we looked", func(t *testing.T) {
+		// lsof exits 1 for this exactly as it does for a detached session, so
+		// the stat guard is the only thing separating them. Left conflated,
+		// herdr moving or renaming its client log is a permanent,
+		// self-consistent "nobody is attached". A socket path addressing
+		// another *real* session is NOT covered — that log exists, so the
+		// stat passes; see herdrClientPIDs.
+		if _, probed := herdrClientPIDs(newHerdrSessionDir(t)); probed {
+			t.Error("a client log that does not exist is not evidence of a detach")
+		}
+	})
+
+	t.Run("no socket path", func(t *testing.T) {
+		if _, probed := herdrClientPIDs(""); probed {
+			t.Error("no address means nothing was probed")
+		}
+	})
+}
+
+// TestHerdrClientLauncher_DoesNotCacheANonAnswer covers step 2 of #1485's
+// suggested shape. The memo exists to collapse one startup seed's worth of
+// identical scans; caching a probe that did not run would instead spread a
+// single failure across every session sharing that socket for the next 5
+// seconds — turning the one thing the tri-state buys back into a wider window.
+func TestHerdrClientLauncher_DoesNotCacheANonAnswer(t *testing.T) {
+	socketPath := newHerdrSessionDir(t) // no client log: the probe cannot run
+	// Defensive, and it is the regression this test exists to catch that would
+	// make it necessary: nothing should ever be inserted under this key.
+	t.Cleanup(func() {
+		herdrClientCacheMu.Lock()
+		delete(herdrClientCache, socketPath)
+		herdrClientCacheMu.Unlock()
+	})
+
+	if _, probed := herdrClientLauncher(socketPath); probed {
+		t.Fatal("want a non-answer for a socket whose client log is absent")
+	}
+	herdrClientCacheMu.Lock()
+	_, cached := herdrClientCache[socketPath]
+	herdrClientCacheMu.Unlock()
+	if cached {
+		t.Error("a non-answer was memoized: the next 5s of reads inherit one failed probe")
+	}
+}
+
+// TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown is #1485 at the
+// port boundary: the reader has to carry the distinction all the way out, or
+// the sweep that consumes it (refreshHerdrHosts) cannot act on it. The pane's
+// own identity is unaffected either way — only the second return value moves.
+func TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown(t *testing.T) {
+	socketPath := newHerdrSessionDir(t) // no client log
+	agentPID := spawnSleeperWithEnv(t, []string{
+		"PATH=/usr/bin:/bin",
+		"HERDR_PANE_ID=w1:p1",
+		"HERDR_SOCKET_PATH=" + socketPath,
+	})
+
+	l, hostKnown := ReadLauncherEnv(agentPID)
+	if hostKnown {
+		t.Error("the client probe could not run, so the host is unknown — not absent")
+	}
+	if l == nil || l.HerdrPaneID != "w1:p1" {
+		t.Fatalf("the pane's own address must survive an unresolved host: %+v", l)
+	}
+
+	// The same pane once the log exists and nobody holds it open: now the
+	// emptiness is an answer, and the sweep is allowed to act on it.
+	if err := os.WriteFile(herdrClientLogPath(socketPath), []byte("detached\n"), 0o600); err != nil {
+		t.Fatalf("seed client log: %v", err)
+	}
+	if _, hostKnown := ReadLauncherEnv(agentPID); !hostKnown {
+		t.Error("a detached session's host is known to be absent")
 	}
 }

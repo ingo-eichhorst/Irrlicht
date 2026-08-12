@@ -5,6 +5,7 @@ package processlifecycle
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -378,10 +379,19 @@ func readProcInfo(pid int) (ppid int, cmd string, err error) {
 }
 
 // herdrClientPIDs returns the PIDs of every herdr client currently attached to
-// the session addressed by socketPath, newest attach first. A detached session
-// yields nil — verified live against herdr 0.8.0, where a session with no
-// client has no writer on its client log, and one with two clients attached
-// (herdr supports attaching from more than one place) has two.
+// the session addressed by socketPath, newest attach first, and whether the
+// probe actually ran. A detached session yields (nil, true) — verified live
+// against herdr 0.8.0, where a session with no client has no writer on its
+// client log, and one with two clients attached (herdr supports attaching from
+// more than one place) has two.
+//
+// The second return value is the whole of #1485. "Nobody is attached" and "I
+// could not look" are different facts, and a caller that merges this answer
+// into a host it already has must be able to tell them apart: the first is
+// evidence, the second is not. Collapsing them was harmless while the host was
+// resolved once and never revisited, and became a defect when #1405 made the
+// liveness sweep re-resolve it — a probe that fails to run then overwrites a
+// good host with nothing.
 //
 // Only writers count. "Holds the log open" is not the predicate: a `tail -f`
 // reader is not a client, and adopting its terminal as the host of every
@@ -394,22 +404,59 @@ func readProcInfo(pid int) (ppid int, cmd string, err error) {
 // are allocated ascending, so descending PID is "newest first". lsof matches
 // by device and inode rather than by string, so a symlinked path (a macOS
 // t.TempDir() lives under /var -> /private/var) needs no canonicalisation here.
-func herdrClientPIDs(socketPath string) []int {
+func herdrClientPIDs(socketPath string) (pids []int, probed bool) {
 	logPath := herdrClientLogPath(socketPath)
 	if logPath == "" {
-		return nil
+		return nil, false
+	}
+	// Stat before probing, because lsof answers exit 1 for BOTH "the file
+	// exists and nobody holds it open" and "there is no such file" (measured,
+	// lsof 4.91: the second also writes a "status error on <path>" line to
+	// stderr, which .Output() discards). Only the first is a detach. Without
+	// this, a client log that resolves to NOTHING — herdr moving or renaming
+	// it between releases — reads as a permanent, self-consistent "nobody is
+	// attached" rather than as a probe that never reached the question.
+	//
+	// It covers only that case, and deliberately not the neighbouring one: a
+	// socket path addressing a *different, real* herdr session resolves to a
+	// client log that exists, so the stat passes and lsof honestly reports no
+	// holders. Verified live against herdr 0.8.0 — a detached session keeps
+	// its client log (~/.config/herdr/sessions/factory/herdr-client.log, 505
+	// bytes, no holders), so file existence cannot separate "detached" from
+	// "probed somebody else's session". Only deriving the path correctly can.
+	if _, err := os.Stat(logPath); err != nil {
+		return nil, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	// A non-zero exit means no process holds the file open — the detached
-	// case, not an error.
 	out, err := exec.CommandContext(ctx, lsofPath, logPath).Output()
-	if err != nil {
-		return nil
+	if !lsofProbeRan(err) {
+		return nil, false
 	}
-	pids := herdrClientWriters(string(out), os.Getpid())
+	pids = herdrClientWriters(string(out), os.Getpid())
 	sort.Sort(sort.Reverse(sort.IntSlice(pids)))
-	return pids
+	return pids, true
+}
+
+// lsofProbeRan reports whether an lsof invocation that returned err
+// nevertheless ran and answered. Exit 1 is lsof's "nothing to report", which —
+// on a path herdrClientPIDs has already confirmed exists — is the detached
+// case and not an error. Every other failure is a probe that did not run: the
+// 2s deadline above, a fork failure, a signal (a process killed under an
+// exhausted CPU limit exits 152, measured on this machine), a missing binary.
+// None of them carry information about who is attached, and returning them as
+// "detached" is #1485.
+//
+// Split out so the classification is testable without arranging a real lsof
+// failure — its table of committed cases is the evidence that a revert to
+// `if err != nil` would be caught. runPgrep (process_darwin.go) draws the same
+// distinction for pgrep's exit 1.
+func lsofProbeRan(err error) bool {
+	if err == nil {
+		return true
+	}
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 1
 }
 
 // herdrClientWriters selects the client PIDs from an lsof table. 'u' counts
@@ -435,9 +482,21 @@ const maxHerdrClientCandidates = 4
 // herdrClientLauncher resolves the host-window identity of the herdr session
 // addressed by socketPath, by reading it from the attached client exactly the
 // way it would be read from any directly-hosted agent (hostIdentity). Returns
-// nil when nothing is attached, or when no attached client resolves to a local
-// GUI host — an SSH client has a real tty but no local window, and reporting
-// one anyway is the misroute #1348 removed.
+// (nil, true) when nothing is attached, or when no attached client REPORTED a
+// local GUI host — an SSH client has a real tty but no local window, and
+// reporting one anyway is the misroute #1348 removed. (nil, false) is the
+// third state, "the probe did not run" (#1485).
+//
+// "Reported" rather than "resolves to" is deliberate and is the known residual
+// of #1485: a candidate whose own identity could not be READ is counted as one
+// that has no host. hostIdentity swallows both of its failure modes — EnvOf's
+// error is discarded, and resolveHostFromAncestry returns ("", 0) for a
+// readProcInfo timeout as well as for a genuine miss — so a client attached
+// from kitty (which sets no TERM_PROGRAM upstream, so ancestry is its only
+// source) yields no host on a loaded machine and is indistinguishable here
+// from an SSH client. That is the same conflation one layer up, and closing it
+// needs hostIdentity to report whether its reads ran, which this fix does not
+// do. Tracked as #1492; do not read the tri-state below as covering it.
 //
 // Only ever called with a socket path the daemon captured from the pane's own
 // $HERDR_SOCKET_PATH, so a resolved identity always accompanies a complete
@@ -449,20 +508,31 @@ const maxHerdrClientCandidates = 4
 // socket, and the startup seed resolves them back to back, synchronously: an
 // lsof scan costs ~0.3s on a quiet machine, so eight panes would otherwise pay
 // eight identical scans before the daemon starts serving.
-func herdrClientLauncher(socketPath string) *session.Launcher {
+func herdrClientLauncher(socketPath string) (*session.Launcher, bool) {
 	if socketPath == "" {
-		return nil
+		return nil, false
 	}
 	if cached, ok := herdrClientCacheGet(socketPath); ok {
-		return cached
+		return cached, true
 	}
-	resolved := resolveHerdrClientLauncher(socketPath)
+	resolved, probed := resolveHerdrClientLauncher(socketPath)
+	if !probed {
+		// Never memoize a non-answer. The cache exists to collapse one startup
+		// seed's worth of identical scans; caching "unknown" would instead
+		// spread a single failed probe across every session that shares this
+		// socket for the next 5 seconds, which is the opposite of what the
+		// tri-state buys.
+		return nil, false
+	}
 	herdrClientCachePut(socketPath, resolved)
-	return resolved
+	return resolved, true
 }
 
-func resolveHerdrClientLauncher(socketPath string) *session.Launcher {
-	pids := herdrClientPIDs(socketPath)
+func resolveHerdrClientLauncher(socketPath string) (*session.Launcher, bool) {
+	pids, probed := herdrClientPIDs(socketPath)
+	if !probed {
+		return nil, false
+	}
 	if len(pids) > maxHerdrClientCandidates {
 		pids = pids[:maxHerdrClientCandidates]
 	}
@@ -476,9 +546,9 @@ func resolveHerdrClientLauncher(socketPath string) *session.Launcher {
 		if host.TermProgram == "" && host.HostBundleID == "" {
 			continue
 		}
-		return host
+		return host, true
 	}
-	return nil
+	return nil, true
 }
 
 // herdrClientCacheTTL is short enough that attaching a client is picked up by
