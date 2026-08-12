@@ -88,8 +88,10 @@ because a reviewer, or the agent itself, ran a mutation nobody had asked for.
 deliberately-broken fixtures are the shape ("committed rather than improvised so the
 mutation evidence outlives the PR"), and `TestSourceScanCatchesEveryKnownShape`
 (`core/application/services/construction_test.go`) is the same idea as a corpus.
-Evidence living only in a merged PR body is re-run by nothing, which for the
-`contracttesting` families is #1479. And a guard that *rewrites* an existing one owes
+Evidence living only in a merged PR body is re-run by nothing; for the
+`contracttesting` families #1479 committed it beside each assertion, in
+`core/internal/contracttesting/<family>_selftest_test.go` — the paragraph
+closing the contract-family bullets below carries the shape and its limits. And a guard that *rewrites* an existing one owes
 its predecessor's cases as locks on top of its own — "Guarded construction" below
 carries that rule and the incident that earned it.
 
@@ -527,11 +529,43 @@ Before marking a ticket done, run the full suite — every layer must pass:
   over the package currently returns eight, because
   `AssertPermissionGatedOnEachKey` is a driver that runs the permission-gate
   family once per key, not a family of its own. Check what a function asserts
-  before moving this number. A new or reworked
+  before moving this number (and before re-counting with `git grep`, whose
+  pathspec `*` crosses directory boundaries and returns nine). A new or reworked
   contract assertion is therefore the mutation rule at the top of this section
   in its most literal form: it lands with the deliberate mutation seen red for
-  each obligation. That evidence currently lives in the PR body, where nothing
-  re-runs it — #1479.
+  each obligation — and since #1479 that mutation is **committed beside the
+  assertion** rather than described in the PR that added it, because a
+  paragraph in a merged PR body is re-run by nothing and an assertion that
+  silently stops discriminating looks exactly like health.
+  `<family>_selftest_test.go` drives one obligation against a fixture that is
+  wrong in exactly ONE way and asserts that obligation reports it;
+  `selftest_test.go` holds the harness — a recording reporter behind the
+  `reporter` seam introduced by #1475/PR #1489, plus `verdictReported` and
+  `verdictSilent` — and the harness's OWN committed mutation, `deafRecorder`
+  and `criesWolfRecorder`, since a recorder that stopped observing would be
+  this failure reproduced inside its own fix. Two rules are load-bearing and
+  neither is obvious. A negative self-test names a fragment of the
+  obligation's own failure message and a bare failure is refused: "the arm
+  failed" and "THIS obligation failed" are different claims, and #1453's
+  second instance is the one where only the first was true (`--port 7837` left
+  `delivery_carries_no_address` green while the run failed incidentally
+  elsewhere). And every family carries a vacuity guard running each arm
+  against a CORRECT fixture, because an arm that reported unconditionally
+  would satisfy every mutation and read as excellent coverage. Note what this
+  does NOT close: #1475's key-blindness would have survived it, because those
+  arms all passed correctly for what they asserted and the gap was that the
+  FIXTURE could not express the distinguishing state — a negative self-test
+  grades an obligation against the wrong receiver it can build, never against
+  the one nobody thought to build. **A new arm takes `reporter`, or `armT` when
+  it also builds fixtures — never `*testing.T`**, or it cannot be driven at all
+  and its obligation silently leaves the covered set. `armT.fixtures` is typed
+  `fixtureT`, which carries `Setenv` and nothing that can decide a verdict, so
+  reporting through it does not compile; that is a type guarantee rather than a
+  guard, the same trade #1390 made for path confinement. Four families carry
+  self-tests (permission gate, hook endpoint, hook disclosure, hook version);
+  the three receiver-shaped ones, and a source walk that would make a fifth
+  family covered by existing rather than by remembering, are #1497 — queued
+  behind #1488, which changes the fake receiver all three would share.
 - Guarded construction: not a contract family — a package-local pair of guards,
   `core/application/services/construction_test.go`. A service whose fields
   include maps, channels, or anything else whose zero value is unusable is

@@ -88,6 +88,14 @@ func referenceBeaconEntry(command string) map[string]interface{} {
 // referenceBeaconEntryNow is the contract's Entry: the inner hook object the
 // adapter would install right now. A resolution failure yields an empty
 // command, which assertDeliveryIsOurs reports rather than grading silently.
+// referenceBeaconEndpointOf is the contract's EndpointOf: beacon delivery is a
+// `type: command` entry, so the delivery string is the whole command — there is
+// no url field and nothing address-shaped inside it.
+func referenceBeaconEndpointOf(hook map[string]interface{}) string {
+	c, _ := hook["command"].(string)
+	return c
+}
+
 func referenceBeaconEntryNow() map[string]interface{} {
 	command, _ := hookbeacon.InstalledCommand(referenceBeaconAdapter)
 	return referenceBeaconEntry(command)
@@ -157,13 +165,14 @@ func referenceBeaconForeignInstall() (bool, error) {
 	return referenceBeaconRun(command, hookjson.EnsureInstalled)
 }
 
-func TestAddressFreeDeliveryContract(t *testing.T) {
-	// Checked up front so a resolution failure reads as itself rather than as
-	// the empty-delivery wiring error assertDeliveryIsOurs would report.
-	if _, err := hookbeacon.InstalledCommand(referenceBeaconAdapter); err != nil {
-		t.Fatalf("resolving the beacon command: %v", err)
-	}
-	AssertHookEndpointFollowsBindAddr(t, HookInstaller{
+// referenceBeaconInstaller is the whole wiring, as one value. An adapter copies
+// this shape; hook_endpoint_selftest_test.go drives obligations 2-4 through it
+// rather than retyping the literal, so the mutations there are graded against
+// exactly the installer this contract test uses. A second copy would let the
+// two drift, and the self-tests would then be evidence about a wiring nobody
+// runs.
+func referenceBeaconInstaller() HookInstaller {
+	return HookInstaller{
 		Delivery: DeliveryAddressFree,
 		SettingsPath: func(t *testing.T) string {
 			t.Setenv(referenceBeaconHomeEnv, t.TempDir())
@@ -173,18 +182,21 @@ func TestAddressFreeDeliveryContract(t *testing.T) {
 			}
 			return path
 		},
-		Sentinel: hookbeacon.Sentinel(referenceBeaconAdapter),
-		Events:   referenceBeaconEvents,
-		Entry:    referenceBeaconEntryNow,
-		// Beacon delivery is a `type: command` entry, so the delivery string is
-		// the whole command — there is no url field and nothing address-shaped
-		// inside it.
-		EndpointOf: func(hook map[string]interface{}) string {
-			c, _ := hook["command"].(string)
-			return c
-		},
+		Sentinel:        hookbeacon.Sentinel(referenceBeaconAdapter),
+		Events:          referenceBeaconEvents,
+		Entry:           referenceBeaconEntryNow,
+		EndpointOf:      referenceBeaconEndpointOf,
 		EnsureInstalled: referenceBeaconEnsureInstalled,
 		Uninstall:       referenceBeaconUninstall,
 		ForeignInstall:  referenceBeaconForeignInstall,
-	})
+	}
+}
+
+func TestAddressFreeDeliveryContract(t *testing.T) {
+	// Checked up front so a resolution failure reads as itself rather than as
+	// the empty-delivery wiring error assertDeliveryIsOurs would report.
+	if _, err := hookbeacon.InstalledCommand(referenceBeaconAdapter); err != nil {
+		t.Fatalf("resolving the beacon command: %v", err)
+	}
+	AssertHookEndpointFollowsBindAddr(t, referenceBeaconInstaller())
 }
