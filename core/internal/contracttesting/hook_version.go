@@ -173,12 +173,24 @@ func assertFloorRefusesOlder(t reporter, gate *agent.VersionGate) {
 		t.Errorf("gate refuses its own floor %s — the comparison is exclusive where it "+
 			"should be inclusive", gate.Min)
 	}
+	// A floor with nothing below it exercises NOTHING: predecessors is empty,
+	// the loop never runs, and the arm passes having asserted only that the
+	// gate permits its own floor. Every other value of Min makes the loop run,
+	// so this is the one input under which the obligation silently stops
+	// discriminating — found by writing this family's negative self-tests
+	// (#1479), which could otherwise not make this arm fail at all.
+	below := predecessors(floor)
+	if len(below) == 0 {
+		t.Errorf("declared floor %s has no version below it, so this obligation asserts "+
+			"nothing — a floor of %s permits every CLI and is not a gate", gate.Min, gate.Min)
+		return
+	}
 	// Each field decremented independently rather than one synthetic
 	// predecessor: a single "just below" value like 0.99.99 exercises only the
 	// borrow path, so a comparison that is correct there and off by one at the
 	// major boundary would still pass. These are the three boundaries a
 	// field-wise comparison can get wrong.
-	for _, older := range predecessors(floor) {
+	for _, older := range below {
 		allowed, why := gate.Permits(older.String())
 		if allowed {
 			t.Errorf("gate permits %s, below the declared floor %s", older, gate.Min)
