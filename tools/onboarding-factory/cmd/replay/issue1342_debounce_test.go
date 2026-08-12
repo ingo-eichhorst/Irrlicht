@@ -164,27 +164,27 @@ var knownFabricated = map[string]string{
 	"copilot/scenarios/2-19_tool-gate-permission-prompt/recordings/2026-08-03-18-02-54_irrlichd-0.5.9+c55d3a0/transcript.jsonl": "pre-existing on main, unrelated to #1342",
 }
 
-// TestSidecarReplayAgreesWithTheDaemonsOwnLog walks the whole catalog and holds
-// every sidecar-driven recording to its own recording in both directions: it
-// must not reproduce ZERO transitions where the daemon logged some, and it must
-// not invent transitions where the daemon logged none.
+// forEachSidecarRecording replays every sidecar-driven recording in the catalog
+// and hands each one's extended check to visit, keyed by its catalog-relative
+// transcript path. It returns how many were visited.
 //
-// Catalog-wide rather than a list of paths, so a newly recorded fixture is
-// covered by existing rather than by somebody remembering to add it.
+// Shared because two catalog gates now ask the same question of the same
+// population and only differ in the verdict they draw — this one and #1480's
+// timing measurement. The walk is mechanism (what counts as a sidecar-driven
+// recording, how a transcript pairs with its sidecar, which recordings
+// legitimately have no extended check); the verdicts are policy and stay in
+// each caller's callback with its own known-lists and messages. Keeping the two
+// replay runs separate is deliberate — sharing the walk costs ~2.8s of re-run
+// and buys full independence between the gates, which is the right trade.
 //
-// Scope note: this asserts only the two absolute failures, not
-// replayed >= recorded generally. 145 of 309 sidecar-driven recordings still
-// show milder extended-check divergence (dominant kind: a missing terminal
-// working→ready); that is a separate population #1342 does not claim to fix,
-// and asserting on it here would fail for reasons this ticket is not about.
-func TestSidecarReplayAgreesWithTheDaemonsOwnLog(t *testing.T) {
+// The zero-recordings vacuity guard lives here rather than in each caller: it
+// is exactly the check that must not be forgotten by the third one, and it was
+// already written twice with two different wordings.
+func forEachSidecarRecording(t *testing.T, visit func(name string, ec *extendedCheck)) int {
+	t.Helper()
 	root := replaydataRoot(t)
 
 	var checked int
-	seenZero := map[string]bool{}
-	seenFabricated := map[string]bool{}
-	var newZero, newFabricated []string
-
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -208,12 +208,41 @@ func TestSidecarReplayAgreesWithTheDaemonsOwnLog(t *testing.T) {
 		// A process-owned-store adapter records no fswatcher fires and
 		// legitimately degrades to transcript-only, so it has no extended
 		// check to compare.
-		ec := report.ExtendedCheck
-		if ec == nil {
+		if report.ExtendedCheck == nil {
 			return nil
 		}
 		checked++
-		name := rel(root, transcript)
+		visit(rel(root, transcript), report.ExtendedCheck)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk replaydata/agents: %v", err)
+	}
+	if checked == 0 {
+		t.Fatal("no sidecar-driven recording found under replaydata/agents — the check is vacuous")
+	}
+	return checked
+}
+
+// TestSidecarReplayAgreesWithTheDaemonsOwnLog walks the whole catalog and holds
+// every sidecar-driven recording to its own recording in both directions: it
+// must not reproduce ZERO transitions where the daemon logged some, and it must
+// not invent transitions where the daemon logged none.
+//
+// Catalog-wide rather than a list of paths, so a newly recorded fixture is
+// covered by existing rather than by somebody remembering to add it.
+//
+// Scope note: this asserts only the two absolute failures, not
+// replayed >= recorded generally. 145 of 309 sidecar-driven recordings still
+// show milder extended-check divergence (dominant kind: a missing terminal
+// working→ready); that is a separate population #1342 does not claim to fix,
+// and asserting on it here would fail for reasons this ticket is not about.
+func TestSidecarReplayAgreesWithTheDaemonsOwnLog(t *testing.T) {
+	seenZero := map[string]bool{}
+	seenFabricated := map[string]bool{}
+	var newZero, newFabricated []string
+
+	checked := forEachSidecarRecording(t, func(name string, ec *extendedCheck) {
 		switch {
 		case ec.RecordedCount > 0 && ec.ReplayedCount == 0:
 			seenZero[name] = true
@@ -228,14 +257,7 @@ func TestSidecarReplayAgreesWithTheDaemonsOwnLog(t *testing.T) {
 					name, ec.ReplayedCount))
 			}
 		}
-		return nil
 	})
-	if err != nil {
-		t.Fatalf("walk replaydata/agents: %v", err)
-	}
-	if checked == 0 {
-		t.Fatal("no sidecar-driven recording found under replaydata/agents — the check is vacuous")
-	}
 
 	report := func(label string, items []string) {
 		if len(items) == 0 {

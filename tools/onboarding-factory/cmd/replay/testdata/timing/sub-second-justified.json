@@ -1,0 +1,46 @@
+{
+  "description": "readBoundaryFor's justified regime — a 42ms gap, its own measured p50. Must NOT be reported as drift, or the measurement cannot tell the widening's win from its cost",
+  "recorded": [
+    {
+      "seq": 1,
+      "ts": "2026-04-11T10:00:00.000000Z",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "ready",
+      "new_state": "working"
+    },
+    {
+      "seq": 2,
+      "ts": "2026-04-11T10:00:01.000000Z",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "working",
+      "new_state": "ready"
+    }
+  ],
+  "replayed": [
+    {
+      "virtual_time": "2026-04-11T10:00:00.042000Z",
+      "prev_state": "ready",
+      "new_state": "working"
+    },
+    {
+      "virtual_time": "2026-04-11T10:00:01.999000Z",
+      "prev_state": "working",
+      "new_state": "ready"
+    }
+  ],
+  "want": [
+    {
+      "index": 0,
+      "kind": "ready→working",
+      "delta_ns": 42000000
+    },
+    {
+      "index": 1,
+      "kind": "working→ready",
+      "delta_ns": 999000000
+    }
+  ],
+  "want_first_drift": null
+}

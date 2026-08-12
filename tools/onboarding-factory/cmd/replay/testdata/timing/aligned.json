@@ -1,0 +1,64 @@
+{
+  "description": "replay reproduces every transition at the daemon's own time (sub-millisecond) — the vacuity guard: a detector that flags this flags everything",
+  "recorded": [
+    {
+      "seq": 1,
+      "ts": "2026-05-23T20:36:41.131713+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "ready",
+      "new_state": "working"
+    },
+    {
+      "seq": 2,
+      "ts": "2026-05-23T20:36:41.132557+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "working",
+      "new_state": "waiting"
+    },
+    {
+      "seq": 3,
+      "ts": "2026-05-23T20:36:44.492741+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "waiting",
+      "new_state": "ready"
+    }
+  ],
+  "replayed": [
+    {
+      "virtual_time": "2026-05-23T20:36:41.131713+02:00",
+      "prev_state": "ready",
+      "new_state": "working"
+    },
+    {
+      "virtual_time": "2026-05-23T20:36:41.133557+02:00",
+      "prev_state": "working",
+      "new_state": "waiting"
+    },
+    {
+      "virtual_time": "2026-05-23T20:36:44.490741+02:00",
+      "prev_state": "waiting",
+      "new_state": "ready"
+    }
+  ],
+  "want": [
+    {
+      "index": 0,
+      "kind": "ready→working",
+      "delta_ns": 0
+    },
+    {
+      "index": 1,
+      "kind": "working→waiting",
+      "delta_ns": 1000000
+    },
+    {
+      "index": 2,
+      "kind": "waiting→ready",
+      "delta_ns": -2000000
+    }
+  ],
+  "want_first_drift": null
+}

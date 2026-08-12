@@ -1,0 +1,46 @@
+{
+  "description": "#1476's worst documented cost, verbatim: mistral-vibe/2-12_context-compaction pins ready→working at 17:23:08.571829 while the daemon logged it at 17:23:39.548309 — 30.976s EARLY, and a full pass on every other gate in this package",
+  "recorded": [
+    {
+      "seq": 21989,
+      "ts": "2026-07-07T17:23:39.548309+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "ready",
+      "new_state": "working"
+    },
+    {
+      "seq": 21990,
+      "ts": "2026-07-07T17:23:39.549021+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "working",
+      "new_state": "ready"
+    }
+  ],
+  "replayed": [
+    {
+      "virtual_time": "2026-07-07T17:23:08.571829+02:00",
+      "prev_state": "ready",
+      "new_state": "working"
+    },
+    {
+      "virtual_time": "2026-07-07T17:23:41.561939+02:00",
+      "prev_state": "working",
+      "new_state": "ready"
+    }
+  ],
+  "want": [
+    {
+      "index": 0,
+      "kind": "ready→working",
+      "delta_ns": -30976480000
+    },
+    {
+      "index": 1,
+      "kind": "working→ready",
+      "delta_ns": 2012918000
+    }
+  ],
+  "want_first_drift": -30976480000
+}

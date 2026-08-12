@@ -23,7 +23,8 @@ func runExtendedCheck(sidecarPath string, replayed []transition) (*extendedCheck
 		RecordedCount: len(recorded),
 		ReplayedCount: len(replayedReal),
 	}
-	check.OrderedMatches, check.OrderedMismatches = compareOrdered(recorded, replayedReal)
+	check.TimeDeltas, check.OrderedMismatches = compareOrdered(recorded, replayedReal)
+	check.OrderedMatches = len(check.TimeDeltas)
 
 	recordedKinds := uniqueTransitionKinds(recorded, func(e lifecycle.Event) (string, string) { return e.PrevState, e.NewState })
 	replayedKinds := uniqueTransitionKinds(replayedReal, func(t transition) (string, string) { return t.PrevState, t.NewState })
@@ -50,12 +51,32 @@ func dropInitTransitions(replayed []transition) []transition {
 // compareOrdered walks recorded and replayed transitions index-by-index up to
 // the shorter slice's length, then reports the longer slice's tail as
 // missing/extra.
-func compareOrdered(recorded []lifecycle.Event, replayedReal []transition) (matches int, mismatches []transitionMismatch) {
+//
+// It returns the MATCHED pairs rather than a count of them, each carrying how
+// far apart in time the two sides fired (#1480). The count callers used to get
+// is len(matched). Those were two functions until the timing measurement's
+// first draft, which rode this pairing from a second, identical loop and
+// documented the coupling in three prose comments plus a runtime assertion that
+// len(TimeDeltas) == OrderedMatches. One loop makes that equality hold by
+// construction, so there is nothing left to remember or to assert: a pairing
+// change cannot move the ordered figure and the timing figure apart, because
+// they are now the same traversal.
+//
+// The timing of an UNMATCHED pair is deliberately not reported. The two sides
+// are not the same transition there — that is what state_differs means — so
+// subtracting their timestamps yields a number with no meaning, and counting it
+// would report one sequence divergence twice.
+func compareOrdered(recorded []lifecycle.Event, replayedReal []transition) (matched []timeDelta, mismatches []transitionMismatch) {
 	n := min(len(recorded), len(replayedReal))
+	matched = make([]timeDelta, 0, n)
 	for i := 0; i < n; i++ {
 		r, p := recorded[i], replayedReal[i]
 		if r.PrevState == p.PrevState && r.NewState == p.NewState {
-			matches++
+			matched = append(matched, timeDelta{
+				Index: i,
+				Kind:  r.PrevState + "→" + r.NewState,
+				Delta: p.VirtualTime.Sub(r.Timestamp),
+			})
 			continue
 		}
 		mismatches = append(mismatches, transitionMismatch{
@@ -81,7 +102,7 @@ func compareOrdered(recorded []lifecycle.Event, replayedReal []transition) (matc
 			Replayed: p.PrevState + "→" + p.NewState,
 		})
 	}
-	return matches, mismatches
+	return matched, mismatches
 }
 
 // diffKinds returns the "prev→new" kind strings present in recordedKinds but
