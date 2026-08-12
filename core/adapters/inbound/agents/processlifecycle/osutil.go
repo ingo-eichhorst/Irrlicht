@@ -145,7 +145,14 @@ func hostIdentity(pid int) *session.Launcher {
 	// kitty field back-fill). Walking the ppid chain once instead of up to
 	// three times keeps this bounded — each readProcInfo is a `ps` shellout
 	// with a 2s ceiling.
-	if l.HerdrPaneID == "" {
+	//
+	// A tmux pane is skipped for the same reason, and the reason is not merely
+	// that the walk is futile: tmux's server is reparented to PID 1, so the
+	// chain from a pane can only ever rediscover the terminal the *server* was
+	// launched from — which is precisely the stale host launcherFromEnv just
+	// suppressed. Running the fallbacks here would undo that suppression by
+	// another route, exactly as it would for herdr.
+	if l.HerdrPaneID == "" && l.TmuxPane == "" {
 		applyAncestryFallbacks(l, pid, memoizedAncestry(pid))
 	}
 
@@ -173,6 +180,18 @@ func launcherFromEnv(env map[string]string) *session.Launcher {
 			HerdrSocketPath: env["HERDR_SOCKET_PATH"],
 		}
 	}
+	// A tmux pane is the same shape as a herdr pane and for the same reason,
+	// so it keeps only its own address too — see session.Launcher's Tmux*
+	// fields. Checked *after* herdr on purpose: a herdr server started from a
+	// tmux pane hands every pane a $TMUX_PANE as well, and that one is the
+	// server's, not the agent's (#1348). herdrPaneEnv in the tests is exactly
+	// that env, and TestLauncherFromEnv_HerdrCapture locks the ordering.
+	if pane := env["TMUX_PANE"]; pane != "" {
+		return &session.Launcher{
+			TmuxPane:   pane,
+			TmuxSocket: tmuxSocketFromEnv(env["TMUX"]),
+		}
+	}
 	l := &session.Launcher{
 		TermProgram:    env["TERM_PROGRAM"],
 		ITermSessionID: env["ITERM_SESSION_ID"],
@@ -181,14 +200,7 @@ func launcherFromEnv(env map[string]string) *session.Launcher {
 		KittyListenOn:  env["KITTY_LISTEN_ON"],
 		KittyWindowID:  env["KITTY_WINDOW_ID"],
 	}
-	if tmux := env["TMUX"]; tmux != "" {
-		// $TMUX is "/path/to/socket,pid,session" — first field is the socket.
-		if i := strings.Index(tmux, ","); i > 0 {
-			l.TmuxSocket = tmux[:i]
-		} else {
-			l.TmuxSocket = tmux
-		}
-	}
+	l.TmuxSocket = tmuxSocketFromEnv(env["TMUX"])
 	if v := env["VSCODE_PID"]; v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			l.VSCodePID = n
@@ -212,6 +224,22 @@ func launcherFromEnv(env map[string]string) *session.Launcher {
 		l.TermProgram = "jetbrains"
 	}
 	return l
+}
+
+// tmuxSocketFromEnv extracts the server socket from $TMUX, whose value is
+// "/path/to/socket,pid,session". Returns "" for an empty $TMUX so a launcher
+// with no tmux server keeps a zero socket rather than an empty-but-set one.
+// Shared by both branches of launcherFromEnv: a tmux pane's address is the one
+// thing it keeps, so the parse must not live only on the path that no longer
+// runs for it.
+func tmuxSocketFromEnv(tmux string) string {
+	if tmux == "" {
+		return ""
+	}
+	if i := strings.Index(tmux, ","); i > 0 {
+		return tmux[:i]
+	}
+	return tmux
 }
 
 // memoizedAncestry returns a closure resolving pid's process ancestry via

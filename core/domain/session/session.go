@@ -85,6 +85,32 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 // resolve to tmux and type into a foreign pane in a different window. This is
 // the rationale the capture and control paths refer back to (#1348).
 //
+// The Tmux* fields are the same case, established by live measurement on tmux
+// 3.6a (#1486): tmux's server daemonizes at first use, is reparented to PID 1,
+// outlives every client, and hands its own launch-time environment to every
+// pane it will ever spawn. A pane created minutes after the launching terminal
+// was gone still carried that terminal's $ITERM_SESSION_ID and
+// $TERM_SESSION_ID, while a different client was the only one attached — so a
+// tmux pane keeps only TmuxPane/TmuxSocket, exactly as a herdr pane keeps only
+// its address.
+//
+// Note what tmux itself does to $TERM_PROGRAM, because it is the opposite of
+// what the herdr paragraph above would lead you to expect: tmux overwrites it
+// with the literal "tmux" rather than leaking the launching terminal's value.
+// That does not make it usable. "tmux" names a multiplexer, not a window;
+// it matches no entry in the macOS activator registry; and being non-empty it
+// suppresses the TermProgram=="" guards that would otherwise reach the
+// ancestry fallbacks. It is a value that can only mask, never resolve, which
+// is why it is dropped rather than kept as a label.
+//
+// The consequence is that a tmux session currently resolves to no host at all
+// — click-to-focus does nothing rather than raising the wrong window, which is
+// the same honest degradation a herdr session with no attached client gets.
+// Resolving the real host means asking tmux which client is attached
+// (`tmux -S <socket> list-clients -F '#{client_pid}'`, then reading that
+// process's identity the way a herdr client's is read). That is #1350's
+// counterpart for tmux and is deliberately not built here.
+//
 // The host fields on a herdr launcher are therefore populated from a different
 // process: the attached herdr *client*, which is what actually owns a window
 // (#1350). Provenance is the whole distinction — the same TmuxPane that is a
@@ -96,7 +122,7 @@ type Launcher struct {
 	TermProgram    string `json:"term_program,omitempty"`     // $TERM_PROGRAM (e.g. iTerm.app, Apple_Terminal, vscode, cursor, ghostty, WezTerm, Hyper)
 	ITermSessionID string `json:"iterm_session_id,omitempty"` // $ITERM_SESSION_ID
 	TermSessionID  string `json:"term_session_id,omitempty"`  // $TERM_SESSION_ID (Terminal.app)
-	TmuxPane       string `json:"tmux_pane,omitempty"`        // $TMUX_PANE
+	TmuxPane       string `json:"tmux_pane,omitempty"`        // $TMUX_PANE — the pane's own address, and the only host-independent thing its env carries (#1486)
 	TmuxSocket     string `json:"tmux_socket,omitempty"`      // first `,`-field of $TMUX
 	VSCodePID      int    `json:"vscode_pid,omitempty"`       // $VSCODE_PID (vscode/cursor/windsurf)
 	TTY            string `json:"tty,omitempty"`              // controlling TTY, e.g. "/dev/ttys021" — Terminal.app AppleScript matches tabs by this. The agent process's own, except on a herdr session with a client attached, where it is the client's: that is the tab actually displaying the pane (#1350)
