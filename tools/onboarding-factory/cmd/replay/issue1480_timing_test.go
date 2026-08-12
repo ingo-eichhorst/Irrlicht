@@ -108,7 +108,7 @@ func TestTransitionTimeDeltas_Corpus(t *testing.T) {
 			// Index is the INPUT pair position, not the output slot, and the
 			// two differ exactly where a pair was excluded — which is what
 			// kind-mismatch-excluded.json pins. Every "at pair N" in the
-			// 65-entry enumeration is that number, so a regression writing the
+			// enumeration below is that number, so a regression writing the
 			// output slot there would leave the deltas right and every
 			// reported position wrong.
 			if !reflect.DeepEqual(got, want) {
@@ -315,7 +315,7 @@ func describeDrift(d timeDelta) string {
 //
 // It is a RATCHET, not a tolerance gate. A transition drifting 900ms is not
 // asserted to be correct; it is asserted not to be NEW. The distinction matters
-// because 28.7% of the committed catalog's transitions are already over 1s from
+// because 24.3% of the committed catalog's transitions are already over 1s from
 // their daemon, and a gate that failed on all of them would be reverted within
 // the day and would protect nothing.
 func TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog(t *testing.T) {

@@ -55,7 +55,7 @@ func (d timeDelta) Abs() time.Duration { return d.Delta.Abs() }
 //	0.1-1s      10    1.2%   ← the trough: ONE HUNDREDTH of the population
 //	1-5s        85   10.3%   ┐
 //	5-10s       39    4.7%   │
-//	10-30s      58    7.0%   ├ 24.4% above 1s — a different phenomenon entirely
+//	10-30s      58    7.0%   ├ 24.3% above 1s — a different phenomenon entirely
 //	30-60s      13    1.6%   │
 //	>60s         6    0.7%   ┘
 //

@@ -659,14 +659,14 @@ Before marking a ticket done, run the full suite — every layer must pass:
   twice. The reporting side (`timing_drift.go`) buckets and ranks those deltas;
   it reuses `core/domain/stats.Percentile` rather than carrying its own.
   It is a **ratchet, not a tolerance gate**, and that is the deliberate
-  shape: 24.4% of the catalog's 826 kind-matched pairs are still more than 1s
+  shape: 24.3% of the catalog's 826 kind-matched pairs are still more than 1s
   from their daemon, so a gate failing on all of them would protect nothing.
   `TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog` walks all 309
   sidecar-driven recordings, prints the distribution, and fails when a
   recording NEWLY drifts, when a pinned entry stops drifting and is left to rot,
   or when the aggregate counts grow — the same idiom `knownZeroTransition`
   uses. The 1s threshold is read off the measured distribution rather than
-  picked: |delta| is sharply bimodal (74.4% under 100ms, 24.4% over 1s) with a
+  picked: |delta| is sharply bimodal (74.4% under 100ms, 24.3% over 1s) with a
   near-empty decade between, so the cut lands where ~1% of the population
   lives; `driftThreshold`'s doc comment carries the histogram. That trough is
   the same 10 pairs before and after #1478 reshaped both modes around it, which
@@ -693,7 +693,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   gemini-cli recordings a *replacement* time bound broke during #1476's review.
   The constant is CALIBRATED, not derived, and both walls are measured facts
   about the committed catalog: below 3ms the rescues are incomplete, at 28ms
-  replay fabricates in `codex/2-1_basic-turn` and at 68ms in
+  replay fabricates in `codex/2-1_basic-turn` and at 52ms in
   `codex/1-1_session-start`. Those two are exactly the goldens #1342's rejected
   guard-narrowing broke — two unrelated mechanisms hitting the same wall, which
   is why it is treated as a property of the catalog. `TestReadBoundaryClusterWindow_BothWallsAreMeasured`

@@ -149,7 +149,7 @@ func TestReplayWithSidecar_Issue1342_HeaderOnlyFirstPassIsWidened(t *testing.T) 
 // Its burst spans 68.875ms, where the three that were rescued span 2-3ms. A
 // window wide enough to reach it is 2.5x past the point where replay starts
 // FABRICATING: at 28ms codex/2-1_basic-turn's 18-54-06 recording gains a
-// ready→working its daemon never logged, and at 68ms codex/1-1_session-start
+// ready→working its daemon never logged, and at 52ms codex/1-1_session-start
 // — the sole recording for a core-twelve scenario, whose daemon correctly held
 // ready for the session's entire life — joins it. Those are precisely the two
 // goldens #1342's rejected guard-narrowing broke, reached here by a completely
@@ -241,7 +241,7 @@ func forEachSidecarRecording(t *testing.T, visit func(name string, ec *extendedC
 // covered by existing rather than by somebody remembering to add it.
 //
 // Scope note: this asserts only the two absolute failures, not
-// replayed >= recorded generally. 145 of 309 sidecar-driven recordings still
+// replayed >= recorded generally. 140 of 309 sidecar-driven recordings still
 // show milder extended-check divergence (dominant kind: a missing terminal
 // working→ready); that is a separate population #1342 does not claim to fix,
 // and asserting on it here would fail for reasons this ticket is not about.

@@ -684,7 +684,7 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 // exactly (-0.000s -> +10..+28s): there the long gap is idle time AFTER a
 // write the daemon did absorb. The sidecar cannot distinguish "gap is idle
 // after the write" from "gap is before the write happened" — the same
-// limitation the four knownZeroTransition entries concede — so the bounded
+// limitation the one remaining knownZeroTransition entry concedes — so the bounded
 // variant is worse on the aggregate (175/118 vs 146/88 recordings drifting
 // >1s/>5s). Net across the catalog the widening still MOVES TIMES TOWARD the
 // daemon: 46 recordings closer, 20 further; >1s drift 171 -> 146, >5s 117 -> 88.
@@ -730,18 +730,23 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 // harness added to the columns because a boundary change moves WHEN a
 // transition fires and nothing before #1480 could see that:
 //
-//	                          zero  fabricated  divergent  drift>1s  pairs
-//	#1476 as shipped             4           1        144       119    818
-//	+ 2ms cluster window         4           1        142       118    821
-//	+ 10ms cluster (shipped)     1           1        139       105    826
-//	+ 28ms cluster (rejected)    1           2        140       106    826
-//	+ 69ms cluster (rejected)    0           3        141       116    825
+// "divergent" is recordings with any extended-check divergence, i.e.
+// len(OrderedMismatches) > 0 — the same population the 145 quoted above and in
+// issue1342_debounce_test.go counts, so the rows below extend that series
+// rather than starting a new one on a narrower definition.
 //
-// The shipped row is jointly best on every column, and the plateau it sits on
-// runs 10-25ms. Note what the last two rows cost: clearing the final entry
-// needs 69ms, which fabricates in TWO goldens — and buying that also makes
-// drift worse (105 -> 116) rather than trading one axis for another. That is
-// the trade #1342 refused and #1478 refuses again.
+//	                          zero  fabricated  divergent  drift>1s  pairs
+//	#1476 as shipped             4           1        145       119    818
+//	+ 2ms cluster window         4           1        143       118    821
+//	+ 10ms cluster (shipped)     1           1        140       105    826
+//	+ 28ms cluster (rejected)    1           2        141       106    826
+//	+ 69ms cluster (rejected)    0           3        142       116    825
+//
+// The shipped row is best on every column but zero, and the plateau it sits on
+// runs 10-25ms. The exception is the point: the ONLY way to improve zero is the
+// 69ms row, which costs two fabrications AND makes drift worse (105 -> 116)
+// rather than trading one axis for another. That is the trade #1342 refused and
+// #1478 refuses again.
 //
 // The one recording that remains is pinned in knownZeroTransition in
 // issue1342_debounce_test.go, with the wall that keeps it there.
@@ -751,7 +756,10 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 // and comparing against the target there would return a boundary behind the
 // cursor and slice srcBytes backwards.
 func (r *sidecarReplayer) readBoundaryFor(eventIdx int, consumed int64, metrics *tailer.SessionMetrics) (int64, bool) {
-	if eventIdx < 0 || metrics == nil {
+	// The upper bound is not reachable from today's four call sites, but it is
+	// load-bearing now that clusterBoundary indexes fswatches[eventIdx]
+	// directly: before #1478 an out-of-range-high index was merely inert.
+	if eventIdx < 0 || eventIdx >= len(r.fswatches) || metrics == nil {
 		return 0, false
 	}
 	if !metrics.NoSubstantiveActivity || metrics.LastEventType != "" {
@@ -798,8 +806,10 @@ func (r *sidecarReplayer) readBoundaryFor(eventIdx int, consumed int64, metrics 
 //     three #1478 recordings reproduce their transitions, because the third's
 //     four fires span further than that.
 //   - CEILING 28ms. At and above it replay FABRICATES: codex/2-1_basic-turn's
-//     18-54-06 recording gains a transition its daemon never logged. At 68ms
-//     codex/1-1_session-start joins it.
+//     18-54-06 recording gains a transition its daemon never logged. A SECOND
+//     wall follows closely at 52ms, where codex/1-1_session-start joins it —
+//     its first two fires are 51.663ms apart. Both walls matter: a 60ms
+//     "compromise" reaching for the pinned recording would clear neither.
 //
 // The ceiling is the load-bearing number, and it did not have to land where it
 // did: those are EXACTLY the two goldens that #1342's rejected guard-narrowing
@@ -839,12 +849,23 @@ var readBoundaryClusterWindow = 10 * time.Millisecond
 // variant that REPLACED the one-step widening with a time bound is the 200ms
 // gap bound rejected during #1476's review, and it broke exactly those 35.
 //
-// The scan takes the MAXIMUM rather than the last qualifying stat, and stops
-// at the first event outside the window rather than scanning on. Neither is
-// cosmetic: sizes in a burst are not guaranteed monotonic (a reconcile-sweep
-// fire can re-report an older stat), and continuing past the first gap would
-// make the rule transitive across an idle period — which is the failure mode
-// this window exists to exclude.
+// Two details of the scan, stated because the obvious reading of each is wrong:
+//
+// The window is ANCHORED, not chained — every candidate is compared to the
+// pass's own timestamp, and `at` is never reassigned — so the rule can never go
+// transitive across an idle period no matter how many events follow. The
+// `break` is therefore a pure early exit, valid because the fswatch stream is
+// Seq-sorted and its dequeue timestamps are monotonic (verified: 0 of 309
+// committed recordings have a non-monotonic fswatch timestamp in Seq order).
+// Do NOT "restore" a chained form by comparing j to j-1: that would silently
+// turn a bounded 10ms rule into an unbounded walk and invalidate the
+// calibration.
+//
+// The fold takes the MAXIMUM rather than the last qualifying stat because sizes
+// in a burst are not guaranteed monotonic — a reconcile-sweep fire can
+// re-report an older stat. No committed recording exercises that inside a
+// window (measured), so the catalog cannot witness it; TestClusterBoundary
+// covers it synthetically instead of leaving the choice unfalsifiable.
 func (r *sidecarReplayer) clusterBoundary(eventIdx int) int64 {
 	if readBoundaryClusterWindow <= 0 {
 		return 0
