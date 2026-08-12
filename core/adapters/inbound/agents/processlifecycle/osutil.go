@@ -145,6 +145,15 @@ func hostIdentity(pid int) *session.Launcher {
 	// kitty field back-fill). Walking the ppid chain once instead of up to
 	// three times keeps this bounded — each readProcInfo is a `ps` shellout
 	// with a 2s ceiling.
+	//
+	// A tmux pane is deliberately NOT skipped here, though the same argument
+	// looks like it should apply. It does not: tmux's server is reparented to
+	// PID 1, so the walk from a genuine pane terminates there having found
+	// nothing — it is inert, not dangerous, and cannot put back what
+	// launcherFromEnv suppressed. Meanwhile it is the only thing that recovers
+	// a host for a process launched from a pane by a terminal that reports
+	// none of its own (kitty), whose fields the suppression above drops. So
+	// skipping it would buy no correctness and cost exactly that case.
 	if l.HerdrPaneID == "" {
 		applyAncestryFallbacks(l, pid, memoizedAncestry(pid))
 	}
@@ -173,6 +182,32 @@ func launcherFromEnv(env map[string]string) *session.Launcher {
 			HerdrSocketPath: env["HERDR_SOCKET_PATH"],
 		}
 	}
+	// A tmux pane is the same shape as a herdr pane and for the same reason,
+	// so it keeps only its own address too — see session.Launcher's Tmux*
+	// fields.
+	//
+	// The condition is $TMUX_PANE *and* tmux's own TERM_PROGRAM marker, never
+	// $TMUX_PANE alone. $TMUX_PANE is not self-describing: every descendant of
+	// a pane inherits it, including a GUI terminal or IDE launched from inside
+	// one (`code .`, `kitty`), and such a process carries the stale pane
+	// address alongside a correct host identity it reported itself. Keying on
+	// the address alone discards that host and turns a working click-to-focus
+	// into a silent no-op. tmux stamps TERM_PROGRAM=tmux onto the panes it
+	// spawns, so a process claiming any other host claimed it for itself and
+	// is left alone; one claiming no host of its own (kitty sets none —
+	// upstream kitty#4793) is suppressed here and recovered by the ancestry
+	// fallbacks, which is why hostIdentity must not skip them for tmux.
+	//
+	// Checked *after* herdr on purpose: a herdr server started from a tmux
+	// pane hands every pane a $TMUX_PANE as well, and that one is the
+	// server's, not the agent's (#1348). herdrPaneEnv in the tests is exactly
+	// that env, and TestLauncherFromEnv_HerdrCapture locks the ordering.
+	if pane := env["TMUX_PANE"]; pane != "" && env["TERM_PROGRAM"] == tmuxTermProgram {
+		return &session.Launcher{
+			TmuxPane:   pane,
+			TmuxSocket: tmuxSocketFromEnv(env["TMUX"]),
+		}
+	}
 	l := &session.Launcher{
 		TermProgram:    env["TERM_PROGRAM"],
 		ITermSessionID: env["ITERM_SESSION_ID"],
@@ -180,14 +215,7 @@ func launcherFromEnv(env map[string]string) *session.Launcher {
 		TmuxPane:       env["TMUX_PANE"],
 		KittyListenOn:  env["KITTY_LISTEN_ON"],
 		KittyWindowID:  env["KITTY_WINDOW_ID"],
-	}
-	if tmux := env["TMUX"]; tmux != "" {
-		// $TMUX is "/path/to/socket,pid,session" — first field is the socket.
-		if i := strings.Index(tmux, ","); i > 0 {
-			l.TmuxSocket = tmux[:i]
-		} else {
-			l.TmuxSocket = tmux
-		}
+		TmuxSocket:     tmuxSocketFromEnv(env["TMUX"]),
 	}
 	if v := env["VSCODE_PID"]; v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -212,6 +240,30 @@ func launcherFromEnv(env map[string]string) *session.Launcher {
 		l.TermProgram = "jetbrains"
 	}
 	return l
+}
+
+// tmuxTermProgram is the value tmux writes into $TERM_PROGRAM for the panes it
+// spawns (measured on 3.6a, alongside TERM_PROGRAM_VERSION=3.6a). It is not a
+// host — it names a multiplexer, matches no entry in the macOS activator
+// registry, and being non-empty it suppresses the TermProgram=="" guards that
+// reach the ancestry fallbacks — so it is used only as evidence that tmux, and
+// not something launched from within it, spawned this process.
+const tmuxTermProgram = "tmux"
+
+// tmuxSocketFromEnv extracts the server socket from $TMUX, whose value is
+// "/path/to/socket,pid,session". Returns "" for an empty $TMUX so a launcher
+// with no tmux server keeps a zero socket rather than an empty-but-set one.
+// Shared by both branches of launcherFromEnv: a tmux pane's address is the one
+// thing it keeps, so the parse must not live only on the path that no longer
+// runs for it.
+func tmuxSocketFromEnv(tmux string) string {
+	if tmux == "" {
+		return ""
+	}
+	if i := strings.Index(tmux, ","); i > 0 {
+		return tmux[:i]
+	}
+	return tmux
 }
 
 // memoizedAncestry returns a closure resolving pid's process ancestry via
