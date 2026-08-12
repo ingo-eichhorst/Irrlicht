@@ -14,7 +14,16 @@
 //
 // Obligations 2-4 are the same code in both delivery routes (only the address
 // assertion and the seed differ — see deliveryRules), so they are driven once
-// here, through the reference beacon installer, and cover both.
+// here, through the reference beacon installer, and cover both. Each of those
+// three makes TWO claims, and the second of each is covered separately in
+// TestEndpointArm_SecondAssertions — an installer can satisfy "writes the
+// canonical line" while rewriting on every start, or "reports modified" while
+// removing nothing.
+//
+// A fixture here is wrong in one way, which is not the same as reddening one
+// assertion: a non-idempotent install also trips the delivery comparison. That
+// is what mustReport's required message fragment is for — it grades WHICH
+// assertion fired, not merely that something did.
 package contracttesting
 
 import (
@@ -329,17 +338,9 @@ func TestEndpointArm_UpgradedInPlace(t *testing.T) {
 		// install is already "ours and current" and EnsureInstalled does
 		// nothing.
 		mutated.EnsureInstalled = func() (bool, error) {
-			path, err := referenceBeaconHooksPath()
-			if err != nil {
-				return false, err
-			}
-			command, err := hookbeacon.InstalledCommand(referenceBeaconAdapter)
-			if err != nil {
-				return false, err
-			}
-			cfg := referenceBeaconConfig(path, command)
-			cfg.IsCanonical = func(map[string]interface{}) bool { return true }
-			return hookjson.EnsureInstalled(cfg)
+			return beaconRunWith(func(cfg *hookjson.Config) {
+				cfg.IsCanonical = func(map[string]interface{}) bool { return true }
+			}, hookjson.EnsureInstalled)
 		}
 		rec := observe(t, func(at armT) { assertUpgradedInPlace(at, mutated, r) })
 		mustReport(t, rec, "expected modified=true when repointing",
@@ -367,17 +368,10 @@ func TestEndpointArm_UninstallIsNotForeignScoped(t *testing.T) {
 	t.Run("uninstall_scoped_to_the_running_binary", func(t *testing.T) {
 		mutated := correctBeaconInstaller()
 		mutated.Uninstall = func() (bool, error) {
-			path, err := referenceBeaconHooksPath()
-			if err != nil {
-				return false, err
-			}
-			command, err := hookbeacon.InstalledCommand(referenceBeaconAdapter)
-			if err != nil {
-				return false, err
-			}
-			cfg := referenceBeaconConfig(path, command)
-			cfg.Sentinel = command // the whole command, so a foreign binary's entry no longer matches
-			return hookjson.Uninstall(cfg)
+			return beaconRunWith(func(cfg *hookjson.Config) {
+				// The whole command, so a foreign binary's entry no longer matches.
+				cfg.Sentinel = cfg.Entry()["command"].(string)
+			}, hookjson.Uninstall)
 		}
 		rec := observe(t, func(at armT) { assertUninstallIsNotForeignScoped(at, mutated, r) })
 		mustReport(t, rec, "expected modified=true removing",
@@ -405,4 +399,82 @@ func TestEndpointRulesFor(t *testing.T) {
 			"a delivery mode naming no obligation set — a third route added without saying "+
 				"which obligations it runs")
 	})
+}
+
+// TestEndpointArm_SecondAssertions covers the half of obligations 2, 3 and 4
+// that the mutations above leave untouched. Each of those obligations makes two
+// claims, and only the first was graded — measured in review of PR #1498, where
+// neutering each of these three left the whole suite green.
+//
+// They are grouped rather than folded into the tests above because each needs a
+// fixture that is CORRECT on the first claim and wrong only on the second;
+// mixing them into one installer would grade two things at once, which is the
+// "the run failed incidentally elsewhere" shape this file exists to refuse.
+func TestEndpointArm_SecondAssertions(t *testing.T) {
+	h := correctBeaconInstaller()
+	r := addressFreeRules(t, h)
+
+	// Obligation 3's second claim: repointed IN PLACE, not appended beside the
+	// foreign entry. A sentinel that does not match what the seed wrote means
+	// EnsureInstalled does not recognize the entry as ours, so it adds a second
+	// matcher group — reported modified=true, and the user's config now carries
+	// two of our hooks, one of them dead. This is #1178's actual damage shape.
+	t.Run("upgrade_appends_a_duplicate_group", func(t *testing.T) {
+		mutated := correctBeaconInstaller()
+		mutated.EnsureInstalled = func() (bool, error) {
+			return beaconRunWith(func(cfg *hookjson.Config) {
+				cfg.Sentinel = "not-the-sentinel-the-seed-wrote"
+			}, hookjson.EnsureInstalled)
+		}
+		rec := observe(t, func(at armT) { assertUpgradedInPlace(at, mutated, r) })
+		mustReport(t, rec, "expected exactly 1 matcher group",
+			"an install that appends a second group beside the foreign entry instead of "+
+				"repointing it (M3b)")
+	})
+
+	// Obligation 4's second claim: the entries are actually GONE. Reporting
+	// modified=true while removing nothing is the shape a caller cannot detect —
+	// `--uninstall-hooks` prints success over a config it did not change.
+	t.Run("uninstall_reports_success_but_removes_nothing", func(t *testing.T) {
+		mutated := correctBeaconInstaller()
+		mutated.Uninstall = func() (bool, error) { return true, nil }
+		rec := observe(t, func(at armT) { assertUninstallIsNotForeignScoped(at, mutated, r) })
+		mustReport(t, rec, "survived uninstall",
+			"an Uninstall that reports modified=true and leaves every entry in place")
+	})
+
+	// Obligation 2's second claim: idempotency. An install that rewrites on every
+	// daemon start churns the user's config forever and makes "modified" useless
+	// as a signal that anything actually changed.
+	t.Run("install_is_not_idempotent", func(t *testing.T) {
+		mutated := correctBeaconInstaller()
+		mutated.EnsureInstalled = func() (bool, error) {
+			// Writes the canonical delivery, so the first claim still holds and
+			// only idempotency is wrong.
+			if _, err := referenceBeaconEnsureInstalled(); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+		rec := observe(t, func(at armT) { assertInstallWritesCanonicalDelivery(at, mutated, r) })
+		mustReport(t, rec, "second install on the same bind address",
+			"an installer that reports modified=true every time it runs")
+	})
+}
+
+// beaconRunWith builds the reference beacon's config, applies one deliberate
+// deviation, and hands it to op — so each mutation above states its deviation
+// as one line rather than restating the whole config.
+func beaconRunWith(mutate func(*hookjson.Config), op func(hookjson.Config) (bool, error)) (bool, error) {
+	path, err := referenceBeaconHooksPath()
+	if err != nil {
+		return false, err
+	}
+	command, err := hookbeacon.InstalledCommand(referenceBeaconAdapter)
+	if err != nil {
+		return false, err
+	}
+	cfg := referenceBeaconConfig(path, command)
+	mutate(&cfg)
+	return op(cfg)
 }

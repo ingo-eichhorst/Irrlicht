@@ -11,6 +11,7 @@
 package contracttesting
 
 import (
+	"strings"
 	"testing"
 
 	"irrlicht/core/adapters/inbound/agents/hookjson"
@@ -106,6 +107,33 @@ func disclosureArms() map[string]disclosureArm {
 	}
 }
 
+// wantOf returns the fragment of an obligation's OWN failure message that
+// proves IT fired. Taking it from the table rather than retyping it at the call
+// site is the review finding from PR #1498: three of these tests originally
+// passed the interpolated VALUE ("Notification", the floor string) as the
+// fragment, which a NEIGHBOURING obligation's message also contains — so an arm
+// that reported the wrong prose for the right condition was graded green. That
+// is #1453's second instance reproduced inside its own fix.
+func wantOf(t *testing.T, obligation string) string {
+	t.Helper()
+	arm, ok := disclosureArms()[obligation]
+	if !ok {
+		t.Fatalf("no obligation named %q — the table and these tests have drifted", obligation)
+	}
+	return arm.want
+}
+
+// mustAlsoName asserts the failure names the value the fixture was wrong about,
+// on top of naming the obligation. Both halves matter: the obligation fragment
+// says WHICH check fired, the value says the message is actionable.
+func mustAlsoName(t *testing.T, obs observation, value, what string) {
+	t.Helper()
+	if !strings.Contains(obs.report(), value) {
+		t.Errorf("%s: the failure never names %q, so a reader cannot act on it: %s",
+			what, value, obs.report())
+	}
+}
+
 func disclosureText(d HookDisclosure) string {
 	perm, _ := disclosureUnderTest(d)
 	return perm.Touches + "\n" + perm.Detail
@@ -141,8 +169,9 @@ func TestDisclosureArm_NamesEveryInstalledEvent(t *testing.T) {
 	rec := observe(t, func(at armT) {
 		assertNamesEveryInstalledEvent(at, d.Installed, disclosureWords(d))
 	})
-	mustReport(t, rec, "Notification",
-		"copy rendered from installed[:len-1] — the last event is installed but never named (#1356)")
+	const what = "copy rendered from installed[:len-1] — the last event is installed but never named (#1356)"
+	mustReport(t, rec, wantOf(t, "names_every_installed_event"), what)
+	mustAlsoName(t, rec, "Notification", what)
 }
 
 // TestDisclosureArm_StatesTheInstalledCount pins the other half of the same
@@ -157,8 +186,9 @@ func TestDisclosureArm_StatesTheInstalledCount(t *testing.T) {
 		rec := observe(t, func(at armT) {
 			assertStatesInstalledCount(at, d.Installed, disclosureText(d))
 		})
-		mustReport(t, rec, "consent copy declares 1 hook entries, installer writes 3",
-			"a hand-restated entry count, one the installer disagrees with (#1356 M1)")
+		const what = "a hand-restated entry count, one the installer disagrees with (#1356 M1)"
+		mustReport(t, rec, wantOf(t, "states_the_installed_count"), what)
+		mustAlsoName(t, rec, "declares 1 hook entries, installer writes 3", what)
 	})
 
 	// A count stated NOWHERE is a different failure from a count stated wrongly,
@@ -197,7 +227,9 @@ func TestDisclosureArm_NamesNoUninstalledEvent(t *testing.T) {
 			rec := observe(t, func(at armT) {
 				assertNamesNoUninstalledEvent(at, d, disclosureWords(d))
 			})
-			mustReport(t, rec, extra, "consent copy naming "+extra+", which the installer never writes")
+			what := "consent copy naming " + extra + ", which the installer never writes"
+			mustReport(t, rec, wantOf(t, "names_no_uninstalled_event"), what)
+			mustAlsoName(t, rec, extra, what)
 		})
 	}
 }
@@ -216,8 +248,9 @@ func TestDisclosureArm_StatesTheVersionFloor(t *testing.T) {
 		perm, _ := disclosureUnderTest(d)
 		assertStatesVersionFloor(at, perm, disclosureText(d))
 	})
-	mustReport(t, rec, selfTestFloor,
-		"a declared version floor the consent copy never mentions (#1393)")
+	const what = "a declared version floor the consent copy never mentions (#1393)"
+	mustReport(t, rec, wantOf(t, "states_the_version_floor"), what)
+	mustAlsoName(t, rec, selfTestFloor, what)
 }
 
 // TestDisclosureArm_PermissionIsModifyKind covers the kind obligation, which is

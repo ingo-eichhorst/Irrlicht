@@ -260,3 +260,47 @@ func TestConsentGate_AnswersPerKey(t *testing.T) {
 		t.Error("denied key reads as granted — the gate is answering key-blind")
 	}
 }
+
+// TestTheLockstepArmsFailABrokenReceiver is the can-fail evidence for the three
+// arms #797/PR #817 shipped. Neither that PR nor #1489 recorded a mutation for
+// them: #1489 measured only that they CANNOT see a wrong-key gate (the test
+// above), and the vacuity guard measures that they pass a correct receiver.
+// Between those two, nothing asserted they can fire at all — which is precisely
+// the property #1479 exists to commit, so covering the fourth arm while leaving
+// the first three uncovered would have been the same gap one level down.
+//
+// Each case is the mis-gating that arm owns, and only that one.
+func TestTheLockstepArmsFailABrokenReceiver(t *testing.T) {
+	t.Run("pending_no_effect", func(t *testing.T) {
+		// No consent check at all: the effect appears while every permission
+		// is still pending, which is a fresh IRRLICHT_HOME on a user's machine.
+		r := &fakeReceiver{gate: NewConsentGate(), gatedOn: nil}
+		rec := observe(t, func(at armT) {
+			assertPendingNoEffect(at, r.gateFor(selfTestTranscripts, selfTestHooks))
+		})
+		mustReport(t, rec, "call site is not consent-gated",
+			"a receiver that dispatches with every permission pending")
+	})
+
+	t.Run("granted_effect_observable", func(t *testing.T) {
+		// Gated on a permission nothing ever grants — the effect never appears,
+		// so a granted permission buys the user nothing.
+		r := &fakeReceiver{gate: NewConsentGate(), gatedOn: []string{"never-granted"}}
+		rec := observe(t, func(at armT) {
+			assertGrantedEffectObservable(at, r.gateFor(selfTestTranscripts, selfTestHooks))
+		})
+		mustReport(t, rec, "effect not observed after granting",
+			"a receiver whose effect never appears however the permission is answered")
+	})
+
+	t.Run("revoked_effect_undone", func(t *testing.T) {
+		// The effect outlives the revoke. For an install-type permission that is
+		// a hook entry left in the user's config after they withdrew consent.
+		r := &fakeReceiver{gate: NewConsentGate(), gatedOn: []string{selfTestTranscripts}}
+		g := r.gateFor(selfTestTranscripts, selfTestHooks)
+		g.Observe = func() bool { return true }
+		rec := observe(t, func(at armT) { assertRevokedEffectUndone(at, g) })
+		mustReport(t, rec, "still observed after revoking",
+			"a receiver whose effect survives the revoke")
+	})
+}

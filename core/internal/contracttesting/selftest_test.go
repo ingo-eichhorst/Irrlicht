@@ -116,6 +116,15 @@ func (r *recordingT) aborted() bool {
 	return r.fatal
 }
 
+// markedHelper reports whether the arm identified itself as a helper. It is
+// read through the mutex like every other field, so the accessor exists rather
+// than the field being touched directly.
+func (r *recordingT) markedHelper() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.helpers > 0
+}
+
 // --- driving an arm ---
 
 // observe runs arm against a recorder and returns what it reported.
@@ -146,6 +155,28 @@ type observation interface {
 	report() string
 }
 
+// helperMarker is the optional half of an observation: whether the arm called
+// t.Helper(). Every contract arm does, first thing, and it is not decoration —
+// without it a failure is attributed to this file rather than to the wiring
+// that supplied the wrong fixture, so every contract failure in the tree would
+// point at the harness.
+//
+// It is optional because the committed broken recorders below are not arms and
+// have no helper to mark. Checking it in the verdicts rather than in one test
+// is what makes it cover every family at once (review of PR #1498).
+type helperMarker interface{ markedHelper() bool }
+
+// verdictHelperMarked reports why obs shows the arm did not identify itself, or
+// "" when it did or cannot say.
+func verdictHelperMarked(obs observation) string {
+	hm, ok := obs.(helperMarker)
+	if !ok || hm.markedHelper() {
+		return ""
+	}
+	return "the arm never called t.Helper() — its failures are attributed to the harness " +
+		"rather than to the call site that wired the fixture"
+}
+
 // verdictReported reports why obs fails to demonstrate that the obligation
 // under test fired, or "" when it does.
 //
@@ -157,6 +188,9 @@ func verdictReported(obs observation, want string) string {
 		return "no expected message fragment was named — a negative self-test that accepts any " +
 			"failure certifies an obligation that may not have run at all (#1453); pass a " +
 			"distinctive fragment of the obligation's own message"
+	}
+	if v := verdictHelperMarked(obs); v != "" {
+		return v
 	}
 	if !obs.reported() {
 		return fmt.Sprintf("the obligation reported nothing against a fixture that is wrong for it — "+
@@ -175,6 +209,9 @@ func verdictReported(obs observation, want string) string {
 // obligation that reported unconditionally would satisfy every negative case
 // and read as excellent coverage.
 func verdictSilent(obs observation) string {
+	if v := verdictHelperMarked(obs); v != "" {
+		return v
+	}
 	if obs.reported() {
 		return "the obligation reported against a fixture that is CORRECT for it — an assertion " +
 			"that fires unconditionally satisfies every negative self-test while discriminating " +
@@ -343,10 +380,21 @@ func TestTheRecorderObservesWhatAnArmReports(t *testing.T) {
 		}
 	})
 
-	t.Run("helper_is_still_called_by_arms", func(t *testing.T) {
+	// This grades the RECORDER, not the arms: the lambda calls Helper itself.
+	// That arms still call it is graded by verdictHelperMarked, which every
+	// mustReport/mustBeSilent in every family goes through.
+	t.Run("helper_is_recorded", func(t *testing.T) {
 		rec := observe(t, func(at armT) { at.Helper() })
-		if rec.helpers == 0 {
+		if !rec.markedHelper() {
 			t.Fatal("Helper was not recorded")
+		}
+	})
+
+	t.Run("an_arm_that_never_marks_itself_is_reported", func(t *testing.T) {
+		rec := observe(t, func(at armT) { at.Errorf("probe") })
+		if verdictReported(rec, "probe") == "" {
+			t.Fatal("an arm that never called t.Helper() was accepted — every contract failure " +
+				"would then be attributed to the harness instead of to the wiring")
 		}
 	})
 }
@@ -361,12 +409,13 @@ func TestTheRecorderObservesWhatAnArmReports(t *testing.T) {
 //
 // It reads the package's own non-test sources, because a convention that lives
 // only in a doc comment is the thing this package exists to replace.
+//
+// ALIASES ARE TRACKED, and that is the review finding this shape exists for:
+// matching only the literal `t.fixtures.Fatalf(...)` chain catches the obvious
+// spelling and misses `ft := t.fixtures; ft.Fatalf(...)`, which bypasses the
+// seam exactly as completely. `core/architecture_hookbody_shapes_test.go` pins
+// "an aliased body" as its own corpus case for the same reason.
 func TestNoArmReportsThroughTheFixtureT(t *testing.T) {
-	const field = "fixtures"
-	reportingMethods := map[string]bool{
-		"Error": true, "Errorf": true, "Fatal": true, "Fatalf": true, "Skip": true, "Skipf": true,
-	}
-
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
 		return !strings.HasSuffix(fi.Name(), "_test.go")
@@ -382,31 +431,101 @@ func TestNoArmReportsThroughTheFixtureT(t *testing.T) {
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Files {
 			ast.Inspect(file, func(n ast.Node) bool {
-				if id, ok := n.(*ast.Ident); ok && id.Name == "armT" {
+				if id, ok := n.(*ast.Ident); ok && id.Name == armTTypeName {
 					seenArmT = true
 				}
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
+				fn, ok := n.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
 					return true
 				}
-				outer, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || !reportingMethods[outer.Sel.Name] {
-					return true
+				for _, pos := range fixtureReportsIn(fn, aliasesOfFixturesIn(fn)) {
+					t.Errorf("%s: reports through the fixture *testing.T — that bypasses the "+
+						"reporter seam, so this obligation cannot be driven by a negative "+
+						"self-test; report through the embedded reporter and keep .%s for "+
+						"fixture machinery only", fset.Position(pos), fixtureFieldName)
 				}
-				inner, ok := outer.X.(*ast.SelectorExpr)
-				if !ok || inner.Sel.Name != field {
-					return true
-				}
-				t.Errorf("%s: reports through .%s.%s — that bypasses the reporter seam, so "+
-					"this obligation cannot be driven by a negative self-test; report through "+
-					"the embedded reporter and keep .%s for fixture machinery only",
-					fset.Position(call.Pos()), field, outer.Sel.Name, field)
 				return true
 			})
 		}
 	}
 	if !seenArmT {
-		t.Fatal("the package no longer mentions armT — this tripwire is scanning for a shape " +
-			"that has been renamed, and would pass whatever the sources do")
+		t.Fatalf("the package no longer mentions %s — this tripwire is scanning for a shape "+
+			"that has been renamed, and would pass whatever the sources do", armTTypeName)
 	}
+}
+
+const (
+	fixtureFieldName = "fixtures"
+	armTTypeName     = "armT"
+)
+
+// reportingMethods are the *testing.T methods that decide a test's verdict. An
+// arm may reach the fixture T for t.TempDir/t.Setenv/t.Cleanup and for the
+// *testing.T-typed wiring fields; these are the ones it may not.
+var reportingMethods = map[string]bool{
+	"Error": true, "Errorf": true, "Fatal": true, "Fatalf": true, "Skip": true, "Skipf": true,
+}
+
+// aliasesOfFixturesIn returns the local names bound to something's .fixtures
+// field anywhere in fn — `ft := t.fixtures`, `var ft = at.fixtures`. Scope is
+// deliberately the whole function rather than the exact block: over-approximating
+// makes the tripwire refuse a shape it is not certain about, which is the
+// direction a check that cannot parse its input must degrade in.
+func aliasesOfFixturesIn(fn *ast.FuncDecl) map[string]bool {
+	aliases := map[string]bool{}
+	bind := func(lhs, rhs []ast.Expr) {
+		for i, r := range rhs {
+			if i >= len(lhs) || !isFixtureSelector(r) {
+				continue
+			}
+			if id, ok := lhs[i].(*ast.Ident); ok && id.Name != "_" {
+				aliases[id.Name] = true
+			}
+		}
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.AssignStmt:
+			bind(v.Lhs, v.Rhs)
+		case *ast.ValueSpec:
+			names := make([]ast.Expr, len(v.Names))
+			for i, name := range v.Names {
+				names[i] = name
+			}
+			bind(names, v.Values)
+		}
+		return true
+	})
+	return aliases
+}
+
+// fixtureReportsIn returns the position of every reporting call in fn made
+// through the fixture T, whether spelled directly or through an alias.
+func fixtureReportsIn(fn *ast.FuncDecl, aliases map[string]bool) []token.Pos {
+	var found []token.Pos
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || !reportingMethods[sel.Sel.Name] {
+			return true
+		}
+		if isFixtureSelector(sel.X) {
+			found = append(found, call.Pos())
+			return true
+		}
+		if id, ok := sel.X.(*ast.Ident); ok && aliases[id.Name] {
+			found = append(found, call.Pos())
+		}
+		return true
+	})
+	return found
+}
+
+// isFixtureSelector reports whether e is a `<something>.fixtures` selection.
+func isFixtureSelector(e ast.Expr) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == fixtureFieldName
 }
