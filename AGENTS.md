@@ -209,6 +209,61 @@ Before marking a ticket done, run the full suite — every layer must pass:
   kitty remote-control (install-type `Apply`/`Remove`), and `InputService`'s
   backchannel forwarding (the shared "control" gate) for the three call-site
   shapes it covers.
+  For a **hook receiver** the key set is no longer the wiring's to name. Since
+  #1488 a receiver declares its permissions to `hookjson.NewHandler` (via
+  `hookjson.RequireConsent`, whose first key is positional — a keyless receiver
+  does not compile), the handler publishes them as `HookHandler.Consent`, and
+  `contracttesting.AssertHookReceiverPermissionGated` derives one arm per
+  declared key. A receiver that later honours a third permission is graded on it
+  by existing rather than by someone remembering — which is what #1475 could
+  assert but not enforce, copilot's receiver having reached #1475 with no wiring
+  at all. Three things to know before touching it:
+  - `DecodeConfined` re-checks the whole declared set and fails closed, so a
+    receiver that declares a permission and never checks it drops the payload
+    instead of dispatching. That is #1466's shape, removed rather than detected.
+    It refuses **before** reading the body and before the confine, so a denied
+    request costs no decode, no path resolution and no confiner counter —
+    asserted by `TestDecodeConfined_RefusesBeforeReadingAnything`, because
+    deleting that guard and merely *moving* it are different mutations and only
+    the first reddens the others.
+  - **The backstop quietens every per-adapter consent mutation that graded
+    DISPATCH, so what those tests assert had to move to the one thing it does
+    NOT reproduce: silence.** Deleting a receiver's own `transcripts` gate used
+    to fail `…/transcripts/gated_on_the_named_key` plus that adapter's #1466
+    defect test; after #1488 the chokepoint drops the same payload, so every
+    dispatch-shaped assertion stays green (measured on all four receivers —
+    claudecode's hooks and statusline, codex, copilot). It is not silent about
+    it: reaching the backstop means a receiver skipped a check or consent was
+    revoked mid-request, so it logs an error, where a receiver's own gate
+    answers a quiet 200. That difference is both the surviving discriminator
+    and a real user-facing property — an ordinary denied session must not
+    collect an error line per tool call — so each of the four receivers' hand-
+    written consent tests now asserts **no error was logged**, and each was
+    seen red again with its gate deleted. Statusline is the receiver to watch
+    here: it declares ONE permission and keeps no second gate, so that
+    assertion is the whole of its live per-adapter proof.
+  - Beside those four, the coverage is one shared proof plus one lock per
+    adapter: `hookjson/consent_test.go`'s committed `forgetfulReceiver`
+    (declares two keys, checks one) grades the backstop for every receiver at
+    once, and `AssertDeclaredPermissions` / each adapter's
+    `Test…DeclaresItsPermissions` replays the key list its wiring used to spell
+    out, so the predecessor's cases are not deleted along with it (#1450).
+    Declaring the WRONG set reddens both.
+  - What did not move is the ORDER — but note exactly how much of it is held.
+    The channel key must stay ahead of `hookjson.ObserveHookReceipt`, and that
+    half IS enforced: deleting the `hooks` check, or hoisting the receipt above
+    it, reddens `AssertHookReceiptObserved`'s
+    `consent_denied_request_is_not_counted` (measured both ways). The other
+    half — the transcript key staying BEHIND the receipt, so a hooks-granted /
+    transcripts-denied install is not reported dead by #1368's watchdog — is
+    held by nothing: hoisting that check above the receipt is green here and
+    was green before #1488 too, so it is a standing gap rather than a
+    regression, and it is stated here rather than left implied by the sentence
+    above it.
+  `HookReceiverGate.Foreign` exists for the one receiver declaring a SINGLE
+  permission — claudecode's statusline — where the derived set leaves nothing to
+  hold open and the driver refuses rather than running a #1475 isolation arm
+  that proves nothing.
   A wiring names the permission under test (`Key`) and at least one the call
   site must NOT be gated on (`OtherKeys`), and `SetState` takes the key it is
   driving — because until #1475 it did not, and every live-gate wiring supplied
@@ -228,12 +283,15 @@ Before marking a ticket done, run the full suite — every layer must pass:
   whose wiring supplies the fake is a contract whose wiring can supply a
   key-blind one. The static `keyedGate` map literals in the adapter test
   packages are a different thing and stay: they pin a fixed two-permission
-  combination in one-off tests and were never key-blind. A receiver gated on
+  combination in one-off tests and were never key-blind. A call site gated on
   more than one permission wires `AssertPermissionGatedOnEachKey` rather than a
   hand-written table pairing each key with "the other one" — it names its key
   set once and the pairing is derived, because such a table can silently list
   only one direction and the direction that already works is
-  indistinguishable from covering both. Install-type wirings use
+  indistinguishable from covering both. A hook receiver is the exception and
+  names no set at all: since #1488 it wires
+  `AssertHookReceiverPermissionGated`, which derives the set from the
+  receiver's own declaration (the bullet above). Install-type wirings use
   `contracttesting.OnlyKey` instead of re-deciding per adapter that a foreign
   key is a no-op. The arm is
   load-bearing only for live per-request gates; for an install-type permission
@@ -526,11 +584,15 @@ Before marking a ticket done, run the full suite — every layer must pass:
   or, for a delivery route no adapter has adopted yet, against its reference
   wiring — so their whole value is that they *can* fail. Seven is a count of
   *obligations*, not of exported `Assert…` functions: `grep -c "^func Assert"`
-  over the package currently returns eight, because
-  `AssertPermissionGatedOnEachKey` is a driver that runs the permission-gate
-  family once per key, not a family of its own. Check what a function asserts
-  before moving this number (and before re-counting with `git grep`, whose
-  pathspec `*` crosses directory boundaries and returns nine). A new or reworked
+  over the package currently returns ten, because three of those are not
+  families. `AssertPermissionGatedOnEachKey` and
+  `AssertHookReceiverPermissionGated` are **drivers** running the
+  permission-gate family once per key — the first over a set the wiring names,
+  the second over one derived from the receiver itself (#1488) — and
+  `AssertDeclaredPermissions` is a one-line **lock** on that derivation rather
+  than an obligation of its own. Check what a function asserts before moving
+  this number (and before re-counting with `git grep`, whose pathspec `*`
+  crosses directory boundaries and returns one more). A new or reworked
   contract assertion is therefore the mutation rule at the top of this section
   in its most literal form: it lands with the deliberate mutation seen red for
   each obligation — and since #1479 that mutation is **committed beside the
@@ -565,7 +627,16 @@ Before marking a ticket done, run the full suite — every layer must pass:
   self-tests (permission gate, hook endpoint, hook disclosure, hook version);
   the three receiver-shaped ones, and a source walk that would make a fifth
   family covered by existing rather than by remembering, are #1497 — queued
-  behind #1488, which changes the fake receiver all three would share.
+  behind #1488, which changed the fake receiver all three would share. It made
+  that fixture cheaper rather than dearer, but did not build it:
+  `hookjson.NewHandler` now takes the consent alongside the confiner, so one
+  `RequireConsent` line replaces the ad-hoc gate each of the three would have
+  wired separately, and `hook_receiver_gate_test.go`'s `gatedFakeReceiver`
+  shows the constructor shape. What that fixture still lacks is most of what
+  #1497 specifies — it passes a nil confiner and never reaches
+  `DecodeConfined`, so it carries no declared roots, no rejection counters and
+  no receipt. The consent third is done; the roots-and-counters two thirds are
+  still #1497's to write.
 - Guarded construction: not a contract family — a package-local pair of guards,
   `core/application/services/construction_test.go`. A service whose fields
   include maps, channels, or anything else whose zero value is unusable is

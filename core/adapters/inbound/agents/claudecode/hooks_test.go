@@ -784,13 +784,16 @@ func TestHookHandler_PreToolUse_UserInputToolStillDispatchesWithMarkerScan(t *te
 // granted (issue #1475). A single wiring over a key-blind gate is what let
 // this receiver dispatch with "transcripts" denied for the whole of its life
 // (issue #1466) while this very test was green.
+//
+// Since #1488 the wiring no longer NAMES that pair: the receiver declares it to
+// hookjson.NewHandler, the handler publishes it, and the driver derives one arm
+// per declared permission. A third permission here would be graded without
+// anyone editing this test. TestHookHandler_DeclaresItsPermissions below is the
+// lock on what that derivation currently yields.
 func TestHookHandler_PermissionGateContract(t *testing.T) {
-	keys := []string{PermissionKeyHooks, PermissionKeyTranscripts}
-
-	contracttesting.AssertPermissionGatedOnEachKey(t, keys,
-		func(key string, others []string) contracttesting.PermissionGate {
+	contracttesting.AssertHookReceiverPermissionGated(t, contracttesting.HookReceiverGate{
+		Build: func(t *testing.T, gate *contracttesting.ConsentGate) contracttesting.GatedHookReceiver {
 			target := &mockTarget{}
-			gate := contracttesting.NewConsentGate()
 			handler := NewHookHandler(target, nil, gate, mockLogger{})
 			payload := hookPayload{
 				TranscriptPath: inTreeTranscript(t, "sess-gate"),
@@ -798,17 +801,26 @@ func TestHookHandler_PermissionGateContract(t *testing.T) {
 				ToolName:       "Bash",
 			}
 
-			return contracttesting.PermissionGate{
-				Key:       key,
-				OtherKeys: others,
-				SetState:  gate.SetState,
+			return contracttesting.GatedHookReceiver{
+				Handler: handler,
 				Exercise: func() {
 					target.reset()
 					postHook(t, handler, payload)
 				},
 				Observe: func() bool { return len(target.getCalls()) > 0 },
 			}
-		})
+		},
+	})
+}
+
+// TestHookHandler_DeclaresItsPermissions is the LOCK on the key list the
+// wiring above used to spell out. Per #1450 a rewritten guard replays its
+// predecessor's cases or it is not known to be a superset — and a derivation
+// is the one thing that cannot assert what it derives.
+func TestHookHandler_DeclaresItsPermissions(t *testing.T) {
+	contracttesting.AssertDeclaredPermissions(t,
+		NewHookHandler(&mockTarget{}, nil, nil, mockLogger{}),
+		PermissionKeyHooks, PermissionKeyTranscripts)
 }
 
 // TestHookHandler_TranscriptsConsentGatesTheRead is the issue #1466 defect
@@ -832,15 +844,24 @@ func TestHookHandler_PermissionGateContract(t *testing.T) {
 // It stays as a LOCK now that the contract above is key-aware (issue #1475).
 // The contract's key-isolation arm covers the dispatch obligation generically
 // — and covers it for every adapter that wires it, which three hand-written
-// per-adapter tests never could. What it does not cover is the status code:
-// AssertPermissionGated's Exercise is opaque to it, so the 200 asserted below
-// is this test's own. Per #1450 a rewritten guard replays its predecessor's
-// cases or it is not known to be a superset; this one is not a superset, so
-// the predecessor stays.
+// per-adapter tests never could. Per #1450 a rewritten guard replays its
+// predecessor's cases or it is not known to be a superset; this one is not a
+// superset, so the predecessor stays.
+//
+// Two of its three assertions are now the ONLY live ones. Since #1488
+// DecodeConfined refuses this same request on the receiver's own declaration,
+// so deleting the gate below leaves the dispatch assertion — and the whole
+// permission-gate contract — green (measured). What the chokepoint does NOT
+// reproduce is the SILENCE: it logs an error, because reaching it means a
+// receiver skipped its check or consent was revoked mid-request. A
+// transcripts-denied user must not collect an error line per tool call, so
+// that is both a real user-facing property and the assertion that keeps this
+// receiver's own gate load-bearing.
 func TestHookHandler_TranscriptsConsentGatesTheRead(t *testing.T) {
 	target := &mockTarget{}
 	gate := keyedGate{PermissionKeyHooks: true, PermissionKeyTranscripts: false}
-	handler := NewHookHandler(target, nil, gate, mockLogger{})
+	log := &contracttesting.RecordingLogger{}
+	handler := NewHookHandler(target, nil, gate, log)
 
 	rec := postHook(t, handler, hookPayload{
 		TranscriptPath: inTreeTranscript(t, "sess-transcripts-gate"),
@@ -854,5 +875,10 @@ func TestHookHandler_TranscriptsConsentGatesTheRead(t *testing.T) {
 	if got := target.getCalls(); len(got) != 0 {
 		t.Errorf("dispatched %d call(s) without transcripts consent: %+v — "+
 			"the detector opens the transcript this path hands it", len(got), got)
+	}
+	if len(log.Errors()) != 0 {
+		t.Errorf("a transcripts-denied hook logged %d error(s): %v — an ordinary denied session "+
+			"must be refused by THIS receiver's own gate, quietly. Reaching DecodeConfined's "+
+			"backstop instead means one error line per tool call, forever", len(log.Errors()), log.Errors())
 	}
 }

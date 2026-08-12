@@ -50,6 +50,18 @@ func decodeConfinerRooted(t *testing.T) (*PathConfiner, string) {
 	return staticRoots(root), root
 }
 
+// decodeConsent is the consent a CORRECT receiver hands the chokepoint: one
+// declared key, granted. Every existing case below passes it, which keeps them
+// asserting what they always asserted; the #1488 cases override exactly one
+// thing about it.
+//
+// A nil ConsentGranter would answer the same (RequireConsent documents it as
+// the ungated test shape) — keyedGranter is used so the cases below travel the
+// same code path production does.
+func decodeConsent() Consent {
+	return RequireConsent(keyedGranter{"hooks": true}, "decode-test", "hooks")
+}
+
 func postDecode(t *testing.T, body string) *http.Request {
 	t.Helper()
 	return httptest.NewRequest(http.MethodPost, "/api/v1/hooks/test", strings.NewReader(body))
@@ -76,7 +88,7 @@ func TestDecodeConfined_AcceptsInTreePathAndErasesTheRawString(t *testing.T) {
 	log := &countingLogger{}
 
 	ok := DecodeConfined(rec, postDecode(t, `{"transcript_path":`+strconv.Quote(raw)+`,"hook_event_name":"Stop"}`),
-		log, "test-receiver", confiner, &p, getDecodePath, setDecodePath)
+		log, "test-receiver", decodeConsent(), confiner, &p, getDecodePath, setDecodePath)
 
 	if !ok {
 		t.Fatalf("in-tree transcript refused; status=%d, logged %d line(s)", rec.Code, len(log.lines))
@@ -100,7 +112,7 @@ func TestDecodeConfined_UndecodableBodyIs400(t *testing.T) {
 	var p decodeTestPayload
 
 	ok := DecodeConfined(rec, postDecode(t, `{"transcript_path": NOT JSON`),
-		&countingLogger{}, "test-receiver", confiner, &p, getDecodePath, setDecodePath)
+		&countingLogger{}, "test-receiver", decodeConsent(), confiner, &p, getDecodePath, setDecodePath)
 
 	if ok {
 		t.Fatal("undecodable body reported as decoded")
@@ -125,7 +137,7 @@ func TestDecodeConfined_OutOfTreePathIsRefusedCountedAnd2xx(t *testing.T) {
 	log := &countingLogger{}
 
 	ok := DecodeConfined(rec, postDecode(t, `{"transcript_path":`+strconv.Quote(outside)+`}`),
-		log, "test-receiver", confiner, &p, getDecodePath, setDecodePath)
+		log, "test-receiver", decodeConsent(), confiner, &p, getDecodePath, setDecodePath)
 
 	if ok {
 		t.Fatal("out-of-tree path reported as accepted")
@@ -165,7 +177,7 @@ func TestDecodeConfined_NilConfinerFailsClosed(t *testing.T) {
 	log := &countingLogger{}
 
 	ok := DecodeConfined(rec, postDecode(t, `{"transcript_path":"/anywhere/at/all.jsonl"}`),
-		log, "test-receiver", nil, &p, getDecodePath, setDecodePath)
+		log, "test-receiver", decodeConsent(), nil, &p, getDecodePath, setDecodePath)
 
 	if ok {
 		t.Fatal("a receiver with NO confiner reported its payload as usable — that dispatches an " +
@@ -204,7 +216,7 @@ func TestDecodeConfined_DisagreeingGetSetFailsClosed(t *testing.T) {
 	log := &countingLogger{}
 
 	ok := DecodeConfined(rec, postDecode(t, `{"transcript_path":`+strconv.Quote(raw)+`}`),
-		log, "test-receiver", confiner, &p, getDecodePath,
+		log, "test-receiver", decodeConsent(), confiner, &p, getDecodePath,
 		func(*decodeTestPayload, string) {}) // the no-op set
 
 	if ok {
@@ -237,7 +249,7 @@ func TestDecodeConfined_OversizedBodyIsRefused(t *testing.T) {
 	var p decodeTestPayload
 
 	ok := DecodeConfined(rec, postDecode(t, body), &countingLogger{}, "test-receiver",
-		confiner, &p, getDecodePath, setDecodePath)
+		decodeConsent(), confiner, &p, getDecodePath, setDecodePath)
 
 	if ok {
 		t.Fatalf("a %d-byte body was accepted; the %d-byte bound did not apply", len(body), maxHookBodyBytes)
@@ -252,7 +264,7 @@ func TestDecodeConfined_OversizedBodyIsRefused(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	var p2 decodeTestPayload
 	if !DecodeConfined(rec2, postDecode(t, small), &countingLogger{}, "test-receiver",
-		confiner, &p2, getDecodePath, setDecodePath) {
+		decodeConsent(), confiner, &p2, getDecodePath, setDecodePath) {
 		t.Fatalf("an in-tree body well under the bound was refused (status %d)", rec2.Code)
 	}
 }

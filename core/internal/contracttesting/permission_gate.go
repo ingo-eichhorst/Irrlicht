@@ -77,12 +77,14 @@ type PermissionGate struct {
 // let an install-type wiring skip it is a flag a live-gate wiring could also
 // reach for, and that is the one place it must not be skippable.
 //
-// What this still does not do is make the obligation unforgettable: a receiver
+// What this still does not do is make the obligation unforgettable: a call site
 // must be wired once per permission it must honour, and nothing fails if an
-// author wires only one of them. Issue #1488 is the chokepoint move that would
-// remove that last act of memory — folding the consent key into
+// author wires only one of them. Issue #1488 removed that last act of memory
+// for hook receivers — the consent keys are folded into
 // hookjson.DecodeConfined, which core/architecture_hookbody_test.go already
-// forces every hook receiver through.
+// forces every hook receiver through, and published on the handler so
+// AssertHookReceiverPermissionGated derives the set instead of being told it.
+// Every other kind of call site still names its own keys here.
 func AssertPermissionGated(t *testing.T, g PermissionGate) {
 	t.Helper()
 	if reason := malformedGateReason(g); reason != "" {

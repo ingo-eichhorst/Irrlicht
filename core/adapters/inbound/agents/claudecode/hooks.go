@@ -241,8 +241,9 @@ func sessionIDFromTranscriptPath(p string) string {
 // gate means no gating — used by tests.
 func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
 	return hookjson.NewHandler(transcriptConfiner(),
-		func(c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
-			serveHookRequest(target, markers, gate, log, c, w, r)
+		hookjson.RequireConsent(gate, AdapterName, PermissionKeyHooks, PermissionKeyTranscripts),
+		func(consent hookjson.Consent, c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+			serveHookRequest(target, markers, consent, log, c, w, r)
 		})
 }
 
@@ -282,15 +283,21 @@ func transcriptConfiner() *hookjson.PathConfiner {
 // transcript the user had denied (issue #1466). A hooks-granted /
 // transcripts-denied session is not monitored anyway, so dropping the hook
 // here is both consent-correct and behaviourally harmless.
-func admitHookRequest(gate ConsentGranter, w http.ResponseWriter) bool {
-	if gate != nil && !gate.Granted(AdapterName, PermissionKeyHooks) {
+//
+// Both keys are asked of the receiver's OWN hookjson.Consent (issue #1488), so
+// the pair this order is written for is the pair the handler publishes and the
+// contract derives — not a second list that could drift from it. A key this
+// receiver did not declare answers false, so the drift fails closed rather than
+// silently gating on nothing.
+func admitHookRequest(consent hookjson.Consent, w http.ResponseWriter) bool {
+	if !consent.Granted(PermissionKeyHooks) {
 		w.WriteHeader(http.StatusOK)
 		return false
 	}
 
 	hookjson.ObserveHookReceipt(AdapterName)
 
-	if gate != nil && !gate.Granted(AdapterName, PermissionKeyTranscripts) {
+	if !consent.Granted(PermissionKeyTranscripts) {
 		w.WriteHeader(http.StatusOK)
 		return false
 	}
@@ -301,13 +308,13 @@ func admitHookRequest(gate ConsentGranter, w http.ResponseWriter) bool {
 // returned closure so its branching isn't counted at the closure's extra
 // nesting depth (go:S3776 — this dropped the reported complexity from 31 to
 // within the 15-point budget without changing any behavior).
-func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+func serveHookRequest(target HookTarget, markers MarkerTarget, consent hookjson.Consent, log outbound.Logger, confiner *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	if !admitHookRequest(gate, w) {
+	if !admitHookRequest(consent, w) {
 		return
 	}
 
@@ -319,7 +326,7 @@ func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGrant
 	// with the confined one, so nothing below can pick it back up (issues
 	// #1361, #1389). It has already answered the request when it returns false.
 	var payload hookPayload
-	if !hookjson.DecodeConfined(w, r, log, logComponentHookReceiver, confiner, &payload,
+	if !hookjson.DecodeConfined(w, r, log, logComponentHookReceiver, consent, confiner, &payload,
 		func(p *hookPayload) string { return p.TranscriptPath },
 		func(p *hookPayload, confined string) { p.TranscriptPath = confined },
 	) {

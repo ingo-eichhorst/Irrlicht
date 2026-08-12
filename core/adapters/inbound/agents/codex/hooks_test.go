@@ -342,9 +342,15 @@ func TestHookHandler_TranscriptsConsentGatesTheRead(t *testing.T) {
 	// read must be gated behind the "transcripts" consent — not merely the
 	// "hooks" write consent. With hooks granted but transcripts denied, the
 	// hook is dropped and the target is never called (issue #1174 review).
+	//
+	// Since #1488 the dispatch half no longer discriminates: DecodeConfined
+	// refuses this same request on the receiver's declaration, so deleting the
+	// gate below leaves it green (measured). The silence assertion is what
+	// still holds the gate in place — see contracttesting.RecordingLogger.
 	target := &mockTarget{}
 	gate := keyedGate{PermissionKeyHooks: true, PermissionKeyTranscripts: false}
-	handler := NewHookHandler(target, gate, mockLogger{})
+	log := &contracttesting.RecordingLogger{}
+	handler := NewHookHandler(target, gate, log)
 
 	rec := postHook(t, handler, codexHookPayload{
 		TranscriptPath: writeSessionTranscript(t, "sess-1"),
@@ -355,6 +361,10 @@ func TestHookHandler_TranscriptsConsentGatesTheRead(t *testing.T) {
 	}
 	if target.totalCalls() != 0 {
 		t.Error("transcript read (and dispatch) happened without transcripts consent")
+	}
+	if len(log.Errors()) != 0 {
+		t.Errorf("a transcripts-denied hook logged %d error(s): %v — an ordinary denied session is "+
+			"this receiver's own gate to refuse, quietly", len(log.Errors()), log.Errors())
 	}
 }
 
@@ -379,25 +389,31 @@ func TestHookHandler_UnrecognizedEvent(t *testing.T) {
 // arm (issue #1475) holds one denied while the other is granted, which is the
 // only state that tells a receiver gated on the right permission from one gated
 // on the other.
+// Since #1488 the pair is derived from the receiver's own declaration rather
+// than named here; TestHookHandler_DeclaresItsPermissions locks what it yields.
 func TestHookHandler_PermissionGateContract(t *testing.T) {
-	keys := []string{PermissionKeyHooks, PermissionKeyTranscripts}
-
-	contracttesting.AssertPermissionGatedOnEachKey(t, keys,
-		func(key string, others []string) contracttesting.PermissionGate {
+	contracttesting.AssertHookReceiverPermissionGated(t, contracttesting.HookReceiverGate{
+		Build: func(t *testing.T, gate *contracttesting.ConsentGate) contracttesting.GatedHookReceiver {
 			target := &mockTarget{}
-			gate := contracttesting.NewConsentGate()
 			handler := NewHookHandler(target, gate, mockLogger{})
 			payload := codexHookPayload{
 				TranscriptPath: writeSessionTranscript(t, "sess-gate"),
 				HookEventName:  HookPermissionRequest,
 				ToolName:       "shell",
 			}
-			return contracttesting.PermissionGate{
-				Key:       key,
-				OtherKeys: others,
-				SetState:  gate.SetState,
-				Exercise:  func() { target.reset(); postHook(t, handler, payload) },
-				Observe:   func() bool { return target.totalCalls() > 0 },
+			return contracttesting.GatedHookReceiver{
+				Handler:  handler,
+				Exercise: func() { target.reset(); postHook(t, handler, payload) },
+				Observe:  func() bool { return target.totalCalls() > 0 },
 			}
-		})
+		},
+	})
+}
+
+// TestHookHandler_DeclaresItsPermissions is the LOCK on the key list the
+// wiring above used to spell out (#1450).
+func TestHookHandler_DeclaresItsPermissions(t *testing.T) {
+	contracttesting.AssertDeclaredPermissions(t,
+		NewHookHandler(&mockTarget{}, nil, mockLogger{}),
+		PermissionKeyHooks, PermissionKeyTranscripts)
 }
