@@ -61,7 +61,7 @@ func sentinelFor(mode DeliveryMode) string {
 // touch the filesystem, they only ask what the adapter WOULD install at two
 // bind addresses. render is the mutation knob — one function from bind address
 // to delivery string, which is exactly the surface #1178 and #1453 are about.
-func entryInstaller(t *testing.T, mode DeliveryMode, render func(bindAddr string) string) HookInstaller {
+func entryInstaller(mode DeliveryMode, render func(bindAddr string) string) HookInstaller {
 	return HookInstaller{
 		Delivery: mode,
 		SettingsPath: func(t *testing.T) string {
@@ -95,10 +95,10 @@ func correctURLDelivery(bindAddr string) string {
 // addresses, which is the first and most legible way it shows up.
 func TestEndpointArm_EndpointFollowsBindAddr(t *testing.T) {
 	t.Run("a_hardcoded_port_does_not_vary", func(t *testing.T) {
-		h := entryInstaller(t, DeliveryURL, func(string) string {
+		h := entryInstaller(DeliveryURL, func(string) string {
 			return "http://localhost:7837" + selfTestEndpointSentinel // #1178, verbatim
 		})
-		rec := observe(t, func(at armT) { assertEndpointFollowsBindAddr(at, h) })
+		rec := observe(t, func(at armT) { assertEndpointFollowsBindAddr(at, h, h.SettingsPath(t)) })
 		mustReport(t, rec, "delivery is identical on the default",
 			"an installer that hardcodes :7837 — the #1178 defect")
 	})
@@ -108,17 +108,17 @@ func TestEndpointArm_EndpointFollowsBindAddr(t *testing.T) {
 	// installer that appended the port as a query parameter while leaving the
 	// endpoint on 7837 would pass.
 	t.Run("varies_but_carries_the_stale_port", func(t *testing.T) {
-		h := entryInstaller(t, DeliveryURL, func(bindAddr string) string {
+		h := entryInstaller(DeliveryURL, func(bindAddr string) string {
 			return "http://localhost:7837" + selfTestEndpointSentinel + "?on=" + bindAddr
 		})
-		rec := observe(t, func(at armT) { assertEndpointFollowsBindAddr(at, h) })
+		rec := observe(t, func(at armT) { assertEndpointFollowsBindAddr(at, h, h.SettingsPath(t)) })
 		mustReport(t, rec, "still carries the default port",
 			"a delivery that varies with the bind address but still points at :7837")
 	})
 
 	t.Run("a_correct_url_installer_passes", func(t *testing.T) {
-		h := entryInstaller(t, DeliveryURL, correctURLDelivery)
-		mustBeSilent(t, observe(t, func(at armT) { assertEndpointFollowsBindAddr(at, h) }),
+		h := entryInstaller(DeliveryURL, correctURLDelivery)
+		mustBeSilent(t, observe(t, func(at armT) { assertEndpointFollowsBindAddr(at, h, h.SettingsPath(t)) }),
 			"an installer whose endpoint follows the bind address")
 	})
 }
@@ -169,19 +169,19 @@ func TestEndpointArm_DeliveryCarriesNoAddress(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// The sentinel has to survive every mutation, or assertDeliveryIsOurs
 			// fires first and this case would be graded on the wrong obligation.
-			h := entryInstaller(t, DeliveryAddressFree, func(bindAddr string) string {
+			h := entryInstaller(DeliveryAddressFree, func(bindAddr string) string {
 				return selfTestBeaconSentinel + " " + c.render(bindAddr)
 			})
-			mustReport(t, observe(t, func(at armT) { assertDeliveryCarriesNoAddress(at, h) }),
+			mustReport(t, observe(t, func(at armT) { assertDeliveryCarriesNoAddress(at, h, h.SettingsPath(t)) }),
 				c.want, c.what)
 		})
 	}
 
 	t.Run("a_correct_address_free_installer_passes", func(t *testing.T) {
-		h := entryInstaller(t, DeliveryAddressFree, func(string) string {
+		h := entryInstaller(DeliveryAddressFree, func(string) string {
 			return "/opt/homebrew/bin/irrlichd " + selfTestBeaconSentinel
 		})
-		mustBeSilent(t, observe(t, func(at armT) { assertDeliveryCarriesNoAddress(at, h) }),
+		mustBeSilent(t, observe(t, func(at armT) { assertDeliveryCarriesNoAddress(at, h, h.SettingsPath(t)) }),
 			"a delivery that varies with nothing and carries no address")
 	})
 }
@@ -201,13 +201,10 @@ func TestEndpointGuard_DeliveryIsOurs(t *testing.T) {
 		"url_route":          DeliveryURL,
 	} {
 		t.Run(name, func(t *testing.T) {
-			h := entryInstaller(t, mode, correctURLDelivery)
+			h := entryInstaller(mode, correctURLDelivery)
 			// The mutation: read a key the entry does not carry. Everything
 			// else about this installer is correct.
-			h.EndpointOf = func(hook map[string]interface{}) string {
-				c, _ := hook["command"].(string)
-				return c
-			}
+			h.EndpointOf = referenceBeaconEndpointOf
 
 			rec := observe(t, func(at armT) { deliveriesOnBothAddrs(at, h) })
 			mustReport(t, rec, "EndpointOf is not reading the field the installer writes",
@@ -254,64 +251,47 @@ func TestEndpointAddressAssertions(t *testing.T) {
 
 // --- fixtures for obligations 2-4, which do touch the filesystem ---
 
-// beaconInstaller wires the reference beacon adapter (see
-// hook_endpoint_addressfree_test.go) as a HookInstaller, with the three entry
-// points taken as parameters so each mutation below replaces exactly one.
-func beaconInstaller(ensure, uninstall, foreign func() (bool, error)) HookInstaller {
-	return HookInstaller{
-		Delivery: DeliveryAddressFree,
-		SettingsPath: func(t *testing.T) string {
-			t.Setenv(referenceBeaconHomeEnv, t.TempDir())
-			path, err := referenceBeaconHooksPath()
-			if err != nil {
-				t.Fatalf("resolving the reference hooks path: %v", err)
-			}
-			return path
-		},
-		Sentinel:        hookbeacon.Sentinel(referenceBeaconAdapter),
-		Events:          referenceBeaconEvents,
-		Entry:           referenceBeaconEntryNow,
-		EndpointOf:      func(hook map[string]interface{}) string { c, _ := hook["command"].(string); return c },
-		EnsureInstalled: ensure,
-		Uninstall:       uninstall,
-		ForeignInstall:  foreign,
+// correctBeaconInstaller is the reference wiring from
+// hook_endpoint_addressfree_test.go, unchanged. Each mutation below takes a
+// fresh copy and replaces exactly one entry point, so the deviation is the only
+// difference from the installer the real contract test runs.
+func correctBeaconInstaller() HookInstaller { return referenceBeaconInstaller() }
+
+// TestEndpointArms_PassACorrectInstaller is this family's vacuity guard, the
+// counterpart of TestDisclosureArms_PassACorrectDisclosure and
+// TestVersionArms_PassACorrectDeclaration: every arm run against the reference
+// installer, which is correct in every respect. An arm that reported
+// unconditionally would satisfy every mutation in this file and read as
+// excellent coverage.
+func TestEndpointArms_PassACorrectInstaller(t *testing.T) {
+	h := correctBeaconInstaller()
+	r := rulesFor(t, h)
+
+	for name, arm := range map[string]func(armT, string){
+		r.firstName:     func(at armT, path string) { r.first(at, h, path) },
+		r.installName:   func(at armT, path string) { assertInstallWritesCanonicalDelivery(at, h, r, path) },
+		r.upgradeName:   func(at armT, path string) { assertUpgradedInPlace(at, h, r, path) },
+		r.uninstallName: func(at armT, path string) { assertUninstallIsNotForeignScoped(at, h, r, path) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			// SettingsPath per sub-test, exactly as the contract calls it: a
+			// fresh temp home, so no arm inherits another's installed state.
+			path := h.SettingsPath(t)
+			mustBeSilent(t, observe(t, func(at armT) { arm(at, path) }), "the reference beacon installer")
+		})
 	}
-}
-
-func correctBeaconInstaller() HookInstaller {
-	return beaconInstaller(referenceBeaconEnsureInstalled, referenceBeaconUninstall, referenceBeaconForeignInstall)
-}
-
-// addressFreeRules is the route the mutations below are graded under. Taking it
-// from rulesFor rather than restating it keeps the self-tests bound to the same
-// seed and address assertion the contract actually uses.
-func addressFreeRules(t *testing.T, h HookInstaller) deliveryRules {
-	t.Helper()
-	return rulesFor(t, h)
 }
 
 // TestEndpointArm_InstallWritesCanonicalDelivery is obligation 2 (PR #1473 M2):
 // the installer writes a line other than the one Entry reports it would.
 func TestEndpointArm_InstallWritesCanonicalDelivery(t *testing.T) {
 	h := correctBeaconInstaller()
-	r := addressFreeRules(t, h)
-
-	t.Run("a_correct_installer_passes", func(t *testing.T) {
-		h := correctBeaconInstaller()
-		mustBeSilent(t, observe(t, func(at armT) { assertInstallWritesCanonicalDelivery(at, h, r) }),
-			"an installer that writes what it says it writes")
-	})
+	r := rulesFor(t, h)
 
 	t.Run("installs_a_line_other_than_the_canonical_one", func(t *testing.T) {
 		mutated := correctBeaconInstaller()
-		mutated.EnsureInstalled = func() (bool, error) {
-			command, err := hookbeacon.Command(referenceForeignBinary, referenceBeaconAdapter)
-			if err != nil {
-				return false, err
-			}
-			return referenceBeaconRun(command, hookjson.EnsureInstalled)
-		}
-		rec := observe(t, func(at armT) { assertInstallWritesCanonicalDelivery(at, mutated, r) })
+		mutated.EnsureInstalled = referenceBeaconForeignInstall
+		rec := observe(t, func(at armT) { assertInstallWritesCanonicalDelivery(at, mutated, r, mutated.SettingsPath(t)) })
 		mustReport(t, rec, "installed delivery =",
 			"an installer whose install does not match what Entry reports it would install (M2)")
 	})
@@ -324,13 +304,7 @@ func TestEndpointArm_InstallWritesCanonicalDelivery(t *testing.T) {
 // is the "reports healthy while delivering nothing" state #1178 is about.
 func TestEndpointArm_UpgradedInPlace(t *testing.T) {
 	h := correctBeaconInstaller()
-	r := addressFreeRules(t, h)
-
-	t.Run("a_correct_installer_passes", func(t *testing.T) {
-		h := correctBeaconInstaller()
-		mustBeSilent(t, observe(t, func(at armT) { assertUpgradedInPlace(at, h, r) }),
-			"an installer that repoints a foreign entry in place")
-	})
+	r := rulesFor(t, h)
 
 	t.Run("a_foreign_entry_is_left_alone", func(t *testing.T) {
 		mutated := correctBeaconInstaller()
@@ -342,7 +316,7 @@ func TestEndpointArm_UpgradedInPlace(t *testing.T) {
 				cfg.IsCanonical = func(map[string]interface{}) bool { return true }
 			}, hookjson.EnsureInstalled)
 		}
-		rec := observe(t, func(at armT) { assertUpgradedInPlace(at, mutated, r) })
+		rec := observe(t, func(at armT) { assertUpgradedInPlace(at, mutated, r, mutated.SettingsPath(t)) })
 		mustReport(t, rec, "expected modified=true when repointing",
 			"an IsCanonical that never checks the binary path, so an entry naming a since-deleted "+
 				"irrlichd is accepted as current (M3a)")
@@ -357,13 +331,7 @@ func TestEndpointArm_UpgradedInPlace(t *testing.T) {
 // --uninstall-hooks, so the entry commonly outlives the path it names.
 func TestEndpointArm_UninstallIsNotForeignScoped(t *testing.T) {
 	h := correctBeaconInstaller()
-	r := addressFreeRules(t, h)
-
-	t.Run("a_correct_uninstall_passes", func(t *testing.T) {
-		h := correctBeaconInstaller()
-		mustBeSilent(t, observe(t, func(at armT) { assertUninstallIsNotForeignScoped(at, h, r) }),
-			"an uninstall matched by a binary-independent sentinel")
-	})
+	r := rulesFor(t, h)
 
 	t.Run("uninstall_scoped_to_the_running_binary", func(t *testing.T) {
 		mutated := correctBeaconInstaller()
@@ -373,7 +341,7 @@ func TestEndpointArm_UninstallIsNotForeignScoped(t *testing.T) {
 				cfg.Sentinel = cfg.Entry()["command"].(string)
 			}, hookjson.Uninstall)
 		}
-		rec := observe(t, func(at armT) { assertUninstallIsNotForeignScoped(at, mutated, r) })
+		rec := observe(t, func(at armT) { assertUninstallIsNotForeignScoped(at, mutated, r, mutated.SettingsPath(t)) })
 		mustReport(t, rec, "expected modified=true removing",
 			"an Uninstall whose sentinel names the running binary, so another daemon's entries survive (M4)")
 	})
@@ -385,7 +353,7 @@ func TestEndpointArm_UninstallIsNotForeignScoped(t *testing.T) {
 // than graded on two obligations that cannot run (PR #1473 M5c).
 func TestEndpointRulesFor(t *testing.T) {
 	t.Run("address_free_without_a_foreign_seed_is_refused", func(t *testing.T) {
-		h := entryInstaller(t, DeliveryAddressFree, correctURLDelivery)
+		h := entryInstaller(DeliveryAddressFree, correctURLDelivery)
 		h.ForeignInstall = nil
 		mustReport(t, observe(t, func(at armT) { rulesFor(at, h) }),
 			"DeliveryAddressFree requires ForeignInstall",
@@ -393,7 +361,7 @@ func TestEndpointRulesFor(t *testing.T) {
 	})
 
 	t.Run("an_unknown_route_is_refused", func(t *testing.T) {
-		h := entryInstaller(t, DeliveryMode(99), correctURLDelivery)
+		h := entryInstaller(DeliveryMode(99), correctURLDelivery)
 		mustReport(t, observe(t, func(at armT) { rulesFor(at, h) }),
 			"unhandled DeliveryMode",
 			"a delivery mode naming no obligation set — a third route added without saying "+
@@ -412,7 +380,7 @@ func TestEndpointRulesFor(t *testing.T) {
 // "the run failed incidentally elsewhere" shape this file exists to refuse.
 func TestEndpointArm_SecondAssertions(t *testing.T) {
 	h := correctBeaconInstaller()
-	r := addressFreeRules(t, h)
+	r := rulesFor(t, h)
 
 	// Obligation 3's second claim: repointed IN PLACE, not appended beside the
 	// foreign entry. A sentinel that does not match what the seed wrote means
@@ -426,7 +394,7 @@ func TestEndpointArm_SecondAssertions(t *testing.T) {
 				cfg.Sentinel = "not-the-sentinel-the-seed-wrote"
 			}, hookjson.EnsureInstalled)
 		}
-		rec := observe(t, func(at armT) { assertUpgradedInPlace(at, mutated, r) })
+		rec := observe(t, func(at armT) { assertUpgradedInPlace(at, mutated, r, mutated.SettingsPath(t)) })
 		mustReport(t, rec, "expected exactly 1 matcher group",
 			"an install that appends a second group beside the foreign entry instead of "+
 				"repointing it (M3b)")
@@ -438,7 +406,7 @@ func TestEndpointArm_SecondAssertions(t *testing.T) {
 	t.Run("uninstall_reports_success_but_removes_nothing", func(t *testing.T) {
 		mutated := correctBeaconInstaller()
 		mutated.Uninstall = func() (bool, error) { return true, nil }
-		rec := observe(t, func(at armT) { assertUninstallIsNotForeignScoped(at, mutated, r) })
+		rec := observe(t, func(at armT) { assertUninstallIsNotForeignScoped(at, mutated, r, mutated.SettingsPath(t)) })
 		mustReport(t, rec, "survived uninstall",
 			"an Uninstall that reports modified=true and leaves every entry in place")
 	})
@@ -456,25 +424,23 @@ func TestEndpointArm_SecondAssertions(t *testing.T) {
 			}
 			return true, nil
 		}
-		rec := observe(t, func(at armT) { assertInstallWritesCanonicalDelivery(at, mutated, r) })
+		rec := observe(t, func(at armT) { assertInstallWritesCanonicalDelivery(at, mutated, r, mutated.SettingsPath(t)) })
 		mustReport(t, rec, "second install on the same bind address",
 			"an installer that reports modified=true every time it runs")
 	})
 }
 
-// beaconRunWith builds the reference beacon's config, applies one deliberate
-// deviation, and hands it to op — so each mutation above states its deviation
-// as one line rather than restating the whole config.
+// beaconRunWith is referenceBeaconRun with one deliberate deviation applied, so
+// each mutation states its deviation as a single line and inherits every other
+// field from the reference config — a new required hookjson.Config field then
+// reaches these mutations as well as the real contract test.
 func beaconRunWith(mutate func(*hookjson.Config), op func(hookjson.Config) (bool, error)) (bool, error) {
-	path, err := referenceBeaconHooksPath()
-	if err != nil {
-		return false, err
-	}
 	command, err := hookbeacon.InstalledCommand(referenceBeaconAdapter)
 	if err != nil {
 		return false, err
 	}
-	cfg := referenceBeaconConfig(path, command)
-	mutate(&cfg)
-	return op(cfg)
+	return referenceBeaconRun(command, func(cfg hookjson.Config) (bool, error) {
+		mutate(&cfg)
+		return op(cfg)
+	})
 }

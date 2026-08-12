@@ -107,7 +107,7 @@ func AssertHookDisclosureMatchesInstalled(t *testing.T, d HookDisclosure) {
 	t.Run("permission_is_modify_kind", func(t *testing.T) {
 		assertModifyKind(t, d.PermissionKey, perm.Kind)
 	})
-	disclosure := perm.Touches + "\n" + perm.Detail
+	disclosure := disclosureTextOf(perm)
 	// One tokenization serves both the "is this name present" and the "what
 	// event-shaped names are present" questions. Whole-word matching is what
 	// makes the first safe: "PostToolUse" occurs inside "PostToolUseFailure",
@@ -127,6 +127,16 @@ func AssertHookDisclosureMatchesInstalled(t *testing.T, d HookDisclosure) {
 	t.Run("states_the_version_floor", func(t *testing.T) {
 		assertStatesVersionFloor(t, perm, disclosure)
 	})
+}
+
+// disclosureTextOf is the copy the user actually reads before granting: the
+// wizard row shows Touches and the (i) expander shows Detail, and which of the
+// two carries a given fact is a presentation choice. It is a function rather
+// than an expression repeated at each reader so the self-tests grade exactly
+// the string the contract grades — a second spelling would keep passing while
+// the contract moved to a wider one.
+func disclosureTextOf(perm agent.Permission) string {
+	return perm.Touches + "\n" + perm.Detail
 }
 
 // disclosureUnderTest returns the permission the contract grades, or a reason

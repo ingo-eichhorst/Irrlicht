@@ -18,6 +18,17 @@
 // mutation harness whose mutations silently stopped applying reported "all
 // green" for the two that mattered most.
 //
+// # Why there is no tripwire policing the fixture *testing.T
+//
+// An earlier draft of this file carried an AST walk asserting that no arm
+// reported through armT's fixture field, alias tracking included. It is gone,
+// and its absence is the point: fixtureT (reporter.go) narrows that field to a
+// reporting-free interface, so `t.fixtures.Fatalf(...)` no longer compiles in
+// any spelling. A guard is worth only what its deliberate failures prove, and
+// this one would have shipped without a committed corpus proving it could find
+// anything — in a package whose whole thesis is that such a guard is worth
+// nothing. A type needs no such proof.
+//
 // # Why the harness has a mutation of its own
 //
 // A recorder that stopped observing would be the failure being fixed,
@@ -32,10 +43,6 @@ package contracttesting
 
 import (
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
 	"runtime"
 	"strings"
 	"sync"
@@ -48,21 +55,21 @@ import (
 // enclosing test. It is the swappable half of armT; the fixture half stays a
 // real *testing.T, so a fixture that cannot be built still fails loudly.
 type recordingT struct {
-	mu      sync.Mutex
-	errs    []string
-	fatal   bool
-	helpers int
+	mu     sync.Mutex
+	errs   []string
+	fatal  bool
+	marked bool
 }
 
 func newRecordingT() *recordingT { return &recordingT{} }
 
-// Helper is counted rather than ignored, so the tripwire test can confirm the
-// arms still mark themselves — a missing t.Helper() moves a failure's reported
-// line into this file and makes every contract failure point at the harness.
+// Helper is recorded rather than ignored, so the verdicts can confirm the arm
+// marked itself — a missing t.Helper() moves a failure's reported line into
+// this file and makes every contract failure point at the harness.
 func (r *recordingT) Helper() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.helpers++
+	r.marked = true
 }
 
 func (r *recordingT) Error(args ...any) { r.record(fmt.Sprint(args...)) }
@@ -122,7 +129,7 @@ func (r *recordingT) aborted() bool {
 func (r *recordingT) markedHelper() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.helpers > 0
+	return r.marked
 }
 
 // --- driving an arm ---
@@ -150,27 +157,28 @@ func observe(t *testing.T, arm func(armT)) *recordingT {
 // observation is what a self-test reads back off a driven arm. It is an
 // interface so the committed broken recorders below can be substituted for the
 // real one, which is how the harness proves its own verdicts are not vacuous.
+// observation carries three axes, and markedHelper is on the interface rather
+// than probed for with a type assertion on purpose: an optional interface is
+// satisfied by NOT implementing it, so a future observation type would opt out
+// of the helper obligation by omission and nothing would say so. That is the
+// silent-skip shape this package exists to remove, and it must not appear in
+// the harness itself.
+//
+// markedHelper reports whether the arm called t.Helper(). Every contract arm
+// does, first thing, and it is not decoration — without it a failure is
+// attributed to the harness rather than to the wiring that supplied the wrong
+// fixture, so every contract failure in the tree would point here.
 type observation interface {
 	reported() bool
 	report() string
+	markedHelper() bool
 }
 
-// helperMarker is the optional half of an observation: whether the arm called
-// t.Helper(). Every contract arm does, first thing, and it is not decoration —
-// without it a failure is attributed to this file rather than to the wiring
-// that supplied the wrong fixture, so every contract failure in the tree would
-// point at the harness.
-//
-// It is optional because the committed broken recorders below are not arms and
-// have no helper to mark. Checking it in the verdicts rather than in one test
-// is what makes it cover every family at once (review of PR #1498).
-type helperMarker interface{ markedHelper() bool }
-
 // verdictHelperMarked reports why obs shows the arm did not identify itself, or
-// "" when it did or cannot say.
+// "" when it did. Checking it in the verdicts rather than in one test is what
+// makes it cover every family at once (review of PR #1498).
 func verdictHelperMarked(obs observation) string {
-	hm, ok := obs.(helperMarker)
-	if !ok || hm.markedHelper() {
+	if obs.markedHelper() {
 		return ""
 	}
 	return "the arm never called t.Helper() — its failures are attributed to the harness " +
@@ -246,7 +254,6 @@ func mustBeSilent(t *testing.T, obs observation, what string) {
 // itself. The two instances below are the only two ways a recorder can be
 // broken: it can fail to observe, or it can observe indiscriminately.
 type brokenRecorder struct {
-	name string
 	did  bool
 	text string
 }
@@ -255,24 +262,29 @@ func (b brokenRecorder) reported() bool { return b.did }
 
 func (b brokenRecorder) report() string { return b.text }
 
+// markedHelper is true for every fixture below: the helper axis is not what
+// they grade, and stating that explicitly is the point of putting the method on
+// observation rather than leaving it optional.
+func (b brokenRecorder) markedHelper() bool { return true }
+
 var (
 	// deafRecorder records nothing, whatever the arm reports. This is the
 	// failure #1479's acceptance criterion names: "a recording-T that records
 	// nothing would make every negative self-test pass". It does not, and
 	// TestTheVerdictsDependOnWhatTheRecorderSaw is why — but the claim has to
 	// be re-run, not believed.
-	deafRecorder = brokenRecorder{name: "deaf", did: false, text: ""}
+	deafRecorder = brokenRecorder{did: false, text: ""}
 
 	// criesWolfRecorder reports unconditionally, with text that names no
 	// obligation. It is the opposite break and the more dangerous one: it
 	// satisfies "something failed" for every mutation ever written, so a
 	// harness that only asked that question would grade every obligation as
 	// discriminating while none of them did.
-	criesWolfRecorder = brokenRecorder{name: "cries-wolf", did: true, text: "something went wrong"}
+	criesWolfRecorder = brokenRecorder{did: true, text: "something went wrong"}
 
 	// faithfulRecording is what a working recorder produces for the mutation
 	// the two above are graded against: the obligation's own message.
-	faithfulRecording = brokenRecorder{name: "faithful", did: true, text: harnessProbeMessage}
+	faithfulRecording = brokenRecorder{did: true, text: harnessProbeMessage}
 )
 
 // harnessProbeMessage stands in for an obligation's failure text. It is
@@ -397,135 +409,4 @@ func TestTheRecorderObservesWhatAnArmReports(t *testing.T) {
 				"would then be attributed to the harness instead of to the wiring")
 		}
 	})
-}
-
-// TestNoArmReportsThroughTheFixtureT is the tripwire for the one way this seam
-// can be silently un-done: armT carries the real *testing.T so an arm can build
-// fixtures with it, and reporting through that field instead of through the
-// embedded reporter bypasses the recorder entirely. Such an arm cannot be
-// driven by a negative self-test — it would fail the enclosing test — so the
-// mutation evidence would go back to being unrunnable without anything saying
-// so.
-//
-// It reads the package's own non-test sources, because a convention that lives
-// only in a doc comment is the thing this package exists to replace.
-//
-// ALIASES ARE TRACKED, and that is the review finding this shape exists for:
-// matching only the literal `t.fixtures.Fatalf(...)` chain catches the obvious
-// spelling and misses `ft := t.fixtures; ft.Fatalf(...)`, which bypasses the
-// seam exactly as completely. `core/architecture_hookbody_shapes_test.go` pins
-// "an aliased body" as its own corpus case for the same reason.
-func TestNoArmReportsThroughTheFixtureT(t *testing.T) {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
-	if err != nil {
-		t.Fatalf("parsing the package: %v", err)
-	}
-	if len(pkgs) == 0 {
-		t.Fatal("parsed no packages — this tripwire would pass vacuously")
-	}
-
-	seenArmT := false
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			ast.Inspect(file, func(n ast.Node) bool {
-				if id, ok := n.(*ast.Ident); ok && id.Name == armTTypeName {
-					seenArmT = true
-				}
-				fn, ok := n.(*ast.FuncDecl)
-				if !ok || fn.Body == nil {
-					return true
-				}
-				for _, pos := range fixtureReportsIn(fn, aliasesOfFixturesIn(fn)) {
-					t.Errorf("%s: reports through the fixture *testing.T — that bypasses the "+
-						"reporter seam, so this obligation cannot be driven by a negative "+
-						"self-test; report through the embedded reporter and keep .%s for "+
-						"fixture machinery only", fset.Position(pos), fixtureFieldName)
-				}
-				return true
-			})
-		}
-	}
-	if !seenArmT {
-		t.Fatalf("the package no longer mentions %s — this tripwire is scanning for a shape "+
-			"that has been renamed, and would pass whatever the sources do", armTTypeName)
-	}
-}
-
-const (
-	fixtureFieldName = "fixtures"
-	armTTypeName     = "armT"
-)
-
-// reportingMethods are the *testing.T methods that decide a test's verdict. An
-// arm may reach the fixture T for t.TempDir/t.Setenv/t.Cleanup and for the
-// *testing.T-typed wiring fields; these are the ones it may not.
-var reportingMethods = map[string]bool{
-	"Error": true, "Errorf": true, "Fatal": true, "Fatalf": true, "Skip": true, "Skipf": true,
-}
-
-// aliasesOfFixturesIn returns the local names bound to something's .fixtures
-// field anywhere in fn — `ft := t.fixtures`, `var ft = at.fixtures`. Scope is
-// deliberately the whole function rather than the exact block: over-approximating
-// makes the tripwire refuse a shape it is not certain about, which is the
-// direction a check that cannot parse its input must degrade in.
-func aliasesOfFixturesIn(fn *ast.FuncDecl) map[string]bool {
-	aliases := map[string]bool{}
-	bind := func(lhs, rhs []ast.Expr) {
-		for i, r := range rhs {
-			if i >= len(lhs) || !isFixtureSelector(r) {
-				continue
-			}
-			if id, ok := lhs[i].(*ast.Ident); ok && id.Name != "_" {
-				aliases[id.Name] = true
-			}
-		}
-	}
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		switch v := n.(type) {
-		case *ast.AssignStmt:
-			bind(v.Lhs, v.Rhs)
-		case *ast.ValueSpec:
-			names := make([]ast.Expr, len(v.Names))
-			for i, name := range v.Names {
-				names[i] = name
-			}
-			bind(names, v.Values)
-		}
-		return true
-	})
-	return aliases
-}
-
-// fixtureReportsIn returns the position of every reporting call in fn made
-// through the fixture T, whether spelled directly or through an alias.
-func fixtureReportsIn(fn *ast.FuncDecl, aliases map[string]bool) []token.Pos {
-	var found []token.Pos
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || !reportingMethods[sel.Sel.Name] {
-			return true
-		}
-		if isFixtureSelector(sel.X) {
-			found = append(found, call.Pos())
-			return true
-		}
-		if id, ok := sel.X.(*ast.Ident); ok && aliases[id.Name] {
-			found = append(found, call.Pos())
-		}
-		return true
-	})
-	return found
-}
-
-// isFixtureSelector reports whether e is a `<something>.fixtures` selection.
-func isFixtureSelector(e ast.Expr) bool {
-	sel, ok := e.(*ast.SelectorExpr)
-	return ok && sel.Sel.Name == fixtureFieldName
 }

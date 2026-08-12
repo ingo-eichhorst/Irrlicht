@@ -171,10 +171,19 @@ type HookInstaller struct {
 func AssertHookEndpointFollowsBindAddr(t *testing.T, h HookInstaller) {
 	t.Helper()
 	r := rulesFor(t, h)
-	t.Run(r.firstName, func(t *testing.T) { r.first(realT(t), h) })
-	t.Run(r.installName, func(t *testing.T) { assertInstallWritesCanonicalDelivery(realT(t), h, r) })
-	t.Run(r.upgradeName, func(t *testing.T) { assertUpgradedInPlace(realT(t), h, r) })
-	t.Run(r.uninstallName, func(t *testing.T) { assertUninstallIsNotForeignScoped(realT(t), h, r) })
+	// SettingsPath is called HERE, on the sub-test's real *testing.T, rather
+	// than inside each arm. It relocates the adapter's config home and reports
+	// its own failures, which is fixture machinery: a home that cannot be
+	// relocated must fail the run loudly, never be recorded as the obligation
+	// under test firing. Arms take the resolved path.
+	t.Run(r.firstName, func(t *testing.T) { r.first(realT(t), h, h.SettingsPath(t)) })
+	t.Run(r.installName, func(t *testing.T) {
+		assertInstallWritesCanonicalDelivery(realT(t), h, r, h.SettingsPath(t))
+	})
+	t.Run(r.upgradeName, func(t *testing.T) { assertUpgradedInPlace(realT(t), h, r, h.SettingsPath(t)) })
+	t.Run(r.uninstallName, func(t *testing.T) {
+		assertUninstallIsNotForeignScoped(realT(t), h, r, h.SettingsPath(t))
+	})
 }
 
 // deliveryRules is everything that differs between the two routes, selected
@@ -190,7 +199,7 @@ func AssertHookEndpointFollowsBindAddr(t *testing.T, h HookInstaller) {
 type deliveryRules struct {
 	// firstName and first are the one obligation that genuinely differs.
 	firstName string
-	first     func(t armT, h HookInstaller)
+	first     func(t armT, h HookInstaller, path string)
 
 	// The remaining three sub-tests are the same functions in both routes and
 	// differ only in what they are called.
@@ -244,13 +253,13 @@ func rulesFor(t reporter, h HookInstaller) deliveryRules {
 // and on the alternate bind address. The two obligation-1 bodies differ only in
 // how they compare the pair.
 //
-// It relocates the config home even though it writes nothing: an Entry() that
-// reads anything home-relative must never be evaluated against the developer's
-// real agent config. And it confirms EndpointOf read something at all before
-// either body compares — see assertDeliveryIsOurs.
+// Its caller has already relocated the config home, which matters even though
+// this writes nothing: an Entry() that reads anything home-relative must never
+// be evaluated against the developer's real agent config. It confirms
+// EndpointOf read something at all before either body compares — see
+// assertDeliveryIsOurs.
 func deliveriesOnBothAddrs(t armT, h HookInstaller) (onDefault, onAlt string) {
 	t.Helper()
-	h.SettingsPath(t.fixtures)
 	onDefault = deliveryOn(t, h, "")
 	onAlt = deliveryOn(t, h, AltBindAddr)
 	assertDeliveryIsOurs(t, h, "delivery on the default bind address", onDefault)
@@ -265,7 +274,7 @@ func deliveriesOnBothAddrs(t armT, h HookInstaller) (onDefault, onAlt string) {
 // #1178 defect, which is address-bearing and equally invariant — and the
 // no-address check alone would pass for a line that varied for some other
 // reason and so could still be written differently by two daemons.
-func assertDeliveryCarriesNoAddress(t armT, h HookInstaller) {
+func assertDeliveryCarriesNoAddress(t armT, h HookInstaller, _ string) {
 	t.Helper()
 	onDefault, onAlt := deliveriesOnBothAddrs(t, h)
 	if onDefault != onAlt {
@@ -279,7 +288,7 @@ func assertDeliveryCarriesNoAddress(t armT, h HookInstaller) {
 // assertEndpointFollowsBindAddr is DeliveryURL's obligation 1 at the source:
 // the endpoint the adapter would install is a function of the bind address at
 // all. An installer that hardcodes the port fails here first, and most legibly.
-func assertEndpointFollowsBindAddr(t armT, h HookInstaller) {
+func assertEndpointFollowsBindAddr(t armT, h HookInstaller, _ string) {
 	t.Helper()
 	onDefault, onAlt := deliveriesOnBothAddrs(t, h)
 	if onDefault == onAlt {
@@ -292,9 +301,8 @@ func assertEndpointFollowsBindAddr(t armT, h HookInstaller) {
 // assertInstallWritesCanonicalDelivery is obligation 2: what actually lands in
 // the settings file, plus idempotency on an unchanged bind address. Shared by
 // both routes — only r.assertAddress differs.
-func assertInstallWritesCanonicalDelivery(t armT, h HookInstaller, r deliveryRules) {
+func assertInstallWritesCanonicalDelivery(t armT, h HookInstaller, r deliveryRules, path string) {
 	t.Helper()
-	path := h.SettingsPath(t.fixtures)
 	want := deliveryOn(t, h, AltBindAddr)
 
 	if _, err := h.EnsureInstalled(); err != nil {
@@ -314,9 +322,8 @@ func assertInstallWritesCanonicalDelivery(t armT, h HookInstaller, r deliveryRul
 // assertUpgradedInPlace is obligation 3: an install left by a differently
 // situated daemon is recognized as ours and repointed, not orphaned beside a
 // duplicate group. What "differently situated" means is r.seed's business.
-func assertUpgradedInPlace(t armT, h HookInstaller, r deliveryRules) {
+func assertUpgradedInPlace(t armT, h HookInstaller, r deliveryRules, path string) {
 	t.Helper()
-	path := h.SettingsPath(t.fixtures)
 	seedForeignInstall(t, h, r, path)
 	want := deliveryOn(t, h, AltBindAddr)
 
@@ -338,9 +345,8 @@ func assertUpgradedInPlace(t armT, h HookInstaller, r deliveryRules) {
 // means Uninstall must not depend on resolving a binary path at all —
 // `site/install.sh --uninstall` removes the binary without calling
 // --uninstall-hooks, so the entry commonly outlives the path it names.
-func assertUninstallIsNotForeignScoped(t armT, h HookInstaller, r deliveryRules) {
+func assertUninstallIsNotForeignScoped(t armT, h HookInstaller, r deliveryRules, path string) {
 	t.Helper()
-	path := h.SettingsPath(t.fixtures)
 	seedForeignInstall(t, h, r, path)
 	t.fixtures.Setenv(daemonaddr.EnvBindAddr, AltBindAddr)
 

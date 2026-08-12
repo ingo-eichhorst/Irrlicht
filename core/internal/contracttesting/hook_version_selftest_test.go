@@ -43,13 +43,21 @@ func selfTestSince() map[string]string {
 	}
 }
 
+// selfTestGate is the gate a correct adapter declares: a parseable floor and a
+// way to learn the installed version. Shared with the disclosure family's
+// fixture, so the floor those tests expect the consent copy to state is the
+// same value this family grades.
+func selfTestGate() *agent.VersionGate {
+	return &agent.VersionGate{
+		Min:   selfTestFloor,
+		Probe: []string{selfTestCLIName, "--version"},
+	}
+}
+
 // correctVersionGate is a wiring that satisfies all five obligations. Each
 // mutation below overrides exactly one thing.
 func correctVersionGate() HookVersionGate {
-	return versionGateWith(&agent.VersionGate{
-		Min:   selfTestFloor,
-		Probe: []string{selfTestCLIName, "--version"},
-	})
+	return versionGateWith(selfTestGate())
 }
 
 func versionGateWith(gate *agent.VersionGate) HookVersionGate {
@@ -196,7 +204,7 @@ func TestVersionArm_FloorRefusesAnOlderCLI(t *testing.T) {
 // only that the direction still holds, and says out loud that that is all it
 // asserts.
 func TestVersionArm_UnknownVersionFailsOpen_IsALock(t *testing.T) {
-	gate := &agent.VersionGate{Min: selfTestFloor, Probe: []string{selfTestCLIName, "--version"}}
+	gate := selfTestGate()
 	for _, unknown := range []string{"", "not a version", "2.1"} {
 		if allowed, why := gate.Permits(unknown); !allowed {
 			t.Fatalf("unknown version %q was refused (%s) — the fail-open direction has been "+

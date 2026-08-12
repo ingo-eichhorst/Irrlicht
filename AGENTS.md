@@ -88,8 +88,9 @@ because a reviewer, or the agent itself, ran a mutation nobody had asked for.
 deliberately-broken fixtures are the shape ("committed rather than improvised so the
 mutation evidence outlives the PR"), and `TestSourceScanCatchesEveryKnownShape`
 (`core/application/services/construction_test.go`) is the same idea as a corpus.
-Evidence living only in a merged PR body is re-run by nothing, which for the
-`contracttesting` families is #1479. And a guard that *rewrites* an existing one owes
+Evidence living only in a merged PR body is re-run by nothing; for the
+`contracttesting` families #1479 committed it beside each assertion, and the
+"Permission gating" bullet below describes the shape. And a guard that *rewrites* an existing one owes
 its predecessor's cases as locks on top of its own — "Guarded construction" below
 carries that rule and the incident that earned it.
 
@@ -527,11 +528,8 @@ Before marking a ticket done, run the full suite — every layer must pass:
   over the package currently returns eight, because
   `AssertPermissionGatedOnEachKey` is a driver that runs the permission-gate
   family once per key, not a family of its own. Check what a function asserts
-  before moving this number, and note that the count is tool-sensitive: a `git
-  grep` over the pathspec `core/internal/contracttesting/*.go` returns NINE,
-  because a git pathspec `*` crosses directory boundaries where a shell glob
-  does not, and it picks up `AssertMatchesCanonical` in the `userblocking/`
-  subpackage. A new or reworked
+  before moving this number (and before re-counting with `git grep`, whose
+  pathspec `*` crosses directory boundaries and returns nine). A new or reworked
   contract assertion is therefore the mutation rule at the top of this section
   in its most literal form: it lands with the deliberate mutation seen red for
   each obligation — and since #1479 that mutation is **committed beside the
@@ -557,10 +555,16 @@ Before marking a ticket done, run the full suite — every layer must pass:
   arms all passed correctly for what they asserted and the gap was that the
   FIXTURE could not express the distinguishing state — a negative self-test
   grades an obligation against the wrong receiver it can build, never against
-  the one nobody thought to build. Four families carry them today (permission
-  gate, hook endpoint, hook disclosure, hook version); the three
-  receiver-shaped ones are #1497, queued behind #1488 because they share one
-  fake receiver and #1488 changes the constructor that builds it.
+  the one nobody thought to build. **A new arm takes `reporter`, or `armT` when
+  it also builds fixtures — never `*testing.T`**, or it cannot be driven at all
+  and its obligation silently leaves the covered set. `armT.fixtures` is typed
+  `fixtureT`, which carries `Setenv` and nothing that can decide a verdict, so
+  reporting through it does not compile; that is a type guarantee rather than a
+  guard, the same trade #1390 made for path confinement. Four families carry
+  self-tests (permission gate, hook endpoint, hook disclosure, hook version);
+  the three receiver-shaped ones, and a source walk that would make a fifth
+  family covered by existing rather than by remembering, are #1497 — queued
+  behind #1488, which changes the fake receiver all three would share.
 - Guarded construction: not a contract family — a package-local pair of guards,
   `core/application/services/construction_test.go`. A service whose fields
   include maps, channels, or anything else whose zero value is unusable is

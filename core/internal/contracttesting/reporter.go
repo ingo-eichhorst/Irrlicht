@@ -44,17 +44,33 @@ type reporter interface {
 	Fatalf(format string, args ...any)
 }
 
-// armT carries both halves an arm can need: where it REPORTS, which a self-test
-// swaps, and the *testing.T its FIXTURES are built against, which no self-test
-// ever swaps.
+// fixtureT is the slice of *testing.T an arm may use to BUILD state, and it is
+// deliberately reporting-free: it carries Setenv and nothing that can decide a
+// test's verdict.
 //
-// The split is the point. A negative self-test substitutes the reporting so an
-// obligation's failure can be observed instead of failing the run; it must NOT
-// substitute t.TempDir/t.Setenv/t.Cleanup, because a fixture that cannot be
-// built is a real failure of the self-test itself and has to be loud. Folding
-// both into one recorder would swallow setup breakage as if it were the
-// obligation firing — which is the second live instance issue #1479 records
-// (an obligation graded green while the run failed incidentally elsewhere).
+// That narrowing is the whole guarantee. armT has to hand an arm some real
+// *testing.T — env relocation is fixture machinery a recorder must not fake,
+// because a fixture that cannot be built is a real failure and has to be loud,
+// not recorded as the obligation firing (issue #1479's second instance, in
+// miniature). But a bare *testing.T field would also carry Errorf and Fatalf,
+// and an arm reporting through those bypasses the seam entirely: it could no
+// longer be driven by a negative self-test, and nothing would say so.
+//
+// The first draft policed that with an AST tripwire over the package's own
+// sources, including alias tracking for `ft := t.fixtures`. This replaces the
+// guard with a type: `t.fixtures.Fatalf(...)` does not compile, in any
+// spelling. It is the same move #1390 made for hook path confinement, where a
+// wiring obligation ("remember to confine") became a type guarantee
+// ("DecodeConfined cannot decode without a *PathConfiner") — and it is the
+// better half of that trade for the same reason, since a guard is worth only
+// what its deliberate failures prove and a type needs no such proof.
+type fixtureT interface {
+	Setenv(key, value string)
+}
+
+// armT carries both halves an arm can need: where it REPORTS, which a self-test
+// swaps, and the fixture machinery it builds state with, which no self-test
+// ever swaps.
 //
 // Only the hook_endpoint family needs this today; the other arms are pure and
 // take reporter.
@@ -63,10 +79,8 @@ type armT struct {
 	// it did when it held a *testing.T, and armT itself satisfies reporter.
 	reporter
 
-	// fixtures is the real *testing.T. Use it ONLY for fixture machinery.
-	// Reporting through it bypasses the seam and silently un-does this file;
-	// TestNoArmReportsThroughTheFixtureT is the tripwire that says so.
-	fixtures *testing.T
+	// fixtures is reporting-free by type — see fixtureT.
+	fixtures fixtureT
 }
 
 // realT wraps a *testing.T as the arm-facing pair used in production, where

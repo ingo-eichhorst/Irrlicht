@@ -55,12 +55,7 @@ func disclosureWith(touches, detail string) HookDisclosure {
 				Touches: touches,
 				Detail:  detail,
 				Apply:   func() error { return nil },
-				Writes: &agent.ManagedUserFile{
-					Version: &agent.VersionGate{
-						Min:   selfTestFloor,
-						Probe: []string{selfTestCLIName, "--version"},
-					},
-				},
+				Writes:  &agent.ManagedUserFile{Version: selfTestGate()},
 			}},
 		},
 		PermissionKey: agent.HooksPermissionKey,
@@ -104,6 +99,13 @@ func disclosureArms() map[string]disclosureArm {
 				assertStatesVersionFloor(t, perm, disclosureText(d))
 			},
 		},
+		"permission_is_modify_kind": {
+			want: "installing hooks writes to the user's config",
+			run: func(t armT, d HookDisclosure) {
+				perm, _ := disclosureUnderTest(d)
+				assertModifyKind(t, d.PermissionKey, perm.Kind)
+			},
+		},
 	}
 }
 
@@ -136,7 +138,7 @@ func mustAlsoName(t *testing.T, obs observation, value, what string) {
 
 func disclosureText(d HookDisclosure) string {
 	perm, _ := disclosureUnderTest(d)
-	return perm.Touches + "\n" + perm.Detail
+	return disclosureTextOf(perm)
 }
 
 func disclosureWords(d HookDisclosure) map[string]bool { return wordsIn(disclosureText(d)) }
@@ -261,12 +263,8 @@ func TestDisclosureArm_PermissionIsModifyKind(t *testing.T) {
 	rec := observe(t, func(at armT) {
 		assertModifyKind(at, agent.HooksPermissionKey, permission.KindObserve)
 	})
-	mustReport(t, rec, "installing hooks writes to the user's config",
+	mustReport(t, rec, wantOf(t, "permission_is_modify_kind"),
 		"a hooks permission declaring itself observe-kind")
-
-	mustBeSilent(t, observe(t, func(at armT) {
-		assertModifyKind(at, agent.HooksPermissionKey, permission.KindModify)
-	}), "a modify-kind hooks permission")
 }
 
 // TestDisclosureUnderTest covers the preconditions. A wiring the contract cannot
