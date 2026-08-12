@@ -404,6 +404,134 @@ func TestReadLauncherEnv_Subprocess_Herdr(t *testing.T) {
 	}
 }
 
+// tmuxPaneEnv is the env a process sees inside a tmux pane whose server was
+// started from an iTerm2 window — iTerm session "w0t0p0:ALPHA-UUID" — that the
+// user has since detached from. Values match a live capture on tmux 3.6a
+// (#1486), and the shape is herdrPaneEnv's above for the same reason: tmux's
+// server daemonizes at first use, is reparented to PID 1, outlives every
+// client, and hands its own launch-time environment to every pane it will ever
+// spawn.
+//
+// Two measured details drive the assertions below.
+//
+// First, TERM_PROGRAM is NOT a stale host name: tmux overwrites it with its own
+// name ("tmux", alongside TERM_PROGRAM_VERSION=3.6a). That refutes #1486's
+// stated hypothesis, but it is not a reprieve — "tmux" matches no entry in the
+// macOS activator registry, and being non-empty it also suppresses the
+// TermProgram=="" guards that would otherwise reach the ancestry fallbacks. So
+// it is a value that can only mask, never resolve.
+//
+// Second, every *other* terminal-identity var IS handed through frozen. This
+// was measured on a pane created minutes after the ALPHA terminal was gone,
+// while a completely different client (Apple_Terminal, "w9t9p9:BRAVO-UUID")
+// was the only one attached — so unlike #1405's herdr staleness, it is wrong
+// from the very first click rather than only after a re-attach.
+var tmuxPaneEnv = map[string]string{
+	"TERM_PROGRAM":      "tmux",
+	"TMUX":              "/private/tmp/tmux-501/default,69323,0",
+	"TMUX_PANE":         "%4",
+	"ITERM_SESSION_ID":  "w0t0p0:ALPHA-UUID",
+	"TERM_SESSION_ID":   "ALPHA_TERMSESS",
+	"KITTY_LISTEN_ON":   "unix:/tmp/kitty-ALPHA/sock",
+	"KITTY_WINDOW_ID":   "77",
+	"KITTY_PID":         "555",
+	"VSCODE_PID":        "4242",
+	"TERMINAL_EMULATOR": "JetBrains-JediTerm",
+}
+
+// TestLauncherFromEnv_TmuxSuppressesInheritedIdentity pins the defect. Each
+// field here describes the terminal the tmux *server* was started in, not the
+// one displaying the pane, and none of them is refreshed when the user
+// re-attaches somewhere else.
+func TestLauncherFromEnv_TmuxSuppressesInheritedIdentity(t *testing.T) {
+	l := launcherFromEnv(tmuxPaneEnv)
+	if l.TermProgram != "" {
+		t.Errorf("TermProgram: tmux's own name is not a host, got %q", l.TermProgram)
+	}
+	if l.ITermSessionID != "" || l.TermSessionID != "" {
+		t.Errorf("iTerm/Terminal.app session identity must not survive, got iterm=%q term=%q",
+			l.ITermSessionID, l.TermSessionID)
+	}
+	if l.KittyListenOn != "" || l.KittyWindowID != "" || l.KittyPID != 0 {
+		t.Errorf("kitty identity must not survive, got listen=%q window=%q pid=%d",
+			l.KittyListenOn, l.KittyWindowID, l.KittyPID)
+	}
+	if l.VSCodePID != 0 {
+		t.Errorf("VSCodePID: inherited value must not survive, got %d", l.VSCodePID)
+	}
+}
+
+// TestLauncherFromEnv_TmuxCapture covers the other half: the pane's own
+// address, which is the only thing in that env that actually describes it and
+// which the backchannel routes on (resolveBackend picks backendTmux from
+// TmuxPane alone, before it ever looks at TermProgram). Keeping these two is
+// what makes the suppression above a click-to-focus change and not a control
+// regression.
+func TestLauncherFromEnv_TmuxCapture(t *testing.T) {
+	l := launcherFromEnv(tmuxPaneEnv)
+	if l.TmuxPane != "%4" {
+		t.Errorf("TmuxPane: want %%4, got %q", l.TmuxPane)
+	}
+	if l.TmuxSocket != "/private/tmp/tmux-501/default" {
+		t.Errorf("TmuxSocket: got %q", l.TmuxSocket)
+	}
+	if l.IsEmpty() {
+		t.Error("a tmux-only launcher must not be reported empty")
+	}
+}
+
+// TestLauncherFromEnv_TmuxSuppressionIsScoped guards the blast radius: the
+// suppression must key off an actual tmux pane and leave an ordinary terminal
+// session alone. A lock — it passes before the change and must keep passing
+// after.
+func TestLauncherFromEnv_TmuxSuppressionIsScoped(t *testing.T) {
+	l := launcherFromEnv(map[string]string{
+		"TERM_PROGRAM":     "iTerm.app",
+		"ITERM_SESSION_ID": "w0t0p0:REAL-UUID",
+		"KITTY_WINDOW_ID":  "3",
+	})
+	if l.TermProgram != "iTerm.app" || l.ITermSessionID != "w0t0p0:REAL-UUID" {
+		t.Errorf("a non-tmux session must keep its own identity, got %+v", l)
+	}
+	if l.KittyWindowID != "3" {
+		t.Errorf("KittyWindowID: want 3, got %q", l.KittyWindowID)
+	}
+}
+
+// TestReadLauncherEnv_Subprocess_TmuxSkipsAncestry is the tmux twin of
+// TestReadLauncherEnv_Subprocess_Herdr: it exercises the real sysctl / /proc
+// read path, and pins that the ancestry fallbacks do not put a host identity
+// back by another route. The walk from a tmux pane leads to the tmux server,
+// which is reparented to PID 1 — so it can only ever rediscover the terminal
+// the server was launched from, which is the value being suppressed. (This
+// test process is itself hosted by some terminal, so without the skip
+// TermProgram/HostBundleID would be populated here.)
+func TestReadLauncherEnv_Subprocess_TmuxSkipsAncestry(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip()
+	}
+	pid := spawnSleeperWithEnv(t, []string{
+		"PATH=/usr/bin:/bin",
+		"TERM_PROGRAM=tmux",
+		"TMUX=/private/tmp/tmux-501/default,69323,0",
+		"TMUX_PANE=%4",
+		"ITERM_SESSION_ID=w0t0p0:ALPHA-UUID",
+	})
+	l, _ := ReadLauncherEnv(pid)
+	if l == nil {
+		t.Fatal("expected non-nil launcher")
+	}
+	if l.TmuxPane != "%4" || l.TmuxSocket != "/private/tmp/tmux-501/default" {
+		t.Errorf("the pane's own address must survive the real read path: %+v", l)
+	}
+	if l.ITermSessionID != "" {
+		t.Errorf("inherited iTerm identity survived the real read path: %+v", l)
+	}
+	if l.TermProgram != "" || l.HostBundleID != "" {
+		t.Errorf("ancestry identity must not be merged into a tmux launcher: %+v", l)
+	}
+}
+
 // TestReadLauncherEnv_Subprocess_KittyOverridesInheritedTermProgram covers
 // the case where kitty was launched from a process whose env contained
 // TERM_PROGRAM=vscode (e.g. a VS Code integrated terminal). kitty itself
