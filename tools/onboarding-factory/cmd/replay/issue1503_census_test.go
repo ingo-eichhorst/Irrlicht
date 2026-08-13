@@ -146,7 +146,11 @@ func TestCatalogCensusMatchesTheCommittedFigures(t *testing.T) {
 	// structurally unreachable; this counts them over the whole catalog so the
 	// refactor that collapsed them is evidenced instead of reasoned.
 	var wideSpelling int
-	var wideOnly []string
+	// Both directions. Collecting only one of them reports "disagree on 0
+	// recordings" whenever the other spelling is a strict SUBSET, which is the
+	// commonest way for two predicates to differ and reads as a message bug
+	// rather than as the finding it is.
+	var disagreed []string
 
 	measured.Recordings = forEachSidecarRecording(t, func(name string, ec *extendedCheck) {
 		if ec.ReproducesNothing() {
@@ -158,22 +162,25 @@ func TestCatalogCensusMatchesTheCommittedFigures(t *testing.T) {
 		if ec.Diverges() {
 			measured.Divergent++
 		}
-		if ec.Diverges() || len(ec.MissingKinds) > 0 || len(ec.ExtraKinds) > 0 {
+		wide := ec.Diverges() || len(ec.MissingKinds) > 0 || len(ec.ExtraKinds) > 0
+		if wide {
 			wideSpelling++
-			if !ec.Diverges() {
-				wideOnly = append(wideOnly, name)
-			}
+		}
+		if wide != ec.Diverges() {
+			disagreed = append(disagreed, fmt.Sprintf("%s (Diverges=%t, ordered-or-kinds=%t)",
+				name, ec.Diverges(), wide))
 		}
 	})
 
 	t.Logf("#1503 catalog census, measured over %d sidecar-driven recordings:\n\n%s",
 		measured.Recordings, measured.literal())
 
-	if wideSpelling != measured.Divergent {
-		t.Errorf("the two divergence spellings disagree on %d recording(s) (Diverges %d, "+
-			"ordered-or-kinds %d): %v — main.go's exit code was collapsed onto Diverges on "+
-			"the grounds that they cannot differ, so this is that grounds failing, not a "+
-			"cosmetic difference", len(wideOnly), measured.Divergent, wideSpelling, wideOnly)
+	if wideSpelling != measured.Divergent || len(disagreed) > 0 {
+		t.Errorf("the two divergence spellings disagree (Diverges %d, ordered-or-kinds %d) on "+
+			"%d recording(s):\n  %s\nmain.go's exit code was collapsed onto Diverges on the "+
+			"grounds that they cannot differ, so this is that grounds failing, not a cosmetic "+
+			"difference",
+			measured.Divergent, wideSpelling, len(disagreed), firstFew(disagreed, 5))
 	}
 
 	// Fail-loudly guards, before the equality check, because the equality
@@ -206,6 +213,17 @@ func TestCatalogCensusMatchesTheCommittedFigures(t *testing.T) {
 		"to close. Paste this over censusOfTheCommittedCatalog, with a reason per moved "+
 		"figure in the PR body:\n\n%s",
 		strings.Join(moved, "; "), measured.literal())
+}
+
+// firstFew renders at most n items with a count of the remainder. A predicate
+// disagreement can involve a third of the catalog, and a failure that prints a
+// hundred paths buries the one fact the reader needs; five names are enough to
+// see the shape and the count carries the scale.
+func firstFew(items []string, n int) string {
+	if len(items) <= n {
+		return strings.Join(items, "\n  ")
+	}
+	return fmt.Sprintf("%s\n  ... and %d more", strings.Join(items[:n], "\n  "), len(items)-n)
 }
 
 // divergenceWitness is the ONE recording in the committed catalog whose replay
