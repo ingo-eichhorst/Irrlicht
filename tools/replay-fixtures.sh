@@ -111,7 +111,17 @@ while IFS= read -r fix; do
   # censusOfTheCommittedCatalog.Divergent in cmd/replay/issue1503_census_test.go,
   # machine-generated, and is deliberately not repeated here: the number this
   # line carried by hand said 198 long after the Go side had measured 140
-  # (#1503). The dominant kind is a missing terminal
+  # (#1503).
+  #
+  # This sweep's own count is legitimately HIGHER than that census, and the
+  # difference is a population, not a predicate: the find below walks
+  # transcript.md as well as transcript.jsonl, while the Go gates pair a
+  # sidecar only with a sibling transcript.jsonl and therefore skip every aider
+  # recording. That population is censusOfTheCommittedCatalog.UnpairedSidecars,
+  # also machine-generated. Measured while #1503 was written: this sweep
+  # reported 142 where the census reported 140, and the two extra recordings
+  # were both aider/4-2_multiple-agents-same-workspace.
+  # The dominant kind is a missing terminal
   # working→ready: the sidecar replayer synthesises idle promotions for child
   # sessions (applyChildOrphan) but never for the primary one. That is a known
   # replay-engine gap, not an artifact of these recordings being old, and it is

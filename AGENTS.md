@@ -818,6 +818,17 @@ Before marking a ticket done, run the full suite — every layer must pass:
   (`TestCensusDiffNamesEveryStaleShape`) — one deliberately-stale literal per
   shape, including #1478's exact one-low, plus the identical-census row that
   stops a diff which reports everything from looking correct.
+  The census carries a fifth figure that is not a defect count:
+  `UnpairedSidecars`. `forEachSidecarRecording` pairs a sidecar with a sibling
+  `transcript.jsonl`, while `tools/replay-fixtures.sh` walks `transcript.md`
+  too — so the sweep replays 31 aider recordings the Go gates never see, and
+  reported **142** divergent against the census's **140** (measured; the two
+  extra were both `aider/4-2_multiple-agents-same-workspace`). That gap is now
+  a produced number rather than an unexplained discrepancy. It is also a
+  standing coverage note: `knownZeroTransition`, `knownFabricated` and #1480's
+  ratchets are catalog-wide over the catalog *that walk can see*, and have
+  never been evaluated against any aider recording. Widening the pairing moves
+  three gates' pinned populations at once, so it is a separate change.
 - Replay read boundary: the sidecar records `file_size` from the fswatcher's
   stat at fire time but stamps `ts` at the daemon's **dequeue** time, and the
   watcher's stat time is not a field of `lifecycle.Event` at all — so "where

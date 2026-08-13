@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -46,6 +49,26 @@ type catalogCensus struct {
 	// about; see Diverges for the two near-miss spellings and which one cost
 	// #1478 a one-low table.
 	Divergent int
+	// UnpairedSidecars counts recorded sidecars that the three catalog gates
+	// never reach, because forEachSidecarRecording pairs a sidecar with a
+	// sibling transcript.jsonl and these recordings carry transcript.md
+	// instead — today, every aider recording.
+	//
+	// It is in the census because it is the DENOMINATOR's honesty, and because
+	// leaving it out is how the same headline came to have two values:
+	// tools/replay-fixtures.sh walks `-name transcript.jsonl -o -name
+	// transcript.md`, so it replays these too and reports a divergence figure
+	// two higher than the Go gates can see. Measured, not asserted — the sweep
+	// reported 142 against this census's 140 while this field was being added.
+	//
+	// A number, not a name list, because the population is uniform (one
+	// adapter, one cause) and its SIZE is what the discrepancy is made of. It
+	// is also a standing measure of a coverage gap: #1342's known-lists and
+	// #1480's ratchets have never been evaluated against any of these
+	// recordings, so "catalog-wide" is true of the catalog this walk can see
+	// rather than of the catalog. Widening the walk moves three gates' pinned
+	// populations at once and is deliberately not done here.
+	UnpairedSidecars int
 }
 
 // censusOfTheCommittedCatalog is the census as measured against the catalog in
@@ -65,10 +88,11 @@ type catalogCensus struct {
 // point is that it cannot move UNNOTICED, and that no doc comment anywhere
 // carries a second, hand-typed copy of it.
 var censusOfTheCommittedCatalog = catalogCensus{
-	Recordings: 309,
-	Zero:       1,
-	Fabricated: 1,
-	Divergent:  140,
+	Recordings:       309,
+	Zero:             1,
+	Fabricated:       1,
+	Divergent:        140,
+	UnpairedSidecars: 31,
 }
 
 // literal renders the census as the Go source to paste over the declaration
@@ -78,8 +102,19 @@ var censusOfTheCommittedCatalog = catalogCensus{
 func (c catalogCensus) literal() string {
 	var b strings.Builder
 	b.WriteString("var censusOfTheCommittedCatalog = catalogCensus{\n")
+	// gofmt aligns a struct literal's values one space past the longest
+	// "Name:", so the width is derived rather than hardcoded. A fixed width
+	// would silently stop being gofmt-clean the moment a field is added, and
+	// then the printed block would no longer be what the file must contain —
+	// which is the one property the whole idiom rests on.
+	width := 0
 	for _, f := range c.fields() {
-		fmt.Fprintf(&b, "\t%-11s %d,\n", f.name+":", f.value)
+		if n := len(f.name) + 1; n > width {
+			width = n
+		}
+	}
+	for _, f := range c.fields() {
+		fmt.Fprintf(&b, "\t%-*s %d,\n", width, f.name+":", f.value)
 	}
 	b.WriteString("}\n")
 	return b.String()
@@ -103,6 +138,7 @@ func (c catalogCensus) fields() []censusField {
 		{"Zero", c.Zero},
 		{"Fabricated", c.Fabricated},
 		{"Divergent", c.Divergent},
+		{"UnpairedSidecars", c.UnpairedSidecars},
 	}
 }
 
@@ -172,6 +208,8 @@ func TestCatalogCensusMatchesTheCommittedFigures(t *testing.T) {
 		}
 	})
 
+	measured.UnpairedSidecars = countUnpairedSidecars(t)
+
 	t.Logf("#1503 catalog census, measured over %d sidecar-driven recordings:\n\n%s",
 		measured.Recordings, measured.literal())
 
@@ -224,6 +262,43 @@ func firstFew(items []string, n int) string {
 		return strings.Join(items, "\n  ")
 	}
 	return fmt.Sprintf("%s\n  ... and %d more", strings.Join(items[:n], "\n  "), len(items)-n)
+}
+
+// countUnpairedSidecars counts recorded sidecars with no sibling
+// transcript.jsonl — the recordings forEachSidecarRecording cannot pair, and
+// therefore the ones every gate built on it is blind to.
+//
+// It stats rather than replays, so it costs milliseconds and, more to the
+// point, it cannot be fooled by the very pairing it is measuring: asking the
+// walk how much the walk missed would always answer zero.
+func countUnpairedSidecars(t *testing.T) int {
+	t.Helper()
+	root := replaydataRoot(t)
+	var unpaired, sidecars int
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || filepath.Base(path) != eventsSidecarName {
+			return nil
+		}
+		sidecars++
+		if _, statErr := os.Stat(filepath.Join(filepath.Dir(path), "transcript.jsonl")); statErr != nil {
+			unpaired++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk replaydata/agents: %v", err)
+	}
+	// The vacuity guard this file's own subject matter demands: a walk that
+	// found no sidecar at all reports zero unpaired ones, which reads as
+	// "nothing is being missed" — the most reassuring possible spelling of a
+	// broken measurement.
+	if sidecars == 0 {
+		t.Fatal("no events.jsonl sidecar found under replaydata/agents — the accounting is vacuous")
+	}
+	return unpaired
 }
 
 // divergenceWitness is the ONE recording in the committed catalog whose replay
@@ -288,7 +363,7 @@ func TestDivergesCatchesTheOrderSwapThatCountsAndKindsMiss(t *testing.T) {
 // because it cannot be committed without leaving the suite permanently red.
 func TestCensusDiffNamesEveryStaleShape(t *testing.T) {
 	// The census as of this commit; every row below perturbs a copy of it.
-	current := catalogCensus{Recordings: 309, Zero: 1, Fabricated: 1, Divergent: 140}
+	current := catalogCensus{Recordings: 309, Zero: 1, Fabricated: 1, Divergent: 140, UnpairedSidecars: 31}
 	with := func(f func(*catalogCensus)) catalogCensus {
 		c := current
 		f(&c)
@@ -332,6 +407,14 @@ func TestCensusDiffNamesEveryStaleShape(t *testing.T) {
 			want:      []string{"Fabricated: committed 3, measured 1"},
 		},
 		{
+			// The gap between this census and tools/replay-fixtures.sh's own
+			// divergence figure is made of exactly this population, so a stale
+			// value here is a stale explanation of a live discrepancy.
+			name:      "the unpaired-sidecar population moved",
+			committed: with(func(c *catalogCensus) { c.UnpairedSidecars = 29 }),
+			want:      []string{"UnpairedSidecars: committed 29, measured 31"},
+		},
+		{
 			// The denominator rots on its own schedule: every promotion or
 			// retirement moves it, and nothing else in the census need change.
 			name:      "the denominator alone went stale",
@@ -344,12 +427,14 @@ func TestCensusDiffNamesEveryStaleShape(t *testing.T) {
 			name: "every figure moved, and every one is named",
 			committed: with(func(c *catalogCensus) {
 				c.Recordings, c.Zero, c.Fabricated, c.Divergent = 300, 4, 3, 145
+				c.UnpairedSidecars = 0
 			}),
 			want: []string{
 				"Recordings: committed 300, measured 309",
 				"Zero: committed 4, measured 1",
 				"Fabricated: committed 3, measured 1",
 				"Divergent: committed 145, measured 140",
+				"UnpairedSidecars: committed 0, measured 31",
 			},
 		},
 	} {
@@ -385,7 +470,9 @@ func TestCensusDiffNamesEveryStaleShape(t *testing.T) {
 // literal that merely REPORTS the numbers puts a human retyping step back in
 // the exact place #1478's error entered.
 func TestCensusLiteralIsValidPasteableSource(t *testing.T) {
-	lit := catalogCensus{Recordings: 309, Zero: 1, Fabricated: 1, Divergent: 140}.literal()
+	lit := catalogCensus{
+		Recordings: 309, Zero: 1, Fabricated: 1, Divergent: 140, UnpairedSidecars: 31,
+	}.literal()
 	const wantPrefix = "var censusOfTheCommittedCatalog = catalogCensus{\n"
 	if !strings.HasPrefix(lit, wantPrefix) {
 		t.Errorf("literal() does not open with the declaration it replaces:\n%s", lit)
@@ -394,10 +481,11 @@ func TestCensusLiteralIsValidPasteableSource(t *testing.T) {
 		t.Errorf("literal() is not a closed composite literal:\n%s", lit)
 	}
 	for _, want := range []string{
-		"\tRecordings: 309,\n",
-		"\tZero:       1,\n",
-		"\tFabricated: 1,\n",
-		"\tDivergent:  140,\n",
+		"\tRecordings:       309,\n",
+		"\tZero:             1,\n",
+		"\tFabricated:       1,\n",
+		"\tDivergent:        140,\n",
+		"\tUnpairedSidecars: 31,\n",
 	} {
 		if !strings.Contains(lit, want) {
 			t.Errorf("literal() is missing the gofmt-aligned line %q:\n%s", want, lit)
