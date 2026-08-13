@@ -81,26 +81,35 @@ const maxAncestry = 10
 // which it was found. Returns ("", 0) when no supported host appears within
 // maxAncestry levels.
 //
+// complete reports whether the walk reached that verdict on its own terms —
+// it found a host, ran out of chain, or ran out of depth — rather than
+// aborting because a `ps` could not be answered. Those two produce the same
+// ("", 0) and are different facts: the first is evidence that this process has
+// no local window, the second is no evidence at all. Every abort is a
+// readProcInfo failure, which on a loaded machine is that helper's 2s ceiling
+// (#1492); the caller that acts on the distinction is
+// resolveClientHostIdentity.
+//
 // Intentionally ignores tmux: tmux's env vars (TMUX, TMUX_PANE) come from
 // the regular env-capture path when readable, and a tmux-only ancestor
 // (without a known host terminal above it) can't be brought to the front
 // by NSWorkspace.
-func resolveHostFromAncestry(pid int) (termProgram string, hostPID int) {
+func resolveHostFromAncestry(pid int) (termProgram string, hostPID int, complete bool) {
 	cur := pid
 	for i := 0; i < maxAncestry && cur > 1; i++ {
 		ppid, cmd, err := readProcInfo(cur)
 		if err != nil {
-			return "", 0
+			return "", 0, false
 		}
 		if term := termProgramForAppPath(cmd); term != "" {
-			return term, cur
+			return term, cur, true
 		}
 		if ppid == cur || ppid <= 1 {
-			return "", 0
+			return "", 0, true
 		}
 		cur = ppid
 	}
-	return "", 0
+	return "", 0, true
 }
 
 // bundleIDForAppPath returns the CFBundleIdentifier of the application bundle
@@ -124,7 +133,10 @@ func bundleIDForAppPath(appPath string) string {
 
 // resolveHostBundleIDFromAncestry walks the parent-process chain of pid and
 // returns the CFBundleIdentifier of the first top-level application bundle it
-// finds, plus that app's PID. It is the generic fallback used when the curated
+// finds, plus that app's PID. complete carries the same meaning as
+// resolveHostFromAncestry's, and the first read is split out of the `ppid <= 1`
+// guard for exactly that reason: "pid's parent is init" is a verdict, "pid
+// could not be read" is not. It is the generic fallback used when the curated
 // termProgramByAppName map matches no ancestor — it lets the UI bring an
 // embedded-terminal GUI host (e.g. Obsidian) to the front without a per-app
 // registry entry. Returns ("", 0) when no top-level app appears within
@@ -133,28 +145,31 @@ func bundleIDForAppPath(appPath string) string {
 // The walk starts at pid's *parent*: the agent runs inside the host and is
 // never the host itself, and an agent whose own binary lives in a top-level
 // bundle (e.g. ClaudeCode.app) must not be mistaken for it.
-func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int) {
+func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int, complete bool) {
 	ppid, _, err := readProcInfo(pid)
-	if err != nil || ppid <= 1 {
-		return "", 0
+	if err != nil {
+		return "", 0, false
+	}
+	if ppid <= 1 {
+		return "", 0, true
 	}
 	cur := ppid
 	for i := 0; i < maxAncestry && cur > 1; i++ {
 		pp, cmd, err := readProcInfo(cur)
 		if err != nil {
-			return "", 0
+			return "", 0, false
 		}
 		if appPath := topLevelAppPath(cmd); appPath != "" {
 			if bid := bundleIDForAppPath(appPath); bid != "" {
-				return bid, cur
+				return bid, cur, true
 			}
 		}
 		if pp == cur || pp <= 1 {
-			return "", 0
+			return "", 0, true
 		}
 		cur = pp
 	}
-	return "", 0
+	return "", 0, true
 }
 
 // IsKnownInteractiveHost reports whether pid's process ancestry traces back to
@@ -176,11 +191,11 @@ func IsKnownInteractiveHost(pid int) bool {
 	// and resolveHostBundleIDFromAncestry each independently re-walk the same
 	// parent chain via their own ps shellouts, so skip the bundle-ID walk
 	// entirely once the curated map already matched.
-	term, _ := resolveHostFromAncestry(pid)
+	term, _, _ := resolveHostFromAncestry(pid)
 	if term != "" {
 		return true
 	}
-	bundleID, _ := resolveHostBundleIDFromAncestry(pid)
+	bundleID, _, _ := resolveHostBundleIDFromAncestry(pid)
 	return isKnownInteractiveHostFrom(term, bundleID)
 }
 
@@ -196,7 +211,7 @@ func isKnownInteractiveHostFrom(termProgram, bundleID string) bool {
 // other host) appears in the chain; callers that also need the host PID
 // should use resolveHostFromAncestry directly to avoid a second walk.
 func resolveTermProgramFromAncestry(pid int) string {
-	term, _ := resolveHostFromAncestry(pid)
+	term, _, _ := resolveHostFromAncestry(pid)
 	return term
 }
 
@@ -208,7 +223,7 @@ func resolveTermProgramFromAncestry(pid int) string {
 // into the env-derived launcher. Ancestry walking still works because we
 // only read ppid + comm, not env.
 func kittyAncestryPID(pid int) int {
-	term, hostPID := resolveHostFromAncestry(pid)
+	term, hostPID, _ := resolveHostFromAncestry(pid)
 	if term != "kitty" {
 		return 0
 	}
@@ -489,12 +504,32 @@ const maxClientCandidates = 4
 // down: true means the answer is evidence, false means the candidates could
 // not be read and the caller must not treat an absent host as a host that is
 // gone.
+//
+// #1492 is the whole of that second return. "This candidate has no local GUI
+// window" and "this candidate's identity could not be READ" arrive at the same
+// place — an empty TermProgram and an empty HostBundleID — and only the first
+// is evidence. The first is real and must stay an answer: an SSH client has a
+// real tty and no local window, and reporting one anyway is the misroute #1348
+// removed. The second is not: kitty sets no TERM_PROGRAM (upstream kitty
+// #4793), so for a client attached from kitty the ancestry walk is the ONLY
+// source of a host, and that walk is a `ps` chain under a 2s ceiling. On a
+// loaded machine it times out, the candidate reports nothing, and answering
+// "detached" makes AdoptHostIdentity clear TermProgram / HostBundleID /
+// ITermSessionID / the kitty selectors from a session whose client is attached
+// right now.
+//
+// So an unreadable candidate poisons the negative answer rather than
+// contributing to it: "no attached client has a local window" is a claim about
+// every candidate, and one that could not be read cannot be vouched for by the
+// others. A candidate that DOES resolve still wins outright, because a found
+// host is evidence regardless of what the rest of the list did.
 func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
 	if len(pids) > maxClientCandidates {
 		pids = pids[:maxClientCandidates]
 	}
+	unreadable := false
 	for _, pid := range pids {
-		host := hostIdentity(pid)
+		host, complete := hostIdentity(pid)
 		if host.HerdrPaneID != "" {
 			// A candidate that is itself a multiplexer pane has no window of
 			// its own — its host is one more indirection away. Don't recurse;
@@ -502,31 +537,35 @@ func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
 			continue
 		}
 		if host.TermProgram == "" && host.HostBundleID == "" {
+			unreadable = unreadable || !complete
 			continue
 		}
 		return host, true
 	}
-	return nil, true
+	return nil, !unreadable
 }
 
 // herdrClientLauncher resolves the host-window identity of the herdr session
 // addressed by socketPath, by reading it from the attached client exactly the
 // way it would be read from any directly-hosted agent (hostIdentity). Returns
-// (nil, true) when nothing is attached, or when no attached client REPORTED a
-// local GUI host — an SSH client has a real tty but no local window, and
-// reporting one anyway is the misroute #1348 removed. (nil, false) is the
-// third state, "the probe did not run" (#1485).
+// (nil, true) when nothing is attached, or when every attached client was read
+// and none has a local GUI host — an SSH client has a real tty but no local
+// window, and reporting one anyway is the misroute #1348 removed. (nil, false)
+// is the third state, "I could not look": either the lsof probe did not run
+// (#1485) or a candidate's own identity could not be read (#1492).
 //
-// "Reported" rather than "resolves to" is deliberate and is the known residual
-// of #1485: a candidate whose own identity could not be READ is counted as one
-// that has no host. hostIdentity swallows both of its failure modes — EnvOf's
-// error is discarded, and resolveHostFromAncestry returns ("", 0) for a
-// readProcInfo timeout as well as for a genuine miss — so a client attached
-// from kitty (which sets no TERM_PROGRAM upstream, so ancestry is its only
-// source) yields no host on a loaded machine and is indistinguishable here
-// from an SSH client. That is the same conflation one layer up, and closing it
-// needs hostIdentity to report whether its reads ran, which this fix does not
-// do. Tracked as #1492; do not read the tri-state below as covering it.
+// "Was read and has no host" rather than "reported no host" is the whole of
+// #1492, and the two are not the same claim. hostIdentity swallows its env
+// read's failure by design — the ProcessObserver port defines an unreadable env
+// as an empty map, and the ancestry fallback is the only signal a
+// hardened-runtime process has — so the distinction is drawn where it can be:
+// resolveHostFromAncestry and resolveHostBundleIDFromAncestry now report
+// whether their walk reached a verdict or aborted on a readProcInfo failure,
+// hostIdentity carries that out as its second return, and
+// resolveClientHostIdentity refuses to call the negative an answer when any
+// candidate could not be read. Before that, a client attached from kitty (which
+// sets no TERM_PROGRAM upstream, so ancestry is its only source) yielded no host
+// on a loaded machine and was indistinguishable here from an SSH client.
 //
 // Only ever called with a socket path the daemon captured from the pane's own
 // $HERDR_SOCKET_PATH, so a resolved identity always accompanies a complete

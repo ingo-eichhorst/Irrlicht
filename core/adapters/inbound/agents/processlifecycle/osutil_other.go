@@ -15,9 +15,16 @@ func processTTY(pid int) string { return "" }
 
 // resolveTermProgramFromAncestry / resolveHostFromAncestry are darwin-only
 // fallbacks; other platforms return zero values.
-func resolveTermProgramFromAncestry(pid int) string                       { return "" }
-func resolveHostFromAncestry(pid int) (term string, host int)             { return "", 0 }
-func resolveHostBundleIDFromAncestry(pid int) (bundleID string, host int) { return "", 0 }
+//
+// complete is true: declining to walk is a settled verdict about this
+// platform, not a read that failed (#1492).
+func resolveTermProgramFromAncestry(pid int) string { return "" }
+func resolveHostFromAncestry(pid int) (term string, host int, complete bool) {
+	return "", 0, true
+}
+func resolveHostBundleIDFromAncestry(pid int) (bundleID string, host int, complete bool) {
+	return "", 0, true
+}
 
 // Stubs for the kitty "no readable env" enrichment helpers — darwin-only.
 func kittyAncestryPID(pid int) int                             { return 0 }

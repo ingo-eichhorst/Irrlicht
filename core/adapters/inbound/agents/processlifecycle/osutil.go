@@ -87,7 +87,14 @@ func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 	if pid <= 0 {
 		return nil, false
 	}
-	l = hostIdentity(pid)
+	// The agent's own identity deliberately ignores hostIdentity's second
+	// return. hostKnown here is about the herdr CLIENT indirection below; a
+	// direct session whose ancestry walk timed out is a different question
+	// with different consumers (captureLauncher, launcherBackfillNeedsFor),
+	// and widening it here would change behaviour for every non-herdr session
+	// on a signal #1492 has no evidence about. See resolveClientHostIdentity
+	// for the read that DOES act on it.
+	l, _ = hostIdentity(pid)
 	hostKnown = true
 
 	// A herdr pane's window belongs to the attached client, so its host
@@ -122,15 +129,30 @@ func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 // (osutil_darwin.go). Keeping it in one function is what stops the two from
 // drifting when a step is added.
 //
+// complete reports whether the reads behind that answer actually ran, so a
+// caller can tell "this process has no local window" from "I could not read
+// this process" (#1492). It is false only when an ancestry walk aborted on an
+// unreadable process rather than reaching a verdict.
+//
+// It deliberately says nothing about the env read, which cannot fail: the
+// ProcessObserver port defines an unreadable env as an empty map rather than
+// an error, and all three implementations discard it (process_darwin.go,
+// process_linux.go, process_other.go). Widening the port would buy nothing
+// here either, because an env that yields no host is exactly the condition
+// that makes the ancestry fallbacks run — so a false "no local window" always
+// passes through an ancestry walk, and the walk is where the distinction has
+// to be drawn.
+//
 // The ordering is load-bearing: ancestry before TTY, and both before any
 // adoption by the caller.
-func hostIdentity(pid int) *session.Launcher {
+func hostIdentity(pid int) (l *session.Launcher, complete bool) {
 	// Env may be empty — hardened-runtime processes hide it from sysctl.
 	// Don't bail here: the ancestry fallback below is the only signal we
 	// have in that case.
 	env, _ := osProc.EnvOf(pid)
 
-	l := launcherFromEnv(env)
+	l = launcherFromEnv(env)
+	complete = true
 
 	// The ancestry fallbacks resolve the *host application* of the process
 	// tree, so they are skipped for a herdr pane: that tree leads to the herdr
@@ -155,14 +177,14 @@ func hostIdentity(pid int) *session.Launcher {
 	// none of its own (kitty), whose fields the suppression above drops. So
 	// skipping it would buy no correctness and cost exactly that case.
 	if l.HerdrPaneID == "" {
-		applyAncestryFallbacks(l, pid, memoizedAncestry(pid))
+		complete = applyAncestryFallbacks(l, pid, memoizedAncestry(pid))
 	}
 
 	// Capture the controlling TTY so Terminal.app (and potentially others)
 	// can target the exact tab — Terminal.app's AppleScript dictionary
 	// matches tabs by `tty` but has no session-UUID analog.
 	l.TTY = processTTY(pid)
-	return l
+	return l, complete
 }
 
 // launcherFromEnv builds a Launcher from the whitelisted per-PID env vars
@@ -266,21 +288,27 @@ func tmuxSocketFromEnv(tmux string) string {
 	return tmux
 }
 
+// ancestryFn is a memoized process-ancestry lookup. complete carries
+// resolveHostFromAncestry's meaning unchanged: false says the walk aborted on
+// an unreadable process, so an empty term is not evidence of anything (#1492).
+type ancestryFn func() (term string, hostPID int, complete bool)
+
 // memoizedAncestry returns a closure resolving pid's process ancestry via
 // resolveHostFromAncestry at most once, caching the result for repeat calls.
 // ReadLauncherEnv's ancestry-dependent fallbacks may all need the same walk;
 // this keeps it bounded to a single `ps` shellout chain instead of up to
 // three.
-func memoizedAncestry(pid int) func() (term string, hostPID int) {
+func memoizedAncestry(pid int) ancestryFn {
 	var ancestryTerm string
 	var ancestryHostPID int
+	var ancestryComplete bool
 	ancestryResolved := false
-	return func() (string, int) {
+	return func() (string, int, bool) {
 		if !ancestryResolved {
-			ancestryTerm, ancestryHostPID = resolveHostFromAncestry(pid)
+			ancestryTerm, ancestryHostPID, ancestryComplete = resolveHostFromAncestry(pid)
 			ancestryResolved = true
 		}
-		return ancestryTerm, ancestryHostPID
+		return ancestryTerm, ancestryHostPID, ancestryComplete
 	}
 }
 
@@ -290,7 +318,13 @@ func memoizedAncestry(pid int) func() (term string, hostPID int) {
 // generic top-level-.app host fallback, and kitty field back-fill for
 // Apple-signed agents. ancestry is expected to be memoized by the caller so
 // this can call it from multiple guarded blocks at no extra cost.
-func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term string, hostPID int)) {
+//
+// The return is the AND of every walk that actually ran: false means at least
+// one of them aborted on an unreadable process, so the fields it would have
+// filled are missing rather than absent (#1492). A run in which no walk was
+// needed is complete by definition.
+func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry ancestryFn) (complete bool) {
+	complete = true
 	// kitty intentionally does not set TERM_PROGRAM (upstream kitty issue
 	// #4793), so the env-captured value may be inherited from whatever
 	// process launched kitty.app (e.g. a VS Code integrated terminal). When
@@ -298,7 +332,9 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term 
 	// we still verify via process ancestry to rule out the reverse case
 	// (KITTY_WINDOW_ID leaked from a kitty shell that spawned VS Code).
 	if l.KittyWindowID != "" && l.TermProgram != "kitty" {
-		if term, _ := ancestry(); term == "kitty" {
+		term, _, ok := ancestry()
+		complete = complete && ok
+		if term == "kitty" {
 			l.TermProgram = "kitty"
 		}
 	}
@@ -307,7 +343,9 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term 
 	// can at least bring the host app to the front. Darwin-only; other
 	// platforms return "" and this is a no-op.
 	if l.TermProgram == "" {
-		l.TermProgram, _ = ancestry()
+		term, _, ok := ancestry()
+		complete = complete && ok
+		l.TermProgram = term
 	}
 	// Generic host fallback: when no curated host matched (TermProgram still
 	// empty), resolve the first top-level `.app` ancestor's bundle id so the
@@ -316,7 +354,9 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term 
 	// on a map miss, so every curated host keeps its exact behavior. Darwin-
 	// only; other platforms return "" and this is a no-op.
 	if l.TermProgram == "" {
-		l.HostBundleID, _ = resolveHostBundleIDFromAncestry(pid)
+		bundleID, _, ok := resolveHostBundleIDFromAncestry(pid)
+		complete = complete && ok
+		l.HostBundleID = bundleID
 	}
 	// Back-fill kitty fields for sessions whose own env is unreadable
 	// (Apple-signed agents like `pi`, hardened-runtime binaries). If kitty
@@ -326,6 +366,7 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term 
 	// target the right tab — exactly the symptom reported for pi sessions
 	// in issue #326.
 	applyKittyAncestryBackfill(l, pid, ancestry)
+	return complete
 }
 
 // applyKittyAncestryBackfill fills in KittyPID/KittyListenOn/KittyWindowID
@@ -333,11 +374,11 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term 
 // kitty is the host (Apple-signed agents like `pi`, hardened-runtime
 // binaries) — split out of applyAncestryFallbacks so its nested guards don't
 // compound that function's cognitive complexity (go:S3776).
-func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry func() (term string, hostPID int)) {
+func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry ancestryFn) {
 	if l.TermProgram != "kitty" || l.KittyPID != 0 {
 		return
 	}
-	term, kpid := ancestry()
+	term, kpid, _ := ancestry()
 	if term != "kitty" || kpid <= 0 {
 		return
 	}

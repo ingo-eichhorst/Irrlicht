@@ -295,7 +295,13 @@ func TestTopLevelAppPath(t *testing.T) {
 // contains a dot) or "" — never errors or panics. The deterministic path
 // logic is covered by TestTopLevelAppPath.
 func TestResolveHostBundleIDFromAncestry_Self(t *testing.T) {
-	bid, hostPID := resolveHostBundleIDFromAncestry(os.Getpid())
+	bid, hostPID, complete := resolveHostBundleIDFromAncestry(os.Getpid())
+	// The running test binary is alive by definition, so every readProcInfo in
+	// its chain answers and the walk reaches a verdict. This arm is
+	// environment-independent even though the verdict itself is not.
+	if !complete {
+		t.Error("the walk over a live process aborted — every ps in its own ancestry must answer")
+	}
 	if bid == "" {
 		return // no top-level .app ancestor (e.g. CI/tmux/ssh) — valid.
 	}
@@ -699,6 +705,47 @@ func exitedPID(t *testing.T) int {
 		t.Fatalf("pid %d is still addressable after being reaped (kill(0) = %v) — PID reuse would make every assertion below vacuous", pid, err)
 	}
 	return pid
+}
+
+// TestResolveHostFromAncestry_UnreadableProcessIsNotAMiss covers the primitive
+// #1492 turns on. Both rows return ("", 0) — the walk found no supported host
+// either way — and the third value is the only thing that separates them:
+// launchd's chain ends honestly at PID 1, while a reaped PID's first
+// readProcInfo fails, which is the same branch a `ps` that blows its 2s ceiling
+// takes.
+func TestResolveHostFromAncestry_UnreadableProcessIsNotAMiss(t *testing.T) {
+	if term, hostPID, complete := resolveHostFromAncestry(1); term != "" || hostPID != 0 || !complete {
+		t.Errorf("launchd: got (%q, %d, %v); want a completed walk that found nothing", term, hostPID, complete)
+	}
+	if term, hostPID, complete := resolveHostFromAncestry(exitedPID(t)); term != "" || hostPID != 0 || complete {
+		t.Errorf("reaped pid: got (%q, %d, %v); want an ABORTED walk — an unreadable process is not a miss", term, hostPID, complete)
+	}
+}
+
+// TestResolveHostBundleIDFromAncestry_UnreadableProcessIsNotAMiss is the same
+// distinction for the generic top-level-.app walk, and pins the split of what
+// was one condition: `if err != nil || ppid <= 1`. "pid's parent is init" is a
+// verdict (launchd, row 1); "pid could not be read" is not (row 2). Merging
+// them is #1492 in miniature.
+func TestResolveHostBundleIDFromAncestry_UnreadableProcessIsNotAMiss(t *testing.T) {
+	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(1); bid != "" || hostPID != 0 || !complete {
+		t.Errorf("launchd: got (%q, %d, %v); want a completed walk that found nothing", bid, hostPID, complete)
+	}
+	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(exitedPID(t)); bid != "" || hostPID != 0 || complete {
+		t.Errorf("reaped pid: got (%q, %d, %v); want an ABORTED walk", bid, hostPID, complete)
+	}
+}
+
+// TestHostIdentity_CarriesTheAncestryVerdict is the link between the two
+// primitives above and the loop below: hostIdentity is where a caller reads
+// them, and #1501's tmux client path is queued to read it the same way.
+func TestHostIdentity_CarriesTheAncestryVerdict(t *testing.T) {
+	if l, complete := hostIdentity(1); !complete || l == nil {
+		t.Errorf("launchd is readable and hostless: got (%+v, %v)", l, complete)
+	}
+	if l, complete := hostIdentity(exitedPID(t)); complete {
+		t.Errorf("a reaped pid cannot be read, so its empty identity is not evidence: got (%+v, %v)", l, complete)
+	}
 }
 
 // TestResolveClientHostIdentity_UnreadableCandidateIsNotDetached is #1492.
