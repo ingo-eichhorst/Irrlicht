@@ -186,6 +186,11 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int, com
 // useful), this is a real allow-list: an ancestor that is a legitimate `.app`
 // but isn't a curated terminal/IDE and isn't in knownEmbeddedHostBundleIDs
 // returns false — which is exactly what excludes CodexBar.
+//
+// It discards the completeness bit resolveHostFromAncestry reports (#1492): a
+// `ps` that blows its ceiling here returns false, which REJECTS a session
+// rather than degrading a click target. Tracked separately — changing an
+// admission gate's failure direction is its own decision — as #1511.
 func IsKnownInteractiveHost(pid int) bool {
 	// Short-circuit before the second ancestry walk: resolveHostFromAncestry
 	// and resolveHostBundleIDFromAncestry each independently re-walk the same
@@ -523,17 +528,35 @@ const maxClientCandidates = 4
 // every candidate, and one that could not be read cannot be vouched for by the
 // others. A candidate that DOES resolve still wins outright, because a found
 // host is evidence regardless of what the rest of the list did.
+//
+// The maxClientCandidates truncation poisons it too, and for the same reason: a
+// candidate dropped by the cap is one we declined to look at. It is a weaker
+// case — herdrClientPIDs sorts newest-attach first, so the dropped candidates
+// are the stale ones — but "every attached client was read" is exactly the
+// claim the cap makes false, and answering it anyway is #1492 arriving through
+// the cap instead of through a timeout.
+//
+// Two residual false negatives survive, both of them "the walk reached a
+// verdict" cases rather than aborts, so the bit above cannot express them:
+// a candidate inside a tmux pane walks to the reparented tmux server and
+// terminates honestly at PID 1 while a local window exists (that indirection is
+// #1501, the tmux twin of #1350), and a chain deeper than maxAncestry is
+// declared a miss on the same terms.
 func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
-	if len(pids) > maxClientCandidates {
+	truncated := len(pids) > maxClientCandidates
+	if truncated {
 		pids = pids[:maxClientCandidates]
 	}
-	unreadable := false
+	unreadable := truncated
 	for _, pid := range pids {
 		host, complete := hostIdentity(pid)
 		if host.HerdrPaneID != "" {
 			// A candidate that is itself a multiplexer pane has no window of
 			// its own — its host is one more indirection away. Don't recurse;
-			// try the next candidate.
+			// try the next candidate. Unlike the cap above, declining here does
+			// NOT poison the answer: refusing to recurse is a standing policy
+			// rather than a failed read, and treating it as "unknown" would mean
+			// a nested setup's stale host could never be cleared at all.
 			continue
 		}
 		if host.TermProgram == "" && host.HostBundleID == "" {
@@ -591,6 +614,14 @@ func herdrClientLauncher(socketPath string) (*session.Launcher, bool) {
 		// spread a single failed probe across every session that shares this
 		// socket for the next 5 seconds, which is the opposite of what the
 		// tri-state buys.
+		//
+		// #1492 widened what reaches this branch, and with it the cost: an
+		// unreadable candidate used to answer (nil, true) and be cached once
+		// per socket, and now re-probes per pane — under exactly the load that
+		// produces it. That is a deliberate trade of cost for correctness, not
+		// an oversight; re-deciding the rule reverses #1485's and is tracked as
+		// #1512, together with refreshHerdrHosts' affordability note, which
+		// assumes one lsof scan per socket per sweep.
 		return nil, false
 	}
 	herdrClientCachePut(socketPath, resolved)

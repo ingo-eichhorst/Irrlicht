@@ -365,8 +365,7 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry ancestryFn) (
 	// Without this, clicking the session in the UI raises kitty but can't
 	// target the right tab — exactly the symptom reported for pi sessions
 	// in issue #326.
-	applyKittyAncestryBackfill(l, pid, ancestry)
-	return complete
+	return complete && applyKittyAncestryBackfill(l, pid, ancestry)
 }
 
 // applyKittyAncestryBackfill fills in KittyPID/KittyListenOn/KittyWindowID
@@ -374,13 +373,20 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry ancestryFn) (
 // kitty is the host (Apple-signed agents like `pi`, hardened-runtime
 // binaries) — split out of applyAncestryFallbacks so its nested guards don't
 // compound that function's cognitive complexity (go:S3776).
-func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry ancestryFn) {
+//
+// It returns the same completeness verdict its caller accumulates. This is the
+// one block that can be the ONLY caller of ancestry() in a run — a candidate
+// whose env names kitty but carries no KITTY_PID skips all three blocks above —
+// so discarding the bit here would let an aborted walk be reported as a
+// complete one, and the caller's "AND of every walk that actually ran" would be
+// a claim its own code contradicts.
+func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry ancestryFn) (complete bool) {
 	if l.TermProgram != "kitty" || l.KittyPID != 0 {
-		return
+		return true // no walk ran, so nothing was left unread
 	}
-	term, kpid, _ := ancestry()
+	term, kpid, complete := ancestry()
 	if term != "kitty" || kpid <= 0 {
-		return
+		return complete
 	}
 	l.KittyPID = kpid
 	if l.KittyListenOn == "" {
@@ -389,6 +395,7 @@ func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry ancestryF
 	if l.KittyListenOn != "" && l.KittyWindowID == "" {
 		l.KittyWindowID = kittyWindowIDForPID(l.KittyListenOn, pid)
 	}
+	return complete
 }
 
 // ReadArgv returns pid's argument vector (argv[0] is the executable as invoked),

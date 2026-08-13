@@ -4,11 +4,13 @@ package processlifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -296,11 +298,12 @@ func TestTopLevelAppPath(t *testing.T) {
 // logic is covered by TestTopLevelAppPath.
 func TestResolveHostBundleIDFromAncestry_Self(t *testing.T) {
 	bid, hostPID, complete := resolveHostBundleIDFromAncestry(os.Getpid())
-	// The running test binary is alive by definition, so every readProcInfo in
-	// its chain answers and the walk reaches a verdict. This arm is
-	// environment-independent even though the verdict itself is not.
+	// The running test binary is alive, so every readProcInfo in its chain has
+	// something to answer with — barring a `ps` slow enough to blow its own 2s
+	// ceiling, which is the condition #1492 is about and which this assertion
+	// would report as a failure rather than hide.
 	if !complete {
-		t.Error("the walk over a live process aborted — every ps in its own ancestry must answer")
+		t.Error("the walk over a live process aborted — either a ps timed out, or the verdict is wrong")
 	}
 	if bid == "" {
 		return // no top-level .app ancestor (e.g. CI/tmux/ssh) — valid.
@@ -701,7 +704,7 @@ func exitedPID(t *testing.T) int {
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("wait: %v", err)
 	}
-	if err := syscall.Kill(pid, 0); err != syscall.ESRCH {
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
 		t.Fatalf("pid %d is still addressable after being reaped (kill(0) = %v) — PID reuse would make every assertion below vacuous", pid, err)
 	}
 	return pid
@@ -733,6 +736,115 @@ func TestResolveHostBundleIDFromAncestry_UnreadableProcessIsNotAMiss(t *testing.
 	}
 	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(exitedPID(t)); bid != "" || hostPID != 0 || complete {
 		t.Errorf("reaped pid: got (%q, %d, %v); want an ABORTED walk", bid, hostPID, complete)
+	}
+}
+
+// envObserver is a ProcessObserver that answers EnvOf from a fixed map. It
+// exists to reach one block of applyAncestryFallbacks that no live process can
+// be arranged into: the kitty back-fill, which runs only when the env NAMES
+// kitty and carries no KITTY_PID, and which is then the ONLY caller of the
+// ancestry walk in that run.
+type envObserver struct {
+	fakeObserver
+	env map[string]string
+}
+
+func (o envObserver) EnvOf(int) (map[string]string, error) { return o.env, nil }
+
+// TestHostIdentity_KittyBackfillWalkCountsTowardCompleteness pins the one
+// ancestry walk that applyAncestryFallbacks used to run and then ignore.
+//
+// A candidate whose env says TERM_PROGRAM=kitty with no KITTY_PID skips all
+// three blocks above the back-fill (block 1 needs KITTY_WINDOW_ID, blocks 2 and
+// 3 need an empty TermProgram), so the back-fill's walk is the only one that
+// runs — and discarding its verdict reported an aborted walk as a complete one.
+// Reaching it needs the env and the process to disagree, which only the osProc
+// seam can arrange: a reaped PID whose env still reads as kitty's.
+func TestHostIdentity_KittyBackfillWalkCountsTowardCompleteness(t *testing.T) {
+	prev := osProc
+	osProc = envObserver{env: map[string]string{"TERM_PROGRAM": "kitty"}}
+	t.Cleanup(func() { osProc = prev })
+
+	// Vacuity guard: with a LIVE pid the same block runs and completes, so a
+	// hostIdentity hard-wired to "incomplete" would not satisfy this test.
+	if l, complete := hostIdentity(os.Getpid()); !complete || l.TermProgram != "kitty" {
+		t.Errorf("live pid: got (%+v, %v); want the back-fill to run and complete", l, complete)
+	}
+
+	l, complete := hostIdentity(exitedPID(t))
+	if l.TermProgram != "kitty" {
+		t.Fatalf("the env still names the host, so it must survive: %+v", l)
+	}
+	if complete {
+		t.Error("the back-fill's walk aborted and it was the only walk in this run — that is not a complete read")
+	}
+}
+
+// orphanPID returns the PID of a live process whose parent has exited, so it
+// has been reparented to launchd. Its ancestry walk therefore enters the loop
+// and leaves it through the `ppid <= 1` verdict — the branch PID 1 itself never
+// reaches, because the loop's `cur > 1` guard skips it entirely.
+//
+// It is also the shape hostIdentity's own comment leans on for tmux: a tmux
+// server daemonizes and is reparented to PID 1, so a pane's walk terminates
+// there having found nothing. That premise is a comment everywhere else in this
+// package; here it is an assertion.
+func orphanPID(t *testing.T) int {
+	t.Helper()
+	out, err := exec.Command("/bin/sh", "-c", "sleep 30 >/dev/null 2>&1 & echo $!").Output()
+	if err != nil {
+		t.Fatalf("spawn orphan: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatalf("parse orphan pid %q: %v", out, err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	// The `sh` has exited (Output waits for it); wait for launchd to actually
+	// re-parent before asserting on the chain.
+	for i := 0; i < 100; i++ {
+		if ppid, _, err := readProcInfo(pid); err == nil && ppid <= 1 {
+			return pid
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("orphan %d was never reparented to launchd", pid)
+	return 0
+}
+
+// TestResolveHostFromAncestry_ChainEndingAtInitIsAVerdict covers the arm PID 1
+// cannot reach. Both of the other tests' "complete" rows use launchd, whose
+// walk never enters the loop at all — so the in-loop verdict, which is the one
+// every reparented client (and every tmux-hosted candidate) leaves through, was
+// asserted by nothing. A walk that ends at init found no host and says so;
+// calling that an abort would mean a genuinely detached session's stale host
+// could never be cleared, which is the #1348 misroute by a third route.
+func TestResolveHostFromAncestry_ChainEndingAtInitIsAVerdict(t *testing.T) {
+	orphan := orphanPID(t)
+
+	if term, hostPID, complete := resolveHostFromAncestry(orphan); term != "" || hostPID != 0 || !complete {
+		t.Errorf("orphan: got (%q, %d, %v); want a completed in-loop walk that found nothing", term, hostPID, complete)
+	}
+	if _, hostKnown := resolveClientHostIdentity([]int{orphan}); !hostKnown {
+		t.Error("a reparented candidate WAS read and has no window — that is an answer")
+	}
+}
+
+// TestResolveClientHostIdentity_TruncatedCandidatesArePoisonToo: the cap is a
+// decision not to look, and answering "every attached client was read" over it
+// is the same conflation the rest of this file removes, arriving through the
+// cap instead of through a timeout. launchd repeated is a readable, genuinely
+// hostless candidate, so nothing but the truncation can move the verdict.
+func TestResolveClientHostIdentity_TruncatedCandidatesArePoisonToo(t *testing.T) {
+	full := make([]int, maxClientCandidates)
+	for i := range full {
+		full[i] = 1
+	}
+	if _, hostKnown := resolveClientHostIdentity(full); !hostKnown {
+		t.Fatalf("exactly maxClientCandidates readable candidates is a complete look: %d", len(full))
+	}
+	if _, hostKnown := resolveClientHostIdentity(append(full, 1)); hostKnown {
+		t.Error("one candidate past the cap was never probed, so 'no client has a window' is unsupported")
 	}
 }
 
