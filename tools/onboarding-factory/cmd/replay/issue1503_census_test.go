@@ -260,6 +260,13 @@ func TestCatalogCensusMatchesTheCommittedFigures(t *testing.T) {
 		"(of %d recorded sidecars on disk):\n\n%s",
 		measured.Recordings, sidecars, measured.literal())
 
+	// The count check is strictly redundant — every disagreeing recording is
+	// already in `disagreed`, so an empty slice implies equal counts. It stays
+	// as a cross-check on the COLLECTION rather than on the predicates: a bug
+	// in the append above would otherwise make this arm silently unfalsifiable,
+	// which is the failure mode this whole file is about. Noted rather than
+	// deleted, because the same diff removes a genuinely redundant disjunction
+	// from main.go and the two calls deserve to be distinguishable.
 	if wideSpelling != measured.Divergent || len(disagreed) > 0 {
 		t.Errorf("the two divergence spellings disagree (Diverges %d, ordered-or-kinds %d) on "+
 			"%d recording(s):\n  %s\nmain.go's exit code was collapsed onto Diverges on the "+
