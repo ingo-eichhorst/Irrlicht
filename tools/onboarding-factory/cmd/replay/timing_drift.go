@@ -12,7 +12,10 @@ import (
 // nothing compared it to anything. compareOrdered walks prev_state/new_state
 // index-by-index and never reads the time; assertReproducesRecordedTransitions
 // checks counts and kind-sets; the "N of 309 recordings diverge" headline every
-// replay PR quotes is counts and kinds only. So a transition reproduced at the
+// replay PR quotes is counts and kinds only (that headline is
+// extendedCheck.Diverges counted over the catalog, and N is
+// censusOfTheCommittedCatalog.Divergent — neither is restated here, per #1503).
+// So a transition reproduced at the
 // right position in the ORDER but 31 seconds from when the daemon made it was a
 // full pass on every gate in this package, and the golden then pinned it as
 // correct.

@@ -107,7 +107,23 @@ while IFS= read -r fix; do
   # an extended-check failure means "the replay engine drifted from the daemon
   # — a replay-fidelity bug… fixed in the replay engine". Pairing the catalog
   # with its sidecars made that check run for ~300 recordings for the first
-  # time, and 198 of them diverge. The dominant kind is a missing terminal
+  # time, and a large minority of them diverge — the exact figure is
+  # censusOfTheCommittedCatalog.Divergent in cmd/replay/issue1503_census_test.go,
+  # machine-generated, and is deliberately not repeated here: the number this
+  # line carried by hand said 198 long after the Go side had measured 140
+  # (#1503).
+  #
+  # This sweep's own count is legitimately HIGHER than that census, and the
+  # difference is a population, not a predicate: the find below walks
+  # transcript.md as well as transcript.jsonl, while the Go gates pair a
+  # sidecar only with a sibling transcript.jsonl and therefore skip every aider
+  # recording. That population is censusOfTheCommittedCatalog.UnpairedSidecars,
+  # also machine-generated. Measured while #1503 was written: this sweep
+  # reported 142 where the census reported 140, and the two extra recordings
+  # were both aider/4-2_multiple-agents-same-workspace. Making the two agree is
+  # a scope call rather than a risky one — see that field's doc comment, which
+  # carries the measurement.
+  # The dominant kind is a missing terminal
   # working→ready: the sidecar replayer synthesises idle promotions for child
   # sessions (applyChildOrphan) but never for the primary one. That is a known
   # replay-engine gap, not an artifact of these recordings being old, and it is
@@ -168,8 +184,9 @@ while IFS= read -r fix; do
       # kind-matched pair. Neither means driftSummary's format and this parser
       # have diverged, and without this the report would simply go silent and
       # the sweep would still exit 0. Checked per recording rather than tallied
-      # to the end, so it fails on the first one and cannot be masked by the 39
-      # recordings that legitimately report n/a. The Go side pins the same
+      # to the end, so it fails on the first one and cannot be masked by the
+      # dozens of recordings that legitimately report n/a. The Go side pins the
+      # same
       # contract from the other direction
       # (TestDriftSummary_FormatIsTheShellContract).
       echo "timing report is broken: ${adapter}/${kind}/${name}/${recname} printed an" >&2
