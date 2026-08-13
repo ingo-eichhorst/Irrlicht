@@ -190,7 +190,7 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int, com
 // It discards the completeness bit resolveHostFromAncestry reports (#1492): a
 // `ps` that blows its ceiling here returns false, which REJECTS a session
 // rather than degrading a click target. Tracked separately — changing an
-// admission gate's failure direction is its own decision — as #1511.
+// admission gate's failure direction is its own decision — as #1513.
 func IsKnownInteractiveHost(pid int) bool {
 	// Short-circuit before the second ancestry walk: resolveHostFromAncestry
 	// and resolveHostBundleIDFromAncestry each independently re-walk the same
@@ -620,7 +620,7 @@ func herdrClientLauncher(socketPath string) (*session.Launcher, bool) {
 		// per socket, and now re-probes per pane — under exactly the load that
 		// produces it. That is a deliberate trade of cost for correctness, not
 		// an oversight; re-deciding the rule reverses #1485's and is tracked as
-		// #1512, together with refreshHerdrHosts' affordability note, which
+		// #1514, together with refreshHerdrHosts' affordability note, which
 		// assumes one lsof scan per socket per sweep.
 		return nil, false
 	}
