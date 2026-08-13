@@ -204,6 +204,32 @@ func (c catalogCensus) diff(other catalogCensus) []string {
 	return moved
 }
 
+// divergesByCountsAndKinds is the NEAR-MISS spelling: "the transition counts
+// differ, or the kind sets do". It is the one that reads as a restatement of
+// Diverges and is not one — it misses an equal-length replay whose transitions
+// are the same set in the wrong ORDER, which is how a whole comparison table
+// came out one low.
+//
+// It is named, and named HERE rather than in extended_check.go, on purpose:
+// the point of #1503 is that a counting rule with no name gets re-spelled
+// slightly differently at each site, so the wrong spelling earns a name too —
+// but it is test-only, and giving it a method beside Diverges in production
+// would invite a caller.
+func divergesByCountsAndKinds(ec *extendedCheck) bool {
+	return ec.RecordedCount != ec.ReplayedCount || kindSetsDiffer(ec)
+}
+
+// divergesByOrderOrKinds is main.go's FORMER exit-code spelling, kept only so
+// the census can measure that collapsing it onto Diverges changed nothing.
+func divergesByOrderOrKinds(ec *extendedCheck) bool {
+	return ec.Diverges() || kindSetsDiffer(ec)
+}
+
+// kindSetsDiffer is the disjunct both near-misses share.
+func kindSetsDiffer(ec *extendedCheck) bool {
+	return len(ec.MissingKinds) > 0 || len(ec.ExtraKinds) > 0
+}
+
 // TestCatalogCensusMatchesTheCommittedFigures is #1503's deliverable: it walks
 // the catalog, counts each population with the named predicates, prints the
 // pasteable literal whether or not anything moved, and fails when the committed
@@ -239,10 +265,10 @@ func TestCatalogCensusMatchesTheCommittedFigures(t *testing.T) {
 		if ec.Diverges() {
 			measured.Divergent++
 		}
-		if ec.RecordedCount != ec.ReplayedCount || len(ec.MissingKinds) > 0 || len(ec.ExtraKinds) > 0 {
+		if divergesByCountsAndKinds(ec) {
 			measured.DivergentByCountsAndKinds++
 		}
-		wide := ec.Diverges() || len(ec.MissingKinds) > 0 || len(ec.ExtraKinds) > 0
+		wide := divergesByOrderOrKinds(ec)
 		if wide {
 			wideSpelling++
 		}
