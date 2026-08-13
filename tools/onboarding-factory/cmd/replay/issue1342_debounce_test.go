@@ -215,7 +215,7 @@ func forEachSidecarRecording(t *testing.T, visit func(name string, ec *extendedC
 		if d.IsDir() || filepath.Base(path) != eventsSidecarName {
 			return nil
 		}
-		transcript := filepath.Join(filepath.Dir(path), "transcript.jsonl")
+		transcript := filepath.Join(filepath.Dir(path), transcriptName)
 		if _, statErr := os.Stat(transcript); statErr != nil {
 			return nil
 		}

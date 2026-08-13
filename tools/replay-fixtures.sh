@@ -120,7 +120,9 @@ while IFS= read -r fix; do
   # recording. That population is censusOfTheCommittedCatalog.UnpairedSidecars,
   # also machine-generated. Measured while #1503 was written: this sweep
   # reported 142 where the census reported 140, and the two extra recordings
-  # were both aider/4-2_multiple-agents-same-workspace.
+  # were both aider/4-2_multiple-agents-same-workspace. Making the two agree is
+  # a scope call rather than a risky one — see that field's doc comment, which
+  # carries the measurement.
   # The dominant kind is a missing terminal
   # working→ready: the sidecar replayer synthesises idle promotions for child
   # sessions (applyChildOrphan) but never for the primary one. That is a known

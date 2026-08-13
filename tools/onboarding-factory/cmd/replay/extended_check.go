@@ -37,7 +37,7 @@ func runExtendedCheck(sidecarPath string, replayed []transition) (*extendedCheck
 
 // Diverges reports whether this recording's replay disagreed with the daemon's
 // own log about WHICH transitions happened, or in WHAT ORDER — the population
-// every "N of 309 recordings diverge" figure in this package is counted over.
+// the "N of the catalog's recordings diverge" headline is counted over.
 //
 // It exists because that headline had no single definition in code. It was
 // quoted in three doc comments, in tools/replay-fixtures.sh, and in every
@@ -60,7 +60,8 @@ func runExtendedCheck(sidecarPath string, replayed []transition) (*extendedCheck
 //     equal transitions, hence identical kind SETS, so the extra disjuncts can
 //     never fire on a check compareOrdered produced. That is a structural
 //     argument, so it is also measured — the catalog census asserts the two
-//     spellings agree on all 309 recordings rather than trusting the reasoning.
+//     spellings agree on every recording it walks, rather than trusting the
+//     reasoning.
 func (ec *extendedCheck) Diverges() bool { return len(ec.OrderedMismatches) > 0 }
 
 // ReproducesNothing reports the #1342 population: the daemon logged transitions

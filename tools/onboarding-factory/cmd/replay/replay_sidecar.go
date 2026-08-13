@@ -715,10 +715,16 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 //
 // Both tables below are HISTORY — each row is a model that was evaluated, most
 // of them rejected, and those rows are fixed by the measurement that rejected
-// them. The catalog's CURRENT figures are deliberately not restated anywhere in
-// this comment: they are censusOfTheCommittedCatalog in
-// issue1503_census_test.go, machine-generated and re-derived on every test run
-// (#1503). A hand-typed copy here is how the shipped row below and
+// them, so they are snapshots and are not re-derived.
+//
+// One row is an exception worth naming rather than leaving for a reader to
+// trip over: the second table's SHIPPED row describes the model that is
+// actually running, so its zero/fabricated/divergent columns were the current
+// figures on the day it was written and will silently stop being so the first
+// time replay fidelity moves. The live values are censusOfTheCommittedCatalog
+// in issue1503_census_test.go, machine-generated and re-derived on every test
+// run (#1503); when they disagree with the shipped row below, the census is
+// right and the row is a snapshot. A hand-typed copy is how that row and
 // tools/replay-fixtures.sh came to disagree by more than fifty recordings.
 //
 //	                                zero-transition  fabricated  divergent

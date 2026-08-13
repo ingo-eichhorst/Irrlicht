@@ -222,8 +222,8 @@ func main() {
 	// below, and the catalog census — see extendedCheck.Diverges (#1503). The
 	// former spelling here added "|| missing kinds || extra kinds", which is
 	// redundant rather than wider: an empty OrderedMismatches forces identical
-	// kind sets. The census asserts the two agree on all 309 committed
-	// recordings, so this is a measured no-op, not an assumed one.
+	// kind sets. The census asserts the two agree on every recording it walks,
+	// so this is a measured no-op, not an assumed one.
 	if c := report.ExtendedCheck; c != nil && c.Diverges() {
 		os.Exit(1)
 	}
