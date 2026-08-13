@@ -48,9 +48,15 @@ import (
 // of the process. Real event names are short PascalCase identifiers, so both
 // are far past anything an upstream rename produces.
 const (
-	// maxUnknownEventNames bounds how many distinct (adapter, event) pairs are
+	// MaxUnknownEventNames bounds how many distinct (adapter, event) pairs are
 	// retained.
-	maxUnknownEventNames = 64
+	//
+	// Exported because a saturated table is indistinguishable from "this name
+	// was never counted" at every reader, so anything explaining that to a
+	// human has to state the bound — and a copy of the number restated
+	// elsewhere goes stale silently while its advice stays confident. Its one
+	// caller is contracttesting.assertNameTableHadRoom (#1497).
+	MaxUnknownEventNames = 64
 
 	// maxUnknownEventNameLen bounds the retained length of one name, in bytes.
 	maxUnknownEventNameLen = 64
@@ -137,7 +143,7 @@ func IgnoreUnknownEvent(log outbound.Logger, component, adapter, sessionID, even
 	case unknownTableFullFirst:
 		log.LogError(component, sessionID, fmt.Sprintf(
 			"unrecognized hook event %q from %s: ignored, and NOT counted by name — the distinct-name table is full at %d entries, so no further name from this adapter can be attributed. Later sightings are totalled per adapter in hooks.json's unknown_event_names_dropped_by_adapter.",
-			name, adapter, maxUnknownEventNames))
+			name, adapter, MaxUnknownEventNames))
 	case unknownRepeat, unknownTableFullRepeat:
 		// Counted. Deliberately silent: these are the flooding cases.
 	}
@@ -158,7 +164,7 @@ func observeUnknownEvent(adapter, event string) (unknownOutcome, string) {
 	unknownMu.RLock()
 	counter := unknownCounts[key]
 	var dropped *atomic.Uint64
-	if counter == nil && len(unknownCounts) >= maxUnknownEventNames {
+	if counter == nil && len(unknownCounts) >= MaxUnknownEventNames {
 		// Post-saturation fast path: read the adapter's drop counter under the
 		// SAME read lock the map lookup above already needs, so a flood of
 		// unretainable names never reaches the exclusive lock.
@@ -181,7 +187,7 @@ func observeUnknownEvent(adapter, event string) (unknownOutcome, string) {
 		counter.Add(1)
 		return unknownRepeat, key.Event
 	}
-	if len(unknownCounts) >= maxUnknownEventNames {
+	if len(unknownCounts) >= MaxUnknownEventNames {
 		if dropped := unknownDropped[adapter]; dropped != nil {
 			dropped.Add(1)
 			return unknownTableFullRepeat, key.Event

@@ -111,19 +111,40 @@ type UnknownEventReceiver struct {
 // adapters, or two invocations, can share a test binary without interfering.
 func AssertUnknownHookEventObserved(t *testing.T, r UnknownEventReceiver) {
 	t.Helper()
-	t.Run("known_event_still_dispatched", func(t *testing.T) { assertKnownEventUncounted(t, r) })
-	t.Run("unknown_event_answered_2xx_not_dispatched", func(t *testing.T) { assertUnknownIgnored(t, r) })
-	t.Run("counted_per_adapter_and_name", func(t *testing.T) { assertUnknownCounted(t, r) })
-	t.Run("reported_once_per_distinct_name", func(t *testing.T) { assertUnknownReportedOnce(t, r) })
+	// Root, WriteTranscript and New are called HERE, on the sub-test's real
+	// *testing.T, rather than inside an arm — the split
+	// AssertHookEndpointFollowsBindAddr draws and AssertHookPathConfined
+	// repeats. So is unknownEventName, which reads t.Name(). All four are
+	// fixture machinery that reports its own failures, and a fixture that
+	// cannot be BUILT has to fail the run loudly instead of being recorded as
+	// the obligation firing (#1479). The arms take resolved values and only
+	// grade them, so a negative self-test can drive one against a deliberately
+	// wrong receiver (#1497).
+	t.Run("known_event_still_dispatched", func(t *testing.T) {
+		transcript := unknownEventTranscript(t, r)
+		log := &recordingLogger{}
+		assertKnownEventUncounted(realT(t), r, r.New(t, log), log, transcript)
+	})
+	t.Run("unknown_event_answered_2xx_not_dispatched", func(t *testing.T) {
+		transcript := unknownEventTranscript(t, r)
+		assertUnknownIgnored(realT(t), r, r.New(t, &recordingLogger{}), transcript, reusableEventName(r.Adapter))
+	})
+	t.Run("counted_per_adapter_and_name", func(t *testing.T) {
+		transcript := unknownEventTranscript(t, r)
+		renamed, stray := reusableEventName(r.Adapter)+"Renamed", reusableEventName(r.Adapter)+"Stray"
+		assertUnknownCounted(realT(t), r, r.New(t, &recordingLogger{}), transcript, renamed, stray)
+	})
+	t.Run("reported_once_per_distinct_name", func(t *testing.T) {
+		transcript := unknownEventTranscript(t, r)
+		log := &recordingLogger{}
+		flooding, second := unknownEventName(t)+"Flood", unknownEventName(t)+"Second"
+		assertUnknownReportedOnce(realT(t), r, r.New(t, log), log, transcript, flooding, second)
+	})
 }
 
 // assertKnownEventUncounted is obligation 1.
-func assertKnownEventUncounted(t *testing.T, r UnknownEventReceiver) {
+func assertKnownEventUncounted(t reporter, r UnknownEventReceiver, rut UnknownEventReceiverUnderTest, log *recordingLogger, transcript string) {
 	t.Helper()
-	transcript := unknownEventTranscript(t, r)
-	log := &recordingLogger{}
-	rut := r.New(t, log)
-
 	before := unknownTotalFor(r.Adapter)
 	rec := postUnknownEvent(t, r, rut, transcript, r.KnownEvent)
 
@@ -140,12 +161,8 @@ func assertKnownEventUncounted(t *testing.T, r UnknownEventReceiver) {
 }
 
 // assertUnknownIgnored is obligation 2.
-func assertUnknownIgnored(t *testing.T, r UnknownEventReceiver) {
+func assertUnknownIgnored(t reporter, r UnknownEventReceiver, rut UnknownEventReceiverUnderTest, transcript, event string) {
 	t.Helper()
-	transcript := unknownEventTranscript(t, r)
-	rut := r.New(t, &recordingLogger{})
-
-	event := unknownEventName(t)
 	rec := postUnknownEvent(t, r, rut, transcript, event)
 
 	assertHookStatus2xx(t, rec, fmt.Sprintf("unrecognized event %q", event))
@@ -155,18 +172,16 @@ func assertUnknownIgnored(t *testing.T, r UnknownEventReceiver) {
 }
 
 // assertUnknownCounted is obligation 3: the count is keyed by adapter AND name.
-func assertUnknownCounted(t *testing.T, r UnknownEventReceiver) {
+func assertUnknownCounted(t reporter, r UnknownEventReceiver, rut UnknownEventReceiverUnderTest, transcript, renamed, stray string) {
 	t.Helper()
-	transcript := unknownEventTranscript(t, r)
-	rut := r.New(t, &recordingLogger{})
-
-	renamed, stray := unknownEventName(t)+"Renamed", unknownEventName(t)+"Stray"
 	beforeRenamed, beforeStray := unknownCountFor(r.Adapter, renamed), unknownCountFor(r.Adapter, stray)
+	beforeDropped := unknownNamesDroppedFor(r.Adapter)
 
 	for i := 0; i < 3; i++ {
 		postUnknownEvent(t, r, rut, transcript, renamed)
 	}
 	postUnknownEvent(t, r, rut, transcript, stray)
+	assertNameTableHadRoom(t, r.Adapter, beforeDropped)
 
 	if got := unknownCountFor(r.Adapter, renamed) - beforeRenamed; got != 3 {
 		t.Errorf("event %q arrived 3 times, counted %d for adapter %q — an event that keeps arriving is the signature of an upstream rename and has to be countable as such",
@@ -179,17 +194,14 @@ func assertUnknownCounted(t *testing.T, r UnknownEventReceiver) {
 }
 
 // assertUnknownReportedOnce is obligation 4.
-func assertUnknownReportedOnce(t *testing.T, r UnknownEventReceiver) {
+func assertUnknownReportedOnce(t reporter, r UnknownEventReceiver, rut UnknownEventReceiverUnderTest, log *recordingLogger, transcript, flooding, second string) {
 	t.Helper()
-	transcript := unknownEventTranscript(t, r)
-	log := &recordingLogger{}
-	rut := r.New(t, log)
-
-	flooding, second := unknownEventName(t)+"Flood", unknownEventName(t)+"Second"
+	beforeDropped := unknownNamesDroppedFor(r.Adapter)
 	for i := 0; i < 5; i++ {
 		postUnknownEvent(t, r, rut, transcript, flooding)
 	}
 	postUnknownEvent(t, r, rut, transcript, second)
+	assertNameTableHadRoom(t, r.Adapter, beforeDropped)
 
 	if n := log.CountMentioning(flooding); n != 1 {
 		t.Errorf("event %q arrived 5 times and produced %d log line(s), want exactly 1 — a renamed event fires on every tool call, and one line per call buries the evidence it is meant to surface\nlines:\n%s",
@@ -211,7 +223,28 @@ func unknownEventTranscript(t *testing.T, r UnknownEventReceiver) string {
 	return r.WriteTranscript(t, mkSubdir(t, r.Root(t), "in-tree"))
 }
 
-// unknownEventName derives a name unique to the running sub-test. The counters
+// reusableEventName derives a name that is stable for one adapter, for the
+// obligations that measure a DELTA rather than a first sighting.
+//
+// hookjson retains at most 64 distinct (adapter, name) pairs for the life of
+// the process and NEVER resets, so every distinct name a contract mints is a
+// slot spent forever and every globally-FRESH one is a slot spent per run.
+// Obligations 2 and 3 need neither: they read a before/after difference, which
+// is correct however many times that name has been seen before. Only obligation
+// 4 depends on first-sighting state, and it is the only caller of
+// unknownEventName left.
+//
+// Keyed by ADAPTER rather than by sub-test on purpose. Per sub-test was the
+// first draft, for traceability, and it spent one permanent slot per sub-test
+// path — about twenty across this package. Per adapter keeps the failure
+// traceable to the CLI it is about, which is the axis that matters when reading
+// one, and costs three slots per adapter forever (review of PR #1512).
+func reusableEventName(adapter string) string {
+	return "IrrUnk" + hash8(adapter)
+}
+
+// unknownEventName derives a name unique to the running sub-test AND to this
+// invocation of it. The counters
 // are process-global and never reset, so a fixed literal would make two
 // invocations in one test binary — two adapters, or a receiver wired twice —
 // silently share a key and a first-sighting.
@@ -231,13 +264,55 @@ func unknownEventTranscript(t *testing.T, r UnknownEventReceiver) string {
 // hash keeps failures traceable to a test; the counter keeps them independent.
 func unknownEventName(t *testing.T) string {
 	t.Helper()
+	return fmt.Sprintf("IrrUnk%s%02d", unknownEventHash(t), unknownEventSeq.Add(1))
+}
+
+// unknownEventHash is the sub-test-derived half both name functions share, so
+// they cannot drift onto different derivations.
+func unknownEventHash(t *testing.T) string {
+	t.Helper()
+	return hash8(t.Name())
+}
+
+// hash8 is the derivation every event name in this file goes through, so the
+// two name functions cannot drift onto different ones — which they had, since
+// reusableEventName takes an adapter name and unknownEventHash a *testing.T, so
+// a shared helper over *testing.T could not serve both (review of PR #1512).
+func hash8(s string) string {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(t.Name()))
-	return fmt.Sprintf("IrrUnk%08x%02d", h.Sum32(), unknownEventSeq.Add(1))
+	_, _ = h.Write([]byte(s))
+	return fmt.Sprintf("%08x", h.Sum32())
 }
 
 // unknownEventSeq makes every unknownEventName call unique within the process.
 var unknownEventSeq atomic.Uint64
+
+// assertNameTableHadRoom stops a saturated process-global name table from being
+// reported as a receiver defect.
+//
+// hookjson retains at most 64 distinct (adapter, name) pairs for the life of the
+// process. Past that, a genuinely-new name is counted only in a per-adapter drop
+// total and never gets a row — so unknownCountFor returns 0 and the arms above
+// say "arrived 3 times, counted 0", which is a FALSE ACCUSATION against a
+// receiver doing exactly the right thing. That is precisely the failure shape
+// this package exists to remove, so it is refused loudly here instead: "a
+// verification mechanism must fail loudly when it cannot run" (AGENTS.md,
+// #1423). It is a Fatalf rather than an Errorf because every assertion below it
+// is graded on the state this guard just declared unreadable.
+func assertNameTableHadRoom(t reporter, adapter string, before uint64) {
+	t.Helper()
+	if got := unknownNamesDroppedFor(adapter) - before; got > 0 {
+		t.Fatalf("hookjson's process-global distinct-name table saturated during this obligation (%d name(s) dropped for adapter %q) — "+
+			"this is a limit of the TEST BINARY, not a defect in the receiver: past %d distinct (adapter, name) pairs a new name is never given a row, "+
+			"so every count below reads 0. Run with a lower -count, or spend fewer globally-fresh names (see reusableEventName)",
+			got, adapter, hookjson.MaxUnknownEventNames)
+	}
+}
+
+// unknownNamesDroppedFor reads one adapter's dropped-name total.
+func unknownNamesDroppedFor(adapter string) uint64 {
+	return hookjson.UnknownEventNamesDropped()[adapter]
+}
 
 // unknownCountFor reads one (adapter, event) counter out of the snapshot.
 func unknownCountFor(adapter, event string) uint64 {
@@ -264,7 +339,7 @@ func unknownTotalFor(adapter string) uint64 {
 
 // postUnknownEvent POSTs the adapter's hook body for event and returns the
 // response.
-func postUnknownEvent(t *testing.T, r UnknownEventReceiver, rut UnknownEventReceiverUnderTest, transcriptPath, event string) *httptest.ResponseRecorder {
+func postUnknownEvent(t reporter, r UnknownEventReceiver, rut UnknownEventReceiverUnderTest, transcriptPath, event string) *httptest.ResponseRecorder {
 	t.Helper()
 	return postHookBody(t, rut.Handler, r.EndpointPath, r.PayloadFor(transcriptPath, event))
 }
