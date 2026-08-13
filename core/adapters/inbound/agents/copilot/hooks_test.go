@@ -346,11 +346,18 @@ func TestHookReceiver_DeniedHooksConsentDropsQuietly(t *testing.T) {
 // TestHookReceiver_DeniedTranscriptsConsentDropsQuietly pins the second gate:
 // dispatching makes the detector read the transcript, so a transcripts-denied
 // session must not dispatch even though the hooks consent is granted.
+//
+// "Quietly" was decoration when this test was written and is now the load-
+// bearing half. Since #1488 DecodeConfined refuses the same request on the
+// receiver's declaration, so the dispatch assertion survives deleting the gate
+// below (measured); the silence does not, because the backstop logs an error
+// where this receiver's own gate says nothing. See contracttesting.RecordingLogger.
 func TestHookReceiver_DeniedTranscriptsConsentDropsQuietly(t *testing.T) {
 	root := copilotSessionRoot(t)
 	tp := writeSessionTranscript(t, root, "sess-stop")
 	target := &mockTarget{}
-	h := NewHookHandler(target, keyedGate{PermissionKeyHooks: true}, mockLogger{})
+	log := &contracttesting.RecordingLogger{}
+	h := NewHookHandler(target, keyedGate{PermissionKeyHooks: true}, log)
 
 	rec := post(t, h, contractPayload(tp, HookStop))
 
@@ -359,6 +366,10 @@ func TestHookReceiver_DeniedTranscriptsConsentDropsQuietly(t *testing.T) {
 	}
 	if n := target.totalCalls(); n != 0 {
 		t.Fatalf("dispatched %d times while transcripts consent was denied, want 0", n)
+	}
+	if len(log.Errors()) != 0 {
+		t.Errorf("a transcripts-denied hook logged %d error(s): %v — the whole point of the word "+
+			"in this test's name", len(log.Errors()), log.Errors())
 	}
 }
 
@@ -372,29 +383,36 @@ func TestHookReceiver_DeniedTranscriptsConsentDropsQuietly(t *testing.T) {
 // separates a receiver gated on the right permission from one gated on the
 // other, and it is the state claudecode sat in undetected for its whole life
 // (issue #1466).
+// Since #1488 the pair is derived from the receiver's own declaration rather
+// than named here — which also means this receiver could no longer have reached
+// #1475 with no wiring at all, the state it was found in.
 func TestHookReceiver_PermissionGateContract(t *testing.T) {
-	keys := []string{PermissionKeyHooks, PermissionKeyTranscripts}
-
-	contracttesting.AssertPermissionGatedOnEachKey(t, keys,
-		func(key string, others []string) contracttesting.PermissionGate {
+	contracttesting.AssertHookReceiverPermissionGated(t, contracttesting.HookReceiverGate{
+		Build: func(t *testing.T, gate *contracttesting.ConsentGate) contracttesting.GatedHookReceiver {
 			root := copilotSessionRoot(t)
 			body := contractPayload(writeSessionTranscript(t, root, "sess-gate"), HookStop)
 			target := &mockTarget{}
-			gate := contracttesting.NewConsentGate()
 			h := NewHookHandler(target, gate, mockLogger{})
 
 			before := 0
-			return contracttesting.PermissionGate{
-				Key:       key,
-				OtherKeys: others,
-				SetState:  gate.SetState,
+			return contracttesting.GatedHookReceiver{
+				Handler: h,
 				Exercise: func() {
 					before = target.totalCalls()
 					post(t, h, body)
 				},
 				Observe: func() bool { return target.totalCalls() > before },
 			}
-		})
+		},
+	})
+}
+
+// TestHookReceiver_DeclaresItsPermissions is the LOCK on the key list the
+// wiring above used to spell out (#1450).
+func TestHookReceiver_DeclaresItsPermissions(t *testing.T) {
+	contracttesting.AssertDeclaredPermissions(t,
+		NewHookHandler(&mockTarget{}, nil, mockLogger{}),
+		PermissionKeyHooks, PermissionKeyTranscripts)
 }
 
 // TestHookReceiver_NonPostRejected is a LOCK on the shared receiver shape.

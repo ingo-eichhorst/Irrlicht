@@ -20,6 +20,16 @@
 // remember" into "the next adapter cannot forget": the contract polices
 // adapters that opted in, the architecture rule polices the ones that did not.
 //
+// #1488 hangs a second obligation on the same chokepoint, for the same reason
+// and by the same route. A receiver's #570 consent had exactly the shape
+// confinement had before #1389: assertable once wired, invisible when nobody
+// wired it. So the permissions a receiver acts under are now an ARGUMENT to the
+// decode too — declared once at NewHandler, published on the handler so a
+// contract derives them rather than restating them, and re-checked here so a
+// declaration that is never checked drops the payload instead of dispatching.
+// See consent.go for what this deliberately does not take over: the ORDER of
+// the receiver'"'"'s own gates, which no single call can express.
+//
 // Rejected, and settled — do not revisit: a mux-level middleware. It would have
 // to key on a top-level "transcript_path" JSON field and would FAIL OPEN for
 // any future payload that nests or renames it, finding nothing and confining
@@ -63,23 +73,67 @@ const maxHookBodyBytes = 1 << 20
 // That is the #1361 defect shape, and leaving set nil would leave the door
 // open.
 //
-// Deliberately NOT handled here: the consent gates. Both the "hooks" gate and
-// the receipt observation must happen before this call (a body we then refuse
-// still proves the channel is alive, #1368), and the adapters that additionally
-// gate "transcripts" check it before calling in. Folding consent into the
-// decode would make this function the place four different obligations are
-// re-decided per adapter, which is the shape #1364's IgnoreUnknownEvent
-// deliberately avoids by taking no ResponseWriter.
+// consent names the permissions this receiver acts under, and every one of them
+// must be granted before the body is read. This is a BACKSTOP, not the
+// receiver's gate: the receiver still runs its own checks, in its own order,
+// because that order is load-bearing in two directions this function cannot see
+// (the channel key ahead of ObserveHookReceipt so a consent-denied request
+// counts no receipt, the transcript key behind it so a hooks-granted /
+// transcripts-denied install is not reported dead by #1368's watchdog). What
+// the backstop adds is the case those checks cannot cover: a receiver that
+// DECLARES a permission and then never checks it. That is #1466 exactly —
+// claudecode read transcripts with "transcripts" denied for the whole of its
+// life — and it is why the keys travel with the decode rather than only with
+// the contract that grades it (issue #1488). It also closes the window where
+// consent is revoked between the receiver's check and this read.
+//
+// A zero Consent declares nothing and is refused, so a receiver cannot reach a
+// payload by passing an empty one; NewHandler and RequireConsent between them
+// make the honest spelling the only short one, and the keyless spelling does
+// not compile at all.
 func DecodeConfined[T any](
 	w http.ResponseWriter,
 	r *http.Request,
 	log outbound.Logger,
 	component string,
+	consent Consent,
 	c *PathConfiner,
 	p *T,
 	get func(*T) string,
 	set func(*T, string),
 ) bool {
+	// Fail closed on a receiver that named no permission. Every hook receiver
+	// acts under at least one (#570), so an empty declaration is a wiring that
+	// went through Consent{} rather than RequireConsent — it cannot be typed
+	// away, and it must not read a body.
+	if len(consent.keys) == 0 {
+		log.LogError(component, "", "hook body dropped: receiver declared no permission to act under")
+		w.WriteHeader(http.StatusOK)
+		return false
+	}
+
+	// A declared permission that is not granted. Answering 2xx is the same
+	// choice every other refusal on this path makes: the refusal is reported by
+	// the log, never by a status code on the user's critical path (#1361,
+	// #1364).
+	//
+	// This logs where a receiver's OWN gate is silent, and the asymmetry is
+	// deliberate rather than an oversight. Reaching here means one of two
+	// things, and both are worth a line: the receiver skipped a check it
+	// declared, or consent was revoked in the window between its check and this
+	// read. The ordinary denied path never reaches here at all — the receiver
+	// answers it quietly, which is what keeps a transcripts-denied user from
+	// collecting an error per tool call, and what each adapter's
+	// consent-drops-quietly test now pins.
+	if key, missing := consent.ungranted(); missing {
+		log.LogError(component, "", fmt.Sprintf(
+			"hook body dropped: permission %q is not granted at the decode — either this "+
+				"receiver skipped the check it declares, or consent was revoked mid-request "+
+				"(issue #1488)", key))
+		w.WriteHeader(http.StatusOK)
+		return false
+	}
+
 	// Fail closed on a receiver wired without a confiner. Returning "not
 	// decoded" drops the payload with a 2xx, the same shape every other refusal
 	// takes, rather than dispatching an unconfined path because the guard

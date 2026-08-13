@@ -103,8 +103,9 @@ type ConsentGranter = hookjson.ConsentGranter
 // tests.
 func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
 	return hookjson.NewHandler(transcriptConfiner(),
-		func(c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
-			serveHookRequest(target, gate, log, c, w, r)
+		hookjson.RequireConsent(gate, AdapterName, PermissionKeyHooks, PermissionKeyTranscripts),
+		func(consent hookjson.Consent, c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+			serveHookRequest(target, consent, log, c, w, r)
 		})
 }
 
@@ -120,13 +121,17 @@ func transcriptConfiner() *hookjson.PathConfiner {
 // serveHookRequest is NewHookHandler's request logic, pulled out of the
 // returned closure so its branching isn't counted at the closure's extra
 // nesting depth.
-func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+func serveHookRequest(target HookTarget, consent hookjson.Consent, log outbound.Logger, confiner *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	if gate != nil && !gate.Granted(AdapterName, PermissionKeyHooks) {
+	// Both keys come off the receiver's OWN hookjson.Consent (issue #1488), so
+	// the set this sequence is written for is the set the handler publishes and
+	// the contract derives. A key this receiver did not declare answers false,
+	// so a drift between the two fails closed.
+	if !consent.Granted(PermissionKeyHooks) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -155,7 +160,7 @@ func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logge
 	// receipt above deliberately stays put: it is counted against the "hooks"
 	// consent only, since a hooks-granted / transcripts-denied install has a
 	// working channel this counter must not call dead (#1368).
-	if gate != nil && !gate.Granted(AdapterName, PermissionKeyTranscripts) {
+	if !consent.Granted(PermissionKeyTranscripts) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -167,7 +172,7 @@ func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logge
 	// overwrites the caller's string with the confined one so the target reads
 	// that (issues #1361, #1389). It has already answered when it returns false.
 	var payload codexHookPayload
-	if !hookjson.DecodeConfined(w, r, log, logComponentHookReceiver, confiner, &payload,
+	if !hookjson.DecodeConfined(w, r, log, logComponentHookReceiver, consent, confiner, &payload,
 		func(p *codexHookPayload) string { return p.TranscriptPath },
 		func(p *codexHookPayload, confined string) { p.TranscriptPath = confined },
 	) {

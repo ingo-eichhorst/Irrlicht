@@ -265,9 +265,17 @@ func TestChainStatuslineCommand_MigratesOldWrapsToV3(t *testing.T) {
 	}
 }
 
+// TestStatuslineHandler_ConsentGateDropsWhenNotGranted is this receiver's only
+// hand-written consent test, and since #1488 its silence assertion is the only
+// part of it that still discriminates: DecodeConfined refuses the same request
+// on the declared key, so deleting the gate in serveStatuslineRequest leaves
+// the drop assertion and three of the four contract arms green (measured).
+// This receiver declares ONE permission, so unlike the hook receivers it keeps
+// no second gate whose deletion would redden — the silence is what is left.
 func TestStatuslineHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 	target := &fakeRateLimitIngester{}
-	h := NewStatuslineHandler(target, fakeGate(false), silentLogger{})
+	log := &contracttesting.RecordingLogger{}
+	h := NewStatuslineHandler(target, fakeGate(false), log)
 
 	body := `{
 		"session_id": "abc",
@@ -286,6 +294,11 @@ func TestStatuslineHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 	if len(target.calls) != 0 {
 		t.Fatalf("ingested %d snapshots while permission not granted", len(target.calls))
 	}
+	if len(log.Errors()) != 0 {
+		t.Errorf("a statusline-denied tick logged %d error(s): %v — the statusline hook fires on "+
+			"every prompt render, so refusing it anywhere but this receiver's own gate floods the "+
+			"log of a user who declined the feature", len(log.Errors()), log.Errors())
+	}
 }
 
 // TestStatuslineHandler_PermissionGateContract generalizes
@@ -294,9 +307,6 @@ func TestStatuslineHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 // pending or denied, ingested once granted, and dropped again once
 // revoked.
 func TestStatuslineHandler_PermissionGateContract(t *testing.T) {
-	target := &fakeRateLimitIngester{}
-	gate := contracttesting.NewConsentGate()
-	h := NewStatuslineHandler(target, gate, silentLogger{})
 	body := `{
 		"session_id": "abc",
 		"transcript_path": "` + inTreeTranscript(t, "abc") + `",
@@ -305,24 +315,44 @@ func TestStatuslineHandler_PermissionGateContract(t *testing.T) {
 		}
 	}`
 
-	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		Key: PermissionKeyStatusline,
+	contracttesting.AssertHookReceiverPermissionGated(t, contracttesting.HookReceiverGate{
 		// This endpoint is a hook receiver too, so the two permissions it must
 		// NOT be gated on are the ones a copy-paste from hooks.go would reach
 		// for. It owes no transcripts consent of its own: the transcript path
 		// it forwards is used as a map key by metrics.IngestRateLimit, never
 		// opened (issue #1466 is about the READ, and there is none here).
-		OtherKeys: []string{PermissionKeyHooks, PermissionKeyTranscripts},
-		SetState:  gate.SetState,
-		Exercise: func() {
-			target.reset()
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode/statusline", strings.NewReader(body))
-			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, req)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200", rec.Code)
+		//
+		// Foreign is non-empty here and empty at the three hook receivers, and
+		// the asymmetry is the whole reason the field exists: this is the one
+		// receiver declaring a SINGLE permission, so its derived set leaves
+		// nothing to hold open and the #1475 isolation arm would have no state
+		// to run in.
+		Foreign: []string{PermissionKeyHooks, PermissionKeyTranscripts},
+		Build: func(t *testing.T, gate *contracttesting.ConsentGate) contracttesting.GatedHookReceiver {
+			target := &fakeRateLimitIngester{}
+			h := NewStatuslineHandler(target, gate, silentLogger{})
+			return contracttesting.GatedHookReceiver{
+				Handler: h,
+				Exercise: func() {
+					target.reset()
+					req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/claudecode/statusline", strings.NewReader(body))
+					rec := httptest.NewRecorder()
+					h.ServeHTTP(rec, req)
+					if rec.Code != http.StatusOK {
+						t.Fatalf("status = %d, want 200", rec.Code)
+					}
+				},
+				Observe: func() bool { return len(target.calls) > 0 },
 			}
 		},
-		Observe: func() bool { return len(target.calls) > 0 },
 	})
+}
+
+// TestStatuslineHandler_DeclaresItsPermission is the LOCK on the single key the
+// wiring above used to name through Key (#1450). It is the load-bearing half of
+// this receiver's asymmetry: statusline, and NOT hooks or transcripts.
+func TestStatuslineHandler_DeclaresItsPermission(t *testing.T) {
+	contracttesting.AssertDeclaredPermissions(t,
+		NewStatuslineHandler(&fakeRateLimitIngester{}, nil, silentLogger{}),
+		PermissionKeyStatusline)
 }
