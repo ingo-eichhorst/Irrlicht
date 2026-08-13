@@ -35,6 +35,52 @@ func runExtendedCheck(sidecarPath string, replayed []transition) (*extendedCheck
 	return check, nil
 }
 
+// Diverges reports whether this recording's replay disagreed with the daemon's
+// own log about WHICH transitions happened, or in WHAT ORDER — the population
+// every "N of 309 recordings diverge" figure in this package is counted over.
+//
+// It exists because that headline had no single definition in code. It was
+// quoted in three doc comments, in tools/replay-fixtures.sh, and in every
+// replay PR body, and was spelled differently at each site that computed it;
+// #1478's author counted it with a plausible near-miss and every row of the
+// resulting comparison table came out ONE LOW, which was invisible from the
+// inside because the table was internally consistent (#1503).
+//
+// The definition is len(OrderedMismatches) > 0 and nothing else. Two near-miss
+// spellings are worth naming, because both look like restatements and neither
+// is:
+//
+//   - "the counts or the kind sets differ" MISSES an equal-length replay whose
+//     transitions are the same SET in the wrong ORDER. Exactly one recording in
+//     the committed catalog is that shape, which is where the one-low came
+//     from; it is pinned by name in issue1503_census_test.go so the trap stays
+//     falsifiable rather than described.
+//   - "ordered OR kinds", main.go's own former spelling, is not wrong but is
+//     redundant: an empty OrderedMismatches forces equal lengths and pairwise
+//     equal transitions, hence identical kind SETS, so the extra disjuncts can
+//     never fire on a check compareOrdered produced. That is a structural
+//     argument, so it is also measured — the catalog census asserts the two
+//     spellings agree on all 309 recordings rather than trusting the reasoning.
+func (ec *extendedCheck) Diverges() bool { return len(ec.OrderedMismatches) > 0 }
+
+// ReproducesNothing reports the #1342 population: the daemon logged transitions
+// and the replay reproduced none, so the recording's golden asserts nothing.
+//
+// Named beside Diverges for the same reason it is: the count is quoted in doc
+// comments and pasted into PR tables, and a predicate that lives only inline in
+// one test's switch statement is one a second counter re-invents slightly
+// differently.
+func (ec *extendedCheck) ReproducesNothing() bool {
+	return ec.RecordedCount > 0 && ec.ReplayedCount == 0
+}
+
+// Fabricates reports the opposite failure, and the worse one: the daemon logged
+// nothing and the replay invented transitions anyway, so the golden asserts
+// something FALSE rather than nothing.
+func (ec *extendedCheck) Fabricates() bool {
+	return ec.RecordedCount == 0 && ec.ReplayedCount > 0
+}
+
 // dropInitTransitions filters out the synthetic initial-state row (empty
 // PrevState) that replay always emits first but the sidecar never records.
 func dropInitTransitions(replayed []transition) []transition {

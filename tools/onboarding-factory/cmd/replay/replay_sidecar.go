@@ -710,8 +710,16 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 //     leading-edge pass fixed 3 of the 7 and made overall extended-check
 //     divergence WORSE (146 → 153 recordings).
 //
-// MEASURED over all 309 sidecar-drivable recordings, stating the cost as well
-// as the win, since these two numbers are the whole argument for the change:
+// MEASURED over all sidecar-drivable recordings, stating the cost as well as
+// the win, since these two numbers are the whole argument for the change.
+//
+// Both tables below are HISTORY — each row is a model that was evaluated, most
+// of them rejected, and those rows are fixed by the measurement that rejected
+// them. The catalog's CURRENT figures are deliberately not restated anywhere in
+// this comment: they are censusOfTheCommittedCatalog in
+// issue1503_census_test.go, machine-generated and re-derived on every test run
+// (#1503). A hand-typed copy here is how the shipped row below and
+// tools/replay-fixtures.sh came to disagree by more than fifty recordings.
 //
 //	                                zero-transition  fabricated  divergent
 //	main                                         20           1        196
@@ -730,10 +738,13 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 // harness added to the columns because a boundary change moves WHEN a
 // transition fires and nothing before #1480 could see that:
 //
-// "divergent" is recordings with any extended-check divergence, i.e.
-// len(OrderedMismatches) > 0 — the same population the 145 quoted above and in
-// issue1342_debounce_test.go counts, so the rows below extend that series
-// rather than starting a new one on a narrower definition.
+// "divergent" is extendedCheck.Diverges — one named predicate, which is where
+// the definition now lives rather than in this sentence (#1503). The rows below
+// extend the series above rather than starting a new one on a narrower
+// definition; that they DO is the thing worth checking, because #1478 computed
+// this column with a plausible near-miss spelling and every row came out one
+// low. Diverges' doc comment names the two near-misses and the single committed
+// recording that separates them.
 //
 //	                          zero  fabricated  divergent  drift>1s  pairs
 //	#1476 as shipped             4           1        145       119    818

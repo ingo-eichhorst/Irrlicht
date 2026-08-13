@@ -570,8 +570,11 @@ func TestDriftSummary_FormatIsTheShellContract(t *testing.T) {
 	})
 
 	t.Run("no pairs reports n/a rather than a zero figure", func(t *testing.T) {
-		// 39 of the catalog's 309 recordings produce no kind-matched pair, so
-		// this is the common case, not an edge one. Reporting "worst +0.000s"
+		// Dozens of the catalog's recordings produce no kind-matched pair at
+		// all — the figure this comment used to carry by hand said 39 and was
+		// left behind by #1478, which rescued three of them; the enclosing
+		// test's own t.Logf reports the live count (#1503). So this is the
+		// common case, not an edge one. Reporting "worst +0.000s"
 		// would make "nothing was measured" indistinguishable from "measured,
 		// and perfect" — in the sweep's output and in the counter.
 		got := driftSummary(nil)

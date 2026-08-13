@@ -749,7 +749,8 @@ Before marking a ticket done, run the full suite — every layer must pass:
   goldens pin it only against their own previous value, `compareOrdered` walks
   `prev_state`/`new_state` index-by-index and never reads the time, and the
   "N of 309 recordings diverge" headline every replay PR quotes is counts and
-  kinds only. So a transition reproduced at the right position in the ORDER but
+  kinds only (that headline is `extendedCheck.Diverges` counted over the
+  catalog — see the next bullet for why it has exactly one definition). So a transition reproduced at the right position in the ORDER but
   31 seconds from when the daemon made it was a full pass, and the golden then
   pinned it as correct. `compareOrdered`
   (`tools/onboarding-factory/cmd/replay/extended_check.go`) now returns the
@@ -786,6 +787,37 @@ Before marking a ticket done, run the full suite — every layer must pass:
   figure beside the divergence figure, because a `go test` that passes prints
   nothing without `-v` and an unread measurement is the failure mode this
   closes.
+- Replay's measured figures: the counterpart rule to "a verification mechanism
+  must fail loudly when it cannot run" is that **a number which documents
+  behaviour but is not produced by it drifts silently, and is then quoted with
+  full confidence**. The replay tree carried one example of each outcome:
+  `knownFirstTransitionDrift` is machine-generated and stayed right across a
+  change that reshaped the distribution it describes, while the
+  `zero`/`fabricated`/`divergent` counts were typed by hand and went wrong twice
+  in two PRs — #1478 had to correct copies in five places, and one it missed
+  left `tools/replay-fixtures.sh` claiming 198 divergent recordings while the Go
+  side measured 140. Two mechanisms close it (#1503). **One named predicate**
+  decides each population — `extendedCheck.Diverges`, `.ReproducesNothing`,
+  `.Fabricates` — and every counter derives from it, including `main.go`'s exit
+  code, which had its own wider spelling (`ordered || missing kinds || extra
+  kinds`); those disjuncts are structurally unreachable and the census asserts
+  the two spellings agree on all 309 recordings rather than trusting that
+  argument. `Diverges` is `len(OrderedMismatches) > 0`, and the near-misses are
+  the point: "the counts or the kind sets differ" reads as a restatement and is
+  one low, because one committed recording replays the same two kinds and the
+  same four transitions in the wrong ORDER — that is the recording #1478's table
+  lost, and it is pinned by name in
+  `TestDivergesCatchesTheOrderSwapThatCountsAndKindsMiss`. **The counts are
+  machine-generated**: `censusOfTheCommittedCatalog` is the pasteable literal
+  `TestCatalogCensusMatchesTheCommittedFigures` prints on every run, the same
+  idiom `knownFirstTransitionDrift` uses, and no doc comment restates a figure
+  it carries. Two guards run before the equality check, because "paste the
+  measured literal" is the wrong advice when the measurement itself broke: a
+  walk that reached fewer recordings than the committed census, and a catalog
+  where nothing diverges at all. Its mutation evidence is a committed corpus
+  (`TestCensusDiffNamesEveryStaleShape`) — one deliberately-stale literal per
+  shape, including #1478's exact one-low, plus the identical-census row that
+  stops a diff which reports everything from looking correct.
 - Replay read boundary: the sidecar records `file_size` from the fswatcher's
   stat at fire time but stamps `ts` at the daemon's **dequeue** time, and the
   watcher's stat time is not a field of `lifecycle.Event` at all — so "where
