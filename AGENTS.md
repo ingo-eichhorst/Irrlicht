@@ -623,20 +623,99 @@ Before marking a ticket done, run the full suite — every layer must pass:
   and its obligation silently leaves the covered set. `armT.fixtures` is typed
   `fixtureT`, which carries `Setenv` and nothing that can decide a verdict, so
   reporting through it does not compile; that is a type guarantee rather than a
-  guard, the same trade #1390 made for path confinement. Four families carry
-  self-tests (permission gate, hook endpoint, hook disclosure, hook version);
-  the three receiver-shaped ones, and a source walk that would make a fifth
-  family covered by existing rather than by remembering, are #1497 — queued
-  behind #1488, which changed the fake receiver all three would share. It made
-  that fixture cheaper rather than dearer, but did not build it:
-  `hookjson.NewHandler` now takes the consent alongside the confiner, so one
-  `RequireConsent` line replaces the ad-hoc gate each of the three would have
-  wired separately, and `hook_receiver_gate_test.go`'s `gatedFakeReceiver`
-  shows the constructor shape. What that fixture still lacks is most of what
-  #1497 specifies — it passes a nil confiner and never reaches
-  `DecodeConfined`, so it carries no declared roots, no rejection counters and
-  no receipt. The consent third is done; the roots-and-counters two thirds are
-  still #1497's to write.
+  guard, the same trade #1390 made for path confinement. Since #1497 **every**
+  family carries self-tests. The three receiver-shaped ones share one fixture,
+  `receiver_fixture_test.go`: a receiver built through `hookjson.NewHandler`
+  over a real `PathConfiner` and a real `RequireConsent`, decoding through
+  `DecodeConfined`, whose `receiverBreak` struct has one field per committed
+  mutation and whose ZERO VALUE is a correct receiver — so a case names what it
+  broke and nothing else. Three things there are worth knowing before writing a
+  fourth family's fixture. **A verdict a self-test cannot reach is stated, not
+  faked**: obligations 2-5 of the confinement family grade a decision
+  `hookjson.PathConfiner` makes, and #1380/#1446 recorded their mutations as
+  edits to `confine.go`, which a test in this package cannot make — so the
+  fixture consults the real confiner and second-guesses its answer in the
+  direction each recorded mutation produced, and the file says that is what the
+  evidence supports. **The counter is only reachable through `Confine`** —
+  `RejectPath` logs and answers 2xx but counts nothing — so a fixture that
+  skipped it would fail every arm with "counted 0 rejection(s)" for a reason
+  unrelated to the mutation under test. And a mutated receiver that cannot use
+  `DecodeConfined` differs from a correct one in TWO ways, the verdict and the
+  decode, so a hand-rolled-but-faithful baseline is run through every arm first
+  to prove the decode is not what was reported.
+  Each case also names the obligations it must leave **silent**, which is half
+  the evidence: without it, six mutations against six obligations are equally
+  satisfied by six arms that all report on everything. Those silences reproduce
+  the recorded #1446 matrix — M1 red on obligation 1 alone, M4 (containment
+  before symlink resolution) red on 4 and 5 while 1-3 stay green, M6 red on 5
+  alone. Two rows are reproduced with a deliberately NARROWER blast radius than
+  the recorded one, because the recorded mutation edited `confine.go` and a
+  reproduction in this package cannot; both say so where they live, and the M3
+  row's narrowing is the point rather than a compromise — its reproduction
+  leaves obligation 2 green, which is exactly what separates the traversal
+  obligation from the out-of-tree one.
+  Two mutation sets could not simply be transcribed, and both gaps are worth
+  knowing about. #1403 recorded obligations 1 and 2 of the unrecognized-event
+  family as **locks** with no mutation at all; deriving them found that
+  obligation 1 carries two independent claims (a recognized event still
+  DISPATCHES, and it is counted as unrecognized by NOBODY), which a receiver
+  can fail one at a time. And #1413's receipt mutation covers obligations 1-3
+  **jointly** — removing `ObserveHookReceipt` entirely — which proves neither
+  PLACEMENT those obligations exist to pin; the two placements that isolate
+  them (`receiptOnlyWhenRecognized`, `receiptAfterConfinement`) are #1497's and
+  are recorded nowhere else.
+  What makes the seam structural rather than remembered is
+  `seam_walk_test.go`, an AST walk over the package's own sources with two
+  rules. **Rule 1**: a function in a non-test file whose FIRST parameter is
+  `*testing.T` must be an exported `Assert…` entry point, `realT`, or named in
+  `deferredToTheSeam` with its reason — keyed on the parameter TYPE and
+  POSITION, never on a name convention, since a naming rule is satisfied by
+  renaming — and `testing.TB`, `*testing.B` and `*testing.M` count as the same
+  type for it, because TB carries `Errorf`/`Fatalf` AND an unexported method, so
+  no recorder can implement it and a TB-first arm is exactly as unswappable as a
+  `*testing.T`-first one. The exemption map admits two KINDS of function, stated
+  as two rather than generalized because the generalization is false and a false
+  one there reads as "you don't need to look": fixture machinery (the line
+  `fixtureT` draws — a fixture that cannot be BUILT must fail loudly rather than
+  be recorded as an obligation firing), and one helper that does decide a
+  verdict but has no family to self-test (`CompareGolden`).
+  **Rule 2**: every arm (first parameter `reporter` or `armT`) must be
+  reachable, along a chain that does **not** pass through an exported entry
+  point, from a reference in a `_test.go` **that also calls `mustReport`**.
+  All three clauses matter — reference-based rather than filename-based, because
+  the permission-gate family's self-tests live in `permission_gate_test.go`;
+  not-through-an-entry-point, because a family's vacuity guard CALLS its entry
+  point and would otherwise mark every arm of a self-test-less family as driven;
+  and the `mustReport` clause, which came from review, because seeded from every
+  test file an arm counted as driven merely by being NAMED — deleting a family's
+  four negative self-tests and leaving the now-uncalled table that listed them
+  passed the rule in full. `mustReport` is the one call every negative self-test
+  makes and no positive test does. Its corpus is `seam_walk_corpus_test.go`: one
+  row per parameter spelling pinned to the verdict the detector must return,
+  plus one per call graph pinning the propagation (no count is stated here,
+  because nothing would keep one honest). The `want:false` rows carry the value,
+  per #1450 — a `*testing.T` in second position, one inside a struct FIELD type,
+  one inside a parameter's own func type, a function literal assigned to a
+  package var, and an aliased `testing` import. The first three are false
+  positives a text-based rule produces; the last two are declared LIMITS of an
+  `ast.FuncDecl` walk over syntactic types, pinned so they are learned from a
+  test rather than from an incident. A `want:false` row is also how this
+  corpus's own worst defect shipped and was caught in review: `testing.TB` sat
+  in the must-NOT-flag block, so the rule's biggest hole came with an approved
+  spelling.
+  One further cost is worth knowing before writing a fifth family:
+  `hookjson`'s distinct-name table retains `MaxUnknownEventNames` `(adapter,
+  name)` pairs for the life of the process and never resets, so an obligation
+  needing a globally FRESH name (only #1364's fourth) spends a slot per run.
+  Keeping the delta-measuring obligations on an adapter-stable name, and driving
+  the fresh-name one only where it is the subject, is what buys the headroom —
+  measured at `go test -count=12` when this was written, against roughly eight
+  before. Trust neither number: nothing produces either, which is precisely the
+  drift "Replay's measured figures" below is about. What IS load-bearing is that
+  `assertNameTableHadRoom` reports a saturated table as a limit of the TEST
+  BINARY — quoting the bound it reads from `hookjson` rather than a copy of it —
+  instead of letting it become the false accusation ("counted 0") it otherwise
+  is.
 - Guarded construction: not a contract family — a package-local pair of guards,
   `core/application/services/construction_test.go`. A service whose fields
   include maps, channels, or anything else whose zero value is unusable is
