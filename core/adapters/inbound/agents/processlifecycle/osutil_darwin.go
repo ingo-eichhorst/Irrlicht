@@ -473,11 +473,41 @@ func herdrClientWriters(out string, self int) []int {
 	return pids
 }
 
-// maxHerdrClientCandidates bounds how many attached clients are probed for a
+// maxClientCandidates bounds how many attached clients are probed for a
 // resolvable host. Each candidate costs an env read plus an ancestry walk, and
 // attaching more than a handful of clients to one session is not a real
 // workflow, so the cap keeps that work proportionate.
-const maxHerdrClientCandidates = 4
+const maxClientCandidates = 4
+
+// resolveClientHostIdentity picks the host-window identity of the first
+// candidate in pids that reports one. It is the shared "which window is this
+// multiplexer session displayed in" loop: herdr feeds it the writers of the
+// session's client log (resolveHerdrClientLauncher), and #1501's tmux path is
+// queued to feed it `tmux list-clients -F '#{client_pid}'`.
+//
+// The second return is the same tri-state herdrClientPIDs draws one layer
+// down: true means the answer is evidence, false means the candidates could
+// not be read and the caller must not treat an absent host as a host that is
+// gone.
+func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
+	if len(pids) > maxClientCandidates {
+		pids = pids[:maxClientCandidates]
+	}
+	for _, pid := range pids {
+		host := hostIdentity(pid)
+		if host.HerdrPaneID != "" {
+			// A candidate that is itself a multiplexer pane has no window of
+			// its own — its host is one more indirection away. Don't recurse;
+			// try the next candidate.
+			continue
+		}
+		if host.TermProgram == "" && host.HostBundleID == "" {
+			continue
+		}
+		return host, true
+	}
+	return nil, true
+}
 
 // herdrClientLauncher resolves the host-window identity of the herdr session
 // addressed by socketPath, by reading it from the attached client exactly the
@@ -533,22 +563,7 @@ func resolveHerdrClientLauncher(socketPath string) (*session.Launcher, bool) {
 	if !probed {
 		return nil, false
 	}
-	if len(pids) > maxHerdrClientCandidates {
-		pids = pids[:maxHerdrClientCandidates]
-	}
-	for _, pid := range pids {
-		host := hostIdentity(pid)
-		if host.HerdrPaneID != "" {
-			// herdr nested in herdr: this client's own window is another
-			// indirection away. Don't recurse — try the next candidate.
-			continue
-		}
-		if host.TermProgram == "" && host.HostBundleID == "" {
-			continue
-		}
-		return host, true
-	}
-	return nil, true
+	return resolveClientHostIdentity(pids)
 }
 
 // herdrClientCacheTTL is short enough that attaching a client is picked up by

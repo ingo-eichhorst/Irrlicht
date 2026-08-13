@@ -669,3 +669,113 @@ func TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown(t *testing.T) 
 		t.Error("a detached session's host is known to be absent")
 	}
 }
+
+// --- client-candidate resolution (#1492) ------------------------------------
+
+// exitedPID returns the PID of a process that has run to completion and been
+// reaped. Every identity read of it then fails the way a herdr client that
+// exits between the lsof scan and the identity read does — and, more to the
+// point of #1492, it takes the *same* `if err != nil` branch inside
+// resolveHostFromAncestry / resolveHostBundleIDFromAncestry that a `ps` which
+// blows its 2s ceiling on a loaded machine takes. The timeout is the cause the
+// issue is about; a reaped PID is the one cause of that class that a test can
+// arrange deterministically.
+//
+// PID reuse is asserted away rather than tolerated: macOS allocates PIDs
+// ascending and wraps at 99999, so a reuse inside this window would need tens
+// of thousands of intervening spawns, and treating it as a skip would let the
+// whole family of assertions below pass vacuously.
+func exitedPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("/usr/bin/true")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	pid := cmd.Process.Pid
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if err := syscall.Kill(pid, 0); err != syscall.ESRCH {
+		t.Fatalf("pid %d is still addressable after being reaped (kill(0) = %v) — PID reuse would make every assertion below vacuous", pid, err)
+	}
+	return pid
+}
+
+// TestResolveClientHostIdentity_UnreadableCandidateIsNotDetached is #1492.
+//
+// The loop's `continue` meant two things at once: "this candidate genuinely has
+// no local GUI window" (an SSH client — reporting one anyway is the #1348
+// misroute) and "this candidate's identity could not be READ". Answering the
+// second with (nil, true) is an authoritative "detached", and AdoptHostIdentity
+// acts on it by clearing TermProgram / HostBundleID / ITermSessionID / the kitty
+// selectors from a session whose client is attached the whole time.
+//
+// A candidate that cannot be read must therefore come back as the third state —
+// "I could not look" — exactly as herdrClientPIDs already reports it one layer
+// down (#1485).
+func TestResolveClientHostIdentity_UnreadableCandidateIsNotDetached(t *testing.T) {
+	dead := exitedPID(t)
+
+	host, hostKnown := resolveClientHostIdentity([]int{dead})
+
+	if host != nil {
+		t.Errorf("an unreadable candidate must not produce a host: %+v", host)
+	}
+	if hostKnown {
+		t.Error("the candidate's identity could not be read, so the host is unknown — not absent (#1492)")
+	}
+}
+
+// TestResolveClientHostIdentity_HostlessCandidateStaysDetached is the lock the
+// fix must not break, and it passes on main by construction: #1348 removed the
+// misroute where a session with no local window was reported as living in the
+// terminal the user had left. launchd stands in for that candidate — its
+// ancestry walk terminates immediately and honestly (PID 1 has no parent), so
+// "no local window" here is evidence, and the answer stays an answer.
+func TestResolveClientHostIdentity_HostlessCandidateStaysDetached(t *testing.T) {
+	host, hostKnown := resolveClientHostIdentity([]int{1})
+
+	if host != nil {
+		t.Errorf("launchd has no window; reporting one is the #1348 misroute: %+v", host)
+	}
+	if !hostKnown {
+		t.Error("the candidate WAS read and genuinely has no local window — that is an answer, not a failed probe")
+	}
+}
+
+// TestResolveClientHostIdentity_OneUnreadableCandidatePoisonsTheAnswer covers
+// the mixed list. "No attached client has a local window" is a claim about
+// every candidate, so a single one that could not be read is enough to make it
+// unsupported — the readable ones cannot vouch for it.
+func TestResolveClientHostIdentity_OneUnreadableCandidatePoisonsTheAnswer(t *testing.T) {
+	dead := exitedPID(t)
+
+	// launchd first: a readable, genuinely hostless candidate. If the loop
+	// only remembered the last verdict it would answer "detached" here.
+	if _, hostKnown := resolveClientHostIdentity([]int{1, dead}); hostKnown {
+		t.Error("one unreadable candidate makes 'no client has a window' unsupported (#1492)")
+	}
+	if _, hostKnown := resolveClientHostIdentity([]int{dead, 1}); hostKnown {
+		t.Error("order must not change the verdict")
+	}
+}
+
+// TestResolveClientHostIdentity_ResolvableCandidateStillWins is the vacuity
+// guard for the three above: a loop that answered "unknown" for everything
+// would satisfy the #1492 assertions while resolving no session at all.
+func TestResolveClientHostIdentity_ResolvableCandidateStillWins(t *testing.T) {
+	client := spawnSleeperWithEnv(t, []string{
+		"PATH=/usr/bin:/bin",
+		"TERM_PROGRAM=iTerm.app",
+		"ITERM_SESSION_ID=w0t0p0-CLIENT",
+	})
+
+	host, hostKnown := resolveClientHostIdentity([]int{client})
+
+	if !hostKnown {
+		t.Fatal("a candidate whose own env names its host is readable by definition")
+	}
+	if host == nil || host.TermProgram != "iTerm.app" || host.ITermSessionID != "w0t0p0-CLIENT" {
+		t.Fatalf("want the candidate's own host identity, got %+v", host)
+	}
+}
