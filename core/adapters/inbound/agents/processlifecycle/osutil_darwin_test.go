@@ -4,7 +4,6 @@ package processlifecycle
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -681,31 +680,25 @@ func TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown(t *testing.T) 
 
 // --- client-candidate resolution (#1492) ------------------------------------
 
-// exitedPID returns the PID of a process that has run to completion and been
-// reaped. Every identity read of it then fails the way a herdr client that
-// exits between the lsof scan and the identity read does — and, more to the
-// point of #1492, it takes the *same* `if err != nil` branch inside
-// resolveHostFromAncestry / resolveHostBundleIDFromAncestry that a `ps` which
-// blows its 2s ceiling on a loaded machine takes. The timeout is the cause the
-// issue is about; a reaped PID is the one cause of that class that a test can
-// arrange deterministically.
+// exitedPID is deadPIDForScannerTest (scanner_test.go, same package and same
+// test binary) with the recycle policy the #1492 family needs. Every identity
+// read of a reaped PID fails the way a herdr client that exits between the lsof
+// scan and the identity read does — and, more to the point, it takes the *same*
+// `if err != nil` branch inside resolveHostFromAncestry /
+// resolveHostBundleIDFromAncestry that a `ps` which blows its 2s ceiling on a
+// loaded machine takes. The timeout is the cause the issue is about; a reaped
+// PID is the one cause of that class a test can arrange deterministically.
 //
-// PID reuse is asserted away rather than tolerated: macOS allocates PIDs
-// ascending and wraps at 99999, so a reuse inside this window would need tens
-// of thousands of intervening spawns, and treating it as a skip would let the
-// whole family of assertions below pass vacuously.
+// The policy difference is the reason this wrapper exists rather than a second
+// spawn-and-reap: its caller skips on a recycled PID, which for these tests
+// would let the whole family pass vacuously. macOS allocates PIDs ascending and
+// wraps at 99999, so a reuse inside this window needs tens of thousands of
+// intervening spawns — rare enough to assert away, not rare enough to hide.
 func exitedPID(t *testing.T) int {
 	t.Helper()
-	cmd := exec.Command("/usr/bin/true")
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("spawn: %v", err)
-	}
-	pid := cmd.Process.Pid
-	if err := cmd.Wait(); err != nil {
-		t.Fatalf("wait: %v", err)
-	}
-	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("pid %d is still addressable after being reaped (kill(0) = %v) — PID reuse would make every assertion below vacuous", pid, err)
+	pid := deadPIDForScannerTest(t)
+	if IsAlive(pid) {
+		t.Fatalf("pid %d is alive after being reaped — PID reuse would make every assertion below vacuous", pid)
 	}
 	return pid
 }
@@ -909,11 +902,14 @@ func TestResolveClientHostIdentity_HostlessCandidateStaysDetached(t *testing.T) 
 func TestResolveClientHostIdentity_OneUnreadableCandidatePoisonsTheAnswer(t *testing.T) {
 	dead := exitedPID(t)
 
-	// launchd first: a readable, genuinely hostless candidate. If the loop
-	// only remembered the last verdict it would answer "detached" here.
+	// launchd first, so a loop that only remembered the FIRST candidate's
+	// verdict would answer "detached" here.
 	if _, hostKnown := resolveClientHostIdentity([]int{1, dead}); hostKnown {
 		t.Error("one unreadable candidate makes 'no client has a window' unsupported (#1492)")
 	}
+	// launchd last, so a loop that only remembered the LAST verdict would
+	// answer "detached" here. Between them the two arms pin both spellings of
+	// "the accumulator was dropped".
 	if _, hostKnown := resolveClientHostIdentity([]int{dead, 1}); hostKnown {
 		t.Error("order must not change the verdict")
 	}
@@ -936,5 +932,13 @@ func TestResolveClientHostIdentity_ResolvableCandidateStillWins(t *testing.T) {
 	}
 	if host == nil || host.TermProgram != "iTerm.app" || host.ITermSessionID != "w0t0p0-CLIENT" {
 		t.Fatalf("want the candidate's own host identity, got %+v", host)
+	}
+
+	// The asymmetry the doc claims: a found host is evidence regardless of what
+	// the rest of the list did, so an unreadable candidate ahead of it must not
+	// poison a POSITIVE answer — only a negative one.
+	host, hostKnown = resolveClientHostIdentity([]int{exitedPID(t), client})
+	if !hostKnown || host == nil || host.TermProgram != "iTerm.app" {
+		t.Errorf("a resolving candidate wins outright past an unreadable one: got (%+v, %v)", host, hostKnown)
 	}
 }

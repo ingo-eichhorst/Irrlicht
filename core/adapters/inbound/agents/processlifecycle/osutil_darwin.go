@@ -543,11 +543,10 @@ const maxClientCandidates = 4
 // #1501, the tmux twin of #1350), and a chain deeper than maxAncestry is
 // declared a miss on the same terms.
 func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
-	truncated := len(pids) > maxClientCandidates
-	if truncated {
+	readAll := len(pids) <= maxClientCandidates
+	if !readAll {
 		pids = pids[:maxClientCandidates]
 	}
-	unreadable := truncated
 	for _, pid := range pids {
 		host, complete := hostIdentity(pid)
 		if host.HerdrPaneID != "" {
@@ -560,12 +559,12 @@ func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
 			continue
 		}
 		if host.TermProgram == "" && host.HostBundleID == "" {
-			unreadable = unreadable || !complete
+			readAll = readAll && complete
 			continue
 		}
 		return host, true
 	}
-	return nil, !unreadable
+	return nil, readAll
 }
 
 // herdrClientLauncher resolves the host-window identity of the herdr session
@@ -578,17 +577,8 @@ func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
 // (#1485) or a candidate's own identity could not be read (#1492).
 //
 // "Was read and has no host" rather than "reported no host" is the whole of
-// #1492, and the two are not the same claim. hostIdentity swallows its env
-// read's failure by design — the ProcessObserver port defines an unreadable env
-// as an empty map, and the ancestry fallback is the only signal a
-// hardened-runtime process has — so the distinction is drawn where it can be:
-// resolveHostFromAncestry and resolveHostBundleIDFromAncestry now report
-// whether their walk reached a verdict or aborted on a readProcInfo failure,
-// hostIdentity carries that out as its second return, and
-// resolveClientHostIdentity refuses to call the negative an answer when any
-// candidate could not be read. Before that, a client attached from kitty (which
-// sets no TERM_PROGRAM upstream, so ancestry is its only source) yielded no host
-// on a loaded machine and was indistinguishable here from an SSH client.
+// #1492; resolveClientHostIdentity's doc carries the argument, and this
+// function only passes its verdict through.
 //
 // Only ever called with a socket path the daemon captured from the pane's own
 // $HERDR_SOCKET_PATH, so a resolved identity always accompanies a complete
