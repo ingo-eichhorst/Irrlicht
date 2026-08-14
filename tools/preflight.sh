@@ -365,6 +365,12 @@ if want security; then
 fi
 
 # ---- swift group (goes BEYOND macos-swift.yml, deliberately) --------------
+# Sourced unconditionally rather than inside the Darwin guard: a load failure
+# must be loud wherever it happens, and `want swift` is decided later.
+. "$SCRIPT_DIR/lib/swift-suite.sh" || {
+  echo "cannot load $SCRIPT_DIR/lib/swift-suite.sh — refusing to run the Swift gate blind" >&2
+  exit 1
+}
 # The macOS app had no automated floor of any kind until #1509: no CI workflow
 # built or tested Swift, and preflight had no Swift gate either, so a
 # platforms/macos-only diff ran *every* gate as SKIP and pushed green having
@@ -397,14 +403,34 @@ swift_suite() {
     echo "swift not found — install Xcode or the Swift toolchain" >&2
     return 1
   fi
-  # Both names: `LauncherTestHarness` is the target, `LauncherHarnessTests` the
-  # class. Either alone excludes the harness today; the pair is what keeps that
-  # true after a class is added to the target or the target is renamed. This
-  # matters more locally than in CI — here an unskipped harness test drives the
-  # developer's own live terminal windows.
-  ( cd platforms/macos && swift build \
-      && swift test --skip LauncherTestHarness --skip LauncherHarnessTests )
-  return $?
+
+  ( cd platforms/macos && swift build ) || return 1
+
+  # The suite runs through tools/lib/swift-suite.sh rather than being invoked
+  # directly, because this gate's exit code was not a sufficient signal and the
+  # gap was not visible from here. XCTest answers a hung expectation by
+  # `abort()`ing the process: the run stops partway (33 of 40 suites, measured),
+  # the aggregate total never prints, and every suite that already reported says
+  # "0 failures" — because none of them failed, the rest simply never ran. The
+  # helper additionally bounds the run, since the other shape of the same fault
+  # is a process that never returns at all, which left this gate — and therefore
+  # the pre-push hook — hanging indefinitely. See #1523.
+  #
+  # Both names below: `LauncherTestHarness` is the target, `LauncherHarnessTests`
+  # the class. Either alone excludes the harness today; the pair is what keeps
+  # that true after a class is added to the target or the target is renamed.
+  # This matters more locally than in CI — here an unskipped harness test drives
+  # the developer's own live terminal windows.
+  local log rc
+  log=$(mktemp -t irrlicht-swift-suite) || return 1
+  ( cd platforms/macos && swift_suite_run "$log" \
+      swift test --skip LauncherTestHarness --skip LauncherHarnessTests )
+  rc=$?
+  cat "$log"
+  swift_suite_verdict "$rc" "$log"
+  rc=$?
+  rm -f "$log"
+  return "$rc"
 }
 
 if want swift; then

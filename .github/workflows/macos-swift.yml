@@ -9,8 +9,12 @@ name: macOS (Swift)
 # name suggests, so it is worth being explicit: the test suite does not
 # currently pass on a GitHub runner, and #1530 is the issue for making it. 227
 # of its tests do pass there; the blockers are 35 host-dependent image-snapshot
-# comparisons, a hang in one of them, #1523's audio stall, and one assertion
-# that depends on the home directory's basename. Gating tests today would mean
+# comparisons, a hang in one of them, and one assertion that depends on the
+# home directory's basename. #1523 was a fourth and is fixed — it turned out to
+# be a main-thread deadlock in a test helper rather than the audio stack that
+# comment originally suspected, so the cause cannot recur on a runner either.
+# That last clause is reasoning from the cause, not a green runner result:
+# nothing in CI runs `swift test` yet, which is what #1530 is for. Gating tests today would mean
 # a check that is red on every PR for reasons unrelated to the PR, which
 # teaches people to ignore it — strictly worse than the gap it would fill.
 #
