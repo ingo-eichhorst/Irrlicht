@@ -904,9 +904,12 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `UnpairedSidecars` and `PairedButUngraded` are the denominator's honesty:
   every sidecar on disk is either graded, unpairable, or paired-but-ungradeable,
   and the three figures sum to the catalog. Nothing is unpairable today — the
-  Go walk and `tools/replay-fixtures.sh` pair the same two transcript names
-  through one rule (`pairedTranscript`, `cmd/replay/issue1517_pairing_test.go`),
-  so both walk the same set. The figure stays in the census at zero because it
+  Go walk and `tools/replay-fixtures.sh` select recordings by the same two
+  transcript names, from the one declaration `replay.TranscriptNames`, with
+  `TestSweepAndGatesWalkTheSameTranscriptNames` pinning the shell's own `find`
+  list to it. They do not walk one identical *set* — the sweep enumerates
+  transcripts, the gates enumerate sidecars — and the NAMES are what had
+  drifted. The figure stays in the census at zero because it
   is what would report the blindness returning: before #1517 it counted every
   aider recording — graded by the sweep, by no Go gate, so
   `knownZeroTransition`, `knownFabricated` and #1480's ratchets described the
