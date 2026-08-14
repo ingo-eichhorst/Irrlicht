@@ -3,8 +3,6 @@
 package processlifecycle
 
 import (
-	"context"
-	"os/exec"
 	"testing"
 
 	"irrlicht/core/domain/session"
@@ -24,43 +22,35 @@ const kittenLsFixture = `[{"tabs":[{"windows":[{"id":7,"pid":4242,"foreground_pr
 // host. Row 1 is the vacuity guard in both directions at once: it is the only
 // row that produces a non-empty id.
 func TestKittyWindowIDForPIDVia_NonAnswerIsNotAnAbsentWindow(t *testing.T) {
-	shell := func(script string) kittenCmd {
-		return func(ctx context.Context, _ string) *exec.Cmd {
-			return exec.CommandContext(ctx, "/bin/sh", "-c", script)
-		}
-	}
-
 	cases := []struct {
 		name       string
-		build      kittenCmd
+		build      shelloutCmd
 		wantID     string
 		wantProbed bool
 		why        string
 	}{
 		{
-			name: "kitten answers with a matching window", build: shell("cat <<'J'\n" + kittenLsFixture + "\nJ"),
+			name: "kitten answers with a matching window", build: shellCmd("cat <<'J'\n" + kittenLsFixture + "\nJ"),
 			wantID: "7", wantProbed: true,
 			why: "the vacuity guard: the only row that resolves an id, so a hard-wired \"\" cannot pass the table",
 		},
 		{
-			name: "kitten answers, no window matches", build: shell("echo '[]'"),
+			name: "kitten answers, no window matches", build: shellCmd("echo '[]'"),
 			wantID: "", wantProbed: true,
 			why: "a LOCK: an empty answer is still an answer",
 		},
 		{
-			name: "kitten exits non-zero", build: shell("exit 1"),
+			name: "kitten exits non-zero", build: shellCmd("exit 1"),
 			wantID: "", wantProbed: true,
 			why: "kitty declining to describe its windows is a verdict about kitty; this probe takes no exit-code allowlist",
 		},
 		{
-			name: "killed by a signal", build: shell("kill -9 $$"),
+			name: "killed by a signal", build: shellCmd("kill -9 $$"),
 			wantID: "", wantProbed: false,
 			why: "#1537: a killed kitten knows nothing about which window holds this session",
 		},
 		{
-			name: "binary missing", build: func(ctx context.Context, _ string) *exec.Cmd {
-				return exec.CommandContext(ctx, "/nonexistent/kitten-1537")
-			},
+			name: "binary missing", build: missingCmd("kitten-1537"),
 			wantID: "", wantProbed: false,
 			why: "a fork/exec failure never reached the question",
 		},
@@ -100,9 +90,7 @@ func TestKittyWindowIDForPIDVia_AbsentKittenIsASettledVerdict(t *testing.T) {
 	kittenPath = "/nonexistent/kitten-never-invoked-1537"
 	t.Cleanup(func() { kittenPath = prev })
 
-	unreachable := func(ctx context.Context, _ string) *exec.Cmd {
-		return exec.CommandContext(ctx, "/nonexistent/kitten-must-not-run-1537")
-	}
+	unreachable := missingCmd("kitten-must-not-run-1537")
 	for _, tc := range []struct {
 		name, socket string
 		pid          int

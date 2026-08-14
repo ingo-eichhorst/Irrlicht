@@ -3,8 +3,6 @@
 package processlifecycle
 
 import (
-	"context"
-	"os/exec"
 	"testing"
 	"time"
 )
@@ -28,43 +26,35 @@ import (
 // Row 1 is also the vacuity guard: a runPgrepVia hard-wired to return an error
 // would satisfy rows 3-5 while proving nothing.
 func TestRunPgrepVia_NonAnswerStaysAnError(t *testing.T) {
-	shell := func(script string) pgrepCmd {
-		return func(ctx context.Context, _, _ string) *exec.Cmd {
-			return exec.CommandContext(ctx, "/bin/sh", "-c", script)
-		}
-	}
-
 	cases := []struct {
 		name    string
-		build   pgrepCmd
+		build   shelloutCmd
 		wantErr bool
 		wantN   int
 		why     string
 	}{
 		{
-			name: "a real answer", build: shell("echo 4711; echo 4712"),
+			name: "a real answer", build: shellCmd("echo 4711; echo 4712"),
 			wantErr: false, wantN: 2,
 			why: "the vacuity guard: without a row that parses PIDs, every want-error row below passes for the wrong reason",
 		},
 		{
-			name: "exit 1 — pgrep's no-match", build: shell("exit 1"),
+			name: "exit 1 — pgrep's no-match", build: shellCmd("exit 1"),
 			wantErr: false, wantN: 0,
 			why: "pgrep exits 1 when nothing matched; that is an answer and the caller must see (nil, nil)",
 		},
 		{
-			name: "exit 2 — pgrep's usage/error status", build: shell("exit 2"),
+			name: "exit 2 — pgrep's usage/error status", build: shellCmd("exit 2"),
 			wantErr: true,
 			why:     "the allowlist is exactly {1}: any other normal exit is not evidence about which processes exist. Widening this to 'any normal exit' was green against the whole suite before this test existed",
 		},
 		{
-			name: "killed by a signal", build: shell("kill -9 $$"),
+			name: "killed by a signal", build: shellCmd("kill -9 $$"),
 			wantErr: true,
 			why:     "a killed pgrep did not answer, and reporting nil matches would say 'that agent is not running' about a process nobody looked for",
 		},
 		{
-			name: "binary missing", build: func(ctx context.Context, _, _ string) *exec.Cmd {
-				return exec.CommandContext(ctx, "/nonexistent/pgrep-1538")
-			},
+			name: "binary missing", build: missingCmd("pgrep-1538"),
 			wantErr: true,
 			why:     "a fork/exec failure never reached the question",
 		},
@@ -93,14 +83,11 @@ func TestRunPgrepVia_NonAnswerStaysAnError(t *testing.T) {
 // elapsed-time assertion is what proves the row did not pass on the cheap
 // branch.
 func TestRunPgrepVia_CeilingIsAnErrorNotAnEmptyResult(t *testing.T) {
-	stalled := func(ctx context.Context, _, _ string) *exec.Cmd {
-		// The passed ctx on purpose: this must be killed by runPgrepVia's own
-		// ceiling, not by a deadline the fixture invented.
-		return exec.CommandContext(ctx, "/bin/sleep", "30")
-	}
-
+	t.Parallel() // spends the real 2s ceiling and shares no state
+	// stalledChild takes the ctx runPgrepVia passes, on purpose: this must be
+	// killed by runPgrepVia's own ceiling, not by a deadline a fixture invented.
 	start := time.Now()
-	pids, err := runPgrepVia("-x", "claude", stalled)
+	pids, err := runPgrepVia("-x", "claude", stalledChild)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -128,40 +115,32 @@ func TestRunPgrepVia_CeilingIsAnErrorNotAnEmptyResult(t *testing.T) {
 // is not an error — it returns 0, nil", which is only meaningful if a probe
 // that could not RUN is one.
 func TestWriterOfVia_NonAnswerIsNotAnUnwrittenFile(t *testing.T) {
-	shell := func(script string) lsofCmd {
-		return func(ctx context.Context, _ string) *exec.Cmd {
-			return exec.CommandContext(ctx, "/bin/sh", "-c", script)
-		}
-	}
-
 	cases := []struct {
 		name    string
-		build   lsofCmd
+		build   shelloutCmd
 		wantErr bool
 		wantPID int
 		why     string
 	}{
 		{
-			name: "lsof answers with a writer", build: shell(
+			name: "lsof answers with a writer", build: shellCmd(
 				`echo "COMMAND  PID USER  FD   TYPE DEVICE SIZE/OFF NODE NAME"; echo "codex  24454 ingo  14w  REG  1,18   3330     99  /tmp/t.jsonl"`),
 			wantErr: false, wantPID: 24454,
 			why: "the vacuity guard: the only row that reaches writerPIDFromLsof at all, so a writerOfVia hard-wired to 0 " +
 				"would satisfy every other row here",
 		},
 		{
-			name: "exit 1 — lsof looked and nobody holds it", build: shell("exit 1"),
+			name: "exit 1 — lsof looked and nobody holds it", build: shellCmd("exit 1"),
 			wantErr: false,
 			why:     "the LOCK: an unwritten transcript is an answer, and (0, nil) is the right one",
 		},
 		{
-			name: "killed by a signal", build: shell("kill -9 $$"),
+			name: "killed by a signal", build: shellCmd("kill -9 $$"),
 			wantErr: true,
 			why:     "#1537: a killed lsof knows nothing about who holds the transcript",
 		},
 		{
-			name: "binary missing", build: func(ctx context.Context, _ string) *exec.Cmd {
-				return exec.CommandContext(ctx, "/nonexistent/lsof-1537")
-			},
+			name: "binary missing", build: missingCmd("lsof-1537"),
 			wantErr: true,
 			why:     "a fork/exec failure never reached the question",
 		},

@@ -124,7 +124,7 @@ func scanShelloutClassification(fset *token.FileSet, files map[string]*ast.File)
 				// uses that idiom (kittenPath resolves a CLI in one). Before it
 				// was walked, a shellout there was invisible AND left runSites
 				// at zero — so the vacuity floor below could not notice either.
-				f, n := scanScope(fset, base, "var initialiser", &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: genDeclExpr(d)}}})
+				f, n := scanScope(fset, base, "var initialiser", d)
 				findings, runSites = append(findings, f...), runSites+n
 			}
 		}
@@ -132,28 +132,20 @@ func scanShelloutClassification(fset *token.FileSet, files map[string]*ast.File)
 	return findings, runSites
 }
 
-// genDeclExpr wraps a declaration's initialiser expressions so scanScope can
-// walk them with the same code path a function body takes.
-func genDeclExpr(d *ast.GenDecl) ast.Expr {
-	lit := &ast.CompositeLit{}
-	for _, spec := range d.Specs {
-		vs, ok := spec.(*ast.ValueSpec)
-		if !ok {
-			continue
-		}
-		lit.Elts = append(lit.Elts, vs.Values...)
-	}
-	return lit
-}
-
-// scanScope applies the rule to ONE function scope, then recurses into any
-// nested function literals as scopes of their own.
+// scanScope applies the rule to ONE scope — a function body, or a declaration's
+// initialiser expressions — then recurses into any nested function literals as
+// scopes of their own.
+//
+// body is ast.Node rather than *ast.BlockStmt so a GenDecl can be handed in
+// directly. The narrower type bought nothing (every use forwards to
+// inspectScope/splitScope, which take ast.Node) and cost a synthetic
+// BlockStmt-wrapping-a-CompositeLit that no Go parser produces.
 //
 // The nesting matters: a closure has its own returns, so a `return err` in the
 // enclosing function does not propagate a closure's error and vice versa.
 // Treating a whole FuncDecl as one flat body would let either vouch for the
 // other.
-func scanScope(fset *token.FileSet, file, name string, body *ast.BlockStmt) (findings []shelloutFinding, runSites int) {
+func scanScope(fset *token.FileSet, file, name string, body ast.Node) (findings []shelloutFinding, runSites int) {
 	runs, lits := splitScope(body)
 	for _, run := range runs {
 		runSites++
@@ -216,7 +208,7 @@ const (
 )
 
 // errBindingFor finds how the run call's error is bound.
-func errBindingFor(body *ast.BlockStmt, run *ast.CallExpr) (name string, kind errBinding) {
+func errBindingFor(body ast.Node, run *ast.CallExpr) (name string, kind errBinding) {
 	name, kind = "", errDiscarded
 	inspectScope(body, func(n ast.Node) bool {
 		switch s := n.(type) {
@@ -286,7 +278,7 @@ func inspectScope(root ast.Node, fn func(ast.Node) bool) {
 //     `return n, err` returns a DIFFERENT error and says nothing about the
 //     collapse above it. Measured — that shape reported findings=0 before this
 //     edge existed, and it is a corpus row now.
-func classifiedOrPropagated(body *ast.BlockStmt, errName string, after token.Pos) bool {
+func classifiedOrPropagated(body ast.Node, errName string, after token.Pos) bool {
 	limit := rebindPos(body, errName, after)
 	found := false
 	inspectScope(body, func(n ast.Node) bool {
@@ -316,7 +308,7 @@ func classifiedOrPropagated(body *ast.BlockStmt, errName string, after token.Pos
 
 // rebindPos returns the position of the first assignment after `after` that
 // writes errName, or an invalid position when there is none.
-func rebindPos(body *ast.BlockStmt, errName string, after token.Pos) token.Pos {
+func rebindPos(body ast.Node, errName string, after token.Pos) token.Pos {
 	best := token.NoPos
 	inspectScope(body, func(n ast.Node) bool {
 		assign, ok := n.(*ast.AssignStmt)

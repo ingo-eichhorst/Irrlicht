@@ -1423,18 +1423,46 @@ func TestHerdrClientCache_ExpiresANonAnswer(t *testing.T) {
 
 // --- plutil non-answers in the bundle-id walk (#1524) ------------------------
 
-// stalledBundleIDCmd is a bundleIDCmd whose child never answers: `sleep` runs
-// until bundleIDVia's own ceiling SIGKILLs it. It is the closest a test can get
-// to the condition #1524 describes — a plutil that blows its 2s ceiling on a
-// loaded machine — and it reaches it through the REAL exec, the REAL ceiling
-// and the REAL error classification rather than a fabricated error value.
+// stalledChild is a shelloutCmd whose child never answers: `sleep` runs until
+// the caller's own ceiling SIGKILLs it. It is the closest a test can get to the
+// condition #1524 describes — a probe that blows its 2s ceiling on a loaded
+// machine — and it reaches it through the REAL exec, the REAL ceiling and the
+// REAL error classification rather than a fabricated error value.
 //
 // /bin/sleep deliberately, not a script this test writes: the first exec of a
 // newly written file is evaluated for code signing (measured at 2.14s worst-of
 // -12 under load), which is itself past the ceiling — a test that planted its
-// own binary could pass while proving nothing about plutil.
-func stalledBundleIDCmd(ctx context.Context, _ string) *exec.Cmd {
+// own binary could pass while proving nothing about the tool under test.
+//
+// Shared by every ceiling test in the package (#1538). It used to be
+// plutil-specific, and the measurement above — which every one of them depends
+// on to be non-vacuous — was documented only there.
+func stalledChild(ctx context.Context) *exec.Cmd {
 	return exec.CommandContext(ctx, "/bin/sleep", "30")
+}
+
+// anyPlist adapts a plist-independent fixture (a stall, a missing binary) to
+// the factory shape bundleIDVia takes — the one site whose command depends on a
+// value the callee derives.
+func anyPlist(c shelloutCmd) bundleIDCmd { return func(string) shelloutCmd { return c } }
+
+// stalledPlistCmd is stalledChild in that factory shape.
+func stalledPlistCmd(string) shelloutCmd { return stalledChild }
+
+// shellCmd is a shelloutCmd running one /bin/sh script, for fixtures that need
+// a specific exit status or signal rather than a stall.
+func shellCmd(script string) shelloutCmd {
+	return func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, "/bin/sh", "-c", script)
+	}
+}
+
+// missingCmd is a shelloutCmd whose binary does not exist, i.e. a fork/exec
+// failure: a probe that never reached the question.
+func missingCmd(name string) shelloutCmd {
+	return func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, "/nonexistent/"+name)
+	}
 }
 
 // plistWithoutBundleID writes a real, well-formed Info.plist that simply has no
@@ -1472,10 +1500,8 @@ func plistWithoutBundleID(t *testing.T) string {
 // answered nothing, and says so.
 func TestBundleIDVia_AnsweredMissIsNotAnUnanswerableProbe(t *testing.T) {
 	t.Parallel() // one row spends the real 2s ceiling; overlap it with the siblings that do too
-	missingBinary := func(ctx context.Context, plist string) *exec.Cmd {
-		return exec.CommandContext(ctx, "/usr/bin/no-such-plutil-1524", plist)
-	}
-	// via adapts a bundleIDCmd into the bundleIDProbe shape bundleIDForAppPath
+	missingBinary := anyPlist(missingCmd("no-such-plutil-1524"))
+	// via adapts a shelloutCmd into the bundleIDProbe shape bundleIDForAppPath
 	// already has, so every row names the function it exercises instead of
 	// encoding it as an absent value.
 	via := func(c bundleIDCmd) bundleIDProbe {
@@ -1514,7 +1540,7 @@ func TestBundleIDVia_AnsweredMissIsNotAnUnanswerableProbe(t *testing.T) {
 		},
 		{
 			"a child killed by the ceiling answered NOTHING",
-			"/System/Library/CoreServices/Finder.app", via(stalledBundleIDCmd),
+			"/System/Library/CoreServices/Finder.app", via(anyPlist(stalledChild)),
 			"", true,
 			"this is #1524: indistinguishable from row 2/3 before the error return existed",
 		},
@@ -1549,7 +1575,7 @@ func TestBundleIDVia_AnsweredMissIsNotAnUnanswerableProbe(t *testing.T) {
 func TestBundleIDVia_CeilingActuallyFires(t *testing.T) {
 	t.Parallel() // spends the real 2s ceiling and shares no state
 	start := time.Now()
-	if _, err := bundleIDVia("/System/Library/CoreServices/Finder.app", stalledBundleIDCmd); err == nil {
+	if _, err := bundleIDVia("/System/Library/CoreServices/Finder.app", stalledPlistCmd); err == nil {
 		t.Fatal("a child that never answers must report an error")
 	}
 	if elapsed := time.Since(start); elapsed < time.Second {
@@ -1698,7 +1724,7 @@ func TestIsKnownInteractiveHost_PlutilNonAnswerAdmits(t *testing.T) {
 func TestIsKnownInteractiveHost_PlutilCeilingAdmitsEndToEnd(t *testing.T) {
 	t.Parallel() // spends the real 2s ceiling and shares no state
 	stalled := func(appPath string) (string, error) {
-		return bundleIDVia(appPath, stalledBundleIDCmd)
+		return bundleIDVia(appPath, stalledPlistCmd)
 	}
 	walk1Finished := walk("", finished)
 	walk2 := func(pid int) (string, int, bool) {

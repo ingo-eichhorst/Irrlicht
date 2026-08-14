@@ -1,6 +1,7 @@
 package processlifecycle
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"slices"
@@ -26,6 +27,20 @@ import (
 // and #1538's whole subject is that the second is only safe because
 // probeAnswered reports it as a non-answer rather than as an empty one.
 const shelloutTimeout = 2 * time.Second
+
+// shelloutCmd builds one bounded child process. Every injected shellout in this
+// package is one of these, and the site's own arguments are CLOSED OVER rather
+// than passed through: a builder that took them would be handing the callee
+// values it already holds, and no test has ever read one — every fixture in
+// this package spells them `_`.
+//
+// Injection is the point, not the arguments. The distinction each caller draws
+// is a property of the CHILD PROCESS — ran to a normal exit, versus killed or
+// never started — which no faked return value can pin and no arrangement of
+// live processes can be driven into on purpose. It began as bundleIDCmd
+// (#1524); #1538 made it one type instead of five, because five signatures
+// carrying arguments nobody reads is five chances to forget the ceiling.
+type shelloutCmd func(ctx context.Context) *exec.Cmd
 
 // probeAnswered reports whether the child process behind a bounded shellout
 // actually ANSWERED, as opposed to never having been asked. It is the one

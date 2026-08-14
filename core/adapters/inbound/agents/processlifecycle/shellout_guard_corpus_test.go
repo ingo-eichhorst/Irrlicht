@@ -1,12 +1,11 @@
 package processlifecycle
 
 import (
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"strings"
 	"testing"
-
-	"go/ast"
 )
 
 // This is the corpus behind shellout_guard_test.go's rule: one spelling per

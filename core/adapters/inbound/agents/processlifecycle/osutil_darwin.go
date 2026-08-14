@@ -38,16 +38,9 @@ var (
 // on macOS omits the "/dev/" prefix that AppleScript returns. This is host
 // enrichment (window targeting), not observation, so other platforms stub it.
 func processTTY(pid int) (string, bool) {
-	return processTTYVia(pid, systemTTYCmd)
-}
-
-// ttyCmd builds the bounded shellout processTTYVia runs, injected for the same
-// reason bundleIDCmd, pgrepCmd and lsofCmd are.
-type ttyCmd func(ctx context.Context, pid int) *exec.Cmd
-
-// systemTTYCmd is the production ttyCmd.
-func systemTTYCmd(ctx context.Context, pid int) *exec.Cmd {
-	return exec.CommandContext(ctx, psPath, "-o", "tty=", "-p", strconv.Itoa(pid))
+	return processTTYVia(pid, func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, psPath, "-o", "tty=", "-p", strconv.Itoa(pid))
+	})
 }
 
 // processTTYVia is processTTY with the shellout injected. The second return is
@@ -62,7 +55,7 @@ func systemTTYCmd(ctx context.Context, pid int) *exec.Cmd {
 // pid it cannot find (measured), which is a real "no such process", not a
 // probe that did not run — so the allowlist form would turn every reaped pid
 // into a non-answer and poison hostIdentity's completeness for it.
-func processTTYVia(pid int, build ttyCmd) (tty string, probed bool) {
+func processTTYVia(pid int, build shelloutCmd) (tty string, probed bool) {
 	if pid <= 0 {
 		// Nothing was asked, so nothing failed — the same reading bundleIDVia
 		// gives an empty appPath.
@@ -70,7 +63,7 @@ func processTTYVia(pid int, build ttyCmd) (tty string, probed bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
 	defer cancel()
-	out, err := build(ctx, pid).Output()
+	out, err := build(ctx).Output()
 	if !probeAnswered(err) {
 		return "", false
 	}
@@ -141,19 +134,18 @@ func resolveHostFromAncestry(pid int) (termProgram string, hostPID int, complete
 	return "", 0, true
 }
 
-// bundleIDCmd builds the bounded shellout that reads one app bundle's
-// CFBundleIdentifier. It is a parameter of bundleIDVia rather than a package
-// var because the distinction bundleIDVia draws is a property of the CHILD
-// PROCESS — ran to a normal exit, versus killed or never started — which no
-// faked return value can pin. Injecting it is the same idiom
-// isKnownInteractiveHostVia uses for the two ancestry walks.
-type bundleIDCmd func(ctx context.Context, plist string) *exec.Cmd
+// bundleIDCmd builds the shellout for one named Info.plist. See bundleIDVia
+// for why this one site takes a factory where the others take a shelloutCmd.
+type bundleIDCmd func(plist string) shelloutCmd
 
-// plutilBundleIDCmd is the production bundleIDCmd. `plutil` ships with macOS
-// and reads both XML and binary Info.plists; bundles under /Applications are
-// world-readable, so this needs no TCC consent.
-func plutilBundleIDCmd(ctx context.Context, plist string) *exec.Cmd {
-	return exec.CommandContext(ctx, plutilPath, "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist)
+// plutilBundleIDCmd is the production shellout for one app bundle's
+// CFBundleIdentifier. `plutil` ships with macOS and reads both XML and binary
+// Info.plists; bundles under /Applications are world-readable, so this needs
+// no TCC consent.
+func plutilBundleIDCmd(plist string) shelloutCmd {
+	return func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, plutilPath, "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist)
+	}
 }
 
 // bundleIDForAppPath returns the CFBundleIdentifier of the application bundle
@@ -193,6 +185,11 @@ func bundleIDForAppPath(appPath string) (string, error) {
 //     and it also covers the deaths the ceiling did not cause — an OOM kill, a
 //     fork that failed under the same load, or a ctx already past its deadline
 //     before Start (where the error is not an ExitError at all).
+//
+// build is a FACTORY producing a shelloutCmd rather than one directly, and it
+// is the only site in the package that needs to be: the command depends on the
+// Info.plist path, which this function derives from appPath. Everywhere else
+// the site's arguments are closed over at the call site (see shelloutCmd).
 func bundleIDVia(appPath string, build bundleIDCmd) (string, error) {
 	if appPath == "" {
 		return "", nil
@@ -200,7 +197,7 @@ func bundleIDVia(appPath string, build bundleIDCmd) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
 	defer cancel()
 	plist := appPath + "/Contents/Info.plist"
-	out, err := build(ctx, plist).Output()
+	out, err := build(plist)(ctx).Output()
 	if err != nil {
 		// No answeredExitCodes: for plutil ANY normal exit is an answer, which
 		// is the empty-variadic form's whole reason for existing — see
@@ -486,16 +483,9 @@ func kittyListenOnFor(kittyPID int) string {
 // (e.g., the pi adapter — pi's env is unreadable via sysctl). Bounded
 // 2-second timeout; runs at session-birth so latency is acceptable.
 func kittyWindowIDForPID(socket string, sessionPID int) (string, bool) {
-	return kittyWindowIDForPIDVia(socket, sessionPID, systemKittenCmd)
-}
-
-// kittenCmd builds the bounded shellout kittyWindowIDForPIDVia runs, injected
-// for the same reason bundleIDCmd, pgrepCmd, lsofCmd and ttyCmd are.
-type kittenCmd func(ctx context.Context, socket string) *exec.Cmd
-
-// systemKittenCmd is the production kittenCmd.
-func systemKittenCmd(ctx context.Context, socket string) *exec.Cmd {
-	return exec.CommandContext(ctx, kittenPath, "@", "--to", socket, "ls")
+	return kittyWindowIDForPIDVia(socket, sessionPID, func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, kittenPath, "@", "--to", socket, "ls")
+	})
 }
 
 // kittyWindowIDForPIDVia is kittyWindowIDForPID with the shellout injected.
@@ -513,13 +503,13 @@ func systemKittenCmd(ctx context.Context, socket string) *exec.Cmd {
 // failed probe would poison hostIdentity's completeness permanently on any
 // machine where kitten is not on the trusted path, in exchange for nothing:
 // only an invocation that actually ran and did not answer is new information.
-func kittyWindowIDForPIDVia(socket string, sessionPID int, build kittenCmd) (string, bool) {
+func kittyWindowIDForPIDVia(socket string, sessionPID int, build shelloutCmd) (string, bool) {
 	if kittenPath == "" || socket == "" || sessionPID <= 0 {
 		return "", true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
 	defer cancel()
-	out, err := build(ctx, socket).Output()
+	out, err := build(ctx).Output()
 	if !probeAnswered(err) {
 		return "", false
 	}

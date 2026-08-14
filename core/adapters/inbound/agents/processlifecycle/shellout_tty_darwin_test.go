@@ -3,9 +3,7 @@
 package processlifecycle
 
 import (
-	"context"
 	"os"
-	"os/exec"
 	"testing"
 	"time"
 )
@@ -20,49 +18,41 @@ import (
 // satisfy row 4 while proving nothing, and one hard-wired to probed=true would
 // satisfy rows 1-3 the same way, so both directions are needed.
 func TestProcessTTYVia_NonAnswerIsNotAnAbsentTerminal(t *testing.T) {
-	shell := func(script string) ttyCmd {
-		return func(ctx context.Context, _ int) *exec.Cmd {
-			return exec.CommandContext(ctx, "/bin/sh", "-c", script)
-		}
-	}
-
 	cases := []struct {
 		name       string
 		pid        int
-		build      ttyCmd
+		build      shelloutCmd
 		wantTTY    string
 		wantProbed bool
 		why        string
 	}{
 		{
-			name: "a real tty", pid: 1, build: shell("echo ttys004"),
+			name: "a real tty", pid: 1, build: shellCmd("echo ttys004"),
 			wantTTY: "/dev/ttys004", wantProbed: true,
 			why: "the vacuity guard: without a row that resolves, every row below passes for the wrong reason",
 		},
 		{
-			name: "ps answers '??' — a hardened-runtime child with no terminal", pid: 1, build: shell("echo '??'"),
+			name: "ps answers '??' — a hardened-runtime child with no terminal", pid: 1, build: shellCmd("echo '??'"),
 			wantTTY: "", wantProbed: true,
 			why: "the LOCK #1533 names explicitly: this empty string is a verdict and must stay one",
 		},
 		{
-			name: "ps exits 1 — no such process", pid: 1, build: shell("exit 1"),
+			name: "ps exits 1 — no such process", pid: 1, build: shellCmd("exit 1"),
 			wantTTY: "", wantProbed: true,
 			why: "ps exits 1 for a pid it cannot find (measured); that is a real answer, which is why this probe takes no exit-code allowlist",
 		},
 		{
-			name: "killed by a signal", pid: 1, build: shell("kill -9 $$"),
+			name: "killed by a signal", pid: 1, build: shellCmd("kill -9 $$"),
 			wantTTY: "", wantProbed: false,
 			why: "#1533: a killed ps knows nothing about this process's terminal",
 		},
 		{
-			name: "binary missing", pid: 1, build: func(ctx context.Context, _ int) *exec.Cmd {
-				return exec.CommandContext(ctx, "/nonexistent/ps-1533")
-			},
+			name: "binary missing", pid: 1, build: missingCmd("ps-1533"),
 			wantTTY: "", wantProbed: false,
 			why: "a fork/exec failure never reached the question",
 		},
 		{
-			name: "pid <= 0 — nothing was asked", pid: 0, build: shell("echo unreachable"),
+			name: "pid <= 0 — nothing was asked", pid: 0, build: shellCmd("echo unreachable"),
 			wantTTY: "", wantProbed: true,
 			why: "an empty input is not a failed probe, the same reading bundleIDVia gives an empty appPath",
 		},
@@ -105,12 +95,9 @@ func TestHostIdentity_UnreadableTTYIsNotACompleteRead(t *testing.T) {
 // shelloutTimeout, and the elapsed assertion is what proves it did not pass on
 // the cheap branch — the same guard TestBundleIDVia_CeilingActuallyFires uses.
 func TestProcessTTY_CeilingIsANonAnswer(t *testing.T) {
-	stalled := func(ctx context.Context, _ int) *exec.Cmd {
-		return exec.CommandContext(ctx, "/bin/sleep", "30")
-	}
-
+	t.Parallel() // spends the real 2s ceiling and shares no state
 	start := time.Now()
-	tty, probed := processTTYVia(1, stalled)
+	tty, probed := processTTYVia(1, stalledChild)
 	elapsed := time.Since(start)
 
 	if probed {

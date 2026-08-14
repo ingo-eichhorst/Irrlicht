@@ -113,27 +113,19 @@ func (darwinObserver) CWDOf(pid int) (string, error) {
 // (read/write) — optionally followed by a lock character, e.g. "59uW". Both
 // 'w' and 'u' are writers; see writerPIDFromLsof.
 func (darwinObserver) WriterOf(path string) (int, error) {
-	return writerOfVia(path, systemLsofCmd)
-}
-
-// lsofCmd builds the bounded shellout writerOfVia runs, injected for the same
-// reason bundleIDCmd and pgrepCmd are: the distinction it draws is a property
-// of the child process, which no faked return value can pin.
-type lsofCmd func(ctx context.Context, path string) *exec.Cmd
-
-// systemLsofCmd is the production lsofCmd.
-func systemLsofCmd(ctx context.Context, path string) *exec.Cmd {
-	return exec.CommandContext(ctx, lsofPath, path)
+	return writerOfVia(path, func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, lsofPath, path)
+	})
 }
 
 // writerOfVia is WriterOf with the shellout injected.
-func writerOfVia(path string, build lsofCmd) (int, error) {
+func writerOfVia(path string, build shelloutCmd) (int, error) {
 	if path == "" {
 		return 0, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
 	defer cancel()
-	out, err := build(ctx, path).Output()
+	out, err := build(ctx).Output()
 	if !lsofProbeRan(err) {
 		// #1537: an lsof that could not be ASKED knows nothing about who holds
 		// this transcript, and the comment that used to sit on the collapsed
@@ -235,26 +227,16 @@ const pgrepNoMatch = 1
 // runPgrep invokes pgrep with the given flag and pattern, parses the PIDs from
 // stdout, and returns nil for the no-match (exit 1) case.
 func runPgrep(flag, pattern string) ([]int, error) {
-	return runPgrepVia(flag, pattern, systemPgrepCmd)
-}
-
-// pgrepCmd builds the bounded shellout runPgrepVia runs. It is a parameter for
-// the same reason bundleIDCmd is one: the distinction runPgrepVia draws is a
-// property of the CHILD PROCESS — ran to a normal exit versus killed or never
-// started — which no faked return value can pin, and which no arrangement of
-// live processes can be driven into on purpose.
-type pgrepCmd func(ctx context.Context, flag, pattern string) *exec.Cmd
-
-// systemPgrepCmd is the production pgrepCmd.
-func systemPgrepCmd(ctx context.Context, flag, pattern string) *exec.Cmd {
-	return exec.CommandContext(ctx, pgrepPath, flag, pattern)
+	return runPgrepVia(flag, pattern, func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, pgrepPath, flag, pattern)
+	})
 }
 
 // runPgrepVia is runPgrep with the shellout injected.
-func runPgrepVia(flag, pattern string, build pgrepCmd) ([]int, error) {
+func runPgrepVia(flag, pattern string, build shelloutCmd) ([]int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
 	defer cancel()
-	out, err := build(ctx, flag, pattern).Output()
+	out, err := build(ctx).Output()
 	if err != nil {
 		// pgrep exits 1 when there are no matches — a real answer, the same
 		// shape as lsof's (lsofProbeRan). Anything else is a probe that did
