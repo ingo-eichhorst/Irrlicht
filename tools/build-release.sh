@@ -23,6 +23,45 @@ DMG_NAME="Irrlicht-${VERSION}.dmg"
 echo "Building Irrlicht v$VERSION"
 echo "============================================="
 
+# ── Web payload (single source of truth for all three copy sites) ─────
+# Every file the dashboard + Beacon PWA need at runtime, copied into the
+# darwin tarball, the linux tarballs, and the app bundle Resources alike.
+# irrlicht.js statically imports its sibling modules, so a list holding only
+# the entry files serves a dashboard that 404s its own module graph and
+# cannot boot; sw.js and beacon-icon.svg are referenced by nothing statically
+# (runtime registration / manifest JSON), so forgetting them ships a silently
+# push-less PWA (docs/mobile-notifications-arc42.md §8.7, risk 6). Kept
+# complete by platforms/web/release-files.test.js, which derives the required
+# set from index.html + the import graph and fails when this list falls
+# behind.
+WEB_FILES=(
+    index.html
+    irrlicht.css
+    irrlicht.js
+    beacon-icon.svg
+    beacon.js
+    beacon.webmanifest
+    collapsedGroups.js
+    collapsedSet.js
+    collapsedSummaries.js
+    connectionProtocol.js
+    domReconcile.js
+    formatters.js
+    historyTab.js
+    permissionsWizard.js
+    quotaChips.js
+    sessionIdentity.js
+    sw.js
+)
+
+copy_web_files() {
+    local dest="$1"
+    local f
+    for f in "${WEB_FILES[@]}"; do
+        cp "platforms/web/$f" "$dest/"
+    done
+}
+
 # Clean build directory
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
@@ -62,7 +101,7 @@ TARBALL_STAGING="$BUILD_DIR/tarball-staging"
 rm -rf "$TARBALL_STAGING"
 mkdir -p "$TARBALL_STAGING/web"
 cp "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" "$TARBALL_STAGING/${DAEMON_NAME}"
-cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$TARBALL_STAGING/web/"
+copy_web_files "$TARBALL_STAGING/web"
 tar -czf "$BUILD_DIR/${DAEMON_NAME}-darwin-universal.tar.gz" -C "$TARBALL_STAGING" .
 rm -rf "$TARBALL_STAGING"
 echo "  Created $BUILD_DIR/${DAEMON_NAME}-darwin-universal.tar.gz"
@@ -84,7 +123,7 @@ build_linux_tarball() {
     rm -rf "$staging"
     mkdir -p "$staging/web"
     cp "$BUILD_DIR/${DAEMON_NAME}-linux-${arch}" "$staging/${DAEMON_NAME}"
-    cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$staging/web/"
+    copy_web_files "$staging/web"
     tar -czf "$BUILD_DIR/${DAEMON_NAME}-linux-${arch}.tar.gz" -C "$staging" .
     rm -rf "$staging"
     echo "  Created $BUILD_DIR/${DAEMON_NAME}-linux-${arch}.tar.gz"
@@ -121,7 +160,7 @@ cp "$SWIFT_BIN" "$APP_CONTENTS/MacOS/${APP_NAME}"
 
 # Web UI lives next to the daemon — resolved by irrlichd at runtime via
 # <exe>/../Resources/web (see resolveUIDir in core/cmd/irrlichd/main.go).
-cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$APP_CONTENTS/Resources/web/"
+copy_web_files "$APP_CONTENTS/Resources/web"
 
 # AppIcon — required for menu bar / Finder display.
 cp platforms/macos/Irrlicht/Resources/AppIcon.icns "$APP_CONTENTS/Resources/AppIcon.icns"

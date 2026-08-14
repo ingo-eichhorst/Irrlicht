@@ -1,0 +1,20 @@
+<!-- Irrlicht Beacon icon — a hand-drawn lantern on a rounded square, using the
+     dashboard palette from irrlicht.css (surface #0f1628, muted #8e96b3,
+     waiting-orange #FF9500). Referenced by beacon.webmanifest; note that iOS
+     ignores manifest SVG icons, so an apple-touch-icon PNG is a known
+     follow-up (docs/mobile-notifications-arc42.md ADR-2 install friction). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#0f1628"/>
+  <!-- glow behind the cage -->
+  <circle cx="32" cy="34" r="13" fill="#FF9500" opacity="0.22"/>
+  <!-- handle -->
+  <path d="M27 12 q5 -5 10 0" fill="none" stroke="#8e96b3" stroke-width="3" stroke-linecap="round"/>
+  <!-- roof -->
+  <path d="M24 17 h16 l4 7 h-24 z" fill="#8e96b3"/>
+  <!-- cage -->
+  <rect x="23" y="26" width="18" height="20" rx="3" fill="none" stroke="#8e96b3" stroke-width="3"/>
+  <!-- flame -->
+  <circle cx="32" cy="36" r="5.5" fill="#FF9500"/>
+  <!-- base -->
+  <rect x="21" y="48" width="22" height="4" rx="2" fill="#8e96b3"/>
+</svg>

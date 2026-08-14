@@ -15,6 +15,7 @@ import {
   cacheBloatBadgeText,
 } from './formatters.js';
 import { reconcile, paintRowNum } from './domReconcile.js';
+import { initBeacon } from './beacon.js';
 
     // --- State ---
     let dashboardGroups = [];
@@ -2423,6 +2424,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // live in historyTab.js; this call wires it up in the same relative spot
     // the inline code used to run.
     initHistoryTab();
+
+    // Irrlicht Beacon (docs/mobile-notifications-arc42.md) — safe to call
+    // unconditionally: everything it does is feature-detected against this
+    // origin's /api/v1/push/info (§5.2), so daemon-served dashboards and old
+    // relays render nothing new and install no service worker.
+    initBeacon({ relayToken: () => settings.relayToken });
 
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,

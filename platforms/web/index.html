@@ -5,6 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Irrlicht</title>
   <link rel="stylesheet" href="irrlicht.css">
+  <!-- Irrlicht Beacon PWA manifest (docs/mobile-notifications-arc42.md ADR-2/
+       ADR-3). Inert on the daemon-served dashboard — installability without
+       pairing is harmless; push only ever follows the explicit pairing flow. -->
+  <link rel="manifest" href="beacon.webmanifest">
+  <!-- The manifest's theme_color is a single value, so the installed app would
+       wear the dark chrome on a light phone. These two override it per scheme —
+       the only theme-aware surface the CSS tokens cannot reach, since the OS
+       paints the status bar and splash before the stylesheet exists. Values
+       match --bg in each palette (irrlicht.css). -->
+  <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#080c16" media="(prefers-color-scheme: dark)">
 </head>
 <body>
   <header>
@@ -87,6 +98,12 @@
           <span class="settings-hint">Heads-up when a session approaches its context limit.</span>
         </span>
       </label>
+
+      <!-- Irrlicht Beacon (phone notifications) — populated by beacon.js only
+           when this origin answers /api/v1/push/info with enabled:true
+           (docs/mobile-notifications-arc42.md §5.2 additivity contract: the
+           daemon-served dashboard and old relays show nothing here). -->
+      <div id="beacon-section" hidden></div>
 
       <details class="settings-advanced" id="settings-advanced">
         <summary>

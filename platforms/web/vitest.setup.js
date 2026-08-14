@@ -20,6 +20,7 @@ export const SETUP_BODY = `
   <div id="gt-container" style="display:none"></div>
   <div id="connection-banner"></div>
   <div id="settings-perm-note"></div>
+  <div id="beacon-section" hidden></div>
   <button id="settings-review-permissions"></button>
   <dialog id="permissions-backdrop">
     <h2 id="permissions-title"></h2>
@@ -29,6 +30,30 @@ export const SETUP_BODY = `
   </dialog>
 `;
 document.body.innerHTML = SETUP_BODY;
+
+// Recent Node versions ship an experimental Web Storage global whose
+// `localStorage` getter returns undefined (with a warning) unless
+// --localstorage-file is passed — and because that key already exists on
+// globalThis, vitest's jsdom global merge leaves it shadowing jsdom's
+// working implementation, so every bare `localStorage` access in app and
+// test code sees undefined. Pin a plain in-memory Web Storage implementation
+// so the suite behaves identically on every Node version (fresh per test
+// file, exactly like jsdom's own per-environment storage).
+function memoryStorage() {
+  const map = new Map();
+  return {
+    get length() { return map.size; },
+    key(i) { return [...map.keys()][i] ?? null; },
+    getItem(k) { return map.has(String(k)) ? map.get(String(k)) : null; },
+    setItem(k, v) { map.set(String(k), String(v)); },
+    removeItem(k) { map.delete(String(k)); },
+    clear() { map.clear(); },
+  };
+}
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: memoryStorage(),
+});
 
 // jsdom has no canvas — give paintRowHistory the minimal 2D context it uses
 // so tests that render session rows don't trip an unhandled rejection.

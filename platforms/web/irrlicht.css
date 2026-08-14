@@ -1389,6 +1389,42 @@
     }
     .settings-modal .settings-action-btn:hover { border-color: var(--working); }
 
+    /* Irrlicht Beacon (phone notifications) — settings section rendered by
+       beacon.js only on push-capable relay origins (docs/
+       mobile-notifications-arc42.md §5.2). Reuses the settings-modal chrome;
+       only the code display and pair row are Beacon-specific. */
+    .settings-modal .beacon-code {
+      font-family: var(--font-mono);
+      font-size: 22px;
+      letter-spacing: 3px;
+      color: var(--text-bright);
+      padding: 8px 4px 2px;
+    }
+    .settings-modal .beacon-code-expiry {
+      font-size: 11px;
+      color: var(--waiting);
+      padding: 0 4px;
+    }
+    .settings-modal .beacon-code-url,
+    .settings-modal .beacon-hint,
+    .settings-modal .beacon-status,
+    .settings-modal .beacon-health {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 4px 4px 0;
+    }
+    .settings-modal .beacon-pair-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 4px;
+    }
+    .settings-modal .beacon-code-input {
+      width: 130px;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+    }
+
     /* Permission wizard (issue #570) — shares the settings modal chrome. */
     .permissions-modal .permissions-intro {
       font-size: 12px;
