@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd agent for running irrlichtrelay on a Mac — "Shape B" in
+  docs/mobile-notifications-arc42.md §7: no extra hardware, the relay lives
+  beside the daemon and a tailnet name gives it the stable HTTPS origin that
+  Web Push subscriptions bind to.
+
+  Install (as your own user — this is a LaunchAgent, not a system daemon):
+    1. Build/copy the binary:
+         (cd core && go build -trimpath \
+            -ldflags "-X main.Version=$(git describe --tags --always)" \
+            -o /usr/local/bin/irrlichtrelay ./cmd/irrlichtrelay)
+    2. Replace every /Users/YOU below with your home directory — launchd does
+       not expand ~ or $HOME in this file.
+    3. Give the relay its own state dir, separate from the daemon's:
+         mkdir -p ~/Library/Application\ Support/Irrlicht/relay
+    4. Issue a token with the SAME IRRLICHT_HOME the agent uses, or the CLI
+       and the service write two different tokens.json:
+         IRRLICHT_HOME=~/Library/Application\ Support/Irrlicht/relay \
+           irrlichtrelay token issue --label "this-mac"
+    5. cp examples/relay/io.irrlicht.relay.plist ~/Library/LaunchAgents/
+       launchctl load ~/Library/LaunchAgents/io.irrlicht.relay.plist
+       tail -f ~/Library/Logs/irrlichtrelay.log
+
+  This binds loopback with bearer-token auth. Publish it with a TLS-terminating
+  front end — on a Mac that is usually Tailscale:
+    tailscale serve --bg 7839          # tailnet-only: https://<mac>.<tailnet>.ts.net
+    tailscale funnel --bg 7839         # public internet, same name
+  Both give a name that survives every network the Mac joins, which is what
+  Web Push needs (arc42 C4: subscriptions are bound to their origin, and
+  renaming the origin re-pairs every phone).
+
+  Note the sleep behavior: a LaunchAgent stops with the user session, and a
+  sleeping Mac serves nothing. That is not a gap for notifications — with the
+  daemon down there are no events to deliver — but the phone's watchdog will
+  report the daemon disconnected 60s in (arc42 §6.4), which is the honest
+  answer rather than silence.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.irrlicht.relay</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/irrlichtrelay</string>
+        <string>serve</string>
+        <string>--addr</string>
+        <string>127.0.0.1:7839</string>
+        <string>--auth</string>
+        <string>tokens-file</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Holds tokens.json, and — once a phone is paired — vapid-keys.json
+             and push-subscriptions.json. Deliberately not the daemon's own
+             IRRLICHT_HOME: two processes, two state dirs, no shared files to
+             reason about. -->
+        <key>IRRLICHT_HOME</key>
+        <string>/Users/YOU/Library/Application Support/Irrlicht/relay</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOU/Library/Logs/irrlichtrelay.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOU/Library/Logs/irrlichtrelay.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

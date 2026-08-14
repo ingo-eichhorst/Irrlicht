@@ -142,6 +142,79 @@ journalctl -u irrlichtrelay -f
 The unit sets `StateDirectory=irrlichtrelay` (`/var/lib/irrlichtrelay`) and `IRRLICHT_HOME` to match, so
 `tokens.json` persists and the `token` CLI (run as `irrlichtrelay`) and the service share one file.
 
+## macOS: launchd
+
+A relay on the Mac itself needs no extra hardware, and a tailnet name gives it the one thing Web Push
+requires — an origin that survives every network the Mac joins. A ready-to-edit LaunchAgent ships at
+[`io.irrlicht.relay.plist`](./io.irrlicht.relay.plist) (loopback + auth, its own state dir, replace
+`/Users/YOU`):
+
+```bash
+mkdir -p ~/Library/Application\ Support/Irrlicht/relay
+IRRLICHT_HOME=~/Library/Application\ Support/Irrlicht/relay \
+  irrlichtrelay token issue --label "this-mac"
+cp examples/relay/io.irrlicht.relay.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/io.irrlicht.relay.plist
+
+tailscale serve --bg 7839     # tailnet-only  → https://<mac>.<tailnet>.ts.net
+tailscale funnel --bg 7839    # public        → same name, reachable anywhere
+```
+
+Give the relay its own `IRRLICHT_HOME`, separate from the daemon's — two processes, two state dirs,
+nothing shared to reason about.
+
+## Phone notifications (Irrlicht Beacon)
+
+The relay can push `waiting` / `ready` transitions to a paired phone as Web Push notifications
+(architecture: [`docs/mobile-notifications-arc42.md`](../../docs/mobile-notifications-arc42.md)). It is
+off until a phone is paired, and there is no project-run service anywhere in the path — the relay signs
+with its own VAPID key and posts directly to Apple's/Google's push service.
+
+**Push requires `--auth`.** A push-capable relay is by definition reachable, and every push endpoint is
+an abuse without an identity, so the relay refuses to serve them under `--auth off`: no VAPID key is
+generated, `GET /api/v1/push/info` answers `{"enabled":false}` with the reason, and every other push
+route answers `403` naming the fix. One security model, not two — this holds on a tailnet as well, where
+the network already gates access.
+
+**It also needs a stable HTTPS origin.** Browser push subscriptions and the installed web app are both
+bound to their origin (a `*.ts.net` name or your own domain, either is fine). Renaming it re-pairs every
+phone, so pick the name once.
+
+### Pairing, from the operator's side
+
+Nothing to configure. In the dashboard the relay serves, **Settings → Beacon** mints a one-time code; the
+phone opens the same URL, adds it to the home screen, and types the code inside the installed app (iOS
+keeps browser-tab storage and installed-app storage separate, which is why the last step happens there).
+The code is single-use, expires in 10 minutes, and repeated wrong guesses are rate-limited.
+
+Redeeming a code issues an ordinary bearer token for that phone, so it shows up in `token list` and
+`token revoke <id>` is the whole un-pairing story — the relay drops the phone's delivery address within
+the same tick its stream access dies.
+
+### What lands on disk
+
+Session content is **never** written to the relay host — before this feature and after it. Push adds two
+files beside `tokens.json`, both mode `0600`:
+
+| File | Holds | If lost |
+|---|---|---|
+| `tokens.json` | token hashes (existing) | every daemon, client and phone must be re-issued |
+| `vapid-keys.json` | the relay's signing identity | no phone is pushable until its app is next opened, which re-subscribes against the new key |
+| `push-subscriptions.json` | one delivery address per paired phone | phones re-register on next open |
+
+Notification payloads are stored **nowhere** — there is no outbox. Apple and Google are the queue, and
+each message's TTL bounds it (a `waiting` notification stays true for an hour, a stale `ready` is noise
+after ten minutes).
+
+**Backup / host migration:** copy those files and keep the hostname; every phone survives the move
+untouched. A corrupt `vapid-keys.json` is refused at startup rather than silently regenerated — the
+error names the file and your two options — because minting a fresh identity would orphan every paired
+phone.
+
+> **Disk compromise:** an attacker who reads the relay's state dir gets no session content and no usable
+> bearer tokens (only hashes) — but `vapid-keys.json` plus `push-subscriptions.json` together let them
+> send arbitrary notifications to paired phones until you re-pair, which rotates everything.
+
 ## Cloned VMs / replicas: `relay-identity.json` collision
 
 This is the most common multi-instance footgun, and it concerns the **daemons that forward in**, not the
