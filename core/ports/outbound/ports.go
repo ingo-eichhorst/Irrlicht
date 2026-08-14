@@ -123,9 +123,11 @@ type Logger interface {
 
 // GitResolver resolves git metadata from a working directory.
 //
-// The four methods that shell out to git return a second value, answered,
-// which is false when git could not be RUN at all — killed by the adapter's
-// ceiling, never started, or output past its cap. It is TRUE, with a zero
+// Four methods here return a second value, answered, which is false when git
+// could not be RUN at all — killed by the adapter's ceiling, never started, or
+// output past its cap. Three of them shell out directly; GetProjectName starts
+// no child of its own and forwards GetGitRoot's verdict, which matters because
+// its one caching consumer must not memoise a guess. It is TRUE, with a zero
 // first value, for every case where git ran and reported nothing to give:
 // not a repo, a detached or unborn HEAD, no release tags.
 //

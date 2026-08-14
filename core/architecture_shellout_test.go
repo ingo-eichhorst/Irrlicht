@@ -40,6 +40,16 @@
 //     distinguishable from an empty answer at the call site. That is
 //     processlifecycle's guard, and core/pkg/shellout.Answered is the shared
 //     predicate #1543 promoted so a second package could reach it.
+//   - It matches on the SELECTOR's package identifier, so `import xexec
+//     "os/exec"` followed by xexec.Command(…) is invisible to it — measured
+//     against the detector, findings=0. So is a dot-import, and so is
+//     os.StartProcess, which starts a child without going through os/exec at
+//     all. All three are pinned as want:0 corpus rows, the same way the
+//     sibling guard in processlifecycle pins its own aliased-import limit,
+//     because a limit that is merely true is learned from an incident while a
+//     limit that is pinned is learned from a test. Fixing them needs type
+//     information, which this scan deliberately does not have (see the last
+//     paragraph).
 //   - It is scoped to core/. tools/ is a separate module of developer tooling
 //     that is not a long-lived daemon.
 //

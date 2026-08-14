@@ -62,6 +62,13 @@ const gitRevParseCmd = "rev-parse"
 // polarity; nothing here gates admission). UNVERIFIED: the scaling to a very
 // large repo is extrapolation from the numbers above (~810 bytes and ~16us of
 // `log` per commit), not a measurement on such a repo.
+//
+// It bounds ONE CALL, not one operation, and callers stack it: adoptGitMetadata
+// makes 2, RefreshOnActivity up to 3, and ComputeDoraMetrics
+// 1 + len(tags) + len(revertCandidates) — on a server whose WriteTimeout is
+// deliberately 0 (core/cmd/irrlichd/startup.go). A per-operation budget is a
+// larger change than #1543 and is not attempted here; what is fixed is that the
+// unbounded case is gone.
 const gitTimeout = 5 * time.Second
 
 // gitWaitDelay bounds the extra time a run waits for the child's output pipe
@@ -137,8 +144,10 @@ func (a *Adapter) run(dir string, args ...string) (out []byte, answered bool) {
 
 	cmd := a.cmd(ctx, dir, args...)
 	cmd.WaitDelay = gitWaitDelay
-	// Never inherit the daemon's stdin: a git that decided to prompt (a
-	// credential helper, a hook) would otherwise block until the ceiling.
+	// Explicit rather than load-bearing: a nil Stdin is already /dev/null, so
+	// os/exec never hands the daemon's own stdin to the child. Spelled out so
+	// a later edit does not "helpfully" wire one up — a git that decided to
+	// prompt (a credential helper, a hook) would then block until the ceiling.
 	cmd.Stdin = nil
 	var buf cappedBuffer
 	buf.limit = gitMaxOutput
@@ -153,16 +162,44 @@ func (a *Adapter) run(dir string, args ...string) (out []byte, answered bool) {
 	if buf.overflowed {
 		return nil, false
 	}
+	if err != nil {
+		// git RAN and reported a failure. That is an answer — "not a repo",
+		// "no such ref" — but its stdout is NOT the answer's content, and
+		// returning it is a defect in both directions:
+		//
+		//   - `git rev-parse HEAD` on an unborn branch exits 128 and writes
+		//     the literal string "HEAD" to STDOUT (measured, git 2.50.1 /
+		//     Apple Git-155, darwin/arm64). Forwarding that made
+		//     GetHeadCommit report "HEAD" as a commit SHA, which
+		//     CaptureYieldOnReady then persisted as YieldProductive.
+		//   - A `git log` that streams commits and then hits a fatal (a
+		//     corrupt object) exits 128 having already written a PREFIX of
+		//     the history. Forwarding it hands DORA a silently truncated
+		//     commit list — the exact harm gitMaxOutput's doc argues must
+		//     never happen, arriving through a different door.
+		//
+		// Discarding it restores what .Output()'s `if err != nil` arm did
+		// before #1543, while keeping the non-answer distinction that arm
+		// could not express.
+		return nil, true
+	}
 	return buf.buf, true
 }
 
-// cappedBuffer collects at most limit bytes and records that it stopped. It
-// never returns an error: exec's output-copying goroutine treats a write error
-// as fatal to the command, which would turn an overflow into a second, less
-// specific failure. run() reads overflowed instead.
+// cappedBuffer collects at most limit bytes and records whether anything was
+// DROPPED. It never returns an error: exec's output-copying goroutine treats a
+// write error as fatal to the command, which would turn an overflow into a
+// second, less specific failure. run() reads overflowed instead.
+//
+// seen counts every byte offered, not every byte kept, because those are the
+// same number until the cap is reached and only the first distinguishes "the
+// output is exactly the cap" from "the output was truncated". Keying on
+// len(buf) >= limit instead conflates them and turns a complete read of exactly
+// gitMaxOutput bytes into a false non-answer.
 type cappedBuffer struct {
 	limit      int
 	buf        []byte
+	seen       int
 	overflowed bool
 }
 
@@ -173,7 +210,8 @@ func (w *cappedBuffer) Write(p []byte) (int, error) {
 		}
 		w.buf = append(w.buf, p[:room]...)
 	}
-	if len(w.buf) >= w.limit {
+	w.seen += len(p)
+	if w.seen > w.limit {
 		w.overflowed = true
 	}
 	return len(p), nil

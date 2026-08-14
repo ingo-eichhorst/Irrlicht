@@ -153,14 +153,13 @@ func TestYieldSweeper_Idempotent(t *testing.T) {
 type fakeYieldGit struct {
 	root     string
 	reverted []string
-	// rootUnread / revertsUnread make this double report a NON-ANSWER — git
-	// could not be run — rather than an empty answer (#1543).
-	rootUnread    bool
-	revertsUnread bool
 }
 
-func (f *fakeYieldGit) GetGitRoot(string) (string, bool)        { return f.root, !f.rootUnread }
-func (f *fakeYieldGit) RevertedCommits(string) ([]string, bool) { return f.reverted, !f.revertsUnread }
+// Always answers. The non-answer cases live in git_nonanswer_test.go, which is
+// in the INTERNAL services package because they need collectRevertedSHAs and
+// indexByCommit; a knob here would be scaffolding no test in this file sets.
+func (f *fakeYieldGit) GetGitRoot(string) (string, bool)        { return f.root, true }
+func (f *fakeYieldGit) RevertedCommits(string) ([]string, bool) { return f.reverted, true }
 
 // 1K sessions correlated against 10K reverted SHAs must complete well under the
 // 2s DoD bar. This measures the daemon's matching cost; the `git log` scan over

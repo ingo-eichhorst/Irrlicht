@@ -136,11 +136,14 @@ func ComputeDoraMetrics(git doraGitProbe, sessions doraSessionLister, project st
 // resolves to a git repo — that's a normal "nothing to compute" outcome, not a
 // failure.
 //
-// answered is false only when EVERY candidate cwd went unread, which is the
-// case that must not reach the user as "not a git repository". A single cwd
-// that resolves is enough to answer the question being asked, so one unread
-// candidate among several is not a failure — it is why the flag is computed
-// over the loop rather than returned from inside it.
+// A single cwd that RESOLVES is enough to answer the question being asked, and
+// that case returns from inside the loop. answered therefore only ever reports
+// on the remaining case: no candidate produced a root. There, every candidate
+// that answered answered NEGATIVELY, so one unread candidate is enough to make
+// "project not found or not a git repository" a claim this daemon cannot
+// support — which is the class of claim #1543 removes everywhere else. Hence
+// `unread == 0` rather than a majority test; it subsumes the no-candidates case,
+// where unread is 0 and "nothing to compute" is the honest answer.
 func resolveDoraProjectRoot(git doraGitProbe, sessions doraSessionLister, project string) (string, bool, error) {
 	all, err := sessions.ListAll()
 	if err != nil {
@@ -161,5 +164,5 @@ func resolveDoraProjectRoot(git doraGitProbe, sessions doraSessionLister, projec
 			return root, true, nil
 		}
 	}
-	return "", asked == 0 || unread < asked, nil
+	return "", unread == 0, nil
 }

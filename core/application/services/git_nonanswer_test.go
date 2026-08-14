@@ -6,6 +6,7 @@ import (
 
 	"irrlicht/core/domain/dora"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
 )
 
 // #1543's collapse did not stop at the adapter — the whole harm was what the
@@ -216,6 +217,37 @@ func TestResolveDoraProjectRootAnswersWhenAnyCandidateDid(t *testing.T) {
 		}
 	})
 
+	// #1551 review finding 7. The old expression was `asked == 0 || unread <
+	// asked`, which let ONE negative candidate outvote N-1 unread ones: with
+	// asked=3, unread=2, the user got the confident "project not found or not
+	// a git repository" on the strength of a single cwd.
+	//
+	// RED-FIRST: against `unread < asked` this reports
+	//	2 of 3 candidates went unread, but the result was reported as an answer
+	t.Run("a mix of unread and negative candidates is not an answer", func(t *testing.T) {
+		seen := 0
+		mixed := &countingRootGit{fn: func(string) (string, bool) {
+			seen++
+			if seen == 3 {
+				return "", true // genuinely not a repo
+			}
+			return "", false // unread
+		}}
+		three := oneSession{states: []*session.SessionState{
+			{SessionID: "a", ProjectName: "proj", CWD: "/one", State: session.StateReady},
+			{SessionID: "b", ProjectName: "proj", CWD: "/two", State: session.StateReady},
+			{SessionID: "c", ProjectName: "proj", CWD: "/three", State: session.StateReady},
+		}}
+		_, answered, err := resolveDoraProjectRoot(mixed, three, "proj")
+		if err != nil {
+			t.Fatalf("resolveDoraProjectRoot: %v", err)
+		}
+		if answered {
+			t.Error("2 of 3 candidates went unread, but the result was reported as an answer; " +
+				"one negative cwd cannot support \"not a git repository\" for the project")
+		}
+	})
+
 	t.Run("no candidate at all is an answer", func(t *testing.T) {
 		none := &countingRootGit{fn: func(string) (string, bool) { return "", true }}
 		_, answered, err := resolveDoraProjectRoot(none, oneSession{}, "proj")
@@ -240,17 +272,31 @@ type enricherGit struct {
 	branchAnswered bool
 	nameAnswered   bool
 	headAnswered   bool
+	rootAnswered   bool
 	branch         string
 	name           string
 	head           string
+	root           string
 }
 
 func (g *enricherGit) GetBranch(string) (string, bool)       { return g.branch, g.branchAnswered }
 func (g *enricherGit) GetProjectName(string) (string, bool)  { return g.name, g.nameAnswered }
-func (g *enricherGit) GetGitRoot(string) (string, bool)      { return "", true }
+func (g *enricherGit) GetGitRoot(string) (string, bool)      { return g.root, g.rootAnswered }
 func (g *enricherGit) GetHeadCommit(string) (string, bool)   { return g.head, g.headAnswered }
 func (g *enricherGit) GetBranchFromTranscript(string) string { return "" }
-func (g *enricherGit) GetCWDFromTranscript(string) string    { return "" }
+
+// GetCWDFromTranscript reports a MOVE: RefreshOnActivity only reaches the
+// branch/project block when the transcript's cwd differs from the state's.
+func (g *enricherGit) GetCWDFromTranscript(string) string { return "/new/repo" }
+
+// noopMetrics is the MetricsCollector RefreshOnActivity needs. It embeds the
+// port so only the methods actually exercised need bodies and an unexpected
+// call panics loudly rather than silently returning a zero value — the idiom
+// session_detector_bornready_test.go's doubles use. ComputeMetrics returns no
+// metrics, so the cwd comes from GetCWDFromTranscript above.
+type noopMetrics struct{ outbound.MetricsCollector }
+
+func (noopMetrics) ComputeMetrics(string, string) (*session.SessionMetrics, error) { return nil, nil }
 
 // TestBackfillDoesNotMarkASessionDoneOnANonAnswer is the permanence bug, and it
 // is the sharpest of the four: backfillOne returns early when ProjectName is
@@ -262,7 +308,7 @@ func (g *enricherGit) GetCWDFromTranscript(string) string    { return "" }
 // assignment): "a non-answer marked the session updated; it will never be
 // retried". Measured by reverting the arm.
 func TestBackfillDoesNotMarkASessionDoneOnANonAnswer(t *testing.T) {
-	e := newMetadataEnricher(&enricherGit{name: "guess", branch: "guess"}, nil)
+	e := newMetadataEnricher(&enricherGit{name: "guess", branch: "guess", rootAnswered: true}, nil)
 	st := &session.SessionState{SessionID: "s", CWD: "/repo/sub"}
 
 	if e.backfillOne(st) {
@@ -280,7 +326,7 @@ func TestBackfillDoesNotMarkASessionDoneOnANonAnswer(t *testing.T) {
 	// nothing at all would pass the arm above.
 	answering := newMetadataEnricher(&enricherGit{
 		nameAnswered: true, name: "proj",
-		branchAnswered: true, branch: "main",
+		branchAnswered: true, branch: "main", rootAnswered: true,
 	}, nil)
 	fresh := &session.SessionState{SessionID: "s", CWD: "/repo/sub"}
 	if !answering.backfillOne(fresh) {
@@ -288,6 +334,58 @@ func TestBackfillDoesNotMarkASessionDoneOnANonAnswer(t *testing.T) {
 	}
 	if fresh.ProjectName != "proj" || fresh.GitBranch != "main" {
 		t.Errorf("got (%q, %q), want (proj, main)", fresh.ProjectName, fresh.GitBranch)
+	}
+}
+
+// TestRefreshOnActivityNeverReportsAnotherDirectorysBranch is #1551 review
+// finding 3, and it is a defect the FIRST DRAFT of #1543 introduced rather
+// than a pre-existing one: applying "never overwrite what you already hold"
+// to a session that has MOVED keeps values describing the OLD directory.
+//
+// A blank branch is a missing fact. Another repo's branch is a false one — and
+// it was permanent, because backfillOne returns early while ProjectName is set
+// and RefreshOnActivity skips the whole block once cwd == state.CWD.
+//
+// RED-FIRST: against the first draft this reports
+//
+//	GitBranch = "old-branch" after moving to /new/repo
+func TestRefreshOnActivityNeverReportsAnotherDirectorysBranch(t *testing.T) {
+	git := &enricherGit{} // every probe reports a non-answer
+	e := newMetadataEnricher(git, &noopMetrics{})
+	st := &session.SessionState{
+		SessionID:   "s",
+		CWD:         "/old/repo",
+		GitBranch:   "old-branch",
+		ProjectName: "old-project",
+	}
+
+	e.RefreshOnActivity(st, "/transcripts/s.jsonl")
+
+	if st.CWD != "/new/repo" {
+		t.Fatalf("CWD = %q, want /new/repo — the fixture is not exercising a move", st.CWD)
+	}
+	if st.GitBranch == "old-branch" {
+		t.Error("the session moved to /new/repo but still reports /old/repo's branch; that is a " +
+			"claim about the new directory the daemon never established")
+	}
+	if st.ProjectName == "old-project" {
+		t.Error("same for ProjectName — and while it is set, backfillOne returns early, so the " +
+			"stale value is permanent")
+	}
+
+	// Vacuity guard: a git that ANSWERS must still update both, or an enricher
+	// that blanked everything unconditionally would pass the arms above.
+	answering := newMetadataEnricher(&enricherGit{
+		branchAnswered: true, branch: "new-branch",
+		rootAnswered: true, root: "/new/new-project",
+	}, &noopMetrics{})
+	st2 := &session.SessionState{SessionID: "s", CWD: "/old/repo", GitBranch: "old-branch", ProjectName: "old-project"}
+	answering.RefreshOnActivity(st2, "/transcripts/s.jsonl")
+	if st2.GitBranch != "new-branch" {
+		t.Errorf("GitBranch = %q, want new-branch", st2.GitBranch)
+	}
+	if st2.ProjectName != "new-project" {
+		t.Errorf("ProjectName = %q, want new-project", st2.ProjectName)
 	}
 }
 
@@ -299,7 +397,7 @@ func TestBackfillDoesNotMarkASessionDoneOnANonAnswer(t *testing.T) {
 // RED-FIRST (with the `!answered` arm removed): "a non-answer was persisted as
 // the verdict YieldUnknown".
 func TestCaptureYieldOnReadyDoesNotRecordAVerdictItDidNotReach(t *testing.T) {
-	e := newMetadataEnricher(&enricherGit{}, nil)
+	e := newMetadataEnricher(&enricherGit{rootAnswered: true}, nil)
 	st := &session.SessionState{SessionID: "s", CWD: "/repo", YieldState: session.YieldProductive, HeadCommit: "abc"}
 
 	e.CaptureYieldOnReady(st)
@@ -313,7 +411,7 @@ func TestCaptureYieldOnReadyDoesNotRecordAVerdictItDidNotReach(t *testing.T) {
 
 	// Vacuity guard: a git that ANSWERS with no HEAD is a genuine
 	// not-a-git-repo verdict and must still be recorded.
-	genuine := newMetadataEnricher(&enricherGit{headAnswered: true, head: ""}, nil)
+	genuine := newMetadataEnricher(&enricherGit{headAnswered: true, head: "", rootAnswered: true}, nil)
 	st2 := &session.SessionState{SessionID: "s", CWD: "/repo", YieldState: session.YieldProductive}
 	genuine.CaptureYieldOnReady(st2)
 	if st2.YieldState != session.YieldUnknown {
@@ -386,6 +484,51 @@ func (l *recordingLogger) LogError(eventType, sessionID, msg string) {
 }
 func (l *recordingLogger) LogProcessingTime(_, _ string, _ int64, _ int, _ string) {}
 func (l *recordingLogger) Close() error                                            { return nil }
+
+// TestYieldSweepReportsRootsItCouldNotResolve is #1551 review finding 4: a cwd
+// whose GetGitRoot never answered never entered rootDirs, so
+// collectRevertedSHAs — which walks that map — could not report it, and the
+// sweep went completely silent for history it never read.
+//
+// RED-FIRST: against the previous code this reports
+//
+//	a cwd whose repo root never resolved was not reported; logged: []
+func TestYieldSweepReportsRootsItCouldNotResolve(t *testing.T) {
+	log := &recordingLogger{}
+	s := NewYieldSweeper(&noopYieldStore{}, &unresolvableRootGit{}, log, 0)
+
+	s.indexByCommit([]*session.SessionState{
+		{SessionID: "a", HeadCommit: "abc", CWD: "/repo/one"},
+		{SessionID: "b", HeadCommit: "def", CWD: "/repo/two"},
+	})
+
+	found := false
+	for _, e := range log.errs {
+		if strings.Contains(e, "could not resolve a repo root") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a cwd whose repo root never resolved was not reported; logged: %v\n"+
+			"collectRevertedSHAs cannot report it — the cwd never reaches rootDirs at all", log.errs)
+	}
+
+	// Vacuity guard: a sweep that resolved every root must log nothing.
+	quiet := &recordingLogger{}
+	NewYieldSweeper(&noopYieldStore{}, &unreadRevertGit{root: "/repo"}, quiet, 0).
+		indexByCommit([]*session.SessionState{{SessionID: "a", HeadCommit: "abc", CWD: "/repo/one"}})
+	for _, e := range quiet.errs {
+		if strings.Contains(e, "could not resolve a repo root") {
+			t.Errorf("a fully resolvable sweep logged an unresolved-roots error: %q", e)
+		}
+	}
+}
+
+// unresolvableRootGit reports a non-answer for the repo-root probe.
+type unresolvableRootGit struct{}
+
+func (unresolvableRootGit) GetGitRoot(string) (string, bool)        { return "", false }
+func (unresolvableRootGit) RevertedCommits(string) ([]string, bool) { return nil, true }
 
 type noopYieldStore struct{}
 

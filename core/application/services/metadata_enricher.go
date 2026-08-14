@@ -143,10 +143,22 @@ func (e *metadataEnricher) RefreshOnActivity(state *session.SessionState, transc
 	if cwd != "" && cwd != state.CWD {
 		state.CWD = cwd
 		branch, branchAnswered := e.git.GetBranch(cwd)
-		// A non-answer must not clear the branch this session already
-		// resolved — an empty string from a git that never ran says nothing
-		// about which branch the worktree is on (#1543).
-		adoptIfAnswered(&state.GitBranch, branch, branchAnswered)
+		// The session has MOVED, so #1485's "never overwrite what you already
+		// hold" does not apply: what is held describes the OLD directory.
+		// Keeping it would report another repo's branch — a false claim, where
+		// an empty one is only a missing one. So on a non-answer the stale
+		// values are dropped rather than kept, and dropping ProjectName is
+		// what reopens backfillOne, which returns early while it is set.
+		//
+		// state.CWD still advances: it comes from the transcript, not from
+		// git, so it is not the thing that went unread, and PID discovery
+		// needs it. What must stay consistent is the TRIPLE — cwd, branch and
+		// project all describing the same directory.
+		if !branchAnswered {
+			state.GitBranch = ""
+		} else {
+			state.GitBranch = branch
+		}
 		// Only update ProjectName when the new CWD is inside a git repo.
 		// For non-git directories, keep the original project name set at
 		// session creation to avoid subdirectory names overriding it.
@@ -155,8 +167,7 @@ func (e *metadataEnricher) RefreshOnActivity(state *session.SessionState, transc
 		gitRoot, rootAnswered := e.git.GetGitRoot(cwd)
 		switch {
 		case !rootAnswered:
-			// Neither branch of the original applies: "not inside a repo" is
-			// exactly what was not established.
+			state.ProjectName = ""
 		case gitRoot != "":
 			state.ProjectName = filepath.Base(gitRoot)
 		case state.ProjectName == "":

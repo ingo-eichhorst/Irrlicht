@@ -95,28 +95,41 @@ func (s *YieldSweeper) Sweep() int {
 func (s *YieldSweeper) indexByCommit(sessions []*session.SessionState) (map[string][]*session.SessionState, map[string]string) {
 	byCommit := make(map[string][]*session.SessionState)
 	rootDirs := make(map[string]string)
+	unresolved := 0
 	for _, st := range sessions {
 		if st == nil || st.HeadCommit == "" || st.YieldState == session.YieldReverted {
 			continue
 		}
 		byCommit[st.HeadCommit] = append(byCommit[st.HeadCommit], st)
-		s.recordRootDir(rootDirs, st.CWD)
+		s.recordRootDir(rootDirs, st.CWD, &unresolved)
+	}
+	if unresolved > 0 {
+		s.logError("yield sweep could not resolve a repo root",
+			fmt.Errorf("%d session cwd(s) unread: git did not answer, so their project was not scanned", unresolved))
 	}
 	return byCommit, rootDirs
 }
 
 // recordRootDir resolves cwd's git root and, if no representative directory
 // is recorded for that root yet, records cwd as its sample directory for the
-// revert scan. A no-op for a non-git or empty cwd.
-func (s *YieldSweeper) recordRootDir(rootDirs map[string]string, cwd string) {
+// revert scan. A no-op for a non-git or empty cwd. unresolved counts the cwds
+// whose root probe never ANSWERED, which is a different fact from "not a repo"
+// and is reported rather than dropped.
+func (s *YieldSweeper) recordRootDir(rootDirs map[string]string, cwd string, unresolved *int) {
 	if cwd == "" {
 		return
 	}
 	root, answered := s.git.GetGitRoot(cwd)
-	if !answered || root == "" {
-		// A non-answer drops this cwd from the scan exactly as a non-repo
-		// does, and collectRevertedSHAs is where that is reported — one line
-		// per sweep at most, rather than one per session.
+	if !answered {
+		// A cwd whose root never resolved never enters rootDirs, so
+		// collectRevertedSHAs — which walks that map — cannot report it. It is
+		// counted here instead and folded into the same single log line, or
+		// the sweep goes completely silent for history it never read, one step
+		// UPSTREAM of where #1543 fixed exactly that (#1551 review finding 4).
+		*unresolved++
+		return
+	}
+	if root == "" {
 		return
 	}
 	if _, seen := rootDirs[root]; !seen {

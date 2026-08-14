@@ -194,6 +194,32 @@ const advice = "never use exec.Command here"
 `,
 		},
 		{
+			name:   "an_aliased_import_of_os_exec_is_NOT_caught",
+			needle: `xexec.Command(`,
+			want:   0, wantBounded: 0,
+			why: "a DECLARED LIMIT (#1551 review finding 9), pinned so it is learned from a test rather than an incident: matching is on the selector's package identifier, and this scan has no type information. The sibling guard in processlifecycle pins the same limit for the same reason.",
+			src: `package shapes
+
+import xexec "os/exec"
+
+func f() error { return xexec.Command("git", "gc").Run() }
+`,
+		},
+		{
+			name:   "os_StartProcess_is_NOT_caught",
+			needle: `os.StartProcess(`,
+			want:   0, wantBounded: 0,
+			why: "a DECLARED LIMIT: a child can be started without os/exec at all. Nothing in core/ does, and widening the rule to os.StartProcess would need the same type information the alias case does.",
+			src: `package shapes
+
+import "os"
+
+func f() (*os.Process, error) {
+	return os.StartProcess("/usr/bin/git", []string{"git", "gc"}, &os.ProcAttr{})
+}
+`,
+		},
+		{
 			name:   "a_bare_Command_call_with_no_package_qualifier",
 			needle: `= Command(`,
 			want:   0, wantBounded: 0,

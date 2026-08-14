@@ -114,7 +114,9 @@ func TestNonAnswerIsDistinguishableFromAGenuineMiss(t *testing.T) {
 	}
 }
 
-// TestEveryShelloutReportsANonAnswer walks all seven. The vacuity guard is the
+// TestEveryShelloutReportsANonAnswer walks the seven shellouts plus
+// GetProjectName, which starts no child of its own but forwards GetGitRoot's
+// verdict. The vacuity guard is the
 // second half of each row: the same call against a real repo must ANSWER, or a
 // method that reported false unconditionally would pass the first half.
 func TestEveryShelloutReportsANonAnswer(t *testing.T) {
@@ -363,8 +365,8 @@ func TestFloodingChildIsBoundedAndReportsANonAnswer(t *testing.T) {
 
 // TestUnderTheCapIsStillAnAnswer is the cap's vacuity guard: without it, a run
 // that reported every read as truncated would satisfy the arm above. It also
-// pins that the boundary is not off by one in the direction that blinds the
-// adapter — a read of exactly the cap is not an overflow of it.
+// pins the boundary in the direction that blinds the adapter — a read of
+// exactly the cap is not an overflow of it, because nothing was dropped.
 func TestUnderTheCapIsStillAnAnswer(t *testing.T) {
 	t.Parallel()
 
@@ -373,7 +375,12 @@ func TestUnderTheCapIsStillAnAnswer(t *testing.T) {
 			return exec.CommandContext(ctx, "/bin/sh", "-c", "head -c "+strconv.Itoa(n)+" /dev/zero")
 		}
 	}
-	for _, n := range []int{1 << 10, gitMaxOutput - 1} {
+	// gitMaxOutput itself is the row that matters: the previous spelling
+	// (len(buf) >= limit) fired when the buffer merely REACHED the cap with
+	// nothing dropped, so a complete read of exactly gitMaxOutput bytes was a
+	// false non-answer. The table used to stop at gitMaxOutput-1 while its
+	// comment claimed to pin the boundary.
+	for _, n := range []int{1 << 10, gitMaxOutput - 1, gitMaxOutput} {
 		out, answered := withCmd(build(n)).run("/tmp", "irrelevant")
 		if !answered {
 			t.Errorf("%d bytes, under the %d-byte cap, was reported as a non-answer", n, gitMaxOutput)
@@ -381,6 +388,101 @@ func TestUnderTheCapIsStillAnAnswer(t *testing.T) {
 		if len(out) != n {
 			t.Errorf("%d bytes written, %d kept", n, len(out))
 		}
+	}
+}
+
+// TestFailingGitDoesNotPublishItsStdoutAsData is findings 1 and 2 of PR #1551's
+// review, and the regression it pins was INTRODUCED by #1543's first draft
+// rather than being pre-existing: .Output()'s `if err != nil { return "" }`
+// discarded stdout on any failure, and routing everything through
+// shellout.Answered's empty-variadic form started forwarding it, because a
+// non-zero NORMAL exit is an answer.
+//
+// It is an answer. Its stdout is not the answer's content.
+//
+// Measured (git 2.50.1 / Apple Git-155, darwin/arm64): on an unborn branch
+// `git rev-parse HEAD` exits 128 and writes the literal string "HEAD" to
+// STDOUT, not just to stderr. The first draft returned ("HEAD", true), which
+// CaptureYieldOnReady persisted as a commit SHA with YieldState productive.
+//
+// RED-FIRST: run against the first draft this reports
+//
+//	GetHeadCommit(unborn) = "HEAD" — a failing git's stdout was published as a commit SHA
+func TestFailingGitDoesNotPublishItsStdoutAsData(t *testing.T) {
+	unborn := realPath(t, t.TempDir())
+	runGitForTest(t, unborn, "init")
+
+	a := New()
+
+	head, answered := a.GetHeadCommit(unborn)
+	if !answered {
+		t.Fatal("an unborn branch is an ANSWER — git ran and exited 128")
+	}
+	if head != "" {
+		t.Errorf("GetHeadCommit(unborn) = %q — a failing git's stdout was published as a "+
+			"commit SHA; #373 says an unborn branch is YieldUnknown, and a session indexed "+
+			"under the fake SHA %q is one the yield sweeper can never correlate", head, head)
+	}
+
+	branch, answered := a.GetBranch(unborn)
+	if !answered {
+		t.Fatal("an unborn branch is an ANSWER for GetBranch too")
+	}
+	if branch != "" {
+		t.Errorf("GetBranch(unborn) = %q, want empty", branch)
+	}
+}
+
+// TestPartialOutputBeforeAFatalIsNotACompleteAnswer is the other half of the
+// same root cause, and the one with DORA-shaped blast radius: a `git log` that
+// streams commits and then hits a fatal exits 128 having already written a
+// prefix of the history. Publishing that prefix is a silently truncated commit
+// list presented as Available:true — exactly what gitMaxOutput's doc argues
+// must never happen, reached through a different door.
+//
+// The fixture writes two records and then exits non-zero, which is the shape
+// without needing to corrupt a real object store.
+//
+// RED-FIRST: against the first draft, both arms report the truncated data.
+func TestPartialOutputBeforeAFatalIsNotACompleteAnswer(t *testing.T) {
+	t.Parallel()
+
+	partial := func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		// Two well-formed \x01-delimited records, then a non-zero exit.
+		return exec.CommandContext(ctx, "/bin/sh", "-c",
+			`printf '\001aaa\002100\002first\001bbb\002200\002second'; exit 128`)
+	}
+	a := withCmd(partial)
+
+	commits, answered := a.CommitsInRange("/tmp", "", "HEAD")
+	if !answered {
+		t.Fatal("a git that exited 128 ANSWERED; only a killed or unstarted child has not")
+	}
+	if len(commits) != 0 {
+		t.Errorf("CommitsInRange returned %d commit(s) from a git that died mid-stream; DORA "+
+			"would publish a median lead time over a silently truncated history as Available:true",
+			len(commits))
+	}
+
+	shas, answered := a.RevertedCommits("/tmp")
+	if !answered {
+		t.Fatal("same for RevertedCommits")
+	}
+	if len(shas) != 0 {
+		t.Errorf("RevertedCommits returned %d SHA(s) from a partial read", len(shas))
+	}
+}
+
+// TestASuccessfulGitStillReturnsItsOutput is the vacuity guard for the two
+// tests above. Discarding stdout whenever err != nil is only correct if
+// err == nil still delivers it — without this, an adapter that returned nil
+// unconditionally would pass both.
+func TestASuccessfulGitStillReturnsItsOutput(t *testing.T) {
+	repo := gitInitForTest(t)
+	sha := commitFileForTest(t, repo, "a.txt", "A")
+
+	if got, answered := New().GetHeadCommit(repo); got != sha || !answered {
+		t.Errorf("GetHeadCommit = (%q, %v), want (%q, true)", got, answered, sha)
 	}
 }
 
@@ -396,11 +498,23 @@ func TestCappedBufferStopsAtItsLimit(t *testing.T) {
 	if w.overflowed {
 		t.Error("3 bytes into a limit of 8 reported an overflow")
 	}
+	// Exactly the limit is NOT an overflow: nothing was dropped. The previous
+	// spelling keyed on len(buf) >= limit and reported one here.
+	if n, err := w.Write([]byte("defgh")); n != 5 || err != nil {
+		t.Fatalf("Write to exactly the limit = (%d, %v), want (5, nil)", n, err)
+	}
+	if w.overflowed {
+		t.Error("a complete read of exactly the limit was reported as truncated — that is a " +
+			"false non-answer, and it blanks a chart the daemon read successfully")
+	}
+	if string(w.buf) != "abcdefgh" {
+		t.Fatalf("kept %q, want abcdefgh", w.buf)
+	}
 	// Reports the full length even past the limit: returning short would make
 	// exec's copier treat it as a write error and fail the command for the
 	// wrong reason.
-	if n, err := w.Write([]byte("defghijkl")); n != 9 || err != nil {
-		t.Fatalf("Write past the limit = (%d, %v), want (9, nil)", n, err)
+	if n, err := w.Write([]byte("i")); n != 1 || err != nil {
+		t.Fatalf("Write past the limit = (%d, %v), want (1, nil)", n, err)
 	}
 	if !w.overflowed {
 		t.Error("writing past the limit did not record an overflow")
