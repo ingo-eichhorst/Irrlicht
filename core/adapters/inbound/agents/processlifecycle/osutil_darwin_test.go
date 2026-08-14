@@ -308,7 +308,24 @@ func TestResolveHostBundleIDFromAncestry_Self(t *testing.T) {
 		t.Error("the walk over a live process aborted — either a ps timed out, or the verdict is wrong")
 	}
 	if bid == "" {
-		return // no top-level .app ancestor (e.g. CI/tmux/ssh) — valid.
+		// "" is the right answer only when this chain HAS no top-level .app
+		// ancestor (CI, tmux, ssh). Returning here unconditionally is what let a
+		// rewiring of the production probe pair read as that same valid case —
+		// and "" is exactly what a probe that never consults plutil produces, so
+		// the escape hatch was the failure mode (found in review of #1524).
+		//
+		// Re-walk the identical chain with the identical readProcInfo, changing
+		// only the bundle probe to one that always answers. A non-empty sentinel
+		// means the walk DID reach a top-level app, so the production pair had
+		// something to name and came back empty.
+		sentinel, _, _ := resolveHostBundleIDVia(os.Getpid(), readProcInfo,
+			func(string) (string, error) { return "sentinel.app", nil })
+		if sentinel != "" {
+			t.Error("the walk reached a top-level .app ancestor but resolveHostBundleIDFromAncestry " +
+				"named nothing — either its production probe pair no longer reaches plutil, or every " +
+				".app in this chain really has no CFBundleIdentifier (which LaunchServices would not launch)")
+		}
+		return
 	}
 	if !strings.Contains(bid, ".") || hostPID <= 1 {
 		t.Errorf("resolveHostBundleIDFromAncestry = (%q, %d); want a dotted bundle id and a real host PID", bid, hostPID)
@@ -1458,8 +1475,13 @@ func TestBundleIDVia_AnsweredMissIsNotAnUnanswerableProbe(t *testing.T) {
 		wantWhy string
 	}{
 		{
-			"a real bundle answers with its id — the vacuity guard",
-			"/System/Library/CoreServices/Finder.app", plutilBundleIDCmd,
+			// nil build deliberately: this row runs the PRODUCTION entry point,
+			// bundleIDForAppPath, so the wiring from it down to plutil is
+			// pinned rather than bypassed. Reaching plutil through
+			// bundleIDVia(_, plutilBundleIDCmd) here would leave a rewiring of
+			// bundleIDForAppPath itself green (found in review of #1524).
+			"a real bundle answers with its id — the vacuity guard, through the production entry point",
+			"/System/Library/CoreServices/Finder.app", nil,
 			"com.apple.finder", false,
 			"if this row ever fails the others prove nothing: they would all be passing on a probe that never works",
 		},
@@ -1490,7 +1512,15 @@ func TestBundleIDVia_AnsweredMissIsNotAnUnanswerableProbe(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			id, err := bundleIDVia(tc.appPath, tc.build)
+			var (
+				id  string
+				err error
+			)
+			if tc.build == nil {
+				id, err = bundleIDForAppPath(tc.appPath)
+			} else {
+				id, err = bundleIDVia(tc.appPath, tc.build)
+			}
 			if id != tc.wantID {
 				t.Errorf("bundleIDVia id = %q, want %q — %s", id, tc.wantID, tc.wantWhy)
 			}
@@ -1509,6 +1539,7 @@ func TestBundleIDVia_AnsweredMissIsNotAnUnanswerableProbe(t *testing.T) {
 // error IS an *exec.ExitError and errors.Is(err, context.DeadlineExceeded) is
 // FALSE.
 func TestBundleIDVia_CeilingActuallyFires(t *testing.T) {
+	t.Parallel() // spends the real 2s ceiling and shares no state
 	start := time.Now()
 	if _, err := bundleIDVia("/System/Library/CoreServices/Finder.app", stalledBundleIDCmd); err == nil {
 		t.Fatal("a child that never answers must report an error")
@@ -1652,6 +1683,7 @@ func TestIsKnownInteractiveHost_PlutilNonAnswerAdmits(t *testing.T) {
 // layers agree — a fabricated probe error cannot show that bundleIDVia
 // classifies a REAL kill the way resolveHostBundleIDVia expects.
 func TestIsKnownInteractiveHost_PlutilCeilingAdmitsEndToEnd(t *testing.T) {
+	t.Parallel() // spends the real 2s ceiling and shares no state
 	stalled := func(appPath string) (string, error) {
 		return bundleIDVia(appPath, stalledBundleIDCmd)
 	}

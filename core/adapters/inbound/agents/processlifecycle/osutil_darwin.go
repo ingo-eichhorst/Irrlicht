@@ -186,7 +186,11 @@ func bundleIDVia(appPath string, build bundleIDCmd) (string, error) {
 
 // resolveHostBundleIDFromAncestry walks the parent-process chain of pid and
 // returns the CFBundleIdentifier of the first top-level application bundle it
-// finds, plus that app's PID. complete carries the same meaning as
+// finds, plus that app's PID. It is the generic fallback used when the curated
+// termProgramByAppName map matches no ancestor — it lets the UI bring an
+// embedded-terminal GUI host (e.g. Obsidian) to the front without a per-app
+// registry entry. Returns ("", 0) when no top-level app appears within
+// maxAncestry levels. complete carries the same meaning as
 // resolveHostFromAncestry's, and the first read is split out of the `ppid <= 1`
 // guard for exactly that reason: "pid's parent is init" is a verdict, "pid
 // could not be read" is not.
@@ -196,11 +200,17 @@ func bundleIDVia(appPath string, build bundleIDCmd) (string, error) {
 // bundleIDForAppPath. Reporting only the first is #1524 — a plutil over its
 // ceiling returned an empty bundle id, the walk read it as "this ancestor is
 // not an app", and the miss it eventually reported was indistinguishable from
-// a walk that had actually seen every ancestor. It is the generic fallback used when the curated
-// termProgramByAppName map matches no ancestor — it lets the UI bring an
-// embedded-terminal GUI host (e.g. Obsidian) to the front without a per-app
-// registry entry. Returns ("", 0) when no top-level app appears within
-// maxAncestry levels.
+// a walk that had actually seen every ancestor.
+//
+// It aborts at the FIRST ancestor whose bundle id it could not get, rather than
+// walking on to look for an outer one. That is deliberate and it is the one
+// place this walk takes a different polarity from resolveClientHostIdentity's
+// "a found host wins outright": here the first top-level app IS the host, so an
+// outer app that answers is not a better answer — it is the wrong window. An
+// honest "I don't know" leaves click-to-focus with no target; carrying on would
+// give it a confidently wrong one. It needs two top-level `.app` ancestors in
+// one chain to matter at all, which the `Contents/Frameworks/` rejection in
+// topLevelAppPath makes rare.
 //
 // The walk starts at pid's *parent*: the agent runs inside the host and is
 // never the host itself, and an agent whose own binary lives in a top-level
