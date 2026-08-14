@@ -14,9 +14,27 @@ production — auth, TLS, systemd, and the cloned-replica gotcha. For the wire p
 Daemons dial **out** to the relay, so only the relay needs a reachable port; the daemon side works
 through NAT with no inbound port.
 
-## Build the binary
+## Get the binary
 
-Built from source — there is no published release yet:
+### From a release (Linux, amd64 + arm64)
+
+`irrlichtrelay-linux-<arch>.tar.gz` ships with every release and carries the
+dashboard alongside the binary. Extract it somewhere and keep the two
+directories together — the relay finds its UI at `../Resources/web` relative to
+the binary, so moving `bin/irrlichtrelay` out on its own leaves the dashboard
+answering 503:
+
+```bash
+sudo mkdir -p /opt/irrlichtrelay
+curl -fsSL -O https://github.com/ingo-eichhorst/Irrlicht/releases/latest/download/irrlichtrelay-linux-arm64.tar.gz
+sudo tar -xzf irrlichtrelay-linux-arm64.tar.gz -C /opt/irrlichtrelay
+/opt/irrlichtrelay/bin/irrlichtrelay --version
+```
+
+`arm64` is the Ampere A1 free tier; use `amd64` on the E2.1.Micro shape. Both
+binaries are statically linked, so they also run on musl and distroless bases.
+
+### From source
 
 ```bash
 cd core
@@ -24,6 +42,11 @@ go build -trimpath -ldflags "-X main.Version=$(git describe --tags --always)" \
   -o /usr/local/bin/irrlichtrelay ./cmd/irrlichtrelay
 irrlichtrelay --version
 ```
+
+A from-source build installs no dashboard, and the binary at `/usr/local/bin`
+has no `../Resources/web` to find — so either copy `platforms/web/` somewhere
+and point `IRRLICHT_UI_DIR` at it, or accept a relay that serves the API and a
+503 on `/`. The service files in this directory do the former.
 
 Or run it in a container — see [`README.md`](./README.md) / [`Dockerfile`](./Dockerfile).
 
@@ -126,7 +149,7 @@ A ready-to-edit unit ships at [`irrlichtrelay.service`](./irrlichtrelay.service)
 front it with one of the TLS proxies above). Install:
 
 ```bash
-# binary at /usr/local/bin/irrlichtrelay (see "Build the binary")
+# binary at /usr/local/bin/irrlichtrelay (see "Get the binary")
 useradd --system --no-create-home --home /var/lib/irrlichtrelay irrlichtrelay
 cp examples/relay/irrlichtrelay.service /etc/systemd/system/
 

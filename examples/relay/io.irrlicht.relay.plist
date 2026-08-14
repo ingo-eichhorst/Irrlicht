@@ -12,6 +12,10 @@
             -o /usr/local/bin/irrlichtrelay ./cmd/irrlichtrelay)
     2. Replace every /Users/YOU below with your home directory — launchd does
        not expand ~ or $HOME in this file.
+    2b. Put the dashboard where IRRLICHT_UI_DIR below points, or the relay
+       serves a 503 instead of a UI (see "The dashboard" below):
+         sudo install -d -m 755 /usr/local/share/irrlicht/web
+         sudo cp platforms/web/* /usr/local/share/irrlicht/web/
     3. Give the relay its own state dir, separate from the daemon's:
          mkdir -p ~/Library/Application\ Support/Irrlicht/relay
     4. Issue a token with the SAME IRRLICHT_HOME the agent uses, or the CLI
@@ -29,6 +33,18 @@
   Both give a name that survives every network the Mac joins, which is what
   Web Push needs (arc42 C4: subscriptions are bound to their origin, and
   renaming the origin re-pairs every phone).
+
+  The dashboard: the relay looks for index.html in IRRLICHT_UI_DIR first, then
+  <dir-of-the-binary>/../Resources/web, then $HOME/.local/share/irrlicht/web
+  (core/cmd/irrlichtrelay/main.go resolveUIDirFor). With the binary at
+  /usr/local/bin the second is /usr/local/Resources/web, which nothing creates,
+  and the third only exists on a Mac where someone ran the daemon's
+  `curl … | sh --daemon-only` — so on a relay-only Mac all three missed and the
+  dashboard answered 503. That gap was this file's for its whole life; step 2b
+  and the variable below close it. A path that does not exist is not an error,
+  it just falls through, so an operator who unpacked
+  irrlichtrelay-linux-<arch>.tar.gz (bin/ + Resources/web/, which the second
+  branch resolves by itself) can leave the variable alone.
 
   Note the sleep behavior: a LaunchAgent stops with the user session, and a
   sleeping Mac serves nothing. That is not a gap for notifications — with the
@@ -59,6 +75,11 @@
              reason about. -->
         <key>IRRLICHT_HOME</key>
         <string>/Users/YOU/Library/Application Support/Irrlicht/relay</string>
+        <!-- Where step 2b put the dashboard. Not /Users/YOU/... on purpose:
+             this one is a read-only asset shared by every user on the Mac,
+             unlike the state dir above. -->
+        <key>IRRLICHT_UI_DIR</key>
+        <string>/usr/local/share/irrlicht/web</string>
     </dict>
 
     <key>RunAtLoad</key>

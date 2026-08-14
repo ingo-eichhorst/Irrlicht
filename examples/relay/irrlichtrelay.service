@@ -1,9 +1,13 @@
 # systemd unit for the standalone irrlichtrelay hub (issue #539).
 #
-# Install (run as root):
+# Install (run as root). Steps 1 and 1b are one step if you use the release
+# tarball — see "The dashboard" below:
 #   1. Build/copy the binary to /usr/local/bin/irrlichtrelay
 #        (cd core && go build -trimpath -ldflags "-X main.Version=$(git describe --tags --always)" \
 #           -o /usr/local/bin/irrlichtrelay ./cmd/irrlichtrelay)
+#   1b. Put the dashboard where IRRLICHT_UI_DIR below points:
+#        install -d -m 755 /usr/local/share/irrlicht/web
+#        cp platforms/web/* /usr/local/share/irrlicht/web/
 #   2. Create the service user (StateDirectory needs it to exist):
 #        useradd --system --no-create-home --home /var/lib/irrlichtrelay irrlichtrelay
 #   3. Install this file:  cp examples/relay/irrlichtrelay.service /etc/systemd/system/
@@ -17,6 +21,22 @@
 # This binds loopback + bearer-token auth — the secure default. Terminate TLS in
 # a reverse proxy in front (see DEPLOY.md), or swap ExecStart for the native-TLS
 # variant below. `token revoke <id>` takes effect within ~2s without a restart.
+#
+# The dashboard: the relay looks for index.html in IRRLICHT_UI_DIR first, then
+# <dir-of-the-binary>/../Resources/web, then $HOME/.local/share/irrlicht/web
+# (core/cmd/irrlichtrelay/main.go resolveUIDirFor). Under this unit the third
+# is unreachable by design — ProtectHome=yes — and with the binary at
+# /usr/local/bin the second would be /usr/local/Resources/web, which nothing
+# creates. Setting IRRLICHT_UI_DIR is what stops the dashboard answering 503,
+# and it was missing for the whole life of this file.
+#
+# Installing the irrlichtrelay-linux-<arch>.tar.gz instead? It carries
+# bin/irrlichtrelay + Resources/web/ precisely so the second branch resolves on
+# its own: extract it to /opt/irrlichtrelay, point ExecStart at
+# /opt/irrlichtrelay/bin/irrlichtrelay, and leave IRRLICHT_UI_DIR where it is —
+# a path with no index.html is not an error, it just falls through to the next
+# branch (measured: an unset directory logs the same "serving dashboard from
+# …/Resources/web" as no variable at all).
 
 [Unit]
 Description=Irrlicht relay — cross-host session hub
@@ -32,6 +52,9 @@ Group=irrlichtrelay
 StateDirectory=irrlichtrelay
 StateDirectoryMode=0700
 Environment=IRRLICHT_HOME=/var/lib/irrlichtrelay
+# Where step 1b put the dashboard. Harmless if it does not exist — the resolver
+# treats a directory without an index.html as "not this one" and moves on.
+Environment=IRRLICHT_UI_DIR=/usr/local/share/irrlicht/web
 ExecStart=/usr/local/bin/irrlichtrelay serve --addr 127.0.0.1:7839 --auth tokens-file
 # Native TLS instead of a reverse proxy — bind a routable address and serve wss://
 # directly (keep --auth; TLS encrypts but does not authenticate the peer):

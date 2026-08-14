@@ -131,6 +131,51 @@ build_linux_tarball() {
 build_linux_tarball amd64
 build_linux_tarball arm64
 
+# ── 1d. Linux relay tarballs ──────────────────────────────────────────
+# The standalone relay hub, published so operators stop having to build from
+# source. Both arches are first-class: the deployment target's free tier is
+# Ampere A1 (aarch64), with an amd64 shape operators land on when A1 capacity
+# is unavailable (docs/mobile-notifications-arc42.md §7).
+#
+# Two things here differ from the daemon tarballs above and neither is
+# cosmetic:
+#
+#   · CGO_ENABLED=0 is set EXPLICITLY rather than inherited from what a
+#     darwin→linux cross-compile happens to imply, because the relay is meant
+#     to run on musl and distroless bases where a dynamically linked binary
+#     dies at exec time with no useful message.
+#
+#   · The layout is {bin/, Resources/web/}, NOT the daemon's flat
+#     {irrlichd, web/}. The relay resolves its UI through the same search
+#     order the daemon uses, whose only exe-relative branch is
+#     <exedir>/../Resources/web (core/cmd/irrlichtrelay/main.go
+#     resolveUIDirFor). Measured: staged flat, the relay logs "dashboard UI
+#     not found" and answers 503 on /; staged this way it logs "serving
+#     dashboard from …/Resources/web" with no environment set at all.
+#
+# The web payload comes from copy_web_files so the relay inherits WEB_FILES
+# rather than growing a fourth copy of the list.
+echo ""
+echo "Creating Linux relay tarballs..."
+RELAY_NAME="irrlichtrelay"
+build_relay_linux_tarball() {
+    local arch="$1"
+    echo "  Building ${RELAY_NAME}-linux-${arch}..."
+    ( cd core && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
+        -ldflags "-X main.Version=$VERSION" \
+        -o "../$BUILD_DIR/${RELAY_NAME}-linux-${arch}" ./cmd/irrlichtrelay/ )
+    local staging="$BUILD_DIR/tarball-staging-relay-${arch}"
+    rm -rf "$staging"
+    mkdir -p "$staging/bin" "$staging/Resources/web"
+    cp "$BUILD_DIR/${RELAY_NAME}-linux-${arch}" "$staging/bin/${RELAY_NAME}"
+    copy_web_files "$staging/Resources/web"
+    tar -czf "$BUILD_DIR/${RELAY_NAME}-linux-${arch}.tar.gz" -C "$staging" .
+    rm -rf "$staging"
+    echo "  Created $BUILD_DIR/${RELAY_NAME}-linux-${arch}.tar.gz"
+}
+build_relay_linux_tarball amd64
+build_relay_linux_tarball arm64
+
 # ── 3. Build Swift macOS app (.app bundle) ─────────────────────────────
 echo ""
 echo "Building macOS app..."
@@ -471,10 +516,15 @@ echo "  Created $BUILD_DIR/$PKG_NAME"
 echo ""
 echo "Calculating checksums..."
 cd "$BUILD_DIR"
+# site/install.sh's sha256_verify greps this file for the asset it just
+# downloaded, so an asset missing here cannot be verified and the install
+# aborts — every published tarball has to be listed.
 shasum -a 256 "$DMG_NAME" "$PKG_NAME" \
     ${DAEMON_NAME}-darwin-universal.tar.gz \
     ${DAEMON_NAME}-linux-amd64.tar.gz \
-    ${DAEMON_NAME}-linux-arm64.tar.gz > checksums.sha256
+    ${DAEMON_NAME}-linux-arm64.tar.gz \
+    ${RELAY_NAME}-linux-amd64.tar.gz \
+    ${RELAY_NAME}-linux-arm64.tar.gz > checksums.sha256
 cd ..
 
 # ── 8. Summary ─────────────────────────────────────────────────────────
@@ -492,6 +542,10 @@ echo ""
 echo "Linux daemon (daemon-only, web UI at 127.0.0.1:7837):"
 echo "  amd64:      $BUILD_DIR/${DAEMON_NAME}-linux-amd64.tar.gz"
 echo "  arm64:      $BUILD_DIR/${DAEMON_NAME}-linux-arm64.tar.gz"
+echo ""
+echo "Linux relay hub (extract anywhere; bin/ + Resources/web/ travel together):"
+echo "  amd64:      $BUILD_DIR/${RELAY_NAME}-linux-amd64.tar.gz"
+echo "  arm64:      $BUILD_DIR/${RELAY_NAME}-linux-arm64.tar.gz"
 echo ""
 echo "Optional:"
 echo "  LaunchAgent: $BUILD_DIR/${BUNDLE_ID}.daemon.plist"

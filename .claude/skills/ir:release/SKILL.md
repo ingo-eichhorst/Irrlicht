@@ -420,8 +420,11 @@ from `gh api`, the token is missing the `security_events` scope:
 
 ### Go daemon (universal binary + tarball)
 The daemon reads `platforms/web/index.html` from disk at runtime; no embed.
-The standalone curl `--daemon-only` install ships a tarball containing both
-the binary and `web/index.html`.
+The standalone curl `--daemon-only` install ships a tarball containing the
+binary and the whole `web/` tree — index.html alone boots nothing, since the
+entry module statically imports ten siblings and the Beacon PWA four more.
+`WEB_FILES` in `tools/build-release.sh` is the single list; the loop below
+reads it instead of naming files.
 
 ```bash
 cd /Users/ingo/projects/irrlicht/core
@@ -432,7 +435,9 @@ lipo -create /tmp/irrlichd-arm64 /tmp/irrlichd-amd64 -output /tmp/irrlichd-darwi
 # Tarball for the curl --daemon-only installer
 rm -rf /tmp/irrlichd-tarball && mkdir -p /tmp/irrlichd-tarball/web
 cp /tmp/irrlichd-darwin-universal /tmp/irrlichd-tarball/irrlichd
-cp /Users/ingo/projects/irrlicht/platforms/web/index.html /tmp/irrlichd-tarball/web/index.html
+( cd /Users/ingo/projects/irrlicht && \
+  sed -n '/^WEB_FILES=(/,/^)/p' tools/build-release.sh | grep -v '[()]' | tr -d ' ' | \
+  while read -r f; do cp "platforms/web/$f" /tmp/irrlichd-tarball/web/; done )
 tar -czf /tmp/irrlichd-darwin-universal.tar.gz -C /tmp/irrlichd-tarball .
 ```
 
@@ -441,8 +446,15 @@ tar -czf /tmp/irrlichd-darwin-universal.tar.gz -C /tmp/irrlichd-tarball .
 These ship the Linux curl install path (`site/install.sh` auto-detects Linux
 and downloads `irrlichd-linux-<arch>.tar.gz`). Pure cross-compile from macOS,
 no cgo. **Required** — omitting them makes every Linux `curl … | sh` 404 on
-the asset. Each Linux tarball carries all three web files (index.html + css +
-js), because the Linux installer installs all three.
+the asset.
+
+Each tarball carries the whole runtime web tree, not a named subset. The
+recipe below used to name three files; the dashboard's entry module statically
+imports ten siblings and the Beacon PWA adds four more, so a three-file tarball
+serves a dashboard that 404s its own module graph. `WEB_FILES` in
+`tools/build-release.sh` is the one list, and `platforms/web/release-files.test.js`
+fails when it falls behind — which is why the loop below reads it rather than
+repeating it.
 
 ```bash
 cd /Users/ingo/projects/irrlicht/core
@@ -451,11 +463,39 @@ for arch in amd64 arm64; do
     -o "/tmp/irrlichd-linux-$arch" ./cmd/irrlichd
   rm -rf "/tmp/irrlichd-linux-tarball-$arch" && mkdir -p "/tmp/irrlichd-linux-tarball-$arch/web"
   cp "/tmp/irrlichd-linux-$arch" "/tmp/irrlichd-linux-tarball-$arch/irrlichd"
-  cp /Users/ingo/projects/irrlicht/platforms/web/index.html \
-     /Users/ingo/projects/irrlicht/platforms/web/irrlicht.css \
-     /Users/ingo/projects/irrlicht/platforms/web/irrlicht.js \
-     "/tmp/irrlichd-linux-tarball-$arch/web/"
+  ( cd /Users/ingo/projects/irrlicht && \
+    sed -n '/^WEB_FILES=(/,/^)/p' tools/build-release.sh | grep -v '[()]' | tr -d ' ' | \
+    while read -r f; do cp "platforms/web/$f" "/tmp/irrlichd-linux-tarball-$arch/web/"; done )
   tar -czf "/tmp/irrlichd-linux-$arch.tar.gz" -C "/tmp/irrlichd-linux-tarball-$arch" .
+done
+```
+
+#### Linux relay tarballs (the standalone hub)
+
+Published so relay operators stop building from source. Both arches matter:
+the deployment target's free tier is Ampere A1 (aarch64) with an amd64 shape
+as the fallback (`docs/mobile-notifications-arc42.md` §7).
+
+Note the layout — `bin/irrlichtrelay` + `Resources/web/`, **not** the daemon's
+flat `{binary, web/}`. The relay's only exe-relative UI branch is
+`<exedir>/../Resources/web`; staged flat it logs `dashboard UI not found` and
+answers 503 on `/` (measured, both arches, in a container with an empty
+`$HOME`). `CGO_ENABLED=0` is explicit so the binary stays static enough for
+musl and distroless bases.
+
+```bash
+cd /Users/ingo/projects/irrlicht/core
+for arch in amd64 arm64; do
+  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
+    -ldflags "-X main.Version=$NEW_VERSION" \
+    -o "/tmp/irrlichtrelay-linux-$arch" ./cmd/irrlichtrelay
+  rm -rf "/tmp/relay-tarball-$arch"
+  mkdir -p "/tmp/relay-tarball-$arch/bin" "/tmp/relay-tarball-$arch/Resources/web"
+  cp "/tmp/irrlichtrelay-linux-$arch" "/tmp/relay-tarball-$arch/bin/irrlichtrelay"
+  ( cd /Users/ingo/projects/irrlicht && \
+    sed -n '/^WEB_FILES=(/,/^)/p' tools/build-release.sh | grep -v '[()]' | tr -d ' ' | \
+    while read -r f; do cp "platforms/web/$f" "/tmp/relay-tarball-$arch/Resources/web/"; done )
+  tar -czf "/tmp/irrlichtrelay-linux-$arch.tar.gz" -C "/tmp/relay-tarball-$arch" .
 done
 ```
 
@@ -909,6 +949,8 @@ cd .build && shasum -a 256 \
   irrlichd-darwin-universal.tar.gz \
   irrlichd-linux-amd64.tar.gz \
   irrlichd-linux-arm64.tar.gz \
+  irrlichtrelay-linux-amd64.tar.gz \
+  irrlichtrelay-linux-arm64.tar.gz \
   Irrlicht-$NEW_VERSION.dmg \
   Irrlicht-$NEW_VERSION-mac-installer.pkg \
   Irrlicht-$NEW_VERSION.zip \
@@ -1124,6 +1166,8 @@ gh release create v$NEW_VERSION \
   .build/irrlichd-darwin-universal.tar.gz \
   .build/irrlichd-linux-amd64.tar.gz \
   .build/irrlichd-linux-arm64.tar.gz \
+  .build/irrlichtrelay-linux-amd64.tar.gz \
+  .build/irrlichtrelay-linux-arm64.tar.gz \
   .build/Irrlicht-$NEW_VERSION.dmg \
   .build/Irrlicht-$NEW_VERSION-mac-installer.pkg \
   .build/Irrlicht-$NEW_VERSION.zip \
@@ -1187,8 +1231,12 @@ without `--push`; the verification will report a mismatch you can ignore.
 ## Step 9: Verify — including a real end-to-end install canary
 
 1. Confirm release URL is returned.
-2. Run `gh release view v$NEW_VERSION` to verify **all five assets** are attached:
-   - `irrlichd-darwin-universal.tar.gz` *(daemon + web/index.html — required by curl --daemon-only)*
+2. Run `gh release view v$NEW_VERSION` to verify **all nine assets** are attached:
+   - `irrlichd-darwin-universal.tar.gz` *(daemon + the whole web/ tree — required by curl --daemon-only)*
+   - `irrlichd-linux-amd64.tar.gz` *(the Linux curl path 404s without it)*
+   - `irrlichd-linux-arm64.tar.gz` *(same, on aarch64)*
+   - `irrlichtrelay-linux-amd64.tar.gz` *(standalone relay hub, the E2.1.Micro fallback shape)*
+   - `irrlichtrelay-linux-arm64.tar.gz` *(standalone relay hub, the Ampere A1 free tier)*
    - `Irrlicht-$NEW_VERSION.dmg`
    - `Irrlicht-$NEW_VERSION-mac-installer.pkg`
    - `Irrlicht-$NEW_VERSION.zip` *(required by the curl installer)*
