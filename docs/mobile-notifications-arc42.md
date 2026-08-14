@@ -1,8 +1,10 @@
 # Mobile Notifications — Architecture (arc42)
 
-**Status:** proposed — this document exists to be reviewed
-**Scope:** feature-level arc42 for phone notifications (discussion [#1346](https://github.com/ingo-eichhorst/Irrlicht/discussions/1346)); system-wide architecture lives in `site/docs/architecture.html` and `docs/relay-protocol.md`
+**Status:** **built, unproven.** Slices 1–7 are implemented and merged on `feat/1346-beacon` (~13.5k lines across 97 files); every gate is green. **Nothing has yet delivered a notification to a real phone** — that is slice D ([`beacon-device-test.md`](./beacon-device-test.md)), and until it runs, the quality requirements in §10 are designed-for rather than demonstrated. Two known gaps are tracked in §11 rather than hidden: R6 (§8.5) and the test-notification button (§8.3).
+**Scope:** feature-level arc42 for phone notifications (discussion [#1346](https://github.com/ingo-eichhorst/Irrlicht/discussions/1346)); system-wide architecture lives in `site/docs/architecture.html` and `docs/relay-protocol.md`. Operator runbook: [`examples/relay/DEPLOY.md`](../examples/relay/DEPLOY.md). User guide: [`site/docs/beacon.html`](../site/docs/beacon.html).
 **Format note:** minimal arc42 profile — every section present, none padded
+
+> **This document describes code that exists.** It began as a proposal, and while it was being implemented three of its confident-sounding sentences turned out to be false — a self-heal that did not cover the case it claimed, a UI button nobody built, a release artifact no release carried. Each was found by writing something *else* against the code and noticing the disagreement, never by re-reading this file. Treat an unsourced assertion here as a claim awaiting its next contradiction, and prefer the `file:line` citations where they appear.
 
 ---
 
@@ -16,10 +18,10 @@ The phone-facing app is named **Irrlicht Beacon** (the name the user sees: manif
 
 | # | Requirement |
 |---|---|
-| R1 | A locked, backgrounded phone shows a banner on `* → waiting` and `working → ready` transitions |
+| R1 | A locked, backgrounded phone shows a banner on `* → waiting` and `working → ready` transitions — **built, not yet observed on a device (slice D)** |
 | R2 | Pairing happens once per phone; daily use needs zero setup gestures |
 | R3 | Ten flapping sessions must not mean ten buzzes (dedupe/coalescing, see §8.4) |
-| R4 | A dead delivery path is visible, never silent (§8.3) |
+| R4 | A dead delivery path is visible, never silent (§8.3) — **met except for one case**: a lost `vapid-keys.json` leaves both the browser subscription and the relay record intact, so nothing looks wrong and nothing self-heals (risk 10) |
 | R5 | The Mac and the phone may both roam networks freely; nothing rebinds |
 | R6 | Tapping a notification opens the app on that session's last-known state — nothing more. **Not yet met:** the ledger is written but never read, so a tap currently just opens the app (§8.5) |
 
@@ -27,7 +29,7 @@ The phone-facing app is named **Irrlicht Beacon** (the name the user sees: manif
 
 | Priority | Goal | Meaning here |
 |---|---|---|
-| 1 | **Privacy** | Nothing readable leaves the user's own infrastructure (Mac + their relay). Apple/Google carry ciphertext and timing only. |
+| 1 | **Privacy** | Nothing readable leaves the user's own infrastructure (Mac + their relay). Apple/Google carry ciphertext plus routing metadata — timing, and the headers §8.2 now enumerates, which distinguish event *kinds*. Content, never. |
 | 2 | **Trustworthy delivery** | Absence of a notification and inability to deliver are distinguishable states (house rule: a mechanism that cannot run fails loudly). |
 | 3 | **Minimal footprint** | Zero daemon changes, zero new wire-protocol frames, no project-hosted services, no app-store presence. |
 
@@ -111,14 +113,14 @@ Every arrow into the relay is dialed **outbound** by a roaming endpoint (R5): th
 flowchart TB
     subgraph core["core (new, pure)"]
         notify["core/domain/notify<br/>policy: edges, hold-down,<br/>coalescing, cooldowns"]
-        webpush["core/pkg/webpush<br/>VAPID JWT + RFC 8191/8291<br/>encrypt + POST"]
+        webpush["core/pkg/webpush<br/>VAPID (8292) + aes128gcm<br/>(8188/8291) + POST (8030)"]
     end
     subgraph relaybin["core/cmd/irrlichtrelay (extended)"]
         hub["hub + session cache<br/>(existing)"]
         observer["transition observer (new)"]
         dispatcher["dispatcher (new)"]
         pairing["pairing + subscription<br/>REST (new)"]
-        stores["vapid-keys.json /<br/>push-subscriptions.json (new, 0600)"]
+        stores["vapid-keys.json /<br/>push-subscriptions.json /<br/>daemon-roster.json (0600)"]
     end
     subgraph web["platforms/web (extended)"]
         pwa["manifest + service worker +<br/>pairing & notification settings UI"]
@@ -133,13 +135,13 @@ flowchart TB
 | Block | Responsibility | Notes |
 |---|---|---|
 | `core/domain/notify` | Decide *whether/when/how-coalesced* to notify, given a stream of transition events | Defines its own input event struct; imports nothing outward (domain rule). Relay maps `outbound.PushMessage` → `notify.Event`. No interface/port — the port is born only when a second consumer exists. |
-| `core/pkg/webpush` | Encrypt payload to a subscription, sign VAPID JWT, POST with `TTL`/`Topic`/`Urgency` headers | `pkg/` leaf-layer rules apply (no adapters/application imports). Wraps or vendors a small RFC 8291 implementation. |
+| `core/pkg/webpush` | Encrypt payload to a subscription, sign VAPID JWT, POST with `TTL`/`Topic`/`Urgency` headers | `pkg/` leaf-layer rules apply (no adapters/application imports). Hand-written on the stdlib — nothing vendored, no new module dependency, which is what keeps it extractable. |
 | Relay: observer | Detect per-session state edges off the cache updates it already performs; seed silently on first sight/snapshot | Feeds `notify` engine; also feeds `daemon_status` disconnects (watchdog) |
 | Relay: dispatcher | Fan decided notifications out to every subscription in the same **workspace**; prune on `410`; record last-delivery status | Workspace scoping mirrors existing isolation |
-| Relay: pairing/REST | `POST /api/v1/push/pairings` (authed; mints one-time code) · `POST /api/v1/push/pair` (code → device token + VAPID pub) · `POST/DELETE /api/v1/push/subscriptions` (device-token-authed) | Device tokens are ordinary `TokenRecord`s — `token list`/`revoke` and 4401 semantics apply unchanged |
-| `platforms/web` PWA | Manifest, service worker (receive push → update IndexedDB ledger → `showNotification` → `setAppBadge`), pairing flow, notification settings, health panel, test button | No build step; plain files. Release copy list in `tools/build-release.sh` must grow (§11) |
+| Relay: pairing/REST | `GET /api/v1/push/info` (unauthenticated — §5.2's feature detection depends on it) · `POST /api/v1/push/pairings` (authed; mints one-time code) · `POST /api/v1/push/pair` (code → device token + VAPID pub) · `POST/DELETE/GET /api/v1/push/subscriptions` (device-token-authed; the GET is §8.3's health panel) | Device tokens are ordinary `TokenRecord`s — `token list`/`revoke` and 4401 semantics apply unchanged |
+| `platforms/web` PWA | Manifest, service worker (push → ledger write → `showNotification`; **no** `setAppBadge`, **no** deep link — slice 8), pairing flow, health panel, unpair. **No** notification-settings UI: policy is server-side (§8.4). **No** test button (slice 9) | No build step; plain files. Ships via `build-release.sh`'s single `WEB_FILES` list, kept complete by a tripwire that derives the required set (§8.7) |
 
-**Source location.** All Go code stays in the existing `core` module — no new module. `notify` (under `domain/`) and `webpush` (under `pkg/`) fall under `core/architecture_test.go`'s layering rules automatically. The relay wiring lands as a **`core/cmd/irrlichtrelay/push` subpackage** — composition-root code, free to import anything, and kept deliberately outside the daemon's hexagon: `core/adapters/outbound/relay` is the *daemon-side* forwarder and stays untouched. PWA assets join `platforms/web` — no third web tree (the #1225 dependency-drift lesson), and no build step to introduce.
+**Source location.** All Go code stays in the existing `core` module — no new module. `notify` (under `domain/`) and `webpush` (under `pkg/`) fall under `core/architecture_test.go`'s layering rules automatically. The relay's push **state** lands in a `core/cmd/irrlichtrelay/push` subpackage (VAPID identity, pairing codes, subscription registry, roster, health); the observer, dispatcher and HTTP surface stayed in `package main` beside the hub they wire into. Both are composition-root code, free to import anything, and kept deliberately outside the daemon's hexagon: `core/adapters/outbound/relay` is the *daemon-side* forwarder and stays untouched. PWA assets join `platforms/web` — no third web tree (the #1225 dependency-drift lesson), and no build step to introduce.
 
 **Separate-repo option (kept open, not taken).** Beacon might one day live in its own repo. Development starts here because the repo's gates (architecture test, preflight, replay) are what hold the new code to the house rules — but every boundary is drawn so extraction stays a move, not a rewrite: `notify` and `webpush` import **stdlib only** (no `irrlicht/core` types cross into them), the Beacon PWA files are additive to `platforms/web` behind feature detection, and the relay already serves its UI from disk (`IRRLICHT_UI_DIR` / `resolveUIDir`), so a standalone repo could ship relay + Beacon assets without touching this one. The one thing extraction would cost is the shared web tree's dashboard — which is exactly why the §5.2 contract keeps Beacon's files separable rather than woven in.
 
@@ -152,8 +154,8 @@ The one shared surface is `platforms/web` (served by the localhost daemon *and* 
 | Rule | Guarantee |
 |---|---|
 | The service worker has **no `fetch` handler** (push + notification-click only) | It can never interpose on asset loading or cache the dashboard stale; local serving stays byte-identical |
-| The service worker is registered **lazily**, from the pairing flow only | Plain dashboard usage never installs it |
-| The pairing/push UI is **feature-detected** (renders only where the origin answers the push-info endpoint) | The daemon-served dashboard shows nothing new; an old relay hides it too |
+| The service worker is registered **lazily**, from the pairing flow and the §8.3 self-heal — never at page load | Plain dashboard usage never installs it. The self-heal is a second call site, but it runs only for an already-paired phone (it is gated on the stored device token), so the guarantee holds |
+| The pairing/push UI is **feature-detected** (renders only where the origin answers the push-info endpoint) | The daemon-served dashboard shows no Beacon UI and installs no service worker; an old relay hides it too. **One exception, stated rather than glossed:** `index.html` links the manifest and two `theme-color` metas unconditionally, so the plain dashboard is installable under the Beacon name. Inert — an install without pairing subscribes to nothing — but it is not literally "nothing new" |
 | No lockstep (ADR-4) | Old daemon ↔ push-capable relay and unchanged daemon ↔ old relay both work |
 
 ---
@@ -172,21 +174,30 @@ sequenceDiagram
 
     D->>R: POST /push/pairings (client-token auth)
     R-->>D: one-time code (10 min TTL, single use)
-    D-->>D: show QR (relay URL + code) and code as text
-    S->>R: open pairing URL (camera scan or typed)
+    D-->>D: show the 8-char code as text (10 min countdown)
+    S->>R: open the relay URL, typed by hand
     S-->>S: Add to Home Screen
+    A->>OS: request notification permission (inside the click)
+    OS-->>A: granted
     A->>R: POST /push/pair {code}
     R-->>A: device token + VAPID public key
-    A->>OS: request notification permission (user gesture)
-    OS-->>A: granted
-    A->>OS: subscribe(VAPID pub)
+    A->>OS: subscribe(VAPID pub) after the worker activates
     OS-->>A: push subscription
     A->>R: POST /push/subscriptions {subscription}
-    A->>R: request test notification
-    R-->>OS: Web Push → banner appears
 ```
 
-The code crosses the Safari-tab → installed-app storage boundary by hand or by surviving in the URL; either way pairing *completes* in the installed app (ADR-3).
+The code crosses the Safari-tab → installed-app storage boundary **by hand** — nothing carries it in a
+URL (ADR-8) — and pairing *completes* in the installed app (ADR-3).
+
+Two orderings here are load-bearing and were both settled by the implementation rather than by this
+diagram. Permission is asked **first**, inside the click's transient user activation: a network
+round-trip plus a worker registration can outlive it, and on iOS an expired activation means the
+prompt never appears at all. It is also the cheap thing to fail — a refusal costs nothing, because
+the single-use code is not yet spent. And `subscribe()` waits for the worker to reach *activated*;
+the Push API rejects it while the registration's active worker is null.
+
+There is no closing "send a test notification" step: that button is §8.3's, and it does not exist
+(slice 9). Proving delivery today means driving a real transition.
 
 ### 6.2 Background delivery (daily path)
 
@@ -205,13 +216,22 @@ sequenceDiagram
         R->>R: cancel — no push
     else hold-down elapses
         R->>R: compose structured payload, pad, encrypt (RFC 8291)
-        R->>P: POST endpoint (VAPID, TTL 10 m, Topic session-id)
+        R->>P: POST endpoint (VAPID, TTL 10 m, Topic = hash of session id)
         P->>SW: wake on locked phone, payload decrypted by browser
-        SW->>SW: update IndexedDB ledger, showNotification(tag session-id), set badge
+        SW->>SW: update IndexedDB ledger, showNotification(tag = session id)
     end
 ```
 
-`* → waiting` follows the same path with no hold-down and TTL 1 h. When the PWA is open and connected, it is an ordinary WS client (live view; its own banners suppressed while visible — same rule the dashboard uses today).
+`* → waiting` follows the same path with no hold-down and TTL 1 h.
+
+**What the PWA is when open, corrected.** An earlier draft said it becomes an ordinary WS client with
+its banners suppressed while visible. Neither half is true. Pairing stores a device token and
+configures no source, and the dashboard's default "local" source dials the serving origin *without* a
+token — which a push-capable relay (always auth-on, §8.1) closes with `CloseRevoked`. A live view on
+the phone is therefore a separate, manual act: enter the relay URL and a client token under Settings →
+Sources. And the visible-tab suppression is the *dashboard's* own client-side banner rule; the service
+worker calls `showNotification` unconditionally, as `userVisibleOnly` requires, so an open PWA still
+gets the banner.
 
 ### 6.3 Roam and reconcile
 
@@ -249,7 +269,7 @@ flowchart TB
 | Survives Mac asleep | Relay yes (only watchdog push remains meaningful) | No — but with the daemon down there are no events anyway |
 | Push egress | Relay → Apple/Google outbound HTTPS | Same, from the Mac |
 
-Dev loop: the daemon serves the same web tree on `127.0.0.1` — a secure context — so service worker and subscription flow are locally testable without TLS.
+Dev loop: **the daemon is not a substitute for the relay here.** It serves the same web tree, but registers no `/api/v1/push/*` route, so feature detection finds nothing and the Beacon section never renders — by design (§5.2), and worth knowing before trying to test pairing against `127.0.0.1:7837`. Use `tools/beacon-rig.sh up`, which stands up a real relay on loopback; loopback is a secure context, so the worker and subscription flow work without TLS.
 
 **Renaming the relay origin re-pairs every phone** (C4). Pick the name once.
 
@@ -293,6 +313,16 @@ No new daemon consent entry: the daemon does nothing new. The flow rides three e
 | Live view (WS + REST reads) | client/device token (existing mechanism) | anyone reads every user's session labels and states |
 | Subscription registration + self-heal | **device token**, minted at pairing | anyone routes your state changes to their phone |
 | Pairing-code minting | any authed client token | codes could not inherit a workspace |
+| Code redemption (`POST /push/pair`) | **the code itself** — no bearer | the one door whose credential is the payload; single-use, 10 min, uniform 401, rate-limited (§6.1) |
+| Feature detection (`GET /push/info`) | **none, deliberately** | it must be able to say *why* push is off on an anonymous relay, and the VAPID public key it returns is public by construction. The cost is real and worth naming: any internet caller learns this origin is an Irrlicht relay with push enabled |
+
+**A device token is a full client token.** It is an ordinary `TokenRecord` in the workspace, so
+every client route accepts it — the WS live view, the REST session mirrors, and `POST
+/push/pairings`, meaning a paired phone can mint further pairing codes. That is not what §3.2's
+"remote control from the phone is out of scope" implies, and it is a consequence of reusing the
+token mechanism rather than a decision anyone took. It is contained by the workspace boundary and by
+`token revoke`, and narrowing it would mean a token *kind* the relay does not currently have —
+recorded here so the next person meets it as a known property rather than a surprise.
 
 Division of labor: the **device token** is the phone's durable identity (an ordinary `TokenRecord` — list/revoke for free); the **push subscription** is only a delivery *address* the OS may reissue at any time (which is why it cannot replace the token, and why self-heal works: identity survives, address is re-registered); the **pairing code** is the one-time bridge that carries the workspace into the device token. After setup, no token is ever seen or typed again.
 
@@ -306,7 +336,7 @@ Division of labor: the **device token** is the phone's durable identity (an ordi
 |---|---|
 | Your Mac | Everything (unchanged) |
 | Your relay | Full session state — **already true today** for any relay user; it composes payloads (ADR-6) |
-| Apple/Google | Endpoint identity, **timing**, ciphertext padded to a fixed 2 KiB | 
+| Apple/Google | Endpoint identity, **timing**, ciphertext padded to a fixed 2 KiB — **and four plaintext headers we long described as absent**: `TTL` (3600 for `waiting`, 600 for `ready` and daemon), `Urgency` (`high` vs `normal`, splitting the same way), the `Topic` collapse key, and the VAPID `k=` public key. The first two mean the push service can distinguish *which kind* of event fired, not merely that one did; `Topic` is a stable per-session pseudonym across its lifetime; `k=` groups every phone paired to one relay, and the `sub` claim (ADR-7) names the software. Content stays unreadable; the metadata is richer than "timing" implied (`core/pkg/webpush/sender.go:117-126`) | 
 | Phone | Structured payload; notification text is composed **on-device** by the service worker |
 
 Named leak, accepted as in #1346: timing is a work-rhythm signal; batching would hide it and ruin the feature. Payloads are structured data (ids, labels, states), never prose — composition stays on-device.
@@ -317,7 +347,7 @@ House rule: absence of a finding and inability to look must never produce the sa
 
 | Failure | Surfaced by |
 |---|---|
-| Push service returns `410/404` | Subscription pruned + PWA health panel shows "push unreachable since …" on next open |
+| Push service returns `410/404` | Subscription pruned; the PWA health panel then reads "Paired, but push is not registered — reopen this app to re-subscribe" on next open (`beacon.js`), and the self-heal re-registers it |
 | Subscription silently invalidated by iOS | Self-heals: PWA re-subscribes on next open with its stored device token |
 | Doubt | A "send test notification" button in PWA settings — **not built**; deferred with the ledger read path. Until it exists, proving delivery means driving a real transition |
 | Daemon link down | Watchdog push (§6.4) |
@@ -333,11 +363,11 @@ House rule: absence of a finding and inability to look must never produce the sa
 | First sighting / snapshot seed | Silent (no push), except a genuine state *diff* on reconcile (§6.3) |
 | Subagent sessions (`ParentSessionID` set) | Never — parent covers them (matches both existing client implementations) |
 | `session_deleted` | No push; cancels pending hold-downs |
-| Collapse | One notification per session: Web Push `Topic` + notification `tag` = session id; newer replaces |
+| Collapse | One notification per session. The device-side `tag` **is** the session id; the `Topic` header is `base64url(sha256(id))[:32]`, because RFC 8030 §5.4 caps a Topic at 32 base64url chars and a session UUID is 36. Same collapse semantics, deterministic, but the header never carries the id — which is also why it is a stable pseudonym rather than a leak of the id itself (§8.2) |
 | Cooldown | 60 s per (session, edge) — the backchannel engine's default |
 | Burst | > 3 pushes within 20 s → single summary "N agents need attention" (itself Topic-replaced) |
 | TTL | `waiting` 1 h · `ready` 10 m · watchdog 10 m — stale `ready` is noise, `waiting` stays true |
-| Presession → real-session rekey | Rekeys cooldown/hold-down state (the #1002 class) |
+| Presession → real-session rekey | The engine rekeys cooldown/hold-down state (the #1002 class) — **but nothing emits `EventRekey`**: the relay's mapper produces only session-update and session-delete (`push_observer.go` `sessionEvent`), so a promotion arrives as a delete plus a silent first sighting and the cooldown is dropped. Policy that is correct in the package and unreachable end-to-end; the relay has no promotion signal to map, since the wire protocol carries none (ADR-4) |
 
 ### 8.5 State on the phone
 
@@ -354,9 +384,9 @@ The relay is stateless-by-design in v0 (sessions in RAM, rebuilt from `daemon_sn
 | Token records (existing) | `tokens.json` | yes | SHA-256 hashes only; hot-reloaded on change |
 | VAPID keypair | `vapid-keys.json` | yes | Subscriptions are bound to it, so **losing it means re-pairing every phone** — the §8.3 self-heal does *not* cover this. `selfHeal` re-subscribes only when the browser has no subscription or the relay has no record of the phone (`beacon.js:418`); after a key loss both still exist, so the phone keeps a subscription bound to a key that is gone and nothing detects it. Back this file up |
 | Subscription registry | `push-subscriptions.json` | yes | Endpoint + device keys per phone, linked to its TokenRecord; rewritten only on pair/revoke/`410`-prune, never per push |
-| Daemon roster | `daemon-roster.json` | yes | id, label, last-seen — so the watchdog cannot silently forget an offline daemon across a relay restart (§6.4) |
+| Daemon roster | `daemon-roster.json` | yes | workspace + id + label + last-seen (the workspace is part of the identity: daemon ids are unique per tenant, not globally) — so the watchdog does not forget an offline daemon across a relay restart (§6.4). Bounded: entries unseen for 30 days are swept, so "cannot forget" is really "does not forget for a month" |
 | Session cache | RAM | no | Repopulated by daemon reconnects within seconds |
-| Policy state (cooldowns, hold-downs, burst windows) | RAM | no | §6.3's reconcile-diff rule doubles as restart recovery: a `ready` that landed during the restart still fires as a genuine diff |
+| Policy state (cooldowns, hold-downs, burst windows) | RAM | no | **A restart is amnesia, not recovery.** The engine's session map is RAM-only and nothing seeds it, so after a restart every session is an unknown id — a first sighting, which is silent by design. A `ready` that landed during the restart is therefore *not* delivered; the next genuine transition is. §6.3's diff rule covers a daemon reconnect, not a relay restart |
 | Pairing codes | RAM | no | 10 min TTL, single use; a restart mid-pairing just means regenerating the code |
 | Delivery health (last attempt per subscription) | RAM | no | Shown as "unknown since restart" — honest, per §8.3 |
 | Notification payloads | **nowhere** | — | No outbox, no durable queue, by design: a stale notification is an anti-feature. Apple/Google *are* the queue; TTL (§8.4) is its bound |
@@ -367,7 +397,34 @@ The relay is stateless-by-design in v0 (sessions in RAM, rebuilt from `daemon_sn
 
 ### 8.7 Testing
 
-Per repo rules, stated here so the slices inherit them: `notify` gets table *and property* tests (random flap storms; fixed seed; failure prints the event sequence); every new guard lands with its committed mutation seen red; the webpush sender is tested against a fake push service asserting encryption, padding, `TTL`/`Topic` headers; the release copy-list gains a tripwire so a missing SW file fails loudly instead of shipping a silently push-less PWA; and the §5.2 contract gets its own tripwire — a static check that `sw.js` registers no `fetch` handler and that the dashboard entry path performs no eager service-worker registration (a guard, landed with its mutation seen red).
+What exists: `notify` has table tests over every §8.4 row plus a fixed-seed property test (2000 flap
+storms, an eight-invariant oracle, and an env-gated 24k sweep); `webpush` is pinned by the RFC 8291
+Appendix A known-answer test, a round-trip property test through a test-side decryptor, and a fake
+push service grading headers and JWT; the relay carries the tripwires §5.2 needs — `sw.js` registers
+no `fetch` handler, exactly one shipped module registers the worker, and the release copy list is
+*derived* from `index.html` plus the import graph rather than hand-kept. `tools/beacon-rig.sh check`
+runs ten assertions against a live relay. Every guard landed with a deliberate mutation seen red.
+
+**The lesson this section exists for, because it nearly shipped a dead feature.** Adversarial review
+of the observer found **seven of eight** fresh mutations staying green. The tests drove the
+component's synchronous core (`handle`, `tick`) directly and never executed the production
+plumbing — so `setPushHook` could be made a no-op (the whole feature dead), `nextWake` could report
+nothing pending (**the ready hold-down and the §6.4 watchdog never firing**), and the run loop's
+`handle` could become `drive` (the roster never persisting) with a fully green build. Every headline
+behaviour in this document reached a phone only through code no test executed.
+
+The fix is one end-to-end test that builds the real collaborator, registers the hook production
+registers, starts the real goroutine and lets a **real timer** fire
+(`push_production_path_test.go` — it calls `handle`, `drive` and `tick` nowhere), proven by severing
+each seam and watching it redden. Two traps are worth carrying to the next component:
+
+- **A zero value that is also a valid value hides a broken guard.** A revoked token resolves to
+  workspace `""`, which *is* the default single-tenant workspace, so tests using named tenants
+  cannot tell "failed to resolve" from "resolved to default". The guard is only testable by issuing
+  against a named workspace and driving the transition in the default one.
+- **A guard can be vacuous in its own right.** The tarball-layout arm asserted `$staging/bin`
+  appeared somewhere in the function — which `mkdir -p "$staging/bin"` one line above satisfies
+  while the binary is staged flat beside it. Found by mutating the guard, not by reading it.
 
 ---
 
@@ -385,8 +442,8 @@ Per repo rules, stated here so the slices inherit them: `notify` gets table *and
 
 **ADR-3 — Pairing completes inside the installed app via one-time code.**
 *Context:* iOS partitions Safari-tab storage from installed-app storage; a token saved pre-install can vanish post-install; long-lived tokens in URLs leak into history.
-*Decision:* short-lived (10 min), single-use, possession-proving code, exchanged for a device token *by the installed app*. QR carries URL + code; typing the code is the universal fallback.
-*Consequence:* one manual entry when the URL fragment doesn't survive install; codes are rate-limited relay-side.
+*Decision:* short-lived (10 min), single-use, possession-proving code, exchanged for a device token *by the installed app*. The code is typed — see ADR-8.
+*Consequence:* the code is typed once, by hand (ADR-8 settled the QR question against vendoring an encoder); codes are rate-limited relay-side, and a wrong one is indistinguishable from an expired one.
 
 **ADR-4 — Zero wire-protocol changes.**
 *Context:* protocol v0 is deliberately thin; daemons must not need lockstep upgrades.
@@ -403,19 +460,33 @@ Per repo rules, stated here so the slices inherit them: `notify` gets table *and
 *Decision:* relay composes structured payloads and encrypts to each device (mandatory per RFC 8291); trust boundary = user's own infrastructure (§8.2).
 *Consequence:* the #1346 promise is reworded from "machine" to "infrastructure" — flagged for discussion sign-off.
 
+**ADR-7 — An unset VAPID subject defaults rather than refusing to start.**
+*Context:* RFC 8292 §2.1 requires a `sub` claim and admits only `mailto:` or `https:`. Apple Web Push and Mozilla autopush **reject** a JWT without it, so the relay shipping one was a total-failure bug on the only platform where the PWA path is mandatory (found in review; §8.7). The fix needed a policy for the operator who configures nothing.
+*Decision:* `--vapid-subject` (or `IRRLICHT_RELAY_VAPID_SUBJECT`) unset resolves to the project URL — a real `https:` URI that self-describes what is pushing. A value that is *set* but is neither `mailto:` nor `https:` is fatal at startup, and validated before push is known to be enabled.
+*Consequence:* refusing to boot over a missing contact address is a worse failure than identifying the software instead of the operator; but a wrong value surfaces as a 4xx per push on somebody's phone, where nobody is looking, so that one dies loudly and early. An operator who wants to be reachable sets it.
+
+**ADR-8 — Paste-only pairing; no QR encoder.**
+*Context:* §6.1 originally offered "QR or paste", which meant vendoring a QR encoder into a no-build tree (risk 7).
+*Decision:* type the code. It is eight characters from an ambiguity-free alphabet, entered once per phone in the phone's own keyboard.
+*Consequence:* a dependency avoided for a one-time act. QR remains addable later behind the same REST call if pairing friction turns out to matter.
+
 ---
 
 ## 10. Quality Requirements
 
-| Q | Scenario | Target |
-|---|---|---|
-| Q1 | Agent enters `waiting` while phone is locked | Banner within ~3 s (detector → WS forward → policy → push service ≤ ~1 s + APNs/FCM delivery) |
-| Q2 | Ten sessions flap `working ↔ ready` for a minute | ≤ 1 summary notification per 20 s window; zero per-session spam (§8.4) |
-| Q3 | Phone's subscription dies silently | Detected at next relay push (`410` → pruned) and shown in the PWA within one app-open; never a permanent quiet gap |
-| Q4 | Mac hops networks mid-session | No user action; forwarder reconnects; no notification storm on reconcile (§6.3) |
-| Q5 | Grep the daemon diff for this feature | 0 lines |
-| Q6 | Push service compromise / subpoena | Yields endpoints, timing, 2 KiB ciphertext blobs — no session content |
-| Q7 | Local-only rig (daemon + dashboard + macOS app, no relay configured) after the feature ships | Behavior identical to before; zero connection attempts to any relay; no service worker installed (§5.2) |
+**How to read the last column.** *Demonstrated* means something ran and was observed. *Asserted*
+means a test pins it, which is weaker than it sounds — the whole point of §8.7's lesson is that a
+green test can pin nothing. *Designed-for* means the code intends it and nobody has checked.
+
+| Q | Scenario | Target | Status |
+|---|---|---|---|
+| Q1 | Agent enters `waiting` while phone is locked | Banner within ~3 s (detector → WS forward → policy → push service ≤ ~1 s + APNs/FCM delivery) | **designed-for** — needs slice D; the ~1 s relay-side half is plausible but unmeasured, and the APNs half is not ours |
+| Q2 | Ten sessions flap `working ↔ ready` for a minute | ≤ 3 individual pushes then summaries only, per 20 s window (the threshold is 3, not 0 — a lone `ready` should still buzz normally) | **asserted** — property test invariant I5 bounds session-kind pushes per window. The original "zero per-session spam" wording was wrong about its own design |
+| Q3 | Phone's subscription dies silently | Detected at next relay push (`410` → pruned) and shown in the PWA within one app-open; never a permanent quiet gap | **asserted** for the `410` prune (relay tests + rig); the PWA's display of it is asserted in jsdom only |
+| Q4 | Mac hops networks mid-session | No user action; forwarder reconnects; no notification storm on reconcile (§6.3) | **asserted** — the engine is diff-driven, so a snapshot replay is silent by construction |
+| Q5 | Grep the daemon diff for this feature | 0 lines | **demonstrated** — `git diff main...HEAD -- core/cmd/irrlichd core/domain/session core/application core/adapters` is empty, as is the relay wire protocol |
+| Q6 | Push service compromise / subpoena | Yields endpoints, timing, TTL/Urgency/Topic metadata (§8.2), and 2 KiB ciphertext blobs — no session content | **asserted** for the size property (exact 2150-byte equality across payload sizes) and for content-blindness; the metadata list is what §8.2 had to be corrected to |
+| Q7 | Local-only rig (daemon + dashboard + macOS app, no relay configured) after the feature ships | Behavior identical to before; zero connection attempts to any relay; no service worker installed (§5.2) | **asserted** — §5.2's tripwires, plus a jsdom arm driving a non-push origin. The "zero connection attempts" half deserves an eye during slice D |
 
 ---
 
@@ -428,9 +499,15 @@ Per repo rules, stated here so the slices inherit them: `notify` gets table *and
 | 3 | Relay origin rename re-pairs every phone | Documented loudly (§7); no P1 mitigation |
 | 4 | Policy lives only in the relay; desktop/web keep their own client-side copies | Accepted for P1; convergence path = both clients eventually consuming server-decided notifications is *not* planned |
 | 5 | Relay was stateless-by-design (v0); push adds persisted files | Full inventory + restart matrix in §8.6; sessions stay in-memory, payloads are never stored |
-| 6 | New static files must reach installed relays | Release copy-list tripwire (§8.7) — a guard, landed with its mutation |
-| 7 | `platforms/web` gains a vendored QR encoder (no-build tree) | Small single-file encoder, or ship paste-only first — decided at slice 5 |
+| 6 | New static files must reach installed relays | **Was worse than predicted, now guarded.** All three copy sites shipped 3 files while `irrlicht.js` imports ten siblings — so a tarball-served *and* a curl-installed dashboard both 404'd their own module graph, before Beacon existed. One `WEB_FILES` list now feeds every site, the tripwire derives what belongs in it, and it covers the Dockerfile and installer too (slice 6) |
+| 7 | `platforms/web` gains a vendored QR encoder (no-build tree) | **Closed: no QR.** Paste-only shipped — typing eight ambiguity-free characters beat auditing vendored code for a one-time act |
 | 8 | Timing metadata to Apple/Google | Named and accepted, as in #1346 |
+| 9 | **Nothing has run on a device.** Every defect so far was found by reading, and two of them — a VAPID JWT with no `sub`, `subscribe()` before the worker activates — fail only on contact with a real push service and passed every mock | Slice D, ordered ahead of release. `tools/beacon-rig.sh check` automates the phone-free half; the rest needs a phone. **Until it runs, §10 is designed-for, not demonstrated** |
+| 10 | **Losing `vapid-keys.json` costs a full re-pair of every phone**, and nothing detects it — `selfHeal` fires only when the browser has no subscription or the relay has no record (`beacon.js:418`); after a key loss both still exist | Named in §8.6 and the runbook's backup list. No code mitigation; a relay whose data dir is not backed up is one file loss from silent, permanent non-delivery |
+| 11 | R6 is unmet and §8.3's test-notification button does not exist | Slices 8 and 9. Both are marked in place rather than quietly dropped — this table is the record of what the doc promises and the code does not yet do |
+| 12 | **Same-`Topic` push ordering is unserialized** — two pushes sharing a Topic race through the dispatch semaphore, so a daemon that flaps inside a slow POST can leave the *stale* banner winning the collapse permanently | Documented at the call site (`push_observer.go`); the exposed pair is the daemon up/down Topic, where the wrong survivor says "disconnected" about a live daemon. No fix in P1 |
+| 13 | **A relay restart is amnesia for policy state** (§8.6): every session becomes an unknown id, and a first sighting is silent — so a `ready` that landed during the restart is never delivered | Accepted: the alternative is persisting per-session policy state, which trades a missed edge for a stale one |
+| 14 | **`EventRekey` is never emitted**, so the presession→real-session cooldown carryover (§8.4) is dead policy | Needs a promotion signal the wire protocol does not carry; wiring one would touch ADR-4 |
 
 ---
 
@@ -454,16 +531,24 @@ Per repo rules, stated here so the slices inherit them: `notify` gets table *and
 
 ## Appendix A — P1 slices (each independently PR-able)
 
-| Slice | Content | Depends on |
+| Slice | Content | State |
 |---|---|---|
-| 1 | `core/domain/notify` — policy engine, table + property tests | — |
-| 2 | `core/pkg/webpush` — encrypt/sign/POST, fake-push-service tests | — |
-| 3 | Relay: VAPID identity, pairing endpoints, subscription registry + revocation coupling, push-requires-auth refusal (a guard — lands with its mutation seen red) | 2 |
-| 4 | Relay: transition observer + dispatcher + watchdog incl. persisted daemon roster | 1, 3 |
-| 5 | `platforms/web`: manifest (app name: Irrlicht Beacon), service worker, pairing + settings UI, QR-or-paste, both release copy lists + tripwire | 3 |
-| **D** | **Device test — pair a real phone against a real relay and observe a notification** ([`docs/beacon-device-test.md`](./beacon-device-test.md)). Runs *before* 6: every defect so far was found by reading, and two of them fail only on contact with a real push service, so packaging a flow nobody has seen work is premature | 1–5 |
-| 6 | Distribution: `irrlichtrelay` into the darwin/linux release tarballs (**both `arm64` and `amd64` — the Oracle target's free tier is ARM**); `examples/relay` push addendum (auth rule, backup list, launchd plist) | D |
-| 7 | Docs: relay-protocol.md addendum (REST endpoints), site setup guide (both deployment shapes) | 3–6 |
+| 1 | `core/domain/notify` — policy engine, table + property tests | **done** `2be21acd` |
+| 2 | `core/pkg/webpush` — encrypt/sign/POST, fake-push-service tests | **done** `e7bad8de` |
+| 3 | Relay: VAPID identity, pairing endpoints, subscription registry + revocation coupling, push-requires-auth refusal | **done** `c13d8035` |
+| 4 | Relay: transition observer + dispatcher + watchdog incl. persisted daemon roster | **done** `527ea4b6` |
+| 5 | `platforms/web`: manifest, service worker, pairing + settings UI, paste-only code, release copy list + tripwires | **done** `ea674027` |
+| — | *Remediation*: device-breaking defects and the coverage vacuity that hid them (§8.7) | **done** `d2643b36` |
+| 6 | Distribution: `irrlichtrelay` tarballs for `linux/arm64` + `linux/amd64`; two broken copy sites fixed | **done** `25281eb8` |
+| 7 | Docs: relay-protocol REST reference, operator runbook, site setup guide | **done** `1a2361f9`, `0dd395fa` |
+| **D** | **Device test — pair a real phone and observe a notification** ([`beacon-device-test.md`](./beacon-device-test.md)). Its phone-free half is automated (`tools/beacon-rig.sh check`, 10 live assertions, passing); the half that needs a device has not run | **outstanding — the gate on calling this done** |
+| 8 | Ledger read path: WS-snapshot fold, `setAppBadge`, notification deep link — what makes **R6** true (§8.5) | not started |
+| 9 | "Send test notification" button (§8.3), and a deterministic session-state driver for the device test's burst case | not started |
+
+Slice D was inserted mid-flight, ahead of 6, on the reasoning that packaging a flow nobody has
+seen work is premature — then 6 and 7 ran first anyway because D needs a human with a phone and
+the fleets did not. That inversion is the honest state of things, not a plan: **the ordering
+argument still stands and D is still the next thing that matters.**
 
 ---
 
