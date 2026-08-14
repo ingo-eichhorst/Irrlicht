@@ -154,10 +154,14 @@ func (c catalogCensus) literal() string {
 // both, stayed gofmt-canonical, kept the right line count, and shipped a census
 // of garbage past the whole package (measured, on review).
 //
-// The width is re-derived by the same rule literal() uses. That is not
-// tautological here: the round-trip through go/format in
-// TestCensusLiteralIsValidPasteableSource is what pins the width itself, and
-// this function pins the pairing the round-trip cannot see.
+// The width is re-derived by the same rule literal() uses. Do NOT "simplify"
+// that by having literal() call this function: the moment the renderer and the
+// expectation share one implementation, every assertion below is comparing a
+// string to itself and passes for any pairing whatsoever. The duplication IS
+// the test. It is not tautological as written, because the round-trip through
+// go/format in TestCensusLiteralIsValidPasteableSource is an independent
+// authority on the width, and this function pins the pairing that round-trip
+// cannot see.
 func (c catalogCensus) alignedFieldLine(f censusField) string {
 	width := 0
 	for _, other := range c.fields() {

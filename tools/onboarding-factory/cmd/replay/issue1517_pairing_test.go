@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -124,13 +123,6 @@ func TestTheCatalogWalkGradesMarkdownTranscripts(t *testing.T) {
 		len(markdown), checked, markdown)
 }
 
-// sweepScript is tools/replay-fixtures.sh, read as the other half of the
-// contract rather than described.
-func sweepScript(t *testing.T) string {
-	t.Helper()
-	return mustAbs(t, filepath.Join("..", "..", "..", "replay-fixtures.sh"))
-}
-
 // findNameRE picks the -name arguments out of the sweep's find invocation.
 var findNameRE = regexp.MustCompile(`-name\s+'([^']+)'`)
 
@@ -150,17 +142,15 @@ var findNameRE = regexp.MustCompile(`-name\s+'([^']+)'`)
 // TestDriftSummary_FormatIsTheShellContract hardcodes the sweep's pattern and
 // so pins the format while still allowing the two files to disagree about it.
 func TestSweepAndGatesWalkTheSameTranscriptNames(t *testing.T) {
-	f, err := os.Open(sweepScript(t))
+	sweep := mustAbs(t, filepath.Join("..", "..", "..", "replay-fixtures.sh"))
+	src, err := os.ReadFile(sweep)
 	if err != nil {
-		t.Fatalf("open the sweep: %v", err)
+		t.Fatalf("read the sweep: %v", err)
 	}
-	defer f.Close()
 
 	var names []string
 	var line string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		l := scanner.Text()
+	for _, l := range strings.Split(string(src), "\n") {
 		if !strings.Contains(l, "find \"$FIXTURES_ROOT\"") {
 			continue
 		}
@@ -169,9 +159,6 @@ func TestSweepAndGatesWalkTheSameTranscriptNames(t *testing.T) {
 			names = append(names, m[1])
 		}
 		break
-	}
-	if err := scanner.Err(); err != nil {
-		t.Fatalf("read the sweep: %v", err)
 	}
 	// Both guards are the vacuity check this contract needs most: a rename in
 	// the script makes every assertion below pass over an empty list, which is
