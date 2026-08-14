@@ -343,3 +343,52 @@ func TestCheckPIDLiveness_HerdrHostSurvivesAnUnrunnableProbe(t *testing.T) {
 		t.Errorf("a non-answer churned the repo and pushed: %d saves", repo.saves-before)
 	}
 }
+
+// TestCheckPIDLiveness_HerdrBackgroundDetachedFollowsAnAcquiredTTY is the
+// sweep half of #1546.
+//
+// TestCheckPIDLiveness_HerdrAcquiresAMissingTTY above pins that a herdr pane
+// stored without a tty acquires one here, and launcherBackfillNeedsFor's doc
+// gives BackgroundAgent.Detached as the reason that need survives the client
+// adoption at all. This is the assertion that reason was never backed by: the
+// tty arrives, and the badge derived from it does not move. For a herdr
+// session this sweep is the only repair that runs inside a daemon's lifetime —
+// everything else waits for a restart.
+func TestCheckPIDLiveness_HerdrBackgroundDetachedFollowsAnAcquiredTTY(t *testing.T) {
+	repo := newMockRepo()
+	s := herdrSession(&session.Launcher{
+		HerdrPaneID:     "w1:p1",
+		HerdrSocketPath: "/cfg/herdr/herdr.sock",
+		TermProgram:     "iTerm.app",
+	})
+	s.Background = &session.BackgroundAgent{Name: "nightly refactor", Detached: true}
+	repo.states["s"] = s
+
+	pm := newPIDManagerForTest(repo)
+	pm.SetLauncherEnvReader(func(int) (*session.Launcher, bool) {
+		return &session.Launcher{
+			HerdrPaneID:     "w1:p1",
+			HerdrSocketPath: "/cfg/herdr/herdr.sock",
+			TermProgram:     "iTerm.app",
+			ITermSessionID:  "w0t0p0",
+			TTY:             "/dev/ttys077",
+		}, true
+	})
+
+	pm.CheckPIDLiveness()
+
+	got := repo.states["s"]
+	// Vacuity guard, as in the seed-path twin: no tty acquired means the sweep
+	// never got as far as the thing under test.
+	if got.Launcher.TTY != "/dev/ttys077" {
+		t.Fatalf("the sweep never backfilled the tty (TTY = %q), so its verdict "+
+			"on Detached says nothing about #1546", got.Launcher.TTY)
+	}
+	if got.Background == nil {
+		t.Fatal("the sweep dropped Background entirely")
+	}
+	if got.Background.Detached {
+		t.Error("Detached: got true, want false — the pane acquired /dev/ttys077, " +
+			"but the badge did not follow it")
+	}
+}

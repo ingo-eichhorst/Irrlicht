@@ -155,7 +155,11 @@ type BackgroundAgent struct {
 	// (e.g. "Add guiding colors to quest cards"); may be empty.
 	Name string `json:"name,omitempty"`
 	// Detached is true when the agent has no controlling terminal — i.e. no
-	// window/tab owns it. Computed by the daemon from the captured Launcher TTY.
+	// window/tab owns it. Derived by the daemon from the captured Launcher TTY,
+	// and RE-derived whenever that TTY is repaired: an empty TTY is as often a
+	// `ps` that never answered as a process with genuinely no terminal, so the
+	// first derivation can be a claim made on no evidence, and freezing it made
+	// that claim permanent and persisted (#1546). Name is set once; this is not.
 	Detached bool `json:"detached,omitempty"`
 }
 
