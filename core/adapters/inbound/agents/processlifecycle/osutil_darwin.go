@@ -230,7 +230,7 @@ type (
 
 // resolveHostBundleIDVia is resolveHostBundleIDFromAncestry with both probes
 // injected.
-func resolveHostBundleIDVia(pid int, procInfo procInfoProbe, bundleID bundleIDProbe) (string, int, bool) {
+func resolveHostBundleIDVia(pid int, procInfo procInfoProbe, bundleID bundleIDProbe) (bundleIDOut string, hostPID int, complete bool) {
 	ppid, _, err := procInfo(pid)
 	if err != nil {
 		return "", 0, false
@@ -307,12 +307,9 @@ func resolveHostBundleIDVia(pid int, procInfo procInfoProbe, bundleID bundleIDPr
 // not CPU pressure and is still unidentified.
 //
 // "Complete" means every probe in the walk was ANSWERED, which is wider than
-// "no readProcInfo call failed": resolveHostBundleIDFromAncestry also shells
-// out to plutil via bundleIDForAppPath, under its own 2s ceiling, and a plutil
-// that blows it used to yield an empty bundle id indistinguishable from an
-// ancestor that is not an app at all — a completed miss, which is the verdict
-// that rejects. That was #1524, and it is now carried by this bit; bundleIDVia
-// is where the line between an answer and a non-answer is drawn.
+// "no readProcInfo call failed" — the walk also shells out to plutil (#1524).
+// resolveHostBundleIDFromAncestry says why that mattered; bundleIDVia is where
+// the line between an answer and a non-answer is drawn.
 func IsKnownInteractiveHost(pid int) bool {
 	return isKnownInteractiveHostVia(pid, resolveHostFromAncestry, resolveHostBundleIDFromAncestry)
 }

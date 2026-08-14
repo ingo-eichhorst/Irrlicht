@@ -870,6 +870,18 @@ func TestIsKnownInteractiveHost_AbortedWalkAdmits(t *testing.T) {
 	}
 }
 
+// walk builds a fixed-verdict ancestryWalk, and aborted/finished name its third
+// value at the call site — every test of this seam turns on which of the two a
+// walk returned, and a bare `true` there reads as "found a host".
+func walk(host string, complete bool) ancestryWalk {
+	return func(int) (string, int, bool) { return host, 0, complete }
+}
+
+const (
+	aborted  = false
+	finished = true
+)
+
 // TestIsKnownInteractiveHostVia_AbortedFirstWalkDoesNotDeferToTheSecond pins
 // the ORDER between the two walks, which neither the pure decision nor any
 // arrangement of live processes can reach: driving the two walks to DIFFERENT
@@ -886,13 +898,6 @@ func TestIsKnownInteractiveHost_AbortedWalkAdmits(t *testing.T) {
 // there rejects a legitimate iTerm session — #1513 arriving through the
 // second walk.
 func TestIsKnownInteractiveHostVia_AbortedFirstWalkDoesNotDeferToTheSecond(t *testing.T) {
-	walk := func(host string, complete bool) ancestryWalk {
-		return func(int) (string, int, bool) { return host, 0, complete }
-	}
-	const (
-		aborted  = false
-		finished = true
-	)
 	tests := []struct {
 		name            string
 		term, bundle    ancestryWalk
@@ -1198,8 +1203,11 @@ func forgetHerdrClientMemo(socketPath string) {
 // the code under test.
 //
 // lsofPath is a package var (process_darwin.go) rather than a seam invented for
-// this test, and no test in this package calls t.Parallel, so swapping it under
-// t.Cleanup is safe.
+// this test. Swapping it under t.Cleanup is safe because this test is serial and
+// Go defers every t.Parallel test until the serial ones have finished, so the
+// swap can never overlap one. (Some tests in this package DO call t.Parallel
+// now — none touch lsofPath, and one that did would need this fixture reworked
+// rather than the comment amended again.)
 func countingLsof(t *testing.T, logPath, table string) func() int {
 	t.Helper()
 	counter := filepath.Join(t.TempDir(), "calls")
@@ -1463,69 +1471,69 @@ func plistWithoutBundleID(t *testing.T) string {
 // Rows 4-5 are the new behaviour: a child that never ran to a normal exit
 // answered nothing, and says so.
 func TestBundleIDVia_AnsweredMissIsNotAnUnanswerableProbe(t *testing.T) {
+	t.Parallel() // one row spends the real 2s ceiling; overlap it with the siblings that do too
 	missingBinary := func(ctx context.Context, plist string) *exec.Cmd {
 		return exec.CommandContext(ctx, "/usr/bin/no-such-plutil-1524", plist)
+	}
+	// via adapts a bundleIDCmd into the bundleIDProbe shape bundleIDForAppPath
+	// already has, so every row names the function it exercises instead of
+	// encoding it as an absent value.
+	via := func(c bundleIDCmd) bundleIDProbe {
+		return func(appPath string) (string, error) { return bundleIDVia(appPath, c) }
 	}
 	tests := []struct {
 		name    string
 		appPath string
-		build   bundleIDCmd
+		probe   bundleIDProbe
 		wantID  string
 		wantErr bool
 		wantWhy string
 	}{
 		{
-			// nil build deliberately: this row runs the PRODUCTION entry point,
-			// bundleIDForAppPath, so the wiring from it down to plutil is
-			// pinned rather than bypassed. Reaching plutil through
-			// bundleIDVia(_, plutilBundleIDCmd) here would leave a rewiring of
-			// bundleIDForAppPath itself green (found in review of #1524).
+			// bundleIDForAppPath, not via(plutilBundleIDCmd): this row runs the
+			// PRODUCTION entry point, so the wiring from it down to plutil is
+			// pinned rather than bypassed — reaching plutil through bundleIDVia
+			// here would leave a rewiring of bundleIDForAppPath itself green
+			// (found in review of #1524).
 			"a real bundle answers with its id — the vacuity guard, through the production entry point",
-			"/System/Library/CoreServices/Finder.app", nil,
+			"/System/Library/CoreServices/Finder.app", bundleIDForAppPath,
 			"com.apple.finder", false,
 			"if this row ever fails the others prove nothing: they would all be passing on a probe that never works",
 		},
 		{
 			"LOCK: a bundle that is not there is an ANSWER",
-			filepath.Join(t.TempDir(), "Gone.app"), plutilBundleIDCmd,
+			filepath.Join(t.TempDir(), "Gone.app"), via(plutilBundleIDCmd),
 			"", false,
 			"plutil ran and said the file does not exist — a verdict, and the walk must carry on past it",
 		},
 		{
 			"LOCK: a real plist with no CFBundleIdentifier is an ANSWER",
-			plistWithoutBundleID(t), plutilBundleIDCmd,
+			plistWithoutBundleID(t), via(plutilBundleIDCmd),
 			"", false,
 			"same exit status as row 2; keying on the exit status would abort here and widen #784",
 		},
 		{
 			"a child killed by the ceiling answered NOTHING",
-			"/System/Library/CoreServices/Finder.app", stalledBundleIDCmd,
+			"/System/Library/CoreServices/Finder.app", via(stalledBundleIDCmd),
 			"", true,
 			"this is #1524: indistinguishable from row 2/3 before the error return existed",
 		},
 		{
 			"a child that never started answered NOTHING",
-			"/System/Library/CoreServices/Finder.app", missingBinary,
+			"/System/Library/CoreServices/Finder.app", via(missingBinary),
 			"", true,
 			"a fork that fails under the same load the ceiling fires under is equally no evidence",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var (
-				id  string
-				err error
-			)
-			if tc.build == nil {
-				id, err = bundleIDForAppPath(tc.appPath)
-			} else {
-				id, err = bundleIDVia(tc.appPath, tc.build)
-			}
+			t.Parallel()
+			id, err := tc.probe(tc.appPath)
 			if id != tc.wantID {
-				t.Errorf("bundleIDVia id = %q, want %q — %s", id, tc.wantID, tc.wantWhy)
+				t.Errorf("id = %q, want %q — %s", id, tc.wantID, tc.wantWhy)
 			}
 			if gotErr := err != nil; gotErr != tc.wantErr {
-				t.Errorf("bundleIDVia err = %v, want error:%v — %s", err, tc.wantErr, tc.wantWhy)
+				t.Errorf("err = %v, want error:%v — %s", err, tc.wantErr, tc.wantWhy)
 			}
 		})
 	}
@@ -1596,32 +1604,37 @@ func unanswerable() bundleIDProbe {
 // completed miss (#784 keeps rejecting it), while an app it never answered
 // about at all is no evidence and must abort the walk.
 func TestResolveHostBundleIDVia_UnanswerableBundleProbeIsNotAMiss(t *testing.T) {
+	// verdict is the walk's whole return, compared as one value: the three
+	// fields are a single answer, and reading them apart invites a test that
+	// checks two of the three.
+	type verdict struct {
+		bundleID string
+		hostPID  int
+		complete bool
+	}
 	tests := []struct {
-		name         string
-		probe        bundleIDProbe
-		wantID       string
-		wantHostPID  int
-		wantComplete bool
+		name  string
+		probe bundleIDProbe
+		want  verdict
 	}{
 		{
 			"the probe answers with Obsidian's id — the vacuity guard",
-			answering("md.obsidian"), "md.obsidian", 400, true,
+			answering("md.obsidian"), verdict{"md.obsidian", 400, true},
 		},
 		{
 			"LOCK: the probe answers that this app has no id it can name — a completed miss",
-			answering(""), "", 0, true,
+			answering(""), verdict{"", 0, true},
 		},
 		{
 			"the probe never answered — no evidence, so the walk did NOT complete",
-			unanswerable(), "", 0, false,
+			unanswerable(), verdict{"", 0, false},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			id, hostPID, complete := resolveHostBundleIDVia(100, obsidianChain(), tc.probe)
-			if id != tc.wantID || hostPID != tc.wantHostPID || complete != tc.wantComplete {
-				t.Errorf("resolveHostBundleIDVia = (%q, %d, %v); want (%q, %d, %v)",
-					id, hostPID, complete, tc.wantID, tc.wantHostPID, tc.wantComplete)
+			if got := (verdict{id, hostPID, complete}); got != tc.want {
+				t.Errorf("resolveHostBundleIDVia = %+v; want %+v", got, tc.want)
 			}
 		})
 	}
@@ -1639,7 +1652,7 @@ func TestResolveHostBundleIDVia_UnanswerableBundleProbeIsNotAMiss(t *testing.T) 
 // answered about and which is not allow-listed must still be declined. Without
 // it "fail open on a non-answer" and "fail open always" look identical here.
 func TestIsKnownInteractiveHost_PlutilNonAnswerAdmits(t *testing.T) {
-	walk1Finished := func(int) (string, int, bool) { return "", 0, true }
+	walk1Finished := walk("", finished)
 	walk2 := func(probe bundleIDProbe) ancestryWalk {
 		return func(pid int) (string, int, bool) {
 			return resolveHostBundleIDVia(pid, obsidianChain(), probe)
@@ -1687,7 +1700,7 @@ func TestIsKnownInteractiveHost_PlutilCeilingAdmitsEndToEnd(t *testing.T) {
 	stalled := func(appPath string) (string, error) {
 		return bundleIDVia(appPath, stalledBundleIDCmd)
 	}
-	walk1Finished := func(int) (string, int, bool) { return "", 0, true }
+	walk1Finished := walk("", finished)
 	walk2 := func(pid int) (string, int, bool) {
 		return resolveHostBundleIDVia(pid, obsidianChain(), stalled)
 	}

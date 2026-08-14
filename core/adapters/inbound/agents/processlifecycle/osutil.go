@@ -373,7 +373,13 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry *ancestryProb
 	// only; other platforms return "" and this is a no-op.
 	if l.TermProgram == "" {
 		bundleID, _, ok := resolveHostBundleIDFromAncestry(pid)
-		complete = ok
+		// AND, not assign: this bit is hand-accumulated three guarded blocks
+		// down, and a block inserted above that also writes it would otherwise
+		// be silently overwritten here — the failure ancestryProbe.walked()'s
+		// doc describes for the sibling walk. Identical today (nothing writes
+		// complete between its initialisation and here); the point is that it
+		// stays identical after the next block lands.
+		complete = complete && ok
 		l.HostBundleID = bundleID
 	}
 	// Back-fill kitty fields for sessions whose own env is unreadable
