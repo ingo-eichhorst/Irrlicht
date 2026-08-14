@@ -23,7 +23,7 @@ import (
 // to a bare basename, i.e. pre-#1046 behavior) so every recordings-dir-only
 // test fixture can omit it.
 type concurrencyProjectResolver interface {
-	GetProjectName(dir string) string
+	GetProjectName(dir string) (name string, answered bool)
 }
 
 // ConcurrencyTracker reconstructs concurrent-agent counts over time from the
@@ -117,7 +117,17 @@ func (t *ConcurrencyTracker) resolveProject(cwd string) string {
 	}
 	p := filepath.Base(cwd)
 	if t.git != nil {
-		if resolved := t.git.GetProjectName(cwd); resolved != "" {
+		resolved, answered := t.git.GetProjectName(cwd)
+		if !answered {
+			// #1543: the cache below is for the daemon's LIFETIME, on the
+			// reasoning that a historical cwd's repo does not change after the
+			// fact. That reasoning holds for a resolution; it does not hold
+			// for a git that never ran, whose basename fallback is a guess —
+			// and for a worktree cwd it is the guess #1046 exists to prevent.
+			// Return it for this request and re-ask on the next.
+			return p
+		}
+		if resolved != "" {
 			p = resolved
 		}
 	}

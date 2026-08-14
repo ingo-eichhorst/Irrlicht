@@ -312,15 +312,15 @@ func (l *mockLogger) errorSnapshot() []string {
 
 type mockGit struct{}
 
-func (g *mockGit) GetBranch(dir string) string { return "main" }
-func (g *mockGit) GetProjectName(dir string) string {
+func (g *mockGit) GetBranch(dir string) (string, bool) { return "main", true }
+func (g *mockGit) GetProjectName(dir string) (string, bool) {
 	if dir == "" {
-		return ""
+		return "", true
 	}
-	return "project"
+	return "project", true
 }
-func (g *mockGit) GetGitRoot(dir string) string               { return "" }
-func (g *mockGit) GetHeadCommit(dir string) string            { return "" }
+func (g *mockGit) GetGitRoot(dir string) (string, bool)       { return "", true }
+func (g *mockGit) GetHeadCommit(dir string) (string, bool)    { return "", true }
 func (g *mockGit) GetBranchFromTranscript(path string) string { return "" }
 func (g *mockGit) GetCWDFromTranscript(path string) string    { return "" }
 

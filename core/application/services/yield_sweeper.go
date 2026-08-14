@@ -25,8 +25,8 @@ type yieldSessionStore interface {
 // yieldGitProbe is the narrow git surface the sweeper needs: resolve a repo
 // root (to dedupe projects) and list the commits a repo has reverted.
 type yieldGitProbe interface {
-	GetGitRoot(dir string) string
-	RevertedCommits(dir string) []string
+	GetGitRoot(dir string) (root string, answered bool)
+	RevertedCommits(dir string) (shas []string, answered bool)
 }
 
 // YieldSweeper periodically correlates `git revert` commits back to the
@@ -112,8 +112,11 @@ func (s *YieldSweeper) recordRootDir(rootDirs map[string]string, cwd string) {
 	if cwd == "" {
 		return
 	}
-	root := s.git.GetGitRoot(cwd)
-	if root == "" {
+	root, answered := s.git.GetGitRoot(cwd)
+	if !answered || root == "" {
+		// A non-answer drops this cwd from the scan exactly as a non-repo
+		// does, and collectRevertedSHAs is where that is reported — one line
+		// per sweep at most, rather than one per session.
 		return
 	}
 	if _, seen := rootDirs[root]; !seen {
@@ -125,10 +128,26 @@ func (s *YieldSweeper) recordRootDir(rootDirs map[string]string, cwd string) {
 // project roots.
 func (s *YieldSweeper) collectRevertedSHAs(rootDirs map[string]string) map[string]bool {
 	reverted := make(map[string]bool)
+	unread := 0
 	for _, dir := range rootDirs {
-		for _, sha := range s.git.RevertedCommits(dir) {
+		shas, answered := s.git.RevertedCommits(dir)
+		if !answered {
+			// #1543: "git could not be run" is not "this repo has no
+			// reverts". The sweep is idempotent and re-runs every interval, so
+			// the correct response is to skip this root and say so — not to
+			// let an unscanned repo count as a scanned one with no findings,
+			// which is how a sweep reports "nothing flipped" for history it
+			// never read.
+			unread++
+			continue
+		}
+		for _, sha := range shas {
 			reverted[sha] = true
 		}
+	}
+	if unread > 0 {
+		s.logError("yield sweep could not read git history",
+			fmt.Errorf("%d of %d project root(s) unscanned: git did not answer", unread, len(rootDirs)))
 	}
 	return reverted
 }

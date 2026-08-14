@@ -157,6 +157,71 @@ func probe() ([]int, bool) {
 }`,
 		},
 		{
+			name: "classified_via_the_qualified_shared_predicate", want: 0, wantRuns: 1,
+			needle: `shellout.Answered(err)`,
+			why:    "#1543 promoted the predicate to core/pkg/shellout; before shelloutPkgClassifiers existed this row reported a FALSE POSITIVE against correctly-classified code (measured against processTTYVia)",
+			src: `package shapes
+func probe() (string, bool) {
+	out, err := exec.CommandContext(ctx, psPath, "-p", pid).Output()
+	if !shellout.Answered(err) {
+		return "", false
+	}
+	return string(out), true
+}`,
+		},
+		{
+			name: "classified_via_the_qualified_predicate_with_an_allowlist", want: 0, wantRuns: 1,
+			needle: `shellout.Answered(err, lsofNothingToReport)`,
+			why:    "the variadic form must be recognised too; matching is on the callee, not on the argument count",
+			src: `package shapes
+func probe() (int, bool) {
+	out, err := exec.CommandContext(ctx, lsofPath, path).Output()
+	if !shellout.Answered(err, lsofNothingToReport) {
+		return 0, false
+	}
+	return parse(out), true
+}`,
+		},
+		{
+			name: "a_different_packages_Answered_does_not_vouch", want: 1, wantRuns: 1,
+			needle: `notourpkg.Answered(err)`,
+			why:    "matching is keyed on the package identifier: an unrelated Answered is not this repo's predicate, and accepting it would make the rule satisfiable by naming",
+			src: `package shapes
+func probe() (string, bool) {
+	out, err := exec.CommandContext(ctx, psPath, "-p", pid).Output()
+	if !notourpkg.Answered(err) {
+		return "", false
+	}
+	return string(out), true
+}`,
+		},
+		{
+			name: "an_aliased_import_of_the_shared_predicate_is_NOT_recognised", want: 1, wantRuns: 1,
+			needle: `sh.Answered(err)`,
+			why:    "a DECLARED LIMIT, pinned so it is learned from a test rather than an incident: the scan has no type information, so `import sh \"irrlicht/core/pkg/shellout\"` reads as an unknown package. The failure is a false positive, which is the loud direction",
+			src: `package shapes
+func probe() (string, bool) {
+	out, err := exec.CommandContext(ctx, psPath, "-p", pid).Output()
+	if !sh.Answered(err) {
+		return "", false
+	}
+	return string(out), true
+}`,
+		},
+		{
+			name: "a_method_named_Answered_on_a_receiver", want: 1, wantRuns: 1,
+			needle: `probe.Answered(err)`,
+			why:    "the SelectorExpr match must not be satisfied by any value with an Answered method; only the known package identifiers count",
+			src: `package shapes
+func run(probe classifier) (string, bool) {
+	out, err := exec.CommandContext(ctx, psPath, "-p", pid).Output()
+	if !probe.Answered(err) {
+		return "", false
+	}
+	return string(out), true
+}`,
+		},
+		{
 			name: "propagated_wrapped", want: 0, wantRuns: 1,
 			needle: `fmt.Errorf(`,
 			why:    "readProcInfo and CWDOf do this: the two facts stay distinguishable at the caller instead of merging here",

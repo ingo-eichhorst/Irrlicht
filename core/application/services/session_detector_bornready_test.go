@@ -13,8 +13,8 @@ import (
 // unexpected call panics loudly rather than silently returning a zero value.
 type bornGit struct{ outbound.GitResolver }
 
-func (bornGit) GetBranch(string) string      { return "main" }
-func (bornGit) GetProjectName(string) string { return "project" }
+func (bornGit) GetBranch(string) (string, bool)      { return "main", true }
+func (bornGit) GetProjectName(string) (string, bool) { return "project", true }
 
 type bornLog struct{ outbound.Logger }
 

@@ -153,10 +153,14 @@ func TestYieldSweeper_Idempotent(t *testing.T) {
 type fakeYieldGit struct {
 	root     string
 	reverted []string
+	// rootUnread / revertsUnread make this double report a NON-ANSWER — git
+	// could not be run — rather than an empty answer (#1543).
+	rootUnread    bool
+	revertsUnread bool
 }
 
-func (f *fakeYieldGit) GetGitRoot(string) string        { return f.root }
-func (f *fakeYieldGit) RevertedCommits(string) []string { return f.reverted }
+func (f *fakeYieldGit) GetGitRoot(string) (string, bool)        { return f.root, !f.rootUnread }
+func (f *fakeYieldGit) RevertedCommits(string) ([]string, bool) { return f.reverted, !f.revertsUnread }
 
 // 1K sessions correlated against 10K reverted SHAs must complete well under the
 // 2s DoD bar. This measures the daemon's matching cost; the `git log` scan over

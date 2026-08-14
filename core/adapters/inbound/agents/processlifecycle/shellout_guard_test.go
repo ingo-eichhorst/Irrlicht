@@ -82,13 +82,61 @@ var shelloutRunMethods = map[string]bool{
 	"Start":          true,
 }
 
-// shelloutClassifiers are the calls that count as answering "did the child
-// answer?". lsofProbeRan is here because it IS probeAnswered with lsof's
-// allowlist bound (osutil_darwin.go); a third tool-specific wrapper would be
-// added here in the same breath as being written.
+// shelloutClassifiers are the UNQUALIFIED calls that count as answering "did
+// the child answer?". lsofProbeRan is here because it IS probeAnswered with
+// lsof's allowlist bound (osutil_darwin.go); a third tool-specific wrapper
+// would be added here in the same breath as being written.
 var shelloutClassifiers = map[string]bool{
 	"probeAnswered": true,
 	"lsofProbeRan":  true,
+}
+
+// shelloutPkgClassifiers are the QUALIFIED spellings, keyed by package
+// identifier then function name.
+//
+// #1543 promoted probeAnswered's implementation to core/pkg/shellout.Answered
+// so an outbound adapter one hexagon layer away could reach it. This package
+// still calls the local probeAnswered — which now forwards — so nothing here
+// changed spelling, and that is exactly why this entry is needed rather than
+// obviously needed: the moment a site here writes shellout.Answered(err)
+// directly, which is a completely reasonable thing to write, an *ast.Ident
+// match stops recognising it.
+//
+// MEASURED before this entry existed, by rewriting processTTYVia's classifier
+// call to the qualified spelling: the guard reported
+//
+//	osutil_darwin.go:67 in processTTYVia(): the error of a child process (err)
+//	is neither passed to probeAnswered/lsofProbeRan nor returned
+//
+// i.e. a FALSE POSITIVE against correctly-classified code, not a false
+// negative. That is the loud direction and the guard's own doc argues for
+// preferring it — but a rule that fails the build on the sanctioned fix
+// teaches the next author to spell it the way the rule expects rather than the
+// way that is right, so it is fixed rather than left as a known quirk.
+//
+// Matching is on the package IDENTIFIER, not an import path: this scan has no
+// type information (see the file header on why it parses source). An aliased
+// import of core/pkg/shellout would therefore not be recognised, which is the
+// same class of limit the run-method table already accepts and is pinned as a
+// corpus row rather than left to be discovered.
+var shelloutPkgClassifiers = map[string]map[string]bool{
+	"shellout": {"Answered": true},
+}
+
+// isShelloutClassifier reports whether fun names a call that classifies a
+// child-process error, in either spelling.
+func isShelloutClassifier(fun ast.Expr) bool {
+	switch f := fun.(type) {
+	case *ast.Ident:
+		return shelloutClassifiers[f.Name]
+	case *ast.SelectorExpr:
+		pkg, ok := f.X.(*ast.Ident)
+		if !ok {
+			return false
+		}
+		return shelloutPkgClassifiers[pkg.Name][f.Sel.Name]
+	}
+	return false
 }
 
 // shelloutFinding is one unclassified shellout error.
@@ -163,7 +211,7 @@ func scanScope(fset *token.FileSet, file, name string, body ast.Node) (findings 
 		default:
 			if !classifiedOrPropagated(body, errName, run.Pos()) {
 				findings = append(findings, shelloutFinding{file, line, name,
-					"the error of a child process (" + errName + ") is neither passed to probeAnswered/lsofProbeRan nor returned — " +
+					"the error of a child process (" + errName + ") is neither passed to probeAnswered/lsofProbeRan/shellout.Answered nor returned — " +
 						"a non-answer collapses into a zero value here (#1538)"})
 			}
 		}
@@ -287,7 +335,7 @@ func classifiedOrPropagated(body ast.Node, errName string, after token.Pos) bool
 		}
 		switch s := n.(type) {
 		case *ast.CallExpr:
-			if id, ok := s.Fun.(*ast.Ident); ok && shelloutClassifiers[id.Name] {
+			if isShelloutClassifier(s.Fun) {
 				for _, arg := range s.Args {
 					if usesIdent(arg, errName) {
 						found = true
@@ -408,7 +456,7 @@ func TestEveryBoundedShelloutClassifiesItsError(t *testing.T) {
 	}
 	if len(findings) > 0 {
 		t.Log("Every issue in this family is one sentence: \"I could not look\" collapsed into \"I looked and there was nothing\" (#1485, #1492, #1513, #1524, #1533, #1537).")
-		t.Log("Fix: classify with probeAnswered(err[, answeredExitCodes...]) and decide at THIS call site what a non-answer means, or return the error.")
+		t.Log("Fix: classify with probeAnswered(err[, answeredExitCodes...]) — or shellout.Answered, the shared predicate it forwards to (#1543) — and decide at THIS call site what a non-answer means, or return the error.")
 	}
 }
 

@@ -19,6 +19,23 @@ type metadataEnricher struct {
 	metrics outbound.MetricsCollector
 }
 
+// adoptIfAnswered writes v into *dst only when the git probe that produced it
+// actually RAN, and reports whether it did.
+//
+// Every git read on this enricher's paths returns ("", false) when git could
+// not be run at all (outbound.GitResolver, #1543), and that empty string is
+// not evidence: assigning it clears a branch or project name the session
+// already resolved, which is #1485's shape one adapter over. Declining also
+// leaves backfillOne's retry open — see the note there, which is the half of
+// this that made a transient failure PERMANENT.
+func adoptIfAnswered(dst *string, v string, answered bool) bool {
+	if !answered {
+		return false
+	}
+	*dst = v
+	return true
+}
+
 // newMetadataEnricher creates a metadataEnricher with the given dependencies.
 func newMetadataEnricher(git outbound.GitResolver, metrics outbound.MetricsCollector) *metadataEnricher {
 	return &metadataEnricher{git: git, metrics: metrics}
@@ -34,7 +51,15 @@ func (e *metadataEnricher) CaptureYieldOnReady(state *session.SessionState) {
 	if state == nil || state.YieldState == session.YieldReverted {
 		return
 	}
-	head := e.git.GetHeadCommit(state.CWD)
+	head, answered := e.git.GetHeadCommit(state.CWD)
+	if !answered {
+		// "unknown" is a VERDICT here — it is what the yield ratio buckets a
+		// session's dollars into, and it is persisted. A git that could not be
+		// run has not established it (#1543). Leaving the state untouched is
+		// safe because this runs on every ready transition, so the next one
+		// re-asks.
+		return
+	}
 	if head == "" {
 		state.YieldState = session.YieldUnknown
 		return
@@ -58,13 +83,11 @@ func (e *metadataEnricher) EnrichNewSession(state *session.SessionState, ev agen
 	// Resolve git metadata.
 	if ev.CWD != "" {
 		state.CWD = ev.CWD
-		state.GitBranch = e.git.GetBranch(ev.CWD)
-		state.ProjectName = e.git.GetProjectName(ev.CWD)
+		e.adoptGitMetadata(state, ev.CWD)
 	} else if ev.TranscriptPath != "" {
 		if cwd := e.git.GetCWDFromTranscript(ev.TranscriptPath); cwd != "" {
 			state.CWD = cwd
-			state.GitBranch = e.git.GetBranch(cwd)
-			state.ProjectName = e.git.GetProjectName(cwd)
+			e.adoptGitMetadata(state, cwd)
 		} else if b := e.git.GetBranchFromTranscript(ev.TranscriptPath); b != "" {
 			state.GitBranch = b
 		}
@@ -84,10 +107,19 @@ func (e *metadataEnricher) EnrichNewSession(state *session.SessionState, ev agen
 		// an already-resolved cwd above wins.
 		if state.CWD == "" && m.LastCWD != "" {
 			state.CWD = m.LastCWD
-			state.GitBranch = e.git.GetBranch(m.LastCWD)
-			state.ProjectName = e.git.GetProjectName(m.LastCWD)
+			e.adoptGitMetadata(state, m.LastCWD)
 		}
 	}
+}
+
+// adoptGitMetadata fills branch and project name from cwd, leaving either
+// untouched when git could not be run for it. Leaving them empty is what keeps
+// backfillOne willing to try again later.
+func (e *metadataEnricher) adoptGitMetadata(state *session.SessionState, cwd string) {
+	branch, branchAnswered := e.git.GetBranch(cwd)
+	adoptIfAnswered(&state.GitBranch, branch, branchAnswered)
+	name, nameAnswered := e.git.GetProjectName(cwd)
+	adoptIfAnswered(&state.ProjectName, name, nameAnswered)
 }
 
 // RefreshOnActivity refreshes CWD/branch/project from the latest transcript
@@ -110,16 +142,26 @@ func (e *metadataEnricher) RefreshOnActivity(state *session.SessionState, transc
 	}
 	if cwd != "" && cwd != state.CWD {
 		state.CWD = cwd
-		state.GitBranch = e.git.GetBranch(cwd)
+		branch, branchAnswered := e.git.GetBranch(cwd)
+		// A non-answer must not clear the branch this session already
+		// resolved — an empty string from a git that never ran says nothing
+		// about which branch the worktree is on (#1543).
+		adoptIfAnswered(&state.GitBranch, branch, branchAnswered)
 		// Only update ProjectName when the new CWD is inside a git repo.
 		// For non-git directories, keep the original project name set at
 		// session creation to avoid subdirectory names overriding it.
 		// However, if ProjectName was never set (initial enrichment failed
 		// because the transcript was too new), use the full fallback chain.
-		if gitRoot := e.git.GetGitRoot(cwd); gitRoot != "" {
+		gitRoot, rootAnswered := e.git.GetGitRoot(cwd)
+		switch {
+		case !rootAnswered:
+			// Neither branch of the original applies: "not inside a repo" is
+			// exactly what was not established.
+		case gitRoot != "":
 			state.ProjectName = filepath.Base(gitRoot)
-		} else if state.ProjectName == "" {
-			state.ProjectName = e.git.GetProjectName(cwd)
+		case state.ProjectName == "":
+			name, nameAnswered := e.git.GetProjectName(cwd)
+			adoptIfAnswered(&state.ProjectName, name, nameAnswered)
 		}
 	}
 }
@@ -166,13 +208,19 @@ func (e *metadataEnricher) backfillOne(state *session.SessionState) bool {
 	if state.CWD == "" {
 		return updated
 	}
+	// updated is set only when git ANSWERED, and that is load-bearing rather
+	// than tidy. This function returns early above when ProjectName is
+	// already set, so a run that stored a value from a git which never ran
+	// would never be revisited: one transient failure at first enrichment
+	// left a session with no project and no branch for the rest of its life
+	// (#1543). Declining to store keeps the next sweep willing to ask again.
 	if state.ProjectName == "" {
-		state.ProjectName = e.git.GetProjectName(state.CWD)
-		updated = true
+		name, answered := e.git.GetProjectName(state.CWD)
+		updated = adoptIfAnswered(&state.ProjectName, name, answered) || updated
 	}
 	if state.GitBranch == "" {
-		state.GitBranch = e.git.GetBranch(state.CWD)
-		updated = true
+		branch, answered := e.git.GetBranch(state.CWD)
+		updated = adoptIfAnswered(&state.GitBranch, branch, answered) || updated
 	}
 	return updated
 }

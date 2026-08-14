@@ -122,15 +122,27 @@ type Logger interface {
 }
 
 // GitResolver resolves git metadata from a working directory.
+//
+// The four methods that shell out to git return a second value, answered,
+// which is false when git could not be RUN at all — killed by the adapter's
+// ceiling, never started, or output past its cap. It is TRUE, with a zero
+// first value, for every case where git ran and reported nothing to give:
+// not a repo, a detached or unborn HEAD, no release tags.
+//
+// The distinction is the whole of #1543, and it has the polarity of #1492
+// rather than #1513: nothing behind this port gates admission, so a non-answer
+// degrades an enrichment to "unknown" and must never be written over a value
+// the caller already holds. The two transcript readers carry no such value —
+// they read files, they start no child process.
 type GitResolver interface {
-	GetBranch(dir string) string
-	GetProjectName(dir string) string
+	GetBranch(dir string) (branch string, answered bool)
+	GetProjectName(dir string) (name string, answered bool)
 	// GetGitRoot returns the absolute path of the git repo root for the given
 	// directory, or "" if the directory is not inside a git repository.
-	GetGitRoot(dir string) string
+	GetGitRoot(dir string) (root string, answered bool)
 	// GetHeadCommit returns the full SHA of the current HEAD commit for the
 	// given directory, or "" if it is not inside a git repository (#373).
-	GetHeadCommit(dir string) string
+	GetHeadCommit(dir string) (sha string, answered bool)
 	GetBranchFromTranscript(transcriptPath string) string
 	// GetCWDFromTranscript extracts the working directory from a transcript
 	// file by scanning the first few lines for a "cwd" field.

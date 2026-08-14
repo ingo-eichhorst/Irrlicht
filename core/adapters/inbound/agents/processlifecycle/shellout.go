@@ -2,10 +2,10 @@ package processlifecycle
 
 import (
 	"context"
-	"errors"
 	"os/exec"
-	"slices"
 	"time"
+
+	"irrlicht/core/pkg/shellout"
 )
 
 // shelloutTimeout is the ceiling EVERY bounded shellout in this package runs
@@ -42,71 +42,21 @@ const shelloutTimeout = 2 * time.Second
 // carrying arguments nobody reads is five chances to forget the ceiling.
 type shelloutCmd func(ctx context.Context) *exec.Cmd
 
-// probeAnswered reports whether the child process behind a bounded shellout
-// actually ANSWERED, as opposed to never having been asked. It is the one
-// predicate every shellout in this package classifies its error with (#1538),
-// replacing three spellings that had drifted apart:
+// probeAnswered is this package's binding of the shared predicate
+// core/pkg/shellout.Answered, which every bounded child process in the repo
+// classifies its error with (#1538). The implementation, and the measurements
+// behind it — why a mid-run deadline kill is an *exec.ExitError that does NOT
+// wrap context.DeadlineExceeded, and why ProcessState.Exited() rather than
+// errors.Is is the ran-vs-killed discriminator — live there.
 //
-//   - lsofProbeRan's `err == nil || (errors.As(&exit) && exit.ExitCode() == 1)`
-//   - bundleIDVia's `errors.As(&exit) && exit.ProcessState.Exited()`
-//   - runPgrep's bare `err.(*exec.ExitError)` type assertion, which misses a
-//     wrapped error for no reason anyone chose.
-//
-// The whole family it exists to prevent — #1485, #1492, #1513, #1524, #1533,
-// #1537 — is one sentence six times: "I could not look" collapsed into "I
-// looked and there was nothing". This predicate answers only the first half.
-// What to DO with a non-answer is per-call-site and deliberately not decided
-// here: IsKnownInteractiveHost gates ADMISSION and so fails open (#1513),
-// while hostIdentity feeds a click target and so degrades an enrichment
-// (#1492). A shared verdict with per-site polarity is the point.
-//
-// answeredExitCodes is the per-tool part, and it is the only part that
-// genuinely differs. Empty means "any normal exit is an answer" — plutil's
-// rule, because it exits 1 both for a missing Info.plist and for a plist
-// carrying no CFBundleIdentifier (both measured: exit 1, #1524 and re-measured
-// in #1538), so treating a non-zero exit as a non-answer would fail the
-// admission gate OPEN and widen #784. A non-empty list is an allowlist of the
-// non-zero exits that count as answers — lsof's and pgrep's rule, where exit 1
-// is "nothing to report" and any OTHER code is not evidence about anything.
-// That distinction is load-bearing rather than cosmetic: `sh -c "exit 152"`
-// (a process killed under an exhausted CPU limit reports 152 through a shell)
-// exits NORMALLY, so ProcessState.Exited() is true and ExitCode() is 152
-// (measured, go1.25 darwin/arm64) — the empty form would call it an answer and
-// lsofProbeRan's committed corpus pins that it is not.
-//
-// The hard half does NOT differ, and it is the half that is easy to get wrong:
-//
-//   - A killed child is not an answer, and `errors.Is(err,
-//     context.DeadlineExceeded)` will not tell you. When CommandContext's
-//     deadline fires MID-RUN the child is SIGKILLed and Output returns
-//     *exec.ExitError "signal: killed", which does not wrap the context's
-//     error: errors.Is reports FALSE while ctx.Err() reports the deadline
-//     (measured independently in #1524 and again in #1538, go1.25
-//     darwin/arm64). The natural-looking spelling compiles, reads correctly,
-//     and misses the exact condition every issue in this family is about.
-//   - ProcessState.Exited() is what separates a process that RAN from one that
-//     was killed, and it covers the deaths the ceiling did not cause too: an
-//     OOM kill, a fork that failed under the same load, and a ctx already past
-//     its deadline before Start — where the error is not an ExitError at all
-//     (measured: `errors.As` false, `errors.Is(DeadlineExceeded)` true).
-//
-// errors.As rather than a type assertion because an error that has been
-// wrapped on the way here is still an exit status. No caller wraps today
-// (os/exec hands back a bare *exec.ExitError), which is exactly why the bare
-// assertion in runPgrep survived unnoticed — it was correct by accident of its
-// caller, not by construction.
+// It stays a local name because the knowledge splits in three, one level per
+// name: shellout.Answered knows what is true of any child process,
+// probeAnswered is where this package's sites agree on the empty-variadic form
+// ("for ps and plutil, any normal exit is an answer"), and lsofProbeRan binds
+// the one per-tool allowlist below that. #1543 moved the bottom of that stack
+// into pkg/ so an OUTBOUND adapter could reach it; it did not merge the three,
+// and shellout_guard_test.go recognises BOTH spellings so a future site here
+// may call shellout.Answered directly without being reported.
 func probeAnswered(err error, answeredExitCodes ...int) bool {
-	if err == nil {
-		return true
-	}
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) || !exit.ProcessState.Exited() {
-		// Killed, never started, or not a child-exit error at all. None of
-		// these carry information about the question that was asked.
-		return false
-	}
-	if len(answeredExitCodes) == 0 {
-		return true
-	}
-	return slices.Contains(answeredExitCodes, exit.ExitCode())
+	return shellout.Answered(err, answeredExitCodes...)
 }
