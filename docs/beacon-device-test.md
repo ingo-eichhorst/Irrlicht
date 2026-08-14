@@ -13,6 +13,33 @@ fault is in what that phase introduced, not in the four before it.
 
 ---
 
+## Automated: `tools/beacon-rig.sh`
+
+Setup friction is what makes this plan expensive to repeat, so most of it is scripted:
+
+```sh
+tools/beacon-rig.sh up [--serve]   # build + start an isolated relay, auth on, own state dir
+tools/beacon-rig.sh check          # every assertion below that needs no phone
+tools/beacon-rig.sh down [--wipe]
+```
+
+State lives in `.build/beacon-rig` — never your real `~/.local/share/irrlicht` — so nothing here
+can touch a production relay's tokens or a paired phone. `up` refuses rather than starting a
+second relay on a busy port, because `7839` is the production default and the thing already
+there is probably yours.
+
+`check` currently covers, against a live relay: the anonymous-mode refusal (403 naming the fix,
+and **no VAPID key minted**), `push/info`, `0600` file modes, mint → redeem → subscribe, a spent
+code answering the uniform 401, the health endpoint not echoing the endpoint path (RFC 8030
+§8.3), a malformed subscription refused at the door, VAPID identity and subscriptions surviving a
+restart, and `token revoke` pruning the delivery address. That is Phase 0's relay half plus most
+of Phase 6.
+
+**It cannot cover what needs a device:** the iOS install and storage partition, permission and
+activation ordering, whether a real push service accepts our JWT, and whether a banner actually
+appears on a locked phone. Those are Phases 3, 4 and the visual half of 5, and they are the whole
+reason this document exists.
+
 ## What you need
 
 - The Mac, with a dev relay and daemon (`tools/build-dev.sh`; `/ir:test-mac separate` gives an
