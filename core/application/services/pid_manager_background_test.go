@@ -149,8 +149,12 @@ func TestSeedPIDs_BackgroundDetachedFollowsTheRefreshedTTY(t *testing.T) {
 		)
 		pm := newPIDManagerForTest(repo)
 		pm.SetLauncherEnvReader(answeringReader)
+		// Deliberately NOT the stored name. captureBackground is set-once, so
+		// nothing this reader returns may reach the record — and a reader that
+		// echoed the stored name would make the Name assertion below pass
+		// whether the identification half was re-stamped or not.
 		pm.SetBackgroundReader(func(int) *session.BackgroundAgent {
-			return &session.BackgroundAgent{Name: "nightly refactor"}
+			return &session.BackgroundAgent{Name: "RE-READ AT SEED"}
 		})
 
 		pm.SeedPIDs([]*session.SessionState{repo.states["s"]})
@@ -171,8 +175,11 @@ func TestSeedPIDs_BackgroundDetachedFollowsTheRefreshedTTY(t *testing.T) {
 				"but the badge did not follow the repaired tty")
 		}
 		// The identification half stays set-once: only the derived field moves.
+		// This is also the seed path's only set-once lock — the reader-call-count
+		// assertion in the #744 test above covers HandlePIDAssigned, not this path.
 		if got.Background.Name != "nightly refactor" {
-			t.Errorf("Name: got %q, want %q", got.Background.Name, "nightly refactor")
+			t.Errorf("Name: got %q, want %q — captureBackground re-stamped a record "+
+				"that already had a Background", got.Background.Name, "nightly refactor")
 		}
 	})
 

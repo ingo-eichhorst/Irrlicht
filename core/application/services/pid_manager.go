@@ -341,9 +341,12 @@ func detachedFromLauncher(l *session.Launcher) bool {
 // process genuinely has no controlling terminal, or the `ps` behind
 // processTTY was killed by its 2s ceiling and never answered. Nothing that
 // reaches this layer distinguishes them — ReadLauncherEnv discards
-// hostIdentity's completeness verdict for the agent's own read, deliberately
-// and for reasons that have nothing to do with the tty (see its doc comment)
-// — so captureBackground's first stamp can be a claim made on no evidence.
+// hostIdentity's completeness verdict for the agent's own read — so
+// captureBackground's first stamp can be a claim made on no evidence. Read
+// that discard carefully before building on it: its stated reasons (see
+// ReadLauncherEnv's doc comment) are about the ANCESTRY walk and predate
+// #1533 folding the tty probe into the same bit, so the verdict being dropped
+// now carries tty information its rationale does not cover.
 //
 // The rest of the codebase already handles that correctly by treating an empty
 // TTY as MISSING rather than absent: launcherBackfillNeedsFor returns
@@ -1429,8 +1432,13 @@ func (pm *PIDManager) refreshHerdrHosts(snaps []livenessSnapshot) {
 		if state == nil {
 			continue
 		}
+		// Not "host re-resolved": since #1546 this pass reports a change when
+		// the host moved, when the background badge was re-derived from a
+		// repaired tty, or both — and in the badge-only case all three values
+		// printed here are identical to the ones printed last time, so the
+		// older wording named the one thing that provably had NOT happened.
 		pm.log.LogInfo(logComponentSessionDetector, state.SessionID,
-			fmt.Sprintf("herdr host re-resolved: term_program=%q host_bundle_id=%q tty=%q",
+			fmt.Sprintf("herdr session refreshed: term_program=%q host_bundle_id=%q tty=%q",
 				state.Launcher.TermProgram, state.Launcher.HostBundleID, state.Launcher.TTY))
 		pm.broadcast(outbound.PushTypeUpdated, state)
 	}
