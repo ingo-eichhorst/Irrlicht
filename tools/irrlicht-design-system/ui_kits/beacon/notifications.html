@@ -1,0 +1,74 @@
+<!-- @dsCard group="Beacon" name="Notification compositions" subtitle="The four payload kinds as lock-screen banners" viewport="460x640" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Beacon — notification compositions — Irrlicht design system</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:#050a14;color:#c8cdd8;font-family:'Outfit',system-ui,sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;opacity:.025;z-index:999;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.stack{width:420px;display:flex;flex-direction:column;gap:14px}
+.kind{font-family:'DM Mono',monospace;font-size:.62rem;letter-spacing:.3em;text-transform:uppercase;color:#5a6378;margin:6px 2px 0}
+.banner{display:flex;gap:12px;align-items:flex-start;background:rgba(18,24,42,.85);backdrop-filter:blur(16px);border:1px solid rgba(200,205,216,.08);border-radius:16px;padding:13px 15px}
+.appicon{width:34px;height:34px;border-radius:8px;background:#0a1020 radial-gradient(ellipse at 50% 65%,rgba(139,92,246,.45),transparent 70%);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.appicon .flame{width:9px;height:13px;background:#8B5CF6;border-radius:50% 50% 50% 50%/60% 60% 40% 40%;box-shadow:0 0 8px rgba(139,92,246,.8)}
+.b-body{flex:1;min-width:0}
+.b-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.b-title{font-weight:500;font-size:.88rem;color:#e8ecf4}
+.b-title .st{font-weight:400}
+.b-title .waiting{color:#FF9500}
+.b-title .ready{color:#34C759}
+.b-time{font-family:'DM Mono',monospace;font-size:.62rem;color:#5a6378;flex-shrink:0}
+.b-text{font-weight:300;font-size:.82rem;color:#c8cdd8;margin-top:2px}
+.b-text code{font-family:'DM Mono',monospace;font-size:.76rem;color:#c8cdd8}
+.silent{opacity:.55}
+.note{font-family:'DM Mono',monospace;font-size:.62rem;letter-spacing:.08em;color:#5a6378;margin:2px 2px 0;text-align:right}
+</style>
+</head>
+<body>
+<div class="stack">
+  <div class="kind">session &middot; waiting &mdash; urgency high, ttl 1h</div>
+  <div class="banner">
+    <div class="appicon"><div class="flame"></div></div>
+    <div class="b-body">
+      <div class="b-top"><span class="b-title">claude-code <span class="st waiting">needs you</span></span><span class="b-time">now</span></div>
+      <div class="b-text"><code>irrlicht</code> &mdash; a question is waiting for your judgment</div>
+    </div>
+  </div>
+  <div class="kind">session &middot; ready &mdash; after the 7s hold-down, ttl 10m</div>
+  <div class="banner">
+    <div class="appicon"><div class="flame"></div></div>
+    <div class="b-body">
+      <div class="b-top"><span class="b-title">claude-code <span class="st ready">is ready</span></span><span class="b-time">9:41</span></div>
+      <div class="b-text"><code>rewrite-spring</code> &mdash; the turn is done, the path is clear</div>
+    </div>
+  </div>
+  <div class="kind">summary &mdash; replaces itself, one banner per burst</div>
+  <div class="banner">
+    <div class="appicon"><div class="flame"></div></div>
+    <div class="b-body">
+      <div class="b-top"><span class="b-title">3 agents <span class="st waiting">need attention</span></span><span class="b-time">9:38</span></div>
+      <div class="b-text"><code>irrlicht &middot; rewrite-spring &middot; moderne-cli</code></div>
+    </div>
+  </div>
+  <div class="kind">daemon &mdash; the watchdog, 60s after the link drops</div>
+  <div class="banner">
+    <div class="appicon"><div class="flame" style="background:#5a6378;box-shadow:none"></div></div>
+    <div class="b-body">
+      <div class="b-top"><span class="b-title">mac &ldquo;laptop&rdquo; disconnected</span><span class="b-time">9:12</span></div>
+      <div class="b-text">no events can arrive until it returns &mdash; silence is not calm</div>
+    </div>
+  </div>
+  <div class="banner silent">
+    <div class="appicon"><div class="flame"></div></div>
+    <div class="b-body">
+      <div class="b-top"><span class="b-title">mac &ldquo;laptop&rdquo; reconnected</span><span class="b-time">9:14</span></div>
+      <div class="b-text">replaces the banner above &mdash; silently, no second buzz</div>
+    </div>
+  </div>
+  <div class="note">composed on-device by the service worker &mdash; the relay ships structured data, never prose</div>
+</div>
+</body>
+</html>

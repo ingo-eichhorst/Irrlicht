@@ -1,0 +1,71 @@
+<!-- @dsCard group="Beacon" name="Paired — health panel" subtitle="Device identity, delivery health, notify rules, unpair" viewport="430x780" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Beacon — paired state — Irrlicht design system</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,300&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:#050a14;color:#c8cdd8;font-family:'Outfit',system-ui,sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;opacity:.025;z-index:999;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.phone{width:390px;background:#070d1a;border:1px solid rgba(138,92,246,.12);border-radius:32px;padding:26px 22px 30px;display:flex;flex-direction:column;gap:18px}
+.eyebrow{font-family:'DM Mono',monospace;font-size:.65rem;letter-spacing:.3em;text-transform:uppercase;color:#5a6378}
+.panel{position:relative;background:rgba(12,18,35,.65);border:1px solid rgba(138,92,246,.08);border-radius:10px;padding:16px 18px}
+.panel::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(139,92,246,.2),transparent)}
+.device{display:flex;align-items:center;gap:12px}
+.dot{width:8px;height:8px;border-radius:50%;background:#34C759;box-shadow:0 0 12px rgba(52,199,89,.5);animation:breathe 3.2s cubic-bezier(.16,1,.3,1) infinite}
+@keyframes breathe{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.2);opacity:.7}}
+.device .name{font-weight:500;font-size:.95rem;color:#e8ecf4}
+.device .meta{font-family:'DM Mono',monospace;font-size:.7rem;letter-spacing:.1em;color:#5a6378}
+.health{display:flex;flex-direction:column;gap:8px;margin-top:14px;border-top:1px solid rgba(200,205,216,.06);padding-top:12px}
+.hrow{display:flex;justify-content:space-between;font-family:'DM Mono',monospace;font-size:.74rem;color:#c8cdd8}
+.hrow .k{color:#5a6378}
+.hrow .ok{color:#34C759}
+.rules{display:flex;flex-direction:column;gap:9px}
+.rule{display:flex;align-items:center;gap:10px;font-weight:300;font-size:.85rem}
+.rule .l{width:7px;height:7px;border-radius:50%}
+.rule .when{font-family:'DM Mono',monospace;font-size:.68rem;letter-spacing:.08em;color:#5a6378;margin-left:auto}
+.l.waiting{background:#FF9500;box-shadow:0 0 10px rgba(255,149,0,.4)}
+.l.ready{background:#34C759;box-shadow:0 0 10px rgba(52,199,89,.4)}
+.l.working{background:#8B5CF6;opacity:.35;box-shadow:none}
+.rule.off span:nth-child(2){color:#5a6378}
+.actions{display:flex;gap:10px}
+.btn{flex:1;appearance:none;border-radius:10px;padding:12px;font-family:'Outfit',sans-serif;font-weight:400;font-size:.88rem;cursor:pointer;background:rgba(255,255,255,.03);border:1px solid rgba(200,205,216,.15);color:#c8cdd8}
+.btn.unpair{color:#5a6378}
+.foot{margin-top:auto;text-align:center;font-family:'Cormorant Garamond',serif;font-style:italic;font-weight:300;font-size:.95rem;color:#5a6378}
+</style>
+</head>
+<body>
+<div class="phone">
+  <div class="eyebrow">beacon &mdash; this phone</div>
+  <div class="panel">
+    <div class="device">
+      <div class="dot"></div>
+      <div>
+        <div class="name">merlin&rsquo;s iphone</div>
+        <div class="meta">paired 14 aug &middot; token 4c7f&hellip;</div>
+      </div>
+    </div>
+    <div class="health">
+      <div class="hrow"><span class="k">last push</span><span class="ok">&#10003; delivered &middot; 14:32</span></div>
+      <div class="hrow"><span class="k">push service</span><span>web.push.apple.com</span></div>
+      <div class="hrow"><span class="k">relay</span><span>relay.example.dev</span></div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="eyebrow" style="margin-bottom:12px">what buzzes</div>
+    <div class="rules">
+      <div class="rule"><span class="l waiting"></span><span>an agent needs you</span><span class="when">immediately</span></div>
+      <div class="rule"><span class="l ready"></span><span>an agent finished</span><span class="when">after 7s calm</span></div>
+      <div class="rule off"><span class="l working"></span><span>working</span><span class="when">never</span></div>
+    </div>
+  </div>
+  <div class="actions">
+    <button class="btn">send a test light</button>
+    <button class="btn unpair">unpair</button>
+  </div>
+  <div class="foot">follow the right light.</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,47 @@
+<!-- @dsCard group="Beacon" name="Pairing — mac side" subtitle="Code display in dashboard settings" viewport="640x460" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Beacon — pairing (mac side) — Irrlicht design system</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,300&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:#050a14;color:#c8cdd8;font-family:'Outfit',system-ui,sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;opacity:.025;z-index:999;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.card{position:relative;width:560px;background:rgba(12,18,35,.65);border:1px solid rgba(138,92,246,.08);border-radius:10px;backdrop-filter:blur(12px);padding:28px 32px}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(139,92,246,.2),transparent)}
+.eyebrow{font-family:'DM Mono',monospace;font-size:.65rem;letter-spacing:.3em;text-transform:uppercase;color:#5a6378;margin-bottom:6px}
+h2{font-family:'Outfit',sans-serif;font-weight:500;font-size:1.05rem;color:#e8ecf4;margin-bottom:4px}
+.hint{font-weight:300;font-size:.82rem;color:#5a6378;margin-bottom:22px}
+.code{display:flex;align-items:baseline;gap:16px;margin-bottom:6px}
+.code-value{font-family:'DM Mono',monospace;font-weight:500;font-size:2.6rem;letter-spacing:.14em;color:#e8ecf4;text-shadow:0 0 20px rgba(139,92,246,.25)}
+.code-value b{color:#8B5CF6;font-weight:500}
+.countdown{font-family:'DM Mono',monospace;font-size:.7rem;letter-spacing:.1em;color:#5a6378}
+.countdown i{font-style:normal;color:#FF9500}
+.url{font-family:'DM Mono',monospace;font-size:.82rem;color:#c8cdd8;background:#060d1a;border:1px solid rgba(200,205,216,.06);border-radius:6px;padding:8px 12px;margin:16px 0 22px;display:flex;justify-content:space-between;align-items:center}
+.url span{color:#5a6378}
+.steps{display:flex;flex-direction:column;gap:8px;border-top:1px solid rgba(200,205,216,.06);padding-top:18px}
+.step{display:flex;gap:12px;font-weight:300;font-size:.88rem;color:#c8cdd8}
+.step .n{font-family:'DM Mono',monospace;font-size:.7rem;color:#8B5CF6;width:16px;padding-top:2px}
+.step code{font-family:'DM Mono',monospace;font-size:.8rem;color:#e8ecf4}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="eyebrow">beacon &mdash; pair a phone</div>
+  <h2>this code pairs one phone, once</h2>
+  <p class="hint">single use &mdash; it expires whether or not it is used.</p>
+  <div class="code">
+    <div class="code-value">KX4M<b>&ndash;</b>7RJQ</div>
+    <div class="countdown">expires in <i>9:41</i></div>
+  </div>
+  <div class="url">https://relay.example.dev<span>open on the phone</span></div>
+  <div class="steps">
+    <div class="step"><span class="n">1</span><span>open this relay&rsquo;s address in the phone&rsquo;s browser</span></div>
+    <div class="step"><span class="n">2</span><span>add it to the home screen &mdash; share&nbsp;&rarr;&nbsp;<code>add to home screen</code></span></div>
+    <div class="step"><span class="n">3</span><span>open <em>irrlicht beacon</em> from the home screen and type the code</span></div>
+  </div>
+</div>
+</body>
+</html>

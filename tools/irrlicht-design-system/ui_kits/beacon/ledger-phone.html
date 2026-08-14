@@ -1,0 +1,60 @@
+<!-- @dsCard group="Beacon" name="Ledger — last known state" subtitle="The backgrounded view: honest about its age" viewport="430x780" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Beacon — last-known-state ledger — Irrlicht design system</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,300&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:#050a14;color:#c8cdd8;font-family:'Outfit',system-ui,sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;opacity:.025;z-index:999;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.phone{width:390px;background:#070d1a;border:1px solid rgba(138,92,246,.12);border-radius:32px;padding:24px 18px 28px;display:flex;flex-direction:column;gap:14px}
+.top{display:flex;justify-content:space-between;align-items:center;padding:0 4px}
+.wordmark{font-family:'DM Mono',monospace;font-weight:500;font-size:.74rem;letter-spacing:.25em;text-transform:uppercase;color:#e8ecf4}
+.wordmark b{color:#8B5CF6;font-weight:500}
+.counts{display:flex;gap:10px;font-family:'DM Mono',monospace;font-size:.72rem}
+.counts span{display:flex;align-items:center;gap:5px}
+.d{width:6px;height:6px;border-radius:50%}
+.d.w{background:#8B5CF6}.d.a{background:#FF9500}.d.r{background:#34C759}
+.stale{display:flex;justify-content:space-between;align-items:center;background:rgba(255,149,0,.12);border:1px solid rgba(255,149,0,.2);border-radius:8px;padding:8px 12px;font-family:'DM Mono',monospace;font-size:.68rem;letter-spacing:.06em;color:#FF9500}
+.stale span:last-child{color:#5a6378}
+.group{font-family:'DM Mono',monospace;font-size:.62rem;letter-spacing:.3em;text-transform:uppercase;color:#5a6378;padding:8px 4px 2px}
+.rows{display:flex;flex-direction:column;gap:2px;font-family:'DM Mono',monospace}
+.row{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:6px;font-size:.76rem;background:rgba(12,18,35,.5);border:1px solid rgba(200,205,216,.04)}
+.row .light{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.row.waiting .light{background:#FF9500;box-shadow:0 0 10px rgba(255,149,0,.5);animation:breathe 2.6s cubic-bezier(.16,1,.3,1) infinite}
+.row.working .light{background:#8B5CF6;box-shadow:0 0 10px rgba(139,92,246,.45);animation:breathe 3.1s cubic-bezier(.16,1,.3,1) infinite}
+.row.ready .light{background:#34C759}
+@keyframes breathe{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.2);opacity:.7}}
+.row .agent{color:#e8ecf4}
+.row .branch{color:#5a6378;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.row .state{font-size:.66rem;letter-spacing:.08em}
+.row.waiting .state{color:#FF9500}
+.row.working .state{color:#8B5CF6}
+.row.ready .state{color:#34C759}
+.row .age{font-size:.62rem;color:#5a6378;width:38px;text-align:right}
+.foot{margin-top:auto;text-align:center;font-family:'Cormorant Garamond',serif;font-style:italic;font-weight:300;font-size:.92rem;color:#5a6378}
+</style>
+</head>
+<body>
+<div class="phone">
+  <div class="top">
+    <div class="wordmark">irr<b>licht</b> beacon</div>
+    <div class="counts"><span><i class="d w"></i>2</span><span><i class="d a"></i>1</span><span><i class="d r"></i>1</span></div>
+  </div>
+  <div class="stale"><span>&#9888; as of 14:32</span><span>open to reconnect</span></div>
+  <div class="group">irrlicht</div>
+  <div class="rows">
+    <div class="row waiting"><span class="light"></span><span class="agent">claude-code</span><span class="branch">feat/1346-beacon</span><span class="state">waiting</span><span class="age">2m</span></div>
+    <div class="row working"><span class="light"></span><span class="agent">codex</span><span class="branch">fix/relay-auth</span><span class="state">working</span><span class="age">2m</span></div>
+  </div>
+  <div class="group">rewrite-spring</div>
+  <div class="rows">
+    <div class="row working"><span class="light"></span><span class="agent">claude-code</span><span class="branch">main</span><span class="state">working</span><span class="age">4m</span></div>
+    <div class="row ready"><span class="light"></span><span class="agent">gemini-cli</span><span class="branch">issue-372</span><span class="state">ready</span><span class="age">11m</span></div>
+  </div>
+  <div class="foot">never authoritative &mdash; the daemon is.</div>
+</div>
+</body>
+</html>
