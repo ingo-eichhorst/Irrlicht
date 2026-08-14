@@ -216,6 +216,80 @@ func classify(err error) bool {
 }`,
 		},
 
+		// ---- caught: found by review of PR #1545, each a hole in the rule's central promise ----
+		{
+			name: "rebound_err_launders_the_collapse", want: 1, wantRuns: 1,
+			needle: `n, err := parseInt(out)`,
+			why: "`err` is the most reused identifier in Go: a later `return n, err` returns a DIFFERENT error and says nothing " +
+				"about the collapse above it. Without the upper window edge this reported findings=0 — the family's exact defect, read as clean",
+			src: `package shapes
+func probe() (int, error) {
+	out, err := exec.CommandContext(ctx, lsofPath).Output()
+	if err != nil {
+		return 0, nil
+	}
+	n, err := parseInt(out)
+	return n, err
+}`,
+		},
+		{
+			name: "package_level_var_iife", want: 1, wantRuns: 1,
+			needle: `var cached = func() string {`,
+			why: "kittenPath in this package is exactly this idiom — a package-level IIFE that probes for a CLI. file.Decls only " +
+				"descends into FuncDecls, so before this the shellout was invisible AND runSites stayed 0, which meant the live " +
+				"rule's vacuity floor could not notice either",
+			src: `package shapes
+var cached = func() string {
+	out, err := exec.CommandContext(ctx, psPath, "-p", "1").Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}()`,
+		},
+		{
+			name: "closure_return_does_not_vouch_for_the_outer_collapse", want: 1, wantRuns: 1,
+			needle: `return func() error {`,
+			why: "a closure has its own returns; flattening a FuncDecl into one body would let an inner `return err` vouch for an " +
+				"outer collapse, and vice versa",
+			src: `package shapes
+func probe() func() error {
+	out, err := exec.CommandContext(ctx, lsofPath).Output()
+	if err != nil {
+		return nil
+	}
+	_ = out
+	return func() error {
+		return err
+	}
+}`,
+		},
+
+		// ---- clean: propagation spellings a name-based rule mis-reports ----
+		{
+			name: "returned_directly", want: 0, wantRuns: 1,
+			needle: `return exec.CommandContext(ctx, lsofPath).Output()`,
+			why: "the error goes straight to the caller with no variable in between. Reported as \"discarded outright\" before " +
+				"review of #1545 — a build failure whose message actively misdescribed correct code",
+			src: `package shapes
+func probe() ([]byte, error) {
+	return exec.CommandContext(ctx, lsofPath).Output()
+}`,
+		},
+		{
+			name: "var_declaration_binding", want: 0, wantRuns: 1,
+			needle: `var out, err = `,
+			why:    "`var out, err = cmd.Output()` binds exactly like `:=`; only AssignStmt was handled before",
+			src: `package shapes
+func probe() ([]byte, error) {
+	var out, err = exec.CommandContext(ctx, lsofPath).Output()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}`,
+		},
+
 		// ---- the measured blind spot, pinned as a known fact ----
 		{
 			name: "classifier_called_and_verdict_discarded", want: 0, wantRuns: 1,

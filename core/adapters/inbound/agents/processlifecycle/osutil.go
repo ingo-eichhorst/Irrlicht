@@ -438,6 +438,18 @@ func applyAncestryFallbacksVia(l *session.Launcher, pid int, ancestry *ancestryP
 // caller's completeness bit: the ancestry `ps` chain behind ancestry.host()
 // (read off the probe by the caller) and the `kitten @ ls` behind
 // readKittyWindow (returned here). Only the first was reported before.
+//
+// Be exact about what that buys today, because it is less than it looks and
+// the next reader must not conclude otherwise: NO consumer can currently
+// observe the kitten half. This block only runs when TermProgram is already
+// "kitty", and resolveClientHostIdentity returns a candidate with a non-empty
+// TermProgram outright without reading complete; ReadLauncherEnv discards the
+// bit entirely. So the verdict is carried for consistency with the walk beside
+// it — a second probe in the same block whose verdict is dropped is how the
+// first one went wrong — and it becomes load-bearing the moment a consumer
+// reads completeness for a host-resolved candidate. The TTY fold in
+// hostIdentityVia is NOT in this position: that one is reached by candidates
+// with no TermProgram at all, which is exactly the branch that reads the bit.
 func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry *ancestryProbe, readKittyWindow kittyWindowProbe) (probed bool) {
 	if l.TermProgram != "kitty" || l.KittyPID != 0 {
 		return true

@@ -30,9 +30,13 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, host int, comple
 }
 
 // Stubs for the kitty "no readable env" enrichment helpers — darwin-only.
-func kittyAncestryPID(pid int) int                             { return 0 }
-func kittyListenOnFor(kittyPID int) string                     { return "" }
-func kittyWindowIDForPID(socket string, sessionPID int) string { return "" }
+func kittyAncestryPID(pid int) int         { return 0 }
+func kittyListenOnFor(kittyPID int) string { return "" }
+
+// probed is true for the same reason processTTY's stub reports it: having no
+// kitty remote-control CLI to run is a settled property of this platform, not
+// a read that failed (#1537).
+func kittyWindowIDForPID(socket string, sessionPID int) (string, bool) { return "", true }
 
 // IsKnownInteractiveHost is darwin-only (ancestry walking); other platforms
 // fail open. The exclusion signal it backs (CodexBar's non-interactive `agy`

@@ -138,8 +138,16 @@ func TestWriterOfVia_NonAnswerIsNotAnUnwrittenFile(t *testing.T) {
 		name    string
 		build   lsofCmd
 		wantErr bool
+		wantPID int
 		why     string
 	}{
+		{
+			name: "lsof answers with a writer", build: shell(
+				`echo "COMMAND  PID USER  FD   TYPE DEVICE SIZE/OFF NODE NAME"; echo "codex  24454 ingo  14w  REG  1,18   3330     99  /tmp/t.jsonl"`),
+			wantErr: false, wantPID: 24454,
+			why: "the vacuity guard: the only row that reaches writerPIDFromLsof at all, so a writerOfVia hard-wired to 0 " +
+				"would satisfy every other row here",
+		},
 		{
 			name: "exit 1 — lsof looked and nobody holds it", build: shell("exit 1"),
 			wantErr: false,
@@ -164,8 +172,8 @@ func TestWriterOfVia_NonAnswerIsNotAnUnwrittenFile(t *testing.T) {
 		if (err != nil) != tc.wantErr {
 			t.Errorf("%s: writerOfVia = (%d, %v), wantErr %v — %s", tc.name, pid, err, tc.wantErr, tc.why)
 		}
-		if pid != 0 {
-			t.Errorf("%s: got pid %d, want 0 — no fixture reports a holder", tc.name, pid)
+		if pid != tc.wantPID {
+			t.Errorf("%s: got pid %d, want %d — %s", tc.name, pid, tc.wantPID, tc.why)
 		}
 	}
 }

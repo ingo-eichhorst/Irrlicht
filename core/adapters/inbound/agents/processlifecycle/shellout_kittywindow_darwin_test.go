@@ -66,10 +66,18 @@ func TestKittyWindowIDForPIDVia_NonAnswerIsNotAnAbsentWindow(t *testing.T) {
 		},
 	}
 
+	// kittenPath is a package var, and pinning it is what stops this table
+	// from evaporating. kittyWindowIDForPIDVia short-circuits on an empty
+	// kittenPath BEFORE reaching the injected command, so on a machine
+	// without kitty every row below would pass without running — and the
+	// CI runner is exactly such a machine. "The probe is absent" and "the
+	// probe answered" producing the same green is the shape this whole
+	// issue family is about; a test suite is not exempt from it.
+	prev := kittenPath
+	kittenPath = "/nonexistent/kitten-never-invoked-1537"
+	t.Cleanup(func() { kittenPath = prev })
+
 	for _, tc := range cases {
-		if kittenPath == "" {
-			t.Skip("kitten is not installed: kittyWindowIDForPIDVia short-circuits before the injected command, so every row below would pass vacuously")
-		}
 		id, probed := kittyWindowIDForPIDVia("unix:/tmp/kitty-1537", 4242, tc.build)
 		if id != tc.wantID || probed != tc.wantProbed {
 			t.Errorf("%s: kittyWindowIDForPIDVia = (%q, %v), want (%q, %v) — %s",
@@ -88,6 +96,10 @@ func TestKittyWindowIDForPIDVia_NonAnswerIsNotAnAbsentWindow(t *testing.T) {
 // where kitten is not on the trusted path, and buys nothing: the value is
 // fill-only downstream and re-probed on the next refresh.
 func TestKittyWindowIDForPIDVia_AbsentKittenIsASettledVerdict(t *testing.T) {
+	prev := kittenPath
+	kittenPath = "/nonexistent/kitten-never-invoked-1537"
+	t.Cleanup(func() { kittenPath = prev })
+
 	unreachable := func(ctx context.Context, _ string) *exec.Cmd {
 		return exec.CommandContext(ctx, "/nonexistent/kitten-must-not-run-1537")
 	}

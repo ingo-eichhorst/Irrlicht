@@ -128,7 +128,8 @@ func (linuxObserver) CWDOf(pid int) (string, error) {
 // WriterOf returns the first PID that has path open for writing, found by
 // scanning every process's /proc/<pid>/fd/* symlinks for one resolving to
 // path and confirming write access via /proc/<pid>/fdinfo. A file no process
-// has open is not an error: returns 0, nil. The scan is O(procs × fds) but
+// has open is not an error: returns 0, nil; a /proc that could not be scanned
+// at all IS one (#1537). The scan is O(procs × fds) but
 // early-exits on the first writer and only stats fdinfo for fds that already
 // point at the target file.
 func (linuxObserver) WriterOf(path string) (int, error) {
@@ -146,7 +147,10 @@ func (linuxObserver) WriterOf(path string) (int, error) {
 	}
 	pids, err := procPIDs()
 	if err != nil {
-		return 0, nil
+		// #1537: an unreadable /proc is the linux spelling of a killed lsof —
+		// it says nothing about who holds the file, and reporting it as
+		// "nobody" is the collapse the port contract now forbids.
+		return 0, fmt.Errorf("scan /proc for writers of %s: %w", path, err)
 	}
 	myPID := os.Getpid()
 	for _, pid := range pids {

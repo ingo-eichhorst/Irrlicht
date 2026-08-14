@@ -111,88 +111,186 @@ func scanShelloutClassification(fset *token.FileSet, files map[string]*ast.File)
 	for name, file := range files {
 		base := filepath.Base(name)
 		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Body == nil {
+					continue
+				}
+				f, n := scanScope(fset, base, d.Name.Name, d.Body)
+				findings, runSites = append(findings, f...), runSites+n
+			case *ast.GenDecl:
+				// A package-level `var x = func() T { … }()` is a function body
+				// that file.Decls alone never reaches, and this package already
+				// uses that idiom (kittenPath resolves a CLI in one). Before it
+				// was walked, a shellout there was invisible AND left runSites
+				// at zero — so the vacuity floor below could not notice either.
+				f, n := scanScope(fset, base, "var initialiser", &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: genDeclExpr(d)}}})
+				findings, runSites = append(findings, f...), runSites+n
 			}
-			f, n := scanFuncForShellouts(fset, base, fn)
-			findings = append(findings, f...)
-			runSites += n
 		}
 	}
 	return findings, runSites
 }
 
-// scanFuncForShellouts applies the rule to one function body.
-func scanFuncForShellouts(fset *token.FileSet, file string, fn *ast.FuncDecl) (findings []shelloutFinding, runSites int) {
-	for _, run := range runCallsIn(fn.Body) {
-		runSites++
-		errName, bound := errIdentFor(fn.Body, run)
-		line := fset.Position(run.Pos()).Line
-		switch {
-		case !bound:
-			findings = append(findings, shelloutFinding{file, line, fn.Name.Name,
-				"the error of a child process is discarded outright"})
-		case errName == "_":
-			findings = append(findings, shelloutFinding{file, line, fn.Name.Name,
-				"the error of a child process is assigned to _"})
-		case !classifiedOrPropagated(fn.Body, errName, run.Pos()):
-			findings = append(findings, shelloutFinding{file, line, fn.Name.Name,
-				"the error of a child process (" + errName + ") is neither passed to probeAnswered/lsofProbeRan nor returned — " +
-					"a non-answer collapses into a zero value here (#1538)"})
-		}
-	}
-	return findings, runSites
-}
-
-// runCallsIn returns every call in body that starts a child process.
-func runCallsIn(body *ast.BlockStmt) []*ast.CallExpr {
-	var out []*ast.CallExpr
-	ast.Inspect(body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
+// genDeclExpr wraps a declaration's initialiser expressions so scanScope can
+// walk them with the same code path a function body takes.
+func genDeclExpr(d *ast.GenDecl) ast.Expr {
+	lit := &ast.CompositeLit{}
+	for _, spec := range d.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
 		if !ok {
-			return true
+			continue
 		}
-		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && shelloutRunMethods[sel.Sel.Name] && len(call.Args) == 0 {
-			out = append(out, call)
+		lit.Elts = append(lit.Elts, vs.Values...)
+	}
+	return lit
+}
+
+// scanScope applies the rule to ONE function scope, then recurses into any
+// nested function literals as scopes of their own.
+//
+// The nesting matters: a closure has its own returns, so a `return err` in the
+// enclosing function does not propagate a closure's error and vice versa.
+// Treating a whole FuncDecl as one flat body would let either vouch for the
+// other.
+func scanScope(fset *token.FileSet, file, name string, body *ast.BlockStmt) (findings []shelloutFinding, runSites int) {
+	runs, lits := splitScope(body)
+	for _, run := range runs {
+		runSites++
+		errName, kind := errBindingFor(body, run)
+		line := fset.Position(run.Pos()).Line
+		switch kind {
+		case errReturnedDirectly:
+			// `return cmd.Output()` — the error goes straight to the caller.
+		case errDiscarded:
+			findings = append(findings, shelloutFinding{file, line, name,
+				"the error of a child process is discarded outright"})
+		case errBlank:
+			findings = append(findings, shelloutFinding{file, line, name,
+				"the error of a child process is assigned to _"})
+		default:
+			if !classifiedOrPropagated(body, errName, run.Pos()) {
+				findings = append(findings, shelloutFinding{file, line, name,
+					"the error of a child process (" + errName + ") is neither passed to probeAnswered/lsofProbeRan nor returned — " +
+						"a non-answer collapses into a zero value here (#1538)"})
+			}
+		}
+	}
+	for _, lit := range lits {
+		f, n := scanScope(fset, file, name+".func", lit.Body)
+		findings, runSites = append(findings, f...), runSites+n
+	}
+	return findings, runSites
+}
+
+// splitScope returns the run calls belonging to THIS scope and the function
+// literals that open their own. It stops descending at a nested literal so the
+// two sets never overlap.
+func splitScope(root ast.Node) (runs []*ast.CallExpr, lits []*ast.FuncLit) {
+	ast.Inspect(root, func(n ast.Node) bool {
+		if n == nil {
+			return false
+		}
+		if lit, ok := n.(*ast.FuncLit); ok && ast.Node(lit) != root {
+			lits = append(lits, lit)
+			return false
+		}
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && shelloutRunMethods[sel.Sel.Name] && len(call.Args) == 0 {
+				runs = append(runs, call)
+			}
 		}
 		return true
 	})
-	return out
+	return runs, lits
 }
 
-// errIdentFor finds the name the run call's error is bound to. bound is false
-// when the call is a bare statement, i.e. the error is thrown away.
-func errIdentFor(body *ast.BlockStmt, run *ast.CallExpr) (name string, bound bool) {
-	ast.Inspect(body, func(n ast.Node) bool {
+// errBinding is how a run call's error reaches (or fails to reach) a name.
+type errBinding int
+
+const (
+	errNamed            errBinding = iota // out, err := cmd.Output()
+	errBlank                              // out, _  := cmd.Output()
+	errDiscarded                          // cmd.Run() as a bare statement
+	errReturnedDirectly                   // return cmd.Output()
+)
+
+// errBindingFor finds how the run call's error is bound.
+func errBindingFor(body *ast.BlockStmt, run *ast.CallExpr) (name string, kind errBinding) {
+	name, kind = "", errDiscarded
+	inspectScope(body, func(n ast.Node) bool {
 		switch s := n.(type) {
 		case *ast.AssignStmt:
 			if len(s.Rhs) == 1 && containsNode(s.Rhs[0], run) && len(s.Lhs) > 0 {
-				if id, ok := s.Lhs[len(s.Lhs)-1].(*ast.Ident); ok {
-					name, bound = id.Name, true
-				}
+				name, kind = lhsName(s.Lhs[len(s.Lhs)-1])
 			}
-		case *ast.ExprStmt:
-			if s.X == ast.Expr(run) {
-				name, bound = "", false
+		case *ast.ValueSpec:
+			// `var out, err = cmd.Output()` binds exactly like :=.
+			if len(s.Values) == 1 && containsNode(s.Values[0], run) && len(s.Names) > 0 {
+				name, kind = lhsName(s.Names[len(s.Names)-1])
+			}
+		case *ast.ReturnStmt:
+			for _, r := range s.Results {
+				if containsNode(r, run) {
+					name, kind = "", errReturnedDirectly
+				}
 			}
 		}
 		return true
 	})
-	return name, bound
+	return name, kind
+}
+
+func lhsName(e ast.Expr) (string, errBinding) {
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return "", errDiscarded
+	}
+	if id.Name == "_" {
+		return "_", errBlank
+	}
+	return id.Name, errNamed
+}
+
+// inspectScope is ast.Inspect confined to ONE function scope: it never
+// descends into a nested function literal, which opens a scope of its own.
+//
+// Every walk that reasons about "what does this function do with err" must use
+// it. A plain ast.Inspect over the enclosing body reaches into closures, so a
+// `return err` inside one would vouch for a collapse outside it — measured, as
+// the closure_return_does_not_vouch_for_the_outer_collapse corpus row.
+func inspectScope(root ast.Node, fn func(ast.Node) bool) {
+	ast.Inspect(root, func(n ast.Node) bool {
+		if n == nil {
+			return false
+		}
+		if lit, ok := n.(*ast.FuncLit); ok && ast.Node(lit) != root {
+			return false
+		}
+		return fn(n)
+	})
 }
 
 // classifiedOrPropagated reports whether errName is passed to a classifier or
-// returned, at a position AFTER the run call.
+// returned, at a position AFTER the run call and BEFORE errName is re-bound.
 //
-// The position test is what stops one classified shellout from vouching for a
-// second, unclassified one later in the same function — a function-wide "does
-// the name appear anywhere" check would call that clean, and a function with
-// two shellouts is exactly where a new one gets added.
+// Two windows, and both edges are load-bearing:
+//
+//   - The lower edge stops one classified shellout from vouching for a second,
+//     unclassified one later in the same function — and a function with two
+//     shellouts is exactly where a new one gets added.
+//   - The upper edge stops a LATER, unrelated error from vouching for this one.
+//     `err` is the most reused identifier in Go, so the extremely ordinary
+//     `out, err := cmd.Output(); if err != nil { return 0, nil }; n, err :=
+//     parse(out); return n, err` would otherwise read as clean: the trailing
+//     `return n, err` returns a DIFFERENT error and says nothing about the
+//     collapse above it. Measured — that shape reported findings=0 before this
+//     edge existed, and it is a corpus row now.
 func classifiedOrPropagated(body *ast.BlockStmt, errName string, after token.Pos) bool {
+	limit := rebindPos(body, errName, after)
 	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if found || n == nil || n.Pos() <= after {
+	inspectScope(body, func(n ast.Node) bool {
+		if found || n == nil || n.Pos() <= after || (limit.IsValid() && n.Pos() >= limit) {
 			return !found
 		}
 		switch s := n.(type) {
@@ -216,6 +314,27 @@ func classifiedOrPropagated(body *ast.BlockStmt, errName string, after token.Pos
 	return found
 }
 
+// rebindPos returns the position of the first assignment after `after` that
+// writes errName, or an invalid position when there is none.
+func rebindPos(body *ast.BlockStmt, errName string, after token.Pos) token.Pos {
+	best := token.NoPos
+	inspectScope(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || assign.Pos() <= after {
+			return true
+		}
+		for _, lhs := range assign.Lhs {
+			if id, ok := lhs.(*ast.Ident); ok && id.Name == errName {
+				if !best.IsValid() || assign.Pos() < best {
+					best = assign.Pos()
+				}
+			}
+		}
+		return true
+	})
+	return best
+}
+
 func containsNode(root ast.Node, target ast.Node) bool {
 	hit := false
 	ast.Inspect(root, func(n ast.Node) bool {
@@ -227,9 +346,23 @@ func containsNode(root ast.Node, target ast.Node) bool {
 	return hit
 }
 
+// usesIdent reports whether name appears in root, NOT counting occurrences
+// inside a function literal.
+//
+// The exclusion is the point rather than a detail. `return func() error {
+// return err }` is a ReturnStmt whose results mention err, but it does not
+// hand this probe's error to this caller — it hands back a closure. Counting
+// it as propagation lets a collapse three lines above go unreported, which is
+// the closure corpus row.
 func usesIdent(root ast.Node, name string) bool {
 	hit := false
 	ast.Inspect(root, func(n ast.Node) bool {
+		if hit || n == nil {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
 		if id, ok := n.(*ast.Ident); ok && id.Name == name {
 			hit = true
 		}
@@ -314,7 +447,13 @@ func TestEveryBoundedShelloutUsesTheNamedCeiling(t *testing.T) {
 			return true
 		})
 	}
-	if seen == 0 {
-		t.Fatal("found no context.WithTimeout calls at all — the scan proves nothing")
+	// A floor, not "> 0": eight of nine ceilings could vanish and a
+	// zero-check would still pass on the one survivor — the same reason the
+	// classification rule counts run sites rather than asking whether it saw
+	// any at all.
+	const knownCeilings = 8
+	if seen < knownCeilings {
+		t.Fatalf("found %d context.WithTimeout calls, expected at least %d: the scan is not looking where it thinks it is",
+			seen, knownCeilings)
 	}
 }
