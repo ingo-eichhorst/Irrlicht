@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
+	"go/format"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,14 +26,6 @@ import (
 // verification mechanism must fail loudly when it cannot run": a number that
 // DOCUMENTS behaviour but is not PRODUCED by it drifts silently, and is then
 // quoted with full confidence.
-
-// transcriptName is the transcript filename forEachSidecarRecording pairs a
-// sidecar with. It is a constant beside eventsSidecarName because the census
-// and the walk it audits must apply the SAME pairing rule — the whole meaning
-// of UnpairedSidecars is the difference between this rule and the wider one
-// tools/replay-fixtures.sh uses, and two bare string literals is how that
-// difference stops being deliberate.
-const transcriptName = "transcript.jsonl"
 
 // catalogCensus is the census of the committed catalog's populations, plus the
 // denominator they are quoted against ("N of 309").
@@ -67,36 +59,28 @@ type catalogCensus struct {
 	// rather than being a sentence that was true once. The recording making up
 	// the difference is pinned by name as divergenceWitness.
 	DivergentByCountsAndKinds int
-	// UnpairedSidecars counts recorded sidecars the walk cannot PAIR: it
-	// requires a sibling transcriptName, and these recordings carry a
-	// transcript.md instead — today, every aider recording.
+	// UnpairedSidecars counts recorded sidecars the walk cannot PAIR at all:
+	// no name in transcriptNames sits beside them. It is 0, and the walk is
+	// therefore not known to be blind to any recording on disk.
 	//
-	// It is in the census because leaving it out is how the same headline came
-	// to have two values: tools/replay-fixtures.sh walks `-name
-	// transcript.jsonl -o -name transcript.md`, so it replays these too and
-	// reports a higher divergence figure. Measured, not asserted — the sweep
-	// reported 142 against this census's 140 while this field was being added,
-	// and diffing the two sets named the two extra recordings exactly (both
-	// aider/4-2_multiple-agents-same-workspace).
-	//
-	// Also a standing coverage note: #1342's known-lists and #1480's ratchets
-	// have never been evaluated against any of these recordings, so
-	// "catalog-wide" is true of the catalog this walk can see rather than of
-	// the catalog.
-	//
-	// Why widening the pairing is deferred is a SCOPE call and is stated as
-	// one, because the natural blast-radius reason is measurably false:
-	// pairing transcript.md when no transcriptName exists adds exactly 2
-	// gradeable recordings, both merely divergent, and moves
-	// knownZeroTransition, knownFabricated and knownFirstTransitionDrift by
-	// nothing at all. It would make this census agree with the sweep exactly,
-	// at the cost of re-replaying the aider recordings that then produce no
-	// extended check.
+	// A zero figure is kept in the census rather than deleted because it is
+	// the one number that would report the blindness coming back. Until #1517
+	// this field counted 31 — every aider recording, paired by
+	// tools/replay-fixtures.sh and by no Go gate, so #1342's known-lists and
+	// #1480's ratchets described the catalog that walk could see rather than
+	// the catalog. A recording committed with its transcript in some third
+	// format would be invisible to every gate here and would land in exactly
+	// this figure. A zero that is measured every run is evidence; a zero that
+	// is assumed is the shape #1503 was filed about.
 	UnpairedSidecars int
 	// PairedButUngraded counts recordings the walk DID pair and still could not
 	// grade: resolveInputPaths declined the sidecar, or the replay produced no
-	// extended check at all — chiefly the process-owned-store adapters, which
-	// record no fswatcher fires and legitimately degrade to transcript-only.
+	// extended check at all. Two populations dominate, both legitimate — the
+	// process-owned-store adapters, which record no fswatcher fires and degrade
+	// to transcript-only, and the 29 aider recordings whose sidecar names no
+	// real session in a transcript_new event and is therefore not drivable
+	// (the benign half of the pair TestReplayWithSidecar_CorruptSidecarIsFatal
+	// separates).
 	//
 	// Derived as (all recorded sidecars) - UnpairedSidecars - Recordings, so
 	// the three account for every sidecar on disk. That identity holds by
@@ -125,13 +109,13 @@ type catalogCensus struct {
 // point is that it cannot move UNNOTICED, and that no doc comment anywhere
 // carries a second, hand-typed copy of it.
 var censusOfTheCommittedCatalog = catalogCensus{
-	Recordings:                309,
+	Recordings:                311,
 	Zero:                      1,
 	Fabricated:                1,
-	Divergent:                 140,
-	DivergentByCountsAndKinds: 139,
-	UnpairedSidecars:          31,
-	PairedButUngraded:         56,
+	Divergent:                 142,
+	DivergentByCountsAndKinds: 141,
+	UnpairedSidecars:          0,
+	PairedButUngraded:         85,
 }
 
 // literal renders the census as the Go source to paste over the declaration
@@ -340,8 +324,8 @@ func TestCatalogCensusMatchesTheCommittedFigures(t *testing.T) {
 }
 
 // countSidecars returns how many recorded sidecars exist under the catalog and
-// how many of them the walk cannot pair, because no sibling transcriptName sits
-// beside them.
+// how many of them the walk cannot pair, because no name in transcriptNames
+// sits beside them.
 //
 // It stats rather than replays, so it costs milliseconds and, more to the
 // point, it cannot be fooled by the very pairing it is measuring: asking the
@@ -357,7 +341,7 @@ func countSidecars(t *testing.T) (total, unpaired int) {
 			return nil
 		}
 		total++
-		if _, statErr := os.Stat(filepath.Join(filepath.Dir(path), transcriptName)); statErr != nil {
+		if _, ok := pairedTranscript(filepath.Dir(path)); !ok {
 			unpaired++
 		}
 		return nil
@@ -456,6 +440,25 @@ func TestCensusDiffNamesEveryStaleShape(t *testing.T) {
 		f(&c)
 		return c
 	}
+	// moved renders the verdict for one perturbed field, taking the MEASURED
+	// half from the live census rather than restating it.
+	//
+	// The rows below used to spell their expectations out in full — "Divergent:
+	// committed 139, measured 140" — which put a hand-typed copy of every
+	// census figure in the corpus that exists to remove hand-typed copies. It
+	// held only while the census stood still: #1517 widened the walk, the
+	// census legitimately moved, and seven of these rows failed for a reason
+	// none of them is about. What each row pins is the SHAPE of the verdict and
+	// the perturbation that provokes it; the figure is the census's business.
+	moved := func(field string, committed int) string {
+		for _, f := range current.fields() {
+			if f.name == field {
+				return fmt.Sprintf("%s: committed %d, measured %d", field, committed, f.value)
+			}
+		}
+		t.Fatalf("no census field named %q — the corpus names a figure that no longer exists", field)
+		return ""
+	}
 
 	for _, tc := range []struct {
 		name      string
@@ -472,75 +475,83 @@ func TestCensusDiffNamesEveryStaleShape(t *testing.T) {
 			// low, internally consistent, and invisible without re-measuring.
 			name:      "divergent one low — #1478's error",
 			committed: with(func(c *catalogCensus) { c.Divergent-- }),
-			want:      []string{"Divergent: committed 139, measured 140"},
+			want:      []string{moved("Divergent", current.Divergent-1)},
 		},
 		{
 			// The other direction. A count that only ever fails when it is too
 			// LOW blesses a regression that raises it.
 			name:      "divergent one high — a fidelity regression left uncounted",
 			committed: with(func(c *catalogCensus) { c.Divergent++ }),
-			want:      []string{"Divergent: committed 141, measured 140"},
+			want:      []string{moved("Divergent", current.Divergent+1)},
 		},
 		{
 			// The near-miss converging on Diverges means the catalog lost its
 			// only order-only witness — a coverage loss that looks like
 			// agreement.
 			name:      "the near-miss spelling stopped being a near miss",
-			committed: with(func(c *catalogCensus) { c.DivergentByCountsAndKinds = 140 }),
-			want:      []string{"DivergentByCountsAndKinds: committed 140, measured 139"},
+			committed: with(func(c *catalogCensus) { c.DivergentByCountsAndKinds = current.Divergent }),
+			want:      []string{moved("DivergentByCountsAndKinds", current.Divergent)},
 		},
 		{
 			// The shape #1342 and #1478 both moved: a zero-transition recording
 			// rescued, with the doc comments still claiming the old figure.
 			name:      "zero stale at its pre-#1478 value",
 			committed: with(func(c *catalogCensus) { c.Zero = 4 }),
-			want:      []string{"Zero: committed 4, measured 1"},
+			want:      []string{moved("Zero", 4)},
 		},
 		{
 			name:      "fabricated stale — the count that must never rise unnoticed",
 			committed: with(func(c *catalogCensus) { c.Fabricated = 3 }),
-			want:      []string{"Fabricated: committed 3, measured 1"},
+			want:      []string{moved("Fabricated", 3)},
 		},
 		{
-			// The gap between this census and tools/replay-fixtures.sh's own
-			// divergence figure is made of exactly this population, so a stale
-			// value here is a stale explanation of a live discrepancy.
+			// This population is what the Go walk cannot pair at all. It is 0,
+			// and a committed non-zero value would be claiming the gates are
+			// blind to recordings they now read — the state #1517 closed.
 			name:      "the unpaired-sidecar population moved",
 			committed: with(func(c *catalogCensus) { c.UnpairedSidecars = 29 }),
-			want:      []string{"UnpairedSidecars: committed 29, measured 31"},
+			want:      []string{moved("UnpairedSidecars", 29)},
 		},
 		{
 			// Moves when the walk's skip conditions change — a store adapter
 			// gaining an fswatcher trace, or a pairing rule quietly widening.
 			name:      "the ungraded population moved",
 			committed: with(func(c *catalogCensus) { c.PairedButUngraded = 54 }),
-			want:      []string{"PairedButUngraded: committed 54, measured 56"},
+			want:      []string{moved("PairedButUngraded", 54)},
 		},
 		{
 			// The denominator rots on its own schedule: every promotion or
 			// retirement moves it, and nothing else in the census need change.
 			name:      "the denominator alone went stale",
 			committed: with(func(c *catalogCensus) { c.Recordings = 300 }),
-			want:      []string{"Recordings: committed 300, measured 309"},
+			want:      []string{moved("Recordings", 300)},
 		},
 		{
 			// Everything at once, in declaration order — a census pasted from a
 			// different branch names every figure rather than the first one.
 			name: "every figure moved, and every one is named",
+			// Every field is perturbed by a distinct non-zero delta rather than
+			// set to fixed values: a constant that happens to equal the live
+			// figure silently drops its line from the expected verdict, which
+			// is how this row would stop testing "every one is named" without
+			// failing. UnpairedSidecars reached exactly that state at 0.
 			committed: with(func(c *catalogCensus) {
-				*c = catalogCensus{
-					Recordings: 300, Zero: 4, Fabricated: 3, Divergent: 145,
-					DivergentByCountsAndKinds: 144, UnpairedSidecars: 0, PairedButUngraded: 0,
-				}
+				c.Recordings -= 9
+				c.Zero += 3
+				c.Fabricated += 2
+				c.Divergent += 5
+				c.DivergentByCountsAndKinds += 5
+				c.UnpairedSidecars += 7
+				c.PairedButUngraded -= 4
 			}),
 			want: []string{
-				"Recordings: committed 300, measured 309",
-				"Zero: committed 4, measured 1",
-				"Fabricated: committed 3, measured 1",
-				"Divergent: committed 145, measured 140",
-				"DivergentByCountsAndKinds: committed 144, measured 139",
-				"UnpairedSidecars: committed 0, measured 31",
-				"PairedButUngraded: committed 0, measured 56",
+				moved("Recordings", current.Recordings-9),
+				moved("Zero", current.Zero+3),
+				moved("Fabricated", current.Fabricated+2),
+				moved("Divergent", current.Divergent+5),
+				moved("DivergentByCountsAndKinds", current.DivergentByCountsAndKinds+5),
+				moved("UnpairedSidecars", current.UnpairedSidecars+7),
+				moved("PairedButUngraded", current.PairedButUngraded-4),
 			},
 		},
 	} {
@@ -592,21 +603,33 @@ func TestCensusLiteralIsValidPasteableSource(t *testing.T) {
 		t.Errorf("literal() has %d lines, want %d (one per field plus both braces):\n%s",
 			got, want, lit)
 	}
-	// The alignment is pinned verbatim because gofmt is what the pasted block
-	// must survive: a literal that is correct but misaligned gets reformatted
-	// on the next gofmt run and stops being byte-identical to what the test
-	// prints, which is the property the idiom rests on.
-	for _, want := range []string{
-		"\tRecordings:                309,\n",
-		"\tZero:                      1,\n",
-		"\tFabricated:                1,\n",
-		"\tDivergent:                 140,\n",
-		"\tDivergentByCountsAndKinds: 139,\n",
-		"\tUnpairedSidecars:          31,\n",
-		"\tPairedButUngraded:         56,\n",
-	} {
-		if !strings.Contains(lit, want) {
-			t.Errorf("literal() is missing the gofmt-aligned line %q:\n%s", want, lit)
+	// The alignment is checked by running the block through gofmt itself and
+	// requiring it back unchanged, which IS the property the idiom rests on: a
+	// literal that is correct but misaligned is reformatted on the next gofmt
+	// run and stops being byte-identical to what this test prints.
+	//
+	// It used to be pinned as seven verbatim lines carrying the committed
+	// figures. That spelling asserted the alignment and the CENSUS at once, so
+	// it failed whenever a figure legitimately moved — #1517 widened the walk
+	// and it broke, having caught nothing about alignment. Round-tripping is
+	// also strictly stronger: the verbatim list could only confirm the widths
+	// someone typed, while gofmt is the authority those widths were guessing
+	// at. It is not tautological, because literal() derives the column itself
+	// rather than deferring to go/format.
+	if formatted, err := format.Source([]byte(lit)); err != nil {
+		t.Errorf("literal() is not valid Go source (%v):\n%s", err, lit)
+	} else if string(formatted) != lit {
+		t.Errorf("literal() is not gofmt-canonical, so the pasted block would be reformatted "+
+			"and stop matching what this test prints.\n got:\n%s\nwant:\n%s", lit, formatted)
+	}
+	// Each field still has to appear with its measured value, or a
+	// gofmt-canonical block that simply omitted one would pass above.
+	for _, f := range censusOfTheCommittedCatalog.fields() {
+		if !strings.Contains(lit, fmt.Sprintf("%s:", f.name)) {
+			t.Errorf("literal() omits the %s field:\n%s", f.name, lit)
+		}
+		if !strings.Contains(lit, fmt.Sprintf(" %d,\n", f.value)) {
+			t.Errorf("literal() does not carry %s's value %d:\n%s", f.name, f.value, lit)
 		}
 	}
 }

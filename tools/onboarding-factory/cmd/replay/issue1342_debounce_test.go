@@ -200,6 +200,12 @@ var knownFabricated = map[string]string{
 // replay runs separate is deliberate — sharing the walk costs ~2.8s of re-run
 // and buys full independence between the gates, which is the right trade.
 //
+// The pairing itself is pairedTranscript, which accepts every name in
+// transcriptNames rather than transcript.jsonl alone. Narrowing it back is not
+// a cosmetic change: it is what made every aider recording invisible to this
+// gate, to #1480's and to the census, while tools/replay-fixtures.sh graded
+// them all along (#1517).
+//
 // The zero-recordings vacuity guard lives here rather than in each caller: it
 // is exactly the check that must not be forgotten by the third one, and it was
 // already written twice with two different wordings.
@@ -215,8 +221,8 @@ func forEachSidecarRecording(t *testing.T, visit func(name string, ec *extendedC
 		if d.IsDir() || filepath.Base(path) != eventsSidecarName {
 			return nil
 		}
-		transcript := filepath.Join(filepath.Dir(path), transcriptName)
-		if _, statErr := os.Stat(transcript); statErr != nil {
+		transcript, paired := pairedTranscript(filepath.Dir(path))
+		if !paired {
 			return nil
 		}
 		tp, sp, useSidecar := resolveInputPaths(transcript)

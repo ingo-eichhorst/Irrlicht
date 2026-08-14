@@ -880,7 +880,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `.Fabricates` — and every counter derives from it, including `main.go`'s exit
   code, which had its own wider spelling (`ordered || missing kinds || extra
   kinds`); those disjuncts are structurally unreachable and the census asserts
-  the two spellings agree on all 309 recordings rather than trusting that
+  the two spellings agree on every recording it walks rather than trusting that
   argument. `Diverges` is `len(OrderedMismatches) > 0`, and the near-misses are
   the point: "the counts or the kind sets differ" reads as a restatement and is
   one low, because one committed recording replays the same two kinds and the
@@ -899,29 +899,22 @@ Before marking a ticket done, run the full suite — every layer must pass:
   stops a diff which reports everything from looking correct.
   Three of the census's figures are not defect counts, and each exists because
   a prose sentence was carrying the number. `DivergentByCountsAndKinds` is the
-  near-miss spelling itself (139 against `Divergent`'s 140), so "they differ by
+  near-miss spelling itself, carried beside `Divergent` so that "they differ by
   exactly one recording" is re-derived every run instead of being true once.
   `UnpairedSidecars` and `PairedButUngraded` are the denominator's honesty:
-  `forEachSidecarRecording` pairs a sidecar with a sibling `transcript.jsonl`,
-  while `tools/replay-fixtures.sh` walks `transcript.md` too — so the sweep
-  replays 31 aider recordings the Go gates never see, and reported **142**
-  divergent against the census's **140** (measured; the two extra were both
-  `aider/4-2_multiple-agents-same-workspace`). A further 56 recordings are
-  paired but produce no extended check at all, chiefly the
-  process-owned-store adapters. Together the three account for every sidecar on
-  disk.
-  There is a standing coverage note in that: `knownZeroTransition`,
-  `knownFabricated` and #1480's ratchets are catalog-wide over the catalog
-  *that walk can see*, and have never been evaluated against any aider
-  recording. Widening the pairing is deferred as a **scope** call, and the
-  reason is stated that way because the tempting blast-radius reason is
-  measurably false — pairing `transcript.md` when no `transcript.jsonl` exists
-  adds exactly **2** gradeable recordings, both merely divergent, and moves
-  `knownZeroTransition`, `knownFabricated` and `knownFirstTransitionDrift` by
-  **nothing**. It would make the census agree with the sweep exactly. A
-  dismissal in this repo carries the same evidentiary bar as the claim it
-  supports, and this one was measured rather than assumed — the first draft of
-  this bullet asserted the opposite and a review caught it.
+  every sidecar on disk is either graded, unpairable, or paired-but-ungradeable,
+  and the three figures sum to the catalog. Nothing is unpairable today — the
+  Go walk and `tools/replay-fixtures.sh` pair the same two transcript names
+  through one rule (`pairedTranscript`, `cmd/replay/issue1517_pairing_test.go`),
+  so both walk the same set. The figure stays in the census at zero because it
+  is what would report the blindness returning: before #1517 it counted every
+  aider recording — graded by the sweep, by no Go gate, so
+  `knownZeroTransition`, `knownFabricated` and #1480's ratchets described the
+  catalog *that walk could see* rather than the catalog, and #1342's stated
+  goal of catalog-wide coverage was silently false for a whole adapter. The
+  remaining `PairedButUngraded` recordings produce no extended check at all —
+  the process-owned-store adapters, plus the aider recordings whose sidecar
+  names no real session and is not drivable.
 - Replay read boundary: the sidecar records `file_size` from the fswatcher's
   stat at fire time but stamps `ts` at the daemon's **dequeue** time, and the
   watcher's stat time is not a field of `lifecycle.Event` at all — so "where
