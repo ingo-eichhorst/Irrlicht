@@ -11,7 +11,10 @@ func readProcessEnv(pid int) (map[string]string, error) {
 }
 
 // processTTY is darwin-only host enrichment; other platforms degrade to "".
-func processTTY(pid int) string { return "" }
+// probed is true: having no darwin ps to run is a settled property of this
+// platform, not a read that failed (#1533) — the same reading the ancestry
+// stubs below give their complete return.
+func processTTY(pid int) (string, bool) { return "", true }
 
 // resolveTermProgramFromAncestry / resolveHostFromAncestry are darwin-only
 // fallbacks; other platforms return zero values.

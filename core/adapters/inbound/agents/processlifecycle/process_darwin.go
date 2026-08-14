@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -81,7 +80,7 @@ func (darwinObserver) ArgvOf(pid int) ([]string, error) {
 
 // CWDOf returns the working directory of pid via `lsof -d cwd`.
 func (darwinObserver) CWDOf(pid int) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, lsofPath, "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
 	if err != nil {
@@ -100,6 +99,11 @@ func (darwinObserver) CWDOf(pid int) (string, error) {
 // lifetime — unlike Claude Code which opens, writes, and closes. A file that
 // no process has open is not an error: returns 0, nil.
 //
+// An lsof that could not be RUN is a different fact and is returned as an
+// error (#1537): the 2s ceiling, a fork failure or a missing binary say
+// nothing about who holds the file, and reporting them as "nobody" is the
+// #1485 collapse with the same tool. lsofProbeRan draws the line.
+//
 // lsof output format:
 //
 //	COMMAND  PID USER  FD   TYPE DEVICE SIZE/OFF NODE NAME
@@ -109,14 +113,36 @@ func (darwinObserver) CWDOf(pid int) (string, error) {
 // (read/write) — optionally followed by a lock character, e.g. "59uW". Both
 // 'w' and 'u' are writers; see writerPIDFromLsof.
 func (darwinObserver) WriterOf(path string) (int, error) {
+	return writerOfVia(path, systemLsofCmd)
+}
+
+// lsofCmd builds the bounded shellout writerOfVia runs, injected for the same
+// reason bundleIDCmd and pgrepCmd are: the distinction it draws is a property
+// of the child process, which no faked return value can pin.
+type lsofCmd func(ctx context.Context, path string) *exec.Cmd
+
+// systemLsofCmd is the production lsofCmd.
+func systemLsofCmd(ctx context.Context, path string) *exec.Cmd {
+	return exec.CommandContext(ctx, lsofPath, path)
+}
+
+// writerOfVia is WriterOf with the shellout injected.
+func writerOfVia(path string, build lsofCmd) (int, error) {
 	if path == "" {
 		return 0, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, lsofPath, path).Output()
-	if err != nil {
-		return 0, nil // file not open by any process
+	out, err := build(ctx, path).Output()
+	if !lsofProbeRan(err) {
+		// #1537: an lsof that could not be ASKED knows nothing about who holds
+		// this transcript, and the comment that used to sit on the collapsed
+		// return ("file not open by any process") stated one cause for an error
+		// with several. Exit 1 IS an answer and still returns (0, nil) below —
+		// on this path the file being absent is itself the honest verdict "no
+		// process is writing it", which is why WriterOf needs no os.Stat where
+		// herdrClientPIDs does.
+		return 0, fmt.Errorf("lsof %s: %w", path, err)
 	}
 
 	return writerPIDFromLsof(string(out), os.Getpid()), nil
@@ -201,15 +227,40 @@ func (darwinObserver) EnvOf(pid int) (map[string]string, error) {
 	return m, nil
 }
 
+// pgrepNoMatch is pgrep's "no process matched" exit status — an answer, not a
+// failure. The lsof twin is lsofNothingToReport (osutil_darwin.go); both are
+// the per-tool half of the shared predicate (#1538).
+const pgrepNoMatch = 1
+
 // runPgrep invokes pgrep with the given flag and pattern, parses the PIDs from
 // stdout, and returns nil for the no-match (exit 1) case.
 func runPgrep(flag, pattern string) ([]int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	return runPgrepVia(flag, pattern, systemPgrepCmd)
+}
+
+// pgrepCmd builds the bounded shellout runPgrepVia runs. It is a parameter for
+// the same reason bundleIDCmd is one: the distinction runPgrepVia draws is a
+// property of the CHILD PROCESS — ran to a normal exit versus killed or never
+// started — which no faked return value can pin, and which no arrangement of
+// live processes can be driven into on purpose.
+type pgrepCmd func(ctx context.Context, flag, pattern string) *exec.Cmd
+
+// systemPgrepCmd is the production pgrepCmd.
+func systemPgrepCmd(ctx context.Context, flag, pattern string) *exec.Cmd {
+	return exec.CommandContext(ctx, pgrepPath, flag, pattern)
+}
+
+// runPgrepVia is runPgrep with the shellout injected.
+func runPgrepVia(flag, pattern string, build pgrepCmd) ([]int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, pgrepPath, flag, pattern).Output()
+	out, err := build(ctx, flag, pattern).Output()
 	if err != nil {
-		// pgrep exits 1 when there are no matches — not an error.
-		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+		// pgrep exits 1 when there are no matches — a real answer, the same
+		// shape as lsof's (lsofProbeRan). Anything else is a probe that did
+		// not run and must stay an error: collapsing it to (nil, nil) would
+		// report "no such process" for a pgrep the 2s ceiling killed.
+		if probeAnswered(err, pgrepNoMatch) {
 			return nil, nil
 		}
 		return nil, err

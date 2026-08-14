@@ -418,7 +418,9 @@ type ProcessObserver interface {
 	CWDOf(pid int) (string, error)
 	// WriterOf returns the PID that currently has path open for writing, or
 	// 0 when no process is writing it. A missing/unopened file is not an
-	// error — it returns 0, nil.
+	// error — it returns 0, nil. A probe that could not RUN is: 0, nil means
+	// the implementation looked and found nobody, never that it could not
+	// look (#1537).
 	WriterOf(path string) (int, error)
 	// EnvOf returns the whitelisted launcher env vars of pid. Returns an
 	// empty/nil map (not an error) when the env is unreadable.
