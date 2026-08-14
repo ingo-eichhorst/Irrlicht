@@ -23,7 +23,14 @@ import (
 )
 
 // execTimeout bounds every backend shell-out, matching the process observer's
-// 2-second ceiling (process_darwin.go).
+// 2-second ceiling (processlifecycle.shelloutTimeout, shellout.go — it was an
+// unnamed literal in process_darwin.go when this comment was written, which is
+// part of why #1538 named it).
+//
+// Deliberately a separate constant rather than an import: that ceiling bounds a
+// window-targeting probe in the inbound adapter layer, this one bounds a write
+// to a terminal backend in the outbound layer, and they are entitled to diverge.
+// The agreement is a coincidence worth recording, not a contract worth welding.
 const execTimeout = 2 * time.Second
 
 // command is a single backend invocation. Keeping construction pure (no exec)

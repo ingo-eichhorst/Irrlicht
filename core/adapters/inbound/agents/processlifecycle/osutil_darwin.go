@@ -5,7 +5,6 @@ package processlifecycle
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -31,28 +30,51 @@ var (
 
 // processTTY returns the controlling TTY of pid in the form "/dev/ttysNNN",
 // or "" if the process has no controlling terminal (hardened-runtime
-// children often don't) or the ps lookup fails. The result is normalized
+// children often don't), plus whether the ps lookup ANSWERED at all — those
+// were one value until #1533, and merging them reported a ps the ceiling
+// killed as "this process has no terminal", silently and permanently for that
+// identity. The result is normalized
 // to match Terminal.app's AppleScript `tty` property format — `ps -o tty=`
 // on macOS omits the "/dev/" prefix that AppleScript returns. This is host
 // enrichment (window targeting), not observation, so other platforms stub it.
-func processTTY(pid int) string {
+func processTTY(pid int) (string, bool) {
+	return processTTYVia(pid, func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, psPath, "-o", "tty=", "-p", strconv.Itoa(pid))
+	})
+}
+
+// processTTYVia is processTTY with the shellout injected. The second return is
+// #1533: whether ps actually answered.
+//
+// The two empty strings below used to be one. "ps could not be run" and "this
+// process has no controlling terminal" are the family's usual pair, and only
+// the second is a verdict — a hardened-runtime child genuinely has no tty, and
+// reporting one anyway would misroute a click.
+//
+// No answeredExitCodes: for ps ANY normal exit is an answer. It exits 1 for a
+// pid it cannot find (measured), which is a real "no such process", not a
+// probe that did not run — so the allowlist form would turn every reaped pid
+// into a non-answer and poison hostIdentity's completeness for it.
+func processTTYVia(pid int, build shelloutCmd) (tty string, probed bool) {
 	if pid <= 0 {
-		return ""
+		// Nothing was asked, so nothing failed — the same reading bundleIDVia
+		// gives an empty appPath.
+		return "", true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, psPath, "-o", "tty=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return ""
+	out, err := build(ctx).Output()
+	if !probeAnswered(err) {
+		return "", false
 	}
-	tty := strings.TrimSpace(string(out))
+	tty = strings.TrimSpace(string(out))
 	if tty == "" || tty == "?" || tty == "??" || tty == "-" {
-		return ""
+		return "", true
 	}
 	if !strings.HasPrefix(tty, "/dev/") {
 		tty = "/dev/" + tty
 	}
-	return tty
+	return tty, true
 }
 
 // readProcessEnv reads the exec-time env of pid via KERN_PROCARGS2 sysctl
@@ -112,19 +134,18 @@ func resolveHostFromAncestry(pid int) (termProgram string, hostPID int, complete
 	return "", 0, true
 }
 
-// bundleIDCmd builds the bounded shellout that reads one app bundle's
-// CFBundleIdentifier. It is a parameter of bundleIDVia rather than a package
-// var because the distinction bundleIDVia draws is a property of the CHILD
-// PROCESS — ran to a normal exit, versus killed or never started — which no
-// faked return value can pin. Injecting it is the same idiom
-// isKnownInteractiveHostVia uses for the two ancestry walks.
-type bundleIDCmd func(ctx context.Context, plist string) *exec.Cmd
+// bundleIDCmd builds the shellout for one named Info.plist. See bundleIDVia
+// for why this one site takes a factory where the others take a shelloutCmd.
+type bundleIDCmd func(plist string) shelloutCmd
 
-// plutilBundleIDCmd is the production bundleIDCmd. `plutil` ships with macOS
-// and reads both XML and binary Info.plists; bundles under /Applications are
-// world-readable, so this needs no TCC consent.
-func plutilBundleIDCmd(ctx context.Context, plist string) *exec.Cmd {
-	return exec.CommandContext(ctx, plutilPath, "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist)
+// plutilBundleIDCmd is the production shellout for one app bundle's
+// CFBundleIdentifier. `plutil` ships with macOS and reads both XML and binary
+// Info.plists; bundles under /Applications are world-readable, so this needs
+// no TCC consent.
+func plutilBundleIDCmd(plist string) shelloutCmd {
+	return func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, plutilPath, "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist)
+	}
 }
 
 // bundleIDForAppPath returns the CFBundleIdentifier of the application bundle
@@ -164,17 +185,25 @@ func bundleIDForAppPath(appPath string) (string, error) {
 //     and it also covers the deaths the ceiling did not cause — an OOM kill, a
 //     fork that failed under the same load, or a ctx already past its deadline
 //     before Start (where the error is not an ExitError at all).
+//
+// build is a FACTORY producing a shelloutCmd rather than one directly, and it
+// is the only site in the package that needs to be: the command depends on the
+// Info.plist path, which this function derives from appPath. Everywhere else
+// the site's arguments are closed over at the call site (see shelloutCmd).
 func bundleIDVia(appPath string, build bundleIDCmd) (string, error) {
 	if appPath == "" {
 		return "", nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
 	defer cancel()
 	plist := appPath + "/Contents/Info.plist"
-	out, err := build(ctx, plist).Output()
+	out, err := build(plist)(ctx).Output()
 	if err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) && exit.ProcessState.Exited() {
+		// No answeredExitCodes: for plutil ANY normal exit is an answer, which
+		// is the empty-variadic form's whole reason for existing — see
+		// probeAnswered, and the paragraph above for why exit 1 in particular
+		// must stay one.
+		if probeAnswered(err) {
 			// plutil ran and declined: this ancestor has no bundle id we can
 			// name. A real, readable verdict — the walk continues on it.
 			return "", nil
@@ -453,17 +482,38 @@ func kittyListenOnFor(kittyPID int) string {
 // KittyWindowID for sessions whose own env didn't expose KITTY_WINDOW_ID
 // (e.g., the pi adapter — pi's env is unreadable via sysctl). Bounded
 // 2-second timeout; runs at session-birth so latency is acceptable.
-func kittyWindowIDForPID(socket string, sessionPID int) string {
+func kittyWindowIDForPID(socket string, sessionPID int) (string, bool) {
+	return kittyWindowIDForPIDVia(socket, sessionPID, func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, kittenPath, "@", "--to", socket, "ls")
+	})
+}
+
+// kittyWindowIDForPIDVia is kittyWindowIDForPID with the shellout injected.
+// The second return is #1537's sixth instance of the family: whether kitten
+// answered at all.
+//
+// No answeredExitCodes: any normal exit of `kitten @ ls` is an answer — a
+// non-zero one means kitty declined to describe its windows, which is a
+// verdict about kitty, where a killed kitten is a verdict about nothing.
+//
+// The guard below reports PROBED, not a failure, and that split is deliberate.
+// An absent kitten binary or an empty socket is a settled property of this
+// installation — "there is no window id to be had here" — which is the same
+// reading osutil_linux.go and osutil_other.go give their stubs. Calling it a
+// failed probe would poison hostIdentity's completeness permanently on any
+// machine where kitten is not on the trusted path, in exchange for nothing:
+// only an invocation that actually ran and did not answer is new information.
+func kittyWindowIDForPIDVia(socket string, sessionPID int, build shelloutCmd) (string, bool) {
 	if kittenPath == "" || socket == "" || sessionPID <= 0 {
-		return ""
+		return "", true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, kittenPath, "@", "--to", socket, "ls").Output()
-	if err != nil {
-		return ""
+	out, err := build(ctx).Output()
+	if !probeAnswered(err) {
+		return "", false
 	}
-	return parseKittenLsForPID(out, sessionPID)
+	return parseKittenLsForPID(out, sessionPID), true
 }
 
 // kittyLsWindow is one entry of a `kitten @ ls` response's tabs[].windows[].
@@ -528,7 +578,7 @@ func findKittyWindowIDForPID(windows []kittyLsWindow, sessionPID int) string {
 // ps already handles the comm-vs-argv-path distinction we need, and the
 // existing package is built around these bounded exec calls.
 func readProcInfo(pid int) (ppid int, cmd string, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, psPath, "-o", "ppid=,comm=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
@@ -601,7 +651,7 @@ func herdrClientPIDs(socketPath string) (pids []int, probed bool) {
 	if _, err := os.Stat(logPath); err != nil {
 		return nil, false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, lsofPath, logPath).Output()
 	if !lsofProbeRan(err) {
@@ -660,12 +710,15 @@ func sortedDistinctPIDs(pids []int) []int {
 // `if err != nil` would be caught. runPgrep (process_darwin.go) draws the same
 // distinction for pgrep's exit 1.
 func lsofProbeRan(err error) bool {
-	if err == nil {
-		return true
-	}
-	var exit *exec.ExitError
-	return errors.As(err, &exit) && exit.ExitCode() == 1
+	return probeAnswered(err, lsofNothingToReport)
 }
+
+// lsofNothingToReport is lsof's "I looked and there is nothing to report" exit
+// status. Named because it is the entire per-tool half of lsofProbeRan: the
+// hard half — what separates a child that ran from one that was killed — is
+// probeAnswered's and is shared with every other shellout in this package
+// (#1538).
+const lsofNothingToReport = 1
 
 // herdrClientWriters selects the client PIDs from an lsof table. 'u' counts
 // alongside 'w': it is read/write, which a client's log handle may legitimately

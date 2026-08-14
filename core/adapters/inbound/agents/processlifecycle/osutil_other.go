@@ -11,7 +11,10 @@ func readProcessEnv(pid int) (map[string]string, error) {
 }
 
 // processTTY is darwin-only host enrichment; other platforms degrade to "".
-func processTTY(pid int) string { return "" }
+// probed is true: having no darwin ps to run is a settled property of this
+// platform, not a read that failed (#1533) — the same reading the ancestry
+// stubs below give their complete return.
+func processTTY(pid int) (string, bool) { return "", true }
 
 // resolveTermProgramFromAncestry / resolveHostFromAncestry are darwin-only
 // fallbacks; other platforms return zero values.
@@ -27,9 +30,13 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, host int, comple
 }
 
 // Stubs for the kitty "no readable env" enrichment helpers — darwin-only.
-func kittyAncestryPID(pid int) int                             { return 0 }
-func kittyListenOnFor(kittyPID int) string                     { return "" }
-func kittyWindowIDForPID(socket string, sessionPID int) string { return "" }
+func kittyAncestryPID(pid int) int         { return 0 }
+func kittyListenOnFor(kittyPID int) string { return "" }
+
+// probed is true for the same reason processTTY's stub reports it: having no
+// kitty remote-control CLI to run is a settled property of this platform, not
+// a read that failed (#1537).
+func kittyWindowIDForPID(socket string, sessionPID int) (string, bool) { return "", true }
 
 // IsKnownInteractiveHost is darwin-only (ancestry walking); other platforms
 // fail open. The exclusion signal it backs (CodexBar's non-interactive `agy`

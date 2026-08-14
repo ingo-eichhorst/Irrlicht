@@ -139,9 +139,12 @@ func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 //
 // complete reports whether the reads behind that answer actually ran, so a
 // caller can tell "this process has no local window" from "I could not read
-// this process" (#1492). It is false only when an ancestry walk aborted rather
-// than reaching a verdict — on an unreadable process, or on a bundle-id probe
-// that was never answered (#1524).
+// this process" (#1492). It is false when an ancestry walk aborted rather than
+// reaching a verdict — on an unreadable process, or on a bundle-id probe that
+// was never answered (#1524) — and, since #1533, when the controlling-TTY read
+// never answered either. Every bounded shellout behind this answer now feeds
+// it; the TTY one did not, because it runs after complete is computed and
+// nothing folded it back in.
 //
 // It deliberately says nothing about the env read, which cannot fail: the
 // ProcessObserver port defines an unreadable env as an empty map rather than
@@ -161,6 +164,16 @@ func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 // The ordering is load-bearing: ancestry before TTY, and both before any
 // adoption by the caller.
 func hostIdentity(pid int) (l *session.Launcher, complete bool) {
+	return hostIdentityVia(pid, processTTY)
+}
+
+// ttyProbe is the controlling-TTY read hostIdentityVia makes, injected so the
+// #1533 non-answer can be arranged — a real `ps` cannot be driven over its
+// ceiling on purpose. Same idiom as resolveHostBundleIDVia's two probes.
+type ttyProbe func(pid int) (string, bool)
+
+// hostIdentityVia is hostIdentity with the TTY read injected.
+func hostIdentityVia(pid int, readTTY ttyProbe) (l *session.Launcher, complete bool) {
 	// Env may be empty — hardened-runtime processes hide it from sysctl.
 	// Don't bail here: the ancestry fallback below is the only signal we
 	// have in that case.
@@ -198,8 +211,14 @@ func hostIdentity(pid int) (l *session.Launcher, complete bool) {
 	// Capture the controlling TTY so Terminal.app (and potentially others)
 	// can target the exact tab — Terminal.app's AppleScript dictionary
 	// matches tabs by `tty` but has no session-UUID analog.
-	l.TTY = processTTY(pid)
-	return l, complete
+	tty, ttyProbed := readTTY(pid)
+	l.TTY = tty
+	// #1533: the TTY read is the third bounded shellout behind this answer, and
+	// it was the one whose verdict was dropped — it runs AFTER complete is
+	// computed, so folding it in has to be explicit. Its polarity is #1492's
+	// rather than #1513's: this is enrichment, so the bit to carry is "this
+	// field is missing rather than absent", not "admit on no evidence".
+	return l, complete && ttyProbed
 }
 
 // launcherFromEnv builds a Launcher from the whitelisted per-PID env vars
@@ -346,6 +365,17 @@ func (a *ancestryProbe) walked() bool { return !a.resolved || a.complete }
 // AND on an unanswerable plutil (#1524); the memoized one has no plutil to
 // make, so for it the two are the same thing.
 func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry *ancestryProbe) (complete bool) {
+	return applyAncestryFallbacksVia(l, pid, ancestry, kittyWindowIDForPID)
+}
+
+// kittyWindowProbe is the `kitten @ ls` read applyKittyAncestryBackfill makes,
+// injected for the same reason ttyProbe is: a real kitten cannot be driven over
+// its ceiling on purpose.
+type kittyWindowProbe func(socket string, sessionPID int) (string, bool)
+
+// applyAncestryFallbacksVia is applyAncestryFallbacks with the kitty
+// remote-control read injected.
+func applyAncestryFallbacksVia(l *session.Launcher, pid int, ancestry *ancestryProbe, readKittyWindow kittyWindowProbe) (complete bool) {
 	complete = true
 	// kitty intentionally does not set TERM_PROGRAM (upstream kitty issue
 	// #4793), so the env-captured value may be inherited from whatever
@@ -389,8 +419,8 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry *ancestryProb
 	// Without this, clicking the session in the UI raises kitty but can't
 	// target the right tab — exactly the symptom reported for pi sessions
 	// in issue #326.
-	applyKittyAncestryBackfill(l, pid, ancestry)
-	return complete && ancestry.walked()
+	kittyProbed := applyKittyAncestryBackfill(l, pid, ancestry, readKittyWindow)
+	return complete && ancestry.walked() && kittyProbed
 }
 
 // applyKittyAncestryBackfill fills in KittyPID/KittyListenOn/KittyWindowID
@@ -403,21 +433,45 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry *ancestryProb
 // run — a candidate whose env names kitty but carries no KITTY_PID skips all
 // three blocks above — which is why its caller reads the verdict off the probe
 // afterwards rather than trusting the blocks to have accumulated it.
-func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry *ancestryProbe) {
+//
+// It makes TWO bounded shellouts, not one, and since #1537 both feed the
+// caller's completeness bit: the ancestry `ps` chain behind ancestry.host()
+// (read off the probe by the caller) and the `kitten @ ls` behind
+// readKittyWindow (returned here). Only the first was reported before.
+//
+// Be exact about what that buys today, because it is less than it looks and
+// the next reader must not conclude otherwise: NO consumer can currently
+// observe the kitten half. This block only runs when TermProgram is already
+// "kitty", and resolveClientHostIdentity returns a candidate with a non-empty
+// TermProgram outright without reading complete; ReadLauncherEnv discards the
+// bit entirely. So the verdict is carried for consistency with the walk beside
+// it — a second probe in the same block whose verdict is dropped is how the
+// first one went wrong — and it becomes load-bearing the moment a consumer
+// reads completeness for a host-resolved candidate. The TTY fold in
+// hostIdentityVia is NOT in this position: that one is reached by candidates
+// with no TermProgram at all, which is exactly the branch that reads the bit.
+func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry *ancestryProbe, readKittyWindow kittyWindowProbe) (probed bool) {
 	if l.TermProgram != "kitty" || l.KittyPID != 0 {
-		return
+		return true
 	}
 	term, kpid := ancestry.host()
 	if term != "kitty" || kpid <= 0 {
-		return
+		return true
 	}
 	l.KittyPID = kpid
 	if l.KittyListenOn == "" {
 		l.KittyListenOn = kittyListenOnFor(kpid)
 	}
 	if l.KittyListenOn != "" && l.KittyWindowID == "" {
-		l.KittyWindowID = kittyWindowIDForPID(l.KittyListenOn, pid)
+		id, ok := readKittyWindow(l.KittyListenOn, pid)
+		l.KittyWindowID = id
+		// #1537: the empty id from a kitten that never ran and the empty id
+		// from a kitty with no matching window arrived here as the same value.
+		// Returning the verdict is what lets the caller AND it into complete —
+		// the sibling failure ancestryProbe.walked() exists for, one probe over.
+		return ok
 	}
+	return true
 }
 
 // ReadArgv returns pid's argument vector (argv[0] is the executable as invoked),
