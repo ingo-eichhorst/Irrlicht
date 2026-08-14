@@ -13,6 +13,8 @@
 #   .github/workflows/web-test.yml  — npm test in both web trees
 #   .github/workflows/ars-gate.yml  — ARS architecture-regression gate
 #                                      (composite/category score vs origin/main)
+#   .github/workflows/macos-swift.yml — swift build + swift test for the
+#                                      macOS app (#1509)
 #   .github/workflows/linux.yml     — its replay-fixtures step natively (see
 #                                      below); the rest — build + full test
 #                                      suite (-race) under Linux, via the
@@ -57,6 +59,7 @@
 #   tools/preflight.sh --only security # just govulncheck + gosec + npm audit
 #   tools/preflight.sh --only tools    # just the tools/lib shell-lib unit tests
 #   tools/preflight.sh --only skills   # just the .claude/skills/**/*.md linter
+#   tools/preflight.sh --only swift    # just the macOS Swift build + test suite
 #   tools/preflight.sh --only posix    # just the #!/bin/sh POSIX/bashism lint
 #   tools/preflight.sh --only linux    # just the Linux Docker gate
 #   tools/preflight.sh --changed       # scope every gate to the packages/trees
@@ -101,7 +104,7 @@ done
 # Not `GROUPS` — that is a bash built-in holding the caller's supplementary
 # group IDs, and assigning to it silently does nothing, so the check would
 # compare against a list of numeric gids and reject every real group name.
-VALID_GROUPS=(go web arch tools skills posix security linux)
+VALID_GROUPS=(go web arch tools skills posix security swift linux)
 if [[ -n "$ONLY" ]]; then
   known=0
   for g in "${VALID_GROUPS[@]}"; do [[ "$ONLY" == "$g" ]] && known=1; done
@@ -359,6 +362,70 @@ if want security; then
   run_gate_scoped '\.go$|(^|/)go\.(mod|sum)$|(^|/)package(-lock)?\.json$' \
                   "security scan (govulncheck + gosec + npm audit)" \
                   tools/security-scan.sh "${security_args[@]}"
+fi
+
+# ---- swift group (goes BEYOND macos-swift.yml, deliberately) --------------
+# The macOS app had no automated floor of any kind until #1509: no CI workflow
+# built or tested Swift, and preflight had no Swift gate either, so a
+# platforms/macos-only diff ran *every* gate as SKIP and pushed green having
+# checked nothing.
+#
+# This is the one gate that is deliberately STRONGER than the CI workflow it
+# corresponds to, which is the opposite of the parity rule elsewhere in this
+# file — so it is worth stating why rather than leaving it to look like drift.
+# macos-swift.yml builds and does not test, because the suite does not yet pass
+# on a GitHub runner (#1530: 227 tests do, but 35 image-snapshot comparisons are
+# host-dependent, one of them hangs, plus #1523 and one home-dependent
+# assertion). It DOES pass on a developer Mac, which is exactly where this hook
+# runs. So the tests are gated here and nowhere else until #1530 lands; a
+# reader who "fixes" this to match the workflow removes the only gate the macOS
+# test suite has.
+#
+# `--skip LauncherHarnessTests` matches the workflow exactly and is
+# load-bearing beyond speed: that target drives real terminal applications
+# through NSRunningApplication, so an unfiltered run on a developer machine
+# reaches out and manipulates live windows. It is separately gated on
+# TEST_HARNESS=1 in the source; the skip is what holds if that is relaxed.
+#
+# Scoped to platforms/macos plus the workflow, since nothing else can break it
+# — the Swift app talks to the daemon over HTTP, not by importing Go.
+swift_suite() {
+  if ! command -v swift >/dev/null 2>&1; then
+    # Loud, not a silent pass: a gate whose absence reads as success is the
+    # failure mode #1423 and #1209 were both about. Reachable only ON macOS —
+    # see the platform guard below for why a Linux host is a different case.
+    echo "swift not found — install Xcode or the Swift toolchain" >&2
+    return 1
+  fi
+  # Both names: `LauncherTestHarness` is the target, `LauncherHarnessTests` the
+  # class. Either alone excludes the harness today; the pair is what keeps that
+  # true after a class is added to the target or the target is renamed. This
+  # matters more locally than in CI — here an unskipped harness test drives the
+  # developer's own live terminal windows.
+  ( cd platforms/macos && swift build \
+      && swift test --skip LauncherTestHarness --skip LauncherHarnessTests )
+  return $?
+}
+
+if want swift; then
+  # macOS-only, and skipped rather than failed elsewhere. The gate mirrors a
+  # workflow that is itself `runs-on: macos-latest`, so on Linux it is out of
+  # scope, not unmet — without this guard a Linux contributor's plain
+  # `tools/preflight.sh` could never go green, since the gate is in the default
+  # set and `swift_suite` fails hard on a missing toolchain. The distinction
+  # this preserves is the one that matters: "this platform does not run this
+  # check" is a SKIP, while "this platform runs it and the tool is missing" is
+  # a FAIL.
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    run_gate_scoped '^platforms/macos/|^\.github/workflows/macos-swift\.yml$|^tools/preflight\.sh$' \
+                    "macOS Swift build + test" swift_suite
+  else
+    echo
+    echo "$SEPARATOR"
+    echo "  macOS Swift build + test  — SKIP (not macOS)"
+    echo "$SEPARATOR"
+    NAMES+=("macOS Swift build + test"); RESULTS+=("SKIP")
+  fi
 fi
 
 # ---- linux group (mirrors linux.yml, opt-in: --linux or --only linux) ---

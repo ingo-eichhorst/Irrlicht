@@ -1,0 +1,75 @@
+name: macOS (Swift)
+
+# Compile gate for the macOS Swift app. Until #1509 nothing in CI ran `swift
+# build` or `swift test` at all: a Swift compile error could land on `main`
+# and no check would notice, because test.yml's macOS job builds Go. That is
+# the hole this closes.
+#
+# It builds and does NOT test, which is a smaller claim than this workflow's
+# name suggests, so it is worth being explicit: the test suite does not
+# currently pass on a GitHub runner, and #1530 is the issue for making it. 227
+# of its tests do pass there; the blockers are 35 host-dependent image-snapshot
+# comparisons, a hang in one of them, #1523's audio stall, and one assertion
+# that depends on the home directory's basename. Gating tests today would mean
+# a check that is red on every PR for reasons unrelated to the PR, which
+# teaches people to ignore it — strictly worse than the gap it would fill.
+#
+# The tests are NOT ungated in the meantime. `tools/preflight.sh --only swift`
+# runs the whole suite, and the pre-push hook runs it on any diff touching
+# platforms/macos/, which is where it demonstrably works. That is a local gate
+# rather than a CI one; #1530 is what moves it here.
+#
+# Deliberately its own workflow rather than a job in test.yml: that file is the
+# Go gate (its header says so), it installs a Go toolchain this job does not
+# need, and a Swift compile break should not be reported under `go-test`.
+#
+# No `paths:` filter, on purpose. A path-filtered workflow does not run for an
+# unrelated PR, and its check is then *absent* rather than green — which reads
+# as "still queued" at a glance and is the failure mode this repo keeps
+# removing elsewhere. The cost is one macOS job per PR, and this one is ~1
+# minute.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A superseded push should not leave a macOS job running. Mirrors linux.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift-build:
+    runs-on: macos-latest
+    # The build is ~45s measured. The cap exists so that a hang is a fast,
+    # legible red rather than a job sitting `in_progress` against GitHub's
+    # 6-hour default — a check stuck pending reads as "still queued", which is
+    # the same ambiguity the no-`paths:` decision above exists to avoid. The
+    # first three attempts at this gate hung for exactly that reason (#1530).
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: platforms/macos
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # Recorded in the log on purpose: when a snapshot reference legitimately
+      # has to be regenerated, the toolchain that produced it is the first
+      # thing the next reader needs — and #1509 is a case where two people in
+      # a row could not tell a toolchain difference from a real bug.
+      - name: Report toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      # Builds the app target AND the test targets, so a compile error in test
+      # code fails the gate too — without running anything. That is deliberate:
+      # test code is where most of this repo's macOS churn lands, and a test
+      # file that no longer compiles is invisible to every other check.
+      - name: Build (app + tests)
+        run: swift build --build-tests

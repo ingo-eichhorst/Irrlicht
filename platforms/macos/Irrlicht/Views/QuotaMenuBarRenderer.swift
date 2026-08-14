@@ -210,13 +210,27 @@ enum QuotaMenuBarRenderer {
     private static let systemOrangeHex = "FF9500"
     private static let systemYellowHex = "FFCC00"
 
-    /// True when the app's effective appearance is dark — same signal
-    /// SessionState.adapterIcon already uses to pick a light/dark SVG
-    /// variant, kept consistent here rather than introducing a second way
-    /// to ask the same question — including its nil-fallback: NSApp is nil
-    /// in unit tests, and adapterIcon defaults to the light variant there
-    /// (the more common ambient appearance), so this matches rather than
-    /// disagreeing with it.
+    /// True when the app's effective appearance is dark.
+    ///
+    /// Asking the *process* is defensible here in a way it is not for
+    /// `SessionState.adapterIcon(isDark:)`, which used to do the same and
+    /// drifted with the system appearance as a result (#1509): that one is
+    /// read by SwiftUI views, which have their own
+    /// `@Environment(\.colorScheme)`, whereas this image is rasterised before
+    /// being handed to a status item. The narrower signal does exist —
+    /// `MenuBarController` installs the result on an `NSStatusBarButton`,
+    /// which has an `effectiveAppearance` — so this is a defensible default
+    /// rather than the only option, and it is untested against a menu bar
+    /// whose appearance differs from the app's.
+    ///
+    /// On the `NSApp == nil` fallback: `NSApp` is nil until something
+    /// instantiates `NSApplication`, so it is nil early in launch and in a
+    /// unit test that has not yet built a view. It is NOT reliably nil under
+    /// XCTest, which is what an earlier version of this comment assumed —
+    /// any test that renders an AppKit view creates the shared application on
+    /// the way, after which this follows the machine's *current* system
+    /// appearance. That is the half that was wrong, and it is how the
+    /// appearance leaked into snapshot renders unnoticed.
     private static var isDarkAppearance: Bool {
         guard let app = NSApp else { return false }
         return app.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua

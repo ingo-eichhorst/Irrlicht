@@ -980,6 +980,31 @@ Before marking a ticket done, run the full suite — every layer must pass:
     failure; declaring less never is (the 30-day / adoption criteria live in
     `site/docs/adapters.html` and no gate can see them). `of status --summary`
     shows claimed vs earned side by side.
+- macOS app (only when touching `platforms/macos/`): `cd platforms/macos &&
+  swift build && swift test --skip LauncherTestHarness --skip LauncherHarnessTests`,
+  run locally by `tools/preflight.sh --only swift` and by the pre-push hook.
+  CI's `.github/workflows/macos-swift.yml` **builds but does not test** — the
+  suite does not yet pass on a GitHub runner (#1530), so the test gate is the
+  local one. That makes `swift` the single gate here that is deliberately
+  stronger locally than in CI; everything else in `preflight.sh` mirrors CI
+  exactly. **Never run the suite unskipped**: the
+  `LauncherTestHarness` target drives real terminal applications through
+  `NSRunningApplication`, so on a developer machine it manipulates live
+  windows. Both names are passed because a test ID is `<target>.<class>`, and
+  either alone stops covering the harness the moment a class is added to that
+  target or the target is renamed.
+  Nothing built or tested Swift in CI until #1509, which is why two snapshot
+  tests sat red on `main` for weeks with no failing check anywhere — the macOS
+  platform had no automated floor at all, and `preflight.sh --changed` reported
+  every gate as SKIP on a `platforms/macos/`-only diff. That issue is also the
+  cautionary tale for reading a snapshot diff: a failure confined to a small
+  region was twice diagnosed as toolchain antialiasing and treated by
+  regenerating the reference (#1034, #1044), when it was an appearance-mode bug
+  that made the suite green by day and red by night. `AdapterIconAppearanceTests`
+  is the lock, and it sets both appearances itself so it cannot pass by daylight.
+  The suite also aborts intermittently (#1523) in a way that **truncates the
+  run** while every suite that did report says "0 failures" — so the exit code
+  is the only reliable signal, never the last totals line you can see.
 - Web (only when touching a `web/` tree): `npm test` in that tree. There are
   two independent suites, each with its own `node_modules`:
   - `platforms/web/` — the dashboard.
@@ -1021,6 +1046,7 @@ tools/preflight.sh --linux        # + full Linux parity (slow: needs Docker)
 tools/preflight.sh --only go      # just the test.yml-equivalent gates
 tools/preflight.sh --only arch    # just the ARS architecture gate
 tools/preflight.sh --only skills  # just the .claude/skills/**/*.md linter
+tools/preflight.sh --only swift   # just the macOS Swift build + test suite
 ```
 
 **For an automated caller (an agent), `--only` chunking is the recipe, not a
@@ -1028,7 +1054,7 @@ debugging convenience — the unscoped run does not reliably fit a foreground
 `Bash` call's 600s budget** (it reliably exceeds it on this machine; the long
 pole is the `go` group's core suite + replay fixtures). Run each group as its
 own **foreground** invocation instead of the single unscoped command:
-`tools/preflight.sh --only go|web|arch|tools|skills|posix|security` (see
+`tools/preflight.sh --only go|web|arch|tools|skills|posix|security|swift` (see
 `tools/preflight.sh --help` for the current group list; `linux` stays opt-in
 and needs Docker). Every gate still runs — chunking only changes how many
 invocations it takes. **Do not background the unscoped run to make it fit**:
