@@ -11,7 +11,7 @@ import (
 // Issue #1480: replay goldens record a virtual_time on every transition and
 // nothing compared it to anything. compareOrdered walks prev_state/new_state
 // index-by-index and never reads the time; assertReproducesRecordedTransitions
-// checks counts and kind-sets; the "N of 309 recordings diverge" headline every
+// checks counts and kind-sets; the "N of M recordings diverge" headline every
 // replay PR quotes is counts and kinds only (that headline is
 // extendedCheck.Diverges counted over the catalog, and N is
 // censusOfTheCommittedCatalog.Divergent — neither is restated here, per #1503).
@@ -48,9 +48,12 @@ func (d timeDelta) Abs() time.Duration { return d.Delta.Abs() }
 //
 // It is chosen from the measured distribution rather than picked, because the
 // issue is explicit that a tolerance cannot be chosen for a distribution nobody
-// has printed. Measured over all 826 kind-matched paired transitions in the
-// committed catalog, |delta| is sharply bimodal, and the two modes are
-// separated by a near-empty decade:
+// has printed. The distribution below was measured for #1480, over the 826
+// kind-matched pairs the catalog held then; it is the evidence for the
+// threshold and is deliberately NOT refreshed as the catalog grows — the live
+// figures are printed by the gate on every run. It is quoted here as of that
+// measurement, not as a current count. |delta| is sharply bimodal, and the two
+// modes are separated by a near-empty decade:
 //
 //	<1ms       190   23.0%   ┐
 //	1-10ms     338   40.9%   ├ 74.4% under 100ms — the daemon's own read latency

@@ -156,7 +156,7 @@ while IFS= read -r fix; do
   if [[ "$summary_line" == *"extended-check:"* ]]; then
     # Tally the ordered/kind divergence. These two counters were added with the
     # reporting block at the end of this script but nothing ever incremented
-    # them, so that block could not print and the "N of 309 diverge" figure it
+    # them, so that block could not print and the "N of M diverge" figure it
     # exists to show had to be recomputed by hand every time (#1480).
     if [[ "$summary_line" == *FAIL* ]]; then
       extended_divergences="${extended_divergences}   ${adapter}/${kind}/${name}/${recname}

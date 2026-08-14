@@ -28,14 +28,14 @@ import (
 // quoted with full confidence.
 
 // catalogCensus is the census of the committed catalog's populations, plus the
-// denominator they are quoted against ("N of 309").
+// denominator they are quoted against ("N of <Recordings>").
 //
 // The denominator is a field rather than a constant because it is quoted just
 // as often and rots the same way: it moves whenever a recording is promoted or
 // retired, and a stale one silently rescales every ratio computed from it.
 type catalogCensus struct {
 	// Recordings is how many sidecar-driven recordings the walk reached — the
-	// denominator in "N of 309".
+	// denominator every population here is quoted against.
 	Recordings int
 	// Zero counts extendedCheck.ReproducesNothing: the daemon logged
 	// transitions, the replay reproduced none, so the golden asserts nothing.
@@ -141,6 +141,31 @@ func (c catalogCensus) literal() string {
 	}
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// alignedFieldLine renders the one line literal() must contain for a field:
+// its name and ITS OWN value, bound together in one string.
+//
+// Bound rather than checked apart, because that is the property the pasted
+// block rests on and the one an independent pair of Contains calls cannot see.
+// #1517 replaced a hand-typed verbatim list here with two separate
+// substring checks — "the name appears" and "the value appears somewhere" — and
+// a literal() that paired every field with its NEIGHBOUR's value satisfied
+// both, stayed gofmt-canonical, kept the right line count, and shipped a census
+// of garbage past the whole package (measured, on review).
+//
+// The width is re-derived by the same rule literal() uses. That is not
+// tautological here: the round-trip through go/format in
+// TestCensusLiteralIsValidPasteableSource is what pins the width itself, and
+// this function pins the pairing the round-trip cannot see.
+func (c catalogCensus) alignedFieldLine(f censusField) string {
+	width := 0
+	for _, other := range c.fields() {
+		if n := len(other.name) + 1; n > width {
+			width = n
+		}
+	}
+	return fmt.Sprintf("\t%-*s %d,\n", width, f.name+":", f.value)
 }
 
 // censusField pairs a figure with the name it is declared and reported under,
@@ -569,12 +594,9 @@ func TestCensusDiffNamesEveryStaleShape(t *testing.T) {
 			}
 			lit := current.literal()
 			for _, f := range current.fields() {
-				if !strings.Contains(lit, fmt.Sprintf("%s:", f.name)) {
-					t.Errorf("literal() omits the %s field entirely:\n%s", f.name, lit)
-				}
-				if !strings.Contains(lit, fmt.Sprintf(" %d,\n", f.value)) {
-					t.Errorf("literal() does not carry the measured %s value %d:\n%s",
-						f.name, f.value, lit)
+				if want := current.alignedFieldLine(f); !strings.Contains(lit, want) {
+					t.Errorf("literal() does not carry %s beside its measured value; "+
+						"want the line %q:\n%s", f.name, want, lit)
 				}
 			}
 		})
@@ -622,14 +644,14 @@ func TestCensusLiteralIsValidPasteableSource(t *testing.T) {
 		t.Errorf("literal() is not gofmt-canonical, so the pasted block would be reformatted "+
 			"and stop matching what this test prints.\n got:\n%s\nwant:\n%s", lit, formatted)
 	}
-	// Each field still has to appear with its measured value, or a
-	// gofmt-canonical block that simply omitted one would pass above.
+	// Each field still has to appear beside ITS OWN value. Checking the name
+	// and the value as two independent substrings is satisfied by a literal
+	// that pairs every field with the wrong figure, which is worse than an
+	// omission: the pasted block would be gofmt-clean and wrong.
 	for _, f := range censusOfTheCommittedCatalog.fields() {
-		if !strings.Contains(lit, fmt.Sprintf("%s:", f.name)) {
-			t.Errorf("literal() omits the %s field:\n%s", f.name, lit)
-		}
-		if !strings.Contains(lit, fmt.Sprintf(" %d,\n", f.value)) {
-			t.Errorf("literal() does not carry %s's value %d:\n%s", f.name, f.value, lit)
+		if want := censusOfTheCommittedCatalog.alignedFieldLine(f); !strings.Contains(lit, want) {
+			t.Errorf("literal() is missing the gofmt-aligned line %q for %s:\n%s",
+				want, f.name, lit)
 		}
 	}
 }

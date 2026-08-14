@@ -827,7 +827,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   transition, and until #1480 **nothing compared it to anything** — the
   goldens pin it only against their own previous value, `compareOrdered` walks
   `prev_state`/`new_state` index-by-index and never reads the time, and the
-  "N of 309 recordings diverge" headline every replay PR quotes is counts and
+  "N of M recordings diverge" headline every replay PR quotes is counts and
   kinds only (that headline is `extendedCheck.Diverges` counted over the
   catalog — see the next bullet for why it has exactly one definition). So a transition reproduced at the right position in the ORDER but
   31 seconds from when the daemon made it was a full pass, and the golden then
@@ -844,10 +844,10 @@ Before marking a ticket done, run the full suite — every layer must pass:
   twice. The reporting side (`timing_drift.go`) buckets and ranks those deltas;
   it reuses `core/domain/stats.Percentile` rather than carrying its own.
   It is a **ratchet, not a tolerance gate**, and that is the deliberate
-  shape: 24.3% of the catalog's 826 kind-matched pairs are still more than 1s
-  from their daemon, so a gate failing on all of them would protect nothing.
-  `TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog` walks all 309
-  sidecar-driven recordings, prints the distribution, and fails when a
+  shape: roughly a quarter of the catalog's kind-matched pairs are still more
+  than 1s from their daemon, so a gate failing on all of them would protect
+  nothing. `TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog` walks every
+  sidecar-driven recording, prints the distribution, and fails when a
   recording NEWLY drifts, when a pinned entry stops drifting and is left to rot,
   or when the aggregate counts grow — the same idiom `knownZeroTransition`
   uses. The 1s threshold is read off the measured distribution rather than
