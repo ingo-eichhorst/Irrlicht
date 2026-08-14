@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -512,10 +512,10 @@ func herdrClientPIDs(socketPath string) (pids []int, probed bool) {
 }
 
 // sortedDistinctPIDs sorts pids newest-attach-first and collapses repeats.
-// It sorts in place and reuses the argument's backing array, so the result
-// aliases pids and pids is not left as the caller passed it. Both are fine for
-// the single production caller, which passes a slice herdrClientWriters just
-// built and does not look at it again.
+// Sorts in place and reuses the argument's backing array — slices.Compact's
+// documented contract — so the result aliases pids. Fine for the single
+// production caller, which passes a slice herdrClientWriters just built and
+// does not look at it again.
 //
 // The sort answers open question 3 of #1350; the dedup is what makes the
 // result a list of CLIENTS rather than of file descriptors. parseLsofFDs emits
@@ -541,14 +541,10 @@ func herdrClientPIDs(socketPath string) (pids []int, probed bool) {
 // not that. Removing it removes a false claim of incompleteness, it does not
 // weaken #1492 — a candidate genuinely dropped by the cap still poisons.
 func sortedDistinctPIDs(pids []int) []int {
-	sort.Sort(sort.Reverse(sort.IntSlice(pids)))
-	distinct := pids[:0]
-	for i, pid := range pids {
-		if i == 0 || pid != pids[i-1] {
-			distinct = append(distinct, pid)
-		}
-	}
-	return distinct
+	slices.Sort(pids)
+	pids = slices.Compact(pids)
+	slices.Reverse(pids)
+	return pids
 }
 
 // lsofProbeRan reports whether an lsof invocation that returned err
@@ -635,6 +631,12 @@ const maxClientCandidates = 4
 // terminates honestly at PID 1 while a local window exists (that indirection is
 // #1501, the tmux twin of #1350), and a chain deeper than maxAncestry is
 // declared a miss on the same terms.
+// Producers must feed it DISTINCT pids. maxClientCandidates is a bound on
+// clients, and the truncation below poisons the answer, so a repeated pid both
+// burns a slot and costs a second identical hostIdentity. herdr's producer
+// dedups (sortedDistinctPIDs) because lsof emits a row per FD; a `tmux
+// list-clients` producer is naturally distinct, but the obligation is stated
+// here, next to the constant that depends on it, rather than only there.
 func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
 	readAll := len(pids) <= maxClientCandidates
 	if !readAll {
@@ -737,8 +739,8 @@ func herdrClientLauncher(socketPath string) (*session.Launcher, bool) {
 	if socketPath == "" {
 		return nil, false
 	}
-	if cached, probed, hit := herdrClientCacheGet(socketPath); hit {
-		return cached, probed
+	if cached, hit := herdrClientCacheGet(socketPath); hit {
+		return cached.launcher, cached.probed
 	}
 	resolved, probed := resolveHerdrClientLauncher(socketPath)
 	herdrClientCachePut(socketPath, resolved, probed)
@@ -775,29 +777,39 @@ var (
 )
 
 // herdrClientCacheGet reports what the last probe of socketPath determined.
-// The three returns are deliberately not two: hit answers "is there a live
-// entry", and (launcher, probed) is the same tri-state herdrClientLauncher
-// returns — a cached "nothing attached" is (nil, true, true) while a cached
-// non-answer is (nil, false, true), and collapsing those two would be #1485.
-// Expired entries are dropped on the way past, so sockets that stop being used
-// don't accumulate.
+// The entry rather than its fields, because launcher and probed are the same
+// tri-state herdrClientLauncher returns — a cached "nothing attached" is
+// (nil, probed) while a cached non-answer is (nil, !probed), and two adjacent
+// bools in a return list is the one shape a future call site can transpose
+// silently. Collapsing those two states would be #1485.
 //
 // A hit deliberately does NOT restamp entry.at. Refreshing on read would let a
 // socket busy enough to be read every sweep hold a stale entry — in particular
 // a stale non-answer — indefinitely; leaving the stamp alone bounds any entry
 // to one TTL from the probe that produced it, however often it is read.
-func herdrClientCacheGet(socketPath string) (l *session.Launcher, probed, hit bool) {
+func herdrClientCacheGet(socketPath string) (herdrClientCacheEntry, bool) {
 	herdrClientCacheMu.Lock()
 	defer herdrClientCacheMu.Unlock()
+	return herdrClientCacheLive(socketPath)
+}
+
+// herdrClientCacheLive returns socketPath's entry when it has not expired, and
+// drops it when it has — so sockets that stop being used don't accumulate.
+// Callers hold herdrClientCacheMu.
+//
+// Split out so the expiry rule has exactly one spelling. Both readers need it
+// and they need it with opposite polarity, which is precisely the pair that
+// drifts.
+func herdrClientCacheLive(socketPath string) (herdrClientCacheEntry, bool) {
 	entry, ok := herdrClientCache[socketPath]
 	if !ok {
-		return nil, false, false
+		return herdrClientCacheEntry{}, false
 	}
 	if time.Since(entry.at) > herdrClientCacheTTL {
 		delete(herdrClientCache, socketPath)
-		return nil, false, false
+		return herdrClientCacheEntry{}, false
 	}
-	return entry.launcher, entry.probed, true
+	return entry, true
 }
 
 // herdrClientCachePut records what a probe of socketPath determined. A
@@ -822,7 +834,7 @@ func herdrClientCachePut(socketPath string, l *session.Launcher, probed bool) {
 	herdrClientCacheMu.Lock()
 	defer herdrClientCacheMu.Unlock()
 	if !probed {
-		if prev, ok := herdrClientCache[socketPath]; ok && prev.probed && time.Since(prev.at) <= herdrClientCacheTTL {
+		if prev, live := herdrClientCacheLive(socketPath); live && prev.probed {
 			return
 		}
 	}

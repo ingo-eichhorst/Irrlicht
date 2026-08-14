@@ -1322,7 +1322,9 @@ func (pm *PIDManager) touchAndSave(state *session.SessionState) {
 //   - The one genuinely costly step — the lsof scan that finds the
 //     attached client, and the per-candidate identity probes behind it —
 //     is memoized per socket path, so N panes of one herdr server cost one
-//     probe per sweep rather than N. That now holds for every outcome,
+//     probe per socket per TTL rather than N — "per sweep" while a pass runs
+//     inside one TTL, which is the normal case but not guaranteed under the
+//     load that produces a non-answer (#1529). That now holds for every outcome,
 //     including the ones that determine nothing, and it did not always:
 //     #1492 routed an unreadable candidate to the same "could not look"
 //     answer as a failed scan, and #1485's rule was that such an answer is
@@ -1338,9 +1340,13 @@ func (pm *PIDManager) touchAndSave(state *session.SessionState) {
 //     for pid > 0 sessions, and sweepStaleSnapshot exempts any session with a
 //     live PID from the readyTTL reap before UpdatedAt is ever consulted.
 //
-// The read runs outside assignMu deliberately: ReadLauncherEnv is allowed to
-// block for up to two seconds, and assignMu serializes PID discovery for every
-// session. Only the merge is taken under the lock.
+// The read runs outside assignMu deliberately: ReadLauncherEnv may block, and
+// assignMu serializes PID discovery for every session. Only the merge is taken
+// under the lock. "For up to two seconds" is what this said, and it was wrong
+// in the same way the bullet above was: each shellout is bounded at 2s, the
+// herdr path's candidate loop is bounded by a COUNT rather than by time, so
+// one resolve can outlast this ticker. That is #1529, not something the memo
+// above fixes — the memo makes it rarer, not shorter.
 func (pm *PIDManager) refreshHerdrHosts(snaps []livenessSnapshot) {
 	if pm.launcherEnv == nil {
 		return

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -649,11 +650,6 @@ func TestHerdrClientPIDs_ProbeTriState(t *testing.T) {
 // The third case is the vacuity guard: a cache that reported probed=false for
 // everything would satisfy the first two and destroy the tri-state.
 func TestHerdrClientLauncher_MemoizedNonAnswerIsStillANonAnswer(t *testing.T) {
-	forget := func(socketPath string) {
-		herdrClientCacheMu.Lock()
-		delete(herdrClientCache, socketPath)
-		herdrClientCacheMu.Unlock()
-	}
 	memoized := func(t *testing.T, socketPath string) herdrClientCacheEntry {
 		t.Helper()
 		herdrClientCacheMu.Lock()
@@ -667,7 +663,7 @@ func TestHerdrClientLauncher_MemoizedNonAnswerIsStillANonAnswer(t *testing.T) {
 
 	t.Run("probe could not run", func(t *testing.T) {
 		socketPath := newHerdrSessionDir(t) // no client log: the probe cannot run
-		t.Cleanup(func() { forget(socketPath) })
+		t.Cleanup(func() { forgetHerdrClientMemo(socketPath) })
 
 		if _, probed := herdrClientLauncher(socketPath); probed {
 			t.Fatal("want a non-answer for a socket whose client log is absent")
@@ -706,7 +702,7 @@ func TestHerdrClientLauncher_MemoizedNonAnswerIsStillANonAnswer(t *testing.T) {
 		socketPath := newHerdrSessionDir(t)
 		want := &session.Launcher{TermProgram: "iTerm.app", HostBundleID: "com.googlecode.iterm2"}
 		herdrClientCachePut(socketPath, want, true)
-		t.Cleanup(func() { forget(socketPath) })
+		t.Cleanup(func() { forgetHerdrClientMemo(socketPath) })
 
 		got, probed := herdrClientLauncher(socketPath)
 		if !probed {
@@ -722,7 +718,7 @@ func TestHerdrClientLauncher_MemoizedNonAnswerIsStillANonAnswer(t *testing.T) {
 		if err := os.WriteFile(herdrClientLogPath(socketPath), []byte("detached\n"), 0o600); err != nil {
 			t.Fatalf("seed client log: %v", err)
 		}
-		t.Cleanup(func() { forget(socketPath) })
+		t.Cleanup(func() { forgetHerdrClientMemo(socketPath) })
 
 		if _, probed := herdrClientLauncher(socketPath); !probed {
 			t.Fatal("a detach is an answer")
@@ -743,9 +739,7 @@ func TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown(t *testing.T) 
 	// it is the one place in the family that would otherwise leave residue in
 	// the package-global memo.
 	t.Cleanup(func() {
-		herdrClientCacheMu.Lock()
-		delete(herdrClientCache, socketPath)
-		herdrClientCacheMu.Unlock()
+		forgetHerdrClientMemo(socketPath)
 	})
 	agentPID := spawnSleeperWithEnv(t, []string{
 		"PATH=/usr/bin:/bin",
@@ -780,9 +774,7 @@ func TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown(t *testing.T) 
 	// Dropping the entry stands in for the TTL elapsing — waiting out five real
 	// seconds would buy nothing but a slower suite. Once it is gone the detach
 	// is visible, which is what bounds the deferral at one TTL.
-	herdrClientCacheMu.Lock()
-	delete(herdrClientCache, socketPath)
-	herdrClientCacheMu.Unlock()
+	forgetHerdrClientMemo(socketPath)
 	if _, hostKnown := ReadLauncherEnv(agentPID); !hostKnown {
 		t.Error("a detached session's host is known to be absent")
 	}
@@ -1152,6 +1144,17 @@ func TestResolveClientHostIdentity_ResolvableCandidateStillWins(t *testing.T) {
 
 // --- non-answer memoization (#1514) -----------------------------------------
 
+// forgetHerdrClientMemo drops socketPath's entry from the process-global memo.
+// Since #1514 every socket a test touches leaves one behind — non-answers are
+// memoized too — so this is the single spelling of the locking protocol rather
+// than a copy per test. One caller uses it mid-test, standing in for the TTL
+// elapsing; the rest wire it through t.Cleanup.
+func forgetHerdrClientMemo(socketPath string) {
+	herdrClientCacheMu.Lock()
+	defer herdrClientCacheMu.Unlock()
+	delete(herdrClientCache, socketPath)
+}
+
 // countingLsof points lsofPath at a stub that records one line per invocation
 // and prints table for every call, and returns a func reporting how many times
 // it ran. It is how the cost claims below are asserted as a COUNT of probes
@@ -1203,9 +1206,7 @@ func unreadableClientSocket(t *testing.T) (string, func() int) {
 		"herdr     " + strconv.Itoa(exitedPID(t)) + " ingo    3w   REG   1,18      372 136170 " + logPath
 	scans := countingLsof(t, table)
 	t.Cleanup(func() {
-		herdrClientCacheMu.Lock()
-		delete(herdrClientCache, socketPath)
-		herdrClientCacheMu.Unlock()
+		forgetHerdrClientMemo(socketPath)
 	})
 	return socketPath, scans
 }
@@ -1251,16 +1252,8 @@ func TestSortedDistinctPIDs(t *testing.T) {
 		"empty":                   {nil, nil},
 	}
 	for name, tc := range cases {
-		got := sortedDistinctPIDs(append([]int(nil), tc.in...))
-		if len(got) != len(tc.want) {
+		if got := sortedDistinctPIDs(slices.Clone(tc.in)); !slices.Equal(got, tc.want) {
 			t.Errorf("%s: got %v, want %v", name, got, tc.want)
-			continue
-		}
-		for i := range got {
-			if got[i] != tc.want[i] {
-				t.Errorf("%s: got %v, want %v", name, got, tc.want)
-				break
-			}
 		}
 	}
 }
@@ -1273,7 +1266,7 @@ func TestSortedDistinctPIDs(t *testing.T) {
 func TestSortedDistinctPIDs_DuplicateDoesNotConsumeACandidateSlot(t *testing.T) {
 	// Three clients, one of them holding two write handles: five FD rows.
 	rows := []int{100, 100, 200, 300, 300}
-	got := sortedDistinctPIDs(append([]int(nil), rows...))
+	got := sortedDistinctPIDs(slices.Clone(rows))
 	if len(got) > maxClientCandidates {
 		t.Fatalf("%d FD rows for 3 clients still exceed the %d-candidate cap: %v",
 			len(rows), maxClientCandidates, got)
@@ -1310,14 +1303,8 @@ func TestHerdrClientPIDs_DedupesFDRowsOfOneClient(t *testing.T) {
 	if !probed {
 		t.Fatal("the stub exits 0, so the probe ran")
 	}
-	want := []int{26940, 26932}
-	if len(pids) != len(want) {
-		t.Fatalf("got %v, want one entry per client %v — the cap counts candidates, so a duplicate consumes a slot", pids, want)
-	}
-	for i := range want {
-		if pids[i] != want[i] {
-			t.Fatalf("got %v, want %v (newest attach first)", pids, want)
-		}
+	if want := []int{26940, 26932}; !slices.Equal(pids, want) {
+		t.Fatalf("got %v, want one entry per client, newest attach first %v — the cap counts candidates, so a duplicate consumes a slot", pids, want)
 	}
 }
 
@@ -1333,16 +1320,11 @@ func TestHerdrClientPIDs_DedupesFDRowsOfOneClient(t *testing.T) {
 // The second case is the vacuity guard: a put that simply refused every
 // overwrite would satisfy the first and freeze the memo forever.
 func TestHerdrClientCachePut_NonAnswerDoesNotDisplaceALiveAnswer(t *testing.T) {
-	forget := func(socketPath string) {
-		herdrClientCacheMu.Lock()
-		delete(herdrClientCache, socketPath)
-		herdrClientCacheMu.Unlock()
-	}
 
 	t.Run("non-answer loses to a live answer", func(t *testing.T) {
 		socketPath := newHerdrSessionDir(t)
 		want := &session.Launcher{TermProgram: "iTerm.app"}
-		t.Cleanup(func() { forget(socketPath) })
+		t.Cleanup(func() { forgetHerdrClientMemo(socketPath) })
 
 		herdrClientCachePut(socketPath, want, true)
 		herdrClientCachePut(socketPath, nil, false) // the slow loser lands second
@@ -1356,7 +1338,7 @@ func TestHerdrClientCachePut_NonAnswerDoesNotDisplaceALiveAnswer(t *testing.T) {
 	t.Run("answer still wins over a non-answer", func(t *testing.T) {
 		socketPath := newHerdrSessionDir(t)
 		want := &session.Launcher{TermProgram: "iTerm.app"}
-		t.Cleanup(func() { forget(socketPath) })
+		t.Cleanup(func() { forgetHerdrClientMemo(socketPath) })
 
 		herdrClientCachePut(socketPath, nil, false)
 		herdrClientCachePut(socketPath, want, true)
@@ -1366,4 +1348,41 @@ func TestHerdrClientCachePut_NonAnswerDoesNotDisplaceALiveAnswer(t *testing.T) {
 			t.Errorf("got (%+v, %v), want the answer to replace the non-answer — re-probing is pointless otherwise", got, probed)
 		}
 	})
+}
+
+// TestHerdrClientCache_ExpiresANonAnswer is the load-bearing half of #1514's
+// argument, and it was missing: deleting herdrClientCacheLive's expiry check
+// entirely left every other test in the package green (measured).
+//
+// The case for reversing #1485 is that a memoized non-answer costs only a
+// DEFERRED recovery. That sentence is true only because the entry expires. An
+// unknown that never expired would pin every pane of a herdr server to "host
+// unknown" for the life of the daemon — strictly worse than the per-pane
+// re-probe #1514 removes, and arrived at through the fix for it.
+//
+// Backdating the stamp stands in for five real seconds; asserting the SCAN
+// COUNT rather than the return value is what makes it discriminating, since a
+// non-answer reads identically whether it was re-probed or served stale.
+func TestHerdrClientCache_ExpiresANonAnswer(t *testing.T) {
+	socketPath, scans := unreadableClientSocket(t)
+
+	if _, probed := herdrClientLauncher(socketPath); probed {
+		t.Fatal("want a non-answer for a socket whose only candidate is unreadable")
+	}
+	if got := scans(); got != 1 {
+		t.Fatalf("first read cost %d scans, want 1", got)
+	}
+
+	herdrClientCacheMu.Lock()
+	entry := herdrClientCache[socketPath]
+	entry.at = time.Now().Add(-herdrClientCacheTTL - time.Second)
+	herdrClientCache[socketPath] = entry
+	herdrClientCacheMu.Unlock()
+
+	if _, probed := herdrClientLauncher(socketPath); probed {
+		t.Fatal("the re-probe finds the same unreadable candidate")
+	}
+	if got := scans(); got != 2 {
+		t.Errorf("an expired non-answer was served from the memo (%d scans, want 2): a cached unknown that never lapses pins every pane on this socket forever", got)
+	}
 }
