@@ -47,28 +47,6 @@ final class AdapterIconAppearanceTests: XCTestCase {
         ContextPressureThreshold.unitKey: ContextPressureThreshold.Unit.percent.rawValue,
     ]
 
-    /// Antigravity's real brand mark: a three-segment arch whose dark variant
-    /// uses Google's lighter tonal colours so it reads against dark chrome.
-    /// Mirrors core/adapters/inbound/agents/antigravity/agent.go.
-    private static let lightSVG = """
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
-      <g fill="none" stroke-width="15" stroke-linecap="round">
-        <path d="M16 82 Q27.3 39.3 38.7 25.1" stroke="#4285F4"/>
-        <path d="M38.7 25.1 Q50 10.9 61.3 25.1" stroke="#EA4335"/>
-        <path d="M61.3 25.1 Q72.7 39.3 84 82" stroke="#34A853"/>
-      </g>
-    </svg>
-    """
-    private static let darkSVG = """
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
-      <g fill="none" stroke-width="15" stroke-linecap="round">
-        <path d="M16 82 Q27.3 39.3 38.7 25.1" stroke="#8AB4F8"/>
-        <path d="M38.7 25.1 Q50 10.9 61.3 25.1" stroke="#F28B82"/>
-        <path d="M61.3 25.1 Q72.7 39.3 84 82" stroke="#81C995"/>
-      </g>
-    </svg>
-    """
-
     override func setUp() async throws {
         try await super.setUp()
         let defaults = UserDefaults.standard
@@ -78,12 +56,7 @@ final class AdapterIconAppearanceTests: XCTestCase {
         }
         sessionManager = SessionManager()
         savedRegistry = AgentRegistry.byName
-        AgentRegistry.byName["antigravity"] = AgentBranding(
-            name: "antigravity",
-            displayName: "Antigravity",
-            iconSVGLight: Self.lightSVG,
-            iconSVGDark: Self.darkSVG
-        )
+        AgentRegistry.byName["antigravity"] = TestAgentBranding.antigravity
     }
 
     override func tearDown() async throws {
