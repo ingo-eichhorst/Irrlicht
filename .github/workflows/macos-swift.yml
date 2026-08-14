@@ -1,0 +1,65 @@
+name: macOS (Swift)
+
+# Pass/fail gate for the macOS Swift app. Until #1509 nothing in CI ran
+# `swift build` or `swift test` at all, so the Swift suite was verified on
+# developer machines only — and two snapshot tests sat red on `main` for weeks
+# with no failing check, no badge, and nothing anywhere to look at. That is the
+# specific hole this workflow closes.
+#
+# Deliberately its own workflow rather than a job in test.yml: that file is the
+# Go gate (its header says so), it installs a Go toolchain every job needs and
+# this one does not, and a Swift compile break should not be reported under a
+# check named `go-test`.
+#
+# No `paths:` filter, on purpose. A path-filtered workflow does not run for an
+# unrelated PR, and its check is then *absent* rather than green — which reads
+# as "still queued" at a glance and is the exact failure mode this repo keeps
+# removing elsewhere. The cost is one extra macOS job per PR; the alternative
+# is a gate whose silence is indistinguishable from a pass.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  swift-test:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: platforms/macos
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # Recorded in the log on purpose: the suite contains image snapshot
+      # tests, whose output depends on the rendering stack. When a reference
+      # legitimately has to be regenerated, the toolchain that produced it is
+      # the first thing the next reader needs.
+      - name: Report toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      # Split from the test step so a compile break in app-only code (which no
+      # test target imports a symbol from) is attributed to building rather
+      # than surfacing as an opaque test-run failure.
+      - name: Build
+        run: swift build
+
+      # `--skip LauncherHarnessTests` is not optional. That target drives real
+      # terminal applications through NSRunningApplication and expects a
+      # display and an installed Ghostty; on a runner it has neither. It is
+      # additionally gated behind TEST_HARNESS=1 in the source, so this is
+      # belt-and-braces — but the skip is what keeps the gate honest if that
+      # env gate is ever relaxed.
+      #
+      # The step fails the job on any non-zero exit, which includes both a test
+      # failure and the process aborting mid-run (see #1523 — an XCTest stall
+      # abort truncates the run while every suite that did report says
+      # "0 failures", so exit status is the only reliable signal).
+      - name: Test
+        run: swift test --skip LauncherHarnessTests

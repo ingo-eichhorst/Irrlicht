@@ -1112,13 +1112,25 @@ struct SessionState: Identifiable, Codable {
     /// when the registry has no entry for this adapter — e.g. before the
     /// first hydration completes, or when an adapter is rolled out by a
     /// daemon newer than this app build.
+    ///
+    /// `isDark` selects the brand's light or dark tonal variant and is the
+    /// caller's to supply, deliberately: every caller is a SwiftUI view, and
+    /// the appearance that matters is the one **that view** is rendered under,
+    /// which a view reads from `@Environment(\.colorScheme)`. This used to
+    /// read `NSApp.effectiveAppearance` instead — the *process's* appearance —
+    /// so an icon drawn into a host with a pinned appearance disagreed with
+    /// the row around it, and on a machine with macOS auto-appearance
+    /// (`AppleInterfaceStyleSwitchesAutomatically`) the rendered pixels
+    /// changed with the time of day. That made the ghost-row snapshot tests
+    /// red at night and green by day for months, twice misdiagnosed as
+    /// toolchain antialiasing drift and "fixed" by regenerating the
+    /// references (#1034, #1044). See `AdapterIconAppearanceTests` (#1509).
+    ///
+    /// A renderer with no view context of its own — the menu-bar image
+    /// builder — legitimately still asks the process; see
+    /// `QuotaMenuBarRenderer.isDarkAppearance`.
     @MainActor
-    var adapterIcon: NSImage? {
-        // NSApp can be nil before the app finishes launching (and is always
-        // nil in unit-test contexts that don't bring up an NSApplication).
-        // Default to the light variant in that case — it's the more common
-        // ambient appearance and avoids an implicit-unwrap crash.
-        let isDark = NSApp?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    func adapterIcon(isDark: Bool) -> NSImage? {
         let svg: String
         if let entry = AgentRegistry.byName[adapter ?? ""] {
             svg = isDark ? entry.iconSVGDark : entry.iconSVGLight

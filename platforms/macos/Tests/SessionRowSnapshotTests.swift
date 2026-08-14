@@ -372,13 +372,24 @@ final class SessionRowSnapshotTests: XCTestCase {
     /// fixture, whose metrics object carries zero tokens / zero utilization, so a
     /// separate zero-token unit case would render an identical row.)
     ///
-    /// Issue #1034: this and testFixtureAntigravityGhost both render the 14×14
-    /// antigravity SVG icon, whose rasterized anti-aliasing shifts slightly
-    /// across Xcode/toolchain versions. A failure confined to a few dozen
-    /// pixels around the icon (not the whole row) is that drift, not a real
-    /// regression — regenerate with `SNAPSHOT_TESTING_RECORD=failed swift
-    /// test --filter SessionRowSnapshotTests/<testName>` rather than chasing
-    /// a pixel-perfect match across toolchains.
+    /// Issue #1509: this and testFixtureAntigravityGhost both render the 14×14
+    /// antigravity SVG icon, and both used to fail with a diff confined to it.
+    /// That was diagnosed twice as toolchain antialiasing drift (#1034,
+    /// #1044) and treated by regenerating the references. It was not drift:
+    /// `adapterIcon` resolved its light/dark brand variant from
+    /// `NSApp.effectiveAppearance` — the process's appearance — while `host()`
+    /// below pins the *view* to `.darkAqua`, so on a Mac with macOS
+    /// auto-appearance the icon changed colour with the time of day and these
+    /// two tests were red at night and green by day. The reference PNG's own
+    /// history shows it oscillating rather than drifting: LIGHT (ade90bdc) →
+    /// DARK (b7e33c06) → LIGHT (e77e3a83). Each "regeneration" simply re-pinned
+    /// whichever variant the machine happened to be in.
+    ///
+    /// The icon now follows the appearance of the view it is drawn into, so
+    /// this render is appearance-independent; `AdapterIconAppearanceTests`
+    /// locks that directly and does not depend on the machine's own setting.
+    /// A diff confined to the icon is therefore a real regression now — do not
+    /// reach for `SNAPSHOT_TESTING_RECORD` before reading it.
     func testGhostRowPID0NilMetrics() {
         let session = makeSession(state: .ready, metrics: nil, pid: 0, adapter: "antigravity")
         assertSnapshot(of: host(session), as: .image)
@@ -515,8 +526,9 @@ final class SessionRowSnapshotTests: XCTestCase {
 
     /// Drives a render straight from a captured `{type, session}` websocket
     /// envelope — the antigravity PID=0 ghost that Phase 1's trace explains.
-    /// See testGhostRowPID0NilMetrics for a note on toolchain-drift pixel
-    /// diffs isolated to this fixture's icon (issue #1034).
+    /// See testGhostRowPID0NilMetrics for why a diff isolated to this
+    /// fixture's icon used to be dismissed as toolchain drift, and why it is
+    /// no longer (issue #1509).
     func testFixtureAntigravityGhost() throws {
         let session = try loadSession("antigravity-ghost.json")
         assertSnapshot(of: host(session), as: .image)

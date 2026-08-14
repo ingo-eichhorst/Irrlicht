@@ -82,6 +82,9 @@ struct SessionRowView: View {
     @AppStorage(ContextPressureThreshold.valueKey) private var contextThresholdValue: Double = ContextPressureThreshold.defaultValue
     @AppStorage(ContextPressureThreshold.unitKey) private var contextThresholdUnitRaw: String = ContextPressureThreshold.defaultUnit.rawValue
     @EnvironmentObject var sessionManager: SessionManager
+    // The adapter brand mark has a light and a dark tonal variant; pick by
+    // the appearance THIS view renders under, not the process's (#1509).
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isHovered = false
 
     private var displayMode: DisplayMode { DisplayMode(rawValue: displayModeRaw) ?? .context }
@@ -371,7 +374,7 @@ struct SessionRowView: View {
                         .truncationMode(.tail)
                         .tooltip(session.effectiveModel)
                         .accessibilityIdentifier("session-model-label-\(session.id)")
-                    if let icon = session.adapterIcon {
+                    if let icon = session.adapterIcon(isDark: colorScheme == .dark) {
                         Image(nsImage: icon)
                             .frame(width: 12, height: 12)
                             .tooltip(session.adapterName)

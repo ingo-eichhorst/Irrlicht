@@ -208,6 +208,10 @@ struct SessionListView: View {
     static let panelWidth: CGFloat = 380
 
     @EnvironmentObject var sessionManager: SessionManager
+    // Only reaches the adapter-icon fallback in the quota chip, which
+    // re-tints it as a template — but the variant is the view's to pick,
+    // never the process's (#1509).
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject var gasTownProvider: GasTownProvider
     @EnvironmentObject var updateManager: UpdateManager
     @State private var isQuitButtonHovered = false
@@ -784,7 +788,7 @@ struct SessionListView: View {
             // pushing the body out of view. Forcing the SwiftUI frame
             // normalises both regardless of underlying decode quirks.
             if let icon = ProviderIconRegistry.image(forKey: d.snapshot.providerKey(adapter: d.session.adapter))
-                ?? d.session.adapterIcon {
+                ?? d.session.adapterIcon(isDark: colorScheme == .dark) {
                 Image(nsImage: icon)
                     .resizable()
                     .renderingMode(.template)

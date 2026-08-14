@@ -210,13 +210,21 @@ enum QuotaMenuBarRenderer {
     private static let systemOrangeHex = "FF9500"
     private static let systemYellowHex = "FFCC00"
 
-    /// True when the app's effective appearance is dark — same signal
-    /// SessionState.adapterIcon already uses to pick a light/dark SVG
-    /// variant, kept consistent here rather than introducing a second way
-    /// to ask the same question — including its nil-fallback: NSApp is nil
-    /// in unit tests, and adapterIcon defaults to the light variant there
-    /// (the more common ambient appearance), so this matches rather than
-    /// disagreeing with it.
+    /// True when the app's effective appearance is dark.
+    ///
+    /// Asking the *process* is correct here and only here: the menu-bar image
+    /// is rasterised outside any view hierarchy, so there is no view whose
+    /// appearance could be consulted instead. Every other brand-mark caller
+    /// is a SwiftUI view and passes its own `@Environment(\.colorScheme)` —
+    /// see `SessionState.adapterIcon(isDark:)`, which used to read `NSApp`
+    /// here too and drifted with the system appearance as a result (#1509).
+    ///
+    /// The `NSApp == nil` fallback is a real launch-ordering guard, not a
+    /// test accommodation: an earlier version of this comment claimed NSApp
+    /// is nil under XCTest, which is false — the test host does bring up an
+    /// NSApplication, and it follows the machine's *current* system
+    /// appearance. That mistaken assumption is exactly what let the
+    /// appearance leak into snapshot renders unnoticed.
     private static var isDarkAppearance: Bool {
         guard let app = NSApp else { return false }
         return app.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
