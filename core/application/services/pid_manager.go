@@ -1319,9 +1319,19 @@ func (pm *PIDManager) touchAndSave(state *session.SessionState) {
 //     memoizes precisely because it is the expensive part. It still pays one
 //     `ps` for its controlling tty (~2ms measured), which is why the read is
 //     memoized per PID across the pass.
-//   - The one genuinely costly step, the lsof scan that finds the attached
-//     client, is memoized per socket path, so N panes of one herdr server cost
-//     one scan per sweep rather than N.
+//   - The one genuinely costly step — the lsof scan that finds the
+//     attached client, and the per-candidate identity probes behind it —
+//     is memoized per socket path, so N panes of one herdr server cost one
+//     probe per sweep rather than N. That now holds for every outcome,
+//     including the ones that determine nothing, and it did not always:
+//     #1492 routed an unreadable candidate to the same "could not look"
+//     answer as a failed scan, and #1485's rule was that such an answer is
+//     never memoized — so from #1492 until #1514 this bullet was false in
+//     exactly the case that costs the most: N panes each re-paid a scan
+//     plus up to four candidates, every candidate two ancestry walks on a
+//     2s ceiling, under precisely the load that made the candidate
+//     unreadable. herdrClientLauncher carries the reversal and its
+//     argument.
 //   - applyLauncherBackfill reports no change when the client has not moved,
 //     so the steady state writes nothing: no Save, no UpdatedAt bump, no push.
 //     The UpdatedAt bump is churn only, not a lifetime hazard: this runs solely

@@ -630,30 +630,84 @@ func TestHerdrClientPIDs_ProbeTriState(t *testing.T) {
 	})
 }
 
-// TestHerdrClientLauncher_DoesNotCacheANonAnswer covers step 2 of #1485's
-// suggested shape. The memo exists to collapse one startup seed's worth of
-// identical scans; caching a probe that did not run would instead spread a
-// single failure across every session sharing that socket for the next 5
-// seconds — turning the one thing the tri-state buys back into a wider window.
-func TestHerdrClientLauncher_DoesNotCacheANonAnswer(t *testing.T) {
-	socketPath := newHerdrSessionDir(t) // no client log: the probe cannot run
-	// Defensive, and it is the regression this test exists to catch that would
-	// make it necessary: nothing should ever be inserted under this key.
-	t.Cleanup(func() {
+// TestHerdrClientLauncher_MemoizedNonAnswerIsStillANonAnswer REPLACES
+// TestHerdrClientLauncher_DoesNotCacheANonAnswer, which locked #1485's rule
+// that a non-answer must never be memoized. #1514 reversed that rule; this is
+// the lock on what replaced it, and it is a strictly stronger claim than the
+// one it retires.
+//
+// The retired lock said "do not cache". This one says "cache, and the cached
+// thing must not be mistaken for an answer" — which is what actually protects
+// #1485's invariant. #1485's defect was never the caching; it was a probe that
+// did not run being read as a detach and clearing a resolved host. A cached
+// nil with no probed bit beside it would re-enter that defect through the
+// memo, and would do it silently, since every consumer reads the bool and not
+// the nil.
+//
+// The third case is the vacuity guard: a cache that reported probed=false for
+// everything would satisfy the first two and destroy the tri-state.
+func TestHerdrClientLauncher_MemoizedNonAnswerIsStillANonAnswer(t *testing.T) {
+	forget := func(socketPath string) {
 		herdrClientCacheMu.Lock()
 		delete(herdrClientCache, socketPath)
 		herdrClientCacheMu.Unlock()
+	}
+	memoized := func(t *testing.T, socketPath string) herdrClientCacheEntry {
+		t.Helper()
+		herdrClientCacheMu.Lock()
+		defer herdrClientCacheMu.Unlock()
+		entry, ok := herdrClientCache[socketPath]
+		if !ok {
+			t.Fatal("nothing was memoized: every pane sharing this socket re-pays the probe (#1514)")
+		}
+		return entry
+	}
+
+	t.Run("probe could not run", func(t *testing.T) {
+		socketPath := newHerdrSessionDir(t) // no client log: the probe cannot run
+		t.Cleanup(func() { forget(socketPath) })
+
+		if _, probed := herdrClientLauncher(socketPath); probed {
+			t.Fatal("want a non-answer for a socket whose client log is absent")
+		}
+		if entry := memoized(t, socketPath); entry.probed {
+			t.Error("the memo calls a probe that never ran an answer — #1485 re-entered through the cache")
+		}
+		if _, probed := herdrClientLauncher(socketPath); probed {
+			t.Error("the second reader was handed a detach built from a probe that did not run")
+		}
 	})
 
-	if _, probed := herdrClientLauncher(socketPath); probed {
-		t.Fatal("want a non-answer for a socket whose client log is absent")
-	}
-	herdrClientCacheMu.Lock()
-	_, cached := herdrClientCache[socketPath]
-	herdrClientCacheMu.Unlock()
-	if cached {
-		t.Error("a non-answer was memoized: the next 5s of reads inherit one failed probe")
-	}
+	t.Run("candidate could not be read", func(t *testing.T) {
+		// The branch #1492 widened, and the one that made the re-probe
+		// expensive rather than merely repeated.
+		socketPath, _ := unreadableClientSocket(t)
+
+		if _, probed := herdrClientLauncher(socketPath); probed {
+			t.Fatal("want a non-answer for a socket whose only candidate is unreadable")
+		}
+		if entry := memoized(t, socketPath); entry.probed {
+			t.Error("an unreadable candidate was memoized as an answer: AdoptHostIdentity would clear a live host")
+		}
+		if _, probed := herdrClientLauncher(socketPath); probed {
+			t.Error("the second pane was told its attached client is gone")
+		}
+	})
+
+	t.Run("detach is still an answer", func(t *testing.T) {
+		socketPath := newHerdrSessionDir(t)
+		if err := os.WriteFile(herdrClientLogPath(socketPath), []byte("detached\n"), 0o600); err != nil {
+			t.Fatalf("seed client log: %v", err)
+		}
+		t.Cleanup(func() { forget(socketPath) })
+
+		if _, probed := herdrClientLauncher(socketPath); !probed {
+			t.Fatal("a detach is an answer")
+		}
+		if entry := memoized(t, socketPath); !entry.probed {
+			t.Error("a real detach was memoized as a non-answer: the stored host can now never be cleared")
+		}
+	})
 }
 
 // TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown is #1485 at the
@@ -676,11 +730,26 @@ func TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown(t *testing.T) 
 		t.Fatalf("the pane's own address must survive an unresolved host: %+v", l)
 	}
 
-	// The same pane once the log exists and nobody holds it open: now the
-	// emptiness is an answer, and the sweep is allowed to act on it.
+	// The same pane once the log exists and nobody holds it open: the
+	// emptiness is now an answer — but not yet a visible one. Since #1514 the
+	// non-answer above is memoized, so the recovery is deferred until that
+	// entry expires. This assertion is the price of that reversal, pinned
+	// rather than left to be rediscovered: a cached unknown clears nothing and
+	// is inert at every consumer, and deferring a recovery by at most one TTL
+	// is the ONLY behaviour it changes.
 	if err := os.WriteFile(herdrClientLogPath(socketPath), []byte("detached\n"), 0o600); err != nil {
 		t.Fatalf("seed client log: %v", err)
 	}
+	if _, hostKnown := ReadLauncherEnv(agentPID); hostKnown {
+		t.Error("the memoized non-answer was bypassed: every pane on this socket is re-paying the probe (#1514)")
+	}
+
+	// Dropping the entry stands in for the TTL elapsing — waiting out five real
+	// seconds would buy nothing but a slower suite. Once it is gone the detach
+	// is visible, which is what bounds the deferral at one TTL.
+	herdrClientCacheMu.Lock()
+	delete(herdrClientCache, socketPath)
+	herdrClientCacheMu.Unlock()
 	if _, hostKnown := ReadLauncherEnv(agentPID); !hostKnown {
 		t.Error("a detached session's host is known to be absent")
 	}
@@ -1045,5 +1114,138 @@ func TestResolveClientHostIdentity_ResolvableCandidateStillWins(t *testing.T) {
 	host, hostKnown = resolveClientHostIdentity([]int{exitedPID(t), client})
 	if !hostKnown || host == nil || host.TermProgram != "iTerm.app" {
 		t.Errorf("a resolving candidate wins outright past an unreadable one: got (%+v, %v)", host, hostKnown)
+	}
+}
+
+// --- non-answer memoization (#1514) -----------------------------------------
+
+// countingLsof points lsofPath at a stub that records one line per invocation
+// and prints table for every call, and returns a func reporting how many times
+// it ran. It is how the cost claims below are asserted as a COUNT of probes
+// rather than as a wall-clock time: the whole regression is "N panes pay N
+// scans instead of 1", and a timing assertion for that is a flake generator on
+// a loaded machine — which is, awkwardly, the exact machine state the defect
+// needs.
+//
+// lsofPath is a package var (process_darwin.go) rather than a seam invented
+// for this test, and no test in this package calls t.Parallel, so swapping it
+// under t.Cleanup is safe.
+func countingLsof(t *testing.T, table string) func() int {
+	t.Helper()
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "calls")
+	stub := filepath.Join(dir, "lsof")
+	script := "#!/bin/sh\necho x >> " + counter + "\ncat <<'TABLE'\n" + table + "\nTABLE\n"
+	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
+		t.Fatalf("write lsof stub: %v", err)
+	}
+	saved := lsofPath
+	lsofPath = stub
+	t.Cleanup(func() { lsofPath = saved })
+	return func() int {
+		b, err := os.ReadFile(counter)
+		if os.IsNotExist(err) {
+			return 0
+		}
+		if err != nil {
+			t.Fatalf("read lsof counter: %v", err)
+		}
+		return strings.Count(string(b), "\n")
+	}
+}
+
+// unreadableClientSocket builds a herdr session whose client log exists and
+// whose only attached "client" is a reaped PID — so the lsof probe answers,
+// every candidate is unreadable, and resolveClientHostIdentity returns the
+// (nil, false) non-answer #1492 introduced. Returns the socket path and the
+// scan counter.
+func unreadableClientSocket(t *testing.T) (string, func() int) {
+	t.Helper()
+	socketPath := newHerdrSessionDir(t)
+	logPath := herdrClientLogPath(socketPath)
+	if err := os.WriteFile(logPath, []byte("attached\n"), 0o600); err != nil {
+		t.Fatalf("seed client log: %v", err)
+	}
+	table := "COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF   NODE NAME\n" +
+		"herdr     " + strconv.Itoa(exitedPID(t)) + " ingo    3w   REG   1,18      372 136170 " + logPath
+	scans := countingLsof(t, table)
+	t.Cleanup(func() {
+		herdrClientCacheMu.Lock()
+		delete(herdrClientCache, socketPath)
+		herdrClientCacheMu.Unlock()
+	})
+	return socketPath, scans
+}
+
+// TestHerdrClientLauncher_UnreadableCandidateIsProbedOncePerSocket is #1514.
+// Every pane of one herdr server shares a socket, and the sweep resolves them
+// one after another, so the memo is the only thing standing between "one probe
+// per socket" and "one probe per pane". Before #1492 an unreadable candidate
+// answered (nil, true) and was memoized; after it, it answers (nil, false) and
+// — under #1485's rule — was not, so all eight panes re-paid the scan plus four
+// candidate probes, each of which is two ancestry walks on a 2s ceiling.
+//
+// Eight is the count herdrClientLauncher's own doc uses.
+func TestHerdrClientLauncher_UnreadableCandidateIsProbedOncePerSocket(t *testing.T) {
+	socketPath, scans := unreadableClientSocket(t)
+
+	const panes = 8
+	for i := 0; i < panes; i++ {
+		if _, probed := herdrClientLauncher(socketPath); probed {
+			t.Fatalf("pane %d: an unreadable candidate is not an answer", i)
+		}
+	}
+	if got := scans(); got != 1 {
+		t.Errorf("%d panes of one herdr server cost %d lsof scans, want 1 — each also drags %d candidate probes behind it",
+			panes, got, maxClientCandidates)
+	}
+}
+
+// TestSortedDistinctPIDs pins both halves of what herdrClientPIDs hands to
+// resolveClientHostIdentity. The ordering half is #1350's open question 3; the
+// distinctness half is what makes maxClientCandidates count clients rather than
+// file descriptors, since parseLsofFDs emits one entry per FD row by design.
+//
+// The dedup is latent rather than a live fix — herdr 0.8.0 gives one write
+// handle per client — so the rows below are constructed, and the "two handles"
+// case is the shape that would otherwise consume two of the four candidate
+// slots for one client.
+func TestSortedDistinctPIDs(t *testing.T) {
+	cases := map[string]struct{ in, want []int }{
+		"newest first":            {[]int{26932, 26941, 26940}, []int{26941, 26940, 26932}},
+		"two handles, one client": {[]int{26932, 26932}, []int{26932}},
+		"repeats collapse":        {[]int{7, 9, 7, 9, 9}, []int{9, 7}},
+		"empty":                   {nil, nil},
+	}
+	for name, tc := range cases {
+		got := sortedDistinctPIDs(append([]int(nil), tc.in...))
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: got %v, want %v", name, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%s: got %v, want %v", name, got, tc.want)
+				break
+			}
+		}
+	}
+}
+
+// TestSortedDistinctPIDs_DuplicateDoesNotConsumeACandidateSlot is the reason
+// the dedup is in this PR rather than filed for later: a duplicated PID is a
+// way to reach maxClientCandidates' truncation that has nothing to do with how
+// many clients are attached, and that truncation is one of the two triggers of
+// #1514's permanent non-answer.
+func TestSortedDistinctPIDs_DuplicateDoesNotConsumeACandidateSlot(t *testing.T) {
+	// Three clients, one of them holding two write handles: five FD rows.
+	rows := []int{100, 100, 200, 300, 300}
+	got := sortedDistinctPIDs(append([]int(nil), rows...))
+	if len(got) > maxClientCandidates {
+		t.Fatalf("%d FD rows for 3 clients still exceed the %d-candidate cap: %v",
+			len(rows), maxClientCandidates, got)
+	}
+	if len(got) != 3 {
+		t.Errorf("got %v, want one entry per client", got)
 	}
 }
