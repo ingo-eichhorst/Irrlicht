@@ -28,6 +28,24 @@ import SwiftUI
 final class AdapterIconAppearanceTests: XCTestCase {
     private var sessionManager: SessionManager!
     private var savedRegistry: [String: AgentBranding] = [:]
+    private var savedDefaults: [String: Any?] = [:]
+
+    /// The `@AppStorage` keys `SessionRowView` reads. Pinned for the same
+    /// reason `SessionRowSnapshotTests` pins them: they live in
+    /// `UserDefaults.standard`, so an unpinned render depends on whatever the
+    /// xctest domain happens to hold — including a value a previous run left
+    /// behind after being killed before `tearDown` (#1523 does exactly that).
+    /// `debugMode` is the one that matters most here: it adds a line to the
+    /// row's VStack inside a fixed-height frame, shifting the metrics line up
+    /// and out of the icon probe box.
+    private static let pinnedDefaults: [String: Any] = [
+        "displayMode": "context",
+        "debugMode": false,
+        "showCostDisplay": false,
+        "summaryDisplayMode": SummaryDisplayMode.waiting.rawValue,
+        ContextPressureThreshold.valueKey: 80,
+        ContextPressureThreshold.unitKey: ContextPressureThreshold.Unit.percent.rawValue,
+    ]
 
     /// Antigravity's real brand mark: a three-segment arch whose dark variant
     /// uses Google's lighter tonal colours so it reads against dark chrome.
@@ -53,6 +71,11 @@ final class AdapterIconAppearanceTests: XCTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
+        let defaults = UserDefaults.standard
+        for (key, value) in Self.pinnedDefaults {
+            savedDefaults[key] = defaults.object(forKey: key)
+            defaults.set(value, forKey: key)
+        }
         sessionManager = SessionManager()
         savedRegistry = AgentRegistry.byName
         AgentRegistry.byName["antigravity"] = AgentBranding(
@@ -65,6 +88,11 @@ final class AdapterIconAppearanceTests: XCTestCase {
 
     override func tearDown() async throws {
         AgentRegistry.byName = savedRegistry
+        let defaults = UserDefaults.standard
+        for (key, value) in savedDefaults {
+            if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+        savedDefaults = [:]
         sessionManager = nil
         try await super.tearDown()
     }
@@ -125,9 +153,15 @@ final class AdapterIconAppearanceTests: XCTestCase {
     /// both values itself — so unlike the snapshot references it cannot pass
     /// by day and fail by night.
     func testProcessAppearanceDoesNotChangeTheRenderedIcon() throws {
-        // Fail loudly rather than vacuously: if the XCTest host ever stops
-        // bringing up an NSApplication, forcing an appearance below would be a
-        // no-op and this test would "pass" while checking nothing.
+        // `NSApp` is nil until something instantiates NSApplication, and in
+        // this class that otherwise happens only as a side effect of an
+        // earlier test's `host()`. Left implicit, this test passes in a full
+        // run and fails under `--filter` on its own name — the one gesture
+        // someone debugging it would reach for. Create it here so the
+        // precondition is self-supplied, then still unwrap: a nil `NSApp`
+        // would make the two assignments below no-ops and the assertion
+        // vacuous, which must fail loudly rather than read as a pass.
+        _ = NSApplication.shared
         let app = try XCTUnwrap(NSApp, "no NSApplication in the test host — this test cannot run")
         let saved = app.appearance
         defer { app.appearance = saved }
@@ -168,16 +202,23 @@ final class AdapterIconAppearanceTests: XCTestCase {
         // The adapter icon is the right-most element of the row's metrics line.
         let x0 = Int(Double(w) * 0.92), x1 = w - 1
         let y0 = Int(Double(h) * 0.30), y1 = Int(Double(h) * 0.72)
-        var best = Int.min
+        var best: Int?
         for y in y0...y1 {
             for x in x0...x1 {
                 guard let c = rep.colorAt(x: x, y: y) else { continue }
                 let r = Int((c.redComponent * 255).rounded())
                 let b = Int((c.blueComponent * 255).rounded())
-                best = max(best, b - r)
+                best = max(best ?? Int.min, b - r)
             }
         }
-        return best
+        // Not `Int.min`: callers subtract two of these, and a sentinel that
+        // escapes would trap on overflow — which in Swift aborts the process
+        // and would truncate the whole run, the same damage #1523 does.
+        guard let measured = best else {
+            XCTFail("no pixel in the icon probe box was readable")
+            return 0
+        }
+        return measured
     }
 
     private func host(_ session: SessionState, appearance: NSAppearance.Name) -> NSView {

@@ -25,9 +25,22 @@ on:
 permissions:
   contents: read
 
+# A superseded push should not leave a macOS job running — doubly so while
+# #1523 can hang `swift test` outright. Mirrors linux.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   swift-test:
     runs-on: macos-latest
+    # The suite is ~3 minutes locally and the build a couple more. The cap is
+    # not tuning — it is what turns #1523 (an intermittent XCTest stall in this
+    # exact command) into a fast, legible red instead of a job that sits
+    # `in_progress` against GitHub's 6-hour default. A check stuck pending
+    # reads as "still queued", which is the same ambiguity the no-`paths:`
+    # decision above exists to avoid. This gate's OWN first run hung this way.
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: platforms/macos
@@ -50,16 +63,37 @@ jobs:
       - name: Build
         run: swift build
 
-      # `--skip LauncherHarnessTests` is not optional. That target drives real
-      # terminal applications through NSRunningApplication and expects a
-      # display and an installed Ghostty; on a runner it has neither. It is
-      # additionally gated behind TEST_HARNESS=1 in the source, so this is
-      # belt-and-braces — but the skip is what keeps the gate honest if that
-      # env gate is ever relaxed.
+      # Skipping the harness is not optional. That target drives real terminal
+      # applications through NSRunningApplication and expects a display and an
+      # installed Ghostty; on a runner it has neither, and on a developer
+      # machine it reaches out and manipulates live windows. It is additionally
+      # gated behind TEST_HARNESS=1 in the source, so this is belt-and-braces —
+      # but the skip is what keeps this honest if that env gate is relaxed.
+      #
+      # BOTH names on purpose. Test IDs are `<target>.<class>/<method>`, so
+      # `LauncherTestHarness` (the target) also excludes any class added to it
+      # later, while `LauncherHarnessTests` (the class) survives the target
+      # being renamed. Verified against `swift test --list-tests`: the harness
+      # has 6 tests and either spelling alone lists 0 of them today — the pair
+      # is what stops that being true only today.
       #
       # The step fails the job on any non-zero exit, which includes both a test
       # failure and the process aborting mid-run (see #1523 — an XCTest stall
       # abort truncates the run while every suite that did report says
       # "0 failures", so exit status is the only reliable signal).
       - name: Test
-        run: swift test --skip LauncherHarnessTests
+        run: swift test --skip LauncherTestHarness --skip LauncherHarnessTests
+
+      # A snapshot failure's whole evidence — the rendered image, the
+      # reference, and their diff — is written to the runner's temp dir and
+      # printed as three file:// paths, which are worthless once the runner is
+      # torn down. Without this a red gate says only "does not match
+      # reference" and the next reader has nothing to look at.
+      - name: Upload snapshot failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-failures
+          path: ${{ runner.temp }}/**/*.png
+          if-no-files-found: ignore
+          retention-days: 7

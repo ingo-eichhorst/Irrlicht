@@ -383,17 +383,40 @@ fi
 swift_suite() {
   if ! command -v swift >/dev/null 2>&1; then
     # Loud, not a silent pass: a gate whose absence reads as success is the
-    # failure mode #1423 and #1209 were both about.
+    # failure mode #1423 and #1209 were both about. Reachable only ON macOS —
+    # see the platform guard below for why a Linux host is a different case.
     echo "swift not found — install Xcode or the Swift toolchain" >&2
     return 1
   fi
-  ( cd platforms/macos && swift build && swift test --skip LauncherHarnessTests )
+  # Both names: `LauncherTestHarness` is the target, `LauncherHarnessTests` the
+  # class. Either alone excludes the harness today; the pair is what keeps that
+  # true after a class is added to the target or the target is renamed. This
+  # matters more locally than in CI — here an unskipped harness test drives the
+  # developer's own live terminal windows.
+  ( cd platforms/macos && swift build \
+      && swift test --skip LauncherTestHarness --skip LauncherHarnessTests )
   return $?
 }
 
 if want swift; then
-  run_gate_scoped '^platforms/macos/|^\.github/workflows/macos-swift\.yml$' \
-                  "macOS Swift build + test" swift_suite
+  # macOS-only, and skipped rather than failed elsewhere. The gate mirrors a
+  # workflow that is itself `runs-on: macos-latest`, so on Linux it is out of
+  # scope, not unmet — without this guard a Linux contributor's plain
+  # `tools/preflight.sh` could never go green, since the gate is in the default
+  # set and `swift_suite` fails hard on a missing toolchain. The distinction
+  # this preserves is the one that matters: "this platform does not run this
+  # check" is a SKIP, while "this platform runs it and the tool is missing" is
+  # a FAIL.
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    run_gate_scoped '^platforms/macos/|^\.github/workflows/macos-swift\.yml$|^tools/preflight\.sh$' \
+                    "macOS Swift build + test" swift_suite
+  else
+    echo
+    echo "$SEPARATOR"
+    echo "  macOS Swift build + test  — SKIP (not macOS)"
+    echo "$SEPARATOR"
+    NAMES+=("macOS Swift build + test"); RESULTS+=("SKIP")
+  fi
 fi
 
 # ---- linux group (mirrors linux.yml, opt-in: --linux or --only linux) ---
