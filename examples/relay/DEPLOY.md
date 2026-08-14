@@ -163,6 +163,97 @@ tailscale funnel --bg 7839    # public        → same name, reachable anywhere
 Give the relay its own `IRRLICHT_HOME`, separate from the daemon's — two processes, two state dirs,
 nothing shared to reason about.
 
+## Oracle Cloud (the reference deployment)
+
+OCI's Always Free tier runs the relay at no cost, and its shape is the reason this section
+exists: the free compute is **ARM** (`VM.Standard.A1.Flex`, aarch64), with an x86 fallback
+(`VM.Standard.E2.1.Micro`) that operators routinely land on when A1 capacity is unavailable.
+Both architectures are published, so match the binary to `uname -m` — `aarch64` on A1,
+`x86_64` on micro. A wrong pick fails with `cannot execute binary file: Exec format error`
+or a systemd unit dying instantly at `status=203/EXEC`.
+
+> **Read this one first: OCI reclaims idle instances, and a relay is the idle profile.**
+> Oracle's stated policy is that an Always Free instance is idle when, over a 7-day window,
+> its 95th-percentile CPU is under 20% **and** network is under 20% **and** (A1 only) memory
+> is under 20%. A relay holding a handful of long-lived WebSockets and posting the occasional
+> 2 KiB push sits far below all three, so it is a candidate by construction — and the failure
+> is silent: the instance stops and notifications simply cease. Converting the tenancy to Pay
+> As You Go is reported to exempt it while usage within Always Free limits still bills at
+> zero, but *we have not verified that* — confirm on Oracle's own FAQ before relying on it.
+> What you can rely on is making the rebuild cheap, which the next paragraph is about.
+
+**Design the deployment so a rebuild costs minutes and re-pairs nothing.** This is where the
+relay's small state footprint pays: assign a **reserved public IP** (regional, survives
+instance termination, reassignable to the replacement) and keep the DNS zone at your registrar
+or Cloudflare rather than OCI DNS — which is not an Always Free resource. The hostname is then
+independent of the instance, so a reclaimed or replaced VM does not change the origin. Restore
+`tokens.json`, `vapid-keys.json`, `push-subscriptions.json` and `daemon-roster.json` onto the
+new instance and every paired phone keeps working, because the origin and the VAPID identity
+are exactly what a subscription is bound to. Without a reserved IP, a rebuild changes the
+origin, and per the note above **that re-pairs every phone**.
+
+### The firewall is two gates, and the console only shows you one
+
+This is the single most common OCI failure, and it looks like a broken service: `curl
+localhost:7839` works on the box, `ss -lntp` shows the process listening, and every request
+from outside hangs. OCI platform images ship a **host firewall that permits only SSH**, on top
+of the VCN security list you edited in the console. Open both.
+
+```bash
+# Layer 1 — VCN. Prefer a Network Security Group over editing the default security list,
+# so the rule travels with the instance.  (protocol 6 = TCP; leave rules stateful)
+oci network nsg rules add --nsg-id <nsg-ocid> --security-rules '[{"direction":"INGRESS",
+  "protocol":"6","source":"0.0.0.0/0","sourceType":"CIDR_BLOCK","isStateless":false,
+  "tcpOptions":{"destinationPortRange":{"min":443,"max":443}}}]'
+
+# Layer 2a — Oracle Linux (firewalld)
+sudo firewall-cmd --zone=public --permanent --add-port=443/tcp && sudo firewall-cmd --reload
+
+# Layer 2b — Ubuntu (raw iptables, persisted in /etc/iptables/rules.v4)
+sudo iptables -I INPUT 6 -p tcp --dport 443 -j ACCEPT   # INSERT above the REJECT, do not append
+sudo netfilter-persistent save
+```
+
+The Ubuntu ruleset ends in `-A INPUT -j REJECT --reject-with icmp-host-prohibited`, so a rule
+**appended** after it never takes effect — insert above it. Two things to never do: Oracle
+states that using `ufw` on an Ubuntu OCI image "might cause an instance not to boot", and
+flushing iptables wholesale removes the rules protecting the iSCSI endpoints
+(`169.254.0.2:3260`, `169.254.2.0/24:3260`) that serve the boot volume — the instance dies at
+the next reboot. Add rules; never replace the ruleset.
+
+Outbound needs no configuration at all: a new VCN's default security list allows all egress,
+so the relay reaches Apple/Google and Let's Encrypt without a rule.
+
+### TLS and the hostname
+
+Caddy on the instance, terminating TLS with automatic Let's Encrypt and reverse-proxying to
+the relay on loopback (the config is in [TLS](#tls) above). ACME works normally here; there is
+nothing OCI-specific about it. Two traps:
+
+- **Do not put the Always Free Load Balancer in front of it.** Its HTTP listener has a
+  60-second idle timeout that kills long-lived WebSockets, and the send and receive timers are
+  independent — a one-directional server heartbeat does not hold the connection open. For a
+  single small relay it adds a failure mode and buys nothing.
+- Ports below 1024 are privileged. Grant the capability rather than running Caddy as root:
+  `AmbientCapabilities=CAP_NET_BIND_SERVICE` in the unit. An ACME failure from a
+  `bind: permission denied` looks exactly like a blocked port and sends you back to re-check
+  firewall rules that were already correct.
+
+### Sizing and the free-tier ledger
+
+The A1 Always Free allocation is **2 OCPUs and 12 GB** — metered as 1,500 OCPU hours and 9,000
+GB hours per month. Note what that arithmetic means: one 2-OCPU instance running 24/7 through a
+31-day month consumes 1,488 of the 1,500 hours. The allowance is sized for exactly one
+always-on instance with about 1% of headroom, so terminate before replacing rather than after,
+or size the overlap window at 1 OCPU. (Many older guides still quote 4 OCPU / 24 GB; that is
+out of date.) Outbound transfer is 10 TB/month — irrelevant for push.
+
+Region is chosen once: Always Free instances must live in the tenancy's **home region**, which
+is fixed at signup and cannot be changed without deleting the tenancy. A1 capacity varies by
+region and "Out of host capacity" is common, so decide the region before signing up. For a
+relay with a handful of connections the micro shape's 1 GB and ~50 Mbps of public bandwidth is
+genuinely sufficient — the capacity fight is usually not worth having.
+
 ## Phone notifications (Irrlicht Beacon)
 
 The relay can push `waiting` / `ready` transitions to a paired phone as Web Push notifications
@@ -201,13 +292,18 @@ files beside `tokens.json`, both mode `0600`:
 | `tokens.json` | token hashes (existing) | every daemon, client and phone must be re-issued |
 | `vapid-keys.json` | the relay's signing identity | no phone is pushable until its app is next opened, which re-subscribes against the new key |
 | `push-subscriptions.json` | one delivery address per paired phone | phones re-register on next open |
+| `daemon-roster.json` | which daemons exist, and when each was last seen | the watchdog forgets a daemon that was already offline, so its disconnect goes unreported until it returns |
 
 Notification payloads are stored **nowhere** — there is no outbox. Apple and Google are the queue, and
 each message's TTL bounds it (a `waiting` notification stays true for an hour, a stale `ready` is noise
 after ten minutes).
 
+Delivery health — when each phone was last reached, and why the last attempt failed — is kept in
+memory only, so after a restart it honestly reads "unknown" rather than reporting a stale success.
+
 **Backup / host migration:** copy those files and keep the hostname; every phone survives the move
-untouched. A corrupt `vapid-keys.json` is refused at startup rather than silently regenerated — the
+untouched. On a host that can be reclaimed under you (see [Oracle Cloud](#oracle-cloud-the-reference-deployment)),
+this is the whole disaster-recovery story — four small files and a DNS record that never changed. A corrupt `vapid-keys.json` is refused at startup rather than silently regenerated — the
 error names the file and your two options — because minting a fresh identity would orphan every paired
 phone.
 

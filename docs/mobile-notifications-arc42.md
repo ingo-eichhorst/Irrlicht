@@ -225,10 +225,13 @@ Relay sees the daemon link drop → 60 s grace (roaming reconnects are seconds) 
 
 ## 7. Deployment View
 
+**Decided:** Shape A on **Oracle Cloud** (Always Free). Shape B stays documented as the
+zero-hardware alternative, not as a second thing to maintain.
+
 ```mermaid
 flowchart TB
-    subgraph shapeA["Shape A — VPS (recommended if one exists)"]
-        vps["relay.yourdomain.tld<br/>Caddy/nginx TLS → irrlichtrelay :7839"]
+    subgraph shapeA["Shape A — VPS · DECIDED: Oracle Cloud Always Free"]
+        vps["relay.yourdomain.tld → reserved public IP<br/>Caddy (Let's Encrypt) → irrlichtrelay :7839"]
     end
     subgraph shapeB["Shape B — relay on the Mac, zero extra hardware"]
         ts["mac.tailnet.ts.net via tailscale serve/funnel<br/>→ irrlichtrelay :7839 loopback"]
@@ -249,6 +252,20 @@ flowchart TB
 Dev loop: the daemon serves the same web tree on `127.0.0.1` — a secure context — so service worker and subscription flow are locally testable without TLS.
 
 **Renaming the relay origin re-pairs every phone** (C4). Pick the name once.
+
+**What choosing Oracle Cloud costs, and how the architecture answers it.** Two of its properties
+are load-bearing enough to belong here rather than only in the operator guide
+(`examples/relay/DEPLOY.md`, which carries the commands):
+
+| Property | Consequence | Why P1 survives it |
+|---|---|---|
+| Free compute is **ARM** (Ampere A1), with an x86 micro fallback when A1 capacity is short | The relay must ship for **both** `linux/arm64` and `linux/amd64` | It cross-compiles clean and static — no cgo, one pure-Go dependency (verified by building both). Slice 6 publishes both tarballs |
+| OCI **reclaims idle instances** — under 20% CPU *and* network *and* (A1) memory across 7 days | A relay is that profile by construction, and the failure is silent: the VM stops, notifications cease | Not preventable from inside the design, so it is made **cheap to recover from**: a reserved public IP plus external DNS keeps the origin stable across a rebuild, and §8.6's four files restore the VAPID identity and subscriptions. **No phone re-pairs** — origin and VAPID key are exactly what a subscription binds to |
+
+The second row is the one to notice: the §8.6 persistence inventory was written as a backup
+story, and it turns out to be the disaster-recovery story for this host. The property that
+makes it work is that the relay holds *no session content* — restoring it is four small files
+and a DNS record that never changed, not a database.
 
 ### 7.1 Distribution
 
