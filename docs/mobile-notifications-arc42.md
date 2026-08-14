@@ -459,7 +459,8 @@ Per repo rules, stated here so the slices inherit them: `notify` gets table *and
 | 3 | Relay: VAPID identity, pairing endpoints, subscription registry + revocation coupling, push-requires-auth refusal (a guard — lands with its mutation seen red) | 2 |
 | 4 | Relay: transition observer + dispatcher + watchdog incl. persisted daemon roster | 1, 3 |
 | 5 | `platforms/web`: manifest (app name: Irrlicht Beacon), service worker, pairing + settings UI, QR-or-paste, both release copy lists + tripwire | 3 |
-| 6 | Distribution: `irrlichtrelay` into the darwin/linux release tarballs; `examples/relay` push addendum (auth rule, backup list, launchd plist) | 3–5 |
+| **D** | **Device test — pair a real phone against a real relay and observe a notification** ([`docs/beacon-device-test.md`](./beacon-device-test.md)). Runs *before* 6: every defect so far was found by reading, and two of them fail only on contact with a real push service, so packaging a flow nobody has seen work is premature | 1–5 |
+| 6 | Distribution: `irrlichtrelay` into the darwin/linux release tarballs (**both `arm64` and `amd64` — the Oracle target's free tier is ARM**); `examples/relay` push addendum (auth rule, backup list, launchd plist) | D |
 | 7 | Docs: relay-protocol.md addendum (REST endpoints), site setup guide (both deployment shapes) | 3–6 |
 
 ---
