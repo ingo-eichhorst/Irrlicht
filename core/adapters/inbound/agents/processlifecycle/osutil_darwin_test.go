@@ -1155,28 +1155,43 @@ func forgetHerdrClientMemo(socketPath string) {
 	delete(herdrClientCache, socketPath)
 }
 
-// countingLsof points lsofPath at a stub that records one line per invocation
-// and prints table for every call, and returns a func reporting how many times
-// it ran. It is how the cost claims below are asserted as a COUNT of probes
-// rather than as a wall-clock time: the whole regression is "N panes pay N
-// scans instead of 1", and a timing assertion for that is a flake generator on
-// a loaded machine — which is, awkwardly, the exact machine state the defect
+// countingLsof makes the herdr client log at logPath answer as an lsof table,
+// records one line per invocation, and returns a func reporting how many times
+// the probe ran. It is how the cost claims below are asserted as a COUNT of
+// probes rather than as a wall-clock time: the whole regression is "N panes pay
+// N scans instead of 1", and a timing assertion for that is a flake generator
+// on a loaded machine — which is, awkwardly, the exact machine state the defect
 // needs.
 //
-// lsofPath is a package var (process_darwin.go) rather than a seam invented
-// for this test, and no test in this package calls t.Parallel, so swapping it
-// under t.Cleanup is safe.
-func countingLsof(t *testing.T, table string) func() int {
+// The shape is odd and the reason is macOS, not taste. The obvious stub — write
+// a #!/bin/sh script somewhere, point lsofPath at it — spawns in ~6ms idle and
+// **2.1s under load**, because the first exec of a newly written file is
+// evaluated for code signing; a copied /bin/cat was outright `signal: killed`
+// on every one of 12 attempts. herdrClientPIDs gives lsof a 2s ceiling, so that
+// stub does not merely run slowly, it times out and the probe reports "could
+// not run" — the exact state these tests are trying to tell apart from the one
+// under test. Measured worst-of-N under a concurrent `go test ./core/... -race`:
+// /usr/bin/true 3.6ms, written script 2.14s, script-as-data below 6.1ms.
+//
+// So nothing new is ever EXEC'd: lsofPath becomes /bin/sh — a warm, signed
+// system binary — and the script it runs is DATA. herdrClientPIDs passes the
+// client-log path as lsof's only argument, so the client log is necessarily
+// where that script has to live. Production never reads the log's bytes (it
+// stats the path and hands it to lsofPath), so the substitution is invisible to
+// the code under test.
+//
+// lsofPath is a package var (process_darwin.go) rather than a seam invented for
+// this test, and no test in this package calls t.Parallel, so swapping it under
+// t.Cleanup is safe.
+func countingLsof(t *testing.T, logPath, table string) func() int {
 	t.Helper()
-	dir := t.TempDir()
-	counter := filepath.Join(dir, "calls")
-	stub := filepath.Join(dir, "lsof")
-	script := "#!/bin/sh\necho x >> " + counter + "\ncat <<'TABLE'\n" + table + "\nTABLE\n"
-	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
-		t.Fatalf("write lsof stub: %v", err)
+	counter := filepath.Join(t.TempDir(), "calls")
+	script := "echo x >> '" + counter + "'\ncat <<'TABLE'\n" + table + "\nTABLE\n"
+	if err := os.WriteFile(logPath, []byte(script), 0o600); err != nil {
+		t.Fatalf("write client log: %v", err)
 	}
 	saved := lsofPath
-	lsofPath = stub
+	lsofPath = "/bin/sh"
 	t.Cleanup(func() { lsofPath = saved })
 	return func() int {
 		b, err := os.ReadFile(counter)
@@ -1199,12 +1214,9 @@ func unreadableClientSocket(t *testing.T) (string, func() int) {
 	t.Helper()
 	socketPath := newHerdrSessionDir(t)
 	logPath := herdrClientLogPath(socketPath)
-	if err := os.WriteFile(logPath, []byte("attached\n"), 0o600); err != nil {
-		t.Fatalf("seed client log: %v", err)
-	}
 	table := "COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF   NODE NAME\n" +
 		"herdr     " + strconv.Itoa(exitedPID(t)) + " ingo    3w   REG   1,18      372 136170 " + logPath
-	scans := countingLsof(t, table)
+	scans := countingLsof(t, logPath, table)
 	t.Cleanup(func() {
 		forgetHerdrClientMemo(socketPath)
 	})
@@ -1288,16 +1300,13 @@ func TestSortedDistinctPIDs_DuplicateDoesNotConsumeACandidateSlot(t *testing.T) 
 func TestHerdrClientPIDs_DedupesFDRowsOfOneClient(t *testing.T) {
 	socketPath := newHerdrSessionDir(t)
 	logPath := herdrClientLogPath(socketPath)
-	if err := os.WriteFile(logPath, []byte("attached\n"), 0o600); err != nil {
-		t.Fatalf("seed client log: %v", err)
-	}
 	// One client on two write handles, plus a second client. lsof emits a row
 	// per FD, so this is three rows for two clients.
 	table := "COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF   NODE NAME\n" +
 		"herdr     26932 ingo    3w   REG   1,18      372 136170 " + logPath + "\n" +
 		"herdr     26932 ingo    4w   REG   1,18      372 136170 " + logPath + "\n" +
 		"herdr     26940 ingo    5u   REG   1,18      372 136170 " + logPath
-	countingLsof(t, table)
+	countingLsof(t, logPath, table)
 
 	pids, probed := herdrClientPIDs(socketPath)
 	if !probed {
