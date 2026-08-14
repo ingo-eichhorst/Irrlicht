@@ -1,0 +1,6 @@
+Test Suite 'All tests' started at 2026-08-14 19:18:00.000
+Test Suite 'IrrlichtPackageTests.xctest' started at 2026-08-14 19:18:00.001
+Test Suite 'SessionRowSnapshotTests' started at 2026-08-14 19:18:03.000
+Test Case '-[IrrlichtTests.SessionRowSnapshotTests testRelayCloudOnline]' started.
+Test Case '-[IrrlichtTests.SessionRowSnapshotTests testRelayCloudOnline]' passed (0.010 seconds).
+Test Case '-[IrrlichtTests.SessionRowSnapshotTests testRoleOrchestratorRow]' started.

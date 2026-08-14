@@ -1,0 +1,9 @@
+Test Suite 'All tests' started at 2026-08-14 11:32:00.000
+Test Suite 'IrrlichtPackageTests.xctest' started at 2026-08-14 11:32:00.001
+Test Suite 'SettingsViewTests' started at 2026-08-14 11:32:04.000
+Test Suite 'SettingsViewTests' passed at 2026-08-14 11:32:04.100.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.100 (0.101) seconds
+Test Suite 'SoundPlayerTests' started at 2026-08-14 11:32:04.200
+Test Case '-[IrrlichtTests.SoundPlayerTests testInstallCustomPassthroughCopiesAiff]' started.
+A stall was detected while waiting on expectations in IrrlichtTests.SoundPlayerTests.testInstallCustomPassthroughCopiesAiffAndReturnError:() at platforms/macos/Tests/SoundPlayerTests.swift:214. There's no IDE/Xcode connection to restart the process, so aborting to break the apparent deadlock.
+error: Exited with unexpected signal code 6

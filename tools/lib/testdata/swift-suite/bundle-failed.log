@@ -1,0 +1,11 @@
+Test Suite 'All tests' started at 2026-08-14 14:25:12.000
+Test Suite 'IrrlichtPackageTests.xctest' started at 2026-08-14 14:25:12.001
+Test Suite 'SoundPlayerTests' started at 2026-08-14 14:25:13.012
+Test Case '-[IrrlichtTests.SoundPlayerTests testInstallCustomPassthroughCopiesAiff]' started.
+/x/SoundPlayerTests.swift:90: error: -[IrrlichtTests.SoundPlayerTests testInstallCustomPassthroughCopiesAiff] : failed - installCustom did not invoke its completion within 5.0s
+Test Suite 'SoundPlayerTests' failed at 2026-08-14 14:25:18.165.
+	 Executed 12 tests, with 10 failures (3 unexpected) in 30.352 (30.353) seconds
+Test Suite 'IrrlichtPackageTests.xctest' failed at 2026-08-14 14:25:18.165.
+	 Executed 311 tests, with 10 failures (3 unexpected) in 31.718 (31.735) seconds
+Test Suite 'All tests' failed at 2026-08-14 14:25:18.165.
+	 Executed 311 tests, with 10 failures (3 unexpected) in 31.718 (31.736) seconds
