@@ -79,10 +79,18 @@ func herdrClientLogPath(socketPath string) string {
 // launcher may ignore it, because there is nothing to clear and dropping the
 // read would cost the pane its herdr address.
 //
-// Never blocks longer than 2 seconds. Never prompts the user — on macOS we use
+// Never prompts the user — on macOS we use
 // `sysctl(kern.procargs2)` (no TCC prompt; `ps e` stopped exposing env on
 // modern macOS). On Linux we read /proc/<pid>/environ. Other platforms return
 // nil.
+//
+// It used to say "never blocks longer than 2 seconds" here. Every individual
+// shellout is bounded at 2s, but this function is not, and has not been since
+// the herdr indirection below: resolveClientHostIdentity loops over up to
+// maxClientCandidates candidates and each costs two ancestry walks plus a tty
+// `ps`, with the bundle-id walk paying a `plutil` per hop. The bound is a
+// COUNT, not a duration. Giving the loop one aggregate deadline is #1529;
+// until then no caller may assume a wall-clock ceiling here.
 func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 	if pid <= 0 {
 		return nil, false
