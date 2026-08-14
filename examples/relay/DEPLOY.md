@@ -18,7 +18,9 @@ through NAT with no inbound port.
 
 ### From a release (Linux, amd64 + arm64)
 
-`irrlichtrelay-linux-<arch>.tar.gz` ships with every release and carries the
+`irrlichtrelay-linux-<arch>.tar.gz` is built by every release **from the next
+one onward** — no published release carries it yet, so check the releases page
+and use the from-source path below if it is not there. It carries the
 dashboard alongside the binary. Extract it somewhere and keep the two
 directories together — the relay finds its UI at `../Resources/web` relative to
 the binary, so moving `bin/irrlichtrelay` out on its own leaves the dashboard
@@ -296,7 +298,7 @@ phone, so pick the name once.
 
 ### Pairing, from the operator's side
 
-Nothing to configure. In the dashboard the relay serves, **Settings → Beacon** mints a one-time code; the
+Nothing to configure. In the dashboard the relay serves, **Settings → Irrlicht Beacon** mints a one-time code; the
 phone opens the same URL, adds it to the home screen, and types the code inside the installed app (iOS
 keeps browser-tab storage and installed-app storage separate, which is why the last step happens there).
 The code is single-use, expires in 10 minutes, and repeated wrong guesses are rate-limited.
@@ -313,7 +315,7 @@ files beside `tokens.json`, both mode `0600`:
 | File | Holds | If lost |
 |---|---|---|
 | `tokens.json` | token hashes (existing) | every daemon, client and phone must be re-issued |
-| `vapid-keys.json` | the relay's signing identity | no phone is pushable until its app is next opened, which re-subscribes against the new key |
+| `vapid-keys.json` | the relay's signing identity | **every phone must be paired again** — a phone whose subscription and relay record both still exist never notices the key changed, so nothing self-heals. This is the file to back up |
 | `push-subscriptions.json` | one delivery address per paired phone | phones re-register on next open |
 | `daemon-roster.json` | which daemons exist, and when each was last seen | the watchdog forgets a daemon that was already offline, so its disconnect goes unreported until it returns |
 

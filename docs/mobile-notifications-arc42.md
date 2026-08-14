@@ -319,7 +319,7 @@ House rule: absence of a finding and inability to look must never produce the sa
 |---|---|
 | Push service returns `410/404` | Subscription pruned + PWA health panel shows "push unreachable since …" on next open |
 | Subscription silently invalidated by iOS | Self-heals: PWA re-subscribes on next open with its stored device token |
-| Doubt | "Send test notification" button in PWA settings |
+| Doubt | A "send test notification" button in PWA settings — **not built**; deferred with the ledger read path. Until it exists, proving delivery means driving a real transition |
 | Daemon link down | Watchdog push (§6.4) |
 | Delivery attempt outcome | Last-status per subscription, visible in the PWA and relay logs |
 
@@ -352,7 +352,7 @@ The relay is stateless-by-design in v0 (sessions in RAM, rebuilt from `daemon_sn
 | Data | Where | Survives restart | Notes |
 |---|---|---|---|
 | Token records (existing) | `tokens.json` | yes | SHA-256 hashes only; hot-reloaded on change |
-| VAPID keypair | `vapid-keys.json` | yes | Subscriptions are bound to it. If lost, no phone is pushable until its PWA is next opened and self-heals by re-subscribing with the new key |
+| VAPID keypair | `vapid-keys.json` | yes | Subscriptions are bound to it, so **losing it means re-pairing every phone** — the §8.3 self-heal does *not* cover this. `selfHeal` re-subscribes only when the browser has no subscription or the relay has no record of the phone (`beacon.js:418`); after a key loss both still exist, so the phone keeps a subscription bound to a key that is gone and nothing detects it. Back this file up |
 | Subscription registry | `push-subscriptions.json` | yes | Endpoint + device keys per phone, linked to its TokenRecord; rewritten only on pair/revoke/`410`-prune, never per push |
 | Daemon roster | `daemon-roster.json` | yes | id, label, last-seen — so the watchdog cannot silently forget an offline daemon across a relay restart (§6.4) |
 | Session cache | RAM | no | Repopulated by daemon reconnects within seconds |
