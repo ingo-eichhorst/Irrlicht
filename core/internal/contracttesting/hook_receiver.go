@@ -7,6 +7,14 @@
 // through a status code on the user's critical path" is one rule (#1361,
 // #1364), and a rule stated in three places is a rule that can disagree with
 // itself.
+//
+// Note which of the three take a reporter and which keeps a *testing.T. The
+// first two are graded — assertHookStatus2xx decides a verdict and postHookBody
+// only marks itself a helper — so both go through the seam and can be driven by
+// a negative self-test (#1479, #1497). mkSubdir cannot: a directory that will
+// not be created is a fixture that could not be BUILT, and recording that as
+// "the obligation fired" is the failure reporter.go's fixtureT split exists to
+// prevent. It is named in deferredToTheSeam for exactly that reason.
 package contracttesting
 
 import (
@@ -19,7 +27,7 @@ import (
 )
 
 // postHookBody POSTs body to handler at endpoint and returns the response.
-func postHookBody(t *testing.T, handler http.Handler, endpoint, body string) *httptest.ResponseRecorder {
+func postHookBody(t reporter, handler http.Handler, endpoint, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, endpoint, strings.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -29,7 +37,7 @@ func postHookBody(t *testing.T, handler http.Handler, endpoint, body string) *ht
 
 // assertHookStatus2xx checks the one status rule every hook receiver owes.
 // what names the input, so the failure says which case broke it.
-func assertHookStatus2xx(t *testing.T, rec *httptest.ResponseRecorder, what string) {
+func assertHookStatus2xx(t reporter, rec *httptest.ResponseRecorder, what string) {
 	t.Helper()
 	if rec.Code < 200 || rec.Code > 299 {
 		t.Errorf("%s: status = %d, want 2xx — a hook receiver reports a refusal through its log and its counters, never through a status code on the user's critical path", what, rec.Code)

@@ -298,3 +298,37 @@ func TestSentinelIsNotAPrefixOfAnother(t *testing.T) {
 		t.Error("the sentinel no longer matches its own rendered command")
 	}
 }
+
+// TestInstalledCommandMatchesTheRunningBinary pins InstalledCommand as exactly
+// Command(BinaryPath(), adapter) — the composition an adapter would otherwise
+// write itself, with the two error branches it would otherwise carry (#1453).
+//
+// The equality is the whole assertion, and it is the one that matters: a helper
+// resolving a DIFFERENT path than Inspect and IsCanonical judge against would
+// report drift against itself and rewrite the user's config on every daemon
+// start without ever converging. Deliberately NOT re-asserted here via
+// IsCanonical(got) — canonicalAgainst recomputes want from the same
+// deterministic BinaryPath and returns early on command == want, so that arm
+// cannot fail once this equality holds. TestIsCanonicalAcceptsTheLiveCommand is
+// where that property is actually locked.
+func TestInstalledCommandMatchesTheRunningBinary(t *testing.T) {
+	got, err := InstalledCommand("gemini-cli")
+	if err != nil {
+		t.Fatalf("InstalledCommand: %v", err)
+	}
+	if want := mustCommand(t, liveBinary(t), "gemini-cli"); got != want {
+		t.Errorf("InstalledCommand = %q, want %q", got, want)
+	}
+}
+
+// TestInstalledCommandForwardsAdapterValidation confirms the wrapper does not
+// lose the refusal Command performs — the rendered text is written into a
+// user's config and executed by a shell. One case is enough: InstalledCommand
+// only forwards, and the segment grammar itself is pinned by
+// TestAdapterSegmentRejectsUnsafeValues (beacon_test.go) and its wrapper-level
+// cases by TestCommandRejectsUnsafeArguments above.
+func TestInstalledCommandForwardsAdapterValidation(t *testing.T) {
+	if got, err := InstalledCommand("../../etc/passwd"); err == nil {
+		t.Errorf("InstalledCommand = %q with no error, want a refusal for a path traversal in the adapter", got)
+	}
+}

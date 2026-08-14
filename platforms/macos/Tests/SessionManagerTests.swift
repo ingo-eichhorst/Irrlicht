@@ -492,6 +492,14 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(SessionLauncher.herdrDiagnostic(for: unregisteredHost),
                        "herdr_pane=w1:p1, client resolved but its host has no activator")
 
+        // A client running inside tmux contributes only a tmux address since
+        // #1486 — its own $TERM_PROGRAM is tmux's marker and is dropped. The
+        // client was still found, so this must not read as "no attached
+        // client".
+        let clientInTmux = try launcher(#"{"herdr_pane_id":"w1:p1","tmux_pane":"%3"}"#)
+        XCTAssertEqual(SessionLauncher.herdrDiagnostic(for: clientInTmux),
+                       "herdr_pane=w1:p1, client resolved but its host has no activator")
+
         XCTAssertEqual(SessionLauncher.herdrDiagnostic(for: nil), "herdr_pane=nil")
     }
 

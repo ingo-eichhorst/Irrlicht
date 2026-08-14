@@ -100,19 +100,46 @@ type HookReceiptReceiver struct {
 // invocations, share a test binary without interfering.
 func AssertHookReceiptObserved(t *testing.T, r HookReceiptReceiver) {
 	t.Helper()
-	t.Run("recognized_event_counts_one", func(t *testing.T) { assertReceiptCounted(t, r, r.KnownEvent) })
-	t.Run("unrecognized_event_counts_too", func(t *testing.T) { assertReceiptCounted(t, r, "IrrReceiptUnknownEvent") })
-	t.Run("confinement_rejected_request_counts_too", func(t *testing.T) { assertReceiptCountedOutOfTree(t, r) })
-	t.Run("consent_denied_request_is_not_counted", func(t *testing.T) { assertDeniedNotCounted(t, r) })
+	// Root, WriteTranscript and New/NewDenied are called HERE, on the
+	// sub-test's real *testing.T, for the reason the other two receiving-side
+	// families give: they are fixture machinery reporting their own failures,
+	// and a fixture that cannot be BUILT has to fail the run loudly instead of
+	// being recorded as the obligation firing (#1479). The arms grade, and
+	// nothing else, so a negative self-test can drive one (#1497).
+	t.Run("recognized_event_counts_one", func(t *testing.T) {
+		transcript := receiptTranscript(t, r, "in-tree")
+		assertReceiptCounted(realT(t), r, r.New(t, &recordingLogger{}), transcript, r.KnownEvent)
+	})
+	t.Run("unrecognized_event_counts_too", func(t *testing.T) {
+		transcript := receiptTranscript(t, r, "in-tree")
+		assertReceiptCounted(realT(t), r, r.New(t, &recordingLogger{}), transcript, receiptUnknownEvent)
+	})
+	t.Run("confinement_rejected_request_counts_too", func(t *testing.T) {
+		// Relocate the root first so the receiver is confined to it, then write
+		// the transcript somewhere else entirely — the request is well-formed
+		// and the channel plainly delivered it; only the path is refused.
+		r.Root(t)
+		outside := r.WriteTranscript(t, mkSubdir(t, t.TempDir(), "out-of-tree"))
+		assertReceiptCountedOutOfTree(realT(t), r, r.New(t, &recordingLogger{}), outside)
+	})
+	t.Run("consent_denied_request_is_not_counted", func(t *testing.T) {
+		transcript := receiptTranscript(t, r, "in-tree")
+		assertDeniedNotCounted(realT(t), r, r.NewDenied(t, &recordingLogger{}), transcript)
+	})
 }
+
+// receiptUnknownEvent is the name obligation 2 posts. It is a constant rather
+// than a literal at the call site so a negative self-test matches the fragment
+// the arm will actually print instead of retyping it — obligations 1 and 2
+// share one arm and one message, and the EVENT NAME is the only thing that
+// tells their failures apart (#1498's own defect was grading an arm on an
+// interpolated value a neighbouring obligation also carried).
+const receiptUnknownEvent = "IrrReceiptUnknownEvent"
 
 // assertReceiptCounted is obligations 1 and 2: a request the receiver was
 // allowed to see adds exactly one receipt, whether or not it understood it.
-func assertReceiptCounted(t *testing.T, r HookReceiptReceiver, event string) {
+func assertReceiptCounted(t reporter, r HookReceiptReceiver, handler http.Handler, transcript, event string) {
 	t.Helper()
-	transcript := receiptTranscript(t, r, "in-tree")
-	handler := r.New(t, &recordingLogger{})
-
 	before := hookjson.HookReceipts()[r.Adapter]
 	rec := postHookBody(t, handler, r.EndpointPath, r.PayloadFor(transcript, event))
 
@@ -124,15 +151,8 @@ func assertReceiptCounted(t *testing.T, r HookReceiptReceiver, event string) {
 }
 
 // assertReceiptCountedOutOfTree is obligation 3.
-func assertReceiptCountedOutOfTree(t *testing.T, r HookReceiptReceiver) {
+func assertReceiptCountedOutOfTree(t reporter, r HookReceiptReceiver, handler http.Handler, outside string) {
 	t.Helper()
-	// Relocate the root first so the receiver is confined to it, then write the
-	// transcript somewhere else entirely — the request is well-formed and the
-	// channel plainly delivered it; only the path is refused.
-	r.Root(t)
-	outside := r.WriteTranscript(t, mkSubdir(t, t.TempDir(), "out-of-tree"))
-	handler := r.New(t, &recordingLogger{})
-
 	before := hookjson.HookReceipts()[r.Adapter]
 	rec := postHookBody(t, handler, r.EndpointPath, r.PayloadFor(outside, r.KnownEvent))
 
@@ -144,11 +164,8 @@ func assertReceiptCountedOutOfTree(t *testing.T, r HookReceiptReceiver) {
 }
 
 // assertDeniedNotCounted is obligation 4.
-func assertDeniedNotCounted(t *testing.T, r HookReceiptReceiver) {
+func assertDeniedNotCounted(t reporter, r HookReceiptReceiver, handler http.Handler, transcript string) {
 	t.Helper()
-	transcript := receiptTranscript(t, r, "in-tree")
-	handler := r.NewDenied(t, &recordingLogger{})
-
 	before := hookjson.HookReceipts()[r.Adapter]
 	rec := postHookBody(t, handler, r.EndpointPath, r.PayloadFor(transcript, r.KnownEvent))
 

@@ -172,7 +172,15 @@ func TestHooksPermission_InstallGateContract(t *testing.T) {
 	t.Setenv(codexHomeEnvVar, home)
 
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(state permission.State) {
+		Key: PermissionKeyHooks,
+		// transcripts is the adapter's only other declared permission and is
+		// observe-kind, so it has no closure to drive: the key-isolation arm is
+		// INERT here and repeats the revoked arm exactly. Install-type wirings
+		// hold their own permission's closures, so a wrong key is not
+		// representable — the arm is load-bearing at the live receiver
+		// (hooks_test.go), not here.
+		OtherKeys: []string{PermissionKeyTranscripts},
+		SetState: contracttesting.OnlyKey(PermissionKeyHooks, func(state permission.State) {
 			var err error
 			if state == permission.StateGranted {
 				_, err = EnsureHooksInstalled()
@@ -180,9 +188,9 @@ func TestHooksPermission_InstallGateContract(t *testing.T) {
 				_, err = UninstallHooks()
 			}
 			if err != nil {
-				t.Fatalf("drive permission to %v: %v", state, err)
+				t.Errorf("drive permission to %v: %v", state, err)
 			}
-		},
+		}),
 		Exercise: func() {},
 		Observe: func() bool {
 			return eventHasSentinel(readHooks(t, home), HookStop)

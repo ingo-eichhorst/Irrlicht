@@ -5,6 +5,7 @@ package processlifecycle
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -80,26 +81,35 @@ const maxAncestry = 10
 // which it was found. Returns ("", 0) when no supported host appears within
 // maxAncestry levels.
 //
+// complete reports whether the walk reached that verdict on its own terms —
+// it found a host, ran out of chain, or ran out of depth — rather than
+// aborting because a `ps` could not be answered. Those two produce the same
+// ("", 0) and are different facts: the first is evidence that this process has
+// no local window, the second is no evidence at all. Every abort is a
+// readProcInfo failure, which on a loaded machine is that helper's 2s ceiling
+// (#1492); the caller that acts on the distinction is
+// resolveClientHostIdentity.
+//
 // Intentionally ignores tmux: tmux's env vars (TMUX, TMUX_PANE) come from
 // the regular env-capture path when readable, and a tmux-only ancestor
 // (without a known host terminal above it) can't be brought to the front
 // by NSWorkspace.
-func resolveHostFromAncestry(pid int) (termProgram string, hostPID int) {
+func resolveHostFromAncestry(pid int) (termProgram string, hostPID int, complete bool) {
 	cur := pid
 	for i := 0; i < maxAncestry && cur > 1; i++ {
 		ppid, cmd, err := readProcInfo(cur)
 		if err != nil {
-			return "", 0
+			return "", 0, false
 		}
 		if term := termProgramForAppPath(cmd); term != "" {
-			return term, cur
+			return term, cur, true
 		}
 		if ppid == cur || ppid <= 1 {
-			return "", 0
+			return "", 0, true
 		}
 		cur = ppid
 	}
-	return "", 0
+	return "", 0, true
 }
 
 // bundleIDForAppPath returns the CFBundleIdentifier of the application bundle
@@ -123,7 +133,10 @@ func bundleIDForAppPath(appPath string) string {
 
 // resolveHostBundleIDFromAncestry walks the parent-process chain of pid and
 // returns the CFBundleIdentifier of the first top-level application bundle it
-// finds, plus that app's PID. It is the generic fallback used when the curated
+// finds, plus that app's PID. complete carries the same meaning as
+// resolveHostFromAncestry's, and the first read is split out of the `ppid <= 1`
+// guard for exactly that reason: "pid's parent is init" is a verdict, "pid
+// could not be read" is not. It is the generic fallback used when the curated
 // termProgramByAppName map matches no ancestor — it lets the UI bring an
 // embedded-terminal GUI host (e.g. Obsidian) to the front without a per-app
 // registry entry. Returns ("", 0) when no top-level app appears within
@@ -132,28 +145,31 @@ func bundleIDForAppPath(appPath string) string {
 // The walk starts at pid's *parent*: the agent runs inside the host and is
 // never the host itself, and an agent whose own binary lives in a top-level
 // bundle (e.g. ClaudeCode.app) must not be mistaken for it.
-func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int) {
+func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int, complete bool) {
 	ppid, _, err := readProcInfo(pid)
-	if err != nil || ppid <= 1 {
-		return "", 0
+	if err != nil {
+		return "", 0, false
+	}
+	if ppid <= 1 {
+		return "", 0, true
 	}
 	cur := ppid
 	for i := 0; i < maxAncestry && cur > 1; i++ {
 		pp, cmd, err := readProcInfo(cur)
 		if err != nil {
-			return "", 0
+			return "", 0, false
 		}
 		if appPath := topLevelAppPath(cmd); appPath != "" {
 			if bid := bundleIDForAppPath(appPath); bid != "" {
-				return bid, cur
+				return bid, cur, true
 			}
 		}
 		if pp == cur || pp <= 1 {
-			return "", 0
+			return "", 0, true
 		}
 		cur = pp
 	}
-	return "", 0
+	return "", 0, true
 }
 
 // IsKnownInteractiveHost reports whether pid's process ancestry traces back to
@@ -170,16 +186,21 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int) {
 // useful), this is a real allow-list: an ancestor that is a legitimate `.app`
 // but isn't a curated terminal/IDE and isn't in knownEmbeddedHostBundleIDs
 // returns false — which is exactly what excludes CodexBar.
+//
+// It discards the completeness bit resolveHostFromAncestry reports (#1492): a
+// `ps` that blows its ceiling here returns false, which REJECTS a session
+// rather than degrading a click target. Tracked separately — changing an
+// admission gate's failure direction is its own decision — as #1513.
 func IsKnownInteractiveHost(pid int) bool {
 	// Short-circuit before the second ancestry walk: resolveHostFromAncestry
 	// and resolveHostBundleIDFromAncestry each independently re-walk the same
 	// parent chain via their own ps shellouts, so skip the bundle-ID walk
 	// entirely once the curated map already matched.
-	term, _ := resolveHostFromAncestry(pid)
+	term, _, _ := resolveHostFromAncestry(pid)
 	if term != "" {
 		return true
 	}
-	bundleID, _ := resolveHostBundleIDFromAncestry(pid)
+	bundleID, _, _ := resolveHostBundleIDFromAncestry(pid)
 	return isKnownInteractiveHostFrom(term, bundleID)
 }
 
@@ -195,7 +216,7 @@ func isKnownInteractiveHostFrom(termProgram, bundleID string) bool {
 // other host) appears in the chain; callers that also need the host PID
 // should use resolveHostFromAncestry directly to avoid a second walk.
 func resolveTermProgramFromAncestry(pid int) string {
-	term, _ := resolveHostFromAncestry(pid)
+	term, _, _ := resolveHostFromAncestry(pid)
 	return term
 }
 
@@ -207,7 +228,7 @@ func resolveTermProgramFromAncestry(pid int) string {
 // into the env-derived launcher. Ancestry walking still works because we
 // only read ppid + comm, not env.
 func kittyAncestryPID(pid int) int {
-	term, hostPID := resolveHostFromAncestry(pid)
+	term, hostPID, _ := resolveHostFromAncestry(pid)
 	if term != "kitty" {
 		return 0
 	}
@@ -378,10 +399,19 @@ func readProcInfo(pid int) (ppid int, cmd string, err error) {
 }
 
 // herdrClientPIDs returns the PIDs of every herdr client currently attached to
-// the session addressed by socketPath, newest attach first. A detached session
-// yields nil — verified live against herdr 0.8.0, where a session with no
-// client has no writer on its client log, and one with two clients attached
-// (herdr supports attaching from more than one place) has two.
+// the session addressed by socketPath, newest attach first, and whether the
+// probe actually ran. A detached session yields (nil, true) — verified live
+// against herdr 0.8.0, where a session with no client has no writer on its
+// client log, and one with two clients attached (herdr supports attaching from
+// more than one place) has two.
+//
+// The second return value is the whole of #1485. "Nobody is attached" and "I
+// could not look" are different facts, and a caller that merges this answer
+// into a host it already has must be able to tell them apart: the first is
+// evidence, the second is not. Collapsing them was harmless while the host was
+// resolved once and never revisited, and became a defect when #1405 made the
+// liveness sweep re-resolve it — a probe that fails to run then overwrites a
+// good host with nothing.
 //
 // Only writers count. "Holds the log open" is not the predicate: a `tail -f`
 // reader is not a client, and adopting its terminal as the host of every
@@ -394,22 +424,59 @@ func readProcInfo(pid int) (ppid int, cmd string, err error) {
 // are allocated ascending, so descending PID is "newest first". lsof matches
 // by device and inode rather than by string, so a symlinked path (a macOS
 // t.TempDir() lives under /var -> /private/var) needs no canonicalisation here.
-func herdrClientPIDs(socketPath string) []int {
+func herdrClientPIDs(socketPath string) (pids []int, probed bool) {
 	logPath := herdrClientLogPath(socketPath)
 	if logPath == "" {
-		return nil
+		return nil, false
+	}
+	// Stat before probing, because lsof answers exit 1 for BOTH "the file
+	// exists and nobody holds it open" and "there is no such file" (measured,
+	// lsof 4.91: the second also writes a "status error on <path>" line to
+	// stderr, which .Output() discards). Only the first is a detach. Without
+	// this, a client log that resolves to NOTHING — herdr moving or renaming
+	// it between releases — reads as a permanent, self-consistent "nobody is
+	// attached" rather than as a probe that never reached the question.
+	//
+	// It covers only that case, and deliberately not the neighbouring one: a
+	// socket path addressing a *different, real* herdr session resolves to a
+	// client log that exists, so the stat passes and lsof honestly reports no
+	// holders. Verified live against herdr 0.8.0 — a detached session keeps
+	// its client log (~/.config/herdr/sessions/factory/herdr-client.log, 505
+	// bytes, no holders), so file existence cannot separate "detached" from
+	// "probed somebody else's session". Only deriving the path correctly can.
+	if _, err := os.Stat(logPath); err != nil {
+		return nil, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	// A non-zero exit means no process holds the file open — the detached
-	// case, not an error.
 	out, err := exec.CommandContext(ctx, lsofPath, logPath).Output()
-	if err != nil {
-		return nil
+	if !lsofProbeRan(err) {
+		return nil, false
 	}
-	pids := herdrClientWriters(string(out), os.Getpid())
+	pids = herdrClientWriters(string(out), os.Getpid())
 	sort.Sort(sort.Reverse(sort.IntSlice(pids)))
-	return pids
+	return pids, true
+}
+
+// lsofProbeRan reports whether an lsof invocation that returned err
+// nevertheless ran and answered. Exit 1 is lsof's "nothing to report", which —
+// on a path herdrClientPIDs has already confirmed exists — is the detached
+// case and not an error. Every other failure is a probe that did not run: the
+// 2s deadline above, a fork failure, a signal (a process killed under an
+// exhausted CPU limit exits 152, measured on this machine), a missing binary.
+// None of them carry information about who is attached, and returning them as
+// "detached" is #1485.
+//
+// Split out so the classification is testable without arranging a real lsof
+// failure — its table of committed cases is the evidence that a revert to
+// `if err != nil` would be caught. runPgrep (process_darwin.go) draws the same
+// distinction for pgrep's exit 1.
+func lsofProbeRan(err error) bool {
+	if err == nil {
+		return true
+	}
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 1
 }
 
 // herdrClientWriters selects the client PIDs from an lsof table. 'u' counts
@@ -426,18 +493,92 @@ func herdrClientWriters(out string, self int) []int {
 	return pids
 }
 
-// maxHerdrClientCandidates bounds how many attached clients are probed for a
+// maxClientCandidates bounds how many attached clients are probed for a
 // resolvable host. Each candidate costs an env read plus an ancestry walk, and
 // attaching more than a handful of clients to one session is not a real
 // workflow, so the cap keeps that work proportionate.
-const maxHerdrClientCandidates = 4
+const maxClientCandidates = 4
+
+// resolveClientHostIdentity picks the host-window identity of the first
+// candidate in pids that reports one. It is the shared "which window is this
+// multiplexer session displayed in" loop: herdr feeds it the writers of the
+// session's client log (resolveHerdrClientLauncher), and #1501's tmux path is
+// queued to feed it `tmux list-clients -F '#{client_pid}'`.
+//
+// The second return is the same tri-state herdrClientPIDs draws one layer
+// down: true means the answer is evidence, false means the candidates could
+// not be read and the caller must not treat an absent host as a host that is
+// gone.
+//
+// #1492 is the whole of that second return. "This candidate has no local GUI
+// window" and "this candidate's identity could not be READ" arrive at the same
+// place — an empty TermProgram and an empty HostBundleID — and only the first
+// is evidence. The first is real and must stay an answer: an SSH client has a
+// real tty and no local window, and reporting one anyway is the misroute #1348
+// removed. The second is not: kitty sets no TERM_PROGRAM (upstream kitty
+// #4793), so for a client attached from kitty the ancestry walk is the ONLY
+// source of a host, and that walk is a `ps` chain under a 2s ceiling. On a
+// loaded machine it times out, the candidate reports nothing, and answering
+// "detached" makes AdoptHostIdentity clear TermProgram / HostBundleID /
+// ITermSessionID / the kitty selectors from a session whose client is attached
+// right now.
+//
+// So an unreadable candidate poisons the negative answer rather than
+// contributing to it: "no attached client has a local window" is a claim about
+// every candidate, and one that could not be read cannot be vouched for by the
+// others. A candidate that DOES resolve still wins outright, because a found
+// host is evidence regardless of what the rest of the list did.
+//
+// The maxClientCandidates truncation poisons it too, and for the same reason: a
+// candidate dropped by the cap is one we declined to look at. It is a weaker
+// case — herdrClientPIDs sorts newest-attach first, so the dropped candidates
+// are the stale ones — but "every attached client was read" is exactly the
+// claim the cap makes false, and answering it anyway is #1492 arriving through
+// the cap instead of through a timeout.
+//
+// Two residual false negatives survive, both of them "the walk reached a
+// verdict" cases rather than aborts, so the bit above cannot express them:
+// a candidate inside a tmux pane walks to the reparented tmux server and
+// terminates honestly at PID 1 while a local window exists (that indirection is
+// #1501, the tmux twin of #1350), and a chain deeper than maxAncestry is
+// declared a miss on the same terms.
+func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
+	readAll := len(pids) <= maxClientCandidates
+	if !readAll {
+		pids = pids[:maxClientCandidates]
+	}
+	for _, pid := range pids {
+		host, complete := hostIdentity(pid)
+		if host.HerdrPaneID != "" {
+			// A candidate that is itself a multiplexer pane has no window of
+			// its own — its host is one more indirection away. Don't recurse;
+			// try the next candidate. Unlike the cap above, declining here does
+			// NOT poison the answer: refusing to recurse is a standing policy
+			// rather than a failed read, and treating it as "unknown" would mean
+			// a nested setup's stale host could never be cleared at all.
+			continue
+		}
+		if host.TermProgram == "" && host.HostBundleID == "" {
+			readAll = readAll && complete
+			continue
+		}
+		return host, true
+	}
+	return nil, readAll
+}
 
 // herdrClientLauncher resolves the host-window identity of the herdr session
 // addressed by socketPath, by reading it from the attached client exactly the
 // way it would be read from any directly-hosted agent (hostIdentity). Returns
-// nil when nothing is attached, or when no attached client resolves to a local
-// GUI host — an SSH client has a real tty but no local window, and reporting
-// one anyway is the misroute #1348 removed.
+// (nil, true) when nothing is attached, or when every attached client was read
+// and none has a local GUI host — an SSH client has a real tty but no local
+// window, and reporting one anyway is the misroute #1348 removed. (nil, false)
+// is the third state, "I could not look": either the lsof probe did not run
+// (#1485) or a candidate's own identity could not be read (#1492).
+//
+// "Was read and has no host" rather than "reported no host" is the whole of
+// #1492; resolveClientHostIdentity's doc carries the argument, and this
+// function only passes its verdict through.
 //
 // Only ever called with a socket path the daemon captured from the pane's own
 // $HERDR_SOCKET_PATH, so a resolved identity always accompanies a complete
@@ -449,36 +590,40 @@ const maxHerdrClientCandidates = 4
 // socket, and the startup seed resolves them back to back, synchronously: an
 // lsof scan costs ~0.3s on a quiet machine, so eight panes would otherwise pay
 // eight identical scans before the daemon starts serving.
-func herdrClientLauncher(socketPath string) *session.Launcher {
+func herdrClientLauncher(socketPath string) (*session.Launcher, bool) {
 	if socketPath == "" {
-		return nil
+		return nil, false
 	}
 	if cached, ok := herdrClientCacheGet(socketPath); ok {
-		return cached
+		return cached, true
 	}
-	resolved := resolveHerdrClientLauncher(socketPath)
+	resolved, probed := resolveHerdrClientLauncher(socketPath)
+	if !probed {
+		// Never memoize a non-answer. The cache exists to collapse one startup
+		// seed's worth of identical scans; caching "unknown" would instead
+		// spread a single failed probe across every session that shares this
+		// socket for the next 5 seconds, which is the opposite of what the
+		// tri-state buys.
+		//
+		// #1492 widened what reaches this branch, and with it the cost: an
+		// unreadable candidate used to answer (nil, true) and be cached once
+		// per socket, and now re-probes per pane — under exactly the load that
+		// produces it. That is a deliberate trade of cost for correctness, not
+		// an oversight; re-deciding the rule reverses #1485's and is tracked as
+		// #1514, together with refreshHerdrHosts' affordability note, which
+		// assumes one lsof scan per socket per sweep.
+		return nil, false
+	}
 	herdrClientCachePut(socketPath, resolved)
-	return resolved
+	return resolved, true
 }
 
-func resolveHerdrClientLauncher(socketPath string) *session.Launcher {
-	pids := herdrClientPIDs(socketPath)
-	if len(pids) > maxHerdrClientCandidates {
-		pids = pids[:maxHerdrClientCandidates]
+func resolveHerdrClientLauncher(socketPath string) (*session.Launcher, bool) {
+	pids, probed := herdrClientPIDs(socketPath)
+	if !probed {
+		return nil, false
 	}
-	for _, pid := range pids {
-		host := hostIdentity(pid)
-		if host.HerdrPaneID != "" {
-			// herdr nested in herdr: this client's own window is another
-			// indirection away. Don't recurse — try the next candidate.
-			continue
-		}
-		if host.TermProgram == "" && host.HostBundleID == "" {
-			continue
-		}
-		return host
-	}
-	return nil
+	return resolveClientHostIdentity(pids)
 }
 
 // herdrClientCacheTTL is short enough that attaching a client is picked up by

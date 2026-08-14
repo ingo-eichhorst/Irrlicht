@@ -64,11 +64,19 @@ enum SessionLauncher {
     /// terminal has no registry entry, lands here too, and pointing that at a
     /// missing client would send whoever debugs it looking for the wrong thing.
     ///
+    /// `tmuxPane` counts as evidence of a resolved client for that same reason.
+    /// A herdr pane's own environment never contributes one — the capture
+    /// suppresses it (#1348) — so a tmux address on a herdr launcher can only
+    /// have been adopted from a client, and since #1486 a client running inside
+    /// tmux contributes *only* that address, with no `termProgram` to speak for
+    /// it.
+    ///
     /// Exposed for tests, which is the only way either wording is checked.
     static func herdrDiagnostic(for launcher: Launcher?) -> String {
         guard let pane = launcher?.herdrPaneID else { return "herdr_pane=nil" }
         let unresolved = (launcher?.termProgram ?? "").isEmpty
             && (launcher?.hostBundleID ?? "").isEmpty
+            && (launcher?.tmuxPane ?? "").isEmpty
         let why = unresolved ? "no attached client" : "client resolved but its host has no activator"
         return "herdr_pane=\(pane), \(why)"
     }

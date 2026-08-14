@@ -150,12 +150,88 @@ type HookReceiver struct {
 // rule rather than leaving each adapter to rediscover it (issues #1361, #1364).
 func AssertHookPathConfined(t *testing.T, r HookReceiver) {
 	t.Helper()
-	t.Run("in_tree_path_accepted", func(t *testing.T) { assertInTreeAccepted(t, r) })
-	t.Run("out_of_tree_path_rejected", func(t *testing.T) { assertOutOfTreeRejected(t, r) })
-	t.Run("parent_traversal_rejected", func(t *testing.T) { assertTraversalRejected(t, r) })
-	t.Run("symlink_escape_rejected", func(t *testing.T) { assertSymlinkEscapeRejected(t, r) })
-	t.Run("dangling_symlink_rejected", func(t *testing.T) { assertDanglingSymlinkRejected(t, r) })
-	t.Run("confined_spelling_is_what_dispatches", func(t *testing.T) { assertConfinedSpellingDispatches(t, r) })
+	// Every wiring closure — Root, WriteTranscript, New — is called HERE, on
+	// the sub-test's real *testing.T, rather than inside an arm. That is the
+	// split AssertHookEndpointFollowsBindAddr already draws, and it is what
+	// lets the arms report through the seam: relocating a root, writing a
+	// transcript, planting a symlink and building a receiver are fixture
+	// machinery that reports its own failures, and a fixture that cannot be
+	// BUILT must fail the run loudly rather than be recorded as the obligation
+	// under test firing (#1479). The arms below take resolved values and do
+	// nothing but grade them, so a negative self-test can drive one against a
+	// deliberately wrong receiver and read back what it said (#1497).
+	t.Run("in_tree_path_accepted", func(t *testing.T) {
+		root := r.Root(t)
+		inTree := r.WriteTranscript(t, mkSubdir(t, root, "in-tree"))
+		rut := r.New(t)
+		assertInTreeAccepted(realT(t), r, rut, inTree)
+	})
+	t.Run("out_of_tree_path_rejected", func(t *testing.T) {
+		r.Root(t)
+		outside := r.WriteTranscript(t, t.TempDir())
+		assertRefused(realT(t), r, r.New(t), outside, whatOutOfTree)
+	})
+	t.Run("parent_traversal_rejected", func(t *testing.T) {
+		root := r.Root(t)
+		outside := r.WriteTranscript(t, t.TempDir())
+		// Concatenated, not filepath.Join'd: Join cleans, and an already-cleaned
+		// path is not the input under test. Enough ".." to bottom out at "/",
+		// where further ones are absorbed.
+		traversal := root + strings.Repeat("/..", 32) + outside
+		assertRefused(realT(t), r, r.New(t), traversal, whatTraversal)
+	})
+	t.Run("symlink_escape_rejected", func(t *testing.T) {
+		root := r.Root(t)
+		outside := r.WriteTranscript(t, t.TempDir())
+		link := filepath.Join(mkSubdir(t, root, "linked"), filepath.Base(outside))
+		if err := os.Symlink(outside, link); err != nil {
+			t.Fatalf("symlink %s -> %s: %v", link, outside, err)
+		}
+		assertRefused(realT(t), r, r.New(t), link, whatSymlinkEscape)
+	})
+	t.Run("dangling_symlink_rejected", func(t *testing.T) {
+		root := r.Root(t)
+		// A path in a directory the receiver has no claim on. Deliberately NOT
+		// created: the whole point is that it does not exist at confinement time.
+		target := filepath.Join(t.TempDir(), "planted"+r.TranscriptExt)
+		link := filepath.Join(mkSubdir(t, root, "dangling"), filepath.Base(target))
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf("symlink %s -> %s: %v", link, target, err)
+		}
+		assertRefused(realT(t), r, r.New(t), link, whatDangling)
+	})
+	t.Run("confined_spelling_is_what_dispatches", func(t *testing.T) {
+		root := r.Root(t)
+		inTree := r.WriteTranscript(t, mkSubdir(t, root, "spelling"))
+		assertConfinedSpellingDispatches(realT(t), r, r.New(t), noisySpellingOf(inTree))
+	})
+}
+
+// The four refusal inputs, named once. Obligations 2-5 share ONE arm
+// (assertRefused) and differ only in the path they post, so `what` is the only
+// thing that tells their failures apart — which makes it the fragment a
+// negative self-test has to match on. Naming them here rather than at the call
+// site is #1498's own lesson applied: that PR graded an arm on an interpolated
+// value a NEIGHBOURING obligation's message also contained, so an arm reporting
+// the wrong prose for the right condition was graded green. A fragment retyped
+// in a self-test is the same defect with an extra step.
+const (
+	whatOutOfTree     = "a well-formed transcript outside every declared root"
+	whatTraversal     = "a path rooted in the declared tree that climbs out of it"
+	whatSymlinkEscape = "a symlink inside the declared root pointing out of it (symlinks must be resolved BEFORE the containment check)"
+	whatDangling      = "a dangling symlink inside the declared root (an unresolvable leaf must not be assumed to be an unflushed write)"
+)
+
+// noisySpellingOf returns path with a redundant "./" before its last component
+// — the same file, spelled the way a caller would if it wanted to find out
+// whether its own string is what travels.
+//
+// Concatenated rather than filepath.Join'd because Join cleans, and a
+// pre-cleaned path cannot tell "the confined string was used" from "the
+// caller's was echoed".
+func noisySpellingOf(path string) string {
+	dir, base := filepath.Split(path)
+	return dir + "./" + base
 }
 
 // assertConfinedSpellingDispatches is obligation 6: for a path that IS accepted,
@@ -173,18 +249,8 @@ func AssertHookPathConfined(t *testing.T, r HookReceiver) {
 // spellings of one file are two sessions. And where the accepted path reached
 // the root through a symlink, the caller's spelling names the link while the
 // confined one names the target.
-func assertConfinedSpellingDispatches(t *testing.T, r HookReceiver) {
+func assertConfinedSpellingDispatches(t reporter, r HookReceiver, rut HookReceiverUnderTest, noisy string) {
 	t.Helper()
-	root := r.Root(t)
-	inTree := r.WriteTranscript(t, mkSubdir(t, root, "spelling"))
-
-	// The same in-tree file, spelled with a redundant "./". Concatenated rather
-	// than filepath.Join'd because Join cleans, and a pre-cleaned path cannot
-	// tell "the confined string was used" from "the caller's was echoed".
-	dir, base := filepath.Split(inTree)
-	noisy := dir + "./" + base
-
-	rut := r.New(t)
 	rec := postHookPath(t, r, rut, noisy)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("in-tree transcript spelled %s: status = %d, want 200 — a redundant \"./\" is still inside the root",
@@ -194,11 +260,12 @@ func assertConfinedSpellingDispatches(t *testing.T, r HookReceiver) {
 	if got == "" {
 		t.Fatal("nothing was dispatched, so this obligation would pass vacuously")
 	}
-	// Asserted as "cleaned", not as equal to inTree: the confiner rebuilds an
-	// accepted path on the adapter's DECLARED root, which on macOS can be the
-	// /var spelling of the /private/var directory the test created. Comparing
-	// strings would fail there for a reason that has nothing to do with the
-	// obligation. Whether the noisy segment survived is the actual question.
+	// Asserted as "cleaned", not as equal to the fixture path: the confiner
+	// rebuilds an accepted path on the adapter's DECLARED root, which on macOS
+	// can be the /var spelling of the /private/var directory the test created.
+	// Comparing strings would fail there for a reason that has nothing to do
+	// with the obligation. Whether the noisy segment survived is the actual
+	// question.
 	if got == noisy || strings.Contains(got, string(filepath.Separator)+"."+string(filepath.Separator)) {
 		t.Errorf("dispatched %q, which is the caller's own spelling — the receiver confined the path and then "+
 			"forwarded the unconfined string anyway. Confinement must not only decide; its result must be what travels",
@@ -209,12 +276,8 @@ func assertConfinedSpellingDispatches(t *testing.T, r HookReceiver) {
 // assertInTreeAccepted is obligation 1. It runs first because every assertion
 // below it is a negative one, and a receiver that has stopped working at all
 // satisfies negative assertions perfectly.
-func assertInTreeAccepted(t *testing.T, r HookReceiver) {
+func assertInTreeAccepted(t reporter, r HookReceiver, rut HookReceiverUnderTest, inTree string) {
 	t.Helper()
-	root := r.Root(t)
-	inTree := r.WriteTranscript(t, mkSubdir(t, root, "in-tree"))
-	rut := r.New(t)
-
 	rec := postHookPath(t, r, rut, inTree)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("in-tree transcript %s: status = %d, want 200 — confinement is refusing the adapter's own tree", inTree, rec.Code)
@@ -227,65 +290,14 @@ func assertInTreeAccepted(t *testing.T, r HookReceiver) {
 	}
 }
 
-// assertOutOfTreeRejected is obligation 2: a plain absolute path elsewhere.
-func assertOutOfTreeRejected(t *testing.T, r HookReceiver) {
-	t.Helper()
-	r.Root(t)
-	outside := r.WriteTranscript(t, t.TempDir())
-	assertRefused(t, r, outside, "a well-formed transcript outside every declared root")
-}
-
-// assertTraversalRejected is obligation 3: lexically inside, really outside.
-func assertTraversalRejected(t *testing.T, r HookReceiver) {
-	t.Helper()
-	root := r.Root(t)
-	outside := r.WriteTranscript(t, t.TempDir())
-	// Concatenated, not filepath.Join'd: Join cleans, and an already-cleaned
-	// path is not the input under test. Enough ".." to bottom out at "/",
-	// where further ones are absorbed.
-	traversal := root + strings.Repeat("/..", 32) + outside
-	assertRefused(t, r, traversal, "a path rooted in the declared tree that climbs out of it")
-}
-
-// assertSymlinkEscapeRejected is obligation 4 — the ordering obligation. The
-// submitted path is lexically inside the declared root and passes any
-// containment check applied to the raw string; only resolving it first reveals
-// that it leaves the tree.
-func assertSymlinkEscapeRejected(t *testing.T, r HookReceiver) {
-	t.Helper()
-	root := r.Root(t)
-	outside := r.WriteTranscript(t, t.TempDir())
-	link := filepath.Join(mkSubdir(t, root, "linked"), filepath.Base(outside))
-	if err := os.Symlink(outside, link); err != nil {
-		t.Fatalf("symlink %s -> %s: %v", link, outside, err)
-	}
-	assertRefused(t, r, link, "a symlink inside the declared root pointing out of it (symlinks must be resolved BEFORE the containment check)")
-}
-
-// assertDanglingSymlinkRejected is obligation 5. The link is inside the root
-// and its target does not exist yet, so a guard that treats "cannot resolve" as
-// "not written yet" accepts it — and the attacker then creates the target.
-func assertDanglingSymlinkRejected(t *testing.T, r HookReceiver) {
-	t.Helper()
-	root := r.Root(t)
-	// A path in a directory the receiver has no claim on. Deliberately NOT
-	// created: the whole point is that it does not exist at confinement time.
-	target := filepath.Join(t.TempDir(), "planted"+r.TranscriptExt)
-	link := filepath.Join(mkSubdir(t, root, "dangling"), filepath.Base(target))
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatalf("symlink %s -> %s: %v", link, target, err)
-	}
-	assertRefused(t, r, link, "a dangling symlink inside the declared root (an unresolvable leaf must not be assumed to be an unflushed write)")
-}
-
 // --- helpers ---
 
-// assertRefused drives one escape attempt against a fresh receiver and checks
-// all three properties a refusal owes: nothing dispatched, a loud status, and a
-// counted reason.
-func assertRefused(t *testing.T, r HookReceiver, path, what string) {
+// assertRefused is obligations 2-5. It drives one escape attempt against a
+// fresh receiver and checks all three properties a refusal owes: nothing
+// dispatched, a loud-in-the-daemon-but-quiet-on-the-wire status, and a counted
+// reason. Which obligation is speaking is carried entirely by `what`.
+func assertRefused(t reporter, r HookReceiver, rut HookReceiverUnderTest, path, what string) {
 	t.Helper()
-	rut := r.New(t)
 	rec := postHookPath(t, r, rut, path)
 	if rut.Observed() {
 		t.Errorf("%s was dispatched downstream: %s", what, path)
@@ -297,7 +309,7 @@ func assertRefused(t *testing.T, r HookReceiver, path, what string) {
 }
 
 // postHookPath POSTs the adapter's hook body for path and returns the response.
-func postHookPath(t *testing.T, r HookReceiver, rut HookReceiverUnderTest, path string) *httptest.ResponseRecorder {
+func postHookPath(t reporter, r HookReceiver, rut HookReceiverUnderTest, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	return postHookBody(t, rut.Handler, r.EndpointPath, r.PayloadFor(path))
 }

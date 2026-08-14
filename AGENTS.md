@@ -58,12 +58,90 @@ Use `./.build` for build artifacts.
 
 ## Testing
 
+**A test earns its place by having been seen fail.** A green that was never red is a
+claim, not evidence. How you obtain that red depends on what the test is for.
+
 **A defect test proves nothing until it has been seen red.** Run it before the fix
 exists, confirm it fails, paste the failure. A test that passes on `main` means either
 the diagnosis is wrong or the test doesn't reach the defect (a stub blind to the
 asserted field is the classic) — stop and report rather than shipping the green. Locks
 — tests pinning behavior that must *not* change — pass by construction; say which ones
 those are. `ir:exec` enforces this at Phase 4 step 11a; it binds outside `ir:exec` too.
+
+**Anything a change *adds* has no "before the fix" to run against, and owes a
+deliberate mutation instead.** A new guard, a static `architecture_test.go` rule, a
+linter or registry tripwire, a derived count or score, a schema constraint, a data
+migration, a config rewriter, a contract assertion — every one of them passes the
+moment it is written, which is exactly the condition the red-first rule exists to
+prevent. So break the thing being protected — violate the invariant, perturb the
+derived number, corrupt a migrated value — and confirm the new check goes red. If
+nothing does, it does not reach what it claims to cover, and that is the same
+stop-and-report as a defect test that passes on `main`. This includes a **lock the
+change itself adds**: "passes by construction" is the reason the mutation is needed,
+not an exemption from it — the Locks sentence above is about locks over behavior that
+predates the change, where there is nothing new to prove reaches anything. Four agents
+in one fleet run arrived at this gap from four directions — a new guard (#1366),
+derived numbers (#1363), a data migration (#1367), a layering rule (#1391) — each
+because a reviewer, or the agent itself, ran a mutation nobody had asked for.
+
+**Prefer committing that mutation to describing it.** `tools/lib/testdata/posix-lint/`'s
+deliberately-broken fixtures are the shape ("committed rather than improvised so the
+mutation evidence outlives the PR"), and `TestSourceScanCatchesEveryKnownShape`
+(`core/application/services/construction_test.go`) is the same idea as a corpus.
+Evidence living only in a merged PR body is re-run by nothing; for the
+`contracttesting` families #1479 committed it beside each assertion, in
+`core/internal/contracttesting/<family>_selftest_test.go` — the paragraph
+closing the contract-family bullets below carries the shape and its limits. And a guard that *rewrites* an existing one owes
+its predecessor's cases as locks on top of its own — "Guarded construction" below
+carries that rule and the incident that earned it.
+
+**A verification mechanism must fail loudly when it cannot run.** Absence of a finding
+and inability to look must never produce the same output: "the thing under test never
+executed" is the most expensive way to fail, because it is indistinguishable from
+success. Wherever a check greps, matches, mutates, shells out or waits on a readiness
+signal, assert that the operation actually happened — not merely that it reported
+nothing. The guard is one line each time. Three of them caught something real the
+moment they were added: `posix-lint.sh` refusing rather than skipping when it finds no
+POSIX shell, no static linter, or no files, after its first draft printed `ALL PASS`
+over an installer carrying a deliberate `[[ ]]` (below); a mutation harness asserting
+its mutation changed the file, which then caught two more stale mutations (#1390); and
+an e2e test waiting on a signal narrower than "the daemon published its addr file",
+which fires *before* the consent effects under test run, so a deliberately-broken
+binary came back green (#1449; `ir:exec` Phase 4 step 11 carries the recipe). Two more
+were added before they could catch anything and carry the weaker evidence that they
+*can* fire: the architecture corpus asserting every case still contains the construct
+it plants (below), and the harness built on #1390's lesson from the start, carrying a
+deliberate no-match row that must report `STALE` (#1450).
+
+**A validator that cannot parse its input checks MORE, never less.** An input it
+cannot read with confidence is neither a quiet pass nor a skip: it is the case where
+the validator has the least idea what it is looking at, so it is the last place to
+drop checks. `skill-lint.sh`'s fence and frontmatter checks exist for exactly that
+reason (below) — skipping is how it tells "documents a marker" from "has one", and an
+unbalanced delimiter would otherwise silence every check after it.
+
+**Code that emits bytes from a structural diff gets a property test.** Anything that
+computes an edit and writes the result — config rewriters, formatting-preserving
+serializers, patchers, migrators — is tested by generating random inputs and random
+mutations and asserting the output round-trips, not only by hand-written cases, which
+encode what the author already thought of and are therefore the same set they got
+right. `hookjson`'s splicer shipped with seven green round-trip tests and a defect
+writing `,,` into ~11% of randomly shaped documents, because all seven removed the
+*tail* of a container — the one position where the arithmetic was correct.
+`TestSplice_PropertyRandomMutations`
+(`core/adapters/inbound/agents/hookjson/jsonc_test.go`) is the shape to copy: a fixed
+seed so a failure reproduces, the document *and* the mutation printed in the failure
+message, and a committed iteration count small enough to stay in the suite (2000,
+0.07s) with a much larger sweep across several seeds run locally before landing. Such
+a PR says two things out loud. **Which structural axes the generator varies** — one
+that varies only the axis you thought of is the same vacuous green wearing a different
+hat: that test's first draft mutated only object members, so it never produced a
+removal run longer than one item and never touched an array, while multi-item removals
+inside an array are exactly what the production uninstall path performs
+(`hooks[event]`, seven events removed in one pass). A fourth defect survived until the
+generator was widened. And **which properties survive which mutation** — "every
+comment is preserved" is false for a deletion, since the deleted subtree's comments
+go with it, and asserting it anyway produces false failures that erode the test.
 
 Before marking a ticket done, run the full suite — every layer must pass:
 
@@ -131,13 +209,135 @@ Before marking a ticket done, run the full suite — every layer must pass:
   kitty remote-control (install-type `Apply`/`Remove`), and `InputService`'s
   backchannel forwarding (the shared "control" gate) for the three call-site
   shapes it covers.
+  For a **hook receiver** the key set is no longer the wiring's to name. Since
+  #1488 a receiver declares its permissions to `hookjson.NewHandler` (via
+  `hookjson.RequireConsent`, whose first key is positional — a keyless receiver
+  does not compile), the handler publishes them as `HookHandler.Consent`, and
+  `contracttesting.AssertHookReceiverPermissionGated` derives one arm per
+  declared key. A receiver that later honours a third permission is graded on it
+  by existing rather than by someone remembering — which is what #1475 could
+  assert but not enforce, copilot's receiver having reached #1475 with no wiring
+  at all. Three things to know before touching it:
+  - `DecodeConfined` re-checks the whole declared set and fails closed, so a
+    receiver that declares a permission and never checks it drops the payload
+    instead of dispatching. That is #1466's shape, removed rather than detected.
+    It refuses **before** reading the body and before the confine, so a denied
+    request costs no decode, no path resolution and no confiner counter —
+    asserted by `TestDecodeConfined_RefusesBeforeReadingAnything`, because
+    deleting that guard and merely *moving* it are different mutations and only
+    the first reddens the others.
+  - **The backstop quietens every per-adapter consent mutation that graded
+    DISPATCH, so what those tests assert had to move to the one thing it does
+    NOT reproduce: silence.** Deleting a receiver's own `transcripts` gate used
+    to fail `…/transcripts/gated_on_the_named_key` plus that adapter's #1466
+    defect test; after #1488 the chokepoint drops the same payload, so every
+    dispatch-shaped assertion stays green (measured on all four receivers —
+    claudecode's hooks and statusline, codex, copilot). It is not silent about
+    it: reaching the backstop means a receiver skipped a check or consent was
+    revoked mid-request, so it logs an error, where a receiver's own gate
+    answers a quiet 200. That difference is both the surviving discriminator
+    and a real user-facing property — an ordinary denied session must not
+    collect an error line per tool call — so each of the four receivers' hand-
+    written consent tests now asserts **no error was logged**, and each was
+    seen red again with its gate deleted. Statusline is the receiver to watch
+    here: it declares ONE permission and keeps no second gate, so that
+    assertion is the whole of its live per-adapter proof.
+  - Beside those four, the coverage is one shared proof plus one lock per
+    adapter: `hookjson/consent_test.go`'s committed `forgetfulReceiver`
+    (declares two keys, checks one) grades the backstop for every receiver at
+    once, and `AssertDeclaredPermissions` / each adapter's
+    `Test…DeclaresItsPermissions` replays the key list its wiring used to spell
+    out, so the predecessor's cases are not deleted along with it (#1450).
+    Declaring the WRONG set reddens both.
+  - What did not move is the ORDER — but note exactly how much of it is held.
+    The channel key must stay ahead of `hookjson.ObserveHookReceipt`, and that
+    half IS enforced: deleting the `hooks` check, or hoisting the receipt above
+    it, reddens `AssertHookReceiptObserved`'s
+    `consent_denied_request_is_not_counted` (measured both ways). The other
+    half — the transcript key staying BEHIND the receipt, so a hooks-granted /
+    transcripts-denied install is not reported dead by #1368's watchdog — is
+    held by nothing: hoisting that check above the receipt is green here and
+    was green before #1488 too, so it is a standing gap rather than a
+    regression, and it is stated here rather than left implied by the sentence
+    above it.
+  `HookReceiverGate.Foreign` exists for the one receiver declaring a SINGLE
+  permission — claudecode's statusline — where the derived set leaves nothing to
+  hold open and the driver refuses rather than running a #1475 isolation arm
+  that proves nothing.
+  A wiring names the permission under test (`Key`) and at least one the call
+  site must NOT be gated on (`OtherKeys`), and `SetState` takes the key it is
+  driving — because until #1475 it did not, and every live-gate wiring supplied
+  a `Granted(_, _ string) bool` fake that discarded the key. One permission
+  moved through three states says only that a call site is gated on
+  *something*: a receiver gated on the WRONG permission answers identically,
+  and that is not hypothetical — claudecode's hook receiver read transcripts
+  with `transcripts` denied for the whole of its life (#1466) while this
+  contract was wired at that receiver and green. The fourth arm holds `Key`
+  denied while `OtherKeys` are granted, the one state that tells those apart,
+  and it denies `Key` **first**: a wiring that still ignored its key would end
+  up holding everything granted and fail, where the reverse order would let it
+  settle at "denied" and pass. Use `contracttesting.ConsentGate` for a live
+  per-request gate rather than a local fake — it replaces the three key-blind
+  mutable fakes those wirings had each grown (claudecode's and codex's
+  `mutableGate`, the services layer's `mutableConsent`), because a contract
+  whose wiring supplies the fake is a contract whose wiring can supply a
+  key-blind one. The static `keyedGate` map literals in the adapter test
+  packages are a different thing and stay: they pin a fixed two-permission
+  combination in one-off tests and were never key-blind. A call site gated on
+  more than one permission wires `AssertPermissionGatedOnEachKey` rather than a
+  hand-written table pairing each key with "the other one" — it names its key
+  set once and the pairing is derived, because such a table can silently list
+  only one direction and the direction that already works is
+  indistinguishable from covering both. A hook receiver is the exception and
+  names no set at all: since #1488 it wires
+  `AssertHookReceiverPermissionGated`, which derives the set from the
+  receiver's own declaration (the bullet above). Install-type wirings use
+  `contracttesting.OnlyKey` instead of re-deciding per adapter that a foreign
+  key is a no-op. The arm is
+  load-bearing only for live per-request gates; for an install-type permission
+  the wiring holds that permission's own closures, so a wrong key is not
+  representable and the arm is weak by construction — and where the other key
+  has no closure at all (an observe-kind sibling, a single-permission
+  declaration) it is inert and repeats the revoked arm, which those three call
+  sites say out loud. It is kept uniform with no opt-out anyway, because a flag
+  an install-type wiring could take is one a live-gate wiring could take too.
+  All of which makes the obligation *assertable*, not unforgettable: a receiver
+  still has to be wired once per permission it must honour (#1488 is the
+  chokepoint move that would remove that remaining act of memory).
 - Hook endpoints: `contracttesting.AssertHookEndpointFollowsBindAddr`
   (`core/internal/contracttesting/hook_endpoint.go`) is the same kind of
   runtime obligation for adapters that install hooks into a JSON config —
   an install writes the resolved port not `:7837`, an entry left by a daemon
   on another port is rewritten in place rather than duplicated, and uninstall
   is not port-scoped (#1178). A new hook-installing adapter wires one call
-  (see `claudecode`/`codex` `hookport_test.go`) instead of porting a test file.
+  (see `claudecode`/`codex`/`copilot` `hookport_test.go`) instead of porting a
+  test file. It grades against the delivery route the adapter DECLARES
+  (`HookInstaller.Delivery`, #1453), because there are two ways to satisfy it
+  and the second makes the first unsatisfiable. `DeliveryURL` — the zero value,
+  and all three adapters above — is an entry that CARRIES the daemon's address.
+  `DeliveryAddressFree` is an entry that carries none, because it names the
+  `irrlichd hook-post` beacon (`core/pkg/hookbeacon`, #1373), which reads the
+  addr file at fire time; three of the four port obligations then fail by
+  construction, measured against a working beacon. That is the good outcome
+  rather than an exemption: the beacon makes the whole stale-port class
+  INEXPRESSIBLE instead of fixing it once more — the dev daemon that left a
+  user's real `~/.claude/settings.json` and `~/.codex/hooks.json` pointing at
+  three dead ports (#1449) could not have — so the address-free route asserts
+  that the property was actually obtained (the line varies with nothing and
+  carries nothing address-shaped) plus the failure the beacon NEWLY admits: an
+  entry naming a binary path that is no longer the running one, which must be
+  rewritten in place exactly as a stale port must. Declaring the wrong route
+  cannot pass quietly, which is why this is a declaration and not an exemption:
+  the two routes' first obligations are contradictory assertions about the same
+  two strings (URL requires them to DIFFER across bind addresses, address-free
+  requires them IDENTICAL), so a beacon adapter that forgets the field and a URL
+  adapter that sets it both go red. The reasoning, and which obligations each
+  route runs, is on `deliveryRules` in that file rather than restated here.
+  Whichever adapter adopts beacon delivery first replaces
+  `hook_endpoint_addressfree_test.go`, the reference wiring the route is
+  currently exercised by — and that file is also the shape to copy, down to
+  resolving the binary path once through `hookbeacon.InstalledCommand` so the
+  config builder stays infallible.
 - Hook disclosure: `contracttesting.AssertHookDisclosureMatchesInstalled`
   (`core/internal/contracttesting/hook_disclosure.go`) binds a hooks
   permission's consent copy to what the installer actually writes — the
@@ -321,7 +521,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
 - Managed user files: every `modify`-kind permission with an `Apply` closure
   declares the shared, user-owned file that closure writes
   (`agent.Permission.Writes`, an `agent.ManagedUserFile` carrying `Path` +
-  `Uninstall`). Two projections read it, and they read deliberately different
+  `Uninstall`). Three projections read it, and they read deliberately different
   slices: `agents.ManagedUserFiles` returns everything — what
   `irrlichd --print-managed-files` prints and the onboarding recorder backs up
   before spawning a `grant-all` daemon against the user's real `$HOME` — while
@@ -346,11 +546,11 @@ Before marking a ticket done, run the full suite — every layer must pass:
   (`TestUninstallTaskEtaReadsOnlyTheInstructionsSlice`), because a
   single-sided narrowing check cannot see the one failure that matters most —
   two commands revoking each other's capability.
-  Both project the **full consent catalog** (`consentCatalog` in
+  All three project the **full consent catalog** (`consentCatalog` in
   `core/cmd/irrlichd`), not `agents.All()`: three daemon-wide declarations —
   gastown, launcher, kitty — are appended outside the adapter registry, and
   projecting only the registry is exactly how the kitty config patch was
-  offered by the wizard while being invisible to both lists (#1383). The
+  offered by the wizard while being invisible to every one of them (#1383). The
   catalog-wide tripwire is
   `TestEveryModifyPermissionDeclaresTheFileItWrites`
   (`core/cmd/irrlichd/managedfiles_test.go`); a new modify permission is
@@ -380,11 +580,142 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `spawn-record-daemon.sh`, immediately beside the `snapshot_managed_files`
   call that earns the entitlement. **`ir:test-mac`'s separate mode therefore no
   longer installs hooks** — that was the damage, not a regression.
-  All seven contract families pass by construction against a correct adapter, so
-  their whole value is that they *can* fail: a new or reworked contract
-  assertion lands with the deliberate mutation that was seen red for each
-  obligation recorded in its PR — the same bar the red-first rule above sets
-  for defect tests.
+  All seven contract families pass by construction against a correct adapter —
+  or, for a delivery route no adapter has adopted yet, against its reference
+  wiring — so their whole value is that they *can* fail. Seven is a count of
+  *obligations*, not of exported `Assert…` functions: `grep -c "^func Assert"`
+  over the package currently returns ten, because three of those are not
+  families. `AssertPermissionGatedOnEachKey` and
+  `AssertHookReceiverPermissionGated` are **drivers** running the
+  permission-gate family once per key — the first over a set the wiring names,
+  the second over one derived from the receiver itself (#1488) — and
+  `AssertDeclaredPermissions` is a one-line **lock** on that derivation rather
+  than an obligation of its own. Check what a function asserts before moving
+  this number (and before re-counting with `git grep`, whose pathspec `*`
+  crosses directory boundaries and returns one more). A new or reworked
+  contract assertion is therefore the mutation rule at the top of this section
+  in its most literal form: it lands with the deliberate mutation seen red for
+  each obligation — and since #1479 that mutation is **committed beside the
+  assertion** rather than described in the PR that added it, because a
+  paragraph in a merged PR body is re-run by nothing and an assertion that
+  silently stops discriminating looks exactly like health.
+  `<family>_selftest_test.go` drives one obligation against a fixture that is
+  wrong in exactly ONE way and asserts that obligation reports it;
+  `selftest_test.go` holds the harness — a recording reporter behind the
+  `reporter` seam introduced by #1475/PR #1489, plus `verdictReported` and
+  `verdictSilent` — and the harness's OWN committed mutation, `deafRecorder`
+  and `criesWolfRecorder`, since a recorder that stopped observing would be
+  this failure reproduced inside its own fix. Two rules are load-bearing and
+  neither is obvious. A negative self-test names a fragment of the
+  obligation's own failure message and a bare failure is refused: "the arm
+  failed" and "THIS obligation failed" are different claims, and #1453's
+  second instance is the one where only the first was true (`--port 7837` left
+  `delivery_carries_no_address` green while the run failed incidentally
+  elsewhere). And every family carries a vacuity guard running each arm
+  against a CORRECT fixture, because an arm that reported unconditionally
+  would satisfy every mutation and read as excellent coverage. Note what this
+  does NOT close: #1475's key-blindness would have survived it, because those
+  arms all passed correctly for what they asserted and the gap was that the
+  FIXTURE could not express the distinguishing state — a negative self-test
+  grades an obligation against the wrong receiver it can build, never against
+  the one nobody thought to build. **A new arm takes `reporter`, or `armT` when
+  it also builds fixtures — never `*testing.T`**, or it cannot be driven at all
+  and its obligation silently leaves the covered set. `armT.fixtures` is typed
+  `fixtureT`, which carries `Setenv` and nothing that can decide a verdict, so
+  reporting through it does not compile; that is a type guarantee rather than a
+  guard, the same trade #1390 made for path confinement. Since #1497 **every**
+  family carries self-tests. The three receiver-shaped ones share one fixture,
+  `receiver_fixture_test.go`: a receiver built through `hookjson.NewHandler`
+  over a real `PathConfiner` and a real `RequireConsent`, decoding through
+  `DecodeConfined`, whose `receiverBreak` struct has one field per committed
+  mutation and whose ZERO VALUE is a correct receiver — so a case names what it
+  broke and nothing else. Three things there are worth knowing before writing a
+  fourth family's fixture. **A verdict a self-test cannot reach is stated, not
+  faked**: obligations 2-5 of the confinement family grade a decision
+  `hookjson.PathConfiner` makes, and #1380/#1446 recorded their mutations as
+  edits to `confine.go`, which a test in this package cannot make — so the
+  fixture consults the real confiner and second-guesses its answer in the
+  direction each recorded mutation produced, and the file says that is what the
+  evidence supports. **The counter is only reachable through `Confine`** —
+  `RejectPath` logs and answers 2xx but counts nothing — so a fixture that
+  skipped it would fail every arm with "counted 0 rejection(s)" for a reason
+  unrelated to the mutation under test. And a mutated receiver that cannot use
+  `DecodeConfined` differs from a correct one in TWO ways, the verdict and the
+  decode, so a hand-rolled-but-faithful baseline is run through every arm first
+  to prove the decode is not what was reported.
+  Each case also names the obligations it must leave **silent**, which is half
+  the evidence: without it, six mutations against six obligations are equally
+  satisfied by six arms that all report on everything. Those silences reproduce
+  the recorded #1446 matrix — M1 red on obligation 1 alone, M4 (containment
+  before symlink resolution) red on 4 and 5 while 1-3 stay green, M6 red on 5
+  alone. Two rows are reproduced with a deliberately NARROWER blast radius than
+  the recorded one, because the recorded mutation edited `confine.go` and a
+  reproduction in this package cannot; both say so where they live, and the M3
+  row's narrowing is the point rather than a compromise — its reproduction
+  leaves obligation 2 green, which is exactly what separates the traversal
+  obligation from the out-of-tree one.
+  Two mutation sets could not simply be transcribed, and both gaps are worth
+  knowing about. #1403 recorded obligations 1 and 2 of the unrecognized-event
+  family as **locks** with no mutation at all; deriving them found that
+  obligation 1 carries two independent claims (a recognized event still
+  DISPATCHES, and it is counted as unrecognized by NOBODY), which a receiver
+  can fail one at a time. And #1413's receipt mutation covers obligations 1-3
+  **jointly** — removing `ObserveHookReceipt` entirely — which proves neither
+  PLACEMENT those obligations exist to pin; the two placements that isolate
+  them (`receiptOnlyWhenRecognized`, `receiptAfterConfinement`) are #1497's and
+  are recorded nowhere else.
+  What makes the seam structural rather than remembered is
+  `seam_walk_test.go`, an AST walk over the package's own sources with two
+  rules. **Rule 1**: a function in a non-test file whose FIRST parameter is
+  `*testing.T` must be an exported `Assert…` entry point, `realT`, or named in
+  `deferredToTheSeam` with its reason — keyed on the parameter TYPE and
+  POSITION, never on a name convention, since a naming rule is satisfied by
+  renaming — and `testing.TB`, `*testing.B` and `*testing.M` count as the same
+  type for it, because TB carries `Errorf`/`Fatalf` AND an unexported method, so
+  no recorder can implement it and a TB-first arm is exactly as unswappable as a
+  `*testing.T`-first one. The exemption map admits two KINDS of function, stated
+  as two rather than generalized because the generalization is false and a false
+  one there reads as "you don't need to look": fixture machinery (the line
+  `fixtureT` draws — a fixture that cannot be BUILT must fail loudly rather than
+  be recorded as an obligation firing), and one helper that does decide a
+  verdict but has no family to self-test (`CompareGolden`).
+  **Rule 2**: every arm (first parameter `reporter` or `armT`) must be
+  reachable, along a chain that does **not** pass through an exported entry
+  point, from a reference in a `_test.go` **that also calls `mustReport`**.
+  All three clauses matter — reference-based rather than filename-based, because
+  the permission-gate family's self-tests live in `permission_gate_test.go`;
+  not-through-an-entry-point, because a family's vacuity guard CALLS its entry
+  point and would otherwise mark every arm of a self-test-less family as driven;
+  and the `mustReport` clause, which came from review, because seeded from every
+  test file an arm counted as driven merely by being NAMED — deleting a family's
+  four negative self-tests and leaving the now-uncalled table that listed them
+  passed the rule in full. `mustReport` is the one call every negative self-test
+  makes and no positive test does. Its corpus is `seam_walk_corpus_test.go`: one
+  row per parameter spelling pinned to the verdict the detector must return,
+  plus one per call graph pinning the propagation (no count is stated here,
+  because nothing would keep one honest). The `want:false` rows carry the value,
+  per #1450 — a `*testing.T` in second position, one inside a struct FIELD type,
+  one inside a parameter's own func type, a function literal assigned to a
+  package var, and an aliased `testing` import. The first three are false
+  positives a text-based rule produces; the last two are declared LIMITS of an
+  `ast.FuncDecl` walk over syntactic types, pinned so they are learned from a
+  test rather than from an incident. A `want:false` row is also how this
+  corpus's own worst defect shipped and was caught in review: `testing.TB` sat
+  in the must-NOT-flag block, so the rule's biggest hole came with an approved
+  spelling.
+  One further cost is worth knowing before writing a fifth family:
+  `hookjson`'s distinct-name table retains `MaxUnknownEventNames` `(adapter,
+  name)` pairs for the life of the process and never resets, so an obligation
+  needing a globally FRESH name (only #1364's fourth) spends a slot per run.
+  Keeping the delta-measuring obligations on an adapter-stable name, and driving
+  the fresh-name one only where it is the subject, is what buys the headroom —
+  measured at `go test -count=12` when this was written, against roughly eight
+  before. Trust neither number: nothing produces either, which is precisely the
+  drift "Replay's measured figures" below is about. What IS load-bearing is that
+  `assertNameTableHadRoom` reports a saturated table as a limit of the TEST
+  BINARY — quoting the bound it reads from `hookjson` rather than a copy of it —
+  instead of letting it become the false accusation ("counted 0") it otherwise
+  is.
 - Guarded construction: not a contract family — a package-local pair of guards,
   `core/application/services/construction_test.go`. A service whose fields
   include maps, channels, or anything else whose zero value is unusable is
@@ -429,8 +760,8 @@ Before marking a ticket done, run the full suite — every layer must pass:
   promotes them, which is how one gets hardened). The fence and frontmatter
   checks exist because skipping is how the linter tells "documents a marker"
   from "has one" — so an unbalanced delimiter would otherwise silence the rest
-  of the file, and the rule is that when a file cannot be parsed with
-  confidence the linter degrades toward *more* checking, never less. Runs as
+  of the file. That is the parse-failure rule at the top of this section in its
+  local form. Runs as
   its own `skill-file lint` gate in `tools/preflight.sh` (scoped to skill
   markdown plus the linter itself) and unscoped as test.yml's "Lint skill
   files" step — first in the job, before `setup-go`. Its own tests are
@@ -492,6 +823,126 @@ Before marking a ticket done, run the full suite — every layer must pass:
   surfaces without Docker. Takes ~3 minutes unscoped; under `--changed` it
   runs only when the diff touches `replaydata/`, the factory, or the
   `core/` parsers and tailer a golden is derived from.
+- Replay transition timing: a golden records a `virtual_time` on every
+  transition, and until #1480 **nothing compared it to anything** — the
+  goldens pin it only against their own previous value, `compareOrdered` walks
+  `prev_state`/`new_state` index-by-index and never reads the time, and the
+  "N of 309 recordings diverge" headline every replay PR quotes is counts and
+  kinds only (that headline is `extendedCheck.Diverges` counted over the
+  catalog — see the next bullet for why it has exactly one definition). So a transition reproduced at the right position in the ORDER but
+  31 seconds from when the daemon made it was a full pass, and the golden then
+  pinned it as correct. `compareOrdered`
+  (`tools/onboarding-factory/cmd/replay/extended_check.go`) now returns the
+  MATCHED pairs rather than a count of them, each carrying how far apart in time
+  the two sides fired — so the ordered-divergence figure and the timing figure
+  are one traversal and cannot describe different transitions. The first draft
+  had a second, identical loop plus three comments and a runtime assertion
+  saying the two must agree; one loop makes that structural instead.
+  Only KIND-MATCHED pairs carry a delta — where `compareOrdered` reports
+  `state_differs` the two sides are not the same transition, so their timestamp
+  difference means nothing and counting it would report one sequence divergence
+  twice. The reporting side (`timing_drift.go`) buckets and ranks those deltas;
+  it reuses `core/domain/stats.Percentile` rather than carrying its own.
+  It is a **ratchet, not a tolerance gate**, and that is the deliberate
+  shape: 24.3% of the catalog's 826 kind-matched pairs are still more than 1s
+  from their daemon, so a gate failing on all of them would protect nothing.
+  `TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog` walks all 309
+  sidecar-driven recordings, prints the distribution, and fails when a
+  recording NEWLY drifts, when a pinned entry stops drifting and is left to rot,
+  or when the aggregate counts grow — the same idiom `knownZeroTransition`
+  uses. The 1s threshold is read off the measured distribution rather than
+  picked: |delta| is sharply bimodal (74.4% under 100ms, 24.3% over 1s) with a
+  near-empty decade between, so the cut lands where ~1% of the population
+  lives; `driftThreshold`'s doc comment carries the histogram. That trough is
+  the same 10 pairs before and after #1478 reshaped both modes around it, which
+  is stronger evidence for the cut than the original measurement was. The
+  goldens #1476 documented as its accepted cost are enumerated by name in
+  `knownFirstTransitionDrift` rather than living in a paragraph of a doc
+  comment, which is what #1480 was filed about. Its mutation evidence is
+  committed, not described: `cmd/replay/testdata/timing/` holds one file per
+  timing shape, carrying both verdicts on purpose — a detector that flags
+  everything and one that flags correctly are indistinguishable without the
+  cases that must stay silent. `tools/replay-fixtures.sh` reports the same
+  figure beside the divergence figure, because a `go test` that passes prints
+  nothing without `-v` and an unread measurement is the failure mode this
+  closes.
+- Replay's measured figures: the counterpart rule to "a verification mechanism
+  must fail loudly when it cannot run" is that **a number which documents
+  behaviour but is not produced by it drifts silently, and is then quoted with
+  full confidence**. The replay tree carried one example of each outcome:
+  `knownFirstTransitionDrift` is machine-generated and stayed right across a
+  change that reshaped the distribution it describes, while the
+  `zero`/`fabricated`/`divergent` counts were typed by hand and went wrong twice
+  in two PRs — #1478 had to correct copies in five places, and one it missed
+  left `tools/replay-fixtures.sh` claiming 198 divergent recordings while the Go
+  side measured 140. Two mechanisms close it (#1503). **One named predicate**
+  decides each population — `extendedCheck.Diverges`, `.ReproducesNothing`,
+  `.Fabricates` — and every counter derives from it, including `main.go`'s exit
+  code, which had its own wider spelling (`ordered || missing kinds || extra
+  kinds`); those disjuncts are structurally unreachable and the census asserts
+  the two spellings agree on all 309 recordings rather than trusting that
+  argument. `Diverges` is `len(OrderedMismatches) > 0`, and the near-misses are
+  the point: "the counts or the kind sets differ" reads as a restatement and is
+  one low, because one committed recording replays the same two kinds and the
+  same four transitions in the wrong ORDER — that is the recording #1478's table
+  lost, and it is pinned by name in
+  `TestDivergesCatchesTheOrderSwapThatCountsAndKindsMiss`. **The counts are
+  machine-generated**: `censusOfTheCommittedCatalog` is the pasteable literal
+  `TestCatalogCensusMatchesTheCommittedFigures` prints on every run, the same
+  idiom `knownFirstTransitionDrift` uses, and no doc comment restates a figure
+  it carries. Two guards run before the equality check, because "paste the
+  measured literal" is the wrong advice when the measurement itself broke: a
+  walk that reached fewer recordings than the committed census, and a catalog
+  where nothing diverges at all. Its mutation evidence is a committed corpus
+  (`TestCensusDiffNamesEveryStaleShape`) — one deliberately-stale literal per
+  shape, including #1478's exact one-low, plus the identical-census row that
+  stops a diff which reports everything from looking correct.
+  Three of the census's figures are not defect counts, and each exists because
+  a prose sentence was carrying the number. `DivergentByCountsAndKinds` is the
+  near-miss spelling itself (139 against `Divergent`'s 140), so "they differ by
+  exactly one recording" is re-derived every run instead of being true once.
+  `UnpairedSidecars` and `PairedButUngraded` are the denominator's honesty:
+  `forEachSidecarRecording` pairs a sidecar with a sibling `transcript.jsonl`,
+  while `tools/replay-fixtures.sh` walks `transcript.md` too — so the sweep
+  replays 31 aider recordings the Go gates never see, and reported **142**
+  divergent against the census's **140** (measured; the two extra were both
+  `aider/4-2_multiple-agents-same-workspace`). A further 56 recordings are
+  paired but produce no extended check at all, chiefly the
+  process-owned-store adapters. Together the three account for every sidecar on
+  disk.
+  There is a standing coverage note in that: `knownZeroTransition`,
+  `knownFabricated` and #1480's ratchets are catalog-wide over the catalog
+  *that walk can see*, and have never been evaluated against any aider
+  recording. Widening the pairing is deferred as a **scope** call, and the
+  reason is stated that way because the tempting blast-radius reason is
+  measurably false — pairing `transcript.md` when no `transcript.jsonl` exists
+  adds exactly **2** gradeable recordings, both merely divergent, and moves
+  `knownZeroTransition`, `knownFabricated` and `knownFirstTransitionDrift` by
+  **nothing**. It would make the census agree with the sweep exactly. A
+  dismissal in this repo carries the same evidentiary bar as the claim it
+  supports, and this one was measured rather than assumed — the first draft of
+  this bullet asserted the opposite and a review caught it.
+- Replay read boundary: the sidecar records `file_size` from the fswatcher's
+  stat at fire time but stamps `ts` at the daemon's **dequeue** time, and the
+  watcher's stat time is not a field of `lifecycle.Event` at all — so "where
+  had the daemon's read reached" is reconstructed, never read off. `#1342`'s
+  `readBoundaryFor` widens a provably-manufactured pass by one recorded stat;
+  `#1478` adds `readBoundaryClusterWindow` (10ms), which additionally takes
+  every later stat dequeued within that window, on the inference that a serial
+  detector loop dequeuing an event microseconds later had it queued while the
+  read ran. **Additive, never narrowing** — that is what keeps it off the 35
+  gemini-cli recordings a *replacement* time bound broke during #1476's review.
+  The constant is CALIBRATED, not derived, and both walls are measured facts
+  about the committed catalog: below 3ms the rescues are incomplete, at 28ms
+  replay fabricates in `codex/2-1_basic-turn` and at 52ms in
+  `codex/1-1_session-start`. Those two are exactly the goldens #1342's rejected
+  guard-narrowing broke — two unrelated mechanisms hitting the same wall, which
+  is why it is treated as a property of the catalog. `TestReadBoundaryClusterWindow_BothWallsAreMeasured`
+  drives the window past each wall and is the calibration's committed mutation
+  evidence; a window justified only from below could be raised to 1s with
+  nothing objecting. One recording remains in `knownZeroTransition` because
+  reaching it needs 69ms, i.e. it can only be bought by making two goldens
+  assert something false — the trade this whole line of work exists to refuse.
 - Replay goldens (when a recording or replay-output change is in play):
   regenerate with `UPDATE_REPLAY_GOLDENS=1 go test
   ./tools/onboarding-factory/cmd/replay/... -count=1` (the `-count=1`
@@ -571,6 +1022,20 @@ tools/preflight.sh --only go      # just the test.yml-equivalent gates
 tools/preflight.sh --only arch    # just the ARS architecture gate
 tools/preflight.sh --only skills  # just the .claude/skills/**/*.md linter
 ```
+
+**For an automated caller (an agent), `--only` chunking is the recipe, not a
+debugging convenience — the unscoped run does not reliably fit a foreground
+`Bash` call's 600s budget** (it reliably exceeds it on this machine; the long
+pole is the `go` group's core suite + replay fixtures). Run each group as its
+own **foreground** invocation instead of the single unscoped command:
+`tools/preflight.sh --only go|web|arch|tools|skills|posix|security` (see
+`tools/preflight.sh --help` for the current group list; `linux` stays opt-in
+and needs Docker). Every gate still runs — chunking only changes how many
+invocations it takes. **Do not background the unscoped run to make it fit**:
+a subagent is not woken by its own background job, so the run stalls silently
+with the work committed but never pushed
+(`.claude/skills/ir:exec/SKILL.md` Phase 4 step 11 has the incident and the
+same recipe).
 
 `tools/install-git-hooks.sh` (run once per clone; worktrees share the parent
 repo's hooks automatically) wires `tools/preflight.sh`'s fast gates as a

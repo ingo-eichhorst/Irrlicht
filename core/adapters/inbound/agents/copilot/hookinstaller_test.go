@@ -68,7 +68,15 @@ func TestHooksPermission_IsGated(t *testing.T) {
 
 	state := permission.StatePending
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(s permission.State) { state = s },
+		Key: PermissionKeyHooks,
+		// transcripts is the adapter's only other declared permission and is
+		// observe-kind, so it has no closure to drive: the key-isolation arm is
+		// INERT here and repeats the revoked arm exactly. Install-type wirings
+		// hold their own permission's closures, so a wrong key is not
+		// representable — the arm is load-bearing at the live receiver
+		// (hooks_test.go), not here.
+		OtherKeys: []string{PermissionKeyTranscripts},
+		SetState:  contracttesting.OnlyKey(PermissionKeyHooks, func(s permission.State) { state = s }),
 		Exercise: func() {
 			switch state {
 			case permission.StateGranted:

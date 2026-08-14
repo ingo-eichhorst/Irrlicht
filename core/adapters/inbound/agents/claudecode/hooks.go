@@ -241,8 +241,9 @@ func sessionIDFromTranscriptPath(p string) string {
 // gate means no gating — used by tests.
 func NewHookHandler(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
 	return hookjson.NewHandler(transcriptConfiner(),
-		func(c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
-			serveHookRequest(target, markers, gate, log, c, w, r)
+		hookjson.RequireConsent(gate, AdapterName, PermissionKeyHooks, PermissionKeyTranscripts),
+		func(consent hookjson.Consent, c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+			serveHookRequest(target, markers, consent, log, c, w, r)
 		})
 }
 
@@ -254,27 +255,68 @@ func transcriptConfiner() *hookjson.PathConfiner {
 	return hookjson.ConfinerForSource(Source, runtime.GOOS, transcriptExt)
 }
 
+// admitHookRequest applies both consents this receiver needs and records the
+// channel receipt between them. It answers the request itself on refusal and
+// returns false; a true means the caller may proceed to read the body.
+//
+// All three steps live here together because their ORDER is the contract, and
+// each boundary is load-bearing in a different direction:
+//
+//   - The "hooks" consent comes first. It authorizes WRITING our entries into
+//     the user's settings.json — which is what makes a POST arrive at all.
+//   - The receipt is counted between them, so a hooks-granted /
+//     transcripts-denied install still reads as a LIVE channel. #1368's
+//     liveness watchdog demotes a channel that produces no receipts and
+//     releases the holds it placed; counting only fully-granted requests would
+//     have it falsely accuse a working install of being dead. See receipt.go
+//     for why each later rejection still counts and why a consent-denied
+//     request must not.
+//   - The "transcripts" consent comes last, and still BEFORE the decode and so
+//     before confinement, so a denied session yields a quiet 200 and the path
+//     is never resolved on that branch. Dispatching makes the detector open
+//     the transcript, so that read needs its own consent: granting "hooks" is
+//     not a licence to read the file those entries point at.
+//
+// codex and copilot have carried the transcripts gate since #1174 and mirror
+// each other step for step; claudecode — the receiver the other two were
+// modelled on — never got it, so a hook POST reached the detector's open on a
+// transcript the user had denied (issue #1466). A hooks-granted /
+// transcripts-denied session is not monitored anyway, so dropping the hook
+// here is both consent-correct and behaviourally harmless.
+//
+// Both keys are asked of the receiver's OWN hookjson.Consent (issue #1488), so
+// the pair this order is written for is the pair the handler publishes and the
+// contract derives — not a second list that could drift from it. A key this
+// receiver did not declare answers false, so the drift fails closed rather than
+// silently gating on nothing.
+func admitHookRequest(consent hookjson.Consent, w http.ResponseWriter) bool {
+	if !consent.Granted(PermissionKeyHooks) {
+		w.WriteHeader(http.StatusOK)
+		return false
+	}
+
+	hookjson.ObserveHookReceipt(AdapterName)
+
+	if !consent.Granted(PermissionKeyTranscripts) {
+		w.WriteHeader(http.StatusOK)
+		return false
+	}
+	return true
+}
+
 // serveHookRequest is NewHookHandler's request logic, pulled out of the
 // returned closure so its branching isn't counted at the closure's extra
 // nesting depth (go:S3776 — this dropped the reported complexity from 31 to
 // within the 15-point budget without changing any behavior).
-func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+func serveHookRequest(target HookTarget, markers MarkerTarget, consent hookjson.Consent, log outbound.Logger, confiner *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	if gate != nil && !gate.Granted(AdapterName, PermissionKeyHooks) {
-		w.WriteHeader(http.StatusOK)
+	if !admitHookRequest(consent, w) {
 		return
 	}
-
-	// The channel delivered (issue #1368). Counted here — after the consent
-	// gate, before anything can reject the payload — because the question this
-	// answers is "are hooks arriving at all", and a body we then refuse still
-	// proves they are. See receipt.go for why each rejection below still
-	// counts and why a consent-denied request must not.
-	hookjson.ObserveHookReceipt(AdapterName)
 
 	// transcript_path arrives in an HTTP body on a local, unauthenticated
 	// endpoint, so it is untrusted: every dispatch below hands it to the
@@ -284,7 +326,7 @@ func serveHookRequest(target HookTarget, markers MarkerTarget, gate ConsentGrant
 	// with the confined one, so nothing below can pick it back up (issues
 	// #1361, #1389). It has already answered the request when it returns false.
 	var payload hookPayload
-	if !hookjson.DecodeConfined(w, r, log, logComponentHookReceiver, confiner, &payload,
+	if !hookjson.DecodeConfined(w, r, log, logComponentHookReceiver, consent, confiner, &payload,
 		func(p *hookPayload) string { return p.TranscriptPath },
 		func(p *hookPayload, confined string) { p.TranscriptPath = confined },
 	) {

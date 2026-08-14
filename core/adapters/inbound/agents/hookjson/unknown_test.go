@@ -162,15 +162,15 @@ func TestUnknownEventTableSaturates(t *testing.T) {
 	log := &countingLogger{}
 
 	// Fill the table with junk aimed at one adapter.
-	for i := 0; i < maxUnknownEventNames+8; i++ {
+	for i := 0; i < MaxUnknownEventNames+8; i++ {
 		IgnoreUnknownEvent(log, "comp", "adapter-junk", "sess", fmt.Sprintf("Sat%03d", i))
 	}
-	if n := len(UnknownEvents()); n > maxUnknownEventNames {
-		t.Errorf("retained %d distinct names, want at most %d", n, maxUnknownEventNames)
+	if n := len(UnknownEvents()); n > MaxUnknownEventNames {
+		t.Errorf("retained %d distinct names, want at most %d", n, MaxUnknownEventNames)
 	}
 	if droppedTotal() == 0 {
 		t.Fatalf("posting %d distinct names past a cap of %d dropped none — the table is unbounded",
-			maxUnknownEventNames+8, maxUnknownEventNames)
+			MaxUnknownEventNames+8, MaxUnknownEventNames)
 	}
 
 	// Now a real rename at a DIFFERENT adapter, arriving on every tool call.
@@ -190,8 +190,8 @@ func TestUnknownEventTableSaturates(t *testing.T) {
 		t.Errorf("saturation was announced %d time(s), want exactly 2 — once per adapter, so a second adapter's rename is not silenced by the first adapter's junk, and not once per event either", n)
 	}
 	// The total still accounts for every event that arrived, named or not.
-	if total := UnknownEventTotal(); total < 500+uint64(maxUnknownEventNames) {
-		t.Errorf("total = %d, want at least %d — dropped sightings must still be totalled", total, 500+maxUnknownEventNames)
+	if total := UnknownEventTotal(); total < 500+uint64(MaxUnknownEventNames) {
+		t.Errorf("total = %d, want at least %d — dropped sightings must still be totalled", total, 500+MaxUnknownEventNames)
 	}
 }
 

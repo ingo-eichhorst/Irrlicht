@@ -12,8 +12,8 @@
     "consumed_events": 19,
     "total_transitions": 5,
     "first_event_time": "2026-05-29T23:27:37.967372+02:00",
-    "last_event_time": "2026-05-29T23:28:45.834558+02:00",
-    "wall_clock_session_duration": 67867186000,
+    "last_event_time": "2026-05-29T23:28:47.834558+02:00",
+    "wall_clock_session_duration": 69867186000,
     "state_durations": {
       "ready": 21458503000,
       "working": 48408683000

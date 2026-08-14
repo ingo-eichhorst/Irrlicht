@@ -46,8 +46,8 @@ func TestHandlePIDAssigned_BackgroundCapture(t *testing.T) {
 		repo := newMockRepo()
 		repo.states["s"] = newReady()
 		pm := newPIDManagerForTest(repo)
-		pm.SetLauncherEnvReader(func(pid int) *session.Launcher {
-			return &session.Launcher{TTY: "/dev/ttys003"}
+		pm.SetLauncherEnvReader(func(pid int) (*session.Launcher, bool) {
+			return &session.Launcher{TTY: "/dev/ttys003"}, true
 		})
 		pm.SetBackgroundReader(func(pid int) *session.BackgroundAgent {
 			return &session.BackgroundAgent{Name: "bg job"}

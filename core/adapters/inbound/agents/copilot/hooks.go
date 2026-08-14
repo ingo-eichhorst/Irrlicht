@@ -160,8 +160,9 @@ type ConsentGranter = hookjson.ConsentGranter
 // means no gating — used by tests.
 func NewHookHandler(target HookTarget, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
 	return hookjson.NewHandler(transcriptConfiner(),
-		func(c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
-			serveHookRequest(target, gate, log, c, w, r)
+		hookjson.RequireConsent(gate, AdapterName, PermissionKeyHooks, PermissionKeyTranscripts),
+		func(consent hookjson.Consent, c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+			serveHookRequest(target, consent, log, c, w, r)
 		})
 }
 
@@ -178,13 +179,17 @@ func transcriptConfiner() *hookjson.PathConfiner {
 // returned closure so its branching isn't counted at the closure's extra
 // nesting depth. The step order matches codex's receiver exactly and each step
 // is load-bearing — see the contract assertions in hook*_test.go.
-func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+func serveHookRequest(target HookTarget, consent hookjson.Consent, log outbound.Logger, confiner *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	if gate != nil && !gate.Granted(AdapterName, PermissionKeyHooks) {
+	// Both keys come off the receiver's OWN hookjson.Consent (issue #1488), so
+	// the set this sequence is written for is the set the handler publishes and
+	// the contract derives. A key this receiver did not declare answers false,
+	// so a drift between the two fails closed.
+	if !consent.Granted(PermissionKeyHooks) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -203,7 +208,7 @@ func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logge
 	// welded those two into one call, and this moved above the pair rather than
 	// being folded into it — see codex's receiver for the full argument, which
 	// this one mirrors step for step.
-	if gate != nil && !gate.Granted(AdapterName, PermissionKeyTranscripts) {
+	if !consent.Granted(PermissionKeyTranscripts) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -221,7 +226,7 @@ func serveHookRequest(target HookTarget, gate ConsentGranter, log outbound.Logge
 	// then leaves payload.TranscriptPath holding the confined path on BOTH
 	// branches, where before it kept the caller's raw string on Stop.
 	var payload copilotHookPayload
-	if !hookjson.DecodeConfined(w, r, log, logComponentHookReceiver, confiner, &payload,
+	if !hookjson.DecodeConfined(w, r, log, logComponentHookReceiver, consent, confiner, &payload,
 		func(p *copilotHookPayload) string { return resolveTranscriptPath(*p) },
 		func(p *copilotHookPayload, confined string) { p.TranscriptPath = confined },
 	) {

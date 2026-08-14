@@ -68,15 +68,34 @@ func herdrClientLogPath(socketPath string) string {
 // ReadLauncherEnv returns the launcher identity captured from the process env
 // of pid. Returns nil if env cannot be read or no interesting vars are present.
 //
+// hostKnown reports whether the host window could be *determined*, which is
+// not the same as being found. It is false whenever this read established
+// nothing: a herdr pane whose client probe did not run (#1485), a pid that
+// cannot be looked at at all (pid <= 0, or a process whose env, ancestry and
+// tty all came back empty), and — at the wiring in cmd/irrlichd — a revoked
+// launcher consent. A caller merging this read into a launcher it already
+// holds must not clear host fields when hostKnown is false: their absence
+// means "not looked up", not "gone". A caller capturing a session's first
+// launcher may ignore it, because there is nothing to clear and dropping the
+// read would cost the pane its herdr address.
+//
 // Never blocks longer than 2 seconds. Never prompts the user — on macOS we use
 // `sysctl(kern.procargs2)` (no TCC prompt; `ps e` stopped exposing env on
 // modern macOS). On Linux we read /proc/<pid>/environ. Other platforms return
 // nil.
-func ReadLauncherEnv(pid int) *session.Launcher {
+func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 	if pid <= 0 {
-		return nil
+		return nil, false
 	}
-	l := hostIdentity(pid)
+	// The agent's own identity deliberately ignores hostIdentity's second
+	// return. hostKnown here is about the herdr CLIENT indirection below; a
+	// direct session whose ancestry walk timed out is a different question
+	// with different consumers (captureLauncher, launcherBackfillNeedsFor),
+	// and widening it here would change behaviour for every non-herdr session
+	// on a signal #1492 has no evidence about. See resolveClientHostIdentity
+	// for the read that DOES act on it.
+	l, _ = hostIdentity(pid)
+	hostKnown = true
 
 	// A herdr pane's window belongs to the attached client, so its host
 	// identity is resolved from that process instead — one indirection past
@@ -85,13 +104,22 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 	// overridden by the client's when something is: AdoptHostIdentity owns
 	// that rule.
 	if l.HerdrPaneID != "" {
-		l.AdoptHostIdentity(herdrClientLauncher(l.HerdrSocketPath))
+		var client *session.Launcher
+		client, hostKnown = herdrClientLauncher(l.HerdrSocketPath)
+		l.AdoptHostIdentity(client)
 	}
 
 	if l.IsEmpty() {
-		return nil
+		// Nothing was determined, so say so rather than passing hostKnown
+		// through: an empty read is "env, ancestry and tty all came back
+		// blank", which is a hardened-runtime process or one that has already
+		// exited as often as it is a process with genuinely no terminal. Every
+		// consumer today bails on the nil before reading the flag, so this
+		// costs nothing — but a future consumer that reads the flag first
+		// would otherwise be told an unreadable process HAS no host.
+		return nil, false
 	}
-	return l
+	return l, hostKnown
 }
 
 // hostIdentity resolves the window-owning identity of pid: its whitelisted
@@ -101,15 +129,36 @@ func ReadLauncherEnv(pid int) *session.Launcher {
 // (osutil_darwin.go). Keeping it in one function is what stops the two from
 // drifting when a step is added.
 //
+// complete reports whether the reads behind that answer actually ran, so a
+// caller can tell "this process has no local window" from "I could not read
+// this process" (#1492). It is false only when an ancestry walk aborted on an
+// unreadable process rather than reaching a verdict.
+//
+// It deliberately says nothing about the env read, which cannot fail: the
+// ProcessObserver port defines an unreadable env as an empty map rather than
+// an error, and all three implementations discard it (process_darwin.go,
+// process_linux.go, process_other.go).
+//
+// On darwin that costs nothing, because an env yielding no host is exactly the
+// condition that makes the ancestry fallbacks run — so a false "no local
+// window" always passes through a walk, and the walk is where the distinction
+// can be drawn. **That argument does not carry to linux or other**, where both
+// ancestry helpers are stubs reporting complete: there the env IS the only host
+// source, so a failed `/proc/<pid>/environ` read reports complete here. It is
+// inert only because herdrClientLauncher — the sole consumer of this bit — is
+// itself a stub off darwin. A second consumer on another platform needs the
+// port widened first, and must not read this comment as saying otherwise.
+//
 // The ordering is load-bearing: ancestry before TTY, and both before any
 // adoption by the caller.
-func hostIdentity(pid int) *session.Launcher {
+func hostIdentity(pid int) (l *session.Launcher, complete bool) {
 	// Env may be empty — hardened-runtime processes hide it from sysctl.
 	// Don't bail here: the ancestry fallback below is the only signal we
 	// have in that case.
 	env, _ := osProc.EnvOf(pid)
 
-	l := launcherFromEnv(env)
+	l = launcherFromEnv(env)
+	complete = true
 
 	// The ancestry fallbacks resolve the *host application* of the process
 	// tree, so they are skipped for a herdr pane: that tree leads to the herdr
@@ -124,15 +173,24 @@ func hostIdentity(pid int) *session.Launcher {
 	// kitty field back-fill). Walking the ppid chain once instead of up to
 	// three times keeps this bounded — each readProcInfo is a `ps` shellout
 	// with a 2s ceiling.
+	//
+	// A tmux pane is deliberately NOT skipped here, though the same argument
+	// looks like it should apply. It does not: tmux's server is reparented to
+	// PID 1, so the walk from a genuine pane terminates there having found
+	// nothing — it is inert, not dangerous, and cannot put back what
+	// launcherFromEnv suppressed. Meanwhile it is the only thing that recovers
+	// a host for a process launched from a pane by a terminal that reports
+	// none of its own (kitty), whose fields the suppression above drops. So
+	// skipping it would buy no correctness and cost exactly that case.
 	if l.HerdrPaneID == "" {
-		applyAncestryFallbacks(l, pid, memoizedAncestry(pid))
+		complete = applyAncestryFallbacks(l, pid, &ancestryProbe{pid: pid})
 	}
 
 	// Capture the controlling TTY so Terminal.app (and potentially others)
 	// can target the exact tab — Terminal.app's AppleScript dictionary
 	// matches tabs by `tty` but has no session-UUID analog.
 	l.TTY = processTTY(pid)
-	return l
+	return l, complete
 }
 
 // launcherFromEnv builds a Launcher from the whitelisted per-PID env vars
@@ -152,6 +210,32 @@ func launcherFromEnv(env map[string]string) *session.Launcher {
 			HerdrSocketPath: env["HERDR_SOCKET_PATH"],
 		}
 	}
+	// A tmux pane is the same shape as a herdr pane and for the same reason,
+	// so it keeps only its own address too — see session.Launcher's Tmux*
+	// fields.
+	//
+	// The condition is $TMUX_PANE *and* tmux's own TERM_PROGRAM marker, never
+	// $TMUX_PANE alone. $TMUX_PANE is not self-describing: every descendant of
+	// a pane inherits it, including a GUI terminal or IDE launched from inside
+	// one (`code .`, `kitty`), and such a process carries the stale pane
+	// address alongside a correct host identity it reported itself. Keying on
+	// the address alone discards that host and turns a working click-to-focus
+	// into a silent no-op. tmux stamps TERM_PROGRAM=tmux onto the panes it
+	// spawns, so a process claiming any other host claimed it for itself and
+	// is left alone; one claiming no host of its own (kitty sets none —
+	// upstream kitty#4793) is suppressed here and recovered by the ancestry
+	// fallbacks, which is why hostIdentity must not skip them for tmux.
+	//
+	// Checked *after* herdr on purpose: a herdr server started from a tmux
+	// pane hands every pane a $TMUX_PANE as well, and that one is the
+	// server's, not the agent's (#1348). herdrPaneEnv in the tests is exactly
+	// that env, and TestLauncherFromEnv_HerdrCapture locks the ordering.
+	if pane := env["TMUX_PANE"]; pane != "" && env["TERM_PROGRAM"] == tmuxTermProgram {
+		return &session.Launcher{
+			TmuxPane:   pane,
+			TmuxSocket: tmuxSocketFromEnv(env["TMUX"]),
+		}
+	}
 	l := &session.Launcher{
 		TermProgram:    env["TERM_PROGRAM"],
 		ITermSessionID: env["ITERM_SESSION_ID"],
@@ -159,14 +243,7 @@ func launcherFromEnv(env map[string]string) *session.Launcher {
 		TmuxPane:       env["TMUX_PANE"],
 		KittyListenOn:  env["KITTY_LISTEN_ON"],
 		KittyWindowID:  env["KITTY_WINDOW_ID"],
-	}
-	if tmux := env["TMUX"]; tmux != "" {
-		// $TMUX is "/path/to/socket,pid,session" — first field is the socket.
-		if i := strings.Index(tmux, ","); i > 0 {
-			l.TmuxSocket = tmux[:i]
-		} else {
-			l.TmuxSocket = tmux
-		}
+		TmuxSocket:     tmuxSocketFromEnv(env["TMUX"]),
 	}
 	if v := env["VSCODE_PID"]; v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -193,23 +270,57 @@ func launcherFromEnv(env map[string]string) *session.Launcher {
 	return l
 }
 
-// memoizedAncestry returns a closure resolving pid's process ancestry via
-// resolveHostFromAncestry at most once, caching the result for repeat calls.
-// ReadLauncherEnv's ancestry-dependent fallbacks may all need the same walk;
-// this keeps it bounded to a single `ps` shellout chain instead of up to
-// three.
-func memoizedAncestry(pid int) func() (term string, hostPID int) {
-	var ancestryTerm string
-	var ancestryHostPID int
-	ancestryResolved := false
-	return func() (string, int) {
-		if !ancestryResolved {
-			ancestryTerm, ancestryHostPID = resolveHostFromAncestry(pid)
-			ancestryResolved = true
-		}
-		return ancestryTerm, ancestryHostPID
+// tmuxTermProgram is the value tmux writes into $TERM_PROGRAM for the panes it
+// spawns (measured on 3.6a, alongside TERM_PROGRAM_VERSION=3.6a). It is not a
+// host — it names a multiplexer, matches no entry in the macOS activator
+// registry, and being non-empty it suppresses the TermProgram=="" guards that
+// reach the ancestry fallbacks — so it is used only as evidence that tmux, and
+// not something launched from within it, spawned this process.
+const tmuxTermProgram = "tmux"
+
+// tmuxSocketFromEnv extracts the server socket from $TMUX, whose value is
+// "/path/to/socket,pid,session". Returns "" for an empty $TMUX so a launcher
+// with no tmux server keeps a zero socket rather than an empty-but-set one.
+// Shared by both branches of launcherFromEnv: a tmux pane's address is the one
+// thing it keeps, so the parse must not live only on the path that no longer
+// runs for it.
+func tmuxSocketFromEnv(tmux string) string {
+	if tmux == "" {
+		return ""
 	}
+	if i := strings.Index(tmux, ","); i > 0 {
+		return tmux[:i]
+	}
+	return tmux
 }
+
+// ancestryProbe resolves pid's process ancestry via resolveHostFromAncestry at
+// most once, caching the result for repeat calls. ReadLauncherEnv's
+// ancestry-dependent fallbacks may all need the same walk; this keeps it
+// bounded to a single `ps` shellout chain instead of up to three.
+type ancestryProbe struct {
+	pid      int
+	resolved bool
+	term     string
+	hostPID  int
+	complete bool
+}
+
+func (a *ancestryProbe) host() (term string, hostPID int) {
+	if !a.resolved {
+		a.term, a.hostPID, a.complete = resolveHostFromAncestry(a.pid)
+		a.resolved = true
+	}
+	return a.term, a.hostPID
+}
+
+// walked reports whether this probe left nothing unread: either no walk was
+// ever needed, or the one that ran reached a verdict rather than aborting on
+// an unreadable process (#1492). Keeping the bit on the memo — rather than
+// ANDing it at each of the guarded blocks that call host() — is what stops a
+// block that forgets to accumulate from silently reporting an aborted walk as
+// a complete one.
+func (a *ancestryProbe) walked() bool { return !a.resolved || a.complete }
 
 // applyAncestryFallbacks fills in Launcher fields that require walking pid's
 // process ancestry — cases the env alone can't resolve: kitty's missing
@@ -217,7 +328,14 @@ func memoizedAncestry(pid int) func() (term string, hostPID int) {
 // generic top-level-.app host fallback, and kitty field back-fill for
 // Apple-signed agents. ancestry is expected to be memoized by the caller so
 // this can call it from multiple guarded blocks at no extra cost.
-func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term string, hostPID int)) {
+//
+// The return is the AND of both walks it can run — the memoized ancestry probe
+// and the separate bundle-id walk: false means one of them aborted on an
+// unreadable process, so the fields it would have filled are missing rather
+// than absent (#1492). A run in which neither was needed is complete by
+// definition.
+func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry *ancestryProbe) (complete bool) {
+	complete = true
 	// kitty intentionally does not set TERM_PROGRAM (upstream kitty issue
 	// #4793), so the env-captured value may be inherited from whatever
 	// process launched kitty.app (e.g. a VS Code integrated terminal). When
@@ -225,7 +343,7 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term 
 	// we still verify via process ancestry to rule out the reverse case
 	// (KITTY_WINDOW_ID leaked from a kitty shell that spawned VS Code).
 	if l.KittyWindowID != "" && l.TermProgram != "kitty" {
-		if term, _ := ancestry(); term == "kitty" {
+		if term, _ := ancestry.host(); term == "kitty" {
 			l.TermProgram = "kitty"
 		}
 	}
@@ -234,7 +352,7 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term 
 	// can at least bring the host app to the front. Darwin-only; other
 	// platforms return "" and this is a no-op.
 	if l.TermProgram == "" {
-		l.TermProgram, _ = ancestry()
+		l.TermProgram, _ = ancestry.host()
 	}
 	// Generic host fallback: when no curated host matched (TermProgram still
 	// empty), resolve the first top-level `.app` ancestor's bundle id so the
@@ -243,7 +361,9 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term 
 	// on a map miss, so every curated host keeps its exact behavior. Darwin-
 	// only; other platforms return "" and this is a no-op.
 	if l.TermProgram == "" {
-		l.HostBundleID, _ = resolveHostBundleIDFromAncestry(pid)
+		bundleID, _, ok := resolveHostBundleIDFromAncestry(pid)
+		complete = ok
+		l.HostBundleID = bundleID
 	}
 	// Back-fill kitty fields for sessions whose own env is unreadable
 	// (Apple-signed agents like `pi`, hardened-runtime binaries). If kitty
@@ -253,6 +373,7 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term 
 	// target the right tab — exactly the symptom reported for pi sessions
 	// in issue #326.
 	applyKittyAncestryBackfill(l, pid, ancestry)
+	return complete && ancestry.walked()
 }
 
 // applyKittyAncestryBackfill fills in KittyPID/KittyListenOn/KittyWindowID
@@ -260,11 +381,16 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry func() (term 
 // kitty is the host (Apple-signed agents like `pi`, hardened-runtime
 // binaries) — split out of applyAncestryFallbacks so its nested guards don't
 // compound that function's cognitive complexity (go:S3776).
-func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry func() (term string, hostPID int)) {
+//
+// It is the one block that can be the ONLY caller of the ancestry probe in a
+// run — a candidate whose env names kitty but carries no KITTY_PID skips all
+// three blocks above — which is why its caller reads the verdict off the probe
+// afterwards rather than trusting the blocks to have accumulated it.
+func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry *ancestryProbe) {
 	if l.TermProgram != "kitty" || l.KittyPID != 0 {
 		return
 	}
-	term, kpid := ancestry()
+	term, kpid := ancestry.host()
 	if term != "kitty" || kpid <= 0 {
 		return
 	}

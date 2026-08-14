@@ -62,6 +62,23 @@ found_any=0
 # variable error.
 extended_divergences=""
 extended_divergence_count=0
+# #1480: transition-timing drift — how far each reproduced transition sits from
+# the ts the recording's own daemon logged for it. Reported beside the
+# divergence figure above because they are the two halves of one question:
+# that one asks whether the replay produced the same transitions, this one
+# whether it produced them at the same TIME. Nothing asked the second until
+# #1480, so a transition reproduced 31s early was a full pass.
+#
+# The authoritative implementation is Go (cmd/replay/timing_drift.go, gated by
+# TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog). This block only
+# surfaces the per-recording figure the replay binary already prints, because a
+# `go test` that passes prints nothing without -v, and an unread measurement is
+# the failure mode #1480 is about.
+timing_drifts=""
+timing_drift_count=0
+# The format the summary line must carry. Kept in a variable because bash 3.2
+# needs an unquoted variable on the right of =~ for a regex with groups.
+timing_re='timing ([0-9]+) pairs worst ([+-][0-9.]+)s@([0-9]+)'
 while IFS= read -r fix; do
   [[ -z "$fix" ]] && continue
   [[ "$fix" == */subagents/* ]] && continue
@@ -90,7 +107,23 @@ while IFS= read -r fix; do
   # an extended-check failure means "the replay engine drifted from the daemon
   # — a replay-fidelity bug… fixed in the replay engine". Pairing the catalog
   # with its sidecars made that check run for ~300 recordings for the first
-  # time, and 198 of them diverge. The dominant kind is a missing terminal
+  # time, and a large minority of them diverge — the exact figure is
+  # censusOfTheCommittedCatalog.Divergent in cmd/replay/issue1503_census_test.go,
+  # machine-generated, and is deliberately not repeated here: the number this
+  # line carried by hand said 198 long after the Go side had measured 140
+  # (#1503).
+  #
+  # This sweep's own count is legitimately HIGHER than that census, and the
+  # difference is a population, not a predicate: the find below walks
+  # transcript.md as well as transcript.jsonl, while the Go gates pair a
+  # sidecar only with a sibling transcript.jsonl and therefore skip every aider
+  # recording. That population is censusOfTheCommittedCatalog.UnpairedSidecars,
+  # also machine-generated. Measured while #1503 was written: this sweep
+  # reported 142 where the census reported 140, and the two extra recordings
+  # were both aider/4-2_multiple-agents-same-workspace. Making the two agree is
+  # a scope call rather than a risky one — see that field's doc comment, which
+  # carries the measurement.
+  # The dominant kind is a missing terminal
   # working→ready: the sidecar replayer synthesises idle promotions for child
   # sessions (applyChildOrphan) but never for the primary one. That is a known
   # replay-engine gap, not an artifact of these recordings being old, and it is
@@ -112,7 +145,58 @@ while IFS= read -r fix; do
   # `preflight.sh` coexist with a red CI on a fresh checkout, inverting the
   # local-CI-parity contract this script provides.
   rm -f "$json"
-  "./$BIN" --out "$json" --debounce "$DEBOUNCE" "$fix" || true
+  # stderr is captured rather than passed straight through so the per-recording
+  # extended-check line can be tallied; it is echoed on unchanged afterwards, so
+  # the sweep's live output is what it always was.
+  replay_err="$("./$BIN" --out "$json" --debounce "$DEBOUNCE" "$fix" 2>&1 >/dev/null || true)"
+  [[ -n "$replay_err" ]] && printf '%s\n' "$replay_err" >&2
+  # printSummary emits exactly one summary line, last, after any malformed-line
+  # warnings — so the last line is the one to read, and matching against the
+  # whole capture could pick up a FAIL from unrelated stderr.
+  summary_line="${replay_err##*$'\n'}"
+  if [[ "$summary_line" == *"extended-check:"* ]]; then
+    # Tally the ordered/kind divergence. These two counters were added with the
+    # reporting block at the end of this script but nothing ever incremented
+    # them, so that block could not print and the "N of 309 diverge" figure it
+    # exists to show had to be recomputed by hand every time (#1480).
+    if [[ "$summary_line" == *FAIL* ]]; then
+      extended_divergences="${extended_divergences}   ${adapter}/${kind}/${name}/${recname}
+"
+      extended_divergence_count=$((extended_divergence_count + 1))
+    fi
+    # Tally the timing drift. The 1s cut matches driftThreshold in
+    # cmd/replay/timing_drift.go, chosen from the measured distribution (a
+    # near-empty decade between 100ms and 1s) rather than picked. Note the cut
+    # is taken on the %+.3f-ROUNDED figure, so a delta of 1.0004s reads as 1.000
+    # and is omitted from this listing while the Go gate counts it. That only
+    # decides which rows print here; the gate is the Go test.
+    if [[ "$summary_line" =~ $timing_re ]]; then
+      tw_delta="${BASH_REMATCH[2]}"
+      if awk "BEGIN{d=$tw_delta; if (d<0) d=-d; exit !(d > 1.0)}"; then
+        timing_drifts="${timing_drifts}   ${adapter}/${kind}/${name}/${recname}: worst ${tw_delta}s at pair ${BASH_REMATCH[3]} of ${BASH_REMATCH[1]}
+"
+        timing_drift_count=$((timing_drift_count + 1))
+      fi
+    elif [[ "$summary_line" != *"timing n/a"* ]]; then
+      # A verification mechanism must fail loudly when it cannot run
+      # (AGENTS.md). Every extended-check line carries a timing figure — a
+      # parseable one, or the literal "timing n/a" for a recording with no
+      # kind-matched pair. Neither means driftSummary's format and this parser
+      # have diverged, and without this the report would simply go silent and
+      # the sweep would still exit 0. Checked per recording rather than tallied
+      # to the end, so it fails on the first one and cannot be masked by the
+      # dozens of recordings that legitimately report n/a. The Go side pins the
+      # same
+      # contract from the other direction
+      # (TestDriftSummary_FormatIsTheShellContract).
+      echo "timing report is broken: ${adapter}/${kind}/${name}/${recname} printed an" >&2
+      echo "  extended-check line carrying neither a parseable timing figure nor 'timing n/a':" >&2
+      echo "    $summary_line" >&2
+      echo "  driftSummary's format and this script's parser have diverged — see" >&2
+      echo "  cmd/replay/timing_drift.go and TestDriftSummary_FormatIsTheShellContract (#1480)." >&2
+      exit 1
+    fi
+  fi
   if [[ ! -s "$json" ]]; then
     echo "replay failed (no report written) for $fix" >&2
     exit 1
@@ -318,6 +402,15 @@ if [[ "$extended_divergence_count" -gt 0 ]]; then
   echo "== extended-check divergences (informational: replay vs the daemon that made the recording) ==" >&2
   printf '%s' "$extended_divergences" >&2
   echo "   $extended_divergence_count recording(s); these do not fail the build — the byte-identity goldens are the gate." >&2
+  echo >&2
+fi
+
+if [[ "$timing_drift_count" -gt 0 ]]; then
+  echo "== transition-timing drift >1s (informational: replay's virtual_time vs the daemon's own ts) ==" >&2
+  printf '%s' "$timing_drifts" >&2
+  echo "   $timing_drift_count recording(s). A NEGATIVE delta means the replay fired EARLY — ahead of" >&2
+  echo "   the daemon. These do not fail the build here; the gate is" >&2
+  echo "   TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog, which ratchets the set (#1480)." >&2
   echo >&2
 fi
 

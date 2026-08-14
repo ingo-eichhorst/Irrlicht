@@ -8,7 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"irrlicht/core/domain/permission"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/internal/contracttesting"
 )
@@ -542,25 +541,17 @@ type fakeGate bool
 
 func (g fakeGate) Granted(_, _ string) bool { return bool(g) }
 
-// mutableGate is a ConsentGranter whose answer can change between calls —
-// needed to drive a single handler instance through all three consent
-// states for contracttesting.AssertPermissionGated.
-type mutableGate struct {
-	mu      sync.Mutex
-	granted bool
-}
+// keyedGate is a ConsentGranter that answers per permission key, so a test can
+// grant one of this adapter's permissions while denying another. fakeGate
+// above deliberately ignores the key, which is why it cannot tell a receiver
+// gated on "hooks" from one gated on "transcripts" (issue #1466).
+//
+// For a MUTABLE keyed gate — one driven through states by the shared contract
+// — use contracttesting.ConsentGate instead. This type is for pinning a fixed
+// combination in a one-off test, which is all it has ever been used for.
+type keyedGate map[string]bool
 
-func (g *mutableGate) Granted(_, _ string) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.granted
-}
-
-func (g *mutableGate) setGranted(v bool) {
-	g.mu.Lock()
-	g.granted = v
-	g.mu.Unlock()
-}
+func (g keyedGate) Granted(_, key string) bool { return g[key] }
 
 func TestHookHandler_ConsentGateDropsWhenNotGranted(t *testing.T) {
 	target := &mockTarget{}
@@ -778,29 +769,116 @@ func TestHookHandler_PreToolUse_UserInputToolStillDispatchesWithMarkerScan(t *te
 	}
 }
 
-// TestHookHandler_PermissionGateContract wires the hooks permission's live
-// per-request ConsentGranter check into the shared issue #797 contract: while
-// PermissionKeyHooks is pending or denied, an inbound hook payload must
+// TestHookHandler_PermissionGateContract wires this receiver's live
+// per-request ConsentGranter checks into the shared issue #797 contract: while
+// the permission under test is pending or denied, an inbound hook payload must
 // dispatch to nothing; granted, it must dispatch; revoked, dispatch must
 // stop again. TestHookHandler_ConsentGateDropsWhenNotGranted /
 // ConsentGatePassesWhenGranted above cover the same call site by hand —
 // this is the generalized, three-state version.
+//
+// It runs once per permission this receiver must honour. Both are needed and
+// neither subsumes the other: "hooks" authorises writing our entries into
+// settings.json, "transcripts" authorises reading the file those entries point
+// at, and the contract's key-isolation arm holds one denied while the other is
+// granted (issue #1475). A single wiring over a key-blind gate is what let
+// this receiver dispatch with "transcripts" denied for the whole of its life
+// (issue #1466) while this very test was green.
+//
+// Since #1488 the wiring no longer NAMES that pair: the receiver declares it to
+// hookjson.NewHandler, the handler publishes it, and the driver derives one arm
+// per declared permission. A third permission here would be graded without
+// anyone editing this test. TestHookHandler_DeclaresItsPermissions below is the
+// lock on what that derivation currently yields.
 func TestHookHandler_PermissionGateContract(t *testing.T) {
-	target := &mockTarget{}
-	gate := &mutableGate{}
-	handler := NewHookHandler(target, nil, gate, mockLogger{})
-	payload := hookPayload{
-		TranscriptPath: inTreeTranscript(t, "sess-gate"),
-		HookEventName:  "PermissionRequest",
-		ToolName:       "Bash",
-	}
+	contracttesting.AssertHookReceiverPermissionGated(t, contracttesting.HookReceiverGate{
+		Build: func(t *testing.T, gate *contracttesting.ConsentGate) contracttesting.GatedHookReceiver {
+			target := &mockTarget{}
+			handler := NewHookHandler(target, nil, gate, mockLogger{})
+			payload := hookPayload{
+				TranscriptPath: inTreeTranscript(t, "sess-gate"),
+				HookEventName:  "PermissionRequest",
+				ToolName:       "Bash",
+			}
 
-	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(state permission.State) { gate.setGranted(state == permission.StateGranted) },
-		Exercise: func() {
-			target.reset()
-			postHook(t, handler, payload)
+			return contracttesting.GatedHookReceiver{
+				Handler: handler,
+				Exercise: func() {
+					target.reset()
+					postHook(t, handler, payload)
+				},
+				Observe: func() bool { return len(target.getCalls()) > 0 },
+			}
 		},
-		Observe: func() bool { return len(target.getCalls()) > 0 },
 	})
+}
+
+// TestHookHandler_DeclaresItsPermissions is the LOCK on the key list the
+// wiring above used to spell out. Per #1450 a rewritten guard replays its
+// predecessor's cases or it is not known to be a superset — and a derivation
+// is the one thing that cannot assert what it derives.
+func TestHookHandler_DeclaresItsPermissions(t *testing.T) {
+	contracttesting.AssertDeclaredPermissions(t,
+		NewHookHandler(&mockTarget{}, nil, nil, mockLogger{}),
+		PermissionKeyHooks, PermissionKeyTranscripts)
+}
+
+// TestHookHandler_TranscriptsConsentGatesTheRead is the issue #1466 defect
+// test. Every dispatch below the gate hands the transcript path to the
+// detector, which opens it (hooks.go says so in as many words) — so accepting
+// a hook POST authorizes a READ of the user's transcript, and that read is
+// what the observe-kind "transcripts" permission covers. The "hooks" consent
+// authorizes WRITING our entries into settings.json; it is not a licence to
+// read the file those entries point at.
+//
+// With hooks granted and transcripts denied the payload must be dropped and
+// the target never called. codex (hooks.go:158) and copilot (hooks.go:206)
+// have carried this second gate since #1174; claudecode never got one, so a
+// hook POST reached os.Open on a transcript the user had not consented to.
+//
+// The status stays 200 for the same reason a confinement refusal does: a
+// refusal is reported by the log, never on the wire, and a transcripts-denied
+// user should not have hooks failing at them. The dispatch assertion is what
+// carries this test.
+//
+// It stays as a LOCK now that the contract above is key-aware (issue #1475).
+// The contract's key-isolation arm covers the dispatch obligation generically
+// — and covers it for every adapter that wires it, which three hand-written
+// per-adapter tests never could. Per #1450 a rewritten guard replays its
+// predecessor's cases or it is not known to be a superset; this one is not a
+// superset, so the predecessor stays.
+//
+// Two of its three assertions are now the ONLY live ones. Since #1488
+// DecodeConfined refuses this same request on the receiver's own declaration,
+// so deleting the gate below leaves the dispatch assertion — and the whole
+// permission-gate contract — green (measured). What the chokepoint does NOT
+// reproduce is the SILENCE: it logs an error, because reaching it means a
+// receiver skipped its check or consent was revoked mid-request. A
+// transcripts-denied user must not collect an error line per tool call, so
+// that is both a real user-facing property and the assertion that keeps this
+// receiver's own gate load-bearing.
+func TestHookHandler_TranscriptsConsentGatesTheRead(t *testing.T) {
+	target := &mockTarget{}
+	gate := keyedGate{PermissionKeyHooks: true, PermissionKeyTranscripts: false}
+	log := &contracttesting.RecordingLogger{}
+	handler := NewHookHandler(target, nil, gate, log)
+
+	rec := postHook(t, handler, hookPayload{
+		TranscriptPath: inTreeTranscript(t, "sess-transcripts-gate"),
+		HookEventName:  HookPermissionRequest,
+		ToolName:       "Bash",
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (a consent refusal is not reported on the wire)", rec.Code)
+	}
+	if got := target.getCalls(); len(got) != 0 {
+		t.Errorf("dispatched %d call(s) without transcripts consent: %+v — "+
+			"the detector opens the transcript this path hands it", len(got), got)
+	}
+	if len(log.Errors()) != 0 {
+		t.Errorf("a transcripts-denied hook logged %d error(s): %v — an ordinary denied session "+
+			"must be refused by THIS receiver's own gate, quietly. Reaching DecodeConfined's "+
+			"backstop instead means one error line per tool call, forever", len(log.Errors()), log.Errors())
+	}
 }

@@ -10,13 +10,13 @@
   "summary": {
     "total_events": 10,
     "consumed_events": 10,
-    "total_transitions": 4,
+    "total_transitions": 5,
     "first_event_time": "2026-06-13T14:51:43.707847+02:00",
-    "last_event_time": "2026-06-13T14:52:11.998724+02:00",
-    "wall_clock_session_duration": 28290877000,
+    "last_event_time": "2026-06-13T14:52:13.998724+02:00",
+    "wall_clock_session_duration": 30290877000,
     "state_durations": {
-      "ready": 24751879000,
-      "working": 3538998000
+      "ready": 9632463000,
+      "working": 20658414000
     },
     "flicker_count": 2,
     "flickers_by_category": {
@@ -49,8 +49,8 @@
     },
     {
       "index": 1,
-      "event_index": 1,
-      "virtual_time": "2026-06-13T14:51:57.174555+02:00",
+      "event_index": 0,
+      "virtual_time": "2026-06-13T14:51:43.707847+02:00",
       "cause": "event",
       "prev_state": "ready",
       "new_state": "working",
@@ -89,6 +89,21 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 4,
+      "event_index": 9,
+      "virtual_time": "2026-06-13T14:52:13.998724+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "alive"
     }
   ],
   "sessions": [
@@ -129,15 +144,8 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 4,
-    "replayed_transition_count": 3,
-    "ordered_matches": 3,
-    "ordered_mismatches": [
-      {
-        "index": 3,
-        "kind": "missing_in_replay",
-        "recorded": "working→ready"
-      }
-    ],
+    "replayed_transition_count": 4,
+    "ordered_matches": 4,
     "recorded_unique_kinds": [
       "ready→working",
       "working→ready"

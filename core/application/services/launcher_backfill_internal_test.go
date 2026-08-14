@@ -8,8 +8,15 @@ import (
 
 // TestLauncherBackfillNeedsFor_HerdrHost covers the gap #1350 leaves open at
 // capture time: a herdr session whose PID was bound while nothing was attached
-// has no host to record, so the seed-time backfill has to be the path that
-// picks up a client attached since then.
+// has no host to record, so a later re-read has to be the path that picks up a
+// client attached since then.
+//
+// The two "already resolved" cases below wanted false until #1405 and now want
+// true. That was the second half of the same defect: a host that did resolve
+// was never re-checked, so a session detached in one terminal and re-attached
+// in another kept naming the first one for the rest of its life. Eligibility is
+// now unconditional for a herdr pane, which is what lets the liveness sweep
+// re-resolve it (refreshHerdrHosts).
 func TestLauncherBackfillNeedsFor_HerdrHost(t *testing.T) {
 	tests := map[string]struct {
 		launcher *session.Launcher
@@ -21,11 +28,11 @@ func TestLauncherBackfillNeedsFor_HerdrHost(t *testing.T) {
 		},
 		"herdr pane whose client already resolved": {
 			launcher: &session.Launcher{HerdrPaneID: "w1:p1", TermProgram: "ghostty"},
-			want:     false,
+			want:     true,
 		},
 		"herdr pane resolved only to a bundle id": {
 			launcher: &session.Launcher{HerdrPaneID: "w1:p1", HostBundleID: "md.obsidian"},
-			want:     false,
+			want:     true,
 		},
 		"a non-herdr session is never eligible": {
 			launcher: &session.Launcher{TTY: "/dev/ttys012"},
@@ -36,6 +43,37 @@ func TestLauncherBackfillNeedsFor_HerdrHost(t *testing.T) {
 		if got := launcherBackfillNeedsFor(tc.launcher).herdrHost; got != tc.want {
 			t.Errorf("%s: herdrHost = %v, want %v", name, got, tc.want)
 		}
+	}
+}
+
+// TestLauncherBackfillNeedsFor_HerdrClientInKitty pins the exclusivity that
+// used to be a coincidence. The kitty needs and the herdr need could never both
+// fire while the herdr one required TermProgram == "" and the kitty ones
+// required TermProgram == "kitty". Dropping that precondition (#1405) removes
+// the coincidence, and a herdr pane whose *client* runs in kitty is exactly the
+// shape that would satisfy both — so the herdr branch now returns before the
+// kitty ones are computed. It has to: a pane owns no kitty field, they are
+// adopted wholesale from the client, and letting the per-field kitty copies run
+// first would report an update for a client that never moved.
+//
+// The tty need is the deliberate exception and is asserted here rather than
+// left implicit: AdoptHostIdentity refuses to move the client's tty onto a pane
+// that has none (#744), so it is the one field the adoption cannot supply and
+// the only one a herdr launcher still backfills per-field.
+func TestLauncherBackfillNeedsFor_HerdrClientInKitty(t *testing.T) {
+	kittyClient := &session.Launcher{
+		HerdrPaneID: "w1:p1",
+		TermProgram: "kitty", // the attached client's, adopted at capture
+	}
+	if want := (launcherBackfillNeeds{herdrHost: true, tty: true}); launcherBackfillNeedsFor(kittyClient) != want {
+		t.Errorf("no kitty need may fire for a herdr pane: got %+v, want %+v",
+			launcherBackfillNeedsFor(kittyClient), want)
+	}
+
+	kittyClient.TTY = "/dev/ttys077"
+	if want := (launcherBackfillNeeds{herdrHost: true}); launcherBackfillNeedsFor(kittyClient) != want {
+		t.Errorf("a herdr pane with a tty needs only the host: got %+v, want %+v",
+			launcherBackfillNeedsFor(kittyClient), want)
 	}
 }
 
@@ -52,7 +90,7 @@ func TestApplyLauncherBackfill_HerdrHost(t *testing.T) {
 
 	// Still detached: the re-read carries the herdr address and nothing else.
 	stillDetached := &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/cfg/herdr/herdr.sock"}
-	if applyLauncherBackfill(stored, needs, stillDetached) {
+	if applyLauncherBackfill(stored, needs, stillDetached, true) {
 		t.Error("a still-detached session must report no update")
 	}
 	if stored.TermProgram != "" {
@@ -67,7 +105,7 @@ func TestApplyLauncherBackfill_HerdrHost(t *testing.T) {
 		ITermSessionID:  "w0t0p0-CLIENT",
 		TTY:             "/dev/ttys012",
 	}
-	if !applyLauncherBackfill(stored, needs, fresh) {
+	if !applyLauncherBackfill(stored, needs, fresh, true) {
 		t.Fatal("a newly attached client must report an update")
 	}
 	if stored.TermProgram != "iTerm.app" || stored.ITermSessionID != "w0t0p0-CLIENT" {

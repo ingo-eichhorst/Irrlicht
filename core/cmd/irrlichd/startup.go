@@ -770,9 +770,12 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	// Consent-gated per capture (#570): checked on every call so a revoke
 	// takes effect immediately; without the grant, click-to-focus falls
 	// back to app-level activation.
-	detector.SetLauncherEnvReader(func(pid int) *session.Launcher {
+	detector.SetLauncherEnvReader(func(pid int) (*session.Launcher, bool) {
 		if !permService.Granted(processlifecycle.LauncherName, processlifecycle.PermissionKeyLauncherEnv) {
-			return nil
+			// Not "there is no host" — "we were not allowed to look". A revoke
+			// must not clear the hosts captured while the grant was live
+			// (#1485).
+			return nil, false
 		}
 		return processlifecycle.ReadLauncherEnv(pid)
 	})

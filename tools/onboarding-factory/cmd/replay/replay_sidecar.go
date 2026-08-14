@@ -114,6 +114,7 @@ func replayWithSidecar(transcriptPath, sidecarPath string, cfg reportSettings) (
 		return nil, err
 	}
 
+	r.extendWindowToLastTransition()
 	r.addDuration(r.state, r.report.Summary.LastEventTime.Sub(r.prevTransitionAt))
 	finalizeSummary(r.report, len(buckets.fswatches), r.stateDurations,
 		summaryMetrics(transcriptPath, cfg, r.lastMetrics), cfg.Adapter)
@@ -331,6 +332,11 @@ type sidecarReplayer struct {
 	// drift unrepresentable.
 	signals *session.SignalHolds
 
+	// fswatches is the primary session's recorded transcript_activity stream,
+	// kept so classifyAt can widen a clamped read to the next stat the daemon
+	// plausibly reached. See readBoundaryFor (#1342).
+	fswatches []lifecycle.Event
+
 	// children carries the subagents discovered via parent_linked. Each
 	// entry's state is updated as child transitions fire on the timeline;
 	// anyChildActive reads the map to decide whether to hold the parent
@@ -395,6 +401,7 @@ func newSidecarReplayer(transcriptPath string, srcBytes []byte, cfg reportSettin
 		stateDurations:   map[string]time.Duration{},
 		children:         children,
 		signals:          session.NewSignalHolds(),
+		fswatches:        fswatches,
 	}
 	r.emit(transition{
 		EventIndex:  -1,
@@ -405,6 +412,40 @@ func newSidecarReplayer(transcriptPath string, srcBytes []byte, cfg reportSettin
 		Reason:      "initial state",
 	})
 	return r, cleanup, nil
+}
+
+// extendWindowToLastTransition widens the reported observation window to cover
+// a transition emitted after the last recorded fs event.
+//
+// A debounce window fires at its DEADLINE, which is one debounce interval past
+// the event that opened it, so the process-exit and end-of-timeline flushes
+// both stamp transitions later than Summary.LastEventTime. emit() charges the
+// interval before each transition to the state it left, so those transitions
+// contribute duration outside the reported window and state_durations sums past
+// wall_clock_session_duration — while the trailing addDuration silently drops
+// its now-negative remainder.
+//
+// The transition's timestamp is the honest one and is NOT clamped: the daemon's
+// timer really did fire there (for codex/2-1_basic-turn, 2ms from the deadline
+// this replayer computes), so it is the window that was too narrow.
+//
+// Measured by counting goldens whose state_durations sum exceeds
+// wall_clock_session_duration: 42 of 399 on origin/main (all 42 sidecar-driven,
+// none transcript-only; 41 exceed by exactly the 2s debounce window and one by
+// 104s), 132 of 365 with #1342's two fixes but this extension disabled, and 0
+// of 399 with it. So this is not a cosmetic tidy-up — the debounce fix alone
+// would have tripled a pre-existing inconsistency (#1342).
+func (r *sidecarReplayer) extendWindowToLastTransition() {
+	n := len(r.report.Transitions)
+	if n == 0 {
+		return
+	}
+	last := r.report.Transitions[n-1].VirtualTime
+	if !last.After(r.report.Summary.LastEventTime) {
+		return
+	}
+	r.report.Summary.LastEventTime = last
+	r.report.Summary.WallClockDuration = last.Sub(r.report.Summary.FirstEventTime)
 }
 
 // emit appends a transition to the report and updates the running
@@ -464,6 +505,9 @@ type transitionCtx struct {
 // A zero-growth fswatcher pass — mistral-vibe's content-less slash-command
 // touch — must not force ready back to working on stale LastEventType.
 func (r *sidecarReplayer) runClassifier(domainMetrics *session.SessionMetrics, ctx transitionCtx, grew bool) {
+	// Mirrors the daemon's skipClassification short-circuit (#329) exactly.
+	// classifyAt is responsible for handing this function a pass the daemon
+	// could actually have had — see readBoundaryFor there (#1342).
 	if domainMetrics.NoSubstantiveActivity {
 		return
 	}
@@ -530,22 +574,38 @@ func (r *sidecarReplayer) applyParentHoldAndSynthesizedWaiting(newState, reason 
 	}
 }
 
+// readTo advances the replayed transcript to boundary and re-runs the tailer,
+// reporting whether any new bytes were consumed. Both of classifyAt's reads go
+// through it — the nominal one at the recorded stat, and readBoundaryFor's
+// widening — so the write cursor is maintained in exactly one place.
+func (r *sidecarReplayer) readTo(boundary int64) (*tailer.SessionMetrics, bool, error) {
+	grew := boundary > r.lastSize
+	if grew {
+		if _, err := r.tmp.Write(r.srcBytes[r.lastSize:boundary]); err != nil {
+			return nil, false, err
+		}
+		r.lastSize = boundary
+	}
+	metrics, err := r.tailer.TailAndProcess()
+	return metrics, grew, err
+}
+
 // classifyAt writes transcript bytes up to fileSize, runs the tailer +
 // classifier, and mirrors SessionDetector.processActivity's force-r→w +
 // ClassifyState pattern. Any emitted transition is added to the report.
 func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
-	target := min(fileSize, int64(len(r.srcBytes)))
-	grew := target > r.lastSize
-	if grew {
-		if _, err := r.tmp.Write(r.srcBytes[r.lastSize:target]); err != nil {
-			return err
-		}
-		r.lastSize = target
-	}
-
-	metrics, err := r.tailer.TailAndProcess()
+	metrics, grew, err := r.readTo(min(fileSize, int64(len(r.srcBytes))))
 	if err != nil {
 		return err
+	}
+	// A pass that parsed only non-substantive lines and left LastEventType
+	// empty is the signature of a read boundary the daemon never had — widen
+	// it once and re-tail. See readBoundaryFor (#1342).
+	if wider, ok := r.readBoundaryFor(ctx.eventIdx, r.lastSize, metrics); ok {
+		if metrics, _, err = r.readTo(wider); err != nil {
+			return err
+		}
+		grew = true
 	}
 	r.lastMetrics = metrics
 	domainMetrics := replayengine.TailerToDomain(metrics)
@@ -566,6 +626,278 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 	r.signals.Overlay(replaySessionKey, domainMetrics, ctx.virtTime)
 	r.runClassifier(domainMetrics, ctx, grew)
 	return nil
+}
+
+// readBoundaryFor decides whether a clamped classify pass should be widened,
+// and to where. It returns (boundary, true) only for the one shape that is
+// provably an artifact of the recording rather than something the daemon saw.
+//
+// The sidecar records file_size from the fswatcher's stat at fire time —
+// SessionDetector.handleTranscriptEvent writes `FileSize: ev.Size` BEFORE
+// calling onActivity, whose RefreshOnActivity then tails to EOF. So the daemon's read
+// always reached at least that stat and usually past it, since the agent keeps
+// appending during the tens of milliseconds the read takes. classifyAt clamps
+// to the stat, which for codex and pi — both of whom open a transcript with a
+// multi-kilobyte session_meta — can land exactly on the end of that header and
+// manufacture a "header line only" pass with no counterpart in the daemon's
+// history. NoSubstantiveActivity is then true by construction, #329's
+// short-circuit fires, and for 7 recordings that was the ONLY classification
+// the replay ever got: every later fs event coalesced into a debounce window
+// that process_exited cancelled before its deadline (correctly — the daemon's
+// timer really was cancelled), so the session's one recorded transition was
+// lost and its golden kept nothing but the synthetic init row (#1342).
+//
+// The widening has two parts, and they answer different halves of the same
+// question:
+//
+//   - A SIZE step, to the NEXT recorded stat for this session, or to the whole
+//     transcript when there is no next event. That is the daemon's own
+//     semantics read back off the recording: its single read absorbed whatever
+//     had been written by the time it finished, and the next fswatcher fire is
+//     the tightest upper bound the sidecar offers on where that was.
+//   - A TIME step, clusterBoundary, which additionally takes every later stat
+//     dequeued within readBoundaryClusterWindow of this pass. #1478 added it;
+//     that constant's doc comment carries the inference, its two measured
+//     walls, and why it is calibrated rather than derived.
+//
+// The time step is strictly additive — it can only widen further, never
+// narrow — which is what keeps it clear of the 35 gemini-cli recordings that a
+// REPLACEMENT time bound broke (see the rejected 200ms variant below).
+//
+// KNOWN COST, and it is a real one: the bound is the next stat's SIZE, never
+// its TIME. When the next fswatcher fire is seconds away, the widening reads
+// bytes that provably did not exist at the pass being classified, so the
+// transition is reproduced at the right place in the ORDER but earlier than
+// the daemon made it. Measured over 114 firings (one per recording, every one
+// at eventIdx 0): gap p50=42ms, p75=13.5s, p90=15.9s, max=31.0s — so the
+// "single read absorbs what was written" story above holds for the median and
+// is false for the 42 firings whose gap exceeds 1s. 20 goldens now pin a first
+// transition more than 1s ahead of their own events.jsonl (worst:
+// mistral-vibe/2-12_context-compaction, 30.976s early). The three recordings
+// this actually rescues have gaps of 1ms, 5ms and 60ms — the win comes
+// entirely from the justified regime, the drift entirely from the other one.
+//
+// A gap bound was tried and REJECTED on measurement, not taste. Capping the
+// widening at 200ms keeps all three #1342 tests green with an unchanged
+// knownZeroTransition set and collapses the six worst drifts (-30.976s ->
+// -0.022s), but it breaks 35 gemini-cli recordings that HEAD reproduces
+// exactly (-0.000s -> +10..+28s): there the long gap is idle time AFTER a
+// write the daemon did absorb. The sidecar cannot distinguish "gap is idle
+// after the write" from "gap is before the write happened" — the same
+// limitation the one remaining knownZeroTransition entry concedes — so the bounded
+// variant is worse on the aggregate (175/118 vs 146/88 recordings drifting
+// >1s/>5s). Net across the catalog the widening still MOVES TIMES TOWARD the
+// daemon: 46 recordings closer, 20 further; >1s drift 171 -> 146, >5s 117 -> 88.
+//
+// Nothing asserts transition TIMESTAMPS today — not the goldens, not
+// compareOrdered, which walks prev_state/new_state index-by-index and never
+// the time — which is why the cost above is invisible to every gate in this
+// package. Tracked separately; do not read a green replay-fixtures run as
+// evidence that timings are right.
+//
+// Two properties make this safe, and both were measured (see the PR for #1342):
+//
+//   - It widens the BOUNDARY, never the verdict. #329's guard is re-applied
+//     unchanged to the re-tailed metrics, so a pass that is still
+//     non-substantive at the wider boundary still skips — which is what keeps
+//     codex/1-1_session-start replaying the zero transitions its daemon
+//     recorded. An earlier draft narrowed the guard itself instead
+//     (skip only when LastEventType != ""), and that classified on no evidence:
+//     it fabricated a ready→working in exactly those goldens, turning two that
+//     AGREED with their recording into two that disagreed.
+//   - It fires only on the artifact's signature, so it is not the global
+//     one-event lookahead that was also tried and rejected. Widening every
+//     leading-edge pass fixed 3 of the 7 and made overall extended-check
+//     divergence WORSE (146 → 153 recordings).
+//
+// MEASURED over all sidecar-drivable recordings, stating the cost as well as
+// the win, since these two numbers are the whole argument for the change.
+//
+// Both tables below are HISTORY — each row is a model that was evaluated, most
+// of them rejected, and those rows are fixed by the measurement that rejected
+// them, so they are snapshots and are not re-derived.
+//
+// One row is an exception worth naming rather than leaving for a reader to
+// trip over: the second table's SHIPPED row describes the model that is
+// actually running, so its zero/fabricated/divergent columns were the current
+// figures on the day it was written and will silently stop being so the first
+// time replay fidelity moves. The live values are censusOfTheCommittedCatalog
+// in issue1503_census_test.go, machine-generated and re-derived on every test
+// run (#1503); when they disagree with the shipped row below, the census is
+// right and the row is a snapshot. A hand-typed copy is how that row and
+// tools/replay-fixtures.sh came to disagree by more than fifty recordings.
+//
+//	                                zero-transition  fabricated  divergent
+//	main                                         20           1        196
+//	debounce fix only                             7           1        146
+//	+ narrowing #329's guard (rejected)           0           3        145
+//	+ readBoundaryFor (shipped)                   4           1        145
+//
+// "fabricated" is recordings replaying a transition the daemon never logged;
+// its single case pre-dates #1342 and neither fix moves it. The rejected draft
+// bought the last 4 by inventing 2 — a golden that asserts the WRONG thing,
+// which is strictly worse than one that asserts nothing and is the failure
+// this whole ticket is about.
+//
+// #1478 then supplied the time-aware boundary those 4 needed, and reached 3 of
+// them. Measured the same way, over the same population, with #1480's timing
+// harness added to the columns because a boundary change moves WHEN a
+// transition fires and nothing before #1480 could see that:
+//
+// "divergent" is extendedCheck.Diverges — one named predicate, which is where
+// the definition now lives rather than in this sentence (#1503). The rows below
+// extend the series above rather than starting a new one on a narrower
+// definition; that they DO is the thing worth checking, because #1478 computed
+// this column with a plausible near-miss spelling and every row came out one
+// low. Diverges' doc comment names the two near-misses and the single committed
+// recording that separates them.
+//
+//	                          zero  fabricated  divergent  drift>1s  pairs
+//	#1476 as shipped             4           1        145       119    818
+//	+ 2ms cluster window         4           1        143       118    821
+//	+ 10ms cluster (shipped)     1           1        140       105    826
+//	+ 28ms cluster (rejected)    1           2        141       106    826
+//	+ 69ms cluster (rejected)    0           3        142       116    825
+//
+// The shipped row is best on every column but zero, and the plateau it sits on
+// runs 10-25ms. The exception is the point: the ONLY way to improve zero is the
+// 69ms row, which costs two fabrications AND makes drift worse (105 -> 116)
+// rather than trading one axis for another. That is the trade #1342 refused and
+// #1478 refuses again.
+//
+// The one recording that remains is pinned in knownZeroTransition in
+// issue1342_debounce_test.go, with the wall that keeps it there.
+//
+// consumed is the replayer's current write cursor (r.lastSize), NOT the pass's
+// nominal target: a pass whose fileSize sits BELOW the cursor writes nothing,
+// and comparing against the target there would return a boundary behind the
+// cursor and slice srcBytes backwards.
+func (r *sidecarReplayer) readBoundaryFor(eventIdx int, consumed int64, metrics *tailer.SessionMetrics) (int64, bool) {
+	// The upper bound is not reachable from today's four call sites, but it is
+	// load-bearing now that clusterBoundary indexes fswatches[eventIdx]
+	// directly: before #1478 an out-of-range-high index was merely inert.
+	if eventIdx < 0 || eventIdx >= len(r.fswatches) || metrics == nil {
+		return 0, false
+	}
+	if !metrics.NoSubstantiveActivity || metrics.LastEventType != "" {
+		return 0, false
+	}
+	wider := int64(len(r.srcBytes))
+	if next := eventIdx + 1; next < len(r.fswatches) {
+		wider = min(r.fswatches[next].FileSize, wider)
+	}
+	if w := r.clusterBoundary(eventIdx); w > wider {
+		wider = w
+	}
+	if wider <= consumed {
+		return 0, false
+	}
+	return wider, true
+}
+
+// readBoundaryClusterWindow is how far past a classify pass's own fswatcher
+// fire a LATER recorded stat is still treated as bytes the SAME daemon read
+// absorbed. It is the time-aware half of the boundary #1478 asked for.
+//
+// WHAT MAKES IT SOUND, AND WHERE THAT STOPS. The sidecar's `ts` is the
+// daemon's DEQUEUE time — SessionDetector.record stamps time.Now() in the
+// processing loop — while `file_size` is the watcher's stat, taken earlier in
+// the watcher goroutine and never recorded. The detector loop is serial, so
+// event j>i is dequeued only after the read for pass i has returned; a j that
+// dequeues microseconds later was therefore ALREADY QUEUED while that read
+// ran, which means its watcher fire — and so the size it observed — preceded
+// the read's completion. That is the inference, and it is why the window is
+// small: it is a bound on how long one read takes, not on how long a session
+// is idle.
+//
+// It is an INFERENCE and not a proof, and the gap is worth stating plainly
+// because it is the whole reason a constant is needed at all. A small
+// inter-dequeue gap is also consistent with "the loop went idle and event j
+// arrived just then", and the recording cannot tell those apart: the watcher's
+// stat time is not a field of lifecycle.Event and is unrecoverable. So the
+// window is CALIBRATED against the committed catalog rather than derived from
+// first principles, and both of its walls are measured facts about that
+// catalog rather than taste:
+//
+//   - FLOOR 3ms. Below it the rescue is incomplete — at 2.7ms only two of the
+//     three #1478 recordings reproduce their transitions, because the third's
+//     four fires span further than that.
+//   - CEILING 28ms. At and above it replay FABRICATES: codex/2-1_basic-turn's
+//     18-54-06 recording gains a transition its daemon never logged. A SECOND
+//     wall follows closely at 52ms, where codex/1-1_session-start joins it —
+//     its first two fires are 51.663ms apart. Both walls matter: a 60ms
+//     "compromise" reaching for the pinned recording would clear neither.
+//
+// The ceiling is the load-bearing number, and it did not have to land where it
+// did: those are EXACTLY the two goldens that #1342's rejected guard-narrowing
+// broke (see readBoundaryFor's table). Two unrelated mechanisms — narrowing
+// #329's guard, and widening this window — fabricate first in the same two
+// recordings, which is independent evidence that the wall is a property of the
+// catalog and not of either heuristic.
+//
+// 10ms is the geometric midpoint of [3ms, 28ms] (9.17ms, rounded), and it sits
+// at the low edge of the plateau where every figure #1480 measures is jointly
+// best (see the table in readBoundaryFor). Low edge rather than middle because
+// the costs are asymmetric: too high fabricates, which is the failure this
+// whole line of work exists to prevent, while too low merely leaves a
+// recording pinned in knownZeroTransition, which is the status quo.
+//
+// It is corroborated by a measurement that does not depend on any of the
+// above. The daemon's own in-pass read+classify latency is directly
+// observable — a state_transition and the transcript_activity that produced it
+// are both stamped by d.record in the same loop iteration — and over the 1157
+// such pairs in the catalog that population has a near-empty decade at 5-10ms
+// (7 pairs, 0.6%) separating a dense sub-5ms mode (47.4%) from the 10-50ms
+// tail. 10ms sits just above the reads that dominate.
+//
+// A var rather than a const so TestReadBoundaryClusterWindow_BothWallsAreMeasured
+// can drive it past each wall and observe the failure — the calibration's own
+// mutation evidence, committed rather than described.
+var readBoundaryClusterWindow = 10 * time.Millisecond
+
+// clusterBoundary returns the largest recorded stat whose dequeue timestamp
+// sits within readBoundaryClusterWindow of the pass at eventIdx, or 0 when no
+// later event qualifies.
+//
+// It is purely ADDITIVE to the one-step widening in readBoundaryFor, which is
+// what keeps it off the 35 gemini-cli recordings that reproduce exactly today:
+// there the next fire is seconds away, so no later stat is within the window
+// and this contributes nothing, leaving the one-step boundary untouched. A
+// variant that REPLACED the one-step widening with a time bound is the 200ms
+// gap bound rejected during #1476's review, and it broke exactly those 35.
+//
+// Two details of the scan, stated because the obvious reading of each is wrong:
+//
+// The window is ANCHORED, not chained — every candidate is compared to the
+// pass's own timestamp, and `at` is never reassigned — so the rule can never go
+// transitive across an idle period no matter how many events follow. The
+// `break` is therefore a pure early exit, valid because the fswatch stream is
+// Seq-sorted and its dequeue timestamps are monotonic (verified: 0 of 309
+// committed recordings have a non-monotonic fswatch timestamp in Seq order).
+// Do NOT "restore" a chained form by comparing j to j-1: that would silently
+// turn a bounded 10ms rule into an unbounded walk and invalidate the
+// calibration.
+//
+// The fold takes the MAXIMUM rather than the last qualifying stat because sizes
+// in a burst are not guaranteed monotonic — a reconcile-sweep fire can
+// re-report an older stat. No committed recording exercises that inside a
+// window (measured), so the catalog cannot witness it; TestClusterBoundary
+// covers it synthetically instead of leaving the choice unfalsifiable.
+func (r *sidecarReplayer) clusterBoundary(eventIdx int) int64 {
+	if readBoundaryClusterWindow <= 0 {
+		return 0
+	}
+	at := r.fswatches[eventIdx].Timestamp
+	var reach int64
+	for j := eventIdx + 1; j < len(r.fswatches); j++ {
+		if r.fswatches[j].Timestamp.Sub(at) > readBoundaryClusterWindow {
+			break
+		}
+		if v := min(r.fswatches[j].FileSize, int64(len(r.srcBytes))); v > reach {
+			reach = v
+		}
+	}
+	return reach
 }
 
 // applyHookEvent mirrors SessionDetector.HandlePermissionHook: apply the hook's
@@ -750,9 +1082,26 @@ func (r *sidecarReplayer) applyTimelineControlEntry(entry timelineEntry, b sidec
 		d.alive = true
 		return true, nil
 	case timelineProcessExit:
-		// Daemon torn down: pending debounce timer is cancelled (not fired),
-		// and the next lifetime starts a fresh session in ready. Reset state
-		// so lifetime-2 events don't coalesce with lifetime-1 debounce.
+		// A window whose deadline already passed is not "pending" — the
+		// daemon's timer fired it, and the transitions it produced are in the
+		// sidecar. Catch it up before tearing down, exactly as the hook and
+		// orphan branches do (issue #1342). Without this, a recording whose fs
+		// events all land inside one debounce window replayed ZERO transitions:
+		// the single classify pass ran on the first event against a partial
+		// transcript, every later event only extended the window, and this
+		// branch then discarded it — leaving a golden that held nothing but the
+		// synthetic init row and so could not fail when the classifier
+		// regressed. It also explains why relaxing flushPendingDebounce's
+		// early-return measured as no-change: by the time that trailing flush
+		// is reached, the reset below has already zeroed d.pending, d.coalesced
+		// and d.pendingSize, so there is nothing left for it to fire.
+		if err := r.flushDebounceIfExpired(entry.ts, d); err != nil {
+			return true, fmt.Errorf("flush before process exit: %w", err)
+		}
+		// Daemon torn down: a pending timer that has NOT yet expired is
+		// genuinely cancelled (not fired), and the next lifetime starts a fresh
+		// session in ready. Reset state so lifetime-2 events don't coalesce
+		// with lifetime-1 debounce.
 		*d = debounceState{debounceDelay: d.debounceDelay}
 		r.state = session.StateReady
 		return true, nil

@@ -16,6 +16,7 @@
 package contracttesting
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -46,21 +47,10 @@ type HookVersionGate struct {
 func AssertHookVersionGate(t *testing.T, g HookVersionGate) {
 	t.Helper()
 
-	perm, ok := findPermission(g.Agent, g.PermissionKey)
-	if !ok {
-		t.Fatalf("agent %q declares no permission with key %q", g.Agent.Identity.Name, g.PermissionKey)
+	gate, reason := versionGateUnderTest(g)
+	if reason != "" {
+		t.Fatal(reason)
 	}
-	if perm.Writes == nil {
-		t.Fatalf("permission %q declares no agent.ManagedUserFile — a hooks permission must, "+
-			"so that --uninstall-hooks and the version gate can both see it", g.PermissionKey)
-	}
-	if perm.Writes.Version == nil || perm.Writes.Version.Min == "" {
-		t.Fatalf("hooks permission %q declares no minimum CLI version (#1365) — an adapter "+
-			"that installs into an agent's config at any version writes entries an older CLI "+
-			"may reject, and the user sees a granted permission whose channel never fires",
-			g.PermissionKey)
-	}
-	gate := perm.Writes.Version
 
 	t.Run("floor_is_parseable", func(t *testing.T) {
 		assertFloorParses(t, gate.Min)
@@ -75,19 +65,52 @@ func AssertHookVersionGate(t *testing.T, g HookVersionGate) {
 		assertUnknownFailsOpen(t, gate)
 	})
 	t.Run("version_source_is_declared", func(t *testing.T) {
-		if gate.Observed == nil && len(gate.Probe) == 0 {
-			t.Errorf("hooks permission %q declares a floor of %q but no way to learn the "+
-				"installed version — neither Observed nor Probe — so the gate can never "+
-				"refuse anything and reads as protection that isn't there",
-				g.PermissionKey, gate.Min)
-		}
+		assertVersionSourceDeclared(t, g.PermissionKey, gate)
 	})
+}
+
+// versionGateUnderTest returns the declared gate the contract grades, or a
+// reason it cannot grade one. It reports a reason rather than failing so the
+// shapes it rejects are themselves drivable from a negative self-test — the
+// same split malformedGateReason draws.
+func versionGateUnderTest(g HookVersionGate) (*agent.VersionGate, string) {
+	perm, ok := findPermission(g.Agent, g.PermissionKey)
+	if !ok {
+		return nil, fmt.Sprintf("agent %q declares no permission with key %q",
+			g.Agent.Identity.Name, g.PermissionKey)
+	}
+	if perm.Writes == nil {
+		return nil, fmt.Sprintf("permission %q declares no agent.ManagedUserFile — a hooks "+
+			"permission must, so that --uninstall-hooks and the version gate can both see it",
+			g.PermissionKey)
+	}
+	if perm.Writes.Version == nil || perm.Writes.Version.Min == "" {
+		return nil, fmt.Sprintf("hooks permission %q declares no minimum CLI version (#1365) — "+
+			"an adapter that installs into an agent's config at any version writes entries an "+
+			"older CLI may reject, and the user sees a granted permission whose channel never fires",
+			g.PermissionKey)
+	}
+	return perm.Writes.Version, ""
+}
+
+// assertVersionSourceDeclared is the arm that keeps a floor from being
+// decorative: claudecode's was probe-only, and the daemon runs under launchd
+// with a minimal PATH, so the probe always missed, unknown failed open, and no
+// version was ever checked.
+func assertVersionSourceDeclared(t reporter, key string, gate *agent.VersionGate) {
+	t.Helper()
+	if gate.Observed == nil && len(gate.Probe) == 0 {
+		t.Errorf("hooks permission %q declares a floor of %q but no way to learn the "+
+			"installed version — neither Observed nor Probe — so the gate can never "+
+			"refuse anything and reads as protection that isn't there",
+			key, gate.Min)
+	}
 }
 
 // assertFloorParses rejects a floor the comparison cannot read. An unparseable
 // floor fails open on every comparison, so the declaration would look like a
 // gate while gating nothing — the failure mode this whole family is about.
-func assertFloorParses(t *testing.T, min string) {
+func assertFloorParses(t reporter, min string) {
 	t.Helper()
 	if _, ok := cliversion.Parse(min); !ok {
 		t.Errorf("declared minimum version %q is not a major.minor.patch triple; "+
@@ -98,7 +121,7 @@ func assertFloorParses(t *testing.T, min string) {
 // assertFloorCoversEveryEvent is the scope-item-2 arm: the floor must dominate
 // every installed event's own introduction, so that at any version where the
 // adapter installs at all, every entry it writes names an event the CLI knows.
-func assertFloorCoversEveryEvent(t *testing.T, min string, installed []string, since map[string]string) {
+func assertFloorCoversEveryEvent(t reporter, min string, installed []string, since map[string]string) {
 	t.Helper()
 	if len(installed) == 0 {
 		t.Fatal("HookVersionGate.Installed is empty — pass the installer's event list")
@@ -118,7 +141,7 @@ func assertFloorCoversEveryEvent(t *testing.T, min string, installed []string, s
 // A missing or unparseable Since is reported rather than skipped: an event
 // with no stated version is one nobody checked, which is the position
 // claudecode's seven-event install was in before #1365.
-func assertFloorCoversEvent(t *testing.T, min, event, since string) {
+func assertFloorCoversEvent(t reporter, min, event, since string) {
 	t.Helper()
 	if since == "" {
 		t.Errorf("no Since entry for installed event %q — every event written into the "+
@@ -140,7 +163,7 @@ func assertFloorCoversEvent(t *testing.T, min, event, since string) {
 // assertFloorRefusesOlder proves the declaration actually blocks, rather than
 // merely being present. It walks one patch level below the floor, which is the
 // boundary an off-by-one in a comparison shows up at.
-func assertFloorRefusesOlder(t *testing.T, gate *agent.VersionGate) {
+func assertFloorRefusesOlder(t reporter, gate *agent.VersionGate) {
 	t.Helper()
 	floor, ok := cliversion.Parse(gate.Min)
 	if !ok {
@@ -150,12 +173,24 @@ func assertFloorRefusesOlder(t *testing.T, gate *agent.VersionGate) {
 		t.Errorf("gate refuses its own floor %s — the comparison is exclusive where it "+
 			"should be inclusive", gate.Min)
 	}
+	// A floor with nothing below it exercises NOTHING: predecessors is empty,
+	// the loop never runs, and the arm passes having asserted only that the
+	// gate permits its own floor. Every other value of Min makes the loop run,
+	// so this is the one input under which the obligation silently stops
+	// discriminating — found by writing this family's negative self-tests
+	// (#1479), which could otherwise not make this arm fail at all.
+	below := predecessors(floor)
+	if len(below) == 0 {
+		t.Errorf("declared floor %s has no version below it, so this obligation asserts "+
+			"nothing — a floor of %s permits every CLI and is not a gate", gate.Min, gate.Min)
+		return
+	}
 	// Each field decremented independently rather than one synthetic
 	// predecessor: a single "just below" value like 0.99.99 exercises only the
 	// borrow path, so a comparison that is correct there and off by one at the
 	// major boundary would still pass. These are the three boundaries a
 	// field-wise comparison can get wrong.
-	for _, older := range predecessors(floor) {
+	for _, older := range below {
 		allowed, why := gate.Permits(older.String())
 		if allowed {
 			t.Errorf("gate permits %s, below the declared floor %s", older, gate.Min)
@@ -199,7 +234,7 @@ func predecessors(v cliversion.Version) []cliversion.Version {
 // flipping the default to fail-closed — which would silently disable hooks for
 // every user whose binary the daemon's PATH cannot reach — cannot happen
 // quietly.
-func assertUnknownFailsOpen(t *testing.T, gate *agent.VersionGate) {
+func assertUnknownFailsOpen(t reporter, gate *agent.VersionGate) {
 	t.Helper()
 	for _, unknown := range []string{"", "not a version", "2.1"} {
 		if allowed, why := gate.Permits(unknown); !allowed {

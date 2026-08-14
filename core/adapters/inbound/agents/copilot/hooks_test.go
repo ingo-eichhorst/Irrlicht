@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"irrlicht/core/domain/session"
+	"irrlicht/core/internal/contracttesting"
 )
 
 // --- test doubles, shared by this file and the contract wirings ---
@@ -60,6 +61,9 @@ func (m *mockTarget) stops() []stopCall {
 	return append([]stopCall(nil), m.stopCalls...)
 }
 
+// keyedGate pins a fixed permission combination for a one-off test. For a
+// MUTABLE keyed gate driven through states by the shared contract, use
+// contracttesting.ConsentGate instead.
 type keyedGate map[string]bool
 
 func (g keyedGate) Granted(_, key string) bool { return g[key] }
@@ -342,11 +346,18 @@ func TestHookReceiver_DeniedHooksConsentDropsQuietly(t *testing.T) {
 // TestHookReceiver_DeniedTranscriptsConsentDropsQuietly pins the second gate:
 // dispatching makes the detector read the transcript, so a transcripts-denied
 // session must not dispatch even though the hooks consent is granted.
+//
+// "Quietly" was decoration when this test was written and is now the load-
+// bearing half. Since #1488 DecodeConfined refuses the same request on the
+// receiver's declaration, so the dispatch assertion survives deleting the gate
+// below (measured); the silence does not, because the backstop logs an error
+// where this receiver's own gate says nothing. See contracttesting.RecordingLogger.
 func TestHookReceiver_DeniedTranscriptsConsentDropsQuietly(t *testing.T) {
 	root := copilotSessionRoot(t)
 	tp := writeSessionTranscript(t, root, "sess-stop")
 	target := &mockTarget{}
-	h := NewHookHandler(target, keyedGate{PermissionKeyHooks: true}, mockLogger{})
+	log := &contracttesting.RecordingLogger{}
+	h := NewHookHandler(target, keyedGate{PermissionKeyHooks: true}, log)
 
 	rec := post(t, h, contractPayload(tp, HookStop))
 
@@ -356,6 +367,52 @@ func TestHookReceiver_DeniedTranscriptsConsentDropsQuietly(t *testing.T) {
 	if n := target.totalCalls(); n != 0 {
 		t.Fatalf("dispatched %d times while transcripts consent was denied, want 0", n)
 	}
+	if len(log.Errors()) != 0 {
+		t.Errorf("a transcripts-denied hook logged %d error(s): %v — the whole point of the word "+
+			"in this test's name", len(log.Errors()), log.Errors())
+	}
+}
+
+// TestHookReceiver_PermissionGateContract runs the shared #797 contract once
+// per permission this receiver must honour. The two tests above pin the same
+// two gates by hand and stay as LOCKS — they additionally assert the 200 that
+// a consent refusal answers with, which the contract's opaque Exercise cannot
+// see. What the contract adds is that the obligation is no longer this
+// adapter's to remember: its key-isolation arm (issue #1475) holds one
+// permission denied while the other is granted, which is the state that
+// separates a receiver gated on the right permission from one gated on the
+// other, and it is the state claudecode sat in undetected for its whole life
+// (issue #1466).
+// Since #1488 the pair is derived from the receiver's own declaration rather
+// than named here — which also means this receiver could no longer have reached
+// #1475 with no wiring at all, the state it was found in.
+func TestHookReceiver_PermissionGateContract(t *testing.T) {
+	contracttesting.AssertHookReceiverPermissionGated(t, contracttesting.HookReceiverGate{
+		Build: func(t *testing.T, gate *contracttesting.ConsentGate) contracttesting.GatedHookReceiver {
+			root := copilotSessionRoot(t)
+			body := contractPayload(writeSessionTranscript(t, root, "sess-gate"), HookStop)
+			target := &mockTarget{}
+			h := NewHookHandler(target, gate, mockLogger{})
+
+			before := 0
+			return contracttesting.GatedHookReceiver{
+				Handler: h,
+				Exercise: func() {
+					before = target.totalCalls()
+					post(t, h, body)
+				},
+				Observe: func() bool { return target.totalCalls() > before },
+			}
+		},
+	})
+}
+
+// TestHookReceiver_DeclaresItsPermissions is the LOCK on the key list the
+// wiring above used to spell out (#1450).
+func TestHookReceiver_DeclaresItsPermissions(t *testing.T) {
+	contracttesting.AssertDeclaredPermissions(t,
+		NewHookHandler(&mockTarget{}, nil, mockLogger{}),
+		PermissionKeyHooks, PermissionKeyTranscripts)
 }
 
 // TestHookReceiver_NonPostRejected is a LOCK on the shared receiver shape.

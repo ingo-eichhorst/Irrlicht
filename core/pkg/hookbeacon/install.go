@@ -172,6 +172,36 @@ func BinaryPath() (string, error) {
 	return filepath.Abs(exe)
 }
 
+// InstalledCommand renders the line to install for adapter against the irrlichd
+// that is running now, resolving the binary path itself.
+//
+// It exists so an adopting adapter has ONE fallible step rather than two.
+// Command and BinaryPath are only ever called together in production, and
+// splitting them pushes two error branches into whatever builds the
+// hookjson.Config — which turns hookConfig into a (Config, error) and adds a
+// branch to each of Ensure/Verify/Uninstall/IsCanonical that calls it, measured
+// at +12 lines when copilot evaluated beacon delivery (#1453).
+//
+// The intended shape is to call this ONCE, at install time, and keep the
+// resolved string: the config builder then stays infallible, and Uninstall —
+// which identifies our entries by Sentinel and never needs the binary path —
+// keeps working when the binary it names has been removed. That case is not
+// hypothetical: `site/install.sh --uninstall` deletes the binary without
+// calling --uninstall-hooks, so the entry outlives every daemon that could
+// reconcile it. core/internal/contracttesting's address-free reference wiring
+// is written that way and is the shape to copy.
+//
+// Command stays exported and keeps taking an explicit path: that is what
+// renders the line a DIFFERENTLY-situated daemon would have installed, which is
+// how the contract seeds binary-path drift.
+func InstalledCommand(adapter string) (string, error) {
+	binaryPath, err := BinaryPath()
+	if err != nil {
+		return "", fmt.Errorf("hookbeacon: resolving the running binary: %w", err)
+	}
+	return Command(binaryPath, adapter)
+}
+
 // Drift names why an installed entry is not the one we would write now. It is
 // the beacon's equivalent of the port comparison inside claudecode's
 // hookEntryIsCanonical, generalized to the failure this mechanism newly admits:

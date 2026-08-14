@@ -218,10 +218,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "note: replaying transcript-only — %s: %s\n", report.SidecarFallback, sidecarPath)
 	}
 	emitReport(opts, report)
-	if c := report.ExtendedCheck; c != nil {
-		if len(c.OrderedMismatches) > 0 || len(c.MissingKinds) > 0 || len(c.ExtraKinds) > 0 {
-			os.Exit(1)
-		}
+	// One predicate decides divergence for the exit code, the summary marker
+	// below, and the catalog census — see extendedCheck.Diverges (#1503). The
+	// former spelling here added "|| missing kinds || extra kinds", which is
+	// redundant rather than wider: an empty OrderedMismatches forces identical
+	// kind sets. The census asserts the two agree on every recording it walks,
+	// so this is a measured no-op, not an assumed one.
+	if c := report.ExtendedCheck; c != nil && c.Diverges() {
+		os.Exit(1)
 	}
 }
 
@@ -394,11 +398,11 @@ func printSummary(report *replayReport) {
 			kindsMark = "FAIL"
 		}
 		orderMark := "ok"
-		if len(c.OrderedMismatches) > 0 {
+		if c.Diverges() {
 			orderMark = "FAIL"
 		}
-		fmt.Fprintf(os.Stderr, " [extended-check: kinds %s ordered %d/%d %s]",
-			kindsMark, c.OrderedMatches, c.RecordedCount, orderMark)
+		fmt.Fprintf(os.Stderr, " [extended-check: kinds %s ordered %d/%d %s %s]",
+			kindsMark, c.OrderedMatches, c.RecordedCount, orderMark, driftSummary(c.TimeDeltas))
 	}
 	fmt.Fprintln(os.Stderr)
 }

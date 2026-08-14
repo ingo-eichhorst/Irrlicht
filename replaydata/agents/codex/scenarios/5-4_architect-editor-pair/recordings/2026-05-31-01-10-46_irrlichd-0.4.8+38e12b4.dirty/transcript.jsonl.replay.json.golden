@@ -10,14 +10,14 @@
   "summary": {
     "total_events": 33,
     "consumed_events": 33,
-    "total_transitions": 4,
+    "total_transitions": 5,
     "first_event_time": "2026-05-31T01:11:37.348612+02:00",
-    "last_event_time": "2026-05-31T01:13:00.088134+02:00",
-    "wall_clock_session_duration": 82739522000,
+    "last_event_time": "2026-05-31T01:13:02.088134+02:00",
+    "wall_clock_session_duration": 84739522000,
     "state_durations": {
-      "ready": 9814120000,
+      "ready": 4038803000,
       "waiting": 72316591000,
-      "working": 608811000
+      "working": 8384128000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -87,6 +87,21 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 4,
+      "event_index": 32,
+      "virtual_time": "2026-05-31T01:13:02.088134+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "calc.py was created."
     }
   ],
   "sessions": [
@@ -128,15 +143,8 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 4,
-    "replayed_transition_count": 3,
-    "ordered_matches": 3,
-    "ordered_mismatches": [
-      {
-        "index": 3,
-        "kind": "missing_in_replay",
-        "recorded": "working→ready"
-      }
-    ],
+    "replayed_transition_count": 4,
+    "ordered_matches": 4,
     "recorded_unique_kinds": [
       "ready→working",
       "waiting→working",
@@ -146,10 +154,8 @@
     "replayed_unique_kinds": [
       "ready→working",
       "waiting→working",
+      "working→ready",
       "working→waiting"
-    ],
-    "missing_kinds": [
-      "working→ready"
     ]
   }
 }

@@ -10,22 +10,22 @@
   "summary": {
     "total_events": 6,
     "consumed_events": 6,
-    "total_transitions": 6,
+    "total_transitions": 7,
     "first_event_time": "2026-07-07T16:51:49.62011+02:00",
-    "last_event_time": "2026-07-07T16:52:01.692501+02:00",
-    "wall_clock_session_duration": 12072391000,
+    "last_event_time": "2026-07-07T16:52:03.692501+02:00",
+    "wall_clock_session_duration": 14072391000,
     "state_durations": {
-      "ready": 8044264000,
-      "working": 4028127000
+      "ready": 8030224000,
+      "working": 6042167000
     },
-    "flicker_count": 4,
+    "flicker_count": 5,
     "flickers_by_category": {
       "ready_between_working": 2,
-      "working_between_ready": 2
+      "working_between_ready": 3
     },
     "flickers_by_reason": {
       "agent finished turn → ready": 2,
-      "force ready→working on first activity": 2
+      "force ready→working on first activity": 3
     }
   },
   "transitions": [
@@ -114,6 +114,21 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 6,
+      "event_index": 5,
+      "virtual_time": "2026-07-07T16:52:03.692501+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ok"
     }
   ],
   "sessions": [
@@ -154,14 +169,9 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 12,
-    "replayed_transition_count": 5,
-    "ordered_matches": 5,
+    "replayed_transition_count": 6,
+    "ordered_matches": 6,
     "ordered_mismatches": [
-      {
-        "index": 5,
-        "kind": "missing_in_replay",
-        "recorded": "working→ready"
-      },
       {
         "index": 6,
         "kind": "missing_in_replay",

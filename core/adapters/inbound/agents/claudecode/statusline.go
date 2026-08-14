@@ -80,8 +80,9 @@ const logComponentStatuslineReceiver = "statusline-receiver"
 // used by tests.
 func NewStatuslineHandler(target RateLimitIngester, gate ConsentGranter, log outbound.Logger) hookjson.HookHandler {
 	return hookjson.NewHandler(transcriptConfiner(),
-		func(c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
-			serveStatuslineRequest(target, gate, log, c, w, r)
+		hookjson.RequireConsent(gate, AdapterName, PermissionKeyStatusline),
+		func(consent hookjson.Consent, c *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+			serveStatuslineRequest(target, consent, log, c, w, r)
 		})
 }
 
@@ -89,13 +90,19 @@ func NewStatuslineHandler(target RateLimitIngester, gate ConsentGranter, log out
 // the returned closure so the constructor reads like its two siblings in
 // hooks.go and the branching isn't counted at the closure's extra nesting
 // depth.
-func serveStatuslineRequest(target RateLimitIngester, gate ConsentGranter, log outbound.Logger, confiner *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
+func serveStatuslineRequest(target RateLimitIngester, consent hookjson.Consent, log outbound.Logger, confiner *hookjson.PathConfiner, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	if gate != nil && !gate.Granted(AdapterName, PermissionKeyStatusline) {
+	// The ONE permission this receiver acts under, and the whole of what it
+	// declares (issue #1488). It owes no "transcripts" consent: the path it
+	// forwards is a map key for metrics.IngestRateLimit, never opened — #1466
+	// is about the READ, and there is none here. Because the set is published
+	// on the handler, that judgement is now stated in one place and the
+	// contract grades exactly it.
+	if !consent.Granted(PermissionKeyStatusline) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -112,7 +119,7 @@ func serveStatuslineRequest(target RateLimitIngester, gate ConsentGranter, log o
 	// it was fixing. Going through DecodeConfined is what makes forgetting it
 	// a build failure rather than a review catch (issue #1389).
 	var payload statuslinePayload
-	if !hookjson.DecodeConfined(w, r, log, logComponentStatuslineReceiver, confiner, &payload,
+	if !hookjson.DecodeConfined(w, r, log, logComponentStatuslineReceiver, consent, confiner, &payload,
 		func(p *statuslinePayload) string { return p.TranscriptPath },
 		func(p *statuslinePayload, confined string) { p.TranscriptPath = confined },
 	) {

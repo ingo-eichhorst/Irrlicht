@@ -15,17 +15,17 @@
     "last_event_time": "2026-05-18T22:53:17.262178+02:00",
     "wall_clock_session_duration": 26561345000,
     "state_durations": {
-      "ready": 18153522000,
-      "working": 8407823000
+      "ready": 13477508000,
+      "working": 13083837000
     },
-    "flicker_count": 6,
+    "flicker_count": 5,
     "flickers_by_category": {
       "ready_between_working": 4,
-      "working_between_ready": 2
+      "working_between_ready": 1
     },
     "flickers_by_reason": {
       "agent finished turn → ready": 4,
-      "force ready→working on first activity": 2
+      "force ready→working on first activity": 1
     },
     "estimated_cost_usd": 0.07060934999999999,
     "cum_input_tokens": 9,
@@ -51,8 +51,8 @@
     },
     {
       "index": 1,
-      "event_index": 1,
-      "virtual_time": "2026-05-18T22:52:55.376847+02:00",
+      "event_index": 0,
+      "virtual_time": "2026-05-18T22:52:50.700833+02:00",
       "cause": "event",
       "prev_state": "ready",
       "new_state": "working",

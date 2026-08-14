@@ -39,9 +39,17 @@ func processTTY(pid int) string { return "" }
 // resolveTermProgramFromAncestry / resolveHostFromAncestry are darwin-only
 // fallbacks for hardened-runtime processes that hide env from sysctl. Linux
 // reads /proc/<pid>/environ directly, so these stubs are unused.
-func resolveTermProgramFromAncestry(pid int) string                       { return "" }
-func resolveHostFromAncestry(pid int) (term string, host int)             { return "", 0 }
-func resolveHostBundleIDFromAncestry(pid int) (bundleID string, host int) { return "", 0 }
+//
+// complete is true: declining to walk is a settled verdict about this
+// platform, not a read that failed. It is false only where a walk was
+// attempted and could not be answered (#1492), which is darwin-only.
+func resolveTermProgramFromAncestry(pid int) string { return "" }
+func resolveHostFromAncestry(pid int) (term string, host int, complete bool) {
+	return "", 0, true
+}
+func resolveHostBundleIDFromAncestry(pid int) (bundleID string, host int, complete bool) {
+	return "", 0, true
+}
 
 // Stubs for the kitty "no readable env" enrichment helpers. Linux can read
 // /proc/<pid>/environ for any process the user owns, so the back-fill path
@@ -60,4 +68,8 @@ func IsKnownInteractiveHost(pid int) bool { return true }
 // client (#1350). Darwin-only: the identity it produces is only consumed by the
 // macOS click-to-focus path, and resolving it needs the same ancestry walk the
 // stubs above already decline to do.
-func herdrClientLauncher(socketPath string) *session.Launcher { return nil }
+//
+// So the answer here is "not probed" (#1485), not "nothing attached": this
+// platform never looks, and a caller merging the read into a stored launcher
+// must not read that silence as a client having detached.
+func herdrClientLauncher(socketPath string) (*session.Launcher, bool) { return nil, false }

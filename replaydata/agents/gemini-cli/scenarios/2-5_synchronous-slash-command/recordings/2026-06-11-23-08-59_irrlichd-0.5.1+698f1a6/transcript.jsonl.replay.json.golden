@@ -15,16 +15,12 @@
     "last_event_time": "2026-06-11T23:09:18.265411+02:00",
     "wall_clock_session_duration": 18541638000,
     "state_durations": {
-      "ready": 15889136000,
-      "working": 2652502000
+      "ready": 2874000,
+      "working": 18538764000
     },
-    "flicker_count": 1,
-    "flickers_by_category": {
-      "working_between_ready": 1
-    },
-    "flickers_by_reason": {
-      "force ready→working on first activity": 1
-    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
     "estimated_cost_usd": 0.017232,
     "cum_input_tokens": 11482,
     "cum_output_tokens": 1,
@@ -47,8 +43,8 @@
     },
     {
       "index": 1,
-      "event_index": 1,
-      "virtual_time": "2026-06-11T23:09:15.610035+02:00",
+      "event_index": 0,
+      "virtual_time": "2026-06-11T23:08:59.723773+02:00",
       "cause": "event",
       "prev_state": "ready",
       "new_state": "working",

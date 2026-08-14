@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"irrlicht/core/application/services"
-	"irrlicht/core/domain/permission"
+	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/internal/contracttesting"
 )
@@ -33,13 +33,6 @@ func (f *fakeController) Controllable(_ string) bool { return f.controllable }
 type fakeConsent struct{ granted bool }
 
 func (f fakeConsent) Granted(_, _ string) bool { return f.granted }
-
-// mutableConsent is a consentGranter whose answer can change between calls —
-// needed to drive a single InputService instance through all three
-// consent states for contracttesting.AssertPermissionGated.
-type mutableConsent struct{ granted bool }
-
-func (c *mutableConsent) Granted(_, _ string) bool { return c.granted }
 
 func controllableSession() *session.SessionState {
 	return &session.SessionState{SessionID: "abc", Adapter: "claude-code"}
@@ -138,12 +131,21 @@ func TestControllable_ReflectsGate(t *testing.T) {
 // permission is pending or denied, must delegate to the controller once
 // granted, and must stop again once revoked.
 func TestSendInput_PermissionGateContract(t *testing.T) {
-	consent := &mutableConsent{}
+	consent := contracttesting.NewConsentGate()
 	ctrl := &fakeController{controllable: true}
 	svc := services.NewInputService(&stubRepo{state: controllableSession()}, ctrl, consent, func() bool { return true }, stubLog{})
 
 	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
-		SetState: func(state permission.State) { consent.granted = state == permission.StateGranted },
+		Key: agent.ControlPermissionKey,
+		// Forwarding must ride on "control" and on nothing else. The keys held
+		// open beside it are other permissions the same wizard grants — a gate
+		// that answered for any of them would forward input on the strength of
+		// a consent that authorises writing a config file, not typing into a
+		// session. Both are domain constants rather than literals: an adapter's
+		// own "transcripts" spelling is package-local, and a key nothing
+		// declares would make this arm a no-op that still reads green.
+		OtherKeys: []string{agent.HooksPermissionKey, agent.InstructionsPermissionKey},
+		SetState:  consent.SetState,
 		Exercise: func() {
 			ctrl.sentData = nil
 			_ = svc.SendInput("abc", []byte("x"))

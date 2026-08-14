@@ -1,0 +1,28 @@
+{
+  "description": "the other sign: a synthesized debounce-deadline stamp fires one whole 2s window after the daemon's own timer did. Drift is measured on |delta| precisely so this is not silently treated as healthy",
+  "recorded": [
+    {
+      "seq": 10,
+      "ts": "2026-05-25T02:16:05.000000+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "ready",
+      "new_state": "working"
+    }
+  ],
+  "replayed": [
+    {
+      "virtual_time": "2026-05-25T02:16:07.004000+02:00",
+      "prev_state": "ready",
+      "new_state": "working"
+    }
+  ],
+  "want": [
+    {
+      "index": 0,
+      "kind": "ready→working",
+      "delta_ns": 2004000000
+    }
+  ],
+  "want_first_drift": 2004000000
+}
