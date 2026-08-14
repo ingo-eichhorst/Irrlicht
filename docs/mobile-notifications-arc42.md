@@ -21,7 +21,7 @@ The phone-facing app is named **Irrlicht Beacon** (the name the user sees: manif
 | R3 | Ten flapping sessions must not mean ten buzzes (dedupe/coalescing, see §8.4) |
 | R4 | A dead delivery path is visible, never silent (§8.3) |
 | R5 | The Mac and the phone may both roam networks freely; nothing rebinds |
-| R6 | Tapping a notification opens the app on that session's last-known state — nothing more |
+| R6 | Tapping a notification opens the app on that session's last-known state — nothing more. **Not yet met:** the ledger is written but never read, so a tap currently just opens the app (§8.5) |
 
 ### 1.2 Quality goals (ranked)
 
@@ -342,6 +342,8 @@ House rule: absence of a finding and inability to look must never produce the sa
 ### 8.5 State on the phone
 
 The PWA holds a last-known-state ledger (IndexedDB): folded from WS snapshots while open, from push payloads while backgrounded. It is never authoritative — the daemon is. Disconnected, it shows "as of 14:32".
+
+**Implementation status (honest):** the service worker *writes* the ledger from push payloads. Nothing reads it yet — there is no WS-snapshot fold, no `setAppBadge`, and `notificationclick` opens `./` with no session context. So the paragraph above describes the design, not today's behavior, and **R6 is unmet** until the read path lands. Called out here rather than left to be discovered, because a doc that describes an intended behavior in the present tense is indistinguishable from one describing a shipped one.
 
 ### 8.6 Persistence and restart behavior
 

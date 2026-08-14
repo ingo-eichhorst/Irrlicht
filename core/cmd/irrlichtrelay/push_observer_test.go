@@ -7,6 +7,11 @@ package main
 // real webpush.Sender against an httptest push service. Events enter
 // through the same hook methods the hub calls, so the frame→event mapping
 // is inside every test's blast radius.
+//
+// What that shape cannot reach is the wiring around the core: the hub's
+// hook, run's goroutine and the timer it arms. That lives in
+// push_production_path_test.go, which drives the same chain through hub
+// methods on the real clock and touches no core entry point.
 
 import (
 	"context"
@@ -14,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -25,6 +31,7 @@ import (
 	"time"
 
 	"irrlicht/core/cmd/irrlichtrelay/push"
+	"irrlicht/core/domain/notify"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/webpush"
 	"irrlicht/core/ports/outbound"
@@ -139,7 +146,7 @@ func newObserverEnv(t *testing.T, seeds ...deviceSeed) *observerEnv {
 		}
 	}
 	sender := &fakeSender{fail: map[string]error{}}
-	obs := newPushObserver(svc, store, sender, clk.now)
+	obs := newPushObserver(svc, store, sender, notify.Config{}, clk.now)
 	return &observerEnv{
 		t: t, obs: obs, svc: svc, store: store, sender: sender, clk: clk,
 		ddir: ddir, tokensPath: tokensPath, tokenIDs: tokenIDs, tokens: tokens,
@@ -274,6 +281,85 @@ func TestDispatchIsWorkspaceScoped(t *testing.T) {
 	}
 	if got := sends[0].sub.Endpoint; got != "https://push.example/v2/a" {
 		t.Fatalf("event in ws-a delivered to %q", got)
+	}
+}
+
+// TestRevokedTokenResolvesToNoWorkspaceNotTheDefaultOne pins the half of
+// §8.1's live workspace resolution that a named-workspace test cannot see.
+// A revoked token has no identity at all, and the zero tokenIdentity's
+// workspace is "" — which IS the default single-tenant workspace every
+// relay issued tokens under before workspaces existed. So a dispatch that
+// drops identityOf's ok and compares only the workspace still behaves
+// correctly for "acme" and routes the default tenant's every transition to
+// the phone whose access was revoked.
+func TestRevokedTokenResolvesToNoWorkspaceNotTheDefaultOne(t *testing.T) {
+	const (
+		revokedEndpoint = "https://push.example/v2/revoked"
+		defaultEndpoint = "https://push.example/v2/default-tenant"
+	)
+	env := newObserverEnv(t,
+		// Issued against a NAMED workspace, so the only way it can match a
+		// default-workspace event is by failing to resolve at all.
+		deviceSeed{label: "revoked", workspace: "acme", endpoint: revokedEndpoint},
+		deviceSeed{label: "default-tenant", workspace: "", endpoint: defaultEndpoint},
+	)
+	found, err := revokeToken(env.tokensPath, env.tokenIDs["revoked"])
+	if err != nil || !found {
+		t.Fatalf("revokeToken = %v, %v", found, err)
+	}
+	if err := env.store.reload(); err != nil {
+		t.Fatalf("reload after revoke: %v", err)
+	}
+
+	// A transition in the DEFAULT workspace — the one a revoked token's
+	// zero identity collides with.
+	env.enterWaiting("", "sess-1")
+
+	sends := env.sender.sends()
+	for _, s := range sends {
+		if s.sub.Endpoint == revokedEndpoint {
+			t.Fatalf("a revoked device token received the default workspace's push — its identity resolved to %q instead of to nothing (docs/mobile-notifications-arc42.md §8.1)", "")
+		}
+	}
+	// Vacuity guard: the default workspace's own phone still gets it, so
+	// the assertion above is not passing because nothing dispatched.
+	if len(sends) != 1 || sends[0].sub.Endpoint != defaultEndpoint {
+		t.Fatalf("got %d send(s) %+v, want exactly one to %q", len(sends), sends, defaultEndpoint)
+	}
+}
+
+// TestTickFiresEveryWorkspacesDueTimers: the watchdog and the ready
+// hold-down reach a phone only through tick, and tick walks a map of
+// engines. Graded at one workspace, a loop that stops after the first
+// workspace with due pushes is indistinguishable from one that fans out —
+// so this drives three tenants whose timers all come due together.
+func TestTickFiresEveryWorkspacesDueTimers(t *testing.T) {
+	workspaces := []string{"ws-a", "ws-b", "ws-c"}
+	seeds := make([]deviceSeed, 0, len(workspaces))
+	for _, ws := range workspaces {
+		seeds = append(seeds, deviceSeed{label: "phone-" + ws, workspace: ws, endpoint: "https://push.example/v2/" + ws})
+	}
+	env := newObserverEnv(t, seeds...)
+
+	for _, ws := range workspaces {
+		env.feed(ws, sessionFrame(outbound.PushTypeCreated, "sess-1", "working", ""))
+		env.feed(ws, sessionFrame(outbound.PushTypeUpdated, "sess-1", "ready", ""))
+	}
+	if n := len(env.sender.sends()); n != 0 {
+		t.Fatalf("a ready edge pushed before its hold-down: %d sends, want 0", n)
+	}
+
+	env.clk.advance(8 * time.Second) // past the 7s hold-down
+	env.tick()
+
+	got := map[string]bool{}
+	for _, s := range env.sender.sends() {
+		got[s.sub.Endpoint] = true
+	}
+	for _, ws := range workspaces {
+		if !got["https://push.example/v2/"+ws] {
+			t.Fatalf("one tick fired %d of %d tenants' due timers (%v) — %s's phone was skipped", len(got), len(workspaces), got, ws)
+		}
 	}
 }
 
@@ -496,7 +582,7 @@ func TestDaemonRosterPersistsAcrossRestart(t *testing.T) {
 		t.Fatalf("push.NewService (restart): %v", err)
 	}
 	sender2 := &fakeSender{}
-	obs2 := newPushObserver(svc2, env.store, sender2, env.clk.now)
+	obs2 := newPushObserver(svc2, env.store, sender2, notify.Config{}, env.clk.now)
 	env.clk.advance(61 * time.Second)
 	obs2.tick(env.clk.now())
 	obs2.inflight.Wait()
@@ -733,7 +819,137 @@ func TestSendFailureNeverRepeatsTheEndpointPath(t *testing.T) {
 	}
 	// The same sanitized string is what the log line carries, so one guard
 	// covers both exits.
-	if got := sendFailureReason(env.sender.fail[endpoint]); strings.Contains(got, "secret-capability-path") {
+	if got := sendFailureReason(endpoint, env.sender.fail[endpoint]); strings.Contains(got, "secret-capability-path") {
 		t.Fatalf("sendFailureReason leaks the path: %q", got)
+	}
+}
+
+// TestSendFailureRedactionIsNotUrlErrorOnly: the capability path leaks
+// through every failure that is not a *url.Error. RFC 8030 §8.2 has push
+// services answer a non-2xx with problem+json, whose RFC 7807 `instance`
+// member names the specific resource — the subscription endpoint — and
+// services repeat it in the human-readable detail. That reaches the relay as
+// a *webpush.StatusError, so keying the redaction on the error's TYPE leaves
+// the path (RFC 8030 §8.3's capability secret) verbatim in the operator's
+// log and in the §8.3 health panel. The endpoint the send was addressed to
+// is known independently of what the error looks like, and that is what must
+// drive the redaction.
+func TestSendFailureRedactionIsNotUrlErrorOnly(t *testing.T) {
+	const endpoint = "https://push.example/v2/secret-capability-path"
+	env := newObserverEnv(t, deviceSeed{label: "phone", workspace: "acme", endpoint: endpoint})
+	env.sender.fail[endpoint] = &webpush.StatusError{
+		Code: 429,
+		Body: `{"instance":"` + endpoint + `","detail":"too many requests for ` + endpoint + `"}`,
+	}
+	env.enterWaiting("acme", "sess-1")
+
+	st, ok := env.svc.DeliveryStatus(env.tokenIDs["phone"])
+	if !ok {
+		t.Fatal("no delivery health recorded for the failed send")
+	}
+	if strings.Contains(st.Detail, "secret-capability-path") {
+		t.Fatalf("delivery detail carries the subscription's capability path: %q", st.Detail)
+	}
+	if !strings.Contains(st.Detail, "push.example") {
+		t.Fatalf("delivery detail %q dropped the host too — the failure must stay diagnosable", st.Detail)
+	}
+	if !strings.Contains(st.Detail, "429") {
+		t.Fatalf("delivery detail %q lost the status code the push service answered with", st.Detail)
+	}
+}
+
+// TestSendFailureRedactsTheQuotedSpellingOfTheEndpoint: net/url.Error
+// renders its URL with %q, so a message carries the endpoint ESCAPED, not
+// verbatim, whenever any byte needed escaping — and a substitution of the
+// raw string then leaves the capability path (RFC 8030 §8.3) in the log.
+// pushManager.subscribe() never mints an endpoint like this and
+// Subscription.Validate would refuse one at the door, but the registry is a
+// file (docs/mobile-notifications-arc42.md §8.6): one restored from backup
+// or edited by hand holds whatever it holds, and this redaction is the last
+// guard before the operator's terminal.
+func TestSendFailureRedactsTheQuotedSpellingOfTheEndpoint(t *testing.T) {
+	const endpoint = `https://push.example/v2/secret\capability`
+	err := &url.Error{Op: "Post", URL: endpoint, Err: errors.New("dial tcp 127.0.0.1:443: connect: connection refused")}
+
+	got := sendFailureReason(endpoint, err)
+	if strings.Contains(got, "capability") {
+		t.Fatalf("the %%q-escaped spelling of the endpoint survived redaction: %q", got)
+	}
+	if !strings.Contains(got, "push.example") {
+		t.Fatalf("redaction %q dropped the host — the failure must stay diagnosable", got)
+	}
+}
+
+// logCapture is a concurrency-safe sink for the standard logger, so a test
+// can read what the observer wrote while its run goroutine is still writing.
+type logCapture struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (c *logCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+func (c *logCapture) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
+}
+
+// captureLog redirects the standard logger for the duration of one test.
+func captureLog(t *testing.T) *logCapture {
+	t.Helper()
+	c := &logCapture{}
+	log.SetOutput(c)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return c
+}
+
+// TestQueueFullLoggingIsThrottledAndTheCounterIsReadable: the drop path runs
+// inside the hook the hub calls, which may hold the hub's lock and is
+// documented as never blocking. log.Printf takes a process-global mutex and
+// writes to stderr, so a line per dropped event turns the overload into its
+// own amplifier — and the queue only fills when the relay is already behind.
+// §8.3 asks for the inability to observe to be VISIBLE, which one line and a
+// running total satisfy; it does not ask for it to be repeated per event.
+// The counter is the other half: incremented and read by nobody is the same
+// write-only state §8.3 exists to forbid, so the line carries the lifetime
+// total and shutdown reports the final one.
+func TestQueueFullLoggingIsThrottledAndTheCounterIsReadable(t *testing.T) {
+	out := captureLog(t)
+	env := newObserverEnv(t) // no run goroutine: nothing drains the queue
+
+	for i := range observerQueueSize {
+		env.obs.observePush("acme", sessionFrame(outbound.PushTypeUpdated, fmt.Sprintf("sess-%d", i), "waiting", ""))
+	}
+	const drops = 500
+	for range drops {
+		env.obs.observePush("acme", sessionFrame(outbound.PushTypeUpdated, "sess-overflow", "waiting", ""))
+	}
+
+	// The env's clock never advances, so the throttle window never elapses
+	// and exactly the first drop may speak.
+	if n := strings.Count(out.String(), "observer queue full"); n != 1 {
+		t.Fatalf("%d dropped events produced %d log lines, want 1 — the first drop speaks and the rest are throttled", drops, n)
+	}
+	if got := env.obs.dropped.Load(); got != drops {
+		t.Fatalf("dropped counter = %d, want %d", got, drops)
+	}
+
+	// Draining the queue and stopping the relay must leave the lifetime
+	// total somewhere a human reads, not only in an atomic nobody prints.
+	stop := make(chan struct{})
+	go env.obs.run(stop)
+	close(stop)
+	select {
+	case <-env.obs.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("observer loop did not exit after stop closed")
+	}
+	if !strings.Contains(out.String(), fmt.Sprintf("%d observed event(s) were dropped", drops)) {
+		t.Fatalf("shutdown never reported the lifetime drop total; log was:\n%s", out.String())
 	}
 }

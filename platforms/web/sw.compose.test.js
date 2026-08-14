@@ -10,7 +10,7 @@ import { WEB_DIR } from './shippedFiles.testutil.js'
 
 const swSource = readFileSync(join(WEB_DIR, 'sw.js'), 'utf8')
 
-function loadWorker() {
+function loadWorkerFrom(source) {
   const self = {
     listeners: Object.create(null),
     addEventListener(type, fn) {
@@ -22,8 +22,26 @@ function loadWorker() {
       openWindow: vi.fn(() => Promise.resolve(null)),
     },
   }
-  new Function('self', swSource)(self)
+  new Function('self', source)(self)
   return self
+}
+
+function loadWorker() {
+  return loadWorkerFrom(swSource)
+}
+
+// Committed mutation evidence (AGENTS.md "Testing"): the two structural
+// properties below hold by construction against a correct sw.js, so each is
+// also driven against a copy of the source with the property deliberately
+// removed — the arm that must report the opposite verdict. A mutation that
+// stopped applying would silently turn both arms into the same arm, so a
+// no-op edit throws rather than returning the source unchanged.
+function mutate(source, from, to) {
+  const out = source.replace(from, to)
+  if (out === source) {
+    throw new Error('stale mutation: sw.js no longer contains ' + JSON.stringify(from))
+  }
+  return out
 }
 
 function pushEvent(data) {
@@ -91,6 +109,26 @@ describe('composeNotification (arc42 §8.2/§8.4)', () => {
     expect(n.title).toBe('Mac laptop reconnected')
     expect(n.tag).toBe('daemon:d-9')
     expect(n.renotify).toBe(true)
+  })
+
+  test('an absent daemon_id still collapses onto the relay\'s own key, and never reads "Mac undefined"', () => {
+    // daemon_id is `omitempty` on the wire (Payload in
+    // core/domain/notify/notify.go), so an empty id simply is not sent — while
+    // the relay's collapse key stays daemonTopic("") = "daemon:" (engine.go).
+    // The tag must equal it byte for byte or a later daemon notification stops
+    // replacing the earlier one (arc42 §8.4, R3).
+    const down = sw.composeNotification({ v: 1, kind: 'daemon_down', at: 1755000000, renotify: false })
+    expect(down.tag).toBe('daemon:')
+    expect(down.title).not.toContain('undefined')
+    const up = sw.composeNotification({ v: 1, kind: 'daemon_up', at: 1755000000, renotify: true })
+    expect(up.tag).toBe('daemon:')
+    expect(up.title).not.toContain('undefined')
+  })
+
+  test('a daemon payload with an id but no label falls back to the id, as the session kind does', () => {
+    const n = sw.composeNotification({ v: 1, kind: 'daemon_down', daemon_id: 'd-9', at: 1755000000 })
+    expect(n.title).toBe('Mac d-9 disconnected')
+    expect(n.tag).toBe('daemon:d-9')
   })
 
   test('v:2 → generic fallback, never a mis-render of unknown fields', () => {
@@ -178,7 +216,64 @@ describe('ledger fold (arc42 §8.5)', () => {
   })
 })
 
+describe('the push handler keeps the ledger write inside waitUntil (arc42 §6.2)', () => {
+  // The worker is killed as soon as its waitUntil chain settles, so a ledger
+  // write detached from that chain is a write iOS can cut mid-flight. Nothing
+  // observable distinguishes the two shapes except whether the chain is still
+  // pending while the write is — which is what this measures.
+  async function chainWaitsForLedger(source) {
+    const sw = loadWorkerFrom(source)
+    let releasePut = null
+    const put = new Promise((r) => { releasePut = r })
+    sw.idbLedgerBackend = () => ({ put: () => put })
+    const ev = pushEvent({
+      json: () => ({ v: 1, kind: 'session', session_id: 's-9', state: 'ready', at: 1755000000 }),
+    })
+    sw.listeners.push[0](ev)
+    let settled = false
+    ev.chain.then(() => { settled = true })
+    // Two turns is plenty for a chain that is not waiting on anything.
+    await Promise.resolve()
+    await Promise.resolve()
+    const waited = !settled
+    releasePut()
+    await ev.chain
+    return waited
+  }
+
+  const LEDGER_IN_CHAIN = 'self.ledgerStore(self.idbLedgerBackend()).update(payload),'
+  const LEDGER_DETACHED = '(self.ledgerStore(self.idbLedgerBackend()).update(payload), Promise.resolve()),'
+
+  test('the chain stays pending until the ledger write resolves', async () => {
+    expect(await chainWaitsForLedger(swSource)).toBe(true)
+  })
+
+  test('and reports the opposite for a worker whose ledger write is detached from it', async () => {
+    expect(await chainWaitsForLedger(mutate(swSource, LEDGER_IN_CHAIN, LEDGER_DETACHED))).toBe(false)
+  })
+})
+
 describe('notificationclick', () => {
+  // includeUncontrolled is load-bearing, not decoration: with no fetch handler
+  // (arc42 §5.2) this worker controls no clients at all, so a matchAll without
+  // it returns an empty list forever and every tap opens a second window.
+  async function matchAllOptionsOf(source) {
+    const sw = loadWorkerFrom(source)
+    const ev = { notification: { close: vi.fn() }, chain: null, waitUntil(p) { this.chain = p } }
+    sw.listeners.notificationclick[0](ev)
+    await ev.chain
+    return sw.clients.matchAll.mock.calls[0][0]
+  }
+
+  test('matchAll asks for uncontrolled windows', async () => {
+    expect(await matchAllOptionsOf(swSource)).toEqual({ type: 'window', includeUncontrolled: true })
+  })
+
+  test('and reports the opposite for a worker that omits it', async () => {
+    const opts = await matchAllOptionsOf(mutate(swSource, ', includeUncontrolled: true', ''))
+    expect(opts.includeUncontrolled).toBeUndefined()
+  })
+
   test('closes, then opens the app when no window is up', async () => {
     const sw = loadWorker()
     const ev = {

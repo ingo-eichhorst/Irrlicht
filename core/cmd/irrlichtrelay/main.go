@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"irrlicht/core/cmd/irrlichtrelay/push"
+	"irrlicht/core/domain/notify"
 	"irrlicht/core/pkg/webpush"
 )
 
@@ -37,7 +38,19 @@ const (
 	envMaxMsgBytes   = "IRRLICHT_RELAY_MAX_MSG_BYTES"
 	envMaxConns      = "IRRLICHT_RELAY_MAX_CONNS"
 	envMaxConnsPerIP = "IRRLICHT_RELAY_MAX_CONNS_PER_IP"
+	envVAPIDSubject  = "IRRLICHT_RELAY_VAPID_SUBJECT"
 )
+
+// defaultVAPIDSubject is the RFC 8292 §2.1 `sub` claim used when the
+// operator names none. The claim is mandatory in practice — Apple Web Push
+// and Mozilla autopush reject a JWT without it — so the choice is between a
+// default and refusing to serve push at all, and a relay that will not start
+// because nobody typed a contact address is a worse failure than one that
+// identifies the software instead of its operator. It is a real https: URI
+// that describes what is pushing, which is what a push service reaching for
+// `sub` is looking for; an operator who wants to be reachable personally
+// sets --vapid-subject to their own mailto:.
+const defaultVAPIDSubject = "https://github.com/ingo-eichhorst/Irrlicht"
 
 // envInt64 returns the int64 value of env var name, or def when unset/unparseable.
 func envInt64(name string, def int64) int64 {
@@ -111,6 +124,7 @@ type serveConfig struct {
 	auth            string
 	originAllowlist string
 	dataDirFlag     string
+	vapidSubject    string
 	lim             limits
 }
 
@@ -127,6 +141,7 @@ func parseServeFlags(args []string) serveConfig {
 	auth := fs.String("auth", "off", "authentication: 'off' (trusted LAN, accept any hello) or 'tokens-file[:PATH]' (verify a hashed bearer token; PATH defaults to <data-dir>/tokens.json)")
 	originAllowlist := fs.String("origin-allowlist", "", "comma-separated Origin hosts allowed for browser WS clients (empty = allow all, loopback-safe)")
 	dataDirFlag := fs.String("data-dir", "", "state directory for the tokens file (default: $IRRLICHT_HOME or ~/.local/share/irrlicht)")
+	vapidSubject := fs.String("vapid-subject", os.Getenv(envVAPIDSubject), "contact `uri` signed into every push JWT as the VAPID sub claim: mailto: or https: (RFC 8292 §2.1); empty uses "+defaultVAPIDSubject)
 	def := defaultLimits()
 	maxMsgBytes := fs.Int64("max-msg-bytes", envInt64(envMaxMsgBytes, def.maxMsgBytes), "max inbound WebSocket message size in bytes (0 disables)")
 	maxConns := fs.Int("max-conns", envInt(envMaxConns, def.maxConns), "max total concurrent connections (0 disables)")
@@ -142,6 +157,7 @@ func parseServeFlags(args []string) serveConfig {
 		auth:            *auth,
 		originAllowlist: *originAllowlist,
 		dataDirFlag:     *dataDirFlag,
+		vapidSubject:    *vapidSubject,
 		lim:             limits{maxMsgBytes: *maxMsgBytes, maxConns: *maxConns, maxConnsPerIP: *maxConnsPerIP},
 	}
 }
@@ -260,11 +276,50 @@ func startListening(srv *http.Server, p listenParams) {
 	}()
 }
 
+// resolveVAPIDSubject validates the operator's --vapid-subject (or
+// IRRLICHT_RELAY_VAPID_SUBJECT), falling back to defaultVAPIDSubject when
+// it is empty. An unset subject is therefore never a failure; a SET one that
+// is neither a mailto: nor an https: URI is, because RFC 8292 §2.1 admits
+// only those two and a push service rejecting the JWT reports it as a 4xx
+// per push, on the device, where nobody is looking. runServe checks it
+// before it knows whether push is even enabled, so a bad value is refused
+// under --auth off too: a flag that is quietly ignored is how an operator
+// finds out at the wrong moment.
+func resolveVAPIDSubject(v string) (string, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return defaultVAPIDSubject, nil
+	}
+	if !strings.HasPrefix(v, "mailto:") && !strings.HasPrefix(v, "https://") {
+		return "", fmt.Errorf("--vapid-subject %q must be a mailto: or https: URI (RFC 8292 §2.1)", v)
+	}
+	return v, nil
+}
+
+// newRelayPushSender builds the dispatcher's production delivery seam: the
+// relay's own VAPID identity, which signs every POST (RFC 8292), together
+// with the `sub` contact claim that RFC requires and Apple Web Push and
+// Mozilla autopush enforce. An empty subject falls back here as well as in
+// resolveVAPIDSubject: webpush.Sender omits the claim entirely for one, so
+// a second construction site that forgot to resolve would ship exactly the
+// JWT iOS refuses, and there is no value of subject worth that.
+func newRelayPushSender(svc *push.Service, subject string) *webpush.Sender {
+	if subject == "" {
+		subject = defaultVAPIDSubject
+	}
+	return &webpush.Sender{Key: svc.VAPIDKey(), Subject: subject}
+}
+
 // runServe parses the serve flags and runs the relay until SIGINT/SIGTERM.
 func runServe(args []string) {
 	cfg := parseServeFlags(args)
 	mustValidTLSPair(cfg.tlsCert, cfg.tlsKey)
 	tlsEnabled := cfg.tlsCert != ""
+
+	vapidSubject, err := resolveVAPIDSubject(cfg.vapidSubject)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	ddir := resolveDataDir(cfg.dataDirFlag)
 	store := buildAuthStore(cfg.auth, ddir)
@@ -293,7 +348,7 @@ func runServe(args []string) {
 		// (docs/mobile-notifications-arc42.md §5.1). Hooked before serving
 		// and stopped with the serve lifecycle; with push disabled the hook
 		// stays nil and the hub's behavior is unchanged.
-		obs := newPushObserver(pushSvc, store, &webpush.Sender{Key: pushSvc.VAPIDKey()}, nil)
+		obs := newPushObserver(pushSvc, store, newRelayPushSender(pushSvc, vapidSubject), notify.Config{}, nil)
 		h.setPushHook(obs)
 		go obs.run(stop)
 	}

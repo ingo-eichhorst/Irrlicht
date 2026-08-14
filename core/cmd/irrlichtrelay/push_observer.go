@@ -15,6 +15,7 @@ import (
 	"errors"
 	"log"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,6 +40,19 @@ const dispatchConcurrency = 8
 // deliveryDetailLimit caps the failure reason recorded in delivery health —
 // it is destined for a status line, not for parsing.
 const deliveryDetailLimit = 200
+
+// dropLogInterval throttles the queue-full log line, the way
+// rejectLogInterval throttles the hub's over-cap one: the queue fills only
+// when the relay is already behind, so a line per dropped event makes the
+// overload its own amplifier. The first drop speaks immediately and at most
+// one line per interval follows.
+const dropLogInterval = time.Second
+
+// sendDrainTimeout bounds how long shutdown waits for cancelled sends to
+// unwind. It sits well inside runServe's 5 s srv.Shutdown window, because
+// the two run in sequence: a longer bound here would spend the HTTP
+// server's grace period rather than the sends'.
+const sendDrainTimeout = 2 * time.Second
 
 // pushSender is the dispatcher's delivery seam. Production is
 // *webpush.Sender (its nil Client falls back to a shared 10 s-timeout
@@ -77,13 +91,27 @@ type pushObserver struct {
 	sender pushSender
 	now    func() time.Time
 
+	// cfg is handed to every engine this observer creates. The zero value
+	// is §8.4's policy table (notify.New fills each zero field), which is
+	// what production passes; a caller shortens individual knobs to drive
+	// the timer path without waiting out a 7 s hold-down.
+	cfg notify.Config
+
 	events  chan queuedEvent
-	dropped atomic.Uint64 // hook-side drops (queue full)
+	dropped atomic.Uint64 // hook-side drops (queue full), for this relay's lifetime
+	// lastDropLog is the unix-nanosecond stamp of the last queue-full log
+	// line, held as an atomic rather than under a mutex because the hook
+	// that writes it may be running under the hub's lock.
+	lastDropLog atomic.Int64
 
 	// inflight tracks spawned send goroutines; sem bounds how many POST
-	// concurrently.
+	// concurrently. ctx is the parent of every POST, cancelled by shutdown
+	// so a relay stopping mid-delivery does not leave requests open past
+	// the process's own grace window.
 	inflight sync.WaitGroup
 	sem      chan struct{}
+	ctx      context.Context
+	cancel   context.CancelFunc
 
 	mu      sync.Mutex
 	engines map[string]*notify.Engine // workspace → policy engine
@@ -92,11 +120,13 @@ type pushObserver struct {
 }
 
 // newPushObserver builds the observer and seeds the watchdog from the
-// persisted daemon roster. now is the injected clock; nil means time.Now.
-// The auth store is required: dispatch resolves every subscription's
-// workspace live through it (docs/mobile-notifications-arc42.md §8.1), and
-// an observer without one would have no isolation boundary to scope by.
-func newPushObserver(svc *push.Service, auth *authStore, sender pushSender, now func() time.Time) *pushObserver {
+// persisted daemon roster. cfg is the policy config every engine gets (the
+// zero value is §8.4's defaults); now is the injected clock, nil means
+// time.Now. The auth store is required: dispatch resolves every
+// subscription's workspace live through it
+// (docs/mobile-notifications-arc42.md §8.1), and an observer without one
+// would have no isolation boundary to scope by.
+func newPushObserver(svc *push.Service, auth *authStore, sender pushSender, cfg notify.Config, now func() time.Time) *pushObserver {
 	if auth == nil {
 		panic("push observer requires an auth store (docs/mobile-notifications-arc42.md §8.1)")
 	}
@@ -108,11 +138,13 @@ func newPushObserver(svc *push.Service, auth *authStore, sender pushSender, now 
 		auth:    auth,
 		sender:  sender,
 		now:     now,
+		cfg:     cfg,
 		events:  make(chan queuedEvent, observerQueueSize),
 		sem:     make(chan struct{}, dispatchConcurrency),
 		engines: make(map[string]*notify.Engine),
 		done:    make(chan struct{}),
 	}
+	o.ctx, o.cancel = context.WithCancel(context.Background())
 	o.seedFromRoster(o.now())
 	return o
 }
@@ -186,16 +218,41 @@ func sessionEvent(msg outbound.PushMessage) (notify.Event, bool) {
 
 // enqueue hands one mapped event to the observer goroutine without ever
 // blocking the caller (which may hold the hub's lock). A full queue DROPS
-// the event, counted and logged with the workspace so inability to observe
-// is never silent (docs/mobile-notifications-arc42.md §8.3). The drop is
-// safe to take: the engine is diff-driven, so a lost session update
-// self-heals at the session's next update or snapshot reconcile.
+// the event, counted always and logged at most once per dropLogInterval so
+// inability to observe is never silent (docs/mobile-notifications-arc42.md
+// §8.3) and never becomes the load itself. Every line carries the lifetime
+// total, and shutdown reports the final one, so the counter is read by a
+// human rather than only incremented. The drop is safe to take: the engine
+// is diff-driven, so a lost session update self-heals at the session's next
+// update or snapshot reconcile.
 func (o *pushObserver) enqueue(workspace string, ev notify.Event) {
 	select {
 	case o.events <- queuedEvent{workspace: workspace, ev: ev}:
+		return
 	default:
-		o.dropped.Add(1)
-		log.Printf("push: observer queue full — dropping %s event for workspace %q (self-heals at the next update or snapshot)", ev.Kind, workspace)
+	}
+	total := o.dropped.Add(1)
+	if !o.claimDropLog() {
+		return
+	}
+	log.Printf("push: observer queue full — dropping %s event for workspace %q (%d dropped since start; further drop lines throttled to one per %s; each self-heals at the next update or snapshot)",
+		ev.Kind, workspace, total, dropLogInterval)
+}
+
+// claimDropLog reports whether this drop is the one allowed to speak in the
+// current interval. Compare-and-swap rather than a mutex: the caller may be
+// holding the hub's lock, and blocking on a contended mutex here is exactly
+// what the hook contract forbids.
+func (o *pushObserver) claimDropLog() bool {
+	now := o.now().UnixNano()
+	for {
+		last := o.lastDropLog.Load()
+		if last != 0 && now-last < int64(dropLogInterval) {
+			return false
+		}
+		if o.lastDropLog.CompareAndSwap(last, now) {
+			return true
+		}
 	}
 }
 
@@ -231,8 +288,33 @@ func (o *pushObserver) run(stop <-chan struct{}) {
 		case <-timer.C:
 			o.tick(o.now())
 		case <-stop:
+			o.shutdown()
 			return
 		}
+	}
+}
+
+// shutdown cancels every in-flight POST and waits a bounded time for the
+// send goroutines to unwind, so run does not return while a request is
+// still open: runServe closes stop and then gives srv.Shutdown five
+// seconds, and an abandoned dispatch goroutine spends that window without
+// anyone accounting for it. Sends that outlast the bound are reported and
+// left — the process is going away regardless, and a shutdown that hangs on
+// an unresponsive push service is worse than one that says what it dropped.
+func (o *pushObserver) shutdown() {
+	o.cancel()
+	drained := make(chan struct{})
+	go func() {
+		o.inflight.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(sendDrainTimeout):
+		log.Printf("push: %s elapsed with push deliveries still in flight — abandoning them", sendDrainTimeout)
+	}
+	if n := o.dropped.Load(); n > 0 {
+		log.Printf("push: %d observed event(s) were dropped by a full observer queue over this relay's lifetime (docs/mobile-notifications-arc42.md §8.3)", n)
 	}
 }
 
@@ -256,7 +338,7 @@ func (o *pushObserver) drive(workspace string, ev notify.Event, now time.Time) {
 	o.mu.Lock()
 	eng := o.engines[workspace]
 	if eng == nil {
-		eng = notify.New(notify.Config{})
+		eng = notify.New(o.cfg)
 		o.engines[workspace] = eng
 	}
 	pushes := eng.Handle(ev, now)
@@ -305,6 +387,27 @@ func (o *pushObserver) nextWake() (time.Time, bool) {
 // from the token store per send — the registry persists no workspace copy,
 // so a revoked token has no workspace at all and simply matches nothing
 // (docs/mobile-notifications-arc42.md §8.1).
+//
+// Two pushes sharing a Topic are NOT ordered against each other, and the
+// window is stated here rather than closed. Each goes to its own goroutine,
+// they queue on the semaphore independently, and RFC 8030 §5.4 collapse
+// happens in ARRIVAL order at the push service — so the older banner wins
+// whenever its POST is accepted last, and it then sits on the phone until
+// that Topic's next push. The window is one scheduling delay plus one round
+// trip, bounded by the sender's 10 s client timeout.
+//
+// What it takes to reach: two pushes on one Topic, less than a round trip
+// apart. §8.4's per-(session, edge) cooldown and the 7 s ready hold-down
+// keep two SESSION pushes that far apart under any healthy round trip, so
+// the exposed pair is the daemon Topic — a down fired by tick and an up
+// folded by handle have no minimum separation at all, and a link that flaps
+// inside a slow POST can leave "disconnected" showing for a daemon that is
+// back.
+//
+// It is left open on purpose: closing it means serializing the send
+// goroutines per Topic, and a keyed lock held across a POST while the
+// semaphore is saturated trades a display-ordering bug for a deadlock
+// shape. The honest bound is the paragraph above, not a partial fix.
 func (o *pushObserver) dispatch(workspace string, pushes []notify.Push) {
 	for _, p := range pushes {
 		payload, err := json.Marshal(pushPayload{Payload: p.Payload, Renotify: p.Renotify})
@@ -329,28 +432,43 @@ func (o *pushObserver) dispatch(workspace string, pushes []notify.Push) {
 // a visible verdict). A gone subscription (404/410) is pruned rather than
 // retried: the phone re-subscribes with its stored device token on its next
 // open.
+//
+// Both waits select on the observer's context: a goroutine queued behind
+// the semaphore when the relay stops never opens its request at all, and
+// one already POSTing has that request cancelled. Neither is a delivery
+// verdict, so neither writes delivery health — overwriting a real outcome
+// with "context canceled" at every shutdown would make the §8.3 panel
+// answer "the last attempt failed" for a subscription that is fine.
 func (o *pushObserver) sendAsync(entry push.Entry, payload []byte, opts webpush.Options) {
 	o.inflight.Add(1)
 	go func() {
 		defer o.inflight.Done()
-		o.sem <- struct{}{}
+		select {
+		case o.sem <- struct{}{}:
+		case <-o.ctx.Done():
+			return
+		}
 		defer func() { <-o.sem }()
-		err := o.sender.Send(context.Background(), entry.Subscription, payload, opts)
+		err := o.sender.Send(o.ctx, entry.Subscription, payload, opts)
+		if err != nil && o.ctx.Err() != nil {
+			return
+		}
 		at := o.now().Unix()
+		reason := func() string { return sendFailureReason(entry.Subscription.Endpoint, err) }
 		switch {
 		case err == nil:
 			o.svc.SetDeliveryStatus(entry.TokenID, push.DeliveryStatus{At: at, OK: true})
 		case errors.Is(err, webpush.ErrSubscriptionGone):
 			// The webpush error already names only the endpoint's origin,
 			// never the path (the subscription's capability secret).
-			log.Printf("push: subscription for token %s is gone — pruning: %s", entry.TokenID, sendFailureReason(err))
+			log.Printf("push: subscription for token %s is gone — pruning: %s", entry.TokenID, reason())
 			if derr := o.svc.DeleteSubscription(entry.TokenID); derr != nil {
 				log.Printf("push: pruning subscription for token %s: %v", entry.TokenID, derr)
 			}
-			o.svc.SetDeliveryStatus(entry.TokenID, push.DeliveryStatus{At: at, OK: false, Detail: sendFailureReason(err)})
+			o.svc.SetDeliveryStatus(entry.TokenID, push.DeliveryStatus{At: at, OK: false, Detail: reason()})
 		default:
-			log.Printf("push: delivery to token %s failed: %s", entry.TokenID, sendFailureReason(err))
-			o.svc.SetDeliveryStatus(entry.TokenID, push.DeliveryStatus{At: at, OK: false, Detail: sendFailureReason(err)})
+			log.Printf("push: delivery to token %s failed: %s", entry.TokenID, reason())
+			o.svc.SetDeliveryStatus(entry.TokenID, push.DeliveryStatus{At: at, OK: false, Detail: reason()})
 		}
 	}()
 }
@@ -367,20 +485,49 @@ func webpushUrgency(u notify.Urgency) webpush.Urgency {
 // detail — the only two places a send error is ever formatted, so the
 // redaction below covers both exits at once.
 //
-// A transport failure surfaces as a *url.Error carrying the whole request
-// URL, and http.Client wraps it again on the way out, so the endpoint's PATH
-// — the subscription's capability secret (RFC 8030 §8.3) — ends up in the
-// rendered message twice over. Substituting the origin for the URL keeps the
-// host, which is what makes an outage diagnosable, and drops the half that
-// would let a log reader push to the phone.
-func sendFailureReason(err error) string {
-	msg := err.Error()
+// The endpoint's PATH is the subscription's capability secret (RFC 8030
+// §8.3) and must reach neither. Which string a failure carries it in is not
+// derivable from the error's type: a transport failure surfaces as a
+// *url.Error rendering the whole request URL, while a push service answering
+// non-2xx comes back as a *webpush.StatusError whose body is the RFC 7807
+// problem+json RFC 8030 §8.2 asks for — and problem+json's `instance` member
+// names that same URL. Keying on *url.Error therefore redacts one shape and
+// waves the other through. The redaction is driven instead by the endpoint
+// the send was ADDRESSED to, which the dispatcher knows whatever the failure
+// looks like; the *url.Error's own URL is redacted on top, for the cases
+// where the two differ. Substituting the origin keeps the host, which is
+// what makes an outage diagnosable, and drops the half that would let a log
+// reader push to the phone.
+func sendFailureReason(endpoint string, err error) string {
+	msg := redactEndpointIn(err.Error(), endpoint)
 	var ue *url.Error
 	if errors.As(err, &ue) && ue.URL != "" {
-		msg = strings.ReplaceAll(msg, ue.URL, redactedEndpoint(ue.URL))
+		msg = redactEndpointIn(msg, ue.URL)
 	}
 	if len(msg) > deliveryDetailLimit {
 		msg = msg[:deliveryDetailLimit]
+	}
+	return msg
+}
+
+// redactEndpointIn substitutes the origin for EVERY occurrence of endpoint
+// in msg, in both spellings it can appear in.
+//
+// Every occurrence, because a single failure names it more than once —
+// problem+json repeats the resource in `instance` and again in the
+// human-readable detail. Both spellings, because net/url.Error and fmt
+// render a URL with %q, which escapes what strconv.Quote escapes: an
+// endpoint carrying such a byte (a registry restored from backup or edited
+// by hand holds whatever it holds — Subscription.Validate only gates the
+// door) appears escaped in the message and the raw substitution misses it.
+func redactEndpointIn(msg, endpoint string) string {
+	if endpoint == "" {
+		return msg
+	}
+	redacted := redactedEndpoint(endpoint)
+	msg = strings.ReplaceAll(msg, endpoint, redacted)
+	if quoted := strconv.Quote(endpoint); quoted != `"`+endpoint+`"` {
+		msg = strings.ReplaceAll(msg, quoted[1:len(quoted)-1], redacted)
 	}
 	return msg
 }

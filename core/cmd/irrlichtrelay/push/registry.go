@@ -48,25 +48,34 @@ func (s *Service) SetSubscription(tokenID string, sub webpush.Subscription) erro
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	created := s.now().Unix()
 	if prev, ok := s.subs[tokenID]; ok {
 		created = prev.Created // a re-registered address keeps its pairing's age
 	}
 	s.subs[tokenID] = Entry{TokenID: tokenID, Created: created, Subscription: sub}
-	return s.saveSubscriptionsLocked()
+	data, seq, err := s.subsSnapshotLocked()
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return s.saveSubscriptions(data, seq)
 }
 
 // DeleteSubscription drops tokenID's entry. Idempotent, and a no-op delete
 // rewrites nothing.
 func (s *Service) DeleteSubscription(tokenID string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, ok := s.subs[tokenID]; !ok {
+		s.mu.Unlock()
 		return nil
 	}
 	delete(s.subs, tokenID)
-	return s.saveSubscriptionsLocked()
+	data, seq, err := s.subsSnapshotLocked()
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return s.saveSubscriptions(data, seq)
 }
 
 // SubscriptionOf returns tokenID's registered entry, ok=false when none
@@ -92,7 +101,6 @@ func (s *Service) Subscriptions() []Entry {
 // when that is non-zero.
 func (s *Service) Prune(valid func(tokenID string) bool) int {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	dropped := 0
 	for id := range s.subs {
 		if !valid(id) {
@@ -100,12 +108,32 @@ func (s *Service) Prune(valid func(tokenID string) bool) int {
 			dropped++
 		}
 	}
-	if dropped > 0 {
-		if err := s.saveSubscriptionsLocked(); err != nil {
-			// The in-memory drop already happened (no push will be sent);
-			// the stale file entry is re-pruned on the next change or start.
-			log.Printf("push: writing %s after prune: %v", registryFilename, err)
+	// The delivery-health record goes with the identity, not with the
+	// address. It deliberately outlives the SUBSCRIPTION — a phone pruned
+	// on 410 keeps its last failure visible, which is the state the §8.3
+	// panel exists to explain — but a token that no longer exists can never
+	// read its own record (the health endpoint authenticates with that very
+	// token) and nothing will ever replace it.
+	for id := range s.health {
+		if !valid(id) {
+			delete(s.health, id)
 		}
+	}
+	if dropped == 0 {
+		s.mu.Unlock()
+		return 0
+	}
+	data, seq, err := s.subsSnapshotLocked()
+	s.mu.Unlock()
+
+	// The in-memory drop already happened (no push will be sent); a stale
+	// file entry is re-pruned on the next change or start.
+	if err != nil {
+		log.Printf("push: encoding %s after prune: %v", registryFilename, err)
+		return dropped
+	}
+	if err := s.saveSubscriptions(data, seq); err != nil {
+		log.Printf("push: writing %s after prune: %v", registryFilename, err)
 	}
 	return dropped
 }
@@ -137,13 +165,18 @@ func (s *Service) sortedEntriesLocked() []Entry {
 	return out
 }
 
-// saveSubscriptionsLocked rewrites the registry file. Caller holds mu.
-func (s *Service) saveSubscriptionsLocked() error {
+// subsSnapshotLocked marshals the registry and stamps it with the sequence
+// number saveSubscriptions orders by. Caller holds mu.
+func (s *Service) subsSnapshotLocked() ([]byte, uint64, error) {
+	s.subsSeq++
 	data, err := json.MarshalIndent(registryFile{Version: 1, Subscriptions: s.sortedEntriesLocked()}, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeFileAtomic(filepath.Join(s.dir, registryFilename), data, 0o600)
+	return data, s.subsSeq, err
+}
+
+// saveSubscriptions carries one marshalled snapshot to disk, outside the
+// Service lock and never behind a fresher one.
+func (s *Service) saveSubscriptions(data []byte, seq uint64) error {
+	return s.subsOut.write(s.writeFile, filepath.Join(s.dir, registryFilename), data, 0o600, seq)
 }
 
 // loadSubscriptions reads the persisted registry; a missing file is an empty

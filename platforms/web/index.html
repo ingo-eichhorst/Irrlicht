@@ -10,10 +10,16 @@
        pairing is harmless; push only ever follows the explicit pairing flow. -->
   <link rel="manifest" href="beacon.webmanifest">
   <!-- The manifest's theme_color is a single value, so the installed app would
-       wear the dark chrome on a light phone. These two override it per scheme —
-       the only theme-aware surface the CSS tokens cannot reach, since the OS
-       paints the status bar and splash before the stylesheet exists. Values
-       match --bg in each palette (irrlicht.css). -->
+       wear the dark chrome on a light phone. These two override it per scheme,
+       for the surface the CSS tokens cannot reach: the OS paints the browser
+       chrome before the stylesheet exists. Values match --bg in each palette
+       (irrlicht.css).
+       What they do NOT reach is the manifest's background_color — the splash
+       the OS paints at launch. The Web App Manifest format has one value per
+       key and no media-query form, so that surface stays on the dark palette
+       and a light-mode phone gets a dark frame before the first paint. Stated
+       rather than fixed: there is nowhere to put the second value.
+       platforms/web/release-files.test.js pins all three to the same palette. -->
   <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#080c16" media="(prefers-color-scheme: dark)">
 </head>

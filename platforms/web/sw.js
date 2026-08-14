@@ -26,6 +26,24 @@ function genericNotification() {
   };
 }
 
+// The daemon collapse key, spelled to match the relay's own: daemonTopic in
+// core/domain/notify/engine.go is "daemon:" + id, and `daemon_id` is
+// `omitempty` on the wire (Payload in core/domain/notify/notify.go), so an
+// empty id arrives as an absent field. Concatenating it undefined would make
+// the tag "daemon:undefined" while the relay's Topic stayed "daemon:" — the
+// two stop matching and a later daemon notification no longer replaces the
+// earlier one (arc42 §8.4, R3).
+function daemonTag(payload) {
+  return 'daemon:' + (payload.daemon_id || '');
+}
+
+// Same shape as the session kind's label fallback: an id if there is one, a
+// neutral noun if there is not — never the string "undefined" in a title the
+// user reads.
+function daemonName(payload) {
+  return payload.daemon_label || payload.daemon_id || 'this Mac';
+}
+
 // On-device composition (arc42 §8.2): the relay sends structured data (ids,
 // labels, states), never prose — the text a user reads is composed here, on
 // the phone. `tag` mirrors the relay's collapse key exactly (arc42 §8.4):
@@ -54,16 +72,16 @@ self.composeNotification = function (payload) {
       };
     case 'daemon_down':
       return {
-        title: 'Mac ' + (payload.daemon_label || payload.daemon_id) + ' disconnected',
+        title: 'Mac ' + daemonName(payload) + ' disconnected',
         body: '',
-        tag: 'daemon:' + payload.daemon_id,
+        tag: daemonTag(payload),
         renotify: !!payload.renotify,
       };
     case 'daemon_up':
       return {
-        title: 'Mac ' + (payload.daemon_label || payload.daemon_id) + ' reconnected',
+        title: 'Mac ' + daemonName(payload) + ' reconnected',
         body: '',
-        tag: 'daemon:' + payload.daemon_id,
+        tag: daemonTag(payload),
         renotify: !!payload.renotify,
       };
     default:
@@ -79,6 +97,27 @@ self.composeNotification = function (payload) {
 // has no IndexedDB and the repo takes no new deps, so the IndexedDB half has
 // structural coverage only (the calls exist and are wired); the fold decisions
 // (which payloads write, what is written) are what the tests pin.
+//
+// DEFERRED, and named here rather than left to be discovered: this ledger is
+// WRITE-ONLY. Three things §8.5 and R6 describe do not exist yet, and each is
+// deferred for a reason, not an oversight.
+//   · Nothing reads it back. A read alone would buy nothing without the next
+//     two, so it lands with them.
+//   · No fold from WS snapshots while the app is open. §8.4 never pushes on
+//     `* → working`, so a backgrounded phone only ever LEARNS that sessions
+//     need attention and never that one stopped — which is why the §6.2
+//     diagram's `set badge` is absent too: derived from this ledger alone a
+//     badge would climb and never fall. The correcting fold belongs to the
+//     dashboard's own WS path, not to this worker.
+//   · No deep link on notificationclick (R6, "opens the app on that session's
+//     last-known state"): the payload carries the relay's bare session id,
+//     while the dashboard re-keys relay-sourced sessions to a compound
+//     `<source>:<id>` before writing `data-session-id` on a row (see the
+//     compoundSessionId rewrites in irrlicht.js). A link keyed on the bare id
+//     would select nothing, silently, for exactly the sessions push
+//     notifications are about — so the mapping is part of the work, and the
+//     work is a slice rather than a line.
+// Until they land, a tap focuses or opens the app at its start URL, below.
 self.ledgerStore = function (backend) {
   return {
     update: function (payload) {

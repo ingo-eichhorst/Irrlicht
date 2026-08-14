@@ -39,12 +39,56 @@ type Service struct {
 
 	vapid *webpush.VAPIDKey
 
+	// writeFile performs every persisted write. It is a field so a test can
+	// stand in a slow or failing disk: what these files have to get right
+	// — that a write never runs under mu, and that a stale snapshot never
+	// lands on a fresh one — is invisible while every write returns in
+	// microseconds. Production is writeFileAtomic and nothing else sets it.
+	writeFile func(path string, data []byte, perm os.FileMode) error
+
 	mu       sync.Mutex
 	codes    []pairingCode
 	failures []time.Time               // failed Redeem timestamps within the rolling window
 	subs     map[string]Entry          // device token id → registered subscription
 	roster   map[rosterKey]RosterEntry // known daemons for the §6.4 watchdog
 	health   map[string]DeliveryStatus // device token id → last send outcome (RAM only, §8.6)
+
+	// Each snapshot taken under mu is stamped with the next value of its
+	// file's counter; the matching fileWriter carries snapshots to disk in
+	// that order, outside mu.
+	rosterSeq uint64
+	subsSeq   uint64
+
+	rosterOut fileWriter
+	subsOut   fileWriter
+}
+
+// fileWriter serializes one file's writes and declines a snapshot that a
+// fresher one has already overtaken.
+//
+// It exists because of the split that keeps a slow disk off Service.mu:
+// marshalling under the lock and writing outside it lets two writers reach
+// the disk in the opposite order to the one they took their snapshots in,
+// and the older one landing last is a file that describes a state the
+// Service has already left. The sequence number is what forbids that.
+type fileWriter struct {
+	mu      sync.Mutex
+	written uint64
+}
+
+// write persists data at path unless a snapshot at least as fresh as seq
+// has already reached it.
+func (w *fileWriter) write(writeFile func(string, []byte, os.FileMode) error, path string, data []byte, perm os.FileMode, seq uint64) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if seq <= w.written {
+		return nil
+	}
+	if err := writeFile(path, data, perm); err != nil {
+		return err
+	}
+	w.written = seq
+	return nil
 }
 
 // NewService loads (or on first run creates) the push state under dir. now
@@ -55,11 +99,12 @@ func NewService(dir string, now func() time.Time) (*Service, error) {
 		now = time.Now
 	}
 	s := &Service{
-		dir:    dir,
-		now:    now,
-		subs:   map[string]Entry{},
-		roster: map[rosterKey]RosterEntry{},
-		health: map[string]DeliveryStatus{},
+		dir:       dir,
+		now:       now,
+		writeFile: writeFileAtomic,
+		subs:      map[string]Entry{},
+		roster:    map[rosterKey]RosterEntry{},
+		health:    map[string]DeliveryStatus{},
 	}
 	if err := s.loadOrCreateVAPID(); err != nil {
 		return nil, err
@@ -92,7 +137,7 @@ func (s *Service) loadOrCreateVAPID() error {
 		if err != nil {
 			return err
 		}
-		if err := writeFileAtomic(path, out, 0o600); err != nil {
+		if err := s.writeFile(path, out, 0o600); err != nil {
 			return err
 		}
 		s.vapid = key
@@ -146,8 +191,36 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		tmp.Close()
 		return err
 	}
+	// The rename is atomic against a crashing PROCESS on its own; against a
+	// crashing HOST it is not, because the kernel may carry the rename to
+	// disk ahead of the bytes it renames. The file most likely to be caught
+	// that way is vapid-keys.json, and a corrupt one is the single case
+	// this package refuses to repair by itself — every paired phone is
+	// bound to the identity inside it.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	syncDir(dir)
+	return nil
+}
+
+// syncDir flushes the directory entry the rename above created, so the new
+// name survives a host crash rather than only the new bytes. Best-effort
+// and deliberately not an error: the write itself has already succeeded, so
+// a filesystem that will not open or fsync its own directory must not turn
+// a completed write into a reported failure.
+func syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	defer d.Close()
+	_ = d.Sync()
 }

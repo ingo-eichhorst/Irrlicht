@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest'
 import {
   initBeacon, urlBase64ToUint8Array, formatPairingCode, normalizePairingCode, countdownText,
+  healthLineText,
 } from './beacon.js'
 
 // Beacon pairing + settings UI (docs/mobile-notifications-arc42.md §6.1,
@@ -14,22 +15,28 @@ const VAPID = 'AQID__-_BAU'
 const VAPID_BYTES = [1, 2, 3, 255, 255, 191, 4, 5]
 
 const flush = async () => {
-  await new Promise((r) => setTimeout(r, 0))
-  await new Promise((r) => setTimeout(r, 0))
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0))
 }
 
 // Routes keyed "METHOD url" (urls are the same-origin relative strings the
-// module must use); anything unrouted answers 404. Returns the call log.
+// module must use); anything unrouted answers 404. A route may carry `replies`
+// — an array consumed one call at a time — so a test can express "the relay
+// answers differently once the self-heal has run". Returns the call log.
 function relayFetch(routes) {
   const calls = []
   global.fetch = (url, opts = {}) => {
     const method = opts.method || 'GET'
     const u = String(url)
     calls.push({ url: u, method, opts })
-    const route = routes[method + ' ' + u]
+    let route = routes[method + ' ' + u]
     if (!route) return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve(null) })
+    if (Array.isArray(route.replies)) route = route.replies.length > 1 ? route.replies.shift() : route.replies[0]
+    if (route.throws) return Promise.reject(new TypeError('Failed to fetch'))
     const status = route.status || 200
-    return Promise.resolve({ ok: status < 300, status, json: () => Promise.resolve(route.body ?? null) })
+    const json = route.badJson
+      ? () => Promise.reject(new SyntaxError('Unexpected token < in JSON at position 0'))
+      : () => Promise.resolve(route.body ?? null)
+    return Promise.resolve({ ok: status < 300, status, json })
   }
   return calls
 }
@@ -42,10 +49,52 @@ function fakeSubscription() {
   }
 }
 
-function mockServiceWorker(reg) {
+// A registration shaped like the one the browser actually hands back:
+// `register()` resolves while the worker is still installing, so `active` is
+// null, and `pushManager.subscribe()` rejects for exactly as long as it stays
+// null (the Push API has no active worker to bind the subscription to).
+// `navigator.serviceWorker.ready` is the signal that activation finished.
+// The mock this replaced resolved everything instantly and had no `active` at
+// all, which is why the pairing flow's activation race was invisible here.
+function activatingRegistration({ subscription = null, subscribeFails = false } = {}) {
+  const reg = {
+    active: null,
+    pushManager: {
+      getSubscription: vi.fn(() => Promise.resolve(subscription)),
+      subscribe: vi.fn(() => {
+        if (!reg.active) {
+          return Promise.reject(
+            new DOMException('Subscription failed - no active Service Worker', 'AbortError'),
+          )
+        }
+        if (subscribeFails) {
+          return Promise.reject(new DOMException('Registration failed - push service error', 'AbortError'))
+        }
+        return Promise.resolve(fakeSubscription())
+      }),
+    },
+  }
+  return reg
+}
+
+// The activation clock starts when a registration comes into existence, not
+// when the mock is built — otherwise a test that flushes a few ticks before
+// clicking hands the module an already-active worker and the race disappears
+// again. `activates: false` is the worker that never reaches `activated`.
+function mockServiceWorker(reg, { activates = true } = {}) {
+  let resolveReady
+  const ready = new Promise((r) => { resolveReady = r })
+  const startActivating = () => {
+    if (!activates || reg.active) return
+    setTimeout(() => {
+      reg.active = { state: 'activated' }
+      resolveReady(reg)
+    }, 0)
+  }
   const sw = {
-    register: vi.fn(() => Promise.resolve(reg)),
-    getRegistration: vi.fn(() => Promise.resolve(reg)),
+    register: vi.fn(() => { startActivating(); return Promise.resolve(reg) }),
+    getRegistration: vi.fn(() => { startActivating(); return Promise.resolve(reg) }),
+    ready,
   }
   Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: sw })
   return sw
@@ -115,16 +164,17 @@ describe('phone-side pairing (arc42 §6.1)', () => {
       'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
       'POST api/v1/push/pair': { body: { token: 'dev-tok-1', token_id: 't1', vapid_public_key: VAPID } },
       'POST api/v1/push/subscriptions': { status: 201, body: {} },
+      // Faithful to handleSubscriptionStatus in
+      // core/cmd/irrlichtrelay/push_handlers.go: `created` is unix seconds and
+      // `last_delivery` is an object, never a string.
       'GET api/v1/push/subscriptions': {
-        body: { registered: true, created: '2026-08-14', endpoint_host: 'web.push.apple.com', last_delivery: '2026-08-14T10:00:00Z' },
+        body: {
+          registered: true, created: 1755165000, endpoint_host: 'web.push.apple.com',
+          last_delivery: { at: 1755165120, ok: true },
+        },
       },
     })
-    const reg = {
-      pushManager: {
-        getSubscription: vi.fn(() => Promise.resolve(null)),
-        subscribe: vi.fn(() => Promise.resolve(fakeSubscription())),
-      },
-    }
+    const reg = activatingRegistration()
     const sw = mockServiceWorker(reg)
 
     await initBeacon()
@@ -154,8 +204,144 @@ describe('phone-side pairing (arc42 §6.1)', () => {
     })
     expect(localStorage.getItem('beaconDeviceToken')).toBe('dev-tok-1')
     // Health panel replaces the entry form.
-    expect(document.getElementById('beacon-health-line').textContent).toContain('web.push.apple.com')
+    const health = document.getElementById('beacon-health-line').textContent
+    expect(health).toContain('web.push.apple.com')
+    expect(health).not.toContain('[object Object]')
     expect(document.getElementById('beacon-unpair')).toBeTruthy()
+  })
+
+  test('subscribe waits for the worker to activate — register() alone is not enough', async () => {
+    const calls = relayFetch({
+      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST api/v1/push/pair': { body: { token: 'dev-tok-a', vapid_public_key: VAPID } },
+      'POST api/v1/push/subscriptions': { status: 201, body: {} },
+      'GET api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
+    })
+    const reg = activatingRegistration()
+    mockServiceWorker(reg)
+
+    await initBeacon()
+    await flush()
+    document.getElementById('beacon-code-input').value = 'AB12CD34'
+    document.getElementById('beacon-pair-submit').click()
+    await flush()
+
+    // The Push API binds a subscription to the registration's ACTIVE worker;
+    // subscribing in the turn register() resolves rejects on a real device
+    // (arc42 §6.1's "subscribe(VAPID pub)" step comes after the worker is up).
+    expect(reg.active, 'subscribed before navigator.serviceWorker.ready resolved').not.toBeNull()
+    expect(calls.some((c) => c.method === 'POST' && c.url === 'api/v1/push/subscriptions')).toBe(true)
+  })
+
+  test('a subscribe that fails leaves a verdict naming the spent code, never a frozen "Pairing…"', async () => {
+    relayFetch({
+      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST api/v1/push/pair': { body: { token: 'dev-tok-b', vapid_public_key: VAPID } },
+    })
+    mockServiceWorker(activatingRegistration({ subscribeFails: true }))
+
+    await initBeacon()
+    await flush()
+    document.getElementById('beacon-code-input').value = 'AB12CD34'
+    document.getElementById('beacon-pair-submit').click()
+    await flush()
+
+    const status = document.getElementById('beacon-pair-status').textContent
+    expect(status).not.toBe('Pairing…')
+    // The code is single-use (arc42 ADR-3) and this attempt spent it — the
+    // user cannot retry with the same one, which is the part they must be told.
+    expect(status).toMatch(/code/i)
+    expect(status).toMatch(/mint|fresh|new code/i)
+    // Identity survived the failure, so the §8.3 self-heal can finish the job.
+    expect(localStorage.getItem('beaconDeviceToken')).toBe('dev-tok-b')
+  })
+
+  test('permission is requested inside the click, before any network round-trip (iOS activation, ADR-2/C3)', async () => {
+    const order = []
+    global.Notification = class {
+      static permission = 'default'
+      static requestPermission = vi.fn(() => {
+        order.push('permission')
+        return Promise.resolve('granted')
+      })
+    }
+    relayFetch({
+      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST api/v1/push/pair': { body: { token: 'dev-tok-c', vapid_public_key: VAPID } },
+      'POST api/v1/push/subscriptions': { status: 201, body: {} },
+      'GET api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
+    })
+    const reg = activatingRegistration()
+    const sw = mockServiceWorker(reg)
+    sw.register = vi.fn(() => {
+      order.push('register')
+      return Promise.resolve(reg)
+    })
+
+    await initBeacon()
+    await flush()
+    const originalFetch = global.fetch
+    global.fetch = (url, opts = {}) => {
+      order.push((opts.method || 'GET') + ' ' + url)
+      return originalFetch(url, opts)
+    }
+    document.getElementById('beacon-code-input').value = 'AB12CD34'
+    document.getElementById('beacon-pair-submit').click()
+    await flush()
+
+    // Transient user activation is what makes the prompt appear at all, and it
+    // does not survive a network round-trip plus a worker registration.
+    expect(order[0]).toBe('permission')
+  })
+
+  test('a worker that never activates fails the pairing rather than wedging it', async () => {
+    vi.useFakeTimers()
+    try {
+      relayFetch({
+        'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+        'POST api/v1/push/pair': { body: { token: 'dev-tok-e', vapid_public_key: VAPID } },
+      })
+      // navigator.serviceWorker.ready never resolves — the phone whose worker
+      // is stuck installing. Without a bound, "Pairing…" is the last thing the
+      // user ever sees, with the code spent.
+      mockServiceWorker(activatingRegistration(), { activates: false })
+
+      await initBeacon()
+      await vi.advanceTimersByTimeAsync(1)
+      document.getElementById('beacon-code-input').value = 'AB12CD34'
+      document.getElementById('beacon-pair-submit').click()
+      await vi.advanceTimersByTimeAsync(20000)
+
+      const status = document.getElementById('beacon-pair-status').textContent
+      expect(status).not.toBe('Pairing…')
+      expect(status).toContain('did not start')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('permission refused does not spend the code — the pair POST never happens', async () => {
+    global.Notification = class {
+      static permission = 'default'
+      static requestPermission = vi.fn(() => Promise.resolve('denied'))
+    }
+    const calls = relayFetch({
+      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST api/v1/push/pair': { body: { token: 'dev-tok-d', vapid_public_key: VAPID } },
+    })
+    mockServiceWorker(activatingRegistration())
+
+    await initBeacon()
+    await flush()
+    document.getElementById('beacon-code-input').value = 'AB12CD34'
+    document.getElementById('beacon-pair-submit').click()
+    await flush()
+
+    expect(calls.some((c) => c.url === 'api/v1/push/pair')).toBe(false)
+    expect(localStorage.getItem('beaconDeviceToken')).toBeNull()
+    const status = document.getElementById('beacon-pair-status').textContent
+    expect(status).toMatch(/notification/i)
+    expect(status).toMatch(/still|again/i)
   })
 
   test('401 shows the uniform rejected-code message (wrong = expired = used)', async () => {
@@ -163,6 +349,7 @@ describe('phone-side pairing (arc42 §6.1)', () => {
       'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
       'POST api/v1/push/pair': { status: 401, body: {} },
     })
+    mockServiceWorker(activatingRegistration())
     await initBeacon()
     await flush()
     document.getElementById('beacon-code-input').value = 'AB12CD34'
@@ -177,6 +364,7 @@ describe('phone-side pairing (arc42 §6.1)', () => {
       'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
       'POST api/v1/push/pair': { status: 429, body: {} },
     })
+    mockServiceWorker(activatingRegistration())
     await initBeacon()
     await flush()
     document.getElementById('beacon-code-input').value = 'AB12CD34'
@@ -197,12 +385,7 @@ describe('self-heal on open (arc42 §8.3)', () => {
       'POST api/v1/push/subscriptions': { status: 201, body: {} },
       'GET api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'fcm.googleapis.com', last_delivery: null } },
     })
-    const reg = {
-      pushManager: {
-        getSubscription: vi.fn(() => Promise.resolve(null)),
-        subscribe: vi.fn(() => Promise.resolve(fakeSubscription())),
-      },
-    }
+    const reg = activatingRegistration()
     mockServiceWorker(reg)
 
     await initBeacon()
@@ -213,6 +396,136 @@ describe('self-heal on open (arc42 §8.3)', () => {
     expect([...subOpts.applicationServerKey]).toEqual(VAPID_BYTES)
     const subPost = calls.find((c) => c.method === 'POST' && c.url === 'api/v1/push/subscriptions')
     expect(subPost.opts.headers.Authorization).toBe('Bearer dev-tok-2')
+  })
+
+  test('browser still holds the subscription but the relay lost it → re-POST, then a fresh verdict', async () => {
+    localStorage.setItem('beaconDeviceToken', 'dev-tok-4')
+    const sub = fakeSubscription()
+    const calls = relayFetch({
+      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST api/v1/push/subscriptions': { status: 201, body: {} },
+      // A relay whose registry lost this phone (restored backup, pruned entry,
+      // registry deleted per arc42 §8.6) answers registered:false while the
+      // browser's own subscription is intact — then registered:true once the
+      // self-heal has re-POSTed it.
+      'GET api/v1/push/subscriptions': {
+        replies: [
+          { body: { registered: false, last_delivery: null } },
+          { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
+        ],
+      },
+    })
+    const reg = activatingRegistration({ subscription: sub })
+    mockServiceWorker(reg)
+
+    await initBeacon()
+    await flush()
+
+    const subPost = calls.find((c) => c.method === 'POST' && c.url === 'api/v1/push/subscriptions')
+    expect(subPost, 'the relay reported the subscription gone and nothing re-registered it').toBeTruthy()
+    expect(subPost.opts.headers.Authorization).toBe('Bearer dev-tok-4')
+    // The address the browser already holds is what gets re-registered — no
+    // second subscribe is needed, and the device token is the identity that
+    // makes the re-POST safe (arc42 §8.1).
+    expect(JSON.parse(subPost.opts.body).endpoint).toBe('https://web.push.example/abc')
+    // The panel must show the state AFTER the repair, not the one that
+    // prompted it — otherwise it advises reopening an app that just healed.
+    const line = document.getElementById('beacon-health-line').textContent
+    expect(line).toContain('web.push.apple.com')
+    expect(line).not.toContain('reopen')
+  })
+
+  test('a revoked device token (401) is reported as un-paired, not as an outage', async () => {
+    localStorage.setItem('beaconDeviceToken', 'dev-tok-5')
+    relayFetch({
+      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET api/v1/push/subscriptions': { status: 401, body: null },
+    })
+    mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
+
+    await initBeacon()
+    await flush()
+
+    const line = document.getElementById('beacon-health-line').textContent
+    expect(line).toMatch(/no longer paired|revoked/i)
+    expect(line).not.toContain('unavailable right now')
+    // And a way back: re-pairing is the only recovery from a revocation.
+    const again = document.getElementById('beacon-repair')
+    expect(again).toBeTruthy()
+    again.click()
+    await flush()
+    expect(localStorage.getItem('beaconDeviceToken')).toBeNull()
+    expect(document.getElementById('beacon-code-input')).toBeTruthy()
+  })
+
+  test('a 401 on the self-heal re-POST is inspected, not swallowed', async () => {
+    localStorage.setItem('beaconDeviceToken', 'dev-tok-6')
+    relayFetch({
+      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET api/v1/push/subscriptions': { body: { registered: false, last_delivery: null } },
+      'POST api/v1/push/subscriptions': { status: 401, body: null },
+    })
+    mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
+
+    await initBeacon()
+    await flush()
+
+    expect(document.getElementById('beacon-health-line').textContent).toMatch(/no longer paired|revoked/i)
+  })
+
+  test('an unreachable relay stays a transient outage, distinct from a revocation', async () => {
+    localStorage.setItem('beaconDeviceToken', 'dev-tok-7')
+    relayFetch({
+      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET api/v1/push/subscriptions': { throws: true },
+    })
+    mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
+
+    await initBeacon()
+    await flush()
+
+    const line = document.getElementById('beacon-health-line').textContent
+    expect(line).toContain('unavailable right now')
+    expect(line).not.toMatch(/no longer paired|revoked/i)
+  })
+})
+
+describe('health panel copy (arc42 §8.3)', () => {
+  // last_delivery is a JSON object on the wire — {at, ok, detail}, see
+  // handleSubscriptionStatus in core/cmd/irrlichtrelay/push_handlers.go.
+  // Concatenating it renders "[object Object]", which makes a success and a
+  // failure read identically.
+  test('a failed delivery names the failure', () => {
+    const t = healthLineText({
+      registered: true,
+      endpoint_host: 'web.push.apple.com',
+      last_delivery: { at: 1755165120, ok: false, detail: '410 Gone' },
+    })
+    expect(t).not.toContain('[object Object]')
+    expect(t).toContain('410 Gone')
+    expect(t).toMatch(/\d{1,2}:\d{2}/)
+    expect(t).toMatch(/fail/i)
+  })
+
+  test('a successful delivery reads as one, and carries its time', () => {
+    const t = healthLineText({
+      registered: true,
+      endpoint_host: 'fcm.googleapis.com',
+      last_delivery: { at: 1755165120, ok: true },
+    })
+    expect(t).not.toContain('[object Object]')
+    expect(t).toContain('fcm.googleapis.com')
+    expect(t).toMatch(/\d{1,2}:\d{2}/)
+    expect(t).not.toMatch(/fail/i)
+  })
+
+  test('null last_delivery says nothing has been attempted, not "never delivered"', () => {
+    // Delivery health is RAM-only on the relay (arc42 §8.6): null means "no
+    // send since the relay started", which is not the same claim as a failure.
+    const t = healthLineText({ registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null })
+    expect(t).not.toContain('[object Object]')
+    expect(t).toMatch(/no delivery attempted|since the relay/i)
+    expect(t).not.toMatch(/fail/i)
   })
 })
 
@@ -225,12 +538,7 @@ describe('unpair (arc42 §8.1 revocation)', () => {
       'GET api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
       'DELETE api/v1/push/subscriptions': { status: 204 },
     })
-    const reg = {
-      pushManager: {
-        getSubscription: vi.fn(() => Promise.resolve(sub)),
-        subscribe: vi.fn(() => Promise.resolve(fakeSubscription())),
-      },
-    }
+    const reg = activatingRegistration({ subscription: sub })
     mockServiceWorker(reg)
 
     await initBeacon()
@@ -270,5 +578,23 @@ describe('mac-side minting (arc42 §6.1, §8.1)', () => {
     expect(document.getElementById('beacon-code').textContent).toBe('AB12-CD34')
     expect(document.getElementById('beacon-code-expiry').textContent).toMatch(/expires in 10:00/)
     expect(document.querySelector('.beacon-code-url').textContent).toContain('and enter this code')
+  })
+
+  test('a 200 that is not JSON leaves a verdict, not "Minting code…" forever', async () => {
+    // Anything in front of the relay — a captive portal, a proxy error page —
+    // can answer 200 with HTML. The same rule as the phone side: a throw on
+    // this leg becomes a verdict the user can act on.
+    relayFetch({
+      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST api/v1/push/pairings': { status: 201, badJson: true },
+    })
+    await initBeacon({ relayToken: () => 'client-tok' })
+    await flush()
+    document.getElementById('beacon-mint').click()
+    await flush()
+
+    const out = document.getElementById('beacon-mint-out').textContent
+    expect(out).not.toBe('Minting code…')
+    expect(out).toMatch(/could not|not.*code/i)
   })
 })
