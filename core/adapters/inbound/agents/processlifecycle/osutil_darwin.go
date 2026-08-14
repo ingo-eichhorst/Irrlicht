@@ -187,27 +187,82 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int, com
 // but isn't a curated terminal/IDE and isn't in knownEmbeddedHostBundleIDs
 // returns false — which is exactly what excludes CodexBar.
 //
-// It discards the completeness bit resolveHostFromAncestry reports (#1492): a
-// `ps` that blows its ceiling here returns false, which REJECTS a session
-// rather than degrading a click target. Tracked separately — changing an
-// admission gate's failure direction is its own decision — as #1513.
+// It honours the completeness bit both walks report (#1492) and fails OPEN on a
+// walk that could not be completed (#1513). An aborted walk and a genuine miss
+// both resolve to "", and they are different facts: the second is the #784
+// evidence itself, the first is no evidence at all.
+//
+// The direction is the opposite of #1492's for the same bit, because this call
+// site is an ADMISSION gate rather than a click target: a false answer here does
+// not degrade an enrichment, it declines a legitimate session outright. It
+// declines it permanently, too — SessionDetector caches the rejection in
+// hostGateRejected, checks that cache ahead of the gate, and never evicts from
+// it — so one slow `ps` cost the user a session for the lifetime of the daemon.
+// Failing open is what core/pkg/cliversion already does for a CLI version it
+// cannot read, what PIDManager.AllowsSession (this function's only caller)
+// already does for a PID it cannot discover, and what this function's own
+// linux/other stubs already do unconditionally.
+//
+// A COMPLETED walk that found no allow-listed host still rejects: that is #784
+// and it is unchanged.
+//
+// "Complete" is exactly "no readProcInfo call failed", which is narrower than
+// "every probe in the walk was answered": resolveHostBundleIDFromAncestry also
+// shells out to plutil via bundleIDForAppPath, and a plutil that blows its own
+// 2s ceiling yields an empty bundle id indistinguishable from an ancestor that
+// is not an app at all. That residue is #1524, not something this bit reports.
 func IsKnownInteractiveHost(pid int) bool {
-	// Short-circuit before the second ancestry walk: resolveHostFromAncestry
-	// and resolveHostBundleIDFromAncestry each independently re-walk the same
-	// parent chain via their own ps shellouts, so skip the bundle-ID walk
-	// entirely once the curated map already matched.
-	term, _, _ := resolveHostFromAncestry(pid)
-	if term != "" {
-		return true
+	return isKnownInteractiveHostVia(pid, resolveHostFromAncestry, resolveHostBundleIDFromAncestry)
+}
+
+// ancestryWalk is the shape resolveHostFromAncestry and
+// resolveHostBundleIDFromAncestry share: a host string, the PID it was found
+// at, and whether the walk reached its verdict rather than aborting.
+type ancestryWalk func(pid int) (host string, hostPID int, complete bool)
+
+// isKnownInteractiveHostVia is IsKnownInteractiveHost with both walks injected,
+// so the ORDER between them is testable — the pure isKnownInteractiveHostFrom
+// below cannot see it, and no arrangement of live processes can drive the two
+// walks to different verdicts on purpose.
+//
+// The `complete` half of the short-circuit is load-bearing, not an
+// optimization, and the asymmetry between the two allow-lists is why: walk 1
+// recognizes every curated terminal and IDE by app name (termProgramByAppName),
+// while walk 2 recognizes exactly the hosts in knownEmbeddedHostBundleIDs —
+// today one entry, md.obsidian. So walk 2 can CONFIRM an embedded host and can
+// never rule out a curated one. Letting it answer alone after walk 1 aborted
+// would reject every iTerm, VS Code, kitty and JetBrains session whose first
+// walk timed out — #1513 again, one walk over, and the very sessions this gate
+// exists to admit.
+//
+// The consequence, stated plainly because it is the trade and not an accident:
+// a walk 1 that aborts TRANSIENTLY (its ps over the 2s ceiling, rather than an
+// unreadable process) admits without re-probing, where a second walk might have
+// completed and found CodexBar. That is the deliberate polarity — a re-probe
+// could only move the answer toward rejection, on evidence this gate has
+// already decided not to trust.
+func isKnownInteractiveHostVia(pid int, walkTerm, walkBundle ancestryWalk) bool {
+	term, _, complete := walkTerm(pid)
+	bundleID := ""
+	if term == "" && complete {
+		// Only reached when walk 1 ran to a verdict, so this also skips the
+		// duplicate ps shellouts whenever the curated map already matched.
+		bundleID, _, complete = walkBundle(pid)
 	}
-	bundleID, _, _ := resolveHostBundleIDFromAncestry(pid)
-	return isKnownInteractiveHostFrom(term, bundleID)
+	return isKnownInteractiveHostFrom(term, bundleID, complete)
 }
 
 // isKnownInteractiveHostFrom is the pure decision behind IsKnownInteractiveHost,
 // split out so the allow-list logic can be tested with synthetic ancestry
 // results instead of depending on whatever launched the test binary.
-func isKnownInteractiveHostFrom(termProgram, bundleID string) bool {
+//
+// complete is checked first and on its own: when the walk aborted, termProgram
+// and bundleID are "" for a reason that says nothing about the host, so reading
+// the allow-list at all would be reading a value that was never observed.
+func isKnownInteractiveHostFrom(termProgram, bundleID string, complete bool) bool {
+	if !complete {
+		return true
+	}
 	return termProgram != "" || knownEmbeddedHostBundleIDs[bundleID]
 }
 

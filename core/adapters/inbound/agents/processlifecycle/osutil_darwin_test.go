@@ -329,23 +329,31 @@ func TestResolveTermProgramFromAncestry_Self(t *testing.T) {
 // synthetic ancestry results — no live process chain needed — so the CodexBar
 // exclusion (#784) and the Obsidian carve-out (#728) are both deterministic,
 // not dependent on whatever happens to have launched `go test`.
+//
+// The last two rows are the same pair of facts as the two live-process tests
+// further down, restated at the pure layer: the empty ancestry means "read, and
+// nothing there" when complete and "not read" when not, and only the second
+// admits (#1513). Every other row carries complete=true, which is what keeps
+// the fail-open arm from swallowing the allow-list.
 func TestIsKnownInteractiveHostFrom(t *testing.T) {
 	tests := []struct {
 		name                 string
 		termProgram          string
 		bundleID             string
+		complete             bool
 		wantKnownInteractive bool
 	}{
-		{"curated terminal", "iTerm.app", "", true},
-		{"curated IDE", "vscode", "", true},
-		{"obsidian via generic top-level-app fallback", "", "md.obsidian", true},
-		{"codexbar is a real .app but not allow-listed", "", "com.steipete.codexbar", false},
-		{"no ancestry resolved at all", "", "", false},
+		{"curated terminal", "iTerm.app", "", true, true},
+		{"curated IDE", "vscode", "", true, true},
+		{"obsidian via generic top-level-app fallback", "", "md.obsidian", true, true},
+		{"codexbar is a real .app but not allow-listed", "", "com.steipete.codexbar", true, false},
+		{"no ancestry resolved at all", "", "", true, false},
+		{"aborted walk resolved nothing and proves nothing", "", "", false, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isKnownInteractiveHostFrom(tc.termProgram, tc.bundleID); got != tc.wantKnownInteractive {
-				t.Errorf("isKnownInteractiveHostFrom(%q, %q) = %v, want %v", tc.termProgram, tc.bundleID, got, tc.wantKnownInteractive)
+			if got := isKnownInteractiveHostFrom(tc.termProgram, tc.bundleID, tc.complete); got != tc.wantKnownInteractive {
+				t.Errorf("isKnownInteractiveHostFrom(%q, %q, complete=%v) = %v, want %v", tc.termProgram, tc.bundleID, tc.complete, got, tc.wantKnownInteractive)
 			}
 		})
 	}
@@ -729,6 +737,103 @@ func TestResolveHostBundleIDFromAncestry_UnreadableProcessIsNotAMiss(t *testing.
 	}
 	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(exitedPID(t)); bid != "" || hostPID != 0 || complete {
 		t.Errorf("reaped pid: got (%q, %d, %v); want an ABORTED walk", bid, hostPID, complete)
+	}
+}
+
+// TestIsKnownInteractiveHost_AbortedWalkAdmits is #1513's defect test, and it
+// is the two tests above carried up to the caller that acts on their verdict.
+// Both rows resolve no host at all; the completeness bit is the only thing
+// separating them.
+//
+// A reaped PID's first readProcInfo fails, which is the branch a `ps` that
+// blows its 2s ceiling under load takes. Before #1513 that returned false, and
+// because this function gates session ADMISSION (#784) the result was that a
+// legitimate agent session was silently declined — not, as in #1492, that a
+// click target degraded. An unreadable probe is no evidence either way, so it
+// fails OPEN: the direction core/pkg/cliversion already takes for a CLI version
+// it cannot read, and the direction this very function's linux/other stubs
+// already take by returning true unconditionally.
+func TestIsKnownInteractiveHost_AbortedWalkAdmits(t *testing.T) {
+	if !IsKnownInteractiveHost(exitedPID(t)) {
+		t.Error("a walk that could not be completed is not evidence of a non-interactive host — it must not reject the session")
+	}
+}
+
+// TestIsKnownInteractiveHostVia_AbortedFirstWalkDoesNotDeferToTheSecond pins
+// the ORDER between the two walks, which neither the pure decision nor any
+// arrangement of live processes can reach: driving the two walks to DIFFERENT
+// verdicts on purpose needs them injected, because in a live chain a `ps` that
+// fails for one walk fails for the other.
+//
+// It exists because the `&& complete` clause looks like an optimization and is
+// not. The two allow-lists are asymmetric — walk 1 knows 27 curated terminals
+// and IDEs by app name, walk 2 knows whatever is in knownEmbeddedHostBundleIDs
+// (today: md.obsidian alone) — so walk 2 can confirm an embedded host and can
+// never rule out a curated one. Row 1 is the case that costs: walk 1 aborted
+// and walk 2 completed on an iTerm ancestor, and iTerm's BUNDLE id is not in
+// walk 2's list because walk 1 is what recognizes iTerm. Deferring to walk 2
+// there rejects a legitimate iTerm session — #1513 arriving through the
+// second walk.
+func TestIsKnownInteractiveHostVia_AbortedFirstWalkDoesNotDeferToTheSecond(t *testing.T) {
+	walk := func(host string, complete bool) ancestryWalk {
+		return func(int) (string, int, bool) { return host, 0, complete }
+	}
+	const (
+		aborted  = false
+		finished = true
+	)
+	tests := []struct {
+		name            string
+		term, bundle    ancestryWalk
+		wantInteractive bool
+	}{
+		{
+			"walk 1 aborted, walk 2 saw iTerm — whose bundle only walk 1 can vouch for",
+			walk("", aborted), walk("com.googlecode.iterm2", finished), true,
+		},
+		{
+			"walk 1 aborted, walk 2 saw CodexBar — a re-probe could only reject, and that is evidence we declined to trust",
+			walk("", aborted), walk("com.steipete.codexbar", finished), true,
+		},
+		{
+			"walk 1 finished and missed, walk 2 saw CodexBar — #784, and the vacuity guard",
+			walk("", finished), walk("com.steipete.codexbar", finished), false,
+		},
+		{
+			"walk 1 finished and missed, walk 2 saw Obsidian — the one host walk 2 does vouch for",
+			walk("", finished), walk("md.obsidian", finished), true,
+		},
+		{
+			"walk 1 matched, so walk 2 is never consulted",
+			walk("iTerm.app", finished), walk("com.steipete.codexbar", finished), true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isKnownInteractiveHostVia(4242, tc.term, tc.bundle); got != tc.wantInteractive {
+				t.Errorf("isKnownInteractiveHostVia = %v, want %v", got, tc.wantInteractive)
+			}
+		})
+	}
+}
+
+// TestIsKnownInteractiveHost_ReadVerdictStillExcludes is the #784 LOCK, and it
+// is what stops the fix above from being spelled `return true`. A walk that RAN
+// and found no curated terminal and no allow-listed embedded host — the shape
+// CodexBar's background `agy` process presents — is a real answer, and must
+// still exclude.
+//
+// The two rows leave the walk by different exits, so neither can stand in for
+// the other: launchd never enters the loop at all (`cur > 1` is false
+// immediately), while a reparented orphan enters it and leaves through the
+// `ppid <= 1` verdict — the arm every reparented and every tmux-hosted
+// candidate takes.
+func TestIsKnownInteractiveHost_ReadVerdictStillExcludes(t *testing.T) {
+	if IsKnownInteractiveHost(1) {
+		t.Error("launchd is readable and is not an interactive host — a completed walk that found nothing must still exclude (#784)")
+	}
+	if orphan := orphanPID(t); IsKnownInteractiveHost(orphan) {
+		t.Errorf("orphan %d was read and has no host ancestor — a completed in-loop walk must still exclude (#784)", orphan)
 	}
 }
 
