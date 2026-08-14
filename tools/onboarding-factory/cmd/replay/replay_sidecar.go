@@ -26,10 +26,15 @@ import (
 //
 // The sentinel is keyed on those symptoms, NOT on the adapter, and the
 // distinction is worth stating because the obvious reading is wrong. For most
-// of the 56 fallbacks the cause really is an adapter property: opencode (30)
-// and hermes (24) are agent.ProcessOwnedStore, with no transcript file for the
-// daemon to watch and so no fswatcher fire to record, and aider is
-// agent.FilesUnderCWD, with no session identifier of its own.
+// of these fallbacks the cause really is an adapter property: opencode and
+// hermes are agent.ProcessOwnedStore, with no transcript file for the daemon to
+// watch and so no fswatcher fire to record, and aider is agent.FilesUnderCWD,
+// with no session identifier of its own — which is why nearly every aider
+// recording lands here. The size of the population is
+// censusOfTheCommittedCatalog.PairedButUngraded, machine-generated, and is not
+// restated here: the count this sentence used to carry described the catalog
+// before #1517 widened the walk to pair transcript.md, and so silently stopped
+// including the aider recordings the very next clause names.
 //
 // The remaining two are recording-level, and they are the reason this comment
 // does not claim otherwise: mistral-vibe is agent.FilesUnderRoot
@@ -752,6 +757,13 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 // low. Diverges' doc comment names the two near-misses and the single committed
 // recording that separates them.
 //
+// The table is #1478's calibration, measured over the catalog as it stood then
+// and kept as the evidence for the window that shipped. Its columns are counts
+// over that population, so they no longer equal the live gate's figures — #1517
+// widened the walk and the shipped row's divergent/pairs columns moved with it.
+// Read it as a comparison BETWEEN the rows, which is what it was built for, not
+// as a current measurement:
+//
 //	                          zero  fabricated  divergent  drift>1s  pairs
 //	#1476 as shipped             4           1        145       119    818
 //	+ 2ms cluster window         4           1        143       118    821
@@ -872,8 +884,10 @@ var readBoundaryClusterWindow = 10 * time.Millisecond
 // pass's own timestamp, and `at` is never reassigned — so the rule can never go
 // transitive across an idle period no matter how many events follow. The
 // `break` is therefore a pure early exit, valid because the fswatch stream is
-// Seq-sorted and its dequeue timestamps are monotonic (verified: 0 of 309
-// committed recordings have a non-monotonic fswatch timestamp in Seq order).
+// Seq-sorted and its dequeue timestamps are monotonic (re-verified for #1517's
+// widened walk: of the catalog's 396 committed sidecars, 393 carry a
+// transcript_activity stream and NONE has a non-monotonic timestamp in Seq
+// order — including the two recordings the widening newly reaches).
 // Do NOT "restore" a chained form by comparing j to j-1: that would silently
 // turn a bounded 10ms rule into an unbounded walk and invalidate the
 // calibration.

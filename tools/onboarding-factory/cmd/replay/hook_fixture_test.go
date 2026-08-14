@@ -272,16 +272,25 @@ func TestReplayWithSidecar_BlankLinesAreNotMalformed(t *testing.T) {
 
 // assertSidecarPairsWithTranscript checks one sidecar, reporting whether it was
 // in scope for the lock: it must carry a hook_received record and sit beside a
-// transcript.jsonl. A hook-carrying sidecar next to a transcript.md (aider) or
-// next to no transcript at all is skipped and reported as not checked, so the
-// caller's "the lock is vacuous" guard stays honest.
+// transcript pairedTranscript recognises. A hook-carrying sidecar next to no
+// transcript at all is skipped and reported as not checked, so the caller's
+// "the lock is vacuous" guard stays honest.
+//
+// It pairs through the shared helper rather than its own literal. Until #1517
+// this line read filepath.Join(..., "transcript.jsonl") and skipped every
+// transcript.md — the same blind spot the rest of that ticket closed, in the
+// one site that did not use the shared rule and so did not move with it. No
+// committed aider recording carries hooks today (measured: 17 hook-carrying
+// sidecars, all claudecode/copilot/hermes, every one beside a transcript.jsonl),
+// so this is a latent hole rather than a live one, which is exactly the kind
+// that reopens unnoticed.
 func assertSidecarPairsWithTranscript(t *testing.T, sidecar string) bool {
 	t.Helper()
 	if !sidecarHasHooks(t, sidecar) {
 		return false
 	}
-	transcript := filepath.Join(filepath.Dir(sidecar), "transcript.jsonl")
-	if _, err := os.Stat(transcript); err != nil {
+	transcript, paired := pairedTranscript(filepath.Dir(sidecar))
+	if !paired {
 		return false
 	}
 	if _, gotSidecar, useSidecar := resolveInputPaths(transcript); !useSidecar || gotSidecar != sidecar {

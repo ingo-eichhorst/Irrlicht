@@ -266,13 +266,22 @@ const (
 // drains. Regenerating goldens then erases the only other trace, since
 // ordered_matches is the serialized field that would have moved.
 //
-// 36 of the 309 recordings already produce zero kind-matched pairs, so
-// "this recording measures nothing" is the current state of an eighth of the
-// catalog rather than a hypothetical — which is exactly why the floor is a
-// number and not merely a non-zero check.
+// 36 recordings already produce zero kind-matched pairs, so "this recording
+// measures nothing" is the current state of over a tenth of the catalog rather
+// than a hypothetical — which is exactly why the floor is a number and not
+// merely a non-zero check.
+//
+// Both floors are re-ratcheted whenever the population grows, and #1517 is why
+// that is spelled out rather than left to judgement. It widened the walk to
+// pair transcript.md, adding two recordings and two pairs; the floors were
+// sitting at exactly the old measured values, so they absorbed the growth as
+// slack and this gate stayed green under a mutation that narrowed the pairing
+// straight back. A floor whose stated job is catching a pairing shift that
+// drains the population has to be re-tightened onto the new measurement, or
+// the very next drain is free.
 const (
-	minKindMatchedPairs   = 826
-	minMeasuredRecordings = 273
+	minKindMatchedPairs   = 828
+	minMeasuredRecordings = 275
 )
 
 // reportDriftEnumeration prints the drifted set — the deliverable of #1480,
