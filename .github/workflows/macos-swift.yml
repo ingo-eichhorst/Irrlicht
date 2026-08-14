@@ -1,21 +1,33 @@
 name: macOS (Swift)
 
-# Pass/fail gate for the macOS Swift app. Until #1509 nothing in CI ran
-# `swift build` or `swift test` at all, so the Swift suite was verified on
-# developer machines only — and two snapshot tests sat red on `main` for weeks
-# with no failing check, no badge, and nothing anywhere to look at. That is the
-# specific hole this workflow closes.
+# Compile gate for the macOS Swift app. Until #1509 nothing in CI ran `swift
+# build` or `swift test` at all: a Swift compile error could land on `main`
+# and no check would notice, because test.yml's macOS job builds Go. That is
+# the hole this closes.
+#
+# It builds and does NOT test, which is a smaller claim than this workflow's
+# name suggests, so it is worth being explicit: the test suite does not
+# currently pass on a GitHub runner, and #1530 is the issue for making it. 227
+# of its tests do pass there; the blockers are 35 host-dependent image-snapshot
+# comparisons, a hang in one of them, #1523's audio stall, and one assertion
+# that depends on the home directory's basename. Gating tests today would mean
+# a check that is red on every PR for reasons unrelated to the PR, which
+# teaches people to ignore it — strictly worse than the gap it would fill.
+#
+# The tests are NOT ungated in the meantime. `tools/preflight.sh --only swift`
+# runs the whole suite, and the pre-push hook runs it on any diff touching
+# platforms/macos/, which is where it demonstrably works. That is a local gate
+# rather than a CI one; #1530 is what moves it here.
 #
 # Deliberately its own workflow rather than a job in test.yml: that file is the
-# Go gate (its header says so), it installs a Go toolchain every job needs and
-# this one does not, and a Swift compile break should not be reported under a
-# check named `go-test`.
+# Go gate (its header says so), it installs a Go toolchain this job does not
+# need, and a Swift compile break should not be reported under `go-test`.
 #
 # No `paths:` filter, on purpose. A path-filtered workflow does not run for an
 # unrelated PR, and its check is then *absent* rather than green — which reads
-# as "still queued" at a glance and is the exact failure mode this repo keeps
-# removing elsewhere. The cost is one extra macOS job per PR; the alternative
-# is a gate whose silence is indistinguishable from a pass.
+# as "still queued" at a glance and is the failure mode this repo keeps
+# removing elsewhere. The cost is one macOS job per PR, and this one is ~1
+# minute.
 
 on:
   pull_request:
@@ -25,22 +37,20 @@ on:
 permissions:
   contents: read
 
-# A superseded push should not leave a macOS job running — doubly so while
-# #1523 can hang `swift test` outright. Mirrors linux.yml.
+# A superseded push should not leave a macOS job running. Mirrors linux.yml.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  swift-test:
+  swift-build:
     runs-on: macos-latest
-    # The suite is ~3 minutes locally and the build a couple more. The cap is
-    # not tuning — it is what turns #1523 (an intermittent XCTest stall in this
-    # exact command) into a fast, legible red instead of a job that sits
-    # `in_progress` against GitHub's 6-hour default. A check stuck pending
-    # reads as "still queued", which is the same ambiguity the no-`paths:`
-    # decision above exists to avoid. This gate's OWN first run hung this way.
-    timeout-minutes: 25
+    # The build is ~45s measured. The cap exists so that a hang is a fast,
+    # legible red rather than a job sitting `in_progress` against GitHub's
+    # 6-hour default — a check stuck pending reads as "still queued", which is
+    # the same ambiguity the no-`paths:` decision above exists to avoid. The
+    # first three attempts at this gate hung for exactly that reason (#1530).
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: platforms/macos
@@ -48,73 +58,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      # Recorded in the log on purpose: the suite contains image snapshot
-      # tests, whose output depends on the rendering stack. When a reference
-      # legitimately has to be regenerated, the toolchain that produced it is
-      # the first thing the next reader needs.
+      # Recorded in the log on purpose: when a snapshot reference legitimately
+      # has to be regenerated, the toolchain that produced it is the first
+      # thing the next reader needs — and #1509 is a case where two people in
+      # a row could not tell a toolchain difference from a real bug.
       - name: Report toolchain
         run: |
           swift --version
           xcodebuild -version
 
-      # Split from the test step so a compile break in app-only code (which no
-      # test target imports a symbol from) is attributed to building rather
-      # than surfacing as an opaque test-run failure.
-      - name: Build
-        run: swift build
-
-      # Skipping the harness is not optional. That target drives real terminal
-      # applications through NSRunningApplication and expects a display and an
-      # installed Ghostty; on a runner it has neither, and on a developer
-      # machine it reaches out and manipulates live windows. It is additionally
-      # gated behind TEST_HARNESS=1 in the source, so this is belt-and-braces —
-      # but the skip is what keeps this honest if that env gate is relaxed.
-      #
-      # BOTH names on purpose. Test IDs are `<target>.<class>/<method>`, so
-      # `LauncherTestHarness` (the target) also excludes any class added to it
-      # later, while `LauncherHarnessTests` (the class) survives the target
-      # being renamed. Verified against `swift test --list-tests`: the harness
-      # has 6 tests and either spelling alone lists 0 of them today — the pair
-      # is what stops that being true only today.
-      #
-      # The step fails the job on any non-zero exit, which includes both a test
-      # failure and the process aborting mid-run (see #1523 — an XCTest stall
-      # abort truncates the run while every suite that did report says
-      # "0 failures", so exit status is the only reliable signal).
-      #
-      # SoundPlayerTests is QUARANTINED here, and only here. It is #1523: its
-      # `installCustom` tests wait on a completion that intermittently never
-      # arrives, and where that is roughly 1-in-6 locally it appears to be
-      # deterministic on a runner — the first three attempts at this gate all
-      # hung inside it, which is consistent with a headless image having no
-      # usable audio stack for the AAC→LPCM transcode. Quarantining it by name
-      # is deliberate: the alternative is a gate that is red on every PR for a
-      # reason unrelated to the PR, which teaches people to ignore it.
-      # `tools/preflight.sh` deliberately does NOT skip it, so the suite still
-      # runs somewhere and its coverage is not silently dropped. #1523 owns
-      # re-enabling it here.
-      - name: Test
-        run: |
-          # `script` allocates a pty, which makes XCTest line-buffer. Without it
-          # stdout is block-buffered, so a run that hangs or aborts uploads a log
-          # containing NOTHING — not even the suites that already passed. That is
-          # how this gate's first three runs each burned 25 minutes saying only
-          # "timed out". It propagates the child's exit status (verified), so the
-          # gate's pass/fail semantics are unchanged.
-          script -q /dev/null swift test \
-            --skip LauncherTestHarness --skip LauncherHarnessTests \
-            --skip SoundPlayerTests
-
-      # A snapshot failure's whole evidence — the rendered image, the
-      # reference, and their diff — is written to the runner's temp dir and
-      # printed as three file:// paths, which are worthless once the runner is
-      # torn down. Without this a red gate says only "does not match
-      # reference" and the next reader has nothing to look at.
-      - name: Upload snapshot failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: snapshot-failures
-          path: ${{ runner.temp }}/**/*.png
-          if-no-files-found: ignore
-          retention-days: 7
+      # Builds the app target AND the test targets, so a compile error in test
+      # code fails the gate too — without running anything. That is deliberate:
+      # test code is where most of this repo's macOS churn lands, and a test
+      # file that no longer compiles is invisible to every other check.
+      - name: Build (app + tests)
+        run: swift build --build-tests

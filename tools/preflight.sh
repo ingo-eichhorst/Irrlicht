@@ -364,13 +364,22 @@ if want security; then
                   tools/security-scan.sh "${security_args[@]}"
 fi
 
-# ---- swift group (mirrors macos-swift.yml) --------------------------------
+# ---- swift group (goes BEYOND macos-swift.yml, deliberately) --------------
 # The macOS app had no automated floor of any kind until #1509: no CI workflow
 # built or tested Swift, and preflight had no Swift gate either, so a
 # platforms/macos-only diff ran *every* gate as SKIP and pushed green having
-# checked nothing. Both halves are closed together on purpose — a CI gate this
-# script does not mirror stops it being local CI parity, which is the one
-# promise its header makes.
+# checked nothing.
+#
+# This is the one gate that is deliberately STRONGER than the CI workflow it
+# corresponds to, which is the opposite of the parity rule elsewhere in this
+# file — so it is worth stating why rather than leaving it to look like drift.
+# macos-swift.yml builds and does not test, because the suite does not yet pass
+# on a GitHub runner (#1530: 227 tests do, but 35 image-snapshot comparisons are
+# host-dependent, one of them hangs, plus #1523 and one home-dependent
+# assertion). It DOES pass on a developer Mac, which is exactly where this hook
+# runs. So the tests are gated here and nowhere else until #1530 lands; a
+# reader who "fixes" this to match the workflow removes the only gate the macOS
+# test suite has.
 #
 # `--skip LauncherHarnessTests` matches the workflow exactly and is
 # load-bearing beyond speed: that target drives real terminal applications

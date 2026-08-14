@@ -982,8 +982,12 @@ Before marking a ticket done, run the full suite — every layer must pass:
     shows claimed vs earned side by side.
 - macOS app (only when touching `platforms/macos/`): `cd platforms/macos &&
   swift build && swift test --skip LauncherTestHarness --skip LauncherHarnessTests`,
-  gated in CI by `.github/workflows/macos-swift.yml` and mirrored locally by
-  `tools/preflight.sh --only swift`. **Never run the suite unskipped**: the
+  run locally by `tools/preflight.sh --only swift` and by the pre-push hook.
+  CI's `.github/workflows/macos-swift.yml` **builds but does not test** — the
+  suite does not yet pass on a GitHub runner (#1530), so the test gate is the
+  local one. That makes `swift` the single gate here that is deliberately
+  stronger locally than in CI; everything else in `preflight.sh` mirrors CI
+  exactly. **Never run the suite unskipped**: the
   `LauncherTestHarness` target drives real terminal applications through
   `NSRunningApplication`, so on a developer machine it manipulates live
   windows. Both names are passed because a test ID is `<target>.<class>`, and
