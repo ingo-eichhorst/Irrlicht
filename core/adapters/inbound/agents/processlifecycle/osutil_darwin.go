@@ -512,6 +512,10 @@ func herdrClientPIDs(socketPath string) (pids []int, probed bool) {
 }
 
 // sortedDistinctPIDs sorts pids newest-attach-first and collapses repeats.
+// It sorts in place and reuses the argument's backing array, so the result
+// aliases pids and pids is not left as the caller passed it. Both are fine for
+// the single production caller, which passes a slice herdrClientWriters just
+// built and does not look at it again.
 //
 // The sort answers open question 3 of #1350; the dedup is what makes the
 // result a list of CLIENTS rather than of file descriptors. parseLsofFDs emits
@@ -528,6 +532,14 @@ func herdrClientPIDs(socketPath string) (pids []int, probed bool) {
 // defect today. It is closed here rather than left standing because the cap's
 // truncation is one of the two triggers of #1514, and a duplicate is a way to
 // reach it that has nothing to do with how many clients are attached.
+//
+// Deduping BEFORE the cap therefore also moves resolveClientHostIdentity's
+// readAll from false to true in those cases, which is a change in the
+// host-CLEARING direction and so deserves saying out loud. It is the honest
+// direction: the cap poisons the answer because a dropped candidate is one we
+// declined to look at, and a second FD row for a candidate we DID look at is
+// not that. Removing it removes a false claim of incompleteness, it does not
+// weaken #1492 — a candidate genuinely dropped by the cap still poisons.
 func sortedDistinctPIDs(pids []int) []int {
 	sort.Sort(sort.Reverse(sort.IntSlice(pids)))
 	distinct := pids[:0]
@@ -687,8 +699,11 @@ func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
 //     pair either way: captureLauncher ignores it outright, and backfillLauncher
 //     and refreshHerdrHosts both route it through applyHerdrHostBackfill, which
 //     returns before touching the stored launcher. The one thing a cached
-//     unknown costs is deferring a RECOVERY — a probe that would have answered
-//     — by at most one TTL.
+//     unknown costs is deferring a RECOVERY — a probe that would have
+//     answered. Note the honest bound on that deferral is a SWEEP, not a TTL:
+//     the entry expires one TTL after the probe that wrote it, but nothing
+//     reads it in between, so what a user observes is quantized to
+//     refreshHerdrHosts' cadence. See the TTL note below.
 //   - The failure the reason describes is no longer the failure that arrives
 //     here. #1485 was written when the only non-answer was a failed lsof probe,
 //     which fails fast, so re-paying it per pane was nearly free and the spread
@@ -706,10 +721,18 @@ func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
 // shorter one of its own. A shorter TTL does not survive the interleaving: the
 // sweep iterates sessions, not sockets, so two panes of one herdr server need
 // not be adjacent, and any TTL shorter than a whole sweep pass can expire
-// between them. Sharing it is bounded in the other direction too, because
-// herdrClientCacheGet does not restamp on a hit: with the TTL and the sweep
-// interval both 5s an entry survives at most into the following sweep, never
-// past it.
+// between them.
+//
+// What a deferred recovery actually costs, stated honestly rather than as one
+// TTL: the reader is the liveness sweep, so recovery lands on the next sweep
+// whose probe runs. SweepDeadPIDs (pid_manager.go) ticks at 5s and backs off
+// to 15s after three clean sweeps — the idle steady state — so the worst case
+// is about one 15s interval. At the 5s cadence it can instead take two
+// intervals, because entry.at is stamped when the probe FINISHES rather than
+// when the pass began, so an entry written late in a pass is not yet expired
+// when the next pass reaches it. It cannot slip further than that, because
+// herdrClientCacheGet does not restamp on a hit: a sweep served from the memo
+// costs nothing and so cannot keep pushing the expiry ahead of itself.
 func herdrClientLauncher(socketPath string) (*session.Launcher, bool) {
 	if socketPath == "" {
 		return nil, false
@@ -777,8 +800,31 @@ func herdrClientCacheGet(socketPath string) (l *session.Launcher, probed, hit bo
 	return entry.launcher, entry.probed, true
 }
 
+// herdrClientCachePut records what a probe of socketPath determined. A
+// non-answer never displaces a live answer.
+//
+// That guard is new with the memo and is the one hazard memoizing non-answers
+// introduces: before #1514 a non-answer was never written, so it could not
+// overwrite anything. Two goroutines can miss the memo for one socket and
+// probe concurrently — refreshHerdrHosts reads outside assignMu, on the sweep
+// goroutine, while PID discovery reaches captureLauncher/backfillLauncher on
+// its own — and a non-answer is by far the SLOWER outcome to produce (up to
+// maxClientCandidates candidates, two ancestry walks each on a 2s ceiling).
+// So the loser of that race is systematically the one carrying no
+// information, and last-writer-wins would let it both erase a resolved host
+// and restamp the entry fresh, extending the deferral by another full TTL.
+//
+// Keeping the incumbent cannot pin anything: its own at is left alone, so it
+// still expires on the schedule the probe that produced it set. The reverse
+// direction needs no guard — an answer displacing a non-answer is strictly
+// more information, which is the whole point of re-probing.
 func herdrClientCachePut(socketPath string, l *session.Launcher, probed bool) {
 	herdrClientCacheMu.Lock()
 	defer herdrClientCacheMu.Unlock()
+	if !probed {
+		if prev, ok := herdrClientCache[socketPath]; ok && prev.probed && time.Since(prev.at) <= herdrClientCacheTTL {
+			return
+		}
+	}
 	herdrClientCache[socketPath] = herdrClientCacheEntry{launcher: l, probed: probed, at: time.Now()}
 }
