@@ -732,6 +732,45 @@ func TestResolveHostBundleIDFromAncestry_UnreadableProcessIsNotAMiss(t *testing.
 	}
 }
 
+// TestIsKnownInteractiveHost_AbortedWalkAdmits is #1513's defect test, and it
+// is the two tests above carried up to the caller that acts on their verdict.
+// Both rows resolve no host at all; the completeness bit is the only thing
+// separating them.
+//
+// A reaped PID's first readProcInfo fails, which is the branch a `ps` that
+// blows its 2s ceiling under load takes. Before #1513 that returned false, and
+// because this function gates session ADMISSION (#784) the result was that a
+// legitimate agent session was silently declined — not, as in #1492, that a
+// click target degraded. An unreadable probe is no evidence either way, so it
+// fails OPEN: the direction core/pkg/cliversion already takes for a CLI version
+// it cannot read, and the direction this very function's linux/other stubs
+// already take by returning true unconditionally.
+func TestIsKnownInteractiveHost_AbortedWalkAdmits(t *testing.T) {
+	if !IsKnownInteractiveHost(exitedPID(t)) {
+		t.Error("a walk that could not be completed is not evidence of a non-interactive host — it must not reject the session")
+	}
+}
+
+// TestIsKnownInteractiveHost_ReadVerdictStillExcludes is the #784 LOCK, and it
+// is what stops the fix above from being spelled `return true`. A walk that RAN
+// and found no curated terminal and no allow-listed embedded host — the shape
+// CodexBar's background `agy` process presents — is a real answer, and must
+// still exclude.
+//
+// The two rows leave the walk by different exits, so neither can stand in for
+// the other: launchd never enters the loop at all (`cur > 1` is false
+// immediately), while a reparented orphan enters it and leaves through the
+// `ppid <= 1` verdict — the arm every reparented and every tmux-hosted
+// candidate takes.
+func TestIsKnownInteractiveHost_ReadVerdictStillExcludes(t *testing.T) {
+	if IsKnownInteractiveHost(1) {
+		t.Error("launchd is readable and is not an interactive host — a completed walk that found nothing must still exclude (#784)")
+	}
+	if orphan := orphanPID(t); IsKnownInteractiveHost(orphan) {
+		t.Errorf("orphan %d was read and has no host ancestor — a completed in-loop walk must still exclude (#784)", orphan)
+	}
+}
+
 // envObserver is a ProcessObserver that answers EnvOf from a fixed map. It
 // exists to reach one block of applyAncestryFallbacks that no live process can
 // be arranged into: the kitty back-fill, which runs only when the env NAMES
