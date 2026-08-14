@@ -82,6 +82,13 @@ swift_suite_last_test() {
   return 0
 }
 
+# _swift_suite_hung_headline — written from two branches (a hang that printed
+# something, and one that printed nothing), which is exactly the kind of pair
+# that drifts apart.
+_swift_suite_hung_headline() {
+  echo "swift test HUNG: no exit within ${SWIFT_SUITE_TIMEOUT}s; the process tree was killed." >&2
+}
+
 # swift_suite_verdict <exit-code> <log> — 0 only if the run both passed and
 # demonstrably finished. Prints a diagnosis naming which of the two failed.
 swift_suite_verdict() {
@@ -113,7 +120,7 @@ swift_suite_verdict() {
   # the toolchain when the process was in fact alive the whole time.
   if [[ ! -s "$log" ]]; then
     if [[ "$rc" -eq 124 ]]; then
-      echo "swift test HUNG: no exit within ${SWIFT_SUITE_TIMEOUT}s; the process tree was killed." >&2
+      _swift_suite_hung_headline
       echo "  It produced no output at all, so there is no test name to attribute it to —" >&2
       echo "  the hang is before or during startup rather than inside a test." >&2
     else
@@ -125,7 +132,7 @@ swift_suite_verdict() {
   fi
 
   if [[ "$rc" -eq 124 ]]; then
-    echo "swift test HUNG: no exit within ${SWIFT_SUITE_TIMEOUT}s; the process tree was killed." >&2
+    _swift_suite_hung_headline
     swift_suite_last_test "$log" >&2
     ok=1
   elif [[ "$rc" -ne 0 ]]; then
