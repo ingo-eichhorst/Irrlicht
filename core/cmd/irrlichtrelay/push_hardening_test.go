@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -204,5 +205,52 @@ func TestRegisterPushRoutesRefusesServiceWithoutStore(t *testing.T) {
 			t.Fatal("registerPushRoutes accepted a push service without an auth store")
 		}
 	}()
-	registerPushRoutes(http.NewServeMux(), nil, svc)
+	registerPushRoutes(http.NewServeMux(), nil, svc, nil)
+}
+
+func TestRegisterPushRoutesRefusesServiceWithoutDispatcher(t *testing.T) {
+	// Same invariant, other half: the test-notification endpoint sends
+	// through the dispatcher that sends every real push
+	// (docs/mobile-notifications-arc42.md §8.3). A push-enabled relay wired
+	// without it would have to answer the one route built for doubt with a
+	// 503, or grow a sender of its own — and a diagnostic with its own
+	// sender proves nothing about the path it reports on.
+	svc, err := push.NewService(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := newAuthStore(filepath.Join(t.TempDir(), tokensFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("registerPushRoutes accepted a push service with no dispatcher to send test notifications through")
+		}
+	}()
+	registerPushRoutes(http.NewServeMux(), store, svc, nil)
+}
+
+func TestRegisterPushRoutesRefusesATypedNilDispatcher(t *testing.T) {
+	// The sibling above passes a literal nil. This one passes the shape
+	// runServe actually produces: a *pushObserver variable that happens to be
+	// nil, stored in the testNotifier interface. That is a NON-nil interface
+	// value holding a nil pointer, so a bare `notifier == nil` waves it
+	// through and the route nil-derefs at request time — on the one endpoint
+	// built to answer doubt, while somebody is using it to diagnose
+	// something else.
+	svc, err := push.NewService(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := newAuthStore(filepath.Join(t.TempDir(), tokensFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("registerPushRoutes accepted a typed-nil dispatcher — it would nil-deref at request time instead of refusing at wiring time")
+		}
+	}()
+	registerPushRoutes(http.NewServeMux(), store, svc, (*pushObserver)(nil))
 }

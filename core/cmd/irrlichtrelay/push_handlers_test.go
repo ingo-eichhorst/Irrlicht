@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"irrlicht/core/cmd/irrlichtrelay/push"
+	"irrlicht/core/domain/notify"
 	"irrlicht/core/pkg/webpush"
 )
 
@@ -57,7 +58,12 @@ func newPushEnv(t *testing.T, seeds ...tokenSeed) *pushEnv {
 		t.Fatalf("push.NewService: %v", err)
 	}
 	h := newHubWithAuth(store, nil, defaultLimits())
-	srv := httptest.NewServer(buildMux(h, store, svc))
+	// The mux runServe builds carries the dispatcher, because the
+	// test-notification route sends through it (§8.3). A fake sender here:
+	// nothing in this file asks for a delivery, and one that reached the
+	// network would be the loudest possible way to find out.
+	obs := newPushObserver(svc, store, &fakeSender{}, notify.Config{}, nil)
+	srv := httptest.NewServer(buildMux(h, store, svc, obs))
 	t.Cleanup(srv.Close)
 	return &pushEnv{srv: srv, store: store, svc: svc, ddir: ddir, tokensPath: tokensPath, tokens: tokens}
 }
@@ -154,7 +160,7 @@ func TestPushRequiresAuthGuard(t *testing.T) {
 	if svc != nil {
 		t.Fatal("buildPushService must return nil with auth off")
 	}
-	srv := httptest.NewServer(buildMux(newHub(defaultLimits()), nil, svc))
+	srv := httptest.NewServer(buildMux(newHub(defaultLimits()), nil, svc, nil))
 	t.Cleanup(srv.Close)
 
 	status, body := doPush(t, "GET", srv.URL+"/api/v1/push/info", "", nil)
@@ -180,6 +186,7 @@ func TestPushRequiresAuthGuard(t *testing.T) {
 		{"POST", "/api/v1/push/pair"},
 		{"POST", "/api/v1/push/subscriptions"},
 		{"DELETE", "/api/v1/push/subscriptions"},
+		{"POST", "/api/v1/push/test"},
 	}
 	for _, rt := range routes {
 		status, body := doPush(t, rt.method, srv.URL+rt.path, "", nil)
@@ -408,7 +415,7 @@ func TestPushInfoStableAcrossRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv2 := httptest.NewServer(buildMux(newHubWithAuth(env.store, nil, defaultLimits()), env.store, svc2))
+	srv2 := httptest.NewServer(buildMux(newHubWithAuth(env.store, nil, defaultLimits()), env.store, svc2, newPushObserver(svc2, env.store, &fakeSender{}, notify.Config{}, nil)))
 	t.Cleanup(srv2.Close)
 	status, body = doPush(t, "GET", srv2.URL+"/api/v1/push/info", "", nil)
 	if status != http.StatusOK {

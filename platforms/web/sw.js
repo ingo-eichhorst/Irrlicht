@@ -92,6 +92,21 @@ self.composeNotification = function (payload) {
         tag: daemonTag(payload),
         renotify: !!payload.renotify,
       };
+    case 'test':
+      // The diagnostic push (arc42 §8.3): the relay sent this because
+      // somebody pressed "Send a test notification", so seeing it IS the
+      // result. Its tag mirrors the relay's collapse key — testPushTopic in
+      // core/cmd/irrlichtrelay/push_observer.go — which is deliberately a
+      // string no session id, daemon topic or summary can be, so proving
+      // delivery never replaces the banner the user actually needed. It
+      // carries no session, so the ledger fold below ignores it and the
+      // badge is untouched.
+      return {
+        title: 'Beacon test notification',
+        body: 'Push delivery from your relay is working.',
+        tag: 'beacon-test',
+        renotify: !!payload.renotify,
+      };
     default:
       // A kind added by a newer relay: same rule as an unknown version.
       return genericNotification();

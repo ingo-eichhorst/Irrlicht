@@ -46,12 +46,13 @@ type Service struct {
 	// microseconds. Production is writeFileAtomic and nothing else sets it.
 	writeFile func(path string, data []byte, perm os.FileMode) error
 
-	mu       sync.Mutex
-	codes    []pairingCode
-	failures []time.Time               // failed Redeem timestamps within the rolling window
-	subs     map[string]Entry          // device token id → registered subscription
-	roster   map[rosterKey]RosterEntry // known daemons for the §6.4 watchdog
-	health   map[string]DeliveryStatus // device token id → last send outcome (RAM only, §8.6)
+	mu        sync.Mutex
+	codes     []pairingCode
+	failures  []time.Time               // failed Redeem timestamps within the rolling window
+	subs      map[string]Entry          // device token id → registered subscription
+	roster    map[rosterKey]RosterEntry // known daemons for the §6.4 watchdog
+	health    map[string]DeliveryStatus // device token id → last send outcome (RAM only, §8.6)
+	testSends map[string]time.Time      // device token id → last test notification, within its window only
 
 	// Each snapshot taken under mu is stamped with the next value of its
 	// file's counter; the matching fileWriter carries snapshots to disk in
@@ -105,6 +106,7 @@ func NewService(dir string, now func() time.Time) (*Service, error) {
 		subs:      map[string]Entry{},
 		roster:    map[rosterKey]RosterEntry{},
 		health:    map[string]DeliveryStatus{},
+		testSends: map[string]time.Time{},
 	}
 	if err := s.loadOrCreateVAPID(); err != nil {
 		return nil, err

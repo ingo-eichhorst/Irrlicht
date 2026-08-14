@@ -1,7 +1,7 @@
 # Irrlicht Beacon — device test plan
 
-**Status:** to be run once, before slice 6 (distribution), and again before any release that
-touches the push path.
+**Status:** not yet run. Everything it grades is built (slices 1–9), so this is the gate on
+calling the feature done — and it should run again before any release that touches the push path.
 **Why it exists:** every defect found in Beacon so far was found by *reading* code. Two of them —
 a VAPID JWT with no `sub` claim, which Apple rejects, and `pushManager.subscribe()` called before
 the service worker activates, which the Push API rejects — fail **only on contact with a real
@@ -52,10 +52,13 @@ reason this document exists.
   Settings → Safari → Advanced → Web Inspector. On the Mac: Safari → Develop → *\<your phone\>* →
   the Beacon app. Without it, a phone-side failure is a blank screen with no diagnosis.
 
-**Before you start, consider adding the "send a test notification" button** (arc42 §8.3 lists it;
-slice 5 deferred it). Every phase below that needs a push currently requires driving a real agent
-into `waiting`. One button turns a two-minute setup into a tap, and it is the affordance you will
-want every future time this breaks.
+**The "send a test notification" button exists** (arc42 §8.3, slice 9): once a phone is paired, the
+Beacon health panel offers it, and it answers on the spot — `Sent via web.push.apple.com…`, or the
+push service's own refusal. Use it wherever a phase below needs "a push, any push". It is not a
+substitute for the phases that drive real transitions: it bypasses the policy engine, so it proves
+the *delivery* half (VAPID, encryption, subscription, the phone's notification settings) and nothing
+about whether an agent going `waiting` would be noticed. Phases 4 and 5 are still the only evidence
+for that half.
 
 ---
 
@@ -76,7 +79,8 @@ half — install, activation, permission gesture — which is a quarter of the s
 | Relay with `--auth tokens-file`, `GET /api/v1/push/info` | `{"enabled":true,"vapid_public_key":"…"}` | No key: `vapid-keys.json` unwritable. `enabled:false`: auth is off — that is the §8.1 guard working |
 | Same call with `--auth off` | `enabled:false` + reason; `POST /push/pairings` → **403** naming the fix | The guard regressed — this is a one-line check that the whole anonymous-mode refusal still holds |
 | Pair the desktop browser through the UI | Subscription lands in `push-subscriptions.json` | DevTools console. Suspect the activation ordering |
-| Trigger one `waiting` transition | Banner on the desktop | **Relay log is the diagnosis.** A 400/403 from the push service here is the VAPID `sub` class of bug — it never reaches the device |
+| **Press "Send a test notification"** | Banner on the desktop, and the panel reads `Sent via …` | The panel names the failure itself — a 4xx here is the VAPID `sub` class of bug, and it now arrives in front of you rather than in the relay log. This is the cheapest possible confirmation that signing and encryption are accepted by a real push service |
+| Trigger one `waiting` transition | Banner on the desktop | Only now is the relay log the diagnosis: the button already proved delivery, so a silent `waiting` means the transition was never observed or policy suppressed it |
 
 Only move on once a desktop banner has actually appeared.
 
@@ -108,6 +112,11 @@ The highest-risk phase, and the one the mocks cover worst.
 4. Watch for, in order: the permission prompt appearing at all (if it does not, transient user
    activation expired — the known ordering bug); `subscribe()` resolving (if it rejects, the
    worker had not activated); `POST /push/subscriptions` → 204.
+5. **Press "Send a test notification"** and watch the phone. This is the whole of Phase 3's payoff
+   in one tap: it proves the pairing produced a working delivery address on *this* device, without
+   touching an agent. If the panel says it was sent and no banner appears, the fault is on the
+   phone (notification permission, Focus mode) rather than in the relay — the two used to be
+   indistinguishable from here.
 
 **Verify the ADR-3 claim while you are here**: pairing must complete *inside the installed app*.
 Pair from the Safari tab instead and confirm the installed app does **not** inherit it — that is
@@ -118,14 +127,21 @@ On failure: Web Inspector console first, relay log second, `push-subscriptions.j
 
 ## Phase 4 — the first real push
 
-Lock the phone. Drive one session to `waiting`.
+Lock the phone. Drive one session to `waiting`. The test notification does **not** cover this
+phase — it is a direct dispatch, so what is new here is everything between an agent's transcript
+write and the dispatcher: the daemon's forward, the relay's observer, and §8.4's policy. Run it even
+if the button worked, and *especially* if it worked, because that narrows a failure here to exactly
+that half.
 
 - **Expect:** a lock-screen banner within about 3 seconds (arc42 Q1).
 - Tap it. (Note: R6 says it should open on that session's last-known state. If the ledger read
   path has not landed, it will just open the app — record which behavior you see.)
-- **If nothing arrives**, the relay log now names the reason with the endpoint path redacted; a
-  4xx from the push service is a signing or encryption fault, silence is a subscription fault.
-  `GET /api/v1/push/subscriptions` gives that phone's last delivery outcome.
+- **If nothing arrives**, press the test button first: it separates the two halves in one tap. A
+  test notification that *does* arrive means delivery is fine and the fault is upstream of the
+  dispatcher — the daemon's link, the observer, or policy. One that does not narrows it to signing,
+  encryption or the subscription, and the panel names which. The relay log carries the same reason
+  with the endpoint path redacted, and `GET /api/v1/push/subscriptions` gives that phone's last
+  delivery outcome.
 
 ## Phase 5 — the policy actually behaves (§8.4)
 
@@ -147,10 +163,10 @@ observable from the couch with a locked phone.
 
 | Scenario | Expect |
 |---|---|
-| `irrlichtrelay token revoke <device-id>` | Pushes stop; the entry is pruned from the registry |
+| `irrlichtrelay token revoke <device-id>` | Pushes stop; the entry is pruned from the registry. The test button is the fast check: it answers 401 and the panel reports the phone as no longer paired, rather than leaving you waiting for a push that will never come |
 | Un-pair from the phone | `DELETE` succeeds, entry gone, no further pushes |
 | Restart the relay | Phones keep working, no re-pairing |
-| Delete `push-subscriptions.json`, reopen the app | It re-registers itself (§8.3 self-heal) |
+| Delete `push-subscriptions.json`, reopen the app | It re-registers itself (§8.3 self-heal), and the test button confirms the re-registered address actually delivers — a repaired *record* and a working *address* are not the same claim |
 | Restore all four files onto a *fresh* relay at the same hostname | Every phone still works — this is the Oracle Cloud reclamation story, and the only way to know it holds is to do it once |
 
 ## Phase 7 — the additivity contract (Q7)

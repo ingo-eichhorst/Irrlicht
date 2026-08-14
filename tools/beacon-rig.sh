@@ -8,6 +8,9 @@
 #                                      --serve also publishes it over Tailscale
 #   tools/beacon-rig.sh check          run the phone-free assertions (exit 1 on
 #                                      the first failure, with the reason)
+#   tools/beacon-rig.sh drive <name>   drive one Phase 5 policy scenario through
+#                                      the relay as a synthetic daemon: waiting,
+#                                      ready, flap, burst, subagent, disconnect
 #   tools/beacon-rig.sh status         what is running, and where its state is
 #   tools/beacon-rig.sh down [--wipe]  stop it; --wipe also deletes the state
 #
@@ -21,6 +24,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RIG_DIR="$REPO_ROOT/.build/beacon-rig"
 STATE_DIR="$RIG_DIR/state"
 BIN="$RIG_DIR/irrlichtrelay"
+DRIVE_BIN="$RIG_DIR/beacon-drive"
+DRIVE_STATE="$RIG_DIR/drive-state.json"
 PID_FILE="$RIG_DIR/relay.pid"
 LOG_FILE="$RIG_DIR/relay.log"
 TOKEN_FILE="$RIG_DIR/client-token"
@@ -271,6 +276,32 @@ cmd_check_guard() {
     ok "anonymous mode refuses push, names the fix, and mints no key"
 }
 
+# ── drive ────────────────────────────────────────────────────────────
+# tools/beacon-drive dials this rig's relay as a daemon and produces one
+# docs/beacon-device-test.md Phase 5 row on demand — the rows that otherwise
+# need a real agent driven into a state, and, for the burst, four of them
+# inside twenty seconds. It reuses the rig's relay URL, client token and state
+# dir, so the tester runs one tool rather than two.
+#
+# The driver pairs a device of its own and prints what the relay actually
+# delivered, so a scenario that decided nothing says so. That pairing is
+# reused across runs via drive-state.json, which also holds the synthetic
+# daemon id: the relay's watchdog roster keeps one entry per daemon it has
+# ever seen (arc42 §8.6), and a fresh id per run would leave one phantom
+# entry — and one "disconnected" banner per relay restart — behind each time.
+cmd_drive() {
+    require_tools go curl
+    relay_running || die "no rig relay running — 'up' first"
+    [ -s "$TOKEN_FILE" ] || die "no client token at $TOKEN_FILE — 'up' first"
+    [ "$#" -ge 1 ] || die "usage: tools/beacon-rig.sh drive <scenario> [flags]  ('drive -h' lists them)"
+
+    info "building beacon-drive"
+    ( cd "$REPO_ROOT/tools/beacon-drive" && go build -o "$DRIVE_BIN" . ) || die "build failed"
+
+    "$DRIVE_BIN" -relay "ws://127.0.0.1:$PORT" -token "$(cat "$TOKEN_FILE")" \
+        -state "$DRIVE_STATE" "$@"
+}
+
 # ── status / down ────────────────────────────────────────────────────
 cmd_status() {
     if relay_running; then
@@ -302,7 +333,8 @@ cmd_down() {
 case "${1:-}" in
     up)     shift; cmd_up "$@" ;;
     check)  shift; cmd_check_guard; cmd_check "$@" ;;
+    drive)  shift; cmd_drive "$@" ;;
     status) cmd_status ;;
     down)   shift; cmd_down "$@" ;;
-    *)      sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *)      sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

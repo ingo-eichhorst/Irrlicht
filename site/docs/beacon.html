@@ -97,7 +97,7 @@
 
       <div class="callout">
         <strong>What it does not do yet</strong>
-        Tapping a banner opens Beacon (or focuses it, if it is already open) at its start page &mdash; it does <em>not</em> jump to the session the notification was about. And there is no &ldquo;send a test notification&rdquo; button: the health line described under <a href="#when-it-breaks">When it breaks</a> is how you check the wiring, and a real transition is what proves the whole path.
+        Tapping a banner opens Beacon (or focuses it, if it is already open) at its start page &mdash; it does <em>not</em> jump to the session the notification was about. And the &ldquo;send a test notification&rdquo; button proves half the path, not all of it: it sends a real, signed, encrypted push to this phone and reports what the push service answered, but it does not run through the rules that decide when a session change becomes a banner. A real transition is still what proves that half.
       </div>
 
       <!-- ── Prerequisites ── -->
@@ -265,6 +265,7 @@ irrlichtrelay token issue --label "my-browser"</code></pre>
       <p><strong>Nothing arrives at all.</strong> Check, in this order:</p>
 
       <ul>
+        <li><strong>Send a test notification</strong>, from the button under the health line. It sends one push down the same path a real notification takes and tells you what came back, so it splits the problem in two: a banner means delivery is fine and the fault is between your agents and the relay, while a named failure (&ldquo;the push service answered 403&rdquo;, &ldquo;this phone&rsquo;s subscription no longer exists&rdquo;) is the answer itself. If it arrives, the checks below are where to look next; if it does not, the sentence it prints is already the diagnosis.</li>
         <li><code>curl https://&lt;your-relay&gt;/api/v1/push/info</code> &mdash; it should answer <code>{"enabled":true,…}</code>. An <code>enabled:false</code> names its own reason, and the usual reason is a relay running with <code>--auth off</code>.</li>
         <li>The connection-status tooltip in the dashboard &mdash; if the daemon is not connected to the relay, there are no transitions to notify about. A daemon that was connected and then dropped becomes a banner of its own after 60 seconds; one that never connected is simply absent, and nothing will arrive.</li>
         <li>What the sessions actually did. A session that never left <span class="badge badge-working">working</span> is not a missed notification.</li>

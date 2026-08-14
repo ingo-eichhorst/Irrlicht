@@ -138,8 +138,8 @@ flowchart TB
 | `core/pkg/webpush` | Encrypt payload to a subscription, sign VAPID JWT, POST with `TTL`/`Topic`/`Urgency` headers | `pkg/` leaf-layer rules apply (no adapters/application imports). Hand-written on the stdlib — nothing vendored, no new module dependency, which is what keeps it extractable. |
 | Relay: observer | Detect per-session state edges off the cache updates it already performs; seed silently on first sight/snapshot | Feeds `notify` engine; also feeds `daemon_status` disconnects (watchdog) |
 | Relay: dispatcher | Fan decided notifications out to every subscription in the same **workspace**; prune on `410`; record last-delivery status | Workspace scoping mirrors existing isolation |
-| Relay: pairing/REST | `GET /api/v1/push/info` (unauthenticated — §5.2's feature detection depends on it) · `POST /api/v1/push/pairings` (authed; mints one-time code) · `POST /api/v1/push/pair` (code → device token + VAPID pub) · `POST/DELETE/GET /api/v1/push/subscriptions` (device-token-authed; the GET is §8.3's health panel) | Device tokens are ordinary `TokenRecord`s — `token list`/`revoke` and 4401 semantics apply unchanged |
-| `platforms/web` PWA | Manifest, service worker (push → ledger fold → `showNotification` → badge; `notificationclick` → deep link; `message` → live fold + ledger reads), pairing flow (which also configures the live view, ADR-9), health panel, unpair. **No** notification-settings UI: policy is server-side (§8.4). **No** test button (slice 9) | No build step; plain files. Ships via `build-release.sh`'s single `WEB_FILES` list, kept complete by a tripwire that derives the required set (§8.7). The worker is a classic script and imports nothing, so the four message names it exchanges with `beacon.js` are two copies — pinned together by `sw-contract.test.js` |
+| Relay: pairing/REST | `GET /api/v1/push/info` (unauthenticated — §5.2's feature detection depends on it) · `POST /api/v1/push/pairings` (authed; mints one-time code) · `POST /api/v1/push/pair` (code → device token + VAPID pub) · `POST/DELETE/GET /api/v1/push/subscriptions` (device-token-authed; the GET is §8.3's health panel) · `POST /api/v1/push/test` (device-token-authed; §8.3's diagnostic — one push down the production path, answered synchronously) | Device tokens are ordinary `TokenRecord`s — `token list`/`revoke` and 4401 semantics apply unchanged |
+| `platforms/web` PWA | Manifest, service worker (push → ledger fold → `showNotification` → badge; `notificationclick` → deep link; `message` → live fold + ledger reads), pairing flow (which also configures the live view, ADR-9), health panel, unpair, and the §8.3 test-notification button (slice 9), whose outcome it renders in place. **No** notification-settings UI: policy is server-side (§8.4) | No build step; plain files. Ships via `build-release.sh`'s single `WEB_FILES` list, kept complete by a tripwire that derives the required set (§8.7). The worker is a classic script and imports nothing, so the four message names it exchanges with `beacon.js` are two copies — pinned together by `sw-contract.test.js` |
 
 **Source location.** All Go code stays in the existing `core` module — no new module. `notify` (under `domain/`) and `webpush` (under `pkg/`) fall under `core/architecture_test.go`'s layering rules automatically. The relay's push **state** lands in a `core/cmd/irrlichtrelay/push` subpackage (VAPID identity, pairing codes, subscription registry, roster, health); the observer, dispatcher and HTTP surface stayed in `package main` beside the hub they wire into. Both are composition-root code, free to import anything, and kept deliberately outside the daemon's hexagon: `core/adapters/outbound/relay` is the *daemon-side* forwarder and stays untouched. PWA assets join `platforms/web` — no third web tree (the #1225 dependency-drift lesson), and no build step to introduce.
 
@@ -196,8 +196,12 @@ prompt never appears at all. It is also the cheap thing to fail — a refusal co
 the single-use code is not yet spent. And `subscribe()` waits for the worker to reach *activated*;
 the Push API rejects it while the registration's active worker is null.
 
-There is no closing "send a test notification" step: that button is §8.3's, and it does not exist
-(slice 9). Proving delivery today means driving a real transition.
+The closing step is §8.3's "send a test notification" button, which the health panel offers as soon
+as a phone is paired: one tap POSTs `/api/v1/push/test`, the relay sends a diagnostic push down the
+production path, and the answer says what the push service said. That is what makes a pairing
+verifiable on the spot rather than by driving a real agent into `waiting`. It ends the *delivery*
+half only — the payload is a direct dispatch, so nothing about it exercises the policy engine that
+decides when a real transition becomes a push (§8.4).
 
 ### 6.2 Background delivery (daily path)
 
@@ -370,7 +374,7 @@ House rule: absence of a finding and inability to look must never produce the sa
 |---|---|
 | Push service returns `410/404` | Subscription pruned; the PWA health panel then reads "Paired, but push is not registered — reopen this app to re-subscribe" on next open (`beacon.js`), and the self-heal re-registers it |
 | Subscription silently invalidated by iOS | Self-heals: PWA re-subscribes on next open with its stored device token |
-| Doubt | A "send test notification" button in PWA settings — **not built** (slice 9). Until it exists, proving delivery means driving a real transition |
+| Doubt | A "send test notification" button in the PWA health panel (slice 9). `POST /api/v1/push/test` sends one diagnostic push through the **production** sender — same VAPID signing, same RFC 8291 encryption, same headers and padding — and answers with the outcome **synchronously**, so a 4xx from Apple lands in front of the person holding the phone instead of in the relay log. It separates "the relay never sent" from "the push service refused" from "this phone's subscription is dead", which nothing else did without driving a real agent into `waiting`. What it deliberately does **not** prove: it bypasses `core/domain/notify`, so it says nothing about whether a real transition would be *observed* — a §8.4 rule that never fires still looks healthy here |
 | A tap that resolves to no session | The app opens and *says so*, naming the session's last-known state from the ledger and the time it was last known (§8.5, R6) — never a tap that appears to do nothing |
 | The live view pairing configured is off, or aimed at another relay | A second line in the health panel, because the badge then only counts up and that would otherwise read as a broken badge rather than a configuration (`liveViewNoteText` in `beacon.js`) |
 | Daemon link down | Watchdog push (§6.4) |
@@ -492,6 +496,28 @@ case the badge most has to survive. That one was reproduced red before it was fi
 socket open before the initial `/api/v1/sessions` fetch resolves, the ordering a warm relay
 connection actually produces.
 
+Slice 9's test endpoint follows the same rule, and the mutation worth recording is the one that
+grades its whole reason for existing. Every HTTP behaviour (auth, the `--auth off` refusal, the
+no-subscription refusal, the outcome in the response, the rate limit) was run against a relay
+without the route and seen red first. Then the property no red-first run can reach — that the
+diagnostic travels the **production** path.
+
+That one was recorded here as proven and was not, which is worth keeping rather than quietly
+correcting. The claim was that pointing `sendTestNotification` at a `webpush.Sender` of its own
+reproduces the missing-`sub` JWT and reddens
+`TestTestNotificationTravelsTheProductionPath`. Review re-ran it: that test stays **green**,
+because it grades the *shape* of the bytes a push service receives, and a second correctly
+configured sender produces byte-identical output. The arms that did fail failed on `no such
+host` — #1453's "the arm failed ≠ THIS obligation failed", in the one place the doc asserted
+otherwise. A wrong record is the one error that stops anyone re-checking, so the fix is an
+assertion on **identity** rather than shape: `TestTestNotificationUsesTheDispatchersOwnSender`
+installs the recorder as the dispatcher's own sender, so a diagnostic that builds its own reaches
+nothing and the count stays at zero. Measured both ways — that mutation leaves the shape test
+green and the identity test red. Two of its quieter rules carry mutations too: a reason returned unredacted leaks the
+endpoint path into the response (`TestTestNotificationNeverEchoesTheEndpointPath`), and a
+cancelled send recorded as a verdict makes the §8.3 panel accuse a healthy subscription
+(`TestTestNotificationCancelledSendLeavesDeliveryHealthAlone`).
+
 **The lesson this section exists for, because it nearly shipped a dead feature.** Adversarial review
 of the observer found **seven of eight** fresh mutations staying green. The tests drove the
 component's synchronous core (`handle`, `tick`) directly and never executed the production
@@ -596,7 +622,7 @@ green test can pin nothing. *Designed-for* means the code intends it and nobody 
 | 8 | Timing metadata to Apple/Google | Named and accepted, as in #1346 |
 | 9 | **Nothing has run on a device.** Every defect so far was found by reading, and two of them — a VAPID JWT with no `sub`, `subscribe()` before the worker activates — fail only on contact with a real push service and passed every mock | Slice D, ordered ahead of release. `tools/beacon-rig.sh check` automates the phone-free half; the rest needs a phone. **Until it runs, §10 is designed-for, not demonstrated** |
 | 10 | **Losing `vapid-keys.json` costs a full re-pair of every phone**, and nothing detects it — `selfHeal` fires only when the browser has no subscription or the relay has no record (`beacon.js:418`); after a key loss both still exist | Named in §8.6 and the runbook's backup list. No code mitigation; a relay whose data dir is not backed up is one file loss from silent, permanent non-delivery |
-| 11 | §8.3's test-notification button does not exist | Slice 9. Marked in place rather than quietly dropped — this table is the record of what the doc promises and the code does not yet do. R6 shared this row until slice 8 (§8.5, ADR-9) |
+| 11 | §8.3's test-notification button did not exist, so proving delivery meant driving a real agent into `waiting` and reading the relay log when nothing arrived | **Closed** (slice 9): `POST /api/v1/push/test` plus the health-panel button, travelling the production sender and reporting the outcome synchronously. The residue is stated where it lives (§8.3) rather than left implied: the diagnostic bypasses `core/domain/notify`, so it proves delivery and never observation — a green test push says nothing about whether a `working → ready` edge would fire. R6 shared this row until slice 8 (§8.5, ADR-9) |
 | 12 | **Same-`Topic` push ordering is unserialized** — two pushes sharing a Topic race through the dispatch semaphore, so a daemon that flaps inside a slow POST can leave the *stale* banner winning the collapse permanently | Documented at the call site (`push_observer.go`); the exposed pair is the daemon up/down Topic, where the wrong survivor says "disconnected" about a live daemon. No fix in P1 |
 | 13 | **A relay restart is amnesia for policy state** (§8.6): every session becomes an unknown id, and a first sighting is silent — so a `ready` that landed during the restart is never delivered | Accepted: the alternative is persisting per-session policy state, which trades a missed edge for a stale one |
 | 14 | **`EventRekey` is never emitted**, so the presession→real-session cooldown carryover (§8.4) is dead policy | Needs a promotion signal the wire protocol does not carry; wiring one would touch ADR-4 |
@@ -636,7 +662,7 @@ green test can pin nothing. *Designed-for* means the code intends it and nobody 
 | 7 | Docs: relay-protocol REST reference, operator runbook, site setup guide | **done** `1a2361f9`, `0dd395fa` |
 | **D** | **Device test — pair a real phone and observe a notification** ([`beacon-device-test.md`](./beacon-device-test.md)). Its phone-free half is automated (`tools/beacon-rig.sh check`, 10 live assertions, passing); the half that needs a device has not run | **outstanding — the gate on calling this done** |
 | 8 | Ledger read path: live-view fold, `setAppBadge`, notification deep link — what makes **R6** true (§8.5), plus the pairing change ADR-9 records | **done** |
-| 9 | "Send test notification" button (§8.3), and a deterministic session-state driver for the device test's burst case | not started |
+| 9 | "Send test notification" button (§8.3), and a deterministic session-state driver for the device test's burst case | button **done**; driver tracked with it |
 
 Slice D was inserted mid-flight, ahead of 6, on the reasoning that packaging a flow nobody has
 seen work is premature — then 6 and 7 ran first anyway because D needs a human with a phone and

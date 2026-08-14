@@ -139,3 +139,7 @@ opencode.json
 # Scratch dir used by atomic_promote while a candidate recording is validated;
 # it lives inside replaydata/ and `record` commits that tree with a directory add.
 .promote-tmp*
+
+# Stray dev binary: `go build ./tools/beacon-drive/...` from the repo root
+# drops it here. The rig builds it into .build/beacon-rig instead.
+/beacon-drive

@@ -453,24 +453,133 @@ func (o *pushObserver) sendAsync(entry push.Entry, payload []byte, opts webpush.
 		if err != nil && o.ctx.Err() != nil {
 			return
 		}
-		at := o.now().Unix()
-		reason := func() string { return sendFailureReason(entry.Subscription.Endpoint, err) }
-		switch {
-		case err == nil:
-			o.svc.SetDeliveryStatus(entry.TokenID, push.DeliveryStatus{At: at, OK: true})
-		case errors.Is(err, webpush.ErrSubscriptionGone):
-			// The webpush error already names only the endpoint's origin,
-			// never the path (the subscription's capability secret).
-			log.Printf("push: subscription for token %s is gone — pruning: %s", entry.TokenID, reason())
-			if derr := o.svc.DeleteSubscription(entry.TokenID); derr != nil {
-				log.Printf("push: pruning subscription for token %s: %v", entry.TokenID, derr)
-			}
-			o.svc.SetDeliveryStatus(entry.TokenID, push.DeliveryStatus{At: at, OK: false, Detail: reason()})
-		default:
-			log.Printf("push: delivery to token %s failed: %s", entry.TokenID, reason())
-			o.svc.SetDeliveryStatus(entry.TokenID, push.DeliveryStatus{At: at, OK: false, Detail: reason()})
-		}
+		o.recordSendOutcome(entry, err)
 	}()
+}
+
+// sendVerdict is what one delivery attempt amounted to: when it happened,
+// whether it landed, whether the push service declared the subscription gone
+// (in which case it has just been pruned), and the redacted reason if it
+// failed. The dispatcher discards it — delivery health is its only
+// consumer — while the synchronous test notification answers with it.
+type sendVerdict struct {
+	at     int64
+	ok     bool
+	gone   bool
+	reason string
+}
+
+// recordSendOutcome turns one Send result into the §8.3 delivery-health
+// record, pruning a subscription the push service reports gone (404/410)
+// rather than retrying it — the phone re-subscribes with its stored device
+// token on its next open.
+//
+// The dispatcher's async sends and the synchronous test notification share
+// it, so what an outcome MEANS cannot differ between the path a user's
+// notifications take and the path the diagnostic reports on. A diagnostic
+// with its own idea of "delivered" is a diagnostic that can disagree with
+// the thing it exists to describe.
+func (o *pushObserver) recordSendOutcome(entry push.Entry, err error) sendVerdict {
+	v := sendVerdict{at: o.now().Unix(), ok: err == nil}
+	if err == nil {
+		o.svc.SetDeliveryStatus(entry.TokenID, push.DeliveryStatus{At: v.at, OK: true})
+		return v
+	}
+	v.reason = sendFailureReason(entry.Subscription.Endpoint, err)
+	if errors.Is(err, webpush.ErrSubscriptionGone) {
+		v.gone = true
+		// The webpush error already names only the endpoint's origin,
+		// never the path (the subscription's capability secret).
+		log.Printf("push: subscription for token %s is gone — pruning: %s", entry.TokenID, v.reason)
+		if derr := o.svc.DeleteSubscription(entry.TokenID); derr != nil {
+			log.Printf("push: pruning subscription for token %s: %v", entry.TokenID, derr)
+		}
+	} else {
+		log.Printf("push: delivery to token %s failed: %s", entry.TokenID, v.reason)
+	}
+	o.svc.SetDeliveryStatus(entry.TokenID, push.DeliveryStatus{At: v.at, OK: false, Detail: v.reason})
+	return v
+}
+
+// --- the test notification (docs/mobile-notifications-arc42.md §8.3) ---
+
+// pushKindTest names the diagnostic payload the "send a test notification"
+// button produces. It is spelled here rather than in core/domain/notify
+// because it is not a policy decision: no engine emits it, and no §8.4 rule
+// applies to it. An installed worker that predates it falls through to its
+// unknown-kind branch (genericNotification in platforms/web/sw.js), which
+// shows a content-free "update the app page" banner under a tag of its own:
+// enough to prove delivery on an older phone, and unable to collapse with a
+// real session's notification. Precisely: the first one is a banner, and a
+// repeat replaces it silently, because that fallback sets renotify false.
+const pushKindTest = notify.PushKind("test")
+
+// testPushTopic is both the RFC 8030 §5.4 collapse key and the device-side
+// `tag` sw.js mirrors it with. It can be neither a session id (a UUID) nor a
+// daemon topic ("daemon:"+id) nor the summary topic, so a test notification
+// replaces only an earlier test notification — never a real one, and never
+// the other way round.
+const testPushTopic = "beacon-test"
+
+// testPushTTL bounds how long a push service may hold an undelivered test
+// notification. It matches §8.4's `ready` TTL: long enough for a phone that
+// is asleep or briefly off the network, which is a state worth being able to
+// diagnose, and short enough that a banner never surfaces so late that it
+// reads as a real event.
+const testPushTTL = 10 * time.Minute
+
+// testPayloadVersion mirrors the unexported payloadVersion the notify engine
+// stamps into every Payload — the number sw.js checks before composing
+// anything (`payload.v !== 1`). It is not importable, so the two copies are
+// pinned together by TestTestPayloadVersionMatchesTheEngines.
+const testPayloadVersion = 1
+
+// testNotificationPayload composes the diagnostic payload. It names no
+// session on purpose: the service worker's ledger fold takes session-kind
+// payloads only (arc42 §8.5), so a test notification cannot leave a phantom
+// row in the ledger or a phantom count on the badge.
+func testNotificationPayload(now time.Time) pushPayload {
+	return pushPayload{
+		Payload: notify.Payload{Version: testPayloadVersion, Kind: pushKindTest, At: now.Unix()},
+		// The point of the exercise is a banner that buzzes: a silent
+		// replacement is indistinguishable from nothing arriving, which is
+		// the state the button is being pressed to resolve.
+		Renotify: true,
+	}
+}
+
+// sendTestNotification delivers one diagnostic push to entry and reports
+// what happened — the §8.3 "Doubt" row. It bypasses core/domain/notify
+// entirely: this is a direct dispatch, not a transition, so no hold-down, no
+// cooldown and no burst window stands between the button and the push
+// service. Everything downstream is the production path, sender included.
+//
+// Deliberately NOT behind the dispatch semaphore. That bound exists to keep
+// the observer's fan-out from opening unbounded connections; a single
+// request-scoped send is already bounded by the HTTP server and by the
+// sender's own client timeout, and queueing the diagnostic behind eight slow
+// deliveries would make it answer "cancelled" precisely when the relay is in
+// the state somebody is pressing the button to investigate.
+func (o *pushObserver) sendTestNotification(ctx context.Context, entry push.Entry) sendVerdict {
+	payload, err := json.Marshal(testNotificationPayload(o.now()))
+	if err != nil {
+		// Unreachable for a fixed struct of scalars, and still not silent:
+		// this function's contract is that its caller can render the answer.
+		return sendVerdict{at: o.now().Unix(), reason: "encoding the test payload: " + err.Error()}
+	}
+	opts := webpush.Options{TTL: testPushTTL, Topic: testPushTopic, Urgency: webpush.UrgencyHigh}
+	err = o.sender.Send(ctx, entry.Subscription, payload, opts)
+	if err != nil && ctx.Err() != nil {
+		// The caller hung up (closed the app, lost the network) and took the
+		// request context with it. Same rule as the dispatcher's async sends:
+		// a cancellation is not a delivery VERDICT, so it must not overwrite
+		// §8.3 delivery health — the panel would then report "the last
+		// attempt failed" about a subscription that is fine, on the strength
+		// of the user closing a tab. The verdict below is returned for the
+		// record; nobody is left to read it.
+		return sendVerdict{at: o.now().Unix(), reason: sendFailureReason(entry.Subscription.Endpoint, err)}
+	}
+	return o.recordSendOutcome(entry, err)
 }
 
 // webpushUrgency maps the policy's urgency onto the RFC 8030 header value.

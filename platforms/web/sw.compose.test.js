@@ -193,6 +193,22 @@ describe('composeNotification (arc42 §8.2/§8.4)', () => {
     expect(n.tag).toBe('irrlicht-update')
   })
 
+  test('the diagnostic kind composes a banner of its own (arc42 §8.3)', () => {
+    // The relay's test notification (POST /api/v1/push/test). Its tag mirrors
+    // the relay's Topic — testPushTopic in
+    // core/cmd/irrlichtrelay/push_observer.go — and must be a key no real
+    // notification uses, or proving delivery would replace the banner the
+    // user actually needed.
+    const n = sw.composeNotification({ v: 1, kind: 'test', at: 1755000000, renotify: true })
+    expect(n.tag).toBe('beacon-test')
+    expect(n.tag).not.toBe('summary')
+    expect(n.tag.startsWith('daemon:')).toBe(false)
+    expect(n.renotify).toBe(true)
+    expect(n.title).toMatch(/test/i)
+    expect(n.title).not.toBe('Irrlicht')
+    expect(n.body).toBeTruthy()
+  })
+
   test('unknown kind → generic fallback', () => {
     const n = sw.composeNotification({ v: 1, kind: 'hologram', at: 1755000000 })
     expect(n.title).toBe('Irrlicht')
@@ -249,6 +265,9 @@ describe('ledger fold (arc42 §8.5)', () => {
   test('non-session and unknown-version payloads write nothing', async () => {
     const sw = loadWorker()
     const backend = mapBackend()
+    // The diagnostic push names no session, so it must leave neither a
+    // phantom ledger row nor a phantom badge count (arc42 §8.3, §8.5).
+    await sw.ledgerStore(backend).update({ v: 1, kind: 'test', at: 1755000000 })
     await sw.ledgerStore(backend).update({ v: 1, kind: 'summary', count: 2, sessions: ['a', 'b'] })
     await sw.ledgerStore(backend).update({ v: 2, kind: 'session', session_id: 's-1', state: 'ready' })
     await sw.ledgerStore(backend).update(null)

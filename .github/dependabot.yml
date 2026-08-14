@@ -48,22 +48,25 @@ updates:
           - patch
 
   # Every module in go.work, which is also the list tools/security-scan.sh
-  # scans with govulncheck and gosec. Three copies of that list now exist
-  # (go.work, security-scan.sh's GO_MODULES, here) and nothing enforces their
-  # equality — it was checked by hand when this file was written. Adding a
-  # seventh module means editing all three.
+  # scans with govulncheck and gosec. Two copies of that list exist now, not
+  # three: security-scan.sh derives GO_MODULES from go.work rather than
+  # restating it, and tools/lib/module-list_test.sh (#1291) holds this list
+  # against go.work's. So a new module means editing go.work and this file,
+  # and forgetting this file is a failing gate rather than a module that
+  # silently stops being dependency-updated.
   - package-ecosystem: gomod
     directories:
       - /core
+      - /tools/beacon-drive
       - /tools/eta-research
       - /tools/onboarding-factory
       - /tools/seed-demo-sessions
       - /tools/wsload
     schedule:
       interval: weekly
-    # Above the directory count (6), not at dependabot's default of 5: the
+    # Above the directory count (7), not at dependabot's default of 5: the
     # limit is a cap on concurrently-open PRs, so a catch-up week that wants
-    # one grouped PR per module would silently withhold the sixth.
+    # one grouped PR per module would silently withhold the seventh.
     open-pull-requests-limit: 10
     commit-message:
       prefix: chore(deps)

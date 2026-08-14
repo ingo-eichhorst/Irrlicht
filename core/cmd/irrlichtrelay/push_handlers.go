@@ -6,11 +6,15 @@ package main
 // wires the bearer-token gate.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
+	"reflect"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -66,12 +70,40 @@ func buildPushService(store *authStore, ddir string) *push.Service {
 	return svc
 }
 
+// testNotifier is the seam POST /api/v1/push/test dispatches through:
+// production is *pushObserver — the same object that dispatches every real
+// notification, holding the same webpush.Sender — so the diagnostic cannot
+// travel a path the notifications it diagnoses do not
+// (docs/mobile-notifications-arc42.md §8.3).
+type testNotifier interface {
+	sendTestNotification(ctx context.Context, entry push.Entry) sendVerdict
+}
+
+// isNilNotifier reports whether the guard below has nothing to send through.
+// `notifier == nil` is not enough: runServe declares a *pushObserver, and a
+// nil one stored in this interface is a non-nil interface value holding a nil
+// pointer. It would slip past a bare nil check and nil-deref at request time —
+// on the one route built to answer doubt, at the moment somebody is using it
+// to diagnose something else.
+func isNilNotifier(n testNotifier) bool {
+	if n == nil {
+		return true
+	}
+	v := reflect.ValueOf(n)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
 // registerPushRoutes wires the push endpoints onto mux. svc is nil exactly
 // when auth is off, and that case is the serving half of the
 // push-requires-auth guard (docs/mobile-notifications-arc42.md §8.1): the
 // info endpoint answers enabled:false with the reason, and every other push
 // route is a 403 naming the fix.
-func registerPushRoutes(mux *http.ServeMux, store *authStore, svc *push.Service) {
+func registerPushRoutes(mux *http.ServeMux, store *authStore, svc *push.Service, notifier testNotifier) {
 	if svc != nil && store == nil {
 		// Held by construction in runServe (buildPushService returns nil
 		// exactly when store is nil), but the invariant spans two functions
@@ -80,6 +112,14 @@ func registerPushRoutes(mux *http.ServeMux, store *authStore, svc *push.Service)
 		// all callers sharing the "" registry slot. Refuse loudly.
 		panic("push routes require an auth store (docs/mobile-notifications-arc42.md §8.1)")
 	}
+	if svc != nil && isNilNotifier(notifier) {
+		// Same shape, and the same reason to be loud rather than degrade: a
+		// push-enabled relay whose test endpoint had no dispatcher would
+		// have to either 503 the one route built to answer doubt, or grow a
+		// sender of its own — and a diagnostic with its own sender proves
+		// nothing about the path real notifications take (§8.3).
+		panic("push routes require the dispatcher that sends real notifications (docs/mobile-notifications-arc42.md §8.3)")
+	}
 	mux.HandleFunc("GET /api/v1/push/info", handlePushInfo(svc))
 	if svc == nil {
 		mux.HandleFunc("POST /api/v1/push/pairings", handlePushDisabled)
@@ -87,6 +127,7 @@ func registerPushRoutes(mux *http.ServeMux, store *authStore, svc *push.Service)
 		mux.HandleFunc("POST /api/v1/push/subscriptions", handlePushDisabled)
 		mux.HandleFunc("DELETE /api/v1/push/subscriptions", handlePushDisabled)
 		mux.HandleFunc("GET /api/v1/push/subscriptions", handlePushDisabled)
+		mux.HandleFunc("POST /api/v1/push/test", handlePushDisabled)
 		return
 	}
 	mux.HandleFunc("POST /api/v1/push/pairings", requireToken(store, handleMintPairing(svc)))
@@ -94,6 +135,7 @@ func registerPushRoutes(mux *http.ServeMux, store *authStore, svc *push.Service)
 	mux.HandleFunc("POST /api/v1/push/subscriptions", requireToken(store, handlePutSubscription(svc)))
 	mux.HandleFunc("DELETE /api/v1/push/subscriptions", requireToken(store, handleDeleteSubscription(svc)))
 	mux.HandleFunc("GET /api/v1/push/subscriptions", requireToken(store, handleSubscriptionStatus(svc)))
+	mux.HandleFunc("POST /api/v1/push/test", requireToken(store, handleTestNotification(svc, notifier)))
 }
 
 // pushJSON writes v as a JSON body with the given status.
@@ -272,11 +314,91 @@ func handleSubscriptionStatus(svc *push.Service) http.HandlerFunc {
 		if entry, ok := svc.SubscriptionOf(tokenIDOf(r)); ok {
 			resp.Registered = true
 			resp.Created = entry.Created
-			if u, err := url.Parse(entry.Subscription.Endpoint); err == nil {
-				resp.EndpointHost = u.Host
-			}
+			resp.EndpointHost = endpointHost(entry.Subscription.Endpoint)
 		}
 		pushJSON(w, http.StatusOK, resp)
+	}
+}
+
+// endpointHost reduces a subscription endpoint to the one part of it that
+// may leave the relay. The PATH is the subscription's capability secret (RFC
+// 8030 §8.3) — anyone holding it can push to that phone — so it stays here,
+// even in an answer to the phone that owns it. The host is what makes an
+// outage diagnosable ("Apple is refusing us"), and the two endpoints that
+// report on a subscription share this one implementation so the rule has a
+// single place to be got right.
+func endpointHost(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
+// testNoSubscriptionMsg refuses a test notification from a paired phone with
+// no delivery address. It names the repair, which is the §8.3 self-heal the
+// app runs on its next open — a bare "no subscription" would leave the user
+// with the one question this endpoint exists to answer.
+const testNoSubscriptionMsg = "no push subscription is registered for this device — reopen the app to re-subscribe, then try again"
+
+// testGoneMsg is what a 404/410 from the push service means to the person
+// holding the phone: the address is dead and has just been dropped, and the
+// way back is the same self-heal.
+const testGoneMsg = "the push service says this device's subscription no longer exists, so the relay dropped it — reopen the app to re-subscribe, then try again"
+
+// handleTestNotification sends one notification to the caller's own
+// subscription and answers with the outcome — §8.3's "Doubt" row, and the
+// most direct diagnostic in the feature: it separates "the relay never sent"
+// from "the push service refused" from "this phone's subscription is dead",
+// which nothing else does without driving a real agent into `waiting`.
+//
+// Synchronous on purpose. A fire-and-forget send would answer 202 and leave
+// the verdict in the relay log, which is where a 4xx from Apple has always
+// been able to hide: the VAPID JWT that shipped without its `sub` claim
+// failed exactly that way and was found by a code review rather than by the
+// phone it never reached.
+//
+// Every failure carries `error`, whatever the status, so one field answers
+// "why not" for a refusal and for a push service's rejection alike.
+func handleTestNotification(svc *push.Service, notifier testNotifier) http.HandlerFunc {
+	type testResp struct {
+		Delivered        bool   `json:"delivered"`
+		EndpointHost     string `json:"endpoint_host,omitempty"`
+		At               int64  `json:"at,omitempty"`
+		Error            string `json:"error,omitempty"`
+		SubscriptionGone bool   `json:"subscription_gone,omitempty"`
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		tokenID := tokenIDOf(r)
+		entry, ok := svc.SubscriptionOf(tokenID)
+		if !ok {
+			pushError(w, http.StatusConflict, testNoSubscriptionMsg)
+			return
+		}
+		if retry, ok := svc.ClaimTestNotification(tokenID); !ok {
+			seconds := int(retry/time.Second) + 1
+			w.Header().Set("Retry-After", strconv.Itoa(seconds))
+			pushError(w, http.StatusTooManyRequests, fmt.Sprintf("a test notification was sent moments ago — wait %d s and try again", seconds))
+			return
+		}
+		v := notifier.sendTestNotification(r.Context(), entry)
+		resp := testResp{
+			Delivered:        v.ok,
+			EndpointHost:     endpointHost(entry.Subscription.Endpoint),
+			At:               v.at,
+			SubscriptionGone: v.gone,
+		}
+		if v.ok {
+			pushJSON(w, http.StatusOK, resp)
+			return
+		}
+		// 502: the relay did its part and something upstream did not. The
+		// reason is already redacted of the endpoint path (sendFailureReason).
+		resp.Error = v.reason
+		if v.gone {
+			resp.Error = testGoneMsg + " (" + v.reason + ")"
+		}
+		pushJSON(w, http.StatusBadGateway, resp)
 	}
 }
 

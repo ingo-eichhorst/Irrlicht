@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest'
 import {
   initBeacon, urlBase64ToUint8Array, formatPairingCode, normalizePairingCode, countdownText,
-  healthLineText, liveViewNoteText, publishLedgerSnapshot, ledgerEntry, sessionFromHash,
+  healthLineText, testNotificationText, liveViewNoteText, publishLedgerSnapshot, ledgerEntry, sessionFromHash,
   BEACON_MESSAGES,
 } from './beacon.js'
 
@@ -924,5 +924,147 @@ describe('mac-side minting (arc42 §6.1, §8.1)', () => {
     const out = document.getElementById('beacon-mint-out').textContent
     expect(out).not.toBe('Minting code…')
     expect(out).toMatch(/could not|not.*code/i)
+  })
+})
+
+describe('the test-notification button (arc42 §8.3, risk 11)', () => {
+  // The panel's own rule: say what happened AND what to do. A bare "failed"
+  // on the one control that exists to answer doubt leaves the user exactly
+  // where they were — which is why every branch below is graded on its
+  // advice, not only on its verdict.
+  const paired = (testRoute) => {
+    localStorage.setItem('beaconDeviceToken', 'dev-tok-9')
+    const calls = relayFetch({
+      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
+      'POST api/v1/push/test': testRoute,
+    })
+    mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
+    return calls
+  }
+
+  test('a paired phone gets the button, and it POSTs with the device token', async () => {
+    const calls = paired({ body: { delivered: true, endpoint_host: 'web.push.apple.com', at: 1755165120 } })
+    await initBeacon()
+    await flush()
+
+    const btn = document.getElementById('beacon-test-push')
+    expect(btn, 'the health panel offers no way to test delivery').toBeTruthy()
+    btn.click()
+    await flush()
+
+    const post = calls.find((c) => c.method === 'POST' && c.url === 'api/v1/push/test')
+    expect(post, 'the button never reached the relay').toBeTruthy()
+    expect(post.opts.headers.Authorization).toBe('Bearer dev-tok-9')
+    const out = document.getElementById('beacon-test-out').textContent
+    expect(out).toContain('web.push.apple.com')
+    expect(out).not.toMatch(/sending/i)
+  })
+
+  test('a relay-reported failure renders the reason, and never reads as sent', async () => {
+    // The whole point of the endpoint being synchronous: a 4xx from the push
+    // service has to arrive HERE, where somebody is looking.
+    paired({ status: 502, body: { delivered: false, endpoint_host: 'web.push.apple.com', error: 'webpush: push service answered 403: VAPID token missing sub claim' } })
+    await initBeacon()
+    await flush()
+    document.getElementById('beacon-test-push').click()
+    await flush()
+
+    const out = document.getElementById('beacon-test-out').textContent
+    expect(out).toContain('403')
+    expect(out).toContain('sub claim')
+    expect(out).not.toMatch(/should appear|sent via/i)
+  })
+
+  test('a 401 from the test route lands in the revoked state, not just a sentence', async () => {
+    // The relay operator revoked this phone while it sat open. A line saying
+    // "no longer paired" with no way to act on it is the dead end the panel
+    // already refuses elsewhere: the revoked state carries the one control
+    // that recovers, and re-pairing is the only recovery (arc42 §8.1).
+    paired({ status: 401, body: null })
+    await initBeacon()
+    await flush()
+    document.getElementById('beacon-test-push').click()
+    await flush()
+
+    expect(document.getElementById('beacon-repair'), 'no way back from a revocation discovered by the test button').toBeTruthy()
+    expect(document.getElementById('beacon-health-line').textContent).toMatch(/no longer paired|revoked/i)
+  })
+
+  test('the button cannot be double-tapped while a send is in flight', async () => {
+    let release = null
+    localStorage.setItem('beaconDeviceToken', 'dev-tok-9')
+    global.fetch = (url, opts = {}) => {
+      const u = String(url)
+      if (u === 'api/v1/push/info') return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ enabled: true, vapid_public_key: VAPID }) })
+      if (u === 'api/v1/push/subscriptions') return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null }) })
+      return new Promise((resolve) => { release = () => resolve({ ok: true, status: 200, json: () => Promise.resolve({ delivered: true, endpoint_host: 'web.push.apple.com', at: 1 }) }) })
+    }
+    mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
+    await initBeacon()
+    await flush()
+
+    const btn = document.getElementById('beacon-test-push')
+    btn.click()
+    await flush()
+    expect(btn.disabled, 'a second tap would spend the relay rate limit and report a 429 for the first send').toBe(true)
+    release()
+    await flush()
+    expect(btn.disabled).toBe(false)
+  })
+})
+
+describe('what the test-notification button says (arc42 §8.3)', () => {
+  test('delivered names the push service and what to check if nothing appears', () => {
+    const t = testNotificationText({ status: 200, body: { delivered: true, endpoint_host: 'fcm.googleapis.com', at: 1755165120 } })
+    expect(t).toContain('fcm.googleapis.com')
+    expect(t).toMatch(/notification/i)
+    // "The relay sent it" and "your phone showed it" are different claims,
+    // and only the first is what a 200 supports.
+    expect(t).toMatch(/if it does not/i)
+  })
+
+  test('a push-service refusal carries the relay\'s reason verbatim', () => {
+    const t = testNotificationText({ status: 502, body: { delivered: false, error: 'webpush: push service answered 403: BadJwtToken' } })
+    expect(t).toContain('403')
+    expect(t).toContain('BadJwtToken')
+    expect(t).not.toMatch(/should appear/i)
+  })
+
+  test('a dead subscription says the relay dropped it and how to get it back', () => {
+    const t = testNotificationText({ status: 502, body: { delivered: false, subscription_gone: true, error: 'gone' } })
+    expect(t).toMatch(/reopen/i)
+    expect(t).toMatch(/subscri/i)
+  })
+
+  test('no registered address is a repair instruction, not an outage', () => {
+    const t = testNotificationText({ status: 409, body: { error: 'no push subscription is registered for this device' } })
+    expect(t).toMatch(/reopen/i)
+    expect(t).not.toMatch(/relay.*(down|unreachable)/i)
+  })
+
+  test('the rate limit reads as "wait", not as a failure', () => {
+    const t = testNotificationText({ status: 429, body: { error: 'a test notification was sent moments ago — wait 7 s and try again' } })
+    expect(t).toMatch(/wait|again/i)
+    expect(t).not.toMatch(/could not reach|failed/i)
+  })
+
+  test('a revoked device token is reported as un-paired, exactly as the panel does', () => {
+    const t = testNotificationText({ status: 401, body: null })
+    expect(t).toMatch(/no longer paired|revoked/i)
+  })
+
+  test('an unreachable relay says nothing was sent, rather than blaming the push service', () => {
+    const t = testNotificationText({ unreachable: true })
+    expect(t).toMatch(/could not reach|offline/i)
+    expect(t).toMatch(/nothing was sent/i)
+  })
+
+  test('a 200 the page cannot read is still a verdict', () => {
+    // Anything in front of the relay can answer 200 with an HTML error page;
+    // the same rule the mint path learned.
+    const t = testNotificationText({ status: 200, body: null })
+    expect(t).toBeTruthy()
+    expect(t).not.toMatch(/should appear/i)
   })
 })

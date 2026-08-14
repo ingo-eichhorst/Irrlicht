@@ -220,8 +220,9 @@ func warnIfExposedWithoutAuth(addr string, store *authStore) {
 // buildMux registers the relay's HTTP routes: the WS stream, the read-only
 // API mirrors (bearer-gated when auth is on), the push surface (pushSvc is
 // nil with --auth off — see registerPushRoutes), and the dashboard UI (or a
-// 503 placeholder when it can't be found).
-func buildMux(h *hub, store *authStore, pushSvc *push.Service) *http.ServeMux {
+// 503 placeholder when it can't be found). notifier is the dispatcher the
+// test-notification endpoint sends through, non-nil exactly when pushSvc is.
+func buildMux(h *hub, store *authStore, pushSvc *push.Service, notifier testNotifier) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions/stream", h.ServeWS)
 	// The data endpoints carry the same session content as the WS stream, so
@@ -231,7 +232,7 @@ func buildMux(h *hub, store *authStore, pushSvc *push.Service) *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/sessions", requireToken(store, handleSessions(h)))
 	mux.HandleFunc("GET /api/v1/agents", requireToken(store, handleAgents(h)))
 	mux.HandleFunc("GET /api/v1/version", handleVersion(Version))
-	registerPushRoutes(mux, store, pushSvc)
+	registerPushRoutes(mux, store, pushSvc, notifier)
 
 	if uiDir := resolveUIDir(); uiDir != "" {
 		log.Printf("serving dashboard from %s", uiDir)
@@ -332,7 +333,17 @@ func runServe(args []string) {
 	_ = mime.AddExtensionType(".css", "text/css")
 
 	h := newHubWithAuth(store, splitCSV(cfg.originAllowlist), cfg.lim)
-	mux := buildMux(h, store, pushSvc)
+
+	// One observer, built before the mux and handed to both: it is the hub's
+	// push hook AND the test endpoint's send path, so the diagnostic and the
+	// notifications it diagnoses share a sender by construction rather than
+	// by two call sites agreeing (docs/mobile-notifications-arc42.md §8.3).
+	// Nil exactly when push is off, which is what registerPushRoutes checks.
+	var obs *pushObserver
+	if pushSvc != nil {
+		obs = newPushObserver(pushSvc, store, newRelayPushSender(pushSvc, vapidSubject), notify.Config{}, nil)
+	}
+	mux := buildMux(h, store, pushSvc, obs)
 
 	stop := make(chan struct{})
 	if store != nil {
@@ -343,12 +354,11 @@ func runServe(args []string) {
 		// (docs/mobile-notifications-arc42.md §8.1).
 		go pushSvc.PruneLoop(stop, tokenReloadInterval, store.valid)
 	}
-	if pushSvc != nil {
+	if obs != nil {
 		// The transition observer bridges the hub's event flow to phones
 		// (docs/mobile-notifications-arc42.md §5.1). Hooked before serving
 		// and stopped with the serve lifecycle; with push disabled the hook
 		// stays nil and the hub's behavior is unchanged.
-		obs := newPushObserver(pushSvc, store, newRelayPushSender(pushSvc, vapidSubject), notify.Config{}, nil)
 		h.setPushHook(obs)
 		go obs.run(stop)
 	}

@@ -631,6 +631,12 @@ if want go; then
                   "go vet (onboarding-factory)" go vet ./tools/onboarding-factory/...
   run_gate_scoped '^tools/onboarding-factory/.*\.go$' \
                   "onboarding-factory tests" go test ./tools/onboarding-factory/... -count=1
+  # beacon-drive imports core's relay envelope and forwarder, so a core
+  # refactor can break it — and nothing else compiles it. Without this gate a
+  # plain compile error is green until the device test reaches for it, which
+  # is the one moment it must work (docs/beacon-device-test.md Phase 5).
+  run_gate_scoped '^tools/beacon-drive/|^core/adapters/outbound/relay/|^core/domain/session/' \
+                  "beacon-drive builds"      go build ./tools/beacon-drive/...
   run_gate_scoped '^replaydata/|^tools/onboarding-factory/' \
                   "replaydata validate"      go run ./tools/onboarding-factory/cmd/of validate
   # The rig's own tests guard two file families that live OUTSIDE

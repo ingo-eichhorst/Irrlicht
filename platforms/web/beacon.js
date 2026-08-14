@@ -719,6 +719,98 @@ function timeText(atSeconds) {
   return 'at ' + new Date(n * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+// ── The test notification (arc42 §8.3, risk 11) ──────────────────────────
+//
+// The one control in the app that answers "is any of this working?" without
+// driving a real agent into `waiting`. The relay sends it down the same path
+// a real notification takes and answers with the outcome synchronously, so
+// the three failures that look identical from here — the relay never sent,
+// the push service refused, this phone's subscription is dead — arrive as
+// three different sentences.
+
+// POST the relay's test endpoint and normalize the answer into what the copy
+// below reads. The three shapes are kept apart for the same reason
+// fetchSubscriptionStatus keeps its three apart: they need different advice.
+async function postTestNotification(deviceToken) {
+  let r = null;
+  try {
+    r = await fetch('api/v1/push/test', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + deviceToken },
+    });
+  } catch (e) {
+    return { unreachable: true };
+  }
+  if (!r) return { unreachable: true };
+  let body = null;
+  try {
+    body = await r.json();
+  } catch (e) {
+    // Anything in front of the relay can answer with an HTML error page; a
+    // throw here would leave the row reading "Sending…" for good.
+    body = null;
+  }
+  return { status: r.status, body };
+}
+
+// The button's one line of copy. Pure, so every branch is graded directly.
+// Two claims are kept apart throughout: the relay HANDED the notification to
+// the push service, which is all a 200 supports, and the phone SHOWED it,
+// which only the user can confirm — a line that conflated them would send
+// someone hunting a relay bug over a muted phone.
+export function testNotificationText(outcome) {
+  if (!outcome || outcome.unreachable) {
+    return 'Could not reach the relay — it may be down, or this phone may be offline. Nothing was sent.';
+  }
+  if (outcome.status === 401) return revokedText();
+  const body = outcome.body || {};
+  if (outcome.status === 200 && body.delivered === true) {
+    return 'Sent via ' + (body.endpoint_host || 'the push service')
+      + ' — the notification should appear on this phone within a few seconds. '
+      + 'If it does not, the push service accepted it and the phone did not show it: check that notifications are allowed for this app.';
+  }
+  if (body.subscription_gone === true) {
+    return 'The push service says this phone\'s subscription no longer exists, so the relay dropped it. '
+      + 'Reopen this app to re-subscribe, then try again.';
+  }
+  if (outcome.status === 409) {
+    return 'This phone has no delivery address registered with the relay — reopen this app to re-subscribe, then try again.';
+  }
+  if (outcome.status === 429) {
+    return body.error || 'A test notification was just sent — wait a few seconds and try again.';
+  }
+  return 'The relay could not deliver it' + (body.error ? ': ' + body.error : ' (relay answered ' + outcome.status + ')') + '.';
+}
+
+// Disabled for the duration of the send, because the relay rate-limits this
+// route per device (§8.3): a second tap lands inside that window, and the
+// 429 it earns would be reported as the FIRST send's outcome.
+//
+// `panel` carries the two things the outcome may have to change beyond this
+// one line: the health line above it, and — on a 401 — the whole panel, since
+// a revocation discovered here is the same terminal state the status fetch
+// reports, and stating it without offering the re-pair control would be the
+// dead end the panel refuses everywhere else.
+async function sendTestNotification(btn, out, deviceToken, panel = {}) {
+  btn.disabled = true;
+  out.hidden = false;
+  out.textContent = 'Sending…';
+  const outcome = await postTestNotification(deviceToken);
+  if (outcome.status === 401 && panel.onRevoked) {
+    panel.onRevoked();
+    return;
+  }
+  out.textContent = testNotificationText(outcome);
+  // A delivered test is itself a delivery attempt, so the health line one row
+  // above now says something false ("no delivery attempted since the relay
+  // started"). Refresh it rather than leave the panel contradicting itself.
+  if (panel.healthLine && outcome.status === 200 && outcome.body && outcome.body.delivered === true) {
+    const status = await fetchSubscriptionStatus(deviceToken);
+    if (status.body) panel.healthLine.textContent = healthLineText(status.body);
+  }
+  btn.disabled = false;
+}
+
 async function renderHealthPanel(phone, info, deviceToken) {
   phone.innerHTML = '';
   const line = el('div', 'beacon-health');
@@ -732,6 +824,20 @@ async function renderHealthPanel(phone, info, deviceToken) {
   const note = liveView ? liveViewNoteText(liveView.read(), deviceToken, location.origin) : '';
   liveLine.textContent = note;
   liveLine.hidden = !note;
+  // The §8.3 "Doubt" row: one tap instead of driving a real agent into
+  // `waiting`, and the only way to tell a relay that never sent from a push
+  // service that refused without reading the relay's log.
+  const testBtn = el('button', 'settings-action-btn');
+  testBtn.type = 'button';
+  testBtn.id = 'beacon-test-push';
+  testBtn.textContent = 'Send a test notification';
+  const testOut = el('div', 'beacon-health');
+  testOut.id = 'beacon-test-out';
+  testOut.hidden = true;
+  testBtn.addEventListener('click', () => sendTestNotification(testBtn, testOut, deviceToken, {
+    healthLine: line,
+    onRevoked: () => renderRevoked(phone, info, deviceToken),
+  }));
   const btn = el('button', 'settings-action-btn');
   btn.type = 'button';
   btn.id = 'beacon-unpair';
@@ -739,6 +845,8 @@ async function renderHealthPanel(phone, info, deviceToken) {
   btn.addEventListener('click', () => unpair(phone, info, deviceToken));
   phone.appendChild(line);
   phone.appendChild(liveLine);
+  phone.appendChild(testBtn);
+  phone.appendChild(testOut);
   phone.appendChild(btn);
 
   let status = await fetchSubscriptionStatus(deviceToken);
