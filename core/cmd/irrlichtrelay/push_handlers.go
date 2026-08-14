@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode"
@@ -85,12 +86,14 @@ func registerPushRoutes(mux *http.ServeMux, store *authStore, svc *push.Service)
 		mux.HandleFunc("POST /api/v1/push/pair", handlePushDisabled)
 		mux.HandleFunc("POST /api/v1/push/subscriptions", handlePushDisabled)
 		mux.HandleFunc("DELETE /api/v1/push/subscriptions", handlePushDisabled)
+		mux.HandleFunc("GET /api/v1/push/subscriptions", handlePushDisabled)
 		return
 	}
 	mux.HandleFunc("POST /api/v1/push/pairings", requireToken(store, handleMintPairing(svc)))
 	mux.HandleFunc("POST /api/v1/push/pair", handlePair(svc, store))
 	mux.HandleFunc("POST /api/v1/push/subscriptions", requireToken(store, handlePutSubscription(svc)))
 	mux.HandleFunc("DELETE /api/v1/push/subscriptions", requireToken(store, handleDeleteSubscription(svc)))
+	mux.HandleFunc("GET /api/v1/push/subscriptions", requireToken(store, handleSubscriptionStatus(svc)))
 }
 
 // pushJSON writes v as a JSON body with the given status.
@@ -244,6 +247,36 @@ func handlePutSubscription(svc *push.Service) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleSubscriptionStatus serves the caller's own delivery health — the
+// PWA health panel's data source (docs/mobile-notifications-arc42.md §8.3).
+// endpoint_host is the endpoint's host and nothing more: the path is the
+// subscription's capability secret (RFC 8030 §8.3) and must never leave the
+// relay, not even to the phone that owns it. A null last_delivery means no
+// send has been attempted since the relay started — health is RAM-only, and
+// "unknown since restart" is the honest answer absence expresses (§8.6).
+func handleSubscriptionStatus(svc *push.Service) http.HandlerFunc {
+	type statusResp struct {
+		Registered   bool                 `json:"registered"`
+		Created      int64                `json:"created,omitempty"`
+		EndpointHost string               `json:"endpoint_host,omitempty"`
+		LastDelivery *push.DeliveryStatus `json:"last_delivery"`
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		resp := statusResp{}
+		if st, ok := svc.DeliveryStatus(tokenIDOf(r)); ok {
+			resp.LastDelivery = &st
+		}
+		if entry, ok := svc.SubscriptionOf(tokenIDOf(r)); ok {
+			resp.Registered = true
+			resp.Created = entry.Created
+			if u, err := url.Parse(entry.Subscription.Endpoint); err == nil {
+				resp.EndpointHost = u.Host
+			}
+		}
+		pushJSON(w, http.StatusOK, resp)
 	}
 }
 

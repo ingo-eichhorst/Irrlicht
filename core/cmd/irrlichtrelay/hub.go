@@ -80,7 +80,26 @@ type hub struct {
 	totalConns    int            // live connections across all peers
 	ipConns       map[string]int // remote IP → live connections
 	lastRejectLog time.Time      // throttle for over-cap rejection logs
+
+	// observer is the push transition observer's view of the hub's event
+	// flow (nil = no observer, zero behavior change). Set once via
+	// setPushHook before serving, never after. A hook may run while the hub
+	// holds h.mu, so implementations must never block.
+	observer pushHook
 }
+
+// pushHook is called at the hub's three observation seams: every
+// client-bound session frame, and each daemon link coming up or (fully)
+// going down. Implementations map and enqueue only — see pushObserver.
+type pushHook interface {
+	observePush(workspace string, msg outbound.PushMessage)
+	observeDaemonConnected(workspace, daemonID, label string)
+	observeDaemonDisconnected(workspace, daemonID, label string)
+}
+
+// setPushHook attaches the observer. Called before the hub serves its first
+// connection, so the field needs no lock.
+func (h *hub) setPushHook(hook pushHook) { h.observer = hook }
 
 // workspaceState holds one tenant's view: the daemons connected under that
 // workspace's tokens, their cached sessions, and their adapter registries. It
@@ -462,6 +481,9 @@ func (h *hub) daemonConnected(workspace, id, label string, send chan []byte) {
 	d.conns++
 	d.send = send // newest connection wins for control routing
 	h.mu.Unlock()
+	if h.observer != nil {
+		h.observer.observeDaemonConnected(workspace, id, label)
+	}
 	h.broadcastDaemonStatus(workspace, id, label, relay.StatusConnected, now)
 }
 
@@ -512,6 +534,9 @@ func (h *hub) daemonDisconnected(workspace, id string, send chan []byte) {
 	// dashboard drops them. The cache is still evicted, so /api/v1/sessions and
 	// any late-joining client reflect only live daemons, and a reconnect
 	// reconciles via a fresh daemon_snapshot.
+	if h.observer != nil {
+		h.observer.observeDaemonDisconnected(workspace, id, label)
+	}
 	h.broadcastDaemonStatus(workspace, id, label, relay.StatusDisconnected, now)
 }
 
@@ -673,6 +698,9 @@ func (h *hub) clientWritePump(cc *clientConn) {
 // --- fan-out + snapshots ---
 
 func (h *hub) fanoutPush(workspace, daemonID string, msg outbound.PushMessage) {
+	if h.observer != nil {
+		h.observer.observePush(workspace, msg)
+	}
 	data, err := json.Marshal(relay.Push{Type: relay.MsgPush, Source: daemonID, TS: time.Now().Unix(), Msg: msg})
 	if err != nil {
 		return

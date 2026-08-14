@@ -31,7 +31,8 @@ const vapidFilename = "vapid-keys.json"
 
 // Service is the relay's push-side state, safe for concurrent use. The
 // VAPID identity is immutable after construction; codes, redeem-failure
-// timestamps and the subscription registry share one mutex.
+// timestamps, the subscription registry, the daemon roster and the delivery
+// health map share one mutex.
 type Service struct {
 	dir string
 	now func() time.Time
@@ -40,8 +41,10 @@ type Service struct {
 
 	mu       sync.Mutex
 	codes    []pairingCode
-	failures []time.Time      // failed Redeem timestamps within the rolling window
-	subs     map[string]Entry // device token id → registered subscription
+	failures []time.Time               // failed Redeem timestamps within the rolling window
+	subs     map[string]Entry          // device token id → registered subscription
+	roster   map[rosterKey]RosterEntry // known daemons for the §6.4 watchdog
+	health   map[string]DeliveryStatus // device token id → last send outcome (RAM only, §8.6)
 }
 
 // NewService loads (or on first run creates) the push state under dir. now
@@ -51,11 +54,20 @@ func NewService(dir string, now func() time.Time) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	s := &Service{dir: dir, now: now, subs: map[string]Entry{}}
+	s := &Service{
+		dir:    dir,
+		now:    now,
+		subs:   map[string]Entry{},
+		roster: map[rosterKey]RosterEntry{},
+		health: map[string]DeliveryStatus{},
+	}
 	if err := s.loadOrCreateVAPID(); err != nil {
 		return nil, err
 	}
 	if err := s.loadSubscriptions(); err != nil {
+		return nil, err
+	}
+	if err := s.loadRoster(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -103,6 +115,13 @@ func (s *Service) loadOrCreateVAPID() error {
 // it unauthenticated.
 func (s *Service) VAPIDPublicKey() string {
 	return s.vapid.PublicKey()
+}
+
+// VAPIDKey returns the relay's signing identity for the dispatch path — the
+// key the production webpush.Sender signs every POST with. Immutable after
+// construction, so handing it out needs no lock.
+func (s *Service) VAPIDKey() *webpush.VAPIDKey {
+	return s.vapid
 }
 
 // writeFileAtomic writes data at perm via a same-directory temp file and

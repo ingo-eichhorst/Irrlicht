@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"irrlicht/core/cmd/irrlichtrelay/push"
+	"irrlicht/core/pkg/webpush"
 )
 
 // Version is injected at build time via -ldflags "-X main.Version=x.y.z".
@@ -286,6 +287,15 @@ func runServe(args []string) {
 		// the same tick its WS access dies
 		// (docs/mobile-notifications-arc42.md §8.1).
 		go pushSvc.PruneLoop(stop, tokenReloadInterval, store.valid)
+	}
+	if pushSvc != nil {
+		// The transition observer bridges the hub's event flow to phones
+		// (docs/mobile-notifications-arc42.md §5.1). Hooked before serving
+		// and stopped with the serve lifecycle; with push disabled the hook
+		// stays nil and the hub's behavior is unchanged.
+		obs := newPushObserver(pushSvc, store, &webpush.Sender{Key: pushSvc.VAPIDKey()}, nil)
+		h.setPushHook(obs)
+		go obs.run(stop)
 	}
 
 	// WS connections are hijacked by gorilla after the upgrade, so the only

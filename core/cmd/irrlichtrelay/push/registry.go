@@ -69,6 +69,15 @@ func (s *Service) DeleteSubscription(tokenID string) error {
 	return s.saveSubscriptionsLocked()
 }
 
+// SubscriptionOf returns tokenID's registered entry, ok=false when none
+// exists — the health endpoint's "registered" answer.
+func (s *Service) SubscriptionOf(tokenID string) (Entry, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.subs[tokenID]
+	return e, ok
+}
+
 // Subscriptions returns a copy of the registry, sorted by token id.
 func (s *Service) Subscriptions() []Entry {
 	s.mu.Lock()
