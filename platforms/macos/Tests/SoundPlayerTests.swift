@@ -195,23 +195,107 @@ final class SoundPlayerTests: XCTestCase {
         )
     }
 
+    /// Pins the parameter that removes #1523's deadlock: the completion is
+    /// delivered on the queue the caller named, not unconditionally on the main
+    /// queue. `deliver` is shared by every exit of `installCustom`, so probing
+    /// one exit covers them all; this uses the unsupported-extension exit
+    /// because it is the only one that writes nothing to `~/Library/Sounds/`.
+    ///
+    /// Restoring `DispatchQueue.main.async` in `installCustom` must make this
+    /// fail rather than hang — which is why it asserts on the semaphore's
+    /// result before asserting on the queue.
+    func testInstallCustomDeliversCompletionOnCallerQueue() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("queue-probe-\(UUID().uuidString).txt")
+        try "junk".write(to: tmp, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let queue = DispatchQueue(label: "SoundPlayerTests.callerQueue")
+        let key = DispatchSpecificKey<Bool>()
+        queue.setSpecific(key: key, value: true)
+
+        let done = DispatchSemaphore(value: 0)
+        var onCallerQueue = false
+        SoundPlayer.installCustom(srcURL: tmp, event: .ready, completionQueue: queue) { _ in
+            onCallerQueue = DispatchQueue.getSpecific(key: key) == true
+            done.signal()
+        }
+
+        XCTAssertEqual(done.wait(timeout: .now() + 5), .success,
+            "installCustom never invoked its completion")
+        XCTAssertTrue(onCallerQueue,
+            "completion must run on the queue the caller passed, not unconditionally on main")
+    }
+
     // MARK: - helpers
 
-    private func waitInstall(src: URL, event: NotificationEvent, timeout: TimeInterval = 5) throws -> String {
-        switch waitInstallResult(src: src, event: event, timeout: timeout) {
+    /// The queue `installCustom`'s completion is delivered on throughout this
+    /// suite. Deliberately **not** the main queue: XCTest runs test methods on
+    /// the main thread and `waitInstallResult` blocks it until the completion
+    /// arrives, so delivering on main is a cycle — the block cannot run until
+    /// the test returns, and the test cannot return until the block runs.
+    private static let completionQueue = DispatchQueue(label: "SoundPlayerTests.installCustom")
+
+    private func waitInstall(
+        src: URL,
+        event: NotificationEvent,
+        timeout: TimeInterval = 5,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> String {
+        switch waitInstallResult(src: src, event: event, timeout: timeout, file: file, line: line) {
         case .success(let name): return name
         case .failure(let error): throw error
         }
     }
 
-    private func waitInstallResult(src: URL, event: NotificationEvent, timeout: TimeInterval = 5) -> Result<String, Error> {
-        let expectation = XCTestExpectation(description: "installCustom completes")
-        var captured: Result<String, Error>!
-        SoundPlayer.installCustom(srcURL: src, event: event) { result in
+    /// Runs `installCustom` and blocks until its completion arrives — or fails
+    /// this one test if it does not.
+    ///
+    /// Three deliberate choices, all of them about #1523's blast radius rather
+    /// than about this helper's ergonomics:
+    ///
+    /// 1. A `DispatchSemaphore`, not `XCTestExpectation`/`XCTWaiter`. A stalled
+    ///    `XCTWaiter` is not a failed test: XCTest's stall detector `abort()`s
+    ///    the **process**, which drops the eight suites that sort after this one
+    ///    and suppresses the aggregate total, while every suite that already
+    ///    reported still says "0 failures". A semaphore always returns by its
+    ///    deadline, so the worst case is one red test.
+    /// 2. `XCTFail` plus a returned `.failure` on timeout, rather than force-
+    ///    unwrapping. The previous helper unwrapped a `Result!` that is nil
+    ///    exactly when the wait timed out, so the loud local failure it was
+    ///    reaching for was in fact a second process-fatal path.
+    /// 3. The completion is delivered on `Self.completionQueue` — see there.
+    ///
+    /// `captured` needs no lock: it is written on `completionQueue` before
+    /// `signal()` and read here only after `wait()` returns, and that pair is a
+    /// happens-before edge.
+    private func waitInstallResult(
+        src: URL,
+        event: NotificationEvent,
+        timeout: TimeInterval = 5,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> Result<String, Error> {
+        let done = DispatchSemaphore(value: 0)
+        var captured: Result<String, Error>?
+        SoundPlayer.installCustom(srcURL: src, event: event, completionQueue: Self.completionQueue) { result in
             captured = result
-            expectation.fulfill()
+            done.signal()
         }
-        _ = XCTWaiter.wait(for: [expectation], timeout: timeout)
+
+        guard done.wait(timeout: .now() + timeout) == .success, let captured else {
+            let message = "installCustom did not invoke its completion within \(timeout)s"
+            XCTFail(message, file: file, line: line)
+            return .failure(InstallTimeout(message: message))
+        }
         return captured
+    }
+
+    /// Returned (in addition to the `XCTFail`) so a timeout reaches callers
+    /// that `throw` rather than silently reading as a missing result.
+    private struct InstallTimeout: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
     }
 }
