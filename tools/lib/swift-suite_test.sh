@@ -10,6 +10,7 @@
 #   hung.log           the process never returned: bundle silent, no signal
 #   zero-tests.log     bundle reports, but executed nothing
 #   control-bytes.log  a complete run carrying the control bytes a real run emits
+#   bundle-failed.log  a complete run whose bundle reports FAILED
 #
 # aborted.log and hung.log both still contain per-suite `Executed N tests`
 # lines, which is the point: that string is present in a truncated run, so a
@@ -37,7 +38,7 @@ fail() { echo "  FAIL — $1" >&2; rc=1; }
 
 # The corpus must actually contain what it claims. A fixture tree that quietly
 # stopped carrying its own cases reads as a pass.
-for f in clean aborted hung zero-tests control-bytes; do
+for f in clean aborted hung zero-tests control-bytes bundle-failed; do
   [[ -s "$DATA/$f.log" ]] || fail "fixture $DATA/$f.log missing or empty"
   # Tracked, not merely present. The repo-root .gitignore carries a blanket
   # `*.log`, so these fixtures exist on the author's disk and reach nobody
@@ -84,6 +85,14 @@ verdict() { swift_suite_verdict "$1" "$DATA/$2.log" >/dev/null 2>&1; echo $?; }
 # verdict built on a bare grep reports this complete run as truncated.
 [[ "$(verdict 0 control-bytes)" == 0 ]] && pass "control bytes: complete run still reads as complete" \
   || fail "control-byte log misread — swift_suite_* lost its -a"
+# The bundle's own verdict is read independently of the exit code, so a
+# script(1) that stopped propagating the child's status cannot turn a failing
+# suite into a pass.
+[[ "$(verdict 0 bundle-failed)" == 1 ]] && pass "exit 0 + bundle reported FAILED → fail" \
+  || fail "a bundle that reported FAILED must fail even at exit 0"
+# A non-numeric exit code must be refused, not silently compared as 0.
+swift_suite_verdict abc "$DATA/clean.log" >/dev/null 2>&1 \
+  && fail "a non-numeric exit code must be refused" || pass "non-numeric exit code → fail"
 swift_suite_verdict 0 "$DATA/nope.log" >/dev/null 2>&1 && fail "a missing log must fail" || pass "missing log → fail"
 swift_suite_verdict "" "" >/dev/null 2>&1 && fail "missing args must fail" || pass "missing args → fail"
 # An empty log is "never started", not "truncated" — generated rather than
@@ -98,6 +107,18 @@ empty_msg=$(swift_suite_verdict 0 "$empty_log" 2>&1 || true)
 case "$empty_msg" in
   *"never started"*) pass "empty log is diagnosed as never-started, not as truncated" ;;
   *) fail "empty log should be diagnosed distinctly from truncation; got: $empty_msg" ;;
+esac
+# ...and an empty log at exit 124 is a HANG that printed nothing, not a run
+# that never started. Getting this backwards points the reader at the pty and
+# the toolchain when the process was alive the whole time.
+hang_msg=$(swift_suite_verdict 124 "$empty_log" 2>&1 || true)
+case "$hang_msg" in
+  *HUNG*)          pass "empty log at exit 124 is diagnosed as a hang" ;;
+  *)               fail "empty log at 124 should read as a hang; got: $hang_msg" ;;
+esac
+case "$hang_msg" in
+  *"never started"*) fail "a hang must not be reported as never-started" ;;
+  *)                 pass "a hang is not mislabelled never-started" ;;
 esac
 rm -f "$empty_log"
 
@@ -142,11 +163,25 @@ else
   # A hang must be killed within the timeout AND take its grandchildren with
   # it: `swift test` forks the process that actually hangs, so a kill that
   # reaches only the wrapper is a timeout that does not stop anything.
+  #
+  # The fixture has to occupy `xctest`'s ACTUAL position, and two details of
+  # that are load-bearing — an earlier version of this test had neither and
+  # passed against a wrapper-only kill, i.e. against no mechanism at all:
+  #
+  #   `set -m`  puts the grandchild in its OWN process group, as SwiftPM's
+  #             xctest is. Sharing the inner shell's group instead means the
+  #             pty hangup reaps it and the assertion measures SIGHUP.
+  #   silence   a hung process writes nothing. A chatty one dies of SIGPIPE
+  #             when the pty master closes, which again is not the kill.
+  #
+  # script(1) calls login_tty, so everything below it is in a different SESSION
+  # from this shell — which is exactly why a negative-PID kill on the wrapper's
+  # process group cannot reach it.
   export SWIFT_SUITE_GRANDCHILD_PIDFILE
   SWIFT_SUITE_GRANDCHILD_PIDFILE=$(mktemp -t swift-suite-gc)
   start=$(date +%s)
   SWIFT_SUITE_TIMEOUT=2 swift_suite_run "$log" \
-    bash -c 'sleep 300 & echo $! > "$SWIFT_SUITE_GRANDCHILD_PIDFILE"; wait' >/dev/null 2>&1
+    bash -c 'set -m; sleep 300 & echo $! > "$SWIFT_SUITE_GRANDCHILD_PIDFILE"; wait' >/dev/null 2>&1
   hang_rc=$?
   elapsed=$(( $(date +%s) - start ))
   [[ "$hang_rc" -eq 124 ]] && pass "a hanging command returns 124" || fail "hang should return 124, got $hang_rc"
@@ -159,7 +194,7 @@ else
       kill -9 "$gc" 2>/dev/null   # don't leak it out of the test either way
       fail "grandchild $gc survived the timeout kill — the process tree was not reaped"
     else
-      pass "the grandchild was reaped with the process group"
+      pass "the whole process tree was reaped, not just the wrapper"
     fi
   else
     fail "grandchild never recorded its pid; the kill assertion did not run"

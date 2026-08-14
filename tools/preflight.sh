@@ -426,7 +426,8 @@ swift_suite() {
   ( cd platforms/macos && swift_suite_run "$log" \
       swift test --skip LauncherTestHarness --skip LauncherHarnessTests )
   rc=$?
-  cat "$log"
+  # No `cat "$log"` here: swift_suite_run streams the run live as well as
+  # capturing it, so re-printing would double every line.
   swift_suite_verdict "$rc" "$log"
   rc=$?
   rm -f "$log"
@@ -443,7 +444,11 @@ if want swift; then
   # check" is a SKIP, while "this platform runs it and the tool is missing" is
   # a FAIL.
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    run_gate_scoped '^platforms/macos/|^\.github/workflows/macos-swift\.yml$|^tools/preflight\.sh$' \
+    # tools/lib/swift-suite.sh is in the trigger set because the harness this
+    # gate runs lives there rather than in this file — without it, a push that
+    # rewrites the watchdog skips the one gate that exercises it against a real
+    # `swift test`. Same reasoning as site/install.sh's entry in the tools gate.
+    run_gate_scoped '^platforms/macos/|^\.github/workflows/macos-swift\.yml$|^tools/preflight\.sh$|^tools/lib/swift-suite(_test)?\.sh$' \
                     "macOS Swift build + test" swift_suite
   else
     echo

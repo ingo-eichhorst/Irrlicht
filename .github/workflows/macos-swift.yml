@@ -14,9 +14,11 @@ name: macOS (Swift)
 # be a main-thread deadlock in a test helper rather than the audio stack that
 # comment originally suspected, so the cause cannot recur on a runner either.
 # That last clause is reasoning from the cause, not a green runner result:
-# nothing in CI runs `swift test` yet, which is what #1530 is for. Gating tests today would mean
-# a check that is red on every PR for reasons unrelated to the PR, which
-# teaches people to ignore it — strictly worse than the gap it would fill.
+# nothing in CI runs `swift test` yet, which is what #1530 is for.
+#
+# Gating tests today would mean a check that is red on every PR for reasons
+# unrelated to the PR, which teaches people to ignore it — strictly worse than
+# the gap it would fill.
 #
 # The tests are NOT ungated in the meantime. `tools/preflight.sh --only swift`
 # runs the whole suite, and the pre-push hook runs it on any diff touching
