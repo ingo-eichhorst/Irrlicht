@@ -304,9 +304,14 @@ func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 
 // captureBackground flags state as a background agent when the reader recognizes
 // its PID, stamping Detached from the captured Launcher TTY. Must run AFTER
-// captureLauncher so the controlling TTY is known. Set-once: a no-op once
-// Background is already set, when no reader is installed, or for an unrecognized
-// PID. Returns true when it set Background so callers can persist (#744).
+// captureLauncher so the controlling TTY is known. Returns true when it set
+// Background so callers can persist (#744).
+//
+// Set-once, but only the IDENTIFICATION half: this is a no-op once Background
+// is already set, when no reader is installed, or for an unrecognized PID.
+// Detached is not an identification, it is derived from a field that is
+// explicitly repairable, so it is re-derived by refreshBackgroundDetached on
+// the paths that repair it (#1546).
 func (pm *PIDManager) captureBackground(state *session.SessionState, pid int) bool {
 	if pm.background == nil || state == nil || state.Background != nil || pid <= 0 {
 		return false
@@ -315,9 +320,60 @@ func (pm *PIDManager) captureBackground(state *session.SessionState, pid int) bo
 	if bg == nil {
 		return false
 	}
-	// No controlling terminal ⇒ no window/tab owns it — the "detached" signature.
-	bg.Detached = state.Launcher == nil || state.Launcher.TTY == ""
+	bg.Detached = detachedFromLauncher(state.Launcher)
 	state.Background = bg
+	return true
+}
+
+// detachedFromLauncher derives BackgroundAgent.Detached from the launcher a
+// session currently holds: no controlling terminal ⇒ no window/tab owns it,
+// which is the "detached" signature (#744). One function so the first stamp
+// and every later re-derivation cannot drift apart on what the badge means.
+func detachedFromLauncher(l *session.Launcher) bool {
+	return l == nil || l.TTY == ""
+}
+
+// refreshBackgroundDetached re-derives Detached for a session that already
+// carries a background badge, and reports whether the value moved so the
+// caller can persist and push only on a real change. It is #1546.
+//
+// Launcher.TTY has two ways of being empty and they are not the same fact: the
+// process genuinely has no controlling terminal, or the `ps` behind
+// processTTY was killed by its 2s ceiling and never answered. Nothing that
+// reaches this layer distinguishes them — ReadLauncherEnv discards
+// hostIdentity's completeness verdict for the agent's own read — so
+// captureBackground's first stamp can be a claim made on no evidence. Read
+// that discard carefully before building on it: its stated reasons (see
+// ReadLauncherEnv's doc comment) are about the ANCESTRY walk and predate
+// #1533 folding the tty probe into the same bit, so the verdict being dropped
+// now carries tty information its rationale does not cover.
+//
+// The rest of the codebase already handles that correctly by treating an empty
+// TTY as MISSING rather than absent: launcherBackfillNeedsFor returns
+// `tty: l.TTY == ""`, and both refresh paths re-read it until one answers. What
+// was missing is the second half — the badge derived from that field never
+// followed it, because captureBackground is set-once and a record carrying a
+// wrong badge is by definition one that already has a Background. So the
+// repair ran and its result was discarded, and since SessionState is persisted
+// whole the badge outlived the daemon that wrote it: a permanent amber "no open
+// window; runs in the daemon pool" on a session with a perfectly good terminal.
+//
+// This can only ever move the badge true → false, which is why it is a repair
+// and not a new way to be wrong: applyLauncherBackfill copies a fresh TTY only
+// when it is non-empty, AdoptHostIdentity refuses to move a client's tty onto a
+// pane that has none, and no path ever nils a stored Launcher — so the field
+// this reads is monotone once set. Correcting a stale FALSE (an agent whose
+// window closed after capture) would need the stored TTY to be invalidated,
+// which nothing does today; that is a separate gap, not one this closes.
+func refreshBackgroundDetached(state *session.SessionState) bool {
+	if state == nil || state.Background == nil {
+		return false
+	}
+	want := detachedFromLauncher(state.Launcher)
+	if state.Background.Detached == want {
+		return false
+	}
+	state.Background.Detached = want
 	return true
 }
 
@@ -1232,7 +1288,15 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 	// Re-attach the background-agent badge to sessions persisted before the
 	// field existed, or restored after a daemon restart (#744). Runs after
 	// backfillLauncher so Detached reflects the refreshed TTY.
-	if pm.captureBackground(state, state.PID) {
+	stamped := pm.captureBackground(state, state.PID)
+	// ...and for a session restored WITH a badge, captureBackground is a
+	// set-once no-op, so the refreshed TTY reaches Detached only through this
+	// second call. That is the whole of #1546: a record already carrying the
+	// wrong badge is precisely the one the line above cannot correct. Both
+	// calls are evaluated — no short-circuit — because a just-stamped badge is
+	// already consistent and the refresh then reports no change anyway.
+	refreshed := refreshBackgroundDetached(state)
+	if stamped || refreshed {
 		state.UpdatedAt = time.Now().Unix()
 		_ = pm.repo.Save(state)
 	}
@@ -1368,8 +1432,13 @@ func (pm *PIDManager) refreshHerdrHosts(snaps []livenessSnapshot) {
 		if state == nil {
 			continue
 		}
+		// Not "host re-resolved": since #1546 this pass reports a change when
+		// the host moved, when the background badge was re-derived from a
+		// repaired tty, or both — and in the badge-only case all three values
+		// printed here are identical to the ones printed last time, so the
+		// older wording named the one thing that provably had NOT happened.
 		pm.log.LogInfo(logComponentSessionDetector, state.SessionID,
-			fmt.Sprintf("herdr host re-resolved: term_program=%q host_bundle_id=%q tty=%q",
+			fmt.Sprintf("herdr session refreshed: term_program=%q host_bundle_id=%q tty=%q",
 				state.Launcher.TermProgram, state.Launcher.HostBundleID, state.Launcher.TTY))
 		pm.broadcast(outbound.PushTypeUpdated, state)
 	}
@@ -1437,7 +1506,19 @@ func (pm *PIDManager) applyHerdrHostRefresh(sessionID string, fresh *session.Lau
 		if fresh.HerdrPaneID != state.Launcher.HerdrPaneID {
 			return
 		}
-		if applyLauncherBackfill(state.Launcher, needs, fresh, hostKnown) {
+		changed := applyLauncherBackfill(state.Launcher, needs, fresh, hostKnown)
+		// The tty this sweep may just have acquired is what
+		// BackgroundAgent.Detached is derived from — launcherBackfillNeedsFor's
+		// doc gives that derivation as the whole reason the tty need survives
+		// the client adoption for a herdr pane. For such a session this is the
+		// only repair that runs inside a daemon's lifetime; everything else
+		// waits for a restart (#1546). It does not disturb the affordability
+		// argument above: once badge and tty agree this reports no change, so
+		// the steady state still writes nothing.
+		if refreshBackgroundDetached(state) {
+			changed = true
+		}
+		if changed {
 			pm.touchAndSave(state)
 			updated = state
 		}
