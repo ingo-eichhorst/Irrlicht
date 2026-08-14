@@ -15,20 +15,30 @@ const (
 	contentTypeJSON   = "application/json"
 )
 
-// workspaceCtxKey carries the validated workspace from requireToken to the read
-// handlers. Its own type avoids collisions with any other context value.
-type workspaceCtxKey struct{}
+// identityCtxKey carries the validated token identity (id + workspace) from
+// requireToken to the handlers. Its own type avoids collisions with any other
+// context value.
+type identityCtxKey struct{}
 
-// withWorkspace attaches the token's workspace to a request context.
-func withWorkspace(ctx context.Context, workspace string) context.Context {
-	return context.WithValue(ctx, workspaceCtxKey{}, workspace)
+// withIdentity attaches the token's identity to a request context.
+func withIdentity(ctx context.Context, ident tokenIdentity) context.Context {
+	return context.WithValue(ctx, identityCtxKey{}, ident)
 }
 
 // workspaceOf reads the workspace requireToken attached, or "" (the default
 // workspace) on a no-auth relay where the gate is a pass-through.
 func workspaceOf(r *http.Request) string {
-	ws, _ := r.Context().Value(workspaceCtxKey{}).(string)
-	return ws
+	ident, _ := r.Context().Value(identityCtxKey{}).(tokenIdentity)
+	return ident.workspace
+}
+
+// tokenIDOf reads the id of the token requireToken validated, or "" on a
+// no-auth relay. The subscription registry keys entries by it, so a delivery
+// address can only ever be written under the identity that authenticated the
+// request — never under anything client-supplied.
+func tokenIDOf(r *http.Request) string {
+	ident, _ := r.Context().Value(identityCtxKey{}).(tokenIdentity)
+	return ident.id
 }
 
 // handleSessions re-serves the daemon's /api/v1/sessions shape, built from the

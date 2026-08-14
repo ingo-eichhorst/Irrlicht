@@ -24,6 +24,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"irrlicht/core/cmd/irrlichtrelay/push"
 )
 
 // Version is injected at build time via -ldflags "-X main.Version=x.y.z".
@@ -199,9 +201,10 @@ func warnIfExposedWithoutAuth(addr string, store *authStore) {
 }
 
 // buildMux registers the relay's HTTP routes: the WS stream, the read-only
-// API mirrors (bearer-gated when auth is on), and the dashboard UI (or a 503
-// placeholder when it can't be found).
-func buildMux(h *hub, store *authStore) *http.ServeMux {
+// API mirrors (bearer-gated when auth is on), the push surface (pushSvc is
+// nil with --auth off — see registerPushRoutes), and the dashboard UI (or a
+// 503 placeholder when it can't be found).
+func buildMux(h *hub, store *authStore, pushSvc *push.Service) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions/stream", h.ServeWS)
 	// The data endpoints carry the same session content as the WS stream, so
@@ -211,6 +214,7 @@ func buildMux(h *hub, store *authStore) *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/sessions", requireToken(store, handleSessions(h)))
 	mux.HandleFunc("GET /api/v1/agents", requireToken(store, handleAgents(h)))
 	mux.HandleFunc("GET /api/v1/version", handleVersion(Version))
+	registerPushRoutes(mux, store, pushSvc)
 
 	if uiDir := resolveUIDir(); uiDir != "" {
 		log.Printf("serving dashboard from %s", uiDir)
@@ -264,6 +268,7 @@ func runServe(args []string) {
 	ddir := resolveDataDir(cfg.dataDirFlag)
 	store := buildAuthStore(cfg.auth, ddir)
 	warnIfExposedWithoutAuth(cfg.addr, store)
+	pushSvc := buildPushService(store, ddir)
 
 	// Serve web assets with correct Content-Type regardless of the host OS
 	// mime database (matches irrlichd).
@@ -271,11 +276,16 @@ func runServe(args []string) {
 	_ = mime.AddExtensionType(".css", "text/css")
 
 	h := newHubWithAuth(store, splitCSV(cfg.originAllowlist), cfg.lim)
-	mux := buildMux(h, store)
+	mux := buildMux(h, store, pushSvc)
 
 	stop := make(chan struct{})
 	if store != nil {
 		go store.watch(stop, tokenReloadInterval)
+		// The subscription orphan prune rides the same cadence as the token
+		// watch: a revoked device token loses its delivery address within
+		// the same tick its WS access dies
+		// (docs/mobile-notifications-arc42.md §8.1).
+		go pushSvc.PruneLoop(stop, tokenReloadInterval, store.valid)
 	}
 
 	// WS connections are hijacked by gorilla after the upgrade, so the only
@@ -386,19 +396,20 @@ func runToken(args []string) {
 // unchanged. With auth on, the request must carry a valid token in either an
 // `Authorization: Bearer <t>` header or a `?token=<t>` query param (the WS
 // endpoint authenticates via the hello frame instead and is not wrapped). The
-// token's workspace is attached to the request context so the handler reads
-// only that tenant's sessions.
+// token's identity (id + workspace) is attached to the request context so the
+// handler reads only that tenant's sessions, and the push handlers key the
+// subscription registry by the authenticated token.
 func requireToken(store *authStore, next http.HandlerFunc) http.HandlerFunc {
 	if store == nil {
 		return next
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		_, workspace, ok := store.validate(bearerToken(r))
+		id, workspace, ok := store.validate(bearerToken(r))
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next(w, r.WithContext(withWorkspace(r.Context(), workspace)))
+		next(w, r.WithContext(withIdentity(r.Context(), tokenIdentity{id: id, workspace: workspace})))
 	}
 }
 
