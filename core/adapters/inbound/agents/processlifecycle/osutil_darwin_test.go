@@ -329,23 +329,31 @@ func TestResolveTermProgramFromAncestry_Self(t *testing.T) {
 // synthetic ancestry results — no live process chain needed — so the CodexBar
 // exclusion (#784) and the Obsidian carve-out (#728) are both deterministic,
 // not dependent on whatever happens to have launched `go test`.
+//
+// The last two rows are the same pair of facts as the two live-process tests
+// further down, restated at the pure layer: the empty ancestry means "read, and
+// nothing there" when complete and "not read" when not, and only the second
+// admits (#1513). Every other row carries complete=true, which is what keeps
+// the fail-open arm from swallowing the allow-list.
 func TestIsKnownInteractiveHostFrom(t *testing.T) {
 	tests := []struct {
 		name                 string
 		termProgram          string
 		bundleID             string
+		complete             bool
 		wantKnownInteractive bool
 	}{
-		{"curated terminal", "iTerm.app", "", true},
-		{"curated IDE", "vscode", "", true},
-		{"obsidian via generic top-level-app fallback", "", "md.obsidian", true},
-		{"codexbar is a real .app but not allow-listed", "", "com.steipete.codexbar", false},
-		{"no ancestry resolved at all", "", "", false},
+		{"curated terminal", "iTerm.app", "", true, true},
+		{"curated IDE", "vscode", "", true, true},
+		{"obsidian via generic top-level-app fallback", "", "md.obsidian", true, true},
+		{"codexbar is a real .app but not allow-listed", "", "com.steipete.codexbar", true, false},
+		{"no ancestry resolved at all", "", "", true, false},
+		{"aborted walk resolved nothing and proves nothing", "", "", false, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isKnownInteractiveHostFrom(tc.termProgram, tc.bundleID); got != tc.wantKnownInteractive {
-				t.Errorf("isKnownInteractiveHostFrom(%q, %q) = %v, want %v", tc.termProgram, tc.bundleID, got, tc.wantKnownInteractive)
+			if got := isKnownInteractiveHostFrom(tc.termProgram, tc.bundleID, tc.complete); got != tc.wantKnownInteractive {
+				t.Errorf("isKnownInteractiveHostFrom(%q, %q, complete=%v) = %v, want %v", tc.termProgram, tc.bundleID, tc.complete, got, tc.wantKnownInteractive)
 			}
 		})
 	}
