@@ -190,8 +190,7 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int, com
 // It honours the completeness bit both walks report (#1492) and fails OPEN on a
 // walk that could not be completed (#1513). An aborted walk and a genuine miss
 // both resolve to "", and they are different facts: the second is the #784
-// evidence itself, the first is no evidence at all — every abort is a
-// readProcInfo failure, which on a loaded machine is that helper's 2s ceiling.
+// evidence itself, the first is no evidence at all.
 //
 // The direction is the opposite of #1492's for the same bit, because this call
 // site is an ADMISSION gate rather than a click target: a false answer here does
@@ -206,17 +205,49 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int, com
 //
 // A COMPLETED walk that found no allow-listed host still rejects: that is #784
 // and it is unchanged.
+//
+// "Complete" is exactly "no readProcInfo call failed", which is narrower than
+// "every probe in the walk was answered": resolveHostBundleIDFromAncestry also
+// shells out to plutil via bundleIDForAppPath, and a plutil that blows its own
+// 2s ceiling yields an empty bundle id indistinguishable from an ancestor that
+// is not an app at all. That residue is #1524, not something this bit reports.
 func IsKnownInteractiveHost(pid int) bool {
-	// Short-circuit before the second ancestry walk: resolveHostFromAncestry
-	// and resolveHostBundleIDFromAncestry each independently re-walk the same
-	// parent chain via their own ps shellouts, so skip the bundle-ID walk
-	// entirely once the curated map already matched — and equally once the
-	// first walk aborted, since the second re-walks that same unreadable chain
-	// and cannot reach a verdict the first could not.
-	term, _, complete := resolveHostFromAncestry(pid)
+	return isKnownInteractiveHostVia(pid, resolveHostFromAncestry, resolveHostBundleIDFromAncestry)
+}
+
+// ancestryWalk is the shape resolveHostFromAncestry and
+// resolveHostBundleIDFromAncestry share: a host string, the PID it was found
+// at, and whether the walk reached its verdict rather than aborting.
+type ancestryWalk func(pid int) (host string, hostPID int, complete bool)
+
+// isKnownInteractiveHostVia is IsKnownInteractiveHost with both walks injected,
+// so the ORDER between them is testable — the pure isKnownInteractiveHostFrom
+// below cannot see it, and no arrangement of live processes can drive the two
+// walks to different verdicts on purpose.
+//
+// The `complete` half of the short-circuit is load-bearing, not an
+// optimization, and the asymmetry between the two allow-lists is why: walk 1
+// recognizes every curated terminal and IDE by app name (termProgramByAppName),
+// while walk 2 recognizes exactly the hosts in knownEmbeddedHostBundleIDs —
+// today one entry, md.obsidian. So walk 2 can CONFIRM an embedded host and can
+// never rule out a curated one. Letting it answer alone after walk 1 aborted
+// would reject every iTerm, VS Code, kitty and JetBrains session whose first
+// walk timed out — #1513 again, one walk over, and the very sessions this gate
+// exists to admit.
+//
+// The consequence, stated plainly because it is the trade and not an accident:
+// a walk 1 that aborts TRANSIENTLY (its ps over the 2s ceiling, rather than an
+// unreadable process) admits without re-probing, where a second walk might have
+// completed and found CodexBar. That is the deliberate polarity — a re-probe
+// could only move the answer toward rejection, on evidence this gate has
+// already decided not to trust.
+func isKnownInteractiveHostVia(pid int, walkTerm, walkBundle ancestryWalk) bool {
+	term, _, complete := walkTerm(pid)
 	bundleID := ""
 	if term == "" && complete {
-		bundleID, _, complete = resolveHostBundleIDFromAncestry(pid)
+		// Only reached when walk 1 ran to a verdict, so this also skips the
+		// duplicate ps shellouts whenever the curated map already matched.
+		bundleID, _, complete = walkBundle(pid)
 	}
 	return isKnownInteractiveHostFrom(term, bundleID, complete)
 }

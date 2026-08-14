@@ -759,6 +759,64 @@ func TestIsKnownInteractiveHost_AbortedWalkAdmits(t *testing.T) {
 	}
 }
 
+// TestIsKnownInteractiveHostVia_AbortedFirstWalkDoesNotDeferToTheSecond pins
+// the ORDER between the two walks, which neither the pure decision nor any
+// arrangement of live processes can reach: driving the two walks to DIFFERENT
+// verdicts on purpose needs them injected, because in a live chain a `ps` that
+// fails for one walk fails for the other.
+//
+// It exists because the `&& complete` clause looks like an optimization and is
+// not. The two allow-lists are asymmetric — walk 1 knows 27 curated terminals
+// and IDEs by app name, walk 2 knows whatever is in knownEmbeddedHostBundleIDs
+// (today: md.obsidian alone) — so walk 2 can confirm an embedded host and can
+// never rule out a curated one. Row 1 is the case that costs: walk 1 aborted
+// and walk 2 completed on an iTerm ancestor, and iTerm's BUNDLE id is not in
+// walk 2's list because walk 1 is what recognizes iTerm. Deferring to walk 2
+// there rejects a legitimate iTerm session — #1513 arriving through the
+// second walk.
+func TestIsKnownInteractiveHostVia_AbortedFirstWalkDoesNotDeferToTheSecond(t *testing.T) {
+	walk := func(host string, complete bool) ancestryWalk {
+		return func(int) (string, int, bool) { return host, 0, complete }
+	}
+	const (
+		aborted  = false
+		finished = true
+	)
+	tests := []struct {
+		name            string
+		term, bundle    ancestryWalk
+		wantInteractive bool
+	}{
+		{
+			"walk 1 aborted, walk 2 saw iTerm — whose bundle only walk 1 can vouch for",
+			walk("", aborted), walk("com.googlecode.iterm2", finished), true,
+		},
+		{
+			"walk 1 aborted, walk 2 saw CodexBar — a re-probe could only reject, and that is evidence we declined to trust",
+			walk("", aborted), walk("com.steipete.codexbar", finished), true,
+		},
+		{
+			"walk 1 finished and missed, walk 2 saw CodexBar — #784, and the vacuity guard",
+			walk("", finished), walk("com.steipete.codexbar", finished), false,
+		},
+		{
+			"walk 1 finished and missed, walk 2 saw Obsidian — the one host walk 2 does vouch for",
+			walk("", finished), walk("md.obsidian", finished), true,
+		},
+		{
+			"walk 1 matched, so walk 2 is never consulted",
+			walk("iTerm.app", finished), walk("com.steipete.codexbar", finished), true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isKnownInteractiveHostVia(4242, tc.term, tc.bundle); got != tc.wantInteractive {
+				t.Errorf("isKnownInteractiveHostVia = %v, want %v", got, tc.wantInteractive)
+			}
+		})
+	}
+}
+
 // TestIsKnownInteractiveHost_ReadVerdictStillExcludes is the #784 LOCK, and it
 // is what stops the fix above from being spelled `return true`. A walk that RAN
 // and found no curated terminal and no allow-listed embedded host — the shape
