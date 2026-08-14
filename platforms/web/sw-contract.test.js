@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { WEB_DIR, deriveShippedSet } from './shippedFiles.testutil.js'
 import { SETUP_BODY } from './vitest.setup.js'
+import { BEACON_MESSAGES } from './beacon.js'
 
 // The §5.2 additivity-contract tripwire (docs/mobile-notifications-arc42.md
 // §5.2, §8.7). platforms/web is one shared surface served by the localhost
@@ -38,6 +39,44 @@ describe('service worker contract (arc42 §5.2)', () => {
       .filter((f) => /serviceWorker\s*\.\s*register\s*\(/.test(readFileSync(join(WEB_DIR, f), 'utf8')))
       .sort()
     expect(registering).toEqual(['beacon.js'])
+  })
+
+  // The two copies of the page↔worker vocabulary (arc42 §8.5). sw.js is a
+  // classic script with nothing to import from — its header says why — so it
+  // spells as literals what beacon.js exports. A rename on one side would
+  // leave the other silently unheard: the app would publish live sessions
+  // nobody folds, and a tap would postMessage a type nobody listens for, both
+  // answering exactly like a healthy install. This is the third §5.2-shaped
+  // tripwire and lives here for the same reason as the other two.
+  //
+  // Read off the SOURCE rather than by executing sw.js: the point is that the
+  // literals in that file match, and a check that ran the file could only
+  // observe values it had already been handed.
+  function workerMessageLiterals(source) {
+    return [...source.matchAll(/^const (?:MSG_[A-Z_]+|SESSION_HASH_KEY) = '([^']+)';$/gm)]
+      .map((m) => m[1])
+      .sort()
+  }
+
+  test('sw.js spells exactly the message names beacon.js exports', () => {
+    expect(workerMessageLiterals(swSource)).toEqual(Object.values(BEACON_MESSAGES).sort())
+  })
+
+  test('and reports the opposite for a worker whose copy drifted', () => {
+    // Committed mutation evidence (AGENTS.md "Testing"): the arm above passes
+    // by construction against a correct pair, so it is also driven against a
+    // worker with one name renamed — the shape of the drift it exists to
+    // catch. A no-op edit throws rather than reading as a pass.
+    const drifted = swSource.replace("const MSG_LIVE_SESSIONS = 'beacon-live-sessions';", "const MSG_LIVE_SESSIONS = 'beacon-live-session';")
+    expect(drifted, 'stale mutation: sw.js no longer declares MSG_LIVE_SESSIONS this way').not.toBe(swSource)
+    expect(workerMessageLiterals(drifted)).not.toEqual(Object.values(BEACON_MESSAGES).sort())
+  })
+
+  test('a worker that stopped declaring them at all fails loudly, not quietly', () => {
+    // The regex is the weak point: a spelling it cannot see would return a
+    // short list, and a short list must never read as agreement.
+    expect(workerMessageLiterals('// no constants here')).toEqual([])
+    expect(Object.values(BEACON_MESSAGES)).toHaveLength(4)
   })
 
   // Boots the dashboard the way index.html does: a fresh module registry, so

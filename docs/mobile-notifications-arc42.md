@@ -1,6 +1,6 @@
 # Mobile Notifications — Architecture (arc42)
 
-**Status:** **built, unproven.** Slices 1–7 are implemented and merged on `feat/1346-beacon` (~13.5k lines across 97 files); every gate is green. **Nothing has yet delivered a notification to a real phone** — that is slice D ([`beacon-device-test.md`](./beacon-device-test.md)), and until it runs, the quality requirements in §10 are designed-for rather than demonstrated. Two known gaps are tracked in §11 rather than hidden: R6 (§8.5) and the test-notification button (§8.3).
+**Status:** **built, unproven.** Slices 1–8 are implemented on `feat/1346-beacon` (~15.8k lines across 100 files); every gate is green. **Nothing has yet delivered a notification to a real phone** — that is slice D ([`beacon-device-test.md`](./beacon-device-test.md)), and until it runs, the quality requirements in §10 are designed-for rather than demonstrated. One known gap is tracked in §11 rather than hidden: the test-notification button (§8.3). R6 was the other until slice 8 (§8.5, ADR-9).
 **Scope:** feature-level arc42 for phone notifications (discussion [#1346](https://github.com/ingo-eichhorst/Irrlicht/discussions/1346)); system-wide architecture lives in `site/docs/architecture.html` and `docs/relay-protocol.md`. Operator runbook: [`examples/relay/DEPLOY.md`](../examples/relay/DEPLOY.md). User guide: [`site/docs/beacon.html`](../site/docs/beacon.html).
 **Format note:** minimal arc42 profile — every section present, none padded
 
@@ -23,7 +23,7 @@ The phone-facing app is named **Irrlicht Beacon** (the name the user sees: manif
 | R3 | Ten flapping sessions must not mean ten buzzes (dedupe/coalescing, see §8.4) |
 | R4 | A dead delivery path is visible, never silent (§8.3) — **met except for one case**: a lost `vapid-keys.json` leaves both the browser subscription and the relay record intact, so nothing looks wrong and nothing self-heals (risk 10) |
 | R5 | The Mac and the phone may both roam networks freely; nothing rebinds |
-| R6 | Tapping a notification opens the app on that session's last-known state — nothing more. **Not yet met:** the ledger is written but never read, so a tap currently just opens the app (§8.5) |
+| R6 | Tapping a notification opens the app on that session's last-known state — nothing more. **Built** (§8.5): the tap carries the session id, the app resolves it to the row the dashboard actually keys, and a session it cannot find is *said out loud* rather than tapped into silence. Like R1, not yet observed on a device (slice D) |
 
 ### 1.2 Quality goals (ranked)
 
@@ -139,7 +139,7 @@ flowchart TB
 | Relay: observer | Detect per-session state edges off the cache updates it already performs; seed silently on first sight/snapshot | Feeds `notify` engine; also feeds `daemon_status` disconnects (watchdog) |
 | Relay: dispatcher | Fan decided notifications out to every subscription in the same **workspace**; prune on `410`; record last-delivery status | Workspace scoping mirrors existing isolation |
 | Relay: pairing/REST | `GET /api/v1/push/info` (unauthenticated — §5.2's feature detection depends on it) · `POST /api/v1/push/pairings` (authed; mints one-time code) · `POST /api/v1/push/pair` (code → device token + VAPID pub) · `POST/DELETE/GET /api/v1/push/subscriptions` (device-token-authed; the GET is §8.3's health panel) | Device tokens are ordinary `TokenRecord`s — `token list`/`revoke` and 4401 semantics apply unchanged |
-| `platforms/web` PWA | Manifest, service worker (push → ledger write → `showNotification`; **no** `setAppBadge`, **no** deep link — slice 8), pairing flow, health panel, unpair. **No** notification-settings UI: policy is server-side (§8.4). **No** test button (slice 9) | No build step; plain files. Ships via `build-release.sh`'s single `WEB_FILES` list, kept complete by a tripwire that derives the required set (§8.7) |
+| `platforms/web` PWA | Manifest, service worker (push → ledger fold → `showNotification` → badge; `notificationclick` → deep link; `message` → live fold + ledger reads), pairing flow (which also configures the live view, ADR-9), health panel, unpair. **No** notification-settings UI: policy is server-side (§8.4). **No** test button (slice 9) | No build step; plain files. Ships via `build-release.sh`'s single `WEB_FILES` list, kept complete by a tripwire that derives the required set (§8.7). The worker is a classic script and imports nothing, so the four message names it exchanges with `beacon.js` are two copies — pinned together by `sw-contract.test.js` |
 
 **Source location.** All Go code stays in the existing `core` module — no new module. `notify` (under `domain/`) and `webpush` (under `pkg/`) fall under `core/architecture_test.go`'s layering rules automatically. The relay's push **state** lands in a `core/cmd/irrlichtrelay/push` subpackage (VAPID identity, pairing codes, subscription registry, roster, health); the observer, dispatcher and HTTP surface stayed in `package main` beside the hub they wire into. Both are composition-root code, free to import anything, and kept deliberately outside the daemon's hexagon: `core/adapters/outbound/relay` is the *daemon-side* forwarder and stays untouched. PWA assets join `platforms/web` — no third web tree (the #1225 dependency-drift lesson), and no build step to introduce.
 
@@ -208,6 +208,8 @@ sequenceDiagram
     participant R as Relay (observer + notify + dispatcher)
     participant P as Apple/Google push service
     participant SW as Service worker (phone)
+    participant U as You
+    participant A as PWA in the foreground
 
     AG->>DM: transcript write (turn ends)
     DM->>R: PushMessage session_updated (existing link)
@@ -218,20 +220,33 @@ sequenceDiagram
         R->>R: compose structured payload, pad, encrypt (RFC 8291)
         R->>P: POST endpoint (VAPID, TTL 10 m, Topic = hash of session id)
         P->>SW: wake on locked phone, payload decrypted by browser
-        SW->>SW: update IndexedDB ledger, showNotification(tag = session id)
+        SW->>SW: fold into IndexedDB ledger, showNotification(tag = session id)
+        SW->>SW: setAppBadge — how many sessions the ledger holds in waiting
     end
+    U->>SW: tap the banner
+    SW->>A: focus and postMessage the session id, or open the app on a session fragment
+    A->>A: resolve the bare id to the compound row key, select that row
+    A->>SW: live session list, whenever the dashboard renders
+    SW->>SW: fold, then setAppBadge — the only path that lowers it
 ```
 
 `* → waiting` follows the same path with no hold-down and TTL 1 h.
 
-**What the PWA is when open, corrected.** An earlier draft said it becomes an ordinary WS client with
-its banners suppressed while visible. Neither half is true. Pairing stores a device token and
-configures no source, and the dashboard's default "local" source dials the serving origin *without* a
-token — which a push-capable relay (always auth-on, §8.1) closes with `CloseRevoked`. A live view on
-the phone is therefore a separate, manual act: enter the relay URL and a client token under Settings →
-Sources. And the visible-tab suppression is the *dashboard's* own client-side banner rule; the service
-worker calls `showNotification` unconditionally, as `userVisibleOnly` requires, so an open PWA still
-gets the banner.
+**What the PWA is when open.** Twice now this paragraph has been wrong, in opposite directions, and
+both errors are worth keeping visible. The first draft said the PWA becomes an ordinary WS client
+with its banners suppressed while visible. The correction said it configures no source at all and a
+live view is a separate, manual act. Since slice 8 that is wrong too: **pairing configures the live
+view** (ADR-9) — `enableRelaySource`, `relayUrl` = the serving origin, `relayToken` = the device
+token, written through the dashboard's own Settings → Sources mechanism and removed again on unpair.
+Not a nicety: it is the only signal that can lower a badge (§8.5), because §8.4 never pushes on
+`* → working`.
+
+Two halves of the older text survive unchanged. The dashboard's default "local" source still dials
+the serving origin *without* a token, which a push-capable relay (always auth-on, §8.1) closes with
+`CloseRevoked` — pairing configures the relay source beside it rather than fixing that. And the
+visible-tab suppression is still the *dashboard's* own client-side banner rule; the service worker
+calls `showNotification` unconditionally, as `userVisibleOnly` requires, so an open PWA still gets the
+banner.
 
 ### 6.3 Roam and reconcile
 
@@ -321,8 +336,14 @@ every client route accepts it — the WS live view, the REST session mirrors, an
 /push/pairings`, meaning a paired phone can mint further pairing codes. That is not what §3.2's
 "remote control from the phone is out of scope" implies, and it is a consequence of reusing the
 token mechanism rather than a decision anyone took. It is contained by the workspace boundary and by
-`token revoke`, and narrowing it would mean a token *kind* the relay does not currently have —
-recorded here so the next person meets it as a known property rather than a surprise.
+`token revoke`, and narrowing it would mean a token *kind* the relay does not currently have.
+
+**Since slice 8 this breadth is load-bearing rather than incidental** (ADR-9): pairing configures the
+phone's own live view with the device token, and that works only because the WS route accepts it. So
+narrowing is now *owed work with a shape*, not merely a recorded property — a narrower kind has to
+keep the live view and the REST session mirrors open while closing `POST /push/pairings`, which is
+the one route nothing needs (risk 15). Recorded here rather than left to be discovered by whoever
+tries the narrowing and finds every phone's live view dead.
 
 Division of labor: the **device token** is the phone's durable identity (an ordinary `TokenRecord` — list/revoke for free); the **push subscription** is only a delivery *address* the OS may reissue at any time (which is why it cannot replace the token, and why self-heal works: identity survives, address is re-registered); the **pairing code** is the one-time bridge that carries the workspace into the device token. After setup, no token is ever seen or typed again.
 
@@ -349,7 +370,9 @@ House rule: absence of a finding and inability to look must never produce the sa
 |---|---|
 | Push service returns `410/404` | Subscription pruned; the PWA health panel then reads "Paired, but push is not registered — reopen this app to re-subscribe" on next open (`beacon.js`), and the self-heal re-registers it |
 | Subscription silently invalidated by iOS | Self-heals: PWA re-subscribes on next open with its stored device token |
-| Doubt | A "send test notification" button in PWA settings — **not built**; deferred with the ledger read path. Until it exists, proving delivery means driving a real transition |
+| Doubt | A "send test notification" button in PWA settings — **not built** (slice 9). Until it exists, proving delivery means driving a real transition |
+| A tap that resolves to no session | The app opens and *says so*, naming the session's last-known state from the ledger and the time it was last known (§8.5, R6) — never a tap that appears to do nothing |
+| The live view pairing configured is off, or aimed at another relay | A second line in the health panel, because the badge then only counts up and that would otherwise read as a broken badge rather than a configuration (`liveViewNoteText` in `beacon.js`) |
 | Daemon link down | Watchdog push (§6.4) |
 | Delivery attempt outcome | Last-status per subscription, visible in the PWA and relay logs |
 
@@ -371,9 +394,60 @@ House rule: absence of a finding and inability to look must never produce the sa
 
 ### 8.5 State on the phone
 
-The PWA holds a last-known-state ledger (IndexedDB): folded from WS snapshots while open, from push payloads while backgrounded. It is never authoritative — the daemon is. Disconnected, it shows "as of 14:32".
+The PWA holds a last-known-state ledger (IndexedDB `beacon-ledger`, one object store, keyed by the
+relay's **bare** session id): folded from push payloads while backgrounded and from the dashboard's
+own live view while open, read back on a notification tap, and reduced to a home-screen badge. It is
+never authoritative — the daemon is. Disconnected, it shows "as of 14:32".
 
-**Implementation status (honest):** the service worker *writes* the ledger from push payloads. Nothing reads it yet — there is no WS-snapshot fold, no `setAppBadge`, and `notificationclick` opens `./` with no session context. So the paragraph above describes the design, not today's behavior, and **R6 is unmet** until the read path lands. Called out here rather than left to be discovered, because a doc that describes an intended behavior in the present tense is indistinguishable from one describing a shipped one.
+**The badge counts `waiting`, and nothing else.** §8.4 pushes a banner for `working → ready` too, but
+the two states make different claims: `waiting` is "an agent is blocked on you", which you clear by
+answering, while `ready` is "work you could pick up", which a finished session keeps asserting until
+you start another turn. A badge counting `ready` would sit non-zero for every session that ever
+finished. `navigator.setAppBadge` is feature-detected per call — it is absent on every desktop
+Firefox and on Safari outside an installed app — and its absence, a throw, and a rejected promise all
+cost nothing: no badge is a better outcome than a broken notification chain, and the chain is the
+feature.
+
+**Why the live fold exists, and why it is part of pairing.** A badge derived from push alone can only
+climb. §8.4 never pushes on `* → working`, and iOS forbids a silent push (`userVisibleOnly` forces a
+visible notification per push), so a backgrounded phone learns that sessions *need* attention and
+never that one stopped. The correcting signal is the dashboard's own WS stream — which is why pairing
+now configures the phone's live view (ADR-9) and why the open app posts its visible session list into
+the same ledger. The live set **replaces** the ledger rather than merging into it: a row the live set
+does not name is dropped, because a session that ended has to stop counting exactly like one that
+left `waiting`. The empty set is therefore a real snapshot and is published like any other — a phone
+opened after everything ended is precisely the case the badge has to survive.
+
+That case turns on **when** a publish is triggered, not on what it carries, and the first
+implementation got it wrong in a way its own tests could not see: the publish rode on `render()`
+alone, and nothing renders when a socket connects. A phone with no sessions therefore had no frame to
+render and published nothing, leaving the badge exactly where the push fold left it. It now publishes
+on the **connect edge** as well, and forgets its last-published signature on **disconnect** — because
+the worker's ledger does not stand still while the page is away (the push fold keeps writing it), so
+"unchanged since I last published" says nothing about what the ledger now holds.
+`irrlicht.beaconedges.test.js` drives both edges with the sessions fetch deliberately never resolving,
+which is what removes `render()` from the picture.
+
+**What a tap resolves to (R6).** The payload carries the relay's bare session id, while the dashboard
+re-keys relay-sourced sessions to a compound `<daemon>\0<id>` (#537) before writing
+`data-session-id`. A link keyed on the bare id would select nothing, silently, for exactly the
+sessions notifications are about — which is why this was a slice and not a line. The worker sends the
+bare id (postMessage to a focused window, URL fragment to a cold one) and the dashboard resolves it
+through `displaySessionId`, `compoundSessionId`'s documented inverse, rather than through a second
+derivation that could drift. A row hidden inside a collapsed group is expanded rather than reported
+missing. A session that genuinely is not there produces a notice naming its last-known state and the
+time it was last known — never a tap that appears to do nothing. Two daemons sharing one bare id are
+reported as ambiguous, and one is selected: a notification names no daemon, so this is the one
+question the payload cannot answer.
+
+Three distinctions are load-bearing here, and each is the §8.3 house rule in local form. **A read
+that failed is not an empty ledger:** `all()` answers `[]` for "nothing there" and `null` for "could
+not look", and a null leaves the badge exactly where it is rather than clearing it — clearing would
+state "nothing needs you", which is a claim a storage failure does not support. **A dashboard with no
+connected source publishes nothing:** its list is not a smaller truth, it is no truth at all, and
+publishing it would delete the ledger kept for exactly that moment. **A message the worker does not
+understand is still answered:** an older worker meeting a newer app is precisely when a caller
+awaiting a reply that never arrives would hang, so every message carrying a reply port gets one.
 
 ### 8.6 Persistence and restart behavior
 
@@ -404,6 +478,19 @@ push service grading headers and JWT; the relay carries the tripwires §5.2 need
 no `fetch` handler, exactly one shipped module registers the worker, and the release copy list is
 *derived* from `index.html` plus the import graph rather than hand-kept. `tools/beacon-rig.sh check`
 runs ten assertions against a live relay. Every guard landed with a deliberate mutation seen red.
+
+Slice 8 added 76 jsdom test cases across six files, and none of them is a green that was never red:
+every one was run against the *previous* `sw.js`, `beacon.js` and `irrlicht.js` first — 28 red on the
+worker side, 32 on the page side — which is the honest form of red-first for a slice that adds
+behaviour rather than fixing a defect. It found two real ones on the way. `liveViewNoteText` took an
+`origin` parameter that half its own verdict ignored in favour of `location.origin`, invisible in
+production because the two are always the same string and visible the moment a pure function was
+called with a different one. And the live fold's "do not republish an unchanged set" guard held
+"nothing published yet" and "published the empty set" as the same value, so the *first* snapshot of
+an empty dashboard was skipped — which is exactly the phone opened after every session ended, the
+case the badge most has to survive. That one was reproduced red before it was fixed, by driving the
+socket open before the initial `/api/v1/sessions` fetch resolves, the ordering a warm relay
+connection actually produces.
 
 **The lesson this section exists for, because it nearly shipped a dead feature.** Adversarial review
 of the observer found **seven of eight** fresh mutations staying green. The tests drove the
@@ -470,6 +557,11 @@ each seam and watching it redden. Two traps are worth carrying to the next compo
 *Decision:* type the code. It is eight characters from an ambiguity-free alphabet, entered once per phone in the phone's own keyboard.
 *Consequence:* a dependency avoided for a one-time act. QR remains addable later behind the same REST call if pairing friction turns out to matter.
 
+**ADR-9 — Pairing also configures the phone's live view.**
+*Context:* the badge R6 implies cannot decay from push alone. §8.4 never pushes on `* → working`, and iOS's `userVisibleOnly` forbids a silent push, so a backgrounded phone only ever learns that sessions *need* attention; a count derived from push alone climbs and never falls. The alternative on the table was a ledger-only slice 8 — deep link and badge, no live fold — which would have shipped a badge that is wrong within minutes of being right.
+*Decision:* a successful pair writes the dashboard's own Sources settings (`enableRelaySource`, `relayUrl` = the serving origin, `relayToken` = the device token) through `irrlicht.js`'s existing settings path — the same object, `persistSettings()` and `rebuildSources()` the Settings panel uses, never localStorage keys written by hand — and unpairing removes them symmetrically. A live view already aimed at a *different* relay is left exactly as the user set it, and the health panel names where it points and what that costs.
+*Consequence:* §8.1's "a device token is a full client token" stops being an incidental property and becomes load-bearing: the live view is accepted because the device token is an ordinary `TokenRecord` every client route takes. Narrowing device tokens to their own kind is therefore owed work with a known shape (risk 15), not a footnote. Second consequence: the ledger's key space belongs to the paired relay, so the dashboard publishes only while its live view watches *that* relay — a live view aimed elsewhere would fold foreign sessions in and drop the paired relay's rows as absent. Third: the phone now holds a source that a `token revoke` kills; a `4401` close parks it in `unauthorized` with no retry (`connectSource` in `irrlicht.js`), so a revoked phone does not reconnect-loop, and unpair takes the source down rather than leaving one that can never connect.
+
 ---
 
 ## 10. Quality Requirements
@@ -504,10 +596,11 @@ green test can pin nothing. *Designed-for* means the code intends it and nobody 
 | 8 | Timing metadata to Apple/Google | Named and accepted, as in #1346 |
 | 9 | **Nothing has run on a device.** Every defect so far was found by reading, and two of them — a VAPID JWT with no `sub`, `subscribe()` before the worker activates — fail only on contact with a real push service and passed every mock | Slice D, ordered ahead of release. `tools/beacon-rig.sh check` automates the phone-free half; the rest needs a phone. **Until it runs, §10 is designed-for, not demonstrated** |
 | 10 | **Losing `vapid-keys.json` costs a full re-pair of every phone**, and nothing detects it — `selfHeal` fires only when the browser has no subscription or the relay has no record (`beacon.js:418`); after a key loss both still exist | Named in §8.6 and the runbook's backup list. No code mitigation; a relay whose data dir is not backed up is one file loss from silent, permanent non-delivery |
-| 11 | R6 is unmet and §8.3's test-notification button does not exist | Slices 8 and 9. Both are marked in place rather than quietly dropped — this table is the record of what the doc promises and the code does not yet do |
+| 11 | §8.3's test-notification button does not exist | Slice 9. Marked in place rather than quietly dropped — this table is the record of what the doc promises and the code does not yet do. R6 shared this row until slice 8 (§8.5, ADR-9) |
 | 12 | **Same-`Topic` push ordering is unserialized** — two pushes sharing a Topic race through the dispatch semaphore, so a daemon that flaps inside a slow POST can leave the *stale* banner winning the collapse permanently | Documented at the call site (`push_observer.go`); the exposed pair is the daemon up/down Topic, where the wrong survivor says "disconnected" about a live daemon. No fix in P1 |
 | 13 | **A relay restart is amnesia for policy state** (§8.6): every session becomes an unknown id, and a first sighting is silent — so a `ready` that landed during the restart is never delivered | Accepted: the alternative is persisting per-session policy state, which trades a missed edge for a stale one |
 | 14 | **`EventRekey` is never emitted**, so the presession→real-session cooldown carryover (§8.4) is dead policy | Needs a promotion signal the wire protocol does not carry; wiring one would touch ADR-4 |
+| 15 | **Narrowing device tokens is now owed, not optional** — ADR-9 made §8.1's "a device token is a full client token" load-bearing, so a paired phone can still mint pairing codes for its workspace | A narrower token kind has to keep the WS live view and the REST session mirrors open while closing `POST /push/pairings`; that shape is recorded in §8.1 so the narrowing does not silently kill every phone's live view. Contained meanwhile by the workspace boundary and `token revoke`, exactly as before |
 
 ---
 
@@ -542,7 +635,7 @@ green test can pin nothing. *Designed-for* means the code intends it and nobody 
 | 6 | Distribution: `irrlichtrelay` tarballs for `linux/arm64` + `linux/amd64`; two broken copy sites fixed | **done** `25281eb8` |
 | 7 | Docs: relay-protocol REST reference, operator runbook, site setup guide | **done** `1a2361f9`, `0dd395fa` |
 | **D** | **Device test — pair a real phone and observe a notification** ([`beacon-device-test.md`](./beacon-device-test.md)). Its phone-free half is automated (`tools/beacon-rig.sh check`, 10 live assertions, passing); the half that needs a device has not run | **outstanding — the gate on calling this done** |
-| 8 | Ledger read path: WS-snapshot fold, `setAppBadge`, notification deep link — what makes **R6** true (§8.5) | not started |
+| 8 | Ledger read path: live-view fold, `setAppBadge`, notification deep link — what makes **R6** true (§8.5), plus the pairing change ADR-9 records | **done** |
 | 9 | "Send test notification" button (§8.3), and a deterministic session-state driver for the device test's burst case | not started |
 
 Slice D was inserted mid-flight, ahead of 6, on the reasoning that packaging a flow nobody has

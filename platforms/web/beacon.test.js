@@ -1,7 +1,8 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest'
 import {
   initBeacon, urlBase64ToUint8Array, formatPairingCode, normalizePairingCode, countdownText,
-  healthLineText,
+  healthLineText, liveViewNoteText, publishLedgerSnapshot, ledgerEntry, sessionFromHash,
+  BEACON_MESSAGES,
 } from './beacon.js'
 
 // Beacon pairing + settings UI (docs/mobile-notifications-arc42.md §6.1,
@@ -46,6 +47,24 @@ function fakeSubscription() {
     endpoint: 'https://web.push.example/abc',
     toJSON: () => ({ endpoint: 'https://web.push.example/abc', keys: { p256dh: 'k1', auth: 'k2' } }),
     unsubscribe: vi.fn(() => Promise.resolve(true)),
+  }
+}
+
+// The Settings → Sources seam initBeacon is handed (irrlicht.js's
+// readSourceSettings / writeSourceSettings). A copy of the dashboard's own
+// `settings` object, so a test can seed the state a user already configured
+// and then read back exactly what pairing wrote — the point being that this
+// module never writes localStorage keys of its own.
+function liveViewSeam(initial = {}) {
+  const settings = {
+    enableLocalSource: true, enableRelaySource: false, relayUrl: '', relayToken: '', ...initial,
+  }
+  const writes = []
+  return {
+    settings,
+    writes,
+    read: () => ({ ...settings }),
+    write: (next) => { writes.push({ ...next }); Object.assign(settings, next) },
   }
 }
 
@@ -555,6 +574,315 @@ describe('unpair (arc42 §8.1 revocation)', () => {
     expect(localStorage.getItem('beaconDeviceToken')).toBeNull()
     expect(document.getElementById('beacon-code-input')).toBeTruthy()
     expect(document.getElementById('beacon-unpair')).toBeNull()
+  })
+})
+
+describe("pairing configures the phone's own live view (arc42 §6.2, ADR-9)", () => {
+  // §8.4 never pushes on `* → working` and iOS forbids a silent push, so a
+  // phone fed only by push learns that sessions NEED attention and never that
+  // one stopped. Pairing therefore also makes this phone an ordinary client of
+  // the relay it paired with — possible because a device token is a full
+  // client token (§8.1), and necessary because nothing else can lower a badge.
+  const PAIR_ROUTES = () => ({
+    'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+    'POST api/v1/push/pair': { body: { token: 'dev-live-1', vapid_public_key: VAPID } },
+    'POST api/v1/push/subscriptions': { status: 201, body: {} },
+    'GET api/v1/push/subscriptions': {
+      body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null },
+    },
+  })
+
+  async function pairWith(seam, routes = PAIR_ROUTES()) {
+    relayFetch(routes)
+    mockServiceWorker(activatingRegistration())
+    await initBeacon({ liveView: seam })
+    await flush()
+    document.getElementById('beacon-code-input').value = 'AB12CD34'
+    document.getElementById('beacon-pair-submit').click()
+    await flush()
+  }
+
+  test('a successful pair writes exactly the three source settings, through the dashboard mechanism', async () => {
+    const seam = liveViewSeam()
+    await pairWith(seam)
+    expect(seam.writes).toEqual([{
+      enableRelaySource: true,
+      // location.origin, not the page URL: relayWsUrl maps https:→wss: and
+      // appends the stream path itself (connectionProtocol.js).
+      relayUrl: location.origin,
+      relayToken: 'dev-live-1',
+    }])
+    // enableLocalSource is not this module's to touch, and a write naming it
+    // would be a phone quietly switching off a source the user chose.
+    expect(seam.settings.enableLocalSource).toBe(true)
+    // Nothing to explain, so the panel's second line stays empty and hidden.
+    const note = document.getElementById('beacon-live-view-line')
+    expect(note.textContent).toBe('')
+    expect(note.hidden).toBe(true)
+  })
+
+  test('a live view already pointed at ANOTHER relay is left as the user set it, and the panel says so', async () => {
+    // The phone may legitimately watch another relay; overwriting would lose
+    // that configuration and hand this phone's device token to a host it was
+    // not minted for.
+    const seam = liveViewSeam({
+      enableRelaySource: true, relayUrl: 'https://relay.example', relayToken: 'user-tok',
+    })
+    await pairWith(seam)
+    expect(seam.writes).toEqual([])
+    expect(seam.settings.relayToken).toBe('user-tok')
+    const note = document.getElementById('beacon-live-view-line')
+    expect(note.hidden).toBe(false)
+    expect(note.textContent).toContain('relay.example')
+    expect(note.textContent).toMatch(/counts up/)
+    // The pairing itself still succeeded — only the live view was declined.
+    expect(localStorage.getItem('beaconDeviceToken')).toBe('dev-live-1')
+  })
+
+  test('the same relay spelled differently is the same relay, not another one', async () => {
+    // Compared through relayWsUrl, exactly as the dashboard's own source list
+    // does — so an origin with a trailing slash is not mistaken for elsewhere
+    // and left unconfigured.
+    const seam = liveViewSeam({ enableRelaySource: false, relayUrl: location.origin + '/' })
+    await pairWith(seam)
+    expect(seam.writes).toEqual([{
+      enableRelaySource: true, relayUrl: location.origin, relayToken: 'dev-live-1',
+    }])
+  })
+
+  test('unpair takes it back down, symmetrically', async () => {
+    // Otherwise the phone keeps a source holding a revoked token: a 4401 close
+    // parks it in `unauthorized` with no retry (the ev.code branch in
+    // irrlicht.js connectSource), so it does not loop — but it is a source
+    // that can never connect, configured by something the user just switched
+    // off.
+    localStorage.setItem('beaconDeviceToken', 'dev-live-2')
+    const seam = liveViewSeam({
+      enableRelaySource: true, relayUrl: location.origin, relayToken: 'dev-live-2',
+    })
+    relayFetch({
+      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET api/v1/push/subscriptions': {
+        body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null },
+      },
+      'DELETE api/v1/push/subscriptions': { status: 204 },
+    })
+    mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
+    await initBeacon({ liveView: seam })
+    await flush()
+
+    document.getElementById('beacon-unpair').click()
+    await flush()
+
+    expect(seam.writes).toEqual([{ enableRelaySource: false, relayUrl: '', relayToken: '' }])
+    expect(seam.settings.relayToken).toBe('')
+    expect(seam.settings.enableLocalSource).toBe(true)
+  })
+
+  test('unpair leaves a live view that was never ours alone', async () => {
+    localStorage.setItem('beaconDeviceToken', 'dev-live-3')
+    const seam = liveViewSeam({
+      enableRelaySource: true, relayUrl: 'https://relay.example', relayToken: 'user-tok',
+    })
+    relayFetch({
+      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET api/v1/push/subscriptions': {
+        body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null },
+      },
+      'DELETE api/v1/push/subscriptions': { status: 204 },
+    })
+    mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
+    await initBeacon({ liveView: seam })
+    await flush()
+
+    document.getElementById('beacon-unpair').click()
+    await flush()
+
+    expect(seam.writes).toEqual([])
+    expect(seam.settings.relayUrl).toBe('https://relay.example')
+  })
+
+  test('a revoked phone lets go of both at once', async () => {
+    // The token is dead on every route the relay serves, live view included
+    // (§8.1), so "Pair again" cannot leave a source behind that only ever
+    // answers 4401.
+    localStorage.setItem('beaconDeviceToken', 'dev-live-4')
+    const seam = liveViewSeam({
+      enableRelaySource: true, relayUrl: location.origin, relayToken: 'dev-live-4',
+    })
+    relayFetch({
+      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET api/v1/push/subscriptions': { status: 401, body: null },
+    })
+    mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
+    await initBeacon({ liveView: seam })
+    await flush()
+
+    document.getElementById('beacon-repair').click()
+    await flush()
+
+    expect(seam.writes).toEqual([{ enableRelaySource: false, relayUrl: '', relayToken: '' }])
+    expect(localStorage.getItem('beaconDeviceToken')).toBeNull()
+  })
+})
+
+describe('what the health panel says about the live view (arc42 §8.3)', () => {
+  const ORIGIN = 'https://relay.mine'
+
+  test('ours → nothing to explain', () => {
+    expect(liveViewNoteText(
+      { enableRelaySource: true, relayUrl: ORIGIN, relayToken: 'dev-1' }, 'dev-1', ORIGIN,
+    )).toBe('')
+  })
+
+  test('pointed elsewhere → names where, and what it costs', () => {
+    const t = liveViewNoteText(
+      { enableRelaySource: true, relayUrl: 'https://relay.theirs', relayToken: 'x' }, 'dev-1', ORIGIN,
+    )
+    expect(t).toContain('relay.theirs')
+    expect(t).toMatch(/left as you set it/i)
+    expect(t).toMatch(/counts up/)
+  })
+
+  test('off for this relay → says the badge only counts up, not that push is broken', () => {
+    const t = liveViewNoteText({ enableRelaySource: false, relayUrl: '', relayToken: '' }, 'dev-1', ORIGIN)
+    expect(t).toMatch(/off for this relay/i)
+    expect(t).toMatch(/notifications still arrive/i)
+  })
+
+  test('a token the user typed is not this phone\'s live view either', () => {
+    // Same origin, but a client token the user entered by hand: this module
+    // neither publishes through it nor takes it down.
+    expect(liveViewNoteText(
+      { enableRelaySource: true, relayUrl: ORIGIN, relayToken: 'client-tok' }, 'dev-1', ORIGIN,
+    )).not.toBe('')
+  })
+})
+
+describe('talking to the service worker (arc42 §8.5)', () => {
+  // A worker that is already active, with a postMessage a test can read. The
+  // pairing mocks above deliberately model the ACTIVATION race; here the
+  // worker is up, which is the state every one of these calls requires.
+  function activeWorkerMock(postMessage = vi.fn()) {
+    const worker = { postMessage }
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: {
+        register: vi.fn(() => Promise.resolve({ active: worker })),
+        getRegistration: vi.fn(() => Promise.resolve({ active: worker })),
+        ready: Promise.resolve({ active: worker }),
+        addEventListener: vi.fn(),
+      },
+    })
+    return worker
+  }
+
+  const ROWS = [{ session_id: 's-1', state: 'waiting', label: 'claude-code', project: 'irrlicht', at: 1755000000 }]
+
+  test('the live snapshot reaches the worker while the live view is ours', async () => {
+    localStorage.setItem('beaconDeviceToken', 'dev-live-5')
+    const worker = activeWorkerMock()
+    relayFetch({})
+    await initBeacon({
+      liveView: liveViewSeam({
+        enableRelaySource: true, relayUrl: location.origin, relayToken: 'dev-live-5',
+      }),
+    })
+    await flush()
+    expect(await publishLedgerSnapshot(ROWS)).toBe(true)
+    expect(worker.postMessage).toHaveBeenCalledWith({
+      type: BEACON_MESSAGES.liveSessions, sessions: ROWS,
+    })
+  })
+
+  test('a live view watching a DIFFERENT relay publishes nothing', async () => {
+    // The ledger's key space is the paired relay's bare session ids. Folding a
+    // foreign relay's sessions in would both add rows that are not ours and
+    // delete the paired relay's as absent.
+    localStorage.setItem('beaconDeviceToken', 'dev-live-6')
+    const worker = activeWorkerMock()
+    relayFetch({})
+    await initBeacon({
+      liveView: liveViewSeam({
+        enableRelaySource: true, relayUrl: 'https://relay.example', relayToken: 'user-tok',
+      }),
+    })
+    await flush()
+    expect(await publishLedgerSnapshot(ROWS)).toBe(false)
+    expect(worker.postMessage).not.toHaveBeenCalled()
+  })
+
+  test('an unpaired dashboard publishes nothing — there is no worker of ours', async () => {
+    const worker = activeWorkerMock()
+    relayFetch({})
+    await initBeacon({
+      liveView: liveViewSeam({
+        enableRelaySource: true, relayUrl: location.origin, relayToken: 'dev-live-7',
+      }),
+    })
+    await flush()
+    expect(await publishLedgerSnapshot(ROWS)).toBe(false)
+    expect(worker.postMessage).not.toHaveBeenCalled()
+  })
+
+  test('a ledger read answers the worker over a reply port', async () => {
+    localStorage.setItem('beaconDeviceToken', 'dev-live-8')
+    activeWorkerMock((msg, transfer) => {
+      expect(msg).toEqual({ type: BEACON_MESSAGES.ledgerGet, session_id: 's-1' })
+      transfer[0].postMessage({ entry: { state: 'waiting', at: 1755000000 } })
+    })
+    expect(await ledgerEntry('s-1')).toEqual({ state: 'waiting', at: 1755000000 })
+  })
+
+  test('a session the worker has no row for answers null', async () => {
+    localStorage.setItem('beaconDeviceToken', 'dev-live-9')
+    activeWorkerMock((msg, transfer) => transfer[0].postMessage({ entry: null }))
+    expect(await ledgerEntry('s-nobody')).toBeNull()
+  })
+
+  test('a worker that never answers resolves null rather than hanging', async () => {
+    // The caller is composing a "that session is not here" notice (R6), so a
+    // promise that never settles would reproduce the very tap-does-nothing
+    // failure the notice exists to prevent.
+    vi.useFakeTimers()
+    try {
+      localStorage.setItem('beaconDeviceToken', 'dev-live-10')
+      activeWorkerMock(() => {})
+      const pending = ledgerEntry('s-1')
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(await pending).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('no worker at all answers null, without throwing', async () => {
+    localStorage.setItem('beaconDeviceToken', 'dev-live-11')
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: { getRegistration: () => Promise.resolve(null), addEventListener: vi.fn() },
+    })
+    expect(await ledgerEntry('s-1')).toBeNull()
+  })
+})
+
+describe('sessionFromHash (R6, the cold-open route)', () => {
+  test('reads the target the worker put in the fragment, decoded', () => {
+    expect(sessionFromHash('#beacon-session=proc%2012')).toBe('proc 12')
+    expect(sessionFromHash('beacon-session=s-1')).toBe('s-1')
+  })
+
+  test('finds its own key among others, and answers empty when there is none', () => {
+    expect(sessionFromHash('#tab=history&beacon-session=s-2')).toBe('s-2')
+    expect(sessionFromHash('#tab=history')).toBe('')
+    expect(sessionFromHash('')).toBe('')
+    expect(sessionFromHash(null)).toBe('')
+  })
+
+  test('a malformed escape yields the raw value rather than nothing', () => {
+    // A target that fails to decode is still a better target than none: the
+    // dashboard will report it as absent, which is a visible answer.
+    expect(sessionFromHash('#beacon-session=%E0%A4%A')).toBe('%E0%A4%A')
   })
 })
 

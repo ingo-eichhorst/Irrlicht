@@ -11,10 +11,30 @@
 //
 // This module is also the only place in the web tree allowed to register the
 // service worker (arc42 §5.2: lazily, from the pairing flow and its §8.3
-// self-heal only — plain dashboard usage never installs a worker).
-// sw-contract.test.js pins both properties.
+// self-heal only — plain dashboard usage never installs a worker), and the
+// only one that talks to it. sw-contract.test.js pins both properties.
+
+import { relayWsUrl } from './connectionProtocol.js';
 
 const DEVICE_TOKEN_KEY = 'beaconDeviceToken';
+
+// The vocabulary this module and sw.js exchange. sw.js is a classic script
+// with nothing to import from (its own header says why), so it spells the same
+// four values as literals and sw-contract.test.js pins the two copies
+// together — a rename on one side would otherwise leave the other silently
+// unheard, which is the failure mode arc42 §8.3 exists to forbid.
+export const BEACON_MESSAGES = Object.freeze({
+  liveSessions: 'beacon-live-sessions',
+  ledgerGet: 'beacon-ledger-get',
+  openSession: 'beacon-open-session',
+  sessionHashKey: 'beacon-session',
+});
+
+// A worker that is asleep, or older than this page, may answer a ledger read
+// with nothing at all. The caller is composing a "that session is not here"
+// notice (R6), so waiting forever would reproduce the very tap-does-nothing
+// failure the notice exists to prevent.
+const LEDGER_REPLY_TIMEOUT_MS = 2000;
 
 // base64url → Uint8Array for pushManager.subscribe's applicationServerKey.
 // Handing subscribe the raw base64url string is the classic silent failure —
@@ -50,13 +70,34 @@ export function countdownText(seconds) {
 
 let relayTokenAccessor = () => '';
 let countdownTimer = null;
+// The Settings → Sources seam (see initBeacon): { read, write } over the same
+// `settings` object and the same persist + reconnect path the Settings panel
+// uses, never localStorage keys of this module's own.
+let liveView = null;
+let openSessionHandler = null;
+let notificationTargetsWired = false;
 
-// Entry point, called from irrlicht.js at wiring time. `opts.relayToken` is an
-// accessor for the Settings → Sources relay token (the authed client token
-// that may mint pairing codes, arc42 §8.1); the phone side needs none.
+// Entry point, called from irrlicht.js at wiring time.
+//   · `opts.relayToken` — accessor for the Settings → Sources relay token (the
+//     authed client token that may mint pairing codes, arc42 §8.1); the phone
+//     side needs none.
+//   · `opts.liveView` — { read(), write(next) } over the dashboard's own
+//     Sources settings. Pairing configures the phone's live view through it
+//     (arc42 §6.2, ADR-9); going through the dashboard's mechanism rather than
+//     writing localStorage by hand is what keeps a later change to how
+//     settings are stored from orphaning it.
+//   · `opts.openSession` — where a notification tap lands (R6).
 export async function initBeacon(opts = {}) {
   relayTokenAccessor = opts.relayToken || (() => '');
+  liveView = opts.liveView || null;
+  openSessionHandler = opts.openSession || null;
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+  // Before the feature-detection fetch and before the section check: a tap
+  // that opened this app cold is waiting on it, and it is not part of the
+  // settings UI. Gated on the stored device token all the same — only a paired
+  // phone can have been sent here by a notification, so an unpaired dashboard
+  // wires nothing (arc42 §5.2).
+  wireNotificationTargets();
   const section = document.getElementById('beacon-section');
   if (!section) return;
   const info = await fetchPushInfo();
@@ -293,6 +334,11 @@ async function pairThisPhone(phone, info, enteredCode, status) {
   // the subscription is only a delivery address). If anything below fails,
   // the §8.3 self-heal retries the subscription on next open.
   localStorage.setItem(DEVICE_TOKEN_KEY, paired.token);
+  // …and configure the live view from the same identity, before the
+  // subscription is attempted: a phone whose subscribe fails still watches the
+  // relay, which is what keeps its ledger and badge honest until the §8.3
+  // self-heal lands the delivery address.
+  configureLiveView(paired.token);
   const ok = await subscribeForPush(paired.token, paired.vapid_public_key || info.vapid_public_key, status);
   if (!ok) return;
   await renderHealthPanel(phone, info, paired.token);
@@ -433,6 +479,195 @@ async function selfHeal(info, deviceToken, relayRegistered) {
   return HEAL_REPAIRED;
 }
 
+// ── The phone's own live view (arc42 §6.2, ADR-9) ────────────────────────
+//
+// Pairing does not only register a delivery address; it also makes this phone
+// an ordinary client of the relay it just paired with. That is possible
+// because a device token is a full client token (§8.1) — an ordinary
+// TokenRecord every client route accepts — and it is NECESSARY because of
+// §8.4: nothing is pushed on `* → working`, and iOS forbids a silent push, so
+// a phone fed only by push learns that sessions need attention and never that
+// one stopped. The badge could climb and never fall. The live view is the
+// correcting signal (§8.5).
+
+// sameRelay compares two relay addresses the way the dashboard's own source
+// list does — through relayWsUrl, so `https://relay.example`, the same with a
+// trailing slash, and the full stream URL are one address rather than three.
+function sameRelay(a, b) {
+  return !!a && !!b && relayWsUrl(a) === relayWsUrl(b);
+}
+
+// The live view is OURS when it watches this relay with this phone's own
+// device token. Anything else — pointed elsewhere, switched off, carrying a
+// token the user typed — belongs to the user, and this module neither
+// publishes through it nor takes it down.
+//
+// `origin` is a parameter rather than a read of `location.origin`, because
+// this predicate is half of liveViewNoteText, which is exported as a pure
+// function and took an origin its verdict then ignored — the two disagreed
+// for any origin but the page's own, and the disagreement was invisible in
+// production, where they are always the same string.
+function liveViewIsOurs(current, deviceToken, origin) {
+  return !!(current && deviceToken
+    && current.enableRelaySource
+    && sameRelay(current.relayUrl, origin)
+    && current.relayToken === deviceToken);
+}
+
+// Called on a successful pair, and only then. Returns what happened so the
+// health panel can say it out loud.
+function configureLiveView(deviceToken) {
+  if (!liveView) return 'no-seam';
+  const current = liveView.read();
+  // Do not clobber a live view aimed at a different relay: the phone may
+  // legitimately watch another one, and overwriting it would both lose that
+  // configuration and hand this phone's device token to a host it was not
+  // minted for. Left alone, and the health panel says so.
+  if (current.relayUrl && !sameRelay(current.relayUrl, location.origin)) return 'elsewhere';
+  liveView.write({
+    enableRelaySource: true,
+    // location.origin, not the page URL: relayWsUrl maps https:→wss: and
+    // appends the stream path itself (connectionProtocol.js).
+    relayUrl: location.origin,
+    relayToken: deviceToken,
+  });
+  return 'configured';
+}
+
+// Unpairing undoes it symmetrically. Without this the phone keeps a live view
+// holding a revoked token: the socket does not reconnect-loop — a 4401 close
+// parks the source in `unauthorized` with no retry scheduled (the ev.code
+// branch in irrlicht.js connectSource) — but it does leave a source that can
+// never connect, and a Sources panel configured by something the user just
+// switched off.
+function releaseLiveView(deviceToken) {
+  if (!liveView) return false;
+  if (!liveViewIsOurs(liveView.read(), deviceToken, location.origin)) return false;
+  liveView.write({ enableRelaySource: false, relayUrl: '', relayToken: '' });
+  return true;
+}
+
+// The health panel's second line. Empty when the live view is ours, because
+// then there is nothing to explain.
+export function liveViewNoteText(current, deviceToken, origin) {
+  if (!current) return '';
+  if (liveViewIsOurs(current, deviceToken, origin)) return '';
+  if (current.relayUrl && !sameRelay(current.relayUrl, origin)) {
+    return 'Live view is pointed at ' + current.relayUrl + ', not this relay — left as you set it. '
+      + 'Notifications still arrive, but this app cannot see when a session stops needing you, so the badge only counts up.';
+  }
+  return 'Live view is off for this relay — notifications still arrive, but the badge only counts up until you open the app.';
+}
+
+// ── Talking to the service worker (arc42 §8.5, R6) ───────────────────────
+
+// getRegistration rather than navigator.serviceWorker.ready: `ready` never
+// settles when there is no registration at all, and a promise that hangs is
+// the one failure this whole slice is about. A worker still installing has a
+// null `active` — that publish is skipped and the next one lands.
+async function activeWorker() {
+  if (!('serviceWorker' in navigator)) return null;
+  if (!localStorage.getItem(DEVICE_TOKEN_KEY)) return null; // unpaired: no worker of ours
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    return (reg && reg.active) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Publish the dashboard's live session list into the worker's ledger (§8.5).
+// Gated on the live view being ours, because the ledger's key space is the
+// paired relay's bare session ids: a live view watching a DIFFERENT relay
+// would fold foreign sessions in and delete the paired relay's rows as absent.
+// Returns whether it published, so the caller (and a test) can tell.
+export async function publishLedgerSnapshot(sessions) {
+  const deviceToken = localStorage.getItem(DEVICE_TOKEN_KEY);
+  if (!deviceToken || !liveView) return false;
+  if (!liveViewIsOurs(liveView.read(), deviceToken, location.origin)) return false;
+  const worker = await activeWorker();
+  if (!worker) return false;
+  try {
+    worker.postMessage({ type: BEACON_MESSAGES.liveSessions, sessions: sessions || [] });
+  } catch (e) {
+    return false;
+  }
+  return true;
+}
+
+// Read one session's last-known state back out of the ledger (§8.5). Answers
+// null for "no entry" and for "could not ask" alike: both mean the caller has
+// no last-known state to show, and it says so either way.
+export async function ledgerEntry(sessionId) {
+  const worker = await activeWorker();
+  if (!worker || !sessionId || typeof MessageChannel === 'undefined') return null;
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { channel.port1.close(); } catch (e) { /* already gone with its page */ }
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(null), LEDGER_REPLY_TIMEOUT_MS);
+    channel.port1.onmessage = (event) => finish((event.data && event.data.entry) || null);
+    try {
+      worker.postMessage(
+        { type: BEACON_MESSAGES.ledgerGet, session_id: sessionId },
+        [channel.port2],
+      );
+    } catch (e) {
+      finish(null);
+    }
+  });
+}
+
+// sessionFromHash reads the deep-link target out of a URL fragment. The worker
+// uses the fragment for a COLD open, where a postMessage would race the page's
+// own module init; a focused window gets the message instead. Pure; exported
+// for tests.
+export function sessionFromHash(hash) {
+  const raw = String(hash || '').replace(/^#/, '');
+  for (const part of raw.split('&')) {
+    const eq = part.indexOf('=');
+    if (eq === -1 || part.slice(0, eq) !== BEACON_MESSAGES.sessionHashKey) continue;
+    const value = part.slice(eq + 1);
+    try {
+      return decodeURIComponent(value);
+    } catch (e) {
+      return value; // a malformed escape is still a better target than none
+    }
+  }
+  return '';
+}
+
+function wireNotificationTargets() {
+  if (!openSessionHandler) return;
+  if (!localStorage.getItem(DEVICE_TOKEN_KEY)) return;
+  if (!notificationTargetsWired && 'serviceWorker' in navigator
+      && typeof navigator.serviceWorker.addEventListener === 'function') {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      const msg = event.data || {};
+      if (msg.type === BEACON_MESSAGES.openSession && msg.session_id) {
+        openSessionHandler(msg.session_id);
+      }
+    });
+    notificationTargetsWired = true;
+  }
+  const target = sessionFromHash(location.hash);
+  if (!target) return;
+  // Consumed: a reload is not a second tap, and the fragment is a message
+  // rather than state.
+  try {
+    history.replaceState(null, '', location.pathname + location.search);
+  } catch (e) {
+    // A browser that refuses the rewrite still gets the selection below.
+  }
+  openSessionHandler(target);
+}
+
 // ── Health panel + unpair (arc42 §8.3: doubt must be answerable) ─────────
 
 // Reads the relay's own view of this phone. The three outcomes are kept apart
@@ -489,24 +724,33 @@ async function renderHealthPanel(phone, info, deviceToken) {
   const line = el('div', 'beacon-health');
   line.id = 'beacon-health-line';
   line.textContent = 'Paired — checking delivery status…';
+  // The live view is half of what pairing configured (§6.2), so the panel that
+  // answers doubt answers for it too — silence here would leave a badge that
+  // only counts up looking like a badge that is broken.
+  const liveLine = el('div', 'beacon-health');
+  liveLine.id = 'beacon-live-view-line';
+  const note = liveView ? liveViewNoteText(liveView.read(), deviceToken, location.origin) : '';
+  liveLine.textContent = note;
+  liveLine.hidden = !note;
   const btn = el('button', 'settings-action-btn');
   btn.type = 'button';
   btn.id = 'beacon-unpair';
   btn.textContent = 'Unpair';
   btn.addEventListener('click', () => unpair(phone, info, deviceToken));
   phone.appendChild(line);
+  phone.appendChild(liveLine);
   phone.appendChild(btn);
 
   let status = await fetchSubscriptionStatus(deviceToken);
-  if (status.revoked) return renderRevoked(phone, info);
+  if (status.revoked) return renderRevoked(phone, info, deviceToken);
   // The self-heal runs BEFORE the verdict is painted. Reading the status
   // first and repairing afterwards is what made the panel advise reopening an
   // app that had just repaired itself.
   const healed = await selfHeal(info, deviceToken, !!(status.body && status.body.registered === true));
-  if (healed === HEAL_REVOKED) return renderRevoked(phone, info);
+  if (healed === HEAL_REVOKED) return renderRevoked(phone, info, deviceToken);
   if (healed === HEAL_REPAIRED) {
     status = await fetchSubscriptionStatus(deviceToken);
-    if (status.revoked) return renderRevoked(phone, info);
+    if (status.revoked) return renderRevoked(phone, info, deviceToken);
   }
   if (status.unreachable) {
     line.textContent = 'Paired — delivery status unavailable right now.';
@@ -517,7 +761,7 @@ async function renderHealthPanel(phone, info, deviceToken) {
 
 // A revoked phone cannot heal: the relay dropped its subscription along with
 // the token (§8.1), so the only route back is a fresh pairing code.
-function renderRevoked(phone, info) {
+function renderRevoked(phone, info, deviceToken) {
   phone.innerHTML = '';
   const line = el('div', 'beacon-health');
   line.id = 'beacon-health-line';
@@ -527,6 +771,10 @@ function renderRevoked(phone, info) {
   btn.id = 'beacon-repair';
   btn.textContent = 'Pair again';
   btn.addEventListener('click', () => {
+    // The revoked token is dead on every route, live view included (§8.1) —
+    // let go of both together or the Sources panel keeps a source that can
+    // only ever answer 4401.
+    releaseLiveView(deviceToken);
     localStorage.removeItem(DEVICE_TOKEN_KEY);
     renderPairEntry(phone, info);
   });
@@ -554,6 +802,8 @@ async function unpair(phone, info, deviceToken) {
     // Best effort — a dangling OS subscription without a relay record
     // delivers nothing.
   }
+  // Symmetric with pairing: what it configured, this takes back down.
+  releaseLiveView(deviceToken);
   localStorage.removeItem(DEVICE_TOKEN_KEY);
   renderPairEntry(phone, info);
 }

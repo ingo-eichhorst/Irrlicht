@@ -15,7 +15,7 @@ import {
   cacheBloatBadgeText,
 } from './formatters.js';
 import { reconcile, paintRowNum } from './domReconcile.js';
-import { initBeacon } from './beacon.js';
+import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
 
     // --- State ---
     let dashboardGroups = [];
@@ -142,6 +142,29 @@ import { initBeacon } from './beacon.js';
     // Settings keys that change the live source connections (vs. display-only
     // toggles), so the change handler knows to reconnect.
     const SOURCE_SETTING_KEYS = new Set(['enableLocalSource', 'enableRelaySource', 'relayUrl', 'relayToken']);
+    // The seam Beacon pairing configures the phone's own live view through
+    // (docs/mobile-notifications-arc42.md §6.2, ADR-9). It is deliberately the
+    // dashboard's own mechanism — this `settings` object, persistSettings(),
+    // and the same rebuildSources() the Settings → Sources change handler
+    // runs — rather than localStorage keys written by hand from beacon.js,
+    // which a later change to how settings are stored would silently orphan.
+    // The Settings form re-reads on open (syncSettingsForm), so nothing there
+    // goes stale.
+    function readSourceSettings() {
+      const out = {};
+      for (const key of SOURCE_SETTING_KEYS) out[key] = settings[key];
+      return out;
+    }
+    function writeSourceSettings(next) {
+      for (const key of Object.keys(next || {})) {
+        // A key outside the source set would be persisted into the same object
+        // and never reconnected — a silent half-write. Refuse it instead.
+        if (!SOURCE_SETTING_KEYS.has(key)) throw new Error('not a source setting: ' + key);
+      }
+      Object.assign(settings, next);
+      persistSettings();
+      rebuildSources();
+    }
     function loadSettings() {
       try {
         const raw = localStorage.getItem(SETTINGS_KEY);
@@ -1268,6 +1291,13 @@ import { initBeacon } from './beacon.js';
       updateSummary(all, topLevel);
       renderHeaderTitle();
       refreshSummaryCollapseAllBtn();
+      // Beacon (arc42 §8.5, R6): reconcile has just rewritten every row's
+      // className, so the notification selection is repainted from state; a tap
+      // still waiting on its session gets another look at the fresh list; and
+      // the phone's ledger is told what the dashboard can now see.
+      paintBeaconFocus();
+      attemptBeaconFocus();
+      scheduleLedgerPublish();
     }
 
     // Keep the header summary-mode button's glyph/label in sync with the
@@ -1800,6 +1830,7 @@ import { initBeacon } from './beacon.js';
 
     function ingestInitialSessions(resp) {
       if (!resp) return;
+      beaconLiveDataArrived = true;
       dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
       normalizeGroupAgents(dashboardGroups);
       dashboardProviderCosts = (resp && !Array.isArray(resp) && resp.provider_costs) || {};
@@ -2037,6 +2068,14 @@ import { initBeacon } from './beacon.js';
         if (src.kind === 'relay' && settings.relayToken) hello.token = settings.relayToken;
         try { ws.send(JSON.stringify(hello)); } catch (e) { console.debug('irrlicht: failed to send hello frame', e); }
         updateWsStatus();
+        // Publish the ledger on the CONNECT edge, not only from render().
+        // Nothing renders when a socket opens, so a phone whose handshake
+        // completes after the last render would otherwise publish nothing
+        // until the next session frame — and if there are no sessions there
+        // is no next frame. That is precisely the case the fold exists for:
+        // opened after everything ended, the empty set is the news that takes
+        // the push fold's last `waiting` row and its badge back down (§8.5).
+        scheduleLedgerPublish();
         // Re-read consent on every (re)connect, mirroring the macOS app's
         // connect() (#1385). A daemon restart re-runs every granted effect
         // at boot, and a failure there is broadcast by nobody: Start emits
@@ -2061,6 +2100,12 @@ import { initBeacon } from './beacon.js';
         // stop reconnecting (until settings change) instead of a tight loop.
         if (ev?.code === 4401) { src.state = 'unauthorized'; updateWsStatus(); return; }
         src.state = 'disconnected';
+        // Forget what we published: the worker's ledger does NOT stand still
+        // while the page is away — sw.js's push fold keeps writing it. On
+        // reconnect an unchanged live set would otherwise be suppressed as
+        // "already published", leaving the push fold's `waiting` row and its
+        // badge in place with nothing left to correct them.
+        beaconPublishedSignature = null;
         updateWsStatus();
         scheduleReconnect(src);
       };
@@ -2195,6 +2240,9 @@ import { initBeacon } from './beacon.js';
         return;
       }
       if (!msg.session) return;
+      // A session frame landed, from any source — so "the session is not in
+      // the list" has stopped being a race and can be reported (arc42 R6).
+      beaconLiveDataArrived = true;
       const s = msg.session;
       if (msg.type === 'session_deleted') {
         applySessionDelete(s.session_id);
@@ -2206,6 +2254,244 @@ import { initBeacon } from './beacon.js';
         applySessionUpdate(s);
       }
       render();
+    }
+
+    // --- Beacon: notification deep link + live ledger fold (arc42 §8.5, R6) ---
+    //
+    // A push payload names the relay's BARE session id — Payload in
+    // core/domain/notify/notify.go carries no daemon id for the session kind —
+    // while a relay-sourced row is keyed by the compound `<daemon>\0<id>` that
+    // normalizeSourcedFrame folds in above (#537), and that compound id is what
+    // reaches `data-session-id`. A link keyed on the bare id therefore matches
+    // no row at all, silently, for exactly the sessions notifications are
+    // about. Resolution runs through displaySessionId — compoundSessionId's
+    // documented inverse (sessionIdentity.js) — rather than through a second
+    // derivation that could drift from it.
+
+    // How long a tap waits for the session list before "not here" is a verdict
+    // rather than a race: the app may have been opened COLD by the tap and be
+    // waiting on its first frame.
+    const BEACON_TARGET_GRACE_MS = 2500;
+    // The live fold is published on a debounce: a metrics tick is not news to
+    // the ledger, and a phone should not post one message per row update.
+    const BEACON_PUBLISH_DEBOUNCE_MS = 500;
+
+    let beaconTarget = null;          // { bareId, deadline } — a tap not yet resolved
+    let beaconGraceTimer = null;
+    let beaconLiveDataArrived = false;
+    let beaconFocusedSessionId = '';
+
+    // Every row a bare id can mean. Plural on purpose: two daemons may deliver
+    // the same bare session_id (`proc-<pid>` collides readily) — the ambiguity
+    // the compound key exists to keep apart, and the one a notification cannot
+    // resolve, since it names no daemon.
+    function beaconRowIdsFor(bareId) {
+      const out = [];
+      for (const id of sessionIndex.keys()) {
+        if (displaySessionId(id) === bareId) out.push(id);
+      }
+      return out;
+    }
+
+    // Entry point for a notification tap, handed to beacon.js at wiring time.
+    export function focusSessionFromNotification(bareId) {
+      if (!bareId) return;
+      beaconTarget = { bareId: String(bareId), deadline: Date.now() + BEACON_TARGET_GRACE_MS };
+      clearBeaconGraceTimer();
+      // A retry rides every render, but a phone that receives no frame at all
+      // renders nothing — so the verdict carries its own clock too.
+      beaconGraceTimer = setTimeout(() => { beaconGraceTimer = null; attemptBeaconFocus(); }, BEACON_TARGET_GRACE_MS);
+      attemptBeaconFocus();
+    }
+
+    function clearBeaconGraceTimer() {
+      if (beaconGraceTimer === null) return;
+      clearTimeout(beaconGraceTimer);
+      beaconGraceTimer = null;
+    }
+
+    function attemptBeaconFocus() {
+      if (!beaconTarget) return;
+      const bareId = beaconTarget.bareId;
+      const ids = beaconRowIdsFor(bareId);
+      if (ids.length === 0 && !beaconLiveDataArrived && Date.now() < beaconTarget.deadline) return;
+      beaconTarget = null;
+      clearBeaconGraceTimer();
+      if (ids.length > 0) { selectBeaconRow(ids, bareId); return; }
+      // Never a tap that appears to have done nothing (R6): if the session is
+      // not in the list, the app opens and says so.
+      reportBeaconSessionMissing(bareId);
+    }
+
+    function beaconRowElement(sessionId) {
+      // Attribute-selector lookup would have to escape a compound id, which
+      // carries a NUL delimiter; the existing repaintHistory walk is the idiom.
+      for (const el of document.querySelectorAll('#session-list .session-row')) {
+        if (el.dataset.sessionId === sessionId) return el;
+      }
+      return null;
+    }
+
+    function selectBeaconRow(ids, bareId) {
+      beaconFocusedSessionId = ids[0];
+      let row = beaconRowElement(ids[0]);
+      if (!row) {
+        // The dashboard holds the session but is not painting it: its group is
+        // collapsed. Expanding is the honest move — reporting "not in the list"
+        // about a row a chevron would reveal is a lie.
+        expandGroupsForSession(ids[0]);
+        render();
+        row = beaconRowElement(ids[0]);
+      }
+      if (!row) { reportBeaconSessionMissing(bareId); return; }
+      paintBeaconFocus();
+      if (typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'center' });
+      showBeaconNotice(ids.length > 1
+        ? 'Two sessions share that id — showing the first. The notification named no daemon, so this app cannot tell them apart.'
+        : '');
+    }
+
+    // reconcile rewrites a session row's className on every update, so the
+    // selection is re-applied from state after each render rather than set once
+    // on the element.
+    function paintBeaconFocus() {
+      for (const el of document.querySelectorAll('#session-list .session-row')) {
+        el.classList.toggle('beacon-focus', !!beaconFocusedSessionId && el.dataset.sessionId === beaconFocusedSessionId);
+      }
+    }
+
+    // The collapse key is path-qualified (see emitGroup), so the chain is
+    // rebuilt the same way rather than guessed from the group's own name.
+    function beaconGroupKeyChain(group) {
+      let chain = [];
+      (function walk(groups, parentKey, ancestors) {
+        for (const g of (groups || [])) {
+          if (chain.length) return;
+          const key = parentKey ? parentKey + '/' + g.name : g.name;
+          const next = ancestors.concat([key]);
+          if (g === group) { chain = next; return; }
+          if (g.groups?.length) walk(g.groups, key, next);
+        }
+      })(dashboardGroups, '', []);
+      return chain;
+    }
+
+    function expandGroupsForSession(sessionId) {
+      const entry = sessionIndex.get(sessionId);
+      if (!entry) return;
+      for (const key of beaconGroupKeyChain(entry.group)) {
+        if (isGroupCollapsed(key)) toggleGroupCollapsed(key);
+      }
+    }
+
+    async function reportBeaconSessionMissing(bareId) {
+      beaconFocusedSessionId = '';
+      paintBeaconFocus();
+      let entry = null;
+      try {
+        entry = await ledgerEntry(bareId);
+      } catch (e) {
+        console.debug('irrlicht: failed to read the beacon ledger', e);
+      }
+      showBeaconNotice(missingSessionText(bareId, entry));
+    }
+
+    // What the app says when a tap resolves to no row. The ledger is the only
+    // thing that still knows anything about that session (arc42 §8.5), so its
+    // last-known state IS the answer — stated "as of <time>", never as now.
+    // Pure; exported for tests.
+    export function missingSessionText(bareId, entry) {
+      const who = [entry?.label, entry?.project].filter(Boolean).join(' · ')
+        || ('Session ' + String(bareId || '').slice(0, 8));
+      if (entry?.state) {
+        return who + ' — last known ' + entry.state + ' ' + beaconAsOfText(entry.at)
+          + ', and not in the list this device is watching.';
+      }
+      return who + ' is not in the list this device is watching, and this phone kept no last-known state for it.';
+    }
+
+    function beaconAsOfText(atSeconds) {
+      const n = Number(atSeconds);
+      if (!Number.isFinite(n) || n <= 0) return 'at an unknown time';
+      return 'as of ' + new Date(n * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Created on demand and removed when it has nothing to say: this notice is
+    // Beacon's only mark on the dashboard chrome, and a dashboard nobody taps a
+    // notification into never grows it (arc42 §5.2).
+    function showBeaconNotice(text) {
+      let el = document.getElementById('beacon-notice');
+      if (!text) { if (el) el.remove(); return; }
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'beacon-notice';
+        el.setAttribute('role', 'status');
+        el.title = 'Dismiss';
+        el.addEventListener('click', () => el.remove());
+        const list = document.getElementById('session-list');
+        if (list?.parentNode) list.parentNode.insertBefore(el, list);
+        else document.body.appendChild(el);
+      }
+      el.textContent = text;
+    }
+
+    // --- The live fold (arc42 §8.5) ---
+    let beaconPublishTimer = null;
+    // null, not '': "nothing has been published yet" and "the empty set has
+    // been published" are different states, and an empty set is the single
+    // most important snapshot this fold sends. A phone opened after every
+    // session ended connects, renders zero rows, and that nothing is exactly
+    // the news — it is what takes the last `waiting` row the push fold wrote
+    // out of the ledger. Held as '' they compare equal, the first publish is
+    // skipped, and the badge never returns to zero.
+    let beaconPublishedSignature = null;
+
+    // What the ledger gets from the live view. Top-level sessions only: §8.4
+    // never notifies about a subagent (the parent covers it), so counting one
+    // in the badge would claim attention nobody was asked for. Keyed by the
+    // BARE id — the key space the push fold already writes.
+    function beaconLedgerSessions() {
+      const at = Math.floor(Date.now() / 1000);
+      const out = [];
+      (function walk(groups) {
+        for (const g of (groups || [])) {
+          for (const a of (g.agents || [])) {
+            if (!a.session_id) continue;
+            out.push({
+              session_id: displaySessionId(a.session_id),
+              state: a.state || '',
+              // Mirrors what the relay composes into a push payload
+              // (push_observer.go: Label = adapter, Project = project name), so
+              // the two folds write the same fields rather than two dialects.
+              label: a.adapter || '',
+              project: a.project_name || '',
+              at,
+            });
+          }
+          if (g.groups?.length) walk(g.groups);
+        }
+      })(dashboardGroups);
+      return out;
+    }
+
+    function scheduleLedgerPublish() {
+      // A disconnected dashboard's list is not a smaller truth, it is no truth
+      // at all — publishing it would delete the ledger §8.5 keeps for exactly
+      // that moment ("as of 14:32").
+      if (![...sources.values()].some(s => s.state === 'connected')) return;
+      if (beaconPublishTimer !== null) return;
+      beaconPublishTimer = setTimeout(() => {
+        beaconPublishTimer = null;
+        const rows = beaconLedgerSessions();
+        const signature = rows.map(r => r.session_id + ':' + r.state).join('|');
+        if (signature === beaconPublishedSignature) return;
+        // Recorded only once it actually published: an unpaired dashboard
+        // answers false, and a phone paired a minute later must not then be
+        // skipped because the set has not changed since.
+        publishLedgerSnapshot(rows).then((published) => {
+          beaconPublishedSignature = published ? signature : null;
+        });
+      }, BEACON_PUBLISH_DEBOUNCE_MS);
     }
 
     // --- Connection status (header dot + banner + tooltip) ---
@@ -2428,8 +2714,15 @@ import { initBeacon } from './beacon.js';
     // Irrlicht Beacon (docs/mobile-notifications-arc42.md) — safe to call
     // unconditionally: everything it does is feature-detected against this
     // origin's /api/v1/push/info (§5.2), so daemon-served dashboards and old
-    // relays render nothing new and install no service worker.
-    initBeacon({ relayToken: () => settings.relayToken });
+    // relays render nothing new and install no service worker. The two seams
+    // below are equally inert there: `liveView` is only written by a successful
+    // pairing (§6.2, ADR-9), and `openSession` only fires for a phone a
+    // notification tap sent here (R6).
+    initBeacon({
+      relayToken: () => settings.relayToken,
+      liveView: { read: readSourceSettings, write: writeSourceSettings },
+      openSession: focusSessionFromNotification,
+    });
 
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
