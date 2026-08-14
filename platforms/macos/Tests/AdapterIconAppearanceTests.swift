@@ -171,10 +171,13 @@ final class AdapterIconAppearanceTests: XCTestCase {
             return 0
         }
         view.cacheDisplay(in: view.bounds, to: rep)
-        let w = rep.pixelsWide, h = rep.pixelsHigh
+        let w = rep.pixelsWide
+        let h = rep.pixelsHigh
         // The adapter icon is the right-most element of the row's metrics line.
-        let x0 = Int(Double(w) * 0.92), x1 = w - 1
-        let y0 = Int(Double(h) * 0.30), y1 = Int(Double(h) * 0.72)
+        let x0 = Int(Double(w) * 0.92)
+        let x1 = w - 1
+        let y0 = Int(Double(h) * 0.30)
+        let y1 = Int(Double(h) * 0.72)
         var best: Int?
         for y in y0...y1 {
             for x in x0...x1 {
