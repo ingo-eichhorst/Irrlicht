@@ -112,41 +112,126 @@ func resolveHostFromAncestry(pid int) (termProgram string, hostPID int, complete
 	return "", 0, true
 }
 
+// bundleIDCmd builds the bounded shellout that reads one app bundle's
+// CFBundleIdentifier. It is a parameter of bundleIDVia rather than a package
+// var because the distinction bundleIDVia draws is a property of the CHILD
+// PROCESS — ran to a normal exit, versus killed or never started — which no
+// faked return value can pin. Injecting it is the same idiom
+// isKnownInteractiveHostVia uses for the two ancestry walks.
+type bundleIDCmd func(ctx context.Context, plist string) *exec.Cmd
+
+// plutilBundleIDCmd is the production bundleIDCmd. `plutil` ships with macOS
+// and reads both XML and binary Info.plists; bundles under /Applications are
+// world-readable, so this needs no TCC consent.
+func plutilBundleIDCmd(ctx context.Context, plist string) *exec.Cmd {
+	return exec.CommandContext(ctx, plutilPath, "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist)
+}
+
 // bundleIDForAppPath returns the CFBundleIdentifier of the application bundle
-// at appPath (".../<App>.app"), or "" when it can't be read. Uses `plutil`,
-// which ships with macOS and reads both XML and binary Info.plists; bundles
-// under /Applications are world-readable so this needs no TCC consent. Same
-// bounded 2-second exec ceiling as the sibling ps helpers.
-func bundleIDForAppPath(appPath string) string {
+// at appPath (".../<App>.app"). Same bounded 2-second exec ceiling as the
+// sibling ps helpers.
+//
+// The error is non-nil ONLY when plutil could not be ASKED, never when it
+// answered — see bundleIDVia for why those are different facts and where the
+// line between them falls (#1524).
+func bundleIDForAppPath(appPath string) (string, error) {
+	return bundleIDVia(appPath, plutilBundleIDCmd)
+}
+
+// bundleIDVia is bundleIDForAppPath with the shellout injected.
+//
+// It reports ("", nil) for an app whose bundle id plutil ANSWERED that it
+// cannot supply, and ("", err) for one plutil never answered about at all —
+// the #1524 distinction, and the reason this helper has an error return where
+// the original swallowed everything into "".
+//
+// The line is drawn at "did the child run to a normal exit", NOT at the
+// context error, and both halves of that are load-bearing:
+//
+//   - A non-zero exit IS an answer. plutil exits 1 both for a missing
+//     Info.plist and for a plist that exists but carries no CFBundleIdentifier
+//     (measured), and neither is evidence that the machine was too loaded to
+//     look — treating either as a non-answer would fail the admission gate open
+//     for any ancestor with an unusual bundle, widening #784 rather than
+//     narrowing #1524.
+//   - A kill IS NOT an answer, and `errors.Is(err, context.DeadlineExceeded)`
+//     does not detect one. When CommandContext's deadline fires mid-run the
+//     child is SIGKILLed and Output returns *exec.ExitError "signal: killed";
+//     that error does not wrap the context's, so errors.Is reports false
+//     (measured on go1.25, darwin/arm64). Keying on it would compile, read
+//     correctly, and miss the exact condition #1524 is about. ProcessState
+//     .Exited() is what separates a process that ran from one that was killed,
+//     and it also covers the deaths the ceiling did not cause — an OOM kill, a
+//     fork that failed under the same load, or a ctx already past its deadline
+//     before Start (where the error is not an ExitError at all).
+func bundleIDVia(appPath string, build bundleIDCmd) (string, error) {
 	if appPath == "" {
-		return ""
+		return "", nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	plist := appPath + "/Contents/Info.plist"
-	out, err := exec.CommandContext(ctx, plutilPath, "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist).Output()
+	out, err := build(ctx, plist).Output()
 	if err != nil {
-		return ""
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ProcessState.Exited() {
+			// plutil ran and declined: this ancestor has no bundle id we can
+			// name. A real, readable verdict — the walk continues on it.
+			return "", nil
+		}
+		return "", fmt.Errorf("plutil %s: %w", plist, err)
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), nil
 }
 
 // resolveHostBundleIDFromAncestry walks the parent-process chain of pid and
 // returns the CFBundleIdentifier of the first top-level application bundle it
-// finds, plus that app's PID. complete carries the same meaning as
-// resolveHostFromAncestry's, and the first read is split out of the `ppid <= 1`
-// guard for exactly that reason: "pid's parent is init" is a verdict, "pid
-// could not be read" is not. It is the generic fallback used when the curated
+// finds, plus that app's PID. It is the generic fallback used when the curated
 // termProgramByAppName map matches no ancestor — it lets the UI bring an
 // embedded-terminal GUI host (e.g. Obsidian) to the front without a per-app
 // registry entry. Returns ("", 0) when no top-level app appears within
-// maxAncestry levels.
+// maxAncestry levels. complete carries the same meaning as
+// resolveHostFromAncestry's, and the first read is split out of the `ppid <= 1`
+// guard for exactly that reason: "pid's parent is init" is a verdict, "pid
+// could not be read" is not.
+//
+// This walk makes TWO bounded shellouts per ancestor, not one, and both feed
+// that bit: the `ps` every walk makes, and the `plutil` behind
+// bundleIDForAppPath. Reporting only the first is #1524 — a plutil over its
+// ceiling returned an empty bundle id, the walk read it as "this ancestor is
+// not an app", and the miss it eventually reported was indistinguishable from
+// a walk that had actually seen every ancestor.
+//
+// It aborts at the FIRST ancestor whose bundle id it could not get, rather than
+// walking on to look for an outer one. That is deliberate and it is the one
+// place this walk takes a different polarity from resolveClientHostIdentity's
+// "a found host wins outright": here the first top-level app IS the host, so an
+// outer app that answers is not a better answer — it is the wrong window. An
+// honest "I don't know" leaves click-to-focus with no target; carrying on would
+// give it a confidently wrong one. It needs two top-level `.app` ancestors in
+// one chain to matter at all, which the `Contents/Frameworks/` rejection in
+// topLevelAppPath makes rare.
 //
 // The walk starts at pid's *parent*: the agent runs inside the host and is
 // never the host itself, and an agent whose own binary lives in a top-level
 // bundle (e.g. ClaudeCode.app) must not be mistaken for it.
 func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int, complete bool) {
-	ppid, _, err := readProcInfo(pid)
+	return resolveHostBundleIDVia(pid, readProcInfo, bundleIDForAppPath)
+}
+
+// procInfoProbe and bundleIDProbe are the two bounded shellouts
+// resolveHostBundleIDVia makes per ancestor. Both are parameters for the same
+// reason isKnownInteractiveHostVia injects its two walks: no arrangement of
+// live processes can drive either into a chosen failure on purpose.
+type (
+	procInfoProbe func(pid int) (ppid int, cmd string, err error)
+	bundleIDProbe func(appPath string) (string, error)
+)
+
+// resolveHostBundleIDVia is resolveHostBundleIDFromAncestry with both probes
+// injected.
+func resolveHostBundleIDVia(pid int, procInfo procInfoProbe, bundleID bundleIDProbe) (bundleIDOut string, hostPID int, complete bool) {
+	ppid, _, err := procInfo(pid)
 	if err != nil {
 		return "", 0, false
 	}
@@ -155,12 +240,20 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int, com
 	}
 	cur := ppid
 	for i := 0; i < maxAncestry && cur > 1; i++ {
-		pp, cmd, err := readProcInfo(cur)
+		pp, cmd, err := procInfo(cur)
 		if err != nil {
 			return "", 0, false
 		}
 		if appPath := topLevelAppPath(cmd); appPath != "" {
-			if bid := bundleIDForAppPath(appPath); bid != "" {
+			bid, err := bundleID(appPath)
+			if err != nil {
+				// #1524: the probe was never answered, so "" here says nothing
+				// about this ancestor. Falling through would walk on and report
+				// a completed miss — the verdict that REJECTS at the admission
+				// gate, and that SessionDetector then caches forever.
+				return "", 0, false
+			}
+			if bid != "" {
 				return bid, cur, true
 			}
 		}
@@ -206,11 +299,17 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int, com
 // A COMPLETED walk that found no allow-listed host still rejects: that is #784
 // and it is unchanged.
 //
-// "Complete" is exactly "no readProcInfo call failed", which is narrower than
-// "every probe in the walk was answered": resolveHostBundleIDFromAncestry also
-// shells out to plutil via bundleIDForAppPath, and a plutil that blows its own
-// 2s ceiling yields an empty bundle id indistinguishable from an ancestor that
-// is not an app at all. That residue is #1524, not something this bit reports.
+// Nothing counts how often either walk fails to get an answer (#1534), which is
+// the standing cost of failing open here: a probe failing constantly is
+// indistinguishable from one that never fails, and the gate would just quietly
+// stop gating. Measured on one machine, plutil stays ~25x under its ceiling
+// even at 12x CPU oversubscription, so whatever triggers a real non-answer is
+// not CPU pressure and is still unidentified.
+//
+// "Complete" means every probe in the walk was ANSWERED, which is wider than
+// "no readProcInfo call failed" — the walk also shells out to plutil (#1524).
+// resolveHostBundleIDFromAncestry says why that mattered; bundleIDVia is where
+// the line between an answer and a non-answer is drawn.
 func IsKnownInteractiveHost(pid int) bool {
 	return isKnownInteractiveHostVia(pid, resolveHostFromAncestry, resolveHostBundleIDFromAncestry)
 }

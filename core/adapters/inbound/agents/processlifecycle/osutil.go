@@ -139,8 +139,9 @@ func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 //
 // complete reports whether the reads behind that answer actually ran, so a
 // caller can tell "this process has no local window" from "I could not read
-// this process" (#1492). It is false only when an ancestry walk aborted on an
-// unreadable process rather than reaching a verdict.
+// this process" (#1492). It is false only when an ancestry walk aborted rather
+// than reaching a verdict — on an unreadable process, or on a bundle-id probe
+// that was never answered (#1524).
 //
 // It deliberately says nothing about the env read, which cannot fail: the
 // ProcessObserver port defines an unreadable env as an empty map rather than
@@ -338,10 +339,12 @@ func (a *ancestryProbe) walked() bool { return !a.resolved || a.complete }
 // this can call it from multiple guarded blocks at no extra cost.
 //
 // The return is the AND of both walks it can run — the memoized ancestry probe
-// and the separate bundle-id walk: false means one of them aborted on an
-// unreadable process, so the fields it would have filled are missing rather
-// than absent (#1492). A run in which neither was needed is complete by
-// definition.
+// and the separate bundle-id walk: false means one of them aborted on a probe
+// it could not get an answer out of, so the fields it would have filled are
+// missing rather than absent (#1492). A run in which neither was needed is
+// complete by definition. The bundle-id walk aborts on an unreadable process
+// AND on an unanswerable plutil (#1524); the memoized one has no plutil to
+// make, so for it the two are the same thing.
 func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry *ancestryProbe) (complete bool) {
 	complete = true
 	// kitty intentionally does not set TERM_PROGRAM (upstream kitty issue
@@ -370,7 +373,13 @@ func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry *ancestryProb
 	// only; other platforms return "" and this is a no-op.
 	if l.TermProgram == "" {
 		bundleID, _, ok := resolveHostBundleIDFromAncestry(pid)
-		complete = ok
+		// AND, not assign: this bit is hand-accumulated three guarded blocks
+		// down, and a block inserted above that also writes it would otherwise
+		// be silently overwritten here — the failure ancestryProbe.walked()'s
+		// doc describes for the sibling walk. Identical today (nothing writes
+		// complete between its initialisation and here); the point is that it
+		// stays identical after the next block lands.
+		complete = complete && ok
 		l.HostBundleID = bundleID
 	}
 	// Back-fill kitty fields for sessions whose own env is unreadable
