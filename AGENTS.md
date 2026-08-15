@@ -703,6 +703,51 @@ Before marking a ticket done, run the full suite — every layer must pass:
   corpus's own worst defect shipped and was caught in review: `testing.TB` sat
   in the must-NOT-flag block, so the rule's biggest hole came with an approved
   spelling.
+  Beside the seam walk sits `fixture_drift_test.go` (#1520), which closes the
+  direction the vacuity guards cannot see. Each obligation of a receiver-shaped
+  family states its fixture TWICE — once in the entry point's `t.Run` body,
+  which is what an adapter runs, and once in the self-test's `armBuilder`
+  table — and only the SELF-TEST side's drift was caught: a self-test that stops
+  posting the input its obligation grades goes silent against a
+  deliberately-wrong fixture and fails, while an ENTRY POINT that changes an
+  input leaves every self-test green, still certifying an input production no
+  longer posts. Measured, not argued: renaming the entry point's `in-tree`
+  subdirectory left the whole package green. Folding the two statements into one
+  source was rejected in #1512 and again in #1520 — those `t.Run` bodies are
+  what an adapter author reads to learn what their adapter owes — so the
+  duplication stays and an assertion removes the silence. Two rules over one
+  parse, both in the seam walk's shape. The **first** compares, per obligation,
+  the multiset of BASIC LITERALS the two bodies contain, which is where "a
+  different path spelling" actually lives and which an identifier-only rule
+  cannot see (`32` becoming `2` shortens the traversal below the point where it
+  bottoms out at `/`); the set of package-level identifiers declared in
+  NON-test files that each side references — the arm, the `what` constant its
+  failure prints, the fixture helper — where a self-test's own
+  `fakePathReceiver` and `receiverBreak` are test-declared and drop out by
+  construction rather than by an exemption list; and the obligation NAMES in
+  ORDER, which catches the one drift no input comparison can, a seventh
+  obligation reusing an existing arm, invisible to the seam walk's rule 2
+  because it introduces no new arm. The family list is derived from the
+  package-level `receiverFamily` vars, so a fourth receiver-shaped family is
+  graded by existing. Names the body BINDS are subtracted before the comparison
+  (the two sides legitimately call one path `inTree` and `spelled`), and the
+  declared limit is EXPRESSION STRUCTURE — two bodies holding the same pieces in
+  a different arrangement agree — pinned by a `want:false` corpus row. AST
+  equality was tried first and abandoned: the two sides already differ in ways
+  nobody should have to mirror, so it would have been red on arrival. The
+  **second** rule is #1520's smaller sibling: every `receiverBreak` knob must
+  still be SPENT by a negative self-test and HONOURED by the fixture, over a
+  knob set derived from the struct's fields plus the constants of every enum a
+  field is declared with — `confine` and `receipt` are single fields carrying
+  three and four distinct mutations, so a field-level rule would report
+  `confine` as spent while `confineAcceptUnresolvable` rotted. All 22 knobs were
+  spent when it was written; one, `receiptNever`, is honoured by matching NO
+  placement guard and is named in `knobsHonouredByAbsence` rather than left to
+  be inferred from the absence of a branch. Both rules' mutation evidence is
+  committed in `fixture_drift_corpus_test.go`, and it does NOT reach the four
+  non-receiver families: their entry points construct no per-obligation input
+  (`assertFloorParses(t, gate.Min)` grades a value the WIRING carries), so there
+  is no second statement to drift from.
   One further cost is worth knowing before writing a fifth family:
   `hookjson`'s distinct-name table retains `MaxUnknownEventNames` `(adapter,
   name)` pairs for the life of the process and never resets, so an obligation
