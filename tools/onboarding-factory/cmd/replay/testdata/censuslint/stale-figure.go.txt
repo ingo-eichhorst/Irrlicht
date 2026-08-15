@@ -1,0 +1,6 @@
+package fixture
+
+// The walk reached 4242 recordings. This is the mutation: a bare integer in a
+// doc comment equal to a live census figure, which is the exact shape #1511
+// committed four times inside the fix for that same shape.
+func Walk() {}

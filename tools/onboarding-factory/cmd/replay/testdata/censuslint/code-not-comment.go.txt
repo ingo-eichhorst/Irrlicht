@@ -1,0 +1,7 @@
+package fixture
+
+const recordings = 4242
+
+var note = "the walk reached 4242 recordings"
+
+func Code() int { return 4242 }

@@ -1,0 +1,5 @@
+package fixture
+
+// Zero sits exactly on censusFigureFloor in the corpus census, at 50, and a
+// figure exactly on the floor is checked rather than skipped.
+func AtFloor() {}

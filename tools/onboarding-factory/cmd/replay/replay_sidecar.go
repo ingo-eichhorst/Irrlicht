@@ -144,9 +144,11 @@ func replayWithSidecar(transcriptPath, sidecarPath string, cfg reportSettings) (
 // Two candidates were checked and one was ruled out: relaxing
 // flushPendingDebounce's `!d.coalesced` early-return changes nothing (measured
 // on codex/2-1_basic-turn — still 1 transition), so a skipped trailing flush is
-// NOT it. Incomplete fs-event coverage is real but explains only 30 of 311
-// sidecar-drivable recordings, and only 1 of the 22 worst-degraded (the other
-// 21 have 100% coverage). What is established is that the sidecar timeline's
+// NOT it. Incomplete fs-event coverage is real but explains only 30 of the
+// sidecar-drivable population — censusOfTheCommittedCatalog.Recordings, which
+// is machine-generated precisely so a denominator is not carried by hand here
+// (#1518) — and only 1 of the 22 worst-degraded (the other 21 have 100%
+// coverage). What is established is that the sidecar timeline's
 // last observed metrics are frequently not the transcript's final metrics.
 //
 // The split this function implements is sound regardless of that cause:
