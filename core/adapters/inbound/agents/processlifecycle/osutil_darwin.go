@@ -61,9 +61,7 @@ func processTTYVia(ctx context.Context, pid int, build shelloutCmd) (tty string,
 		// gives an empty appPath.
 		return "", true
 	}
-	ctx, cancel := context.WithTimeout(ctx, shelloutTimeout)
-	defer cancel()
-	out, err := build(ctx).Output()
+	out, err := runProbe(ctx, build)
 	if !probeAnswered(err) {
 		return "", false
 	}
@@ -195,10 +193,8 @@ func bundleIDVia(ctx context.Context, appPath string, build bundleIDCmd) (string
 	if appPath == "" {
 		return "", nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, shelloutTimeout)
-	defer cancel()
 	plist := appPath + "/Contents/Info.plist"
-	out, err := build(plist)(ctx).Output()
+	out, err := runProbe(ctx, build(plist))
 	if err != nil {
 		// No answeredExitCodes: for plutil ANY normal exit is an answer, which
 		// is the empty-variadic form's whole reason for existing — see
@@ -518,9 +514,7 @@ func kittyWindowIDForPIDVia(ctx context.Context, socket string, sessionPID int, 
 	if kittenPath == "" || socket == "" || sessionPID <= 0 {
 		return "", true
 	}
-	ctx, cancel := context.WithTimeout(ctx, shelloutTimeout)
-	defer cancel()
-	out, err := build(ctx).Output()
+	out, err := runProbe(ctx, build)
 	if !probeAnswered(err) {
 		return "", false
 	}
@@ -589,9 +583,9 @@ func findKittyWindowIDForPID(windows []kittyLsWindow, sessionPID int) string {
 // ps already handles the comm-vs-argv-path distinction we need, and the
 // existing package is built around these bounded exec calls.
 func readProcInfo(ctx context.Context, pid int) (ppid int, cmd string, err error) {
-	ctx, cancel := context.WithTimeout(ctx, shelloutTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, psPath, "-o", "ppid=,comm=", "-p", strconv.Itoa(pid)).Output()
+	out, err := runProbe(ctx, func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, psPath, "-o", "ppid=,comm=", "-p", strconv.Itoa(pid))
+	})
 	if err != nil {
 		return 0, "", fmt.Errorf("ps pid %d: %w", pid, err)
 	}
@@ -662,9 +656,9 @@ func herdrClientPIDs(ctx context.Context, socketPath string) (pids []int, probed
 	if _, err := os.Stat(logPath); err != nil {
 		return nil, false
 	}
-	ctx, cancel := context.WithTimeout(ctx, shelloutTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, lsofPath, logPath).Output()
+	out, err := runProbe(ctx, func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, lsofPath, logPath)
+	})
 	if !lsofProbeRan(err) {
 		return nil, false
 	}

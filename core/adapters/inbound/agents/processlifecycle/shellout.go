@@ -50,6 +50,52 @@ const shelloutTimeout = 2 * time.Second
 // carrying arguments nobody reads is five chances to forget the ceiling.
 type shelloutCmd func(ctx context.Context) *exec.Cmd
 
+// runProbe starts one bounded child process and hands its output and error
+// back unclassified. It is the ONLY place in this package that applies
+// shelloutTimeout, and — enforced by TestEveryChildProcessRunsThroughRunProbe
+// — the only place that starts a child at all.
+//
+// It exists because #1538 extracted the two VALUES out of the bounded-shellout
+// block (the ceiling and the predicate) and left the SHAPE copied at all eight
+// sites:
+//
+//	ctx, cancel := context.WithTimeout(ctx, shelloutTimeout)
+//	defer cancel()
+//	out, err := build(ctx).Output()
+//
+// Three lines that must be got right together — derive from the CALLER's
+// context so an aggregate deadline still caps the sum (#1529), name the
+// ceiling, and cancel — written out eight times. A ninth site copying a
+// neighbour got them right; a ninth site written from scratch had three
+// independent chances not to. Now it has none: there is one copy, and the
+// routing rule makes a second inexpressible rather than merely detectable.
+//
+// ctx is the caller's AGGREGATE budget, and the child's ceiling is derived
+// from it, so the child dies at whichever comes first. A caller with no
+// context of its own passes context.Background() — the three
+// outbound.ProcessObserver methods do, because that port takes no context and
+// widening it is a different change — and still gets the child ceiling. That
+// is not the bare Background() core/architecture_shellout_test.go forbids:
+// nothing here reaches exec.CommandContext without passing through the
+// WithTimeout below.
+//
+// WHAT IT DELIBERATELY DOES NOT DO is classify. #1547 proposed the wider
+// signature (out []byte, answered bool, err error), on the premise that
+// folding the predicate in would let TestEveryBoundedShelloutClassifiesItsError
+// be deleted. It would not: a caller can spell `out, _, _ := runProbe(…)`, or
+// `if err != nil { return "" }` on the third result, and both are the family's
+// exact collapse routed perfectly through the helper. The guard therefore has
+// to survive, and it reasons about "does this run site's error reach a
+// classifier" — so the helper that COMPOSES with it is the one that returns
+// (out, err) and leaves the verdict, whose POLARITY is per-call-site anyway, at
+// the call site. See the file header of shellout_guard_test.go for the rule and
+// what each half of it can and cannot see.
+func runProbe(ctx context.Context, build shelloutCmd) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, shelloutTimeout)
+	defer cancel()
+	return build(ctx).Output()
+}
+
 // probeAnswered is this package's binding of the shared predicate
 // core/pkg/shellout.Answered, which every bounded child process in the repo
 // classifies its error with (#1538). The implementation, and the measurements
@@ -63,12 +109,23 @@ type shelloutCmd func(ctx context.Context) *exec.Cmd
 // probeAnswered(err, pgrepNoMatch), so the variadic is forwarded, not bound.
 // lsofProbeRan is the only real binding in this package.
 //
-// The honest reason it survives #1543's promotion is churn: five call sites, a
-// guard classifier table and a committed corpus all spell it this way, and
-// #1547 argues that verified enforcement machinery is worth not disturbing for
-// a rename. Deleting it — or narrowing it to a non-variadic form so it binds
-// what its name suggests — is a reasonable follow-up; shellout_guard_test.go
-// already recognises the qualified spelling, so nothing mechanical blocks it.
+// #1543 left its survival provisional — "deleting it is a reasonable
+// follow-up" — and #1547 is where that was settled, by disturbing the
+// machinery for other reasons and asking the question again with the diff
+// already open. The answer came back the same, and the reason is worth stating
+// once so it is not re-opened a third time:
+//
+//   - The package needs a local name for the predicate regardless, because
+//     lsofProbeRan is a REAL binding built on it. Deleting the alias while
+//     keeping lsofProbeRan would leave the local vocabulary existing for
+//     exactly one tool.
+//   - shellout_guard_test.go's shelloutClassifiers table IS that vocabulary,
+//     and five committed corpus rows pin how the guard recognises a call to it.
+//     Deleting the alias deletes those rows and buys nothing behavioural — it
+//     spends predecessor coverage on a rename.
+//
+// Narrowing it to a non-variadic form remains as unavailable as ever:
+// process_darwin.go calls probeAnswered(err, pgrepNoMatch).
 func probeAnswered(err error, answeredExitCodes ...int) bool {
 	return shellout.Answered(err, answeredExitCodes...)
 }
