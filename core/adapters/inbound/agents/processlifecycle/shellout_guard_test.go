@@ -691,13 +691,27 @@ func TestEveryBoundedShelloutUsesTheNamedCeiling(t *testing.T) {
 // exec.CommandContext — which until #1529 was a sentence nothing checked.
 //
 // It matters because that helper is a NAMED spelling of context.Background(),
-// and core/architecture_shellout_test.go's repo-wide rule matches the LITERAL
-// spelling only ("a variable that happens to hold one is invisible here", its
-// own declared limit). So `exec.CommandContext(noAggregateBudget(), …)` would
-// be exec.Command wearing two disguises instead of one: unbounded, and passing
-// both the repo rule and a reviewer skimming for a blessed helper name. The
-// helper exists to name an absent AGGREGATE, never an absent child ceiling —
-// every site derives shelloutTimeout from it, and this is what keeps that true.
+// so `exec.CommandContext(noAggregateBudget(), …)` is exec.Command wearing two
+// disguises instead of one: unbounded, and passing a reviewer skimming for a
+// blessed helper name. The helper exists to name an absent AGGREGATE, never an
+// absent child ceiling — every site derives shelloutTimeout from it, and this
+// is what keeps that true.
+//
+// Until #1559 it was also the ONLY thing that did: the repo-wide rule matched
+// the literal spelling only, so this package-local guard was the general
+// question's answer in one package, and the next package to name its own root
+// context would have inherited nothing. That is fixed there rather than here —
+// core/architecture_shellout_test.go now resolves a package-local helper whose
+// body returns a root context, and catches this call site too (measured, by
+// planting exactly that line at osutil_darwin.go:42).
+//
+// This guard is KEPT anyway, and not as ceremony: the two key on different
+// things and fail in OPPOSITE directions. The repo rule reads the helper's
+// BODY, so it follows a rename for free but stops seeing this one the moment
+// the body grows a second statement (`c := context.Background(); return c` — a
+// declared limit there, pinned by a want:0 row). This one reads the NAME, so it
+// survives any body shape but not a rename. Cheap belt-and-braces over a helper
+// whose whole reason to exist is that it is easy to reach for by name.
 func TestNoAggregateBudgetNeverReachesAChildProcess(t *testing.T) {
 	fset, files := parsePackageSources(t, ".")
 
@@ -722,9 +736,10 @@ func TestNoAggregateBudgetNeverReachesAChildProcess(t *testing.T) {
 			}
 			if id, ok := inner.Fun.(*ast.Ident); ok && id.Name == "noAggregateBudget" {
 				t.Errorf("%s:%d: exec.CommandContext given noAggregateBudget() — that is a NAMED "+
-					"context.Background(), so this child has no ceiling at all, and the repo-wide rule "+
-					"in core/architecture_shellout_test.go matches only the literal spelling and cannot "+
-					"see it. Derive shelloutTimeout from the caller's context instead (#1529, #1543)",
+					"context.Background(), so this child has no ceiling at all. The repo-wide rule in "+
+					"core/architecture_shellout_test.go reports it too (#1559); this guard adds the "+
+					"half that keys on the NAME rather than the body. Derive shelloutTimeout from the "+
+					"caller's context instead (#1529, #1543)",
 					filepath.Base(name), fset.Position(call.Pos()).Line)
 			}
 			return true

@@ -100,10 +100,13 @@ const clientHostBudget = 2 * time.Second
 //     them at shelloutTimeout. #1529 gathered no evidence about that path and
 //     deliberately did not move it.
 //
-// This is NOT the bare context.Background() core/architecture_shellout_test.go
-// forbids: nothing passes it to exec.CommandContext. Every shellout downstream
-// still derives its own shelloutTimeout from it, so each CHILD keeps a
-// ceiling. What is absent is only the ceiling ACROSS children.
+// It does not violate core/architecture_shellout_test.go, and note the reason
+// is what is DONE with it rather than what it is: since #1559 that rule
+// resolves this helper and would report it exactly like a literal
+// context.Background(), so what keeps it legal is that nothing passes it to
+// exec.CommandContext. Every shellout downstream still derives its own
+// shelloutTimeout from it, so each CHILD keeps a ceiling. What is absent is
+// only the ceiling ACROSS children.
 func noAggregateBudget() context.Context { return context.Background() }
 
 // CWDToProjectDir converts a working directory path to the directory name used
