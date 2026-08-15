@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -442,10 +443,10 @@ func toDoraMetric(m dora.Metric) doraMetric {
 // historyGitReader is the narrow git surface chart=dora needs, matching the
 // historySessionLister convention of small per-consumer interfaces.
 type historyGitReader interface {
-	GetGitRoot(dir string) (root string, answered bool)
-	ListReleaseTags(dir string) (tags []dora.TagInfo, answered bool)
-	CommitsInRange(dir, fromRef, toRef string) (commits []dora.CommitInfo, answered bool)
-	TagContaining(dir, hash string) (tag string, answered bool)
+	GetGitRoot(ctx context.Context, dir string) (root string, answered bool)
+	ListReleaseTags(ctx context.Context, dir string) (tags []dora.TagInfo, answered bool)
+	CommitsInRange(ctx context.Context, dir, fromRef, toRef string) (commits []dora.CommitInfo, answered bool)
+	TagContaining(ctx context.Context, dir, hash string) (tag string, answered bool)
 }
 
 // serveHistoryDoraChart serves chart=dora (#951): requires exactly one
@@ -455,7 +456,16 @@ type historyGitReader interface {
 // with Available:false, not an error, mirroring
 // serveHistoryAgentsChart's nil-reader / fetchHistoryCostSeries's
 // nil-tracker empty-but-valid payload convention.
-func serveHistoryDoraChart(w http.ResponseWriter, git historyGitReader, sessions historySessionLister, project, rangeKey string, start, end int64) {
+//
+// ctx is the REQUEST's context, and passing it is half of #1563's bound: the
+// other half is services.DoraGitBudget, which this derives from it, but a
+// browser that navigates away or a daemon shutting down cancels the git walks
+// immediately rather than leaving them to run out that budget for a response
+// nobody will read. Before #1563 the git calls were rooted at
+// context.Background() inside the adapter, so neither bound existed and this
+// handler could hold a connection for `N x 30s` on a server whose WriteTimeout
+// is deliberately 0.
+func serveHistoryDoraChart(ctx context.Context, w http.ResponseWriter, git historyGitReader, sessions historySessionLister, project, rangeKey string, start, end int64) {
 	if project == "" {
 		http.Error(w, "chart=dora requires ?project=<name>", http.StatusBadRequest)
 		return
@@ -465,7 +475,7 @@ func serveHistoryDoraChart(w http.ResponseWriter, git historyGitReader, sessions
 		return
 	}
 
-	result, err := services.ComputeDoraMetrics(git, sessions, project, start, end)
+	result, err := services.ComputeDoraMetrics(ctx, git, sessions, project, start, end)
 	if err != nil {
 		http.Error(w, errInternalErrorMsg, http.StatusInternalServerError)
 		return
@@ -774,7 +784,7 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 		// DORA metrics are a per-project period summary, not a cost time
 		// series — handle it before the cost-tracker path (#951).
 		if hq.chart == "dora" {
-			serveHistoryDoraChart(w, git, sessions, q.Get("project"), hq.rangeKey, hq.start, hq.end)
+			serveHistoryDoraChart(r.Context(), w, git, sessions, q.Get("project"), hq.rangeKey, hq.start, hq.end)
 			return
 		}
 

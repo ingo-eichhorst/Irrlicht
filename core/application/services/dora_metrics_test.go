@@ -1,6 +1,7 @@
 package services_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,13 +83,13 @@ func doraCommitAt(t *testing.T, dir, name, content, message, date string) string
 }
 
 func TestComputeDoraMetrics_ProjectRequired(t *testing.T) {
-	if _, err := services.ComputeDoraMetrics(git.New(), &doraFakeSessions{}, "", 0, 1); err == nil {
+	if _, err := services.ComputeDoraMetrics(context.Background(), git.New(), &doraFakeSessions{}, "", 0, 1); err == nil {
 		t.Fatal("expected an error for an empty project")
 	}
 }
 
 func TestComputeDoraMetrics_ProjectNotFound(t *testing.T) {
-	result, err := services.ComputeDoraMetrics(git.New(), &doraFakeSessions{}, "no-such-project", 0, 1)
+	result, err := services.ComputeDoraMetrics(context.Background(), git.New(), &doraFakeSessions{}, "no-such-project", 0, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -104,7 +105,7 @@ func TestComputeDoraMetrics_NoReleasesYet(t *testing.T) {
 	sessions := &doraFakeSessions{states: []*session.SessionState{
 		{SessionID: "s1", ProjectName: "proj", CWD: dir},
 	}}
-	result, err := services.ComputeDoraMetrics(git.New(), sessions, "proj", 0, 1<<62)
+	result, err := services.ComputeDoraMetrics(context.Background(), git.New(), sessions, "proj", 0, 1<<62)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -150,7 +151,7 @@ func TestComputeDoraMetrics_EndToEnd(t *testing.T) {
 		{SessionID: "s1", ProjectName: "proj", CWD: dir},
 	}}
 
-	result, err := services.ComputeDoraMetrics(git.New(), sessions, "proj", 0, 1<<62)
+	result, err := services.ComputeDoraMetrics(context.Background(), git.New(), sessions, "proj", 0, 1<<62)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -192,16 +193,20 @@ type doraRecordingProbe struct {
 	asked   []string // "<fromRef>..<toRef>" per CommitsInRange call, in order
 }
 
-func (p *doraRecordingProbe) GetGitRoot(string) (string, bool) { return p.root, true }
+func (p *doraRecordingProbe) GetGitRoot(context.Context, string) (string, bool) { return p.root, true }
 
-func (p *doraRecordingProbe) ListReleaseTags(string) ([]dora.TagInfo, bool) { return p.tags, true }
+func (p *doraRecordingProbe) ListReleaseTags(context.Context, string) ([]dora.TagInfo, bool) {
+	return p.tags, true
+}
 
-func (p *doraRecordingProbe) CommitsInRange(_, fromRef, toRef string) ([]dora.CommitInfo, bool) {
+func (p *doraRecordingProbe) CommitsInRange(_ context.Context, _, fromRef, toRef string) ([]dora.CommitInfo, bool) {
 	p.asked = append(p.asked, fromRef+".."+toRef)
 	return p.commits[toRef], true
 }
 
-func (p *doraRecordingProbe) TagContaining(string, string) (string, bool) { return "", true }
+func (p *doraRecordingProbe) TagContaining(context.Context, string, string) (string, bool) {
+	return "", true
+}
 
 // TestComputeDoraMetrics_SkipsCommitRangesNoMetricReads is #1553's work bound.
 // ComputeDoraMetrics used to walk the commits of EVERY release tag in the
@@ -235,7 +240,7 @@ func TestComputeDoraMetrics_SkipsCommitRangesNoMetricReads(t *testing.T) {
 		{SessionID: "s1", ProjectName: "proj", CWD: "/repo/sub"},
 	}}
 
-	result, err := services.ComputeDoraMetrics(probe, sessions, "proj", 30*day, 50*day)
+	result, err := services.ComputeDoraMetrics(context.Background(), probe, sessions, "proj", 30*day, 50*day)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

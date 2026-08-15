@@ -66,9 +66,16 @@ const gitRevParseCmd = "rev-parse"
 // The consequence worth stating: these reads sit inside the detector loop,
 // where 5s of stall is bad but bounded. That is what the value is chosen
 // against, and it is why the history walks could not simply take it with them.
-// It also bounds ONE CALL, not one operation, and callers stack it —
+//
+// It bounds ONE CALL, not one operation, and callers stack it —
 // adoptGitMetadata makes 2, RefreshOnActivity up to 3, ComputeDoraMetrics
-// 1 + len(in-window tags) + len(revertCandidates) — which is #1563.
+// 1 + len(in-window tags) + len(revertCandidates). That was #1563, and since
+// #1563 the SUM is the caller's to bound: every method here takes a
+// context.Context, so an operation that stacks calls derives one aggregate
+// deadline over the whole sequence and each call runs under whichever of the
+// two is shorter. What is NOT delegated is this ceiling — a caller with no
+// aggregate at all (services.noGitBudget) still gets it per call, which is the
+// property #1543 established and #1563 deliberately did not weaken.
 const gitTimeout = 5 * time.Second
 
 // gitHistoryTimeout is the ceiling for the two shellouts that read every commit
@@ -107,6 +114,13 @@ const gitTimeout = 5 * time.Second
 // Every second here is multiplied by that count, so the value is chosen against
 // the stack rather than against the largest repository imaginable.
 //
+// #1563 supplied the aggregate and did NOT revisit this number, which is worth
+// stating because the relation now runs the other way too: an operation budget
+// smaller than this ceiling would silently narrow it for every caller that
+// stacks, so services.doraGitBudget is derived from it rather than picked
+// beside it (the relation is pinned in core/cmd/irrlichd, the one package that
+// depends on both — see HistoryCeiling below).
+//
 // And it is a TIME bound rather than a work bound, which #1553 asked to have
 // argued rather than assumed. Both work bounds that issue proposed were
 // measured and rejected:
@@ -130,6 +144,20 @@ const gitTimeout = 5 * time.Second
 // outside its window, because nothing reads them — the domain filters both
 // LeadTime and DetectReverts through filterRange.
 const gitHistoryTimeout = 30 * time.Second
+
+// HistoryCeiling is gitHistoryTimeout under an exported name, and it exists for
+// exactly one reader: the test in core/cmd/irrlichd that pins
+// services.DoraGitBudget against it (#1563).
+//
+// A second spelling of one number is a drift risk this repo normally refuses,
+// so note that this one cannot drift — it is a constant DEFINED as the other,
+// not a copy of its value — and that the alternative was worse. The aggregate
+// budget lives in application/services, which core/architecture_test.go forbids
+// from importing an adapter, so services cannot read gitHistoryTimeout at all;
+// without an exported name the relation between the two would be a sentence in
+// a doc comment, which is precisely the "number that documents behaviour but is
+// not produced by it" AGENTS.md records drifting twice in two PRs.
+const HistoryCeiling = gitHistoryTimeout
 
 // costProfile names which of the two ceilings above a shellout runs under. It
 // is a REQUIRED argument of run() rather than a default the call sites can
@@ -312,6 +340,21 @@ func (a *Adapter) binary() string {
 // run executes `git args...` in dir under the ceiling cost names, and reports
 // whether git ANSWERED — as opposed to never having been asked.
 //
+// ctx is the CALLER'S budget, and it is a required argument for the reason
+// costProfile is: an operation that stacks calls has to decide where its
+// aggregate comes from, and a default would let it decide by omission. Two
+// deadlines are in play and the shorter always wins — this adapter's own
+// ceiling, derived here per call so a caller with no aggregate is still bounded
+// (#1543), and whatever the caller brought (#1563). A caller that deliberately
+// has none says so by name rather than by silence; services.noGitBudget is that
+// name, and its doc carries which paths are on it and why.
+//
+// An expired ctx arriving here is a NON-answer, not an empty one, and it costs
+// no new code: os/exec fails before Start, the error is not an *exec.ExitError
+// at all, and shellout.Answered already reports false for it (measured — see
+// that predicate's doc). That is what lets an abandoned sub-call compose with
+// #1543's polarity instead of needing a fourth state.
+//
 // answered is false for exactly three things: the ceiling killed the child,
 // the child never started (git missing, fork failure), or its output exceeded
 // gitMaxOutput. It is TRUE for every non-zero exit git produces on its own,
@@ -339,7 +382,7 @@ func (a *Adapter) binary() string {
 // `fatal:`), and it is the pre-existing behaviour; the distinction #1543 is
 // about is "git could not be RUN" versus "git ran and said no", and that is
 // the line drawn here.
-func (a *Adapter) run(cost costProfile, dir string, args ...string) (out []byte, answered bool) {
+func (a *Adapter) run(ctx context.Context, cost costProfile, dir string, args ...string) (out []byte, answered bool) {
 	if dir == "" {
 		// Nothing was asked, so nothing failed — the reading processTTYVia
 		// gives a non-positive pid. Deciding it here rather than at each
@@ -347,7 +390,7 @@ func (a *Adapter) run(cost costProfile, dir string, args ...string) (out []byte,
 		// of any particular git subcommand.
 		return nil, true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), a.ceilingFor(cost))
+	ctx, cancel := context.WithTimeout(ctx, a.ceilingFor(cost))
 	defer cancel()
 
 	cmd := a.builder()(ctx, dir, args...)
@@ -400,8 +443,8 @@ func (a *Adapter) run(cost costProfile, dir string, args ...string) (out []byte,
 // branch to report: dir is not a repo, HEAD is detached, or the branch is
 // unborn. Callers must not overwrite a branch they already hold on a
 // non-answer — an empty string there carries no information (#1485/#1543).
-func (a *Adapter) GetBranch(dir string) (string, bool) {
-	out, answered := a.run(fixedCost, dir, gitRevParseCmd, "--abbrev-ref", "HEAD")
+func (a *Adapter) GetBranch(ctx context.Context, dir string) (string, bool) {
+	out, answered := a.run(ctx, fixedCost, dir, gitRevParseCmd, "--abbrev-ref", "HEAD")
 	if !answered {
 		return "", false
 	}
@@ -419,8 +462,8 @@ func (a *Adapter) GetBranch(dir string) (string, bool) {
 // is no HEAD — not a git repo, or an unborn branch with no commits yet (#373).
 // answered=false means git could not be run, which is not evidence about
 // either.
-func (a *Adapter) GetHeadCommit(dir string) (string, bool) {
-	out, answered := a.run(fixedCost, dir, gitRevParseCmd, "HEAD")
+func (a *Adapter) GetHeadCommit(ctx context.Context, dir string) (string, bool) {
+	out, answered := a.run(ctx, fixedCost, dir, gitRevParseCmd, "HEAD")
 	if !answered {
 		return "", false
 	}
@@ -438,8 +481,8 @@ func (a *Adapter) GetHeadCommit(dir string) (string, bool) {
 // all of those as ordinary non-zero exits. answered=false means the scan did
 // not happen, which is NOT "no reverts" — treating it as such is what makes a
 // yield sweep report "nothing flipped" for a repo it never read (#1543).
-func (a *Adapter) RevertedCommits(dir string) ([]string, bool) {
-	out, answered := a.run(historyCost, dir, "log", "--all", "--grep", "^This reverts commit ", "--pretty=format:%b")
+func (a *Adapter) RevertedCommits(ctx context.Context, dir string) ([]string, bool) {
+	out, answered := a.run(ctx, historyCost, dir, "log", "--all", "--grep", "^This reverts commit ", "--pretty=format:%b")
 	if !answered {
 		return nil, false
 	}
@@ -459,8 +502,8 @@ func (a *Adapter) RevertedCommits(dir string) ([]string, bool) {
 // git ran and there are no release tags (or dir is not a repo);
 // answered=false means git could not be run, and reporting that as "no
 // releases found for this project" is the false claim #1543 removes.
-func (a *Adapter) ListReleaseTags(dir string) ([]dora.TagInfo, bool) {
-	out, answered := a.run(fixedCost, dir, "for-each-ref", "--sort=creatordate", "--format=%(refname:short)%09%(creatordate:unix)", "refs/tags")
+func (a *Adapter) ListReleaseTags(ctx context.Context, dir string) ([]dora.TagInfo, bool) {
+	out, answered := a.run(ctx, fixedCost, dir, "for-each-ref", "--sort=creatordate", "--format=%(refname:short)%09%(creatordate:unix)", "refs/tags")
 	if !answered {
 		return nil, false
 	}
@@ -486,7 +529,7 @@ func (a *Adapter) ListReleaseTags(dir string) ([]dora.TagInfo, bool) {
 // answered=false is the case DORA must not average over: a partial failure is
 // worse than a total one, because a median lead time computed over the tags
 // that happened to succeed is a biased number reported as Available:true.
-func (a *Adapter) CommitsInRange(dir, fromRef, toRef string) ([]dora.CommitInfo, bool) {
+func (a *Adapter) CommitsInRange(ctx context.Context, dir, fromRef, toRef string) ([]dora.CommitInfo, bool) {
 	// toRef, unlike dir, is still guarded HERE: an empty one would become an
 	// empty argv entry rather than no call at all. run() handles the dir case.
 	if toRef == "" {
@@ -499,7 +542,7 @@ func (a *Adapter) CommitsInRange(dir, fromRef, toRef string) ([]dora.CommitInfo,
 	// \x01/\x02 are ASCII control bytes used as record/field separators —
 	// they won't collide with real commit message content, so a multi-line
 	// %B body can be parsed without spawning a process per commit.
-	out, answered := a.run(historyCost, dir, "log", "--pretty=format:%x01%H%x02%at%x02%B", rangeSpec)
+	out, answered := a.run(ctx, historyCost, dir, "log", "--pretty=format:%x01%H%x02%at%x02%B", rangeSpec)
 	if !answered {
 		return nil, false
 	}
@@ -531,13 +574,13 @@ func (a *Adapter) CommitsInRange(dir, fromRef, toRef string) ([]dora.CommitInfo,
 // and treating that as "never released" DROPS the revert from the failure
 // list, which makes Change Failure Rate read BETTER than reality — the one
 // path in this adapter where the collapse flatters the number (#1543).
-func (a *Adapter) TagContaining(dir, hash string) (string, bool) {
+func (a *Adapter) TagContaining(ctx context.Context, dir, hash string) (string, bool) {
 	// hash, unlike dir, is still guarded HERE — an empty one would become an
 	// empty argv entry. run() handles the dir case.
 	if hash == "" {
 		return "", true
 	}
-	out, answered := a.run(fixedCost, dir, "tag", "--contains", hash, "--sort=creatordate")
+	out, answered := a.run(ctx, fixedCost, dir, "tag", "--contains", hash, "--sort=creatordate")
 	if !answered {
 		return "", false
 	}
@@ -559,7 +602,7 @@ func (a *Adapter) TagContaining(dir, hash string) (string, bool) {
 // repository; answered=false means git could not be run, and reporting that to
 // a user as "project not found or not a git repository" is a second false
 // claim #1543 removes.
-func (a *Adapter) GetGitRoot(dir string) (string, bool) {
+func (a *Adapter) GetGitRoot(ctx context.Context, dir string) (string, bool) {
 	// This guard must stay, and it is NOT the one run() absorbed:
 	// nearestExistingDir("") walks Dir("") == "." and Stat(".") succeeds, so
 	// without it an empty dir would resolve to the DAEMON'S OWN working
@@ -568,7 +611,7 @@ func (a *Adapter) GetGitRoot(dir string) (string, bool) {
 		return "", true
 	}
 	dir = nearestExistingDir(dir)
-	out, answered := a.run(fixedCost, dir, gitRevParseCmd, "--path-format=absolute", "--git-common-dir")
+	out, answered := a.run(ctx, fixedCost, dir, gitRevParseCmd, "--path-format=absolute", "--git-common-dir")
 	if !answered {
 		return "", false
 	}
@@ -611,8 +654,8 @@ func nearestExistingDir(dir string) string {
 // caches this (filesystem.ConcurrencyTracker) memoises for the daemon's
 // lifetime. A guess cached forever as though it were resolved is the same
 // defect one layer up (#1528's "memoize a non-answer as a non-answer").
-func (a *Adapter) GetProjectName(dir string) (string, bool) {
-	root, answered := a.GetGitRoot(dir)
+func (a *Adapter) GetProjectName(ctx context.Context, dir string) (string, bool) {
+	root, answered := a.GetGitRoot(ctx, dir)
 	if root != "" {
 		return filepath.Base(root), answered
 	}

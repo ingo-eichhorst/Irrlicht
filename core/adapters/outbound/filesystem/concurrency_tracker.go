@@ -2,6 +2,7 @@ package filesystem
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -24,8 +25,26 @@ import (
 // to a bare basename, i.e. pre-#1046 behavior) so every recordings-dir-only
 // test fixture can omit it.
 type concurrencyProjectResolver interface {
-	GetProjectName(dir string) (name string, answered bool)
+	GetProjectName(ctx context.Context, dir string) (name string, answered bool)
 }
+
+// noGitBudget is the context this tracker's one git read runs under: a
+// deliberately absent aggregate deadline, named so the absence is reviewable
+// rather than inferred (#1563, the shape #1529's noAggregateBudget established).
+//
+// It is the services twin's argument in its weakest and therefore easiest form:
+// there is nothing here to aggregate. resolveProject makes exactly ONE git call
+// per distinct CWD, memoised for the daemon's lifetime on success and behind a
+// TTL on a non-answer, so no sequence of calls exists for a budget to span. The
+// per-call ceiling the adapter derives from this (gitTimeout, 5s) is the whole
+// bound and is unchanged.
+//
+// It is spelled here rather than imported from application/services because
+// core/architecture_test.go forbids an adapter from importing that layer — and
+// because a package-local helper is what core/architecture_shellout_test.go can
+// resolve: a shared one in pkg/ would be invisible to that rule, so handing it
+// straight to exec.CommandContext would stop being caught.
+func noGitBudget() context.Context { return context.Background() }
 
 // ConcurrencyTracker reconstructs concurrent-agent counts over time from the
 // lifecycle recordings irrlichd writes under <dataDir>/recordings when started
@@ -157,7 +176,7 @@ func (t *ConcurrencyTracker) resolveProject(cwd string) string {
 			}
 			delete(t.unresolvedUntil, cwd)
 		}
-		resolved, answered := t.git.GetProjectName(cwd)
+		resolved, answered := t.git.GetProjectName(noGitBudget(), cwd)
 		if !answered {
 			// #1543: resolveCache is for the daemon's LIFETIME, on the
 			// reasoning that a historical cwd's repo does not change after the

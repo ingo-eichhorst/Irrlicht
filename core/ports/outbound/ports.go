@@ -143,15 +143,32 @@ type Logger interface {
 // degrades an enrichment to "unknown" and must never be written over a value
 // the caller already holds. The two transcript readers carry no such value —
 // they read files, they start no child process.
+//
+// The ctx parameter is #1563, and the rule it draws is the one a reviewer can
+// check: EVERY method here that starts a child process takes one, and the two
+// that only read files do not. It is the caller's AGGREGATE budget over a whole
+// operation, not a per-call ceiling — the adapter keeps its own ceilings and
+// derives each call under whichever is shorter — and it exists because the
+// ceiling bounded one call while callers stacked several with nothing bounding
+// the sum. An operation that stacks (services.ComputeDoraMetrics,
+// YieldSweeper.Sweep) derives one deadline and checks it at each loop head
+// itself, because an aggregate only INHERITED by the children is one no caller
+// can observe as a bound and it produces the wrong fact — "everything was
+// unreadable" where the truth is "I stopped looking".
+//
+// A caller that deliberately has no aggregate passes services.noGitBudget()
+// (or its filesystem twin) rather than a bare context, so the absence is a name
+// a reviewer can see instead of one they have to infer — the shape
+// processlifecycle's noAggregateBudget established in #1529.
 type GitResolver interface {
-	GetBranch(dir string) (branch string, answered bool)
-	GetProjectName(dir string) (name string, answered bool)
+	GetBranch(ctx context.Context, dir string) (branch string, answered bool)
+	GetProjectName(ctx context.Context, dir string) (name string, answered bool)
 	// GetGitRoot returns the absolute path of the git repo root for the given
 	// directory, or "" if the directory is not inside a git repository.
-	GetGitRoot(dir string) (root string, answered bool)
+	GetGitRoot(ctx context.Context, dir string) (root string, answered bool)
 	// GetHeadCommit returns the full SHA of the current HEAD commit for the
 	// given directory, or "" if it is not inside a git repository (#373).
-	GetHeadCommit(dir string) (sha string, answered bool)
+	GetHeadCommit(ctx context.Context, dir string) (sha string, answered bool)
 	GetBranchFromTranscript(transcriptPath string) string
 	// GetCWDFromTranscript extracts the working directory from a transcript
 	// file by scanning the first few lines for a "cwd" field.

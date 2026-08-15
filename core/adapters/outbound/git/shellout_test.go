@@ -144,7 +144,7 @@ func TestNonAnswerIsDistinguishableFromAGenuineMiss(t *testing.T) {
 	notARepo := t.TempDir()
 
 	// A genuine miss: git runs fine and reports that this is not a repo.
-	branch, answered := New().GetBranch(notARepo)
+	branch, answered := New().GetBranch(noBudget(), notARepo)
 	if !answered {
 		t.Fatal("a directory that is not a repo is an ANSWER — git exits 128 and has said so")
 	}
@@ -153,7 +153,7 @@ func TestNonAnswerIsDistinguishableFromAGenuineMiss(t *testing.T) {
 	}
 
 	// A non-answer: git cannot be run at all.
-	branch, answered = withCmd(missingGit).GetBranch(realRepo)
+	branch, answered = withCmd(missingGit).GetBranch(noBudget(), realRepo)
 	if answered {
 		t.Error("a git that never started was reported as an answer; \"\" would then " +
 			"mean \"this repo has no branch\", which is #1543")
@@ -180,21 +180,21 @@ func TestEveryShelloutReportsANonAnswer(t *testing.T) {
 		unread  func(*Adapter) bool // reports the adapter's answered bit
 		wantVal string              // description of what the zero value would have meant
 	}{
-		{"GetBranch", func(a *Adapter) bool { _, ok := a.GetBranch(repo); return ok },
+		{"GetBranch", func(a *Adapter) bool { _, ok := a.GetBranch(noBudget(), repo); return ok },
 			"detached HEAD"},
-		{"GetHeadCommit", func(a *Adapter) bool { _, ok := a.GetHeadCommit(repo); return ok },
+		{"GetHeadCommit", func(a *Adapter) bool { _, ok := a.GetHeadCommit(noBudget(), repo); return ok },
 			"not a git repo (persisted as YieldUnknown)"},
-		{"RevertedCommits", func(a *Adapter) bool { _, ok := a.RevertedCommits(repo); return ok },
+		{"RevertedCommits", func(a *Adapter) bool { _, ok := a.RevertedCommits(noBudget(), repo); return ok },
 			"this repo has no reverts"},
-		{"ListReleaseTags", func(a *Adapter) bool { _, ok := a.ListReleaseTags(repo); return ok },
+		{"ListReleaseTags", func(a *Adapter) bool { _, ok := a.ListReleaseTags(noBudget(), repo); return ok },
 			"no releases found for this project"},
-		{"CommitsInRange", func(a *Adapter) bool { _, ok := a.CommitsInRange(repo, "", "v0.1.0"); return ok },
+		{"CommitsInRange", func(a *Adapter) bool { _, ok := a.CommitsInRange(noBudget(), repo, "", "v0.1.0"); return ok },
 			"this release shipped no commits"},
-		{"TagContaining", func(a *Adapter) bool { _, ok := a.TagContaining(repo, sha); return ok },
+		{"TagContaining", func(a *Adapter) bool { _, ok := a.TagContaining(noBudget(), repo, sha); return ok },
 			"this commit was never released (which LOWERS change failure rate)"},
-		{"GetGitRoot", func(a *Adapter) bool { _, ok := a.GetGitRoot(repo); return ok },
+		{"GetGitRoot", func(a *Adapter) bool { _, ok := a.GetGitRoot(noBudget(), repo); return ok },
 			"project not found or not a git repository"},
-		{"GetProjectName", func(a *Adapter) bool { _, ok := a.GetProjectName(repo); return ok },
+		{"GetProjectName", func(a *Adapter) bool { _, ok := a.GetProjectName(noBudget(), repo); return ok },
 			"the directory basename, cached for the daemon's lifetime"},
 	}
 
@@ -231,20 +231,20 @@ func TestNotARepoIsAnAnswer(t *testing.T) {
 		name string
 		ok   func() bool
 	}{
-		{"not a repo/GetBranch", func() bool { _, ok := a.GetBranch(notARepo); return ok }},
-		{"not a repo/GetHeadCommit", func() bool { _, ok := a.GetHeadCommit(notARepo); return ok }},
-		{"not a repo/RevertedCommits", func() bool { _, ok := a.RevertedCommits(notARepo); return ok }},
-		{"not a repo/ListReleaseTags", func() bool { _, ok := a.ListReleaseTags(notARepo); return ok }},
-		{"not a repo/TagContaining", func() bool { _, ok := a.TagContaining(notARepo, "deadbeef"); return ok }},
-		{"not a repo/GetGitRoot", func() bool { _, ok := a.GetGitRoot(notARepo); return ok }},
+		{"not a repo/GetBranch", func() bool { _, ok := a.GetBranch(noBudget(), notARepo); return ok }},
+		{"not a repo/GetHeadCommit", func() bool { _, ok := a.GetHeadCommit(noBudget(), notARepo); return ok }},
+		{"not a repo/RevertedCommits", func() bool { _, ok := a.RevertedCommits(noBudget(), notARepo); return ok }},
+		{"not a repo/ListReleaseTags", func() bool { _, ok := a.ListReleaseTags(noBudget(), notARepo); return ok }},
+		{"not a repo/TagContaining", func() bool { _, ok := a.TagContaining(noBudget(), notARepo, "deadbeef"); return ok }},
+		{"not a repo/GetGitRoot", func() bool { _, ok := a.GetGitRoot(noBudget(), notARepo); return ok }},
 		// The seventh method. It was the one row missing from this table
 		// (#1551 QA), which mattered because CommitsInRange is the method
 		// whose non-answer biases a DORA median rather than blanking a field.
-		{"not a repo/CommitsInRange", func() bool { _, ok := a.CommitsInRange(notARepo, "", "HEAD"); return ok }},
-		{"unborn branch/GetHeadCommit", func() bool { _, ok := a.GetHeadCommit(unborn); return ok }},
-		{"unborn branch/RevertedCommits", func() bool { _, ok := a.RevertedCommits(unborn); return ok }},
-		{"unresolvable object/TagContaining", func() bool { _, ok := a.TagContaining(repo, "deadbeef"); return ok }},
-		{"unknown ref range/CommitsInRange", func() bool { _, ok := a.CommitsInRange(repo, "v9.9.9", "v9.9.8"); return ok }},
+		{"not a repo/CommitsInRange", func() bool { _, ok := a.CommitsInRange(noBudget(), notARepo, "", "HEAD"); return ok }},
+		{"unborn branch/GetHeadCommit", func() bool { _, ok := a.GetHeadCommit(noBudget(), unborn); return ok }},
+		{"unborn branch/RevertedCommits", func() bool { _, ok := a.RevertedCommits(noBudget(), unborn); return ok }},
+		{"unresolvable object/TagContaining", func() bool { _, ok := a.TagContaining(noBudget(), repo, "deadbeef"); return ok }},
+		{"unknown ref range/CommitsInRange", func() bool { _, ok := a.CommitsInRange(noBudget(), repo, "v9.9.9", "v9.9.8"); return ok }},
 	}
 	for _, tc := range cases {
 		if !tc.ok() {
@@ -266,24 +266,24 @@ func TestNothingAskedIsNotANonAnswer(t *testing.T) {
 		name string
 		ok   bool
 	}{
-		{"GetBranch", second(a.GetBranch(""))},
-		{"GetHeadCommit", second(a.GetHeadCommit(""))},
-		{"GetGitRoot", second(a.GetGitRoot(""))},
-		{"GetProjectName", second(a.GetProjectName(""))},
-		{"TagContaining/no hash", second(a.TagContaining("/tmp", ""))},
+		{"GetBranch", second(a.GetBranch(noBudget(), ""))},
+		{"GetHeadCommit", second(a.GetHeadCommit(noBudget(), ""))},
+		{"GetGitRoot", second(a.GetGitRoot(noBudget(), ""))},
+		{"GetProjectName", second(a.GetProjectName(noBudget(), ""))},
+		{"TagContaining/no hash", second(a.TagContaining(noBudget(), "/tmp", ""))},
 	}
 	for _, c := range checks {
 		if !c.ok {
 			t.Errorf("%s: an unasked question was reported as a non-answer", c.name)
 		}
 	}
-	if _, ok := a.RevertedCommits(""); !ok {
+	if _, ok := a.RevertedCommits(noBudget(), ""); !ok {
 		t.Error("RevertedCommits: an unasked question was reported as a non-answer")
 	}
-	if _, ok := a.ListReleaseTags(""); !ok {
+	if _, ok := a.ListReleaseTags(noBudget(), ""); !ok {
 		t.Error("ListReleaseTags: an unasked question was reported as a non-answer")
 	}
-	if _, ok := a.CommitsInRange("", "", ""); !ok {
+	if _, ok := a.CommitsInRange(noBudget(), "", "", ""); !ok {
 		t.Error("CommitsInRange: an unasked question was reported as a non-answer")
 	}
 }
@@ -315,7 +315,7 @@ func TestRunCeilingActuallyFires(t *testing.T) {
 	t.Parallel()
 
 	start := time.Now()
-	_, answered := withCeiling(stalledGit, testCeiling).GetBranch("/tmp")
+	_, answered := withCeiling(stalledGit, testCeiling).GetBranch(noBudget(), "/tmp")
 	elapsed := time.Since(start)
 
 	if answered {
@@ -350,7 +350,7 @@ func TestOrphanHoldingStdoutIsANonAnswer(t *testing.T) {
 	t.Parallel()
 
 	start := time.Now()
-	_, answered := withCeiling(orphanHoldingStdout, testCeiling).GetHeadCommit("/tmp")
+	_, answered := withCeiling(orphanHoldingStdout, testCeiling).GetHeadCommit(noBudget(), "/tmp")
 	elapsed := time.Since(start)
 
 	if answered {
@@ -373,7 +373,7 @@ func TestMissingBinaryFailsImmediately(t *testing.T) {
 	t.Parallel()
 
 	start := time.Now()
-	_, answered := withCeiling(missingGit, testCeiling).GetGitRoot("/tmp")
+	_, answered := withCeiling(missingGit, testCeiling).GetGitRoot(noBudget(), "/tmp")
 	elapsed := time.Since(start)
 
 	if answered {
@@ -404,7 +404,7 @@ func TestFloodingChildIsBoundedAndReportsANonAnswer(t *testing.T) {
 	t.Parallel()
 
 	start := time.Now()
-	_, answered := withCeiling(floodingGit, testCeiling).RevertedCommits("/tmp")
+	_, answered := withCeiling(floodingGit, testCeiling).RevertedCommits(noBudget(), "/tmp")
 	elapsed := time.Since(start)
 
 	if answered {
@@ -434,7 +434,7 @@ func TestUnderTheCapIsStillAnAnswer(t *testing.T) {
 	// A gitMaxOutput-1 row would cost a second 64 MiB pipe copy to assert what
 	// TestCappedBufferStopsAtItsLimit already pins at Limit: 8.
 	for _, n := range []int{1 << 10, gitMaxOutput} {
-		out, answered := withCmd(build(n)).run(fixedCost, "/tmp", "irrelevant")
+		out, answered := withCmd(build(n)).run(noBudget(), fixedCost, "/tmp", "irrelevant")
 		if !answered {
 			t.Errorf("%d bytes, under the %d-byte cap, was reported as a non-answer", n, gitMaxOutput)
 		}
@@ -467,7 +467,7 @@ func TestFailingGitDoesNotPublishItsStdoutAsData(t *testing.T) {
 
 	a := New()
 
-	head, answered := a.GetHeadCommit(unborn)
+	head, answered := a.GetHeadCommit(noBudget(), unborn)
 	if !answered {
 		t.Fatal("an unborn branch is an ANSWER — git ran and exited 128")
 	}
@@ -477,7 +477,7 @@ func TestFailingGitDoesNotPublishItsStdoutAsData(t *testing.T) {
 			"under the fake SHA %q is one the yield sweeper can never correlate", head, head)
 	}
 
-	branch, answered := a.GetBranch(unborn)
+	branch, answered := a.GetBranch(noBudget(), unborn)
 	if !answered {
 		t.Fatal("an unborn branch is an ANSWER for GetBranch too")
 	}
@@ -507,7 +507,7 @@ func TestPartialOutputBeforeAFatalIsNotACompleteAnswer(t *testing.T) {
 	}
 	a := withCmd(partial)
 
-	commits, answered := a.CommitsInRange("/tmp", "", "HEAD")
+	commits, answered := a.CommitsInRange(noBudget(), "/tmp", "", "HEAD")
 	if !answered {
 		t.Fatal("a git that exited 128 ANSWERED; only a killed or unstarted child has not")
 	}
@@ -517,7 +517,7 @@ func TestPartialOutputBeforeAFatalIsNotACompleteAnswer(t *testing.T) {
 			len(commits))
 	}
 
-	shas, answered := a.RevertedCommits("/tmp")
+	shas, answered := a.RevertedCommits(noBudget(), "/tmp")
 	if !answered {
 		t.Fatal("same for RevertedCommits")
 	}
@@ -534,7 +534,7 @@ func TestASuccessfulGitStillReturnsItsOutput(t *testing.T) {
 	repo := gitInitForTest(t)
 	sha := commitFileForTest(t, repo, "a.txt", "A")
 
-	if got, answered := New().GetHeadCommit(repo); got != sha || !answered {
+	if got, answered := New().GetHeadCommit(noBudget(), repo); got != sha || !answered {
 		t.Errorf("GetHeadCommit = (%q, %v), want (%q, true)", got, answered, sha)
 	}
 }
@@ -577,7 +577,7 @@ func TestProductionAdapterIsBounded(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, answered := withBinary(stub).GetHeadCommit(t.TempDir())
+	_, answered := withBinary(stub).GetHeadCommit(noBudget(), t.TempDir())
 	elapsed := time.Since(start)
 
 	if answered {
@@ -635,7 +635,7 @@ func TestZeroValuedAdapterIsStillBounded(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, answered := a.GetBranch("/tmp")
+	_, answered := a.GetBranch(noBudget(), "/tmp")
 	elapsed := time.Since(start)
 
 	if answered {
@@ -799,14 +799,14 @@ func TestEachShelloutRunsUnderTheCeilingForItsCostProfile(t *testing.T) {
 		want time.Duration
 		call func()
 	}{
-		{"GetBranch", gitTimeout, func() { a.GetBranch(dir) }},
-		{"GetHeadCommit", gitTimeout, func() { a.GetHeadCommit(dir) }},
-		{"GetGitRoot", gitTimeout, func() { a.GetGitRoot(dir) }},
-		{"GetProjectName", gitTimeout, func() { a.GetProjectName(dir) }},
-		{"ListReleaseTags", gitTimeout, func() { a.ListReleaseTags(dir) }},
-		{"TagContaining", gitTimeout, func() { a.TagContaining(dir, "deadbeef") }},
-		{"RevertedCommits", gitHistoryTimeout, func() { a.RevertedCommits(dir) }},
-		{"CommitsInRange", gitHistoryTimeout, func() { a.CommitsInRange(dir, "", "HEAD") }},
+		{"GetBranch", gitTimeout, func() { a.GetBranch(noBudget(), dir) }},
+		{"GetHeadCommit", gitTimeout, func() { a.GetHeadCommit(noBudget(), dir) }},
+		{"GetGitRoot", gitTimeout, func() { a.GetGitRoot(noBudget(), dir) }},
+		{"GetProjectName", gitTimeout, func() { a.GetProjectName(noBudget(), dir) }},
+		{"ListReleaseTags", gitTimeout, func() { a.ListReleaseTags(noBudget(), dir) }},
+		{"TagContaining", gitTimeout, func() { a.TagContaining(noBudget(), dir, "deadbeef") }},
+		{"RevertedCommits", gitHistoryTimeout, func() { a.RevertedCommits(noBudget(), dir) }},
+		{"CommitsInRange", gitHistoryTimeout, func() { a.CommitsInRange(noBudget(), dir, "", "HEAD") }},
 	}
 
 	const tolerance = 2 * time.Second // the read happens microseconds after the deadline is set
@@ -879,14 +879,14 @@ func TestTheTwoCeilingsAreIndependentAtRuntime(t *testing.T) {
 	a := withCeilings(stalledGit, short, long)
 
 	start := time.Now()
-	_, answered := a.GetBranch("/tmp")
+	_, answered := a.GetBranch(noBudget(), "/tmp")
 	fixedElapsed := time.Since(start)
 	if answered {
 		t.Error("GetBranch: a child killed by the ceiling was reported as an answer")
 	}
 
 	start = time.Now()
-	_, answered = a.RevertedCommits("/tmp")
+	_, answered = a.RevertedCommits(noBudget(), "/tmp")
 	historyElapsed := time.Since(start)
 	if answered {
 		t.Error("RevertedCommits: a child killed by the ceiling was reported as an answer")
