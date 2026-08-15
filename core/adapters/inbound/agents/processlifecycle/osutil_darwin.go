@@ -37,8 +37,8 @@ var (
 // to match Terminal.app's AppleScript `tty` property format — `ps -o tty=`
 // on macOS omits the "/dev/" prefix that AppleScript returns. This is host
 // enrichment (window targeting), not observation, so other platforms stub it.
-func processTTY(pid int) (string, bool) {
-	return processTTYVia(pid, func(ctx context.Context) *exec.Cmd {
+func processTTY(ctx context.Context, pid int) (string, bool) {
+	return processTTYVia(ctx, pid, func(ctx context.Context) *exec.Cmd {
 		return exec.CommandContext(ctx, psPath, "-o", "tty=", "-p", strconv.Itoa(pid))
 	})
 }
@@ -55,13 +55,13 @@ func processTTY(pid int) (string, bool) {
 // pid it cannot find (measured), which is a real "no such process", not a
 // probe that did not run — so the allowlist form would turn every reaped pid
 // into a non-answer and poison hostIdentity's completeness for it.
-func processTTYVia(pid int, build shelloutCmd) (tty string, probed bool) {
+func processTTYVia(ctx context.Context, pid int, build shelloutCmd) (tty string, probed bool) {
 	if pid <= 0 {
 		// Nothing was asked, so nothing failed — the same reading bundleIDVia
 		// gives an empty appPath.
 		return "", true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
+	ctx, cancel := context.WithTimeout(ctx, shelloutTimeout)
 	defer cancel()
 	out, err := build(ctx).Output()
 	if !probeAnswered(err) {
@@ -109,17 +109,18 @@ const maxAncestry = 10
 // ("", 0) and are different facts: the first is evidence that this process has
 // no local window, the second is no evidence at all. Every abort is a
 // readProcInfo failure, which on a loaded machine is that helper's 2s ceiling
-// (#1492); the caller that acts on the distinction is
-// resolveClientHostIdentity.
+// (#1492) — or, since #1529, ctx's aggregate budget expiring first, which
+// produces the same non-answer for the same reason. The caller that acts on the
+// distinction is resolveClientHostIdentity.
 //
 // Intentionally ignores tmux: tmux's env vars (TMUX, TMUX_PANE) come from
 // the regular env-capture path when readable, and a tmux-only ancestor
 // (without a known host terminal above it) can't be brought to the front
 // by NSWorkspace.
-func resolveHostFromAncestry(pid int) (termProgram string, hostPID int, complete bool) {
+func resolveHostFromAncestry(ctx context.Context, pid int) (termProgram string, hostPID int, complete bool) {
 	cur := pid
 	for i := 0; i < maxAncestry && cur > 1; i++ {
-		ppid, cmd, err := readProcInfo(cur)
+		ppid, cmd, err := readProcInfo(ctx, cur)
 		if err != nil {
 			return "", 0, false
 		}
@@ -155,8 +156,8 @@ func plutilBundleIDCmd(plist string) shelloutCmd {
 // The error is non-nil ONLY when plutil could not be ASKED, never when it
 // answered — see bundleIDVia for why those are different facts and where the
 // line between them falls (#1524).
-func bundleIDForAppPath(appPath string) (string, error) {
-	return bundleIDVia(appPath, plutilBundleIDCmd)
+func bundleIDForAppPath(ctx context.Context, appPath string) (string, error) {
+	return bundleIDVia(ctx, appPath, plutilBundleIDCmd)
 }
 
 // bundleIDVia is bundleIDForAppPath with the shellout injected.
@@ -190,11 +191,11 @@ func bundleIDForAppPath(appPath string) (string, error) {
 // is the only site in the package that needs to be: the command depends on the
 // Info.plist path, which this function derives from appPath. Everywhere else
 // the site's arguments are closed over at the call site (see shelloutCmd).
-func bundleIDVia(appPath string, build bundleIDCmd) (string, error) {
+func bundleIDVia(ctx context.Context, appPath string, build bundleIDCmd) (string, error) {
 	if appPath == "" {
 		return "", nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
+	ctx, cancel := context.WithTimeout(ctx, shelloutTimeout)
 	defer cancel()
 	plist := appPath + "/Contents/Info.plist"
 	out, err := build(plist)(ctx).Output()
@@ -244,8 +245,8 @@ func bundleIDVia(appPath string, build bundleIDCmd) (string, error) {
 // The walk starts at pid's *parent*: the agent runs inside the host and is
 // never the host itself, and an agent whose own binary lives in a top-level
 // bundle (e.g. ClaudeCode.app) must not be mistaken for it.
-func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int, complete bool) {
-	return resolveHostBundleIDVia(pid, readProcInfo, bundleIDForAppPath)
+func resolveHostBundleIDFromAncestry(ctx context.Context, pid int) (bundleID string, hostPID int, complete bool) {
+	return resolveHostBundleIDVia(ctx, pid, readProcInfo, bundleIDForAppPath)
 }
 
 // procInfoProbe and bundleIDProbe are the two bounded shellouts
@@ -253,14 +254,14 @@ func resolveHostBundleIDFromAncestry(pid int) (bundleID string, hostPID int, com
 // reason isKnownInteractiveHostVia injects its two walks: no arrangement of
 // live processes can drive either into a chosen failure on purpose.
 type (
-	procInfoProbe func(pid int) (ppid int, cmd string, err error)
-	bundleIDProbe func(appPath string) (string, error)
+	procInfoProbe func(ctx context.Context, pid int) (ppid int, cmd string, err error)
+	bundleIDProbe func(ctx context.Context, appPath string) (string, error)
 )
 
 // resolveHostBundleIDVia is resolveHostBundleIDFromAncestry with both probes
 // injected.
-func resolveHostBundleIDVia(pid int, procInfo procInfoProbe, bundleID bundleIDProbe) (bundleIDOut string, hostPID int, complete bool) {
-	ppid, _, err := procInfo(pid)
+func resolveHostBundleIDVia(ctx context.Context, pid int, procInfo procInfoProbe, bundleID bundleIDProbe) (bundleIDOut string, hostPID int, complete bool) {
+	ppid, _, err := procInfo(ctx, pid)
 	if err != nil {
 		return "", 0, false
 	}
@@ -269,12 +270,12 @@ func resolveHostBundleIDVia(pid int, procInfo procInfoProbe, bundleID bundleIDPr
 	}
 	cur := ppid
 	for i := 0; i < maxAncestry && cur > 1; i++ {
-		pp, cmd, err := procInfo(cur)
+		pp, cmd, err := procInfo(ctx, cur)
 		if err != nil {
 			return "", 0, false
 		}
 		if appPath := topLevelAppPath(cmd); appPath != "" {
-			bid, err := bundleID(appPath)
+			bid, err := bundleID(ctx, appPath)
 			if err != nil {
 				// #1524: the probe was never answered, so "" here says nothing
 				// about this ancestor. Falling through would walk on and report
@@ -335,18 +336,28 @@ func resolveHostBundleIDVia(pid int, procInfo procInfoProbe, bundleID bundleIDPr
 // even at 12x CPU oversubscription, so whatever triggers a real non-answer is
 // not CPU pressure and is still unidentified.
 //
+// That is also why #1529 bounded the herdr client indirection and left THIS
+// call site running under noAggregateBudget(): here an aggregate deadline would
+// manufacture the very non-answer the gate fails open on, so it would move
+// answers toward admitting — invisibly, per the paragraph above. The walks
+// therefore remain bounded by a COUNT (two of them, up to maxAncestry hops
+// each, every hop a `ps` and possibly a `plutil` at shelloutTimeout), which is
+// a real standing hazard on the discovery path and is stated rather than
+// implied. noAggregateBudget carries the polarity argument for both call sites
+// side by side.
+//
 // "Complete" means every probe in the walk was ANSWERED, which is wider than
 // "no readProcInfo call failed" — the walk also shells out to plutil (#1524).
 // resolveHostBundleIDFromAncestry says why that mattered; bundleIDVia is where
 // the line between an answer and a non-answer is drawn.
 func IsKnownInteractiveHost(pid int) bool {
-	return isKnownInteractiveHostVia(pid, resolveHostFromAncestry, resolveHostBundleIDFromAncestry)
+	return isKnownInteractiveHostVia(noAggregateBudget(), pid, resolveHostFromAncestry, resolveHostBundleIDFromAncestry)
 }
 
 // ancestryWalk is the shape resolveHostFromAncestry and
 // resolveHostBundleIDFromAncestry share: a host string, the PID it was found
 // at, and whether the walk reached its verdict rather than aborting.
-type ancestryWalk func(pid int) (host string, hostPID int, complete bool)
+type ancestryWalk func(ctx context.Context, pid int) (host string, hostPID int, complete bool)
 
 // isKnownInteractiveHostVia is IsKnownInteractiveHost with both walks injected,
 // so the ORDER between them is testable — the pure isKnownInteractiveHostFrom
@@ -369,13 +380,13 @@ type ancestryWalk func(pid int) (host string, hostPID int, complete bool)
 // completed and found CodexBar. That is the deliberate polarity — a re-probe
 // could only move the answer toward rejection, on evidence this gate has
 // already decided not to trust.
-func isKnownInteractiveHostVia(pid int, walkTerm, walkBundle ancestryWalk) bool {
-	term, _, complete := walkTerm(pid)
+func isKnownInteractiveHostVia(ctx context.Context, pid int, walkTerm, walkBundle ancestryWalk) bool {
+	term, _, complete := walkTerm(ctx, pid)
 	bundleID := ""
 	if term == "" && complete {
 		// Only reached when walk 1 ran to a verdict, so this also skips the
 		// duplicate ps shellouts whenever the curated map already matched.
-		bundleID, _, complete = walkBundle(pid)
+		bundleID, _, complete = walkBundle(ctx, pid)
 	}
 	return isKnownInteractiveHostFrom(term, bundleID, complete)
 }
@@ -398,8 +409,8 @@ func isKnownInteractiveHostFrom(termProgram, bundleID string, complete bool) boo
 // PID. Kept for the existing call site that only cares whether kitty (or any
 // other host) appears in the chain; callers that also need the host PID
 // should use resolveHostFromAncestry directly to avoid a second walk.
-func resolveTermProgramFromAncestry(pid int) string {
-	term, _, _ := resolveHostFromAncestry(pid)
+func resolveTermProgramFromAncestry(ctx context.Context, pid int) string {
+	term, _, _ := resolveHostFromAncestry(ctx, pid)
 	return term
 }
 
@@ -410,8 +421,8 @@ func resolveTermProgramFromAncestry(pid int) string {
 // their env even from non-TCC sysctl reads, so KITTY_PID never makes it
 // into the env-derived launcher. Ancestry walking still works because we
 // only read ppid + comm, not env.
-func kittyAncestryPID(pid int) int {
-	term, hostPID, _ := resolveHostFromAncestry(pid)
+func kittyAncestryPID(ctx context.Context, pid int) int {
+	term, hostPID, _ := resolveHostFromAncestry(ctx, pid)
 	if term != "kitty" {
 		return 0
 	}
@@ -482,8 +493,8 @@ func kittyListenOnFor(kittyPID int) string {
 // KittyWindowID for sessions whose own env didn't expose KITTY_WINDOW_ID
 // (e.g., the pi adapter — pi's env is unreadable via sysctl). Bounded
 // 2-second timeout; runs at session-birth so latency is acceptable.
-func kittyWindowIDForPID(socket string, sessionPID int) (string, bool) {
-	return kittyWindowIDForPIDVia(socket, sessionPID, func(ctx context.Context) *exec.Cmd {
+func kittyWindowIDForPID(ctx context.Context, socket string, sessionPID int) (string, bool) {
+	return kittyWindowIDForPIDVia(ctx, socket, sessionPID, func(ctx context.Context) *exec.Cmd {
 		return exec.CommandContext(ctx, kittenPath, "@", "--to", socket, "ls")
 	})
 }
@@ -503,11 +514,11 @@ func kittyWindowIDForPID(socket string, sessionPID int) (string, bool) {
 // failed probe would poison hostIdentity's completeness permanently on any
 // machine where kitten is not on the trusted path, in exchange for nothing:
 // only an invocation that actually ran and did not answer is new information.
-func kittyWindowIDForPIDVia(socket string, sessionPID int, build shelloutCmd) (string, bool) {
+func kittyWindowIDForPIDVia(ctx context.Context, socket string, sessionPID int, build shelloutCmd) (string, bool) {
 	if kittenPath == "" || socket == "" || sessionPID <= 0 {
 		return "", true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
+	ctx, cancel := context.WithTimeout(ctx, shelloutTimeout)
 	defer cancel()
 	out, err := build(ctx).Output()
 	if !probeAnswered(err) {
@@ -577,8 +588,8 @@ func findKittyWindowIDForPID(windows []kittyLsWindow, sessionPID int) string {
 // helpers. We shell out rather than parse `kinfo_proc` from sysctl because
 // ps already handles the comm-vs-argv-path distinction we need, and the
 // existing package is built around these bounded exec calls.
-func readProcInfo(pid int) (ppid int, cmd string, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
+func readProcInfo(ctx context.Context, pid int) (ppid int, cmd string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, shelloutTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, psPath, "-o", "ppid=,comm=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
@@ -628,7 +639,7 @@ func readProcInfo(pid int) (ppid int, cmd string, err error) {
 // are allocated ascending, so descending PID is "newest first". lsof matches
 // by device and inode rather than by string, so a symlinked path (a macOS
 // t.TempDir() lives under /var -> /private/var) needs no canonicalisation here.
-func herdrClientPIDs(socketPath string) (pids []int, probed bool) {
+func herdrClientPIDs(ctx context.Context, socketPath string) (pids []int, probed bool) {
 	logPath := herdrClientLogPath(socketPath)
 	if logPath == "" {
 		return nil, false
@@ -651,7 +662,7 @@ func herdrClientPIDs(socketPath string) (pids []int, probed bool) {
 	if _, err := os.Stat(logPath); err != nil {
 		return nil, false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), shelloutTimeout)
+	ctx, cancel := context.WithTimeout(ctx, shelloutTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, lsofPath, logPath).Output()
 	if !lsofProbeRan(err) {
@@ -738,6 +749,13 @@ func herdrClientWriters(out string, self int) []int {
 // resolvable host. Each candidate costs an env read plus an ancestry walk, and
 // attaching more than a handful of clients to one session is not a real
 // workflow, so the cap keeps that work proportionate.
+//
+// Since #1529 it is a SANITY cap and no longer the de-facto time bound it had
+// been: herdrClientBudget bounds the loop by duration, so a machine slow enough
+// for four candidates to matter now stops on the clock instead of on the count.
+// The cap still poisons the answer when it truncates (see
+// resolveClientHostIdentity), because "we declined to look at the rest" is the
+// same non-answer whichever bound produced it.
 const maxClientCandidates = 4
 
 // resolveClientHostIdentity picks the host-window identity of the first
@@ -777,6 +795,29 @@ const maxClientCandidates = 4
 // claim the cap makes false, and answering it anyway is #1492 arriving through
 // the cap instead of through a timeout.
 //
+// #1529's aggregate budget arrives at the SAME conclusion by a third route, and
+// getting its polarity backwards would have made this fix cause the misroute
+// #1348/#1492 removed. ctx carries one deadline shared by the lsof scan and
+// every candidate behind it, and a candidate abandoned on it is a candidate we
+// declined to look at — so it poisons readAll exactly as an unreadable one
+// does, and the caller is told (nil, false) = "I could not look". Two ways in,
+// both covered:
+//
+//   - A candidate ABANDONED before it starts: the check below is why the loop
+//     tests the budget itself rather than relying on the children to inherit
+//     it. An expired ctx still lets every remaining candidate run three
+//     shellouts that fail instantly, and — worse for correctness than for cost —
+//     an aggregate that is only ever inherited is one no caller can observe as
+//     a bound.
+//   - A candidate CUT SHORT mid-flight: its own shellouts die on the shared
+//     deadline, hostIdentity reports complete=false, and the existing #1492
+//     line below poisons on it with no new code. That composition is the whole
+//     reason the tri-state needed no fourth state.
+//
+// A candidate that resolved a host BEFORE the budget ran out still wins
+// outright, on the same grounds as an unreadable-siblings answer: a found host
+// is evidence regardless of what the rest of the list did.
+//
 // Two residual false negatives survive, both of them "the walk reached a
 // verdict" cases rather than aborts, so the bit above cannot express them:
 // a candidate inside a tmux pane walks to the reparented tmux server and
@@ -789,13 +830,51 @@ const maxClientCandidates = 4
 // dedups (sortedDistinctPIDs) because lsof emits a row per FD; a `tmux
 // list-clients` producer is naturally distinct, but the obligation is stated
 // here, next to the constant that depends on it, rather than only there.
-func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
+//
+// This wrapper is the loop paired with the PRODUCTION identity read, and it is
+// the name the rest of this file's prose refers to. Say plainly what it is
+// today rather than let a reader infer: nothing in production calls it —
+// resolveHerdrClientLauncher reaches the Via form so it can name both probes at
+// one wiring — and its callers are the #1492 tests, which drive real PIDs
+// through the real hostIdentity and would otherwise have to name that probe
+// themselves. So the production probe is named twice, one line apart, which is
+// a drift worth knowing about and too small to be worth a seam.
+func resolveClientHostIdentity(ctx context.Context, pids []int) (*session.Launcher, bool) {
+	return resolveClientHostIdentityVia(ctx, pids, hostIdentity)
+}
+
+// hostIdentityProbe is the per-candidate identity read
+// resolveClientHostIdentityVia makes. Injected for the reason ttyProbe,
+// kittyWindowProbe and resolveHostBundleIDVia's two probes are: no arrangement
+// of live processes can be driven to consume a shared budget at a chosen
+// candidate, and #1529's whole subject is what the loop does when it has.
+//
+// It returns a NON-NIL launcher, as hostIdentity does for every input: the loop
+// reads fields off it before deciding anything, and a probe that returned nil
+// would panic rather than report a non-answer. "Nothing was determined" is the
+// second return, never a nil first.
+type hostIdentityProbe func(ctx context.Context, pid int) (*session.Launcher, bool)
+
+// resolveClientHostIdentityVia is resolveClientHostIdentity with the
+// per-candidate identity read injected.
+func resolveClientHostIdentityVia(ctx context.Context, pids []int, identify hostIdentityProbe) (*session.Launcher, bool) {
 	readAll := len(pids) <= maxClientCandidates
 	if !readAll {
 		pids = pids[:maxClientCandidates]
 	}
 	for _, pid := range pids {
-		host, complete := hostIdentity(pid)
+		if ctx.Err() != nil {
+			// #1529: the aggregate budget is gone and candidates are left. They
+			// are candidates we declined to look at, which is the cap's case
+			// rather than the detach case — so poison and stop, exactly as a
+			// truncation does. Checked HERE rather than left to the children:
+			// an expired deadline reaches them anyway, but only this check
+			// turns "every probe failed" into "we stopped looking", and only
+			// this check makes the aggregate a bound a caller can observe.
+			readAll = false
+			break
+		}
+		host, complete := identify(ctx, pid)
 		if host.HerdrPaneID != "" {
 			// A candidate that is itself a multiplexer pane has no window of
 			// its own — its host is one more indirection away. Don't recurse;
@@ -826,6 +905,15 @@ func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
 // "Was read and has no host" rather than "reported no host" is the whole of
 // #1492; resolveClientHostIdentity's doc carries the argument, and this
 // function only passes its verdict through.
+//
+// A miss costs at most herdrClientBudget, and that is a real ceiling rather
+// than a sum of per-child ones (#1529): resolveHerdrClientLauncherVia derives
+// ONE deadline covering the lsof scan and every candidate behind it. Before
+// that the cost here was bounded by a COUNT — up to maxClientCandidates
+// candidates, each two independent ancestry walks plus a tty `ps`, the
+// bundle-id walk paying a `plutil` per hop up to maxAncestry — so one resolve
+// could run to tens of seconds inside a 5s liveness-sweep tick. A cache HIT is
+// free either way and is the common case; the budget bounds the miss.
 //
 // Only ever called with a socket path the daemon captured from the pane's own
 // $HERDR_SOCKET_PATH, so a resolved identity always accompanies a complete
@@ -863,9 +951,12 @@ func resolveClientHostIdentity(pids []int) (*session.Launcher, bool) {
 //     which fails fast, so re-paying it per pane was nearly free and the spread
 //     was the only cost worth naming. #1492 routed the most EXPENSIVE outcome in
 //     this function to the same branch: every candidate probed and none
-//     readable, which is up to maxClientCandidates candidates, each costing two
-//     independent ancestry walks on readProcInfo's 2s ceiling. Re-paying now
-//     dominates, and the trade the rule was making inverted.
+//     readable, which is the whole herdrClientBudget spent before an answer
+//     arrives. Re-paying now dominates, and the trade the rule was making
+//     inverted. (Until #1529 that outcome had no ceiling at all — up to
+//     maxClientCandidates candidates, two independent ancestry walks each on
+//     readProcInfo's 2s ceiling, with a `plutil` per hop — which is why #1514's
+//     memo made it rarer without making it shorter.)
 //
 // The new rule: the memo holds what ONE probe of this socket determined, for
 // one TTL — an answer or the absence of one. A non-answer keeps probed=false on
@@ -900,11 +991,54 @@ func herdrClientLauncher(socketPath string) (*session.Launcher, bool) {
 }
 
 func resolveHerdrClientLauncher(socketPath string) (*session.Launcher, bool) {
-	pids, probed := herdrClientPIDs(socketPath)
+	return resolveHerdrClientLauncherVia(socketPath, herdrClientPIDs, hostIdentity)
+}
+
+// clientPIDProbe is the attached-client scan resolveHerdrClientLauncherVia
+// makes — the lsof half of the budget, injected so a test can drive the loop
+// behind it without a live herdr server.
+type clientPIDProbe func(ctx context.Context, socketPath string) (pids []int, probed bool)
+
+// resolveHerdrClientLauncherVia is resolveHerdrClientLauncher with both probes
+// injected. It DERIVES the aggregate deadline rather than taking one, so a test
+// driving it exercises herdrClientBudget itself rather than a budget the test
+// supplied — the same reason #1390 collapsed a receiver's two constructors into
+// the one the daemon builds.
+//
+// One context spans both stages on purpose: two deadlines, one per stage, would
+// read as a bound while summing to twice the budget, and what the herdr
+// indirection costs is one number, so it is one context.
+//
+// What sharing COSTS, stated rather than argued away. The two stages compete
+// for one budget and the scan goes first, so an lsof that runs to nearly
+// herdrClientBudget and still SUCCEEDS leaves the loop nothing: every candidate
+// is abandoned and the answer is (nil, false). On a machine where lsof is
+// chronically slow-but-answering, a herdr host would then never resolve, where
+// before #1529 it resolved slowly. Three things bound that, and none of them
+// makes it go away:
+//
+//   - It fails to the SAFE side. A non-answer clears no stored host (#1492) and
+//     the memo re-probes on the next sweep, so the cost is a deferred recovery
+//     rather than a wrong answer.
+//   - The band is narrow. An lsof at its own shelloutTimeout is normally KILLED
+//     rather than slow, and a killed one is already (nil, false) via
+//     lsofProbeRan — so only the slow-and-successful window is new.
+//   - Nobody would see it. #1534 is that nothing counts probe non-answers, and
+//     that now covers budget abandonment too.
+//
+// Splitting the budget between the stages is the obvious alternative and is
+// deliberately NOT taken here: it needs evidence about the real distribution of
+// scan times, which #1529 has none of. This is the same trade #1553 records for
+// the git adapter — an unbounded call that answered slowly becomes a bounded
+// one that does not answer at all — and it is written down for the same reason.
+func resolveHerdrClientLauncherVia(socketPath string, scan clientPIDProbe, identify hostIdentityProbe) (*session.Launcher, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), herdrClientBudget)
+	defer cancel()
+	pids, probed := scan(ctx, socketPath)
 	if !probed {
 		return nil, false
 	}
-	return resolveClientHostIdentity(pids)
+	return resolveClientHostIdentityVia(ctx, pids, identify)
 }
 
 // herdrClientCacheTTL is short enough that attaching a client is picked up by
@@ -972,8 +1106,9 @@ func herdrClientCacheLive(socketPath string) (herdrClientCacheEntry, bool) {
 // overwrite anything. Two goroutines can miss the memo for one socket and
 // probe concurrently — refreshHerdrHosts reads outside assignMu, on the sweep
 // goroutine, while PID discovery reaches captureLauncher/backfillLauncher on
-// its own — and a non-answer is by far the SLOWER outcome to produce (up to
-// maxClientCandidates candidates, two ancestry walks each on a 2s ceiling).
+// its own — and a non-answer is still by far the SLOWER outcome to produce: it
+// is the one that can spend the whole herdrClientBudget, where an answer stops
+// at the first candidate that resolves.
 // So the loser of that race is systematically the one carrying no
 // information, and last-writer-wins would let it both erase a resolved host
 // and restamp the entry fresh, extending the deferral by another full TTL.

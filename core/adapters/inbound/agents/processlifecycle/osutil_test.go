@@ -608,7 +608,7 @@ func TestReadLauncherEnv_Subprocess_KittyOverridesInheritedTermProgram(t *testin
 		t.Errorf("KittyPID: want 4242, got %d", l.KittyPID)
 	}
 	// Resolve ancestry of the spawned subprocess to decide which branch we're in.
-	ancestry := resolveTermProgramFromAncestry(pid)
+	ancestry := resolveTermProgramFromAncestry(noAggregateBudget(), pid)
 	if ancestry == "kitty" {
 		if l.TermProgram != "kitty" {
 			t.Errorf("kitty in ancestry: expected TermProgram override to 'kitty', got %q", l.TermProgram)

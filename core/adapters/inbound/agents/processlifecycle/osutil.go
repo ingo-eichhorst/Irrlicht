@@ -9,13 +9,82 @@
 package processlifecycle
 
 import (
+	"context"
 	"encoding/binary"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"irrlicht/core/domain/session"
 )
+
+// herdrClientBudget is the ONE aggregate deadline covering the entire herdr
+// client indirection: the lsof scan that finds the attached clients and every
+// candidate probed behind it (resolveHerdrClientLauncherVia, osutil_darwin.go).
+//
+// It exists because every individual shellout on that path was bounded and the
+// path was not (#1529). resolveClientHostIdentity loops over up to
+// maxClientCandidates candidates; each costs two independent ancestry walks
+// plus a tty `ps`, and the bundle-id walk pays a `plutil` per hop up to
+// maxAncestry — so the bound was a COUNT, and one resolve could run to tens of
+// seconds.
+//
+// The value is set by what it has to fit inside rather than by what the probes
+// cost: PIDManager.SweepDeadPIDs calls refreshHerdrHosts synchronously on its
+// ticker, and Go's Ticker drops ticks it overruns, so a single herdr resolve
+// delays dead-PID reaping for every session behind it.
+// TestHerdrReadFitsTheLivenessSweepTick reads that cadence out of the services
+// source and pins the sum against it, so the relation is measured rather than
+// restated.
+//
+// Abandoning candidates is safe by construction and that is what makes the
+// budget cheap: an abandoned candidate is a NON-answer (#1492), not a detach,
+// so the caller is told "I could not look" and nothing clears a stored host.
+//
+// It lives here, platform-neutral, although the loop it bounds is darwin-only.
+// The contract it defines is stated in ReadLauncherEnv's doc, which compiles on
+// every platform, so a constant behind //go:build darwin would leave that doc
+// naming a symbol a linux reader cannot look up, and would put the arithmetic
+// that matters behind the same tag. It also belongs beside noAggregateBudget:
+// together the two ARE the decision about which host reads get an aggregate and
+// which deliberately do not, and splitting that across a build tag hides half
+// of it.
+const herdrClientBudget = 2 * time.Second
+
+// noAggregateBudget is the context every host read that deliberately has NO
+// aggregate deadline runs under. Naming it is the whole point: #1529 bounded
+// the herdr client indirection (herdrClientBudget above) and left these
+// unbounded, and a named helper makes that a reviewable absence rather than a
+// context.Background() whose meaning the next reader has to infer.
+//
+// Its two production call sites are the direct (non-herdr) launcher read in
+// ReadLauncherEnv and the interactive-host admission gate
+// (IsKnownInteractiveHost). Both keep exactly the aggregate they had before
+// #1529 — a COUNT — and their reasons are OPPOSITE polarities rather than one
+// shared argument, which is why they are stated separately instead of as
+// "bounding either would change an answer":
+//
+//   - ReadLauncherEnv discards hostIdentity's completeness for the direct read
+//     (see the call site), so an abandoned walk there arrives at consumers as a
+//     determined "this process has no host" with hostKnown TRUE. Bounding it
+//     would move answers in the host-CLEARING direction — the misroute #1348
+//     opened and #1492 narrowed.
+//   - IsKnownInteractiveHost fails OPEN on an incomplete walk (#1513), so
+//     bounding it would move answers the other way: the #784 exclusion would
+//     quietly stop excluding. Nothing counts how often either of its walks
+//     fails to be answered (#1534), so that degradation would be invisible.
+//     The standing cost is that this gate — reached synchronously from PID
+//     discovery — is still bounded only by a COUNT: two walks of up to
+//     maxAncestry hops, each hop a `ps` and possibly a `plutil`, every one of
+//     them at shelloutTimeout. #1529 gathered no evidence about that path and
+//     deliberately did not move it.
+//
+// This is NOT the bare context.Background() core/architecture_shellout_test.go
+// forbids: nothing passes it to exec.CommandContext. Every shellout downstream
+// still derives its own shelloutTimeout from it, so each CHILD keeps a
+// ceiling. What is absent is only the ceiling ACROSS children.
+func noAggregateBudget() context.Context { return context.Background() }
 
 // CWDToProjectDir converts a working directory path to the directory name used
 // by Claude Code under ~/.claude/projects/. Claude Code replaces both "/" and
@@ -84,13 +153,36 @@ func herdrClientLogPath(socketPath string) string {
 // modern macOS). On Linux we read /proc/<pid>/environ. Other platforms return
 // nil.
 //
-// It used to say "never blocks longer than 2 seconds" here. Every individual
-// shellout is bounded at 2s, but this function is not, and has not been since
-// the herdr indirection below: resolveClientHostIdentity loops over up to
-// maxClientCandidates candidates and each costs two ancestry walks plus a tty
-// `ps`, with the bundle-id walk paying a `plutil` per hop. The bound is a
-// COUNT, not a duration. Giving the loop one aggregate deadline is #1529;
-// until then no caller may assume a wall-clock ceiling here.
+// On the herdr path this function is bounded at shelloutTimeout +
+// herdrClientBudget. One shelloutTimeout is the pane's own controlling-TTY
+// `ps`, which is the ONLY child process the direct read starts for a herdr
+// pane: launcherFromEnv returns early with HerdrPaneID set, hostIdentityVia
+// skips the ancestry fallbacks for exactly that case, and the env read is a
+// sysctl rather than a shellout. herdrClientBudget is one aggregate deadline
+// covering the entire client indirection below — the lsof scan and every
+// candidate behind it. The sum is not restated here as a number, because a
+// number a doc carries and nothing produces drifts: it is
+// TestHerdrReadFitsTheLivenessSweepTick that measures it, against the sweep
+// cadence that has to accommodate it.
+//
+// It used to say "never blocks longer than 2 seconds", and then, honestly,
+// that it said nothing at all. Every individual shellout was bounded at 2s and
+// the function was not: resolveClientHostIdentity looped over up to
+// maxClientCandidates candidates, each independently spending two ancestry
+// walks plus a tty `ps`, with the bundle-id walk paying a `plutil` per hop.
+// The bound was a COUNT, not a duration. #1529 gave that loop one aggregate
+// deadline, so the arithmetic above is a real ceiling rather than a hope.
+//
+// The DIRECT path is deliberately still a count, and saying so is the point of
+// scoping the sentence above to herdr. A non-herdr pid walks its ancestry
+// under per-shellout ceilings only, up to maxAncestry hops on each of two
+// walks. Bounding it would be a behaviour change in the host-CLEARING
+// direction on a path #1529 has no evidence about: an abandoned direct walk
+// returns an empty host with hostKnown TRUE — this function discards
+// hostIdentity's completeness for the direct read, see below — which is
+// exactly the shape the contract above tells callers they may act on. So the
+// budget stops at the herdr indirection, and noAggregateBudget names what the
+// direct read runs under instead.
 func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 	if pid <= 0 {
 		return nil, false
@@ -102,7 +194,7 @@ func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 	// and widening it here would change behaviour for every non-herdr session
 	// on a signal #1492 has no evidence about. See resolveClientHostIdentity
 	// for the read that DOES act on it.
-	l, _ = hostIdentity(pid)
+	l, _ = hostIdentity(noAggregateBudget(), pid)
 	hostKnown = true
 
 	// A herdr pane's window belongs to the attached client, so its host
@@ -163,17 +255,26 @@ func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 //
 // The ordering is load-bearing: ancestry before TTY, and both before any
 // adoption by the caller.
-func hostIdentity(pid int) (l *session.Launcher, complete bool) {
-	return hostIdentityVia(pid, processTTY)
+//
+// ctx carries the caller's aggregate budget, and every bounded shellout below
+// derives its own shelloutTimeout from it — so a child is killed at whichever
+// comes first, its own ceiling or the budget. That composition is what makes
+// #1529's aggregate deadline real rather than advisory: this function is
+// applied once per herdr candidate, and a candidate cut short by the shared
+// budget reports complete=false, which is already the "could not be read"
+// non-answer #1492 gave it. Callers with no aggregate to impose pass
+// noAggregateBudget().
+func hostIdentity(ctx context.Context, pid int) (l *session.Launcher, complete bool) {
+	return hostIdentityVia(ctx, pid, processTTY)
 }
 
 // ttyProbe is the controlling-TTY read hostIdentityVia makes, injected so the
 // #1533 non-answer can be arranged — a real `ps` cannot be driven over its
 // ceiling on purpose. Same idiom as resolveHostBundleIDVia's two probes.
-type ttyProbe func(pid int) (string, bool)
+type ttyProbe func(ctx context.Context, pid int) (string, bool)
 
 // hostIdentityVia is hostIdentity with the TTY read injected.
-func hostIdentityVia(pid int, readTTY ttyProbe) (l *session.Launcher, complete bool) {
+func hostIdentityVia(ctx context.Context, pid int, readTTY ttyProbe) (l *session.Launcher, complete bool) {
 	// Env may be empty — hardened-runtime processes hide it from sysctl.
 	// Don't bail here: the ancestry fallback below is the only signal we
 	// have in that case.
@@ -205,13 +306,13 @@ func hostIdentityVia(pid int, readTTY ttyProbe) (l *session.Launcher, complete b
 	// none of its own (kitty), whose fields the suppression above drops. So
 	// skipping it would buy no correctness and cost exactly that case.
 	if l.HerdrPaneID == "" {
-		complete = applyAncestryFallbacks(l, pid, &ancestryProbe{pid: pid})
+		complete = applyAncestryFallbacks(ctx, l, pid, &ancestryProbe{pid: pid})
 	}
 
 	// Capture the controlling TTY so Terminal.app (and potentially others)
 	// can target the exact tab — Terminal.app's AppleScript dictionary
 	// matches tabs by `tty` but has no session-UUID analog.
-	tty, ttyProbed := readTTY(pid)
+	tty, ttyProbed := readTTY(ctx, pid)
 	l.TTY = tty
 	// #1533: the TTY read is the third bounded shellout behind this answer, and
 	// it was the one whose verdict was dropped — it runs AFTER complete is
@@ -334,9 +435,13 @@ type ancestryProbe struct {
 	complete bool
 }
 
-func (a *ancestryProbe) host() (term string, hostPID int) {
+// host walks the ancestry once and memoizes the result. ctx is a parameter
+// rather than a field of the memo on purpose: a context stored in a struct
+// outlives the call it was scoped to, and this memo is passed between three
+// guarded blocks that each already hold the caller's budget.
+func (a *ancestryProbe) host(ctx context.Context) (term string, hostPID int) {
 	if !a.resolved {
-		a.term, a.hostPID, a.complete = resolveHostFromAncestry(a.pid)
+		a.term, a.hostPID, a.complete = resolveHostFromAncestry(ctx, a.pid)
 		a.resolved = true
 	}
 	return a.term, a.hostPID
@@ -364,18 +469,18 @@ func (a *ancestryProbe) walked() bool { return !a.resolved || a.complete }
 // complete by definition. The bundle-id walk aborts on an unreadable process
 // AND on an unanswerable plutil (#1524); the memoized one has no plutil to
 // make, so for it the two are the same thing.
-func applyAncestryFallbacks(l *session.Launcher, pid int, ancestry *ancestryProbe) (complete bool) {
-	return applyAncestryFallbacksVia(l, pid, ancestry, kittyWindowIDForPID)
+func applyAncestryFallbacks(ctx context.Context, l *session.Launcher, pid int, ancestry *ancestryProbe) (complete bool) {
+	return applyAncestryFallbacksVia(ctx, l, pid, ancestry, kittyWindowIDForPID)
 }
 
 // kittyWindowProbe is the `kitten @ ls` read applyKittyAncestryBackfill makes,
 // injected for the same reason ttyProbe is: a real kitten cannot be driven over
 // its ceiling on purpose.
-type kittyWindowProbe func(socket string, sessionPID int) (string, bool)
+type kittyWindowProbe func(ctx context.Context, socket string, sessionPID int) (string, bool)
 
 // applyAncestryFallbacksVia is applyAncestryFallbacks with the kitty
 // remote-control read injected.
-func applyAncestryFallbacksVia(l *session.Launcher, pid int, ancestry *ancestryProbe, readKittyWindow kittyWindowProbe) (complete bool) {
+func applyAncestryFallbacksVia(ctx context.Context, l *session.Launcher, pid int, ancestry *ancestryProbe, readKittyWindow kittyWindowProbe) (complete bool) {
 	complete = true
 	// kitty intentionally does not set TERM_PROGRAM (upstream kitty issue
 	// #4793), so the env-captured value may be inherited from whatever
@@ -384,7 +489,7 @@ func applyAncestryFallbacksVia(l *session.Launcher, pid int, ancestry *ancestryP
 	// we still verify via process ancestry to rule out the reverse case
 	// (KITTY_WINDOW_ID leaked from a kitty shell that spawned VS Code).
 	if l.KittyWindowID != "" && l.TermProgram != "kitty" {
-		if term, _ := ancestry.host(); term == "kitty" {
+		if term, _ := ancestry.host(ctx); term == "kitty" {
 			l.TermProgram = "kitty"
 		}
 	}
@@ -393,7 +498,7 @@ func applyAncestryFallbacksVia(l *session.Launcher, pid int, ancestry *ancestryP
 	// can at least bring the host app to the front. Darwin-only; other
 	// platforms return "" and this is a no-op.
 	if l.TermProgram == "" {
-		l.TermProgram, _ = ancestry.host()
+		l.TermProgram, _ = ancestry.host(ctx)
 	}
 	// Generic host fallback: when no curated host matched (TermProgram still
 	// empty), resolve the first top-level `.app` ancestor's bundle id so the
@@ -402,7 +507,7 @@ func applyAncestryFallbacksVia(l *session.Launcher, pid int, ancestry *ancestryP
 	// on a map miss, so every curated host keeps its exact behavior. Darwin-
 	// only; other platforms return "" and this is a no-op.
 	if l.TermProgram == "" {
-		bundleID, _, ok := resolveHostBundleIDFromAncestry(pid)
+		bundleID, _, ok := resolveHostBundleIDFromAncestry(ctx, pid)
 		// AND, not assign: this bit is hand-accumulated three guarded blocks
 		// down, and a block inserted above that also writes it would otherwise
 		// be silently overwritten here — the failure ancestryProbe.walked()'s
@@ -419,7 +524,7 @@ func applyAncestryFallbacksVia(l *session.Launcher, pid int, ancestry *ancestryP
 	// Without this, clicking the session in the UI raises kitty but can't
 	// target the right tab — exactly the symptom reported for pi sessions
 	// in issue #326.
-	kittyProbed := applyKittyAncestryBackfill(l, pid, ancestry, readKittyWindow)
+	kittyProbed := applyKittyAncestryBackfill(ctx, l, pid, ancestry, readKittyWindow)
 	return complete && ancestry.walked() && kittyProbed
 }
 
@@ -450,11 +555,11 @@ func applyAncestryFallbacksVia(l *session.Launcher, pid int, ancestry *ancestryP
 // reads completeness for a host-resolved candidate. The TTY fold in
 // hostIdentityVia is NOT in this position: that one is reached by candidates
 // with no TermProgram at all, which is exactly the branch that reads the bit.
-func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry *ancestryProbe, readKittyWindow kittyWindowProbe) (probed bool) {
+func applyKittyAncestryBackfill(ctx context.Context, l *session.Launcher, pid int, ancestry *ancestryProbe, readKittyWindow kittyWindowProbe) (probed bool) {
 	if l.TermProgram != "kitty" || l.KittyPID != 0 {
 		return true
 	}
-	term, kpid := ancestry.host()
+	term, kpid := ancestry.host(ctx)
 	if term != "kitty" || kpid <= 0 {
 		return true
 	}
@@ -463,7 +568,7 @@ func applyKittyAncestryBackfill(l *session.Launcher, pid int, ancestry *ancestry
 		l.KittyListenOn = kittyListenOnFor(kpid)
 	}
 	if l.KittyListenOn != "" && l.KittyWindowID == "" {
-		id, ok := readKittyWindow(l.KittyListenOn, pid)
+		id, ok := readKittyWindow(ctx, l.KittyListenOn, pid)
 		l.KittyWindowID = id
 		// #1537: the empty id from a kitten that never ran and the empty id
 		// from a kitty with no matching window arrived here as the same value.

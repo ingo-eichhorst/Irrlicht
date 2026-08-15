@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -460,6 +461,28 @@ func TestEveryBoundedShelloutClassifiesItsError(t *testing.T) {
 	}
 }
 
+// namedCeilings are the durations a context.WithTimeout in this package may be
+// given. Both are package-level constants, and the rule is still that the
+// argument is a NAMED one — an inline literal, or a local whose value nothing
+// names, fails whichever site writes it.
+//
+// #1529 added the second entry rather than widening the rule to "any
+// identifier", because the two are different KINDS of ceiling and a rule that
+// could not tell them apart would be the weaker one:
+//
+//   - shelloutTimeout bounds ONE child process. Every shellout in this package
+//     derives it, and #1538's whole point is that the value stays one fact.
+//   - herdrClientBudget bounds a SEQUENCE of them — the lsof scan plus every
+//     herdr client candidate behind it — which is a bound shelloutTimeout
+//     cannot express, and its absence is exactly what #1529 was filed about.
+//
+// A third entry is a reviewable diff, which is the property an "any named
+// identifier" rule would have thrown away.
+var namedCeilings = map[string]bool{
+	"shelloutTimeout":   true,
+	"herdrClientBudget": true,
+}
+
 // TestEveryBoundedShelloutUsesTheNamedCeiling is #1538's second half. The 2s
 // ceiling was an unnamed literal in eight places while three doc comments and
 // a test assertion already treated the value as a contract ("half of 2s"), and
@@ -479,11 +502,11 @@ func TestEveryBoundedShelloutUsesTheNamedCeiling(t *testing.T) {
 				return true
 			}
 			seen++
-			if id, ok := call.Args[1].(*ast.Ident); ok && id.Name == "shelloutTimeout" {
+			if id, ok := call.Args[1].(*ast.Ident); ok && namedCeilings[id.Name] {
 				return true
 			}
-			t.Errorf("%s:%d: a bounded shellout's ceiling is spelled inline; use shelloutTimeout so the value stays one fact (#1538)",
-				filepath.Base(name), fset.Position(call.Pos()).Line)
+			t.Errorf("%s:%d: a context ceiling here is spelled inline or names something outside %v; use one of those so each value stays one fact (#1538, #1529)",
+				filepath.Base(name), fset.Position(call.Pos()).Line, sortedNames(namedCeilings))
 			return true
 		})
 	}
@@ -496,4 +519,70 @@ func TestEveryBoundedShelloutUsesTheNamedCeiling(t *testing.T) {
 		t.Fatalf("found %d context.WithTimeout calls, expected at least %d: the scan is not looking where it thinks it is",
 			seen, knownCeilings)
 	}
+}
+
+// TestNoAggregateBudgetNeverReachesAChildProcess enforces the one claim
+// noAggregateBudget's own doc makes about itself — that nothing hands it to
+// exec.CommandContext — which until #1529 was a sentence nothing checked.
+//
+// It matters because that helper is a NAMED spelling of context.Background(),
+// and core/architecture_shellout_test.go's repo-wide rule matches the LITERAL
+// spelling only ("a variable that happens to hold one is invisible here", its
+// own declared limit). So `exec.CommandContext(noAggregateBudget(), …)` would
+// be exec.Command wearing two disguises instead of one: unbounded, and passing
+// both the repo rule and a reviewer skimming for a blessed helper name. The
+// helper exists to name an absent AGGREGATE, never an absent child ceiling —
+// every site derives shelloutTimeout from it, and this is what keeps that true.
+func TestNoAggregateBudgetNeverReachesAChildProcess(t *testing.T) {
+	fset, files := parsePackageSources(t, ".")
+
+	sites := 0
+	for name, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) == 0 {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "CommandContext" {
+				return true
+			}
+			if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "exec" {
+				return true
+			}
+			sites++
+			inner, ok := call.Args[0].(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := inner.Fun.(*ast.Ident); ok && id.Name == "noAggregateBudget" {
+				t.Errorf("%s:%d: exec.CommandContext given noAggregateBudget() — that is a NAMED "+
+					"context.Background(), so this child has no ceiling at all, and the repo-wide rule "+
+					"in core/architecture_shellout_test.go matches only the literal spelling and cannot "+
+					"see it. Derive shelloutTimeout from the caller's context instead (#1529, #1543)",
+					filepath.Base(name), fset.Position(call.Pos()).Line)
+			}
+			return true
+		})
+	}
+
+	// A floor for the same reason the two rules above carry one: a scan that
+	// stopped seeing this package's shellouts would report nothing and read
+	// exactly like a clean one.
+	const knownCommandSites = 4
+	if sites < knownCommandSites {
+		t.Fatalf("found %d exec.CommandContext sites, expected at least %d: the scan is not looking where it thinks it is",
+			sites, knownCommandSites)
+	}
+}
+
+// sortedNames renders a name set deterministically, so a failure message does
+// not vary run to run with Go's map iteration order.
+func sortedNames(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for name := range set {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }

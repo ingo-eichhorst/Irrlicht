@@ -3,6 +3,7 @@
 package processlifecycle
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -59,7 +60,7 @@ func TestProcessTTYVia_NonAnswerIsNotAnAbsentTerminal(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tty, probed := processTTYVia(tc.pid, tc.build)
+		tty, probed := processTTYVia(noAggregateBudget(), tc.pid, tc.build)
 		if tty != tc.wantTTY || probed != tc.wantProbed {
 			t.Errorf("%s: processTTYVia = (%q, %v), want (%q, %v) — %s",
 				tc.name, tty, probed, tc.wantTTY, tc.wantProbed, tc.why)
@@ -77,13 +78,13 @@ func TestProcessTTYVia_NonAnswerIsNotAnAbsentTerminal(t *testing.T) {
 // The vacuity guard is the second half: a working ps must still produce a
 // complete read, or a hostIdentity hard-wired to incomplete would pass.
 func TestHostIdentity_UnreadableTTYIsNotACompleteRead(t *testing.T) {
-	answered := func(int) (string, bool) { return "/dev/ttys004", true }
-	unanswered := func(int) (string, bool) { return "", false }
+	answered := func(context.Context, int) (string, bool) { return "/dev/ttys004", true }
+	unanswered := func(context.Context, int) (string, bool) { return "", false }
 
-	if l, complete := hostIdentityVia(os.Getpid(), answered); !complete || l.TTY != "/dev/ttys004" {
+	if l, complete := hostIdentityVia(noAggregateBudget(), os.Getpid(), answered); !complete || l.TTY != "/dev/ttys004" {
 		t.Errorf("a ps that answered: got (TTY %q, complete %v); want the read to complete", l.TTY, complete)
 	}
-	if _, complete := hostIdentityVia(os.Getpid(), unanswered); complete {
+	if _, complete := hostIdentityVia(noAggregateBudget(), os.Getpid(), unanswered); complete {
 		t.Error("a ps that never answered was reported as a complete read of this process (#1533)")
 	}
 }
@@ -97,7 +98,7 @@ func TestHostIdentity_UnreadableTTYIsNotACompleteRead(t *testing.T) {
 func TestProcessTTY_CeilingIsANonAnswer(t *testing.T) {
 	t.Parallel() // spends the real 2s ceiling and shares no state
 	start := time.Now()
-	tty, probed := processTTYVia(1, stalledChild)
+	tty, probed := processTTYVia(noAggregateBudget(), 1, stalledChild)
 	elapsed := time.Since(start)
 
 	if probed {
