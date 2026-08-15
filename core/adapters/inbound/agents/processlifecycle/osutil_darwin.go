@@ -1005,11 +1005,32 @@ type clientPIDProbe func(ctx context.Context, socketPath string) (pids []int, pr
 // supplied — the same reason #1390 collapsed a receiver's two constructors into
 // the one the daemon builds.
 //
-// One context spans both stages on purpose. Two deadlines, one per stage, would
-// read as a bound and add up to twice the budget; and the lsof scan is the
-// cheap half of a pair whose expensive half is the loop, so the scan running
-// long is precisely when the loop needs less. What the herdr indirection costs
-// is one number, so it is one context.
+// One context spans both stages on purpose: two deadlines, one per stage, would
+// read as a bound while summing to twice the budget, and what the herdr
+// indirection costs is one number, so it is one context.
+//
+// What sharing COSTS, stated rather than argued away. The two stages compete
+// for one budget and the scan goes first, so an lsof that runs to nearly
+// herdrClientBudget and still SUCCEEDS leaves the loop nothing: every candidate
+// is abandoned and the answer is (nil, false). On a machine where lsof is
+// chronically slow-but-answering, a herdr host would then never resolve, where
+// before #1529 it resolved slowly. Three things bound that, and none of them
+// makes it go away:
+//
+//   - It fails to the SAFE side. A non-answer clears no stored host (#1492) and
+//     the memo re-probes on the next sweep, so the cost is a deferred recovery
+//     rather than a wrong answer.
+//   - The band is narrow. An lsof at its own shelloutTimeout is normally KILLED
+//     rather than slow, and a killed one is already (nil, false) via
+//     lsofProbeRan — so only the slow-and-successful window is new.
+//   - Nobody would see it. #1534 is that nothing counts probe non-answers, and
+//     that now covers budget abandonment too.
+//
+// Splitting the budget between the stages is the obvious alternative and is
+// deliberately NOT taken here: it needs evidence about the real distribution of
+// scan times, which #1529 has none of. This is the same trade #1553 records for
+// the git adapter — an unbounded call that answered slowly becomes a bounded
+// one that does not answer at all — and it is written down for the same reason.
 func resolveHerdrClientLauncherVia(socketPath string, scan clientPIDProbe, identify hostIdentityProbe) (*session.Launcher, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), herdrClientBudget)
 	defer cancel()
