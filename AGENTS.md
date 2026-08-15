@@ -1135,9 +1135,19 @@ compose — `--only <group> --budget <n>` bounds one group.
 
 Also read a push's exit status directly, never through a pipe: `git push … |
 tail` reports `tail`'s status, so a push the hook refused looks like a success
-to the caller. Use `PIPESTATUS`, or assert afterwards that `git status -sb`
-shows a tracking branch — this is a plausible cause of the "committed but never
-pushed" incident recorded in `ir:exec` Phase 4 (#1570).
+to the caller. Assert afterwards that `git status -sb` shows a tracking branch —
+this is a plausible cause of the "committed but never pushed" incident recorded
+in `ir:exec` Phase 4 (#1570).
+
+**Not `PIPESTATUS`**, which is what this paragraph advised until #1559's agent
+tried it: this repo's shell is zsh, where the array is spelled `$pipestatus` and
+indexed from **1**, so the bash spelling `${PIPESTATUS[0]}` expands to the empty
+string and the check reports nothing at all. Advice for reading a status that
+silently yields no status is this section's own subject arriving in its own
+prose, which is why the fix is to name the portable check rather than to correct
+the spelling — `git status -sb` works in either shell and asserts the thing
+actually wanted (the branch is tracking), where a pipe status only asserts that
+one command in a pipeline exited zero.
 
 `tools/install-git-hooks.sh` (run once per clone; worktrees share the parent
 repo's hooks automatically) wires `tools/preflight.sh`'s fast gates as a
