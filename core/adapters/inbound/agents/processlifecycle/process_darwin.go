@@ -80,7 +80,7 @@ func (darwinObserver) ArgvOf(pid int) ([]string, error) {
 
 // CWDOf returns the working directory of pid via `lsof -d cwd`.
 func (darwinObserver) CWDOf(pid int) (string, error) {
-	out, err := runProbe(context.Background(), func(ctx context.Context) *exec.Cmd {
+	out, err := runProbe(context.Background(), probeLsofCWD, func(ctx context.Context) *exec.Cmd {
 		return exec.CommandContext(ctx, lsofPath, "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn")
 	})
 	if err != nil {
@@ -123,7 +123,7 @@ func writerOfVia(path string, build shelloutCmd) (int, error) {
 	if path == "" {
 		return 0, nil
 	}
-	out, err := runProbe(context.Background(), build)
+	out, err := runProbe(context.Background(), probeLsofWriter, build)
 	if !lsofProbeRan(err) {
 		// #1537: an lsof that could not be ASKED knows nothing about who holds
 		// this transcript, and the comment that used to sit on the collapsed
@@ -232,7 +232,7 @@ func runPgrep(flag, pattern string) ([]int, error) {
 
 // runPgrepVia is runPgrep with the shellout injected.
 func runPgrepVia(flag, pattern string, build shelloutCmd) ([]int, error) {
-	out, err := runProbe(context.Background(), build)
+	out, err := runProbe(context.Background(), probePgrepDiscover, build)
 	if err != nil {
 		// pgrep exits 1 when there are no matches — a real answer, the same
 		// shape as lsof's (lsofProbeRan). Anything else is a probe that did

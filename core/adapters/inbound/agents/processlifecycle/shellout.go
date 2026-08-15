@@ -101,10 +101,27 @@ type shelloutCmd func(ctx context.Context) *exec.Cmd
 // (out, err) and leaves the verdict, whose POLARITY is per-call-site anyway, at
 // the call site. See the file header of shellout_guard_test.go for the rule and
 // what each half of it can and cannot see.
-func runProbe(ctx context.Context, build shelloutCmd) ([]byte, error) {
+//
+// WHAT IT DOES DO, since #1534, is COUNT. Being the only place a child starts
+// is exactly what makes one counting site cover every probe, present and
+// future — eight call sites' worth of remembering removed the same way #1547
+// removed eight copies of the ceiling. The counter has to know WHICH question
+// was asked, which is why this signature grew a parameter rather than deriving
+// one: a shelloutCmd closes its arguments over (see the type), so there is
+// nothing in build to derive a kind from, and TestEveryProbeSiteDeclaresItsOwnKind
+// grades what each site passes.
+//
+// Counting is still not CLASSIFYING, and the distinction is the same one the
+// paragraph above draws. observeProbe records whether the CHILD answered —
+// shellout.Answered's tool-independent half — and touches no site's exit-code
+// allowlist and no site's polarity. probecount.go's probeOutcomeRule carries
+// that argument and states what it costs.
+func runProbe(ctx context.Context, kind probeKind, build shelloutCmd) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, shelloutTimeout)
 	defer cancel()
-	return build(ctx).Output()
+	out, err := build(ctx).Output()
+	observeProbe(kind, err)
+	return out, err
 }
 
 // probeAnswered is this package's binding of the shared predicate

@@ -88,6 +88,12 @@ func buildTestService(t *testing.T) *DiagnosticsService {
 // --diagnose CLI (a process that served no hooks), non-nil is the daemon.
 func buildTestServiceWithHooks(t *testing.T, hookHealth func() HookHealthSnapshot) *DiagnosticsService {
 	t.Helper()
+	return buildTestServiceWith(t, hookHealth, nil)
+}
+
+// buildTestServiceWith wires both nil-meaningful snapshot sources explicitly.
+func buildTestServiceWith(t *testing.T, hookHealth func() HookHealthSnapshot, probeHealth func() ProbeHealthSnapshot) *DiagnosticsService {
+	t.Helper()
 	home := "/Users/test"
 	dir := t.TempDir()
 	instancesDir := filepath.Join(dir, "instances")
@@ -140,6 +146,7 @@ func buildTestServiceWithHooks(t *testing.T, hookHealth func() HookHealthSnapsho
 		Cfg:            cfg,
 		Version:        "9.9.9+test",
 		HookHealth:     hookHealth,
+		ProbeHealth:    probeHealth,
 		Paths: DiagnosticsPaths{
 			Home:            home,
 			InstancesDir:    instancesDir,
@@ -160,7 +167,7 @@ func TestWriteBundleContents(t *testing.T) {
 	for _, want := range []string{
 		"version.txt", "system.txt", "config.json", "permissions.json",
 		"state.json", "sessions.json", "liveness.json", "processes.json",
-		"hooks.json", "events.log", "instances/sess-a.json", "ledgers/abc.ledger.json",
+		"hooks.json", "probes.json", "events.log", "instances/sess-a.json", "ledgers/abc.ledger.json",
 	} {
 		if _, ok := files[want]; !ok {
 			t.Errorf("bundle missing %s (have %v)", want, keys(files))

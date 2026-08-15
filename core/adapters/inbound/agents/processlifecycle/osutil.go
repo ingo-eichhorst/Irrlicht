@@ -486,6 +486,13 @@ func newAncestryReadsVia(read procInfoProbe) *ancestryReads {
 // can, and records only what the underlying read ANSWERED.
 func (r *ancestryReads) probe(ctx context.Context, pid int) (ppid int, cmd string, err error) {
 	if answer, hit := r.seen[pid]; hit {
+		// #1534: a hit starts no child, so runProbe never sees it, and an
+		// "N answered" that silently excluded hits would understate how often
+		// this probe is ASKED. #1544's own hand-back named this — "a memo now
+		// also hides how often the probe runs" — so the hit is counted where it
+		// happens, on the kind the underlying read would have used, and
+		// published as its own outcome rather than folded into the runs.
+		observeProbeMemoHit(probePSProcInfo)
 		return answer.ppid, answer.cmd, nil
 	}
 	ppid, cmd, err = r.read(ctx, pid)
