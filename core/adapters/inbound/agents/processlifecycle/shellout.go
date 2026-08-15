@@ -26,6 +26,14 @@ import (
 // probe that blocks session discovery, and a probe killed before it answers —
 // and #1538's whole subject is that the second is only safe because
 // probeAnswered reports it as a non-answer rather than as an empty one.
+//
+// Since #1529 every site derives this ceiling FROM the caller's context rather
+// than from context.Background(), so a child is killed at whichever comes
+// first: its own ceiling, or an aggregate deadline the caller imposed across a
+// whole sequence of them (herdrClientBudget is the one such aggregate today;
+// noAggregateBudget names the reads that deliberately have none). Nothing about
+// the per-child value changed — what changed is that a caller can now cap the
+// SUM, which this constant never could.
 const shelloutTimeout = 2 * time.Second
 
 // shelloutCmd builds one bounded child process. Every injected shellout in this

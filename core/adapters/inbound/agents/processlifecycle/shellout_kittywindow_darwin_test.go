@@ -3,6 +3,7 @@
 package processlifecycle
 
 import (
+	"context"
 	"testing"
 
 	"irrlicht/core/domain/session"
@@ -68,7 +69,7 @@ func TestKittyWindowIDForPIDVia_NonAnswerIsNotAnAbsentWindow(t *testing.T) {
 	t.Cleanup(func() { kittenPath = prev })
 
 	for _, tc := range cases {
-		id, probed := kittyWindowIDForPIDVia("unix:/tmp/kitty-1537", 4242, tc.build)
+		id, probed := kittyWindowIDForPIDVia(noAggregateBudget(), "unix:/tmp/kitty-1537", 4242, tc.build)
 		if id != tc.wantID || probed != tc.wantProbed {
 			t.Errorf("%s: kittyWindowIDForPIDVia = (%q, %v), want (%q, %v) — %s",
 				tc.name, id, probed, tc.wantID, tc.wantProbed, tc.why)
@@ -98,7 +99,7 @@ func TestKittyWindowIDForPIDVia_AbsentKittenIsASettledVerdict(t *testing.T) {
 		{"no socket", "", 4242},
 		{"no session pid", "unix:/tmp/kitty-1537", 0},
 	} {
-		if id, probed := kittyWindowIDForPIDVia(tc.socket, tc.pid, unreachable); id != "" || !probed {
+		if id, probed := kittyWindowIDForPIDVia(noAggregateBudget(), tc.socket, tc.pid, unreachable); id != "" || !probed {
 			t.Errorf("%s: got (%q, %v), want (\"\", true) — nothing was asked, so nothing failed", tc.name, id, probed)
 		}
 	}
@@ -121,18 +122,18 @@ func TestApplyAncestryFallbacks_UnreadableKittyWindowIsNotACompleteRead(t *testi
 		return &session.Launcher{TermProgram: "kitty", KittyListenOn: "unix:/tmp/kitty-1537"},
 			&ancestryProbe{pid: 4242, resolved: true, term: "kitty", hostPID: 999, complete: true}
 	}
-	answered := func(string, int) (string, bool) { return "7", true }
-	unanswered := func(string, int) (string, bool) { return "", false }
+	answered := func(context.Context, string, int) (string, bool) { return "7", true }
+	unanswered := func(context.Context, string, int) (string, bool) { return "", false }
 
 	// Vacuity guard: a kitten that answers must still complete, or a
 	// hard-wired "incomplete" would satisfy the assertion below.
 	l, ancestry := fixture()
-	if complete := applyAncestryFallbacksVia(l, 4242, ancestry, answered); !complete || l.KittyWindowID != "7" {
+	if complete := applyAncestryFallbacksVia(noAggregateBudget(), l, 4242, ancestry, answered); !complete || l.KittyWindowID != "7" {
 		t.Errorf("a kitten that answered: got (window %q, complete %v); want (\"7\", true)", l.KittyWindowID, complete)
 	}
 
 	l, ancestry = fixture()
-	if complete := applyAncestryFallbacksVia(l, 4242, ancestry, unanswered); complete {
+	if complete := applyAncestryFallbacksVia(noAggregateBudget(), l, 4242, ancestry, unanswered); complete {
 		t.Error("a kitten that never answered was reported as a complete read (#1537)")
 	}
 }

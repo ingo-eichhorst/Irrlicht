@@ -2,7 +2,11 @@
 
 package processlifecycle
 
-import "irrlicht/core/domain/session"
+import (
+	"context"
+
+	"irrlicht/core/domain/session"
+)
 
 // readProcessEnv is not implemented on this platform — launcher capture
 // is disabled and the menu-bar app falls back to Finder-reveal of cwd.
@@ -14,29 +18,31 @@ func readProcessEnv(pid int) (map[string]string, error) {
 // probed is true: having no darwin ps to run is a settled property of this
 // platform, not a read that failed (#1533) — the same reading the ancestry
 // stubs below give their complete return.
-func processTTY(pid int) (string, bool) { return "", true }
+func processTTY(ctx context.Context, pid int) (string, bool) { return "", true }
 
 // resolveTermProgramFromAncestry / resolveHostFromAncestry are darwin-only
 // fallbacks; other platforms return zero values.
 //
 // complete is true: declining to walk is a settled verdict about this
 // platform, not a read that failed (#1492).
-func resolveTermProgramFromAncestry(pid int) string { return "" }
-func resolveHostFromAncestry(pid int) (term string, host int, complete bool) {
+func resolveTermProgramFromAncestry(ctx context.Context, pid int) string { return "" }
+func resolveHostFromAncestry(ctx context.Context, pid int) (term string, host int, complete bool) {
 	return "", 0, true
 }
-func resolveHostBundleIDFromAncestry(pid int) (bundleID string, host int, complete bool) {
+func resolveHostBundleIDFromAncestry(ctx context.Context, pid int) (bundleID string, host int, complete bool) {
 	return "", 0, true
 }
 
 // Stubs for the kitty "no readable env" enrichment helpers — darwin-only.
-func kittyAncestryPID(pid int) int         { return 0 }
-func kittyListenOnFor(kittyPID int) string { return "" }
+func kittyAncestryPID(ctx context.Context, pid int) int { return 0 }
+func kittyListenOnFor(kittyPID int) string              { return "" }
 
 // probed is true for the same reason processTTY's stub reports it: having no
 // kitty remote-control CLI to run is a settled property of this platform, not
 // a read that failed (#1537).
-func kittyWindowIDForPID(socket string, sessionPID int) (string, bool) { return "", true }
+func kittyWindowIDForPID(ctx context.Context, socket string, sessionPID int) (string, bool) {
+	return "", true
+}
 
 // IsKnownInteractiveHost is darwin-only (ancestry walking); other platforms
 // fail open. The exclusion signal it backs (CodexBar's non-interactive `agy`

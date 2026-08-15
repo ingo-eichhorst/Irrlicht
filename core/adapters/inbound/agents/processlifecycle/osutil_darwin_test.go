@@ -24,7 +24,7 @@ func TestKittyAncestryPID_Self(t *testing.T) {
 	// app launched `go test`, so we only assert the helper returns cleanly.
 	// When it returns non-zero, the result must point at a real kitty.app
 	// process (or one that's since exited — the lookup is best-effort).
-	got := kittyAncestryPID(os.Getpid())
+	got := kittyAncestryPID(noAggregateBudget(), os.Getpid())
 	if got == 0 {
 		return // legitimate when no kitty in ancestry
 	}
@@ -299,7 +299,7 @@ func TestTopLevelAppPath(t *testing.T) {
 // contains a dot) or "" — never errors or panics. The deterministic path
 // logic is covered by TestTopLevelAppPath.
 func TestResolveHostBundleIDFromAncestry_Self(t *testing.T) {
-	bid, hostPID, complete := resolveHostBundleIDFromAncestry(os.Getpid())
+	bid, hostPID, complete := resolveHostBundleIDFromAncestry(noAggregateBudget(), os.Getpid())
 	// The running test binary is alive, so every readProcInfo in its chain has
 	// something to answer with — barring a `ps` slow enough to blow its own 2s
 	// ceiling, which is the condition #1492 is about and which this assertion
@@ -318,8 +318,8 @@ func TestResolveHostBundleIDFromAncestry_Self(t *testing.T) {
 		// only the bundle probe to one that always answers. A non-empty sentinel
 		// means the walk DID reach a top-level app, so the production pair had
 		// something to name and came back empty.
-		sentinel, _, _ := resolveHostBundleIDVia(os.Getpid(), readProcInfo,
-			func(string) (string, error) { return "sentinel.app", nil })
+		sentinel, _, _ := resolveHostBundleIDVia(noAggregateBudget(), os.Getpid(), readProcInfo,
+			func(context.Context, string) (string, error) { return "sentinel.app", nil })
 		if sentinel != "" {
 			t.Error("the walk reached a top-level .app ancestor but resolveHostBundleIDFromAncestry " +
 				"named nothing — either its production probe pair no longer reaches plutil, or every " +
@@ -337,7 +337,7 @@ func TestResolveHostBundleIDFromAncestry_Self(t *testing.T) {
 // invocation, so we only assert that the helper either finds a supported host
 // (non-empty) or returns "" cleanly — never errors or panics.
 func TestResolveTermProgramFromAncestry_Self(t *testing.T) {
-	got := resolveTermProgramFromAncestry(os.Getpid())
+	got := resolveTermProgramFromAncestry(noAggregateBudget(), os.Getpid())
 	if got != "" {
 		if _, known := termProgramByAppName[reverseLookup(got)]; !known {
 			t.Errorf("resolveTermProgramFromAncestry returned unknown TermProgram %q", got)
@@ -412,7 +412,7 @@ func spawnHerdrClient(t *testing.T, socketPath string, env ...string) int {
 	}, env...))
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		pids, _ := herdrClientPIDs(socketPath)
+		pids, _ := herdrClientPIDs(noAggregateBudget(), socketPath)
 		for _, got := range pids {
 			if got == pid {
 				return pid
@@ -481,7 +481,7 @@ func TestHerdrClientPIDs_MultipleClientsAreOrderedNewestFirst(t *testing.T) {
 	first := spawnHerdrClient(t, socketPath)
 	second := spawnHerdrClient(t, socketPath)
 
-	pids, _ := herdrClientPIDs(socketPath)
+	pids, _ := herdrClientPIDs(noAggregateBudget(), socketPath)
 	if len(pids) < 2 {
 		t.Fatalf("want both attached clients, got %v (first=%d second=%d)", pids, first, second)
 	}
@@ -607,7 +607,7 @@ func TestHerdrClientPIDs_ProbeTriState(t *testing.T) {
 	t.Run("attached", func(t *testing.T) {
 		socketPath := newHerdrSessionDir(t)
 		client := spawnHerdrClient(t, socketPath)
-		pids, probed := herdrClientPIDs(socketPath)
+		pids, probed := herdrClientPIDs(noAggregateBudget(), socketPath)
 		if !probed {
 			t.Fatal("a successful lsof must report a probe that ran")
 		}
@@ -622,7 +622,7 @@ func TestHerdrClientPIDs_ProbeTriState(t *testing.T) {
 		if err := os.WriteFile(herdrClientLogPath(socketPath), []byte("detached\n"), 0o600); err != nil {
 			t.Fatalf("seed client log: %v", err)
 		}
-		pids, probed := herdrClientPIDs(socketPath)
+		pids, probed := herdrClientPIDs(noAggregateBudget(), socketPath)
 		if !probed {
 			t.Fatal("a detach is an answer, not a failure — reporting it as unknown would freeze the last host forever")
 		}
@@ -638,13 +638,13 @@ func TestHerdrClientPIDs_ProbeTriState(t *testing.T) {
 		// self-consistent "nobody is attached". A socket path addressing
 		// another *real* session is NOT covered — that log exists, so the
 		// stat passes; see herdrClientPIDs.
-		if _, probed := herdrClientPIDs(newHerdrSessionDir(t)); probed {
+		if _, probed := herdrClientPIDs(noAggregateBudget(), newHerdrSessionDir(t)); probed {
 			t.Error("a client log that does not exist is not evidence of a detach")
 		}
 	})
 
 	t.Run("no socket path", func(t *testing.T) {
-		if _, probed := herdrClientPIDs(""); probed {
+		if _, probed := herdrClientPIDs(noAggregateBudget(), ""); probed {
 			t.Error("no address means nothing was probed")
 		}
 	})
@@ -829,10 +829,10 @@ func exitedPID(t *testing.T) int {
 // readProcInfo fails, which is the same branch a `ps` that blows its 2s ceiling
 // takes.
 func TestResolveHostFromAncestry_UnreadableProcessIsNotAMiss(t *testing.T) {
-	if term, hostPID, complete := resolveHostFromAncestry(1); term != "" || hostPID != 0 || !complete {
+	if term, hostPID, complete := resolveHostFromAncestry(noAggregateBudget(), 1); term != "" || hostPID != 0 || !complete {
 		t.Errorf("launchd: got (%q, %d, %v); want a completed walk that found nothing", term, hostPID, complete)
 	}
-	if term, hostPID, complete := resolveHostFromAncestry(exitedPID(t)); term != "" || hostPID != 0 || complete {
+	if term, hostPID, complete := resolveHostFromAncestry(noAggregateBudget(), exitedPID(t)); term != "" || hostPID != 0 || complete {
 		t.Errorf("reaped pid: got (%q, %d, %v); want an ABORTED walk — an unreadable process is not a miss", term, hostPID, complete)
 	}
 }
@@ -843,10 +843,10 @@ func TestResolveHostFromAncestry_UnreadableProcessIsNotAMiss(t *testing.T) {
 // verdict (launchd, row 1); "pid could not be read" is not (row 2). Merging
 // them is #1492 in miniature.
 func TestResolveHostBundleIDFromAncestry_UnreadableProcessIsNotAMiss(t *testing.T) {
-	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(1); bid != "" || hostPID != 0 || !complete {
+	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(noAggregateBudget(), 1); bid != "" || hostPID != 0 || !complete {
 		t.Errorf("launchd: got (%q, %d, %v); want a completed walk that found nothing", bid, hostPID, complete)
 	}
-	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(exitedPID(t)); bid != "" || hostPID != 0 || complete {
+	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(noAggregateBudget(), exitedPID(t)); bid != "" || hostPID != 0 || complete {
 		t.Errorf("reaped pid: got (%q, %d, %v); want an ABORTED walk", bid, hostPID, complete)
 	}
 }
@@ -874,7 +874,7 @@ func TestIsKnownInteractiveHost_AbortedWalkAdmits(t *testing.T) {
 // value at the call site — every test of this seam turns on which of the two a
 // walk returned, and a bare `true` there reads as "found a host".
 func walk(host string, complete bool) ancestryWalk {
-	return func(int) (string, int, bool) { return host, 0, complete }
+	return func(context.Context, int) (string, int, bool) { return host, 0, complete }
 }
 
 const (
@@ -926,7 +926,7 @@ func TestIsKnownInteractiveHostVia_AbortedFirstWalkDoesNotDeferToTheSecond(t *te
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isKnownInteractiveHostVia(4242, tc.term, tc.bundle); got != tc.wantInteractive {
+			if got := isKnownInteractiveHostVia(noAggregateBudget(), 4242, tc.term, tc.bundle); got != tc.wantInteractive {
 				t.Errorf("isKnownInteractiveHostVia = %v, want %v", got, tc.wantInteractive)
 			}
 		})
@@ -981,11 +981,11 @@ func TestHostIdentity_KittyBackfillWalkCountsTowardCompleteness(t *testing.T) {
 
 	// Vacuity guard: with a LIVE pid the same block runs and completes, so a
 	// hostIdentity hard-wired to "incomplete" would not satisfy this test.
-	if l, complete := hostIdentity(os.Getpid()); !complete || l.TermProgram != "kitty" {
+	if l, complete := hostIdentity(noAggregateBudget(), os.Getpid()); !complete || l.TermProgram != "kitty" {
 		t.Errorf("live pid: got (%+v, %v); want the back-fill to run and complete", l, complete)
 	}
 
-	l, complete := hostIdentity(exitedPID(t))
+	l, complete := hostIdentity(noAggregateBudget(), exitedPID(t))
 	if l.TermProgram != "kitty" {
 		t.Fatalf("the env still names the host, so it must survive: %+v", l)
 	}
@@ -1017,7 +1017,7 @@ func orphanPID(t *testing.T) int {
 	// The `sh` has exited (Output waits for it); wait for launchd to actually
 	// re-parent before asserting on the chain.
 	for i := 0; i < 100; i++ {
-		if ppid, _, err := readProcInfo(pid); err == nil && ppid <= 1 {
+		if ppid, _, err := readProcInfo(noAggregateBudget(), pid); err == nil && ppid <= 1 {
 			return pid
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -1036,10 +1036,10 @@ func orphanPID(t *testing.T) int {
 func TestResolveHostFromAncestry_ChainEndingAtInitIsAVerdict(t *testing.T) {
 	orphan := orphanPID(t)
 
-	if term, hostPID, complete := resolveHostFromAncestry(orphan); term != "" || hostPID != 0 || !complete {
+	if term, hostPID, complete := resolveHostFromAncestry(noAggregateBudget(), orphan); term != "" || hostPID != 0 || !complete {
 		t.Errorf("orphan: got (%q, %d, %v); want a completed in-loop walk that found nothing", term, hostPID, complete)
 	}
-	if _, hostKnown := resolveClientHostIdentity([]int{orphan}); !hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), []int{orphan}); !hostKnown {
 		t.Error("a reparented candidate WAS read and has no window — that is an answer")
 	}
 }
@@ -1054,10 +1054,10 @@ func TestResolveClientHostIdentity_TruncatedCandidatesArePoisonToo(t *testing.T)
 	for i := range full {
 		full[i] = 1
 	}
-	if _, hostKnown := resolveClientHostIdentity(full); !hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), full); !hostKnown {
 		t.Fatalf("exactly maxClientCandidates readable candidates is a complete look: %d", len(full))
 	}
-	if _, hostKnown := resolveClientHostIdentity(append(full, 1)); hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), append(full, 1)); hostKnown {
 		t.Error("one candidate past the cap was never probed, so 'no client has a window' is unsupported")
 	}
 }
@@ -1066,10 +1066,10 @@ func TestResolveClientHostIdentity_TruncatedCandidatesArePoisonToo(t *testing.T)
 // primitives above and the loop below: hostIdentity is where a caller reads
 // them, and #1501's tmux client path is queued to read it the same way.
 func TestHostIdentity_CarriesTheAncestryVerdict(t *testing.T) {
-	if l, complete := hostIdentity(1); !complete || l == nil {
+	if l, complete := hostIdentity(noAggregateBudget(), 1); !complete || l == nil {
 		t.Errorf("launchd is readable and hostless: got (%+v, %v)", l, complete)
 	}
-	if l, complete := hostIdentity(exitedPID(t)); complete {
+	if l, complete := hostIdentity(noAggregateBudget(), exitedPID(t)); complete {
 		t.Errorf("a reaped pid cannot be read, so its empty identity is not evidence: got (%+v, %v)", l, complete)
 	}
 }
@@ -1089,7 +1089,7 @@ func TestHostIdentity_CarriesTheAncestryVerdict(t *testing.T) {
 func TestResolveClientHostIdentity_UnreadableCandidateIsNotDetached(t *testing.T) {
 	dead := exitedPID(t)
 
-	host, hostKnown := resolveClientHostIdentity([]int{dead})
+	host, hostKnown := resolveClientHostIdentity(noAggregateBudget(), []int{dead})
 
 	if host != nil {
 		t.Errorf("an unreadable candidate must not produce a host: %+v", host)
@@ -1106,7 +1106,7 @@ func TestResolveClientHostIdentity_UnreadableCandidateIsNotDetached(t *testing.T
 // ancestry walk terminates immediately and honestly (PID 1 has no parent), so
 // "no local window" here is evidence, and the answer stays an answer.
 func TestResolveClientHostIdentity_HostlessCandidateStaysDetached(t *testing.T) {
-	host, hostKnown := resolveClientHostIdentity([]int{1})
+	host, hostKnown := resolveClientHostIdentity(noAggregateBudget(), []int{1})
 
 	if host != nil {
 		t.Errorf("launchd has no window; reporting one is the #1348 misroute: %+v", host)
@@ -1125,13 +1125,13 @@ func TestResolveClientHostIdentity_OneUnreadableCandidatePoisonsTheAnswer(t *tes
 
 	// launchd first, so a loop that only remembered the FIRST candidate's
 	// verdict would answer "detached" here.
-	if _, hostKnown := resolveClientHostIdentity([]int{1, dead}); hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), []int{1, dead}); hostKnown {
 		t.Error("one unreadable candidate makes 'no client has a window' unsupported (#1492)")
 	}
 	// launchd last, so a loop that only remembered the LAST verdict would
 	// answer "detached" here. Between them the two arms pin both spellings of
 	// "the accumulator was dropped".
-	if _, hostKnown := resolveClientHostIdentity([]int{dead, 1}); hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), []int{dead, 1}); hostKnown {
 		t.Error("order must not change the verdict")
 	}
 }
@@ -1146,7 +1146,7 @@ func TestResolveClientHostIdentity_ResolvableCandidateStillWins(t *testing.T) {
 		"ITERM_SESSION_ID=w0t0p0-CLIENT",
 	})
 
-	host, hostKnown := resolveClientHostIdentity([]int{client})
+	host, hostKnown := resolveClientHostIdentity(noAggregateBudget(), []int{client})
 
 	if !hostKnown {
 		t.Fatal("a candidate whose own env names its host is readable by definition")
@@ -1158,7 +1158,7 @@ func TestResolveClientHostIdentity_ResolvableCandidateStillWins(t *testing.T) {
 	// The asymmetry the doc claims: a found host is evidence regardless of what
 	// the rest of the list did, so an unreadable candidate ahead of it must not
 	// poison a POSITIVE answer — only a negative one.
-	host, hostKnown = resolveClientHostIdentity([]int{exitedPID(t), client})
+	host, hostKnown = resolveClientHostIdentity(noAggregateBudget(), []int{exitedPID(t), client})
 	if !hostKnown || host == nil || host.TermProgram != "iTerm.app" {
 		t.Errorf("a resolving candidate wins outright past an unreadable one: got (%+v, %v)", host, hostKnown)
 	}
@@ -1333,7 +1333,7 @@ func TestHerdrClientPIDs_DedupesFDRowsOfOneClient(t *testing.T) {
 		"herdr     26940 ingo    5u   REG   1,18      372 136170 " + logPath
 	countingLsof(t, logPath, table)
 
-	pids, probed := herdrClientPIDs(socketPath)
+	pids, probed := herdrClientPIDs(noAggregateBudget(), socketPath)
 	if !probed {
 		t.Fatal("the stub exits 0, so the probe ran")
 	}
@@ -1505,7 +1505,7 @@ func TestBundleIDVia_AnsweredMissIsNotAnUnanswerableProbe(t *testing.T) {
 	// already has, so every row names the function it exercises instead of
 	// encoding it as an absent value.
 	via := func(c bundleIDCmd) bundleIDProbe {
-		return func(appPath string) (string, error) { return bundleIDVia(appPath, c) }
+		return func(ctx context.Context, appPath string) (string, error) { return bundleIDVia(ctx, appPath, c) }
 	}
 	tests := []struct {
 		name    string
@@ -1554,7 +1554,7 @@ func TestBundleIDVia_AnsweredMissIsNotAnUnanswerableProbe(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			id, err := tc.probe(tc.appPath)
+			id, err := tc.probe(noAggregateBudget(), tc.appPath)
 			if id != tc.wantID {
 				t.Errorf("id = %q, want %q — %s", id, tc.wantID, tc.wantWhy)
 			}
@@ -1575,7 +1575,7 @@ func TestBundleIDVia_AnsweredMissIsNotAnUnanswerableProbe(t *testing.T) {
 func TestBundleIDVia_CeilingActuallyFires(t *testing.T) {
 	t.Parallel() // spends the real 2s ceiling and shares no state
 	start := time.Now()
-	if _, err := bundleIDVia("/System/Library/CoreServices/Finder.app", stalledPlistCmd); err == nil {
+	if _, err := bundleIDVia(noAggregateBudget(), "/System/Library/CoreServices/Finder.app", stalledPlistCmd); err == nil {
 		t.Fatal("a child that never answers must report an error")
 	}
 	if elapsed := time.Since(start); elapsed < time.Second {
@@ -1600,7 +1600,7 @@ func obsidianChain() procInfoProbe {
 		300: {400, "/Applications/Obsidian.app/Contents/Frameworks/Obsidian Helper (Renderer).app/Contents/MacOS/Obsidian Helper (Renderer)"},
 		400: {1, "/Applications/Obsidian.app/Contents/MacOS/Obsidian"},
 	}
-	return func(pid int) (int, string, error) {
+	return func(_ context.Context, pid int) (int, string, error) {
 		l, ok := links[pid]
 		if !ok {
 			return 0, "", fmt.Errorf("no process info for pid %d", pid)
@@ -1613,11 +1613,11 @@ func obsidianChain() procInfoProbe {
 // unanswerable returns one that never answers. The pair is the whole #1524
 // distinction in two lines.
 func answering(id string) bundleIDProbe {
-	return func(string) (string, error) { return id, nil }
+	return func(context.Context, string) (string, error) { return id, nil }
 }
 
 func unanswerable() bundleIDProbe {
-	return func(string) (string, error) { return "", fmt.Errorf("plutil: signal: killed") }
+	return func(context.Context, string) (string, error) { return "", fmt.Errorf("plutil: signal: killed") }
 }
 
 // TestResolveHostBundleIDVia_UnanswerableBundleProbeIsNotAMiss is #1524's
@@ -1658,7 +1658,7 @@ func TestResolveHostBundleIDVia_UnanswerableBundleProbeIsNotAMiss(t *testing.T) 
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			id, hostPID, complete := resolveHostBundleIDVia(100, obsidianChain(), tc.probe)
+			id, hostPID, complete := resolveHostBundleIDVia(noAggregateBudget(), 100, obsidianChain(), tc.probe)
 			if got := (verdict{id, hostPID, complete}); got != tc.want {
 				t.Errorf("resolveHostBundleIDVia = %+v; want %+v", got, tc.want)
 			}
@@ -1680,8 +1680,8 @@ func TestResolveHostBundleIDVia_UnanswerableBundleProbeIsNotAMiss(t *testing.T) 
 func TestIsKnownInteractiveHost_PlutilNonAnswerAdmits(t *testing.T) {
 	walk1Finished := walk("", finished)
 	walk2 := func(probe bundleIDProbe) ancestryWalk {
-		return func(pid int) (string, int, bool) {
-			return resolveHostBundleIDVia(pid, obsidianChain(), probe)
+		return func(ctx context.Context, pid int) (string, int, bool) {
+			return resolveHostBundleIDVia(ctx, pid, obsidianChain(), probe)
 		}
 	}
 	tests := []struct {
@@ -1708,7 +1708,7 @@ func TestIsKnownInteractiveHost_PlutilNonAnswerAdmits(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isKnownInteractiveHostVia(100, walk1Finished, walk2(tc.probe)); got != tc.want {
+			if got := isKnownInteractiveHostVia(noAggregateBudget(), 100, walk1Finished, walk2(tc.probe)); got != tc.want {
 				t.Errorf("isKnownInteractiveHostVia = %v, want %v — %s", got, tc.want, tc.why)
 			}
 		})
@@ -1723,14 +1723,14 @@ func TestIsKnownInteractiveHost_PlutilNonAnswerAdmits(t *testing.T) {
 // classifies a REAL kill the way resolveHostBundleIDVia expects.
 func TestIsKnownInteractiveHost_PlutilCeilingAdmitsEndToEnd(t *testing.T) {
 	t.Parallel() // spends the real 2s ceiling and shares no state
-	stalled := func(appPath string) (string, error) {
-		return bundleIDVia(appPath, stalledPlistCmd)
+	stalled := func(ctx context.Context, appPath string) (string, error) {
+		return bundleIDVia(ctx, appPath, stalledPlistCmd)
 	}
 	walk1Finished := walk("", finished)
-	walk2 := func(pid int) (string, int, bool) {
-		return resolveHostBundleIDVia(pid, obsidianChain(), stalled)
+	walk2 := func(ctx context.Context, pid int) (string, int, bool) {
+		return resolveHostBundleIDVia(ctx, pid, obsidianChain(), stalled)
 	}
-	if !isKnownInteractiveHostVia(100, walk1Finished, walk2) {
+	if !isKnownInteractiveHostVia(noAggregateBudget(), 100, walk1Finished, walk2) {
 		t.Error("a plutil that blew its own ceiling declined a legitimate Obsidian-hosted session (#1524)")
 	}
 }

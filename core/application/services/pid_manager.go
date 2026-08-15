@@ -868,6 +868,14 @@ func (pm *PIDManager) DiscoverPIDWithRetry(sessionID, cwd, transcriptPath, adapt
 // cancelled. The sweep interval backs off from 5s to 15s when no dead PIDs
 // are found for several consecutive sweeps.
 func (pm *PIDManager) SweepDeadPIDs(ctx context.Context) {
+	// baseInterval is read out of this source, by name and in this spelling, by
+	// processlifecycle's TestHerdrReadFitsTheLivenessSweepTick: this handler
+	// calls refreshHerdrHosts synchronously, so the herdr launcher read has to
+	// fit inside one tick, and an adapter can neither import this package nor a
+	// function-local const. Renaming or moving it fails that test loudly rather
+	// than silently unpinning the bound — which is the intended behaviour, not a
+	// nuisance: it means re-pointing the test, or noticing that the coupling has
+	// changed.
 	const baseInterval = 5 * time.Second
 	const backoffInterval = 15 * time.Second
 	const cleanThreshold = 3
@@ -1387,8 +1395,10 @@ func (pm *PIDManager) touchAndSave(state *session.SessionState) {
 //     attached client, and the per-candidate identity probes behind it —
 //     is memoized per socket path, so N panes of one herdr server cost one
 //     probe per socket per TTL rather than N — "per sweep" while a pass runs
-//     inside one TTL, which is the normal case but not guaranteed under the
-//     load that produces a non-answer (#1529). That now holds for every outcome,
+//     inside one TTL, which is the normal case and is now also the case under
+//     the load that produces a non-answer, because #1529 capped what one such
+//     probe can cost (herdrClientBudget) rather than only how often it is
+//     paid. That now holds for every outcome,
 //     including the ones that determine nothing, and it did not always:
 //     #1492 routed an unreadable candidate to the same "could not look"
 //     answer as a failed scan, and #1485's rule was that such an answer is
@@ -1406,11 +1416,19 @@ func (pm *PIDManager) touchAndSave(state *session.SessionState) {
 //
 // The read runs outside assignMu deliberately: ReadLauncherEnv may block, and
 // assignMu serializes PID discovery for every session. Only the merge is taken
-// under the lock. "For up to two seconds" is what this said, and it was wrong
-// in the same way the bullet above was: each shellout is bounded at 2s, the
-// herdr path's candidate loop is bounded by a COUNT rather than by time, so
-// one resolve can outlast this ticker. That is #1529, not something the memo
-// above fixes — the memo makes it rarer, not shorter.
+// under the lock. What it may block FOR, on this path, is
+// processlifecycle.shelloutTimeout + herdrClientBudget: the pane's own
+// controlling-tty `ps` plus one aggregate deadline over the whole herdr client
+// indirection. That sum is asserted to fit inside baseInterval below, by
+// processlifecycle's TestHerdrReadFitsTheLivenessSweepTick, which reads this
+// function's own cadence out of this file rather than restating it.
+//
+// This said "for up to two seconds", and it was wrong in the same way the
+// bullet above was: each shellout was bounded at 2s and the herdr candidate
+// loop was bounded by a COUNT rather than by time, so one resolve could outlast
+// this ticker — which drops ticks it overruns. #1529 gave that loop the
+// aggregate deadline; the memo above makes the cost rarer, and this is what
+// makes it short.
 func (pm *PIDManager) refreshHerdrHosts(snaps []livenessSnapshot) {
 	if pm.launcherEnv == nil {
 		return
