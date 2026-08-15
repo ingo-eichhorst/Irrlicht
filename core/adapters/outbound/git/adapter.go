@@ -36,47 +36,139 @@ var gitPath = pathutil.MustResolve("git")
 // and GetGitRoot to resolve refs, commits, and repo-relative paths.
 const gitRevParseCmd = "rev-parse"
 
-// gitTimeout is the ceiling EVERY shellout in this adapter runs under. Until
-// #1543 there was none at all: seven plain exec.Command calls with no context,
-// inside a long-lived daemon, on directories that can be network mounts or
-// repos holding a lock.
+// gitTimeout is the ceiling for every shellout in this adapter whose cost does
+// NOT grow with the number of commits in the repository. gitHistoryTimeout
+// below is the other profile, and the reason there are two is #1553. Until
+// #1543 there was no ceiling at all: seven plain exec.Command calls with no
+// context, inside a long-lived daemon, on directories that can be network
+// mounts or repos holding a lock.
 //
 // The value is this adapter's own rather than a copy of the 2s next door
 // (processlifecycle's shelloutTimeout), because the workloads are not
-// comparable — a `ps` answers about one PID, `git log --all --grep` walks
-// every commit a user has ever reachable. Measured on this repo (3192 commits,
-// 265 MiB pack, git 2.50.1 / Apple Git-155, darwin/arm64, warm cache):
-// `log --all --grep` 0.05s, `for-each-ref refs/tags` 0.01s,
-// `tag --contains` 0.01s, `rev-parse` 0.01s. 5s is ~100x the heaviest of
-// those, and ~500x the three on the session-enrichment path, which are all
-// rev-parse.
+// comparable — a `ps` answers about one PID, `git tag --contains` walks a
+// commit graph. Measured on this repo (3209 commits across all refs, 325 MiB
+// .git, git 2.50.1 / Apple Git-155, darwin/arm64, warm cache, ~7ms of each
+// figure being process start): `rev-parse` 33ms, `for-each-ref refs/tags`
+// 38ms, `tag --contains` 39ms. 5s is ~130x the heaviest of those.
 //
-// Two consequences are stated rather than left implied. The ceiling is a
-// SINGLE value across two profiles: the enrichment reads (GetBranch,
-// GetHeadCommit, GetGitRoot) run inside the detector loop where 5s of stall is
-// bad but bounded, while the DORA reads run on a request a user is already
-// waiting on. And a repo large enough to legitimately exceed 5s now reports a
-// non-answer where it previously returned a correct-but-slow result — which is
-// the trade this whole family makes, and is safe only because a non-answer is
-// now propagated as "unknown" rather than as "there was nothing" (#1492's
-// polarity; nothing here gates admission). UNVERIFIED: the scaling to a very
-// large repo is extrapolation from the numbers above (~810 bytes and ~16us of
-// `log` per commit), not a measurement on such a repo.
+// `tag --contains` is the one whose membership in this profile is a judgement
+// rather than a fact, and #1553's own table had it backwards: it does not
+// scale with the TAG count, it walks the commit graph, so it scales with
+// history. Measured on a synthetic 1,000,000-commit repo carrying 40 tags:
+// 1.04s for a commit near the root (the worst case — every tag contains it)
+// against 38ms for a recent one. That is ~1us/commit where the two `log` walks
+// below cost ~22, because it reads the commit GRAPH rather than every commit
+// MESSAGE, so 5s covers roughly 5M commits. It stays in this profile rather
+// than moving to the longer ceiling because it is also the call
+// ComputeDoraMetrics makes most often — once per revert candidate — so a
+// longer ceiling multiplies worst there (#1563).
 //
-// It bounds ONE CALL, not one operation, and callers stack it: adoptGitMetadata
-// makes 2, RefreshOnActivity up to 3, and ComputeDoraMetrics
-// 1 + len(tags) + len(revertCandidates) — on a server whose WriteTimeout is
-// deliberately 0 (core/cmd/irrlichd/startup.go). A per-operation budget is a
-// larger change than #1543 and is not attempted here; what is fixed is that the
-// unbounded case is gone.
+// The consequence worth stating: these reads sit inside the detector loop,
+// where 5s of stall is bad but bounded. That is what the value is chosen
+// against, and it is why the history walks could not simply take it with them.
+// It also bounds ONE CALL, not one operation, and callers stack it —
+// adoptGitMetadata makes 2, RefreshOnActivity up to 3, ComputeDoraMetrics
+// 1 + len(in-window tags) + len(revertCandidates) — which is #1563.
 const gitTimeout = 5 * time.Second
 
-// gitMaxOutput caps how much of git's stdout is held in memory. gitTimeout
-// bounds how long git runs, not how much it writes in that time, and this runs
-// inside a long-lived daemon: `git log --pretty=format:...%B` over full history
-// measured 2.59 MB on this repo's 3192 commits (~810 bytes/commit), so a
-// 100k-commit repo is ~81 MB and a 1M-commit one ~810 MB, all buffered by
+// gitHistoryTimeout is the ceiling for the two shellouts that read every commit
+// MESSAGE in their range: RevertedCommits (`log --all --grep`) and
+// CommitsInRange (`log --pretty=%B`). They are the only two whose cost grows
+// with the size of the history, and #1553 is that one 5s ceiling covered both
+// profiles — so a repository big enough to exceed it got a permanent NON-answer
+// where before #1543 it got a correct-but-slow one, the DORA panel reading
+// "could not read this project's git history" forever and the yield sweep
+// logging an unread root every 30 minutes.
+//
+// MEASURED, on synthetic `git fast-import` repositories (one branch, ~60-byte
+// commit messages, packed, warm cache, same machine and git as above):
+//
+//	commits              log --all --grep   log --pretty=%B
+//	    3,209 (this repo)           0.15s   0.08s (over the 1,386 from HEAD)
+//	  100,000                       1.89s   2.24s
+//	1,000,000                      22.5s   30.5s
+//
+// Two things follow, and the first corrects #1553's own headline figure. 5s is
+// NOT reached at 100k commits — that costs 1.9s, comfortably inside it; the
+// wall is nearer 250k for the grep walk (19us/commit at 100k, 22us at 1M) and
+// ~200k for the body walk. And 30s covers the largest history measured here,
+// 1M commits — Linux-kernel scale — with ~25% headroom on the grep walk.
+//
+// The caveats belong to the measurement rather than to the constant: a
+// synthetic repo's commit objects are far smaller than a real one's (this repo
+// averages ~1.9 KB of message per commit against the synthetic's ~60 bytes), it
+// carries ONE ref where `--all` on a real large repo iterates thousands, and
+// the cache was warm. Read 1M commits as the shape of the curve, not as a
+// guarantee for any particular repository.
+//
+// Why 30s and not 60. It bounds one CALL, and ComputeDoraMetrics stacks
+// 1 + len(in-window tags) + len(revertCandidates) of them on a request served
+// by a server whose WriteTimeout is deliberately 0 (#1563 is that aggregate).
+// Every second here is multiplied by that count, so the value is chosen against
+// the stack rather than against the largest repository imaginable.
+//
+// And it is a TIME bound rather than a work bound, which #1553 asked to have
+// argued rather than assumed. Both work bounds that issue proposed were
+// measured and rejected:
+//
+//   - `--max-count` does not bound the work of a `--grep` scan at all. It caps
+//     the commits OUTPUT, after filtering, so git still walks everything
+//     looking for matches it never finds. Measured at 100k commits with no
+//     matching commit: 1921.8ms with `--max-count=10` against 1923.5ms without.
+//     "This repo has no reverts" is the ordinary case, so the option leaves
+//     precisely the worst case untouched.
+//   - `--since` derived from the DORA window changes the NUMBER, not only its
+//     cost. LeadTime is the median of (release time - commit author time) over
+//     a release's commits, so dropping the commits authored before the window
+//     start drops the LONGEST lead times first: the median moves down and is
+//     still published as Available:true. That is the biased-sample failure
+//     gitMaxOutput's doc argues must never happen, arriving through a third
+//     door.
+//
+// What DOES bound the work is the one bound that costs no semantics, and it is
+// #1553's other half: ComputeDoraMetrics no longer asks for the commits of tags
+// outside its window, because nothing reads them — the domain filters both
+// LeadTime and DetectReverts through filterRange.
+const gitHistoryTimeout = 30 * time.Second
+
+// costProfile names which of the two ceilings above a shellout runs under. It
+// is a REQUIRED argument of run() rather than a default the call sites can
+// inherit by omission, because picking wrong is silent in both directions: a
+// history walk on the short ceiling is #1553 reintroduced, and an enrichment
+// read on the long one stalls the detector loop for 30s. Deriving the profile
+// from the subcommand was the alternative and was rejected — `git log -1
+// --format=%s` is an entirely plausible future enrichment read, and it would
+// inherit the history ceiling from its argv with nobody deciding that.
+type costProfile int
+
+const (
+	// fixedCost is a shellout whose cost does not grow with the number of
+	// commits — or, for `tag --contains`, grows ~20x more slowly than the two
+	// history walks because it reads the commit graph rather than every commit
+	// message (see gitTimeout, which carries that measurement).
+	fixedCost costProfile = iota
+	// historyCost is a shellout that reads every commit MESSAGE in its range.
+	// There are exactly two and both are `git log`.
+	historyCost
+)
+
+// gitMaxOutput caps how much of git's stdout is held in memory. The ceilings
+// above bound how long git runs, not how much it writes in that time, and this
+// runs inside a long-lived daemon: `git log --pretty=format:...%B` over full
+// history measured 2,611,982 bytes on this repo — over the 1,386 commits
+// reachable from HEAD, which is the population that command actually walks, so
+// ~1.9 KB per commit. (It said "~810 bytes/commit" until #1553, which divided
+// that same byte count by the 3,192-commit ALL-REFS population: two different
+// populations, and every extrapolation from it was ~2.3x low.) So a
+// 100k-commit repo is ~190 MB and a 1M-commit one ~1.9 GB, all buffered by
 // cmd.Output() before #1543 with nothing to stop it.
+//
+// Which of the two bounds actually binds for CommitsInRange at scale is worth
+// knowing before reading #1553 as more than it is: 64 MiB is reached at
+// ~36,000 commits in a single range at that rate, while the 30s ceiling is not
+// reached until ~1M. Raising the ceiling therefore restores RevertedCommits,
+// whose output is only the MATCHING bodies, and leaves CommitsInRange's real
+// wall where it was — #1564.
 //
 // run() reports overflow as a NON-ANSWER rather than truncating, which is the
 // opposite of cliprobe's choice and deliberately so: a truncated version banner
@@ -96,14 +188,15 @@ type gitCmd func(ctx context.Context, dir string, args ...string) *exec.Cmd
 // Adapter implements ports/outbound.GitResolver using local git commands and
 // transcript file inspection.
 //
-// Its three fields are the adapter's three test seams, and they share ONE
-// shape rather than three: each is read through an accessor that falls back to
-// the production value, so the zero value of the struct is the production
-// adapter and no seam can be left in a state the daemon would never build.
-// #1554 is why that uniformity is worth stating — the binary was the one of
-// the three with no field, so the only way to drive the production builder at
-// a stub was to mutate the package var `gitPath`, which every parallel test in
-// the package shares.
+// Its four fields are the adapter's four test seams, and they share ONE shape
+// rather than four: each is read through an accessor that falls back to the
+// production value, so the zero value of the struct is the production adapter
+// and no seam can be left in a state the daemon would never build. #1554 is
+// why that uniformity is worth stating — the binary was the one field-less
+// seam, so the only way to drive the production builder at a stub was to
+// mutate the package var `gitPath`, which every parallel test in the package
+// shares. #1553's second ceiling took the same shape rather than inventing a
+// fifth.
 type Adapter struct {
 	// cmd is execGitCmd unless a test injected a fake child. Injected so a
 	// test can arrange the one distinction no faked return value can pin: a
@@ -115,6 +208,16 @@ type Adapter struct {
 	// TestProductionAdapterIsBounded deliberately does NOT use this seam: it
 	// goes through New(), so the real constant stays proven.
 	timeout time.Duration
+	// historyTimeout is gitHistoryTimeout unless a test lowered it — #1553's
+	// second ceiling. It is its own field rather than a multiple of timeout
+	// because the only way to observe that a history walk is NOT bounded by
+	// the enrichment ceiling is to drive the two at different values in one
+	// adapter (TestTheTwoCeilingsAreIndependentAtRuntime), and a multiple
+	// cannot express that. Waiting out the real 30s is not a cost this suite
+	// can pay, so the production wiring is proven by the DEADLINE the
+	// production adapter sets rather than by outliving it
+	// (TestEachShelloutRunsUnderTheCeilingForItsCostProfile).
+	historyTimeout time.Duration
 	// path is gitPath unless a test injected another executable — the seam
 	// #1554 added, and the reason it exists is the one the other two already
 	// had: TestProductionAdapterIsBounded must point the PRODUCTION builder at
@@ -127,14 +230,14 @@ type Adapter struct {
 
 // New returns a new git Adapter.
 //
-// It names the two production values it can name even though the accessors
+// It names the three production values it can name even though the accessors
 // below would supply the same ones from the zero value, so what the daemon
 // runs stays readable here rather than only assembled from fallbacks. The
 // builder is the exception and is left to builder(): naming it would mean
 // storing a method value bound to this very Adapter (`a.cmd = a.execGitCmd`),
 // and a copy of that struct would then keep running the ORIGINAL's binary.
 func New() *Adapter {
-	return &Adapter{timeout: gitTimeout, path: gitPath}
+	return &Adapter{timeout: gitTimeout, historyTimeout: gitHistoryTimeout, path: gitPath}
 }
 
 // execGitCmd is the production builder: git, resolved through pathutil rather
@@ -161,7 +264,7 @@ func (a *Adapter) builder() gitCmd {
 	return a.execGitCmd
 }
 
-// ceiling is the adapter's timeout, defaulting to gitTimeout so a
+// ceiling is the adapter's fixed-cost timeout, defaulting to gitTimeout so a
 // zero-valued Adapter (a struct literal in a test) is still bounded rather
 // than unbounded — the failure mode #1543 is about.
 func (a *Adapter) ceiling() time.Duration {
@@ -169,6 +272,30 @@ func (a *Adapter) ceiling() time.Duration {
 		return a.timeout
 	}
 	return gitTimeout
+}
+
+// historyCeiling is the adapter's timeout for the two history walks,
+// defaulting to gitHistoryTimeout exactly as ceiling() defaults to gitTimeout.
+// The fallback matters more here than the symmetry does: every helper in this
+// package's tests predates #1553 and sets only `timeout`, so without it a
+// history walk in any of them would run under a ZERO ceiling — a
+// context.WithTimeout that fires immediately, i.e. every history read a
+// non-answer for a reason that has nothing to do with git.
+func (a *Adapter) historyCeiling() time.Duration {
+	if a.historyTimeout > 0 {
+		return a.historyTimeout
+	}
+	return gitHistoryTimeout
+}
+
+// ceilingFor is the single place a cost profile chooses a ceiling, so the two
+// accessors above stay one-per-field and the mapping stays one expression
+// rather than one per call site.
+func (a *Adapter) ceilingFor(cost costProfile) time.Duration {
+	if cost == historyCost {
+		return a.historyCeiling()
+	}
+	return a.ceiling()
 }
 
 // binary is the git executable this adapter runs, defaulting to gitPath
@@ -182,8 +309,8 @@ func (a *Adapter) binary() string {
 	return gitPath
 }
 
-// run executes `git args...` in dir under gitTimeout and reports whether git
-// ANSWERED — as opposed to never having been asked.
+// run executes `git args...` in dir under the ceiling cost names, and reports
+// whether git ANSWERED — as opposed to never having been asked.
 //
 // answered is false for exactly three things: the ceiling killed the child,
 // the child never started (git missing, fork failure), or its output exceeded
@@ -212,7 +339,7 @@ func (a *Adapter) binary() string {
 // `fatal:`), and it is the pre-existing behaviour; the distinction #1543 is
 // about is "git could not be RUN" versus "git ran and said no", and that is
 // the line drawn here.
-func (a *Adapter) run(dir string, args ...string) (out []byte, answered bool) {
+func (a *Adapter) run(cost costProfile, dir string, args ...string) (out []byte, answered bool) {
 	if dir == "" {
 		// Nothing was asked, so nothing failed — the reading processTTYVia
 		// gives a non-positive pid. Deciding it here rather than at each
@@ -220,7 +347,7 @@ func (a *Adapter) run(dir string, args ...string) (out []byte, answered bool) {
 		// of any particular git subcommand.
 		return nil, true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), a.ceiling())
+	ctx, cancel := context.WithTimeout(context.Background(), a.ceilingFor(cost))
 	defer cancel()
 
 	cmd := a.builder()(ctx, dir, args...)
@@ -274,7 +401,7 @@ func (a *Adapter) run(dir string, args ...string) (out []byte, answered bool) {
 // unborn. Callers must not overwrite a branch they already hold on a
 // non-answer — an empty string there carries no information (#1485/#1543).
 func (a *Adapter) GetBranch(dir string) (string, bool) {
-	out, answered := a.run(dir, gitRevParseCmd, "--abbrev-ref", "HEAD")
+	out, answered := a.run(fixedCost, dir, gitRevParseCmd, "--abbrev-ref", "HEAD")
 	if !answered {
 		return "", false
 	}
@@ -293,7 +420,7 @@ func (a *Adapter) GetBranch(dir string) (string, bool) {
 // answered=false means git could not be run, which is not evidence about
 // either.
 func (a *Adapter) GetHeadCommit(dir string) (string, bool) {
-	out, answered := a.run(dir, gitRevParseCmd, "HEAD")
+	out, answered := a.run(fixedCost, dir, gitRevParseCmd, "HEAD")
 	if !answered {
 		return "", false
 	}
@@ -312,7 +439,7 @@ func (a *Adapter) GetHeadCommit(dir string) (string, bool) {
 // not happen, which is NOT "no reverts" — treating it as such is what makes a
 // yield sweep report "nothing flipped" for a repo it never read (#1543).
 func (a *Adapter) RevertedCommits(dir string) ([]string, bool) {
-	out, answered := a.run(dir, "log", "--all", "--grep", "^This reverts commit ", "--pretty=format:%b")
+	out, answered := a.run(historyCost, dir, "log", "--all", "--grep", "^This reverts commit ", "--pretty=format:%b")
 	if !answered {
 		return nil, false
 	}
@@ -333,7 +460,7 @@ func (a *Adapter) RevertedCommits(dir string) ([]string, bool) {
 // answered=false means git could not be run, and reporting that as "no
 // releases found for this project" is the false claim #1543 removes.
 func (a *Adapter) ListReleaseTags(dir string) ([]dora.TagInfo, bool) {
-	out, answered := a.run(dir, "for-each-ref", "--sort=creatordate", "--format=%(refname:short)%09%(creatordate:unix)", "refs/tags")
+	out, answered := a.run(fixedCost, dir, "for-each-ref", "--sort=creatordate", "--format=%(refname:short)%09%(creatordate:unix)", "refs/tags")
 	if !answered {
 		return nil, false
 	}
@@ -372,7 +499,7 @@ func (a *Adapter) CommitsInRange(dir, fromRef, toRef string) ([]dora.CommitInfo,
 	// \x01/\x02 are ASCII control bytes used as record/field separators —
 	// they won't collide with real commit message content, so a multi-line
 	// %B body can be parsed without spawning a process per commit.
-	out, answered := a.run(dir, "log", "--pretty=format:%x01%H%x02%at%x02%B", rangeSpec)
+	out, answered := a.run(historyCost, dir, "log", "--pretty=format:%x01%H%x02%at%x02%B", rangeSpec)
 	if !answered {
 		return nil, false
 	}
@@ -410,7 +537,7 @@ func (a *Adapter) TagContaining(dir, hash string) (string, bool) {
 	if hash == "" {
 		return "", true
 	}
-	out, answered := a.run(dir, "tag", "--contains", hash, "--sort=creatordate")
+	out, answered := a.run(fixedCost, dir, "tag", "--contains", hash, "--sort=creatordate")
 	if !answered {
 		return "", false
 	}
@@ -441,7 +568,7 @@ func (a *Adapter) GetGitRoot(dir string) (string, bool) {
 		return "", true
 	}
 	dir = nearestExistingDir(dir)
-	out, answered := a.run(dir, gitRevParseCmd, "--path-format=absolute", "--git-common-dir")
+	out, answered := a.run(fixedCost, dir, gitRevParseCmd, "--path-format=absolute", "--git-common-dir")
 	if !answered {
 		return "", false
 	}

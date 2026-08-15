@@ -74,18 +74,36 @@ func floodingGit(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, "/bin/sh", "-c", "head -c "+over+" /dev/zero")
 }
 
-// withCmd returns an adapter whose git is build, under the production ceiling.
-// Every method routes through Adapter.run, so one seam covers all seven
-// shellouts.
-func withCmd(build gitCmd) *Adapter { return &Adapter{cmd: build, timeout: gitTimeout} }
+// withCmd returns an adapter whose git is build, under the production
+// ceilings. Every method routes through Adapter.run, so one seam covers all
+// seven shellouts.
+func withCmd(build gitCmd) *Adapter {
+	return &Adapter{cmd: build, timeout: gitTimeout, historyTimeout: gitHistoryTimeout}
+}
 
 // withCeiling is withCmd under a SHORT ceiling, for the tests whose subject is
 // the ceiling firing rather than its value. Waiting out the real 5s twice is
 // the package's slowest and most load-sensitive cost, and neither test learns
-// anything from the extra 4.9s. The real constant stays proven by
-// TestProductionAdapterIsBounded, which runs the adapter New() builds.
+// anything from the extra 4.9s. The real constants stay proven by
+// TestProductionAdapterIsBounded and
+// TestEachShelloutRunsUnderTheCeilingForItsCostProfile, which run the adapter
+// New() builds.
+//
+// It sets BOTH ceilings, which matters since #1553 gave the adapter two: the
+// callers whose subject is "the ceiling fired" (the flooding one drives
+// RevertedCommits) want a short one whichever profile they happen to reach,
+// and one left at the production 30s would make that test wait 30s to prove
+// something about the cap. withCeilings below is for the one test that needs
+// them to DIFFER.
 func withCeiling(build gitCmd, d time.Duration) *Adapter {
-	return &Adapter{cmd: build, timeout: d}
+	return &Adapter{cmd: build, timeout: d, historyTimeout: d}
+}
+
+// withCeilings is withCeiling with the two ceilings driven independently —
+// the only shape that can observe a history walk outliving the enrichment
+// ceiling, which is #1553's whole subject.
+func withCeilings(build gitCmd, fixed, history time.Duration) *Adapter {
+	return &Adapter{cmd: build, timeout: fixed, historyTimeout: history}
 }
 
 // withBinary is the adapter New() returns, running binary instead of git —
@@ -416,7 +434,7 @@ func TestUnderTheCapIsStillAnAnswer(t *testing.T) {
 	// A gitMaxOutput-1 row would cost a second 64 MiB pipe copy to assert what
 	// TestCappedBufferStopsAtItsLimit already pins at Limit: 8.
 	for _, n := range []int{1 << 10, gitMaxOutput} {
-		out, answered := withCmd(build(n)).run("/tmp", "irrelevant")
+		out, answered := withCmd(build(n)).run(fixedCost, "/tmp", "irrelevant")
 		if !answered {
 			t.Errorf("%d bytes, under the %d-byte cap, was reported as a non-answer", n, gitMaxOutput)
 		}
@@ -606,6 +624,15 @@ func TestZeroValuedAdapterIsStillBounded(t *testing.T) {
 		t.Errorf("ceiling() = %v on a zero-valued Adapter, want the %v default; a zero ceiling "+
 			"means context.WithTimeout fires immediately and a negative one means never", got, gitTimeout)
 	}
+	// #1553's second ceiling needs the same fallback, and needs it MORE: every
+	// helper in this file predates it and sets only `timeout`, so a missing
+	// fallback would run every history walk under a zero ceiling — a
+	// context.WithTimeout that has already expired, i.e. RevertedCommits and
+	// CommitsInRange reporting a non-answer instantly, for a reason that has
+	// nothing to do with git.
+	if got := a.historyCeiling(); got != gitHistoryTimeout {
+		t.Errorf("historyCeiling() = %v on a zero-valued Adapter, want the %v default", got, gitHistoryTimeout)
+	}
 
 	start := time.Now()
 	_, answered := a.GetBranch("/tmp")
@@ -658,6 +685,17 @@ func TestEverySeamDefaultsToProduction(t *testing.T) {
 		t.Fatal("builder() = nil on a zero-valued Adapter; run() would panic on the call " +
 			"rather than shelling out to the production git")
 	}
+	// ceilingFor is the whole of the profile→ceiling mapping, and it is one
+	// expression, so pinning both directions costs two lines. Without the
+	// second, a ceilingFor that returned the history ceiling for EVERYTHING
+	// would satisfy the first — and that is the mutation that puts the
+	// detector loop on a 30s stall.
+	if got := zero.ceilingFor(historyCost); got != gitHistoryTimeout {
+		t.Errorf("ceilingFor(historyCost) = %v, want %v", got, gitHistoryTimeout)
+	}
+	if got := zero.ceilingFor(fixedCost); got != gitTimeout {
+		t.Errorf("ceilingFor(fixedCost) = %v, want %v", got, gitTimeout)
+	}
 
 	const stub = "/nonexistent/irrlicht-1554-stub"
 	cmd := withBinary(stub).builder()(context.Background(), "/tmp", gitRevParseCmd, "HEAD")
@@ -705,5 +743,173 @@ func TestGitPathIsResolvedNotInherited(t *testing.T) {
 	}
 	if strings.Contains(resolved, "..") {
 		t.Errorf("New() runs %q, which contains a traversal", resolved)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The two cost profiles (#1553)
+// ---------------------------------------------------------------------------
+
+// TestEachShelloutRunsUnderTheCeilingForItsCostProfile is the wiring arm for
+// #1553, and it is the test the mutation "put the history walks back on the
+// short ceiling" has to fail. It reads the DEADLINE the adapter puts on the
+// context it hands the builder, rather than outliving it: waiting out
+// gitHistoryTimeout would cost 30s per run, which -count=4 turns into two
+// minutes for a fact a deadline states exactly.
+//
+// It drives the adapter New() builds, with only the builder substituted, so
+// what it pins is the PRODUCTION mapping of both constants — not a pair of
+// values a helper chose. TestProductionAdapterIsBounded remains the arm that
+// proves a real child actually dies at a real ceiling; this one proves which
+// ceiling each of the eight methods asks for.
+//
+// MUTATION EVIDENCE is recorded on TestTheTwoCeilingsAreIndependentAtRuntime
+// below, which the same mutations also redden.
+func TestEachShelloutRunsUnderTheCeilingForItsCostProfile(t *testing.T) {
+	t.Parallel()
+
+	// Vacuity guard, and it is not decorative: every row below asserts
+	// "budget == the constant this profile names", so if the two constants
+	// were equal the whole table would pass against an adapter that had never
+	// heard of a second profile. The 6x gap is the only reason the assertions
+	// discriminate.
+	if gitHistoryTimeout <= gitTimeout {
+		t.Fatalf("gitHistoryTimeout (%v) is not longer than gitTimeout (%v); with one value "+
+			"this test cannot tell the two profiles apart and #1553 is not fixed",
+			gitHistoryTimeout, gitTimeout)
+	}
+
+	dir := realPath(t, t.TempDir())
+
+	var budget time.Duration
+	var built bool
+	a := New()
+	a.cmd = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		if deadline, ok := ctx.Deadline(); ok {
+			budget = time.Until(deadline)
+		}
+		built = true
+		// A child that exits at once: what is under test is the deadline the
+		// adapter set, not what the child does with it.
+		return exec.CommandContext(ctx, "/bin/sh", "-c", "exit 0")
+	}
+
+	cases := []struct {
+		name string
+		want time.Duration
+		call func()
+	}{
+		{"GetBranch", gitTimeout, func() { a.GetBranch(dir) }},
+		{"GetHeadCommit", gitTimeout, func() { a.GetHeadCommit(dir) }},
+		{"GetGitRoot", gitTimeout, func() { a.GetGitRoot(dir) }},
+		{"GetProjectName", gitTimeout, func() { a.GetProjectName(dir) }},
+		{"ListReleaseTags", gitTimeout, func() { a.ListReleaseTags(dir) }},
+		{"TagContaining", gitTimeout, func() { a.TagContaining(dir, "deadbeef") }},
+		{"RevertedCommits", gitHistoryTimeout, func() { a.RevertedCommits(dir) }},
+		{"CommitsInRange", gitHistoryTimeout, func() { a.CommitsInRange(dir, "", "HEAD") }},
+	}
+
+	const tolerance = 2 * time.Second // the read happens microseconds after the deadline is set
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			budget, built = 0, false
+			tc.call()
+			// Fail loudly rather than silently: a method that started no child
+			// records no budget, and a zero budget would otherwise be reported
+			// as "ran under a 0s ceiling" — a finding about a call that never
+			// happened.
+			if !built {
+				t.Fatal("no child was built, so nothing was measured; this row is not exercising " +
+					"the shellout it names")
+			}
+			if budget <= 0 {
+				t.Fatalf("the context carried no deadline; #1543's whole subject is that every " +
+					"child here runs under one")
+			}
+			if diff := tc.want - budget; diff < 0 || diff > tolerance {
+				t.Errorf("ran under a %v budget, want ~%v. The other profile's ceiling is %v — a "+
+					"history walk on the short one is #1553 reintroduced (a big repository gets a "+
+					"permanent non-answer), and an enrichment read on the long one stalls the "+
+					"detector loop for %v",
+					budget, tc.want, otherCeiling(tc.want), gitHistoryTimeout)
+			}
+		})
+	}
+}
+
+// otherCeiling names the ceiling a row did NOT want, so the failure message
+// above can say which mistake it is looking at rather than only which number
+// disagreed.
+func otherCeiling(want time.Duration) time.Duration {
+	if want == gitHistoryTimeout {
+		return gitTimeout
+	}
+	return gitHistoryTimeout
+}
+
+// TestTheTwoCeilingsAreIndependentAtRuntime is the behavioural half: the
+// deadline test above reads what the adapter INTENDS, this one watches a real
+// child outlive the shorter ceiling. Together they are the two claims #1553
+// makes — that the mapping is right, and that the longer ceiling is a ceiling
+// rather than a number nothing consults.
+//
+// The two values are driven independently through the seams (short=100ms,
+// long=2s) rather than at their production values, because the property is the
+// INDEPENDENCE and waiting out 30s to observe it buys nothing. The gap is wide
+// enough that shellout.WaitDelay (500ms) cannot close it: a history walk that
+// had run under the short ceiling returns in at most ~600ms, well under the 1s
+// this asserts it must exceed.
+//
+// MUTATION EVIDENCE (both run, both red — see the PR body for the output):
+//
+//   - RevertedCommits and CommitsInRange changed back to run(fixedCost, …):
+//     this test fails with "RevertedCommits returned after ~100ms against a 2s
+//     history ceiling", and
+//     TestEachShelloutRunsUnderTheCeilingForItsCostProfile fails on both of its
+//     history rows with "ran under a 5s budget, want ~30s".
+//   - ceilingFor() reduced to `return a.historyCeiling()` — i.e. one ceiling
+//     again, the other direction: this test fails on the GetBranch arm, and the
+//     deadline test fails on all six fixed-cost rows.
+func TestTheTwoCeilingsAreIndependentAtRuntime(t *testing.T) {
+	t.Parallel()
+
+	const short = 100 * time.Millisecond
+	const long = 2 * time.Second
+
+	a := withCeilings(stalledGit, short, long)
+
+	start := time.Now()
+	_, answered := a.GetBranch("/tmp")
+	fixedElapsed := time.Since(start)
+	if answered {
+		t.Error("GetBranch: a child killed by the ceiling was reported as an answer")
+	}
+
+	start = time.Now()
+	_, answered = a.RevertedCommits("/tmp")
+	historyElapsed := time.Since(start)
+	if answered {
+		t.Error("RevertedCommits: a child killed by the ceiling was reported as an answer")
+	}
+
+	if historyElapsed < long/2 {
+		t.Errorf("RevertedCommits returned after %v against a %v history ceiling — it is running "+
+			"under the %v enrichment ceiling instead, which is #1553: the history walk a large "+
+			"repository needs is cut off at the short one and the yield sweep reports that root "+
+			"unread forever", historyElapsed, long, short)
+	}
+	if fixedElapsed > long/2 {
+		t.Errorf("GetBranch returned after %v against a %v enrichment ceiling — it is running "+
+			"under the %v history ceiling instead, which puts a %v stall inside the detector loop",
+			fixedElapsed, short, long, gitHistoryTimeout)
+	}
+	// Upper bounds, so a ceiling that fired for the wrong reason (or not at
+	// all) is not read as success.
+	if limit := long + shellout.WaitDelay + 5*time.Second; historyElapsed > limit {
+		t.Errorf("RevertedCommits took %v against a %v ceiling; the bound did not fire",
+			historyElapsed, long)
+	}
+	if limit := short + shellout.WaitDelay + 5*time.Second; fixedElapsed > limit {
+		t.Errorf("GetBranch took %v against a %v ceiling; the bound did not fire", fixedElapsed, short)
 	}
 }

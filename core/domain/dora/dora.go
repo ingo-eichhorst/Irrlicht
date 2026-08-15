@@ -73,11 +73,23 @@ var (
 	revertTrailerPattern = regexp.MustCompile(`(?m)^This reverts commit ([0-9a-f]{7,40})`)
 )
 
+// InWindow reports whether an epoch falls inside the [from, to] window every
+// metric below is computed over.
+//
+// It is exported for ONE caller and for one reason: since #1553 the
+// application service decides, before walking git, which tags the metrics
+// below will actually read, and skips the commit-range call for the rest. That
+// decision has to use this comparison rather than a copy of it — a second
+// spelling that drifted would not produce a slower answer, it would produce a
+// metric computed over commits the service never fetched, which is a silently
+// wrong number rather than a visible failure.
+func InWindow(epoch, from, to int64) bool { return epoch >= from && epoch <= to }
+
 // filterRange returns the tags whose Epoch falls within [from, to].
 func filterRange(tags []TagInfo, from, to int64) []TagInfo {
 	var out []TagInfo
 	for _, t := range tags {
-		if t.Epoch >= from && t.Epoch <= to {
+		if InWindow(t.Epoch, from, to) {
 			out = append(out, t)
 		}
 	}

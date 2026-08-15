@@ -101,6 +101,32 @@ func ComputeDoraMetrics(git doraGitProbe, sessions doraSessionLister, project st
 	// left for a follow-up rather than smuggled in here.
 	commitsByTag := make(map[string][]dora.CommitInfo, len(tags))
 	for i, tag := range tags {
+		// Skip the tags no metric will read. LeadTime and DetectReverts are
+		// the only two consumers of commitsByTag and both index it through
+		// dora.filterRange, so an out-of-window tag's commits are fetched,
+		// parsed, held in memory and then never looked at — and until #1553
+		// every release in the repository's history was fetched on every
+		// request, however narrow the window. The oldest tag is the expensive
+		// one: its range starts at the repo root, so on a project that adopted
+		// tags late it is a full-history walk paid for a chart that spans a
+		// week. dora.InWindow rather than a local comparison, so this and
+		// filterRange cannot disagree about which tags those are.
+		//
+		// This is a WORK bound, not a time bound, and it is the only one of
+		// the three #1553 weighed that costs no semantics: nothing reads what
+		// is no longer fetched. (`--max-count` was measured not to bound the
+		// work of a `--grep` scan at all, and `--since` biases LeadTime's
+		// median downward — both recorded on gitHistoryTimeout.)
+		//
+		// One user-visible consequence, stated rather than left implied: a
+		// repository whose out-of-window history cannot be read no longer
+		// blanks the panel. Before this, one unreadable ancient range made
+		// every window unavailable; now the panel is blank only when a read
+		// the metrics actually needed failed. That is the same polarity as the
+		// rest of #1543 — claim nothing about history nobody asked about.
+		if !dora.InWindow(tag.Epoch, start, end) {
+			continue
+		}
 		from := ""
 		if i > 0 {
 			from = tags[i-1].Name
