@@ -51,9 +51,17 @@ func probeHealthFixture() ProbeHealthSnapshot {
 			{Probe: "kitten.window"},
 			{Probe: "lsof.cwd", Answered: 17},
 		},
-		OutcomeRule:                      "a child that ran to a normal exit ANSWERED; one killed, never started, or whose fork failed did not",
-		HerdrCandidatesProbed:            9,
-		HerdrCandidatesAbandonedOnBudget: 3,
+		OutcomeRule: "a child that ran to a normal exit ANSWERED; one killed, never started, or whose fork failed did not",
+		// Deliberately out of order for the same reason Probes is, and
+		// deliberately asymmetric: herdr starved on 2 of its 3 abandonments
+		// while tmux abandoned once and starved on none. A fixture where the
+		// two multiplexers agreed could not tell a per-row reading from a
+		// summed one (#1558).
+		ClientLoops: []ClientLoopCount{
+			{Multiplexer: "tmux", CandidatesProbed: 40, AbandonedOnBudget: 1},
+			{Multiplexer: "herdr", CandidatesProbed: 9, AbandonedOnBudget: 3, StarvedByScan: 2},
+		},
+		ClientLoopStarvationRule: "an abandonment with ZERO candidates probed in that loop was STARVED BY THE SCAN (#1529/#1558)",
 		// Deliberately out of order for the same reason Probes is.
 		HostGate: []HostGateOutcomeCount{
 			{Outcome: "rejected.no_known_host", Count: 4},
@@ -107,14 +115,61 @@ func TestProbesBundleReportsCounts(t *testing.T) {
 	if !strings.Contains(unanswered, "plutil.bundle_id") || !strings.Contains(unanswered, "#784") {
 		t.Errorf("a non-zero unanswered count must name the probe and what fails open on it: %q", unanswered)
 	}
-	if got["herdr_client_candidates_abandoned_on_budget"] != float64(3) {
-		t.Errorf("herdr abandonment = %v, want 3 (#1558)", got["herdr_client_candidates_abandoned_on_budget"])
+}
+
+// TestProbesBundleReportsClientLoopsPerMultiplexer is #1558's own coverage.
+//
+// Three claims, and each fails on a different mutation: the rows are PER
+// MULTIPLEXER (a summed pair cannot say which scan starved, and the two differ
+// by more than an order of magnitude); the starvation column is separate from
+// the abandonment one (they were one number, which is why the issue could not
+// be decided); and the notes name both figures against their denominators.
+func TestProbesBundleReportsClientLoopsPerMultiplexer(t *testing.T) {
+	got := probesJSON(t, buildTestServiceWithProbes(t, probeHealthFixture))
+
+	rows, _ := got["client_host_loops"].([]any)
+	if len(rows) != 2 {
+		t.Fatalf("client_host_loops has %d rows, want 2: %v — one row per multiplexer, including one that never ran", len(rows), got["client_host_loops"])
 	}
-	if got["herdr_client_candidates_probed"] != float64(9) {
-		t.Errorf("herdr probed = %v, want 9 — without the denominator the abandonment count cannot be read", got["herdr_client_candidates_probed"])
+	first, _ := rows[0].(map[string]any)
+	if first["multiplexer"] != "herdr" {
+		t.Errorf("first row = %v, want herdr (sorted by multiplexer) — two captures of one daemon must diff cleanly", first)
 	}
-	if note, _ := got["herdr_abandonment_note"].(string); !strings.Contains(note, "#1529") {
-		t.Errorf("a non-zero abandonment must explain itself: %q", note)
+	byMux := map[string]map[string]any{}
+	for _, row := range rows {
+		r, _ := row.(map[string]any)
+		mux, _ := r["multiplexer"].(string)
+		byMux[mux] = r
+	}
+	// The asymmetry IS the assertion: herdr starved twice, tmux never, and a
+	// view that summed them would publish "3 starved of 4" against neither.
+	if byMux["herdr"]["starved_by_scan"] != float64(2) || byMux["herdr"]["abandoned_on_budget"] != float64(3) || byMux["herdr"]["candidates_probed"] != float64(9) {
+		t.Errorf("herdr row = %v, want probed:9 abandoned:3 starved:2 kept apart", byMux["herdr"])
+	}
+	if byMux["tmux"]["starved_by_scan"] != float64(0) || byMux["tmux"]["abandoned_on_budget"] != float64(1) {
+		t.Errorf("tmux row = %v, want abandoned:1 starved:0 — an abandonment the LOOP caused is not a starvation", byMux["tmux"])
+	}
+	if rule, _ := got["client_host_loop_starvation_rule"].(string); !strings.Contains(rule, "ZERO candidates probed") {
+		t.Errorf("client_host_loop_starvation_rule must carry the rule the rows were produced by, from the package that produced them: %q", rule)
+	}
+
+	abandon, _ := got["client_host_loop_abandonment_note"].(string)
+	for _, want := range []string{"herdr abandoned 3 of 9", "tmux abandoned 1 of 40", "#1529", "deferred host-window recovery"} {
+		if !strings.Contains(abandon, want) {
+			t.Errorf("the abandonment note does not mention %q — it must name each multiplexer against its own denominator and say the answer fails safe: %q", want, abandon)
+		}
+	}
+	starved, _ := got["client_host_loop_starvation_note"].(string)
+	for _, want := range []string{"#1558", "herdr starved 2 of its 3", "availability, never correctness", "DISTRIBUTION"} {
+		if !strings.Contains(starved, want) {
+			t.Errorf("the starvation note does not mention %q — it must name the multiplexer, say what it costs, and refuse to invite tuning against a distribution nobody has: %q", want, starved)
+		}
+	}
+	// tmux appears in the fixed legend naming both scans, which is why this
+	// checks the ACCUSATION rather than the token: a note that credits every
+	// multiplexer with a starvation says nothing about which one is degrading.
+	if strings.Contains(starved, "tmux starved") {
+		t.Errorf("the starvation note reports tmux as starved, and it starved on nothing: %q", starved)
 	}
 }
 
@@ -125,14 +180,32 @@ func TestProbesBundleReportsCounts(t *testing.T) {
 func TestProbesBundleStaysTerseWhenNothingIsWrong(t *testing.T) {
 	got := probesJSON(t, buildTestServiceWithProbes(t, func() ProbeHealthSnapshot {
 		return ProbeHealthSnapshot{
-			Probes:                []ProbeCount{{Probe: "lsof.cwd", Answered: 17}},
-			OutcomeRule:           "a child that ran to a normal exit ANSWERED",
-			HerdrCandidatesProbed: 9,
+			Probes:      []ProbeCount{{Probe: "lsof.cwd", Answered: 17}},
+			OutcomeRule: "a child that ran to a normal exit ANSWERED",
+			// A busy but healthy loop: candidates probed, nothing abandoned,
+			// nothing starved. This is the vacuity guard for #1558's figure —
+			// a run that does NOT starve must be counted by nobody as starved,
+			// and its essay must not appear.
+			ClientLoops: []ClientLoopCount{{Multiplexer: "herdr", CandidatesProbed: 9}},
 		}
 	}))
 
+	// The rows themselves are NOT conditional and must still be published; only
+	// the essays are. Asserted here rather than left to the daemon test,
+	// because "healthy" is exactly the state in which an omitted zero row would
+	// look like an absent producer.
+	if rows, ok := got["client_host_loops"].([]any); !ok || len(rows) != 1 {
+		t.Errorf("client_host_loops = %v, want the row at zero — a healthy machine publishes the figure and not its explanation", got["client_host_loops"])
+	}
+
 	for _, field := range []string{
-		"unanswered_note", "herdr_abandonment_note", "undeclared_probe_kinds_note", "undeclared_probe_kinds",
+		"unanswered_note", "undeclared_probe_kinds_note", "undeclared_probe_kinds",
+		// #1558's two essays: a machine whose client loops abandoned nothing
+		// gets the rows and no prose. The starvation one is the load-bearing
+		// half — an explanation that fires on a healthy loop cannot report the
+		// degradation the issue is about.
+		"client_host_loop_abandonment_note", "client_host_loop_starvation_note",
+		"undeclared_client_loop_kinds", "undeclared_client_loop_kinds_note",
 		// #1525's essays follow the same rule: a machine whose gate never
 		// admitted on no evidence gets the rows and no prose.
 		"host_gate_aborted_walk_note", "host_gate_reconciliation_note",
@@ -168,11 +241,16 @@ func TestProbesBundleOmitsCountsWhenNotCollectedInDaemon(t *testing.T) {
 	// different question.
 	for _, field := range []string{
 		"probes", "total_unanswered", "undeclared_probe_kinds",
-		"herdr_client_candidates_probed", "herdr_client_candidates_abandoned_on_budget",
+		// #1558's rows and their essays, omitted for the HOST GATE's reason
+		// rather than this section's — see
+		// TestProbesBundleSaysWhyClientLoopCountsAreMissing.
+		"client_host_loops", "client_host_loop_starvation_rule",
+		"client_host_loop_abandonment_note", "client_host_loop_starvation_note",
+		"undeclared_client_loop_kinds",
 		// The notes that only make sense beside counts. outcome_rule is here
 		// too: a counting rule printed next to no counts describes numbers this
 		// section does not carry.
-		"memo_note", "outcome_rule", "unanswered_note", "herdr_abandonment_note",
+		"memo_note", "outcome_rule", "unanswered_note",
 		// #1525's rows and their essays, omitted for a DIFFERENT reason than
 		// the probe rows above — see TestProbesBundleSaysWhyHostGateCountsAreMissing.
 		"host_gate", "host_gate_outcome_rule", "host_gate_aborted_walk_note",
@@ -345,5 +423,27 @@ func TestProbesBundleSaysWhyHostGateCountsAreMissing(t *testing.T) {
 	// wrong about one of them and no test would notice.
 	if probeNote, _ := got["note"].(string); !strings.Contains(probeNote, "NOT zero") {
 		t.Errorf("the probe note stopped saying its own counters are non-zero here: %q", probeNote)
+	}
+}
+
+// TestProbesBundleSaysWhyClientLoopCountsAreMissing is the same obligation for
+// #1558's rows, and it is a third test rather than a line in the one above
+// because a reader has to be told WHICH of the two reasons applies.
+//
+// It is the host gate's: reaching the attached-client loop needs
+// ReadLauncherEnv or the liveness sweep's refreshMultiplexerHosts, and
+// `irrlichd --diagnose` runs neither, so these counters are structurally zero
+// here. A reader who carried the probe section's reason down — "small, real,
+// about this process's own collection" — would conclude that this process
+// resolves multiplexer hosts and that a zero starvation count means it found
+// none.
+func TestProbesBundleSaysWhyClientLoopCountsAreMissing(t *testing.T) {
+	got := probesJSON(t, buildTestServiceWithProbes(t, nil))
+
+	note, _ := got["client_host_loop_note"].(string)
+	for _, want := range []string{"structurally zero", "SAME reason", "refreshMultiplexerHosts", "/debug/bundle", "#1558"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("the client-loop note does not mention %q — it must name which of the two reasons applies, why, and where the real evidence is: %q", want, note)
+		}
 	}
 }

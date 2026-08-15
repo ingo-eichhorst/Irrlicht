@@ -153,13 +153,20 @@ type ProbeHealthSnapshot struct {
 	// UndeclaredKinds is how many observations named a probe kind nobody
 	// declared. Non-zero means Probes is INCOMPLETE.
 	UndeclaredKinds uint64
-	// HerdrCandidatesProbed and HerdrCandidatesAbandonedOnBudget are #1558's
-	// figures: how many attached-client candidates the herdr host loop asked
-	// about, and how many times it stopped early because the aggregate budget
-	// was already spent. Not probe rows — no child process is involved — so
-	// they are reported beside them rather than as an outcome.
-	HerdrCandidatesProbed            uint64
-	HerdrCandidatesAbandonedOnBudget uint64
+	// ClientLoops is #1558's figures, one row per MULTIPLEXER: how many
+	// attached-client candidates that host loop asked about, how many times it
+	// stopped early because the aggregate budget was already spent, and how
+	// many of those had probed nothing at all — the scan ahead of the loop
+	// having spent the whole budget, which is the degradation #1558 was filed
+	// about. Not probe rows — no child process is involved — so they are
+	// reported beside them rather than as an outcome.
+	ClientLoops []ClientLoopCount
+	// ClientLoopStarvationRule is what "starved by scan" means, taken from the
+	// package that decides it for the reason OutcomeRule above is.
+	ClientLoopStarvationRule string
+	// UndeclaredClientLoopKinds is how many observations named a multiplexer
+	// nobody declared. Non-zero means ClientLoops is INCOMPLETE.
+	UndeclaredClientLoopKinds uint64
 	// HostGate is #1525's figures: what the #784 host-admission gate decided,
 	// per outcome. Not probe rows either, and carried here rather than in a
 	// snapshot of their own because they are the DOWNSTREAM view of the same
@@ -174,6 +181,30 @@ type ProbeHealthSnapshot struct {
 	// UndeclaredHostGateOutcomes is how many evaluations named an outcome
 	// nobody declared. Non-zero means HostGate is INCOMPLETE.
 	UndeclaredHostGateOutcomes uint64
+}
+
+// ClientLoopCount is one multiplexer's attached-client host loop, as probes.json
+// reports it (issue #1558). A plain mirror of processlifecycle's own row, for
+// the reason ProbeCount is one: application/services must not import an inbound
+// adapter.
+//
+// One row per multiplexer rather than one pair of scalars, because the two
+// scans ahead of the shared loop differ by more than an order of magnitude
+// (`tmux list-clients` ~14ms, `lsof` of a herdr client log ~0.3-0.45s) and a
+// merged figure cannot say which of them starved. That is not a hypothetical
+// merge: #1573's figures were named `herdr_*` while the tmux producer had been
+// incrementing them since #1501.
+type ClientLoopCount struct {
+	// Multiplexer is the token, e.g. "herdr".
+	Multiplexer string `json:"multiplexer"`
+	// CandidatesProbed is the denominator — how many attached-client candidates
+	// this loop asked about.
+	CandidatesProbed uint64 `json:"candidates_probed"`
+	// AbandonedOnBudget is how many times it stopped early on the aggregate
+	// budget (#1529), one per event rather than per candidate left unread.
+	AbandonedOnBudget uint64 `json:"abandoned_on_budget"`
+	// StarvedByScan is the subset of those where the loop had probed NOTHING.
+	StarvedByScan uint64 `json:"starved_by_scan"`
 }
 
 // HostGateOutcomeCount is one outcome of the #784 host-admission gate and how
@@ -661,9 +692,10 @@ func (s *DiagnosticsService) probesView() any {
 		// (or zeros) in it — the same rule hooksView follows, for a reason that
 		// is one step stronger. See the doc comment above.
 		return struct {
-			CollectedFrom string `json:"collected_from"`
-			Note          string `json:"note"`
-			HostGateNote  string `json:"host_gate_note"`
+			CollectedFrom  string `json:"collected_from"`
+			Note           string `json:"note"`
+			HostGateNote   string `json:"host_gate_note"`
+			ClientLoopNote string `json:"client_host_loop_note"`
 		}{
 			CollectedFrom: "cli",
 			Note: "Collected by `irrlichd --diagnose`, which is not the process that runs the daemon's " +
@@ -686,6 +718,18 @@ func (s *DiagnosticsService) probesView() any {
 				"not small-and-irrelevant. The gate's aborted-walk line IS logged, so events.log in this bundle still " +
 				"carries any `#784 host gate ADMITTED this session` line. For the counts, fetch GET /debug/bundle " +
 				"from the running daemon.",
+			// #1558's rows share the HOST GATE's reason, not the probe rows'.
+			// Said explicitly rather than left to be inferred from the field
+			// order: `--diagnose` really does run probes, so a reader who
+			// carried the probe sentence down to this section would conclude
+			// that this process resolves multiplexer hosts and that a zero
+			// here means it found no starvation. It resolves none.
+			ClientLoopNote: "The attached-client host loop counters (#1558) are omitted here for the SAME reason as the " +
+				"host-gate counters above and NOT for the probe counters' reason: reaching that loop needs " +
+				"ReadLauncherEnv or the liveness sweep's refreshMultiplexerHosts, and `irrlichd --diagnose` runs " +
+				"neither — it never builds a session detector and never resolves a herdr or tmux host, so these " +
+				"counters are structurally zero in this process rather than small-and-irrelevant. For the counts, " +
+				"fetch GET /debug/bundle from the running daemon.",
 		}
 	}
 
@@ -704,14 +748,18 @@ func (s *DiagnosticsService) probesView() any {
 	// captures of one daemon must diff cleanly.
 	hostGate := append([]HostGateOutcomeCount(nil), snap.HostGate...)
 	sort.Slice(hostGate, func(i, j int) bool { return hostGate[i].Outcome < hostGate[j].Outcome })
+	// Copied and sorted for the reason probes is.
+	clientLoops := append([]ClientLoopCount(nil), snap.ClientLoops...)
+	sort.Slice(clientLoops, func(i, j int) bool { return clientLoops[i].Multiplexer < clientLoops[j].Multiplexer })
 	return struct {
 		CollectedFrom       string                 `json:"collected_from"`
 		OutcomeRule         string                 `json:"outcome_rule"`
 		Probes              []ProbeCount           `json:"probes"`
 		TotalUnanswered     uint64                 `json:"total_unanswered"`
 		UndeclaredKinds     uint64                 `json:"undeclared_probe_kinds,omitempty"`
-		HerdrProbed         uint64                 `json:"herdr_client_candidates_probed"`
-		HerdrAbandoned      uint64                 `json:"herdr_client_candidates_abandoned_on_budget"`
+		ClientLoops         []ClientLoopCount      `json:"client_host_loops"`
+		ClientLoopRule      string                 `json:"client_host_loop_starvation_rule"`
+		ClientLoopUndecl    uint64                 `json:"undeclared_client_loop_kinds,omitempty"`
 		HostGate            []HostGateOutcomeCount `json:"host_gate"`
 		HostGateRule        string                 `json:"host_gate_outcome_rule"`
 		HostGateAbortNote   string                 `json:"host_gate_aborted_walk_note,omitempty"`
@@ -721,7 +769,9 @@ func (s *DiagnosticsService) probesView() any {
 		HostGatePlatformNte string                 `json:"host_gate_platform_note,omitempty"`
 		UnansweredNote      string                 `json:"unanswered_note,omitempty"`
 		UndeclaredNote      string                 `json:"undeclared_probe_kinds_note,omitempty"`
-		HerdrAbandonNote    string                 `json:"herdr_abandonment_note,omitempty"`
+		ClientAbandonNote   string                 `json:"client_host_loop_abandonment_note,omitempty"`
+		ClientStarvedNote   string                 `json:"client_host_loop_starvation_note,omitempty"`
+		ClientUndeclNote    string                 `json:"undeclared_client_loop_kinds_note,omitempty"`
 		MemoNote            string                 `json:"memo_note"`
 		PlatformNote        string                 `json:"platform_note,omitempty"`
 	}{
@@ -730,8 +780,9 @@ func (s *DiagnosticsService) probesView() any {
 		Probes:              probes,
 		TotalUnanswered:     totalUnanswered,
 		UndeclaredKinds:     snap.UndeclaredKinds,
-		HerdrProbed:         snap.HerdrCandidatesProbed,
-		HerdrAbandoned:      snap.HerdrCandidatesAbandonedOnBudget,
+		ClientLoops:         clientLoops,
+		ClientLoopRule:      snap.ClientLoopStarvationRule,
+		ClientLoopUndecl:    snap.UndeclaredClientLoopKinds,
 		HostGate:            hostGate,
 		HostGateRule:        snap.HostGateOutcomeRule,
 		HostGateAbortNote:   hostGateAbortedWalkNote(hostGate),
@@ -741,7 +792,9 @@ func (s *DiagnosticsService) probesView() any {
 		HostGatePlatformNte: hostGatePlatformNote(),
 		UnansweredNote:      unansweredProbeNote(probes),
 		UndeclaredNote:      undeclaredProbeKindsNote(snap.UndeclaredKinds),
-		HerdrAbandonNote:    herdrAbandonmentNote(snap.HerdrCandidatesAbandonedOnBudget),
+		ClientAbandonNote:   clientLoopAbandonmentNote(clientLoops),
+		ClientStarvedNote:   clientLoopStarvationNote(clientLoops),
+		ClientUndeclNote:    undeclaredClientLoopKindsNote(snap.UndeclaredClientLoopKinds),
 		MemoNote: "memo_hits are calls a memo answered without starting a child (#1544), so they are NOT " +
 			"included in answered/unanswered — answered+unanswered is how often a child actually ran, and " +
 			"answered+unanswered+memo_hits is how often the probe was asked. Only ps.proc_info and " +
@@ -906,18 +959,77 @@ func undeclaredProbeKindsNote(n uint64) string {
 		"daemon, not a machine condition.", n)
 }
 
-// herdrAbandonmentNote fires only when the herdr client loop actually stopped
-// early on its aggregate budget (#1558). It is the one figure in this file
-// whose absence was the whole reason the issue could not be decided.
-func herdrAbandonmentNote(n uint64) string {
+// clientLoopAbandonmentNote fires only when some attached-client loop actually
+// stopped early on its aggregate budget (#1529/#1558).
+//
+// It names the multiplexers rather than summing, because the two producers'
+// scans differ by more than an order of magnitude and a total says nothing
+// about which indirection is degrading.
+func clientLoopAbandonmentNote(rows []ClientLoopCount) string {
+	var parts []string
+	var total uint64
+	for _, row := range rows {
+		if row.AbandonedOnBudget == 0 {
+			continue
+		}
+		total += row.AbandonedOnBudget
+		parts = append(parts, fmt.Sprintf("%s abandoned %d of %d candidate probe(s)",
+			row.Multiplexer, row.AbandonedOnBudget, row.CandidatesProbed))
+	}
+	if total == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s — the aggregate budget (#1529) was already spent when the loop reached a "+
+		"candidate. The answer is then \"I could not look\", which clears no stored host and is re-probed "+
+		"on the next sweep, so this is a deferred host-window recovery rather than a wrong answer. "+
+		"See client_host_loop_starvation_note for the half of this that #1558 is actually about.",
+		strings.Join(parts, "; "))
+}
+
+// clientLoopStarvationNote is #1558's own figure, and the reason that issue
+// could not be decided before it existed.
+//
+// It is deliberately a SEPARATE note from the abandonment one rather than a
+// sentence inside it: an abandonment after the loop probed candidates is the
+// loop spending its own share, which splitting the budget per stage would not
+// fix, and the two arriving as one number is exactly what made "how often does
+// the scan starve the loop" unanswerable. It also states the denominator and
+// what a reader should do with a non-zero — a bare count invites the tuning the
+// issue exists to defer until there is a distribution.
+func clientLoopStarvationNote(rows []ClientLoopCount) string {
+	var parts []string
+	var total uint64
+	for _, row := range rows {
+		if row.StarvedByScan == 0 {
+			continue
+		}
+		total += row.StarvedByScan
+		parts = append(parts, fmt.Sprintf("%s starved %d of its %d abandonment(s)",
+			row.Multiplexer, row.StarvedByScan, row.AbandonedOnBudget))
+	}
+	if total == 0 {
+		return ""
+	}
+	return fmt.Sprintf("#1558: %s. A starved loop probed NO candidate at all, so the scan ahead of it "+
+		"(lsof for herdr, `tmux list-clients` for tmux) spent the whole aggregate budget on its own and "+
+		"still succeeded — the one window #1529's bound does not cover, and the case in which splitting "+
+		"the budget between the two stages would help. It costs availability, never correctness: the "+
+		"answer is \"I could not look\", no stored host is cleared, and the memo re-probes next sweep. "+
+		"Before acting on this, capture the DISTRIBUTION of scan times behind it; a starvation count on "+
+		"its own does not say what a per-stage cap should be.", strings.Join(parts, "; "))
+}
+
+// undeclaredClientLoopKindsNote fires only when an observation named a
+// multiplexer nobody declared, i.e. client_host_loops is incomplete. The
+// sibling of undeclaredProbeKindsNote and for the same reason: rows that do not
+// add up must say so rather than be reconciled by a reader.
+func undeclaredClientLoopKindsNote(n uint64) string {
 	if n == 0 {
 		return ""
 	}
-	return fmt.Sprintf("The herdr client loop abandoned its remaining candidates %d time(s) because the "+
-		"aggregate budget (#1529) was already spent — normally because the lsof scan ahead of it ran "+
-		"slowly and still SUCCEEDED, which is the one window that bound does not cover. The answer is "+
-		"then \"I could not look\", which clears no stored host and is re-probed on the next sweep, so "+
-		"this is a deferred host-window recovery rather than a wrong answer (#1558).", n)
+	return fmt.Sprintf("%d attached-client loop observation(s) named a multiplexer that is not in "+
+		"allClientLoopKinds, so client_host_loops above is INCOMPLETE and something is wired wrong "+
+		"(#1558).", n)
 }
 
 // probePlatformNote says out loud that these probes are macOS-only, so an

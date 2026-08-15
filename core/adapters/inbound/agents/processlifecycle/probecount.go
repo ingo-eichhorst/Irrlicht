@@ -196,38 +196,120 @@ func observeProbeMemoHit(kind probeKind) {
 	tally.memoHits.Add(1)
 }
 
-// herdrCandidates counts the two ways resolveClientHostIdentityVia's loop can
-// end for a candidate: it probed one, or it abandoned the rest on the aggregate
-// budget (#1529's clientHostBudget).
+// clientLoopKind names ONE attached-client indirection — one MULTIPLEXER, not
+// one tool and not one scan.
 //
-// This is #1558, and it is counted HERE rather than deferred because that issue
-// says so in its own words: "#1534 is that nothing counts probe non-answers,
-// and that now covers budget abandonment too, so this degradation is invisible
-// by construction", with "count it first" named as the cheapest option and the
-// measurement every other option needs.
+// Keyed for the reason probeKind is, and the failure it guards against is not
+// hypothetical here: it already happened. #1573 added these counters for herdr,
+// #1501 had already generalised the loop they sit in to a second producer, and
+// the tmux resolve therefore spent a year's worth of future evidence
+// incrementing a counter named `herdr_client_candidates_probed`. Measured
+// before this key existed: one `resolveTmuxClientLauncherVia` moved the herdr
+// figure by 2.
 //
-// It is NOT a probe row and is deliberately kept off the (kind, outcome) axis:
-// no child process is involved, so calling it "unanswered" would put a
-// different kind of fact in a column whose meaning is fixed by
-// probeOutcomeRule. It is published beside them instead.
+// The distinction is load-bearing rather than tidy, because the two scans ahead
+// of the shared loop differ by more than an order of magnitude — `tmux -S
+// <sock> list-clients` at ~14ms against an `lsof` of a herdr client log at
+// ~0.3-0.45s (clientHostBudget's own doc carries the first figure; the second
+// was re-measured at 0.44-0.48s while #1558 was being answered). clientHostBudget's
+// doc asserts that a cheap scan "leaves MORE of the budget for the candidates,
+// which is exactly the trade resolveHerdrClientLauncherVia's doc says lsof
+// loses" — i.e. it claims starvation is an lsof-side phenomenon. A merged
+// bucket cannot confirm or refute that claim, and it is the claim any decision
+// about splitting the budget per stage would rest on.
+type clientLoopKind string
+
+const (
+	// clientLoopHerdr is resolveHerdrClientLauncherVia — an `lsof` of the herdr
+	// client log, then the shared candidate loop.
+	clientLoopHerdr clientLoopKind = "herdr"
+	// clientLoopTmux is resolveTmuxClientLauncherVia (#1501) — a `tmux
+	// list-clients`, then the same loop.
+	clientLoopTmux clientLoopKind = "tmux"
+)
+
+// allClientLoopKinds is every declared multiplexer indirection, and the set
+// ClientLoopCounts reports. TestEveryClientLoopSiteDeclaresItsOwnKind grades
+// the call sites against it, so a THIRD multiplexer producer is covered by
+// existing rather than by remembering — which is precisely what #1501 did not
+// have when it reused herdr's.
+var allClientLoopKinds = []clientLoopKind{clientLoopHerdr, clientLoopTmux}
+
+// clientLoopTally is one multiplexer's three figures.
 //
-// probed is the denominator, and it is the half #1558 does not ask for. Without
-// it "12 abandoned" cannot be read at all — 12 out of 12 and 12 out of 10,000
-// are different findings and a single scalar cannot tell them apart.
-var herdrCandidates struct {
+// Atomics for the reason probeTally uses them: what these exist to observe is a
+// burst under load, and instrumentation that serializes when the events arrive
+// together would blunt the thing it measures.
+type clientLoopTally struct {
 	probed            atomic.Uint64
 	abandonedOnBudget atomic.Uint64
+	starvedByScan     atomic.Uint64
 }
 
-// observeHerdrCandidateProbed records one candidate the loop actually asked
-// about.
-func observeHerdrCandidateProbed() { herdrCandidates.probed.Add(1) }
+// clientLoopCounts maps every declared multiplexer to its tally. Built once at
+// init and never written again, exactly as probeCounts is and for the same
+// reason: adding an entry at runtime would make every read here a data race.
+var clientLoopCounts = func() map[clientLoopKind]*clientLoopTally {
+	m := make(map[clientLoopKind]*clientLoopTally, len(allClientLoopKinds))
+	for _, kind := range allClientLoopKinds {
+		m[kind] = &clientLoopTally{}
+	}
+	return m
+}()
 
-// observeHerdrCandidatesAbandoned records ONE abandonment event — the loop
+// undeclaredClientLoops counts observations naming a multiplexer nobody
+// declared, for the reason undeclaredProbes exists: dropping the observation
+// would make an uncounted loop indistinguishable from one that never ran.
+var undeclaredClientLoops atomic.Uint64
+
+// clientLoopStarvationRule records what "starved by scan" means, because that
+// is the whole of #1558 and a definition written twice is one that can describe
+// behaviour it no longer has (the bundle prints this string rather than a copy).
+//
+// The loop consults the budget before each candidate, so "the budget was
+// already gone when the loop asked about its FIRST candidate" is the only state
+// in which nothing but the scan can have spent it: between
+// context.WithTimeout(clientHostBudget) and that first check, the scan is the
+// only thing that ran. An abandonment with candidates already probed is the
+// loop spending its own share, which is a different fact with a different
+// remedy — and splitting the budget per stage, #1558's option 1, is a remedy
+// for the first only.
+const clientLoopStarvationRule = "an abandonment with ZERO candidates probed in that loop was STARVED BY THE SCAN — the scan ahead of the loop spent the whole aggregate budget (#1529/#1558); an abandonment with candidates already probed is the loop spending its own share, which a per-stage split would not fix"
+
+// observeClientCandidateProbed records one candidate the loop actually asked
+// about. It is the denominator, and it is the half #1558 does not ask for:
+// without it "12 abandoned" cannot be read at all — 12 out of 12 and 12 out of
+// 10,000 are different findings and a single scalar cannot tell them apart.
+func observeClientCandidateProbed(kind clientLoopKind) {
+	tally, declared := clientLoopCounts[kind]
+	if !declared {
+		undeclaredClientLoops.Add(1)
+		return
+	}
+	tally.probed.Add(1)
+}
+
+// observeClientCandidatesAbandoned records ONE abandonment event — the loop
 // stopping because the aggregate budget was gone — not one per candidate left
 // unread. The loop breaks on the first expired check, so it never learns how
 // many were left; counting the event is the fact it actually has.
-func observeHerdrCandidatesAbandoned() { herdrCandidates.abandonedOnBudget.Add(1) }
+//
+// probedBefore is how many candidates THIS loop had already probed. Zero is
+// #1558's starvation, and both figures are written from this one call rather
+// than from two call sites, so `starved <= abandoned` holds by construction
+// instead of by two sites agreeing — the same argument #1480 makes for deriving
+// two replay figures from one traversal.
+func observeClientCandidatesAbandoned(kind clientLoopKind, probedBefore int) {
+	tally, declared := clientLoopCounts[kind]
+	if !declared {
+		undeclaredClientLoops.Add(1)
+		return
+	}
+	tally.abandonedOnBudget.Add(1)
+	if probedBefore == 0 {
+		tally.starvedByScan.Add(1)
+	}
+}
 
 // ProbeCount is one probe kind's counters, as the diagnostics bundle reports
 // them. Exported for the composition root, which converts it into the
@@ -276,22 +358,58 @@ func ProbeCounts() []ProbeCount {
 // published rather than left to be inferred from rows that do not add up.
 func UndeclaredProbeKinds() uint64 { return undeclaredProbes.Load() }
 
-// HerdrCandidateCounts is the herdr client loop's two figures (#1558).
-type HerdrCandidateCounts struct {
-	// Probed is how many attached-client candidates the loop asked about.
-	Probed uint64
+// ClientLoopCount is one multiplexer's attached-client loop figures (#1558).
+//
+// Deliberately NOT a probe row and kept off the (kind, outcome) axis: no child
+// process is involved, so calling an abandonment "unanswered" would put a
+// different kind of fact in a column whose meaning is fixed by
+// probeOutcomeRule. It is published beside them instead.
+type ClientLoopCount struct {
+	// Multiplexer is the kind token, e.g. "herdr".
+	Multiplexer string
+	// CandidatesProbed is how many attached-client candidates this
+	// multiplexer's loop asked about — the denominator the other two are read
+	// against.
+	CandidatesProbed uint64
 	// AbandonedOnBudget is how many times the loop stopped early because
 	// clientHostBudget was already spent — one per event, not per candidate.
 	AbandonedOnBudget uint64
+	// StarvedByScan is the subset of those where the loop had probed NOTHING,
+	// i.e. the scan ahead of it spent the whole budget. This is the figure
+	// #1558 exists to obtain; see clientLoopStarvationRule.
+	StarvedByScan uint64
 }
 
-// HerdrCandidates snapshots that loop.
-func HerdrCandidates() HerdrCandidateCounts {
-	return HerdrCandidateCounts{
-		Probed:            herdrCandidates.probed.Load(),
-		AbandonedOnBudget: herdrCandidates.abandonedOnBudget.Load(),
+// ClientLoopCounts snapshots every declared multiplexer, sorted.
+//
+// Every kind is returned, including one that never ran, for the reason
+// ProbeCounts returns its zero rows: on a machine that uses only one
+// multiplexer the ZERO row is the evidence, and omitting it would leave a
+// reader unable to tell "never ran" from "this build has no such producer".
+func ClientLoopCounts() []ClientLoopCount {
+	out := make([]ClientLoopCount, 0, len(allClientLoopKinds))
+	for _, kind := range allClientLoopKinds {
+		tally := clientLoopCounts[kind]
+		out = append(out, ClientLoopCount{
+			Multiplexer:       string(kind),
+			CandidatesProbed:  tally.probed.Load(),
+			AbandonedOnBudget: tally.abandonedOnBudget.Load(),
+			StarvedByScan:     tally.starvedByScan.Load(),
+		})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Multiplexer < out[j].Multiplexer })
+	return out
 }
+
+// UndeclaredClientLoopKinds is how many observations named a multiplexer nobody
+// declared. Non-zero means ClientLoopCounts is INCOMPLETE, published rather
+// than left to be inferred from rows that do not add up.
+func UndeclaredClientLoopKinds() uint64 { return undeclaredClientLoops.Load() }
+
+// ClientLoopStarvationRule is clientLoopStarvationRule, exported so the
+// diagnostics bundle prints the definition the numbers were produced by rather
+// than a second copy of it written in the application layer.
+func ClientLoopStarvationRule() string { return clientLoopStarvationRule }
 
 // ProbeOutcomeRule is probeOutcomeRule, exported so the diagnostics bundle
 // prints the definition it is actually counting by rather than a second copy

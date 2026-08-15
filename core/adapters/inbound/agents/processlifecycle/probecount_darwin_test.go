@@ -132,45 +132,94 @@ func TestBundleIDMemoHitIsCounted(t *testing.T) {
 	}, "#1544's hand-back: a memo hides how often the probe RUNS, so a hit is its own outcome rather than an unreported one")
 }
 
-// TestHerdrCandidateAbandonmentIsCounted is #1558 inside #1534.
+// TestClientCandidateAbandonmentIsCounted is #1558 inside #1534.
 //
 // The loop's budget break produces the same (nil, false) a failed lsof
 // produces, so on a machine where the scan is chronically slow-but-successful a
 // herdr host would never resolve and nothing anywhere would say why. The
 // probed figure is the denominator: without it "12 abandoned" cannot be read.
-func TestHerdrCandidateAbandonmentIsCounted(t *testing.T) {
+// The three arms are the three things a reader of the bundle needs to be able
+// to tell apart, and only the first two existed before #1558: a loop that ran
+// to the end, a loop the SCAN starved, and a loop that spent its own share.
+// The third is the discriminating one — it is an abandonment too, and the
+// published pair could not distinguish it from the second, so "how often does
+// the scan starve the loop" had no answer in a bundle.
+func TestClientCandidateAbandonmentIsCounted(t *testing.T) {
 	identify := func(ctx context.Context, pid int) (*session.Launcher, bool) {
 		return &session.Launcher{}, true
 	}
 
 	t.Run("a live budget probes every candidate and abandons none", func(t *testing.T) {
-		before := HerdrCandidates()
-		if _, readAll := resolveClientHostIdentityVia(context.Background(), []int{11, 12}, identify); !readAll {
+		before := readClientLoopLedger()
+		if _, readAll := resolveClientHostIdentityVia(context.Background(), clientLoopHerdr, []int{11, 12}, identify); !readAll {
 			t.Fatal("every candidate was read and none has a host: that is an ANSWER (#1492)")
 		}
-		got := HerdrCandidates()
-		if probed := got.Probed - before.Probed; probed != 2 {
-			t.Errorf("probed moved by %d, want 2 — the denominator must count what the loop actually asked about", probed)
-		}
-		if abandoned := got.AbandonedOnBudget - before.AbandonedOnBudget; abandoned != 0 {
-			t.Errorf("abandoned moved by %d, want 0 — a loop that ran to the end abandoned nothing, and a counter that fires anyway measures nothing", abandoned)
-		}
+		assertClientLoopsMoved(t, before, map[string]ClientLoopCount{
+			"herdr": {Multiplexer: "herdr", CandidatesProbed: 2},
+		}, "a loop that ran to the end abandoned nothing and starved on nothing; a counter that fires anyway measures nothing")
 	})
 
-	t.Run("a spent budget abandons once and probes nothing", func(t *testing.T) {
+	t.Run("a budget already spent when the loop starts was STARVED BY THE SCAN", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		before := HerdrCandidates()
-		if _, readAll := resolveClientHostIdentityVia(ctx, []int{11, 12}, identify); readAll {
+		before := readClientLoopLedger()
+		if _, readAll := resolveClientHostIdentityVia(ctx, clientLoopHerdr, []int{11, 12}, identify); readAll {
 			t.Fatal("candidates we declined to look at must poison the answer (#1529)")
 		}
-		got := HerdrCandidates()
-		if abandoned := got.AbandonedOnBudget - before.AbandonedOnBudget; abandoned != 1 {
-			t.Errorf("abandoned moved by %d, want 1 — one event per loop, not one per candidate left unread", abandoned)
-		}
-		if probed := got.Probed - before.Probed; probed != 0 {
-			t.Errorf("probed moved by %d, want 0 — the loop broke before asking about anything", probed)
-		}
+		assertClientLoopsMoved(t, before, map[string]ClientLoopCount{
+			"herdr": {Multiplexer: "herdr", AbandonedOnBudget: 1, StarvedByScan: 1},
+		}, "the loop broke before asking about anything, so nothing but the scan can have spent the budget — "+
+			"ONE event per loop, not one per candidate left unread (#1558)")
 	})
+
+	t.Run("a budget the LOOP spent is an abandonment and is starved by nobody", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var probed []int
+		before := readClientLoopLedger()
+		if _, readAll := resolveClientHostIdentityVia(ctx, clientLoopHerdr, []int{11, 12, 13, 14}, exhaustAt(2, cancel, &probed)); readAll {
+			t.Fatal("candidates we declined to look at must poison the answer (#1529)")
+		}
+		assertClientLoopsMoved(t, before, map[string]ClientLoopCount{
+			"herdr": {Multiplexer: "herdr", CandidatesProbed: 2, AbandonedOnBudget: 1},
+		}, "this loop probed two candidates and then ran out of budget on its own — it is an abandonment, "+
+			"and counting it as starved would report the scan for time the CANDIDATES spent. Splitting the "+
+			"budget per stage (#1558 option 1) would not help this case at all, which is why the two must "+
+			"be separate figures")
+	})
+}
+
+// TestEachMultiplexerCountsUnderItsOwnKind is #1558's other half, and the
+// failure it pins already shipped rather than being imagined.
+//
+// #1501 generalised the candidate loop to a second producer; #1573 then added
+// these counters keyed to nothing, named `herdr_client_candidates_*`. So every
+// tmux resolve incremented herdr's figures, and a bundle showing starvation
+// could not say whether the ~0.3-0.45s `lsof` or the ~14ms `tmux list-clients`
+// had starved it — which is precisely the comparison any decision about
+// splitting the budget would rest on.
+//
+// It drives the two PRODUCTION resolves rather than the shared loop, because
+// what is being pinned is which kind each producer passes; a test that called
+// the loop with a kind of its own would assert nothing about the wiring.
+func TestEachMultiplexerCountsUnderItsOwnKind(t *testing.T) {
+	identify := func(ctx context.Context, pid int) (*session.Launcher, bool) {
+		return &session.Launcher{}, true
+	}
+	scan := func(ctx context.Context, _ string) ([]int, bool) { return []int{11, 12}, true }
+
+	before := readClientLoopLedger()
+	_, _ = resolveHerdrClientLauncherVia("/tmp/irrlicht-1558/herdr.sock", scan, identify)
+	assertClientLoopsMoved(t, before, map[string]ClientLoopCount{
+		"herdr": {Multiplexer: "herdr", CandidatesProbed: 2},
+	}, "the herdr indirection must count under herdr and move no other multiplexer's row")
+
+	before = readClientLoopLedger()
+	_, _ = resolveTmuxClientLauncherVia("/private/tmp/tmux-501/default", scan, identify)
+	assertClientLoopsMoved(t, before, map[string]ClientLoopCount{
+		"tmux": {Multiplexer: "tmux", CandidatesProbed: 2},
+	}, "the tmux indirection must count under tmux: it spent #1501-to-#1558 incrementing a figure named "+
+		"`herdr_client_candidates_probed`, which is the shared-bucket defect #1534's per-call-site rule exists to prevent")
 }

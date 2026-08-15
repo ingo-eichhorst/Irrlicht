@@ -75,7 +75,7 @@ func TestResolveClientHostIdentity_ChecksTheBudgetBeforeEachCandidate(t *testing
 	defer cancel()
 
 	var probed []int
-	_, _ = resolveClientHostIdentityVia(ctx, []int{11, 12, 13, 14}, exhaustAt(2, cancel, &probed))
+	_, _ = resolveClientHostIdentityVia(ctx, clientLoopHerdr, []int{11, 12, 13, 14}, exhaustAt(2, cancel, &probed))
 
 	if want := []int{11, 12}; !slices.Equal(probed, want) {
 		t.Errorf("the budget ran out at candidate 2 and the loop went on to probe %v, want %v: "+
@@ -89,7 +89,7 @@ func TestResolveClientHostIdentity_ChecksTheBudgetBeforeEachCandidate(t *testing
 	probed = nil
 	stillLive, cancelLive := context.WithCancel(context.Background())
 	defer cancelLive()
-	_, _ = resolveClientHostIdentityVia(stillLive, []int{11, 12, 13, 14}, exhaustAt(0, cancelLive, &probed))
+	_, _ = resolveClientHostIdentityVia(stillLive, clientLoopHerdr, []int{11, 12, 13, 14}, exhaustAt(0, cancelLive, &probed))
 	if want := []int{11, 12, 13, 14}; !slices.Equal(probed, want) {
 		t.Errorf("with budget to spare the loop probed %v, want %v — the test above proves nothing "+
 			"if the loop truncates regardless", probed, want)
@@ -117,7 +117,7 @@ func TestResolveClientHostIdentity_AbandonedCandidateIsANonAnswer(t *testing.T) 
 	defer cancel()
 
 	var probed []int
-	host, hostKnown := resolveClientHostIdentityVia(ctx, []int{11, 12}, exhaustAt(1, cancel, &probed))
+	host, hostKnown := resolveClientHostIdentityVia(ctx, clientLoopHerdr, []int{11, 12}, exhaustAt(1, cancel, &probed))
 
 	if host != nil {
 		t.Errorf("an abandoned run named a host %+v; no candidate resolved one", host)
@@ -135,7 +135,7 @@ func TestResolveClientHostIdentity_AbandonedCandidateIsANonAnswer(t *testing.T) 
 	probed = nil
 	stillLive, cancelLive := context.WithCancel(context.Background())
 	defer cancelLive()
-	if _, hostKnown := resolveClientHostIdentityVia(stillLive, []int{11, 12}, exhaustAt(0, cancelLive, &probed)); !hostKnown {
+	if _, hostKnown := resolveClientHostIdentityVia(stillLive, clientLoopHerdr, []int{11, 12}, exhaustAt(0, cancelLive, &probed)); !hostKnown {
 		t.Error("two readable, genuinely hostless candidates read within budget is an ANSWER — " +
 			"if this fails, the assertion above passes for a loop that never says 'I looked'")
 	}
