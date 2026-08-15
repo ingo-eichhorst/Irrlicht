@@ -308,8 +308,17 @@ func TestCommitsInRange(t *testing.T) {
 	if len(between) != 1 || between[0].Hash != shaB {
 		t.Fatalf("v0.1.0..v0.2.0: got %+v, want just %s", between, shaB)
 	}
-	if !strings.Contains(between[0].Body, "Fixes #123.") {
-		t.Fatalf("multi-line body not preserved: %q", between[0].Body)
+	// Since #1564 an ordinary commit carries its SUBJECT, not its whole
+	// message: the range walk asks for %s, and only the revert-shaped commits
+	// — the only ones DetectReverts reads past the subject of — get a %B fetch.
+	// So the assertion this row used to make ("Fixes #123." survives) is now
+	// false BY DESIGN, and asserting the subject in its place would leave the
+	// multi-line parse this fixture exists for untested. It asserts the
+	// contract instead; the newline-bearing half is exercised where it now
+	// lives, in TestCommitsInRangeBodyContract's revert-shaped commits.
+	if between[0].Body != "add b.txt" {
+		t.Fatalf("Body = %q, want just the subject %q — dora.CommitInfo.Body carries the full "+
+			"message only for a revert-shaped commit (#1564)", between[0].Body, "add b.txt")
 	}
 
 	if got, answered := a.CommitsInRange(noBudget(), dir, "v0.2.0", "v0.2.0"); got != nil || !answered {

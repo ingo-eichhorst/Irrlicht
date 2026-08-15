@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,10 +79,13 @@ const gitRevParseCmd = "rev-parse"
 // property #1543 established and #1563 deliberately did not weaken.
 const gitTimeout = 5 * time.Second
 
-// gitHistoryTimeout is the ceiling for the two shellouts that read every commit
-// MESSAGE in their range: RevertedCommits (`log --all --grep`) and
-// CommitsInRange (`log --pretty=%B`). They are the only two whose cost grows
-// with the size of the history, and #1553 is that one 5s ceiling covered both
+// gitHistoryTimeout is the ceiling for the shellouts whose cost grows with the
+// size of the history: RevertedCommits (`log --all --grep`) and CommitsInRange
+// (`log --pretty=%s` over the range, plus, only when the range holds a
+// revert-shaped commit, a `log --no-walk --pretty=%B` over that subset — #1564
+// split what was one `log --pretty=%B` call).
+//
+// #1553 is that ONE 5s ceiling covered both
 // profiles — so a repository big enough to exceed it got a permanent NON-answer
 // where before #1543 it got a correct-but-slow one, the DORA panel reading
 // "could not read this project's git history" forever and the yield sweep
@@ -175,8 +179,13 @@ const (
 	// history walks because it reads the commit graph rather than every commit
 	// message (see gitTimeout, which carries that measurement).
 	fixedCost costProfile = iota
-	// historyCost is a shellout that reads every commit MESSAGE in its range.
-	// There are exactly two and both are `git log`.
+	// historyCost is a shellout whose cost is bounded by the size of the
+	// history rather than independent of it. Three call sites, all `git log`:
+	// the two walks that read every commit MESSAGE in their range
+	// (RevertedCommits, CommitsInRange's first call), and #1564's body fetch,
+	// which reads a SUBSET of one range's messages — smaller, but bounded by
+	// the range and not by a constant, so the short ceiling would make a
+	// legitimately revert-heavy range a non-answer.
 	historyCost
 )
 
@@ -191,12 +200,30 @@ const (
 // 100k-commit repo is ~190 MB and a 1M-commit one ~1.9 GB, all buffered by
 // cmd.Output() before #1543 with nothing to stop it.
 //
-// Which of the two bounds actually binds for CommitsInRange at scale is worth
-// knowing before reading #1553 as more than it is: 64 MiB is reached at
-// ~36,000 commits in a single range at that rate, while the 30s ceiling is not
-// reached until ~1M. Raising the ceiling therefore restores RevertedCommits,
-// whose output is only the MATCHING bodies, and leaves CommitsInRange's real
-// wall where it was — #1564.
+// Which of the two bounds actually binds is worth knowing before reading #1553
+// as more than it is. For RevertedCommits it is the ceiling, and raising it
+// restored that method: its output is only the MATCHING bodies. For
+// CommitsInRange it was NOT the ceiling — at 1.9 KB/commit, 64 MiB is reached
+// at ~36,000 commits in a single range while 30s is not reached until ~1M, so
+// #1553 left that method's real wall exactly where it was. That was #1564, and
+// it is fixed at the source rather than by moving either bound: CommitsInRange
+// no longer asks for a body it will not read (see that method), which puts its
+// output at ~80 bytes/commit and the same 64 MiB at ~835,000 commits — past
+// the ceiling, so the two walls are now in the order the ceiling's own
+// reasoning assumes.
+//
+// Measured rather than extrapolated, on a 36,000-commit synthetic carrying
+// 1.9 KB messages (the rate above), same machine and git:
+//
+//	%H %at %B (until #1564)   70,659,428 bytes   1,963/commit   overflows
+//	%H %at %s (the range)      2,893,807 bytes      80/commit
+//	%B for the 360 revert-shaped commits            708,665 bytes
+//
+// What remains, stated because a wall that has moved reads as a wall that has
+// gone: the body fetch can still overflow, on a range holding ~36k
+// revert-SHAPED commits. Reaching that needs a range that already exceeded this
+// cap before #1564, so nothing that worked got worse — but the class is
+// narrowed rather than removed.
 //
 // run() reports overflow as a NON-ANSWER rather than truncating, which is the
 // opposite of cliprobe's choice and deliberately so: a truncated version banner
@@ -383,6 +410,29 @@ func (a *Adapter) binary() string {
 // about is "git could not be RUN" versus "git ran and said no", and that is
 // the line drawn here.
 func (a *Adapter) run(ctx context.Context, cost costProfile, dir string, args ...string) (out []byte, answered bool) {
+	return a.runWithInput(ctx, cost, dir, nil, args...)
+}
+
+// runWithInput is run with something on the child's stdin. Exactly one call
+// site supplies one — CommitsInRange's body fetch, which hands git a newline-
+// separated list of revisions for `log --no-walk --stdin` (#1564).
+//
+// stdin is an in-memory reader and must stay one. The nil default below is not
+// bookkeeping: a git that decided to WAIT for input would otherwise block until
+// the ceiling, which is why run() leaves it nil and says so. A finite
+// bytes.Reader cannot produce that — git reaches EOF whether or not it wanted
+// more — so this widens the surface by an amount that is bounded by the
+// argument's type rather than by a convention. A pipe fed by a goroutine, or
+// anything that can block, would not be.
+//
+// The alternative was putting the revisions on ARGV, and it was rejected on a
+// measurement rather than on taste: at 41 bytes per hash a range holding more
+// than ~25k revert-shaped commits exceeds ARG_MAX, and execve then fails before
+// Start — a non-answer for a range that reads fine TODAY. Feeding them through
+// stdin is what makes #1564 strictly better than what it replaces in every case
+// rather than better in the common one, and it is pinned by
+// TestBodyFetchPutsItsRevisionsOnStdinNotArgv.
+func (a *Adapter) runWithInput(ctx context.Context, cost costProfile, dir string, stdin io.Reader, args ...string) (out []byte, answered bool) {
 	if dir == "" {
 		// Nothing was asked, so nothing failed — the reading processTTYVia
 		// gives a non-positive pid. Deciding it here rather than at each
@@ -395,11 +445,13 @@ func (a *Adapter) run(ctx context.Context, cost costProfile, dir string, args ..
 
 	cmd := a.builder()(ctx, dir, args...)
 	cmd.WaitDelay = shellout.WaitDelay
-	// Explicit rather than load-bearing: a nil Stdin is already /dev/null, so
+	// nil for every call but one, and a nil Stdin is already /dev/null, so
 	// os/exec never hands the daemon's own stdin to the child. Spelled out so
 	// a later edit does not "helpfully" wire one up — a git that decided to
 	// prompt (a credential helper, a hook) would then block until the ceiling.
-	cmd.Stdin = nil
+	// The one exception is runWithInput's finite in-memory reader, whose doc
+	// carries why that hazard cannot arise from it.
+	cmd.Stdin = stdin
 	buf := shellout.CappedBuffer{Limit: gitMaxOutput}
 	cmd.Stdout = &buf
 	// stderr is left nil (i.e. /dev/null) rather than captured: nothing here
@@ -522,6 +574,20 @@ func (a *Adapter) ListReleaseTags(ctx context.Context, dir string) ([]dora.TagIn
 	return tags, true
 }
 
+// commitSubjectFormat and commitBodyFormat are the two shapes CommitsInRange
+// asks for. \x01/\x02 are ASCII control bytes used as record/field separators
+// — they won't collide with real commit message content, so a multi-line %B
+// body can be parsed without spawning a process per commit.
+//
+// They differ in their last field alone (%s against %B) so that one parser
+// reads both, and commitBodyFormat is character-for-character the format the
+// single-call form used until #1564 — the second call IS the old command,
+// restricted to the commits that need it.
+const (
+	commitSubjectFormat = "--pretty=format:%x01%H%x02%at%x02%s"
+	commitBodyFormat    = "--pretty=format:%x01%H%x02%at%x02%B"
+)
+
 // CommitsInRange returns the commits reachable from toRef but not fromRef
 // (fromRef empty walks toRef's entire history — for the oldest release
 // tag, which has no predecessor) (#951).
@@ -529,6 +595,36 @@ func (a *Adapter) ListReleaseTags(ctx context.Context, dir string) ([]dora.TagIn
 // answered=false is the case DORA must not average over: a partial failure is
 // worse than a total one, because a median lead time computed over the tags
 // that happened to succeed is a biased number reported as Available:true.
+//
+// It makes ONE call for the range and a second only when the range holds a
+// revert-shaped commit, which is #1564 and needs its trade stating. The single
+// %B call this replaces wrote ~1.9 KB per commit (measured on this repo), so it
+// reached gitMaxOutput at ~36k commits in one range — the oldest-tag case,
+// where fromRef is empty and the range is the whole history — and #1553's
+// raised ceiling could not help, because 30s is not reached until ~1M. Asking
+// for %s instead drops that to ~80 bytes/commit, and the bodies the one
+// consumer of them needs (dora.DetectReverts, past the subject line only for
+// dora.HasRevertSubject) come from a `--no-walk` fetch over that subset.
+//
+// The issue proposed getting them from a second `--grep`-filtered walk of the
+// same range instead, and that was MEASURED AND REJECTED. A `--grep` walk runs
+// its regex over every commit message in the range, so it costs MORE than the
+// %B walk it was meant to relieve, and worst in the ordinary case where nothing
+// matches and the regex cannot short-circuit — the same shape #1553 measured
+// for `--max-count`. On a 36k-commit synthetic with 1.9 KB messages
+// (git 2.50.1 / Apple Git-155, darwin/arm64, packed, warm cache, best of 3):
+//
+//	current  %H %at %B, one call        902ms   70,659,428 bytes  (overflows)
+//	issue    %H %at + grep ^revert     3313ms    2,000,000 + up   (3.7x slower)
+//	this     %H %at %s + no-walk        831ms    2,893,807 + 708,665 bytes
+//
+// So the split shipped here is not a trade at all on that fixture: it is
+// FASTER than what it replaces (the subject walk writes 24x less) and 20x
+// smaller, which matters under #1563's aggregate because DORA's stages compete
+// for one 60s budget and the range loop is the stage that starves the later
+// ones. The second call is skipped entirely when nothing in the range is
+// revert-shaped, and when it does run its cost is O(matching commits) — 72ms
+// for 360 of them — rather than O(range).
 func (a *Adapter) CommitsInRange(ctx context.Context, dir, fromRef, toRef string) ([]dora.CommitInfo, bool) {
 	// toRef, unlike dir, is still guarded HERE: an empty one would become an
 	// empty argv entry rather than no call at all. run() handles the dir case.
@@ -539,13 +635,77 @@ func (a *Adapter) CommitsInRange(ctx context.Context, dir, fromRef, toRef string
 	if fromRef != "" {
 		rangeSpec = fromRef + ".." + toRef
 	}
-	// \x01/\x02 are ASCII control bytes used as record/field separators —
-	// they won't collide with real commit message content, so a multi-line
-	// %B body can be parsed without spawning a process per commit.
-	out, answered := a.run(ctx, historyCost, dir, "log", "--pretty=format:%x01%H%x02%at%x02%B", rangeSpec)
+	out, answered := a.run(ctx, historyCost, dir, "log", commitSubjectFormat, rangeSpec)
 	if !answered {
 		return nil, false
 	}
+	commits := parseCommitRecords(out)
+	// %s is git's SUBJECT, which is not byte-identical to the first line of
+	// %B — it skips leading blank lines and folds a multi-line first paragraph
+	// onto one line. Both differences can only ADD a match here, never remove
+	// one (a first line that already begins with "revert" has nothing to strip
+	// and nothing to fold in front of it), so this selects a superset of the
+	// commits DetectReverts will read past the subject of. A superset costs a
+	// body nobody reads; a subset would cost a Change Failure Rate sample.
+	// TestSubjectSelectsASupersetOfTheBodySubjects pins the direction against
+	// real git.
+	var needBody []int
+	for i := range commits {
+		if dora.HasRevertSubject(commits[i].Body) {
+			needBody = append(needBody, i)
+		}
+	}
+	if len(needBody) == 0 {
+		return commits, true
+	}
+	return a.fillBodies(ctx, dir, commits, needBody)
+}
+
+// fillBodies replaces the subject in commits[i].Body with the commit's full
+// message, for each i in needBody, via one `log --no-walk` over those
+// revisions alone.
+//
+// It fails CLOSED in both of its two ways to come up short — git not answering,
+// and git answering without a commit that was asked for. The second is the one
+// worth spelling out: a revert-shaped commit left carrying only its subject
+// does not blank anything, it silently becomes an `unresolved` count in
+// DetectReverts instead of a Change Failure Rate sample, which makes the
+// number read BETTER than reality. That is the single direction this adapter's
+// doc calls worse than a blank chart (see TagContaining), so "I asked for N and
+// got N-1" is a non-answer rather than a partial one.
+func (a *Adapter) fillBodies(ctx context.Context, dir string, commits []dora.CommitInfo, needBody []int) ([]dora.CommitInfo, bool) {
+	var revs bytes.Buffer
+	revs.Grow(len(needBody) * 41)
+	for _, i := range needBody {
+		revs.WriteString(commits[i].Hash)
+		revs.WriteByte('\n')
+	}
+	// historyCost, not fixedCost: what this reads is a subset of the range's
+	// commit MESSAGES, so its cost is bounded by the history rather than
+	// independent of it — the line the two profiles are drawn on. The short
+	// ceiling would make a legitimately revert-heavy range a non-answer.
+	out, answered := a.runWithInput(ctx, historyCost, dir, &revs, "log", "--no-walk", commitBodyFormat, "--stdin")
+	if !answered {
+		return nil, false
+	}
+	bodies := make(map[string]string, len(needBody))
+	for _, c := range parseCommitRecords(out) {
+		bodies[c.Hash] = c.Body
+	}
+	for _, i := range needBody {
+		body, ok := bodies[commits[i].Hash]
+		if !ok {
+			return nil, false
+		}
+		commits[i].Body = body
+	}
+	return commits, true
+}
+
+// parseCommitRecords reads the \x01/\x02-delimited output of either format
+// above. The third field is whatever that format put there — a subject or a
+// full body — so this deliberately does not name it.
+func parseCommitRecords(out []byte) []dora.CommitInfo {
 	var commits []dora.CommitInfo
 	for _, record := range bytes.Split(out, []byte{0x01}) {
 		if len(record) == 0 {
@@ -561,7 +721,7 @@ func (a *Adapter) CommitsInRange(ctx context.Context, dir, fromRef, toRef string
 		}
 		commits = append(commits, dora.CommitInfo{Hash: string(parts[0]), AuthorEpoch: epoch, Body: string(parts[2])})
 	}
-	return commits, true
+	return commits
 }
 
 // TagContaining returns the earliest release tag (by creation date) that
