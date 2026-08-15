@@ -51,6 +51,14 @@ func TestResolveBackend(t *testing.T) {
 		// different window entirely.
 		{"herdr wins over inherited tmux", &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/h.sock", TmuxPane: "%0", TmuxSocket: "/tmp/other"}, backendHerdr},
 		{"tmux pane", &session.Launcher{TmuxPane: "%3"}, backendTmux},
+		// A LOCK, green before #1582 and after, and the reason that fix is a
+		// capture-side one: a genuine pane that adopted its client's window
+		// (#1501) is field-for-field the shape an inherited $TMUX_PANE used to
+		// produce, so there is nothing here to discriminate on. This must keep
+		// resolving to tmux — the agent is in the pane; the iTerm identity only
+		// says which window displays it.
+		{"tmux pane whose host was adopted from its client",
+			&session.Launcher{TmuxPane: "%3", TmuxSocket: "/tmp/tmux-501/default", TermProgram: "iTerm.app", ITermSessionID: "w0t0p0:UUID"}, backendTmux},
 		{"tmux wins over kitty", &session.Launcher{TmuxPane: "%3", KittyListenOn: "unix:/x", KittyWindowID: "12"}, backendTmux},
 		{"kitty both fields", &session.Launcher{KittyListenOn: "unix:/x", KittyWindowID: "12"}, backendKitty},
 		{"kitty missing window", &session.Launcher{KittyListenOn: "unix:/x"}, backendNone},

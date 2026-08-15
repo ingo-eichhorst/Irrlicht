@@ -474,6 +474,20 @@ func TestReadLauncherEnv_Tmux_UnreachableServerKeepsNothingAndKnowsNothing(t *te
 // Two claims, and the second is the one a naive gate fails: the identity
 // survives, AND tmux is never consulted at all — asserted by pointing tmuxPath
 // at a fake that would resolve a different host if it ran.
+//
+// Since #1582 it carries a third, which is the one that was seen RED: the
+// inherited address is not recorded either. Until then the launcher kept it
+// beside the correct host, control.resolveBackend picked the tmux backend from
+// that field alone, and the backchannel typed into a pane in a window the user
+// was not looking at.
+//
+// That third claim is why the hostKnown assertion below reads the other way
+// round from #1501's. The tri-state answers "was the host of the pane this
+// launcher ADDRESSES determined", and this launcher now addresses no pane at
+// all — so true is not a claim about the foreign pane's client, it is the
+// ordinary answer for an ordinary launcher, and it is what keeps this session
+// out of the liveness sweep's per-tick re-read (services.hostedInAMultiplexerPane).
+// The state it used to protect against is gone with the address.
 func TestReadLauncherEnv_Tmux_InheritedPaneKeepsItsOwnHost(t *testing.T) {
 	otherClientPID := spawnClientSleeperWithEnv(t, []string{
 		"PATH=/usr/bin:/bin",
@@ -500,9 +514,14 @@ func TestReadLauncherEnv_Tmux_InheritedPaneKeepsItsOwnHost(t *testing.T) {
 	if l.TermProgram != "iTerm.app" || l.ITermSessionID != "w0t0p0-OWN" {
 		t.Errorf("a session that reported its own host must keep it: %+v", l)
 	}
-	if hostKnown {
-		t.Error("the pane this launcher ADDRESSES had its host looked up, which it must not have been: " +
-			"hostKnown=false is what stops the sweep adopting a fresh read over this session's own identity")
+	if l.TmuxPane != "" || l.TmuxSocket != "" {
+		t.Errorf("an inherited pane address must not be recorded — control.resolveBackend routes on it "+
+			"and would send-keys into a pane in someone else's window (#1582): pane=%q socket=%q",
+			l.TmuxPane, l.TmuxSocket)
+	}
+	if !hostKnown {
+		t.Error("this launcher addresses no pane, so there is no pane host left unlooked-up to report: " +
+			"answering false would put a plain session back into the sweep's per-tick re-read")
 	}
 }
 

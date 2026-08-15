@@ -952,24 +952,27 @@ type livenessSnapshot struct {
 // client rather than to l's own process — the gate that decides which sessions
 // the periodic refresh pays a read for.
 //
-// It is deliberately CHEAPER and wider than the test the reader itself applies
+// It is deliberately CHEAPER than the test the reader itself applies
 // (processlifecycle.tmuxPaneAwaitsItsClient): this runs under assignMu for
-// every session on every sweep, so it may only look at fields, and the stored
-// launcher cannot distinguish a genuine tmux pane whose host was ADOPTED from
-// one whose $TMUX_PANE was merely inherited by a GUI terminal launched from a
-// pane — both end up with a pane address and a host, and nothing records which
-// process the host came from.
+// every session on every sweep, so it may only look at fields.
 //
-// What that costs is a read per sweep for such a session, and what it does NOT
-// cost is correctness: the reader re-derives the narrow test from the live env
-// every time, so an inherited-$TMUX_PANE session resolves to its OWN identity,
-// which is what it already stored, and the merge reports no change and writes
-// nothing. The wide gate spends work on it; it cannot corrupt it.
+// It used to be WIDER as well, because the stored launcher could not
+// distinguish a genuine tmux pane whose host was ADOPTED from one whose
+// $TMUX_PANE was merely inherited by a GUI terminal launched from a pane — both
+// ended up with a pane address and a host, and nothing recorded which process
+// the host came from. #1582 removed the shape rather than the ambiguity: the
+// capture no longer stores an inherited address at all
+// (processlifecycle.dropInheritedTmuxPane), so a TmuxPane reaching this gate is
+// the pane its process is in.
 //
-// (Removing even that cost means not storing a foreign pane address in the
-// first place — #1582, the pre-existing inherited-$TMUX_PANE bug, filed
-// separately because it is also what makes the backchannel address a foreign
-// pane, and that is the half worth fixing first.)
+// One case survives that, and it is why the cost argument stays here rather
+// than being deleted with the shape: a session whose Launcher was captured by a
+// daemon older than #1582 keeps its inherited address in the persisted state,
+// and this gate pays a read per sweep for it. What that does NOT cost is
+// correctness — the reader re-derives the narrow test from the live env every
+// time, so such a session resolves to its OWN identity, which is what it
+// already stored, and the merge reports no change and writes nothing. The wide
+// gate spends work on it; it cannot corrupt it.
 func hostedInAMultiplexerPane(l *session.Launcher) bool {
 	return l != nil && (l.HerdrPaneID != "" || l.TmuxPane != "")
 }
@@ -1639,15 +1642,15 @@ func (n launcherBackfillNeeds) any() bool {
 // which is the one place the two multiplexers are not symmetric. The herdr
 // branch can replace, because $HERDR_PANE_ID is injected per pane and so always
 // describes THIS pane; $TMUX_PANE is inherited by every descendant, so this
-// branch is also reached by sessions whose host is their own and whose pane
+// branch was also reached by sessions whose host is their own and whose pane
 // address is stale. Suppressing their kitty needs would take a working
 // per-field backfill away from them in exchange for an adoption that
-// ReadLauncherEnv correctly refuses to make (its hostKnown is false for exactly
-// that shape), leaving them with neither.
+// ReadLauncherEnv correctly refuses to make, leaving them with neither.
 //
-// The wide gate is deliberate — hostedInAMultiplexerPane cannot tell an adopted
-// host from an inherited pane address, and that function says why the cost is
-// real and the risk is not.
+// Since #1582 the capture no longer stores such an address, so the only
+// launchers still carrying one were captured by an older daemon — see
+// hostedInAMultiplexerPane. The asymmetry is kept because it is conservative
+// for exactly those, not because it is load-bearing for a fresh capture.
 func launcherBackfillNeedsFor(l *session.Launcher) launcherBackfillNeeds {
 	if l.HerdrPaneID != "" {
 		return launcherBackfillNeeds{tty: l.TTY == "", multiplexerHost: true}

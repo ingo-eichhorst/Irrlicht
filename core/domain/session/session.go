@@ -102,6 +102,16 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 // enabled so a descendant reporting no host itself is still resolved — see
 // processlifecycle.launcherFromEnv.
 //
+// Such a descendant's pane ADDRESS is dropped rather than stored, which is a
+// separate decision from the suppression above and was made later (#1582): the
+// two fields are what control.resolveBackend routes on, so keeping them sent
+// the user's input into a stranger's pane, in a window they were not looking
+// at, and interrupt and read-back went to the same one. It has to be
+// decided at capture, because these fields cannot carry their own provenance —
+// a genuine pane that adopted its client's identity and a descendant that
+// reported its own are the same struct. So a TmuxPane that reaches this type is
+// the pane its process is IN, and every consumer may treat it as one.
+//
 // Note what tmux itself does to $TERM_PROGRAM, because it is the opposite of
 // what the herdr paragraph above would lead you to expect: tmux overwrites it
 // with the literal "tmux" rather than leaking the launching terminal's value.
@@ -130,7 +140,7 @@ type Launcher struct {
 	TermProgram    string `json:"term_program,omitempty"`     // $TERM_PROGRAM (e.g. iTerm.app, Apple_Terminal, vscode, cursor, ghostty, WezTerm, Hyper)
 	ITermSessionID string `json:"iterm_session_id,omitempty"` // $ITERM_SESSION_ID
 	TermSessionID  string `json:"term_session_id,omitempty"`  // $TERM_SESSION_ID (Terminal.app)
-	TmuxPane       string `json:"tmux_pane,omitempty"`        // $TMUX_PANE — this process's pane when tmux spawned it; inherited, and then a foreign pane's, in any descendant of one (#1486)
+	TmuxPane       string `json:"tmux_pane,omitempty"`        // $TMUX_PANE — the pane this process is IN. Every descendant of a pane inherits the variable (#1486), so an inherited one is dropped at capture instead of stored (#1582)
 	TmuxSocket     string `json:"tmux_socket,omitempty"`      // first `,`-field of $TMUX
 	VSCodePID      int    `json:"vscode_pid,omitempty"`       // $VSCODE_PID (vscode/cursor/windsurf)
 	TTY            string `json:"tty,omitempty"`              // controlling TTY, e.g. "/dev/ttys021" — Terminal.app AppleScript matches tabs by this. The agent process's own, except on a herdr session with a client attached, where it is the client's: that is the tab actually displaying the pane (#1350)

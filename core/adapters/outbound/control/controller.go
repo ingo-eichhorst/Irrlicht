@@ -208,6 +208,20 @@ var cliBackends = map[backend]cliBackend{
 // the #1348 misroute, arriving by a different route. Reordering these two
 // checks reintroduces it. TestResolveBackend_HerdrWinsOverClientTmux is the
 // lock.
+//
+// The tmux check is `TmuxPane != ""` and cannot usefully be more than that,
+// which is worth stating because the herdr line below is stricter and the
+// asymmetry reads as an oversight. What made it one — a $TMUX_PANE inherited by
+// a GUI terminal or IDE launched from inside a pane, addressed here as if the
+// session were in it (#1582) — is not visible from these fields: a genuine pane
+// that adopted its client's identity and a descendant that reported its own are
+// the same struct, so there is nothing here to require. Requiring the socket as
+// well would not have discriminated either, because $TMUX is inherited beside
+// $TMUX_PANE. That decision is made once, at capture
+// (processlifecycle.dropInheritedTmuxPane), and what reaches here is a pane the
+// session is in. The socket half of the asymmetry is a real and separate gap —
+// a pane id with no socket is addressed against whatever server the daemon's
+// own environment points at — and is #1593.
 func resolveBackend(l *session.Launcher) backend {
 	if l == nil {
 		return backendNone

@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"irrlicht/core/domain/session"
 )
 
 // TestHelperProcess is a sleeper used by the subprocess env-capture tests.
@@ -285,11 +287,37 @@ func TestReadLauncherEnv_Subprocess_Tmux(t *testing.T) {
 	if l == nil {
 		t.Fatal("expected non-nil launcher")
 	}
-	if l.TmuxSocket != "/private/tmp/tmux-501/default" {
-		t.Errorf("TmuxSocket: got %q", l.TmuxSocket)
+	assertPaneAddressFollowsProvenance(t, l, "%17", "/private/tmp/tmux-501/default")
+}
+
+// assertPaneAddressFollowsProvenance asserts #1582's rule against a launcher
+// read through the real sysctl / /proc path: the tmux address survives exactly
+// when nothing claimed a host for the process, and is dropped otherwise.
+//
+// A biconditional rather than a fixed expectation, because the fixture the two
+// callers use cannot model a pane faithfully on every platform.
+// spawnSleeperWithEnv's helper is a CHILD of the test binary, so on darwin its
+// ancestry walk climbs `go test` → the shell → the terminal and resolves a host
+// (measured while #1582 was written: TermProgram=vscode) — which is precisely
+// the descendant shape dropInheritedTmuxPane refuses to record an address for.
+// On linux the ancestry helpers are stubs, nothing claims a host, and the
+// address survives. Pinning either single outcome would pin the RIG rather than
+// the rule, and would fail on one platform for a reason unrelated to the code.
+//
+// The fixture that IS faithful is spawnPaneSleeperWithEnv, which reparents the
+// helper to init exactly as tmux's server is; the cases in
+// tmuxclient_darwin_test.go use it and do assert the address outright.
+func assertPaneAddressFollowsProvenance(t *testing.T, l *session.Launcher, pane, socket string) {
+	t.Helper()
+	if l.TermProgram == "" && l.HostBundleID == "" {
+		if l.TmuxPane != pane || l.TmuxSocket != socket {
+			t.Errorf("nothing claimed a host, so this is a pane and keeps its address: %+v", l)
+		}
+		return
 	}
-	if l.TmuxPane != "%17" {
-		t.Errorf("TmuxPane: got %q", l.TmuxPane)
+	if l.TmuxPane != "" || l.TmuxSocket != "" {
+		t.Errorf("a host was claimed (%q/%q), so the pane address is inherited and must not be recorded (#1582): %+v",
+			l.TermProgram, l.HostBundleID, l)
 	}
 }
 
@@ -529,6 +557,83 @@ func TestLauncherFromEnv_TmuxSuppressionSparesADescendantsOwnHost(t *testing.T) 
 	if l.VSCodePID != 4242 {
 		t.Errorf("VSCodePID: want 4242, got %d", l.VSCodePID)
 	}
+	// #1582: keeping that identity is only half the answer. The pane address
+	// beside it belongs to the pane VS Code was launched FROM, and
+	// dropInheritedTmuxPane is what stops it being stored — see the table
+	// below, and TestReadLauncherEnv_Tmux_InheritedPaneKeepsItsOwnHost for the
+	// same case through the real read path.
+}
+
+// TestDropInheritedTmuxPane is #1582's rule at the one place it is decided: a
+// $TMUX_PANE is recorded only when it is the reading process's own, which is
+// exactly when nothing else has claimed a host for that process.
+//
+// The end-to-end proof against a live process is
+// TestReadLauncherEnv_Tmux_InheritedPaneKeepsItsOwnHost (darwin, and the case
+// seen red before the fix). This table is the cross-platform half, and it is
+// the only coverage of two rows that fixture cannot express: the descendant
+// whose host came from the ANCESTRY walk rather than from its own env, and the
+// blast radius — the drop may move those two fields and nothing else.
+func TestDropInheritedTmuxPane(t *testing.T) {
+	const (
+		pane   = "%17"
+		socket = "/private/tmp/tmux-501/default"
+	)
+	cases := []struct {
+		name string
+		in   session.Launcher
+		keep bool
+	}{
+		// Nothing claimed a host: launcherFromEnv suppressed the inherited
+		// identity and the ancestry walk terminated at the reparented tmux
+		// server having found nothing. That is a genuine pane, and dropping its
+		// address would cost it click-to-focus and the backchannel.
+		{"genuine pane", session.Launcher{TmuxPane: pane, TmuxSocket: socket}, true},
+		// The shape the issue was filed about: `open -a iTerm` from a pane.
+		{"descendant reporting its own TERM_PROGRAM",
+			session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0-OWN", TmuxPane: pane, TmuxSocket: socket}, false},
+		// `code .` from a pane. VSCODE_PID implies the host, so this is the
+		// same row through launcherFromEnv's inference rather than $TERM_PROGRAM.
+		{"descendant reporting a vscode host",
+			session.Launcher{TermProgram: "vscode", VSCodePID: 4242, TmuxPane: pane, TmuxSocket: socket}, false},
+		// The row an env-only check cannot see, and the reason this runs after
+		// the ancestry walk: kitty sets no $TERM_PROGRAM (upstream kitty#4793),
+		// so a kitty window launched from a pane inherits tmux's own marker and
+		// is indistinguishable from a pane until the walk finds kitty.app.
+		{"descendant whose host came from the ancestry walk",
+			session.Launcher{HostBundleID: "net.kovidgoyal.kitty", TmuxPane: pane, TmuxSocket: socket}, false},
+		// Same descendant once the kitty back-fill has run. Dropping the pane
+		// is what lets control.resolveBackend reach the kitty branch, which is
+		// the backend that actually addresses this session's window.
+		{"descendant with its own kitty backend",
+			session.Launcher{TermProgram: "kitty", KittyListenOn: "unix:/tmp/kitty/sock", KittyWindowID: "42", TmuxPane: pane, TmuxSocket: socket}, false},
+		// Vacuity guards: neither row has an address to decide about, and a
+		// drop that fired on them would be clearing fields it was never given.
+		{"no pane address at all", session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0-OWN"}, true},
+		{"herdr pane", session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/h.sock"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := c.in
+			dropInheritedTmuxPane(&got)
+			wantPane, wantSocket := "", ""
+			if c.keep {
+				wantPane, wantSocket = c.in.TmuxPane, c.in.TmuxSocket
+			}
+			if got.TmuxPane != wantPane || got.TmuxSocket != wantSocket {
+				t.Errorf("pane=%q socket=%q, want pane=%q socket=%q", got.TmuxPane, got.TmuxSocket, wantPane, wantSocket)
+			}
+			// The address is the whole of the decision: a drop that also took
+			// the host with it would turn a descendant into a session nothing
+			// can focus, which is the outcome #1499 exists to prevent.
+			gotRest, wantRest := got, c.in
+			gotRest.TmuxPane, gotRest.TmuxSocket = "", ""
+			wantRest.TmuxPane, wantRest.TmuxSocket = "", ""
+			if gotRest != wantRest {
+				t.Errorf("only the pane address may change: got %+v, want %+v", gotRest, wantRest)
+			}
+		})
+	}
 }
 
 // TestReadLauncherEnv_Subprocess_TmuxSuppressesInheritedIdentity is the tmux
@@ -564,9 +669,7 @@ func TestReadLauncherEnv_Subprocess_TmuxSuppressesInheritedIdentity(t *testing.T
 	if l == nil {
 		t.Fatal("expected non-nil launcher")
 	}
-	if l.TmuxPane != "%4" || l.TmuxSocket != "/private/tmp/tmux-501/default" {
-		t.Errorf("the pane's own address must survive the real read path: %+v", l)
-	}
+	assertPaneAddressFollowsProvenance(t, l, "%4", "/private/tmp/tmux-501/default")
 	if l.ITermSessionID != "" || l.TermSessionID != "" {
 		t.Errorf("inherited terminal identity survived the real read path: %+v", l)
 	}
