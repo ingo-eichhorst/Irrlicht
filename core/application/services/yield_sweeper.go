@@ -112,9 +112,9 @@ func (s *YieldSweeper) indexByCommit(sessions []*session.SessionState) (map[stri
 	return byCommit, rootDirs
 }
 
-// recordRootDir resolves cwd's git root and, if no representative directory
-// is recorded for that root yet, records cwd as its sample directory for the
-// revert scan. A no-op for a non-git or empty cwd.
+// recordRootDir resolves cwd's git root and, if that root is not recorded yet,
+// records it as the directory the revert scan will run in. A no-op for a
+// non-git or empty cwd.
 //
 // resolved is false only when the root probe never ANSWERED — a different fact
 // from "not a repo", and the one the caller counts and reports rather than
@@ -136,7 +136,15 @@ func (s *YieldSweeper) recordRootDir(rootDirs map[string]string, cwd string) (re
 		return true
 	}
 	if _, seen := rootDirs[root]; !seen {
-		rootDirs[root] = cwd
+		// The ROOT is the scan directory, not the cwd it was resolved from
+		// (#1551 QA, B2). GetGitRoot walks up to the nearest existing ancestor
+		// before asking git, so it answers for a cleaned-up worktree — but the
+		// cwd itself may no longer exist, and running the revert scan there
+		// fails at chdir before exec, which is a PERMANENT non-answer. That
+		// left the repo unscanned forever and, once this PR added the report,
+		// logging that it was unscanned every 30 minutes. root is guaranteed to
+		// exist: git just read its .git directory to produce it.
+		rootDirs[root] = root
 	}
 	return true
 }

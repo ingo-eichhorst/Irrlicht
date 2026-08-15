@@ -116,6 +116,16 @@ func execGitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	return cmd
 }
 
+// ceiling is the adapter's timeout, defaulting to gitTimeout so a
+// zero-valued Adapter (a struct literal in a test) is still bounded rather
+// than unbounded — the failure mode this whole issue is about.
+func (a *Adapter) ceiling() time.Duration {
+	if a.timeout > 0 {
+		return a.timeout
+	}
+	return gitTimeout
+}
+
 // run executes `git args...` in dir under gitTimeout and reports whether git
 // ANSWERED — as opposed to never having been asked.
 //
@@ -130,22 +140,22 @@ func execGitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
 // why shellout.Answered is called in its EMPTY-variadic form here — the same
 // form, for the same reason, that plutil uses (#1524).
 //
+// One non-answer is PERMANENT rather than transient, and callers must not
+// reason as if retrying fixes it: when dir no longer exists, os/exec fails at
+// chdir BEFORE the child is started, so there is no exit status and this
+// reports answered=false forever. Cleaned-up worktrees are the ordinary case
+// here — GetGitRoot and GetProjectName survive it because they walk up to the
+// nearest existing ancestor first (nearestExistingDir), and the other six
+// deliberately do not, because walking up would answer about a DIFFERENT
+// directory's branch or history. Measured across all eight methods in #1551's
+// QA.
+//
 // The limit that reading buys: a repo whose objects are corrupt, or whose
 // .git is on a filesystem returning EIO, also exits 128, so this reports it as
 // "git answered: not a repo". That is the reading git itself gives (it prints
 // `fatal:`), and it is the pre-existing behaviour; the distinction #1543 is
 // about is "git could not be RUN" versus "git ran and said no", and that is
 // the line drawn here.
-// ceiling is the adapter's timeout, defaulting to gitTimeout so a
-// zero-valued Adapter (a struct literal in a test) is still bounded rather
-// than unbounded — the failure mode this whole issue is about.
-func (a *Adapter) ceiling() time.Duration {
-	if a.timeout > 0 {
-		return a.timeout
-	}
-	return gitTimeout
-}
-
 func (a *Adapter) run(dir string, args ...string) (out []byte, answered bool) {
 	if dir == "" {
 		// Nothing was asked, so nothing failed — the reading processTTYVia

@@ -50,6 +50,17 @@
 //     limit that is pinned is learned from a test. Fixing them needs type
 //     information, which this scan deliberately does not have (see the last
 //     paragraph).
+//   - It matches the CALLEE syntactically, so a child started through a value
+//     rather than a direct call is invisible: a package-level `var run =
+//     exec.Command` used as `run(…).Run()`, or a method value / interface
+//     whose implementation lives in another file. Both are measured
+//     (findings=0) and pinned as want:0 corpus rows. Seeing them needs type
+//     information, which this scan deliberately does not have.
+//   - It reads NON-TEST files only, and does not skip vendor/ (the repo has
+//     none). Test code starting an unbounded child is out of scope on purpose:
+//     the hazard this rule exists for is a long-lived daemon waiting forever,
+//     and every fixture in core/adapters/outbound/git's own suite deliberately
+//     builds stalling children.
 //   - It is scoped to core/. tools/ is a separate module of developer tooling
 //     that is not a long-lived daemon.
 //
@@ -97,6 +108,24 @@ func (f shelloutBoundFinding) String() string {
 // being scanned while one survivor kept a `> 0` check green.
 func scanShelloutBounds(fset *token.FileSet, file *ast.File, name string) (findings []shelloutBoundFinding, bounded int) {
 	ast.Inspect(file, func(n ast.Node) bool {
+		// A composite literal is the one spelling that cannot be fixed by
+		// passing a context, because exec.Cmd has no exported context field —
+		// CommandContext sets an unexported one. So `&exec.Cmd{Path: …}`
+		// followed by .Run() is unbounded BY CONSTRUCTION, and it is the
+		// natural thing to reach for once exec.Command is banned. Flagged
+		// rather than merely declared, because unlike the two limits in the
+		// header this one needs no type information to see.
+		if lit, ok := n.(*ast.CompositeLit); ok {
+			if sel, ok := lit.Type.(*ast.SelectorExpr); ok {
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "exec" && sel.Sel.Name == "Cmd" {
+					findings = append(findings, shelloutBoundFinding{name, fset.Position(lit.Pos()).Line,
+						"an exec.Cmd built as a struct literal has no context field at all — " +
+							"exec.CommandContext sets an unexported one, so nothing can ever cancel " +
+							"this child. Build it with exec.CommandContext (#1543)"})
+				}
+			}
+			return true
+		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true

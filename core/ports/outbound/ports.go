@@ -124,12 +124,19 @@ type Logger interface {
 // GitResolver resolves git metadata from a working directory.
 //
 // Four methods here return a second value, answered, which is false when git
-// could not be RUN at all — killed by the adapter's ceiling, never started, or
-// output past its cap. Three of them shell out directly; GetProjectName starts
-// no child of its own and forwards GetGitRoot's verdict, which matters because
-// its one caching consumer must not memoise a guess. It is TRUE, with a zero
-// first value, for every case where git ran and reported nothing to give:
-// not a repo, a detached or unborn HEAD, no release tags.
+// could not be RUN at all — killed by the adapter's ceiling, never started
+// (including a dir that no longer exists, which fails at chdir and is therefore
+// PERMANENT, not transient), or output past its cap. Three of them shell out
+// directly; GetProjectName starts no child of its own and forwards GetGitRoot's
+// verdict, which matters because its one caching consumer must not memoise a
+// guess.
+//
+// answered is TRUE for every case where git RAN, whatever it found. For three
+// of the four that also means a zero first value when there was nothing to give
+// — not a repo, a detached or unborn HEAD. GetProjectName is the exception and
+// the sentence has to say so: it answers with a non-empty directory-basename
+// fallback for a perfectly ordinary non-repo directory, so "answered" there
+// means "this name is a resolution, not a guess", never "the name is empty".
 //
 // The distinction is the whole of #1543, and it has the polarity of #1492
 // rather than #1513: nothing behind this port gates admission, so a non-answer

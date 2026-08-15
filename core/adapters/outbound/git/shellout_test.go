@@ -562,7 +562,16 @@ func TestProductionAdapterIsBounded(t *testing.T) {
 // MUTATION EVIDENCE: replacing ceiling()'s body with `return a.timeout` left
 // the whole package GREEN before this test existed, which is why it is here —
 // the fallback was uncovered, so nothing would have noticed it being deleted.
-// With this test the same mutation fails on both assertions below.
+// With this test the same mutation fails, reporting `ceiling() = 0s ... want
+// the 5s default`.
+//
+// Only the FIRST assertion fires under that mutation, and saying so is the
+// point (#1551 QA, B5): a zero ceiling makes context.WithTimeout expire
+// immediately, so the run returns in microseconds and the elapsed arms below
+// are satisfied for the wrong reason. They are kept because they cover the
+// OTHER direction — a negative or absurdly large fallback, which a zero-check
+// alone would wave through — and the ceiling() assertion is what actually
+// discriminates the deletion.
 func TestZeroValuedAdapterIsStillBounded(t *testing.T) {
 	t.Parallel()
 

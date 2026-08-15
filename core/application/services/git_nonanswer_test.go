@@ -356,9 +356,15 @@ func TestRefreshOnActivityNeverReportsAnotherDirectorysBranch(t *testing.T) {
 		t.Error("the session moved to /new/repo but still reports /old/repo's branch; that is a " +
 			"claim about the new directory the daemon never established")
 	}
-	if st.ProjectName == "old-project" {
-		t.Error("same for ProjectName — and while it is set, backfillOne returns early, so the " +
-			"stale value is permanent")
+	// ProjectName is the opposite obligation, and #1551's QA (B1) is where the
+	// first draft had it backwards: blanking it is DESTRUCTIVE, because an
+	// empty project name is bucketed as "unknown" by aggregateYieldBySession
+	// and is invisible to DORA. main kept it here, #1543's polarity says a
+	// non-answer leaves what we hold alone, and the only repair path is
+	// bounded and idle-only.
+	if st.ProjectName != "old-project" {
+		t.Errorf("ProjectName = %q — a git that could not be run destroyed a resolved project "+
+			"name, which costs the session its yield spend and its DORA membership", st.ProjectName)
 	}
 
 	// Vacuity guard: a git that ANSWERS must still update both, or an enricher
@@ -397,6 +403,18 @@ func TestCaptureYieldOnReadyDoesNotRecordAVerdictItDidNotReach(t *testing.T) {
 		t.Errorf("HeadCommit = %q — a non-answer cleared a resolved commit", st.HeadCommit)
 	}
 
+	// #1551 QA, B2: a session with NO verdict yet must not be left empty.
+	// aggregateYieldBySession skips YieldState == "" entirely, so an empty
+	// state removes the session's spend from the chart, where main put it in
+	// the unknown bucket. Unknown is the honest bucket for a non-answer.
+	fresh := &session.SessionState{SessionID: "s2", CWD: "/gone"}
+	e.CaptureYieldOnReady(fresh)
+	if fresh.YieldState != session.YieldUnknown {
+		t.Errorf("YieldState = %q for a first-ever non-answer, want unknown — an empty state is "+
+			"skipped by aggregateYieldBySession, so the session's spend leaves the yield chart "+
+			"altogether. A cleaned-up worktree makes this permanent, not transient.", fresh.YieldState)
+	}
+
 	// Vacuity guard: a git that ANSWERS with no HEAD is a genuine
 	// not-a-git-repo verdict and must still be recorded.
 	genuine := newMetadataEnricher(&enricherGit{headAnswered: true, head: "", rootAnswered: true}, nil)
@@ -432,6 +450,30 @@ func TestYieldSweepReportsRootsItCouldNotScan(t *testing.T) {
 		collectRevertedSHAs(map[string]string{"/repo": "/repo/sub"})
 	if quiet.errorMentioning("could not read git history") {
 		t.Errorf("a fully readable sweep logged an unread-roots error: %v", quiet.errors)
+	}
+}
+
+// TestYieldSweepScansTheRootNotAPossiblyDeletedCWD is #1551 QA finding B2's
+// second half. GetGitRoot walks up to the nearest existing ancestor, so it
+// answers for a cleaned-up worktree — but the cwd it resolved FROM may be gone,
+// and running the revert scan there fails at chdir before exec, which is a
+// permanent non-answer. Recording the cwd left that repo unscanned forever and,
+// once this PR added the report, logging it every 30 minutes.
+//
+// RED-FIRST: with `rootDirs[root] = cwd` this reports
+//
+//	scan dir = "/repo/worktrees/gone", want the resolved root "/repo"
+func TestYieldSweepScansTheRootNotAPossiblyDeletedCWD(t *testing.T) {
+	git := &unreadRevertGit{root: "/repo"}
+	s := NewYieldSweeper(&diagFakeRepo{}, git, &gateLog{}, 0)
+
+	rootDirs := map[string]string{}
+	if !s.recordRootDir(rootDirs, "/repo/worktrees/gone") {
+		t.Fatal("a resolvable root was reported as unresolved")
+	}
+	if got := rootDirs["/repo"]; got != "/repo" {
+		t.Errorf("scan dir = %q, want the resolved root %q — the cwd it was resolved from may "+
+			"no longer exist, and a deleted directory is a PERMANENT non-answer", got, "/repo")
 	}
 }
 

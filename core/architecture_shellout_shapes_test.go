@@ -193,6 +193,47 @@ const advice = "never use exec.Command here"
 `,
 		},
 		{
+			name:   "exec_Cmd_built_as_a_struct_literal",
+			needle: `&exec.Cmd{`,
+			want:   1, wantBounded: 0,
+			why: "#1551 QA, S1: the natural thing to reach for once exec.Command is banned, and the WORST of the three — exec.Cmd has no exported context field, so this is unbounded by construction rather than by omission.",
+			src: `package shapes
+
+import "os/exec"
+
+func f() error {
+	cmd := &exec.Cmd{Path: "/usr/bin/git", Args: []string{"git", "gc"}}
+	return cmd.Run()
+}
+`,
+		},
+		{
+			name:   "a_package_level_var_holding_exec_Command_is_NOT_caught",
+			needle: `var run = exec.Command`,
+			want:   0, wantBounded: 0,
+			why: "a DECLARED LIMIT (#1551 QA, S1), measured: the rule matches the CALLEE, and `run(...)` names an Ident whose value is only knowable with type information.",
+			src: `package shapes
+
+import "os/exec"
+
+var run = exec.Command
+
+func f() error { return run("git", "gc").Run() }
+`,
+		},
+		{
+			name:   "a_child_started_through_a_value_built_elsewhere_is_NOT_caught",
+			needle: `builder.build("git", "gc").Run()`,
+			want:   0, wantBounded: 0,
+			why: "a DECLARED LIMIT (#1551 QA, S1): with no exec.* selector in the file there is nothing syntactic to match. Note the sibling shape WITH the builder in the same file IS caught, via the exec.Command inside it — the gap is cross-file, not the method value itself.",
+			src: `package shapes
+
+type cmdBuilder interface{ build(string, ...string) interface{ Run() error } }
+
+func f(builder cmdBuilder) error { return builder.build("git", "gc").Run() }
+`,
+		},
+		{
 			name:   "an_aliased_import_of_os_exec_is_NOT_caught",
 			needle: `xexec.Command(`,
 			want:   0, wantBounded: 0,
