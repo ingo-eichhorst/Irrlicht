@@ -79,6 +79,17 @@ type shelloutCmd func(ctx context.Context) *exec.Cmd
 // nothing here reaches exec.CommandContext without passing through the
 // WithTimeout below.
 //
+// Those three deliberately spell context.Background() rather than reusing
+// noAggregateBudget() (osutil.go), and the two are NOT interchangeable even
+// though they evaluate to the same thing. noAggregateBudget names a DECISION —
+// a host read that COULD take an aggregate and deliberately does not, with a
+// polarity argument about which way the answer would move if it did. These
+// three name an ABSENCE: outbound.ProcessObserver takes no context, so there is
+// nothing to thread and no such decision was made. Collapsing either into the
+// other attaches one's justification to the other's call site, which is why
+// this is written down rather than left looking like an inconsistency worth
+// tidying.
+//
 // WHAT IT DELIBERATELY DOES NOT DO is classify. #1547 proposed the wider
 // signature (out []byte, answered bool, err error), on the premise that
 // folding the predicate in would let TestEveryBoundedShelloutClassifiesItsError
