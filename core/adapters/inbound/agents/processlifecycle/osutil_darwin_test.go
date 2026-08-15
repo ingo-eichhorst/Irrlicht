@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -1098,6 +1099,205 @@ func TestHostIdentity_KittyBackfillWalkCountsTowardCompleteness(t *testing.T) {
 	}
 }
 
+// fixturePollInterval and fixturePollDeadline bound every awaitFixtureCondition
+// caller below. The deadline is generous on purpose (#1586): every millisecond
+// of it is only spent when the condition is not yet true, so a loaded machine
+// pays a slower pass where a fixed sleep paid a failure.
+const (
+	fixturePollInterval = 5 * time.Millisecond
+	fixturePollDeadline = 2 * time.Second
+)
+
+// fixtureWait is what one awaitFixtureCondition run observed. Attempts and
+// Elapsed are reported rather than derived from each other: a check may be a
+// bounded `ps` shell-out, which on a loaded machine costs anything from
+// microseconds to its own 2s ceiling, and the failure message is only useful if
+// it says which of those happened. Saw carries the check's own description of
+// the last state it read, so the failure names how far the fixture got rather
+// than only that it did not get there.
+type fixtureWait struct {
+	OK       bool
+	Saw      string
+	Attempts int
+	Elapsed  time.Duration
+}
+
+// awaitFixtureCondition polls check until it reports true, or until deadline
+// expires. A check that cannot READ its condition reports false with a
+// description and is retried rather than being fatal: for readProcInfo that is
+// `ps` killed by its own ceiling or never forked, which is exactly the load the
+// poll exists to ride out, and treating it as a verdict would be the #1586
+// flake with a longer fuse.
+//
+// The check is injected rather than the pid, so the polling itself is testable
+// against a condition that becomes true on a known attempt — a poll only ever
+// seen to succeed on its first call is untested machinery.
+func awaitFixtureCondition(check func() (bool, string), interval, deadline time.Duration) fixtureWait {
+	start := time.Now()
+	var w fixtureWait
+	for {
+		w.Attempts++
+		w.OK, w.Saw = check()
+		w.Elapsed = time.Since(start)
+		if w.OK || w.Elapsed >= deadline {
+			return w
+		}
+		time.Sleep(interval)
+	}
+}
+
+// awaitOrFail runs check to its deadline and fails the test if it never held,
+// naming what was last seen, how many attempts it took and how long it ran.
+//
+// Polling rather than sleeping a fixed interval is #1586. The fixtures below
+// spawn helpers whose readiness depends on the kernel and on bounded shell-outs
+// that a loaded machine can starve, and a fixed sleep turns that into a hard
+// failure indistinguishable from a regression in the code under test — the real
+// cost, because this is the hot path of a family that changes constantly. What
+// the hard failure is kept for is the case it was written for: a helper that
+// never becomes what the fixture claims it is fails loudly here, rather than
+// hanging or being silently tested as something else.
+func awaitOrFail(t *testing.T, check func() (bool, string), interval, deadline time.Duration, why string) {
+	t.Helper()
+	w := awaitFixtureCondition(check, interval, deadline)
+	if !w.OK {
+		t.Fatalf("fixture never became ready after %d attempts over %v: %s — %s",
+			w.Attempts, w.Elapsed, w.Saw, why)
+	}
+	if w.Attempts > 1 {
+		// Not a failure: it is the poll doing its job, and worth a line so a
+		// future flake investigation can see how close to the deadline it ran.
+		t.Logf("fixture ready after %d attempts over %v: %s", w.Attempts, w.Elapsed, w.Saw)
+	}
+}
+
+// waitForReparentToInit blocks until pid's parent is init.
+func waitForReparentToInit(t *testing.T, pid int) {
+	t.Helper()
+	awaitOrFail(t, func() (bool, string) {
+		ppid, _, err := readProcInfo(noAggregateBudget(), pid)
+		return err == nil && ppid <= 1, fmt.Sprintf("pid %d has ppid %d (err %v)", pid, ppid, err)
+	}, fixturePollInterval, fixturePollDeadline,
+		"this fixture only stands in for a reparented process — a tmux pane, a daemonized server — "+
+			"while its ancestry terminates at init")
+}
+
+// waitForLauncherEnv blocks until sysctl reports every whitelisted variable in
+// env for pid.
+//
+// This is the condition the #1586 fixture actually needed, and the one its
+// fixed sleep was covering while its hard-fail checked the other. Measured over
+// 40 runs on an idle machine: a helper backgrounded from a shell is reparented
+// to init on the FIRST `ps` every time, while its env is readable on the first
+// sysctl NONE of the time and becomes readable after ~1.2ms (p50, 2.5ms max).
+// The lag is the exec: until it lands the pid is still /bin/sh, and macOS
+// strips env from sysctl for Apple-signed binaries — the same fact
+// spawnSleeperWithEnv's doc comment leans on in the other direction. So a wait
+// on the reparenting alone would have replaced a 120ms margin with the duration
+// of one `ps`, which is narrower, not wider.
+//
+// Vacuity guard: env carrying no whitelisted variable would make this a poll
+// that succeeds without observing anything, so it refuses instead.
+func waitForLauncherEnv(t *testing.T, pid int, env []string) {
+	t.Helper()
+	want := whitelistedEnvPairs(env)
+	if len(want) == 0 {
+		t.Fatalf("waitForLauncherEnv(%d) was given no whitelisted variable to wait for, so it would "+
+			"pass without reading anything: %v", pid, env)
+	}
+	awaitOrFail(t, func() (bool, string) {
+		got, _ := osProc.EnvOf(pid)
+		for k, v := range want {
+			if got[k] != v {
+				return false, fmt.Sprintf("pid %d: %s is %q, want %q (read %v)", pid, k, got[k], v, got)
+			}
+		}
+		return true, fmt.Sprintf("pid %d publishes %v", pid, want)
+	}, fixturePollInterval, fixturePollDeadline,
+		"the fixture's whole point is a process whose env sysctl can read; until the exec lands it is "+
+			"still the (Apple-signed, env-stripped) shell that spawned it")
+}
+
+// whitelistedEnvPairs picks the launcherEnvKeys entries out of a KEY=VALUE
+// slice. Keyed on the production whitelist rather than a second list, so a
+// fixture cannot end up waiting for a variable ReadLauncherEnv never reads.
+func whitelistedEnvPairs(env []string) map[string]string {
+	pairs := map[string]string{}
+	for _, kv := range env {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if _, whitelisted := launcherEnvKeys[k]; whitelisted {
+			pairs[k] = v
+		}
+	}
+	return pairs
+}
+
+// TestAwaitFixtureCondition covers the poll #1586 replaced a fixed sleep with.
+// Every arm drives a condition that is NOT true on the first read, because a
+// poll observed only succeeding immediately proves nothing about the retrying.
+func TestAwaitFixtureCondition(t *testing.T) {
+	t.Run("polls until the condition holds", func(t *testing.T) {
+		calls := 0
+		w := awaitFixtureCondition(func() (bool, string) {
+			calls++
+			return calls >= 4, fmt.Sprintf("call %d", calls)
+		}, time.Millisecond, time.Second)
+		if !w.OK || w.Attempts != 4 {
+			t.Errorf("got %+v, want OK after exactly 4 attempts", w)
+		}
+	})
+
+	t.Run("a check that could not read is retried, not taken as a verdict", func(t *testing.T) {
+		calls := 0
+		w := awaitFixtureCondition(func() (bool, string) {
+			calls++
+			if calls < 3 {
+				return false, "ps pid 4242: probe did not run"
+			}
+			return true, "ppid 1"
+		}, time.Millisecond, time.Second)
+		if !w.OK || w.Attempts != 3 {
+			t.Errorf("got %+v, want the ps failures ridden out and OK on attempt 3", w)
+		}
+	})
+
+	t.Run("a condition that never holds fails, with the elapsed time", func(t *testing.T) {
+		w := awaitFixtureCondition(func() (bool, string) { return false, "ppid 4242" }, time.Millisecond, 20*time.Millisecond)
+		if w.OK {
+			t.Fatal("the condition never held; reporting otherwise would trade the hard-fail away")
+		}
+		if w.Attempts < 2 {
+			t.Errorf("gave up after %d attempt(s): a deadline that admits one read is a sleep", w.Attempts)
+		}
+		if w.Elapsed < 20*time.Millisecond {
+			t.Errorf("returned after %v, before the %v deadline", w.Elapsed, 20*time.Millisecond)
+		}
+		if w.Saw != "ppid 4242" {
+			t.Errorf("Saw %q: the failure must carry what was last read", w.Saw)
+		}
+	})
+}
+
+// TestWhitelistedEnvPairs pins the extraction waitForLauncherEnv's vacuity
+// guard reads. The empty case is the one that matters: it is what makes the
+// guard fire rather than letting a fixture wait for nothing.
+func TestWhitelistedEnvPairs(t *testing.T) {
+	got := whitelistedEnvPairs([]string{
+		"PATH=/usr/bin:/bin", "GO_WANT_LAUNCHER_HELPER=1",
+		"TERM_PROGRAM=tmux", "TMUX_PANE=%17", "malformed",
+	})
+	want := map[string]string{"TERM_PROGRAM": "tmux", "TMUX_PANE": "%17"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if got := whitelistedEnvPairs([]string{"PATH=/usr/bin:/bin"}); len(got) != 0 {
+		t.Errorf("got %v, want nothing — PATH is not launcher identity", got)
+	}
+}
+
 // orphanPID returns the PID of a live process whose parent has exited, so it
 // has been reparented to launchd. Its ancestry walk therefore enters the loop
 // and leaves it through the `ppid <= 1` verdict — the branch PID 1 itself never
@@ -1120,14 +1320,8 @@ func orphanPID(t *testing.T) int {
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 	// The `sh` has exited (Output waits for it); wait for launchd to actually
 	// re-parent before asserting on the chain.
-	for i := 0; i < 100; i++ {
-		if ppid, _, err := readProcInfo(noAggregateBudget(), pid); err == nil && ppid <= 1 {
-			return pid
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("orphan %d was never reparented to launchd", pid)
-	return 0
+	waitForReparentToInit(t, pid)
+	return pid
 }
 
 // TestResolveHostFromAncestry_ChainEndingAtInitIsAVerdict covers the arm PID 1
