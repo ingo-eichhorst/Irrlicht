@@ -209,19 +209,36 @@ var cliBackends = map[backend]cliBackend{
 // checks reintroduces it. TestResolveBackend_HerdrWinsOverClientTmux is the
 // lock.
 //
-// The tmux check is `TmuxPane != ""` and cannot usefully be more than that,
-// which is worth stating because the herdr line below is stricter and the
-// asymmetry reads as an oversight. What made it one — a $TMUX_PANE inherited by
-// a GUI terminal or IDE launched from inside a pane, addressed here as if the
-// session were in it (#1582) — is not visible from these fields: a genuine pane
-// that adopted its client's identity and a descendant that reported its own are
-// the same struct, so there is nothing here to require. Requiring the socket as
-// well would not have discriminated either, because $TMUX is inherited beside
-// $TMUX_PANE. That decision is made once, at capture
-// (processlifecycle.dropInheritedTmuxPane), and what reaches here is a pane the
-// session is in. The socket half of the asymmetry is a real and separate gap —
-// a pane id with no socket is addressed against whatever server the daemon's
-// own environment points at — and is #1593.
+// The tmux check requires both fields, for the reason the herdr comment below
+// gives and by the same argument: a pane id alone is addressed against whatever
+// server the daemon's own environment points at — under launchd, the default
+// socket — and ids like "%17" exist on every server, so `send-keys -t %17` does
+// not degrade to "the default session", it lands in a stranger's pane. That
+// shape is producible rather than theoretical: $TMUX and $TMUX_PANE are
+// separate variables and `unset TMUX` is the documented way to nest tmux, so a
+// pane can report its own address with no server to address it against
+// (processlifecycle.launcherFromEnv;
+// TestLauncherFromEnv_TmuxPaneSurvivesAClearedTmux pins it, #1593).
+//
+// What this check deliberately does NOT ask is whether the pane is the
+// session's own. A $TMUX_PANE inherited by a GUI terminal or IDE launched from
+// inside a pane was addressed here as if the session were in it (#1582), and
+// that is invisible from these fields: a genuine pane that adopted its client's
+// identity (#1501) and a descendant that reported its own are the same struct.
+// Requiring the socket does not discriminate there either, because $TMUX is
+// inherited beside $TMUX_PANE — the two rules are independent, this one asking
+// whether the address is COMPLETE and that one whether it is OURS. Provenance
+// is decided once, at capture (processlifecycle.dropInheritedTmuxPane), and
+// what reaches here is a pane the session is in.
+//
+// A refusal falls THROUGH to the checks below rather than resolving to
+// backendNone directly, exactly as herdr's and kitty's do. In practice every
+// producible socket-less pane ends at backendNone anyway: the #1501 adoption
+// that could give such a launcher a window identity is itself skipped on an
+// empty socket (processlifecycle.tmuxClientPIDs), so no later branch matches.
+// What that session loses is control and read-back — the trade #1582 already
+// made here, a pane we cannot address safely being better reported
+// uncontrollable than typed into blind.
 func resolveBackend(l *session.Launcher) backend {
 	if l == nil {
 		return backendNone
@@ -235,7 +252,7 @@ func resolveBackend(l *session.Launcher) backend {
 	if l.HerdrPaneID != "" && l.HerdrSocketPath != "" {
 		return backendHerdr
 	}
-	if l.TmuxPane != "" {
+	if l.TmuxPane != "" && l.TmuxSocket != "" {
 		return backendTmux
 	}
 	if l.KittyListenOn != "" && l.KittyWindowID != "" {
@@ -275,13 +292,19 @@ func tmuxInterrupt(l *session.Launcher) command {
 	return command{name: "tmux", args: args}
 }
 
-// tmuxBase prepends `-S <socket>` when the session's tmux server socket is
-// known, so we target the right server even with multiple tmux instances.
+// tmuxBase names the server every tmux command is addressed to, so we target
+// the right one even with several tmux instances running.
+//
+// It is unconditional, and that is #1593's other half. resolveBackend refuses a
+// launcher with no socket, so the field is non-empty on every path that reaches
+// here — but a builder able to omit `-S` can silently address whatever server
+// the daemon's own environment points at, and a loaded gun is worth unloading
+// even when no caller currently reaches it. An empty socket that somehow
+// arrived now produces `tmux -S ""`, which tmux refuses ("error connecting to
+// ...") and captureRunnerExec surfaces with that stderr — a diagnosable failure
+// instead of a successful write into a stranger's pane.
 func tmuxBase(l *session.Launcher) []string {
-	if l.TmuxSocket != "" {
-		return []string{"-S", l.TmuxSocket}
-	}
-	return nil
+	return []string{"-S", l.TmuxSocket}
 }
 
 // kittyInput builds the send-text command targeting the session's window over

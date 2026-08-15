@@ -346,14 +346,17 @@ func tmuxPaneAwaitsItsClient(l *session.Launcher) bool {
 // pane address belonging to a different process in a different window. #1499
 // already keeps such a session's own host identity — its suppression keys on
 // tmux's own TERM_PROGRAM marker — and copied the pane address alongside it.
-// control.resolveBackend picks the tmux backend from that field alone, so the
+// control.resolveBackend routed to the tmux backend on that address, so the
 // backchannel ran `tmux -S <inherited socket> send-keys -t %17 -l -- <text>`
 // into a stranger's pane, and interrupt and capture addressed the same one
 // (#1582). That is the failure #1348 removed for herdr, reached through the
-// one field #1499 deliberately left populated for a descendant.
+// one field #1499 deliberately left populated for a descendant. (resolveBackend
+// has since grown a socket requirement of its own, #1593 — an independent rule
+// that would not have caught this one, because $TMUX is inherited beside
+// $TMUX_PANE and a descendant carries both.)
 //
 // The CAPTURE is the only place this can be decided, which is why the fix is
-// here and resolveBackend is untouched. A stored launcher cannot tell the two
+// here and resolveBackend was untouched by it. A stored launcher cannot tell the two
 // apart: a genuine pane that adopted its client's identity (#1501) and a
 // descendant that reported its own end up with the same fields —
 // {TermProgram: iTerm.app, ITermSessionID, TmuxPane, TmuxSocket} — and nothing

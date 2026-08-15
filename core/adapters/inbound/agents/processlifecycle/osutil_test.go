@@ -491,10 +491,10 @@ func TestLauncherFromEnv_TmuxSuppressesInheritedIdentity(t *testing.T) {
 
 // TestLauncherFromEnv_TmuxCapture covers the other half: the pane's own
 // address, which is the only thing in that env that actually describes it and
-// which the backchannel routes on (resolveBackend picks backendTmux from
-// TmuxPane alone, before it ever looks at TermProgram). Keeping these two is
-// what makes the suppression above a click-to-focus change and not a control
-// regression.
+// which the backchannel routes on (resolveBackend reaches backendTmux from
+// these two fields, before it ever looks at TermProgram — and since #1593 it
+// needs BOTH of them). Keeping them is what makes the suppression above a
+// click-to-focus change and not a control regression.
 func TestLauncherFromEnv_TmuxCapture(t *testing.T) {
 	l := launcherFromEnv(tmuxPaneEnv)
 	if l.TmuxPane != "%4" {
@@ -505,6 +505,43 @@ func TestLauncherFromEnv_TmuxCapture(t *testing.T) {
 	}
 	if l.IsEmpty() {
 		t.Error("a tmux-only launcher must not be reported empty")
+	}
+}
+
+// TestLauncherFromEnv_TmuxPaneSurvivesAClearedTmux is the reachability half of
+// #1593, and a LOCK: it passes before that fix and after, because the shape it
+// pins is an input to the router rather than a decision the router makes.
+//
+// $TMUX carries the socket and $TMUX_PANE the address, and they are separate
+// variables. `unset TMUX` is the documented way to run tmux inside tmux, and
+// some shell configs do it — which leaves a genuine pane reporting its own
+// address with no server to address it against. #1582's drop does not close
+// this: it clears the two fields TOGETHER, but only for an address the process
+// inherited, and this process's address is its own (nothing else claimed a host
+// for it), so the drop deliberately keeps it.
+//
+// So `{TmuxPane: "%4", TmuxSocket: ""}` reaches control.resolveBackend, which
+// is why TestResolveBackend_TmuxPaneWithoutSocketIsNotAddressable is a defect
+// test rather than a lock over an unreachable state.
+func TestLauncherFromEnv_TmuxPaneSurvivesAClearedTmux(t *testing.T) {
+	env := map[string]string{}
+	for k, v := range tmuxPaneEnv {
+		env[k] = v
+	}
+	delete(env, "TMUX")
+
+	l := launcherFromEnv(env)
+	if l.TmuxPane != "%4" {
+		t.Errorf("TmuxPane: want %%4, got %q", l.TmuxPane)
+	}
+	if l.TmuxSocket != "" {
+		t.Errorf("TmuxSocket: want empty with $TMUX cleared, got %q", l.TmuxSocket)
+	}
+	// And #1582's drop leaves it alone, because it is this process's own.
+	dropInheritedTmuxPane(l)
+	if l.TmuxPane != "%4" || l.TmuxSocket != "" {
+		t.Errorf("after dropInheritedTmuxPane: pane=%q socket=%q, want %%4 and empty",
+			l.TmuxPane, l.TmuxSocket)
 	}
 }
 
@@ -589,6 +626,11 @@ func TestDropInheritedTmuxPane(t *testing.T) {
 		// server having found nothing. That is a genuine pane, and dropping its
 		// address would cost it click-to-focus and the backchannel.
 		{"genuine pane", session.Launcher{TmuxPane: pane, TmuxSocket: socket}, true},
+		// The same pane with $TMUX cleared (`unset TMUX`, the documented way to
+		// nest tmux). Still this process's own address, so still kept — which
+		// is what leaves a socket-less pane reaching control.resolveBackend and
+		// makes #1593 a live defect rather than a state #1582 closed off.
+		{"genuine pane whose $TMUX was cleared", session.Launcher{TmuxPane: pane}, true},
 		// The shape the issue was filed about: `open -a iTerm` from a pane.
 		{"descendant reporting its own TERM_PROGRAM",
 			session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0-OWN", TmuxPane: pane, TmuxSocket: socket}, false},
