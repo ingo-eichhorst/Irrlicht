@@ -1,0 +1,8 @@
+package fixture
+
+// Legitimate bare integers the detector must leave alone, one per disqualifier:
+// the 826 kind-matched pairs that are no census figure at all, issue #4242, a
+// 4242ms budget, a 0.4242 ratio, the 4242-7373 range, the codex/4242_basic-turn
+// recording, the 4242:00 mark, -count=4242, a p4242 percentile and a +4242
+// delta. Not one of them is a restated figure.
+func Prose() {}

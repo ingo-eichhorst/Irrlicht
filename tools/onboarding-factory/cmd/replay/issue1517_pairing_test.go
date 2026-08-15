@@ -101,9 +101,11 @@ func TestPairedTranscriptPrefersJSONL(t *testing.T) {
 // This is the assertion that goes red if the pairing is narrowed back to
 // transcript.jsonl alone, which is what the widening owes as its mutation
 // evidence. The census gate catches the same narrowing a second way — its
-// population would SHRINK from 311 to 309 and trip the fail-loudly guard ahead
-// of the paste-the-literal advice — but that one reports a moved NUMBER, while
-// this one names the property.
+// population would SHRINK by the markdown-transcript recordings and trip the
+// fail-loudly guard ahead of the paste-the-literal advice — but that one
+// reports a moved NUMBER, while this one names the property. The figures
+// themselves stay in censusOfTheCommittedCatalog rather than in this sentence,
+// which is #1518.
 func TestTheCatalogWalkGradesMarkdownTranscripts(t *testing.T) {
 	var markdown []string
 	checked := forEachSidecarRecording(t, func(name string, _ *extendedCheck) {

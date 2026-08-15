@@ -1,0 +1,7 @@
+package fixture
+
+/*
+A block comment is scanned too, and the line reported must be the line the
+figure sits on rather than the line the comment opens on: 4242 sits here.
+*/
+func Block() {}
