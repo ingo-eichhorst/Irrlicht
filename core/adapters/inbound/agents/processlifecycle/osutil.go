@@ -170,12 +170,18 @@ func herdrClientLogPath(socketPath string) string {
 //
 // Read it as "the host of the PANE this launcher addresses was determined",
 // which is what the merging contract above actually needs, and which #1501
-// separated from "a host was determined". A process that merely INHERITED a
-// $TMUX_PANE has a host of its own and no claim on that pane's — so the answer
-// for it is false, and the merge leaves its own identity alone instead of
-// overwriting it with a fresh read that could be one timed-out probe short.
-// For a launcher addressing no pane at all the two readings coincide and it is
-// true, exactly as before.
+// separated from "a host was determined". For a launcher addressing no pane at
+// all the two readings coincide and it is true, exactly as before.
+//
+// A process that merely INHERITED a $TMUX_PANE used to be the case that made
+// the distinction bite: it has a host of its own and no claim on that pane's,
+// so the answer for it was false and the merge left its own identity alone.
+// Since #1582 it no longer carries the pane address at all
+// (dropInheritedTmuxPane), so it is an ordinary launcher addressing no pane and
+// the answer for it is true — which is also what stops the liveness sweep
+// paying a re-read per tick for a session whose identity was never the pane's
+// to change (services.hostedInAMultiplexerPane). The distinction itself stays:
+// it is what a genuine pane whose client probe did not run still needs.
 //
 // Never prompts the user — on macOS we use
 // `sysctl(kern.procargs2)` (no TCC prompt; `ps e` stopped exposing env on
@@ -264,6 +270,13 @@ func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 // looked up", which is precisely the shape ReadLauncherEnv's hostKnown contract
 // tells a merging caller not to clear fields on.
 //
+// Since #1582 that case no longer arrives from ReadLauncherEnv, which drops the
+// inherited address one step earlier (dropInheritedTmuxPane), so the branch is
+// reached only by tests today. It is kept rather than deleted because it guards
+// a DIFFERENT failure from the one that drop fixes — adopting a stranger's
+// window onto a session that has its own, which is #1499 rather than #1582 —
+// and the two are not one edit apart.
+//
 // It is the dispatcher, and having one is the point: the two producers differ
 // only in how they enumerate clients (osutil_darwin.go), and the ORDER they are
 // tried in is #1348's — herdr first, because a herdr server started from inside
@@ -315,8 +328,63 @@ func clientHostFor(l *session.Launcher) (client *session.Launcher, probed, addre
 // So this is the same "no local window" test resolveClientHostIdentityVia
 // applies to a CANDIDATE, applied one level up to decide whether to look for
 // candidates at all.
+//
+// Since #1582 the same three terms answer a second question — whether the pane
+// address is worth RECORDING at all — and dropInheritedTmuxPane below asks it
+// through this function rather than restating the terms. The two questions are
+// the same one: an address that is not this process's own is neither a pane
+// whose client we may adopt nor a pane we may address.
 func tmuxPaneAwaitsItsClient(l *session.Launcher) bool {
 	return l.TmuxPane != "" && l.TermProgram == "" && l.HostBundleID == ""
+}
+
+// dropInheritedTmuxPane clears l's tmux address when that address is not the
+// process it was read from's own.
+//
+// $TMUX_PANE is inherited by every descendant of a pane, so a GUI terminal or
+// IDE launched from inside one (`code .`, `kitty`, `open -a iTerm`) carries a
+// pane address belonging to a different process in a different window. #1499
+// already keeps such a session's own host identity — its suppression keys on
+// tmux's own TERM_PROGRAM marker — and copied the pane address alongside it.
+// control.resolveBackend picks the tmux backend from that field alone, so the
+// backchannel ran `tmux -S <inherited socket> send-keys -t %17 -l -- <text>`
+// into a stranger's pane, and interrupt and capture addressed the same one
+// (#1582). That is the failure #1348 removed for herdr, reached through the
+// one field #1499 deliberately left populated for a descendant.
+//
+// The CAPTURE is the only place this can be decided, which is why the fix is
+// here and resolveBackend is untouched. A stored launcher cannot tell the two
+// apart: a genuine pane that adopted its client's identity (#1501) and a
+// descendant that reported its own end up with the same fields —
+// {TermProgram: iTerm.app, ITermSessionID, TmuxPane, TmuxSocket} — and nothing
+// records which process the host came from. Requiring BOTH tmux fields the way
+// resolveBackend requires both herdr ones does not discriminate either: $TMUX
+// is inherited beside $TMUX_PANE, so a descendant carries the socket too.
+//
+// It runs AFTER the ancestry fallbacks, and not inside launcherFromEnv, because
+// the env alone does not answer the question. tmux stamps TERM_PROGRAM=tmux
+// onto the panes it spawns, and a kitty window launched from a pane inherits
+// exactly that (kitty sets no TERM_PROGRAM of its own, upstream kitty#4793) —
+// so at env time a genuine pane and a kitty descendant are the same map, and an
+// env-only check would leave that descendant addressing the pane kitty was
+// launched from while its own kitty backend sat one branch further down
+// resolveBackend. The walk is what separates them: from a genuine pane it
+// terminates at the reparented tmux server having found nothing, and from a
+// descendant it finds the host app.
+//
+// It fails towards DROPPING. An address wrongly dropped costs click-to-focus
+// and the backchannel for that one session, which keeps its own host and stays
+// visible; an address wrongly kept types the user's text into a terminal they
+// were not looking at, and no amount of it being rare makes that the better
+// error. The residual is a descendant whose host cannot be resolved at all (no
+// $TERM_PROGRAM of its own, no `.app` in its ancestry): it is indistinguishable
+// from a genuine pane here and keeps the address, which is the same residual
+// #1499's suppression already accepted.
+func dropInheritedTmuxPane(l *session.Launcher) {
+	if l.TmuxPane == "" || tmuxPaneAwaitsItsClient(l) {
+		return
+	}
+	l.TmuxPane, l.TmuxSocket = "", ""
 }
 
 // hostIdentity resolves the window-owning identity of pid: its whitelisted
@@ -406,6 +474,10 @@ func hostIdentityVia(ctx context.Context, pid int, readTTY ttyProbe) (l *session
 		complete = applyAncestryFallbacks(ctx, l, pid, &ancestryProbe{pid: pid, reads: newAncestryReads()})
 	}
 
+	// Here rather than in launcherFromEnv, because the answer needs the walk
+	// above: see dropInheritedTmuxPane.
+	dropInheritedTmuxPane(l)
+
 	// Capture the controlling TTY so Terminal.app (and potentially others)
 	// can target the exact tab — Terminal.app's AppleScript dictionary
 	// matches tabs by `tty` but has no session-UUID analog.
@@ -452,6 +524,12 @@ func launcherFromEnv(env map[string]string) *session.Launcher {
 	// upstream kitty#4793) is suppressed here and recovered by the ancestry
 	// fallbacks, which is why hostIdentity must not skip them for tmux.
 	//
+	// What this branch decides is which HOST fields survive, never whether the
+	// pane ADDRESS is the process's own — both shapes above carry one and only
+	// one of them is in that pane, and this map cannot tell them apart. That is
+	// dropInheritedTmuxPane's question, asked once the ancestry walk has run
+	// (#1582).
+	//
 	// Checked *after* herdr on purpose: a herdr server started from a tmux
 	// pane hands every pane a $TMUX_PANE as well, and that one is the
 	// server's, not the agent's (#1348). herdrPaneEnv in the tests is exactly
@@ -466,7 +544,7 @@ func launcherFromEnv(env map[string]string) *session.Launcher {
 		TermProgram:    env["TERM_PROGRAM"],
 		ITermSessionID: env["ITERM_SESSION_ID"],
 		TermSessionID:  env["TERM_SESSION_ID"],
-		TmuxPane:       env["TMUX_PANE"],
+		TmuxPane:       env["TMUX_PANE"], // provisional; see dropInheritedTmuxPane (#1582)
 		KittyListenOn:  env["KITTY_LISTEN_ON"],
 		KittyWindowID:  env["KITTY_WINDOW_ID"],
 		TmuxSocket:     tmuxSocketFromEnv(env["TMUX"]),
