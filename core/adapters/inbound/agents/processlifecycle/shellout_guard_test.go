@@ -13,7 +13,25 @@ import (
 	"testing"
 )
 
-// This file is the enforcement half of #1538, and it is the half that matters.
+// This file is the enforcement half of #1538 and #1547, and it is the half
+// that matters. It holds two rules over the same eight shellouts, and they are
+// stated as two because neither implies the other:
+//
+//   - ROUTING (#1547, TestEveryChildProcessRunsThroughRunProbe): no child is
+//     started outside runProbe. This makes the bounded-shellout SHAPE — derive
+//     the ceiling from the CALLER's context, name it, cancel it —
+//     unrepresentable at a second site rather than merely correct at today's
+//     eight.
+//   - CLASSIFICATION (#1538, below): the error a run site produces must be
+//     classified or propagated. runProbe does NOT make this one redundant, and
+//     that is the finding that shaped #1547's implementation: a caller can
+//     route perfectly through runProbe and still write
+//     `if err != nil { return "" }`, which is the family's exact collapse. So
+//     the helper was built to COMPOSE with this rule — it returns (out, err)
+//     and leaves the verdict at the call site — rather than to replace it,
+//     which the issue had assumed it would.
+//
+// The rest of this header is the classification rule.
 //
 // Applying one shared predicate at today's eight shellouts is a refactor: it
 // leaves the package correct and leaves the NEXT shellout free to classify its
@@ -82,6 +100,21 @@ var shelloutRunMethods = map[string]bool{
 	"Run":            true,
 	"Start":          true,
 }
+
+// runProbeName is the one helper that may start a child in this package
+// (#1547). Two rules read it and they ask opposite questions of the same name:
+//
+//   - TestEveryChildProcessRunsThroughRunProbe requires every run METHOD to be
+//     inside it, so the ceiling stays one copy.
+//   - The classification rule below treats a CALL to it as a run site of its
+//     own, so what its eight callers do with the error is graded exactly as
+//     what a direct .Output() caller's was. Without that second half the
+//     refactor would have made this guard blind: run sites went from 8 to 1 the
+//     moment the sites were routed, which is measured — the vacuity floor
+//     fired ("found 1 child-process run sites, expected at least 8") rather
+//     than the rule quietly passing, which is the whole reason that floor is a
+//     count and not a bool.
+const runProbeName = "runProbe"
 
 // shelloutClassifiers are the UNQUALIFIED calls that count as answering "did
 // the child answer?". lsofProbeRan is here because it IS probeAnswered with
@@ -236,14 +269,29 @@ func splitScope(root ast.Node) (runs []*ast.CallExpr, lits []*ast.FuncLit) {
 			lits = append(lits, lit)
 			return false
 		}
-		if call, ok := n.(*ast.CallExpr); ok {
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && shelloutRunMethods[sel.Sel.Name] && len(call.Args) == 0 {
-				runs = append(runs, call)
-			}
+		if call, ok := n.(*ast.CallExpr); ok && (isRunMethodCall(call) || isRunProbeCall(call)) {
+			runs = append(runs, call)
 		}
 		return true
 	})
 	return runs, lits
+}
+
+// isRunMethodCall reports whether call is `<something>.Output()` and friends —
+// an expression that actually STARTS a child. Building a command is not
+// running one (plutilBundleIDCmd returns an *exec.Cmd it never runs), and the
+// zero-argument check is what separates the two.
+func isRunMethodCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && shelloutRunMethods[sel.Sel.Name] && len(call.Args) == 0
+}
+
+// isRunProbeCall reports whether call invokes the package's one shellout
+// helper. It is matched as a bare *ast.Ident because runProbe is unexported
+// and package-local: a qualified spelling would be a different function.
+func isRunProbeCall(call *ast.CallExpr) bool {
+	id, ok := call.Fun.(*ast.Ident)
+	return ok && id.Name == runProbeName
 }
 
 // errBinding is how a run call's error reaches (or fails to reach) a name.
@@ -446,6 +494,12 @@ func TestEveryBoundedShelloutClassifiesItsError(t *testing.T) {
 	// not evaluate. The floor is deliberately below today's count so an
 	// intentional removal does not fail here for the wrong reason, but a
 	// scan that stops seeing the package fails loudly.
+	//
+	// Today's count is 9: the eight production call sites of runProbe, plus
+	// the one .Output() inside runProbe itself (whose error is returned
+	// directly, so it is clean). Before #1547 it was 8 direct .Output() sites,
+	// and routing them WITHOUT teaching this scan about runProbe took it to 1
+	// — which this floor reported rather than passing over.
 	const knownRunSites = 8
 	if runSites < knownRunSites {
 		t.Fatalf("found %d child-process run sites, expected at least %d: the scan is not looking where it thinks it is, so its silence proves nothing",
@@ -458,6 +512,92 @@ func TestEveryBoundedShelloutClassifiesItsError(t *testing.T) {
 	if len(findings) > 0 {
 		t.Log("Every issue in this family is one sentence: \"I could not look\" collapsed into \"I looked and there was nothing\" (#1485, #1492, #1513, #1524, #1533, #1537).")
 		t.Log("Fix: classify with probeAnswered(err[, answeredExitCodes...]) — or shellout.Answered, the shared predicate it forwards to (#1543) — and decide at THIS call site what a non-answer means, or return the error.")
+	}
+}
+
+// scanShelloutRouting is the production detector behind #1547's routing rule,
+// shared by the live rule and by its corpus. It returns one finding per child
+// started outside runProbe, plus the number started INSIDE it — the second is
+// the vacuity guard, and it has to be a count rather than a bool because a
+// runProbe that started two children would satisfy a `> 0` check while being
+// exactly the duplication the rule exists to prevent.
+//
+// It uses a plain ast.Inspect rather than splitScope's scope-confined walk, and
+// that is deliberate: a run method inside a function literal is still outside
+// runProbe, and the literals in this package are precisely where a shellout
+// would be smuggled — every site's builder IS a FuncLit, and a builder that
+// ran its own command instead of returning it would be invisible to a walk
+// that stopped at closures.
+func scanShelloutRouting(fset *token.FileSet, files map[string]*ast.File) (findings []shelloutFinding, insideRunProbe int) {
+	for name, file := range files {
+		base := filepath.Base(name)
+		for _, decl := range file.Decls {
+			owner, node := "var initialiser", ast.Node(decl)
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				if fn.Body == nil {
+					continue
+				}
+				owner, node = fn.Name.Name, fn.Body
+			}
+			ast.Inspect(node, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || !isRunMethodCall(call) {
+					return true
+				}
+				if owner == runProbeName {
+					insideRunProbe++
+					return true
+				}
+				findings = append(findings, shelloutFinding{base, fset.Position(call.Pos()).Line, owner,
+					"a child process is started outside " + runProbeName + "() — so this site spells its own " +
+						"ceiling, and the three things that have to be right together (derive from the CALLER's " +
+						"context, name the ceiling, cancel) are copied here instead of being inherited (#1547)"})
+				return true
+			})
+		}
+	}
+	return findings, insideRunProbe
+}
+
+// TestEveryChildProcessRunsThroughRunProbe is #1547's rule, and it is the
+// half that makes the SHAPE unrepresentable where the classification rule
+// below only makes a misuse detectable.
+//
+// Two arms, the shape core/architecture_hookbody_test.go uses: none outside,
+// exactly one inside. The second is not decoration — it is what stops the
+// exemption from being a hole. A runProbe that stopped running a child would
+// leave the first arm trivially satisfied by a package that starts no process
+// at all, which is this repo's most expensive failure mode; and a runProbe
+// that ran TWO would be the duplication the rule was written to delete,
+// wearing the blessed name.
+//
+// There is deliberately no exemption list, for the reason architecture_test.go
+// and architecture_hookbody_test.go have none: a site that genuinely must
+// start a child another way amends this rule in a reviewable diff.
+//
+// What it does NOT cover, stated because a rule whose limits are implied reads
+// as stronger than it is: it matches run methods by NAME with no type
+// information (see the file header on why this parses source), so a child
+// started through os.StartProcess, or through a value rather than a direct
+// method call, is invisible to it. Those are the same limits
+// core/architecture_shellout_test.go declares and pins, one layer up and
+// repo-wide.
+func TestEveryChildProcessRunsThroughRunProbe(t *testing.T) {
+	fset, files := parsePackageSources(t, ".")
+	findings, inside := scanShelloutRouting(fset, files)
+
+	for _, f := range findings {
+		t.Errorf("%s", f)
+	}
+	if len(findings) > 0 {
+		t.Logf("Fix: build the command as a shelloutCmd and hand it to %s(ctx, build) — it applies "+
+			"shelloutTimeout to the caller's context and cancels it. The ceiling is one copy on purpose.", runProbeName)
+	}
+	if inside != 1 {
+		t.Fatalf("%d child-process run sites inside %s(), want exactly 1: with 0 the rule above is "+
+			"satisfied by a package that starts no process at all, and with more than 1 the duplication "+
+			"it was written to delete has moved inside the one function allowed to have it",
+			inside, runProbeName)
 	}
 }
 
@@ -487,6 +627,25 @@ var namedCeilings = map[string]bool{
 // ceiling was an unnamed literal in eight places while three doc comments and
 // a test assertion already treated the value as a contract ("half of 2s"), and
 // a sibling package's own constant pointed here for the justification.
+//
+// #1547 proposed DELETING it, on the argument that "with one
+// context.WithTimeout in the package, a re-spelled ceiling is not
+// expressible". Re-derived against the tree as it actually is, that argument
+// does not hold, and it fails twice over:
+//
+//   - There are TWO WithTimeout sites after runProbe, not one. herdrClientBudget
+//     bounds a SEQUENCE of children (#1529) and so is not a child shellout and
+//     does not live inside runProbe. A second aggregate is foreseeable —
+//     noAggregateBudget's own doc names IsKnownInteractiveHost's ancestry walk
+//     as a standing gap (#1534) — and nothing but this rule would stop the next
+//     one being spelled `2*time.Second` inline.
+//   - Even for the CHILD ceiling, "one WithTimeout" is a consequence of the
+//     routing rule, not of runProbe existing. Routing forbids running a child
+//     elsewhere; it says nothing about writing context.WithTimeout elsewhere.
+//     Keeping the VALUE one fact is this rule's job and is independent of it.
+//
+// So it is narrowed rather than deleted: the floor drops from 8 to 2 because
+// runProbe collapsed eight child ceilings into one.
 func TestEveryBoundedShelloutUsesTheNamedCeiling(t *testing.T) {
 	fset, files := parsePackageSources(t, ".")
 
@@ -510,11 +669,13 @@ func TestEveryBoundedShelloutUsesTheNamedCeiling(t *testing.T) {
 			return true
 		})
 	}
-	// A floor, not "> 0": eight of nine ceilings could vanish and a
-	// zero-check would still pass on the one survivor — the same reason the
-	// classification rule counts run sites rather than asking whether it saw
-	// any at all.
-	const knownCeilings = 8
+	// A floor, not "> 0", for the same reason the classification rule counts
+	// run sites rather than asking whether it saw any at all. Since #1547 it
+	// equals the population rather than sitting below it: there is exactly one
+	// child ceiling (runProbe's) and one aggregate (herdrClientBudget's), and
+	// either disappearing means the scan is looking somewhere else — a third
+	// entry raises this number in the same reviewable diff that adds it.
+	const knownCeilings = 2
 	if seen < knownCeilings {
 		t.Fatalf("found %d context.WithTimeout calls, expected at least %d: the scan is not looking where it thinks it is",
 			seen, knownCeilings)
