@@ -16,7 +16,7 @@ import (
 // was never re-checked, so a session detached in one terminal and re-attached
 // in another kept naming the first one for the rest of its life. Eligibility is
 // now unconditional for a herdr pane, which is what lets the liveness sweep
-// re-resolve it (refreshHerdrHosts).
+// re-resolve it (refreshMultiplexerHosts).
 func TestLauncherBackfillNeedsFor_HerdrHost(t *testing.T) {
 	tests := map[string]struct {
 		launcher *session.Launcher
@@ -40,8 +40,8 @@ func TestLauncherBackfillNeedsFor_HerdrHost(t *testing.T) {
 		},
 	}
 	for name, tc := range tests {
-		if got := launcherBackfillNeedsFor(tc.launcher).herdrHost; got != tc.want {
-			t.Errorf("%s: herdrHost = %v, want %v", name, got, tc.want)
+		if got := launcherBackfillNeedsFor(tc.launcher).multiplexerHost; got != tc.want {
+			t.Errorf("%s: multiplexerHost = %v, want %v", name, got, tc.want)
 		}
 	}
 }
@@ -65,13 +65,13 @@ func TestLauncherBackfillNeedsFor_HerdrClientInKitty(t *testing.T) {
 		HerdrPaneID: "w1:p1",
 		TermProgram: "kitty", // the attached client's, adopted at capture
 	}
-	if want := (launcherBackfillNeeds{herdrHost: true, tty: true}); launcherBackfillNeedsFor(kittyClient) != want {
+	if want := (launcherBackfillNeeds{multiplexerHost: true, tty: true}); launcherBackfillNeedsFor(kittyClient) != want {
 		t.Errorf("no kitty need may fire for a herdr pane: got %+v, want %+v",
 			launcherBackfillNeedsFor(kittyClient), want)
 	}
 
 	kittyClient.TTY = "/dev/ttys077"
-	if want := (launcherBackfillNeeds{herdrHost: true}); launcherBackfillNeedsFor(kittyClient) != want {
+	if want := (launcherBackfillNeeds{multiplexerHost: true}); launcherBackfillNeedsFor(kittyClient) != want {
 		t.Errorf("a herdr pane with a tty needs only the host: got %+v, want %+v",
 			launcherBackfillNeedsFor(kittyClient), want)
 	}

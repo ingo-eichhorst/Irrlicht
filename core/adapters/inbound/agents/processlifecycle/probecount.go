@@ -73,6 +73,12 @@ const (
 	probePgrepDiscover probeKind = "pgrep.discover"
 	// probeKittenWindow is kittyWindowIDForPID's `kitten @ ls` (#1537).
 	probeKittenWindow probeKind = "kitten.window"
+	// probeTmuxClients is tmuxClientPIDs' `tmux -S <sock> list-clients` (#1501)
+	// — the tmux twin of probeLsofHerdrClients, and its own row for the reason
+	// this file keys per call site: the two answer the same QUESTION ("who is
+	// displaying this pane") with different tools, so one bucket could not say
+	// which multiplexer stopped resolving.
+	probeTmuxClients probeKind = "tmux.list_clients"
 )
 
 // allProbeKinds is every declared kind. It is the set
@@ -88,6 +94,7 @@ var allProbeKinds = []probeKind{
 	probeLsofHerdrClients,
 	probePgrepDiscover,
 	probeKittenWindow,
+	probeTmuxClients,
 }
 
 // probeTally is one kind's three counters.
@@ -191,7 +198,7 @@ func observeProbeMemoHit(kind probeKind) {
 
 // herdrCandidates counts the two ways resolveClientHostIdentityVia's loop can
 // end for a candidate: it probed one, or it abandoned the rest on the aggregate
-// budget (#1529's herdrClientBudget).
+// budget (#1529's clientHostBudget).
 //
 // This is #1558, and it is counted HERE rather than deferred because that issue
 // says so in its own words: "#1534 is that nothing counts probe non-answers,
@@ -274,7 +281,7 @@ type HerdrCandidateCounts struct {
 	// Probed is how many attached-client candidates the loop asked about.
 	Probed uint64
 	// AbandonedOnBudget is how many times the loop stopped early because
-	// herdrClientBudget was already spent — one per event, not per candidate.
+	// clientHostBudget was already spent — one per event, not per candidate.
 	AbandonedOnBudget uint64
 }
 

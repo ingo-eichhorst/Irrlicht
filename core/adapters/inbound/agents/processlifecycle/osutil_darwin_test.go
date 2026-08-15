@@ -667,11 +667,11 @@ func TestHerdrClientPIDs_ProbeTriState(t *testing.T) {
 // The third case is the vacuity guard: a cache that reported probed=false for
 // everything would satisfy the first two and destroy the tri-state.
 func TestHerdrClientLauncher_MemoizedNonAnswerIsStillANonAnswer(t *testing.T) {
-	memoized := func(t *testing.T, socketPath string) herdrClientCacheEntry {
+	memoized := func(t *testing.T, socketPath string) clientHostEntry {
 		t.Helper()
-		herdrClientCacheMu.Lock()
-		defer herdrClientCacheMu.Unlock()
-		entry, ok := herdrClientCache[socketPath]
+		herdrClientHosts.mu.Lock()
+		defer herdrClientHosts.mu.Unlock()
+		entry, ok := herdrClientHosts.entries[socketPath]
 		if !ok {
 			t.Fatal("nothing was memoized: every pane sharing this socket re-pays the probe (#1514)")
 		}
@@ -712,13 +712,13 @@ func TestHerdrClientLauncher_MemoizedNonAnswerIsStillANonAnswer(t *testing.T) {
 	t.Run("a hit returns what was memoized", func(t *testing.T) {
 		// Without this the whole family is satisfiable by a cache that returns
 		// the right tri-state and drops the launcher — measured: making
-		// herdrClientCacheGet return a nil launcher leaves every other test in
+		// clientHostMemo.get return a nil launcher leaves every other test in
 		// the package green, while panes 2..N of a herdr server silently lose
 		// their host. The socket has no client log, so a read that reached the
 		// prober instead of the memo would answer probed=false and fail here.
 		socketPath := newHerdrSessionDir(t)
 		want := &session.Launcher{TermProgram: "iTerm.app", HostBundleID: "com.googlecode.iterm2"}
-		herdrClientCachePut(socketPath, want, true)
+		herdrClientHosts.put(socketPath, want, true)
 		t.Cleanup(func() { forgetHerdrClientMemo(socketPath) })
 
 		got, probed := herdrClientLauncher(socketPath)
@@ -748,7 +748,7 @@ func TestHerdrClientLauncher_MemoizedNonAnswerIsStillANonAnswer(t *testing.T) {
 
 // TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown is #1485 at the
 // port boundary: the reader has to carry the distinction all the way out, or
-// the sweep that consumes it (refreshHerdrHosts) cannot act on it. The pane's
+// the sweep that consumes it (refreshMultiplexerHosts) cannot act on it. The pane's
 // own identity is unaffected either way — only the second return value moves.
 func TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown(t *testing.T) {
 	socketPath := newHerdrSessionDir(t) // no client log
@@ -1172,9 +1172,9 @@ func TestResolveClientHostIdentity_ResolvableCandidateStillWins(t *testing.T) {
 // than a copy per test. One caller uses it mid-test, standing in for the TTL
 // elapsing; the rest wire it through t.Cleanup.
 func forgetHerdrClientMemo(socketPath string) {
-	herdrClientCacheMu.Lock()
-	defer herdrClientCacheMu.Unlock()
-	delete(herdrClientCache, socketPath)
+	herdrClientHosts.mu.Lock()
+	defer herdrClientHosts.mu.Unlock()
+	delete(herdrClientHosts.entries, socketPath)
 }
 
 // countingLsof makes the herdr client log at logPath answer as an lsof table,
@@ -1345,7 +1345,7 @@ func TestHerdrClientPIDs_DedupesFDRowsOfOneClient(t *testing.T) {
 // TestHerdrClientCachePut_NonAnswerDoesNotDisplaceALiveAnswer locks the one
 // hazard memoizing non-answers introduces. Before #1514 a non-answer was never
 // written, so it could not overwrite anything; now two goroutines can miss the
-// memo for one socket and probe concurrently (refreshHerdrHosts reads outside
+// memo for one socket and probe concurrently (refreshMultiplexerHosts reads outside
 // assignMu on the sweep goroutine, PID discovery reaches captureLauncher on its
 // own), and the non-answer is systematically the slower of the two to produce.
 // Last-writer-wins would let the one carrying no information erase a resolved
@@ -1360,8 +1360,8 @@ func TestHerdrClientCachePut_NonAnswerDoesNotDisplaceALiveAnswer(t *testing.T) {
 		want := &session.Launcher{TermProgram: "iTerm.app"}
 		t.Cleanup(func() { forgetHerdrClientMemo(socketPath) })
 
-		herdrClientCachePut(socketPath, want, true)
-		herdrClientCachePut(socketPath, nil, false) // the slow loser lands second
+		herdrClientHosts.put(socketPath, want, true)
+		herdrClientHosts.put(socketPath, nil, false) // the slow loser lands second
 
 		got, probed := herdrClientLauncher(socketPath)
 		if !probed || got != want {
@@ -1374,8 +1374,8 @@ func TestHerdrClientCachePut_NonAnswerDoesNotDisplaceALiveAnswer(t *testing.T) {
 		want := &session.Launcher{TermProgram: "iTerm.app"}
 		t.Cleanup(func() { forgetHerdrClientMemo(socketPath) })
 
-		herdrClientCachePut(socketPath, nil, false)
-		herdrClientCachePut(socketPath, want, true)
+		herdrClientHosts.put(socketPath, nil, false)
+		herdrClientHosts.put(socketPath, want, true)
 
 		got, probed := herdrClientLauncher(socketPath)
 		if !probed || got != want {
@@ -1385,7 +1385,7 @@ func TestHerdrClientCachePut_NonAnswerDoesNotDisplaceALiveAnswer(t *testing.T) {
 }
 
 // TestHerdrClientCache_ExpiresANonAnswer is the load-bearing half of #1514's
-// argument, and it was missing: deleting herdrClientCacheLive's expiry check
+// argument, and it was missing: deleting clientHostMemo.live's expiry check
 // entirely left every other test in the package green (measured).
 //
 // The case for reversing #1485 is that a memoized non-answer costs only a
@@ -1407,11 +1407,11 @@ func TestHerdrClientCache_ExpiresANonAnswer(t *testing.T) {
 		t.Fatalf("first read cost %d scans, want 1", got)
 	}
 
-	herdrClientCacheMu.Lock()
-	entry := herdrClientCache[socketPath]
-	entry.at = time.Now().Add(-herdrClientCacheTTL - time.Second)
-	herdrClientCache[socketPath] = entry
-	herdrClientCacheMu.Unlock()
+	herdrClientHosts.mu.Lock()
+	entry := herdrClientHosts.entries[socketPath]
+	entry.at = time.Now().Add(-clientHostCacheTTL - time.Second)
+	herdrClientHosts.entries[socketPath] = entry
+	herdrClientHosts.mu.Unlock()
 
 	if _, probed := herdrClientLauncher(socketPath); probed {
 		t.Fatal("the re-probe finds the same unreadable candidate")

@@ -111,15 +111,6 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 // ancestry fallbacks. It is a value that can only mask, never resolve, which
 // is why it is dropped rather than kept as a label.
 //
-// The consequence is that a genuine tmux pane currently resolves to no host at
-// all
-// — click-to-focus does nothing rather than raising the wrong window, which is
-// the same honest degradation a herdr session with no attached client gets.
-// Resolving the real host means asking tmux which client is attached
-// (`tmux -S <socket> list-clients -F '#{client_pid}'`, then reading that
-// process's identity the way a herdr client's is read). That is #1350's
-// counterpart for tmux and is deliberately not built here.
-//
 // The host fields on a herdr launcher are therefore populated from a different
 // process: the attached herdr *client*, which is what actually owns a window
 // (#1350). Provenance is the whole distinction — the same TmuxPane that is a
@@ -127,6 +118,14 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 // client's own, because then the client really is running in that tmux pane.
 // A session with no attached client keeps the two Herdr* fields alone, which
 // is the honest answer: nothing is displaying it anywhere.
+//
+// Since #1501 a tmux pane's host fields come from the same indirection, one
+// step cheaper: tmux is asked which clients are attached
+// (`tmux -S <socket> list-clients -F '#{client_pid}'`) instead of the socket
+// directory being scanned for them, and each client PID is then read exactly as
+// a herdr client's is. A pane with no client attached keeps TmuxPane/TmuxSocket
+// alone — nothing is displaying it — which is why a click on such a session
+// still does nothing rather than raising a stale window.
 type Launcher struct {
 	TermProgram    string `json:"term_program,omitempty"`     // $TERM_PROGRAM (e.g. iTerm.app, Apple_Terminal, vscode, cursor, ghostty, WezTerm, Hyper)
 	ITermSessionID string `json:"iterm_session_id,omitempty"` // $ITERM_SESSION_ID
@@ -176,27 +175,89 @@ func (l *Launcher) IsEmpty() bool {
 		l.HostBundleID == "" && l.HerdrPaneID == "" && l.HerdrSocketPath == "")
 }
 
+// paneKind names which multiplexer a launcher's session lives in, as decided
+// by (*Launcher).pane below.
+type paneKind string
+
+const (
+	paneKindNone  paneKind = ""
+	paneKindHerdr paneKind = "herdr"
+	paneKindTmux  paneKind = "tmux"
+)
+
+// ownPane is the multiplexer pane a launcher's session lives IN — the address
+// that is the PANE's rather than the displaying window's.
+type ownPane struct {
+	kind paneKind
+	id   string
+}
+
+// pane reports which multiplexer pane this launcher's session lives in.
+//
+// The precedence is herdr-then-tmux, and it is not a preference: it is the
+// SAME precedence processlifecycle.launcherFromEnv applies when it captures
+// these fields, and the reason is #1348 — a herdr server started from inside a
+// tmux pane hands every pane it will ever spawn a $TMUX_PANE that is the
+// server's, not the agent's. A launcher carrying both addresses is therefore a
+// herdr pane whose tmux address is inherited, never a tmux pane that also
+// happens to be a herdr one. Deciding it here rather than at each call site is
+// what stops the capture and the adoption from drifting to opposite answers.
+//
+// A launcher in NEITHER — a plain terminal session — reports paneKindNone, and
+// callers must treat that as "this is not a pane" rather than as a default.
+func (l *Launcher) pane() ownPane {
+	switch {
+	case l == nil:
+		return ownPane{}
+	case l.HerdrPaneID != "":
+		return ownPane{kind: paneKindHerdr, id: l.HerdrPaneID}
+	case l.TmuxPane != "":
+		return ownPane{kind: paneKindTmux, id: l.TmuxPane}
+	}
+	return ownPane{}
+}
+
+// SamePaneAs reports whether other describes the same multiplexer pane as l.
+//
+// It exists for the one check that stands between a periodic host refresh and
+// a PID-reuse misroute: a PID can be recycled by an unrelated process, and a
+// fresh read of it describes whatever that process is in. Comparing the pane
+// address — kind AND id, so a pane that changed multiplexer is not "the same
+// pane with a new address" — is what tells a client that MOVED (the thing the
+// refresh exists to observe) from a session that is no longer there at all.
+//
+// Two launchers in no pane at all are not "the same pane": paneKindNone is an
+// absence, and answering true for it would let a refresh adopt a stranger's
+// identity onto a session whose own address had gone.
+func (l *Launcher) SamePaneAs(other *Launcher) bool {
+	mine := l.pane()
+	if mine.kind == paneKindNone {
+		return false
+	}
+	return mine == other.pane()
+}
+
 // AdoptHostIdentity copies every host-window field of from onto l, leaving
-// l's own herdr address untouched, and reports whether anything changed. It is
-// how a herdr pane acquires the identity of the client that displays it: the
-// pane supplies the address to focus, the client supplies the window to raise.
+// l's own pane address untouched, and reports whether anything changed. It is
+// how a multiplexer pane acquires the identity of the client that displays it:
+// the pane supplies the address to focus, the client supplies the window to
+// raise.
 //
 // A nil or empty from is a no-op, so "no client attached" degrades to the
-// herdr-only launcher rather than to a half-populated one. Callers must only
+// address-only launcher rather than to a half-populated one. Callers must only
 // pass a launcher they resolved from the attached client — the point of #1348
 // is that the pane's own environment is not that.
 func (l *Launcher) AdoptHostIdentity(from *Launcher) bool {
 	if l == nil || from.IsEmpty() {
 		return false
 	}
-	// Copy wholesale and put back the two fields that are the *pane's*, rather
-	// than listing the host fields one by one. The host set grows (it has
-	// eleven members and gains one per terminal integration) while the herdr
-	// address is closed at two, so enumerating the closed set is what keeps a
-	// newly added host field from being silently left behind here.
+	// Copy wholesale and put back the pane's own address, rather than listing
+	// the host fields one by one. The host set grows (it has eleven members and
+	// gains one per terminal integration) while a pane address is closed at two
+	// fields, so enumerating the closed set is what keeps a newly added host
+	// field from being silently left behind here.
 	merged := *from
-	merged.HerdrPaneID = l.HerdrPaneID
-	merged.HerdrSocketPath = l.HerdrSocketPath
+	l.putBackOwnPaneAddress(&merged)
 	// TTY needs both sides, and the guard is symmetric on purpose:
 	// BackgroundAgent.Detached is computed from this field (#744), so a client
 	// resolved without a controlling tty must not erase the pane's own — and,
@@ -213,6 +274,42 @@ func (l *Launcher) AdoptHostIdentity(from *Launcher) bool {
 	}
 	*l = merged
 	return true
+}
+
+// putBackOwnPaneAddress restores onto merged the address that is l's PANE's
+// rather than the displaying window's — the closed set AdoptHostIdentity's
+// wholesale copy is allowed to overwrite and must not.
+//
+// WHICH closed set is l.pane()'s answer, and #1501 is why that is a question at
+// all. Until then the only pane that adopted anything was a herdr one, so the
+// put-back could name Herdr* unconditionally. A tmux pane adopts too now, and
+// its address has to survive the copy for exactly the same reason:
+// TmuxPane/TmuxSocket are what the backchannel routes on
+// (control.resolveBackend) and what the macOS TmuxActivator selects with, and
+// the attached client carries neither — it is a GUI terminal, not a pane.
+// Leaving them behind would resolve the window and lose the pane inside it,
+// which is a worse outcome than the nil it replaced: a click would raise the
+// right window and select nothing, and control would fall through to a backend
+// addressing a different process.
+//
+// Only the pane's OWN address is put back. A herdr client that is itself
+// running inside tmux contributes real TmuxPane/TmuxSocket fields — the client
+// really is in that pane — and those must pass through, which is what
+// control.resolveBackend's herdr-before-tmux ordering depends on.
+func (l *Launcher) putBackOwnPaneAddress(merged *Launcher) {
+	switch l.pane().kind {
+	case paneKindHerdr:
+		merged.HerdrPaneID = l.HerdrPaneID
+		merged.HerdrSocketPath = l.HerdrSocketPath
+	case paneKindTmux:
+		merged.TmuxPane = l.TmuxPane
+		merged.TmuxSocket = l.TmuxSocket
+	case paneKindNone:
+		// Not reachable from either production call site — both resolve a
+		// client only for a launcher that IS a pane — and pinned as a lock
+		// rather than left to be inferred. There is no own address to keep, so
+		// from stands whole.
+	}
 }
 
 // SessionState represents the current state of a Claude Code or Copilot session.

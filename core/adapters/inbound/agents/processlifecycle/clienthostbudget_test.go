@@ -17,17 +17,33 @@ const sweepBaseIntervalSource = "../../../../application/services/pid_manager.go
 // but reading the source can produce it.
 var sweepBaseIntervalDecl = regexp.MustCompile(`const baseInterval = (\d+) \* time\.(Second|Millisecond|Minute)`)
 
-// TestHerdrReadFitsTheLivenessSweepTick is what makes herdrClientBudget's value
+// TestClientHostReadFitsTheLivenessSweepTick is what makes clientHostBudget's value
 // a decision rather than a preference, and it is the reason #1529 was filed as
 // a bug rather than as a doc fix.
 //
-// refreshHerdrHosts runs SYNCHRONOUSLY inside the SweepDeadPIDs ticker handler
-// (CheckPIDLiveness → refreshHerdrHosts), and Go's Ticker drops ticks it
+// It covers BOTH producers, because since #1501 there is one budget rather
+// than one per multiplexer (see clientHostBudget for that decision) — so one
+// assertion over one constant is the whole coverage, and a second constant
+// would be the thing that could drift past this tick unobserved.
+//
+// What it does NOT cover, stated because a reader would otherwise assume the
+// arithmetic is exhaustive: a tmux pane's DIRECT read is not shelloutTimeout.
+// hostIdentity skips the ancestry fallbacks for a herdr pane and deliberately
+// runs them for a tmux one (a kitty launched from a pane has no other source of
+// a host), so a tmux session pays the ordinary non-herdr direct read — two
+// walks bounded by a COUNT, which is what noAggregateBudget names and what
+// #1529 deliberately did not move. In practice that walk terminates at the
+// reparented tmux server in two or three hops; in the worst case it is the
+// standing cost noAggregateBudget's doc records for every non-herdr session,
+// and #1501 neither adds to it nor fixes it.
+//
+// refreshMultiplexerHosts runs SYNCHRONOUSLY inside the SweepDeadPIDs ticker handler
+// (CheckPIDLiveness → refreshMultiplexerHosts), and Go's Ticker drops ticks it
 // overruns. So a herdr read that can outlast one tick delays dead-PID reaping
 // for every session behind it — which is what the old bound, a COUNT over up to
 // maxClientCandidates candidates each spending several 2s ceilings, allowed.
 // The whole read is shelloutTimeout (the pane's own controlling-tty `ps`, the
-// only child the direct read starts for a herdr pane) plus herdrClientBudget
+// only child the direct read starts for a herdr pane) plus clientHostBudget
 // (the entire client indirection), so that sum is what has to fit.
 //
 // The cadence is READ OUT OF THE SERVICES SOURCE rather than copied here. A
@@ -41,14 +57,14 @@ var sweepBaseIntervalDecl = regexp.MustCompile(`const baseInterval = (\d+) \* ti
 // It refuses rather than skips when it cannot find that declaration: a gate
 // whose inability to look is indistinguishable from a pass is the failure mode
 // this repo's guards exist to remove.
-func TestHerdrReadFitsTheLivenessSweepTick(t *testing.T) {
+func TestClientHostReadFitsTheLivenessSweepTick(t *testing.T) {
 	tick := sweepBaseInterval(t)
 
-	if read := shelloutTimeout + herdrClientBudget; read >= tick {
-		t.Errorf("a herdr ReadLauncherEnv can take shelloutTimeout+herdrClientBudget = %v, "+
+	if read := shelloutTimeout + clientHostBudget; read >= tick {
+		t.Errorf("a pane's ReadLauncherEnv can take shelloutTimeout+clientHostBudget = %v, "+
 			"which does not fit inside the liveness sweep's fastest tick (%v, PIDManager.SweepDeadPIDs). "+
-			"That sweep calls refreshHerdrHosts synchronously and Go's Ticker drops ticks it overruns, "+
-			"so one herdr resolve would again delay dead-PID reaping for every session behind it — #1529 "+
+			"That sweep calls refreshMultiplexerHosts synchronously and Go's Ticker drops ticks it overruns, "+
+			"so one client resolve would again delay dead-PID reaping for every session behind it — #1529 "+
 			"exactly, with a duration bound instead of a count", read, tick)
 	}
 }
@@ -66,13 +82,13 @@ func sweepBaseInterval(t *testing.T) time.Duration {
 	}
 	if !regexp.MustCompile(`func \(pm \*PIDManager\) SweepDeadPIDs\(`).Match(src) {
 		t.Fatalf("%s no longer declares PIDManager.SweepDeadPIDs: the cadence this test reads may no "+
-			"longer be the one refreshHerdrHosts runs under, so re-point it rather than trusting it",
+			"longer be the one refreshMultiplexerHosts runs under, so re-point it rather than trusting it",
 			sweepBaseIntervalSource)
 	}
 	m := sweepBaseIntervalDecl.FindSubmatch(src)
 	if m == nil {
 		t.Fatalf("%s no longer declares `const baseInterval = N * time.Unit`: the liveness sweep's "+
-			"cadence is what bounds herdrClientBudget, and a test that cannot read it must say so "+
+			"cadence is what bounds clientHostBudget, and a test that cannot read it must say so "+
 			"rather than pass", sweepBaseIntervalSource)
 	}
 	n, err := strconv.Atoi(string(m[1]))

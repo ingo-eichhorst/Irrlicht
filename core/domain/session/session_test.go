@@ -187,3 +187,120 @@ func TestLauncher_AdoptHostIdentity_TTYlessAgentStaysTTYless(t *testing.T) {
 		t.Errorf("TermProgram: want iTerm.app, got %q", detachedAgent.TermProgram)
 	}
 }
+
+// TestLauncher_AdoptHostIdentity_TmuxPaneKeepsItsAddress is #1501's defect
+// test, and the riskiest line of that change: AdoptHostIdentity's "put back"
+// set was closed at the two Herdr* fields, so a tmux pane adopting its
+// client's identity would have been handed a launcher with the client's window
+// and NO pane address — the client is a GUI terminal and carries none.
+//
+// Losing it is worse than the nil it replaced. TmuxPane/TmuxSocket are what
+// control.resolveBackend routes the backchannel on and what the macOS
+// TmuxActivator selects with, so the result would be a click that raises the
+// right window and selects nothing, and a control path that falls through to
+// whatever backend the remaining fields happen to match.
+//
+// Seen RED against origin/main, where the put-back names only the herdr
+// address.
+func TestLauncher_AdoptHostIdentity_TmuxPaneKeepsItsAddress(t *testing.T) {
+	pane := &Launcher{
+		TmuxPane:   "%17",
+		TmuxSocket: "/private/tmp/tmux-501/default",
+		TTY:        "/dev/ttys900", // the pane's own pty
+	}
+	client := &Launcher{
+		TermProgram:    "iTerm.app",
+		ITermSessionID: "w0t0p0-CLIENT",
+		TTY:            "/dev/ttys012",
+		HostBundleID:   "com.googlecode.iterm2",
+	}
+	if !pane.AdoptHostIdentity(client) {
+		t.Fatal("adopting a populated client identity must report a change")
+	}
+	if pane.TermProgram != "iTerm.app" || pane.ITermSessionID != "w0t0p0-CLIENT" {
+		t.Errorf("host identity not adopted: %+v", pane)
+	}
+	if pane.TmuxPane != "%17" || pane.TmuxSocket != "/private/tmp/tmux-501/default" {
+		t.Errorf("the pane lost the address the backchannel routes on: %+v", pane)
+	}
+	if pane.TTY != "/dev/ttys012" {
+		t.Errorf("TTY: want the client's tab, got %q", pane.TTY)
+	}
+}
+
+// TestLauncher_AdoptHostIdentity_HerdrPaneKeepsTheClientsTmuxAddress is the
+// lock the #1501 put-back had to not break. A herdr client can itself be
+// running inside a tmux pane, in which case its TmuxPane/TmuxSocket are its
+// OWN and describe the window displaying the herdr pane —
+// control.resolveBackend's herdr-before-tmux ordering exists precisely because
+// both addresses can be present and mean different things.
+//
+// So the put-back is the pane's own address only, chosen by the same
+// herdr-then-tmux precedence processlifecycle.launcherFromEnv captures with. A
+// put-back that unconditionally cleared both address pairs would erase this.
+func TestLauncher_AdoptHostIdentity_HerdrPaneKeepsTheClientsTmuxAddress(t *testing.T) {
+	pane := &Launcher{HerdrPaneID: "w1:p2", HerdrSocketPath: "/cfg/herdr/herdr.sock"}
+	pane.AdoptHostIdentity(&Launcher{
+		TermProgram: "iTerm.app",
+		TmuxPane:    "%4",
+		TmuxSocket:  "/private/tmp/tmux-501/default",
+		TTY:         "/dev/ttys012",
+	})
+	if pane.HerdrPaneID != "w1:p2" || pane.HerdrSocketPath != "/cfg/herdr/herdr.sock" {
+		t.Errorf("the herdr pane's own address must survive: %+v", pane)
+	}
+	if pane.TmuxPane != "%4" || pane.TmuxSocket != "/private/tmp/tmux-501/default" {
+		t.Errorf("the client's own tmux address must pass through: %+v", pane)
+	}
+}
+
+// TestLauncher_AdoptHostIdentity_NoPaneKeepsNothing pins the third branch.
+// A launcher in no pane at all has no own address to put back, so from stands
+// whole. Unreachable from either production call site — both resolve a client
+// only for a launcher that IS a pane — and pinned rather than left to be
+// inferred from the absence of a branch.
+func TestLauncher_AdoptHostIdentity_NoPaneKeepsNothing(t *testing.T) {
+	plain := &Launcher{TermProgram: "ghostty"}
+	plain.AdoptHostIdentity(&Launcher{TermProgram: "iTerm.app", TmuxPane: "%9", HerdrPaneID: "w1:p1"})
+	if plain.TmuxPane != "%9" || plain.HerdrPaneID != "w1:p1" {
+		t.Errorf("with no own pane address there is nothing to put back: %+v", plain)
+	}
+}
+
+// TestLauncher_SamePaneAs is what stands between the periodic host refresh and
+// a PID-reuse misroute (services.applyMultiplexerHostRefresh).
+func TestLauncher_SamePaneAs(t *testing.T) {
+	cases := map[string]struct {
+		stored, fresh *Launcher
+		want          bool
+	}{
+		"same herdr pane": {
+			&Launcher{HerdrPaneID: "w1:p1"}, &Launcher{HerdrPaneID: "w1:p1"}, true,
+		},
+		"same tmux pane": {
+			&Launcher{TmuxPane: "%17"}, &Launcher{TmuxPane: "%17"}, true,
+		},
+		"a herdr pane whose client moved into tmux is still the same pane": {
+			&Launcher{HerdrPaneID: "w1:p1", TmuxPane: "%4"},
+			&Launcher{HerdrPaneID: "w1:p1", TmuxPane: "%9"},
+			true,
+		},
+		"tmux pane rebound to another pane": {
+			&Launcher{TmuxPane: "%17"}, &Launcher{TmuxPane: "%18"}, false,
+		},
+		"the pid is no longer in any pane": {
+			&Launcher{TmuxPane: "%17"}, &Launcher{TermProgram: "ghostty"}, false,
+		},
+		"the pid moved from tmux into herdr": {
+			&Launcher{TmuxPane: "%17"}, &Launcher{HerdrPaneID: "w1:p1"}, false,
+		},
+		"neither is in a pane": {
+			&Launcher{TermProgram: "ghostty"}, &Launcher{TermProgram: "ghostty"}, false,
+		},
+	}
+	for name, tc := range cases {
+		if got := tc.stored.SamePaneAs(tc.fresh); got != tc.want {
+			t.Errorf("%s: SamePaneAs = %v, want %v", name, got, tc.want)
+		}
+	}
+}

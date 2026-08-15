@@ -77,3 +77,11 @@ func hostGateFor(pid int) hostGateOutcome { return observeHostGate(hostGateNotEv
 // platform never looks, and a caller merging the read into a stored launcher
 // must not read that silence as a client having detached.
 func herdrClientLauncher(socketPath string) (*session.Launcher, bool) { return nil, false }
+
+// tmuxClientLauncher resolves a tmux pane's window through the attached client
+// (#1501). Darwin-only for the same reason herdrClientLauncher is: the identity
+// it produces is only consumed by the macOS click-to-focus path, and resolving
+// it needs the same ancestry walk the stubs above already decline to do.
+//
+// So the answer here is "not probed" (#1485), not "nothing attached".
+func tmuxClientLauncher(socketPath string) (*session.Launcher, bool) { return nil, false }
