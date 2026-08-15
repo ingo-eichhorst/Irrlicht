@@ -144,8 +144,8 @@ func (t *ConcurrencyTracker) resolveProject(cwd string) string {
 	}
 	t.resolveMu.Lock()
 	defer t.resolveMu.Unlock()
-	if p, ok := t.resolveCache[cwd]; ok {
-		return p
+	if cached, ok := t.resolveCache[cwd]; ok {
+		return cached
 	}
 	p := filepath.Base(cwd)
 	if t.git != nil {

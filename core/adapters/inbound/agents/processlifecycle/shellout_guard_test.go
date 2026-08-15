@@ -91,8 +91,8 @@ var shelloutClassifiers = map[string]bool{
 	"lsofProbeRan":  true,
 }
 
-// shelloutPkgClassifiers are the QUALIFIED spellings, keyed by package
-// identifier then function name.
+// shelloutPkgClassifiers are the QUALIFIED spellings, keyed by the source text
+// "<package identifier>.<function>".
 //
 // #1543 promoted probeAnswered's implementation to core/pkg/shellout.Answered
 // so an outbound adapter one hexagon layer away could reach it. This package
@@ -119,8 +119,8 @@ var shelloutClassifiers = map[string]bool{
 // import of core/pkg/shellout would therefore not be recognised, which is the
 // same class of limit the run-method table already accepts and is pinned as a
 // corpus row rather than left to be discovered.
-var shelloutPkgClassifiers = map[string]map[string]bool{
-	"shellout": {"Answered": true},
+var shelloutPkgClassifiers = map[string]bool{
+	"shellout.Answered": true,
 }
 
 // isShelloutClassifier reports whether fun names a call that classifies a
@@ -134,7 +134,7 @@ func isShelloutClassifier(fun ast.Expr) bool {
 		if !ok {
 			return false
 		}
-		return shelloutPkgClassifiers[pkg.Name][f.Sel.Name]
+		return shelloutPkgClassifiers[pkg.Name+"."+f.Sel.Name]
 	}
 	return false
 }

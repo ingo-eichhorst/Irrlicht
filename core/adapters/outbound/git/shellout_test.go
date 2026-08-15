@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"irrlicht/core/pkg/shellout"
 )
 
 // This file covers the two halves of #1543, and they need different evidence.
@@ -71,9 +73,23 @@ func floodingGit(ctx context.Context, _ string, _ ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, "/bin/sh", "-c", "head -c "+over+" /dev/zero")
 }
 
-// withCmd returns an adapter whose git is build. Every method routes through
-// Adapter.run, so one seam covers all seven shellouts.
-func withCmd(build gitCmd) *Adapter { return &Adapter{cmd: build} }
+// withCmd returns an adapter whose git is build, under the production ceiling.
+// Every method routes through Adapter.run, so one seam covers all seven
+// shellouts.
+func withCmd(build gitCmd) *Adapter { return &Adapter{cmd: build, timeout: gitTimeout} }
+
+// withCeiling is withCmd under a SHORT ceiling, for the tests whose subject is
+// the ceiling firing rather than its value. Waiting out the real 5s twice is
+// the package's slowest and most load-sensitive cost, and neither test learns
+// anything from the extra 4.9s. The real constant stays proven by
+// TestProductionAdapterIsBounded, which goes through New().
+func withCeiling(build gitCmd, d time.Duration) *Adapter {
+	return &Adapter{cmd: build, timeout: d}
+}
+
+// testCeiling is short enough to keep the suite fast and long enough that a
+// loaded machine still starts the child before it fires.
+const testCeiling = 300 * time.Millisecond
 
 // ---------------------------------------------------------------------------
 // The collapse (#1543 defect 1)
@@ -255,27 +271,27 @@ func second(_ string, ok bool) bool { return ok }
 //   - Widening gitTimeout to 60s: fails on the elapsed assertion, reporting
 //     ~30s against a half-ceiling of 30s.
 //
-// The elapsed bound is gitTimeout+gitWaitDelay+slack rather than exactly
+// The elapsed bound is gitTimeout+shellout.WaitDelay+slack rather than exactly
 // gitTimeout: the child is SIGKILLed at the deadline and exec then waits up to
 // WaitDelay for the output pipe.
 func TestRunCeilingActuallyFires(t *testing.T) {
 	t.Parallel()
 
 	start := time.Now()
-	_, answered := withCmd(stalledGit).GetBranch("/tmp")
+	_, answered := withCeiling(stalledGit, testCeiling).GetBranch("/tmp")
 	elapsed := time.Since(start)
 
 	if answered {
 		t.Error("a child killed by the ceiling was reported as an answer — the empty branch " +
 			"would then mean \"detached HEAD\"")
 	}
-	if elapsed < gitTimeout/2 {
+	if elapsed < testCeiling/2 {
 		t.Errorf("returned after %v, well under the %v ceiling: the child cannot have been "+
-			"the 30s sleep this test arranges, so the ceiling is not what stopped it", elapsed, gitTimeout)
+			"the 30s sleep this test arranges, so the ceiling is not what stopped it", elapsed, testCeiling)
 	}
-	if limit := gitTimeout + gitWaitDelay + 2*time.Second; elapsed > limit {
+	if limit := testCeiling + shellout.WaitDelay + 5*time.Second; elapsed > limit {
 		t.Errorf("took %v against a %v ceiling (+%v WaitDelay); the bound did not fire",
-			elapsed, gitTimeout, gitWaitDelay)
+			elapsed, testCeiling, shellout.WaitDelay)
 	}
 }
 
@@ -286,7 +302,7 @@ func TestRunCeilingActuallyFires(t *testing.T) {
 // routinely — a credential helper, an fsmonitor daemon, a pager forced on by
 // global config.
 //
-// MUTATION EVIDENCE: deleting `cmd.WaitDelay = gitWaitDelay` from Adapter.run
+// MUTATION EVIDENCE: deleting `cmd.WaitDelay = shellout.WaitDelay` from Adapter.run
 // makes this fail on BOTH assertions, and the first is the one worth having.
 // Measured directly (go1.25 darwin/arm64): without WaitDelay the call returns
 // after 30.01s with err == NIL — so the adapter does not just block, it then
@@ -297,17 +313,17 @@ func TestOrphanHoldingStdoutIsANonAnswer(t *testing.T) {
 	t.Parallel()
 
 	start := time.Now()
-	_, answered := withCmd(orphanHoldingStdout).GetHeadCommit("/tmp")
+	_, answered := withCeiling(orphanHoldingStdout, testCeiling).GetHeadCommit("/tmp")
 	elapsed := time.Since(start)
 
 	if answered {
 		t.Error("a read that never saw EOF was reported as an answer; whatever partial " +
 			"output it collected would be published as the whole of it")
 	}
-	if limit := gitWaitDelay + 2*time.Second; elapsed > limit {
+	if limit := shellout.WaitDelay + 2*time.Second; elapsed > limit {
 		t.Errorf("took %v; WaitDelay (%v) is supposed to bound exactly this, and the "+
 			"ceiling cannot — the process the context knows about exited immediately",
-			elapsed, gitWaitDelay)
+			elapsed, shellout.WaitDelay)
 	}
 }
 
@@ -320,15 +336,15 @@ func TestMissingBinaryFailsImmediately(t *testing.T) {
 	t.Parallel()
 
 	start := time.Now()
-	_, answered := withCmd(missingGit).GetGitRoot("/tmp")
+	_, answered := withCeiling(missingGit, testCeiling).GetGitRoot("/tmp")
 	elapsed := time.Since(start)
 
 	if answered {
 		t.Error("a binary that does not exist was reported as an answer")
 	}
-	if elapsed > gitTimeout/2 {
+	if elapsed > testCeiling/2 {
 		t.Errorf("took %v for a missing binary; the PATH lookup should fail before anything "+
-			"is spawned, well inside the %v budget", elapsed, gitTimeout)
+			"is spawned, well inside the %v budget", elapsed, testCeiling)
 	}
 }
 
@@ -351,15 +367,15 @@ func TestFloodingChildIsBoundedAndReportsANonAnswer(t *testing.T) {
 	t.Parallel()
 
 	start := time.Now()
-	_, answered := withCmd(floodingGit).RevertedCommits("/tmp")
+	_, answered := withCeiling(floodingGit, testCeiling).RevertedCommits("/tmp")
 	elapsed := time.Since(start)
 
 	if answered {
 		t.Error("a truncated read was reported as an answer; the surviving commits would " +
 			"then be published as if they were all of them")
 	}
-	if limit := gitTimeout + gitWaitDelay + 2*time.Second; elapsed > limit {
-		t.Errorf("took %v against a %v ceiling; the flood was not bounded", elapsed, gitTimeout)
+	if limit := testCeiling + shellout.WaitDelay + 5*time.Second; elapsed > limit {
+		t.Errorf("took %v against a %v ceiling; the flood was not bounded", elapsed, testCeiling)
 	}
 }
 
@@ -375,12 +391,12 @@ func TestUnderTheCapIsStillAnAnswer(t *testing.T) {
 			return exec.CommandContext(ctx, "/bin/sh", "-c", "head -c "+strconv.Itoa(n)+" /dev/zero")
 		}
 	}
-	// gitMaxOutput itself is the row that matters: the previous spelling
-	// (len(buf) >= limit) fired when the buffer merely REACHED the cap with
-	// nothing dropped, so a complete read of exactly gitMaxOutput bytes was a
-	// false non-answer. The table used to stop at gitMaxOutput-1 while its
-	// comment claimed to pin the boundary.
-	for _, n := range []int{1 << 10, gitMaxOutput - 1, gitMaxOutput} {
+	// gitMaxOutput itself is the row that matters, and it is the one this
+	// test adds over shellout.CappedBuffer's unit tests: it pins that run()
+	// wires the REAL constant, not just that the buffer's arithmetic is right.
+	// A gitMaxOutput-1 row would cost a second 64 MiB pipe copy to assert what
+	// TestCappedBufferStopsAtItsLimit already pins at Limit: 8.
+	for _, n := range []int{1 << 10, gitMaxOutput} {
 		out, answered := withCmd(build(n)).run("/tmp", "irrelevant")
 		if !answered {
 			t.Errorf("%d bytes, under the %d-byte cap, was reported as a non-answer", n, gitMaxOutput)
@@ -486,47 +502,6 @@ func TestASuccessfulGitStillReturnsItsOutput(t *testing.T) {
 	}
 }
 
-// TestCappedBufferStopsAtItsLimit is the unit half of the arm above, so a
-// change to gitMaxOutput's enforcement is caught without spawning `yes`.
-func TestCappedBufferStopsAtItsLimit(t *testing.T) {
-	var w cappedBuffer
-	w.limit = 8
-
-	if n, err := w.Write([]byte("abc")); n != 3 || err != nil {
-		t.Fatalf("Write = (%d, %v), want (3, nil)", n, err)
-	}
-	if w.overflowed {
-		t.Error("3 bytes into a limit of 8 reported an overflow")
-	}
-	// Exactly the limit is NOT an overflow: nothing was dropped. The previous
-	// spelling keyed on len(buf) >= limit and reported one here.
-	if n, err := w.Write([]byte("defgh")); n != 5 || err != nil {
-		t.Fatalf("Write to exactly the limit = (%d, %v), want (5, nil)", n, err)
-	}
-	if w.overflowed {
-		t.Error("a complete read of exactly the limit was reported as truncated — that is a " +
-			"false non-answer, and it blanks a chart the daemon read successfully")
-	}
-	if string(w.buf) != "abcdefgh" {
-		t.Fatalf("kept %q, want abcdefgh", w.buf)
-	}
-	// Reports the full length even past the limit: returning short would make
-	// exec's copier treat it as a write error and fail the command for the
-	// wrong reason.
-	if n, err := w.Write([]byte("i")); n != 1 || err != nil {
-		t.Fatalf("Write past the limit = (%d, %v), want (1, nil)", n, err)
-	}
-	if !w.overflowed {
-		t.Error("writing past the limit did not record an overflow")
-	}
-	if len(w.buf) != 8 {
-		t.Errorf("kept %d bytes, want the limit of 8", len(w.buf))
-	}
-	if string(w.buf) != "abcdefgh" {
-		t.Errorf("kept %q, want the FIRST 8 bytes", w.buf)
-	}
-}
-
 // TestProductionAdapterIsBounded is the wiring arm. Every test above builds an
 // Adapter with an injected command, so none of them proves the adapter New()
 // returns has a ceiling — which is the shape #1390 removed from the path
@@ -569,8 +544,45 @@ func TestProductionAdapterIsBounded(t *testing.T) {
 		t.Errorf("returned after %v, far under the %v ceiling — the stub cannot have run, "+
 			"so this proves nothing about the production path", elapsed, gitTimeout)
 	}
-	if limit := gitTimeout + gitWaitDelay + 3*time.Second; elapsed > limit {
+	if limit := gitTimeout + shellout.WaitDelay + 3*time.Second; elapsed > limit {
 		t.Errorf("the production adapter took %v; New() is not running under gitTimeout", elapsed)
+	}
+}
+
+// TestZeroValuedAdapterIsStillBounded covers ceiling()'s fallback, which
+// nothing else reaches: every other test builds its Adapter through New() or
+// one of the helpers above, all of which set timeout.
+//
+// It exists because the timeout field is a TEST seam, and a test seam whose
+// zero value is "no ceiling" reintroduces #1543 the first time someone writes
+// &Adapter{cmd: ...} — an entirely reasonable thing to write, and exactly the
+// literal the helpers above are. The fallback makes unbounded unrepresentable
+// rather than merely discouraged.
+//
+// MUTATION EVIDENCE: replacing ceiling()'s body with `return a.timeout` left
+// the whole package GREEN before this test existed, which is why it is here —
+// the fallback was uncovered, so nothing would have noticed it being deleted.
+// With this test the same mutation fails on both assertions below.
+func TestZeroValuedAdapterIsStillBounded(t *testing.T) {
+	t.Parallel()
+
+	a := &Adapter{cmd: stalledGit} // no timeout set — the shape that must not be unbounded
+
+	if got := a.ceiling(); got != gitTimeout {
+		t.Errorf("ceiling() = %v on a zero-valued Adapter, want the %v default; a zero ceiling "+
+			"means context.WithTimeout fires immediately and a negative one means never", got, gitTimeout)
+	}
+
+	start := time.Now()
+	_, answered := a.GetBranch("/tmp")
+	elapsed := time.Since(start)
+
+	if answered {
+		t.Error("a child killed by the default ceiling was reported as an answer")
+	}
+	if limit := gitTimeout + shellout.WaitDelay + 5*time.Second; elapsed > limit {
+		t.Errorf("took %v; a zero-valued Adapter is not bounded, which is #1543 reintroduced "+
+			"through the test seam that was added to make it faster", elapsed)
 	}
 }
 

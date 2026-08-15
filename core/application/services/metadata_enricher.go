@@ -19,6 +19,21 @@ type metadataEnricher struct {
 	metrics outbound.MetricsCollector
 }
 
+// baseNameOf is the non-git project-name fallback: the directory's own name,
+// or "" for the degenerate roots that are not a name. It mirrors the tail of
+// the git adapter's GetProjectName, which is the only other place this
+// fallback is spelled.
+func baseNameOf(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	name := filepath.Base(dir)
+	if name == "." || name == "/" {
+		return ""
+	}
+	return name
+}
+
 // adoptIfAnswered writes v into *dst only when the git probe that produced it
 // actually RAN, and reports whether it did.
 //
@@ -171,8 +186,15 @@ func (e *metadataEnricher) RefreshOnActivity(state *session.SessionState, transc
 		case gitRoot != "":
 			state.ProjectName = filepath.Base(gitRoot)
 		case state.ProjectName == "":
-			name, nameAnswered := e.git.GetProjectName(cwd)
-			adoptIfAnswered(&state.ProjectName, name, nameAnswered)
+			// The basename is inlined rather than asked of GetProjectName,
+			// which would spend a SECOND bounded shellout to learn what this
+			// arm already knows: it is reachable only when the root probe
+			// answered and reported no repo, and GetProjectName's first act is
+			// to re-run exactly that probe. On main the empty root was
+			// ambiguous (error or not-a-repo) so re-asking was at least
+			// arguable; #1543 removed the ambiguity, which is what makes the
+			// second call provably dead rather than merely redundant.
+			state.ProjectName = baseNameOf(cwd)
 		}
 	}
 }

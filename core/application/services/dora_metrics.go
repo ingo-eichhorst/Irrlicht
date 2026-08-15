@@ -83,13 +83,22 @@ func ComputeDoraMetrics(git doraGitProbe, sessions doraSessionLister, project st
 		return DoraResult{Available: false, Message: "no releases found for this project"}, nil
 	}
 
-	// Every read below is all-or-nothing, and that is the point rather than
-	// caution. A PARTIAL failure is worse than a total one here: dropping one
-	// tag's commits still yields a median lead time, and dropping one revert's
-	// containing tag still yields a Change Failure Rate — each computed over
-	// whatever happened to succeed and published as Available:true. A number
-	// that is quietly biased is harder to notice than a chart that says it
+	// Every read below is all-or-nothing. The load-bearing half of that is
+	// never publishing a number computed over "whatever happened to succeed":
+	// dropping one tag's commits still yields a median lead time, and dropping
+	// one revert's containing tag still yields a Change Failure Rate, each
+	// quietly biased and therefore harder to notice than a chart that says it
 	// could not be drawn (#1543).
+	//
+	// Blanking ALL FOUR metrics is the conservative part, not the principled
+	// part, and it is stated that way rather than defended. dora.Metric already
+	// carries its own Available/Message and the handler, the dashboard and the
+	// CSV builder all honour it, so a per-metric version is expressible today:
+	// a TagContaining non-answer biases ChangeFailureRate and MTTR while
+	// DeploymentFrequency (computed from tags alone) was fully read. That is a
+	// user-visible behaviour change beyond #1543's scope — a blank panel is
+	// conservative but honest, which is what this issue is about — so it is
+	// left for a follow-up rather than smuggled in here.
 	commitsByTag := make(map[string][]dora.CommitInfo, len(tags))
 	for i, tag := range tags {
 		from := ""
@@ -149,12 +158,11 @@ func resolveDoraProjectRoot(git doraGitProbe, sessions doraSessionLister, projec
 	if err != nil {
 		return "", true, err
 	}
-	asked, unread := 0, 0
+	unread := 0
 	for _, st := range all {
 		if st == nil || st.ProjectName != project || st.CWD == "" {
 			continue
 		}
-		asked++
 		root, answered := git.GetGitRoot(st.CWD)
 		if !answered {
 			unread++

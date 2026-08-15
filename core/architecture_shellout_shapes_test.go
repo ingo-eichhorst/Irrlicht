@@ -3,7 +3,6 @@ package core_test
 import (
 	"go/parser"
 	"go/token"
-	"strings"
 	"testing"
 )
 
@@ -251,10 +250,10 @@ func TestShelloutBoundScanCatchesEveryKnownShape(t *testing.T) {
 			// Anti-rot: a row whose source stopped containing the construct it
 			// plants would pass on a detector that reports nothing, which is
 			// the "verification mechanism that cannot run" failure inside the
-			// mechanism meant to catch it (AGENTS.md).
-			if !strings.Contains(sh.src, sh.needle) {
-				t.Fatalf("shape %q no longer contains %q — it is not testing what it claims", sh.name, sh.needle)
-			}
+			// mechanism meant to catch it (AGENTS.md). Shared with the
+			// hookbody corpus, which also refuses a row declaring NO needle —
+			// the case this file's first draft let through silently.
+			assertPlantedShapePresent(t, sh.name, sh.src, sh.needle)
 
 			fset := token.NewFileSet()
 			f, err := parser.ParseFile(fset, sh.name+".go", sh.src, parser.ParseComments)

@@ -101,7 +101,9 @@ func (s *YieldSweeper) indexByCommit(sessions []*session.SessionState) (map[stri
 			continue
 		}
 		byCommit[st.HeadCommit] = append(byCommit[st.HeadCommit], st)
-		s.recordRootDir(rootDirs, st.CWD, &unresolved)
+		if !s.recordRootDir(rootDirs, st.CWD) {
+			unresolved++
+		}
 	}
 	if unresolved > 0 {
 		s.logError("yield sweep could not resolve a repo root",
@@ -112,12 +114,14 @@ func (s *YieldSweeper) indexByCommit(sessions []*session.SessionState) (map[stri
 
 // recordRootDir resolves cwd's git root and, if no representative directory
 // is recorded for that root yet, records cwd as its sample directory for the
-// revert scan. A no-op for a non-git or empty cwd. unresolved counts the cwds
-// whose root probe never ANSWERED, which is a different fact from "not a repo"
-// and is reported rather than dropped.
-func (s *YieldSweeper) recordRootDir(rootDirs map[string]string, cwd string, unresolved *int) {
+// revert scan. A no-op for a non-git or empty cwd.
+//
+// resolved is false only when the root probe never ANSWERED — a different fact
+// from "not a repo", and the one the caller counts and reports rather than
+// dropping.
+func (s *YieldSweeper) recordRootDir(rootDirs map[string]string, cwd string) (resolved bool) {
 	if cwd == "" {
-		return
+		return true
 	}
 	root, answered := s.git.GetGitRoot(cwd)
 	if !answered {
@@ -126,15 +130,15 @@ func (s *YieldSweeper) recordRootDir(rootDirs map[string]string, cwd string, unr
 		// counted here instead and folded into the same single log line, or
 		// the sweep goes completely silent for history it never read, one step
 		// UPSTREAM of where #1543 fixed exactly that (#1551 review finding 4).
-		*unresolved++
-		return
+		return false
 	}
 	if root == "" {
-		return
+		return true
 	}
 	if _, seen := rootDirs[root]; !seen {
 		rootDirs[root] = cwd
 	}
+	return true
 }
 
 // collectRevertedSHAs gathers every reverted commit SHA across the deduped

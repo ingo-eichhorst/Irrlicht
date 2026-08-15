@@ -1,12 +1,10 @@
 package services
 
 import (
-	"strings"
 	"testing"
 
 	"irrlicht/core/domain/dora"
 	"irrlicht/core/domain/session"
-	"irrlicht/core/ports/outbound"
 )
 
 // #1543's collapse did not stop at the adapter — the whole harm was what the
@@ -26,8 +24,7 @@ type unreadGit struct {
 	root      string
 	tags      []dora.TagInfo
 	commits   map[string][]dora.CommitInfo
-	tagFor    string
-	unreadFor map[string]bool // "root" | "tags" | "commits" | "tagcontaining" | "branch" | "name"
+	unreadFor map[string]bool // "root" | "tags" | "commits" | "tagcontaining"
 }
 
 func (g *unreadGit) answered(probe string) bool { return !g.unreadFor[probe] }
@@ -57,7 +54,7 @@ func (g *unreadGit) TagContaining(string, string) (string, bool) {
 	if !g.answered("tagcontaining") {
 		return "", false
 	}
-	return g.tagFor, true
+	return "", true
 }
 
 type oneSession struct{ states []*session.SessionState }
@@ -289,15 +286,6 @@ func (g *enricherGit) GetBranchFromTranscript(string) string { return "" }
 // branch/project block when the transcript's cwd differs from the state's.
 func (g *enricherGit) GetCWDFromTranscript(string) string { return "/new/repo" }
 
-// noopMetrics is the MetricsCollector RefreshOnActivity needs. It embeds the
-// port so only the methods actually exercised need bodies and an unexpected
-// call panics loudly rather than silently returning a zero value — the idiom
-// session_detector_bornready_test.go's doubles use. ComputeMetrics returns no
-// metrics, so the cwd comes from GetCWDFromTranscript above.
-type noopMetrics struct{ outbound.MetricsCollector }
-
-func (noopMetrics) ComputeMetrics(string, string) (*session.SessionMetrics, error) { return nil, nil }
-
 // TestBackfillDoesNotMarkASessionDoneOnANonAnswer is the permanence bug, and it
 // is the sharpest of the four: backfillOne returns early when ProjectName is
 // already set, so a session that stored a value from a git which never ran was
@@ -351,7 +339,7 @@ func TestBackfillDoesNotMarkASessionDoneOnANonAnswer(t *testing.T) {
 //	GitBranch = "old-branch" after moving to /new/repo
 func TestRefreshOnActivityNeverReportsAnotherDirectorysBranch(t *testing.T) {
 	git := &enricherGit{} // every probe reports a non-answer
-	e := newMetadataEnricher(git, &noopMetrics{})
+	e := newMetadataEnricher(git, emptyMetrics{})
 	st := &session.SessionState{
 		SessionID:   "s",
 		CWD:         "/old/repo",
@@ -378,7 +366,7 @@ func TestRefreshOnActivityNeverReportsAnotherDirectorysBranch(t *testing.T) {
 	answering := newMetadataEnricher(&enricherGit{
 		branchAnswered: true, branch: "new-branch",
 		rootAnswered: true, root: "/new/new-project",
-	}, &noopMetrics{})
+	}, emptyMetrics{})
 	st2 := &session.SessionState{SessionID: "s", CWD: "/old/repo", GitBranch: "old-branch", ProjectName: "old-project"}
 	answering.RefreshOnActivity(st2, "/transcripts/s.jsonl")
 	if st2.GitBranch != "new-branch" {
@@ -426,33 +414,24 @@ func TestCaptureYieldOnReadyDoesNotRecordAVerdictItDidNotReach(t *testing.T) {
 // RED-FIRST (with collectRevertedSHAs's `!answered` arm removed): no error was
 // logged and the sweep reported a clean pass.
 func TestYieldSweepReportsRootsItCouldNotScan(t *testing.T) {
-	log := &recordingLogger{}
+	log := &gateLog{}
 	git := &unreadRevertGit{root: "/repo", unread: true}
-	s := NewYieldSweeper(&noopYieldStore{}, git, log, 0)
+	s := NewYieldSweeper(&diagFakeRepo{}, git, log, 0)
 
 	s.collectRevertedSHAs(map[string]string{"/repo": "/repo/sub"})
 
-	errs := log.errs
-	found := false
-	for _, e := range errs {
-		if strings.Contains(e, "could not read git history") {
-			found = true
-		}
-	}
-	if !found {
+	if !log.errorMentioning("could not read git history") {
 		t.Errorf("a root whose revert scan never ran was not reported; logged: %v\n"+
-			"Silence here means the sweep reports \"nothing flipped\" for history it never read", errs)
+			"Silence here means the sweep reports \"nothing flipped\" for history it never read", log.errors)
 	}
 
 	// Vacuity guard: a sweep that read everything must log nothing, or a
 	// sweeper that always complained would pass the arm above.
-	quiet := &recordingLogger{}
-	NewYieldSweeper(&noopYieldStore{}, &unreadRevertGit{root: "/repo"}, quiet, 0).
+	quiet := &gateLog{}
+	NewYieldSweeper(&diagFakeRepo{}, &unreadRevertGit{root: "/repo"}, quiet, 0).
 		collectRevertedSHAs(map[string]string{"/repo": "/repo/sub"})
-	for _, e := range quiet.errs {
-		if strings.Contains(e, "could not read git history") {
-			t.Errorf("a fully readable sweep logged an unread-roots error: %q", e)
-		}
+	if quiet.errorMentioning("could not read git history") {
+		t.Errorf("a fully readable sweep logged an unread-roots error: %v", quiet.errors)
 	}
 }
 
@@ -461,29 +440,26 @@ func TestYieldSweepReportsRootsItCouldNotScan(t *testing.T) {
 // because that one lives in the EXTERNAL services_test package and these tests
 // need the unexported collectRevertedSHAs.
 type unreadRevertGit struct {
-	root   string
-	unread bool
+	root string
+	// unread / rootUnread pick WHICH probe reports the non-answer; the two
+	// sweeper tests need different ones, and one type with two knobs beats two
+	// types differing by a line.
+	unread     bool
+	rootUnread bool
 }
 
-func (g *unreadRevertGit) GetGitRoot(string) (string, bool) { return g.root, true }
+func (g *unreadRevertGit) GetGitRoot(string) (string, bool) {
+	if g.rootUnread {
+		return "", false
+	}
+	return g.root, true
+}
 func (g *unreadRevertGit) RevertedCommits(string) ([]string, bool) {
 	if g.unread {
 		return nil, false
 	}
 	return nil, true
 }
-
-// recordingLogger keeps the error lines the sweeper writes. The sweep's whole
-// report of an unscanned root is a log line, so a test that could not read them
-// would be asserting on nothing.
-type recordingLogger struct{ errs []string }
-
-func (l *recordingLogger) LogInfo(_, _, _ string) {}
-func (l *recordingLogger) LogError(eventType, sessionID, msg string) {
-	l.errs = append(l.errs, eventType+" "+sessionID+" "+msg)
-}
-func (l *recordingLogger) LogProcessingTime(_, _ string, _ int64, _ int, _ string) {}
-func (l *recordingLogger) Close() error                                            { return nil }
 
 // TestYieldSweepReportsRootsItCouldNotResolve is #1551 review finding 4: a cwd
 // whose GetGitRoot never answered never entered rootDirs, so
@@ -494,44 +470,24 @@ func (l *recordingLogger) Close() error                                         
 //
 //	a cwd whose repo root never resolved was not reported; logged: []
 func TestYieldSweepReportsRootsItCouldNotResolve(t *testing.T) {
-	log := &recordingLogger{}
-	s := NewYieldSweeper(&noopYieldStore{}, &unresolvableRootGit{}, log, 0)
+	log := &gateLog{}
+	s := NewYieldSweeper(&diagFakeRepo{}, &unreadRevertGit{rootUnread: true}, log, 0)
 
 	s.indexByCommit([]*session.SessionState{
 		{SessionID: "a", HeadCommit: "abc", CWD: "/repo/one"},
 		{SessionID: "b", HeadCommit: "def", CWD: "/repo/two"},
 	})
 
-	found := false
-	for _, e := range log.errs {
-		if strings.Contains(e, "could not resolve a repo root") {
-			found = true
-		}
-	}
-	if !found {
+	if !log.errorMentioning("could not resolve a repo root") {
 		t.Errorf("a cwd whose repo root never resolved was not reported; logged: %v\n"+
-			"collectRevertedSHAs cannot report it — the cwd never reaches rootDirs at all", log.errs)
+			"collectRevertedSHAs cannot report it — the cwd never reaches rootDirs at all", log.errors)
 	}
 
 	// Vacuity guard: a sweep that resolved every root must log nothing.
-	quiet := &recordingLogger{}
-	NewYieldSweeper(&noopYieldStore{}, &unreadRevertGit{root: "/repo"}, quiet, 0).
+	quiet := &gateLog{}
+	NewYieldSweeper(&diagFakeRepo{}, &unreadRevertGit{root: "/repo"}, quiet, 0).
 		indexByCommit([]*session.SessionState{{SessionID: "a", HeadCommit: "abc", CWD: "/repo/one"}})
-	for _, e := range quiet.errs {
-		if strings.Contains(e, "could not resolve a repo root") {
-			t.Errorf("a fully resolvable sweep logged an unresolved-roots error: %q", e)
-		}
+	if quiet.errorMentioning("could not resolve a repo root") {
+		t.Errorf("a fully resolvable sweep logged an unresolved-roots error: %v", quiet.errors)
 	}
 }
-
-// unresolvableRootGit reports a non-answer for the repo-root probe.
-type unresolvableRootGit struct{}
-
-func (unresolvableRootGit) GetGitRoot(string) (string, bool)        { return "", false }
-func (unresolvableRootGit) RevertedCommits(string) ([]string, bool) { return nil, true }
-
-type noopYieldStore struct{}
-
-func (noopYieldStore) ListAll() ([]*session.SessionState, error)  { return nil, nil }
-func (noopYieldStore) Load(string) (*session.SessionState, error) { return nil, nil }
-func (noopYieldStore) Save(*session.SessionState) error           { return nil }

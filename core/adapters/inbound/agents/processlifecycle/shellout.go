@@ -49,14 +49,18 @@ type shelloutCmd func(ctx context.Context) *exec.Cmd
 // wrap context.DeadlineExceeded, and why ProcessState.Exited() rather than
 // errors.Is is the ran-vs-killed discriminator — live there.
 //
-// It stays a local name because the knowledge splits in three, one level per
-// name: shellout.Answered knows what is true of any child process,
-// probeAnswered is where this package's sites agree on the empty-variadic form
-// ("for ps and plutil, any normal exit is an answer"), and lsofProbeRan binds
-// the one per-tool allowlist below that. #1543 moved the bottom of that stack
-// into pkg/ so an OUTBOUND adapter could reach it; it did not merge the three,
-// and shellout_guard_test.go recognises BOTH spellings so a future site here
-// may call shellout.Answered directly without being reported.
+// It is a pure alias — same signature, same semantics, binding nothing — and
+// saying so is better than the tidier story that it is "this package's binding
+// of the empty-variadic form". That story is false: process_darwin.go calls
+// probeAnswered(err, pgrepNoMatch), so the variadic is forwarded, not bound.
+// lsofProbeRan is the only real binding in this package.
+//
+// The honest reason it survives #1543's promotion is churn: five call sites, a
+// guard classifier table and a committed corpus all spell it this way, and
+// #1547 argues that verified enforcement machinery is worth not disturbing for
+// a rename. Deleting it — or narrowing it to a non-variadic form so it binds
+// what its name suggests — is a reasonable follow-up; shellout_guard_test.go
+// already recognises the qualified spelling, so nothing mechanical blocks it.
 func probeAnswered(err error, answeredExitCodes ...int) bool {
 	return shellout.Answered(err, answeredExitCodes...)
 }

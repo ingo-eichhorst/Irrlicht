@@ -452,12 +452,23 @@ func writeShapeCorpus(t *testing.T, shapes []shapeCase) string {
 // row and as a detector bug for every want:true one.
 func plantedShapeIsPresent(t *testing.T, shape shapeCase) {
 	t.Helper()
-	if shape.needle == "" {
-		t.Fatalf("shape %s declares no needle; every case must assert the construct it plants is present", shape.file)
+	assertPlantedShapePresent(t, shape.file, shape.src, shape.needle)
+}
+
+// assertPlantedShapePresent is the corpus-agnostic half, shared with
+// architecture_shellout_shapes_test.go (#1543). Both corpora are in package
+// core_test, so this is one fact rather than two — and the shellout corpus's
+// first draft re-inlined only the "contains" half, so a row that declared no
+// needle at all passed silently, which is the failure this guard exists to
+// prevent happening inside the guard.
+func assertPlantedShapePresent(t *testing.T, id, src, needle string) {
+	t.Helper()
+	if needle == "" {
+		t.Fatalf("shape %s declares no needle; every case must assert the construct it plants is present", id)
 	}
-	if !strings.Contains(shape.src, shape.needle) {
+	if !strings.Contains(src, needle) {
 		t.Fatalf("shape %s does not contain its own needle %q — the case is not testing what it says it tests",
-			shape.file, shape.needle)
+			id, needle)
 	}
 }
 

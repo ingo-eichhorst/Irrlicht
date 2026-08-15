@@ -17,6 +17,7 @@ import (
 
 	"irrlicht/core/pkg/cliversion"
 	"irrlicht/core/pkg/pathutil"
+	"irrlicht/core/pkg/shellout"
 )
 
 // Timeout bounds how long a version probe may take. A version check runs on
@@ -24,18 +25,15 @@ import (
 // CLI that hangs must lose quickly rather than wedge the grant.
 const Timeout = 2 * time.Second
 
-// waitDelay bounds the extra time Probe waits for the child's output pipes to
-// close after its context expires. Killing the process is not enough on its
-// own: exec waits for stdout to reach EOF, and a grandchild that inherited the
-// pipe holds it open after its parent dies, so a plain CommandContext kill can
-// still block indefinitely. This is the difference between "fails fast" as an
-// intention and as a guarantee.
-const waitDelay = 500 * time.Millisecond
-
 // maxOutput caps how much of the child's stdout is read. Timeout bounds how
 // long a misbehaving CLI gets, not how much it can write in that time — a
 // process streaming to a pipe moves gigabytes in two seconds, and this runs
 // inside a long-lived daemon. A version banner is a few hundred bytes.
+//
+// Overflow is TRUNCATED rather than reported: a version banner followed by
+// noise still contains the version. shellout.CappedBuffer's doc carries the
+// contrast with the git adapter, which treats the same overflow as a
+// non-answer for the opposite reason.
 const maxOutput = 64 << 10
 
 // Probe runs argv and returns the first version triple it prints on stdout.
@@ -46,8 +44,8 @@ const maxOutput = 64 << 10
 //
 //   - Missing binary: the lookup fails before anything is spawned, so this
 //     returns immediately rather than after Timeout.
-//   - Hung binary: bounded by Timeout, and by waitDelay against a grandchild
-//     holding the output pipe open past the kill.
+//   - Hung binary: bounded by Timeout, and by shellout.WaitDelay against a
+//     grandchild holding the output pipe open past the kill.
 //   - Flooding binary: bounded by maxOutput.
 //   - Unintelligible output: reported as an error here, unknown by Parse.
 //
@@ -66,13 +64,12 @@ func Probe(ctx context.Context, argv []string) (string, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, pathutil.MustResolve(argv[0]), argv[1:]...)
-	cmd.WaitDelay = waitDelay
+	cmd.WaitDelay = shellout.WaitDelay
 	// A version probe must never block on a prompt or inherit the daemon's
 	// stdin, and stderr is discarded so a chatty CLI cannot buffer through it.
 	cmd.Stdin = nil
 
-	var out cappedWriter
-	out.limit = maxOutput
+	out := shellout.CappedBuffer{Limit: maxOutput}
 	cmd.Stdout = &out
 
 	runErr := cmd.Run()
@@ -92,25 +89,3 @@ func Probe(ctx context.Context, argv []string) (string, error) {
 	}
 	return version.String(), nil
 }
-
-// cappedWriter keeps at most limit bytes and silently discards the rest. It
-// never returns an error: exec's output-copying goroutine treats a write error
-// as fatal to the command, and a CLI whose banner happens to be followed by
-// noise has still told us its version. Bounding memory is the whole job here —
-// the process itself is bounded by Timeout.
-type cappedWriter struct {
-	limit int
-	buf   []byte
-}
-
-func (w *cappedWriter) Write(p []byte) (int, error) {
-	if room := w.limit - len(w.buf); room > 0 {
-		if len(p) < room {
-			room = len(p)
-		}
-		w.buf = append(w.buf, p[:room]...)
-	}
-	return len(p), nil
-}
-
-func (w *cappedWriter) String() string { return string(w.buf) }

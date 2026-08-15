@@ -71,22 +71,14 @@ const gitRevParseCmd = "rev-parse"
 // unbounded case is gone.
 const gitTimeout = 5 * time.Second
 
-// gitWaitDelay bounds the extra time a run waits for the child's output pipe
-// to close after its context expires. Killing git is not enough on its own:
-// exec waits for stdout to reach EOF, and a grandchild that inherited the pipe
-// — a credential helper, a `core.fsmonitor` daemon, a pager some global config
-// forced on — holds it open after its parent dies. Same reasoning, same value,
-// as core/pkg/cliprobe's waitDelay.
-const gitWaitDelay = 500 * time.Millisecond
-
 // gitMaxOutput caps how much of git's stdout is held in memory. gitTimeout
 // bounds how long git runs, not how much it writes in that time, and this runs
 // inside a long-lived daemon: `git log --pretty=format:...%B` over full history
 // measured 2.59 MB on this repo's 3192 commits (~810 bytes/commit), so a
 // 100k-commit repo is ~81 MB and a 1M-commit one ~810 MB, all buffered by
-// cmd.Output() today with nothing to stop it.
+// cmd.Output() before #1543 with nothing to stop it.
 //
-// Overflow is reported as a NON-ANSWER rather than truncated, which is the
+// run() reports overflow as a NON-ANSWER rather than truncating, which is the
 // opposite of cliprobe's choice and deliberately so: a truncated version banner
 // still contains the version, whereas a truncated commit list silently drops
 // releases and reverts, and DORA would then publish a smaller sample as though
@@ -105,10 +97,16 @@ type gitCmd func(ctx context.Context, dir string, args ...string) *exec.Cmd
 // transcript file inspection.
 type Adapter struct {
 	cmd gitCmd
+	// timeout is gitTimeout unless a test lowered it. Injected for the same
+	// reason cmd is — driving the ceiling means waiting it out, and two tests
+	// waiting out 5s each is both slow and the most load-sensitive thing in
+	// the package. TestProductionAdapterIsBounded deliberately does NOT use
+	// this seam: it goes through New(), so the real constant stays proven.
+	timeout time.Duration
 }
 
 // New returns a new git Adapter.
-func New() *Adapter { return &Adapter{cmd: execGitCmd} }
+func New() *Adapter { return &Adapter{cmd: execGitCmd, timeout: gitTimeout} }
 
 // execGitCmd is the production builder: git, resolved through pathutil rather
 // than the inherited PATH (go:S4036), run in dir.
@@ -138,19 +136,35 @@ func execGitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
 // `fatal:`), and it is the pre-existing behaviour; the distinction #1543 is
 // about is "git could not be RUN" versus "git ran and said no", and that is
 // the line drawn here.
+// ceiling is the adapter's timeout, defaulting to gitTimeout so a
+// zero-valued Adapter (a struct literal in a test) is still bounded rather
+// than unbounded — the failure mode this whole issue is about.
+func (a *Adapter) ceiling() time.Duration {
+	if a.timeout > 0 {
+		return a.timeout
+	}
+	return gitTimeout
+}
+
 func (a *Adapter) run(dir string, args ...string) (out []byte, answered bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	if dir == "" {
+		// Nothing was asked, so nothing failed — the reading processTTYVia
+		// gives a non-positive pid. Deciding it here rather than at each
+		// method keeps it one fact: it is a property of starting a child, not
+		// of any particular git subcommand.
+		return nil, true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), a.ceiling())
 	defer cancel()
 
 	cmd := a.cmd(ctx, dir, args...)
-	cmd.WaitDelay = gitWaitDelay
+	cmd.WaitDelay = shellout.WaitDelay
 	// Explicit rather than load-bearing: a nil Stdin is already /dev/null, so
 	// os/exec never hands the daemon's own stdin to the child. Spelled out so
 	// a later edit does not "helpfully" wire one up — a git that decided to
 	// prompt (a credential helper, a hook) would then block until the ceiling.
 	cmd.Stdin = nil
-	var buf cappedBuffer
-	buf.limit = gitMaxOutput
+	buf := shellout.CappedBuffer{Limit: gitMaxOutput}
 	cmd.Stdout = &buf
 	// stderr is left nil (i.e. /dev/null) rather than captured: nothing here
 	// reads it, and a pipe nobody drains is a way to block.
@@ -159,7 +173,7 @@ func (a *Adapter) run(dir string, args ...string) (out []byte, answered bool) {
 	if !shellout.Answered(err) {
 		return nil, false
 	}
-	if buf.overflowed {
+	if buf.Overflowed() {
 		return nil, false
 	}
 	if err != nil {
@@ -183,38 +197,7 @@ func (a *Adapter) run(dir string, args ...string) (out []byte, answered bool) {
 		// could not express.
 		return nil, true
 	}
-	return buf.buf, true
-}
-
-// cappedBuffer collects at most limit bytes and records whether anything was
-// DROPPED. It never returns an error: exec's output-copying goroutine treats a
-// write error as fatal to the command, which would turn an overflow into a
-// second, less specific failure. run() reads overflowed instead.
-//
-// seen counts every byte offered, not every byte kept, because those are the
-// same number until the cap is reached and only the first distinguishes "the
-// output is exactly the cap" from "the output was truncated". Keying on
-// len(buf) >= limit instead conflates them and turns a complete read of exactly
-// gitMaxOutput bytes into a false non-answer.
-type cappedBuffer struct {
-	limit      int
-	buf        []byte
-	seen       int
-	overflowed bool
-}
-
-func (w *cappedBuffer) Write(p []byte) (int, error) {
-	if room := w.limit - len(w.buf); room > 0 {
-		if len(p) < room {
-			room = len(p)
-		}
-		w.buf = append(w.buf, p[:room]...)
-	}
-	w.seen += len(p)
-	if w.seen > w.limit {
-		w.overflowed = true
-	}
-	return len(p), nil
+	return buf.Bytes(), true
 }
 
 // GetBranch returns the current git branch for the given working directory.
@@ -225,11 +208,6 @@ func (w *cappedBuffer) Write(p []byte) (int, error) {
 // unborn. Callers must not overwrite a branch they already hold on a
 // non-answer — an empty string there carries no information (#1485/#1543).
 func (a *Adapter) GetBranch(dir string) (string, bool) {
-	if dir == "" {
-		// Nothing was asked, so nothing failed — the reading processTTYVia
-		// gives a non-positive pid.
-		return "", true
-	}
 	out, answered := a.run(dir, gitRevParseCmd, "--abbrev-ref", "HEAD")
 	if !answered {
 		return "", false
@@ -249,9 +227,6 @@ func (a *Adapter) GetBranch(dir string) (string, bool) {
 // answered=false means git could not be run, which is not evidence about
 // either.
 func (a *Adapter) GetHeadCommit(dir string) (string, bool) {
-	if dir == "" {
-		return "", true
-	}
 	out, answered := a.run(dir, gitRevParseCmd, "HEAD")
 	if !answered {
 		return "", false
@@ -271,9 +246,6 @@ func (a *Adapter) GetHeadCommit(dir string) (string, bool) {
 // not happen, which is NOT "no reverts" — treating it as such is what makes a
 // yield sweep report "nothing flipped" for a repo it never read (#1543).
 func (a *Adapter) RevertedCommits(dir string) ([]string, bool) {
-	if dir == "" {
-		return nil, true
-	}
 	out, answered := a.run(dir, "log", "--all", "--grep", "^This reverts commit ", "--pretty=format:%b")
 	if !answered {
 		return nil, false
@@ -295,9 +267,6 @@ func (a *Adapter) RevertedCommits(dir string) ([]string, bool) {
 // answered=false means git could not be run, and reporting that as "no
 // releases found for this project" is the false claim #1543 removes.
 func (a *Adapter) ListReleaseTags(dir string) ([]dora.TagInfo, bool) {
-	if dir == "" {
-		return nil, true
-	}
 	out, answered := a.run(dir, "for-each-ref", "--sort=creatordate", "--format=%(refname:short)%09%(creatordate:unix)", "refs/tags")
 	if !answered {
 		return nil, false
@@ -325,7 +294,9 @@ func (a *Adapter) ListReleaseTags(dir string) ([]dora.TagInfo, bool) {
 // worse than a total one, because a median lead time computed over the tags
 // that happened to succeed is a biased number reported as Available:true.
 func (a *Adapter) CommitsInRange(dir, fromRef, toRef string) ([]dora.CommitInfo, bool) {
-	if dir == "" || toRef == "" {
+	// toRef, unlike dir, is still guarded HERE: an empty one would become an
+	// empty argv entry rather than no call at all. run() handles the dir case.
+	if toRef == "" {
 		return nil, true
 	}
 	rangeSpec := toRef
@@ -368,7 +339,9 @@ func (a *Adapter) CommitsInRange(dir, fromRef, toRef string) ([]dora.CommitInfo,
 // list, which makes Change Failure Rate read BETTER than reality — the one
 // path in this adapter where the collapse flatters the number (#1543).
 func (a *Adapter) TagContaining(dir, hash string) (string, bool) {
-	if dir == "" || hash == "" {
+	// hash, unlike dir, is still guarded HERE — an empty one would become an
+	// empty argv entry. run() handles the dir case.
+	if hash == "" {
 		return "", true
 	}
 	out, answered := a.run(dir, "tag", "--contains", hash, "--sort=creatordate")
@@ -394,13 +367,14 @@ func (a *Adapter) TagContaining(dir, hash string) (string, bool) {
 // a user as "project not found or not a git repository" is a second false
 // claim #1543 removes.
 func (a *Adapter) GetGitRoot(dir string) (string, bool) {
+	// This guard must stay, and it is NOT the one run() absorbed:
+	// nearestExistingDir("") walks Dir("") == "." and Stat(".") succeeds, so
+	// without it an empty dir would resolve to the DAEMON'S OWN working
+	// directory and report that repo's root.
 	if dir == "" {
 		return "", true
 	}
 	dir = nearestExistingDir(dir)
-	if dir == "" {
-		return "", true
-	}
 	out, answered := a.run(dir, gitRevParseCmd, "--path-format=absolute", "--git-common-dir")
 	if !answered {
 		return "", false
