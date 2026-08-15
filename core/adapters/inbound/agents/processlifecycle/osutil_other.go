@@ -4,6 +4,7 @@ package processlifecycle
 
 import (
 	"context"
+	"fmt"
 
 	"irrlicht/core/domain/session"
 )
@@ -26,11 +27,23 @@ func processTTY(ctx context.Context, pid int) (string, bool) { return "", true }
 // complete is true: declining to walk is a settled verdict about this
 // platform, not a read that failed (#1492).
 func resolveTermProgramFromAncestry(ctx context.Context, pid int) string { return "" }
-func resolveHostFromAncestry(ctx context.Context, pid int) (term string, host int, complete bool) {
+
+// reads is #1544's per-resolve read memo, carried in the signature so the
+// cross-platform caller has one spelling. Unused here for the same reason the
+// walks themselves are: this platform makes no `ps` shellouts to dedup.
+func resolveHostFromAncestry(ctx context.Context, pid int, reads *ancestryReads) (term string, host int, complete bool) {
 	return "", 0, true
 }
-func resolveHostBundleIDFromAncestry(ctx context.Context, pid int) (bundleID string, host int, complete bool) {
+func resolveHostBundleIDFromAncestry(ctx context.Context, pid int, reads *ancestryReads) (bundleID string, host int, complete bool) {
 	return "", 0, true
+}
+
+// newAncestryReads binds the memo to a read that refuses — see the identical
+// stub in osutil_linux.go for why it fails loudly rather than answering.
+func newAncestryReads() *ancestryReads {
+	return newAncestryReadsVia(func(ctx context.Context, pid int) (int, string, error) {
+		return 0, "", fmt.Errorf("ancestry walking is darwin-only: no read for pid %d", pid)
+	})
 }
 
 // Stubs for the kitty "no readable env" enrichment helpers — darwin-only.

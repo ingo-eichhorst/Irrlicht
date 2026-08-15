@@ -299,7 +299,7 @@ func TestTopLevelAppPath(t *testing.T) {
 // contains a dot) or "" — never errors or panics. The deterministic path
 // logic is covered by TestTopLevelAppPath.
 func TestResolveHostBundleIDFromAncestry_Self(t *testing.T) {
-	bid, hostPID, complete := resolveHostBundleIDFromAncestry(noAggregateBudget(), os.Getpid())
+	bid, hostPID, complete := resolveHostBundleIDFromAncestry(noAggregateBudget(), os.Getpid(), newAncestryReads())
 	// The running test binary is alive, so every readProcInfo in its chain has
 	// something to answer with — barring a `ps` slow enough to blow its own 2s
 	// ceiling, which is the condition #1492 is about and which this assertion
@@ -829,10 +829,10 @@ func exitedPID(t *testing.T) int {
 // readProcInfo fails, which is the same branch a `ps` that blows its 2s ceiling
 // takes.
 func TestResolveHostFromAncestry_UnreadableProcessIsNotAMiss(t *testing.T) {
-	if term, hostPID, complete := resolveHostFromAncestry(noAggregateBudget(), 1); term != "" || hostPID != 0 || !complete {
+	if term, hostPID, complete := resolveHostFromAncestry(noAggregateBudget(), 1, newAncestryReads()); term != "" || hostPID != 0 || !complete {
 		t.Errorf("launchd: got (%q, %d, %v); want a completed walk that found nothing", term, hostPID, complete)
 	}
-	if term, hostPID, complete := resolveHostFromAncestry(noAggregateBudget(), exitedPID(t)); term != "" || hostPID != 0 || complete {
+	if term, hostPID, complete := resolveHostFromAncestry(noAggregateBudget(), exitedPID(t), newAncestryReads()); term != "" || hostPID != 0 || complete {
 		t.Errorf("reaped pid: got (%q, %d, %v); want an ABORTED walk — an unreadable process is not a miss", term, hostPID, complete)
 	}
 }
@@ -843,10 +843,10 @@ func TestResolveHostFromAncestry_UnreadableProcessIsNotAMiss(t *testing.T) {
 // verdict (launchd, row 1); "pid could not be read" is not (row 2). Merging
 // them is #1492 in miniature.
 func TestResolveHostBundleIDFromAncestry_UnreadableProcessIsNotAMiss(t *testing.T) {
-	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(noAggregateBudget(), 1); bid != "" || hostPID != 0 || !complete {
+	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(noAggregateBudget(), 1, newAncestryReads()); bid != "" || hostPID != 0 || !complete {
 		t.Errorf("launchd: got (%q, %d, %v); want a completed walk that found nothing", bid, hostPID, complete)
 	}
-	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(noAggregateBudget(), exitedPID(t)); bid != "" || hostPID != 0 || complete {
+	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(noAggregateBudget(), exitedPID(t), newAncestryReads()); bid != "" || hostPID != 0 || complete {
 		t.Errorf("reaped pid: got (%q, %d, %v); want an ABORTED walk", bid, hostPID, complete)
 	}
 }
@@ -1036,7 +1036,7 @@ func orphanPID(t *testing.T) int {
 func TestResolveHostFromAncestry_ChainEndingAtInitIsAVerdict(t *testing.T) {
 	orphan := orphanPID(t)
 
-	if term, hostPID, complete := resolveHostFromAncestry(noAggregateBudget(), orphan); term != "" || hostPID != 0 || !complete {
+	if term, hostPID, complete := resolveHostFromAncestry(noAggregateBudget(), orphan, newAncestryReads()); term != "" || hostPID != 0 || !complete {
 		t.Errorf("orphan: got (%q, %d, %v); want a completed in-loop walk that found nothing", term, hostPID, complete)
 	}
 	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), []int{orphan}); !hostKnown {
