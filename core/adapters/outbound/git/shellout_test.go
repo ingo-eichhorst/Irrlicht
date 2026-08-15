@@ -204,6 +204,10 @@ func TestNotARepoIsAnAnswer(t *testing.T) {
 		{"not a repo/ListReleaseTags", func() bool { _, ok := a.ListReleaseTags(notARepo); return ok }},
 		{"not a repo/TagContaining", func() bool { _, ok := a.TagContaining(notARepo, "deadbeef"); return ok }},
 		{"not a repo/GetGitRoot", func() bool { _, ok := a.GetGitRoot(notARepo); return ok }},
+		// The seventh method. It was the one row missing from this table
+		// (#1551 QA), which mattered because CommitsInRange is the method
+		// whose non-answer biases a DORA median rather than blanking a field.
+		{"not a repo/CommitsInRange", func() bool { _, ok := a.CommitsInRange(notARepo, "", "HEAD"); return ok }},
 		{"unborn branch/GetHeadCommit", func() bool { _, ok := a.GetHeadCommit(unborn); return ok }},
 		{"unborn branch/RevertedCommits", func() bool { _, ok := a.RevertedCommits(unborn); return ok }},
 		{"unresolvable object/TagContaining", func() bool { _, ok := a.TagContaining(repo, "deadbeef"); return ok }},
