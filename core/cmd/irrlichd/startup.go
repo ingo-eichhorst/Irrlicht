@@ -805,7 +805,10 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 		// keeping an Antigravity `agy` process running in the background for
 		// quota polling, with no distinguishing argv or cwd (#784). Demo mode
 		// never tracks live processes, so leave the gate unwired there.
-		detector.SetHostGate(agents.RequireKnownHost(allAgents), processlifecycle.IsKnownInteractiveHost)
+		// HostGate rather than IsKnownInteractiveHost: same verdict (both go
+		// through one hostGateFor), plus the aborted-walk line and the outcome
+		// counters probes.json publishes (#1525).
+		detector.SetHostGate(agents.RequireKnownHost(allAgents), processlifecycle.HostGate(logger))
 		// Consent gate for the detector's own transcript reads (startup seed +
 		// stale-working refresh of PERSISTED sessions) — the watcher pipeline
 		// is gated by construction, but these two paths read repo-listed

@@ -327,6 +327,9 @@ func assertProbesCollectedInDaemon(t *testing.T, url string, raw []byte) {
 		Probes        []struct {
 			Probe string `json:"probe"`
 		} `json:"probes"`
+		HostGate []struct {
+			Outcome string `json:"outcome"`
+		} `json:"host_gate"`
 	}
 	if err := json.Unmarshal(raw, &probes); err != nil {
 		t.Fatalf("probes.json is not valid JSON: %v\n%s", err, raw)
@@ -339,6 +342,12 @@ func assertProbesCollectedInDaemon(t *testing.T, url string, raw []byte) {
 	// empty list means the conversion in liveProbeHealth dropped them.
 	if len(probes.Probes) == 0 {
 		t.Errorf("probes.json reports itself as daemon-collected but carries no probe rows — every declared kind is published, including one that never ran")
+	}
+	// The same argument for #1525's rows, and it is not covered by the one
+	// above: they ride the same snapshot but travel through their own
+	// conversion in liveProbeHealth, so one can be wired and the other dropped.
+	if len(probes.HostGate) == 0 {
+		t.Errorf("probes.json reports itself as daemon-collected but carries no host_gate rows — every declared outcome is published, including one that never happened (#1525)")
 	}
 }
 

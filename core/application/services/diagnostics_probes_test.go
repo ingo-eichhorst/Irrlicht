@@ -54,6 +54,14 @@ func probeHealthFixture() ProbeHealthSnapshot {
 		OutcomeRule:                      "a child that ran to a normal exit ANSWERED; one killed, never started, or whose fork failed did not",
 		HerdrCandidatesProbed:            9,
 		HerdrCandidatesAbandonedOnBudget: 3,
+		// Deliberately out of order for the same reason Probes is.
+		HostGate: []HostGateOutcomeCount{
+			{Outcome: "rejected.no_known_host", Count: 4},
+			{Outcome: "admitted.walk_aborted", Count: 3},
+			{Outcome: "admitted.host_matched", Count: 11},
+			{Outcome: "admitted.not_evaluated", Count: 0},
+		},
+		HostGateOutcomeRule: "a walk that ran and found an allow-listed host ADMITS; a walk that could not be completed ADMITS on no evidence (#1513)",
 	}
 }
 
@@ -122,7 +130,13 @@ func TestProbesBundleStaysTerseWhenNothingIsWrong(t *testing.T) {
 		}
 	}))
 
-	for _, field := range []string{"unanswered_note", "herdr_abandonment_note", "undeclared_probe_kinds_note", "undeclared_probe_kinds"} {
+	for _, field := range []string{
+		"unanswered_note", "herdr_abandonment_note", "undeclared_probe_kinds_note", "undeclared_probe_kinds",
+		// #1525's essays follow the same rule: a machine whose gate never
+		// admitted on no evidence gets the rows and no prose.
+		"host_gate_aborted_walk_note", "host_gate_reconciliation_note",
+		"undeclared_host_gate_outcomes", "undeclared_host_gate_outcomes_note",
+	} {
 		if v, ok := got[field]; ok {
 			t.Errorf("%s is present on a healthy machine: %v — an explanation that always fires explains nothing", field, v)
 		}
@@ -158,6 +172,10 @@ func TestProbesBundleOmitsCountsWhenNotCollectedInDaemon(t *testing.T) {
 		// too: a counting rule printed next to no counts describes numbers this
 		// section does not carry.
 		"memo_note", "outcome_rule", "unanswered_note", "herdr_abandonment_note",
+		// #1525's rows and their essays, omitted for a DIFFERENT reason than
+		// the probe rows above — see TestProbesBundleSaysWhyHostGateCountsAreMissing.
+		"host_gate", "host_gate_outcome_rule", "host_gate_aborted_walk_note",
+		"host_gate_reconciliation_note", "undeclared_host_gate_outcomes",
 	} {
 		if v, ok := got[field]; ok {
 			t.Errorf("%s is present without a daemon to read it from: %v", field, v)
@@ -171,5 +189,137 @@ func TestProbesBundleOmitsCountsWhenNotCollectedInDaemon(t *testing.T) {
 	// would teach the next reader that this process runs no probes.
 	if !strings.Contains(note, "NOT zero") {
 		t.Errorf("note must say that this process's counters are non-zero and describe its own collection, not that they are structurally zero: %q", note)
+	}
+}
+
+// --- the #784 host-admission gate's outcomes (#1525) ------------------------
+//
+// These rows live in probes.json rather than a section of their own because an
+// aborted walk is the DOWNSTREAM view of a probe that did not answer: the cause
+// and the effect are only useful side by side, and the reconciliation between
+// them is computed here. hooksView's own comment makes the same call for its
+// three hook diagnoses.
+
+// TestProbesBundleReportsHostGateOutcomes covers the daemon-collected form: the
+// three-way answer the gate reached, which before #1525 was reported by nothing
+// except in the one case that rejected.
+func TestProbesBundleReportsHostGateOutcomes(t *testing.T) {
+	got := probesJSON(t, buildTestServiceWithProbes(t, probeHealthFixture))
+
+	rows, _ := got["host_gate"].([]any)
+	if len(rows) != 4 {
+		t.Fatalf("host_gate has %d rows, want 4: %v — every declared outcome is published, including one that never happened", len(rows), got["host_gate"])
+	}
+	first, _ := rows[0].(map[string]any)
+	if first["outcome"] != "admitted.host_matched" {
+		t.Errorf("first row = %v, want admitted.host_matched (sorted by outcome)", first)
+	}
+	byOutcome := map[string]float64{}
+	for _, row := range rows {
+		r, _ := row.(map[string]any)
+		outcome, _ := r["outcome"].(string)
+		count, _ := r["count"].(float64)
+		byOutcome[outcome] = count
+	}
+	// The three outcomes are three numbers, not one. A single "gate ran N
+	// times" scalar is what this section exists to replace.
+	for outcome, want := range map[string]float64{
+		"admitted.host_matched":  11,
+		"admitted.walk_aborted":  3,
+		"rejected.no_known_host": 4,
+		"admitted.not_evaluated": 0,
+	} {
+		if byOutcome[outcome] != want {
+			t.Errorf("host_gate[%s] = %v, want %v", outcome, byOutcome[outcome], want)
+		}
+	}
+	if rule, _ := got["host_gate_outcome_rule"].(string); !strings.Contains(rule, "#1513") {
+		t.Errorf("host_gate_outcome_rule must carry the rule the rows were produced by, from the package that produced them: %q", rule)
+	}
+
+	note, _ := got["host_gate_aborted_walk_note"].(string)
+	for _, want := range []string{"3 of 18", "no evidence", "#1513", "rejected.no_known_host", "host-gate"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("the aborted-walk note does not mention %q — it must give the count against its denominator, say what an abort means, and name the OTHER row it is not: %q", want, note)
+		}
+	}
+}
+
+// TestProbesBundleReconcilesAbortedWalksWithProbeNonAnswers is the cross-check
+// #1525 asks for, and the reason both figures had to land in one artifact.
+//
+// An aborted walk is caused by a bounded child that did not answer, so the two
+// numbers ought to correspond — and #1574 is the recorded reason they can fail
+// to: readProcInfo treats an ANSWERED "no such process" as a failure, so the
+// walk aborts while ps.proc_info records health. A reader who is not told that
+// concludes the counters are broken.
+func TestProbesBundleReconcilesAbortedWalksWithProbeNonAnswers(t *testing.T) {
+	t.Run("aborts with no recorded non-answers name #1574", func(t *testing.T) {
+		got := probesJSON(t, buildTestServiceWithProbes(t, func() ProbeHealthSnapshot {
+			return ProbeHealthSnapshot{
+				Probes:   []ProbeCount{{Probe: "ps.proc_info", Answered: 900}, {Probe: "plutil.bundle_id", Answered: 40}},
+				HostGate: []HostGateOutcomeCount{{Outcome: "admitted.walk_aborted", Count: 6}},
+			}
+		}))
+		note, _ := got["host_gate_reconciliation_note"].(string)
+		for _, want := range []string{"6 aborted walk(s)", "0 unanswered", "#1574", "readProcInfo"} {
+			if !strings.Contains(note, want) {
+				t.Errorf("the reconciliation note does not mention %q: %q", want, note)
+			}
+		}
+	})
+
+	t.Run("aborts beside real non-answers say what the numbers can and cannot be", func(t *testing.T) {
+		got := probesJSON(t, buildTestServiceWithProbes(t, func() ProbeHealthSnapshot {
+			return ProbeHealthSnapshot{
+				Probes: []ProbeCount{
+					{Probe: "ps.proc_info", Answered: 900, Unanswered: 5},
+					{Probe: "plutil.bundle_id", Answered: 40, Unanswered: 2},
+					// Not one of the two a walk can abort on: counting it here
+					// would inflate the comparison with probes the gate never
+					// ran.
+					{Probe: "lsof.cwd", Unanswered: 99},
+				},
+				HostGate: []HostGateOutcomeCount{{Outcome: "admitted.walk_aborted", Count: 6}},
+			}
+		}))
+		note, _ := got["host_gate_reconciliation_note"].(string)
+		if !strings.Contains(note, "7 unanswered") {
+			t.Errorf("the reconciliation note must sum only the two probes a walk can abort on (5+2), not every unanswered probe: %q", note)
+		}
+		if !strings.Contains(note, "not required to be equal") {
+			t.Errorf("the note must say the two figures need not match, or a reader treats a mismatch as a defect: %q", note)
+		}
+	})
+}
+
+// TestProbesBundleSaysWhyHostGateCountsAreMissing is the honesty obligation for
+// #1525's half of this section, and the reason it is a separate test from
+// probes.json's own is that the true answer is DIFFERENT.
+//
+// `irrlichd --diagnose` genuinely runs probes — collecting processes.json
+// shells out through the observer — so its probe counters are non-zero and
+// irrelevant. It never builds a session detector, so it never installs the host
+// gate and cannot evaluate it even once: those counters are structurally zero.
+// Reporting the probe reason for both would tell a reader this process runs the
+// gate; reporting the hook reason for both would be right here by accident.
+func TestProbesBundleSaysWhyHostGateCountsAreMissing(t *testing.T) {
+	got := probesJSON(t, buildTestServiceWithProbes(t, nil))
+
+	note, _ := got["host_gate_note"].(string)
+	if !strings.Contains(note, "structurally zero") {
+		t.Errorf("the host-gate note must say these counters are structurally zero in this process — the gate is never installed here: %q", note)
+	}
+	if !strings.Contains(note, "DIFFERENT reason") {
+		t.Errorf("the host-gate note must say it is not the probe counters' reason, or the two are read as one claim: %q", note)
+	}
+	if !strings.Contains(note, "/debug/bundle") {
+		t.Errorf("the host-gate note does not say where the real evidence is: %q", note)
+	}
+	// The probe note must NOT have acquired the host gate's reason, which is
+	// the mutation this pair exists to catch: one sentence covering both is
+	// wrong about one of them and no test would notice.
+	if probeNote, _ := got["note"].(string); !strings.Contains(probeNote, "NOT zero") {
+		t.Errorf("the probe note stopped saying its own counters are non-zero here: %q", probeNote)
 	}
 }

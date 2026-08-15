@@ -171,12 +171,21 @@ func liveProbeHealth() func() services.ProbeHealthSnapshot {
 	return func() services.ProbeHealthSnapshot {
 		rows := processlifecycle.ProbeCounts()
 		herdr := processlifecycle.HerdrCandidates()
+		gate := processlifecycle.HostGateCounts()
 		snap := services.ProbeHealthSnapshot{
 			Probes:                           make([]services.ProbeCount, 0, len(rows)),
 			OutcomeRule:                      processlifecycle.ProbeOutcomeRule(),
 			UndeclaredKinds:                  processlifecycle.UndeclaredProbeKinds(),
 			HerdrCandidatesProbed:            herdr.Probed,
 			HerdrCandidatesAbandonedOnBudget: herdr.AbandonedOnBudget,
+			// #1525's outcomes ride this snapshot rather than one of their own:
+			// an aborted walk is the downstream view of a probe that did not
+			// answer, so the two figures are only useful side by side, and one
+			// nil-meaningful seam is one thing to get wrong in --diagnose
+			// instead of two.
+			HostGate:                   make([]services.HostGateOutcomeCount, 0, len(gate)),
+			HostGateOutcomeRule:        processlifecycle.HostGateOutcomeRule(),
+			UndeclaredHostGateOutcomes: processlifecycle.UndeclaredHostGateOutcomes(),
 		}
 		for _, row := range rows {
 			snap.Probes = append(snap.Probes, services.ProbeCount{
@@ -184,6 +193,12 @@ func liveProbeHealth() func() services.ProbeHealthSnapshot {
 				Answered:   row.Answered,
 				Unanswered: row.Unanswered,
 				MemoHits:   row.MemoHits,
+			})
+		}
+		for _, row := range gate {
+			snap.HostGate = append(snap.HostGate, services.HostGateOutcomeCount{
+				Outcome: row.Outcome,
+				Count:   row.Count,
 			})
 		}
 		return snap

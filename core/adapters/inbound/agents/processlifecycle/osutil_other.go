@@ -61,7 +61,12 @@ func kittyWindowIDForPID(ctx context.Context, socket string, sessionPID int) (st
 // fail open. The exclusion signal it backs (CodexBar's non-interactive `agy`
 // process, issue #784) only exists on macOS, so failing closed here would
 // reject every antigravity CLI session on this platform instead.
-func IsKnownInteractiveHost(pid int) bool { return true }
+func IsKnownInteractiveHost(pid int) bool { return hostGateFor(pid).admits() }
+
+// hostGateFor reports that this platform did not evaluate the gate — see the
+// identical stub in osutil_linux.go for why that is its own outcome rather than
+// an admission or a silence (#1525).
+func hostGateFor(pid int) hostGateOutcome { return observeHostGate(hostGateNotEvaluated) }
 
 // herdrClientLauncher resolves a herdr pane's window through the attached
 // client (#1350). Darwin-only: the identity it produces is only consumed by the
