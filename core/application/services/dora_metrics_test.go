@@ -4,11 +4,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/application/services"
+	"irrlicht/core/domain/dora"
 	"irrlicht/core/domain/session"
 )
 
@@ -176,5 +178,87 @@ func TestComputeDoraMetrics_EndToEnd(t *testing.T) {
 	wantHours := float64(29 * 24)
 	if result.MTTR.Value != wantHours {
 		t.Fatalf("MTTR.Value = %v, want %v (29 days)", result.MTTR.Value, wantHours)
+	}
+}
+
+// doraRecordingProbe is a doraGitProbe that serves a fixed tag list and
+// records every commit-range it is asked for. It is a fake rather than a real
+// repo because what is under test is which git calls are MADE, and a real repo
+// answers the same either way.
+type doraRecordingProbe struct {
+	root    string
+	tags    []dora.TagInfo
+	commits map[string][]dora.CommitInfo
+	asked   []string // "<fromRef>..<toRef>" per CommitsInRange call, in order
+}
+
+func (p *doraRecordingProbe) GetGitRoot(string) (string, bool) { return p.root, true }
+
+func (p *doraRecordingProbe) ListReleaseTags(string) ([]dora.TagInfo, bool) { return p.tags, true }
+
+func (p *doraRecordingProbe) CommitsInRange(_, fromRef, toRef string) ([]dora.CommitInfo, bool) {
+	p.asked = append(p.asked, fromRef+".."+toRef)
+	return p.commits[toRef], true
+}
+
+func (p *doraRecordingProbe) TagContaining(string, string) (string, bool) { return "", true }
+
+// TestComputeDoraMetrics_SkipsCommitRangesNoMetricReads is #1553's work bound.
+// ComputeDoraMetrics used to walk the commits of EVERY release tag in the
+// repository on every request, however narrow the window — and the oldest
+// tag's range starts at the repo root, so on a project that adopted tags late
+// that one call is a full-history walk paid for a chart spanning a week.
+// Nothing read those commits: LeadTime and DetectReverts index commitsByTag
+// through the domain's window filter (locked by
+// TestNoMetricReadsAnOutOfWindowTagsCommits).
+//
+// MUTATION EVIDENCE: deleting the `if !dora.InWindow(...) { continue }` guard
+// from ComputeDoraMetrics makes this fail, reporting the four ranges it walked
+// against the two it needed.
+func TestComputeDoraMetrics_SkipsCommitRangesNoMetricReads(t *testing.T) {
+	const day = int64(86400)
+	probe := &doraRecordingProbe{
+		root: "/repo",
+		tags: []dora.TagInfo{
+			{Name: "v1.0", Epoch: 10 * day}, // before the window
+			{Name: "v2.0", Epoch: 20 * day}, // before the window
+			{Name: "v3.0", Epoch: 40 * day}, // in
+			{Name: "v4.0", Epoch: 45 * day}, // in
+			{Name: "v5.0", Epoch: 90 * day}, // after
+		},
+		commits: map[string][]dora.CommitInfo{
+			"v3.0": {{Hash: "ccc", AuthorEpoch: 39 * day, Body: "work\n"}},
+			"v4.0": {{Hash: "ddd", AuthorEpoch: 44 * day, Body: "more work\n"}},
+		},
+	}
+	sessions := &doraFakeSessions{states: []*session.SessionState{
+		{SessionID: "s1", ProjectName: "proj", CWD: "/repo/sub"},
+	}}
+
+	result, err := services.ComputeDoraMetrics(probe, sessions, "proj", 30*day, 50*day)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The vacuity guard, and it is the important half: a service that fetched
+	// NOTHING would satisfy the call-list assertion below while publishing
+	// metrics over an empty sample.
+	if !result.Available {
+		t.Fatalf("expected Available=true, got %+v", result)
+	}
+	if result.LeadTime.SampleSize != 2 {
+		t.Errorf("LeadTime.SampleSize = %d, want 2 — the in-window releases' commits were not read",
+			result.LeadTime.SampleSize)
+	}
+
+	// The predecessor ref of an in-window tag is still used as the range's
+	// START even when that predecessor is itself out of window: the range is
+	// what shipped in v3.0, and that is bounded by v2.0 whether or not v2.0's
+	// own commits are read.
+	want := []string{"v2.0..v3.0", "v3.0..v4.0"}
+	if !slices.Equal(probe.asked, want) {
+		t.Errorf("walked %v, want %v — a commit range was fetched for a tag no metric reads "+
+			"(the oldest one is a full-history walk), or an in-window range was skipped",
+			probe.asked, want)
 	}
 }
