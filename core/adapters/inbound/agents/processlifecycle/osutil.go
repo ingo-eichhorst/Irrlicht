@@ -306,7 +306,7 @@ func hostIdentityVia(ctx context.Context, pid int, readTTY ttyProbe) (l *session
 	// none of its own (kitty), whose fields the suppression above drops. So
 	// skipping it would buy no correctness and cost exactly that case.
 	if l.HerdrPaneID == "" {
-		complete = applyAncestryFallbacks(ctx, l, pid, &ancestryProbe{pid: pid})
+		complete = applyAncestryFallbacks(ctx, l, pid, &ancestryProbe{pid: pid, reads: newAncestryReads()})
 	}
 
 	// Capture the controlling TTY so Terminal.app (and potentially others)
@@ -423,12 +423,96 @@ func tmuxSocketFromEnv(tmux string) string {
 	return tmux
 }
 
+// procInfoProbe is one per-PID `ppid + comm` read — the unit both ancestry
+// walks are built out of. It lives here rather than beside its darwin
+// implementation because ancestryReads below is what the two walks SHARE, and
+// that sharing is arranged by cross-platform code (hostIdentityVia).
+type procInfoProbe func(ctx context.Context, pid int) (ppid int, cmd string, err error)
+
+// procInfoAnswer is one ANSWERED per-PID read. Only answers are representable:
+// there is no error field, which is the admission rule of ancestryReads made
+// structural rather than remembered.
+type procInfoAnswer struct {
+	ppid int
+	cmd  string
+}
+
+// ancestryReads dedups the per-PID `ps` reads the two ancestry walks make,
+// **within one resolve and no further**. It is the second half of #1544, and
+// its lifetime is the OPPOSITE of the bundle-id memo's in osutil_darwin.go —
+// which is the single thing to get right here:
+//
+//   - A CFBundleIdentifier is immutable for the life of a bundle, so that memo
+//     is process-global and synchronised.
+//   - A ppid is not. The process table changes constantly: PIDs die, are
+//     reaped, and are REUSED. A process-global memo of ppid/comm would resolve
+//     a dead process's ancestry, or — the case that is a real defect rather
+//     than a stale enrichment — a recycled PID's, reporting the window of
+//     whatever process last held that number. So this one is created per
+//     resolve, handed to both walks, and dropped when the resolve returns.
+//
+// Being per-resolve is also why it carries no mutex: one instance is reachable
+// from exactly one goroutine, for the duration of one call. A shared instance
+// would need one, and would be wrong for the reason above — so the missing
+// mutex is a consequence of the lifetime, not an oversight to be "fixed" by
+// adding one.
+//
+// What it buys, measured on the committed code rather than argued: both call
+// sites run walk 1 to a full verdict and then walk 2 over the SAME chain, so
+// every PID in the chain was read exactly twice — 2 x depth `ps` execs, at a
+// measured 6.6ms median per exec on the machine #1544 was implemented on
+// (n=300; p99 10.2ms). At the maxAncestry ceiling that is ten wasted execs on
+// the synchronous discovery path.
+//
+// The admission rule is the same sentence as the bundle-id memo's, at a
+// different lifetime: **memoize answers, never a non-answer.** A failed read is
+// returned and forgotten, so walk 2 re-probes a PID walk 1 could not read. That
+// keeps the change purely a performance one — the two walks reach exactly the
+// verdicts they reached before, including when a `ps` is killed by its ceiling
+// mid-chain and the second walk's retry succeeds.
+type ancestryReads struct {
+	read procInfoProbe
+	seen map[int]procInfoAnswer
+}
+
+// newAncestryReadsVia builds a per-resolve memo over an injected read. The
+// production binding is newAncestryReads (osutil_darwin.go); every other
+// platform's ancestry walks are stubs that never probe.
+func newAncestryReadsVia(read procInfoProbe) *ancestryReads {
+	return &ancestryReads{read: read, seen: map[int]procInfoAnswer{}}
+}
+
+// probe is the procInfoProbe the walks are handed. It answers from seen when it
+// can, and records only what the underlying read ANSWERED.
+func (r *ancestryReads) probe(ctx context.Context, pid int) (ppid int, cmd string, err error) {
+	if answer, hit := r.seen[pid]; hit {
+		return answer.ppid, answer.cmd, nil
+	}
+	ppid, cmd, err = r.read(ctx, pid)
+	if err != nil {
+		// Never memoize a non-answer. A `ps` killed by its ceiling says
+		// nothing about this PID, and storing that would let one loaded moment
+		// abort both walks instead of one — turning a transient into a verdict
+		// for the whole resolve. #1524 drew this line for the plutil probe;
+		// this is the same line one shellout over.
+		return 0, "", err
+	}
+	r.seen[pid] = procInfoAnswer{ppid: ppid, cmd: cmd}
+	return ppid, cmd, nil
+}
+
 // ancestryProbe resolves pid's process ancestry via resolveHostFromAncestry at
 // most once, caching the result for repeat calls. ReadLauncherEnv's
 // ancestry-dependent fallbacks may all need the same walk; this keeps it
 // bounded to a single `ps` shellout chain instead of up to three.
+//
+// It memoizes walk 1's VERDICT. reads memoizes the per-PID shellouts BELOW that
+// verdict, and the two are different scopes rather than one mechanism spelled
+// twice: the verdict memo cannot help walk 2, which asks a different question
+// (#1544) and re-derives its own answer from the same chain.
 type ancestryProbe struct {
 	pid      int
+	reads    *ancestryReads
 	resolved bool
 	term     string
 	hostPID  int
@@ -441,7 +525,7 @@ type ancestryProbe struct {
 // guarded blocks that each already hold the caller's budget.
 func (a *ancestryProbe) host(ctx context.Context) (term string, hostPID int) {
 	if !a.resolved {
-		a.term, a.hostPID, a.complete = resolveHostFromAncestry(ctx, a.pid)
+		a.term, a.hostPID, a.complete = resolveHostFromAncestry(ctx, a.pid, a.reads)
 		a.resolved = true
 	}
 	return a.term, a.hostPID
@@ -507,7 +591,10 @@ func applyAncestryFallbacksVia(ctx context.Context, l *session.Launcher, pid int
 	// on a map miss, so every curated host keeps its exact behavior. Darwin-
 	// only; other platforms return "" and this is a no-op.
 	if l.TermProgram == "" {
-		bundleID, _, ok := resolveHostBundleIDFromAncestry(ctx, pid)
+		// ancestry.reads, not a fresh memo: the block above has already walked
+		// this exact ppid chain, and handing walk 2 those reads is the whole of
+		// #1544's second half. Every PID below was otherwise read twice.
+		bundleID, _, ok := resolveHostBundleIDFromAncestry(ctx, pid, ancestry.reads)
 		// AND, not assign: this bit is hand-accumulated three guarded blocks
 		// down, and a block inserted above that also writes it would otherwise
 		// be silently overwritten here — the failure ancestryProbe.walked()'s

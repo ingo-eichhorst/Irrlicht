@@ -115,10 +115,23 @@ const maxAncestry = 10
 // the regular env-capture path when readable, and a tmux-only ancestor
 // (without a known host terminal above it) can't be brought to the front
 // by NSWorkspace.
-func resolveHostFromAncestry(ctx context.Context, pid int) (termProgram string, hostPID int, complete bool) {
+// reads is the per-resolve dedup of the `ps` reads this walk shares with
+// resolveHostBundleIDFromAncestry (#1544). It is never nil on this platform —
+// every caller builds one with newAncestryReads — and the walk goes through it
+// rather than calling readProcInfo directly, because a walk that reaches its
+// own read is a walk walk 2 cannot share.
+func resolveHostFromAncestry(ctx context.Context, pid int, reads *ancestryReads) (termProgram string, hostPID int, complete bool) {
+	return resolveHostFromAncestryVia(ctx, pid, reads.probe)
+}
+
+// resolveHostFromAncestryVia is resolveHostFromAncestry with the per-PID read
+// injected — the same idiom resolveHostBundleIDVia has had since #1524, and
+// needed here for the same reason: no arrangement of live processes can drive a
+// read into a chosen failure, or be counted, on purpose.
+func resolveHostFromAncestryVia(ctx context.Context, pid int, procInfo procInfoProbe) (termProgram string, hostPID int, complete bool) {
 	cur := pid
 	for i := 0; i < maxAncestry && cur > 1; i++ {
-		ppid, cmd, err := readProcInfo(ctx, cur)
+		ppid, cmd, err := procInfo(ctx, cur)
 		if err != nil {
 			return "", 0, false
 		}
@@ -132,6 +145,10 @@ func resolveHostFromAncestry(ctx context.Context, pid int) (termProgram string, 
 	}
 	return "", 0, true
 }
+
+// newAncestryReads is the production binding of the per-resolve read memo:
+// darwin is the one platform whose ancestry walks actually shell out.
+func newAncestryReads() *ancestryReads { return newAncestryReadsVia(readProcInfo) }
 
 // bundleIDCmd builds the shellout for one named Info.plist. See bundleIDVia
 // for why this one site takes a factory where the others take a shelloutCmd.
@@ -154,8 +171,133 @@ func plutilBundleIDCmd(plist string) shelloutCmd {
 // The error is non-nil ONLY when plutil could not be ASKED, never when it
 // answered — see bundleIDVia for why those are different facts and where the
 // line between them falls (#1524).
+//
+// Since #1544 an ANSWER is memoized for the life of the process (bundleIDMemo
+// below). The memo sits in FRONT of runProbe rather than inside it, so a hit
+// starts no child, spends none of the caller's aggregate budget, and is invisible
+// to shellout_guard_test.go's two rules — the run site is still the single
+// `runProbe` call inside bundleIDVia, and it still classifies its own error.
 func bundleIDForAppPath(ctx context.Context, appPath string) (string, error) {
+	return bundleIDs.resolve(ctx, appPath, bundleIDUncached)
+}
+
+// bundleIDUncached is the plutil read itself, split out so the memo below has
+// something to wrap and so a test can drive the memo without a real bundle.
+func bundleIDUncached(ctx context.Context, appPath string) (string, error) {
 	return bundleIDVia(ctx, appPath, plutilBundleIDCmd)
+}
+
+// bundleIDMemo caches app-path → CFBundleIdentifier for the life of the
+// process. It is #1544's first half, and its LIFETIME is the opposite of
+// ancestryReads' (osutil.go) — the pairing is the whole design, so read them
+// together:
+//
+//   - A CFBundleIdentifier is immutable for the life of a bundle. It is the
+//     name LaunchServices, the keychain and every preferences domain key off,
+//     so an app that changed it across an update would break its own state.
+//     That is what makes a process-global memo defensible HERE and nowhere
+//     near ancestryReads, whose subject — the process table — changes by the
+//     second.
+//   - Process-global therefore means shared between goroutines: PID discovery
+//     and the liveness sweep both reach it (see refreshHerdrHosts' own comment
+//     on running outside assignMu). It is synchronised with an RWMutex, the
+//     same idiom herdrClientCache uses one file down.
+//
+// It carries no TTL and no eviction, and both are deliberate. No TTL because
+// the entry describes something immutable — herdrClientCache's 5s exists
+// precisely because ITS subject (who is attached to a herdr socket) is not.
+// No eviction because the key space is the set of top-level `.app` bundles in
+// one machine's process ancestry: a handful, bounded by what is installed and
+// running, and reached only through topLevelAppPath — which already rejects
+// every nested helper bundle.
+//
+// The two ways an entry could go stale, stated rather than waved past, since a
+// dismissal is worth what its evidence is worth:
+//
+//   - An in-place app replacement that also CHANGES the bundle id. Requires the
+//     daemon to outlive the update and the developer to have renamed their own
+//     identifier; the memo would then name the previous id until restart.
+//   - A path reused by a DIFFERENT app (`/Applications/Foo.app` removed, an
+//     unrelated Foo.app installed). Same window, same restart.
+//
+// Neither is mitigated, and the cost of being wrong is bounded: the value feeds
+// click-to-focus enrichment and the #784 embedded-host allow-list, not any
+// persisted state.
+//
+// UNVERIFIED, and marked as such because #1544 carried the claim forward from
+// #1538 without a profile: that the daemon seed makes N identical plutil calls
+// with N persisted sessions under one host. What #1544 DID measure is the
+// per-call cost — 9.7ms median, p99 13.8ms, n=300, warm, on one machine — and
+// the call shape: one plutil per ancestry resolve that reaches a top-level
+// `.app`, so N such resolves under one host collapse to one. Note that is a
+// long way from #1524's "2.2ms median" for the same exec on the same class of
+// machine; neither figure is produced by anything that would keep it honest, so
+// treat both as snapshots rather than constants.
+type bundleIDMemo struct {
+	mu  sync.RWMutex
+	ids map[string]string
+}
+
+// bundleIDs is the one process-global instance. Tests build their own rather
+// than reaching for this, so nothing in the suite depends on the order tests
+// run in — the exception is the wiring lock, which asserts that
+// bundleIDForAppPath populates exactly this one.
+var bundleIDs = &bundleIDMemo{ids: map[string]string{}}
+
+// lookup reports what plutil last ANSWERED for appPath.
+func (m *bundleIDMemo) lookup(appPath string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	id, hit := m.ids[appPath]
+	return id, hit
+}
+
+// record stores an answer. Only resolve calls it, and only on a nil error.
+func (m *bundleIDMemo) record(appPath, id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ids[appPath] = id
+}
+
+// resolve answers from the memo or runs probe, storing what probe ANSWERED.
+//
+// The admission rule is **memoize answers including the empty one, never
+// memoize a non-answer**, and the two halves are separately load-bearing:
+//
+//   - The EMPTY answer is admitted. "" here means plutil ran and declined —
+//     this ancestor has no bundle id we can name (bundleIDVia says where that
+//     line falls). It is a verdict the walk continues on, so re-paying an exec
+//     to be told it again is exactly what this memo exists to stop.
+//   - A NON-answer is never admitted. That is the bug this family keeps
+//     producing (#1485, #1492, #1513, #1524, #1533, #1537), and storing one
+//     here would be strictly worse than every previous instance: those were
+//     transient, and a cache entry is not. One loaded moment would freeze
+//     "this ancestor is not an app" for the life of the daemon, which is the
+//     verdict that REJECTS at the #784 admission gate and that SessionDetector
+//     then caches in hostGateRejected and never evicts.
+//
+// #1514 reached the OPPOSITE conclusion for herdrClientCache — it memoizes
+// non-answers on purpose — and the two must not be read as a contradiction,
+// because they turn on a property this cache does not have. #1514's rule is
+// that a non-answer may be cached only when every consumer sees it AS a
+// non-answer: herdrClientLauncher returns `(*session.Launcher, bool)` and the
+// memo carries that second bool through, so a cached "I could not look" is
+// still a "I could not look" at the call site, and #1514 additionally guards
+// the write so a non-answer never displaces a live answer. This cache has no
+// such channel to carry: its consumers are ancestry walks whose only use of the
+// value is `bid != ""`, so a stored non-answer would arrive as the empty
+// ANSWER — indistinguishable, permanent, and wrong. The rule differs because
+// the consumer does, not because one of the two is a mistake.
+func (m *bundleIDMemo) resolve(ctx context.Context, appPath string, probe bundleIDProbe) (string, error) {
+	if id, hit := m.lookup(appPath); hit {
+		return id, nil
+	}
+	id, err := probe(ctx, appPath)
+	if err != nil {
+		return "", err
+	}
+	m.record(appPath, id)
+	return id, nil
 }
 
 // bundleIDVia is bundleIDForAppPath with the shellout injected.
@@ -241,18 +383,21 @@ func bundleIDVia(ctx context.Context, appPath string, build bundleIDCmd) (string
 // The walk starts at pid's *parent*: the agent runs inside the host and is
 // never the host itself, and an agent whose own binary lives in a top-level
 // bundle (e.g. ClaudeCode.app) must not be mistaken for it.
-func resolveHostBundleIDFromAncestry(ctx context.Context, pid int) (bundleID string, hostPID int, complete bool) {
-	return resolveHostBundleIDVia(ctx, pid, readProcInfo, bundleIDForAppPath)
+//
+// reads is the per-resolve read memo this walk shares with walk 1 (#1544), and
+// the sharing is the point: both walks traverse the same ppid chain, so without
+// it every PID here is read a second time. It is never nil on this platform.
+func resolveHostBundleIDFromAncestry(ctx context.Context, pid int, reads *ancestryReads) (bundleID string, hostPID int, complete bool) {
+	return resolveHostBundleIDVia(ctx, pid, reads.probe, bundleIDForAppPath)
 }
 
-// procInfoProbe and bundleIDProbe are the two bounded shellouts
-// resolveHostBundleIDVia makes per ancestor. Both are parameters for the same
-// reason isKnownInteractiveHostVia injects its two walks: no arrangement of
-// live processes can drive either into a chosen failure on purpose.
-type (
-	procInfoProbe func(ctx context.Context, pid int) (ppid int, cmd string, err error)
-	bundleIDProbe func(ctx context.Context, appPath string) (string, error)
-)
+// bundleIDProbe is the plutil half of the two bounded shellouts
+// resolveHostBundleIDVia makes per ancestor (procInfoProbe, the other half,
+// is declared in osutil.go beside the memo that dedups it). Both are
+// parameters for the same reason isKnownInteractiveHostVia injects its two
+// walks: no arrangement of live processes can drive either into a chosen
+// failure on purpose.
+type bundleIDProbe func(ctx context.Context, appPath string) (string, error)
 
 // resolveHostBundleIDVia is resolveHostBundleIDFromAncestry with both probes
 // injected.
@@ -347,7 +492,31 @@ func resolveHostBundleIDVia(ctx context.Context, pid int, procInfo procInfoProbe
 // resolveHostBundleIDFromAncestry says why that mattered; bundleIDVia is where
 // the line between an answer and a non-answer is drawn.
 func IsKnownInteractiveHost(pid int) bool {
-	return isKnownInteractiveHostVia(noAggregateBudget(), pid, resolveHostFromAncestry, resolveHostBundleIDFromAncestry)
+	return isKnownInteractiveHostSharingReads(noAggregateBudget(), pid, newAncestryReads(), bundleIDForAppPath)
+}
+
+// isKnownInteractiveHostSharingReads builds both walks over ONE per-resolve
+// read memo and hands them to isKnownInteractiveHostVia (#1544).
+//
+// This is the call site the sharing matters most at, and the reason is the
+// short-circuit one function down: walk 2 runs only when walk 1 found nothing
+// AND completed, which for walk 1 means it walked the chain to its END. So walk
+// 2 never reads a PID walk 1 did not already read — the duplication here is not
+// partial, it is total. Measured on a synthetic chain that misses the curated
+// map: 2 x depth `ps` execs, D duplicates at depth D, up to maxAncestry.
+//
+// Both probes are injected rather than the two walks, which is the difference
+// from isKnownInteractiveHostVia below: that one exists so the ORDER between
+// the walks is testable, this one so what the walks READ is countable. A test
+// that injected walks could not observe a memo the walks are built out of.
+func isKnownInteractiveHostSharingReads(ctx context.Context, pid int, reads *ancestryReads, bundleID bundleIDProbe) bool {
+	return isKnownInteractiveHostVia(ctx, pid,
+		func(ctx context.Context, pid int) (string, int, bool) {
+			return resolveHostFromAncestryVia(ctx, pid, reads.probe)
+		},
+		func(ctx context.Context, pid int) (string, int, bool) {
+			return resolveHostBundleIDVia(ctx, pid, reads.probe, bundleID)
+		})
 }
 
 // ancestryWalk is the shape resolveHostFromAncestry and
@@ -406,7 +575,7 @@ func isKnownInteractiveHostFrom(termProgram, bundleID string, complete bool) boo
 // other host) appears in the chain; callers that also need the host PID
 // should use resolveHostFromAncestry directly to avoid a second walk.
 func resolveTermProgramFromAncestry(ctx context.Context, pid int) string {
-	term, _, _ := resolveHostFromAncestry(ctx, pid)
+	term, _, _ := resolveHostFromAncestry(ctx, pid, newAncestryReads())
 	return term
 }
 
@@ -418,7 +587,7 @@ func resolveTermProgramFromAncestry(ctx context.Context, pid int) string {
 // into the env-derived launcher. Ancestry walking still works because we
 // only read ppid + comm, not env.
 func kittyAncestryPID(ctx context.Context, pid int) int {
-	term, hostPID, _ := resolveHostFromAncestry(ctx, pid)
+	term, hostPID, _ := resolveHostFromAncestry(ctx, pid, newAncestryReads())
 	if term != "kitty" {
 		return 0
 	}
