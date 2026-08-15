@@ -1,12 +1,20 @@
 // hostgate.go counts what the #784 host-admission gate actually DECIDED, and
 // says so out loud the first time it admitted on no evidence at all (#1525).
 //
-// The gate has three outcomes on darwin and, until this file, exactly one of
+// The gate has four outcomes on darwin and, until this file, exactly one of
 // them left a trace:
 //
 //	completed walk, allow-listed host    admit    reported by nothing
 //	completed walk, no allow-listed host reject   one LogInfo in admitHost
-//	aborted walk                         admit    reported by nothing
+//	walk stopped by an unanswered probe  admit    reported by nothing
+//	walk stopped by a gone process       admit    reported by nothing
+//
+// The last two were ONE outcome until #1574, on the strength of both being an
+// `if err != nil` inside the walk. They are not one fact: the first is a machine
+// whose bounded children are dying, the second is a pid that ceased to exist
+// between PID discovery and the walk. Merging them made admitted.walk_aborted
+// climb on a perfectly healthy machine, which is the state this file's whole
+// argument for counting is about.
 //
 // Before #1513 the aborted walk was silently a REJECTION — a legitimate session
 // that never appeared, permanently, because SessionDetector caches the
@@ -20,16 +28,16 @@
 //
 // Three decisions here are load-bearing.
 //
-//   - COUNTED WHERE THE THREE-WAY ANSWER EXISTS, which is inside the darwin
+//   - COUNTED WHERE THE MULTI-WAY ANSWER EXISTS, which is inside the darwin
 //     walk and nowhere above it. The issue proposed counting in
 //     SessionDetector.admitHost "because the darwin function returns a bare
 //     bool"; that reasoning inverts. admitHost receives a bare bool, so the WHY
 //     is precisely what it does not have — and it receives that bool through
 //     PIDManager.AllowsSession, which returns true for four further reasons
 //     that are not gate outcomes at all (the adapter opted out, no discoverer
-//     is installed, no PID was found, no gate is wired). The three-way
-//     distinction lives in hostGateOutcomeFrom, which has term, bundleID and
-//     complete, and that is where it is counted.
+//     is installed, no PID was found, no gate is wired). The distinction lives
+//     in hostGateOutcomeFrom, which has term, bundleID and how the walk ended,
+//     and that is where it is counted.
 //   - THE VERDICT IS DERIVED FROM THE COUNTED OUTCOME, not computed beside it.
 //     isKnownInteractiveHostFrom is hostGateOutcomeFrom(...).admits(), so there
 //     is one classifier and the number cannot drift from the behaviour it
@@ -42,15 +50,16 @@
 //     "admitted.host_matched" would publish an ancestry verdict from a daemon
 //     that never looked at an ancestor. They observe admitted.not_evaluated,
 //     which is its own row, so a Linux bundle says "the gate was consulted N
-//     times and this platform declines to look" instead of three zeros that
-//     read as "the gate never fired".
+//     times and this platform declines to look" instead of zeros that read as
+//     "the gate never fired".
 //
 // The counters are read into the diagnostics bundle beside #1534's per-probe
 // answered/unanswered rows, in probes.json rather than a section of their own,
 // because an aborted walk is the DOWNSTREAM view of a probe that did not
 // answer: the cause and the effect belong on one page, and probesView computes
-// the reconciliation between them. See hostGateReconciliationNote there, and
-// #1574 for the known reason the two figures can legitimately disagree.
+// the reconciliation between them. See hostGateReconciliationNote there — since
+// #1574 that reconciliation compares two figures that are meant to correspond,
+// rather than explaining why they need not.
 package processlifecycle
 
 import (
@@ -76,9 +85,33 @@ const (
 	// (knownEmbeddedHostBundleIDs). The ordinary admission.
 	hostGateHostMatched hostGateOutcome = "admitted.host_matched"
 	// hostGateWalkAborted is a walk that could not be completed — a `ps` or
-	// `plutil` that did not answer — so "" says nothing about the host. Admits
+	// `plutil` that did not ANSWER — so "" says nothing about the host. Admits
 	// on no evidence (#1513), and is the outcome this file exists for.
+	//
+	// Since #1574 it means what that sentence says and nothing wider: the row it
+	// is read beside is #1534's per-probe non-answer count, and a walk stopped by
+	// an ANSWERED "no such process" now lands in hostGateProcessGone instead.
 	hostGateWalkAborted hostGateOutcome = "admitted.walk_aborted"
+	// hostGateProcessGone is a walk stopped because `ps` ANSWERED that a process
+	// in the chain does not exist (#1574) — a pid reaped between PID discovery
+	// and this gate, or an ancestor that exited mid-walk.
+	//
+	// Its own row rather than folded into either neighbour, because it is a
+	// different DIAGNOSIS from both and the whole family is about keeping those
+	// apart. Against walk_aborted: nothing failed to answer, so a reader must
+	// not go hunting for a probe that is fine, and the reconciliation against
+	// ps.proc_info/plutil.bundle_id stops needing a paragraph explaining why the
+	// two ledgers may contradict each other. Against no_known_host: that row is
+	// #784 working — a walk that RAN and found no allow-listed terminal or IDE
+	// — and a process that no longer exists reported nothing to allow-list.
+	//
+	// It ADMITS, on exactly #1513's argument: "this process is gone" is no more
+	// evidence of a non-interactive host than "this probe was killed" is, and
+	// rejecting costs a session permanently (SessionDetector caches the
+	// rejection per session id and never evicts). See errProcessGone (osutil.go)
+	// for why the alternative — terminating the walk as if at PID 1, which is
+	// what reparenting produces — was considered and rejected.
+	hostGateProcessGone hostGateOutcome = "admitted.process_gone"
 	// hostGateNotEvaluated is a platform that does not walk ancestry at all.
 	// Its own row rather than a silence, because "the gate declined to look"
 	// and "the gate looked and found a host" are different facts and only one
@@ -97,15 +130,17 @@ const (
 var allHostGateOutcomes = []hostGateOutcome{
 	hostGateHostMatched,
 	hostGateWalkAborted,
+	hostGateProcessGone,
 	hostGateNotEvaluated,
 	hostGateNoKnownHost,
 }
 
 // admits reports whether this outcome lets the session through.
 //
-// Three of the four admit, which is the fail-open polarity #1513 chose for this
-// gate and #1524 confirmed for the plutil half: a probe that could not be asked
-// is not evidence of a non-interactive host, and rejecting on it costs the user
+// Four of the five admit, which is the fail-open polarity #1513 chose for this
+// gate, #1524 confirmed for the plutil half and #1574 kept for a process that no
+// longer exists: neither a probe that could not be asked nor a pid that is gone
+// is evidence of a non-interactive host, and rejecting on either costs the user
 // a legitimate session for the lifetime of the daemon.
 //
 // The trailing return is reached only by an outcome nobody enumerated. It
@@ -113,12 +148,35 @@ var allHostGateOutcomes = []hostGateOutcome{
 // what stops that line from becoming a place decisions hide.
 func (o hostGateOutcome) admits() bool {
 	switch o {
-	case hostGateHostMatched, hostGateWalkAborted, hostGateNotEvaluated:
+	case hostGateHostMatched, hostGateWalkAborted, hostGateProcessGone, hostGateNotEvaluated:
 		return true
 	case hostGateNoKnownHost:
 		return false
 	}
 	return true
+}
+
+// admittedOnNoEvidence reports whether this outcome let the session through
+// WITHOUT the walk having said anything about the host — the two arms the log
+// line below exists for.
+//
+// It is separate from admits() because the two questions have different answers
+// and merging them would make one of them wrong: host_matched admits on
+// evidence, not_evaluated admits on a platform that declines to look (and never
+// reaches darwin's logging entry point at all), and only these two admit having
+// looked and learned nothing.
+//
+// The trailing return is false rather than true, which is the opposite polarity
+// from admits() and deliberately so: an unenumerated outcome must not start
+// writing an error line per session claiming a phantom admission it knows
+// nothing about. TestEveryHostGateOutcomeDeclaresItsVerdict grades this column
+// beside the verdict one.
+func (o hostGateOutcome) admittedOnNoEvidence() bool {
+	switch o {
+	case hostGateWalkAborted, hostGateProcessGone:
+		return true
+	}
+	return false
 }
 
 // hostGateCounts maps every declared outcome to its counter. Built once at init
@@ -145,7 +203,9 @@ var undeclaredHostGateOutcomes atomic.Uint64
 // hostGateOutcomeRule records what the four rows mean, because a bundle is
 // pasted by a bug reporter who has not read this file.
 const hostGateOutcomeRule = "a walk that ran and found an allow-listed host ADMITS; a walk that ran and found none REJECTS (#784); " +
-	"a walk that could not be completed ADMITS on no evidence (#1513); a platform that does not walk ancestry at all is NOT an evaluation"
+	"a walk stopped by a child that did not ANSWER ADMITS on no evidence (#1513); a walk stopped because `ps` answered that a " +
+	"process in the chain no longer exists ADMITS on no evidence too, in its own row (#1574); a platform that does not walk " +
+	"ancestry at all is NOT an evaluation"
 
 // observeHostGate records one gate evaluation and returns the outcome, so a
 // call site reads `return observeHostGate(...)` and cannot reach the verdict
@@ -178,7 +238,8 @@ type HostGateOutcomeCount struct {
 // itself a finding here. On Linux every row but admitted.not_evaluated is
 // structurally zero, and on a darwin daemon a zero admitted.walk_aborted row is
 // the evidence that the 2s ceilings are not firing — the question #1513 and
-// #1524 both closed as unmeasured.
+// #1524 both closed as unmeasured. Since #1574 that reading is worth what it
+// claims: the row no longer also collects reaped pids, which have their own.
 func HostGateCounts() []HostGateOutcomeCount {
 	out := make([]HostGateOutcomeCount, 0, len(allHostGateOutcomes))
 	for _, outcome := range allHostGateOutcomes {
@@ -208,15 +269,15 @@ func HostGateOutcomeRule() string { return hostGateOutcomeRule }
 const logComponentHostGate = "host-gate"
 
 // HostGate is the production entry point: the #784 admission gate in the shape
-// SessionDetector.SetHostGate wants, wired to report the aborted-walk arm.
+// SessionDetector.SetHostGate wants, wired to report both admitted-on-no-evidence arms.
 //
 // sessionID is carried IN rather than an outcome carried OUT, and that is the
 // direction the seam widened for a reason. The gate is the only place that
-// knows the pid and the three-way answer; admitHost is the only place that
+// knows the pid and the multi-way answer; admitHost is the only place that
 // knows the id the session is about to get. Reporting a phantom admission needs
 // both in one line, and passing the id inward keeps the outcome vocabulary
 // inside this package — carrying it outward would require a second copy of
-// these four tokens above the adapter boundary, since application/services may
+// these tokens above the adapter boundary, since application/services may
 // not import this package at all.
 //
 // The rate limiter is per-closure rather than package-global, so it is one
@@ -226,16 +287,35 @@ func HostGate(log outbound.Logger) func(sessionID string, pid int) bool {
 	var reportedFirstAbort atomic.Bool
 	return func(sessionID string, pid int) bool {
 		outcome := hostGateFor(pid)
-		if outcome == hostGateWalkAborted {
-			reportAbortedHostGateWalk(log, &reportedFirstAbort, sessionID, pid)
+		if outcome.admittedOnNoEvidence() {
+			reportAdmissionOnNoEvidence(log, &reportedFirstAbort, sessionID, pid, outcome)
 		}
 		return outcome.admits()
 	}
 }
 
-// reportAbortedHostGateWalk writes the aborted-walk line: the first at error
-// level with the full explanation, every later one at info level naming its own
-// session.
+// noEvidenceReason is the clause that says WHICH of the two no-evidence
+// admissions this was, in the words a bug reporter needs rather than the token.
+//
+// One log path carrying a per-outcome clause, rather than two report functions:
+// the only arrangement a test can drive through this entry point is a reaped pid
+// (a `ps` over its 2s ceiling cannot be produced on purpose, which is why every
+// other test of this seam injects the walks), so two paths would mean one of
+// them was never executed by anything. The token is in the line as well, so the
+// row in probes.json and the line in events.log name each other.
+func noEvidenceReason(outcome hostGateOutcome) string {
+	if outcome == hostGateProcessGone {
+		return "the walk RAN and found that a process in the chain no longer exists (`ps` answered \"no such process\"), " +
+			"so there was no ancestry left to read — this is the ordinary race between PID discovery and a short-lived " +
+			"agent process, and NOT a probe that failed (#1574)"
+	}
+	return "the walk was not answered — a `ps` or `plutil` was killed by its 2s ceiling, never started, or failed to fork — " +
+		"so it does not say the host is interactive; it says nothing at all"
+}
+
+// reportAdmissionOnNoEvidence writes the admitted-on-no-evidence line: the first
+// at error level with the full explanation, every later one at info level naming
+// its own session.
 //
 // The rate is decided rather than defaulted. A line per occurrence would be
 // burial-by-noise if this fired per tool call, which is the failure
@@ -250,27 +330,27 @@ func HostGate(log outbound.Logger) func(sessionID string, pid int) bool {
 //
 // A nil logger loses the line and keeps the count — hostGateFor has already
 // observed by the time this runs — rather than panicking on the admission path.
-func reportAbortedHostGateWalk(log outbound.Logger, reportedFirst *atomic.Bool, sessionID string, pid int) {
+func reportAdmissionOnNoEvidence(log outbound.Logger, reportedFirst *atomic.Bool, sessionID string, pid int, outcome hostGateOutcome) {
 	if log == nil {
 		return
 	}
 	if reportedFirst.CompareAndSwap(false, true) {
 		log.LogError(logComponentHostGate, sessionID, fmt.Sprintf(
-			"#784 host gate ADMITTED this session on an ancestry walk it could not complete (pid %d). "+
-				"The walk was not answered, so it does not say the host is interactive — it says nothing at all, "+
-				"and admitting is the deliberate direction (#1513): rejecting on an unanswered probe declines a "+
-				"legitimate session for the lifetime of the daemon. If a session appeared that nobody started "+
-				"interactively, this line is why. Further occurrences are logged at info level and counted: read "+
-				"host_gate in the diagnostics bundle's probes.json for the volume, and the ps.proc_info / "+
-				"plutil.bundle_id rows beside it for the probe that did not answer (#1534). This is NOT the "+
+			"#784 host gate ADMITTED this session on an ancestry walk that produced NO EVIDENCE about the host "+
+				"(pid %d, outcome %s): %s. Admitting is the deliberate direction (#1513): rejecting on a walk that "+
+				"reached no verdict declines a legitimate session for the lifetime of the daemon. If a session "+
+				"appeared that nobody started interactively, this line is why. Further occurrences are logged at "+
+				"info level and counted: read host_gate in the diagnostics bundle's probes.json for the volume, and "+
+				"the ps.proc_info / plutil.bundle_id rows beside it for the probe that did not answer (#1534) — "+
+				"note that admitted.process_gone needs no such non-answer behind it (#1574). This is NOT the "+
 				"\"skipping session bound to a non-interactive host\" line, which is a walk that RAN and found no "+
 				"allow-listed terminal or IDE — that one is #784 working.",
-			pid))
+			pid, outcome, noEvidenceReason(outcome)))
 		return
 	}
 	log.LogInfo(logComponentHostGate, sessionID, fmt.Sprintf(
-		"#784 host gate admitted this session on an ancestry walk it could not complete (pid %d) — the same shape "+
-			"as the first such line, which was logged at error level with the full explanation. host_gate in the "+
-			"diagnostics bundle's probes.json carries the running count.",
-		pid))
+		"#784 host gate admitted this session on an ancestry walk that reached no verdict (pid %d, outcome %s) — the "+
+			"same shape as the first such line, which was logged at error level with the full explanation. host_gate "+
+			"in the diagnostics bundle's probes.json carries the running count.",
+		pid, outcome))
 }

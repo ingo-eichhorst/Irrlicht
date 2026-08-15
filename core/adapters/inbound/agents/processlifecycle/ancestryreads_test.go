@@ -42,7 +42,12 @@ func (p *scriptedProcTable) read(ctx context.Context, pid int) (int, string, err
 	}
 	row, ok := p.rows[pid]
 	if !ok {
-		return 0, "", errors.New("no such process")
+		// A pid this table does not carry is a pid that does not exist, which is
+		// the fact readProcInfo reports with errProcessGone since #1574 — an
+		// ANSWER, and the one thing that separates this return from the killed
+		// `ps` above. It said "no such process" in a bare error before, which
+		// read the same to a human and to nothing else.
+		return 0, "", errProcessGone
 	}
 	return row.ppid, row.cmd, nil
 }
@@ -102,6 +107,55 @@ func TestAncestryReadsNeverMemoizeANonAnswer(t *testing.T) {
 	}
 	if table.reads[4242] != 3 {
 		t.Fatalf("the answer was not memoized: underlying read ran %d times, want still 3", table.reads[4242])
+	}
+}
+
+// TestAncestryReadsRecordWhichKindOfFailureEndedAWalk is #1574's half of this
+// memo: the walks return a bare completeness bit, and this is where the REASON
+// behind a false one is kept, because the memo is the only object that sees
+// every per-PID read of one evaluation.
+//
+// The three arms are three different states of the same flag and each is
+// load-bearing. A memo that reported gone unconditionally would satisfy the
+// third arm alone, and every session on a healthy machine would then be filed
+// under admitted.process_gone — the mirror of the defect #1574 fixed, with the
+// two rows swapped. The killed-`ps` arm is the one that would go wrong if the
+// flag were set for any error rather than for this one.
+func TestAncestryReadsRecordWhichKindOfFailureEndedAWalk(t *testing.T) {
+	ctx := context.Background()
+
+	fresh := newAncestryReadsVia(newScriptedProcTable().read)
+	if fresh.sawProcessGone() {
+		t.Error("a memo that has read nothing reports a gone process — every gate evaluation would be filed under admitted.process_gone before a single `ps` ran")
+	}
+
+	answered := newScriptedProcTable()
+	answered.rows[4242] = procInfoAnswer{ppid: 900, cmd: "/bin/zsh"}
+	reads := newAncestryReadsVia(answered.read)
+	if _, _, err := reads.probe(ctx, 4242); err != nil {
+		t.Fatalf("probe of a live pid: %v", err)
+	}
+	if reads.sawProcessGone() {
+		t.Error("a read that ANSWERED with an ancestor set the gone flag — the walk did not even end here")
+	}
+
+	killed := newScriptedProcTable()
+	killed.rows[4242] = procInfoAnswer{ppid: 900, cmd: "/bin/zsh"}
+	killed.fails[4242] = 1
+	reads = newAncestryReadsVia(killed.read)
+	if _, _, err := reads.probe(ctx, 4242); err == nil {
+		t.Fatal("a killed `ps` must stay a non-answer")
+	}
+	if reads.sawProcessGone() {
+		t.Error("a `ps` killed by its ceiling was recorded as a gone process — that is the #1534 counter and the gate row disagreeing again, in the other direction: the daemon would report a race where it has a probe that is dying")
+	}
+
+	reads = newAncestryReadsVia(newScriptedProcTable().read)
+	if _, _, err := reads.probe(ctx, 4242); !errors.Is(err, errProcessGone) {
+		t.Fatalf("probe of a pid the table does not carry returned %v, want errProcessGone", err)
+	}
+	if !reads.sawProcessGone() {
+		t.Error("an ANSWERED \"no such process\" left no trace — the gate is then back to reporting it as a walk that could not be answered, which is #1574")
 	}
 }
 

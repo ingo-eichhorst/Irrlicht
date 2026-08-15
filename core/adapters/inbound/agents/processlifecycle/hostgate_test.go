@@ -68,34 +68,50 @@ func assertHostGateMoved(t *testing.T, before hostGateLedger, want map[string]ui
 }
 
 // TestEveryHostGateOutcomeDeclaresItsVerdict pins what each outcome DOES, and
-// is the lock that keeps admits()'s trailing `return true` from becoming a
-// place a decision hides.
+// is the lock that keeps admits()'s trailing `return true` — and, since #1574,
+// admittedOnNoEvidence()'s trailing `return false` — from becoming a place a
+// decision hides.
 //
 // The table is written out rather than derived, because deriving it from the
-// function under test asserts nothing. Its two guards are what make it a lock
-// rather than five loose rows: it must name every declared outcome, and it must
-// name no outcome that is not declared — so an outcome added to the vocabulary
-// without a decision about whether it admits fails here instead of silently
-// taking the fallback.
+// functions under test asserts nothing. Its two guards are what make it a lock
+// rather than a handful of loose rows: it must name every declared outcome, and
+// it must name no outcome that is not declared — so an outcome added to the
+// vocabulary without a decision about what it does fails here instead of
+// silently taking a fallback.
+//
+// Two columns rather than one, because the two questions have DIFFERENT answers
+// and a single column cannot express either: three outcomes admit and only two
+// of those admit having learned nothing. The second column decides whether a
+// session gets an error line explaining a phantom admission, so an outcome that
+// answered it by accident would either bury the log in lines about ordinary
+// admissions or leave a phantom unexplained.
 func TestEveryHostGateOutcomeDeclaresItsVerdict(t *testing.T) {
-	want := map[hostGateOutcome]bool{
-		hostGateHostMatched:  true,
-		hostGateWalkAborted:  true,  // #1513: no evidence is not evidence of a miss
-		hostGateNotEvaluated: true,  // a platform that never looked must not reject
-		hostGateNoKnownHost:  false, // #784, the one rejection
+	type verdict struct {
+		admits             bool
+		admittedNoEvidence bool
+	}
+	want := map[hostGateOutcome]verdict{
+		hostGateHostMatched:  {true, false},  // an ordinary admission, on evidence
+		hostGateWalkAborted:  {true, true},   // #1513: no evidence is not evidence of a miss
+		hostGateProcessGone:  {true, true},   // #1574: a gone pid is no more evidence than an unanswered probe
+		hostGateNotEvaluated: {true, false},  // a platform that never looked must not reject — and never reaches the log
+		hostGateNoKnownHost:  {false, false}, // #784, the one rejection
 	}
 	if len(want) != len(allHostGateOutcomes) {
 		t.Fatalf("this table decides %d outcomes but %d are declared — an outcome with no decision here takes admits()'s fallback, which is where a polarity gets chosen by accident",
 			len(want), len(allHostGateOutcomes))
 	}
 	for _, outcome := range allHostGateOutcomes {
-		verdict, decided := want[outcome]
+		row, decided := want[outcome]
 		if !decided {
 			t.Errorf("%q is declared but this table does not say whether it admits", outcome)
 			continue
 		}
-		if got := outcome.admits(); got != verdict {
-			t.Errorf("%q.admits() = %v, want %v", outcome, got, verdict)
+		if got := outcome.admits(); got != row.admits {
+			t.Errorf("%q.admits() = %v, want %v", outcome, got, row.admits)
+		}
+		if got := outcome.admittedOnNoEvidence(); got != row.admittedNoEvidence {
+			t.Errorf("%q.admittedOnNoEvidence() = %v, want %v — this column decides whether the gate writes the line that explains a phantom session", outcome, got, row.admittedNoEvidence)
 		}
 	}
 }
@@ -255,7 +271,7 @@ func hostGateOutcomeIdentsIn(fn *ast.FuncDecl) string {
 // outcome is graded by existing.
 func isHostGateOutcomeIdent(name string) bool {
 	switch name {
-	case "hostGateHostMatched", "hostGateWalkAborted", "hostGateNotEvaluated", "hostGateNoKnownHost":
+	case "hostGateHostMatched", "hostGateWalkAborted", "hostGateProcessGone", "hostGateNotEvaluated", "hostGateNoKnownHost":
 		return true
 	}
 	return false
