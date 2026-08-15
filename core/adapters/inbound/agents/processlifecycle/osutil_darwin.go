@@ -103,13 +103,19 @@ const maxAncestry = 10
 //
 // complete reports whether the walk reached that verdict on its own terms —
 // it found a host, ran out of chain, or ran out of depth — rather than
-// aborting because a `ps` could not be answered. Those two produce the same
-// ("", 0) and are different facts: the first is evidence that this process has
-// no local window, the second is no evidence at all. Every abort is a
-// readProcInfo failure, which on a loaded machine is that helper's 2s ceiling
-// (#1492) — or, since #1529, ctx's aggregate budget expiring first, which
-// produces the same non-answer for the same reason. The caller that acts on the
-// distinction is resolveClientHostIdentity.
+// aborting because a `ps` did not produce a readable ancestor. Those two produce
+// the same ("", 0) and are different facts: the first is evidence that this
+// process has no local window, the second is no evidence at all. Every abort is
+// a readProcInfo failure, which is either that helper's 2s ceiling on a loaded
+// machine (#1492) — or, since #1529, ctx's aggregate budget expiring first,
+// which produces the same non-answer for the same reason — or, since #1574, a
+// `ps` that ANSWERED "no such process" for a pid that has been reaped. The two
+// are the same abort here, deliberately: with no ancestry left to read there is
+// no verdict about the host either way, so the bit this function returns is the
+// same and only the REASON differs. The caller that acts on the distinction
+// between an abort and a completed walk is resolveClientHostIdentity; the caller
+// that acts on the reason behind the abort is the #784 gate, which reads it off
+// the shared read memo (walkEndOf).
 //
 // Intentionally ignores tmux: tmux's env vars (TMUX, TMUX_PANE) come from
 // the regular env-capture path when readable, and a tmux-only ancestor
@@ -476,13 +482,14 @@ func resolveHostBundleIDVia(ctx context.Context, pid int, procInfo procInfoProbe
 // A COMPLETED walk that found no allow-listed host still rejects: that is #784
 // and it is unchanged.
 //
-// Which of the three outcomes each evaluation reached IS counted (#1525): the
-// walk is classified once, by hostGateOutcomeFrom, and this bool is derived
-// from that classification rather than computed beside it. hostgate.go carries
-// why the count lives here and not at the admission gate above, and what the
-// bundle does with it. The per-probe non-answer counts underneath it are
-// #1534's; the two figures are meant to reconcile, and #1574 is the known
-// reason they can fail to.
+// Which outcome each evaluation reached IS counted (#1525): the walk is
+// classified once, by hostGateOutcomeFrom, and this bool is derived from that
+// classification rather than computed beside it. hostgate.go carries why the
+// count lives here and not at the admission gate above, and what the bundle does
+// with it. The per-probe non-answer counts underneath it are #1534's, and the
+// two figures reconcile: since #1574 a walk stopped by an ANSWERED "no such
+// process" is its own row rather than an abort, so admitted.walk_aborted means a
+// child that did not answer and can be read against those counts directly.
 //
 // Measured on one machine, plutil stays ~25x under its ceiling even at 12x CPU
 // oversubscription, so whatever triggers a real non-answer is not CPU pressure
@@ -538,18 +545,70 @@ func isKnownInteractiveHostSharingReads(ctx context.Context, pid int, reads *anc
 // hostGateOutcomeSharingReads is isKnownInteractiveHostSharingReads' outcome.
 func hostGateOutcomeSharingReads(ctx context.Context, pid int, reads *ancestryReads, bundleID bundleIDProbe) hostGateOutcome {
 	return hostGateOutcomeVia(ctx, pid,
-		func(ctx context.Context, pid int) (string, int, bool) {
-			return resolveHostFromAncestryVia(ctx, pid, reads.probe)
+		func(ctx context.Context, pid int) (string, int, walkEnd) {
+			term, hostPID, complete := resolveHostFromAncestryVia(ctx, pid, reads.probe)
+			return term, hostPID, walkEndOf(complete, reads)
 		},
-		func(ctx context.Context, pid int) (string, int, bool) {
-			return resolveHostBundleIDVia(ctx, pid, reads.probe, bundleID)
+		func(ctx context.Context, pid int) (string, int, walkEnd) {
+			bid, hostPID, complete := resolveHostBundleIDVia(ctx, pid, reads.probe, bundleID)
+			return bid, hostPID, walkEndOf(complete, reads)
 		})
 }
 
+// walkEnd is how an ancestry walk ended, as the #784 gate reads it.
+//
+// The walks themselves still return a bare `complete bool`, and that is the
+// decision rather than a step not taken: three callers consume that bit and only
+// this one acts on the difference between its two false cases. hostIdentity's
+// consumer (resolveClientHostIdentity) wants both treated alike — a candidate
+// that vanished between the lsof scan and the identity read means the candidate
+// LIST is stale, so "I could not look" is the honest answer there and clearing a
+// stored host on it would be the #1348 misroute — and ReadLauncherEnv discards
+// completeness entirely. Widening the shared bit would carry a distinction two
+// callers must then be shown to ignore, in exchange for the same behaviour.
+//
+// So the reason travels beside the bit, from the per-resolve read memo that is
+// the only object seeing every read of one evaluation (ancestryReads.gone), and
+// walkEndOf below is where the two are put back together.
+type walkEnd int
+
+const (
+	// walkCompleted is a walk that reached its verdict on its own terms: it
+	// found a host, ran out of chain, or ran out of depth.
+	walkCompleted walkEnd = iota
+	// walkProcessGone is a walk stopped because a `ps` ANSWERED that a process
+	// in the chain does not exist (#1574). No verdict about the host either —
+	// there is no ancestry left to read — but nothing failed to answer.
+	walkProcessGone
+	// walkUnanswered is a walk stopped by a bounded child that did NOT answer: a
+	// `ps` or `plutil` killed by its ceiling, never started, or whose fork
+	// failed (#1492/#1513/#1524). Also the end a `ps` that answered with an
+	// unparseable line reaches, which readProcInfo's doc states out loud.
+	walkUnanswered
+)
+
+// walkEndOf pairs a walk's completeness bit with the reason its reads recorded.
+//
+// The lookup is safe in the only shape it is used — one evaluation, one memo,
+// both walks — because a read that fails ends its walk immediately and walk 2
+// runs only after walk 1 completed, so a resolve has at most one failed read and
+// this flag is that read's reason. ancestryReads.gone carries the same argument
+// at the field it is stored in.
+func walkEndOf(complete bool, reads *ancestryReads) walkEnd {
+	switch {
+	case complete:
+		return walkCompleted
+	case reads.sawProcessGone():
+		return walkProcessGone
+	default:
+		return walkUnanswered
+	}
+}
+
 // ancestryWalk is the shape resolveHostFromAncestry and
-// resolveHostBundleIDFromAncestry share: a host string, the PID it was found
-// at, and whether the walk reached its verdict rather than aborting.
-type ancestryWalk func(ctx context.Context, pid int) (host string, hostPID int, complete bool)
+// resolveHostBundleIDFromAncestry share, as the gate consumes it: a host string,
+// the PID it was found at, and how the walk ended.
+type ancestryWalk func(ctx context.Context, pid int) (host string, hostPID int, end walkEnd)
 
 // isKnownInteractiveHostVia is IsKnownInteractiveHost with both walks injected,
 // so the ORDER between them is testable — the pure isKnownInteractiveHostFrom
@@ -586,16 +645,16 @@ func isKnownInteractiveHostVia(ctx context.Context, pid int, walkTerm, walkBundl
 // hostGateFor is reached only with live ancestry, so counting there would leave
 // every outcome but the machine's own unreachable from a test. This function is
 // the innermost point that both performs one complete evaluation and can be
-// driven to any of the three by injecting the walks.
+// driven to any of them by injecting the walks.
 func hostGateOutcomeVia(ctx context.Context, pid int, walkTerm, walkBundle ancestryWalk) hostGateOutcome {
-	term, _, complete := walkTerm(ctx, pid)
+	term, _, end := walkTerm(ctx, pid)
 	bundleID := ""
-	if term == "" && complete {
+	if term == "" && end == walkCompleted {
 		// Only reached when walk 1 ran to a verdict, so this also skips the
 		// duplicate ps shellouts whenever the curated map already matched.
-		bundleID, _, complete = walkBundle(ctx, pid)
+		bundleID, _, end = walkBundle(ctx, pid)
 	}
-	return observeHostGate(hostGateOutcomeFrom(term, bundleID, complete))
+	return observeHostGate(hostGateOutcomeFrom(term, bundleID, end))
 }
 
 // isKnownInteractiveHostFrom is the pure decision behind IsKnownInteractiveHost,
@@ -608,31 +667,45 @@ func hostGateOutcomeVia(ctx context.Context, pid int, walkTerm, walkBundle ances
 // the allow-list check — one to decide, one to label — is the drift this repo
 // keeps paying for elsewhere, and there is no version of it that fails
 // visibly.
-func isKnownInteractiveHostFrom(termProgram, bundleID string, complete bool) bool {
-	return hostGateOutcomeFrom(termProgram, bundleID, complete).admits()
+func isKnownInteractiveHostFrom(termProgram, bundleID string, end walkEnd) bool {
+	return hostGateOutcomeFrom(termProgram, bundleID, end).admits()
 }
 
-// hostGateOutcomeFrom is the three-way classification the gate's bool is
-// derived from: which of the outcomes in hostgate.go this walk reached.
+// hostGateOutcomeFrom is the classification the gate's bool is derived from:
+// which of the outcomes in hostgate.go this walk reached.
 //
-// complete is checked first and on its own: when the walk aborted, termProgram
-// and bundleID are "" for a reason that says nothing about the host, so reading
-// the allow-list at all would be reading a value that was never observed. That
-// ordering is also what keeps the aborted arm distinguishable from the
-// completed-miss arm — both carry the same two empty strings, and the
-// completeness bit is the only thing separating a session admitted on no
-// evidence from #784 doing its job.
+// How the walk ENDED is checked first and on its own: when it did not reach a
+// verdict, termProgram and bundleID are "" for a reason that says nothing about
+// the host, so reading the allow-list at all would be reading a value that was
+// never observed. That ordering is also what keeps the two admitted-on-no-
+// evidence arms distinguishable from the completed-miss arm — all three carry
+// the same two empty strings, and how the walk ended is the only thing
+// separating a session admitted on no evidence from #784 doing its job.
+//
+// The two no-evidence arms are separated for the reason #1574 was filed:
+// admitted.walk_aborted is meant to be read beside #1534's per-probe non-answer
+// rows, and a walk stopped by an ANSWERED "no such process" made that row climb
+// on a machine whose probes were perfectly healthy. Both still admit.
+//
+// Written as a switch with the fallthrough on the no-evidence side, so an end
+// nobody classified admits rather than reaching the allow-list with values no
+// walk observed — the same polarity admits()'s own trailing return takes, and
+// TestEveryWalkEndDeclaresItsOutcome is what stops it becoming a place decisions
+// hide.
 //
 // Pure, and deliberately does not count: it is reached by a table test with
 // synthetic inputs and no walk behind it. hostGateOutcomeVia counts.
-func hostGateOutcomeFrom(termProgram, bundleID string, complete bool) hostGateOutcome {
-	if !complete {
-		return hostGateWalkAborted
+func hostGateOutcomeFrom(termProgram, bundleID string, end walkEnd) hostGateOutcome {
+	switch end {
+	case walkCompleted:
+		if termProgram != "" || knownEmbeddedHostBundleIDs[bundleID] {
+			return hostGateHostMatched
+		}
+		return hostGateNoKnownHost
+	case walkProcessGone:
+		return hostGateProcessGone
 	}
-	if termProgram != "" || knownEmbeddedHostBundleIDs[bundleID] {
-		return hostGateHostMatched
-	}
-	return hostGateNoKnownHost
+	return hostGateWalkAborted
 }
 
 // resolveTermProgramFromAncestry is a thin wrapper that discards the host
@@ -816,16 +889,41 @@ func findKittyWindowIDForPID(windows []kittyLsWindow, sessionPID int) string {
 // helpers. We shell out rather than parse `kinfo_proc` from sysctl because
 // ps already handles the comm-vs-argv-path distinction we need, and the
 // existing package is built around these bounded exec calls.
+//
+// The error says WHICH of three things happened, and since #1574 the first two
+// are not the same fact:
+//
+//   - probeAnswered false — `ps` was killed by its ceiling, never started, or
+//     failed to fork. Nothing was learned about pid. This is the branch #1492,
+//     #1513 and #1524 are all about, and the one whose downstream cost is an
+//     ancestry walk that cannot be completed.
+//   - errProcessGone — `ps` RAN and reported no such process. macOS `ps -p`
+//     exits 1 with empty output for a pid it cannot find (measured), which is
+//     the same fact processTTYVia's doc has always named as an ANSWER. It is
+//     wrapped rather than returned bare so the pid stays in the message.
+//   - anything else — `ps` answered with a line this daemon could not parse.
+//     Rare enough that no counter separates it, and it is stated here because
+//     it is the one remaining way an ANSWERED probe still ends a walk as if it
+//     had not answered.
+//
+// Both of the first two still end the walk: a process that is gone has no
+// ancestry left to read, so there is no verdict about its host either way. The
+// difference is reported, not acted on — errProcessGone's doc carries why
+// terminating as if at PID 1 was rejected.
 func readProcInfo(ctx context.Context, pid int) (ppid int, cmd string, err error) {
 	out, err := runProbe(ctx, probePSProcInfo, func(ctx context.Context) *exec.Cmd {
 		return exec.CommandContext(ctx, psPath, "-o", "ppid=,comm=", "-p", strconv.Itoa(pid))
 	})
-	if err != nil {
+	if !probeAnswered(err) {
 		return 0, "", fmt.Errorf("ps pid %d: %w", pid, err)
 	}
+	// Reached with err non-nil for the ordinary "no such process" exit 1, whose
+	// stdout is empty — the same empty output an (unobserved) exit 0 would
+	// produce for a pid that vanished between the fork and the read, so both
+	// arrive here as one fact rather than as two spellings of it.
 	line := strings.TrimSpace(string(out))
 	if line == "" {
-		return 0, "", fmt.Errorf("no process info for pid %d", pid)
+		return 0, "", fmt.Errorf("ps pid %d: %w", pid, errProcessGone)
 	}
 	// ppid is the first whitespace-separated token; everything after is the
 	// command path (which may itself contain spaces, e.g. "Visual Studio Code").

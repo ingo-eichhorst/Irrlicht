@@ -179,12 +179,15 @@ type ProbeHealthSnapshot struct {
 // HostGateOutcomeCount is one outcome of the #784 host-admission gate and how
 // often it happened (issue #1525).
 //
-// The gate has three outcomes on macOS and only one of them left any trace: a
+// The gate has four outcomes on macOS and only one of them left any trace: a
 // completed walk that found no allow-listed host logs a line (that is #784
-// working), while a completed walk that DID find one, and a walk that could not
-// be completed at all, were both silent. The second silence is the expensive
-// one — since #1513 an incomplete walk ADMITS, so the gate quietly stops gating
-// and a session admitted on no evidence has nothing anywhere to explain it.
+// working), while a completed walk that DID find one, and a walk that reached no
+// verdict at all, were both silent. The second silence is the expensive one —
+// since #1513 a walk that reached no verdict ADMITS, so the gate quietly stops
+// gating and a session admitted on no evidence has nothing anywhere to explain
+// it. Since #1574 that case is TWO rows, because the two causes call for
+// different responses: a probe that did not answer is a machine to look at, a
+// process that no longer exists is a race to expect.
 type HostGateOutcomeCount struct {
 	// Outcome is the token, e.g. "admitted.walk_aborted". Its prefix is the
 	// verdict, so the table reads without a legend.
@@ -769,6 +772,7 @@ func hostGateOutcomeCount(rows []HostGateOutcomeCount, outcome string) uint64 {
 // so a rename here can lose a note, and can never change an admission.
 const (
 	hostGateOutcomeWalkAborted  = "admitted.walk_aborted"
+	hostGateOutcomeProcessGone  = "admitted.process_gone"
 	hostGateOutcomeNotEvaluated = "admitted.not_evaluated"
 )
 
@@ -801,14 +805,17 @@ func hostGateAbortedWalkNote(rows []HostGateOutcomeCount) string {
 //
 // A walk aborts because readProcInfo or bundleIDForAppPath returned an error,
 // and both are bounded shellouts counted by ps.proc_info and plutil.bundle_id.
-// So aborted walks with ZERO recorded non-answers is not a contradiction to
-// puzzle over — it is #1574, which records that readProcInfo classifies an
-// ANSWERED "no such process" (`ps` exit 1 for a reaped pid) as a failure, so
-// the walk aborts while the probe counter records health. Saying so here is
-// what keeps a reader from concluding the counters are broken.
+// Until #1574 the two figures were not comparable at all: readProcInfo
+// classified an ANSWERED "no such process" (`ps` exit 1 for a reaped pid) as a
+// probe failure, so a walk could abort with the probe counter recording perfect
+// health, and this note existed mostly to stop a reader concluding the counters
+// were broken. That reason is gone — a gone process now reaches its own row —
+// so the note reports a comparison that is meant to hold, and says which way to
+// read it when it does not.
 func hostGateReconciliationNote(rows []HostGateOutcomeCount, probes []ProbeCount) string {
 	aborted := hostGateOutcomeCount(rows, hostGateOutcomeWalkAborted)
-	if aborted == 0 {
+	gone := hostGateOutcomeCount(rows, hostGateOutcomeProcessGone)
+	if aborted == 0 && gone == 0 {
 		return ""
 	}
 	var nonAnswers uint64
@@ -819,17 +826,21 @@ func hostGateReconciliationNote(rows []HostGateOutcomeCount, probes []ProbeCount
 	}
 	note := fmt.Sprintf("Cross-check: %d aborted walk(s) against %d unanswered ps.proc_info/plutil.bundle_id "+
 		"probe(s), the only two children a walk can abort on. ", aborted, nonAnswers)
-	if nonAnswers == 0 {
-		return note + "Zero non-answers with a non-zero abort count is NOT a broken counter: it is #1574, where " +
-			"readProcInfo treats an ANSWERED \"no such process\" (`ps` exits 1 for a pid it cannot find, e.g. one " +
-			"reaped mid-walk) as a probe failure, so the walk aborts while ps.proc_info records an answer. This " +
-			"bundle is evidence that path was taken."
+	if gone > 0 {
+		note += fmt.Sprintf("The %d admitted.process_gone walk(s) are NOT part of that comparison and need no "+
+			"non-answer behind them (#1574): there `ps` ANSWERED that a process in the chain no longer exists, which "+
+			"is the ordinary race between PID discovery and a short-lived agent process rather than a probe that "+
+			"failed. ", gone)
+	}
+	if aborted > 0 && nonAnswers == 0 {
+		return note + "Zero non-answers beside a non-zero ABORT count is worth a second look: since #1574 an " +
+			"answered \"no such process\" is counted as admitted.process_gone above, so an aborted walk means a `ps` " +
+			"or `plutil` was killed, never started or failed to fork — or, rarely, that a `ps` answered with a line " +
+			"this daemon could not parse, the one remaining way an answered probe still ends a walk."
 	}
 	return note + "The two are not required to be equal in either direction: one walk reads several ancestors, so " +
-		"one abort can follow several non-answers, and #1574 means an abort can also occur with no non-answer at " +
-		"all (an answered `ps` exit 1 for a reaped pid is classified as a failure by readProcInfo). Aborts far " +
-		"exceeding non-answers points at #1574; non-answers far exceeding aborts means the failing probe is mostly " +
-		"being run by something other than this gate."
+		"one abort can follow several non-answers, and a probe can be run by something other than this gate. " +
+		"Non-answers far exceeding aborts means the failing probe is mostly being run elsewhere."
 }
 
 // undeclaredHostGateOutcomesNote fires only when an evaluation named an outcome

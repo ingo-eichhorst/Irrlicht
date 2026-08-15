@@ -11,6 +11,7 @@ package processlifecycle
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -525,6 +526,35 @@ func tmuxSocketFromEnv(tmux string) string {
 // that sharing is arranged by cross-platform code (hostIdentityVia).
 type procInfoProbe func(ctx context.Context, pid int) (ppid int, cmd string, err error)
 
+// errProcessGone is the error a per-PID read returns when the read ANSWERED and
+// the answer was "there is no such process". It is part of this type's contract
+// rather than one implementation's private detail, which is why it lives here
+// beside procInfoProbe and not next to readProcInfo (osutil_darwin.go).
+//
+// It is #1574, and the asymmetry it removes was one file apart: processTTYVia
+// classifies its `ps` with probeAnswered and says in its own doc why an exit 1
+// must be an ANSWER — "a real 'no such process', not a probe that did not run —
+// so the allowlist form would turn every reaped pid into a non-answer and poison
+// hostIdentity's completeness for it" — while readProcInfo, eleven lines further
+// down, returned a bare error for exactly that exit and did what that sentence
+// warns against. #1534's counter then made the two visibly disagree: `ps` exit 1
+// is ANSWERED by probeOutcomeRule, so the #784 gate reported "admitted on a walk
+// I could not complete" beside a ps.proc_info row reporting perfect health
+// (measured in PR #1576).
+//
+// What it does NOT do is change a walk's verdict. A gone process still ends the
+// walk with no host and completeness false, because there is no ancestry left to
+// read; what it changes is that the daemon can now say WHY, and the one caller
+// that publishes the difference does (hostGateProcessGone, hostgate.go). The
+// alternative — terminating the walk as if at PID 1, i.e. a COMPLETED walk that
+// found no host — was considered and rejected: at the admission gate that turns
+// a reaped pid into a rejection, which SessionDetector caches per session id and
+// never evicts, so a short-lived agent whose process exits between PID discovery
+// and the walk would be hidden for the lifetime of the daemon. That is the harm
+// #1513 was filed about, and "this process is gone" is no more evidence of a
+// non-interactive host than "this probe was killed" is.
+var errProcessGone = errors.New("no such process")
+
 // procInfoAnswer is one ANSWERED per-PID read. Only answers are representable:
 // there is no error field, which is the admission rule of ancestryReads made
 // structural rather than remembered.
@@ -569,6 +599,18 @@ type procInfoAnswer struct {
 type ancestryReads struct {
 	read procInfoProbe
 	seen map[int]procInfoAnswer
+	// gone records that a read in THIS resolve was answered "there is no such
+	// process" (#1574). It is the REASON behind whatever completeness bit the
+	// walks report, and it is kept here because this memo is the only object
+	// that sees every per-PID read of one evaluation — the two walks each
+	// return a bare bool, and three callers consume it while only one (the #784
+	// gate) acts on the difference.
+	//
+	// One flag rather than a per-read record, because a read that fails ends its
+	// walk immediately and walk 2 runs only when walk 1 both completed and found
+	// nothing: at most one read fails per resolve, so this flag IS that
+	// failure's reason rather than a summary of several.
+	gone bool
 }
 
 // newAncestryReadsVia builds a per-resolve memo over an injected read. The
@@ -593,16 +635,33 @@ func (r *ancestryReads) probe(ctx context.Context, pid int) (ppid int, cmd strin
 	}
 	ppid, cmd, err = r.read(ctx, pid)
 	if err != nil {
+		// #1574: record WHICH kind of failure this was before returning it. A
+		// gone process is an ANSWER — the caller that publishes gate outcomes
+		// reads this so its "walk aborted" row keeps meaning "a child did not
+		// answer" — while everything else about the failure path is unchanged.
+		if errors.Is(err, errProcessGone) {
+			r.gone = true
+		}
 		// Never memoize a non-answer. A `ps` killed by its ceiling says
 		// nothing about this PID, and storing that would let one loaded moment
 		// abort both walks instead of one — turning a transient into a verdict
 		// for the whole resolve. #1524 drew this line for the plutil probe;
 		// this is the same line one shellout over.
+		//
+		// A gone process is not memoized either, and that is deliberate rather
+		// than an oversight: what would be stored is an absence, the walks
+		// re-probe it at most once more, and the PID could be recycled between
+		// the two reads — the hazard this memo's lifetime exists to bound.
 		return 0, "", err
 	}
 	r.seen[pid] = procInfoAnswer{ppid: ppid, cmd: cmd}
 	return ppid, cmd, nil
 }
+
+// sawProcessGone reports whether any read in this resolve was answered "there is
+// no such process". Read AFTER the walks have run, by the one caller that
+// distinguishes the two ways a walk can fail to reach a verdict (#1574).
+func (r *ancestryReads) sawProcessGone() bool { return r.gone }
 
 // ancestryProbe resolves pid's process ancestry via resolveHostFromAncestry at
 // most once, caching the result for repeat calls. ReadLauncherEnv's

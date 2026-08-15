@@ -4,6 +4,7 @@ package processlifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -350,30 +351,31 @@ func TestResolveTermProgramFromAncestry_Self(t *testing.T) {
 // exclusion (#784) and the Obsidian carve-out (#728) are both deterministic,
 // not dependent on whatever happens to have launched `go test`.
 //
-// The last two rows are the same pair of facts as the two live-process tests
-// further down, restated at the pure layer: the empty ancestry means "read, and
-// nothing there" when complete and "not read" when not, and only the second
-// admits (#1513). Every other row carries complete=true, which is what keeps
-// the fail-open arm from swallowing the allow-list.
+// The last three rows are the same facts as the live-process tests further
+// down, restated at the pure layer: the empty ancestry means "read, and nothing
+// there" when the walk completed and "not read" when it did not, and only the
+// second and third admit (#1513, #1574). Every other row carries walkCompleted,
+// which is what keeps the fail-open arm from swallowing the allow-list.
 func TestIsKnownInteractiveHostFrom(t *testing.T) {
 	tests := []struct {
 		name                 string
 		termProgram          string
 		bundleID             string
-		complete             bool
+		end                  walkEnd
 		wantKnownInteractive bool
 	}{
-		{"curated terminal", "iTerm.app", "", true, true},
-		{"curated IDE", "vscode", "", true, true},
-		{"obsidian via generic top-level-app fallback", "", "md.obsidian", true, true},
-		{"codexbar is a real .app but not allow-listed", "", "com.steipete.codexbar", true, false},
-		{"no ancestry resolved at all", "", "", true, false},
-		{"aborted walk resolved nothing and proves nothing", "", "", false, true},
+		{"curated terminal", "iTerm.app", "", walkCompleted, true},
+		{"curated IDE", "vscode", "", walkCompleted, true},
+		{"obsidian via generic top-level-app fallback", "", "md.obsidian", walkCompleted, true},
+		{"codexbar is a real .app but not allow-listed", "", "com.steipete.codexbar", walkCompleted, false},
+		{"no ancestry resolved at all", "", "", walkCompleted, false},
+		{"unanswered walk resolved nothing and proves nothing", "", "", walkUnanswered, true},
+		{"gone process resolved nothing and proves nothing either", "", "", walkProcessGone, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isKnownInteractiveHostFrom(tc.termProgram, tc.bundleID, tc.complete); got != tc.wantKnownInteractive {
-				t.Errorf("isKnownInteractiveHostFrom(%q, %q, complete=%v) = %v, want %v", tc.termProgram, tc.bundleID, tc.complete, got, tc.wantKnownInteractive)
+			if got := isKnownInteractiveHostFrom(tc.termProgram, tc.bundleID, tc.end); got != tc.wantKnownInteractive {
+				t.Errorf("isKnownInteractiveHostFrom(%q, %q, end=%v) = %v, want %v", tc.termProgram, tc.bundleID, tc.end, got, tc.wantKnownInteractive)
 			}
 		})
 	}
@@ -808,6 +810,13 @@ func TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown(t *testing.T) 
 // loaded machine takes. The timeout is the cause the issue is about; a reaped
 // PID is the one cause of that class a test can arrange deterministically.
 //
+// Since #1574 the two are still the same branch inside the WALKS and no longer
+// the same fact underneath them: a reaped pid's `ps` ANSWERS "no such process"
+// (errProcessGone) where a ceiling kill answers nothing. Any test here that
+// turns on WHICH of the two happened — the gate's outcome row, the log line's
+// reason — must say so; the ones that turn only on the walk being incomplete
+// are unaffected, which is why the two #1492 tests below still read this way.
+//
 // The policy difference is the reason this wrapper exists rather than a second
 // spawn-and-reap: its caller skips on a recycled PID, which for these tests
 // would let the whole family pass vacuously. macOS allocates PIDs ascending and
@@ -853,33 +862,128 @@ func TestResolveHostBundleIDFromAncestry_UnreadableProcessIsNotAMiss(t *testing.
 
 // TestIsKnownInteractiveHost_AbortedWalkAdmits is #1513's defect test, and it
 // is the two tests above carried up to the caller that acts on their verdict.
-// Both rows resolve no host at all; the completeness bit is the only thing
-// separating them.
+// Both rows resolve no host at all; whether the walk reached a verdict is the
+// only thing separating them.
 //
-// A reaped PID's first readProcInfo fails, which is the branch a `ps` that
-// blows its 2s ceiling under load takes. Before #1513 that returned false, and
+// A reaped PID's first readProcInfo fails. Before #1513 that returned false, and
 // because this function gates session ADMISSION (#784) the result was that a
 // legitimate agent session was silently declined — not, as in #1492, that a
-// click target degraded. An unreadable probe is no evidence either way, so it
-// fails OPEN: the direction core/pkg/cliversion already takes for a CLI version
-// it cannot read, and the direction this very function's linux/other stubs
-// already take by returning true unconditionally.
+// click target degraded. A walk that reached no verdict is no evidence either
+// way, so it fails OPEN: the direction core/pkg/cliversion already takes for a
+// CLI version it cannot read, and the direction this very function's
+// linux/other stubs already take by returning true unconditionally.
+//
+// #1574 split the CAUSE and deliberately not the VERDICT. A reaped pid now
+// reaches admitted.process_gone rather than admitted.walk_aborted, and this
+// assertion is unchanged, because "this process is gone" is no more evidence of
+// a non-interactive host than "this probe was killed" is — and rejecting it
+// would cost the session permanently, SessionDetector caching the rejection per
+// session id and never evicting. Terminating the walk as if at PID 1, which is
+// what reparenting produces and what #1574 named as the obvious candidate, is
+// exactly the change that would redden this line.
 func TestIsKnownInteractiveHost_AbortedWalkAdmits(t *testing.T) {
 	if !IsKnownInteractiveHost(exitedPID(t)) {
-		t.Error("a walk that could not be completed is not evidence of a non-interactive host — it must not reject the session")
+		t.Error("a walk that reached no verdict is not evidence of a non-interactive host — it must not reject the session")
 	}
 }
 
-// walk builds a fixed-verdict ancestryWalk, and aborted/finished name its third
-// value at the call site — every test of this seam turns on which of the two a
-// walk returned, and a bare `true` there reads as "found a host".
-func walk(host string, complete bool) ancestryWalk {
-	return func(context.Context, int) (string, int, bool) { return host, 0, complete }
+// TestReadProcInfoTellsAnAnsweredNoSuchProcessFromAProbeThatDidNotRun is
+// #1574's defect test at the function the issue is about.
+//
+// processTTYVia, eleven lines up in the same file, classifies its `ps` with
+// probeAnswered and its doc says why: an exit 1 for a pid it cannot find is "a
+// real 'no such process', not a probe that did not run — so the allowlist form
+// would turn every reaped pid into a non-answer". readProcInfo returned a bare
+// error for that exit, which is what that sentence warns against, and #1534's
+// counter then made the two visibly disagree (PR #1576).
+//
+// Two rows, and the live one is the point: a REAL `ps`, a real exit 1, and the
+// real classification, because a fabricated error cannot show that this helper
+// agrees with shellout.Answered about what an exit 1 is.
+func TestReadProcInfoTellsAnAnsweredNoSuchProcessFromAProbeThatDidNotRun(t *testing.T) {
+	_, _, err := readProcInfo(noAggregateBudget(), exitedPID(t))
+	if err == nil {
+		t.Fatal("a reaped pid has no ancestor to report, so the read must still fail — the walk has nothing to continue with")
+	}
+	if !errors.Is(err, errProcessGone) {
+		t.Errorf("readProcInfo of a reaped pid returned %v, which no caller can tell from a `ps` that never ran — that is #1574, and it is what makes the #784 gate report an unanswerable probe on a machine whose probes are healthy", err)
+	}
+
+	// The vacuity guard, and the row that would fail if errProcessGone were
+	// returned for every failure: a live pid answers, and an answer is neither.
+	ppid, cmd, err := readProcInfo(noAggregateBudget(), os.Getpid())
+	if err != nil || ppid <= 0 || cmd == "" {
+		t.Errorf("readProcInfo of the running test binary = (%d, %q, %v); want a real ancestor — this row is what stops the one above from passing on a helper that fails for everything", ppid, cmd, err)
+	}
 }
 
+// TestWalkEndOfNamesWhyAnIncompleteWalkStopped pins the join between the two
+// halves of #1574: the walks report a bare completeness bit, the per-resolve
+// read memo carries the reason, and this is where they are put back together for
+// the one caller that publishes the difference.
+//
+// The completed row is not a formality. walkEndOf is asked its question AFTER
+// both walks have run over one shared memo, so a resolve whose first walk read a
+// gone ancestor and whose second completed must still report completed —
+// otherwise a session that resolved its host perfectly well would be filed as an
+// admission on no evidence.
+func TestWalkEndOfNamesWhyAnIncompleteWalkStopped(t *testing.T) {
+	ctx := context.Background()
+	answering := func(int, string) *ancestryReads {
+		table := newScriptedProcTable()
+		table.rows[4242] = procInfoAnswer{ppid: 1, cmd: "/sbin/launchd"}
+		return newAncestryReadsVia(table.read)
+	}
+
+	live := answering(4242, "/sbin/launchd")
+	if _, _, err := live.probe(ctx, 4242); err != nil {
+		t.Fatalf("probe of a live pid: %v", err)
+	}
+	if got := walkEndOf(true, live); got != walkCompleted {
+		t.Errorf("walkEndOf(complete) = %v, want walkCompleted", got)
+	}
+
+	goneReads := newAncestryReadsVia(newScriptedProcTable().read)
+	if _, _, err := goneReads.probe(ctx, 4242); !errors.Is(err, errProcessGone) {
+		t.Fatalf("probe of a pid the table does not carry: %v", err)
+	}
+	if got := walkEndOf(false, goneReads); got != walkProcessGone {
+		t.Errorf("walkEndOf(incomplete, after an answered \"no such process\") = %v, want walkProcessGone — this is the whole of #1574 at the gate", got)
+	}
+	// The same memo, still holding the gone flag, must not turn a COMPLETED walk
+	// into an admission on no evidence.
+	if got := walkEndOf(true, goneReads); got != walkCompleted {
+		t.Errorf("walkEndOf(complete, after an answered \"no such process\") = %v, want walkCompleted — walk 2 completing after walk 1 read a gone ancestor is a resolve with a verdict", got)
+	}
+
+	killed := newScriptedProcTable()
+	killed.rows[4242] = procInfoAnswer{ppid: 1, cmd: "/sbin/launchd"}
+	killed.fails[4242] = 1
+	killedReads := newAncestryReadsVia(killed.read)
+	if _, _, err := killedReads.probe(ctx, 4242); err == nil {
+		t.Fatal("a killed `ps` must stay a non-answer")
+	}
+	if got := walkEndOf(false, killedReads); got != walkUnanswered {
+		t.Errorf("walkEndOf(incomplete, after a killed `ps`) = %v, want walkUnanswered — reporting this as a gone process tells a reader there is a race where there is a probe that is dying", got)
+	}
+}
+
+// walk builds a fixed-verdict ancestryWalk, and aborted/gone/finished name its
+// third value at the call site — every test of this seam turns on which of them
+// a walk returned, and a bare value there reads as "found a host".
+func walk(host string, end walkEnd) ancestryWalk {
+	return func(context.Context, int) (string, int, walkEnd) { return host, 0, end }
+}
+
+// These were `false` and `true` until #1574 made how a walk ended a three-valued
+// fact. The two existing names keep their spellings at every call site on
+// purpose: `walk("", aborted)` still means the same thing, and the rows that
+// were written before there was a third value are still asserting what they
+// asserted, rather than being silently re-pointed at the new one.
 const (
-	aborted  = false
-	finished = true
+	aborted  = walkUnanswered
+	gone     = walkProcessGone
+	finished = walkCompleted
 )
 
 // TestIsKnownInteractiveHostVia_AbortedFirstWalkDoesNotDeferToTheSecond pins
@@ -1680,8 +1784,9 @@ func TestResolveHostBundleIDVia_UnanswerableBundleProbeIsNotAMiss(t *testing.T) 
 func TestIsKnownInteractiveHost_PlutilNonAnswerAdmits(t *testing.T) {
 	walk1Finished := walk("", finished)
 	walk2 := func(probe bundleIDProbe) ancestryWalk {
-		return func(ctx context.Context, pid int) (string, int, bool) {
-			return resolveHostBundleIDVia(ctx, pid, obsidianChain(), probe)
+		return func(ctx context.Context, pid int) (string, int, walkEnd) {
+			id, hostPID, complete := resolveHostBundleIDVia(ctx, pid, obsidianChain(), probe)
+			return id, hostPID, unansweredOr(complete)
 		}
 	}
 	tests := []struct {
@@ -1727,10 +1832,27 @@ func TestIsKnownInteractiveHost_PlutilCeilingAdmitsEndToEnd(t *testing.T) {
 		return bundleIDVia(ctx, appPath, stalledPlistCmd)
 	}
 	walk1Finished := walk("", finished)
-	walk2 := func(ctx context.Context, pid int) (string, int, bool) {
-		return resolveHostBundleIDVia(ctx, pid, obsidianChain(), stalled)
+	walk2 := func(ctx context.Context, pid int) (string, int, walkEnd) {
+		id, hostPID, complete := resolveHostBundleIDVia(ctx, pid, obsidianChain(), stalled)
+		return id, hostPID, unansweredOr(complete)
 	}
 	if !isKnownInteractiveHostVia(noAggregateBudget(), 100, walk1Finished, walk2) {
 		t.Error("a plutil that blew its own ceiling declined a legitimate Obsidian-hosted session (#1524)")
 	}
+}
+
+// unansweredOr adapts a walk that still returns the plain completeness bit onto
+// walkEnd, for the two tests above whose only failure mode is a `plutil` that
+// did not answer.
+//
+// It is deliberately NOT walkEndOf (osutil_darwin.go): that one reads the reason
+// off the per-resolve read memo, and these walks are driven by obsidianChain(),
+// a procInfo probe that answers for every pid — so a false bit here can only be
+// the plutil non-answer the rows are about, and naming walkUnanswered says which
+// end is under test rather than deriving it from a memo that saw nothing.
+func unansweredOr(complete bool) walkEnd {
+	if complete {
+		return walkCompleted
+	}
+	return walkUnanswered
 }

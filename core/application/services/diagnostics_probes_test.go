@@ -59,9 +59,10 @@ func probeHealthFixture() ProbeHealthSnapshot {
 			{Outcome: "rejected.no_known_host", Count: 4},
 			{Outcome: "admitted.walk_aborted", Count: 3},
 			{Outcome: "admitted.host_matched", Count: 11},
+			{Outcome: "admitted.process_gone", Count: 2},
 			{Outcome: "admitted.not_evaluated", Count: 0},
 		},
-		HostGateOutcomeRule: "a walk that ran and found an allow-listed host ADMITS; a walk that could not be completed ADMITS on no evidence (#1513)",
+		HostGateOutcomeRule: "a walk that ran and found an allow-listed host ADMITS; a walk stopped by a child that did not ANSWER ADMITS on no evidence (#1513); a walk stopped because `ps` answered that a process in the chain no longer exists ADMITS on no evidence too, in its own row (#1574)",
 	}
 }
 
@@ -201,14 +202,14 @@ func TestProbesBundleOmitsCountsWhenNotCollectedInDaemon(t *testing.T) {
 // three hook diagnoses.
 
 // TestProbesBundleReportsHostGateOutcomes covers the daemon-collected form: the
-// three-way answer the gate reached, which before #1525 was reported by nothing
+// multi-way answer the gate reached, which before #1525 was reported by nothing
 // except in the one case that rejected.
 func TestProbesBundleReportsHostGateOutcomes(t *testing.T) {
 	got := probesJSON(t, buildTestServiceWithProbes(t, probeHealthFixture))
 
 	rows, _ := got["host_gate"].([]any)
-	if len(rows) != 4 {
-		t.Fatalf("host_gate has %d rows, want 4: %v — every declared outcome is published, including one that never happened", len(rows), got["host_gate"])
+	if len(rows) != 5 {
+		t.Fatalf("host_gate has %d rows, want 5: %v — every declared outcome is published, including one that never happened", len(rows), got["host_gate"])
 	}
 	first, _ := rows[0].(map[string]any)
 	if first["outcome"] != "admitted.host_matched" {
@@ -221,11 +222,14 @@ func TestProbesBundleReportsHostGateOutcomes(t *testing.T) {
 		count, _ := r["count"].(float64)
 		byOutcome[outcome] = count
 	}
-	// The three outcomes are three numbers, not one. A single "gate ran N
-	// times" scalar is what this section exists to replace.
+	// The outcomes are separate numbers, not one. A single "gate ran N times"
+	// scalar is what this section exists to replace — and since #1574 that
+	// includes the two admissions on no evidence, which have different causes
+	// and different things to do about them.
 	for outcome, want := range map[string]float64{
 		"admitted.host_matched":  11,
 		"admitted.walk_aborted":  3,
+		"admitted.process_gone":  2,
 		"rejected.no_known_host": 4,
 		"admitted.not_evaluated": 0,
 	} {
@@ -238,7 +242,7 @@ func TestProbesBundleReportsHostGateOutcomes(t *testing.T) {
 	}
 
 	note, _ := got["host_gate_aborted_walk_note"].(string)
-	for _, want := range []string{"3 of 18", "no evidence", "#1513", "rejected.no_known_host", "host-gate"} {
+	for _, want := range []string{"3 of 20", "no evidence", "#1513", "rejected.no_known_host", "host-gate"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("the aborted-walk note does not mention %q — it must give the count against its denominator, say what an abort means, and name the OTHER row it is not: %q", want, note)
 		}
@@ -249,12 +253,14 @@ func TestProbesBundleReportsHostGateOutcomes(t *testing.T) {
 // #1525 asks for, and the reason both figures had to land in one artifact.
 //
 // An aborted walk is caused by a bounded child that did not answer, so the two
-// numbers ought to correspond — and #1574 is the recorded reason they can fail
-// to: readProcInfo treats an ANSWERED "no such process" as a failure, so the
-// walk aborts while ps.proc_info records health. A reader who is not told that
-// concludes the counters are broken.
+// numbers ought to correspond. Until #1574 they could not: readProcInfo treated
+// an ANSWERED "no such process" as a failure, so a walk aborted while
+// ps.proc_info recorded health, and this note's job was to stop a reader
+// concluding the counters were broken. Its job now is the opposite — the
+// comparison is meant to hold, so an abort count with nothing under it is
+// something to look at rather than something to excuse.
 func TestProbesBundleReconcilesAbortedWalksWithProbeNonAnswers(t *testing.T) {
-	t.Run("aborts with no recorded non-answers name #1574", func(t *testing.T) {
+	t.Run("aborts with no recorded non-answers are no longer excused by #1574", func(t *testing.T) {
 		got := probesJSON(t, buildTestServiceWithProbes(t, func() ProbeHealthSnapshot {
 			return ProbeHealthSnapshot{
 				Probes:   []ProbeCount{{Probe: "ps.proc_info", Answered: 900}, {Probe: "plutil.bundle_id", Answered: 40}},
@@ -262,9 +268,27 @@ func TestProbesBundleReconcilesAbortedWalksWithProbeNonAnswers(t *testing.T) {
 			}
 		}))
 		note, _ := got["host_gate_reconciliation_note"].(string)
-		for _, want := range []string{"6 aborted walk(s)", "0 unanswered", "#1574", "readProcInfo"} {
+		for _, want := range []string{"6 aborted walk(s)", "0 unanswered", "#1574", "second look", "could not parse"} {
 			if !strings.Contains(note, want) {
 				t.Errorf("the reconciliation note does not mention %q: %q", want, note)
+			}
+		}
+		if strings.Contains(note, "NOT a broken counter") {
+			t.Errorf("the note still tells a reader that aborts beside zero non-answers are expected — that was true only while readProcInfo mis-classified an answered \"no such process\" (#1574), and a stale reassurance here is worse than none: %q", note)
+		}
+	})
+
+	t.Run("a gone-process row explains itself without a non-answer behind it", func(t *testing.T) {
+		got := probesJSON(t, buildTestServiceWithProbes(t, func() ProbeHealthSnapshot {
+			return ProbeHealthSnapshot{
+				Probes:   []ProbeCount{{Probe: "ps.proc_info", Answered: 900}, {Probe: "plutil.bundle_id", Answered: 40}},
+				HostGate: []HostGateOutcomeCount{{Outcome: "admitted.process_gone", Count: 4}},
+			}
+		}))
+		note, _ := got["host_gate_reconciliation_note"].(string)
+		for _, want := range []string{"4 admitted.process_gone", "NOT part of that comparison", "#1574"} {
+			if !strings.Contains(note, want) {
+				t.Errorf("a bundle whose gate admitted on gone processes and aborted on nothing must still explain the row it does carry — a reader seeing an admission row with zero non-answers underneath it and no note draws the #1574 conclusion the fix removed: %q", note)
 			}
 		}
 	})
