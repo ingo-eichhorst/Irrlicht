@@ -12,7 +12,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"irrlicht/core/domain/session"
 )
@@ -336,13 +335,19 @@ func spawnPaneSleeperWithEnv(t *testing.T, env []string) int {
 		t.Fatalf("helper pid %q: %v", out, err)
 	}
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
-	// Give the kernel a beat to publish the exec'd env to sysctl, and the
-	// shell a beat to exit so the reparenting has actually happened.
-	time.Sleep(120 * time.Millisecond)
-	if ppid, _, err := readProcInfo(context.Background(), pid); err != nil || ppid != 1 {
-		t.Fatalf("helper %d has ppid %d (err %v), want 1: this fixture only stands in for a "+
-			"tmux pane while its ancestry terminates at init", pid, ppid, err)
-	}
+	// Poll for the two conditions this fixture's claim rests on, rather than
+	// sleeping a fixed 120ms and hard-failing if they have not happened yet
+	// (#1586: 120ms was enough on an idle machine and a guarantee on none, on
+	// the hot path of the family this file is part of, where a timing flake is
+	// indistinguishable from a regression in whatever is under review).
+	//
+	// Both, and in this order, because the sleep was covering a different one
+	// from the hard-fail — see waitForLauncherEnv for the measurement. The env
+	// is the condition that is genuinely pending here; the reparenting is what
+	// makes the pid a faithful stand-in for a pane, and its `ps` is what a
+	// loaded machine starves.
+	waitForLauncherEnv(t, pid, cmd.Env)
+	waitForReparentToInit(t, pid)
 	return pid
 }
 

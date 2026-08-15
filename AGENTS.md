@@ -113,6 +113,26 @@ were added before they could catch anything and carry the weaker evidence that t
 it plants (below), and the harness built on #1390's lesson from the start, carrying a
 deliberate no-match row that must report `STALE` (#1450).
 
+**A fixture that waits by SLEEPING has not observed what it waits for, and the
+assertion after the sleep is not evidence that it has.** Poll the condition to a
+generous deadline and fail with the elapsed time: that turns "the machine was busy"
+into a slower pass while a thing that genuinely never happens still fails loudly —
+the property a longer sleep weakens. #1586's tmux fixture is the shape, and the
+reason to MEASURE rather than reason about which condition is pending: it slept a
+fixed 120ms and then hard-failed unless the helper had been reparented to init, and
+those were **not the same condition**. Measured over 40 runs, the reparenting was
+already complete on the first `ps` every time, while the env the test actually reads
+was readable on the first sysctl *none* of the time (~1.2ms p50) — it only lands with
+the exec, since until then the pid is still the Apple-signed, env-stripped `/bin/sh`.
+So the sleep was covering a condition nothing checked, the hard-fail was checking one
+that never failed for its stated reason, and polling only the checked one would have
+replaced a 120ms margin with the duration of one `ps`. The poll is
+`awaitFixtureCondition` (`processlifecycle/osutil_darwin_test.go`); each caller carries
+a vacuity guard, because a fixture handed nothing to wait for reports ready having read
+nothing. This is a rule about the shape, not a known-flake register: after the fix that
+test is not expected to flake, and recording it as one would be a dismissal that stops
+the next agent looking.
+
 **A validator that cannot parse its input checks MORE, never less.** An input it
 cannot read with confidence is neither a quiet pass nor a skip: it is the case where
 the validator has the least idea what it is looking at, so it is the last place to
