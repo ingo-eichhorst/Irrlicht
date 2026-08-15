@@ -61,7 +61,7 @@ func processTTYVia(ctx context.Context, pid int, build shelloutCmd) (tty string,
 		// gives an empty appPath.
 		return "", true
 	}
-	out, err := runProbe(ctx, build)
+	out, err := runProbe(ctx, probePSTTY, build)
 	if !probeAnswered(err) {
 		return "", false
 	}
@@ -290,6 +290,12 @@ func (m *bundleIDMemo) record(appPath, id string) {
 // the consumer does, not because one of the two is a mistake.
 func (m *bundleIDMemo) resolve(ctx context.Context, appPath string, probe bundleIDProbe) (string, error) {
 	if id, hit := m.lookup(appPath); hit {
+		// #1534, and the sibling of ancestryReads.probe's line: a hit starts no
+		// child, so the counter at runProbe cannot see it. Counting it here is
+		// what keeps "answered" from silently meaning "answered, of the ones
+		// that were not memoized" — #1544 flagged exactly this in its own
+		// hand-back.
+		observeProbeMemoHit(probePlutilBundleID)
 		return id, nil
 	}
 	id, err := probe(ctx, appPath)
@@ -336,7 +342,7 @@ func bundleIDVia(ctx context.Context, appPath string, build bundleIDCmd) (string
 		return "", nil
 	}
 	plist := appPath + "/Contents/Info.plist"
-	out, err := runProbe(ctx, build(plist))
+	out, err := runProbe(ctx, probePlutilBundleID, build(plist))
 	if err != nil {
 		// No answeredExitCodes: for plutil ANY normal exit is an answer, which
 		// is the empty-variadic form's whole reason for existing — see
@@ -683,7 +689,7 @@ func kittyWindowIDForPIDVia(ctx context.Context, socket string, sessionPID int, 
 	if kittenPath == "" || socket == "" || sessionPID <= 0 {
 		return "", true
 	}
-	out, err := runProbe(ctx, build)
+	out, err := runProbe(ctx, probeKittenWindow, build)
 	if !probeAnswered(err) {
 		return "", false
 	}
@@ -752,7 +758,7 @@ func findKittyWindowIDForPID(windows []kittyLsWindow, sessionPID int) string {
 // ps already handles the comm-vs-argv-path distinction we need, and the
 // existing package is built around these bounded exec calls.
 func readProcInfo(ctx context.Context, pid int) (ppid int, cmd string, err error) {
-	out, err := runProbe(ctx, func(ctx context.Context) *exec.Cmd {
+	out, err := runProbe(ctx, probePSProcInfo, func(ctx context.Context) *exec.Cmd {
 		return exec.CommandContext(ctx, psPath, "-o", "ppid=,comm=", "-p", strconv.Itoa(pid))
 	})
 	if err != nil {
@@ -825,7 +831,7 @@ func herdrClientPIDs(ctx context.Context, socketPath string) (pids []int, probed
 	if _, err := os.Stat(logPath); err != nil {
 		return nil, false
 	}
-	out, err := runProbe(ctx, func(ctx context.Context) *exec.Cmd {
+	out, err := runProbe(ctx, probeLsofHerdrClients, func(ctx context.Context) *exec.Cmd {
 		return exec.CommandContext(ctx, lsofPath, logPath)
 	})
 	if !lsofProbeRan(err) {
@@ -1034,9 +1040,18 @@ func resolveClientHostIdentityVia(ctx context.Context, pids []int, identify host
 			// an expired deadline reaches them anyway, but only this check
 			// turns "every probe failed" into "we stopped looking", and only
 			// this check makes the aggregate a bound a caller can observe.
+			//
+			// #1558/#1534: counted here because this branch is invisible
+			// everywhere else. It produces the same (nil, false) a failed lsof
+			// produces, so on a machine where the scan is chronically
+			// slow-but-successful a herdr host would never resolve and nothing
+			// would say so. ONE event per loop, not one per candidate left —
+			// the break means the loop never learns how many those were.
+			observeHerdrCandidatesAbandoned()
 			readAll = false
 			break
 		}
+		observeHerdrCandidateProbed()
 		host, complete := identify(ctx, pid)
 		if host.HerdrPaneID != "" {
 			// A candidate that is itself a multiplexer pane has no window of

@@ -257,6 +257,7 @@ func assertBundleEndpoint(t *testing.T, client *http.Client, url string) {
 		t.Errorf("bundle from %s missing version.txt", url)
 	}
 	assertHooksCollectedInDaemon(t, url, entries["hooks.json"])
+	assertProbesCollectedInDaemon(t, url, entries["probes.json"])
 }
 
 // readBundleEntries decodes the gzip+tar bundle into name → contents.
@@ -305,6 +306,39 @@ func assertHooksCollectedInDaemon(t *testing.T, url string, raw []byte) {
 	}
 	if hooks.CollectedFrom != "daemon" {
 		t.Errorf("hooks.json collected_from = %q, want \"daemon\" — the running daemon did not wire its hook counters into the bundle", hooks.CollectedFrom)
+	}
+}
+
+// assertProbesCollectedInDaemon checks that the LIVE daemon's bundle reports
+// its probe counters as daemon-collected (issue #1534).
+//
+// It is the twin of assertHooksCollectedInDaemon and exists for the same
+// reason: the service's nil-ProbeHealth branch is a perfectly valid, perfectly
+// quiet output, so a daemon that forgot to wire liveProbeHealth would emit the
+// CLI form here and no unit test anywhere would notice. It is the only thing
+// that proves startup.go passes it.
+func assertProbesCollectedInDaemon(t *testing.T, url string, raw []byte) {
+	t.Helper()
+	if len(raw) == 0 {
+		t.Fatalf("bundle from %s missing probes.json", url)
+	}
+	var probes struct {
+		CollectedFrom string `json:"collected_from"`
+		Probes        []struct {
+			Probe string `json:"probe"`
+		} `json:"probes"`
+	}
+	if err := json.Unmarshal(raw, &probes); err != nil {
+		t.Fatalf("probes.json is not valid JSON: %v\n%s", err, raw)
+	}
+	if probes.CollectedFrom != "daemon" {
+		t.Errorf("probes.json collected_from = %q, want \"daemon\" — the running daemon did not wire its probe counters into the bundle", probes.CollectedFrom)
+	}
+	// A daemon form with no rows would satisfy the field above while carrying
+	// no measurement at all: the snapshot publishes every declared kind, so an
+	// empty list means the conversion in liveProbeHealth dropped them.
+	if len(probes.Probes) == 0 {
+		t.Errorf("probes.json reports itself as daemon-collected but carries no probe rows — every declared kind is published, including one that never ran")
 	}
 }
 

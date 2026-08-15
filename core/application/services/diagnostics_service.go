@@ -51,6 +51,7 @@ type DiagnosticsService struct {
 	version        string
 	paths          DiagnosticsPaths
 	hookHealth     func() HookHealthSnapshot
+	probeHealth    func() ProbeHealthSnapshot
 }
 
 // UnknownHookEvent is one (adapter, event name) pair a hook receiver was sent
@@ -106,6 +107,61 @@ type HookHealthSnapshot struct {
 	EntryReverification HookEntryReverifySnapshot
 }
 
+// ProbeCount is one bounded child process the daemon runs, with how often it
+// ANSWERED, how often it did not, and how often a memo answered for it without
+// starting a child at all (issue #1534).
+//
+// Six issues in this family — #1485, #1492, #1513, #1524, #1533, #1537 — each
+// fixed one probe that collapsed "I could not look" into "I looked and there
+// was nothing", and each closed with the same footer: nothing measures how
+// often it actually happens. Three of them fail OPEN, so a probe failing
+// constantly and one that never fails produce the same observable daemon.
+// Unanswered is the number that was missing.
+type ProbeCount struct {
+	// Probe is the per-call-site kind token, e.g. "lsof.herdr_clients". Per
+	// call site rather than per tool: `lsof` answers three different questions
+	// here and `ps` two, and a count that cannot say WHICH stopped being
+	// answered is the single-scalar failure #1364 already paid for.
+	Probe string `json:"probe"`
+	// Answered is how many children ran to a normal exit.
+	Answered uint64 `json:"answered"`
+	// Unanswered is how many were killed (the 2s ceiling, an OOM kill), never
+	// started, or failed to fork.
+	Unanswered uint64 `json:"unanswered"`
+	// MemoHits is how many calls a memo served without starting a child
+	// (#1544). Only two probes have a memo, so a zero here is a finding of
+	// nothing rather than an inability to look.
+	MemoHits uint64 `json:"memo_hits"`
+}
+
+// ProbeHealthSnapshot is the probe counters at one instant.
+//
+// Like HookHealthSnapshot it is a plain value handed in by the composition
+// root, because application/services must not import adapters/inbound — the
+// hexagonal rule core/architecture_test.go enforces. The daemon converts
+// processlifecycle's snapshot into this; --diagnose supplies nothing.
+type ProbeHealthSnapshot struct {
+	// Probes is every declared probe kind, including one that never ran: a
+	// zero row is itself evidence (a missing tool, a daemon that never
+	// resolved a host) and omitting it would leave a reader unable to tell
+	// "never ran" from "no such probe in this build".
+	Probes []ProbeCount
+	// OutcomeRule is the counting rule, taken from the package that does the
+	// counting rather than restated here — a definition written twice is one
+	// that can describe behaviour it no longer has.
+	OutcomeRule string
+	// UndeclaredKinds is how many observations named a probe kind nobody
+	// declared. Non-zero means Probes is INCOMPLETE.
+	UndeclaredKinds uint64
+	// HerdrCandidatesProbed and HerdrCandidatesAbandonedOnBudget are #1558's
+	// figures: how many attached-client candidates the herdr host loop asked
+	// about, and how many times it stopped early because the aggregate budget
+	// was already spent. Not probe rows — no child process is involved — so
+	// they are reported beside them rather than as an outcome.
+	HerdrCandidatesProbed            uint64
+	HerdrCandidatesAbandonedOnBudget uint64
+}
+
 // DiagnosticsServiceDeps bundles NewDiagnosticsService's dependencies.
 type DiagnosticsServiceDeps struct {
 	Repo    outbound.SessionRepository
@@ -124,6 +180,15 @@ type DiagnosticsServiceDeps struct {
 	// hooks.json then omits the counts and says where the real ones are, rather
 	// than publishing zeros that look like an all-clear.
 	HookHealth func() HookHealthSnapshot
+	// ProbeHealth snapshots the in-process probe counters (#1534). NIL IS
+	// MEANINGFUL and means something SHARPER than HookHealth's nil: the
+	// --diagnose CLI does run probes — collecting processes.json shells out to
+	// pgrep and lsof through the observer — so its counters are not
+	// structurally zero, they are a handful of numbers describing that CLI's
+	// own bundle collection. Publishing those under the same field names as
+	// the daemon's would be worse than publishing zeros, because they look
+	// plausible. probesView omits them and says so.
+	ProbeHealth func() ProbeHealthSnapshot
 }
 
 // NewDiagnosticsService wires the service.
@@ -138,6 +203,7 @@ func NewDiagnosticsService(deps DiagnosticsServiceDeps) *DiagnosticsService {
 		version:        deps.Version,
 		paths:          deps.Paths,
 		hookHealth:     deps.HookHealth,
+		probeHealth:    deps.ProbeHealth,
 	}
 }
 
@@ -167,6 +233,7 @@ func (s *DiagnosticsService) WriteBundle(w io.Writer) error {
 	b.addJSON("liveness.json", s.liveness(sessions, b.red))
 	b.addJSON("processes.json", s.processes(b.red))
 	b.addJSON("hooks.json", s.hooksView())
+	b.addJSON("probes.json", s.probesView())
 	s.addLogs(b)
 
 	if errs := b.errs; len(errs) > 0 {
@@ -531,6 +598,153 @@ func (s *DiagnosticsService) hooksView() any {
 		UnknownEvents:            events,
 		UnknownEventNamesDropped: snap.UnknownNamesDropped,
 	}
+}
+
+// probesView renders probes.json: how often each bounded child process the
+// daemon runs actually ANSWERED (issue #1534).
+//
+// It is a sibling of hooks.json rather than a section inside it. The two answer
+// different questions of different subjects — what arrived at our HTTP
+// endpoints, versus what came back from the children we start — and the one
+// thing they share is the honesty problem below, which is a reason to draw the
+// seam the same way, not to merge the artifacts.
+//
+// That honesty problem is SHARPER here than for hooks, and getting it wrong
+// would be worse. `irrlichd --diagnose` builds its bundle in a separate,
+// freshly launched process, and unlike the hook case that process is not
+// structurally quiet: collecting processes.json walks every adapter's matcher
+// through the observer, which on macOS is `pgrep` and `lsof`. So its counters
+// are non-zero — a handful of probes, run by the bundle collector itself, in
+// the last second. Published under the daemon's field names they would read as
+// a measurement of the daemon's probe health, and they would look plausible
+// enough that nobody would check. Zeros at least announce themselves. So when
+// no snapshot source is wired the counts are OMITTED and the section says both
+// that they are missing and why the numbers this process could have printed
+// would not have been the ones asked for.
+func (s *DiagnosticsService) probesView() any {
+	if s.probeHealth == nil {
+		// A DIFFERENT shape, not the daemon shape with this CLI's own numbers
+		// (or zeros) in it — the same rule hooksView follows, for a reason that
+		// is one step stronger. See the doc comment above.
+		return struct {
+			CollectedFrom string `json:"collected_from"`
+			Note          string `json:"note"`
+		}{
+			CollectedFrom: "cli",
+			Note: "Collected by `irrlichd --diagnose`, which is not the process that runs the daemon's " +
+				"probes, so the per-probe answered/unanswered counters are omitted rather than reported. " +
+				"Note they are NOT zero in this process: building processes.json shells out to pgrep and " +
+				"lsof through the same observer, so this process has a few counts of its own, describing " +
+				"nothing but its own bundle collection — which is why they are omitted rather than printed. " +
+				"For the daemon's real counts, fetch GET /debug/bundle from the running daemon.",
+		}
+	}
+
+	snap := s.probeHealth()
+	// Copied before sorting, for the reason hooksView copies its events: the
+	// slice belongs to the injected snapshot source, and reordering a caller's
+	// slice in place is the aliasing bug this repo has already paid for once
+	// (#965/#967/#975).
+	probes := append([]ProbeCount(nil), snap.Probes...)
+	sort.Slice(probes, func(i, j int) bool { return probes[i].Probe < probes[j].Probe })
+	var totalUnanswered uint64
+	for _, p := range probes {
+		totalUnanswered += p.Unanswered
+	}
+	return struct {
+		CollectedFrom    string       `json:"collected_from"`
+		OutcomeRule      string       `json:"outcome_rule"`
+		Probes           []ProbeCount `json:"probes"`
+		TotalUnanswered  uint64       `json:"total_unanswered"`
+		UndeclaredKinds  uint64       `json:"undeclared_probe_kinds,omitempty"`
+		HerdrProbed      uint64       `json:"herdr_client_candidates_probed"`
+		HerdrAbandoned   uint64       `json:"herdr_client_candidates_abandoned_on_budget"`
+		UnansweredNote   string       `json:"unanswered_note,omitempty"`
+		UndeclaredNote   string       `json:"undeclared_probe_kinds_note,omitempty"`
+		HerdrAbandonNote string       `json:"herdr_abandonment_note,omitempty"`
+		MemoNote         string       `json:"memo_note"`
+		PlatformNote     string       `json:"platform_note,omitempty"`
+	}{
+		CollectedFrom:    "daemon",
+		OutcomeRule:      snap.OutcomeRule,
+		Probes:           probes,
+		TotalUnanswered:  totalUnanswered,
+		UndeclaredKinds:  snap.UndeclaredKinds,
+		HerdrProbed:      snap.HerdrCandidatesProbed,
+		HerdrAbandoned:   snap.HerdrCandidatesAbandonedOnBudget,
+		UnansweredNote:   unansweredProbeNote(probes),
+		UndeclaredNote:   undeclaredProbeKindsNote(snap.UndeclaredKinds),
+		HerdrAbandonNote: herdrAbandonmentNote(snap.HerdrCandidatesAbandonedOnBudget),
+		MemoNote: "memo_hits are calls a memo answered without starting a child (#1544), so they are NOT " +
+			"included in answered/unanswered — answered+unanswered is how often a child actually ran, and " +
+			"answered+unanswered+memo_hits is how often the probe was asked. Only ps.proc_info and " +
+			"plutil.bundle_id have a memo; a zero elsewhere means there is no memo, not that it never hit.",
+		PlatformNote: probePlatformNote(),
+	}
+}
+
+// unansweredProbeNote explains what a non-zero unanswered count means, and —
+// like silentChannelNote beside it — what it does not. Emitted only when
+// something actually went unanswered, so a healthy bundle keeps the terse rows
+// and no essay.
+func unansweredProbeNote(probes []ProbeCount) string {
+	var failing []string
+	for _, p := range probes {
+		if p.Unanswered > 0 {
+			failing = append(failing, fmt.Sprintf("%s (%d of %d runs)", p.Probe, p.Unanswered, p.Answered+p.Unanswered))
+		}
+	}
+	if len(failing) == 0 {
+		return ""
+	}
+	return "Probe(s) that did not answer: " + strings.Join(failing, ", ") +
+		". A non-answer is a child killed by its 2-second ceiling, killed by something else, or never " +
+		"started — never a tool that ran and reported nothing, which is an ANSWER and is counted as one. " +
+		"This matters most where the caller fails OPEN: IsKnownInteractiveHost (#1513/#1524) admits a " +
+		"session whose ancestry walk it could not complete, so a climbing count on ps.proc_info or " +
+		"plutil.bundle_id means the #784 admission gate is quietly not gating. Where the caller degrades " +
+		"instead (#1485/#1492/#1537), the cost is a host-window enrichment that stops resolving rather " +
+		"than a wrong one. Measured on one machine plutil stayed ~25x under its ceiling even at 12x CPU " +
+		"oversubscription, so if these counts are non-zero the trigger is something other than CPU " +
+		"pressure and this bundle is the first evidence of it."
+}
+
+// undeclaredProbeKindsNote fires only when the counters saw a probe kind
+// nothing declared — which means the rows above are incomplete, and a reader
+// must not have to work that out by noticing they do not add up.
+func undeclaredProbeKindsNote(n uint64) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d probe observation(s) named a kind that is not in the declared set, so the "+
+		"probes list above is INCOMPLETE and no row accounts for them. This is a wiring defect in the "+
+		"daemon, not a machine condition.", n)
+}
+
+// herdrAbandonmentNote fires only when the herdr client loop actually stopped
+// early on its aggregate budget (#1558). It is the one figure in this file
+// whose absence was the whole reason the issue could not be decided.
+func herdrAbandonmentNote(n uint64) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("The herdr client loop abandoned its remaining candidates %d time(s) because the "+
+		"aggregate budget (#1529) was already spent — normally because the lsof scan ahead of it ran "+
+		"slowly and still SUCCEEDED, which is the one window that bound does not cover. The answer is "+
+		"then \"I could not look\", which clears no stored host and is re-probed on the next sweep, so "+
+		"this is a deferred host-window recovery rather than a wrong answer (#1558).", n)
+}
+
+// probePlatformNote says out loud that these probes are macOS-only, so an
+// all-zero table on another platform reads as "this build starts no children"
+// rather than as a broken counter.
+func probePlatformNote() string {
+	if runtime.GOOS == "darwin" {
+		return ""
+	}
+	return "Every probe listed here is a macOS bounded shellout. On " + runtime.GOOS +
+		" the daemon reads the same process facts from /proc without starting a child, so these counters " +
+		"are structurally zero — that is this platform having no such probe, not a probe that never ran."
 }
 
 // entryReverificationNote spells out what the entry_reverification rows mean
