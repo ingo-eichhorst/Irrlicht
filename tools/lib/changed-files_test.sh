@@ -172,10 +172,30 @@ for script in security-scan.sh preflight.sh; do
     *)                args=(--changed) ;;
   esac
   cp "$REPO_ROOT_FOR_TEST/tools/$script" "$NOLIB/$script"
+
+  # Case 1: no lib/ directory at all. Both scripts source more than one lib
+  # now (#1570 added gate-budget.sh to preflight.sh and gosec-report.sh to
+  # security-scan.sh), so whichever they reach first is the one they name —
+  # this case pins the REFUSAL, not which file it happens to be about.
+  rm -rf "$NOLIB/lib"
   out=$( cd "$REPO_ROOT_FOR_TEST" && bash "$NOLIB/$script" "${args[@]}" 2>&1 )
   rc=$?
-  assert_eq "$script --changed with no lib/ → exit 2, not a silent pass" "2" "$rc"
-  assert_contains "$script names the missing lib in its error" "changed-files.sh" "$out"
+  assert_eq "$script --changed with no lib/ at all → exit 2, not a silent pass" "2" "$rc"
+  assert_contains "$script refuses rather than running blind" "refusing" "$out"
+
+  # Case 2: every lib present EXCEPT this one. That is the assertion this block
+  # was written for — that a missing changed-files.sh specifically is fatal and
+  # named — and case 1 stopped reaching it the moment a second lib was sourced
+  # ahead of it. Deleting one file rather than the whole directory is what
+  # keeps the original case alive instead of quietly replacing it.
+  mkdir -p "$NOLIB/lib"
+  cp "$REPO_ROOT_FOR_TEST/tools/lib/"*.sh "$NOLIB/lib/"
+  rm -f "$NOLIB/lib/changed-files.sh"
+  out=$( cd "$REPO_ROOT_FOR_TEST" && bash "$NOLIB/$script" "${args[@]}" 2>&1 )
+  rc=$?
+  assert_eq "$script --changed with only changed-files.sh missing → exit 2" "2" "$rc"
+  assert_contains "$script names changed-files.sh in its error" "changed-files.sh" "$out"
+  rm -rf "$NOLIB/lib"
 done
 
 echo ""

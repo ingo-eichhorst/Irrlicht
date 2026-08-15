@@ -33,10 +33,29 @@ set -uo pipefail
 # Unset them so preflight's git-touching tests see a clean environment.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
-echo "pre-push: running tools/preflight.sh --changed"
-echo "pre-push: gates are scoped to this push's diff vs origin/main — usually"
-echo "pre-push: seconds, but a large or cross-cutting diff (or a go.mod/go.sum"
-echo "pre-push: change) can still take a few minutes. Skip with"
+# The whole run is bounded, so it cannot be killed from OUTSIDE with no output
+# (#1570). An automated caller gives a foreground command 600s; a one-file
+# core/ diff measured 621s here, so the caller killed the tool call, the hook
+# died mid-gate with no summary and no exit code, and the push did not land
+# with the commit already made. Six of thirteen PRs in one day then went out
+# with --no-verify, which skips the sub-second gates too. 540s leaves that
+# caller ~60s of headroom; a gate that outlives what is left is reported
+# TIMEOUT by name and the push is refused with that named, which is a louder
+# outcome than today's, not a quieter one.
+#
+# PREPUSH_BUDGET=0 restores the old unbounded behaviour exactly; raise it
+# (PREPUSH_BUDGET=1800 git push) when a genuinely large diff needs the room.
+BUDGET="${PREPUSH_BUDGET:-540}"
+
+echo "pre-push: running tools/preflight.sh --changed --budget $BUDGET"
+echo "pre-push: gates are scoped to this push's diff vs origin/main and run"
+echo "pre-push: cheapest-first — usually seconds, but a large or cross-cutting"
+echo "pre-push: diff (or a go.mod/go.sum change) can still take minutes."
+echo "pre-push: The run is bounded to ${BUDGET}s in total: a gate that outruns"
+echo "pre-push: what is left is killed and reported TIMEOUT, and gates after it"
+echo "pre-push: are reported NOT RUN. Neither is a pass. Raise the bound with"
+echo "pre-push: 'PREPUSH_BUDGET=1800 git push', or remove it with"
+echo "pre-push: 'PREPUSH_BUDGET=0 git push'. Skip every gate with"
 echo "pre-push: 'git push --no-verify' (run tools/preflight.sh manually for the"
 echo "pre-push: full unscoped gate)."
-./tools/preflight.sh --changed
+./tools/preflight.sh --changed --budget "$BUDGET"
