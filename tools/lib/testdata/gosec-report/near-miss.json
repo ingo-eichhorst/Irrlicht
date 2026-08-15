@@ -1,0 +1,10 @@
+{
+  "Golang errors": {},
+  "Issues": [
+    {"severity":"HIGH","confidence":"MEDIUM","cwe":{"id":"190","url":"https://cwe.mitre.org/data/definitions/190.html"},"rule_id":"G115","details":"integer overflow conversion uint64 -> int64","file":"/repo/core/adapters/inbound/agents/antigravity/dbmetrics.go","code":"165: out = int64(num)\n","line":"165","column":"15","nosec":false,"suppressions":null},
+    {"severity":"MEDIUM","confidence":"HIGH","cwe":{"id":"22","url":"https://cwe.mitre.org/data/definitions/22.html"},"rule_id":"G304","details":"Potential file inclusion via variable","file":"/repo/core/pkg/tailer/tailer.go","code":"41: f, err := os.Open(path)\n","line":"41","column":"12","nosec":false,"suppressions":null},
+    {"severity":"HIGH","confidence":"LOW","cwe":{"id":"798","url":"https://cwe.mitre.org/data/definitions/798.html"},"rule_id":"G101","details":"Potential hardcoded credentials","file":"/repo/core/adapters/outbound/store/dsn.go","code":"12: const tokenKey = \"token\"\n","line":"12","column":"7","nosec":false,"suppressions":null}
+  ],
+  "Stats": {"files":263,"lines":66534,"nosec":0,"found":3},
+  "GosecVersion":"dev"
+}

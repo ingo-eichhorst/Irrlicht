@@ -1,0 +1,9 @@
+{
+  "Golang errors": {},
+  "Issues": [
+    {"severity":"MEDIUM","confidence":"HIGH","cwe":{"id":"22","url":"https://cwe.mitre.org/data/definitions/22.html"},"rule_id":"G304","details":"Potential file inclusion via variable","file":"/repo/core/pkg/tailer/tailer.go","code":"41: f, err := os.Open(path)\n","line":"41","column":"12","nosec":false,"suppressions":null},
+    {"severity":"LOW","confidence":"HIGH","cwe":{"id":"703","url":"https://cwe.mitre.org/data/definitions/703.html"},"rule_id":"G104","details":"Errors unhandled","file":"/repo/core/domain/session/state.go","code":"88: defer f.Close()\n","line":"88","column":"2","nosec":false,"suppressions":null}
+  ],
+  "Stats": {"files":263,"lines":66534,"nosec":0,"found":2},
+  "GosecVersion":"dev"
+}

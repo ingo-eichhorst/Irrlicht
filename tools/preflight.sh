@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# preflight.sh — run every PR-gating CI check locally, in the same order CI
-# runs them, so a failure surfaces on your machine in minutes instead of on
-# GitHub Actions after a push. Exit code mirrors CI: 0 only if every gate
-# that ran passed. All gates run regardless of an earlier failure, and a
-# pass/fail summary prints at the end — so one invocation surfaces every
-# problem instead of forcing one push per failure.
+# preflight.sh — run every PR-gating CI check locally, so a failure surfaces on
+# your machine in minutes instead of on GitHub Actions after a push. Exit code
+# mirrors CI: 0 only if every gate that ran passed. All gates run regardless of
+# an earlier failure, and a pass/fail summary prints at the end — so one
+# invocation surfaces every problem instead of forcing one push per failure.
+#
+# Gates run CHEAPEST FIRST, in two phases, rather than in the order CI happens
+# to (#1570) — there is no single CI order to mirror anyway, since test.yml,
+# web-test.yml, ars-gate.yml, macos-swift.yml and linux.yml are separate
+# workflows GitHub runs concurrently. See the "PHASE 1"/"PHASE 2" banners below
+# for why the order is load-bearing under --budget, and why cheap-first moves
+# this script towards test.yml rather than away from it.
 #
 # Mirrors:
 #   .github/workflows/test.yml      — gofmt, core + onboarding-factory tests,
@@ -72,6 +78,24 @@
 #                                        runs, then security-scan.sh --changed
 #                                        picks which Go modules / web trees to
 #                                        scan (issue #1213).
+#   tools/preflight.sh --budget 540    # bound the WHOLE run to 540s of wall
+#                                        clock. Each gate gets whatever is
+#                                        left; one that outlives it is killed
+#                                        and reported TIMEOUT by name, and
+#                                        every gate after it is reported
+#                                        NOT RUN. Both exit non-zero — neither
+#                                        is a pass, and neither is a SKIP.
+#                                        0 (the default) is unbounded, which is
+#                                        what a manual run gets: the full run
+#                                        is byte-for-byte what it was.
+#
+# --budget exists because the pre-push hook's failure mode was the one thing
+# AGENTS.md rules out (#1570): on a one-file core/ diff the run measured 621s
+# against an automated caller's 600s command budget, so the CALLER killed it
+# from outside — no summary, no gate name, no exit code, the commit already
+# made and the push not sent. The documented recovery, `git push --no-verify`,
+# then disables every gate including the sub-second ones nobody ran. A budget
+# the run enforces itself turns that silence into a named refusal.
 #
 # PLATFORMS overrides the Linux gate's docker --platform (default: linux/amd64,
 # matching linux.yml's ubuntu-latest runner — QEMU-emulated on Apple Silicon,
@@ -85,11 +109,13 @@ cd "$ROOT_DIR"
 RUN_LINUX=0
 ONLY=""
 CHANGED=0
+BUDGET=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --linux) RUN_LINUX=1; shift ;;
     --only)  ONLY="${2:-}"; shift 2 ;;
     --changed) CHANGED=1; shift ;;
+    --budget) BUDGET="${2:-}"; shift 2 ;;
     # Print the whole leading comment block — including the Usage section,
     # which the previous fixed line range had already drifted past.
     -h|--help) awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"; exit 0 ;;
@@ -115,6 +141,25 @@ if [[ -n "$ONLY" ]]; then
 fi
 
 [[ "$ONLY" == "linux" ]] && RUN_LINUX=1
+
+# ---- wall-clock budget (#1570) -------------------------------------------
+# Sourced unconditionally, and fatally: without it every gate would run
+# unbounded, which is precisely the behaviour --budget was passed to prevent.
+# A bound that silently is not one is worse than no bound, because the caller
+# stops watching for the outcome it was promised protection from.
+# shellcheck source=lib/gate-budget.sh
+. "$SCRIPT_DIR/lib/gate-budget.sh" || {
+  echo "cannot load $SCRIPT_DIR/lib/gate-budget.sh — refusing to run a budgeted gate set with no budget" >&2
+  exit 2
+}
+budget_open "$BUDGET" || exit 2
+if budget_is_bounded; then
+  echo "budget: this run is bounded to ${BUDGET}s of wall clock in total."
+  echo "budget: a gate that outlives what is left is KILLED and reported TIMEOUT;"
+  echo "budget: gates after it are reported NOT RUN. Neither is a pass, and both"
+  echo "budget: exit non-zero. Re-run any of them unbounded with"
+  echo "budget:   tools/preflight.sh --changed --only <group>"
+fi
 
 want() {
   local group="$1"
@@ -162,13 +207,50 @@ RESULTS=()
 overall=0
 SEPARATOR="=============================================================="
 
+# The group whose gates are currently being run, so a TIMEOUT can name the
+# exact `--only` value that re-runs it unbounded. Set by each `if want …`
+# block below; the advice is useless without it.
+CURRENT_GROUP=""
+
 run_gate() {
   local name="$1"; shift
+  # Checked BEFORE the banner: a gate with nothing left is one that did not
+  # run, which is a different claim from one that ran and was killed, and the
+  # reader has to be able to tell them apart. Both refuse the push.
+  if budget_exhausted; then
+    echo
+    echo "$SEPARATOR"
+    echo "  $name  — NOT RUN (the ${BUDGET_TOTAL_SECONDS}s budget was already spent)"
+    echo "$SEPARATOR"
+    # One line, not a paragraph: every gate behind the one that overran prints
+    # this, and six copies of the same explanation bury the TIMEOUT above them.
+    # The reasoning is stated once, in the closing block after the summary.
+    echo "  Never started — that is not a SKIP and not a pass."
+    echo "  Run it:  tools/preflight.sh --changed --only ${CURRENT_GROUP:-<group>}"
+    NAMES+=("$name"); RESULTS+=("NOT RUN")
+    overall=1
+    return 0
+  fi
   echo
   echo "$SEPARATOR"
   echo "  $name"
   echo "$SEPARATOR"
-  if "$@"; then
+  local allowed rc
+  allowed=$(budget_remaining)   # 0 when unbounded — budget_run reads that as "no bound"
+  budget_run "$allowed" "$@"
+  rc=$?
+  # BUDGET_LAST_TIMED_OUT, not `rc == 124`: a gate is free to exit 124 on its
+  # own, and reporting that as a timeout would send the reader hunting for
+  # time nobody spent.
+  if [[ "$BUDGET_LAST_TIMED_OUT" -eq 1 ]]; then
+    echo
+    echo "  $name — TIMEOUT."
+    echo "  Killed after ${allowed}s: all that was left of this run's ${BUDGET_TOTAL_SECONDS}s budget."
+    echo "  It did NOT finish, so nothing it covers is known to pass."
+    echo "  Run it unbounded:  tools/preflight.sh --changed --only ${CURRENT_GROUP:-<group>}"
+    NAMES+=("$name"); RESULTS+=("TIMEOUT")
+    overall=1
+  elif [[ "$rc" -eq 0 ]]; then
     NAMES+=("$name"); RESULTS+=("PASS")
   else
     NAMES+=("$name"); RESULTS+=("FAIL")
@@ -195,7 +277,24 @@ run_gate_scoped() {
   run_gate "$@"
 }
 
-# ---- go group (mirrors test.yml) ----------------------------------------
+# ---- gate implementations -------------------------------------------------
+# Each group's helper is defined here; the two PHASES below decide the order
+# the gates run in. Phase 1 is the cheap, deterministic set — seconds at most,
+# no test binaries, no network — and Phase 2 is everything that costs real
+# time.
+#
+# That split is load-bearing, not cosmetic (#1570). Under --budget a run can
+# end before it reaches its last gate, so the order decides WHICH gates survive
+# a squeeze — and the cheap ones have to be the survivors. `skill-file lint`
+# and `POSIX sh lint` are the only coverage their file families have anywhere,
+# and each costs a fraction of a second; paying for them behind four minutes of
+# `go test` is backwards. test.yml already makes this argument for this gate,
+# in these words: "Runs first, before setup-go: it needs no toolchain and takes
+# a fraction of a second, and behind the Go suites a `go test` failure would
+# abort the job and leave a skills-only PR with no skill feedback at all." So
+# ordering cheap-first moves preflight TOWARDS the workflow it mirrors.
+
+# -- go ---------------------------------------------------------------------
 gofmt_check() {
   local unformatted
   unformatted=$(gofmt -l core/ tools/)
@@ -237,8 +336,114 @@ core_module_tests() {
   go test $pkgs -race -count=1
 }
 
+# -- web (mirrors web-test.yml) ---------------------------------------------
+web_tree() {
+  local dir="$1"
+  # --ignore-scripts mirrors web-test.yml: no dependency lifecycle script runs
+  # at install time. Keep the two in step, or preflight stops being CI parity.
+  ( cd "$dir" && npm ci --ignore-scripts && npm test )
+  return $?
+}
+
+# -- tools (mirrors test.yml's "Test the shared shell libs" step) ------------
+shell_lib_tests() {
+  local rc=0 t
+  for t in tools/lib/*_test.sh; do
+    [[ -e "$t" ]] || continue
+    bash "$t" || rc=1
+  done
+  return "$rc"
+}
+
+# ===========================================================================
+#  PHASE 1 — the cheap, deterministic gates. Sub-second to ~16s each.
+# ===========================================================================
+
+# ---- posix group (mirrors linux.yml's "Lint POSIX sh scripts" step) --------
+# The #!/bin/sh corpus is two files today (site/install.sh and
+# tools/linux-replay-entrypoint.sh) and the gate re-lints all of them whenever
+# it fires — it is a fraction of a second, and the trigger cannot enumerate
+# them anyway, because a NEW POSIX script is exactly the file the gate most
+# needs to see on the push that adds it. So the regex is deliberately loose:
+# any *.sh, any extensionless file under tools/ or site/, plus the linter and
+# its own corpus. Over-firing costs milliseconds; under-firing is #1209's
+# silent-skip shape again.
+#
+# Unlike the CI step this gate can legitimately be unrunnable on a developer
+# machine that has neither checkbashisms nor shellcheck. It still FAILS rather
+# than skipping in that case — the script says what to `brew install`. A gate
+# whose absence looks like a pass is the defect #1423 was filed about, and
+# preflight is not the place to reintroduce it.
+#
+# The extensionless alternatives are not decoration: `tools/git-hooks/pre-push`
+# is already a tracked script with no suffix, and a `#!/bin/sh` file called
+# `site/install` would match nothing in a `\.sh$`-only trigger — skipping the
+# gate on precisely the push that introduces the script it exists to check.
+if want posix; then
+  CURRENT_GROUP=posix
+  run_gate_scoped '\.sh$|^(tools|site)/[^/]*$|^tools/git-hooks/|^tools/lib/testdata/posix-lint/' \
+                  "POSIX sh lint (#!/bin/sh bashisms)" tools/posix-lint.sh
+fi
+
+# ---- skills group (mirrors test.yml's "Lint skill files" step) ------------
+# Scoped to skill markdown plus the linter, so editing a check re-lints the
+# corpus it governs. `SKILL.md` matches at any path because skills are not all
+# under .claude/skills/ — tools/irrlicht-design-system/ holds one. The whole
+# corpus is linted whenever the gate fires rather than just the changed files:
+# it is ~23 small files and a fraction of a second, and a finding a
+# *neighbouring* file already carries is worth surfacing on the push that
+# finally reads it.
+if want skills; then
+  CURRENT_GROUP=skills
+  run_gate_scoped '^\.claude/skills/.*\.md$|(^|/)SKILL\.md$|^tools/skill-lint\.sh$' \
+                  "skill-file lint" tools/skill-lint.sh
+fi
+
+# ---- tools group (mirrors test.yml's "Test the shared shell libs" step) ----
+# Scoped to tools/lib/ plus every top-level tools/*.sh rather than naming the
+# two current callers: a third script sourcing the lib would otherwise stop
+# running these tests without anyone noticing.
+if want tools; then
+  CURRENT_GROUP=tools
+  # go.work and .github/dependabot.yml are in scope because module-list_test.sh
+  # asserts they agree — and a commit touching only one of those two is exactly
+  # the commit that breaks the invariant, so leaving them out would skip the
+  # test precisely when it matters (#1291).
+  # site/install.sh is in the trigger set because tools/lib/install-uninstall_test.sh
+  # tests it (#1416). Without it a push touching only the installer would SKIP
+  # the one gate that covers the installer.
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$' \
+                  "tools/lib shell-lib tests" shell_lib_tests
+fi
+
+# ---- go group, cheap half (mirrors test.yml's gofmt step) ------------------
+# gofmt is a second of work and is the single most common way a push fails, so
+# it runs before anything expensive. Unscoped, exactly as in CI: it reads the
+# whole tree, not the diff.
 if want go; then
-  run_gate        "gofmt"                    gofmt_check
+  CURRENT_GROUP=go
+  run_gate "gofmt" gofmt_check
+fi
+
+# ---- arch group (mirrors ars-gate.yml) -----------------------------------
+# ars-gate.sh scans core/, so an ARS regression can only come from a core/
+# change. ~16s, which is the boundary of "cheap" — it is the last gate in
+# phase 1 for that reason.
+if want arch; then
+  CURRENT_GROUP=arch
+  run_gate_scoped '^core/' "ARS architecture gate" tools/ars-gate.sh
+fi
+
+# ===========================================================================
+#  PHASE 2 — the gates that cost real time. Measured on a one-file diff under
+#  core/adapters/inbound/agents/: core module tests + replay fixtures 250s,
+#  security scan 185s. These are the gates a --budget squeeze drops first, and
+#  each is reported by name when it does.
+# ===========================================================================
+
+# ---- go group, expensive half (mirrors test.yml) --------------------------
+if want go; then
+  CURRENT_GROUP=go
   run_gate_scoped '^core/.*\.go$|^core/go\.(mod|sum)$' \
                   "core module tests"        core_module_tests
   run_gate_scoped '^tools/onboarding-factory/.*\.go$' \
@@ -264,95 +469,19 @@ if want go; then
 fi
 
 # ---- web group (mirrors web-test.yml) -----------------------------------
-web_tree() {
-  local dir="$1"
-  # --ignore-scripts mirrors web-test.yml: no dependency lifecycle script runs
-  # at install time. Keep the two in step, or preflight stops being CI parity.
-  ( cd "$dir" && npm ci --ignore-scripts && npm test )
-  return $?
-}
-
 if want web; then
+  CURRENT_GROUP=web
   run_gate_scoped '^platforms/web/' \
                   "web: platforms/web"             web_tree platforms/web
   run_gate_scoped '^tools/onboarding-factory/internal/viewer/web/' \
                   "web: onboarding-factory viewer" web_tree tools/onboarding-factory/internal/viewer/web
 fi
 
-# ---- arch group (mirrors ars-gate.yml) -----------------------------------
-# ars-gate.sh scans core/, so an ARS regression can only come from a core/
-# change.
-if want arch; then
-  run_gate_scoped '^core/' "ARS architecture gate" tools/ars-gate.sh
-fi
-
-# ---- tools group (mirrors test.yml's "Test the shared shell libs" step) ----
-# Scoped to tools/lib/ plus every top-level tools/*.sh rather than naming the
-# two current callers: a third script sourcing the lib would otherwise stop
-# running these tests without anyone noticing.
-shell_lib_tests() {
-  local rc=0 t
-  for t in tools/lib/*_test.sh; do
-    [[ -e "$t" ]] || continue
-    bash "$t" || rc=1
-  done
-  return "$rc"
-}
-
-if want tools; then
-  # go.work and .github/dependabot.yml are in scope because module-list_test.sh
-  # asserts they agree — and a commit touching only one of those two is exactly
-  # the commit that breaks the invariant, so leaving them out would skip the
-  # test precisely when it matters (#1291).
-  # site/install.sh is in the trigger set because tools/lib/install-uninstall_test.sh
-  # tests it (#1416). Without it a push touching only the installer would SKIP
-  # the one gate that covers the installer.
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$' \
-                  "tools/lib shell-lib tests" shell_lib_tests
-fi
-
-# ---- skills group (mirrors test.yml's "Lint skill files" step) ------------
-# Scoped to skill markdown plus the linter, so editing a check re-lints the
-# corpus it governs. `SKILL.md` matches at any path because skills are not all
-# under .claude/skills/ — tools/irrlicht-design-system/ holds one. The whole
-# corpus is linted whenever the gate fires rather than just the changed files:
-# it is ~23 small files and a fraction of a second, and a finding a
-# *neighbouring* file already carries is worth surfacing on the push that
-# finally reads it.
-if want skills; then
-  run_gate_scoped '^\.claude/skills/.*\.md$|(^|/)SKILL\.md$|^tools/skill-lint\.sh$' \
-                  "skill-file lint" tools/skill-lint.sh
-fi
-
-# ---- posix group (mirrors linux.yml's "Lint POSIX sh scripts" step) --------
-# The #!/bin/sh corpus is two files today (site/install.sh and
-# tools/linux-replay-entrypoint.sh) and the gate re-lints all of them whenever
-# it fires — it is a fraction of a second, and the trigger cannot enumerate
-# them anyway, because a NEW POSIX script is exactly the file the gate most
-# needs to see on the push that adds it. So the regex is deliberately loose:
-# any *.sh, any extensionless file under tools/ or site/, plus the linter and
-# its own corpus. Over-firing costs milliseconds; under-firing is #1209's
-# silent-skip shape again.
-#
-# Unlike the CI step this gate can legitimately be unrunnable on a developer
-# machine that has neither checkbashisms nor shellcheck. It still FAILS rather
-# than skipping in that case — the script says what to `brew install`. A gate
-# whose absence looks like a pass is the defect #1423 was filed about, and
-# preflight is not the place to reintroduce it.
-#
-# The extensionless alternatives are not decoration: `tools/git-hooks/pre-push`
-# is already a tracked script with no suffix, and a `#!/bin/sh` file called
-# `site/install` would match nothing in a `\.sh$`-only trigger — skipping the
-# gate on precisely the push that introduces the script it exists to check.
-if want posix; then
-  run_gate_scoped '\.sh$|^(tools|site)/[^/]*$|^tools/git-hooks/|^tools/lib/testdata/posix-lint/' \
-                  "POSIX sh lint (#!/bin/sh bashisms)" tools/posix-lint.sh
-fi
-
 # ---- security group (mirrors tools/security-scan.sh's local mode; the same
 # script's full mode, with GitHub Dependabot/CodeQL alert checks, runs at
 # release time from ir:release's Step 5.5, not here) ------------------------
 if want security; then
+  CURRENT_GROUP=security
   # In --changed mode the gate's trigger regex only decides whether the scan
   # runs at all; --changed then narrows *which* modules and trees it scans, so
   # a diff that trips the trigger via one tree's lockfile doesn't also audit
@@ -435,6 +564,7 @@ swift_suite() {
 }
 
 if want swift; then
+  CURRENT_GROUP=swift
   # macOS-only, and skipped rather than failed elsewhere. The gate mirrors a
   # workflow that is itself `runs-on: macos-latest`, so on Linux it is out of
   # scope, not unmet — without this guard a Linux contributor's plain
@@ -471,6 +601,7 @@ linux_parity() {
 }
 
 if [[ "$RUN_LINUX" == 1 ]]; then
+  CURRENT_GROUP=linux
   run_gate "linux parity (build + go test ./... -race + replay-fixtures)" linux_parity
 fi
 
@@ -487,5 +618,24 @@ fi
 for i in "${!NAMES[@]}"; do
   printf "  %-58s %s\n" "${NAMES[$i]}" "${RESULTS[$i]}"
 done
+
+# Name the unfinished gates once more, after the table (#1570). The table is
+# the first thing scrolled past; the sentence that decides whether to push is
+# the last thing printed. SKIP is deliberately absent from this list — "this
+# diff cannot break it" is a finished answer, where TIMEOUT and NOT RUN are the
+# absence of one.
+unfinished=()
+for i in "${!NAMES[@]}"; do
+  case "${RESULTS[$i]}" in
+    TIMEOUT|"NOT RUN") unfinished+=("${NAMES[$i]} (${RESULTS[$i]})") ;;
+  esac
+done
+if [[ ${#unfinished[@]} -gt 0 ]]; then
+  echo
+  echo "  ${#unfinished[@]} gate(s) did not finish inside the ${BUDGET_TOTAL_SECONDS}s budget:"
+  printf '    - %s\n' "${unfinished[@]}"
+  echo "  They are NOT passes. Run them unbounded before pushing, or push with a"
+  echo "  larger budget:  PREPUSH_BUDGET=1800 git push"
+fi
 
 exit "$overall"

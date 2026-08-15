@@ -1096,10 +1096,16 @@ Before marking a ticket done, run the full suite — every layer must pass:
 
 `tools/preflight.sh` runs every PR-gating check (test.yml + web-test.yml +
 ars-gate.yml + linux.yml's replay-fixtures step natively, plus the full Linux
-build+test gate via Docker under `--linux`) locally, in CI's order, and prints
-a pass/fail summary
-instead of stopping at the first failure — so before opening a PR, run it
-once instead of round-tripping through GitHub Actions per fix:
+build+test gate via Docker under `--linux`) locally and prints a pass/fail
+summary instead of stopping at the first failure — so before opening a PR, run
+it once instead of round-tripping through GitHub Actions per fix. Gates run
+**cheapest first**, in two phases, not in "CI's order": there is no single CI
+order to mirror, since those are separate workflows GitHub runs concurrently,
+and the order is load-bearing under `--budget` (below) because it decides which
+gates survive a squeeze. `skill-file lint` and `POSIX sh lint` are the only
+coverage their file families have and cost a fraction of a second each, so they
+run before four minutes of `go test` — which is the argument test.yml already
+makes in-file for running the skill lint before `setup-go`.
 
 ```
 tools/preflight.sh                # everything except the Linux Docker gate
@@ -1108,6 +1114,7 @@ tools/preflight.sh --only go      # just the test.yml-equivalent gates
 tools/preflight.sh --only arch    # just the ARS architecture gate
 tools/preflight.sh --only skills  # just the .claude/skills/**/*.md linter
 tools/preflight.sh --only swift   # just the macOS Swift build + test suite
+tools/preflight.sh --budget 540   # bound the whole run; see "The budget" below
 ```
 
 **For an automated caller (an agent), `--only` chunking is the recipe, not a
@@ -1122,20 +1129,69 @@ invocations it takes. **Do not background the unscoped run to make it fit**:
 a subagent is not woken by its own background job, so the run stalls silently
 with the work committed but never pushed
 (`.claude/skills/ir:exec/SKILL.md` Phase 4 step 11 has the incident and the
-same recipe).
+same recipe). Chunking is still the recipe for a *manual* unscoped run;
+`--budget` is what covers the `--changed` run the hook performs, and the two
+compose — `--only <group> --budget <n>` bounds one group.
+
+Also read a push's exit status directly, never through a pipe: `git push … |
+tail` reports `tail`'s status, so a push the hook refused looks like a success
+to the caller. Use `PIPESTATUS`, or assert afterwards that `git status -sb`
+shows a tracking branch — this is a plausible cause of the "committed but never
+pushed" incident recorded in `ir:exec` Phase 4 (#1570).
 
 `tools/install-git-hooks.sh` (run once per clone; worktrees share the parent
 repo's hooks automatically) wires `tools/preflight.sh`'s fast gates as a
 pre-push hook, so a push that would fail CI is rejected locally instead. The
-hook runs `tools/preflight.sh --changed`, which scopes every gate to the
-packages and web trees the push's diff actually touches (vs `origin/main`), so
-a typical push finishes in seconds rather than re-running the whole suite —
-important for automated callers, whose bounded command timeout the full run
-routinely blew past, killing the push after the commit had already landed. A
-large or cross-cutting diff (or a `go.mod`/`go.sum` change, which falls back to
-the full core suite) can still take a few minutes. Skip once with `git push
---no-verify`; run `tools/preflight.sh` manually (no `--changed`) for the
-unscoped full gate.
+hook runs `tools/preflight.sh --changed --budget 540`, which scopes every gate
+to the packages and web trees the push's diff actually touches (vs
+`origin/main`), so a typical push finishes in seconds rather than re-running
+the whole suite. A large or cross-cutting diff (or a `go.mod`/`go.sum` change,
+which falls back to the full core suite) can still take a few minutes. Skip
+once with `git push --no-verify`; run `tools/preflight.sh` manually (no
+`--changed`) for the unscoped full gate.
+
+**The budget is the part not to remove** (#1570). Scoping alone did not make
+the hook fit: on a one-file diff under `core/adapters/inbound/agents/` the run
+measured **621s** — go 250s, arch 16s, security 355s — against an automated
+caller's 600s command budget, so the *caller* killed the tool call. That is the
+worst available failure: no summary, no gate name, no exit code, the commit
+already made and the push not sent, and the documented recovery (`--no-verify`)
+then skips the sub-second gates nobody ran. Six of thirteen PRs in one day went
+out that way. `--budget <seconds>` makes the run bound itself: each gate is
+given whatever is left, a gate that outlives it is **killed and reported
+`TIMEOUT` by name**, every gate behind it is reported **`NOT RUN`**, and both
+exit non-zero. Neither is a `SKIP` — `SKIP` means "this diff cannot break it",
+which is a finished answer; these two are the absence of one, and the closing
+block lists them again after the summary. `PREPUSH_BUDGET` overrides the hook's
+540s (`0` = unbounded, exactly the old behaviour); an unflagged
+`tools/preflight.sh` is unbounded and unchanged. The bounded runner is
+`tools/lib/gate-budget.sh` — pure bash 3.2, because `timeout(1)` is not on a
+stock macOS and a gate that stops being bounded on the machines missing an
+optional dependency is the same defect wearing a different hat. Its unit tests
+plus the end-to-end mutation (a copy of `preflight.sh` with one gate replaced
+by a `sleep`) are `tools/lib/gate-budget_test.sh`, in the `tools` gate.
+
+Two things the budget makes visible that were previously invisible, both
+measured while #1570 was being fixed:
+- **`gosec` was running twice per module.** `-severity`/`-confidence` filter
+  the *report*, not the analysis, so `security-scan.sh`'s informational pass
+  and its gate pass were the same 172s scan of the same 263 files, twice. One
+  `-fmt=json` run now answers both (`tools/lib/gosec-report.sh`), which took
+  the security gate from **355s to 186s** with identical coverage and verdict.
+  Nothing was narrowed — deduplicating a scan is not scanning less, which is
+  why gosec was *not* scoped to changed packages instead. A report that will
+  not parse, or whose own `.Stats.files` is 0, is refused rather than read as
+  clean: a scan that read nothing produces "no High/High findings" too.
+- **The `swift` gate can consume the whole budget on its own.** Its trigger
+  includes `tools/preflight.sh` itself, and `SWIFT_SUITE_TIMEOUT` defaults to
+  600s — equal to an automated caller's entire command budget, so the gate's
+  own careful HUNG diagnosis could never print before the caller killed
+  everything. Measured on this machine at `origin/main`, the suite reaches
+  `SessionRowSnapshotTests.testRelayCloudOnline` and stops there (twice, at the
+  identical point; that test passes in 0.157s in isolation) — #1523/#1530
+  territory. Under `--budget` the outer bound fires first and names the gate,
+  and the tree kill reaches through `script -q`'s separate session, leaving no
+  orphaned `xctest` (measured at `--budget 45`).
 
 The security gate is scoped twice over: its trigger regex decides whether the
 scan runs at all, and `tools/security-scan.sh --changed` then picks which Go
