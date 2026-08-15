@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -82,9 +83,23 @@ func withCmd(build gitCmd) *Adapter { return &Adapter{cmd: build, timeout: gitTi
 // the ceiling firing rather than its value. Waiting out the real 5s twice is
 // the package's slowest and most load-sensitive cost, and neither test learns
 // anything from the extra 4.9s. The real constant stays proven by
-// TestProductionAdapterIsBounded, which goes through New().
+// TestProductionAdapterIsBounded, which runs the adapter New() builds.
 func withCeiling(build gitCmd, d time.Duration) *Adapter {
 	return &Adapter{cmd: build, timeout: d}
+}
+
+// withBinary is the adapter New() returns, running binary instead of git —
+// the production builder and the production ceiling, with one substitution.
+//
+// It is built FROM New() rather than from a struct literal on purpose: what
+// TestProductionAdapterIsBounded has to prove is a property of the adapter the
+// daemon builds, so the injected binary must be the only thing that differs
+// from it. A literal would restate New()'s body and could then drift from it,
+// which is the shape #1390 removed from the path-confinement contract.
+func withBinary(binary string) *Adapter {
+	a := New()
+	a.path = binary
+	return a
 }
 
 // testCeiling is short enough to keep the suite fast and long enough that a
@@ -509,9 +524,19 @@ func TestASuccessfulGitStillReturnsItsOutput(t *testing.T) {
 // TestProductionAdapterIsBounded is the wiring arm. Every test above builds an
 // Adapter with an injected command, so none of them proves the adapter New()
 // returns has a ceiling — which is the shape #1390 removed from the path
-// confinement contract for the same reason. gitPath is a package var, so the
-// production builder can be pointed at a real stalling binary without an
-// injected gitCmd.
+// confinement contract for the same reason. It drives the PRODUCTION builder
+// (execGitCmd) under the PRODUCTION ceiling at a real stalling binary,
+// substituted through the adapter's own path field.
+//
+// Until #1554 that substitution was an assignment to the package var gitPath,
+// under t.Parallel(). It was clean only because every other parallel test in
+// the package built its adapter through the injected gitCmd seam, which never
+// reads gitPath — so the invariant was "no parallel test may call New()", and
+// nothing enforced it. The first one that did would have run
+// `/bin/sh -c 'exec sleep 30'` as git for the ~5s this test holds the stub in
+// place, and reported it as a timing flake rather than a fixture collision.
+// The seam removes the hazard rather than documenting it, so t.Parallel()
+// stays and no test in this package needs to know what any other is doing.
 func TestProductionAdapterIsBounded(t *testing.T) {
 	t.Parallel()
 
@@ -533,12 +558,8 @@ func TestProductionAdapterIsBounded(t *testing.T) {
 		_ = warm.Wait()
 	}
 
-	saved := gitPath
-	gitPath = stub
-	t.Cleanup(func() { gitPath = saved })
-
 	start := time.Now()
-	_, answered := New().GetHeadCommit(t.TempDir())
+	_, answered := withBinary(stub).GetHeadCommit(t.TempDir())
 	elapsed := time.Since(start)
 
 	if answered {
@@ -599,17 +620,90 @@ func TestZeroValuedAdapterIsStillBounded(t *testing.T) {
 	}
 }
 
+// TestEverySeamDefaultsToProduction covers the other two accessors the way
+// TestZeroValuedAdapterIsStillBounded covers ceiling(): an Adapter with a
+// field left at its zero value must run the PRODUCTION value for it, so no
+// seam can leave the adapter in a state the daemon would never build.
+//
+// binary() is #1554's new field and needs it most. An empty path reaches
+// exec.CommandContext as "", which fails to start on every call — so a
+// zero-valued Adapter without the fallback resolves NOTHING, quietly, and
+// every method reports a non-answer for a reason that has nothing to do with
+// git.
+//
+// The second half is a distinct claim from the first: binary() returning the
+// injected path and execGitCmd actually RUNNING it are two things, and an
+// execGitCmd left reading the package var satisfies the first while ignoring
+// the injection entirely — which is precisely the defect this issue's fix
+// would be if it were only half applied.
+//
+// MUTATION EVIDENCE (#1554):
+//   - `binary()` reduced to `return a.path` fails the first arm:
+//     `binary() = "" on a zero-valued Adapter`.
+//   - `execGitCmd` reading the package `gitPath` instead of `a.binary()` fails
+//     the last arm: `the production builder ran "/usr/bin/git", want the
+//     injected "/nonexistent/irrlicht-1554-stub"`.
+//   - `builder()` returning a nil gitCmd fails the second arm rather than
+//     panicking somewhere inside run().
+func TestEverySeamDefaultsToProduction(t *testing.T) {
+	t.Parallel()
+
+	zero := &Adapter{} // every seam at its zero value
+
+	if got := zero.binary(); got != gitPath {
+		t.Errorf("binary() = %q on a zero-valued Adapter, want the resolved %q; an empty "+
+			"path reaches exec as \"\", so every call becomes a non-answer", got, gitPath)
+	}
+	if zero.builder() == nil {
+		t.Fatal("builder() = nil on a zero-valued Adapter; run() would panic on the call " +
+			"rather than shelling out to the production git")
+	}
+
+	const stub = "/nonexistent/irrlicht-1554-stub"
+	cmd := withBinary(stub).builder()(context.Background(), "/tmp", gitRevParseCmd, "HEAD")
+	if cmd.Path != stub {
+		t.Errorf("the production builder ran %q, want the injected %q; the injected path "+
+			"is readable but not reaching the child", cmd.Path, stub)
+	}
+	if cmd.Dir != "/tmp" {
+		t.Errorf("cmd.Dir = %q, want /tmp — the builder is not running git in the "+
+			"directory it was asked about", cmd.Dir)
+	}
+	if want := []string{stub, gitRevParseCmd, "HEAD"}; !slices.Equal(cmd.Args, want) {
+		t.Errorf("cmd.Args = %q, want %q", cmd.Args, want)
+	}
+}
+
 // TestGitPathIsResolvedNotInherited pins go:S4036 — the adapter must not run
 // whatever "git" the inherited PATH happens to resolve to.
+//
+// It asserts on what New()'s adapter WILL RUN rather than on the package var
+// alone. Since #1554 those are two reads and only the first is the property:
+// an adapter whose path field were wired to something else would leave a
+// var-only assertion green while running that something else. The var is still
+// read for the skip and for the equality arm, which is what pins the wiring.
+//
+// t.Parallel() is safe here now and was not before, which is the point rather
+// than a tidy-up: gitPath is written once, at package initialisation, and
+// nothing assigns to it afterwards — TestNothingAssignsToTheResolvedGitPath
+// (gitpath_scan_test.go) is what keeps that true, so this unsynchronised read
+// cannot race a fixture.
 func TestGitPathIsResolvedNotInherited(t *testing.T) {
+	t.Parallel()
+
 	if gitPath == "git" {
 		t.Skip("git is not under a trusted directory on this machine; pathutil fell back " +
 			"to a PATH lookup, which is MustResolve's documented degradation")
 	}
-	if !filepath.IsAbs(gitPath) {
-		t.Errorf("gitPath = %q, want an absolute path under a trusted directory", gitPath)
+	resolved := New().binary()
+	if resolved != gitPath {
+		t.Errorf("New() runs %q, want the resolved %q; the constructor is not wiring "+
+			"the pathutil-resolved git into the adapter", resolved, gitPath)
 	}
-	if strings.Contains(gitPath, "..") {
-		t.Errorf("gitPath = %q contains a traversal", gitPath)
+	if !filepath.IsAbs(resolved) {
+		t.Errorf("New() runs %q, want an absolute path under a trusted directory", resolved)
+	}
+	if strings.Contains(resolved, "..") {
+		t.Errorf("New() runs %q, which contains a traversal", resolved)
 	}
 }

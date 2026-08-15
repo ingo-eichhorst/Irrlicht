@@ -95,35 +95,91 @@ type gitCmd func(ctx context.Context, dir string, args ...string) *exec.Cmd
 
 // Adapter implements ports/outbound.GitResolver using local git commands and
 // transcript file inspection.
+//
+// Its three fields are the adapter's three test seams, and they share ONE
+// shape rather than three: each is read through an accessor that falls back to
+// the production value, so the zero value of the struct is the production
+// adapter and no seam can be left in a state the daemon would never build.
+// #1554 is why that uniformity is worth stating — the binary was the one of
+// the three with no field, so the only way to drive the production builder at
+// a stub was to mutate the package var `gitPath`, which every parallel test in
+// the package shares.
 type Adapter struct {
+	// cmd is execGitCmd unless a test injected a fake child. Injected so a
+	// test can arrange the one distinction no faked return value can pin: a
+	// child that RAN to a normal exit versus one killed or never started.
 	cmd gitCmd
-	// timeout is gitTimeout unless a test lowered it. Injected for the same
-	// reason cmd is — driving the ceiling means waiting it out, and two tests
-	// waiting out 5s each is both slow and the most load-sensitive thing in
-	// the package. TestProductionAdapterIsBounded deliberately does NOT use
-	// this seam: it goes through New(), so the real constant stays proven.
+	// timeout is gitTimeout unless a test lowered it. Injected because driving
+	// the ceiling means waiting it out, and two tests waiting out 5s each is
+	// both slow and the most load-sensitive thing in the package.
+	// TestProductionAdapterIsBounded deliberately does NOT use this seam: it
+	// goes through New(), so the real constant stays proven.
 	timeout time.Duration
+	// path is gitPath unless a test injected another executable — the seam
+	// #1554 added, and the reason it exists is the one the other two already
+	// had: TestProductionAdapterIsBounded must point the PRODUCTION builder at
+	// a stalling stub, and the alternative it used to take was assigning to
+	// the package var while calling t.Parallel(). That was clean only for as
+	// long as no other parallel test called New(), an invariant nothing
+	// enforced.
+	path string
 }
 
 // New returns a new git Adapter.
-func New() *Adapter { return &Adapter{cmd: execGitCmd, timeout: gitTimeout} }
+//
+// It names the two production values it can name even though the accessors
+// below would supply the same ones from the zero value, so what the daemon
+// runs stays readable here rather than only assembled from fallbacks. The
+// builder is the exception and is left to builder(): naming it would mean
+// storing a method value bound to this very Adapter (`a.cmd = a.execGitCmd`),
+// and a copy of that struct would then keep running the ORIGINAL's binary.
+func New() *Adapter {
+	return &Adapter{timeout: gitTimeout, path: gitPath}
+}
 
 // execGitCmd is the production builder: git, resolved through pathutil rather
 // than the inherited PATH (go:S4036), run in dir.
-func execGitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, gitPath, args...)
+//
+// It is a METHOD rather than the package-level function it was until #1554,
+// because the executable it runs is now the adapter's own field. That is the
+// whole of the fix: a test injects into the value it built instead of into
+// state every other test in the package shares.
+func (a *Adapter) execGitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, a.binary(), args...)
 	cmd.Dir = dir
 	return cmd
 }
 
+// builder is the adapter's command builder, defaulting to the production one
+// so that an Adapter built by a struct literal shells out to real git rather
+// than panicking on a nil func — the same polarity ceiling() and binary()
+// take, and the reason New() can leave the field unset (see New()).
+func (a *Adapter) builder() gitCmd {
+	if a.cmd != nil {
+		return a.cmd
+	}
+	return a.execGitCmd
+}
+
 // ceiling is the adapter's timeout, defaulting to gitTimeout so a
 // zero-valued Adapter (a struct literal in a test) is still bounded rather
-// than unbounded — the failure mode this whole issue is about.
+// than unbounded — the failure mode #1543 is about.
 func (a *Adapter) ceiling() time.Duration {
 	if a.timeout > 0 {
 		return a.timeout
 	}
 	return gitTimeout
+}
+
+// binary is the git executable this adapter runs, defaulting to gitPath
+// exactly as ceiling() defaults to gitTimeout. An empty path would otherwise
+// reach exec.CommandContext as "", which fails with a non-answer on every
+// call — a zero-valued Adapter that silently resolves NOTHING.
+func (a *Adapter) binary() string {
+	if a.path != "" {
+		return a.path
+	}
+	return gitPath
 }
 
 // run executes `git args...` in dir under gitTimeout and reports whether git
@@ -167,7 +223,7 @@ func (a *Adapter) run(dir string, args ...string) (out []byte, answered bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), a.ceiling())
 	defer cancel()
 
-	cmd := a.cmd(ctx, dir, args...)
+	cmd := a.builder()(ctx, dir, args...)
 	cmd.WaitDelay = shellout.WaitDelay
 	// Explicit rather than load-bearing: a nil Stdin is already /dev/null, so
 	// os/exec never hands the daemon's own stdin to the child. Spelled out so
