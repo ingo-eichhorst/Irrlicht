@@ -1284,8 +1284,13 @@ const maxClientCandidates = 4
 // through the real hostIdentity and would otherwise have to name that probe
 // themselves. So the production probe is named twice, one line apart, which is
 // a drift worth knowing about and too small to be worth a seam.
-func resolveClientHostIdentity(ctx context.Context, pids []int) (*session.Launcher, bool) {
-	return resolveClientHostIdentityVia(ctx, pids, hostIdentity)
+//
+// It takes the multiplexer kind rather than naming one, because it is a
+// forwarding wrapper and which indirection this is, is the caller's fact —
+// hard-coding one here would make it a second call site claiming a kind, and
+// the whole of #1558's keying is that exactly one site claims each.
+func resolveClientHostIdentity(ctx context.Context, kind clientLoopKind, pids []int) (*session.Launcher, bool) {
+	return resolveClientHostIdentityVia(ctx, kind, pids, hostIdentity)
 }
 
 // hostIdentityProbe is the per-candidate identity read
@@ -1302,11 +1307,16 @@ type hostIdentityProbe func(ctx context.Context, pid int) (*session.Launcher, bo
 
 // resolveClientHostIdentityVia is resolveClientHostIdentity with the
 // per-candidate identity read injected.
-func resolveClientHostIdentityVia(ctx context.Context, pids []int, identify hostIdentityProbe) (*session.Launcher, bool) {
+func resolveClientHostIdentityVia(ctx context.Context, kind clientLoopKind, pids []int, identify hostIdentityProbe) (*session.Launcher, bool) {
 	readAll := len(pids) <= maxClientCandidates
 	if !readAll {
 		pids = pids[:maxClientCandidates]
 	}
+	// #1558: how many candidates THIS loop reached before the budget went, which
+	// is what separates "the scan spent it all" from "the loop spent its own
+	// share". The process-wide probed total cannot answer that — it sums over
+	// every loop and, before this change, over both multiplexers as well.
+	probedHere := 0
 	for _, pid := range pids {
 		if ctx.Err() != nil {
 			// #1529: the aggregate budget is gone and candidates are left. They
@@ -1323,11 +1333,17 @@ func resolveClientHostIdentityVia(ctx context.Context, pids []int, identify host
 			// slow-but-successful a herdr host would never resolve and nothing
 			// would say so. ONE event per loop, not one per candidate left —
 			// the break means the loop never learns how many those were.
-			observeHerdrCandidatesAbandoned()
+			//
+			// probedHere is what makes it #1558's figure rather than #1529's:
+			// zero means nothing but the scan can have spent the budget, since
+			// the scan is the only thing that ran between the WithTimeout and
+			// this check. See clientLoopStarvationRule.
+			observeClientCandidatesAbandoned(kind, probedHere)
 			readAll = false
 			break
 		}
-		observeHerdrCandidateProbed()
+		probedHere++
+		observeClientCandidateProbed(kind)
 		host, complete := identify(ctx, pid)
 		if host.HerdrPaneID != "" {
 			// A candidate that is itself a multiplexer pane has no window of
@@ -1496,7 +1512,7 @@ func resolveTmuxClientLauncherVia(socketPath string, scan clientPIDProbe, identi
 	if !probed {
 		return nil, false
 	}
-	return resolveClientHostIdentityVia(ctx, pids, identify)
+	return resolveClientHostIdentityVia(ctx, clientLoopTmux, pids, identify)
 }
 
 // clientPIDProbe is the attached-client scan resolveHerdrClientLauncherVia
@@ -1528,14 +1544,23 @@ type clientPIDProbe func(ctx context.Context, socketPath string) (pids []int, pr
 //   - The band is narrow. An lsof at its own shelloutTimeout is normally KILLED
 //     rather than slow, and a killed one is already (nil, false) via
 //     lsofProbeRan — so only the slow-and-successful window is new.
-//   - Nobody would see it. #1534 is that nothing counts probe non-answers, and
-//     that now covers budget abandonment too.
+//   - Somebody would now see it, which is the ONE of the three that changed.
+//     #1558 counts it: `client_host_loops[].starved_by_scan` in the diagnostics
+//     bundle's probes.json is exactly this case — an abandonment with no
+//     candidate probed, so nothing but the scan can have spent the budget — and
+//     it is keyed per multiplexer, because a merged figure could not say
+//     whether the ~0.3-0.45s lsof or the ~14ms `tmux list-clients` had starved.
+//     Until then the degradation was invisible by construction: #1573's
+//     abandonment scalar counted the loop spending its own share identically.
 //
 // Splitting the budget between the stages is the obvious alternative and is
-// deliberately NOT taken here: it needs evidence about the real distribution of
-// scan times, which #1529 has none of. This is the same trade #1553 records for
-// the git adapter — an unbounded call that answered slowly becomes a bounded
-// one that does not answer at all — and it is written down for the same reason.
+// deliberately still NOT taken: it needs evidence about the real distribution
+// of scan times, which #1529 has none of and which a starvation COUNT does not
+// supply either — the count says whether the case ever occurs, not what a
+// per-stage cap should be. This is the same trade #1553 records for the git
+// adapter — an unbounded call that answered slowly becomes a bounded one that
+// does not answer at all — and #1603 reached the same conclusion for DORA's
+// stages, declining a per-stage split for the same missing distribution.
 func resolveHerdrClientLauncherVia(socketPath string, scan clientPIDProbe, identify hostIdentityProbe) (*session.Launcher, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), clientHostBudget)
 	defer cancel()
@@ -1543,7 +1568,7 @@ func resolveHerdrClientLauncherVia(socketPath string, scan clientPIDProbe, ident
 	if !probed {
 		return nil, false
 	}
-	return resolveClientHostIdentityVia(ctx, pids, identify)
+	return resolveClientHostIdentityVia(ctx, clientLoopHerdr, pids, identify)
 }
 
 // clientHostCacheTTL is short enough that attaching a client is picked up by

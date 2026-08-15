@@ -170,14 +170,15 @@ func liveHookHealth(watchdog *services.HookLivenessWatchdog, verifier *services.
 func liveProbeHealth() func() services.ProbeHealthSnapshot {
 	return func() services.ProbeHealthSnapshot {
 		rows := processlifecycle.ProbeCounts()
-		herdr := processlifecycle.HerdrCandidates()
+		loops := processlifecycle.ClientLoopCounts()
 		gate := processlifecycle.HostGateCounts()
 		snap := services.ProbeHealthSnapshot{
-			Probes:                           make([]services.ProbeCount, 0, len(rows)),
-			OutcomeRule:                      processlifecycle.ProbeOutcomeRule(),
-			UndeclaredKinds:                  processlifecycle.UndeclaredProbeKinds(),
-			HerdrCandidatesProbed:            herdr.Probed,
-			HerdrCandidatesAbandonedOnBudget: herdr.AbandonedOnBudget,
+			Probes:                    make([]services.ProbeCount, 0, len(rows)),
+			OutcomeRule:               processlifecycle.ProbeOutcomeRule(),
+			UndeclaredKinds:           processlifecycle.UndeclaredProbeKinds(),
+			ClientLoops:               make([]services.ClientLoopCount, 0, len(loops)),
+			ClientLoopStarvationRule:  processlifecycle.ClientLoopStarvationRule(),
+			UndeclaredClientLoopKinds: processlifecycle.UndeclaredClientLoopKinds(),
 			// #1525's outcomes ride this snapshot rather than one of their own:
 			// an aborted walk is the downstream view of a probe that did not
 			// answer, so the two figures are only useful side by side, and one
@@ -193,6 +194,14 @@ func liveProbeHealth() func() services.ProbeHealthSnapshot {
 				Answered:   row.Answered,
 				Unanswered: row.Unanswered,
 				MemoHits:   row.MemoHits,
+			})
+		}
+		for _, row := range loops {
+			snap.ClientLoops = append(snap.ClientLoops, services.ClientLoopCount{
+				Multiplexer:       row.Multiplexer,
+				CandidatesProbed:  row.CandidatesProbed,
+				AbandonedOnBudget: row.AbandonedOnBudget,
+				StarvedByScan:     row.StarvedByScan,
 			})
 		}
 		for _, row := range gate {

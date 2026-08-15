@@ -1337,7 +1337,7 @@ func TestResolveHostFromAncestry_ChainEndingAtInitIsAVerdict(t *testing.T) {
 	if term, hostPID, complete := resolveHostFromAncestry(noAggregateBudget(), orphan, newAncestryReads()); term != "" || hostPID != 0 || !complete {
 		t.Errorf("orphan: got (%q, %d, %v); want a completed in-loop walk that found nothing", term, hostPID, complete)
 	}
-	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), []int{orphan}); !hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{orphan}); !hostKnown {
 		t.Error("a reparented candidate WAS read and has no window — that is an answer")
 	}
 }
@@ -1352,10 +1352,10 @@ func TestResolveClientHostIdentity_TruncatedCandidatesArePoisonToo(t *testing.T)
 	for i := range full {
 		full[i] = 1
 	}
-	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), full); !hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, full); !hostKnown {
 		t.Fatalf("exactly maxClientCandidates readable candidates is a complete look: %d", len(full))
 	}
-	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), append(full, 1)); hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, append(full, 1)); hostKnown {
 		t.Error("one candidate past the cap was never probed, so 'no client has a window' is unsupported")
 	}
 }
@@ -1387,7 +1387,7 @@ func TestHostIdentity_CarriesTheAncestryVerdict(t *testing.T) {
 func TestResolveClientHostIdentity_UnreadableCandidateIsNotDetached(t *testing.T) {
 	dead := exitedPID(t)
 
-	host, hostKnown := resolveClientHostIdentity(noAggregateBudget(), []int{dead})
+	host, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{dead})
 
 	if host != nil {
 		t.Errorf("an unreadable candidate must not produce a host: %+v", host)
@@ -1404,7 +1404,7 @@ func TestResolveClientHostIdentity_UnreadableCandidateIsNotDetached(t *testing.T
 // ancestry walk terminates immediately and honestly (PID 1 has no parent), so
 // "no local window" here is evidence, and the answer stays an answer.
 func TestResolveClientHostIdentity_HostlessCandidateStaysDetached(t *testing.T) {
-	host, hostKnown := resolveClientHostIdentity(noAggregateBudget(), []int{1})
+	host, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{1})
 
 	if host != nil {
 		t.Errorf("launchd has no window; reporting one is the #1348 misroute: %+v", host)
@@ -1423,13 +1423,13 @@ func TestResolveClientHostIdentity_OneUnreadableCandidatePoisonsTheAnswer(t *tes
 
 	// launchd first, so a loop that only remembered the FIRST candidate's
 	// verdict would answer "detached" here.
-	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), []int{1, dead}); hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{1, dead}); hostKnown {
 		t.Error("one unreadable candidate makes 'no client has a window' unsupported (#1492)")
 	}
 	// launchd last, so a loop that only remembered the LAST verdict would
 	// answer "detached" here. Between them the two arms pin both spellings of
 	// "the accumulator was dropped".
-	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), []int{dead, 1}); hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{dead, 1}); hostKnown {
 		t.Error("order must not change the verdict")
 	}
 }
@@ -1444,7 +1444,7 @@ func TestResolveClientHostIdentity_ResolvableCandidateStillWins(t *testing.T) {
 		"ITERM_SESSION_ID=w0t0p0-CLIENT",
 	})
 
-	host, hostKnown := resolveClientHostIdentity(noAggregateBudget(), []int{client})
+	host, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{client})
 
 	if !hostKnown {
 		t.Fatal("a candidate whose own env names its host is readable by definition")
@@ -1456,7 +1456,7 @@ func TestResolveClientHostIdentity_ResolvableCandidateStillWins(t *testing.T) {
 	// The asymmetry the doc claims: a found host is evidence regardless of what
 	// the rest of the list did, so an unreadable candidate ahead of it must not
 	// poison a POSITIVE answer — only a negative one.
-	host, hostKnown = resolveClientHostIdentity(noAggregateBudget(), []int{exitedPID(t), client})
+	host, hostKnown = resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{exitedPID(t), client})
 	if !hostKnown || host == nil || host.TermProgram != "iTerm.app" {
 		t.Errorf("a resolving candidate wins outright past an unreadable one: got (%+v, %v)", host, hostKnown)
 	}

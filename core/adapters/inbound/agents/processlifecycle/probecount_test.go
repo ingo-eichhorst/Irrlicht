@@ -33,9 +33,9 @@ import (
 // defers parallel tests until the serial ones have finished, so a serial delta
 // cannot overlap the package's real-ceiling shellout tests.
 
-// probeLedger is one reading of every per-probe counter. The herdr figures are
-// deliberately not in it: they are not on the (kind, outcome) axis, and folding
-// them in would let a probe assertion vouch for a herdr one.
+// probeLedger is one reading of every per-probe counter. The client-loop
+// figures are deliberately not in it: they are not on the (kind, outcome) axis,
+// and folding them in would let a probe assertion vouch for a client-loop one.
 type probeLedger struct {
 	rows map[string]ProbeCount
 }
@@ -255,6 +255,254 @@ func TestProbeCountsReportsEveryDeclaredKind(t *testing.T) {
 	if !sort.SliceIsSorted(rows, func(i, j int) bool { return rows[i].Probe < rows[j].Probe }) {
 		t.Errorf("ProbeCounts is unsorted: %v — two captures of the same daemon must diff cleanly", rows)
 	}
+}
+
+// --- #1558's attached-client loop counters ---------------------------------
+//
+// The mechanism half, platform-neutral. The loop these describe is darwin-only,
+// so what the runtime tests beside it (probecount_darwin_test.go) cannot cover
+// on another platform is covered here by driving the observers directly — and
+// the source scan below is deliberately here too, because parsePackageSources
+// ignores build tags and a gate that only runs on darwin is a gate whose
+// absence on linux reads as a pass.
+
+// clientLoopLedger is one reading of every per-multiplexer counter. Separate
+// from probeLedger for the reason stated on it: two different axes, and one
+// ledger would let an assertion about one vouch for the other.
+type clientLoopLedger struct {
+	rows map[string]ClientLoopCount
+}
+
+// readClientLoopLedger snapshots the per-multiplexer counters.
+func readClientLoopLedger() clientLoopLedger {
+	l := clientLoopLedger{rows: map[string]ClientLoopCount{}}
+	for _, row := range ClientLoopCounts() {
+		l.rows[row.Multiplexer] = row
+	}
+	return l
+}
+
+// clientLoopsSince returns the rows that MOVED, with deltas in place of totals,
+// and only those — so a bare reflect.DeepEqual against a one-entry map is an
+// exhaustive claim: this multiplexer moved by exactly this much AND no other
+// multiplexer moved at all. The second half is what #1558's whole keying rests
+// on, since the defect it removes is one producer's loop landing in another's
+// bucket, which is invisible to any assertion that only checks its own row.
+func clientLoopsSince(before clientLoopLedger) map[string]ClientLoopCount {
+	moved := map[string]ClientLoopCount{}
+	for mux, now := range readClientLoopLedger().rows {
+		was := before.rows[mux]
+		delta := ClientLoopCount{
+			Multiplexer:       mux,
+			CandidatesProbed:  now.CandidatesProbed - was.CandidatesProbed,
+			AbandonedOnBudget: now.AbandonedOnBudget - was.AbandonedOnBudget,
+			StarvedByScan:     now.StarvedByScan - was.StarvedByScan,
+		}
+		if delta.CandidatesProbed != 0 || delta.AbandonedOnBudget != 0 || delta.StarvedByScan != 0 {
+			moved[mux] = delta
+		}
+	}
+	return moved
+}
+
+// assertClientLoopsMoved fails unless exactly want moved.
+func assertClientLoopsMoved(t *testing.T, before clientLoopLedger, want map[string]ClientLoopCount, why string) {
+	t.Helper()
+	if got := clientLoopsSince(before); !reflect.DeepEqual(got, want) {
+		t.Errorf("client loop counters moved by %v, want %v — %s", got, want, why)
+	}
+}
+
+// TestClientLoopStarvationIsDecidedByTheCandidateCount is the mechanism claim
+// under #1558's figure, driven without the darwin loop: an abandonment with no
+// candidates probed is starvation, one with candidates probed is not, and both
+// are abandonments.
+//
+// Both figures come from ONE call, so `starved <= abandoned` holds by
+// construction. That is asserted anyway, because the property this file exists
+// to protect is that a counter cannot quietly stop discriminating, and "the two
+// are written together" is a claim about the code rather than about the numbers.
+func TestClientLoopStarvationIsDecidedByTheCandidateCount(t *testing.T) {
+	before := readClientLoopLedger()
+	observeClientCandidatesAbandoned(clientLoopTmux, 0)
+	assertClientLoopsMoved(t, before, map[string]ClientLoopCount{
+		"tmux": {Multiplexer: "tmux", AbandonedOnBudget: 1, StarvedByScan: 1},
+	}, "zero candidates probed means the scan ahead of the loop spent the whole budget (#1558)")
+
+	before = readClientLoopLedger()
+	observeClientCandidatesAbandoned(clientLoopTmux, 3)
+	assertClientLoopsMoved(t, before, map[string]ClientLoopCount{
+		"tmux": {Multiplexer: "tmux", AbandonedOnBudget: 1},
+	}, "an abandonment after three candidates is the LOOP spending its own share; counting it as starved "+
+		"would attribute to the scan time the candidates spent, and a per-stage split would not help it")
+
+	before = readClientLoopLedger()
+	observeClientCandidateProbed(clientLoopHerdr)
+	assertClientLoopsMoved(t, before, map[string]ClientLoopCount{
+		"herdr": {Multiplexer: "herdr", CandidatesProbed: 1},
+	}, "a probed candidate is the denominator and is neither an abandonment nor a starvation")
+}
+
+// TestUndeclaredClientLoopKindIsCountedNotDropped is the guard on the guard,
+// the sibling of TestUndeclaredProbeKindIsCountedNotDropped. A multiplexer
+// nothing declared cannot be attributed to a row, and dropping the observation
+// would make an uncounted loop indistinguishable from one that never ran.
+func TestUndeclaredClientLoopKindIsCountedNotDropped(t *testing.T) {
+	beforeUndeclared := UndeclaredClientLoopKinds()
+	before := readClientLoopLedger()
+
+	observeClientCandidateProbed(clientLoopKind("not.a.multiplexer"))
+	observeClientCandidatesAbandoned(clientLoopKind("not.a.multiplexer"), 0)
+
+	if got := UndeclaredClientLoopKinds() - beforeUndeclared; got != 2 {
+		t.Errorf("undeclared observations = %d, want 2 — an unattributable loop must be reported, not swallowed", got)
+	}
+	assertClientLoopsMoved(t, before, map[string]ClientLoopCount{},
+		"an undeclared multiplexer must not be silently folded into some other producer's row")
+}
+
+// TestClientLoopCountsReportsEveryDeclaredKind pins the snapshot's shape, for
+// the reason TestProbeCountsReportsEveryDeclaredKind pins the probe one: on a
+// machine that uses only one multiplexer the ZERO row IS the evidence, and an
+// omitted row cannot be told apart from a producer this build does not have.
+func TestClientLoopCountsReportsEveryDeclaredKind(t *testing.T) {
+	if len(clientLoopCounts) != len(allClientLoopKinds) {
+		t.Fatalf("clientLoopCounts has %d entries for %d declared kinds — two kinds share a token, so they share a bucket",
+			len(clientLoopCounts), len(allClientLoopKinds))
+	}
+	rows := ClientLoopCounts()
+	if len(rows) != len(allClientLoopKinds) {
+		t.Fatalf("ClientLoopCounts returned %d rows for %d declared kinds", len(rows), len(allClientLoopKinds))
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		seen[row.Multiplexer] = true
+	}
+	for _, kind := range allClientLoopKinds {
+		if !seen[string(kind)] {
+			t.Errorf("ClientLoopCounts omits %q", kind)
+		}
+	}
+	if !sort.SliceIsSorted(rows, func(i, j int) bool { return rows[i].Multiplexer < rows[j].Multiplexer }) {
+		t.Errorf("ClientLoopCounts is unsorted: %v — two captures of the same daemon must diff cleanly", rows)
+	}
+	if !strings.Contains(ClientLoopStarvationRule(), "ZERO candidates probed") {
+		t.Errorf("the exported starvation rule must carry the definition the numbers were produced by, "+
+			"or the bundle prints a second copy that can describe behaviour it no longer has: %q", ClientLoopStarvationRule())
+	}
+}
+
+// TestEveryClientLoopSiteDeclaresItsOwnKind is the tripwire that makes a THIRD
+// multiplexer producer covered by existing rather than by remembering — which
+// is exactly what #1501 did not have when it reused herdr's counter.
+//
+// A "site" is a call to resolveClientHostIdentityVia that names a declared
+// constant. A call that FORWARDS a clientLoopKind parameter (the
+// resolveClientHostIdentity wrapper) names no multiplexer and is not a site;
+// it still counts toward the vacuity floor, so the scan cannot go quiet by
+// stopping to recognise anything.
+func TestEveryClientLoopSiteDeclaresItsOwnKind(t *testing.T) {
+	fset, files := parsePackageSources(t, ".")
+	declared := declaredClientLoopKindIdents(t, files)
+
+	if len(declared) != len(allClientLoopKinds) {
+		t.Fatalf("the source declares %d clientLoopKind constants but allClientLoopKinds lists %d — a kind that is not in allClientLoopKinds has no counter",
+			len(declared), len(allClientLoopKinds))
+	}
+	values := declaredValues(declared)
+	for _, kind := range allClientLoopKinds {
+		if !values[string(kind)] {
+			t.Errorf("allClientLoopKinds contains %q, which no clientLoopKind constant declares", kind)
+		}
+	}
+
+	usedBy, sites := clientLoopKindsBySite(fset, files, declared)
+
+	// Vacuity floor, the same shape and reason as the probe scan's: a scan that
+	// found no sites reports no violations and is indistinguishable from a
+	// clean package. Three: the two producers plus the forwarding wrapper.
+	const knownClientLoopSites = 3
+	if sites < knownClientLoopSites {
+		t.Fatalf("found %d resolveClientHostIdentityVia call sites, expected at least %d: the scan is not looking where it thinks it is, so its silence proves nothing",
+			sites, knownClientLoopSites)
+	}
+
+	for kind, where := range usedBy {
+		if len(where) > 1 {
+			t.Errorf("%s is passed by %d call sites (%s) — they share one bucket, so a climbing count cannot say which multiplexer stopped resolving, and the two scans behind them differ by more than an order of magnitude (#1558)",
+				kind, len(where), strings.Join(where, ", "))
+		}
+	}
+	for name := range declared {
+		if len(usedBy[name]) == 0 {
+			t.Errorf("%s is declared but passed by no call site — it publishes a permanent zero row that no producer can ever move", name)
+		}
+	}
+}
+
+// clientLoopKindsBySite returns, per declared kind identifier, the `file:line`
+// of every call site that passes it — plus how many resolveClientHostIdentityVia
+// calls were seen at all, the vacuity floor's input. An argument that is not a
+// declared constant (a forwarded parameter) contributes to sites and to no
+// kind, so it can neither be mistaken for coverage nor silence the floor.
+func clientLoopKindsBySite(fset *token.FileSet, files map[string]*ast.File, declared map[string]string) (usedBy map[string][]string, sites int) {
+	usedBy = map[string][]string{}
+	for name, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			fn, ok := call.Fun.(*ast.Ident)
+			if !ok || fn.Name != "resolveClientHostIdentityVia" || len(call.Args) < 2 {
+				return true
+			}
+			sites++
+			id, ok := call.Args[1].(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if _, isKind := declared[id.Name]; !isKind {
+				return true
+			}
+			usedBy[id.Name] = append(usedBy[id.Name],
+				filepath.Base(name)+":"+strconv.Itoa(fset.Position(call.Pos()).Line))
+			return true
+		})
+	}
+	return usedBy, sites
+}
+
+// declaredClientLoopKindIdents returns the identifier names of every
+// `clientLoopKind` constant, mapped to its string value. Derived from the
+// source rather than listed here, so a new kind is graded by existing.
+func declaredClientLoopKindIdents(t *testing.T, files map[string]*ast.File) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				if typ, ok := vs.Type.(*ast.Ident); !ok || typ.Name != "clientLoopKind" {
+					continue
+				}
+				for i, name := range vs.Names {
+					out[name.Name] = probeKindLiteral(vs, i)
+				}
+			}
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("no clientLoopKind constants found in the package source — the scan is looking in the wrong place, so its silence proves nothing")
+	}
+	return out
 }
 
 // --- the static half: every run site names its own declared kind -----------
