@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -8,6 +9,15 @@ import (
 	"strings"
 	"testing"
 )
+
+// noBudget is the context this package's tests drive the adapter with where the
+// caller has no aggregate deadline — the great majority of them, since what
+// they grade is the adapter's OWN per-call ceiling, which run() derives from
+// whatever it is handed (#1563). It is the test-side twin of
+// services.noGitBudget, named for the same reason: an absence spelled out reads
+// differently from one inferred. The budget-aware tests in shellout_test.go
+// supply their own cancellable context instead.
+func noBudget() context.Context { return context.Background() }
 
 func TestNearestExistingDir(t *testing.T) {
 	t.Run("existing dir returns itself", func(t *testing.T) {
@@ -46,7 +56,7 @@ func TestGetGitRoot_DeletedSubdir(t *testing.T) {
 	a := New()
 
 	// Existing dir works as before.
-	got, answered := a.GetGitRoot(dir)
+	got, answered := a.GetGitRoot(noBudget(), dir)
 	if !answered {
 		t.Fatal("existing dir: git did not answer")
 	}
@@ -56,7 +66,7 @@ func TestGetGitRoot_DeletedSubdir(t *testing.T) {
 
 	// Deleted subdir resolves to the same repo root.
 	deleted := filepath.Join(dir, "nonexistent", "child")
-	got, answered = a.GetGitRoot(deleted)
+	got, answered = a.GetGitRoot(noBudget(), deleted)
 	if !answered {
 		t.Fatal("deleted subdir: git did not answer")
 	}
@@ -68,7 +78,7 @@ func TestGetGitRoot_DeletedSubdir(t *testing.T) {
 func TestGetGitRoot_NotARepo(t *testing.T) {
 	dir := t.TempDir()
 	a := New()
-	got, answered := a.GetGitRoot(dir)
+	got, answered := a.GetGitRoot(noBudget(), dir)
 	if !answered {
 		t.Fatal("a non-repo dir is an ANSWER — git ran and reported exit 128 (#1543)")
 	}
@@ -101,7 +111,7 @@ func TestGetProjectName_DeletedWorktree(t *testing.T) {
 
 	a := New()
 	deleted := filepath.Join(repoDir, ".claude", "worktrees", "62")
-	got, answered := a.GetProjectName(deleted)
+	got, answered := a.GetProjectName(noBudget(), deleted)
 	if !answered {
 		t.Fatal("git did not answer")
 	}
@@ -145,12 +155,12 @@ func commitFileForTest(t *testing.T, dir, name, content string) string {
 
 func TestGetHeadCommit(t *testing.T) {
 	a := New()
-	if got, answered := a.GetHeadCommit(t.TempDir()); got != "" || !answered {
+	if got, answered := a.GetHeadCommit(noBudget(), t.TempDir()); got != "" || !answered {
 		t.Errorf("non-repo dir: got (%q, %v), want (\"\", true)", got, answered)
 	}
 	dir := gitInitForTest(t)
 	sha := commitFileForTest(t, dir, "a.txt", "hello")
-	if got, answered := a.GetHeadCommit(dir); got != sha || !answered {
+	if got, answered := a.GetHeadCommit(noBudget(), dir); got != sha || !answered {
 		t.Errorf("got (%q, %v), want (%q, true)", got, answered, sha)
 	}
 }
@@ -161,12 +171,12 @@ func TestRevertedCommits(t *testing.T) {
 	shaA := commitFileForTest(t, dir, "a.txt", "A")
 	commitFileForTest(t, dir, "b.txt", "B")
 
-	if got, answered := a.RevertedCommits(dir); len(got) != 0 || !answered {
+	if got, answered := a.RevertedCommits(noBudget(), dir); len(got) != 0 || !answered {
 		t.Fatalf("no reverts yet: got (%v, %v)", got, answered)
 	}
 
 	runGitForTest(t, dir, "revert", "--no-edit", shaA)
-	got, answered := a.RevertedCommits(dir)
+	got, answered := a.RevertedCommits(noBudget(), dir)
 	if !answered {
 		t.Fatal("git did not answer")
 	}
@@ -180,7 +190,7 @@ func TestRevertedCommits(t *testing.T) {
 		t.Errorf("expected revert of %s in %v", shaA, got)
 	}
 
-	if r, answered := a.RevertedCommits(t.TempDir()); r != nil || !answered {
+	if r, answered := a.RevertedCommits(noBudget(), t.TempDir()); r != nil || !answered {
 		t.Errorf("non-repo dir: want (nil, true), got (%v, %v)", r, answered)
 	}
 }
@@ -232,13 +242,13 @@ func TestGetCWDFromTranscript_WrappedCodex(t *testing.T) {
 func TestListReleaseTags(t *testing.T) {
 	a := New()
 
-	if got, answered := a.ListReleaseTags(t.TempDir()); got != nil || !answered {
+	if got, answered := a.ListReleaseTags(noBudget(), t.TempDir()); got != nil || !answered {
 		t.Errorf("non-repo dir: want (nil, true), got (%v, %v)", got, answered)
 	}
 
 	dir := gitInitForTest(t)
 	commitFileForTest(t, dir, "a.txt", "A")
-	if got, answered := a.ListReleaseTags(dir); got != nil || !answered {
+	if got, answered := a.ListReleaseTags(noBudget(), dir); got != nil || !answered {
 		t.Fatalf("no tags yet: want (nil, true), got (%v, %v)", got, answered)
 	}
 
@@ -247,7 +257,7 @@ func TestListReleaseTags(t *testing.T) {
 	commitFileForTest(t, dir, "b.txt", "B")
 	runGitForTest(t, dir, "tag", "v0.2.0")
 
-	got, answered := a.ListReleaseTags(dir)
+	got, answered := a.ListReleaseTags(noBudget(), dir)
 	if !answered {
 		t.Fatal("git did not answer")
 	}
@@ -265,7 +275,7 @@ func TestListReleaseTags(t *testing.T) {
 func TestCommitsInRange(t *testing.T) {
 	a := New()
 
-	if got, answered := a.CommitsInRange(t.TempDir(), "", "HEAD"); got != nil || !answered {
+	if got, answered := a.CommitsInRange(noBudget(), t.TempDir(), "", "HEAD"); got != nil || !answered {
 		t.Errorf("non-repo dir: want (nil, true), got (%v, %v)", got, answered)
 	}
 
@@ -283,7 +293,7 @@ func TestCommitsInRange(t *testing.T) {
 	shaB := runGitForTest(t, dir, "rev-parse", "HEAD")
 	runGitForTest(t, dir, "tag", "v0.2.0")
 
-	oldest, answered := a.CommitsInRange(dir, "", "v0.1.0")
+	oldest, answered := a.CommitsInRange(noBudget(), dir, "", "v0.1.0")
 	if !answered {
 		t.Fatal("git did not answer for the oldest tag")
 	}
@@ -291,7 +301,7 @@ func TestCommitsInRange(t *testing.T) {
 		t.Fatalf("oldest tag (no predecessor): got %+v, want just %s", oldest, shaA)
 	}
 
-	between, answered := a.CommitsInRange(dir, "v0.1.0", "v0.2.0")
+	between, answered := a.CommitsInRange(noBudget(), dir, "v0.1.0", "v0.2.0")
 	if !answered {
 		t.Fatal("git did not answer for the range")
 	}
@@ -302,7 +312,7 @@ func TestCommitsInRange(t *testing.T) {
 		t.Fatalf("multi-line body not preserved: %q", between[0].Body)
 	}
 
-	if got, answered := a.CommitsInRange(dir, "v0.2.0", "v0.2.0"); got != nil || !answered {
+	if got, answered := a.CommitsInRange(noBudget(), dir, "v0.2.0", "v0.2.0"); got != nil || !answered {
 		t.Fatalf("empty range: want (nil, true), got (%v, %v)", got, answered)
 	}
 }
@@ -310,7 +320,7 @@ func TestCommitsInRange(t *testing.T) {
 func TestTagContaining(t *testing.T) {
 	a := New()
 
-	if got, answered := a.TagContaining(t.TempDir(), "deadbeef"); got != "" || !answered {
+	if got, answered := a.TagContaining(noBudget(), t.TempDir(), "deadbeef"); got != "" || !answered {
 		t.Errorf("non-repo dir: want (\"\", true), got (%q, %v)", got, answered)
 	}
 
@@ -320,12 +330,12 @@ func TestTagContaining(t *testing.T) {
 	commitFileForTest(t, dir, "b.txt", "B")
 	runGitForTest(t, dir, "tag", "v0.2.0")
 
-	if got, answered := a.TagContaining(dir, shaA); got != "v0.1.0" || !answered {
+	if got, answered := a.TagContaining(noBudget(), dir, shaA); got != "v0.1.0" || !answered {
 		t.Errorf("got (%q, %v), want (v0.1.0, true) — earliest tag containing the first commit", got, answered)
 	}
 	// An object name git cannot resolve exits 129 (measured, git 2.50.1) —
 	// still an ANSWER: git ran and told us no release contains it.
-	if got, answered := a.TagContaining(dir, "0000000000000000000000000000000000000000"); got != "" || !answered {
+	if got, answered := a.TagContaining(noBudget(), dir, "0000000000000000000000000000000000000000"); got != "" || !answered {
 		t.Errorf("unknown hash: want (\"\", true), got (%q, %v)", got, answered)
 	}
 }

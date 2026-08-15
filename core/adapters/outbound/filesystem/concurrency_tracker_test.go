@@ -1,6 +1,7 @@
 package filesystem
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"os"
@@ -739,7 +740,7 @@ type countingResolver struct {
 	unread bool
 }
 
-func (r *countingResolver) GetProjectName(dir string) (string, bool) {
+func (r *countingResolver) GetProjectName(_ context.Context, dir string) (string, bool) {
 	r.mu.Lock()
 	if r.calls == nil {
 		r.calls = map[string]int{}

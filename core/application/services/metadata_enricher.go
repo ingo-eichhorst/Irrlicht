@@ -66,7 +66,7 @@ func (e *metadataEnricher) CaptureYieldOnReady(state *session.SessionState) {
 	if state == nil || state.YieldState == session.YieldReverted {
 		return
 	}
-	head, answered := e.git.GetHeadCommit(state.CWD)
+	head, answered := e.git.GetHeadCommit(noGitBudget(), state.CWD)
 	if !answered {
 		// A git that could not be run must not overwrite a verdict already
 		// reached — that is #1543's polarity, and it is why an existing
@@ -146,10 +146,13 @@ func (e *metadataEnricher) EnrichNewSession(state *session.SessionState, ev agen
 // adoptGitMetadata fills branch and project name from cwd, leaving either
 // untouched when git could not be run for it. Leaving them empty is what keeps
 // backfillOne willing to try again later.
+//
+// Two git calls, and deliberately no aggregate deadline over the pair — see
+// noGitBudget, which carries the argument for every enricher path.
 func (e *metadataEnricher) adoptGitMetadata(state *session.SessionState, cwd string) {
-	branch, branchAnswered := e.git.GetBranch(cwd)
+	branch, branchAnswered := e.git.GetBranch(noGitBudget(), cwd)
 	adoptIfAnswered(&state.GitBranch, branch, branchAnswered)
-	name, nameAnswered := e.git.GetProjectName(cwd)
+	name, nameAnswered := e.git.GetProjectName(noGitBudget(), cwd)
 	adoptIfAnswered(&state.ProjectName, name, nameAnswered)
 }
 
@@ -157,6 +160,9 @@ func (e *metadataEnricher) adoptGitMetadata(state *session.SessionState, cwd str
 // content and recomputes metrics. A single transcript read serves both metrics
 // and CWD extraction, eliminating the redundant 32KB read that
 // GetCWDFromTranscript would perform.
+//
+// Up to three git calls, and deliberately no aggregate deadline over them —
+// see noGitBudget.
 func (e *metadataEnricher) RefreshOnActivity(state *session.SessionState, transcriptPath string) {
 	// Refresh metrics first — the tailer now extracts LastCWD during parsing,
 	// so we get CWD for free without a separate file read.
@@ -173,7 +179,7 @@ func (e *metadataEnricher) RefreshOnActivity(state *session.SessionState, transc
 	}
 	if cwd != "" && cwd != state.CWD {
 		state.CWD = cwd
-		branch, branchAnswered := e.git.GetBranch(cwd)
+		branch, branchAnswered := e.git.GetBranch(noGitBudget(), cwd)
 		// The session has MOVED, so what is held describes the OLD directory
 		// and #1485's "never overwrite what you already hold" does not protect
 		// it. Reporting another repo's branch is a false claim where an empty
@@ -212,7 +218,7 @@ func (e *metadataEnricher) RefreshOnActivity(state *session.SessionState, transc
 		// (retryIdleProjectResolution, capped by
 		// maxIdleProjectResolveAttempts), so it cannot be relied on to undo a
 		// blanking; that is why nothing here claims a sweep will fix it.
-		gitRoot, rootAnswered := e.git.GetGitRoot(cwd)
+		gitRoot, rootAnswered := e.git.GetGitRoot(noGitBudget(), cwd)
 		switch {
 		case !rootAnswered:
 			// Leave ProjectName exactly as it is.
@@ -289,11 +295,11 @@ func (e *metadataEnricher) backfillOne(state *session.SessionState) bool {
 	// bounded retry open; it does not promise the value will eventually
 	// arrive.
 	if state.ProjectName == "" {
-		name, answered := e.git.GetProjectName(state.CWD)
+		name, answered := e.git.GetProjectName(noGitBudget(), state.CWD)
 		updated = adoptIfAnswered(&state.ProjectName, name, answered) || updated
 	}
 	if state.GitBranch == "" {
-		branch, answered := e.git.GetBranch(state.CWD)
+		branch, answered := e.git.GetBranch(noGitBudget(), state.CWD)
 		updated = adoptIfAnswered(&state.GitBranch, branch, answered) || updated
 	}
 	return updated

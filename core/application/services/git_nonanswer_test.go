@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"testing"
 
 	"irrlicht/core/domain/dora"
@@ -29,28 +30,28 @@ type unreadGit struct {
 
 func (g *unreadGit) answered(probe string) bool { return !g.unreadFor[probe] }
 
-func (g *unreadGit) GetGitRoot(string) (string, bool) {
+func (g *unreadGit) GetGitRoot(context.Context, string) (string, bool) {
 	if !g.answered("root") {
 		return "", false
 	}
 	return g.root, true
 }
 
-func (g *unreadGit) ListReleaseTags(string) ([]dora.TagInfo, bool) {
+func (g *unreadGit) ListReleaseTags(context.Context, string) ([]dora.TagInfo, bool) {
 	if !g.answered("tags") {
 		return nil, false
 	}
 	return g.tags, true
 }
 
-func (g *unreadGit) CommitsInRange(_, _, toRef string) ([]dora.CommitInfo, bool) {
+func (g *unreadGit) CommitsInRange(_ context.Context, _, _, toRef string) ([]dora.CommitInfo, bool) {
 	if !g.answered("commits") {
 		return nil, false
 	}
 	return g.commits[toRef], true
 }
 
-func (g *unreadGit) TagContaining(string, string) (string, bool) {
+func (g *unreadGit) TagContaining(context.Context, string, string) (string, bool) {
 	if !g.answered("tagcontaining") {
 		return "", false
 	}
@@ -110,7 +111,7 @@ func TestDoraReportsUnreadableGitRatherThanAFalseVerdict(t *testing.T) {
 				commits:   commits,
 				unreadFor: map[string]bool{tc.unread: true},
 			}
-			got, err := ComputeDoraMetrics(git, doraSessions("proj", "/repo/sub"), "proj", 0, 9999)
+			got, err := ComputeDoraMetrics(context.Background(), git, doraSessions("proj", "/repo/sub"), "proj", 0, 9999)
 			if err != nil {
 				t.Fatalf("ComputeDoraMetrics: %v", err)
 			}
@@ -133,7 +134,7 @@ func TestDoraReportsUnreadableGitRatherThanAFalseVerdict(t *testing.T) {
 func TestDoraStillReportsItsGenuineVerdicts(t *testing.T) {
 	t.Run("no session resolves to a repo", func(t *testing.T) {
 		git := &unreadGit{root: ""}
-		got, err := ComputeDoraMetrics(git, doraSessions("proj", "/nowhere"), "proj", 0, 9999)
+		got, err := ComputeDoraMetrics(context.Background(), git, doraSessions("proj", "/nowhere"), "proj", 0, 9999)
 		if err != nil {
 			t.Fatalf("ComputeDoraMetrics: %v", err)
 		}
@@ -144,7 +145,7 @@ func TestDoraStillReportsItsGenuineVerdicts(t *testing.T) {
 
 	t.Run("a repo with no release tags", func(t *testing.T) {
 		git := &unreadGit{root: "/repo", tags: nil}
-		got, err := ComputeDoraMetrics(git, doraSessions("proj", "/repo/sub"), "proj", 0, 9999)
+		got, err := ComputeDoraMetrics(context.Background(), git, doraSessions("proj", "/repo/sub"), "proj", 0, 9999)
 		if err != nil {
 			t.Fatalf("ComputeDoraMetrics: %v", err)
 		}
@@ -162,7 +163,7 @@ func TestDoraStillReportsItsGenuineVerdicts(t *testing.T) {
 				"v0.2.0": {{Hash: "b", AuthorEpoch: 1900}},
 			},
 		}
-		got, err := ComputeDoraMetrics(git, doraSessions("proj", "/repo/sub"), "proj", 0, 9999)
+		got, err := ComputeDoraMetrics(context.Background(), git, doraSessions("proj", "/repo/sub"), "proj", 0, 9999)
 		if err != nil {
 			t.Fatalf("ComputeDoraMetrics: %v", err)
 		}
@@ -192,7 +193,7 @@ func TestResolveDoraProjectRootAnswersWhenAnyCandidateDid(t *testing.T) {
 		{SessionID: "b", ProjectName: "proj", CWD: "/two", State: session.StateReady},
 	}}
 
-	root, answered, err := resolveDoraProjectRoot(git, sessions, "proj")
+	root, answered, err := resolveDoraProjectRoot(context.Background(), git, sessions, "proj")
 	if err != nil {
 		t.Fatalf("resolveDoraProjectRoot: %v", err)
 	}
@@ -205,7 +206,7 @@ func TestResolveDoraProjectRootAnswersWhenAnyCandidateDid(t *testing.T) {
 
 	t.Run("every candidate unread is unreadable", func(t *testing.T) {
 		all := &countingRootGit{fn: func(string) (string, bool) { return "", false }}
-		_, answered, err := resolveDoraProjectRoot(all, sessions, "proj")
+		_, answered, err := resolveDoraProjectRoot(context.Background(), all, sessions, "proj")
 		if err != nil {
 			t.Fatalf("resolveDoraProjectRoot: %v", err)
 		}
@@ -235,7 +236,7 @@ func TestResolveDoraProjectRootAnswersWhenAnyCandidateDid(t *testing.T) {
 			{SessionID: "b", ProjectName: "proj", CWD: "/two", State: session.StateReady},
 			{SessionID: "c", ProjectName: "proj", CWD: "/three", State: session.StateReady},
 		}}
-		_, answered, err := resolveDoraProjectRoot(mixed, three, "proj")
+		_, answered, err := resolveDoraProjectRoot(context.Background(), mixed, three, "proj")
 		if err != nil {
 			t.Fatalf("resolveDoraProjectRoot: %v", err)
 		}
@@ -247,7 +248,7 @@ func TestResolveDoraProjectRootAnswersWhenAnyCandidateDid(t *testing.T) {
 
 	t.Run("no candidate at all is an answer", func(t *testing.T) {
 		none := &countingRootGit{fn: func(string) (string, bool) { return "", true }}
-		_, answered, err := resolveDoraProjectRoot(none, oneSession{}, "proj")
+		_, answered, err := resolveDoraProjectRoot(context.Background(), none, oneSession{}, "proj")
 		if err != nil {
 			t.Fatalf("resolveDoraProjectRoot: %v", err)
 		}
@@ -262,7 +263,7 @@ type countingRootGit struct {
 	unreadGit
 }
 
-func (g *countingRootGit) GetGitRoot(cwd string) (string, bool) { return g.fn(cwd) }
+func (g *countingRootGit) GetGitRoot(_ context.Context, cwd string) (string, bool) { return g.fn(cwd) }
 
 // enricherGit is a GitResolver whose branch/name probes report a non-answer.
 type enricherGit struct {
@@ -276,10 +277,18 @@ type enricherGit struct {
 	root           string
 }
 
-func (g *enricherGit) GetBranch(string) (string, bool)       { return g.branch, g.branchAnswered }
-func (g *enricherGit) GetProjectName(string) (string, bool)  { return g.name, g.nameAnswered }
-func (g *enricherGit) GetGitRoot(string) (string, bool)      { return g.root, g.rootAnswered }
-func (g *enricherGit) GetHeadCommit(string) (string, bool)   { return g.head, g.headAnswered }
+func (g *enricherGit) GetBranch(context.Context, string) (string, bool) {
+	return g.branch, g.branchAnswered
+}
+func (g *enricherGit) GetProjectName(context.Context, string) (string, bool) {
+	return g.name, g.nameAnswered
+}
+func (g *enricherGit) GetGitRoot(context.Context, string) (string, bool) {
+	return g.root, g.rootAnswered
+}
+func (g *enricherGit) GetHeadCommit(context.Context, string) (string, bool) {
+	return g.head, g.headAnswered
+}
 func (g *enricherGit) GetBranchFromTranscript(string) string { return "" }
 
 // GetCWDFromTranscript reports a MOVE: RefreshOnActivity only reaches the
@@ -436,7 +445,7 @@ func TestYieldSweepReportsRootsItCouldNotScan(t *testing.T) {
 	git := &unreadRevertGit{root: "/repo", unread: true}
 	s := NewYieldSweeper(&diagFakeRepo{}, git, log, 0)
 
-	s.collectRevertedSHAs(map[string]string{"/repo": "/repo/sub"})
+	s.collectRevertedSHAs(context.Background(), map[string]string{"/repo": "/repo/sub"})
 
 	if !log.errorMentioning("could not read git history") {
 		t.Errorf("a root whose revert scan never ran was not reported; logged: %v\n"+
@@ -447,7 +456,7 @@ func TestYieldSweepReportsRootsItCouldNotScan(t *testing.T) {
 	// sweeper that always complained would pass the arm above.
 	quiet := &gateLog{}
 	NewYieldSweeper(&diagFakeRepo{}, &unreadRevertGit{root: "/repo"}, quiet, 0).
-		collectRevertedSHAs(map[string]string{"/repo": "/repo/sub"})
+		collectRevertedSHAs(context.Background(), map[string]string{"/repo": "/repo/sub"})
 	if quiet.errorMentioning("could not read git history") {
 		t.Errorf("a fully readable sweep logged an unread-roots error: %v", quiet.errors)
 	}
@@ -468,7 +477,7 @@ func TestYieldSweepScansTheRootNotAPossiblyDeletedCWD(t *testing.T) {
 	s := NewYieldSweeper(&diagFakeRepo{}, git, &gateLog{}, 0)
 
 	rootDirs := map[string]string{}
-	if !s.recordRootDir(rootDirs, "/repo/worktrees/gone") {
+	if !s.recordRootDir(context.Background(), rootDirs, "/repo/worktrees/gone") {
 		t.Fatal("a resolvable root was reported as unresolved")
 	}
 	if got := rootDirs["/repo"]; got != "/repo" {
@@ -490,13 +499,13 @@ type unreadRevertGit struct {
 	rootUnread bool
 }
 
-func (g *unreadRevertGit) GetGitRoot(string) (string, bool) {
+func (g *unreadRevertGit) GetGitRoot(context.Context, string) (string, bool) {
 	if g.rootUnread {
 		return "", false
 	}
 	return g.root, true
 }
-func (g *unreadRevertGit) RevertedCommits(string) ([]string, bool) {
+func (g *unreadRevertGit) RevertedCommits(context.Context, string) ([]string, bool) {
 	if g.unread {
 		return nil, false
 	}
@@ -515,7 +524,7 @@ func TestYieldSweepReportsRootsItCouldNotResolve(t *testing.T) {
 	log := &gateLog{}
 	s := NewYieldSweeper(&diagFakeRepo{}, &unreadRevertGit{rootUnread: true}, log, 0)
 
-	s.indexByCommit([]*session.SessionState{
+	s.indexByCommit(context.Background(), []*session.SessionState{
 		{SessionID: "a", HeadCommit: "abc", CWD: "/repo/one"},
 		{SessionID: "b", HeadCommit: "def", CWD: "/repo/two"},
 	})
@@ -528,7 +537,7 @@ func TestYieldSweepReportsRootsItCouldNotResolve(t *testing.T) {
 	// Vacuity guard: a sweep that resolved every root must log nothing.
 	quiet := &gateLog{}
 	NewYieldSweeper(&diagFakeRepo{}, &unreadRevertGit{root: "/repo"}, quiet, 0).
-		indexByCommit([]*session.SessionState{{SessionID: "a", HeadCommit: "abc", CWD: "/repo/one"}})
+		indexByCommit(context.Background(), []*session.SessionState{{SessionID: "a", HeadCommit: "abc", CWD: "/repo/one"}})
 	if quiet.errorMentioning("could not resolve a repo root") {
 		t.Errorf("a fully resolvable sweep logged an unresolved-roots error: %v", quiet.errors)
 	}

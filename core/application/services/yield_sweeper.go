@@ -22,11 +22,40 @@ type yieldSessionStore interface {
 	Save(state *session.SessionState) error
 }
 
+// yieldSweepBudget is the ONE aggregate deadline covering a whole sweep: the
+// per-session repo-root resolutions and one revert scan per deduped project
+// root. Both are unbounded in the input — a user's session list and the number
+// of distinct repositories in it — and #1553 raised the revert scan's own
+// ceiling to 30s, so before #1563 a sweep's worst case was
+// `(sessions + roots) x 30s` with nothing bounding the sum.
+//
+// The value is set by what it has to fit inside, which here is the sweep's own
+// tick: DefaultYieldSweepInterval. Go's Ticker drops ticks it overruns, so a
+// sweep longer than its interval does not queue up — it silently becomes a
+// slower sweep, which is the failure being bounded. A sixth of the default
+// interval leaves five sixths of every tick free and is pinned against it by
+// TestYieldSweepBudgetFitsItsOwnTick.
+//
+// One standing limit, stated rather than left to be discovered: the relation is
+// pinned against the DEFAULT interval, and a user who configures
+// YieldSweepInterval below this budget can still have a sweep outlive its tick.
+// That is the pre-existing behaviour unchanged (before #1563 any sweep could),
+// and it is bounded rather than unbounded now, so the budget is not derived
+// from s.interval — a small configured interval would then produce a budget too
+// small to read a single repository, turning a fast tick into a sweep that
+// never finishes anything.
+const yieldSweepBudget = DefaultYieldSweepInterval / 6
+
 // yieldGitProbe is the narrow git surface the sweeper needs: resolve a repo
 // root (to dedupe projects) and list the commits a repo has reverted.
+//
+// Both take the aggregate budget explicitly, for the reason doraGitProbe's
+// methods do: the context this sweep checks its loops against and the one its
+// children run under must be the same object, not two that a wiring could let
+// disagree.
 type yieldGitProbe interface {
-	GetGitRoot(dir string) (root string, answered bool)
-	RevertedCommits(dir string) (shas []string, answered bool)
+	GetGitRoot(ctx context.Context, dir string) (root string, answered bool)
+	RevertedCommits(ctx context.Context, dir string) (shas []string, answered bool)
 }
 
 // YieldSweeper periodically correlates `git revert` commits back to the
@@ -52,8 +81,12 @@ func NewYieldSweeper(store yieldSessionStore, git yieldGitProbe, log outbound.Lo
 }
 
 // Run sweeps once at startup, then every interval until ctx is cancelled.
+//
+// ctx is passed INTO each sweep since #1563, not merely consulted between them:
+// a daemon shutting down mid-sweep now cancels the git walks in flight instead
+// of waiting out however many 30s history ceilings are left.
 func (s *YieldSweeper) Run(ctx context.Context) {
-	s.Sweep()
+	s.Sweep(ctx)
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 	for {
@@ -61,7 +94,7 @@ func (s *YieldSweeper) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.Sweep()
+			s.Sweep(ctx)
 		}
 	}
 }
@@ -69,19 +102,30 @@ func (s *YieldSweeper) Run(ctx context.Context) {
 // Sweep runs one correlation pass and returns the number of sessions newly
 // flipped to reverted. Safe to call repeatedly; only un-reverted sessions with
 // a recorded HeadCommit are ever touched.
-func (s *YieldSweeper) Sweep() int {
+//
+// ctx bounds the whole pass at yieldSweepBudget (#1563). A sweep abandoned on
+// it flips fewer sessions and says so — every root it did not reach is counted
+// and logged as unscanned, never as scanned-and-clean, which is the #1543
+// polarity this file already had for a git that could not run. Nothing is
+// permanently lost by abandoning: the sweep is idempotent and re-runs every
+// interval, and rootDirs is a map, so Go's randomized range order means
+// successive sweeps do not deterministically starve the same roots.
+func (s *YieldSweeper) Sweep(ctx context.Context) int {
+	ctx, cancel := context.WithTimeout(ctx, yieldSweepBudget)
+	defer cancel()
+
 	sessions, err := s.store.ListAll()
 	if err != nil {
 		s.logError("failed to list sessions for yield sweep", err)
 		return 0
 	}
 
-	byCommit, rootDirs := s.indexByCommit(sessions)
+	byCommit, rootDirs := s.indexByCommit(ctx, sessions)
 	if len(byCommit) == 0 {
 		return 0
 	}
 
-	reverted := s.collectRevertedSHAs(rootDirs)
+	reverted := s.collectRevertedSHAs(ctx, rootDirs)
 	if len(reverted) == 0 {
 		return 0
 	}
@@ -92,7 +136,7 @@ func (s *YieldSweeper) Sweep() int {
 // indexByCommit indexes un-reverted, git-tracked sessions by their HEAD
 // commit, and collects one representative directory per unique repo root so
 // each project's history is scanned exactly once.
-func (s *YieldSweeper) indexByCommit(sessions []*session.SessionState) (map[string][]*session.SessionState, map[string]string) {
+func (s *YieldSweeper) indexByCommit(ctx context.Context, sessions []*session.SessionState) (map[string][]*session.SessionState, map[string]string) {
 	byCommit := make(map[string][]*session.SessionState)
 	rootDirs := make(map[string]string)
 	unresolved := 0
@@ -101,7 +145,22 @@ func (s *YieldSweeper) indexByCommit(sessions []*session.SessionState) (map[stri
 			continue
 		}
 		byCommit[st.HeadCommit] = append(byCommit[st.HeadCommit], st)
-		if !s.recordRootDir(rootDirs, st.CWD) {
+		// #1563: the loop checks the aggregate itself rather than leaving it to
+		// the children. Inheriting alone would run a doomed `rev-parse` per
+		// remaining session and report every one of them as unresolved, which
+		// is the wrong fact (we stopped looking) and is also the count this
+		// sweep logs. Indexing continues — byCommit costs no git — so a
+		// truncated sweep still flips what the roots it DID read found.
+		//
+		// The CWD test is repeated here, ahead of recordRootDir's own, so that
+		// only a session that would actually have cost a git call is counted as
+		// unresolved: an empty CWD is "nothing to look at", which an
+		// abandonment does not turn into "not looked at".
+		if st.CWD != "" && budgetSpent(ctx) {
+			unresolved++
+			continue
+		}
+		if !s.recordRootDir(ctx, rootDirs, st.CWD) {
 			unresolved++
 		}
 	}
@@ -119,11 +178,11 @@ func (s *YieldSweeper) indexByCommit(sessions []*session.SessionState) (map[stri
 // resolved is false only when the root probe never ANSWERED — a different fact
 // from "not a repo", and the one the caller counts and reports rather than
 // dropping.
-func (s *YieldSweeper) recordRootDir(rootDirs map[string]string, cwd string) (resolved bool) {
+func (s *YieldSweeper) recordRootDir(ctx context.Context, rootDirs map[string]string, cwd string) (resolved bool) {
 	if cwd == "" {
 		return true
 	}
-	root, answered := s.git.GetGitRoot(cwd)
+	root, answered := s.git.GetGitRoot(ctx, cwd)
 	if !answered {
 		// A cwd whose root never resolved never enters rootDirs, so
 		// collectRevertedSHAs — which walks that map — cannot report it. It is
@@ -151,11 +210,22 @@ func (s *YieldSweeper) recordRootDir(rootDirs map[string]string, cwd string) (re
 
 // collectRevertedSHAs gathers every reverted commit SHA across the deduped
 // project roots.
-func (s *YieldSweeper) collectRevertedSHAs(rootDirs map[string]string) map[string]bool {
+func (s *YieldSweeper) collectRevertedSHAs(ctx context.Context, rootDirs map[string]string) map[string]bool {
 	reverted := make(map[string]bool)
 	unread := 0
 	for _, dir := range rootDirs {
-		shas, answered := s.git.RevertedCommits(dir)
+		// #1563: a root abandoned on the aggregate budget is a root we declined
+		// to scan, so it joins the unread count and the log line below rather
+		// than being dropped — "we stopped looking" and "git could not be run"
+		// are different facts, but they are the same fact HERE: this sweep did
+		// not read that history and must not be counted as having found no
+		// reverts in it. The loop checks rather than inheriting, so the count is
+		// the truth instead of "every remaining root failed".
+		if budgetSpent(ctx) {
+			unread++
+			continue
+		}
+		shas, answered := s.git.RevertedCommits(ctx, dir)
 		if !answered {
 			// #1543: "git could not be run" is not "this repo has no
 			// reverts". The sweep is idempotent and re-runs every interval, so
