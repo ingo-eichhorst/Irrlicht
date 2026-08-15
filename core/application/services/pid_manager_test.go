@@ -96,7 +96,7 @@ func TestAllowsSession(t *testing.T) {
 			if tc.requireKnownHost {
 				requireKnownHost["antigravity"] = true
 			}
-			pm.SetHostGate(requireKnownHost, func(pid int) bool { return tc.isKnownHost })
+			pm.SetHostGate(requireKnownHost, func(_ string, pid int) bool { return tc.isKnownHost })
 
 			if got := pm.AllowsSession("sess1", "antigravity", "/some/cwd", "/some/transcript.jsonl"); got != tc.want {
 				t.Errorf("AllowsSession() = %v, want %v", got, tc.want)
@@ -135,7 +135,7 @@ func TestAllowsSession_ClaimAwareDisambiguation(t *testing.T) {
 		OnSessionDeleted: func(string) {},
 	})
 	var checkedPID int
-	pm.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool {
+	pm.SetHostGate(map[string]bool{"antigravity": true}, func(_ string, pid int) bool {
 		checkedPID = pid
 		return true
 	})

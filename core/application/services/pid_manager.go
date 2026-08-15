@@ -102,8 +102,14 @@ type PIDManager struct {
 	// interactive terminal or IDE (e.g. CodexBar keeping an Antigravity `agy`
 	// process running for quota polling — issue #784). Both nil disables the
 	// check; installed once at startup via SetHostGate.
+	//
+	// isKnownHost takes the session id it is deciding about purely so it can
+	// SAY so: the gate is the only place that knows the pid and why it decided,
+	// and this layer is the only place that knows the id the session is about
+	// to get, so a line that can name a phantom admission needs the id passed
+	// inward (#1525). Nothing here reads a verdict out of it beyond the bool.
 	requireKnownHost map[string]bool
-	isKnownHost      func(pid int) bool
+	isKnownHost      func(sessionID string, pid int) bool
 
 	// onSessionDeleted is called when a session is deleted so the caller can
 	// clean up its own tracking structures (e.g. projectSessions map).
@@ -238,7 +244,7 @@ func (pm *PIDManager) SetInfraReaper(excluders map[string]func([]string) bool, r
 // requireKnownHost maps adapter name → Process.RequireKnownHost; isKnownHost
 // resolves a PID's process ancestry. Both nil (the default, and what
 // tests/demo mode leave) disables the check. Called once at startup.
-func (pm *PIDManager) SetHostGate(requireKnownHost map[string]bool, isKnownHost func(pid int) bool) {
+func (pm *PIDManager) SetHostGate(requireKnownHost map[string]bool, isKnownHost func(sessionID string, pid int) bool) {
 	pm.requireKnownHost = requireKnownHost
 	pm.isKnownHost = isKnownHost
 }
@@ -267,6 +273,14 @@ func (pm *PIDManager) RequiresKnownHost(adapter string) bool {
 // PID they're looking at — a mismatch would let the gate ancestry-check a
 // stale/unrelated PID sharing the same cwd instead of the one that's actually
 // about to be bound.
+//
+// Note what a `true` from here does and does not mean, because #1525 turned on
+// it: only the LAST return is a gate outcome. The four before it — the adapter
+// did not opt in, no discoverer is installed, no PID was found, no gate is
+// wired — are admissions the gate was never asked about, and they are
+// indistinguishable from a resolved interactive host at this layer and at every
+// layer above it. That is why the gate's own outcomes are counted where they
+// are decided rather than here.
 func (pm *PIDManager) AllowsSession(sessionID, adapter, cwd, transcriptPath string) bool {
 	if !pm.requireKnownHost[adapter] {
 		return true
@@ -282,7 +296,7 @@ func (pm *PIDManager) AllowsSession(sessionID, adapter, cwd, transcriptPath stri
 	if pm.isKnownHost == nil {
 		return true
 	}
-	return pm.isKnownHost(pid)
+	return pm.isKnownHost(sessionID, pid)
 }
 
 // captureLauncher invokes the launcher-env reader if one is installed and

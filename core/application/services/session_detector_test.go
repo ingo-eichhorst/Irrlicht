@@ -153,7 +153,7 @@ func TestSessionDetector_NewSession_SkipsNonInteractiveHost(t *testing.T) {
 		},
 	}
 	det := services.NewSessionDetector([]inbound.Watcher{tw}, defaultSessionDetectorDeps(pw, repo, discovers))
-	det.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool { return false })
+	det.SetHostGate(map[string]bool{"antigravity": true}, func(_ string, pid int) bool { return false })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -191,7 +191,7 @@ func TestSessionDetector_NewSession_AdmitsKnownHost(t *testing.T) {
 		},
 	}
 	det := services.NewSessionDetector([]inbound.Watcher{tw}, defaultSessionDetectorDeps(pw, repo, discovers))
-	det.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool { return true })
+	det.SetHostGate(map[string]bool{"antigravity": true}, func(_ string, pid int) bool { return true })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -240,7 +240,7 @@ func TestSessionDetector_NewSession_HostGateResolvesCWDFromTranscript(t *testing
 	deps := defaultSessionDetectorDeps(pw, repo, discovers)
 	deps.Git = &cwdGit{cwd: wantCWD}
 	det := services.NewSessionDetector([]inbound.Watcher{tw}, deps)
-	det.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool { return false })
+	det.SetHostGate(map[string]bool{"antigravity": true}, func(_ string, pid int) bool { return false })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -290,7 +290,7 @@ func TestSessionDetector_NewSession_HostGateRejectionSurvivesIdentityLessRetry(t
 	deps := defaultSessionDetectorDeps(pw, repo, discovers)
 	deps.Git = &cwdGit{cwd: "/Users/ghost"}
 	det := services.NewSessionDetector([]inbound.Watcher{tw}, deps)
-	det.SetHostGate(map[string]bool{"antigravity": true}, func(pid int) bool { return false })
+	det.SetHostGate(map[string]bool{"antigravity": true}, func(_ string, pid int) bool { return false })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

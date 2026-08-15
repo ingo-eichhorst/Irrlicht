@@ -476,12 +476,17 @@ func resolveHostBundleIDVia(ctx context.Context, pid int, procInfo procInfoProbe
 // A COMPLETED walk that found no allow-listed host still rejects: that is #784
 // and it is unchanged.
 //
-// Nothing counts how often either walk fails to get an answer (#1534), which is
-// the standing cost of failing open here: a probe failing constantly is
-// indistinguishable from one that never fails, and the gate would just quietly
-// stop gating. Measured on one machine, plutil stays ~25x under its ceiling
-// even at 12x CPU oversubscription, so whatever triggers a real non-answer is
-// not CPU pressure and is still unidentified.
+// Which of the three outcomes each evaluation reached IS counted (#1525): the
+// walk is classified once, by hostGateOutcomeFrom, and this bool is derived
+// from that classification rather than computed beside it. hostgate.go carries
+// why the count lives here and not at the admission gate above, and what the
+// bundle does with it. The per-probe non-answer counts underneath it are
+// #1534's; the two figures are meant to reconcile, and #1574 is the known
+// reason they can fail to.
+//
+// Measured on one machine, plutil stays ~25x under its ceiling even at 12x CPU
+// oversubscription, so whatever triggers a real non-answer is not CPU pressure
+// and is still unidentified.
 //
 // That is also why #1529 bounded the herdr client indirection and left THIS
 // call site running under noAggregateBudget(): here an aggregate deadline would
@@ -498,7 +503,18 @@ func resolveHostBundleIDVia(ctx context.Context, pid int, procInfo procInfoProbe
 // resolveHostBundleIDFromAncestry says why that mattered; bundleIDVia is where
 // the line between an answer and a non-answer is drawn.
 func IsKnownInteractiveHost(pid int) bool {
-	return isKnownInteractiveHostSharingReads(noAggregateBudget(), pid, newAncestryReads(), bundleIDForAppPath)
+	return hostGateFor(pid).admits()
+}
+
+// hostGateFor is IsKnownInteractiveHost's outcome rather than its verdict, and
+// is what the production entry point (HostGate, hostgate.go) evaluates.
+//
+// Both spellings go through this one function, so the logging gate and the bare
+// predicate cannot disagree about a pid — the #1390 lesson, which is that "the
+// thing under test" and "the thing the daemon builds" must be one object rather
+// than two that are believed to match.
+func hostGateFor(pid int) hostGateOutcome {
+	return hostGateOutcomeSharingReads(noAggregateBudget(), pid, newAncestryReads(), bundleIDForAppPath)
 }
 
 // isKnownInteractiveHostSharingReads builds both walks over ONE per-resolve
@@ -516,7 +532,12 @@ func IsKnownInteractiveHost(pid int) bool {
 // the walks is testable, this one so what the walks READ is countable. A test
 // that injected walks could not observe a memo the walks are built out of.
 func isKnownInteractiveHostSharingReads(ctx context.Context, pid int, reads *ancestryReads, bundleID bundleIDProbe) bool {
-	return isKnownInteractiveHostVia(ctx, pid,
+	return hostGateOutcomeSharingReads(ctx, pid, reads, bundleID).admits()
+}
+
+// hostGateOutcomeSharingReads is isKnownInteractiveHostSharingReads' outcome.
+func hostGateOutcomeSharingReads(ctx context.Context, pid int, reads *ancestryReads, bundleID bundleIDProbe) hostGateOutcome {
+	return hostGateOutcomeVia(ctx, pid,
 		func(ctx context.Context, pid int) (string, int, bool) {
 			return resolveHostFromAncestryVia(ctx, pid, reads.probe)
 		},
@@ -552,6 +573,21 @@ type ancestryWalk func(ctx context.Context, pid int) (host string, hostPID int, 
 // could only move the answer toward rejection, on evidence this gate has
 // already decided not to trust.
 func isKnownInteractiveHostVia(ctx context.Context, pid int, walkTerm, walkBundle ancestryWalk) bool {
+	return hostGateOutcomeVia(ctx, pid, walkTerm, walkBundle).admits()
+}
+
+// hostGateOutcomeVia is isKnownInteractiveHostVia's outcome, and is the ONE
+// place a gate evaluation is counted (#1525).
+//
+// Counted here rather than in the pure hostGateOutcomeFrom below, or in
+// hostGateFor above, and the middle is the right place for a reason at each
+// end. hostGateOutcomeFrom is reached by a table test with synthetic inputs and
+// no walk behind it, so counting there would count decisions nobody made;
+// hostGateFor is reached only with live ancestry, so counting there would leave
+// every outcome but the machine's own unreachable from a test. This function is
+// the innermost point that both performs one complete evaluation and can be
+// driven to any of the three by injecting the walks.
+func hostGateOutcomeVia(ctx context.Context, pid int, walkTerm, walkBundle ancestryWalk) hostGateOutcome {
 	term, _, complete := walkTerm(ctx, pid)
 	bundleID := ""
 	if term == "" && complete {
@@ -559,21 +595,44 @@ func isKnownInteractiveHostVia(ctx context.Context, pid int, walkTerm, walkBundl
 		// duplicate ps shellouts whenever the curated map already matched.
 		bundleID, _, complete = walkBundle(ctx, pid)
 	}
-	return isKnownInteractiveHostFrom(term, bundleID, complete)
+	return observeHostGate(hostGateOutcomeFrom(term, bundleID, complete))
 }
 
 // isKnownInteractiveHostFrom is the pure decision behind IsKnownInteractiveHost,
 // split out so the allow-list logic can be tested with synthetic ancestry
 // results instead of depending on whatever launched the test binary.
 //
+// Since #1525 it is derived from hostGateOutcomeFrom rather than deciding
+// anything itself, so the bool the daemon acts on and the row the diagnostics
+// bundle publishes come from ONE classification of ONE walk. A second copy of
+// the allow-list check — one to decide, one to label — is the drift this repo
+// keeps paying for elsewhere, and there is no version of it that fails
+// visibly.
+func isKnownInteractiveHostFrom(termProgram, bundleID string, complete bool) bool {
+	return hostGateOutcomeFrom(termProgram, bundleID, complete).admits()
+}
+
+// hostGateOutcomeFrom is the three-way classification the gate's bool is
+// derived from: which of the outcomes in hostgate.go this walk reached.
+//
 // complete is checked first and on its own: when the walk aborted, termProgram
 // and bundleID are "" for a reason that says nothing about the host, so reading
-// the allow-list at all would be reading a value that was never observed.
-func isKnownInteractiveHostFrom(termProgram, bundleID string, complete bool) bool {
+// the allow-list at all would be reading a value that was never observed. That
+// ordering is also what keeps the aborted arm distinguishable from the
+// completed-miss arm — both carry the same two empty strings, and the
+// completeness bit is the only thing separating a session admitted on no
+// evidence from #784 doing its job.
+//
+// Pure, and deliberately does not count: it is reached by a table test with
+// synthetic inputs and no walk behind it. hostGateOutcomeVia counts.
+func hostGateOutcomeFrom(termProgram, bundleID string, complete bool) hostGateOutcome {
 	if !complete {
-		return true
+		return hostGateWalkAborted
 	}
-	return termProgram != "" || knownEmbeddedHostBundleIDs[bundleID]
+	if termProgram != "" || knownEmbeddedHostBundleIDs[bundleID] {
+		return hostGateHostMatched
+	}
+	return hostGateNoKnownHost
 }
 
 // resolveTermProgramFromAncestry is a thin wrapper that discards the host

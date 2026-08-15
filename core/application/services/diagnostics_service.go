@@ -160,6 +160,37 @@ type ProbeHealthSnapshot struct {
 	// they are reported beside them rather than as an outcome.
 	HerdrCandidatesProbed            uint64
 	HerdrCandidatesAbandonedOnBudget uint64
+	// HostGate is #1525's figures: what the #784 host-admission gate decided,
+	// per outcome. Not probe rows either, and carried here rather than in a
+	// snapshot of their own because they are the DOWNSTREAM view of the same
+	// events — a walk aborts because a probe did not answer, so the cause and
+	// the effect belong in one artifact and one nil-meaningful seam. hooksView
+	// already argues that a fourth such seam is a fourth thing to get wrong in
+	// the --diagnose case.
+	HostGate []HostGateOutcomeCount
+	// HostGateOutcomeRule is what the outcome tokens mean, taken from the
+	// package that decides them for the reason OutcomeRule above is.
+	HostGateOutcomeRule string
+	// UndeclaredHostGateOutcomes is how many evaluations named an outcome
+	// nobody declared. Non-zero means HostGate is INCOMPLETE.
+	UndeclaredHostGateOutcomes uint64
+}
+
+// HostGateOutcomeCount is one outcome of the #784 host-admission gate and how
+// often it happened (issue #1525).
+//
+// The gate has three outcomes on macOS and only one of them left any trace: a
+// completed walk that found no allow-listed host logs a line (that is #784
+// working), while a completed walk that DID find one, and a walk that could not
+// be completed at all, were both silent. The second silence is the expensive
+// one — since #1513 an incomplete walk ADMITS, so the gate quietly stops gating
+// and a session admitted on no evidence has nothing anywhere to explain it.
+type HostGateOutcomeCount struct {
+	// Outcome is the token, e.g. "admitted.walk_aborted". Its prefix is the
+	// verdict, so the table reads without a legend.
+	Outcome string `json:"outcome"`
+	// Count is how many evaluations ended that way.
+	Count uint64 `json:"count"`
 }
 
 // DiagnosticsServiceDeps bundles NewDiagnosticsService's dependencies.
@@ -629,6 +660,7 @@ func (s *DiagnosticsService) probesView() any {
 		return struct {
 			CollectedFrom string `json:"collected_from"`
 			Note          string `json:"note"`
+			HostGateNote  string `json:"host_gate_note"`
 		}{
 			CollectedFrom: "cli",
 			Note: "Collected by `irrlichd --diagnose`, which is not the process that runs the daemon's " +
@@ -637,6 +669,20 @@ func (s *DiagnosticsService) probesView() any {
 				"lsof through the same observer, so this process has a few counts of its own, describing " +
 				"nothing but its own bundle collection — which is why they are omitted rather than printed. " +
 				"For the daemon's real counts, fetch GET /debug/bundle from the running daemon.",
+			// A DIFFERENT reason from the probe rows above it, in the same
+			// section, and saying which is the point. The probe counters are
+			// non-zero-but-irrelevant here; the host-gate counters are
+			// structurally zero, because runDiagnose never builds a
+			// SessionDetector and therefore never calls SetHostGate, so no code
+			// path in this process can evaluate the gate even once. Copying the
+			// sentence above would teach a reader that this process runs the
+			// gate, and copying hooks.json's would be right by accident.
+			HostGateNote: "The #784 host-gate outcome counters (#1525) are omitted here too, for a DIFFERENT reason " +
+				"than the probe counters above: `irrlichd --diagnose` never builds a session detector, so it never " +
+				"installs the gate and cannot evaluate it — these counters are structurally zero in this process, " +
+				"not small-and-irrelevant. The gate's aborted-walk line IS logged, so events.log in this bundle still " +
+				"carries any `#784 host gate ADMITTED this session` line. For the counts, fetch GET /debug/bundle " +
+				"from the running daemon.",
 		}
 	}
 
@@ -651,36 +697,164 @@ func (s *DiagnosticsService) probesView() any {
 	for _, p := range probes {
 		totalUnanswered += p.Unanswered
 	}
+	// Copied for the reason probes is, and sorted by the same argument: two
+	// captures of one daemon must diff cleanly.
+	hostGate := append([]HostGateOutcomeCount(nil), snap.HostGate...)
+	sort.Slice(hostGate, func(i, j int) bool { return hostGate[i].Outcome < hostGate[j].Outcome })
 	return struct {
-		CollectedFrom    string       `json:"collected_from"`
-		OutcomeRule      string       `json:"outcome_rule"`
-		Probes           []ProbeCount `json:"probes"`
-		TotalUnanswered  uint64       `json:"total_unanswered"`
-		UndeclaredKinds  uint64       `json:"undeclared_probe_kinds,omitempty"`
-		HerdrProbed      uint64       `json:"herdr_client_candidates_probed"`
-		HerdrAbandoned   uint64       `json:"herdr_client_candidates_abandoned_on_budget"`
-		UnansweredNote   string       `json:"unanswered_note,omitempty"`
-		UndeclaredNote   string       `json:"undeclared_probe_kinds_note,omitempty"`
-		HerdrAbandonNote string       `json:"herdr_abandonment_note,omitempty"`
-		MemoNote         string       `json:"memo_note"`
-		PlatformNote     string       `json:"platform_note,omitempty"`
+		CollectedFrom       string                 `json:"collected_from"`
+		OutcomeRule         string                 `json:"outcome_rule"`
+		Probes              []ProbeCount           `json:"probes"`
+		TotalUnanswered     uint64                 `json:"total_unanswered"`
+		UndeclaredKinds     uint64                 `json:"undeclared_probe_kinds,omitempty"`
+		HerdrProbed         uint64                 `json:"herdr_client_candidates_probed"`
+		HerdrAbandoned      uint64                 `json:"herdr_client_candidates_abandoned_on_budget"`
+		HostGate            []HostGateOutcomeCount `json:"host_gate"`
+		HostGateRule        string                 `json:"host_gate_outcome_rule"`
+		HostGateAbortNote   string                 `json:"host_gate_aborted_walk_note,omitempty"`
+		HostGateReconcile   string                 `json:"host_gate_reconciliation_note,omitempty"`
+		HostGateUndeclared  uint64                 `json:"undeclared_host_gate_outcomes,omitempty"`
+		HostGateUndeclNote  string                 `json:"undeclared_host_gate_outcomes_note,omitempty"`
+		HostGatePlatformNte string                 `json:"host_gate_platform_note,omitempty"`
+		UnansweredNote      string                 `json:"unanswered_note,omitempty"`
+		UndeclaredNote      string                 `json:"undeclared_probe_kinds_note,omitempty"`
+		HerdrAbandonNote    string                 `json:"herdr_abandonment_note,omitempty"`
+		MemoNote            string                 `json:"memo_note"`
+		PlatformNote        string                 `json:"platform_note,omitempty"`
 	}{
-		CollectedFrom:    "daemon",
-		OutcomeRule:      snap.OutcomeRule,
-		Probes:           probes,
-		TotalUnanswered:  totalUnanswered,
-		UndeclaredKinds:  snap.UndeclaredKinds,
-		HerdrProbed:      snap.HerdrCandidatesProbed,
-		HerdrAbandoned:   snap.HerdrCandidatesAbandonedOnBudget,
-		UnansweredNote:   unansweredProbeNote(probes),
-		UndeclaredNote:   undeclaredProbeKindsNote(snap.UndeclaredKinds),
-		HerdrAbandonNote: herdrAbandonmentNote(snap.HerdrCandidatesAbandonedOnBudget),
+		CollectedFrom:       "daemon",
+		OutcomeRule:         snap.OutcomeRule,
+		Probes:              probes,
+		TotalUnanswered:     totalUnanswered,
+		UndeclaredKinds:     snap.UndeclaredKinds,
+		HerdrProbed:         snap.HerdrCandidatesProbed,
+		HerdrAbandoned:      snap.HerdrCandidatesAbandonedOnBudget,
+		HostGate:            hostGate,
+		HostGateRule:        snap.HostGateOutcomeRule,
+		HostGateAbortNote:   hostGateAbortedWalkNote(hostGate),
+		HostGateReconcile:   hostGateReconciliationNote(hostGate, probes),
+		HostGateUndeclared:  snap.UndeclaredHostGateOutcomes,
+		HostGateUndeclNote:  undeclaredHostGateOutcomesNote(snap.UndeclaredHostGateOutcomes),
+		HostGatePlatformNte: hostGatePlatformNote(),
+		UnansweredNote:      unansweredProbeNote(probes),
+		UndeclaredNote:      undeclaredProbeKindsNote(snap.UndeclaredKinds),
+		HerdrAbandonNote:    herdrAbandonmentNote(snap.HerdrCandidatesAbandonedOnBudget),
 		MemoNote: "memo_hits are calls a memo answered without starting a child (#1544), so they are NOT " +
 			"included in answered/unanswered — answered+unanswered is how often a child actually ran, and " +
 			"answered+unanswered+memo_hits is how often the probe was asked. Only ps.proc_info and " +
 			"plutil.bundle_id have a memo; a zero elsewhere means there is no memo, not that it never hit.",
 		PlatformNote: probePlatformNote(),
 	}
+}
+
+// hostGateOutcomeCount pulls one outcome's count out of a snapshot. A token the
+// snapshot does not carry reads as zero, which is right: the rows come from the
+// package that declares them, so an absent row is a build without that outcome.
+func hostGateOutcomeCount(rows []HostGateOutcomeCount, outcome string) uint64 {
+	for _, row := range rows {
+		if row.Outcome == outcome {
+			return row.Count
+		}
+	}
+	return 0
+}
+
+// Host-gate outcome tokens, as this layer reads them out of the snapshot.
+//
+// These are strings rather than an import because application/services must not
+// import the inbound adapter that declares them (core/architecture_test.go).
+// The copy is deliberate and narrow: it is used only to pick the two rows the
+// notes below are about, never to decide anything the daemon acts on, and the
+// gate's own verdict is derived from the outcome in the package that owns it —
+// so a rename here can lose a note, and can never change an admission.
+const (
+	hostGateOutcomeWalkAborted  = "admitted.walk_aborted"
+	hostGateOutcomeNotEvaluated = "admitted.not_evaluated"
+)
+
+// hostGateAbortedWalkNote fires only when the #784 gate actually admitted a
+// session on a walk it could not complete — the figure #1513 and #1524 both
+// closed as unmeasured, and the reason this section exists (#1525).
+func hostGateAbortedWalkNote(rows []HostGateOutcomeCount) string {
+	aborted := hostGateOutcomeCount(rows, hostGateOutcomeWalkAborted)
+	if aborted == 0 {
+		return ""
+	}
+	var evaluated uint64
+	for _, row := range rows {
+		if row.Outcome != hostGateOutcomeNotEvaluated {
+			evaluated += row.Count
+		}
+	}
+	return fmt.Sprintf("The #784 host-admission gate admitted %d of %d evaluated session(s) on an ancestry walk it "+
+		"could NOT complete. Each of those was admitted on no evidence: the walk did not report a non-interactive "+
+		"host, it reported nothing at all, and admitting is the deliberate direction (#1513) because rejecting on an "+
+		"unanswered probe declines a legitimate session for the lifetime of the daemon. If a session appeared that "+
+		"nobody started interactively, these are the candidates, and events.log names them (component host-gate). "+
+		"This is a different row from rejected.no_known_host, which is a walk that RAN and found no allow-listed "+
+		"terminal or IDE — that one is #784 working.", aborted, evaluated)
+}
+
+// hostGateReconciliationNote cross-checks #1525's aborted walks against
+// #1534's probe non-answers, which is the pair of numbers neither issue could
+// compare on its own.
+//
+// A walk aborts because readProcInfo or bundleIDForAppPath returned an error,
+// and both are bounded shellouts counted by ps.proc_info and plutil.bundle_id.
+// So aborted walks with ZERO recorded non-answers is not a contradiction to
+// puzzle over — it is #1574, which records that readProcInfo classifies an
+// ANSWERED "no such process" (`ps` exit 1 for a reaped pid) as a failure, so
+// the walk aborts while the probe counter records health. Saying so here is
+// what keeps a reader from concluding the counters are broken.
+func hostGateReconciliationNote(rows []HostGateOutcomeCount, probes []ProbeCount) string {
+	aborted := hostGateOutcomeCount(rows, hostGateOutcomeWalkAborted)
+	if aborted == 0 {
+		return ""
+	}
+	var nonAnswers uint64
+	for _, p := range probes {
+		if p.Probe == "ps.proc_info" || p.Probe == "plutil.bundle_id" {
+			nonAnswers += p.Unanswered
+		}
+	}
+	note := fmt.Sprintf("Cross-check: %d aborted walk(s) against %d unanswered ps.proc_info/plutil.bundle_id "+
+		"probe(s), the only two children a walk can abort on. ", aborted, nonAnswers)
+	if nonAnswers == 0 {
+		return note + "Zero non-answers with a non-zero abort count is NOT a broken counter: it is #1574, where " +
+			"readProcInfo treats an ANSWERED \"no such process\" (`ps` exits 1 for a pid it cannot find, e.g. one " +
+			"reaped mid-walk) as a probe failure, so the walk aborts while ps.proc_info records an answer. This " +
+			"bundle is evidence that path was taken."
+	}
+	return note + "The two are not required to be equal in either direction: one walk reads several ancestors, so " +
+		"one abort can follow several non-answers, and #1574 means an abort can also occur with no non-answer at " +
+		"all (an answered `ps` exit 1 for a reaped pid is classified as a failure by readProcInfo). Aborts far " +
+		"exceeding non-answers points at #1574; non-answers far exceeding aborts means the failing probe is mostly " +
+		"being run by something other than this gate."
+}
+
+// undeclaredHostGateOutcomesNote fires only when an evaluation named an outcome
+// nothing declared — which means the host_gate rows are incomplete, and a
+// reader must not have to work that out by noticing they do not add up.
+func undeclaredHostGateOutcomesNote(n uint64) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d host-gate evaluation(s) named an outcome that is not in the declared set, so the "+
+		"host_gate rows above are INCOMPLETE and no row accounts for them. This is a wiring defect in the "+
+		"daemon, not a machine condition.", n)
+}
+
+// hostGatePlatformNote says out loud that ancestry walking is macOS-only, so a
+// non-darwin bundle's admitted.not_evaluated row reads as "this platform
+// declines to look" rather than as a gate that admitted everything.
+func hostGatePlatformNote() string {
+	if runtime.GOOS == "darwin" {
+		return ""
+	}
+	return "The #784 gate walks process ancestry, which is implemented on macOS only — the exclusion signal it " +
+		"backs (a menu-bar app keeping an agent CLI alive for quota polling) does not exist on " + runtime.GOOS +
+		". So every row here but admitted.not_evaluated is structurally zero, and that row is the gate reporting " +
+		"that it declined to look rather than a verdict it reached."
 }
 
 // unansweredProbeNote explains what a non-zero unanswered count means, and —

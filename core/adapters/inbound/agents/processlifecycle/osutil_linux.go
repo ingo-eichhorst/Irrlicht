@@ -88,7 +88,19 @@ func kittyWindowIDForPID(ctx context.Context, socket string, sessionPID int) (st
 // fail open. The exclusion signal it backs (CodexBar's non-interactive `agy`
 // process, issue #784) only exists on macOS, so failing closed here would
 // reject every antigravity CLI session on this platform instead.
-func IsKnownInteractiveHost(pid int) bool { return true }
+func IsKnownInteractiveHost(pid int) bool { return hostGateFor(pid).admits() }
+
+// hostGateFor reports that this platform did not evaluate the gate, rather than
+// a verdict it never reached (#1525).
+//
+// This is the whole of the non-darwin constraint on that issue: the stub admits
+// unconditionally, so counting it as admitted.host_matched would publish an
+// ancestry verdict from a daemon that never read an ancestor, and counting
+// nothing at all would make a Linux bundle's three zeros indistinguishable from
+// a darwin daemon whose gate was never exercised. admitted.not_evaluated is
+// neither — it says the gate was consulted N times and this platform declined
+// to look, which is the fact this build actually has.
+func hostGateFor(pid int) hostGateOutcome { return observeHostGate(hostGateNotEvaluated) }
 
 // herdrClientLauncher resolves a herdr pane's window through the attached
 // client (#1350). Darwin-only: the identity it produces is only consumed by the
