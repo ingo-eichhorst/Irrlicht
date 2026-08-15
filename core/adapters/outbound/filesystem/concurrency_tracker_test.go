@@ -733,9 +733,13 @@ type countingResolver struct {
 	mu    sync.Mutex
 	calls map[string]int
 	delay time.Duration
+	// unread makes the double report a NON-ANSWER — git could not be run —
+	// rather than a resolved name (#1543). The zero value answers, so every
+	// pre-existing use is unchanged.
+	unread bool
 }
 
-func (r *countingResolver) GetProjectName(dir string) string {
+func (r *countingResolver) GetProjectName(dir string) (string, bool) {
 	r.mu.Lock()
 	if r.calls == nil {
 		r.calls = map[string]int{}
@@ -746,7 +750,10 @@ func (r *countingResolver) GetProjectName(dir string) string {
 	if delay > 0 {
 		time.Sleep(delay)
 	}
-	return filepath.Base(dir)
+	if r.unread {
+		return "", false
+	}
+	return filepath.Base(dir), true
 }
 
 func (r *countingResolver) Calls(dir string) int {

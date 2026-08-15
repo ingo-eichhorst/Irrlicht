@@ -442,10 +442,10 @@ func toDoraMetric(m dora.Metric) doraMetric {
 // historyGitReader is the narrow git surface chart=dora needs, matching the
 // historySessionLister convention of small per-consumer interfaces.
 type historyGitReader interface {
-	GetGitRoot(dir string) string
-	ListReleaseTags(dir string) []dora.TagInfo
-	CommitsInRange(dir, fromRef, toRef string) []dora.CommitInfo
-	TagContaining(dir, hash string) string
+	GetGitRoot(dir string) (root string, answered bool)
+	ListReleaseTags(dir string) (tags []dora.TagInfo, answered bool)
+	CommitsInRange(dir, fromRef, toRef string) (commits []dora.CommitInfo, answered bool)
+	TagContaining(dir, hash string) (tag string, answered bool)
 }
 
 // serveHistoryDoraChart serves chart=dora (#951): requires exactly one

@@ -251,12 +251,12 @@ func (l *nopLogger) Close() error                                            { r
 
 type stubGit struct{}
 
-func (g *stubGit) GetBranch(_ string) string               { return "main" }
-func (g *stubGit) GetProjectName(dir string) string        { return filepath.Base(dir) }
-func (g *stubGit) GetGitRoot(_ string) string              { return "" }
-func (g *stubGit) GetHeadCommit(_ string) string           { return "" }
-func (g *stubGit) GetBranchFromTranscript(_ string) string { return "" }
-func (g *stubGit) GetCWDFromTranscript(_ string) string    { return "" }
+func (g *stubGit) GetBranch(_ string) (string, bool)        { return "main", true }
+func (g *stubGit) GetProjectName(dir string) (string, bool) { return filepath.Base(dir), true }
+func (g *stubGit) GetGitRoot(_ string) (string, bool)       { return "", true }
+func (g *stubGit) GetHeadCommit(_ string) (string, bool)    { return "", true }
+func (g *stubGit) GetBranchFromTranscript(_ string) string  { return "" }
+func (g *stubGit) GetCWDFromTranscript(_ string) string     { return "" }
 
 type stubMetrics struct{}
 
