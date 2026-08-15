@@ -118,11 +118,15 @@ const runProbeName = "runProbe"
 
 // shelloutClassifiers are the UNQUALIFIED calls that count as answering "did
 // the child answer?". lsofProbeRan is here because it IS probeAnswered with
-// lsof's allowlist bound (osutil_darwin.go); a third tool-specific wrapper
-// would be added here in the same breath as being written.
+// lsof's allowlist bound (osutil_darwin.go), and #1501's tmuxListedClients is
+// the third: it is probeAnswered with an EMPTY allowlist and a further exit-0
+// requirement, because tmux has no "nothing to report" status at all. A fourth
+// tool-specific wrapper is added here in the same breath as being written —
+// that instruction has now been followed once, which is the evidence it works.
 var shelloutClassifiers = map[string]bool{
-	"probeAnswered": true,
-	"lsofProbeRan":  true,
+	"probeAnswered":     true,
+	"lsofProbeRan":      true,
+	"tmuxListedClients": true,
 }
 
 // shelloutPkgClassifiers are the QUALIFIED spellings, keyed by the source text
@@ -612,15 +616,15 @@ func TestEveryChildProcessRunsThroughRunProbe(t *testing.T) {
 //
 //   - shelloutTimeout bounds ONE child process. Every shellout in this package
 //     derives it, and #1538's whole point is that the value stays one fact.
-//   - herdrClientBudget bounds a SEQUENCE of them — the lsof scan plus every
+//   - clientHostBudget bounds a SEQUENCE of them — the lsof scan plus every
 //     herdr client candidate behind it — which is a bound shelloutTimeout
 //     cannot express, and its absence is exactly what #1529 was filed about.
 //
 // A third entry is a reviewable diff, which is the property an "any named
 // identifier" rule would have thrown away.
 var namedCeilings = map[string]bool{
-	"shelloutTimeout":   true,
-	"herdrClientBudget": true,
+	"shelloutTimeout":  true,
+	"clientHostBudget": true,
 }
 
 // TestEveryBoundedShelloutUsesTheNamedCeiling is #1538's second half. The 2s
@@ -633,7 +637,7 @@ var namedCeilings = map[string]bool{
 // expressible". Re-derived against the tree as it actually is, that argument
 // does not hold, and it fails twice over:
 //
-//   - There are TWO WithTimeout sites after runProbe, not one. herdrClientBudget
+//   - There are TWO WithTimeout sites after runProbe, not one. clientHostBudget
 //     bounds a SEQUENCE of children (#1529) and so is not a child shellout and
 //     does not live inside runProbe. A second aggregate is foreseeable —
 //     noAggregateBudget's own doc names IsKnownInteractiveHost's ancestry walk
@@ -672,7 +676,7 @@ func TestEveryBoundedShelloutUsesTheNamedCeiling(t *testing.T) {
 	// A floor, not "> 0", for the same reason the classification rule counts
 	// run sites rather than asking whether it saw any at all. Since #1547 it
 	// equals the population rather than sitting below it: there is exactly one
-	// child ceiling (runProbe's) and one aggregate (herdrClientBudget's), and
+	// child ceiling (runProbe's) and one aggregate (clientHostBudget's), and
 	// either disappearing means the scan is looking somewhere else — a third
 	// entry raises this number in the same reviewable diff that adds it.
 	const knownCeilings = 2

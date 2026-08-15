@@ -30,7 +30,7 @@ import (
 // Since #1529 every site derives this ceiling FROM the caller's context rather
 // than from context.Background(), so a child is killed at whichever comes
 // first: its own ceiling, or an aggregate deadline the caller imposed across a
-// whole sequence of them (herdrClientBudget is the one such aggregate today;
+// whole sequence of them (clientHostBudget is the one such aggregate today;
 // noAggregateBudget names the reads that deliberately have none). Nothing about
 // the per-child value changed — what changed is that a caller can now cap the
 // SUM, which this constant never could.

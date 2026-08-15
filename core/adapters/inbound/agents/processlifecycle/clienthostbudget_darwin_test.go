@@ -11,10 +11,15 @@ import (
 	"irrlicht/core/domain/session"
 )
 
-// This file is #1529's behavioural half: what the herdr client loop does when
-// the ONE aggregate deadline covering it runs out. The value half — that the
-// deadline is small enough to be worth having — is
-// TestHerdrReadFitsTheLivenessSweepTick, platform-neutral beside the constant.
+// This file is #1529's behavioural half: what the attached-client loop does
+// when the ONE aggregate deadline covering it runs out. The value half — that
+// the deadline is small enough to be worth having — is
+// TestClientHostReadFitsTheLivenessSweepTick, platform-neutral beside the
+// constant.
+//
+// The loop is shared by both producers since #1501, so every assertion here is
+// a lock on tmux's indirection as much as on herdr's; only the last test, which
+// pins the DERIVATION of the budget, has to be stated once per producer.
 //
 // Every assertion here turns on the BUDGET rather than on a wall clock, which
 // is what the issue asked for and what keeps these tests instant: the loop
@@ -169,11 +174,47 @@ func TestResolveHerdrClientLauncher_DerivesOneBudgetOverScanAndCandidates(t *tes
 	}
 	if !scanDeadline.Equal(candidateDeadline) {
 		t.Errorf("the scan and the candidate loop ran under different deadlines (%v apart): "+
-			"one deadline per stage sums to twice herdrClientBudget and is not the aggregate this fix states (#1529)",
+			"one deadline per stage sums to twice clientHostBudget and is not the aggregate this fix states (#1529)",
 			candidateDeadline.Sub(scanDeadline))
 	}
-	if scanDeadline.After(after.Add(herdrClientBudget)) || !scanDeadline.After(before) {
-		t.Errorf("the derived deadline is %v from the call, want a positive span no longer than herdrClientBudget (%v)",
-			scanDeadline.Sub(before), herdrClientBudget)
+	if scanDeadline.After(after.Add(clientHostBudget)) || !scanDeadline.After(before) {
+		t.Errorf("the derived deadline is %v from the call, want a positive span no longer than clientHostBudget (%v)",
+			scanDeadline.Sub(before), clientHostBudget)
+	}
+}
+
+// TestResolveTmuxClientLauncher_DerivesOneBudgetOverScanAndCandidates is the
+// #1501 twin of the test above, and it is duplicated rather than shared for the
+// one reason the two resolves are not merged: what it pins is that THIS
+// producer derives the budget itself. A table over both would be driven by a
+// helper that derives it once, which is precisely the thing that must be
+// asserted separately at each entry point.
+func TestResolveTmuxClientLauncher_DerivesOneBudgetOverScanAndCandidates(t *testing.T) {
+	var scanDeadline, candidateDeadline time.Time
+	var scanBounded, candidateBounded bool
+
+	before := time.Now()
+	scan := func(ctx context.Context, _ string) ([]int, bool) {
+		scanDeadline, scanBounded = ctx.Deadline()
+		return []int{11}, true
+	}
+	identify := func(ctx context.Context, _ int) (*session.Launcher, bool) {
+		candidateDeadline, candidateBounded = ctx.Deadline()
+		return readableHostlessCandidate()
+	}
+	_, _ = resolveTmuxClientLauncherVia("/private/tmp/tmux-501/default", scan, identify)
+	after := time.Now()
+
+	if !scanBounded || !candidateBounded {
+		t.Fatal("the tmux client indirection ran unbounded: `list-clients` is cheap, but the candidate " +
+			"loop behind it is the same two ancestry walks per candidate herdr pays (#1529)")
+	}
+	if !scanDeadline.Equal(candidateDeadline) {
+		t.Errorf("the scan and the candidate loop ran under different deadlines (%v apart): "+
+			"one deadline per stage sums to twice clientHostBudget", candidateDeadline.Sub(scanDeadline))
+	}
+	if scanDeadline.After(after.Add(clientHostBudget)) || !scanDeadline.After(before) {
+		t.Errorf("the derived deadline is %v from the call, want a positive span no longer than clientHostBudget (%v)",
+			scanDeadline.Sub(before), clientHostBudget)
 	}
 }

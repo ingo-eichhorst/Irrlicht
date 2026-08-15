@@ -19,9 +19,10 @@ import (
 	"irrlicht/core/domain/session"
 )
 
-// herdrClientBudget is the ONE aggregate deadline covering the entire herdr
-// client indirection: the lsof scan that finds the attached clients and every
-// candidate probed behind it (resolveHerdrClientLauncherVia, osutil_darwin.go).
+// clientHostBudget is the ONE aggregate deadline covering an entire attached-
+// client indirection: the scan that finds the attached clients and every
+// candidate probed behind it (resolveHerdrClientLauncherVia and
+// resolveTmuxClientLauncherVia, osutil_darwin.go).
 //
 // It exists because every individual shellout on that path was bounded and the
 // path was not (#1529). resolveClientHostIdentity loops over up to
@@ -30,13 +31,31 @@ import (
 // maxAncestry — so the bound was a COUNT, and one resolve could run to tens of
 // seconds.
 //
+// ONE constant for BOTH producers, which #1501 decided rather than inherited.
+// The two scans differ by more than an order of magnitude — `tmux -S <sock>
+// list-clients` measured at 14ms/call against an `lsof` of a herdr client log
+// at roughly 0.3s — so a per-producer budget was the obvious alternative. It is
+// not taken, for three reasons:
+//
+//   - What the budget bounds is the CANDIDATE LOOP, and that is literally the
+//     same function for both (resolveClientHostIdentityVia). The scan is the
+//     cheap stage in both spellings; the ancestry walks behind it are what can
+//     run to tens of seconds, and they do not know which producer found the pid.
+//   - A cheaper scan does not want a smaller aggregate, it wants the same one:
+//     it leaves MORE of the budget for the candidates, which is exactly the
+//     trade resolveHerdrClientLauncherVia's doc says lsof loses.
+//   - The sum this bounds has to fit inside one liveness-sweep tick, and that
+//     assertion is over ONE number. Two constants would let one drift past the
+//     tick while the test still passed on the other — a second number with no
+//     second piece of evidence behind it.
+//
 // The value is set by what it has to fit inside rather than by what the probes
-// cost: PIDManager.SweepDeadPIDs calls refreshHerdrHosts synchronously on its
-// ticker, and Go's Ticker drops ticks it overruns, so a single herdr resolve
-// delays dead-PID reaping for every session behind it.
-// TestHerdrReadFitsTheLivenessSweepTick reads that cadence out of the services
-// source and pins the sum against it, so the relation is measured rather than
-// restated.
+// cost: PIDManager.SweepDeadPIDs calls refreshMultiplexerHosts synchronously on
+// its ticker, and Go's Ticker drops ticks it overruns, so a single client
+// resolve delays dead-PID reaping for every session behind it.
+// TestClientHostReadFitsTheLivenessSweepTick reads that cadence out of the
+// services source and pins the sum against it, so the relation is measured
+// rather than restated.
 //
 // Abandoning candidates is safe by construction and that is what makes the
 // budget cheap: an abandoned candidate is a NON-answer (#1492), not a detach,
@@ -50,11 +69,11 @@ import (
 // together the two ARE the decision about which host reads get an aggregate and
 // which deliberately do not, and splitting that across a build tag hides half
 // of it.
-const herdrClientBudget = 2 * time.Second
+const clientHostBudget = 2 * time.Second
 
 // noAggregateBudget is the context every host read that deliberately has NO
 // aggregate deadline runs under. Naming it is the whole point: #1529 bounded
-// the herdr client indirection (herdrClientBudget above) and left these
+// the herdr client indirection (clientHostBudget above) and left these
 // unbounded, and a named helper makes that a reviewable absence rather than a
 // context.Background() whose meaning the next reader has to infer.
 //
@@ -139,14 +158,23 @@ func herdrClientLogPath(socketPath string) string {
 //
 // hostKnown reports whether the host window could be *determined*, which is
 // not the same as being found. It is false whenever this read established
-// nothing: a herdr pane whose client probe did not run (#1485), a pid that
-// cannot be looked at at all (pid <= 0, or a process whose env, ancestry and
-// tty all came back empty), and — at the wiring in cmd/irrlichd — a revoked
-// launcher consent. A caller merging this read into a launcher it already
-// holds must not clear host fields when hostKnown is false: their absence
-// means "not looked up", not "gone". A caller capturing a session's first
-// launcher may ignore it, because there is nothing to clear and dropping the
-// read would cost the pane its herdr address.
+// nothing: a pane whose client probe did not run (#1485 for herdr, #1501 for
+// tmux), a pid that cannot be looked at at all (pid <= 0, or a process whose
+// env, ancestry and tty all came back empty), and — at the wiring in
+// cmd/irrlichd — a revoked launcher consent. A caller merging this read into a
+// launcher it already holds must not clear host fields when hostKnown is false:
+// their absence means "not looked up", not "gone". A caller capturing a
+// session's first launcher may ignore it, because there is nothing to clear and
+// dropping the read would cost the pane its address.
+//
+// Read it as "the host of the PANE this launcher addresses was determined",
+// which is what the merging contract above actually needs, and which #1501
+// separated from "a host was determined". A process that merely INHERITED a
+// $TMUX_PANE has a host of its own and no claim on that pane's — so the answer
+// for it is false, and the merge leaves its own identity alone instead of
+// overwriting it with a fresh read that could be one timed-out probe short.
+// For a launcher addressing no pane at all the two readings coincide and it is
+// true, exactly as before.
 //
 // Never prompts the user — on macOS we use
 // `sysctl(kern.procargs2)` (no TCC prompt; `ps e` stopped exposing env on
@@ -154,15 +182,15 @@ func herdrClientLogPath(socketPath string) string {
 // nil.
 //
 // On the herdr path this function is bounded at shelloutTimeout +
-// herdrClientBudget. One shelloutTimeout is the pane's own controlling-TTY
+// clientHostBudget. One shelloutTimeout is the pane's own controlling-TTY
 // `ps`, which is the ONLY child process the direct read starts for a herdr
 // pane: launcherFromEnv returns early with HerdrPaneID set, hostIdentityVia
 // skips the ancestry fallbacks for exactly that case, and the env read is a
-// sysctl rather than a shellout. herdrClientBudget is one aggregate deadline
+// sysctl rather than a shellout. clientHostBudget is one aggregate deadline
 // covering the entire client indirection below — the lsof scan and every
 // candidate behind it. The sum is not restated here as a number, because a
 // number a doc carries and nothing produces drifts: it is
-// TestHerdrReadFitsTheLivenessSweepTick that measures it, against the sweep
+// TestClientHostReadFitsTheLivenessSweepTick that measures it, against the sweep
 // cadence that has to accommodate it.
 //
 // It used to say "never blocks longer than 2 seconds", and then, honestly,
@@ -197,15 +225,14 @@ func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 	l, _ = hostIdentity(noAggregateBudget(), pid)
 	hostKnown = true
 
-	// A herdr pane's window belongs to the attached client, so its host
+	// A multiplexer pane's window belongs to the attached client, so its host
 	// identity is resolved from that process instead — one indirection past
-	// the ancestry walk hostIdentity skipped (#1350). Runs after the TTY
+	// the ancestry walk (#1350 for herdr, #1501 for tmux). Runs after the TTY
 	// capture so the pane keeps its own pty when nothing is attached, and is
 	// overridden by the client's when something is: AdoptHostIdentity owns
 	// that rule.
-	if l.HerdrPaneID != "" {
-		var client *session.Launcher
-		client, hostKnown = herdrClientLauncher(l.HerdrSocketPath)
+	if client, probed, addressesAPane := clientHostFor(l); addressesAPane {
+		hostKnown = probed
 		l.AdoptHostIdentity(client)
 	}
 
@@ -220,6 +247,75 @@ func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 		return nil, false
 	}
 	return l, hostKnown
+}
+
+// clientHostFor resolves the identity of the client displaying l's pane, for
+// the one multiplexer l's session lives in.
+//
+// Three-valued on purpose, and the third value is the one worth reading twice.
+// addressesAPane says l carries a pane address at all; probed is the
+// #1485/#1492 tri-state for that pane's host. They come apart in exactly one
+// case and it is the case #1499 was filed about: a launcher that carries a
+// $TMUX_PANE it INHERITED — a GUI terminal or IDE launched from inside a pane —
+// addresses a pane whose host it must not adopt, because its own host is real
+// and the pane's belongs to a different process. So that case answers
+// (nil, false, true): "this addresses a pane, and the pane's host was not
+// looked up", which is precisely the shape ReadLauncherEnv's hostKnown contract
+// tells a merging caller not to clear fields on.
+//
+// It is the dispatcher, and having one is the point: the two producers differ
+// only in how they enumerate clients (osutil_darwin.go), and the ORDER they are
+// tried in is #1348's — herdr first, because a herdr server started from inside
+// a tmux pane hands every pane it spawns a $TMUX_PANE that is the server's.
+// session.Launcher.pane applies the same precedence for the adoption's
+// put-back, and the two must not disagree.
+func clientHostFor(l *session.Launcher) (client *session.Launcher, probed, addressesAPane bool) {
+	switch {
+	case l.HerdrPaneID != "":
+		client, probed = herdrClientLauncher(l.HerdrSocketPath)
+		return client, probed, true
+	case l.TmuxPane == "":
+		return nil, false, false
+	case !tmuxPaneAwaitsItsClient(l):
+		return nil, false, true
+	default:
+		client, probed = tmuxClientLauncher(l.TmuxSocket)
+		return client, probed, true
+	}
+}
+
+// tmuxPaneAwaitsItsClient reports whether l is a tmux pane whose host can only
+// come from the attached client.
+//
+// It is deliberately NARROWER than "$TMUX_PANE is set", and the difference is
+// the whole reason #1499 keyed its suppression on tmux's own TERM_PROGRAM
+// marker rather than on the pane address. $TMUX_PANE is not self-describing:
+// every descendant of a pane inherits it, so a GUI terminal or IDE launched
+// from inside one (`code .`, `kitty`) carries a stale pane address next to a
+// perfectly good host identity of its own. Resolving THAT session's tmux client
+// and adopting it would replace a correct host with the window displaying a
+// pane the session is not in — the #1348 misroute, arriving through the fix for
+// it.
+//
+// The three-term test is what tells those apart, and each term is doing work:
+//
+//   - TmuxPane non-empty: there is a pane address to resolve a client for.
+//   - TermProgram and HostBundleID both empty: nothing has claimed a host for
+//     this process. A descendant that reports its own $TERM_PROGRAM never had
+//     it suppressed (launcherFromEnv), and one that reports none of its own —
+//     kitty, upstream kitty#4793 — has just had it recovered by the ancestry
+//     fallbacks, which hostIdentity deliberately runs for tmux for exactly that
+//     reason. Either way the host is the process's own and is not the client's
+//     to overwrite.
+//
+// A genuine pane passes all three, because its ancestry terminates at the
+// reparented tmux server: the walk is inert there (hostIdentityVia says so),
+// which is what leaves the two host fields empty for it and for nothing else.
+// So this is the same "no local window" test resolveClientHostIdentityVia
+// applies to a CANDIDATE, applied one level up to decide whether to look for
+// candidates at all.
+func tmuxPaneAwaitsItsClient(l *session.Launcher) bool {
+	return l.TmuxPane != "" && l.TermProgram == "" && l.HostBundleID == ""
 }
 
 // hostIdentity resolves the window-owning identity of pid: its whitelisted

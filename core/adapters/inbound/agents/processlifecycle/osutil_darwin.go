@@ -199,12 +199,12 @@ func bundleIDUncached(ctx context.Context, appPath string) (string, error) {
 //     near ancestryReads, whose subject — the process table — changes by the
 //     second.
 //   - Process-global therefore means shared between goroutines: PID discovery
-//     and the liveness sweep both reach it (see refreshHerdrHosts' own comment
+//     and the liveness sweep both reach it (see refreshMultiplexerHosts' own comment
 //     on running outside assignMu). It is synchronised with an RWMutex, the
-//     same idiom herdrClientCache uses one file down.
+//     same idiom clientHostMemo uses one file down.
 //
 // It carries no TTL and no eviction, and both are deliberate. No TTL because
-// the entry describes something immutable — herdrClientCache's 5s exists
+// the entry describes something immutable — clientHostMemo's 5s exists
 // precisely because ITS subject (who is attached to a herdr socket) is not.
 // No eviction because the key space is the set of top-level `.app` bundles in
 // one machine's process ancestry: a handful, bounded by what is installed and
@@ -276,7 +276,7 @@ func (m *bundleIDMemo) record(appPath, id string) {
 //     verdict that REJECTS at the #784 admission gate and that SessionDetector
 //     then caches in hostGateRejected and never evicts.
 //
-// #1514 reached the OPPOSITE conclusion for herdrClientCache — it memoizes
+// #1514 reached the OPPOSITE conclusion for clientHostMemo — it memoizes
 // non-answers on purpose — and the two must not be read as a contradiction,
 // because they turn on a property this cache does not have. #1514's rule is
 // that a non-answer may be cached only when every consumer sees it AS a
@@ -973,13 +973,132 @@ func herdrClientWriters(out string, self int) []int {
 	return pids
 }
 
+// tmuxPath is the tmux CLI, resolved once at package init.
+//
+// Resolved with pathutil.Resolve rather than MustResolve, unlike psPath and
+// plutilPath at the top of this file, and the difference is deliberate. Those
+// two are macOS platform binaries under /usr/bin, so a miss there means
+// something is deeply wrong and falling back to the bare name costs nothing.
+// tmux is a third-party install that is routinely absent — and MustResolve's
+// fallback is the bare name, which hands the lookup to exec.Command's PATH
+// search. The daemon runs under launchd with a minimal PATH, so on a machine
+// where tmux lives outside the trusted directories that fallback does not find
+// it either; it just pays a fork per sweep to be told so. An empty string here
+// is checked once instead (tmuxClientPIDs).
+//
+// pathutil's trusted set covers /opt/homebrew/bin and /usr/local/bin, which is
+// where Homebrew puts tmux on Apple Silicon and Intel respectively — the two
+// installs this actually has to find (measured: /opt/homebrew/bin/tmux on this
+// machine, a symlink into the Cellar, which Stat follows).
+var tmuxPath = func() string {
+	p, err := pathutil.Resolve("tmux")
+	if err != nil {
+		return ""
+	}
+	return p
+}()
+
+// tmuxClientPIDFormat asks list-clients for one client PID per line and
+// nothing else. tmux's own format language, so the parse below has no columns
+// to get wrong — the contrast with herdrClientPIDs, which has to select the
+// write handles out of an lsof table, is the whole of what makes this the
+// cheaper half of #1350's shape.
+const tmuxClientPIDFormat = "#{client_pid}"
+
+// tmuxClientPIDs asks the tmux server at socketPath which clients are attached,
+// newest-attach-first.
+//
+// The second return is the same tri-state herdrClientPIDs draws: true means the
+// list is evidence, false means the question did not reach the server and a
+// caller must not read the absence of clients as a detach.
+//
+// A missing tmux binary is (nil, false) — "I could not look" — and NOT the
+// settled-property reading kittyWindowIDForPIDVia gives its absent kitten. The
+// two look alike and are not: kitten's absence means this installation has no
+// kitty to describe windows, which is a fact about the machine, whereas a
+// session in a tmux pane is standing proof that tmux exists here and only our
+// lookup failed. Reporting "no client attached" on that would be a claim that
+// nothing is displaying a session that plainly is displayed. The cost of the
+// honest answer is bounded: a permanent non-answer clears no stored host
+// (#1485/#1492) and adopts none, which is exactly the state such a machine was
+// in before this existed.
+func tmuxClientPIDs(ctx context.Context, socketPath string) (pids []int, probed bool) {
+	if tmuxPath == "" || socketPath == "" {
+		return nil, false
+	}
+	return tmuxClientPIDsVia(ctx, func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, tmuxPath, "-S", socketPath, "list-clients", "-F", tmuxClientPIDFormat)
+	})
+}
+
+// tmuxClientPIDsVia is tmuxClientPIDs with the shellout injected.
+func tmuxClientPIDsVia(ctx context.Context, build shelloutCmd) (pids []int, probed bool) {
+	out, err := runProbe(ctx, probeTmuxClients, build)
+	if !tmuxListedClients(err) {
+		return nil, false
+	}
+	// Sorted and deduped through the shared helper, which is where
+	// resolveClientHostIdentityVia's "producers must feed it DISTINCT pids"
+	// obligation is discharged. tmux emits one line per client, so the dedup is
+	// inert here — reusing the helper rather than asserting that in a comment is
+	// what keeps it inert if tmux ever grows a second row per client.
+	return sortedDistinctPIDs(tmuxClientPIDsFrom(string(out))), true
+}
+
+// tmuxListedClients reports whether a `tmux list-clients` that returned err
+// answered the question it was asked.
+//
+// It is the strictest classifier in this package, and the strictness is
+// measured rather than assumed (tmux 3.6a, this machine):
+//
+//	live server, no client attached   exit 0, empty stdout
+//	no server at that path            exit 1, "no server running on <path>"
+//	path is not a socket              exit 1, "error connecting to <path> …"
+//	path does not exist               exit 1, "error connecting to <path> …"
+//
+// So tmux has NO "nothing to report" status: the detach case, which is lsof's
+// exit 1 and pgrep's exit 1, is tmux's exit ZERO. An allowlist modelled on
+// lsofProbeRan would therefore turn every socket we cannot reach into an
+// authoritative "nobody is displaying this session" — #1485's defect with a
+// different tool, and on the one path where it clears a resolved host.
+//
+// probeAnswered still decides the harder half, and it is called rather than
+// folded away even though `err == nil` implies it. Two facts are being
+// separated, they are measured separately, and only one of them is tmux's: a
+// child killed by the ceiling or one that never started is a non-answer
+// everywhere in this package (#1538), and a reader who saw only a nil check
+// would learn neither that nor why the allowlist is empty.
+func tmuxListedClients(err error) bool {
+	if !probeAnswered(err) {
+		return false
+	}
+	return err == nil
+}
+
+// tmuxClientPIDsFrom parses tmuxClientPIDFormat output: one PID per line.
+// Unparseable lines are skipped rather than failing the read — tmux writes
+// nothing else to stdout under -F, so a line that is not a number is a format
+// change we do not understand, and dropping the read entirely would report a
+// working server as unreachable.
+func tmuxClientPIDsFrom(out string) []int {
+	var pids []int
+	for _, line := range strings.Split(out, "\n") {
+		pid, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil || pid <= 0 {
+			continue
+		}
+		pids = append(pids, pid)
+	}
+	return pids
+}
+
 // maxClientCandidates bounds how many attached clients are probed for a
 // resolvable host. Each candidate costs an env read plus an ancestry walk, and
 // attaching more than a handful of clients to one session is not a real
 // workflow, so the cap keeps that work proportionate.
 //
 // Since #1529 it is a SANITY cap and no longer the de-facto time bound it had
-// been: herdrClientBudget bounds the loop by duration, so a machine slow enough
+// been: clientHostBudget bounds the loop by duration, so a machine slow enough
 // for four candidates to matter now stops on the clock instead of on the count.
 // The cap still poisons the answer when it truncates (see
 // resolveClientHostIdentity), because "we declined to look at the rest" is the
@@ -1143,7 +1262,7 @@ func resolveClientHostIdentityVia(ctx context.Context, pids []int, identify host
 // #1492; resolveClientHostIdentity's doc carries the argument, and this
 // function only passes its verdict through.
 //
-// A miss costs at most herdrClientBudget, and that is a real ceiling rather
+// A miss costs at most clientHostBudget, and that is a real ceiling rather
 // than a sum of per-child ones (#1529): resolveHerdrClientLauncherVia derives
 // ONE deadline covering the lsof scan and every candidate behind it. Before
 // that the cost here was bounded by a COUNT — up to maxClientCandidates
@@ -1176,19 +1295,19 @@ func resolveClientHostIdentityVia(ctx context.Context, pids []int, identify host
 //     memoized non-answer keeps that exactly, because it is stored AS a
 //     non-answer and every consumer of the bit sees the identical (nil, false)
 //     pair either way: captureLauncher ignores it outright, and backfillLauncher
-//     and refreshHerdrHosts both route it through applyHerdrHostBackfill, which
+//     and refreshMultiplexerHosts both route it through applyMultiplexerHostBackfill, which
 //     returns before touching the stored launcher. The one thing a cached
 //     unknown costs is deferring a RECOVERY — a probe that would have
 //     answered. Note the honest bound on that deferral is a SWEEP, not a TTL:
 //     the entry expires one TTL after the probe that wrote it, but nothing
 //     reads it in between, so what a user observes is quantized to
-//     refreshHerdrHosts' cadence. See the TTL note below.
+//     refreshMultiplexerHosts' cadence. See the TTL note below.
 //   - The failure the reason describes is no longer the failure that arrives
 //     here. #1485 was written when the only non-answer was a failed lsof probe,
 //     which fails fast, so re-paying it per pane was nearly free and the spread
 //     was the only cost worth naming. #1492 routed the most EXPENSIVE outcome in
 //     this function to the same branch: every candidate probed and none
-//     readable, which is the whole herdrClientBudget spent before an answer
+//     readable, which is the whole clientHostBudget spent before an answer
 //     arrives. Re-paying now dominates, and the trade the rule was making
 //     inverted. (Until #1529 that outcome had no ceiling at all — up to
 //     maxClientCandidates candidates, two independent ancestry walks each on
@@ -1213,22 +1332,73 @@ func resolveClientHostIdentityVia(ctx context.Context, pids []int, identify host
 // intervals, because entry.at is stamped when the probe FINISHES rather than
 // when the pass began, so an entry written late in a pass is not yet expired
 // when the next pass reaches it. It cannot slip further than that, because
-// herdrClientCacheGet does not restamp on a hit: a sweep served from the memo
+// clientHostMemo.get does not restamp on a hit: a sweep served from the memo
 // costs nothing and so cannot keep pushing the expiry ahead of itself.
 func herdrClientLauncher(socketPath string) (*session.Launcher, bool) {
-	if socketPath == "" {
-		return nil, false
-	}
-	if cached, hit := herdrClientCacheGet(socketPath); hit {
-		return cached.launcher, cached.probed
-	}
-	resolved, probed := resolveHerdrClientLauncher(socketPath)
-	herdrClientCachePut(socketPath, resolved, probed)
-	return resolved, probed
+	return herdrClientHosts.resolve(socketPath, resolveHerdrClientLauncher)
 }
 
 func resolveHerdrClientLauncher(socketPath string) (*session.Launcher, bool) {
 	return resolveHerdrClientLauncherVia(socketPath, herdrClientPIDs, hostIdentity)
+}
+
+// tmuxClientLauncher resolves the host-window identity of the tmux session
+// displayed in socketPath's server, by reading it from an attached client
+// exactly the way a herdr pane's is read (#1501, #1350's counterpart).
+//
+// It is #1350 one step cheaper, and the step it saves is the whole reason this
+// was worth doing separately: herdr has to be asked WHO holds its per-session
+// client log open, with an `lsof` scan, while tmux answers the question itself
+// in one line of output. Everything downstream — the candidate cap, the
+// aggregate budget, the tri-state, the #1492 poisoning rule — is the same code
+// (resolveClientHostIdentityVia).
+//
+// Process ancestry cannot substitute for it, which is why the indirection is
+// needed at all rather than being a cheaper alternative to a walk: the tmux
+// server daemonizes at first use and is reparented to PID 1 (measured, tmux
+// 3.6a — a pane's shell has the server as its parent and the server has init),
+// so the walk from a pane terminates at init having found nothing. That is
+// exactly what left a genuine tmux pane with no host at all after #1499, and
+// therefore with a click that did nothing.
+//
+// The same memoization argument as herdr's applies and is stronger: every pane
+// of one tmux server shares a socket, and a user with eight panes open is
+// ordinary. Every outcome is memoized, non-answers included — clientHostMemo
+// carries #1514's rule and its argument.
+//
+// Only ever called with a socket path the daemon parsed from the pane's own
+// $TMUX, so a resolved identity always accompanies the pane address it belongs
+// to; AdoptHostIdentity puts that address back over the client's own (the
+// client is a GUI terminal and carries none), which is what keeps control and
+// the macOS TmuxActivator addressing the pane rather than the window.
+func tmuxClientLauncher(socketPath string) (*session.Launcher, bool) {
+	return tmuxClientHosts.resolve(socketPath, resolveTmuxClientLauncher)
+}
+
+func resolveTmuxClientLauncher(socketPath string) (*session.Launcher, bool) {
+	return resolveTmuxClientLauncherVia(socketPath, tmuxClientPIDs, hostIdentity)
+}
+
+// resolveTmuxClientLauncherVia is resolveTmuxClientLauncher with both probes
+// injected. It derives the aggregate deadline rather than taking one, for the
+// reason resolveHerdrClientLauncherVia's doc gives: a test driving it exercises
+// clientHostBudget itself rather than a budget the test supplied.
+//
+// The two functions are deliberately NOT merged into one parameterised by its
+// scan. They would differ only in the probe, and the probe is already a
+// parameter — but the budget derivation is the thing under test in both, and a
+// single shared body reached through two one-line wrappers is what
+// resolveHerdrClientLauncherVia already is. What is shared is the part that can
+// drift (the loop, the budget, the tri-state); what is duplicated is two lines
+// naming this producer's own probes.
+func resolveTmuxClientLauncherVia(socketPath string, scan clientPIDProbe, identify hostIdentityProbe) (*session.Launcher, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), clientHostBudget)
+	defer cancel()
+	pids, probed := scan(ctx, socketPath)
+	if !probed {
+		return nil, false
+	}
+	return resolveClientHostIdentityVia(ctx, pids, identify)
 }
 
 // clientPIDProbe is the attached-client scan resolveHerdrClientLauncherVia
@@ -1238,7 +1408,7 @@ type clientPIDProbe func(ctx context.Context, socketPath string) (pids []int, pr
 
 // resolveHerdrClientLauncherVia is resolveHerdrClientLauncher with both probes
 // injected. It DERIVES the aggregate deadline rather than taking one, so a test
-// driving it exercises herdrClientBudget itself rather than a budget the test
+// driving it exercises clientHostBudget itself rather than a budget the test
 // supplied — the same reason #1390 collapsed a receiver's two constructors into
 // the one the daemon builds.
 //
@@ -1248,7 +1418,7 @@ type clientPIDProbe func(ctx context.Context, socketPath string) (pids []int, pr
 //
 // What sharing COSTS, stated rather than argued away. The two stages compete
 // for one budget and the scan goes first, so an lsof that runs to nearly
-// herdrClientBudget and still SUCCEEDS leaves the loop nothing: every candidate
+// clientHostBudget and still SUCCEEDS leaves the loop nothing: every candidate
 // is abandoned and the answer is (nil, false). On a machine where lsof is
 // chronically slow-but-answering, a herdr host would then never resolve, where
 // before #1529 it resolved slowly. Three things bound that, and none of them
@@ -1269,7 +1439,7 @@ type clientPIDProbe func(ctx context.Context, socketPath string) (pids []int, pr
 // the git adapter — an unbounded call that answered slowly becomes a bounded
 // one that does not answer at all — and it is written down for the same reason.
 func resolveHerdrClientLauncherVia(socketPath string, scan clientPIDProbe, identify hostIdentityProbe) (*session.Launcher, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), herdrClientBudget)
+	ctx, cancel := context.WithTimeout(context.Background(), clientHostBudget)
 	defer cancel()
 	pids, probed := scan(ctx, socketPath)
 	if !probed {
@@ -1278,15 +1448,15 @@ func resolveHerdrClientLauncherVia(socketPath string, scan clientPIDProbe, ident
 	return resolveClientHostIdentityVia(ctx, pids, identify)
 }
 
-// herdrClientCacheTTL is short enough that attaching a client is picked up by
+// clientHostCacheTTL is short enough that attaching a client is picked up by
 // the next session bound after it, and long enough to collapse one startup
 // seed's worth of repeats into a single scan.
-const herdrClientCacheTTL = 5 * time.Second
+const clientHostCacheTTL = 5 * time.Second
 
-type herdrClientCacheEntry struct {
+type clientHostEntry struct {
 	launcher *session.Launcher
-	// probed carries herdrClientLauncher's second return through the memo. It
-	// is what makes caching a non-answer safe: without it a cached nil is
+	// probed carries the resolver's second return through the memo. It is what
+	// makes caching a non-answer safe: without it a cached nil is
 	// indistinguishable from a cached detach, and the next pane to read this
 	// socket would be told its client is gone on the strength of a probe that
 	// never ran — #1485's defect, re-entered through the cache.
@@ -1294,58 +1464,78 @@ type herdrClientCacheEntry struct {
 	at     time.Time
 }
 
+// clientHostMemo is the per-socket memo in front of one attached-client
+// resolver. #1544's rule decides its LIFETIME and it is the opposite end of
+// that pairing from bundleIDMemo: who is attached to a multiplexer socket
+// changes by the second — detach-here-reattach-there is the entire point of a
+// persistent multiplexer — so this one carries a TTL and bundleIDMemo, whose
+// subject is immutable, carries none.
+//
+// One type, two instances (below), because #1514's admission rule is subtle
+// enough that a second hand-written copy is a second chance to get the
+// non-answer semantics wrong — which is the defect this memo exists to avoid
+// re-introducing, not a style preference. The instances are separate rather
+// than one shared map because a herdr socket path and a tmux socket path are
+// different namespaces that happen to share a key type, and one map would let
+// a collision serve a herdr answer to a tmux pane.
+type clientHostMemo struct {
+	mu      sync.Mutex
+	entries map[string]clientHostEntry
+}
+
 var (
-	herdrClientCacheMu sync.Mutex
-	herdrClientCache   = map[string]herdrClientCacheEntry{}
+	// herdrClientHosts memoizes herdr's lsof-based client scan (#1350/#1514).
+	herdrClientHosts = &clientHostMemo{entries: map[string]clientHostEntry{}}
+	// tmuxClientHosts memoizes tmux's `list-clients` scan (#1501).
+	tmuxClientHosts = &clientHostMemo{entries: map[string]clientHostEntry{}}
 )
 
-// herdrClientCacheGet reports what the last probe of socketPath determined.
-// The entry rather than its fields, because launcher and probed are the same
-// tri-state herdrClientLauncher returns — a cached "nothing attached" is
-// (nil, probed) while a cached non-answer is (nil, !probed), and two adjacent
-// bools in a return list is the one shape a future call site can transpose
-// silently. Collapsing those two states would be #1485.
+// get reports what the last probe of socketPath determined. The entry rather
+// than its fields, because launcher and probed are the same tri-state the
+// resolver returns — a cached "nothing attached" is (nil, probed) while a
+// cached non-answer is (nil, !probed), and two adjacent bools in a return list
+// is the one shape a future call site can transpose silently. Collapsing those
+// two states would be #1485.
 //
 // A hit deliberately does NOT restamp entry.at. Refreshing on read would let a
 // socket busy enough to be read every sweep hold a stale entry — in particular
 // a stale non-answer — indefinitely; leaving the stamp alone bounds any entry
 // to one TTL from the probe that produced it, however often it is read.
-func herdrClientCacheGet(socketPath string) (herdrClientCacheEntry, bool) {
-	herdrClientCacheMu.Lock()
-	defer herdrClientCacheMu.Unlock()
-	return herdrClientCacheLive(socketPath)
+func (m *clientHostMemo) get(socketPath string) (clientHostEntry, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.live(socketPath)
 }
 
-// herdrClientCacheLive returns socketPath's entry when it has not expired, and
-// drops it when it has — so sockets that stop being used don't accumulate.
-// Callers hold herdrClientCacheMu.
+// live returns socketPath's entry when it has not expired, and drops it when it
+// has — so sockets that stop being used don't accumulate. Callers hold m.mu.
 //
 // Split out so the expiry rule has exactly one spelling. Both readers need it
 // and they need it with opposite polarity, which is precisely the pair that
 // drifts.
-func herdrClientCacheLive(socketPath string) (herdrClientCacheEntry, bool) {
-	entry, ok := herdrClientCache[socketPath]
+func (m *clientHostMemo) live(socketPath string) (clientHostEntry, bool) {
+	entry, ok := m.entries[socketPath]
 	if !ok {
-		return herdrClientCacheEntry{}, false
+		return clientHostEntry{}, false
 	}
-	if time.Since(entry.at) > herdrClientCacheTTL {
-		delete(herdrClientCache, socketPath)
-		return herdrClientCacheEntry{}, false
+	if time.Since(entry.at) > clientHostCacheTTL {
+		delete(m.entries, socketPath)
+		return clientHostEntry{}, false
 	}
 	return entry, true
 }
 
-// herdrClientCachePut records what a probe of socketPath determined. A
-// non-answer never displaces a live answer.
+// put records what a probe of socketPath determined. A non-answer never
+// displaces a live answer.
 //
 // That guard is new with the memo and is the one hazard memoizing non-answers
 // introduces: before #1514 a non-answer was never written, so it could not
 // overwrite anything. Two goroutines can miss the memo for one socket and
-// probe concurrently — refreshHerdrHosts reads outside assignMu, on the sweep
-// goroutine, while PID discovery reaches captureLauncher/backfillLauncher on
-// its own — and a non-answer is still by far the SLOWER outcome to produce: it
-// is the one that can spend the whole herdrClientBudget, where an answer stops
-// at the first candidate that resolves.
+// probe concurrently — refreshMultiplexerHosts reads outside assignMu, on the
+// sweep goroutine, while PID discovery reaches captureLauncher/backfillLauncher
+// on its own — and a non-answer is still by far the SLOWER outcome to produce:
+// it is the one that can spend the whole clientHostBudget, where an answer
+// stops at the first candidate that resolves.
 // So the loser of that race is systematically the one carrying no
 // information, and last-writer-wins would let it both erase a resolved host
 // and restamp the entry fresh, extending the deferral by another full TTL.
@@ -1354,13 +1544,29 @@ func herdrClientCacheLive(socketPath string) (herdrClientCacheEntry, bool) {
 // still expires on the schedule the probe that produced it set. The reverse
 // direction needs no guard — an answer displacing a non-answer is strictly
 // more information, which is the whole point of re-probing.
-func herdrClientCachePut(socketPath string, l *session.Launcher, probed bool) {
-	herdrClientCacheMu.Lock()
-	defer herdrClientCacheMu.Unlock()
+func (m *clientHostMemo) put(socketPath string, l *session.Launcher, probed bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if !probed {
-		if prev, live := herdrClientCacheLive(socketPath); live && prev.probed {
+		if prev, live := m.live(socketPath); live && prev.probed {
 			return
 		}
 	}
-	herdrClientCache[socketPath] = herdrClientCacheEntry{launcher: l, probed: probed, at: time.Now()}
+	m.entries[socketPath] = clientHostEntry{launcher: l, probed: probed, at: time.Now()}
+}
+
+// resolve answers from the memo or runs probe, recording whatever it
+// determined. It is the shape every consumer of a client indirection goes
+// through, so the memo cannot be bypassed by one producer and honoured by the
+// other.
+func (m *clientHostMemo) resolve(socketPath string, probe func(string) (*session.Launcher, bool)) (*session.Launcher, bool) {
+	if socketPath == "" {
+		return nil, false
+	}
+	if cached, hit := m.get(socketPath); hit {
+		return cached.launcher, cached.probed
+	}
+	resolved, probed := probe(socketPath)
+	m.put(socketPath, resolved, probed)
+	return resolved, probed
 }
