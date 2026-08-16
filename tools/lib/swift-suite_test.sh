@@ -274,6 +274,112 @@ else
     fail "grandchild never recorded its pid; the kill assertion did not run"
   fi
   rm -f "$log" "$SWIFT_SUITE_GRANDCHILD_PIDFILE"
+
+  # -------------------------------------------------------------------------
+  # ...and all of that has to hold under the CALLER's `-e` (#1633).
+  #
+  # swift_suite_run is SOURCED, so it runs with whatever shell options its
+  # caller happens to have, and its post-timeout sequence issues commands that
+  # are EXPECTED to fail: after SIGTERM plus the 2s grace the victims are
+  # already gone, so `kill -KILL` exits non-zero and `wait` reports the signal.
+  # Under `-e` the shell dies on the first of those — before `return 124` — and
+  # 124 is the single value swift_suite_verdict's entire hang diagnosis keys on.
+  #
+  # Two assertions in two DIFFERENT calling shapes, because bash's
+  # errexit-context rule makes each one blind to the other's defect:
+  #
+  #   the 124   is read in a BARE statement position, the shape this file's
+  #             header documents. Called from a `||` or an `if`, bash ignores
+  #             -e for the whole function body, so the hazard cannot fire there
+  #             and the assertion would pass against the unfixed lib.
+  #   the leak  is read where a line after the call still runs, which under -e
+  #             a bare 124 does not — the caller aborts on it (#1629, fixed on
+  #             the caller side). A `||` position still EXECUTES any `set` the
+  #             body performs, so that is exactly where a library which turned
+  #             -e off and forgot to restore it becomes visible.
+  echo "== swift_suite_run under the caller's \`-e\` (#1633) =="
+
+  # `bash --noprofile --norc -e -o pipefail` is GitHub's own `shell: bash`
+  # invocation, the same one calling_shape uses below. Everything the inner
+  # shell needs arrives through the environment, so the heredocs are QUOTED and
+  # carry no escaping to get wrong.
+  e_log=$(mktemp -t swift-suite-e-log)
+  e_pidfile=$(mktemp -t swift-suite-e-gc)
+  e_opts_before=$(mktemp -t swift-suite-e-opts-before)
+  e_opts_after=$(mktemp -t swift-suite-e-opts-after)
+  export SWIFT_SUITE_E_LOG="$e_log" SWIFT_SUITE_E_PIDFILE="$e_pidfile" \
+         SWIFT_SUITE_E_SLEEP="$gc_sleep" \
+         SWIFT_SUITE_E_OPTS_BEFORE="$e_opts_before" SWIFT_SUITE_E_OPTS_AFTER="$e_opts_after"
+
+  # The hang, driven exactly as the header documents it. Its return value is
+  # read as the inner shell's EXIT STATUS, and that is the only place it can be
+  # read: a correct 124 aborts the caller right there, so there is no line
+  # after the call to print it from. errexit exits with the status of the
+  # command that tripped it, so the inner shell's status IS what the function
+  # returned — 124 once the timeout path runs to its end, and otherwise
+  # whatever aborted it first (measured: 1 at `kill -KILL`, 143 at `wait`).
+  errexit_hang_probe() {
+    bash --noprofile --norc -e -o pipefail /dev/stdin 2>&1 <<'PROBE'
+set -uo pipefail
+. tools/lib/swift-suite.sh
+SWIFT_SUITE_TIMEOUT=2 swift_suite_run "$SWIFT_SUITE_E_LOG" \
+  bash -c 'set -m; sleep "$SWIFT_SUITE_E_SLEEP" & echo $! > "$SWIFT_SUITE_E_PIDFILE"; wait'
+PROBE
+  }
+  e_hang_out=$(errexit_hang_probe); e_hang_rc=$?
+
+  # A verification that could not run must not read as one that found nothing:
+  # an inner shell that died before reaching the timeout path (a bad cwd, a
+  # source that failed) exits 1, which is indistinguishable from the defect.
+  # The fixture recording its pid is the proof that the path was reached.
+  [[ -s "$e_pidfile" ]] \
+    && pass "the -e probe reached the timeout path (its fixture recorded a pid)" \
+    || fail "the -e probe never launched its fixture, so the assertion below measured something else; it printed: $e_hang_out"
+
+  [[ "$e_hang_rc" -eq 124 ]] \
+    && pass "a hanging command returns 124 under the caller's -e too" \
+    || fail "under \`bash --noprofile --norc -e -o pipefail\` a hang came back $e_hang_rc, not 124 — the post-timeout kill sequence aborted the shell before \`return 124\`; it printed: $e_hang_out"
+
+  e_gc=$(cat "$e_pidfile" 2>/dev/null)
+  [[ -n "$e_gc" ]] && kill -9 "$e_gc" 2>/dev/null   # don't leak it out of a red run
+  : > "$e_pidfile"
+
+  # The other direction. Whatever swift_suite_run does about -e, it must not
+  # pay for it by leaving the caller's options changed: a library that turns
+  # errexit off and forgets to restore it is invisible for exactly the same
+  # reason as the defect above, and does more damage.
+  #
+  # `set +o` REDIRECTED TO A FILE is the probe, and the spelling is
+  # load-bearing rather than a style choice. `$(set +o)` runs in a command
+  # substitution, and bash 3.2 — which is what /bin/bash is on macOS — reports
+  # errexit and nounset as OFF inside one no matter what the parent has
+  # (measured), so a probe built that way is byte-identical before and after
+  # and can never see an errexit leak. `set` is a builtin, so redirecting it
+  # does not fork. (`$-` is fork-free too, but has no flag character for
+  # pipefail; the dump covers every `set -o` option there is.)
+  leak_out=$(bash --noprofile --norc -e -o pipefail /dev/stdin 2>&1 <<'PROBE'
+set -uo pipefail
+. tools/lib/swift-suite.sh
+set +o > "$SWIFT_SUITE_E_OPTS_BEFORE"
+leak_rc=0
+SWIFT_SUITE_TIMEOUT=2 swift_suite_run "$SWIFT_SUITE_E_LOG" \
+  bash -c 'set -m; sleep "$SWIFT_SUITE_E_SLEEP" & echo $! > "$SWIFT_SUITE_E_PIDFILE"; wait' || leak_rc=$?
+set +o > "$SWIFT_SUITE_E_OPTS_AFTER"
+echo "leak probe: swift_suite_run returned $leak_rc"
+PROBE
+)
+  if [[ ! -s "$e_opts_before" || ! -s "$e_opts_after" ]]; then
+    fail "the option-leak probe recorded no before/after option dump — it could not run; it printed: $leak_out"
+  elif diff "$e_opts_before" "$e_opts_after" >/dev/null 2>&1; then
+    pass "the caller's shell options are unchanged across the call"
+  else
+    fail "swift_suite_run LEAKED a shell option change back to its caller:
+$(diff "$e_opts_before" "$e_opts_after" | sed 's/^/    /')"
+  fi
+
+  e_gc=$(cat "$e_pidfile" 2>/dev/null)
+  [[ -n "$e_gc" ]] && kill -9 "$e_gc" 2>/dev/null
+  rm -f "$e_log" "$e_pidfile" "$e_opts_before" "$e_opts_after"
 fi
 
 # ---------------------------------------------------------------------------

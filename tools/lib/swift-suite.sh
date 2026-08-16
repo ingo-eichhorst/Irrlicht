@@ -8,6 +8,17 @@
 #   swift_suite_run "$log" swift test --skip LauncherHarnessTests
 #   swift_suite_verdict "$?" "$log"
 #
+# Shell options, both directions, because the convention above depends on them
+# and used to say nothing about them (#1633):
+#
+#   this file  requires nothing of the caller's options and changes none of
+#              them. swift_suite_run returns the command's status, or 124 for
+#              a hang, whether or not `-e` is set.
+#   the caller must keep `$?` reachable. Under `-e` a non-zero return aborts
+#              the caller on the line above, so swift_suite_verdict never runs
+#              and a hang and a failure print the same thing — write `set +e`
+#              first, or `|| rc=$?` (#1629, .github/workflows/macos-swift.yml).
+#
 # Why any of this exists. XCTest's stall detector responds to a hung
 # expectation by calling `abort()` on the whole process. The run then stops
 # partway — 33 of 40 suites, in the measured case — and the aggregate total
@@ -257,6 +268,21 @@ swift_suite_run() {
     # an error *in this file* at exactly the moment the gate is trying to
     # explain itself. The notice is written when `wait` reaps, so the
     # redirection has to cover the wait, not just the kills.
+    #
+    # The trailing `|| :` is the opposite — safety, not legibility — and it is
+    # not about the group's status, which `return 124` discards anyway. Every
+    # command in here is EXPECTED to fail: after SIGTERM plus the grace the
+    # victims are gone, so `kill -KILL` exits non-zero and `wait` reports the
+    # signal. Under a CALLER's `-e` the shell then dies on the first of them
+    # and `return 124` is never reached, so a hang comes back as an ordinary
+    # failure and swift_suite_verdict — which keys its entire hang diagnosis on
+    # that 124 — diagnoses the wrong thing (#1633). A compound command that is
+    # the left operand of `||` runs with errexit ignored throughout, so this
+    # one token covers the whole block, including whatever is added to it
+    # later. Guarding the commands individually is NOT equivalent, and the
+    # near-miss is why this spelling was chosen: `|| :` on the two kills alone
+    # moves the abort onto `wait` and returns 143 — as plausible a wrong answer
+    # as the 1 it replaces. Measured all three ways in #1633.
     {
       # Unquoted on purpose: a whitespace-separated pid list.
       # shellcheck disable=SC2086
@@ -265,7 +291,7 @@ swift_suite_run() {
       # shellcheck disable=SC2086
       kill -KILL $victims 2>/dev/null
       wait "$child"
-    } 2>/dev/null
+    } 2>/dev/null || :
     return 124
   fi
 
