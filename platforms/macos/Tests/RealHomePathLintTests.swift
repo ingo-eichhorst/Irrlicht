@@ -241,38 +241,58 @@ final class RealHomePathLintTests: XCTestCase {
         }
     }
 
-    func testNoSourceOutsideAppHomeResolvesTheRealHome() throws {
+    /// What one directory's walk found. Kept as a value so the test body is a
+    /// fold over three of them rather than three levels of nesting.
+    private struct Walk {
         var offenders: [String] = []
         var filesScanned = 0
-        var exemptionsHit = Set<String>()
+        var exemptionsHit: Set<String> = []
 
-        for directory in Self.scannedDirectories {
-            let root = Self.macosRoot.appendingPathComponent(directory)
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory),
-                  isDirectory.boolValue else {
-                // Loud, not silent: a walk over a directory that is not there
-                // finds nothing and is indistinguishable from a clean tree.
-                XCTFail("scanned directory \(directory) is missing at \(root.path)")
-                continue
-            }
-            guard let walk = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
-                XCTFail("could not enumerate \(root.path)")
-                continue
-            }
-            for case let url as URL in walk where url.pathExtension == "swift" {
-                let relative = url.path.replacingOccurrences(of: Self.macosRoot.path + "/", with: "")
-                filesScanned += 1
-                let occurrences = Self.offendingOccurrences(in: try String(contentsOf: url, encoding: .utf8))
-                if Self.exemptions[relative] != nil {
-                    if !occurrences.isEmpty { exemptionsHit.insert(relative) }
-                    continue
-                }
-                offenders.append(contentsOf: occurrences.map { "\(relative):\($0)" })
-            }
+        static func + (lhs: Walk, rhs: Walk) -> Walk {
+            Walk(offenders: lhs.offenders + rhs.offenders,
+                 filesScanned: lhs.filesScanned + rhs.filesScanned,
+                 exemptionsHit: lhs.exemptionsHit.union(rhs.exemptionsHit))
         }
+    }
 
-        XCTAssertGreaterThan(filesScanned, 0, "the scan read no Swift files — it checked nothing")
+    /// Walks one directory, or fails loudly. A walk over a directory that is
+    /// not there finds nothing and is indistinguishable from a clean tree, so
+    /// both unreachable cases `XCTFail` rather than returning an empty result.
+    private func walk(_ directory: String) throws -> Walk {
+        let root = Self.macosRoot.appendingPathComponent(directory)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            XCTFail("scanned directory \(directory) is missing at \(root.path)")
+            return Walk()
+        }
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
+            XCTFail("could not enumerate \(root.path)")
+            return Walk()
+        }
+        var found = Walk()
+        for case let url as URL in enumerator where url.pathExtension == "swift" {
+            let relative = url.path.replacingOccurrences(of: Self.macosRoot.path + "/", with: "")
+            found.filesScanned += 1
+            let occurrences = Self.offendingOccurrences(in: try String(contentsOf: url, encoding: .utf8))
+            guard Self.exemptions[relative] == nil else {
+                if !occurrences.isEmpty { found.exemptionsHit.insert(relative) }
+                continue
+            }
+            found.offenders.append(contentsOf: occurrences.map { "\(relative):\($0)" })
+        }
+        return found
+    }
+
+    func testNoSourceOutsideAppHomeResolvesTheRealHome() throws {
+        var scan = Walk()
+        for directory in Self.scannedDirectories {
+            scan = scan + (try walk(directory))
+        }
+        let offenders = scan.offenders
+        let exemptionsHit = scan.exemptionsHit
+
+        XCTAssertGreaterThan(scan.filesScanned, 0, "the scan read no Swift files — it checked nothing")
         // An exemption that no longer covers anything is a rule that has quietly
         // grown wider than it needs to be, and — more to the point here — it is
         // the shape a scan takes when it has stopped reading the files it thinks
