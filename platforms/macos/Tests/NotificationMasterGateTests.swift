@@ -15,23 +15,25 @@ import XCTest
 /// pure-helper idiom `SessionManagerFocusTests` uses for the Focus/DND gate.
 final class NotificationMasterGateTests: XCTestCase {
 
-    private var suiteName: String!
-    private var defaults: UserDefaults!
-
-    override func setUp() {
-        super.setUp()
-        // A throwaway suite, never `.standard` — these tests must not mutate the
-        // developer's real notification preferences.
-        suiteName = "io.irrlicht.tests.NotificationMasterGate.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)
-    }
-
-    override func tearDown() {
-        defaults.removePersistentDomain(forName: suiteName)
-        defaults = nil
-        suiteName = nil
-        super.tearDown()
-    }
+    /// `InMemoryDefaults`, never a named suite and never `.standard`.
+    ///
+    /// This class is #1661: it used to mint a fresh `UserDefaults` suite per
+    /// test with a UUID name and remove the *domain* in `tearDown`, which does
+    /// not remove the *file*. 1160 of them had accumulated in a developer's real
+    /// `~/Library/Preferences`. The double writes to a dictionary, so there is
+    /// nothing to clean up and no cleanup that can go wrong — see
+    /// `InMemoryDefaults` for the three redirects that were measured and
+    /// rejected first, and `PersistentDefaultsLintTests` for the rule that stops
+    /// the next test re-introducing it.
+    ///
+    /// XCTest instantiates the class once per test method, so this initializer
+    /// already gives every case its own store — the isolation the per-test UUID
+    /// suite was reaching for, without the file. There is deliberately no
+    /// `setUp` and no `tearDown`: nothing is allocated outside this process, so
+    /// the fix holds for exactly the runs that never reach a teardown — an
+    /// `abort()` from XCTest's stall detector (#1523), `swift-suite.sh`'s 240s
+    /// tree kill, a `--budget` kill.
+    private let defaults = InMemoryDefaults()
 
     // MARK: - Pure decision
 
