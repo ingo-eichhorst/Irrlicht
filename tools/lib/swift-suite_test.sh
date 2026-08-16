@@ -199,9 +199,21 @@ else
   # process group cannot reach it.
   export SWIFT_SUITE_GRANDCHILD_PIDFILE
   SWIFT_SUITE_GRANDCHILD_PIDFILE=$(mktemp -t swift-suite-gc)
+  # The grandchild's own lifetime and the deadline its reap is polled to below
+  # are declared as a pair, and the relation between them is checked rather
+  # than assumed (#1619). A poll that ran anywhere near ${gc_sleep}s would stop
+  # asserting anything: "the fixture exited by itself" and "the tree was
+  # reaped" would produce the same reading, and the case would pass vacuously.
+  # This is the wall from ABOVE — the reap latency measured below gives a
+  # deadline no lower bound worth speaking of, so without this it could be
+  # raised to any number at all with nothing objecting.
+  gc_sleep=300
+  reap_deadline=15
+  (( reap_deadline * 10 <= gc_sleep )) \
+    || fail "the reap deadline (${reap_deadline}s) is not an order of magnitude under the grandchild's own lifetime (${gc_sleep}s) — at that ratio a natural exit starts reading as a reap"
   start=$(date +%s)
   SWIFT_SUITE_TIMEOUT=2 swift_suite_run "$log" \
-    bash -c 'set -m; sleep 300 & echo $! > "$SWIFT_SUITE_GRANDCHILD_PIDFILE"; wait' >/dev/null 2>&1
+    bash -c 'set -m; sleep '"$gc_sleep"' & echo $! > "$SWIFT_SUITE_GRANDCHILD_PIDFILE"; wait' >/dev/null 2>&1
   hang_rc=$?
   elapsed=$(( $(date +%s) - start ))
   [[ "$hang_rc" -eq 124 ]] && pass "a hanging command returns 124" || fail "hang should return 124, got $hang_rc"
@@ -209,12 +221,54 @@ else
 
   gc=$(cat "$SWIFT_SUITE_GRANDCHILD_PIDFILE" 2>/dev/null)
   if [[ -n "$gc" ]]; then
-    sleep 1
-    if kill -0 "$gc" 2>/dev/null; then
-      kill -9 "$gc" 2>/dev/null   # don't leak it out of the test either way
-      fail "grandchild $gc survived the timeout kill — the process tree was not reaped"
+    # Polled, not slept (#1619). The first look happens with nothing in front
+    # of it, so a tree already reaped when swift_suite_run returned — which is
+    # what a correct implementation produces, since it posts SIGKILL and
+    # `wait`s before returning — is reported at once instead of after a fixed
+    # second. The deadline only absorbs a machine too busy to finish the
+    # teardown; a tree that genuinely survives still fails loudly, now with the
+    # elapsed time and the last state observed rather than a bare pid.
+    #
+    # `kill -0` is the predicate because it is a shell BUILTIN: it cannot fail
+    # to run, so "we could not look" can never come out as "it is gone". `ps`
+    # only DESCRIBES a pid that is still visible and never decides the verdict —
+    # a missing or broken `ps` prints nothing, and nothing would otherwise read
+    # as reaped.
+    #
+    # The residual failure mode #1619 names — the pid lingering as an unreaped
+    # ZOMBIE, which `kill -0` cannot tell from a live process — is not
+    # representable here, and a longer deadline would not have fixed it if it
+    # were. Measured: the grandchild's parent is the inner `bash -c`, which is
+    # itself in the victim list, and an orphaned zombie is reparented to launchd
+    # and reaped before the first look (0 polls). A zombie needs a LIVE parent
+    # that never waits, and this fixture has none. If one ever appeared anyway,
+    # the failure line below carries `Z <defunct>` and says so itself.
+    reap_start=$(date +%s)
+    looks=0
+    seen=""
+    while :; do
+      looks=$(( looks + 1 ))
+      if ! kill -0 "$gc" 2>/dev/null; then seen=gone; break; fi
+      psrow=$(ps -o stat=,command= -p "$gc" 2>/dev/null)
+      if [[ -n "$psrow" ]]; then
+        read -r gc_stat gc_cmd <<< "$psrow"
+        seen="state $gc_stat, command ${gc_cmd:0:60}"
+      else
+        seen="visible to kill -0, but ps prints no row for it"
+      fi
+      (( $(date +%s) - reap_start >= reap_deadline )) && break
+      sleep 0.1
+    done
+    reap_elapsed=$(( $(date +%s) - reap_start ))
+    if [[ "$seen" == gone ]]; then
+      # Printed rather than described in a comment: measured over 50 runs (25
+      # idle, 25 at load average ~55 on 10 cores) this was always look 1 at 0s,
+      # and a reap that started taking seconds would show up here instead of in
+      # a doc comment nothing re-derives (#1572).
+      pass "the whole process tree was reaped, not just the wrapper (gone on look $looks, after ${reap_elapsed}s)"
     else
-      pass "the whole process tree was reaped, not just the wrapper"
+      kill -9 "$gc" 2>/dev/null   # don't leak it out of the test either way
+      fail "grandchild $gc survived the timeout kill — the process tree was not reaped (still there after ${reap_elapsed}s / $looks looks; last seen: $seen)"
     fi
   else
     fail "grandchild never recorded its pid; the kill assertion did not run"
