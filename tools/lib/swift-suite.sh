@@ -40,7 +40,31 @@
 # mirrors macos-swift.yml's `timeout-minutes`, which exists for the same
 # reason: a job stuck `in_progress` reads as "still queued". It mirrors that
 # rationale, not that workflow's number (15 minutes, for a ~45s build).
-SWIFT_SUITE_TIMEOUT="${SWIFT_SUITE_TIMEOUT:-600}"
+#
+# The number is a CEILING, and it is derived rather than picked (#1530). It was
+# 600 — exactly an automated caller's whole Bash-tool budget — so the caller
+# killed the gate at the same instant the gate would have started explaining
+# itself, and every careful diagnosis below was unreachable for the one kind of
+# caller that most needs it. A bound whose expiry nobody can observe is this
+# file's own founding rule turned on itself: absence of a finding and inability
+# to look produced the same output.
+#
+# The four numbers it has to sit under, all measured or documented elsewhere in
+# the repo rather than invented here:
+#
+#   suite, healthy         ~5s (318 tests, this machine), ~30s under heavy load
+#   cold `swift build`     ~105s measured; the swift gate builds BEFORE the suite
+#   pre-push budget        540s (tools/preflight.sh --budget, #1570)
+#   agent command budget   600s (one foreground Bash tool call)
+#
+# So the bound must satisfy `timeout + cold build < pre-push budget`, i.e.
+# anything below 435. 240 takes that with room and still leaves 8× the loaded
+# run. `SWIFT_SUITE_MIN_HEADROOM` is what `swift-suite_test.sh` asserts against
+# — the relation is checked on every run rather than being true the day it was
+# typed.
+SWIFT_SUITE_COLD_BUILD_SECONDS=105
+SWIFT_SUITE_MIN_HEADROOM=540
+SWIFT_SUITE_TIMEOUT="${SWIFT_SUITE_TIMEOUT:-240}"
 
 # Every grep here passes -a. That is not defensive noise: `swift test` emits
 # ANSI colour and erase sequences, and a grep that classifies the stream as

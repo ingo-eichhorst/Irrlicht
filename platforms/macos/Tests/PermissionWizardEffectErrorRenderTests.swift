@@ -52,7 +52,7 @@ final class PermissionWizardEffectErrorRenderTests: XCTestCase {
     /// "Granted, but not applied" strip and its Retry button beneath it.
     func testFailedApplyRendersWarningAndRetry() throws {
         let view = host(try snapshotModel(state: "granted", effectError: reason), mode: .review)
-        assertSnapshot(of: view, as: .image, named: "granted-apply-failed")
+        assertSnapshot(of: view, as: .pinnedImage, named: "granted-apply-failed")
     }
 
     /// Control: the same wizard with a healthy grant draws no warning at
@@ -60,13 +60,13 @@ final class PermissionWizardEffectErrorRenderTests: XCTestCase {
     /// effect_error and nothing else.
     func testHealthyGrantRendersNoWarning() throws {
         let view = host(try snapshotModel(state: "granted", effectError: nil), mode: .review)
-        assertSnapshot(of: view, as: .image, named: "granted-healthy")
+        assertSnapshot(of: view, as: .pinnedImage, named: "granted-healthy")
     }
 
     /// Auto mode asks about pending items only; a failed grant must still
     /// appear there, or the surface the user is looking at hides it.
     func testFailedApplyVisibleInAutoMode() throws {
         let view = host(try snapshotModel(state: "granted", effectError: reason), mode: .auto)
-        assertSnapshot(of: view, as: .image, named: "auto-apply-failed")
+        assertSnapshot(of: view, as: .pinnedImage, named: "auto-apply-failed")
     }
 }

@@ -122,6 +122,26 @@ case "$hang_msg" in
 esac
 rm -f "$empty_log"
 
+echo "== SWIFT_SUITE_TIMEOUT default is reachable =="
+# #1530. Every diagnosis in this file is unreachable if the bound outlives the
+# caller waiting for it: at the old default of 600s an automated caller's Bash
+# tool call — also 600s — was killed at the same instant the gate would have
+# started speaking, so the HUNG branch could never print for the caller that
+# most needs it. The gate runs `swift build` first, so what has to fit inside
+# the pre-push budget is the bound PLUS a cold build.
+#
+# Read from a subshell with the variable unset, so this measures the DEFAULT
+# and not whatever the surrounding run exported.
+default_timeout=$(unset SWIFT_SUITE_TIMEOUT; . tools/lib/swift-suite.sh; echo "$SWIFT_SUITE_TIMEOUT")
+[[ "$default_timeout" =~ ^[0-9]+$ ]] \
+  && pass "default timeout is numeric ($default_timeout s)" \
+  || fail "default timeout is not a number: '$default_timeout'"
+if (( default_timeout + SWIFT_SUITE_COLD_BUILD_SECONDS < SWIFT_SUITE_MIN_HEADROOM )); then
+  pass "default ${default_timeout}s + ${SWIFT_SUITE_COLD_BUILD_SECONDS}s cold build fits in ${SWIFT_SUITE_MIN_HEADROOM}s"
+else
+  fail "default ${default_timeout}s + ${SWIFT_SUITE_COLD_BUILD_SECONDS}s cold build does NOT fit in ${SWIFT_SUITE_MIN_HEADROOM}s — the HUNG diagnosis cannot print for a bounded caller"
+fi
+
 echo "== swift_suite_last_test =="
 swift_suite_last_test "$DATA/hung.log" | grep -aq 'testRoleOrchestratorRow' \
   && pass "names the test a hung run stopped in" || fail "should name the last started test"

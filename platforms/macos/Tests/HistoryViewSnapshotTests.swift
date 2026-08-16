@@ -163,7 +163,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
             onExportCSV: { /* unused in this snapshot */ },
             onExportJSON: { /* unused in this snapshot */ }
         )
-        assertSnapshot(of: host(view, height: 460), as: .image)
+        assertSnapshot(of: host(view, height: 460), as: .pinnedImage)
     }
 
     func testHistoryTokens() {
@@ -176,7 +176,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
             onExportCSV: { /* unused in this snapshot */ },
             onExportJSON: { /* unused in this snapshot */ }
         )
-        assertSnapshot(of: host(view, height: 460), as: .image)
+        assertSnapshot(of: host(view, height: 460), as: .pinnedImage)
     }
 
     /// #1029: the CO2 chart is the only one with a methodology-link overlay
@@ -200,7 +200,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
             onExportCSV: { /* unused in this snapshot */ },
             onExportJSON: { /* unused in this snapshot */ }
         )
-        assertSnapshot(of: host(view, height: 460), as: .image)
+        assertSnapshot(of: host(view, height: 460), as: .pinnedImage)
     }
 
     /// #1029 (code-review follow-up): the methodology link is gated on
@@ -220,7 +220,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
             onExportCSV: { /* unused in this snapshot */ },
             onExportJSON: { /* unused in this snapshot */ }
         )
-        assertSnapshot(of: host(view, height: 320), as: .image)
+        assertSnapshot(of: host(view, height: 320), as: .pinnedImage)
     }
 
     func testHistoryDrilldown() {
@@ -233,7 +233,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
             onExportCSV: { /* unused in this snapshot */ },
             onExportJSON: { /* unused in this snapshot */ }
         )
-        assertSnapshot(of: host(view, height: 500), as: .image)
+        assertSnapshot(of: host(view, height: 500), as: .pinnedImage)
     }
 
     func testHistoryEmptyState() {
@@ -243,7 +243,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
             onExportCSV: { /* unused in this snapshot */ },
             onExportJSON: { /* unused in this snapshot */ }
         )
-        assertSnapshot(of: host(view, height: 320), as: .image)
+        assertSnapshot(of: host(view, height: 320), as: .pinnedImage)
     }
 
     // MARK: Yield (#373)
@@ -269,7 +269,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
 
     func testYieldPopulated() {
         let view = HistoryYieldContentView(data: yieldFixture(), range: .month)
-        assertSnapshot(of: host(view, height: 360), as: .image)
+        assertSnapshot(of: host(view, height: 360), as: .pinnedImage)
     }
 
     // MARK: DORA (#951)
@@ -306,12 +306,12 @@ final class HistoryViewSnapshotTests: XCTestCase {
 
     func testDoraPopulated() {
         let view = HistoryDoraContentView(data: doraFixture())
-        assertSnapshot(of: host(view, height: 260), as: .image)
+        assertSnapshot(of: host(view, height: 260), as: .pinnedImage)
     }
 
     func testDoraUnavailable() {
         let view = HistoryDoraContentView(data: doraUnavailableFixture())
-        assertSnapshot(of: host(view, height: 200), as: .image)
+        assertSnapshot(of: host(view, height: 200), as: .pinnedImage)
     }
 
     // MARK: Activity Matrix (#1028)
@@ -377,7 +377,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
             onExportCSV: { /* unused in this snapshot */ },
             onExportJSON: { /* unused in this snapshot */ }
         )
-        assertSnapshot(of: host(view, height: 260), as: .image)
+        assertSnapshot(of: host(view, height: 260), as: .pinnedImage)
     }
 
     func testActivityEmptyState() {
@@ -387,7 +387,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
             onExportCSV: { /* unused in this snapshot */ },
             onExportJSON: { /* unused in this snapshot */ }
         )
-        assertSnapshot(of: host(view, height: 260), as: .image)
+        assertSnapshot(of: host(view, height: 260), as: .pinnedImage)
     }
 
     /// Regression guard for issue #1046: hosted through the real nested
@@ -401,7 +401,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
             onExportCSV: { /* unused in this snapshot */ },
             onExportJSON: { /* unused in this snapshot */ }
         )
-        assertSnapshot(of: hostInScrollingTab(view, height: 400), as: .image)
+        assertSnapshot(of: hostInScrollingTab(view, height: 400), as: .pinnedImage)
     }
 
     // MARK: Quota projection
@@ -467,7 +467,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
     /// subscription): exercises the 5h cap trajectory + 7d on-pace footer.
     func testQuotaForecastSingleProvider() {
         let view = HistoryQuotaForecastView(providers: [anthropicProvider()])
-        assertSnapshot(of: host(view, height: 320), as: .image)
+        assertSnapshot(of: host(view, height: 320), as: .pinnedImage)
     }
 
     /// Two active providers stacked — Anthropic (5h hits cap, 7d on pace) +
@@ -475,6 +475,6 @@ final class HistoryViewSnapshotTests: XCTestCase {
     /// and both footer states.
     func testQuotaForecastMultiProvider() {
         let view = HistoryQuotaForecastView(providers: [anthropicProvider(), openaiProvider()])
-        assertSnapshot(of: host(view, height: 460), as: .image)
+        assertSnapshot(of: host(view, height: 460), as: .pinnedImage)
     }
 }

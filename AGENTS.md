@@ -1057,11 +1057,25 @@ Before marking a ticket done, run the full suite — every layer must pass:
 - macOS app (only when touching `platforms/macos/`): `cd platforms/macos &&
   swift build && swift test --skip LauncherTestHarness --skip LauncherHarnessTests`,
   run locally by `tools/preflight.sh --only swift` and by the pre-push hook.
-  CI's `.github/workflows/macos-swift.yml` **builds but does not test** — the
-  suite does not yet pass on a GitHub runner (#1530), so the test gate is the
-  local one. That makes `swift` the single gate here that is deliberately
-  stronger locally than in CI; everything else in `preflight.sh` mirrors CI
-  exactly. **Never run the suite unskipped**: the
+  Since #1530 CI's `.github/workflows/macos-swift.yml` runs it too, as a second
+  job beside the build and through the same `tools/lib/swift-suite.sh` harness,
+  so a hang there is a named failure at 240s rather than a job cancelled at the
+  cap with an empty log. `swift` is still the one gate deliberately **stronger**
+  locally than in CI — a runner has a virtual display, a stock font set and no
+  usable audio stack — but it is no longer the only place the suite runs.
+  Four host dependencies had to go first, and the general lesson is worth more
+  than the four fixes: each was a value read from the MACHINE where the
+  equivalent value was available from the INPUT. Image snapshots rasterised at
+  `NSScreen.main`'s backing scale rather than at a pinned one
+  (`Tests/PinnedScaleSnapshot.swift`); `UpdateManager` started Sparkle in a test
+  host, where `startUpdater` fails outside an app bundle and answers by running
+  a modal `NSAlert` on the main queue a second later, hanging whichever
+  unrelated test next spun the run loop — which is why #1530 and #1523 each
+  attributed the hang to a different test; and `AXTitleMatchActivator` filtered
+  path segments by the running process's own `$HOME` instead of by the cwd it
+  was scoring, in two places. A test that reads the host and a test that reads
+  its fixture look identical on the machine where they agree. **Never run the
+  suite unskipped**: the
   `LauncherTestHarness` target drives real terminal applications through
   `NSRunningApplication`, so on a developer machine it manipulates live
   windows. Both names are passed because a test ID is `<target>.<class>`, and
@@ -1076,9 +1090,23 @@ Before marking a ticket done, run the full suite — every layer must pass:
   regenerating the reference (#1034, #1044), when it was an appearance-mode bug
   that made the suite green by day and red by night. `AdapterIconAppearanceTests`
   is the lock, and it sets both appearances itself so it cannot pass by daylight.
+  `PinnedScaleSnapshotTests` is #1530's version of the same shape, and the shape
+  is what to copy: asserting "renders at 2×" would have been green on every Mac
+  anyone runs it on whether the scale was pinned or inherited, so it drives 1×,
+  2× and 3× through one view instead — whatever the host's scale is, at most one
+  arm can agree with it. A host-independence lock that can only be checked on
+  one host is not a lock.
   The suite also aborts intermittently (#1523) in a way that **truncates the
   run** while every suite that did report says "0 failures" — so the exit code
-  is the only reliable signal, never the last totals line you can see.
+  is the only reliable signal, never the last totals line you can see. That is
+  what `tools/lib/swift-suite.sh` judges a run by, and its `SWIFT_SUITE_TIMEOUT`
+  default is 240s rather than 600s for a reason worth generalizing: at 600 it
+  equalled an automated caller's entire command budget, so the caller killed the
+  gate at the instant the gate would have started explaining itself and the
+  `HUNG` diagnosis could never print for the caller that most needed it. A bound
+  nobody can outlive reports nothing. The relation
+  (`timeout + cold build < pre-push budget`) is asserted in
+  `tools/lib/swift-suite_test.sh` rather than left true the day it was typed.
 - Web (only when touching a `web/` tree): `npm test` in that tree. There are
   two independent suites, each with its own `node_modules`:
   - `platforms/web/` — the dashboard.
