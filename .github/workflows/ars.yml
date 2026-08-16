@@ -58,9 +58,32 @@ jobs:
             echo "No badge changes to commit"
           else
             git commit -m "chore: update ARS badge [skip ci]"
+            # `pushed` is the only thing that can tell "it went in on attempt
+            # 3" from "it never went in", and until #1641 nothing did. The
+            # loop's last statement was `sleep`, which succeeds — so five
+            # failed attempts ended the loop with status 0, and the step, the
+            # job and this workflow's check all went GREEN with the badge
+            # unpushed. GitHub's implicit `-e` (a step declaring no `shell:`
+            # runs as `bash --noprofile --norc -e -o pipefail {0}`) does not
+            # save it: errexit is suppressed for every command in an `&&` list
+            # except the one after the final `&&`, which is precisely what
+            # MAKES this a retry rather than one attempt. That suppression is
+            # wanted; what was missing is anything that reads the exhausted
+            # case. Measured, not reasoned about — the pre-fix loop is emitted
+            # verbatim by tools/lib/ars-badge-push_test.sh and still exits 0
+            # there on every run, and that test executes THIS block.
+            #
+            # `|| true` on the push is the false fix and is deliberately not
+            # used: it makes the loop's own status 0 for the same reason, one
+            # level down (#1629 measured the same trap on a `$?` capture).
+            pushed=0
             for i in 1 2 3 4 5; do
-              git pull --rebase origin main && git push && break
+              if git pull --rebase origin main && git push; then pushed=1; break; fi
               echo "Push attempt $i failed, retrying..."
               sleep $((i * 3))
             done
+            if [ "$pushed" -ne 1 ]; then
+              echo "::error::ARS badge was NOT pushed: all 5 \`git pull --rebase origin main && git push\` attempts to origin/main failed. The badge commit exists only on this runner; README.md on main still shows the previous score."
+              exit 1
+            fi
           fi

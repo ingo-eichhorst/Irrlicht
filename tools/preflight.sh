@@ -444,7 +444,12 @@ if want tools; then
   # shell-lib-suite_test.sh asserts that its "Test the shared shell libs" step
   # goes through the shared runner rather than growing its own loop back, and a
   # commit editing only that workflow is again exactly the one that breaks it.
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^\.github/workflows/(macos-swift|test)\.yml$' \
+  # .github/workflows/ars.yml joins them for the fourth time (#1641):
+  # ars-badge-push_test.sh EXTRACTS that workflow's "Commit badge update" step
+  # and executes it, so the assertion that an exhausted push-retry fails the
+  # step lives entirely in this gate — and a commit editing only ars.yml is
+  # once again exactly the one that breaks it.
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^\.github/workflows/(ars|macos-swift|test)\.yml$' \
                   "tools/lib shell-lib tests" shell_lib_tests
 fi
 

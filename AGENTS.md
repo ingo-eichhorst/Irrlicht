@@ -990,6 +990,43 @@ Before marking a ticket done, run the full suite — every layer must pass:
   re-measured on every run, which doubles as the vacuity guard — if bash ever
   stopped aborting, the fix would be protecting nothing and would pass for the
   wrong reason.
+- The ARS badge push: `tools/lib/ars-badge-push_test.sh` EXTRACTS
+  `.github/workflows/ars.yml`'s "Commit badge update" step out of the workflow
+  file and EXECUTES it against a git stub, under
+  `bash --noprofile --norc -e -o pipefail` — GitHub's documented invocation for
+  a step declaring no `shell:`. Behavioural rather than a text scan, because a
+  scan pins one spelling of a guard where running the block pins the property.
+  Before #1641 the push-retry loop's last statement was `sleep`, which
+  succeeds, so five failed attempts ended the loop — and the step, the job and
+  this workflow's check — at status 0 with the badge unpushed and nothing
+  saying so; the observable symptom is a README badge that quietly stops
+  tracking `main` behind a green history. `-e` does not save it: errexit is
+  suppressed for every command in an `&&` list except the one after the final
+  `&&`, which is exactly what MAKES the loop a retry. Three things are
+  load-bearing. The pre-fix loop is emitted verbatim there and re-measured on
+  every run, so "five failures exit 0" is a fact rather than a sentence in a
+  merged PR body — and it is the vacuity guard, since a bash that stopped
+  behaving that way would leave every other arm passing for the wrong reason.
+  The **third-attempt** arm is what keeps the fix honest: a "fix" dropping the
+  retry, or one that stops suppressing errexit inside the `&&` list, satisfies
+  the exhausted-case arm just as well and simply gives up after one attempt.
+  And the git stub answers an **unmodelled** subcommand with a loud, distinctive
+  99 naming the call, never a quiet 0 — a stub that said "fine" to a call it
+  does not model would make every arm pass for a reason unrelated to its
+  obligation (seen red: adding one `git status` to the step reports
+  `STUB: unmodelled call`, not a pass).
+  **No linter was built, and the measurement is the reason.** Over the 19
+  multi-line `run:` blocks in `.github/workflows/`, a rule keyed on "the
+  block's last statement is `echo`/`sleep`/`cat`/`printf`" flags 6 and **misses
+  this very defect** — the loop is nested inside an `if`/`else`, so the block's
+  last line is `fi` — while 4 of the 6 it does flag are correct code; a rule
+  keyed on `|| true` flags 2 and also misses it; "the block contains a loop"
+  flags 3, of which 1 is the defect. No candidate both catches the subject and
+  stays quiet on the correct blocks, so a green would claim coverage it does
+  not have — the same conclusion #1629 reached by the same measurement about a
+  `$?`-keyed rule, and #1639 about the sibling family. `preflight.sh`'s `tools`
+  trigger gains `ars.yml`, its fourth widening for this reason (#1591, #1629,
+  #1639), because that assertion lives entirely inside that gate.
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh` — gated in CI by linux.yml, and run
   natively as `tools/preflight.sh`'s `replay fixtures` gate, so golden drift
