@@ -1,0 +1,83 @@
+#!/bin/sh
+# shim — the file tools/install-git-hooks.sh copies, verbatim, into the shared
+# .git/hooks/ directory under each hook's name. It is not itself a hook: it is
+# the indirection that makes the real hooks worktree-local.
+#
+# WHY IT EXISTS (#1591). Linked worktrees share the parent repo's .git/hooks/.
+# The installer used to symlink .git/hooks/<name> at the MAIN checkout's
+# tools/git-hooks/<name>, so every worktree's push ran the main checkout's
+# script. The consequence, stated plainly: a change to a hook in a worktree
+# did not govern that worktree's own push. PR #1590 rewrote the pre-push hook
+# to bound its own runtime, and its own push ran the OLD unbounded hook, which
+# then blew the command budget — the exact defect that PR fixes, in the
+# session that fixed it. Anything under tools/git-hooks/ was untestable from
+# the branch that changed it, and landed on main having only ever been run by
+# hand. It also mixed versions silently: a worktree based on an older main
+# pushed through whatever hook the main checkout happened to have.
+#
+# THE TRADE, STATED RATHER THAN LEFT IMPLIED. This file becomes the one part
+# of the chain a `git pull` cannot update — changing it requires re-running
+# tools/install-git-hooks.sh. That is deliberate and is the right way round:
+# these few lines resolve a path and exec, and have no reason to change, while
+# tools/git-hooks/pre-push changes often and is now picked up by every push
+# with no install step at all. The installer overwrites whatever it finds
+# (older symlink install, hand-edited copy, stale shim), so re-running it is
+# always safe, always sufficient, and a no-op when nothing changed.
+#
+# TWO MEASURED FACTS ABOUT THE HOOK ENVIRONMENT (git 2.50.1, macOS; a linked
+# worktree pushing through a hook in the shared hooks dir):
+#   * $0 is the MAIN checkout's .git/hooks/<name>, NOT anything under the
+#     pushing worktree — so the repository root must never be derived from it.
+#     `git rev-parse --show-toplevel` DOES return the pushing worktree's root
+#     (GIT_DIR is set to <main>/.git/worktrees/<name>, which knows its own
+#     work tree), which is why that is what is used below. Git also runs hooks
+#     with cwd at the pushing tree's root even when `git push` was invoked
+#     from a subdirectory, but rev-parse is used anyway: it is correct under
+#     both, and does not have to be re-verified if that guarantee moves.
+#   * the basename of $0 IS the hook name, because git looks a hook up by name
+#     in the hooks directory. That is what lets one shim serve every hook.
+#
+# GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE are deliberately left alone here:
+# the resolution above reads GIT_DIR, and unsetting them is the delegated
+# hook's own documented job (tools/git-hooks/pre-push does it, for its own
+# reasons, after this shim has done its work).
+set -u
+
+hook_name=${0##*/}
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || root=
+if [ -z "$root" ]; then
+  echo "$hook_name shim: cannot resolve the working tree root — 'git rev-parse --show-toplevel' failed." >&2
+  echo "  Refusing rather than skipping: a gate that cannot find itself must not read as a pass." >&2
+  echo "  Push once with --no-verify if this is genuinely not a working tree." >&2
+  exit 1
+fi
+
+hook=$root/tools/git-hooks/$hook_name
+
+if [ -x "$hook" ]; then
+  exec "$hook" "$@"
+fi
+
+# Not runnable here. Two very different situations, and they get OPPOSITE
+# answers on purpose — "fail loudly" everywhere makes `git bisect` hostile,
+# and "pass quietly" everywhere is a silently-missing gate.
+if git cat-file -e "HEAD:tools/git-hooks/$hook_name" 2>/dev/null; then
+  # This revision DOES carry the hook, so its absence — or a stripped exec bit
+  # — is an accident: a deleted file, an interrupted checkout, a copy made
+  # without permissions. A gate skipped because a file was invisible is this
+  # repo's most-repeated failure shape, so this case is loud and refuses.
+  echo "$hook_name shim: $hook is missing or not executable, yet HEAD carries tools/git-hooks/$hook_name." >&2
+  echo "  That is a broken working tree, not a revision without the hook — refusing the push." >&2
+  echo "  Restore it (git checkout -- tools/git-hooks/$hook_name) or chmod +x it; --no-verify skips once." >&2
+  exit 1
+fi
+
+# This revision genuinely has no such hook: an old branch, a bisect, a worktree
+# checked out from before the file existed. There is no gate here to skip, so
+# refusing would only punish `git bisect` for a hook that was never this
+# revision's to run. Allow it — but say so on stderr, every time, naming the
+# one reading that would mean something is wrong.
+echo "$hook_name shim: this revision carries no tools/git-hooks/$hook_name — nothing to run, allowing the push." >&2
+echo "  Expected during a bisect, or on a branch predating the hook. On an up-to-date branch it means it was deleted." >&2
+exit 0

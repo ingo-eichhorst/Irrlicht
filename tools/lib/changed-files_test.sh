@@ -52,6 +52,15 @@ assert_contains() {
   esac
   return 0
 }
+# assert_not_contains <label> <needle> <haystack>
+assert_not_contains() {
+  local label="$1" needle="$2" haystack="$3"
+  case "$haystack" in
+    *"$needle"*) fail "$label" "does NOT contain: $needle" "$haystack" ;;
+    *) pass "$label" ;;
+  esac
+  return 0
+}
 
 # No copy of security-scan.sh's GO_MODULES/WEB_TREES lives here on purpose.
 # These predicates are pure string matching and never stat the filesystem, so
@@ -132,17 +141,61 @@ trap 'rm -rf "$TMP"' EXIT
   echo '{}' >core/go.mod && git add core/go.mod      # staged, uncommitted
   echo unstaged >README.md                            # untracked-but-modified peer
   git add README.md && echo more >>README.md          # staged AND then modified
+  mkdir -p tools && echo new >tools/brand-new.sh      # never added: #1591's miss
+  echo 'ignored/' >.gitignore && git add .gitignore   # (staged, so it shows up too)
+  mkdir -p ignored && echo x >ignored/noise.txt       # untracked AND gitignored
 ) >/dev/null 2>&1
 out=$( cd "$TMP" && . "$DIR/changed-files.sh" && changed_files_vs_origin_main )
-assert_eq "collects committed + staged + unstaged, sorted and de-duplicated" \
-  "$(printf 'README.md\ncore/go.mod\ncore/main.go')" "$out"
+assert_eq "collects committed + staged + unstaged + untracked, sorted and de-duplicated" \
+  "$(printf '.gitignore\nREADME.md\ncore/go.mod\ncore/main.go\ntools/brand-new.sh')" "$out"
+
+echo "== #1591: an untracked new file counts, a gitignored one does not =="
+# git diff cannot see a file that was never added, and --cached only catches it
+# once staged — so before #1591 a brand new file selected NO gates, while this
+# function's doc said uncommitted work counted. Harmless for the pre-push hook
+# (a file must be committed to be pushed) and wrong for a manual
+# `tools/preflight.sh --changed`, where the gates covering a newly written
+# script were silently skipped. The gitignored half is the other direction: an
+# untracked set that swept in build output would put every gate in scope on
+# every run, which is a different way of meaning nothing.
+assert_contains "an untracked new file is in the changed set" "tools/brand-new.sh" "$out"
+assert_not_contains "a gitignored untracked file is NOT" "ignored/noise.txt" "$out"
+
+# The end-to-end shape the fix is actually for: from git, through the changed
+# set, into the predicate that decides whether a gate runs.
+UNTRACKED_ONLY="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$UNTRACKED_ONLY"' EXIT
+(
+  cd "$UNTRACKED_ONLY" || exit 1
+  git init -q . && git config user.email t@t && git config user.name t
+  mkdir -p core && echo package main >core/main.go
+  git add -A && git commit -qm base
+  git update-ref refs/remotes/origin/main HEAD
+  mkdir -p core && echo 'package main' >core/brand_new.go   # untracked, nothing else changed
+) >/dev/null 2>&1
+uo=$( cd "$UNTRACKED_ONLY" && . "$DIR/changed-files.sh" && changed_files_vs_origin_main )
+assert_eq "a tree whose ONLY change is an untracked file is not an empty set" \
+  "core/brand_new.go" "$uo"
+assert_scope "…and that file puts its Go module in scope" \
+  in go_module_touched core "$uo"
+
+echo "== the changed set is repo-root-relative from any cwd =="
+# `git ls-files --others` alone lists only what is under the CALLER's cwd and
+# prints it cwd-relative, while the three `git diff` lines are root-relative
+# over the whole repo. Called from the repo root — the only place preflight and
+# the hook call it — the two spellings are identical, so the wrong one would
+# look right forever, and every predicate here matches on a root-relative
+# prefix.
+sub=$( cd "$UNTRACKED_ONLY/core" && . "$DIR/changed-files.sh" && changed_files_vs_origin_main )
+assert_eq "called from a subdirectory → same root-relative set, not 'brand_new.go'" \
+  "core/brand_new.go" "$sub"
 
 echo "== changed_files_vs_origin_main: no resolvable baseline must abort, not return an empty set =="
 # An empty result is byte-for-byte what "nothing changed" looks like, and an
 # empty set scopes every gate to a skip. Returning 0 there would mean a fresh
 # or shallow clone gets a fully green pre-push run that checked nothing.
 NOREMOTE="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$NOREMOTE"' EXIT
+trap 'rm -rf "$TMP" "$UNTRACKED_ONLY" "$NOREMOTE"' EXIT
 (
   cd "$NOREMOTE" || exit 1
   git init -q . && git config user.email t@t && git config user.name t
@@ -161,7 +214,7 @@ echo "== callers hard-fail rather than skip everything when this lib is missing 
 # sibling lib/ reproduces exactly that.
 REPO_ROOT_FOR_TEST="$(cd "$DIR/../.." && pwd)"
 NOLIB="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$NOREMOTE" "$NOLIB"' EXIT
+trap 'rm -rf "$TMP" "$UNTRACKED_ONLY" "$NOREMOTE" "$NOLIB"' EXIT
 for script in security-scan.sh preflight.sh; do
   # --local on security-scan.sh keeps a regression off the network: without the
   # guard it would fall through to the gh alert gates instead of exiting here.

@@ -360,11 +360,12 @@ shell_lib_tests() {
 # ===========================================================================
 
 # ---- posix group (mirrors linux.yml's "Lint POSIX sh scripts" step) --------
-# The #!/bin/sh corpus is two files today (site/install.sh and
-# tools/linux-replay-entrypoint.sh) and the gate re-lints all of them whenever
-# it fires — it is a fraction of a second, and the trigger cannot enumerate
-# them anyway, because a NEW POSIX script is exactly the file the gate most
-# needs to see on the push that adds it. So the regex is deliberately loose:
+# The #!/bin/sh corpus is three files today (site/install.sh,
+# tools/linux-replay-entrypoint.sh and tools/git-hooks/shim) and the gate
+# re-lints all of them whenever it fires — it is a fraction of a second, and
+# the trigger cannot enumerate them anyway, because a NEW POSIX script is
+# exactly the file the gate most needs to see on the push that adds it. So the
+# regex is deliberately loose:
 # any *.sh, any extensionless file under tools/ or site/, plus the linter and
 # its own corpus. Over-firing costs milliseconds; under-firing is #1209's
 # silent-skip shape again.
@@ -412,7 +413,10 @@ if want tools; then
   # site/install.sh is in the trigger set because tools/lib/install-uninstall_test.sh
   # tests it (#1416). Without it a push touching only the installer would SKIP
   # the one gate that covers the installer.
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$' \
+  # tools/git-hooks/ is in it for the same reason (#1591): git-hooks_test.sh
+  # covers the shim and the hook scripts, and neither matches `^tools/[^/]*\.sh$`
+  # — they are extensionless files one directory down.
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$' \
                   "tools/lib shell-lib tests" shell_lib_tests
 fi
 
