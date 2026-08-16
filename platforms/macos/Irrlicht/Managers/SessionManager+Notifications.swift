@@ -65,7 +65,7 @@ extension SessionManager {
     }
 
     func sendContextPressureNotification(session: SessionState, threshold: ContextPressureThreshold, metrics: SessionMetrics) {
-        guard UserDefaults.standard.bool(forKey: NotificationEvent.contextPressure.enabledKey) else { return }
+        guard defaults.bool(forKey: NotificationEvent.contextPressure.enabledKey) else { return }
         let label = session.projectName ?? session.shortId
 
         let title: String
@@ -105,8 +105,8 @@ extension SessionManager {
         // Skip subagent sessions to avoid notification noise
         if session.parentSessionId != nil { return }
 
-        let notifyReady = UserDefaults.standard.bool(forKey: "notifyOnReady")
-        let notifyWaiting = UserDefaults.standard.bool(forKey: "notifyOnWaiting")
+        let notifyReady = defaults.bool(forKey: "notifyOnReady")
+        let notifyWaiting = defaults.bool(forKey: "notifyOnWaiting")
 
         let title: String
         let event: NotificationEvent
@@ -147,7 +147,7 @@ extension SessionManager {
         // UNNotificationContent entirely, is covered.
         guard NotificationSettings.masterEnabled() else { return }
         guard canUseUserNotifications else { return }
-        let choice = Self.choice(for: event)
+        let choice = Self.choice(for: event, defaults: defaults)
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -207,12 +207,22 @@ extension SessionManager {
     /// Convenience for tests + callers that want the event → sound lookup in
     /// a single hop. Production path uses `choice(for:)` + `notificationSound(for:)`
     /// directly to avoid double-reading UserDefaults.
-    nonisolated static func resolveNotificationSound(for event: NotificationEvent) -> UNNotificationSound? {
-        notificationSound(for: choice(for: event))
+    nonisolated static func resolveNotificationSound(
+        for event: NotificationEvent,
+        defaults: UserDefaults = .standard
+    ) -> UNNotificationSound? {
+        notificationSound(for: choice(for: event, defaults: defaults))
     }
 
-    nonisolated static func choice(for event: NotificationEvent) -> SoundChoice {
-        let raw = UserDefaults.standard.string(forKey: event.soundKey) ?? SoundChoice.default.rawValue
+    /// `defaults` is a parameter rather than `.standard` for #1662's reason:
+    /// a test driving this must not have to write the developer's real
+    /// `com.apple.dt.xctest.tool` domain and put it back in a `tearDown` the
+    /// aborting runs skip.
+    nonisolated static func choice(
+        for event: NotificationEvent,
+        defaults: UserDefaults = .standard
+    ) -> SoundChoice {
+        let raw = defaults.string(forKey: event.soundKey) ?? SoundChoice.default.rawValue
         return SoundChoice(rawValue: raw) ?? .default
     }
 

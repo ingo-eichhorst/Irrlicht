@@ -1435,14 +1435,57 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `HistoryViewSnapshotTests`' `setUp` rather than keeping it, deliberately —
   with no process-wide assignment left, those 8 references are themselves the
   live evidence that the seam reaches every date the panel draws.
-  Still open in this family, each with its evidence in the issue rather than
+  **The third member is `@AppStorage`, and it is the one where the seam already
+  existed** (#1662). `GroupViewSnapshotTests` and `SessionRowSnapshotTests` each
+  held eight real preference keys open in `setUp` and put them back in
+  `tearDown`, `AdapterIconAppearanceTests` six — and unlike the locale and the
+  zone, **no product seam was needed for the views**: SwiftUI's own
+  `.defaultAppStorage(_:)` is honoured by `@AppStorage`, where `format: .number`
+  ignores `\.locale` and a file-scope `DateFormatter` is reachable from no view
+  at all. So the whole view half is one modifier on `PinnedSnapshotHost`. Three
+  things there are worth carrying. The parameter is typed **`InMemoryDefaults`,
+  not `UserDefaults`**, so `.standard` is not expressible at a snapshot host —
+  the type guarantee #1390 prefers over a guard, one family further on — and its
+  default is an EMPTY store, which is what made adoption free: an unset key
+  renders at the `@AppStorage` declaration's own default, which is exactly what
+  the deleted `setUp`s were assigning, so all 53 references still match and none
+  was regenerated. **A suite that forgets to pass its store gets isolation and a
+  visible failure** ("my pinned value did not reach the view"), never a
+  reference that silently photographs someone's Settings — the polarity is what
+  makes the default safe. And the abort path (#1523, the 240s tree kill,
+  `--budget`) is answered by **removing the state, not unwinding it more
+  carefully**: with nothing written there is nothing a skipped `tearDown` can
+  fail to restore.
+  Two keys did need a product seam, because they are not `@AppStorage` and no
+  environment reaches them: `SessionManager` reads `summaryDisplayMode` and
+  `projectGroupOrder` itself, so it takes the store it reads them from
+  (`.standard` by default). One measured trap there, found by the change's own
+  new test rather than in review: **`didSet` DOES fire for a write in the second
+  phase of a base class's own `init`**, so seeding a value read from the store
+  wrote it straight back — in the app, a preference persisted into the user's
+  real `io.irrlicht.app` domain that they never set. The seed goes through the
+  `@Published` STORAGE (`self._summaryDisplayMode = Published(initialValue:)`),
+  which the property observer does not see.
+  Measured while doing it, and it settles the "is this hypothetical" question the
+  issue left open: with the pin deleted, the probe in
+  `PinnedAppStorageSnapshotTests` reads `menuBarStyle = combined`,
+  `notificationsEnabled = true` and `advancedSettingsExpanded = true` off this
+  machine — the nine keys nothing pinned were live inputs, not a worry. The
+  structural half is `PersistentDefaultsLintTests`' second rule, which fails the
+  build on any `UserDefaults.standard` **mutation** in the test targets; READS
+  are deliberately left legal, because `object(forKey:)` is how a test says "and
+  the process domain was not touched", and banning it would ban the evidence
+  along with the defect. What that rule cannot see is a production call site a
+  test drives — measured, two sound keys still reach that domain across a full
+  gate run and no test source names the write (#1672).
+  Still open in this family, with its evidence in the issue rather than
   asserted here: `SessionListView.formatResetTime` (#1663 — a timezone pin
   reaches two of its three machine reads and leaves the `Date()` that picks the
-  format string, so it was left whole rather than half-covered) and
-  `@AppStorage`/`UserDefaults` (#1662 — and no, a test run does not modify the
-  user's real app preferences: `UserDefaults.standard` under `swift test`
-  resolves to `com.apple.dt.xctest.tool`, measured against a byte-identical
-  `io.irrlicht.app.plist` across a full run).
+  format string, so it was left whole rather than half-covered). And no, a test
+  run does not modify the user's real app preferences:
+  `UserDefaults.standard` under `swift test` resolves to
+  `com.apple.dt.xctest.tool`, measured again across two full gate runs against a
+  byte- and mtime-identical `io.irrlicht.app.plist`.
   **A sibling family reads the machine for its WRITES rather than its
   formatting**, and is closed the same way: `AppHome`
   (`Irrlicht/Managers/AppHome.swift`) is now the one place the app resolves the
