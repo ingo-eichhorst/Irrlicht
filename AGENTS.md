@@ -912,6 +912,49 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `install-uninstall_test.sh` now *executes* the installer under `dash` rather
   than `sh` (macOS ships `/bin/dash`), which is the runtime half — it reaches
   only the lines a case runs, where the linter reads every line.
+- Sourced shell libraries: not a contract family — a tripwire,
+  `tools/lib/shell-lib-errexit_test.sh`, over every `tools/lib/*.sh` that is
+  not a `*_test.sh`. Each function it can drive must, under a caller's
+  `set -e`, return what its library DOCUMENTS rather than aborting the caller,
+  and must leave the caller's shell options byte-identical. It exists because
+  three issues in a row were the same defect in a different file — #1629 (a
+  workflow step reading `$?` on a line GitHub's implicit `-e` never reached),
+  #1633 (`swift_suite_run`'s post-timeout kill sequence aborting before
+  `return 124`), #1635 (`budget_run`'s backgrounded child inheriting errexit
+  and dying before writing the status file that is its "it finished" signal,
+  so a gate that failed instantly was reported as a TIMEOUT that burned the
+  whole budget) — and each sibling was found only because someone happened to
+  look. These files are SOURCED, so they run with whatever options their caller
+  has, and none of them said anything about that. Four things are load-bearing:
+  - **Bare statement position is the whole point.** Every other calling shape —
+    `if f`, `f || x`, `x=$(f)` — makes bash ignore errexit for the whole
+    function body, and (measured on 3.2.57) for a subshell that body
+    backgrounds as well. The very call that came back 1 instead of 3 against
+    the unfixed `gate-budget.sh` returns 3 written as `budget_run … || rc=$?`,
+    so a lock written that way is green against a broken library.
+  - **`$(set +o)` cannot capture the options.** bash 3.2 reports errexit and
+    nounset as OFF inside a command substitution regardless of the parent —
+    measured, same shell, same instant: `$( )` gives `set +o errexit` where a
+    redirect to a file gives `set -o errexit`. A probe built the obvious way is
+    byte-identical before and after any leak and can never fail. The redirect
+    spelling is used, and `tw_fixture_leaks` is its committed guard.
+  - **No function is blind-called.** Each has a named setup+call recipe;
+    expected statuses are chosen DISTINCTIVE (0, 2, 3, 124) because a documented
+    1 is indistinguishable from an errexit abort, which also exits 1. Anything
+    undrivable is named in `TW_EXEMPT_KEYS` with its reason — today one entry,
+    `swift_suite_run` on a non-Darwin host, and it is inactive on macOS where
+    the suite actually runs. Recipe keys and exemption keys are existence-
+    checked against the walk in BOTH directions, so a library that stopped
+    being walked surfaces as its recipes naming nothing rather than as silence.
+  - Its own mutation evidence is committed (`tw_fixture_correct` /
+    `tw_fixture_aborts` / `tw_fixture_leaks`, four synthetic bijection cases,
+    and a real walk over a directory holding three of the four libraries). The
+    fixtures matter in both directions: a leaked `set +e` is a *working* fix for
+    the return value, so obligation (a) passes it and only (b) objects.
+  What it buys over a hand-written lock was measured on this repo: deleting
+  `_budget_kill_tree`'s own guard reddens the tripwire and leaves
+  `gate-budget_test.sh`'s whole `-e` block green, because that helper is only
+  ever reached through a region `budget_run` guards separately.
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh` — gated in CI by linux.yml, and run
   natively as `tools/preflight.sh`'s `replay fixtures` gate, so golden drift
