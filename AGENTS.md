@@ -1443,6 +1443,41 @@ Before marking a ticket done, run the full suite — every layer must pass:
   user's real app preferences: `UserDefaults.standard` under `swift test`
   resolves to `com.apple.dt.xctest.tool`, measured against a byte-identical
   `io.irrlicht.app.plist` across a full run).
+  **A sibling family reads the machine for its WRITES rather than its
+  formatting**, and is closed the same way: `AppHome`
+  (`Irrlicht/Managers/AppHome.swift`) is now the one place the app resolves the
+  user's home, and under XCTest it answers a per-process directory beneath
+  `NSTemporaryDirectory()`. Five call sites resolved it directly and three of
+  them wrote — a fixture into the live daemon's
+  `~/Library/Application Support/Irrlicht/instances/`, the developer's own
+  `session-order.json` **overwritten** with test data (`{"order":["b","a"]}`,
+  measured), and `~/Library/Sounds/IrrlichtCustom-<event>.<ext>` behind a
+  `defer` (#1669, #1670; #1661 was the same class in `~/Library/Preferences`).
+  Four things there are worth carrying. **`HOME` is inert** — measured,
+  `HOME=<tmp>` alone leaves `NSHomeDirectory()` at the real home and only
+  `CFFIXED_USER_HOME` moves it — so a redirect built on `HOME` looks like a fix
+  and changes nothing; the redirect is therefore in-process and keyed on
+  `NSClassFromString("XCTestCase")`, the signal #832 already uses to keep tests
+  off the live daemon socket, so it holds under a bare `swift test` and under
+  Xcode rather than only under a script that sets an env var. **Nothing sweeps**:
+  a function deleting files from a directory it did not create is what removed
+  ~1895 files from a real `~/Library/Preferences` during #1661, and no code in
+  this family has a removal path. **The standing guard is split by what each
+  half can see** — `tools/lib/swift-suite.sh`'s witness brackets the `swift
+  test` invocation and fails on any new entry in `~/Library/Preferences` or
+  `~/Library/Sounds`, which is the only check that still runs when the suite
+  ABORTS (#1523) and a `defer` does not, while
+  `Tests/RealHomeIsolationTests.swift` locks the resolved PATHS, because the
+  worst of #1669 is an overwrite that adds no directory entry and the level that
+  would see the rest is written continuously by the live daemon. And the
+  witness's noise is a function of its WINDOW, stated honestly because the
+  flattering version is what erodes a guard: 0 additions across each of two
+  suite-length windows, 4 unrelated background plists across one 870s window of
+  interactive use. It is not filtered by name — #1661's leaked files were
+  `<uuid>.plist`, so any name filter that quietened the churn would have
+  quietened the incident. `Tests/RealHomePathLintTests.swift` is the structural
+  half, over the app AND test targets, with an existence-checked exemption list
+  (two entries) because the safe construct is built out of the banned one.
   The suite also aborts intermittently (#1523) in a way that **truncates the
   run** while every suite that did report says "0 failures" — so the exit code
   is the only reliable signal, never the last totals line you can see. That is

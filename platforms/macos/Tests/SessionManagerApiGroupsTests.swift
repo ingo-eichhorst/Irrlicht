@@ -288,7 +288,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
             updatedAt: Date(timeIntervalSince1970: 0),
             role: "test-role", children: [child]
         )
-        let dir = instancesURL()
+        let dir = sut.instancesPath
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let fixturePath = dir.appendingPathComponent("\(id).json")
         try Data("{\"state\":\"working\",\"updated_at\":0}".utf8).write(to: fixturePath)
@@ -310,10 +310,12 @@ final class SessionManagerApiGroupsTests: XCTestCase {
                        "withState must preserve children across reset")
     }
 
-    private func instancesURL() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Irrlicht/instances")
-    }
+    // The instances directory is deliberately NOT re-derived here. It used to
+    // be, from `homeDirectoryForCurrentUser`, and that is #1669: the fixture
+    // landed in the live daemon's own directory, and the test could disagree
+    // with the code under test about where that directory is. `sut.instancesPath`
+    // is the one the subject reads, which under test is `AppHome`'s per-process
+    // temporary home.
 
     // MARK: - SessionState.withChildren
 

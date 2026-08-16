@@ -426,6 +426,33 @@ row 'swift-suite.sh::swift_suite_run' 'swift_suite_run (ordinary path)' 3 \
     '. tools/lib/swift-suite.sh; SWIFT_SUITE_TIMEOUT=5' \
     'swift_suite_run "$TW_TMP/swift-suite-run.log" bash -c "exit 3" >/dev/null 2>&1'
 
+# The real-home witness (#1669, #1670). Every recipe below drives a FIXTURE
+# home under $TW_TMP through SWIFT_SUITE_WITNESS_HOME — never the real one,
+# since planting a file in the developer's home to grade a guard against
+# planting files in the developer's home is the incident, not a test of it.
+#
+# All five are driven at 0, and that is a limitation stated rather than papered
+# over: each documents 1 for its failure paths, and a documented 1 is
+# indistinguishable from an errexit abort, which is this file's own rule about
+# distinctive statuses. Those paths are graded — eight of them, with their
+# messages — by swift-suite_test.sh, which is not under `-e`; what is asserted
+# here is the errexit/option property on the path a caller takes.
+row 'swift-suite.sh::swift_suite_witness_home' 'swift_suite_witness_home' 0 \
+    '. tools/lib/swift-suite.sh' \
+    'swift_suite_witness_home >/dev/null'
+row 'swift-suite.sh::_swift_suite_witness_slug' '_swift_suite_witness_slug' 0 \
+    '. tools/lib/swift-suite.sh' \
+    '_swift_suite_witness_slug Library/Preferences >/dev/null'
+row 'swift-suite.sh::_swift_suite_witness_snapshot' '_swift_suite_witness_snapshot' 0 \
+    '. tools/lib/swift-suite.sh; mkdir -p "$TW_TMP/wh-snap/Library/Preferences" "$TW_TMP/ws-snap"; : >"$TW_TMP/wh-snap/Library/Preferences/a.plist"; SWIFT_SUITE_WITNESS_HOME="$TW_TMP/wh-snap"' \
+    '_swift_suite_witness_snapshot "$TW_TMP/ws-snap" before'
+row 'swift-suite.sh::swift_suite_witness_before' 'swift_suite_witness_before' 0 \
+    '. tools/lib/swift-suite.sh; mkdir -p "$TW_TMP/wh-before/Library/Preferences" "$TW_TMP/ws-before"; : >"$TW_TMP/wh-before/Library/Preferences/a.plist"; SWIFT_SUITE_WITNESS_HOME="$TW_TMP/wh-before"' \
+    'swift_suite_witness_before "$TW_TMP/ws-before"'
+row 'swift-suite.sh::swift_suite_witness_verdict' 'swift_suite_witness_verdict (nothing changed)' 0 \
+    '. tools/lib/swift-suite.sh; mkdir -p "$TW_TMP/wh-verdict/Library/Preferences" "$TW_TMP/ws-verdict"; : >"$TW_TMP/wh-verdict/Library/Preferences/a.plist"; SWIFT_SUITE_WITNESS_HOME="$TW_TMP/wh-verdict"; swift_suite_witness_before "$TW_TMP/ws-verdict"' \
+    'swift_suite_witness_verdict "$TW_TMP/ws-verdict" >/dev/null'
+
 # ---------------------------------------------------------------------------
 # The exemption map
 #

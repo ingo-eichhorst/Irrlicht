@@ -86,8 +86,7 @@ enum SoundChoice: Hashable {
             guard let name = systemSoundFilename else { return nil }
             return URL(fileURLWithPath: "/System/Library/Sounds/\(name)")
         case .custom(let installedFilename, _):
-            let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
-            return library?.appendingPathComponent("Sounds").appendingPathComponent(installedFilename)
+            return AppHome.library.appendingPathComponent("Sounds").appendingPathComponent(installedFilename)
         case .none, .speak:
             return nil
         }

@@ -500,5 +500,121 @@ $(grep -a 'offending run: block' <<<"$shape")"
   fi
 fi
 
+echo "== real-home witness (#1669, #1670) =="
+# Every case here runs against a FIXTURE home under $TMPDIR, never the real
+# one. That is not politeness: planting a file in the developer's home to prove
+# a guard against planting files in the developer's home would reproduce the
+# incident this guard exists for. `SWIFT_SUITE_WITNESS_HOME` exists for exactly
+# this caller and for no other.
+#
+# The `want 0` rows carry as much of the value as the rest: a witness that
+# reported unconditionally would satisfy every mutation below and read as
+# excellent coverage.
+
+# _witness_home — a fixture home shaped like a real one: Preferences present
+# and non-empty (so the vacuity guard is satisfied), Sounds absent (so the
+# "the run created it" case is reachable).
+_witness_home() {
+  local home
+  home=$(mktemp -d -t swift-suite-witness-home) || return 1
+  mkdir -p "$home/Library/Preferences" || return 1
+  printf 'x' > "$home/Library/Preferences/com.example.settled.plist" || return 1
+  printf '%s\n' "$home"
+}
+
+# _witness_scrub <dir> — remove a directory THIS FILE created, and refuse
+# anything else. The refusal is the point: it is a one-line reproduction of the
+# rule that a delete path must never be able to address a directory it did not
+# create.
+_witness_scrub() {
+  case "$1" in
+    "${TMPDIR:-/tmp}"swift-suite-witness-*|/tmp/swift-suite-witness-*|/var/folders/*/swift-suite-witness-*)
+      rm -rf "$1" ;;
+    *) echo "  refusing to remove '$1' — not a fixture this test created" >&2; return 1 ;;
+  esac
+}
+
+# _witness_case <name> <want-rc> <mutation-fn> [expected-substring]
+_witness_case() {
+  local name="$1" want="$2" mutate="$3" needle="${4:-}" home state out got
+  home=$(_witness_home) || { fail "$name: could not build the fixture home"; return; }
+  state=$(mktemp -d -t swift-suite-witness-state) || { fail "$name: no state dir"; return; }
+
+  SWIFT_SUITE_WITNESS_HOME="$home" swift_suite_witness_before "$state"
+  "$mutate" "$home"
+  out=$(SWIFT_SUITE_WITNESS_HOME="$home" swift_suite_witness_verdict "$state" 2>&1)
+  got=$?
+
+  if [[ "$got" == "$want" ]]; then
+    pass "$name → rc $got"
+  else
+    fail "$name: expected rc $want, got $got; output: $out"
+  fi
+  if [[ -n "$needle" ]]; then
+    case "$out" in
+      *"$needle"*) pass "$name: names '$needle'" ;;
+      *) fail "$name: output does not name '$needle'; got: $out" ;;
+    esac
+  fi
+  chmod -R u+rwX "$home" 2>/dev/null
+  _witness_scrub "$home"
+  _witness_scrub "$state"
+}
+
+_witness_noop() { :; }
+_witness_plant() { printf 'leak' > "$1/Library/Preferences/com.irrlicht.leaked-by-a-test.plist"; }
+_witness_remove_entry() { rm -f "$1/Library/Preferences/com.example.settled.plist"; }
+_witness_create_sounds() { mkdir -p "$1/Library/Sounds"; }
+_witness_install_sound() { mkdir -p "$1/Library/Sounds"; printf 'a' > "$1/Library/Sounds/IrrlichtCustom-ready.aiff"; }
+_witness_remove_dir() { rm -rf "$1/Library/Preferences"; }
+_witness_unreadable() { chmod 000 "$1/Library/Preferences"; }
+_witness_empty_home() { rm -rf "$1/Library"; }
+
+# The vacuity guard. Without it, every row below is satisfied by a witness that
+# always fails.
+_witness_case "a run that changed nothing passes" 0 _witness_noop "no new entries"
+# #1661's shape: a file appears in ~/Library/Preferences.
+_witness_case "a planted preference file is caught" 1 _witness_plant "com.irrlicht.leaked-by-a-test.plist"
+# #1670's shape, both halves.
+_witness_case "creating ~/Library/Sounds is caught" 1 _witness_create_sounds "CREATED"
+_witness_case "an installed sound is caught" 1 _witness_install_sound "IrrlichtCustom-ready.aiff"
+# The direction nothing in this repo is allowed to move in at all.
+_witness_case "a removed entry is caught" 1 _witness_remove_entry "REMOVED"
+_witness_case "a removed watched directory is caught" 1 _witness_remove_dir "gone now"
+# "Could not look" and "found nothing" must not print the same thing. Both of
+# these would be a clean report from a witness that simply returned early.
+_witness_case "an unreadable watched directory fails loudly" 1 _witness_unreadable "unwitnessed"
+_witness_case "a home with nothing to watch fails loudly" 1 _witness_empty_home "not one watched directory"
+
+# A verdict with no `before` snapshot is the same class: the run was not
+# witnessed, and saying nothing would mean "nothing was measured".
+_no_before=$(mktemp -d -t swift-suite-witness-state)
+_out=$(swift_suite_witness_verdict "$_no_before" 2>&1) && \
+  fail "a verdict with no before-snapshot must fail" || pass "no before-snapshot → fail"
+case "$_out" in
+  *"NOT witnessed"*) pass "an unwitnessed run says so" ;;
+  *) fail "an unwitnessed run must say so; got: $_out" ;;
+esac
+_witness_scrub "$_no_before"
+swift_suite_witness_verdict "" >/dev/null 2>&1 && fail "missing statedir must fail" || pass "missing statedir → fail"
+
+# The witness reads the PASSWORD DATABASE, not $HOME. A witness that followed
+# $HOME would watch an empty temp directory and report clean forever — and
+# moving $HOME is one of the things a future fix in this area might do.
+_real_home=$(swift_suite_witness_home)
+_moved_home=$(HOME=/tmp/definitely-not-the-home swift_suite_witness_home)
+[[ -n "$_real_home" && "$_real_home" == "$_moved_home" ]] \
+  && pass "swift_suite_witness_home ignores \$HOME ($_real_home)" \
+  || fail "swift_suite_witness_home followed \$HOME: '$_real_home' vs '$_moved_home'"
+[[ -d "$_real_home" ]] && pass "the home it reads is a directory" \
+  || fail "swift_suite_witness_home returned '$_real_home', which is not a directory"
+
+# The watched set is asserted rather than left implicit: it is the whole scope
+# of the guard, and silently shrinking it to nothing is indistinguishable from
+# a guard that finds nothing.
+[[ "${#SWIFT_SUITE_WITNESSED_DIRS[@]}" -ge 2 ]] \
+  && pass "watching ${#SWIFT_SUITE_WITNESSED_DIRS[@]} directories: ${SWIFT_SUITE_WITNESSED_DIRS[*]}" \
+  || fail "the watched set has shrunk to ${#SWIFT_SUITE_WITNESSED_DIRS[@]} — the guard covers almost nothing"
+
 if [[ "$rc" -eq 0 ]]; then echo "swift-suite_test: ALL PASS"; else echo "swift-suite_test: FAILURES" >&2; fi
 exit "$rc"

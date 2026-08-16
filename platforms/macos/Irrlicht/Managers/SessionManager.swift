@@ -273,8 +273,11 @@ class SessionManager: ObservableObject {
     init(focusMonitor: FocusStateProviding = FocusMonitor()) {
         self.focusMonitor = focusMonitor
 
-        let homeURL = FileManager.default.homeDirectoryForCurrentUser
-        let supportPath = homeURL
+        // `AppHome`, not the real home: both paths below are WRITTEN — a
+        // fixture into `instances/`, and `session-order.json` overwritten with
+        // whatever a test left in `sessionOrder` — and under `swift test` those
+        // are the live daemon's own files (#1669).
+        let supportPath = AppHome.url
             .appendingPathComponent("Library")
             .appendingPathComponent("Application Support")
             .appendingPathComponent("Irrlicht")

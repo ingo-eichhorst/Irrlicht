@@ -594,8 +594,25 @@ swift_suite() {
   # that true after a class is added to the target or the target is renamed.
   # This matters more locally than in CI — here an unskipped harness test drives
   # the developer's own live terminal windows.
-  local log rc
+  local log rc witness wrc
   log=$(mktemp -t irrlicht-swift-suite) || return 1
+
+  # The real-home witness brackets the RUN, not the build: `swift build` writes
+  # under ~/Library/Caches and ~/Library/org.swift.swiftpm, neither of which is
+  # watched, and a tighter window is less exposed to third-party churn. See
+  # tools/lib/swift-suite.sh for what is watched and what deliberately is not.
+  #
+  # Deliberately NOT also wired into .github/workflows/macos-swift.yml. Its
+  # noise floor was measured HERE and not on a GitHub runner: 0 additions across
+  # each of two windows bracketing a full suite run, against 4 unrelated
+  # background plists across one 870s window of interactive use. A runner's
+  # background churn is unmeasured, and a guard that goes red for reasons nobody
+  # has characterised gets ignored — this one has to be believed the first time
+  # it fires. AGENTS.md already names this gate as the real one and CI as the
+  # floor.
+  witness=$(mktemp -d -t irrlicht-swift-witness) || return 1
+  swift_suite_witness_before "$witness"
+
   ( cd platforms/macos && swift_suite_run "$log" \
       swift test --skip LauncherTestHarness --skip LauncherHarnessTests )
   rc=$?
@@ -603,7 +620,18 @@ swift_suite() {
   # capturing it, so re-printing would double every line.
   swift_suite_verdict "$rc" "$log"
   rc=$?
+
+  # Judged even when the suite hung, aborted or failed — those are precisely
+  # the runs on which a `defer`-based cleanup does not run, so a witness that
+  # only spoke after a healthy run would be silent exactly when it matters.
+  swift_suite_witness_verdict "$witness"
+  wrc=$?
+  if (( wrc != 0 )); then
+    rc=1
+  fi
+
   rm -f "$log"
+  rm -rf "$witness"
   return "$rc"
 }
 

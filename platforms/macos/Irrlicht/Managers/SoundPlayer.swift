@@ -219,14 +219,13 @@ enum SoundPlayer {
     }
 
     /// Resolves `~/Library/Sounds/`, creating it if necessary.
+    ///
+    /// Through `AppHome` rather than `FileManager.url(for: .libraryDirectory,
+    /// in: .userDomainMask, …)`, which resolves the same `<home>/Library` and
+    /// is not redirected under test — this method both writes into that
+    /// directory and creates it when absent, which is #1670.
     static func soundsDirectory() throws -> URL {
-        let library = try FileManager.default.url(
-            for: .libraryDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: false
-        )
-        let sounds = library.appendingPathComponent("Sounds", isDirectory: true)
+        let sounds = AppHome.library.appendingPathComponent("Sounds", isDirectory: true)
         if !FileManager.default.fileExists(atPath: sounds.path) {
             try FileManager.default.createDirectory(at: sounds, withIntermediateDirectories: true)
         }
