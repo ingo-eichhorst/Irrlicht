@@ -148,18 +148,95 @@ echo "== the whole process tree dies, not just the direct child =="
 # `go test` forks a compiler and a test binary per package and npm forks node,
 # so a bound that only kills the shell leaves the expensive part running after
 # the hook has returned — a "bounded" run that keeps burning the machine.
-marker=$(mktemp -t irrlicht-gate-budget-marker)
-rm -f "$marker"
-budget_run 1 bash -c "bash -c 'sleep 30; echo grandchild-survived >\"$marker\"' & wait"
+#
+# The fixture is a script that recurses to a fixed depth and whose LEAF `exec`s
+# its sleep. Both halves of that are load-bearing (#1616).
+#
+# `exec`, because the first version of this case asked whether a surviving
+# great-grandchild had written a marker file — and that great-grandchild was a
+# SHELL running `sleep 30; echo … >marker`, so "the sleep was interrupted" and
+# "the process survived" produced the same evidence. _budget_kill_tree signals
+# depth-first, so the `sleep` is signalled BEFORE the shell waiting on it; if
+# the walking shell is descheduled between those two kills, that shell reaps
+# its dead child and runs the next command in the list. The marker appeared
+# while `pgrep` found nothing — the writer was gone by the time the test
+# looked — so the two assertions contradicted each other, on a required check,
+# for a reason no reader could act on. Measured on the old fixture: 1 failure
+# in 600 runs under load, and 100% of runs with that window widened by 400µs
+# (the threshold is ~150µs, which is an ordinary preemption). After `exec`
+# there IS no next command — the observed process is the `sleep` itself, so it
+# either exists or it does not, and there is no mid-transition state to catch
+# it in.
+#
+# A script rather than a nest of quoted `bash -c`s, because the pids are then
+# reachable by a pattern unique to this run. The old survivor query was the bare
+# literal `sleep 30; echo grandchild-survived`, and `pgrep -f` matches ANY
+# process whose command line contains it — a concurrent copy of this suite, or
+# simply the shell that invoked it. Measured: a `bash -c` whose argv merely
+# quotes that string is reported as a survivor, so an agent or CI step that
+# names the pattern (to clean up after it, say) fails the assertion 100% of the
+# time for a reason that has nothing to do with the kill.
+fixture=$(mktemp -t irrlicht-gate-budget-fixture)
+leafpid=$(mktemp -t irrlicht-gate-budget-leafpid)
+trap 'rm -f "$fixture" "$leafpid"' EXIT
+cat >"$fixture" <<'FIXTURE'
+#!/usr/bin/env bash
+# $1 = file the leaf records its pid in; $2 = levels still to descend.
+# Each level backgrounds the next and waits, so budget_run has a TREE to walk
+# and not just a child: the leaf sits as deep below the pid it kills as a real
+# gate's test binary sits below `go test`.
+if [[ "${2:-0}" -gt 0 ]]; then
+  bash "$0" "$1" "$(($2 - 1))" &
+  wait
+  exit
+fi
+echo $$ >"$1"
+exec sleep 30
+FIXTURE
+# The bound is 2, not 1, and that is setup rather than slack for a race — the
+# race is gone by construction above. $SECONDS counts whole seconds, so
+# budget_run's first deadline check can fire almost immediately: `budget_run 1`
+# gives its command anywhere from ~0.15s to ~1s (measured over phase-randomised
+# runs), while the fixture needs ~12ms idle and ~35ms under heavy load to reach
+# its leaf. At 2 the floor is ~1.2s, so the guard below reports "the tree was
+# never built" only when something is really wrong. The old fixture had the
+# same exposure and answered it by passing vacuously.
+budget_run 2 bash "$fixture" "$leafpid" 2
 assert_eq "the wrapper still reports a timeout" "1" "$BUDGET_LAST_TIMED_OUT"
-# Give a survivor time to prove it survived: without the tree kill the
-# grandchild would still be sleeping here and would write the marker at t+30.
-sleep 2
-survivors=$(pgrep -f 'sleep 30; echo grandchild-survived' | wc -l | tr -d ' ')
-assert_eq "no descendant of the killed command is still running" "0" "$survivors"
-[[ -e "$marker" ]] && fail "the grandchild must not outlive the bound" "no marker file" "marker written"
-[[ -e "$marker" ]] || pass "the grandchild did not outlive the bound"
-rm -f "$marker"
+
+leaf=$(cat "$leafpid" 2>/dev/null)
+if [[ -z "$leaf" ]]; then
+  # Loud, not silent: with no leaf pid there is nothing to look at, and "the
+  # tree was never built" must not be reported as "the tree died".
+  fail "the fixture reached its leaf before the bound expired" \
+       "a recorded pid" "an empty pidfile — the tree-kill assertion never ran"
+else
+  # Poll to a generous deadline instead of sleeping a fixed 2s and looking
+  # once. A fixed wait only has to be shorter than the machine is slow to turn
+  # a correct kill into a red, and it makes the pass slower than it needs to be;
+  # this returns the moment the tree is gone and says how long it waited when it
+  # does not. The shells are matched by the fixture's (unique) path, the leaf by
+  # the pid it recorded — after `exec` its command line is just `sleep 30`.
+  start=$SECONDS
+  alive=""
+  while :; do
+    alive="$(pgrep -f "$fixture" 2>/dev/null | tr '\n' ' ')"
+    kill -0 "$leaf" 2>/dev/null && alive="$alive$leaf(the exec'd leaf)"
+    [[ -z "$alive" ]] && break
+    [[ $((SECONDS - start)) -ge 15 ]] && break
+    sleep 0.1
+  done
+  elapsed=$((SECONDS - start))
+  if [[ -z "$alive" ]]; then
+    pass "no descendant of the killed command outlived the bound (gone after ${elapsed}s)"
+  else
+    fail "no descendant of the killed command may outlive the bound" \
+         "every descendant gone within 15s" "still alive after ${elapsed}s: $alive"
+  fi
+  kill -0 "$leaf" 2>/dev/null && kill -9 "$leaf" 2>/dev/null  # never leak a 30s sleep
+fi
+pkill -f "$fixture" 2>/dev/null
+rm -f "$fixture" "$leafpid"
 
 echo ""
 echo "== end to end: tools/preflight.sh names the gate that ran out of time =="
@@ -168,7 +245,9 @@ echo "== end to end: tools/preflight.sh names the gate that ran out of time =="
 # produces both verdicts in one run: gofmt TIMEOUT, then every gate behind it
 # NOT RUN. No --changed, so this does not depend on the branch's diff.
 probe="$ROOT/tools/.preflight-budget-probe-$$.sh"
-trap 'rm -f "$probe"' EXIT
+# Replaces the tree-kill block's trap, so it re-names that block's files: both
+# are already gone by here, but a reordering must not silently lose them.
+trap 'rm -f "$probe" "$fixture" "$leafpid"' EXIT
 python3 - "$ROOT/tools/preflight.sh" "$probe" <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
