@@ -145,7 +145,13 @@ Irrlicht is agent-verifiable by design — every session lives as atomic JSON at
 
 ## Star History
 
-[![Star History Chart](assets/star-history.svg)](https://www.star-history.com/?repos=ingo-eichhorst%2FIrrlicht&type=date&legend=top-left)
+<a href="https://www.star-history.com/?repos=ingo-eichhorst%2FIrrlicht&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ingo-eichhorst/Irrlicht&type=date&theme=dark&legend=top-left&sealed_token=39gJS4tcD4kfvmwSprUPlRZoS637fvMVuaDo4R6XMWxPrfCeqw1TvecoDt0U3RIOb4tDTO6pXDajykGfHvlgf076zXr_8PN0Z7wQ5lGT_snkSWc0UJdQAA" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ingo-eichhorst/Irrlicht&type=date&legend=top-left&sealed_token=39gJS4tcD4kfvmwSprUPlRZoS637fvMVuaDo4R6XMWxPrfCeqw1TvecoDt0U3RIOb4tDTO6pXDajykGfHvlgf076zXr_8PN0Z7wQ5lGT_snkSWc0UJdQAA" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=ingo-eichhorst/Irrlicht&type=date&legend=top-left&sealed_token=39gJS4tcD4kfvmwSprUPlRZoS637fvMVuaDo4R6XMWxPrfCeqw1TvecoDt0U3RIOb4tDTO6pXDajykGfHvlgf076zXr_8PN0Z7wQ5lGT_snkSWc0UJdQAA" />
+ </picture>
+</a>
 
 ## License
 

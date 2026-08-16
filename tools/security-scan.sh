@@ -87,12 +87,11 @@ done
 
 # Every module in go.work — govulncheck/gosec run per module, matching how
 # go.work itself scopes builds (see tools/preflight.sh's `go` group for the
-# narrower go-test set: only core, onboarding-factory, and starhistory have
-# test suites today, but a vuln/SAST scan doesn't need tests to pass, so all
-# six run).
+# narrower go-test set: only core and onboarding-factory have test suites
+# today, but a vuln/SAST scan doesn't need tests to pass, so all five run).
 #
 # Read from go.work rather than restated here (#1291). A hand-maintained copy
-# drifts silently in the one direction that matters: add a seventh module and
+# drifts silently in the one direction that matters: add a sixth module and
 # forget this line, and that module is never scanned — it builds, it tests, and
 # nothing says otherwise. `go work edit -json` is Go's own parse of the file,
 # so this cannot disagree with what the toolchain builds.

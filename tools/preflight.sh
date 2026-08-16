@@ -507,8 +507,6 @@ if want go; then
   # full run, which is why the scoping matters for the pre-push hook.
   run_gate_scoped '^replaydata/|^tools/onboarding-factory/|^core/pkg/tailer/|^core/adapters/inbound/agents/' \
                   "replay fixtures"          tools/replay-fixtures.sh
-  run_gate_scoped '^tools/starhistory/' \
-                  "starhistory tests"        go test ./tools/starhistory/... -count=1
 fi
 
 # ---- web group (mirrors web-test.yml) -----------------------------------
