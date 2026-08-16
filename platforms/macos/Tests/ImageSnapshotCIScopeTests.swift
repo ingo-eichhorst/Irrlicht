@@ -39,6 +39,13 @@ import XCTest
 /// remembering. This makes it assertable: the set of suites that render image
 /// snapshots is DERIVED from the test sources, and every one of them has to be
 /// classified.
+///
+/// Since #1615 the same classification also drives the `swift-snapshot-evidence`
+/// job, which runs precisely the suites the gate skips so their pixels can be
+/// looked at. That makes the workflow carry TWO `swift test` commands with
+/// deliberately opposite argument lists, so the parse below is per-invocation:
+/// a union over the file is satisfied by moving a suite from one command to the
+/// other, which is exactly the drift worth catching.
 final class ImageSnapshotCIScopeTests: XCTestCase {
 
     /// Every suite that takes an image snapshot, and whether `macos-swift.yml`
@@ -64,6 +71,17 @@ final class ImageSnapshotCIScopeTests: XCTestCase {
     /// and its class, skipped everywhere because it drives real applications
     /// through `NSRunningApplication`.
     private static let harnessSkips: Set<String> = ["LauncherTestHarness", "LauncherHarnessTests"]
+
+    /// Suites the evidence job runs that are not image-snapshot suites.
+    ///
+    /// `RasterPrimitiveEvidenceTests` renders four rasters and publishes their
+    /// bytes; it never calls `assertSnapshot`, has no committed reference and
+    /// therefore cannot fail for a rasterisation difference on any host —
+    /// which is precisely what lets it run to completion and report on the
+    /// host where the answer is "different" (#1615). So it is invisible to the
+    /// `as: .pinnedImage` derivation below, and `testTheTwoClassificationsAreDisjoint`
+    /// asserts that stays true rather than leaving it as a claim.
+    private static let evidenceOnlySuites: Set<String> = ["RasterPrimitiveEvidenceTests"]
 
     private var repoRoot: URL {
         URL(fileURLWithPath: #filePath)                 // …/platforms/macos/Tests/<this file>
@@ -138,39 +156,131 @@ final class ImageSnapshotCIScopeTests: XCTestCase {
             "a suite renders image snapshots without being classified for CI (or is classified but no longer renders any)")
     }
 
-    /// …and the YAML actually skips the ones marked skipped, no more and no
-    /// fewer. Two lists that can disagree are worth exactly one of them.
-    func testWorkflowSkipListMatchesTheClassification() throws {
-        let workflow = repoRoot.appendingPathComponent(".github/workflows/macos-swift.yml")
-        let text = try String(contentsOf: workflow, encoding: .utf8)
+    /// One `swift test …` command from the workflow, with the arguments it
+    /// carries across shell line continuations.
+    private struct Invocation {
+        var skips: Set<String> = []
+        var filters: Set<String> = []
+    }
 
-        var skipped: Set<String> = []
-        var sawSwiftTest = false
-        for line in text.split(separator: "\n") {
-            // COMMENTS ARE NOT THE INVOCATION. The block above this workflow's
-            // test step discusses `--skip` at length and names suites in prose;
-            // reading those would make the check agree with an explanation
-            // rather than with what CI runs, and a step whose real arguments
-            // were deleted would still pass.
-            let code = line.drop { $0 == " " }
+    /// Every `swift test` command the workflow runs.
+    ///
+    /// Per-invocation rather than one union over the file, and that is the
+    /// whole difference the evidence job made. A union is satisfied by ANY
+    /// arrangement of the same names: moving `--skip SessionRowSnapshotTests`
+    /// out of the gating command and into the evidence one changes what CI
+    /// gates and leaves a union check green. Two commands that can disagree
+    /// are worth exactly one of them, which is the same argument this file
+    /// already made about two lists.
+    private func swiftTestInvocations(in text: String) -> [Invocation] {
+        var out: [Invocation] = []
+        var current: Invocation?
+
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            // COMMENTS ARE NOT THE INVOCATION. The blocks above this
+            // workflow's steps discuss `--skip` at length and name suites in
+            // prose; reading those would make the check agree with an
+            // explanation rather than with what CI runs, and a step whose real
+            // arguments were deleted would still pass.
+            let code = Substring(line.trimmingCharacters(in: .whitespaces))
             guard !code.hasPrefix("#") else { continue }
-            guard code.contains("swift test") || code.contains("--skip") else { continue }
-            if code.contains("swift test") { sawSwiftTest = true }
+
+            if code.contains("swift test") {
+                if let open = current { out.append(open) }
+                current = Invocation()
+            }
+            guard current != nil else { continue }
+
             var rest = code
             while let r = rest.range(of: "--skip ") {
                 rest = rest[r.upperBound...]
                 let name = rest.prefix { $0.isLetter || $0.isNumber || $0 == "_" }
-                if !name.isEmpty { skipped.insert(String(name)) }
+                if !name.isEmpty { current?.skips.insert(String(name)) }
+            }
+            rest = code
+            while let r = rest.range(of: "--filter ") {
+                rest = rest[r.upperBound...]
+                let name = rest.prefix { $0.isLetter || $0.isNumber || $0 == "_" }
+                if !name.isEmpty { current?.filters.insert(String(name)) }
+            }
+
+            // A shell continuation is what holds one command's arguments
+            // together across lines; the first line that does not end in `\`
+            // ends the command.
+            if !code.hasSuffix("\\") {
+                out.append(current!)
+                current = nil
             }
         }
+        if let open = current { out.append(open) }
+        return out
+    }
+
+    /// …and the YAML actually skips the ones marked skipped, no more and no
+    /// fewer — in the invocation that GATES.
+    func testWorkflowSkipListMatchesTheClassification() throws {
+        let workflow = repoRoot.appendingPathComponent(".github/workflows/macos-swift.yml")
+        let invocations = swiftTestInvocations(in: try String(contentsOf: workflow, encoding: .utf8))
+
         // Fail loudly rather than comparing two empty sets: a workflow this
         // cannot parse is the case where it knows least about what CI runs.
-        XCTAssertTrue(sawSwiftTest, "found no `swift test` invocation in \(workflow.path)")
-        XCTAssertFalse(skipped.isEmpty, "parsed no --skip arguments — the check is vacuous")
+        let gating = invocations.filter { $0.filters.isEmpty }
+        XCTAssertEqual(gating.count, 1,
+                       "expected exactly one unfiltered `swift test` (the gate) in \(workflow.path), parsed \(invocations.count) invocation(s)")
+        guard let gate = gating.first else { return }
+        XCTAssertFalse(gate.skips.isEmpty, "parsed no --skip arguments — the check is vacuous")
 
         let expected = Set(Self.imageSnapshotSuites.filter { $0.value }.map { $0.key })
             .union(Self.harnessSkips)
-        XCTAssertEqual(skipped.sorted(), expected.sorted(),
+        XCTAssertEqual(gate.skips.sorted(), expected.sorted(),
                        "macos-swift.yml's --skip list and this file's classification disagree")
+    }
+
+    /// The evidence job runs exactly the suites the gate skips (#1615).
+    ///
+    /// Without this, "skipped in CI" and "collected as evidence" are two hand-
+    /// maintained lists again, and the failure it admits is the quiet one: a
+    /// suite dropped from the gate's `--skip` list but left in the evidence
+    /// filter, or added to the skip list and never collected, publishes an
+    /// artifact that reads as complete while missing exactly the suite someone
+    /// went looking for.
+    ///
+    /// The harness names are asserted here too. `--filter` already makes them
+    /// unreachable, so passing them is belt-and-braces — which is the reason to
+    /// pin it: a future filter widened past those six names would otherwise
+    /// start driving real applications through `NSRunningApplication` on a
+    /// machine, and the whole of `AGENTS.md`'s prohibition rests on both names
+    /// being present at every invocation.
+    func testEvidenceJobRunsExactlyTheSuitesTheGateSkips() throws {
+        let workflow = repoRoot.appendingPathComponent(".github/workflows/macos-swift.yml")
+        let invocations = swiftTestInvocations(in: try String(contentsOf: workflow, encoding: .utf8))
+
+        let filtered = invocations.filter { !$0.filters.isEmpty }
+        XCTAssertEqual(filtered.count, 1,
+                       "expected exactly one `--filter`ed `swift test` (the evidence job) in \(workflow.path)")
+        guard let evidence = filtered.first else { return }
+
+        let expected = Set(Self.imageSnapshotSuites.filter { $0.value }.map { $0.key })
+            .union(Self.evidenceOnlySuites)
+        XCTAssertEqual(evidence.filters.sorted(), expected.sorted(),
+                       "the evidence job collects a different set of suites than swift-test skips")
+        XCTAssertEqual(evidence.skips.sorted(), Self.harnessSkips.sorted(),
+                       "the evidence job must skip the harness target and its class, and nothing else")
+    }
+
+    /// The two classifications name disjoint suites.
+    ///
+    /// `evidenceOnlySuites` claims its members take no image snapshot, and
+    /// nothing else checks that claim — the derivation above simply would not
+    /// see them. If one grows an `as: .pinnedImage` call it becomes a suite
+    /// with a committed reference that the evidence job runs expecting a
+    /// failure, which is two different contracts at once; this is where that
+    /// is noticed.
+    func testTheTwoClassificationsAreDisjoint() throws {
+        let derived = try suitesTakingImageSnapshots()
+        XCTAssertTrue(derived.isDisjoint(with: Self.evidenceOnlySuites),
+                      "an evidence-only suite now takes image snapshots: \(derived.intersection(Self.evidenceOnlySuites).sorted())")
+        XCTAssertTrue(Set(Self.imageSnapshotSuites.keys).isDisjoint(with: Self.evidenceOnlySuites),
+                      "a suite is classified both as an image-snapshot suite and as evidence-only")
     }
 }

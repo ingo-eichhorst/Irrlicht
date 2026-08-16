@@ -47,11 +47,28 @@ name: macOS (Swift)
 # rather than an oversight: `tools/preflight.sh --only swift` runs the same
 # suite on a developer Mac, where the display, the fonts and the audio stack
 # are the ones the app actually ships against.
+#
+# A THIRD job, `swift-snapshot-evidence`, runs the five skipped suites on
+# purpose and uploads what they render (#1615, step 1). Until it existed, the
+# skipped suites failed on no machine anybody could look at, so every statement
+# about WHAT differs was inferred from which suites pass. It is not a gate on
+# the pixels — those failing is its expected outcome and it does not judge them
+# — but it IS a gate on itself: a run that hung, was truncated, executed
+# nothing, or produced no images fails it, because "collected no evidence" and
+# "found no difference" must never print the same thing.
+#
+# It costs a third macOS job per PR (macOS minutes bill at 10×). That is
+# deliberate for as long as the suites are skipped and #1615's step 3 is open;
+# once the policy question is answered, narrowing this job to
+# `workflow_dispatch` — or deleting it — is the cheap part.
 
 on:
   pull_request:
   push:
     branches: [main]
+  # So the pixels can be re-collected on demand — for a toolchain bump on the
+  # runner, say — without pushing a commit to ask.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -147,10 +164,15 @@ jobs:
       # tolerance wide enough to absorb this drift as also wide enough to pass
       # a missing architecture segment. The residual is #1615.
       #
+      # What they render is not lost by being skipped: `swift-snapshot-evidence`
+      # below runs these same five and uploads the images, which is how #1615
+      # gets looked at rather than reasoned about.
+      #
       # This list cannot silently drift: `Tests/ImageSnapshotCIScopeTests.swift`
       # derives the set of image-snapshot suites from the test sources and
-      # cross-checks it against these very arguments, so a new one fails there
-      # rather than reddening an unrelated PR's check.
+      # cross-checks it against these very arguments — and, since the evidence
+      # job exists, against ITS arguments too, so the two invocations cannot
+      # come to disagree about which suites are the skipped ones.
       #
       # This still gates 272 of 320 tests, against 0 before — measured, on this
       # workflow's own run, not derived from the list above by hand (the first
@@ -188,3 +210,130 @@ jobs:
           path: ${{ runner.temp }}/swift-test.log
           if-no-files-found: error
           retention-days: 7
+
+  # The pixel evidence for #1615. Runs exactly the suites `swift-test` skips,
+  # expects them to fail, and publishes what they drew.
+  #
+  # Its own job rather than a step in `swift-test`, for the same reason that
+  # file's header gives for splitting build from test: a failing assertion and
+  # a broken harness are different diagnoses. Here it is load-bearing twice
+  # over — `swift-test` is a reported check on every PR, and the whole point of
+  # this job is to run the assertions that fail, so sharing a conclusion with
+  # it would either turn that check red for the expected outcome or force this
+  # one to swallow its own failures.
+  swift-snapshot-evidence:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # Which toolchain drew these pixels is the first question anyone asks of
+      # them, so it is in the same log. `ls /Applications` because #1615's
+      # cheapest untested lever is pinning the runner's Xcode, and whether
+      # another version is even installed is the precondition for trying it.
+      - name: Report toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+          sw_vers
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "no /Applications/Xcode*.app"
+
+      # SnapshotTesting 1.19.2 writes the NEWLY-TAKEN image of a failed
+      # comparison to `$SNAPSHOT_ARTIFACTS/<TestFile>/<test>.<n>.png`
+      # (`Sources/SnapshotTesting/AssertSnapshot.swift:469` — read in the
+      # pinned checkout, not assumed). Two things it does NOT write, which is
+      # why the rest of this step exists:
+      #
+      #   the reference   already on disk, in `Tests/__Snapshots__`. Copied in
+      #                   below so the downloaded artifact is diffable on its
+      #                   own, without checking the repo out at the right SHA.
+      #   the difference  produced only as an attachment, and that whole branch
+      #                   is behind `__XCODE_BUILT_PRODUCTS_DIR_PATHS`, which
+      #                   SwiftPM does not set. So there is no diff image under
+      #                   `swift test` at all, by construction — it is computed
+      #                   off the pair after download.
+      #
+      # `RasterPrimitiveEvidenceTests` rides along because it is the other half
+      # of #1615: four one-thing-each rasters (flat fill, stroked bezier, text,
+      # SF Symbol) whose hashes say WHICH content differs, where a SessionRow
+      # only says that something did.
+      - name: Collect the skipped suites' pixels
+        shell: bash
+        run: |
+          set -uo pipefail
+          . tools/lib/swift-suite.sh
+          log="$RUNNER_TEMP/swift-snapshot-evidence.log"
+          export SNAPSHOT_ARTIFACTS="$RUNNER_TEMP/snapshot-artifacts"
+          mkdir -p "$SNAPSHOT_ARTIFACTS"
+          ( cd platforms/macos && swift_suite_run "$log" \
+              swift test --skip LauncherTestHarness --skip LauncherHarnessTests \
+                         --filter BackchannelRulesViewSnapshotTests \
+                         --filter GroupViewSnapshotTests \
+                         --filter HistoryViewSnapshotTests \
+                         --filter RasterPrimitiveEvidenceTests \
+                         --filter SessionListUnappliedGrantsWiringTests \
+                         --filter SessionRowSnapshotTests )
+          rc=$?
+
+          # `swift_suite_verdict` is deliberately NOT called: it folds "the
+          # bundle reported FAILED" in with the shape checks, and here that one
+          # is the expected outcome. Its predicates are consulted individually
+          # instead, so this job still fails for every reason that means the
+          # evidence was not actually collected.
+          bad=0
+          if [ "$rc" -eq 124 ]; then
+            echo "::error::the evidence run HUNG at ${SWIFT_SUITE_TIMEOUT}s — no pixels were collected."
+            bad=1
+          fi
+          if ! swift_suite_completed "$log"; then
+            echo "::error::the evidence run was TRUNCATED: the bundle never reported its own result, so the suites after the last one shown never ran."
+            bad=1
+          fi
+          if ! swift_suite_ran_tests "$log"; then
+            echo "::error::the evidence run executed 0 tests."
+            bad=1
+          fi
+
+          cp -R platforms/macos/Tests/__Snapshots__ "$SNAPSHOT_ARTIFACTS/__References__"
+
+          primitives=$(find "$SNAPSHOT_ARTIFACTS/RasterPrimitiveEvidence" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
+          failed=$(find "$SNAPSHOT_ARTIFACTS" -name '*.png' \
+                     -not -path '*/RasterPrimitiveEvidence/*' \
+                     -not -path '*/__References__/*' 2>/dev/null | wc -l | tr -d ' ')
+          echo "collected $failed failure image(s) and $primitives primitive image(s)"
+          echo "collected $failed failure image(s) and $primitives primitive image(s)" >> "$GITHUB_STEP_SUMMARY"
+
+          # An empty result and a clean result must not print the same thing.
+          if [ "$primitives" -lt 4 ]; then
+            echo "::error::RasterPrimitiveEvidenceTests published $primitives image(s), expected 4 — the fixture did not run."
+            bad=1
+          fi
+          if [ "$failed" -lt 1 ]; then
+            # NOTE: no literal `--skip ` or `--filter ` in the text below.
+            # ImageSnapshotCIScopeTests parses this file for those tokens, and
+            # a message that spells one is an argument as far as a text scan is
+            # concerned — measured: an earlier wording of this line injected a
+            # suite named "list" into the parse.
+            echo "::error::not one of the five suites produced a failure image. Either SNAPSHOT_ARTIFACTS stopped being honoured, or those suites now PASS on a runner — in which case ImageSnapshotCIScopeTests' classification, and the skip list in swift-test derived from it, is stale and #1615 has moved."
+            bad=1
+          fi
+          exit "$bad"
+
+      - name: Upload the pixels
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-snapshot-evidence
+          path: ${{ runner.temp }}/snapshot-artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload the run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-snapshot-evidence-log
+          path: ${{ runner.temp }}/swift-snapshot-evidence.log
+          if-no-files-found: error
+          retention-days: 14
