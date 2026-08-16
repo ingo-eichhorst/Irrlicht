@@ -5,7 +5,7 @@ import XCTest
 /// `InMemoryDefaults` makes the safe thing available; it cannot make the unsafe
 /// thing impossible, because `UserDefaults(suiteName:)` is a Foundation
 /// initializer and nothing stops the next test from calling it. That is exactly
-/// how 1160 plists reached a developer's real `~/Library/Preferences`: one
+/// how 1136 plists reached a developer's real `~/Library/Preferences`: one
 /// suite, one test class, no reviewer with a reason to notice.
 ///
 /// So the rule is enforced the way AGENTS.md enforces the same shape twice
@@ -208,7 +208,7 @@ final class PersistentDefaultsLintTests: XCTestCase {
             `InMemoryDefaults` instead: a named suite leaves a file in the \
             developer's real ~/Library/Preferences that \
             `removePersistentDomain(forName:)` does not remove and that nothing \
-            in this repository is allowed to delete (#1661 — 1160 of them).
+            in this repository is allowed to delete (#1661 — 1136 of them).
 
             \(offenders.joined(separator: "\n"))
             """

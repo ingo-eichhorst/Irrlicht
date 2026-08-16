@@ -8,7 +8,7 @@ import Foundation
 /// `NotificationMasterGateTests` minted a fresh `UserDefaults(suiteName:)` per
 /// test with a UUID name and called `removePersistentDomain(forName:)` in
 /// `tearDown`. That call empties the *domain* and does not remove the *file*;
-/// 1160 42-byte plists had accumulated in a developer's real
+/// 1136 42-byte plists had accumulated in a developer's real
 /// `~/Library/Preferences` before anyone looked.
 ///
 /// # Why the obvious fixes were rejected, with what was measured
@@ -191,8 +191,12 @@ final class InMemoryDefaults: UserDefaults {
 
     override func setPersistentDomain(_ domain: [String: Any], forName domainName: String) {}
 
+    /// `nil`, never the store: this object HAS no persistent domain, and
+    /// answering with the dictionary would say the opposite — that the values a
+    /// test wrote are sitting in one. Reading a real domain here is not the
+    /// alternative, since that is the daemon call the type exists to avoid.
     override func persistentDomain(forName domainName: String) -> [String: Any]? {
-        dictionaryRepresentation()
+        nil
     }
 
     override func addSuite(named suiteName: String) {}

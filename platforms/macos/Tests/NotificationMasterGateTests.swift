@@ -19,7 +19,7 @@ final class NotificationMasterGateTests: XCTestCase {
     ///
     /// This class is #1661: it used to mint a fresh `UserDefaults` suite per
     /// test with a UUID name and remove the *domain* in `tearDown`, which does
-    /// not remove the *file*. 1160 of them had accumulated in a developer's real
+    /// not remove the *file*. 1136 of them had accumulated in a developer's real
     /// `~/Library/Preferences`. The double writes to a dictionary, so there is
     /// nothing to clean up and no cleanup that can go wrong — see
     /// `InMemoryDefaults` for the three redirects that were measured and

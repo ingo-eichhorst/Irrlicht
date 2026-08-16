@@ -116,7 +116,7 @@ final class InMemoryDefaultsTests: XCTestCase {
         defaults.set(true, forKey: key)
 
         XCTAssertNil(UserDefaults.standard.object(forKey: key))
-        XCTAssertNil(defaults.persistentDomain(forName: "com.apple.finder")?["nonexistent"])
+        XCTAssertNil(defaults.persistentDomain(forName: "com.apple.finder"), "the double must not read a real domain, nor claim to be one")
     }
 
     // MARK: - Arm 2: the #1661 guarantee
