@@ -1402,9 +1402,9 @@ Before marking a ticket done, run the full suite — every layer must pass:
   The sibling family that is NOT closed is **timezone**: `HistoryFormat`'s
   formatters pin `en_US_POSIX` but never set `timeZone`, and 8 of the 14
   `HistoryViewSnapshotTests` references contain their output, held only by that
-  suite's own `setUp` — tracked separately, since a process-global
+  suite's own `setUp` — #1659, kept separate because a process-global
   `private static let DateFormatter` is not reachable from the view environment
-  the way a `FormatStyle` is.
+  the way a `FormatStyle` is, so it needs its own seam rather than a second key.
   The suite also aborts intermittently (#1523) in a way that **truncates the
   run** while every suite that did report says "0 failures" — so the exit code
   is the only reliable signal, never the last totals line you can see. That is
