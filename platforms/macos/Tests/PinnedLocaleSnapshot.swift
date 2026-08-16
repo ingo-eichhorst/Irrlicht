@@ -86,6 +86,47 @@ extension View {
         environment(\.formatLocale, locale)
             .environment(\.locale, locale)
     }
+
+    /// Pin the time zone this subtree renders dates in, for a snapshot host
+    /// (#1659). Scoped to the subtree, unlike the `NSTimeZone.default`
+    /// assignment `HistoryViewSnapshotTests` used to make, so it cannot leak
+    /// past a test that aborts before its `tearDown` (#1523).
+    ///
+    /// Sets **three** environments, and the second one is the one nobody would
+    /// predict. Measured, by deleting that suite's `setUp` and keeping only
+    /// `\.formatTimeZone`: six of its fourteen references still reddened, and
+    /// they all went green again under `TZ=UTC`. So the string formatting was
+    /// not the only machine read.
+    ///
+    /// - `\.formatTimeZone` is the seam the `DateFormatter`s consult
+    ///   (`Irrlicht/Views/FormatTimeZoneEnvironment.swift`). It decides what a
+    ///   tick LABEL says.
+    /// - `\.calendar` is what **Swift Charts** resolves `AxisMarks(values:
+    ///   .automatic(…))` through, so it decides WHERE the ticks and gridlines
+    ///   are — which is why `testQuotaForecast*` moved even though its chart
+    ///   is `compact` and draws no axis labels at all. Its default is
+    ///   `Calendar.current`, whose `timeZone` DOES follow `NSTimeZone.default`
+    ///   (measured; `TimeZone.current` notably does not), which is how the old
+    ///   `setUp` reached it by accident.
+    /// - `\.timeZone` is SwiftUI's own. Nothing in this app is known to read
+    ///   it, and its default did NOT follow `NSTimeZone.default`, so it was
+    ///   `Europe/Berlin` while every committed reference was recorded — but
+    ///   pinning it changes no reference (measured: all 14 still match), and a
+    ///   host that pins two of the three time zones in its environment would be
+    ///   an odd thing to leave behind.
+    ///
+    /// The calendar is rebuilt rather than copied from `Calendar.current`,
+    /// which carries the host's calendar identity and week rules as well as its
+    /// zone. `.gregorian` + the pinned locale reproduces the recording host
+    /// exactly (all 14 references still match) while no longer depending on it.
+    fileprivate func pinnedTimeZone(_ timeZone: TimeZone, locale: Locale) -> some View {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        calendar.locale = locale
+        return environment(\.formatTimeZone, timeZone)
+            .environment(\.calendar, calendar)
+            .environment(\.timeZone, timeZone)
+    }
 }
 
 /// The rasterisable host a `.pinnedImage` snapshot is taken of — and the only
@@ -110,6 +151,13 @@ extension View {
 /// itself, so "the host the suites use" and "the host the pin was proven on"
 /// cannot be two things that disagree.
 ///
+/// #1659 moved the **time zone** pin here for the same reason, out of
+/// `HistoryViewSnapshotTests`' `setUp`. That one had a second problem a
+/// subtree environment does not have: it assigned `NSTimeZone.default`, which
+/// is process-wide, so it depended on `tearDown` running to put the process
+/// back — and per #1523 this suite intermittently aborts mid-run.
+/// `PinnedTimeZoneSnapshotTests` grades it here, on this object.
+///
 /// The remaining hole is the one a type cannot close: a suite that stops using
 /// `.pinnedImage` altogether. `ImageSnapshotCIScopeTests` already derives its CI
 /// classification from that same string, so such a suite loses the scale pin,
@@ -131,12 +179,18 @@ struct PinnedSnapshotHost {
     ///     tests are the one caller that passes `.aqua`).
     ///   - locale: defaults to the locale every committed reference was
     ///     recorded under. Only the tests that PROVE the pin pass anything else.
+    ///   - timeZone: same, for date rendering (#1659). It was
+    ///     `HistoryViewSnapshotTests`' own `setUp` until this parameter
+    ///     existed, which is exactly the "one suite remembers" shape the
+    ///     locale pin was moved here to stop.
     init(_ content: some View,
          width: CGFloat,
          height: CGFloat,
          appearance: NSAppearance.Name = .darkAqua,
-         locale: Locale = PinnedLocaleSnapshot.referenceLocale) {
-        let hosting = NSHostingView(rootView: content.pinnedLocale(locale))
+         locale: Locale = PinnedLocaleSnapshot.referenceLocale,
+         timeZone: TimeZone = PinnedTimeZoneSnapshot.referenceTimeZone) {
+        let hosting = NSHostingView(
+            rootView: content.pinnedLocale(locale).pinnedTimeZone(timeZone, locale: locale))
         hosting.appearance = NSAppearance(named: appearance)
         hosting.frame = CGRect(x: 0, y: 0, width: width, height: height)
         hosting.layoutSubtreeIfNeeded()
