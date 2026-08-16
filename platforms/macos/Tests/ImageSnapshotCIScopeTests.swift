@@ -17,9 +17,13 @@ import XCTest
 ///
 ///     Newly-taken snapshot does not match reference.                               (36×, bytes)
 ///
-/// The remaining difference is rasterisation, between a runner on Xcode 26.6
-/// and a developer Mac on 26.3, and it is #1615. It is deliberately NOT
-/// papered over here:
+/// The remaining difference is rasterisation, and it is #1615. It is not the
+/// Xcode gap this comment used to name: measured by that issue's evidence job,
+/// all 15 Xcodes on `macos-latest` — including 26.3.0 build 17C529, the
+/// reference Mac's own build — produce the same 36 failures, and the residual
+/// is confined to the brand icons `SessionState.adapterIcon` rasterises from
+/// inline SVG through `NSImage(data:)`, at 1-5/255 on 0.3-0.9% of a row's
+/// pixels. It is deliberately NOT papered over here:
 /// re-recording a snapshot to make it pass is the exact move #1034 and #1044
 /// both made and both got wrong, and #1509 measured a perceptual tolerance
 /// wide enough to absorb this drift as also wide enough to pass a missing

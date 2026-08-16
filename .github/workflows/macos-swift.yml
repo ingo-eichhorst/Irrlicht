@@ -158,8 +158,15 @@ jobs:
       # does not match reference.`, 36×), which is the branch in
       # SnapshotTesting's `compare` that is only reachable once the pixel
       # dimensions agree. So the scale half is fixed and a rasterisation half
-      # is now visible underneath it — a runner on Xcode 26.6 against a
-      # developer Mac on 26.3. Re-recording to make it green is the move #1034
+      # is now visible underneath it.
+      #
+      # It is NOT the Xcode difference this comment used to name. Measured by
+      # #1615's evidence job and its throwaway probe: all 15 Xcodes installed
+      # on `macos-latest` — 26.0 through 26.6, including 26.3.0 build 17C529,
+      # bit-for-bit the reference Mac's own — produce the same 36 failures,
+      # while that Mac on that build produces none. The toolchain is not the
+      # variable; the OS is (runner macOS 26.5.2 / 25F84, reference 26.5 /
+      # 25F71). Re-recording to make it green is the move #1034
       # and #1044 both made and both got wrong, and #1509 measured a perceptual
       # tolerance wide enough to absorb this drift as also wide enough to pass
       # a missing architecture segment. The residual is #1615.
