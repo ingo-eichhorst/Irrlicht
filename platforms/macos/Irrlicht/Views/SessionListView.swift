@@ -1117,6 +1117,20 @@ struct SessionListView: View {
         }
     }
 
+    // #1663 — these two are the timezone family's third site, and #1659
+    // deliberately left them alone rather than half-covering them. Threading
+    // `\.formatTimeZone` / `\.formatLocale` in (as `HistoryFormat` now does)
+    // would reach two of `formatResetTime`'s three machine reads and leave the
+    // one that matters most: `Date()` below selects a different FORMAT STRING
+    // either side of midnight, so a snapshot pinned on zone and locale alone is
+    // still a snapshot of the day it was recorded. That needs an injectable
+    // "now", which is a wider seam than this issue.
+    //
+    // Unreached by any committed reference today — the whole chain is behind
+    // `guard let snap = session.metrics?.rateLimit` (:705) and no fixture under
+    // Tests/Fixtures carries a rate-limit window (verified by grep, both files).
+    // The first fixture that seeds one bakes locale, timezone and the recording
+    // day into a reference at once; read #1663 before adding it.
     private func formatClockTime(_ date: Date) -> String {
         let f = DateFormatter()
         f.dateStyle = .none

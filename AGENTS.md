@@ -1399,12 +1399,50 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `format: .number` at `BackchannelRulesView.swift:149` is the only
   `FormatStyle` in the app (every other numeric render is `String(format:)`,
   which takes no locale, or an `Int` interpolation, which carries no grouping).
-  The sibling family that is NOT closed is **timezone**: `HistoryFormat`'s
-  formatters pin `en_US_POSIX` but never set `timeZone`, and 8 of the 14
-  `HistoryViewSnapshotTests` references contain their output, held only by that
-  suite's own `setUp` — #1659, kept separate because a process-global
-  `private static let DateFormatter` is not reachable from the view environment
-  the way a `FormatStyle` is, so it needs its own seam rather than a second key.
+  **The sibling family is TIMEZONE, and closing it found a second machine read
+  nobody had named** (#1659). `HistoryFormat`'s formatters pinned `en_US_POSIX`
+  and never set `timeZone`, so 8 of the 14 `HistoryViewSnapshotTests` references
+  were held only by that suite's own `setUp` assigning `NSTimeZone.default`.
+  The seam is `\.formatTimeZone` (`Irrlicht/Views/FormatTimeZoneEnvironment.swift`),
+  and unlike `\.formatLocale` it could not be read by the formatters as they
+  stood — a file-scope `private static let DateFormatter` is reachable from no
+  view — so `HistoryFormat.axisLabel`/`clock`/`fullDateTime` take a `TimeZone`
+  as a REQUIRED argument and the views pass what they read. A zone-less call
+  site is `error: missing argument for parameter 'timeZone' in call`. The
+  default is `NSTimeZone.default` and **not** `TimeZone.autoupdatingCurrent`,
+  which reads like the obvious mirror of `\.formatLocale`'s
+  `Locale.autoupdatingCurrent` and is wrong: measured, after
+  `NSTimeZone.default = UTC` an unset `DateFormatter` renders UTC while
+  `TimeZone.autoupdatingCurrent` **and** `TimeZone.current` both still report
+  the host zone, so either would have been a real change for exactly the
+  processes that assign it. The pinned zone is `UTC` because that is what the
+  references were recorded under, so nothing was regenerated.
+  Two things there are worth carrying beyond the fix. **The pin is three
+  environments, not one**: pinning only `\.formatTimeZone` still reddened 6 of
+  the 14, because **Swift Charts resolves `AxisMarks(values: .automatic(…))`
+  through `\.calendar`** — whose default `Calendar.current` *does* follow
+  `NSTimeZone.default` — so the deleted `setUp` had been holding tick and
+  gridline POSITIONS as well as label text, which is why the `compact` quota
+  chart moved despite drawing no axis labels at all. `PinnedSnapshotHost` now
+  pins `\.formatTimeZone`, `\.calendar` (rebuilt `.gregorian` + the pinned
+  locale, so the host's week rules go too) and `\.timeZone`. And **the two
+  halves are separately invisible**: reverting the product seam while keeping
+  the pins reddens 4 references, dropping the `\.calendar` pin reddens the other
+  6, and the union is the 8 — reverting the seam leaves every `M/d` label green
+  on a `Europe/Berlin` host, because a one-hour shift does not change a date.
+  That is #1630's mutation B one family later: only the rendered-string
+  assertions in `PinnedTimeZoneSnapshotTests` catch it. That suite deletes
+  `HistoryViewSnapshotTests`' `setUp` rather than keeping it, deliberately —
+  with no process-wide assignment left, those 8 references are themselves the
+  live evidence that the seam reaches every date the panel draws.
+  Still open in this family, each with its evidence in the issue rather than
+  asserted here: `SessionListView.formatResetTime` (#1663 — a timezone pin
+  reaches two of its three machine reads and leaves the `Date()` that picks the
+  format string, so it was left whole rather than half-covered) and
+  `@AppStorage`/`UserDefaults` (#1662 — and no, a test run does not modify the
+  user's real app preferences: `UserDefaults.standard` under `swift test`
+  resolves to `com.apple.dt.xctest.tool`, measured against a byte-identical
+  `io.irrlicht.app.plist` across a full run).
   The suite also aborts intermittently (#1523) in a way that **truncates the
   run** while every suite that did report says "0 failures" — so the exit code
   is the only reliable signal, never the last totals line you can see. That is

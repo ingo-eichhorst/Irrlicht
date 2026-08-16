@@ -7,27 +7,25 @@ import SnapshotTesting
 // pure visual-rendering snapshots, not interaction tests, so export wiring is
 // irrelevant (SonarQube swift:S1186 flags each occurrence individually).
 @MainActor
+// This suite used to open with a `setUp`/`tearDown` pair assigning
+// `NSTimeZone.default = UTC` and putting it back, because eight of its
+// fourteen references contain `HistoryFormat`'s date output. That pin now
+// lives on `PinnedSnapshotHost` (#1659), which is what every host below goes
+// through, so it cannot be forgotten by the next suite to render these views —
+// and it is scoped to the hosted subtree instead of to the process, so an
+// aborted run (#1523) cannot leave the process's time zone reassigned.
+//
+// Deleting it here is deliberate and load-bearing: with the process-wide pin
+// gone, these eight references are the live evidence that the seam reaches
+// every date this panel draws. A call site that stopped passing
+// `\.formatTimeZone` would render this `Europe/Berlin` machine's clock and
+// redden them.
 final class HistoryViewSnapshotTests: XCTestCase {
-    private var originalTimeZone: TimeZone!
-
-    override func setUp() async throws {
-        try await super.setUp()
-        // Pin the timezone so the chart's x-axis labels (HH:mm / M/d) render
-        // identically regardless of the machine running the test.
-        originalTimeZone = NSTimeZone.default
-        NSTimeZone.default = TimeZone(identifier: "UTC")!
-    }
-
-    override func tearDown() async throws {
-        NSTimeZone.default = originalTimeZone
-        try await super.tearDown()
-    }
-
     private func host(_ view: some View, height: CGFloat) -> PinnedSnapshotHost {
         let width = SessionListView.panelWidth
         // `PinnedSnapshotHost` pins dark aqua so snapshots don't depend on the
-        // current system appearance (matches SessionRowSnapshotTests), and the
-        // locale (#1630).
+        // current system appearance (matches SessionRowSnapshotTests), the
+        // locale (#1630) and the time zone (#1659).
         return PinnedSnapshotHost(
             view
                 .frame(width: width, height: height)
