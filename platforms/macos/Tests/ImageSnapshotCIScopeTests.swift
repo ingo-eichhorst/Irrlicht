@@ -97,13 +97,22 @@ final class ImageSnapshotCIScopeTests: XCTestCase {
         for name in names.sorted() {
             guard let text = try? String(contentsOf: testsDir.appendingPathComponent(name), encoding: .utf8) else { continue }
             filesRead += 1
-            var currentClass: String?
-            for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-                if let declared = Self.className(in: String(line)) { currentClass = declared }
-                if line.contains("as: .pinnedImage"), let c = currentClass { found.insert(c) }
-            }
+            found.formUnion(Self.snapshottingClasses(in: text))
         }
         XCTAssertEqual(filesRead, names.count, "some test sources could not be read")
+        return found
+    }
+
+    /// Classes in one source that contain an `as: .pinnedImage` call, by
+    /// tracking the most recent class declaration above each line.
+    private static func snapshottingClasses(in source: String) -> Set<String> {
+        var found: Set<String> = []
+        var currentClass: String?
+        for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            if let declared = className(in: String(line)) { currentClass = declared }
+            guard line.contains("as: .pinnedImage"), let c = currentClass else { continue }
+            found.insert(c)
+        }
         return found
     }
 
