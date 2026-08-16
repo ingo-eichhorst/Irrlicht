@@ -101,15 +101,23 @@ enum PinnedScaleSnapshot {
     }
 }
 
-extension Snapshotting where Value == NSView, Format == NSImage {
+extension Snapshotting where Value == PinnedSnapshotHost, Format == NSImage {
     /// `.image`, rasterised at the scale the committed references were
     /// recorded at rather than at the host's. Use this and not `.image`.
+    ///
+    /// Declared over `PinnedSnapshotHost` rather than `NSView` since #1630:
+    /// backing scale was not the only value these references were reading off
+    /// the MACHINE — the locale was too, and a hosting view that has already
+    /// been built cannot be asked to render under a different one. Requiring
+    /// the host type makes both pins a precondition of taking the snapshot at
+    /// all; see that type's doc comment for why this is a type rather than a
+    /// modifier plus a guard.
     static var pinnedImage: Snapshotting {
         pinnedImage(scale: PinnedScaleSnapshot.referenceScale)
     }
 
     static func pinnedImage(scale: CGFloat) -> Snapshotting {
         Snapshotting<NSImage, NSImage>.image(precision: 1, perceptualPrecision: 1)
-            .pullback { view in PinnedScaleSnapshot.rasterize(view, scale: scale) }
+            .pullback { host in PinnedScaleSnapshot.rasterize(host.view, scale: scale) }
     }
 }

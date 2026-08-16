@@ -35,16 +35,12 @@ final class PermissionWizardEffectErrorRenderTests: XCTestCase {
         return try JSONDecoder().decode(PermissionsSnapshot.self, from: Data(json.utf8))
     }
 
-    private func host(_ snap: PermissionsSnapshot, mode: PermissionWizardView.Mode) -> NSView {
+    private func host(_ snap: PermissionsSnapshot, mode: PermissionWizardView.Mode) -> PinnedSnapshotHost {
         let manager = SessionManager()
         manager.permissionsSnapshot = snap
         let view = PermissionWizardView(mode: mode, lockedAgents: ["claude-code"], onClose: {})
             .environmentObject(manager)
-        let hosting = NSHostingView(rootView: view)
-        hosting.appearance = NSAppearance(named: .darkAqua)
-        hosting.frame = CGRect(x: 0, y: 0, width: SessionListView.panelWidth, height: 420)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+        return PinnedSnapshotHost(view, width: SessionListView.panelWidth, height: 420)
     }
 
     /// The defect case: a grant whose Apply failed. The reference shows the

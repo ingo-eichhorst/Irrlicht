@@ -178,32 +178,30 @@ final class SessionRowSnapshotTests: XCTestCase {
         return session
     }
 
-    private func host(_ session: SessionState, height: CGFloat = 48) -> NSView {
+    private func host(_ session: SessionState, height: CGFloat = 48) -> PinnedSnapshotHost {
         host(SessionRowView(session: session, agentNumber: 1), height: height)
     }
 
-    private func host(_ view: some View, height: CGFloat = 48) -> NSView {
+    private func host(_ view: some View, height: CGFloat = 48) -> PinnedSnapshotHost {
         host(view, height: height, appearance: .darkAqua)
     }
 
-    private func hostLight(_ session: SessionState, height: CGFloat = 48) -> NSView {
+    private func hostLight(_ session: SessionState, height: CGFloat = 48) -> PinnedSnapshotHost {
         host(SessionRowView(session: session, agentNumber: 1), height: height, appearance: .aqua)
     }
 
-    private func host(_ view: some View, height: CGFloat = 48, appearance: NSAppearance.Name) -> NSView {
-        let wrapped = view
-            .environmentObject(sessionManager)
-            .frame(width: 350, height: height)
-            .background(Color(NSColor.windowBackgroundColor))
-        let hosting = NSHostingView(rootView: wrapped)
-        // Pin appearance explicitly so snapshots don't depend on the current
-        // system appearance (Color(NSColor.windowBackgroundColor) adapts
-        // otherwise) — most tests pin dark aqua; the light-mode pill
-        // contrast tests below (issue #984) pin aqua instead.
-        hosting.appearance = NSAppearance(named: appearance)
-        hosting.frame = CGRect(x: 0, y: 0, width: 350, height: height)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+    private func host(_ view: some View, height: CGFloat = 48, appearance: NSAppearance.Name) -> PinnedSnapshotHost {
+        // Appearance is passed explicitly so snapshots don't depend on the
+        // current system appearance (Color(NSColor.windowBackgroundColor)
+        // adapts otherwise) — most tests pin dark aqua; the light-mode pill
+        // contrast tests below (issue #984) pin aqua instead. The host also
+        // pins the locale (#1630).
+        PinnedSnapshotHost(
+            view
+                .environmentObject(sessionManager)
+                .frame(width: 350, height: height)
+                .background(Color(NSColor.windowBackgroundColor)),
+            width: 350, height: height, appearance: appearance)
     }
 
     /// Decodes a daemon-shaped session fixture (issue #757). Accepts either a
