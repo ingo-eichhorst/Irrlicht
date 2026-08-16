@@ -133,6 +133,23 @@ nothing. This is a rule about the shape, not a known-flake register: after the f
 test is not expected to flake, and recording it as one would be a dismissal that stops
 the next agent looking.
 
+**And a fixture must observe the SUBJECT, never a side effect the subject produces on
+its way out.** Polling is the second half of the rule above and not the whole of it:
+#1616 fell through the gap. `gate-budget_test.sh` asked whether a killed process tree
+had survived by looking for a *marker file* its innermost `sleep 30; echo … >marker`
+would write — so "it was interrupted" and "it survived" could write the same evidence,
+and an ordinary preemption between the two `kill`s of a depth-first walk let the shell
+reap its dead `sleep` and run the `echo`. Someone following the paragraph above would
+have polled the marker and kept an ambiguous fixture. Two measurements make the point
+sharper than the flake did. The marker assertion could only fire at t+30 while the case
+ended at t+3, so it never carried the property at all — the survivor count did. And
+sparing the deepest process left the old case passing all three of its assertions while
+a `sleep 30` genuinely outlived its bound. The fix is structural rather than a longer
+wait: the fixture's leaf `exec`s its sleep, so there is no next command and no
+mid-transition state, and survival is read as "does this pid exist" and polled to a
+deadline that fails with the surviving pids. Reproduced 1-in-600 naturally under load,
+and deterministically at 100% by injecting ~400µs at the identified point.
+
 **A validator that cannot parse its input checks MORE, never less.** An input it
 cannot read with confidence is neither a quiet pass nor a skip: it is the case where
 the validator has the least idea what it is looking at, so it is the last place to
