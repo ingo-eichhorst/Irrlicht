@@ -1,0 +1,12 @@
+name: Job-level defaults written after the steps
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inheriting step
+        run: |
+          echo one
+    defaults:
+      run:
+        shell: bash

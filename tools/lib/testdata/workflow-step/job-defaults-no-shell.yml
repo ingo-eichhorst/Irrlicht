@@ -1,0 +1,12 @@
+name: Job defaults that declare no shell (macos-swift.yml's shape)
+on: [push]
+jobs:
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: platforms/macos
+    steps:
+      - name: Plain step
+        run: |
+          echo one

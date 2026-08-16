@@ -53,8 +53,11 @@ jobs:
 
       - name: Detect deletions of load-bearing replaydata
         run: |
+          # `set -euo pipefail` on the step's own first line, deliberately: a
+          # step declaring no `shell:` gets `bash -e {0}` from the runner —
+          # errexit only, NO pipefail (measured, run 31960152598's own step
+          # header) — so nounset and pipefail are this line's to supply.
           set -euo pipefail
-          command -v jq >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq jq; }
           base="${{ github.event.pull_request.base.sha }}"
           head="${{ github.event.pull_request.head.sha }}"
           echo "Comparing merge-base($base, $head) ...head $head"

@@ -963,8 +963,9 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `tools/preflight.sh`'s `tools` gate. Before #1639 those were two copies of
   the same loop that disagreed about the only thing that matters: preflight's
   collected every file's status, CI's had no `|| rc=1` and — test.yml declaring
-  no `shell:` and no `defaults:`, so GitHub's `bash --noprofile --norc -eo
-  pipefail` applies — aborted on the FIRST failing file with every later file
+  no `shell:` and no `defaults:`, so GitHub's `bash -e {0}` applies (errexit
+  only; see "Which bash a workflow step gets" below) — aborted on the FIRST
+  failing file with every later file
   in glob order never run and nothing in the log saying so. One round trip per
   red file, on suites that take seconds each. The sharing follows
   `macos-swift.yml`'s own reason for sharing `swift-suite.sh`: CI and the
@@ -975,7 +976,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   predecessor. An **empty corpus is a named refusal** (status 2, distinct from
   1) rather than either predecessor's answer, both measured: CI's loop iterated
   once with the literal unexpanded pattern (nullglob is off by default and
-  `-eo pipefail` does not change it) and died with `No such file or directory`,
+  neither invocation changes it) and died with `No such file or directory`,
   while preflight's `[[ -e "$t" ]] || continue` filtered that out and returned
   0, passing silently. And the two callers' one remaining scope difference —
   CI skips `posix-lint_test.sh`, which needs a linter the macos image lacks —
@@ -992,9 +993,11 @@ Before marking a ticket done, run the full suite — every layer must pass:
   wrong reason.
 - The ARS badge push: `tools/lib/ars-badge-push_test.sh` EXTRACTS
   `.github/workflows/ars.yml`'s "Commit badge update" step out of the workflow
-  file and EXECUTES it against a git stub, under
-  `bash --noprofile --norc -e -o pipefail` — GitHub's documented invocation for
-  a step declaring no `shell:`. Behavioural rather than a text scan, because a
+  file and EXECUTES it against a git stub, under the invocation that step
+  actually gets — DERIVED from the workflow, today `bash -e` (see "Which bash a
+  workflow step gets" below; this bullet claimed
+  `bash --noprofile --norc -e -o pipefail` until #1650). Behavioural rather
+  than a text scan, because a
   scan pins one spelling of a guard where running the block pins the property.
   Before #1641 the push-retry loop's last statement was `sleep`, which
   succeeds, so five failed attempts ended the loop — and the step, the job and
@@ -1031,8 +1034,9 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `tools/lib/replaydata-deletion-guard_test.sh` does to
   `.github/workflows/replaydata-deletion-guard.yml`'s "Detect deletions of
   load-bearing replaydata" step what the bullet above does to ars.yml —
-  extracts it and EXECUTES it against a git stub, under the same
-  `bash --noprofile --norc -e -o pipefail`. It is the same family's most
+  extracts it and EXECUTES it against a git stub, under the same derived
+  invocation (`bash -e` for that step, which is why the step supplies its own
+  `set -euo pipefail` on line 1). It is the same family's most
   expensive member, because that workflow is a **merge gate**: before #1645 its
   diff was captured as `deletions=$(git diff … || true)`, and an empty
   `$deletions` is the gate's SUCCESS condition — so a git exiting 128 produced
@@ -1071,6 +1075,54 @@ Before marking a ticket done, run the full suite — every layer must pass:
   step makes rather than claiming the step implements renaming.
   `preflight.sh`'s `tools` trigger gains this workflow, its fifth widening for
   this reason (#1591, #1629, #1639, #1641).
+- Which bash a workflow step gets: **there are two invocations and this repo
+  conflated them** for the whole of the two bullets above (#1650). A step
+  DECLARING `shell: bash` runs as `bash --noprofile --norc -e -o pipefail {0}`;
+  a step declaring no `shell:` and no `defaults:` runs as **`bash -e {0}`** —
+  errexit only, no `--noprofile`, no `--norc` and **no pipefail**. That is
+  measured off a runner rather than read off the docs: run 31960152598's own
+  group header for `replaydata-deletion-guard.yml`'s step reads
+  `shell: /usr/bin/bash -e {0}`. Of this repo's workflows only
+  `macos-swift.yml` declares `shell: bash` (on two steps; its job-level
+  `defaults:` sets `working-directory` and no shell), so every other step is on
+  the `bash -e` side.
+  **The direction of the error is what made it worth a library rather than a
+  comment fix.** Four harnesses extracted a step body and ran it under the
+  pipefail spelling, each saying in its own header that running it under
+  anything else "would grade a different program" — which was true, and was
+  what they were doing. A body whose correctness depends on pipefail
+  (`x=$(thing | grep -v skip)`) is graded SAFE by a harness that supplies it and
+  swallows the failure in production: a false green, the same "absence of a
+  finding and inability to look produce the same output" shape as the rest of
+  this section. (Under `shell: bash` the error reverses and is loud.)
+  So the invocation is **derived, not typed**: `tools/lib/workflow-step.sh`
+  answers `workflow_step_shell <workflow> <step>` and `workflow_step_body`
+  off the same one-pass scan, so a harness cannot grade one step's body under
+  another step's shell, and a step that later gains `shell: bash` — or whose
+  job or workflow gains a `defaults: { run: { shell: … } }` — moves its harness
+  with it. It REFUSES (status 2, naming what it could not do) for an unreadable
+  file, an absent step, a DUPLICATE step name, an unmodelled `shell:` value and
+  a step with no `run: |` block, and never falls back to a default: a harness
+  handed a plausible `bash -e` for a step that no longer exists would grade an
+  empty body, which exits 0 and reads as a clean run. Its tests are
+  `tools/lib/workflow-step_test.sh` over the committed corpus
+  `tools/lib/testdata/workflow-step/` (one fixture per declaration shape, plus
+  the refusals), and three of its obligations are the ones to keep: the two
+  invocations are shown to grade the SAME body differently (without that,
+  deriving is ceremony and a derivation stuck on one answer looks correct); a
+  copy of a real workflow is mutated BOTH ways, since a derivation hard-wired
+  to either answer passes one direction; and the five real harnessed steps are
+  resolved through the same code, which is what stops
+  `swift-suite_test.sh`'s hand-written `shell: bash` spelling — correct, and
+  left alone — from silently stopping to match.
+  Verified while fixing it, per "dismissals carry evidence": **no live pipefail
+  dependency existed** anywhere in `.github/workflows/`. All 16 pipeline-
+  carrying lines were read — ars.yml's two are `$(… | head -1 || echo "")` and
+  its `sed "s|…|…|"` is a delimiter not a pipe; the deletion guard sets its own
+  `set -euo pipefail`; macos-swift.yml is on the `shell: bash` side already;
+  test.yml's is inside an `echo` message; and codescene-badge.yml's
+  `SCORE=$(… | jq -r …)` and coverage.yml's `pct=$(…)` are each followed
+  immediately by an explicit emptiness guard that does the work pipefail would.
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh` — gated in CI by linux.yml, and run
   natively as `tools/preflight.sh`'s `replay fixtures` gate, so golden drift

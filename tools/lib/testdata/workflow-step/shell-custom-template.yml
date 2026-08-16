@@ -1,0 +1,10 @@
+name: Step declares a custom shell template
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Templated step
+        shell: bash -x {0}
+        run: |
+          echo one
