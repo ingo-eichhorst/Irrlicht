@@ -22,9 +22,19 @@ jobs:
 
     steps:
       - name: Checkout code
+        # A PAT here, not the default GITHUB_TOKEN: main's "Protect Main"
+        # ruleset requires the go-test and build-test status checks (added
+        # 2026-08-15), which only run on the native pull_request event —
+        # and GitHub never fires pull_request-triggered workflows for a
+        # branch/PR pushed with a run's own GITHUB_TOKEN (anti-recursion
+        # protection). A PAT-pushed branch isn't GITHUB_TOKEN-authored, so
+        # it doesn't hit that suppression and the required checks actually
+        # run, letting the PR merge normally. Reuses STARHISTORY_TOKEN (the
+        # PAT from #1013, idle since #1187 moved the stargazer fetch to
+        # GraphQL) rather than provisioning a new secret.
         uses: actions/checkout@v7
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.STARHISTORY_TOKEN }}
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -34,14 +44,15 @@ jobs:
 
       - name: Generate star history chart
         # tools/starhistory reads starred_at over the GraphQL API, which
-        # works with the default GITHUB_TOKEN. The REST stargazers listing
+        # works with either token type. The REST stargazers listing
         # (application/vnd.github.star+json) does not: it 403s for the
         # Actions installation token ("Resource not accessible by
         # integration", #1012) and, since 2026-07-24, for personal access
         # tokens as well ("Resource not accessible by personal access
-        # token"), which is what broke the PAT-based workaround. GraphQL
-        # serves both, so no PAT-scoped secret is needed — the
-        # STARHISTORY_TOKEN secret is now unused and can be deleted.
+        # token"), which is what broke the original PAT-based workaround.
+        # GraphQL serves both, so this step's token choice doesn't matter —
+        # STARHISTORY_TOKEN is reused for the checkout/push/PR steps below
+        # instead (see the Checkout step), not for a different reason here.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -50,7 +61,7 @@ jobs:
 
       - name: Commit chart update
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.STARHISTORY_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -60,11 +71,26 @@ jobs:
             exit 0
           fi
 
-          # main requires a PR for every change (0 approvals, no required
-          # checks) — a direct push here always gets rejected with GH013.
-          # Route the update through a same-repo branch + auto-merged PR
-          # instead, so the update stays fully automated without weakening
-          # branch protection. See #1012.
+          # Belt-and-suspenders against a repeat of 2026-08-15's pile-up (20
+          # duplicate PRs in a day, see #1012): even with the PAT above
+          # making checks run and merges succeed again, a PR still takes a
+          # couple of minutes to go green, and this workflow re-fires on
+          # every push to main — which happens constantly in this repo. If
+          # a star-history PR is already open, one is already in flight;
+          # don't open a second one on top of it.
+          existing=$(gh pr list --base main --state open \
+            --json headRefName \
+            --jq '[.[] | select(.headRefName | startswith("chore/star-history-update-"))] | length')
+          if [ "$existing" -gt 0 ]; then
+            echo "A star-history update PR is already open ($existing) — skipping."
+            exit 0
+          fi
+
+          # main requires a PR for every change (0 approvals) — a direct
+          # push here always gets rejected with GH013. Route the update
+          # through a same-repo branch + auto-merged PR instead, so the
+          # update stays fully automated without weakening branch
+          # protection. See #1012.
           branch="chore/star-history-update-${{ github.run_id }}"
           git checkout -b "$branch"
           git commit -m "chore: update star history chart [skip ci]"
@@ -72,4 +98,8 @@ jobs:
           gh pr create --base main --head "$branch" \
             --title "chore: update star history chart" \
             --body "Automated star history chart refresh."
-          gh pr merge "$branch" --squash --delete-branch
+          # --auto rather than an immediate merge attempt: go-test/build-test
+          # take a couple of minutes to complete even though they now run.
+          # GitHub merges automatically once they (and every other required
+          # check) go green.
+          gh pr merge "$branch" --squash --auto --delete-branch
