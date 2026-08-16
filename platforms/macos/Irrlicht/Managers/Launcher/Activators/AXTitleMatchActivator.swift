@@ -139,10 +139,28 @@ struct AXTitleMatchActivator: HostActivator {
     private static let genericTopSegments: Set<String> = [
         "Users", "home", "tmp", "var", "private", "opt", "mnt", "root"
     ]
-    private static let homeBasename: String = {
-        (ProcessInfo.processInfo.environment["HOME"] ?? "")
-            .split(separator: "/").last.map(String.init) ?? ""
-    }()
+
+    /// Is `parts[i]` the home-directory segment of the path it belongs to —
+    /// the `ingo` in `/Users/ingo/…`, the `runner` in `/home/runner/…`?
+    ///
+    /// Derived POSITIONALLY, from the cwd being scored, rather than from the
+    /// running process's own `$HOME` (#1530). The old spelling took the
+    /// basename of `ProcessInfo.processInfo.environment["HOME"]`, which is a
+    /// property of *whoever is running the app* and not of the path under
+    /// test. The two coincide on the developer's own Mac and diverge
+    /// everywhere else — a session whose cwd is under another account's home,
+    /// a path served from a volume, and a CI runner, where the same call
+    /// scored 2 instead of 0 because `ingo` is not `runner`. The score is a
+    /// pure function of `(title, cwd)` and now reads nothing outside them.
+    ///
+    /// A home segment is one that sits directly under a generic root — that is
+    /// what "home directory" means in every layout this matcher sees. It
+    /// deliberately does NOT skip the same name deeper in the path: a real
+    /// directory called `projects/ingo/…` is a legitimate, specific match
+    /// signal, and the old rule threw it away.
+    private static func isHomeSegment(_ parts: [String], _ i: Int) -> Bool {
+        i == 1 && genericTopSegments.contains(parts[0])
+    }
 
     /// Scores a window title against a cwd. Higher score = better match.
     /// Returns 0 when the title shares no meaningful path segment with cwd.
@@ -157,9 +175,10 @@ struct AXTitleMatchActivator: HostActivator {
     ///   levels below (`.../irrlicht/.claude/worktrees/170`). The deeper the
     ///   matching ancestor, the more specific the signal.
     ///
-    /// Generic top segments (`Users`, user home basename, `tmp`, etc.) are
-    /// skipped because they occur in nearly every string and would cause
-    /// false matches.
+    /// Generic top segments (`Users`, `tmp`, etc.) and the cwd's own home
+    /// segment are skipped because they occur in nearly every string and would
+    /// cause false matches. Both are read off the cwd, so the score depends on
+    /// nothing but its two arguments (see `isHomeSegment`).
     static func titleMatchScore(title: String, cwd: String) -> Int {
         if title.isEmpty || cwd.isEmpty { return 0 }
         if title.contains(cwd) { return 1_000 }
@@ -171,7 +190,7 @@ struct AXTitleMatchActivator: HostActivator {
             let p = parts[i]
             if p.isEmpty { continue }
             if genericTopSegments.contains(p) { continue }
-            if !homeBasename.isEmpty && p == homeBasename { continue }
+            if isHomeSegment(parts, i) { continue }
             if title.contains(p) { return i + 1 }
         }
         return 0
@@ -202,17 +221,21 @@ struct AXTitleMatchActivator: HostActivator {
     /// title. Used as a tie-breaker when two titles share the same primary
     /// score — a title mentioning both `irrlicht` and `a` beats one that
     /// mentions only `irrlicht`.
+    ///
+    /// Skips the same two categories `titleMatchScore` does, and for the same
+    /// reason (#1530): this filtered on the running process's `$HOME` too, so
+    /// the tie-break between two equally-scoring windows also moved with the
+    /// account the app ran under. That second site had no failing assertion of
+    /// its own — it was found by the compiler, once the first was fixed.
     static func cwdSegmentMatchCount(title: String, cwd: String) -> Int {
         if title.isEmpty || cwd.isEmpty { return 0 }
         let trimmed = cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd
-        let segments = trimmed
-            .split(separator: "/", omittingEmptySubsequences: true)
-            .map(String.init)
-            .filter { p in
-                !p.isEmpty &&
-                !genericTopSegments.contains(p) &&
-                (homeBasename.isEmpty || p != homeBasename)
-            }
-        return segments.filter { title.contains($0) }.count
+        let parts = trimmed.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        return parts.indices.filter { i in
+            !parts[i].isEmpty
+                && !genericTopSegments.contains(parts[i])
+                && !isHomeSegment(parts, i)
+                && title.contains(parts[i])
+        }.count
     }
 }

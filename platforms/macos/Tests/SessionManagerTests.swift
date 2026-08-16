@@ -573,6 +573,52 @@ final class SessionManagerTests: XCTestCase {
             0)
     }
 
+    /// The home segment is a property of the cwd being scored, not of whoever
+    /// is running the app (#1530).
+    ///
+    /// The case above is the one that was red on a GitHub runner and green on
+    /// the developer's Mac — `("2") is not equal to ("0")` — because the old
+    /// implementation compared each segment against the basename of the
+    /// *process's* `$HOME`. It cannot lock the fix: on the machine where the
+    /// bug does not reproduce it passes either way, which is the "green by
+    /// day, red by night" shape #1509 already paid for once.
+    ///
+    /// This one is host-independent by construction. Three cwds carry three
+    /// different home segments, and on any given machine at most ONE of them
+    /// can be the running user's — so an implementation keyed on `$HOME`
+    /// fails at least two arms wherever it runs.
+    func testTitleMatchScoreSkipsTheCwdsOwnHomeSegmentOnAnyHost() {
+        let homes = [
+            ("/Users/ingo/projects/irrlicht", "ingo"),      // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+            ("/Users/runner/work/Irrlicht", "runner"),      // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+            ("/home/ci/build/Irrlicht", "ci"),              // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+        ]
+        for (cwd, homeSegment) in homes {
+            XCTAssertEqual(
+                AXTitleMatchActivator.titleMatchScore(title: "\(homeSegment)@host: ~ — zsh", cwd: cwd),
+                0,
+                "home segment '\(homeSegment)' of \(cwd) must never match alone")
+        }
+
+        // Vacuity guard: the identical title shape still scores when it names
+        // a segment that is neither generic nor the home segment. Without
+        // this, `return 0` passes every arm above.
+        XCTAssertEqual(
+            AXTitleMatchActivator.titleMatchScore(
+                title: "runner@host: work — zsh",
+                cwd: "/Users/runner/work/Irrlicht"),         // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+            3)
+
+        // The rule is positional, not name-based: the same word deeper in the
+        // path is a real directory and a legitimate signal. The old
+        // `$HOME`-basename rule discarded it on the developer's own machine.
+        XCTAssertEqual(
+            AXTitleMatchActivator.titleMatchScore(
+                title: "notes.md — ingo",
+                cwd: "/Users/ingo/projects/ingo"),           // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+            4)
+    }
+
     func testTitleMatchScoreEmptyInputs() {
         let cwd = "/Users/ingo/projects/irrlicht"  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         XCTAssertEqual(AXTitleMatchActivator.titleMatchScore(title: "", cwd: cwd), 0)
