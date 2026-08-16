@@ -64,7 +64,9 @@ jobs:
             # failed attempts ended the loop with status 0, and the step, the
             # job and this workflow's check all went GREEN with the badge
             # unpushed. GitHub's implicit `-e` (a step declaring no `shell:`
-            # runs as `bash --noprofile --norc -e -o pipefail {0}`) does not
+            # and no `defaults:` runs as `bash -e {0}` — errexit only, NO
+            # pipefail and no `--noprofile/--norc`, which is what `shell: bash`
+            # gives; measured, run 31960152598) does not
             # save it: errexit is suppressed for every command in an `&&` list
             # except the one after the final `&&`, which is precisely what
             # MAKES this a retry rather than one attempt. That suppression is

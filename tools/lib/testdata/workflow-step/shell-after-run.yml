@@ -1,0 +1,10 @@
+name: shell declared after run
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Declaring step
+        run: |
+          echo one
+        shell: bash

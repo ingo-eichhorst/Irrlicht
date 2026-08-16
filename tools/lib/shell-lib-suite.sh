@@ -35,8 +35,11 @@
 #     done
 #
 # with no `|| rc=1`. That file declares no `shell:` and no `defaults:`, so the
-# step runs under GitHub's documented default, `bash --noprofile --norc -eo
-# pipefail`. The FIRST failing file aborted the step; every later file in glob
+# step runs under GitHub's documented default for such a step, `bash -e {0}` —
+# errexit ONLY, no pipefail (measured off run 31960152598's own step header;
+# `bash --noprofile --norc -eo pipefail` is what `shell: bash` gives, and this
+# comment claimed it until #1650). The FIRST failing file aborted the step,
+# which `-e` alone is enough to do; every later file in glob
 # order never ran, and NOTHING in the log said so — the output simply ended
 # after that file's own `== header ==`. Measured, three fixtures with the first
 # and the last failing: only the first one's header and body appear, and the
@@ -65,7 +68,8 @@
 # measured rather than reasoned about:
 #
 #   test.yml's      `for t in dir/*_test.sh` with nullglob OFF (bash's default,
-#                   and GitHub's `-eo pipefail` does not change it) iterates
+#                   and neither GitHub's `-e` nor `shell: bash`'s added
+#                   `-o pipefail` changes it) iterates
 #                   ONCE with the literal unexpanded pattern, so the step died
 #                   with `bash: dir/*_test.sh: No such file or directory` and
 #                   exit 127 — non-zero, but reading as a missing file rather
@@ -111,7 +115,9 @@ shell_lib_suite_run() {
   fi
 
   # `[ -e ]` rather than a bare glob expansion: with nullglob OFF (the default,
-  # and what GitHub's `bash --noprofile --norc -eo pipefail` runs with) an empty
+  # and what both of GitHub's invocations — `bash -e` for a step declaring
+  # nothing, `bash --noprofile --norc -e -o pipefail` for `shell: bash` — run
+  # with) an empty
   # directory yields the literal pattern, and with nullglob ON it yields
   # nothing. Both land on `found == 0` below, so the refusal does not depend on
   # a shell option the caller may or may not have set.

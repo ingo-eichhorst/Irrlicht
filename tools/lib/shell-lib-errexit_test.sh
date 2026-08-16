@@ -213,7 +213,19 @@ tw_bijection() {
 # The two obligations
 #
 # Both build an inner script and run it under `bash --noprofile --norc -e -o
-# pipefail`, which is GitHub's own `shell: bash` invocation. `: > "$TW_REACHED"`
+# pipefail`. That is GitHub's `shell: bash` invocation, and it is chosen here as
+# the STRICTEST caller any of these libraries has rather than as "the" step
+# shell: these files are sourced from three places with three different option
+# sets — macos-swift.yml's two steps (`shell: bash`, so exactly this),
+# test.yml's step (no `shell:`, so `bash -e` — errexit only, no pipefail; that
+# is #1650's correction, and this file used to imply the two were the same) and
+# tools/preflight.sh (`set -uo pipefail`, no `-e` at all). The obligations here
+# are about what `-e` does to a callee, and `-e` is in all three; the extra
+# `pipefail` can only make a callee's own pipeline abort EARLIER, so the error
+# runs toward a false accusation (loud) rather than a false pass (silent).
+# A harness EXECUTING one named step's body derives its invocation instead —
+# see tools/lib/workflow-step.sh — because there the direction reverses.
+# `: > "$TW_REACHED"`
 # is emitted immediately before the call, so an inner shell that died in its
 # setup (a bad path, a source that failed) is reported as a probe that could
 # not run rather than as the defect — those exit 1 too, which is byte-identical
@@ -354,6 +366,37 @@ row 'shell-lib-suite.sh::shell_lib_suite_run' 'shell_lib_suite_run (a corpus tha
 row 'shell-lib-suite.sh::shell_lib_suite_run' 'shell_lib_suite_run (refuses an empty corpus)' 2 \
     '. tools/lib/shell-lib-suite.sh; mkdir -p "$TW_TMP/suite-empty"' \
     'shell_lib_suite_run "$TW_TMP/suite-empty" >/dev/null 2>&1'
+
+# Driven against the committed fixture corpus rather than against a real
+# workflow: these rows grade what the functions do to their CALLER under -e,
+# and a fixture cannot be edited out from under them by an unrelated workflow
+# change. Both statuses are distinctive — 0 for an answer, 2 for a refusal —
+# so neither can be confused with an errexit abort, and the refusal rows are
+# the load-bearing half here: refusing rather than defaulting is the whole
+# contract (#1650), and a refusal that aborted its caller would take the
+# harness down instead of being reported.
+WS_DATA=tools/lib/testdata/workflow-step
+row 'workflow-step.sh::workflow_step_shell' 'workflow_step_shell (a step declaring no shell:)' 0 \
+    ". tools/lib/workflow-step.sh" \
+    "workflow_step_shell $WS_DATA/no-shell.yml 'Plain step' >/dev/null"
+row 'workflow-step.sh::workflow_step_shell' 'workflow_step_shell (refuses a step it cannot find)' 2 \
+    ". tools/lib/workflow-step.sh" \
+    "workflow_step_shell $WS_DATA/no-shell.yml 'No such step' >/dev/null 2>&1"
+row 'workflow-step.sh::workflow_step_body' 'workflow_step_body (a step with a run: | block)' 0 \
+    ". tools/lib/workflow-step.sh" \
+    "workflow_step_body $WS_DATA/no-shell.yml 'Plain step' >/dev/null"
+row 'workflow-step.sh::workflow_step_body' 'workflow_step_body (refuses a uses: step)' 2 \
+    ". tools/lib/workflow-step.sh" \
+    "workflow_step_body $WS_DATA/no-run-block.yml 'Uses step' >/dev/null 2>&1"
+row 'workflow-step.sh::_workflow_step_record' '_workflow_step_record (refuses an unreadable file)' 2 \
+    ". tools/lib/workflow-step.sh" \
+    "_workflow_step_record $WS_DATA/no-such-file.yml 'Plain step' >/dev/null 2>&1"
+row 'workflow-step.sh::_workflow_step_scan' '_workflow_step_scan' 0 \
+    ". tools/lib/workflow-step.sh" \
+    "_workflow_step_scan $WS_DATA/no-shell.yml 'Plain step' >/dev/null"
+row 'workflow-step.sh::_workflow_step_field' '_workflow_step_field' 0 \
+    '. tools/lib/workflow-step.sh' \
+    '_workflow_step_field "matches 1" matches >/dev/null'
 
 row 'swift-suite.sh::swift_suite_completed' 'swift_suite_completed' 0 \
     '. tools/lib/swift-suite.sh' \

@@ -1,0 +1,21 @@
+name: A body carrying lines that look like structure
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tricky body
+        run: |
+          # a comment inside the body
+          violations=""
+          violations="$violations  - name: not a step"$'\n'
+          echo "shell: pwsh"
+          if true; then
+            echo indented
+          fi
+
+          echo after a blank line
+      - name: The step after it
+        shell: bash
+        run: |
+          echo two

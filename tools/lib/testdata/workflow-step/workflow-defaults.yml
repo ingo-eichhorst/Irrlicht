@@ -1,0 +1,12 @@
+name: Workflow-level defaults
+on: [push]
+defaults:
+  run:
+    shell: bash
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inheriting step
+        run: |
+          echo one

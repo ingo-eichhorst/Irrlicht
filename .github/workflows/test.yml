@@ -102,7 +102,10 @@ jobs:
       # that can disagree. They did disagree, and this was the wrong half
       # (#1639): the loop was written inline here with no `|| rc=1`, and this
       # file declares no `shell:` and no `defaults:`, so it ran under GitHub's
-      # default `bash --noprofile --norc -eo pipefail`. The FIRST failing file
+      # default for such a step — `bash -e {0}`, errexit ONLY (measured, run
+      # 31960152598; `bash --noprofile --norc -eo pipefail` is what a step
+      # DECLARING `shell: bash` gets, and this comment claimed it until
+      # #1650). The FIRST failing file
       # aborted the step, every later file in glob order never ran, and nothing
       # in the log distinguished that from a clean run — one push per red file.
       # The runner prints a census (found / skipped / ran / failed) and refuses

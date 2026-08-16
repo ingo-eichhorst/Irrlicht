@@ -1,0 +1,10 @@
+name: Steps with no `run: |` block
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Uses step
+        uses: actions/checkout@v7
+      - name: Single-line run step
+        run: echo one

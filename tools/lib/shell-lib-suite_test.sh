@@ -6,10 +6,12 @@
 # ---------------------------------------------------------------------------
 # What is being asserted, and why each obligation exists
 #
-# The defect was a loop with no `|| rc=1` running under GitHub's default
-# `bash --noprofile --norc -eo pipefail`: the first failing file aborted the
-# step and every later file never ran, with nothing in the log distinguishing
-# that from a clean run. So the obligations are, in order:
+# The defect was a loop with no `|| rc=1` running under GitHub's default for a
+# step declaring no `shell:` — `bash -e {0}`, errexit only (#1650; this file
+# used to say `bash --noprofile --norc -eo pipefail`, which is what
+# `shell: bash` gives): the first failing file aborted the step and every later
+# file never ran, with nothing in the log distinguishing that from a clean run.
+# So the obligations are, in order:
 #
 #   1. an EARLY failure and a LATE failure are BOTH reported. A fix that only
 #      collects the status of the last file, or that reports "1 failed" when
@@ -55,6 +57,32 @@ need grep
 
 LIB=tools/lib/shell-lib-suite.sh
 [[ -f "$LIB" ]] || { echo "FAIL: shell-lib-suite_test — $LIB not found" >&2; exit 1; }
+
+WF=.github/workflows/test.yml
+STEP='Test the shared shell libs'
+
+# shellcheck source=workflow-step.sh
+. tools/lib/workflow-step.sh
+
+# The invocation, DERIVED from the workflow rather than spelled here (#1650).
+#
+# Everything below models test.yml's step, so it has to run under the shell
+# that step really gets. GitHub has two bash invocations and this file used to
+# state the wrong one: `bash --noprofile --norc -eo pipefail` is what a step
+# DECLARING `shell: bash` gets, while test.yml declares neither `shell:` nor
+# `defaults:` and so gets `bash -e {0}` — errexit only, no pipefail (measured,
+# run 31960152598's own step header). `-e` is the option every obligation here
+# turns on and it is present either way, so the verdicts do not move; what
+# moves is what this file would grade if the step ever grew a pipeline, since
+# supplying pipefail to a body production runs without reports it safe while
+# production swallows the failure. workflow-step.sh REFUSES rather than
+# defaulting when it cannot find the step, which is why this is a hard exit.
+if ! STEP_SHELL=$(workflow_step_shell "$WF" "$STEP"); then
+  echo "FAIL: shell-lib-suite_test — could not derive the shell $WF gives '$STEP' (refusal above); nothing below would have graded the real program" >&2
+  exit 1
+fi
+read -r -a STEP_ARGV <<<"$STEP_SHELL"
+echo "== $WF :: '$STEP' runs under \`$STEP_SHELL\` (derived) =="
 
 TMP=$(mktemp -d -t shell-lib-suite) || exit 1
 trap 'rm -rf "$TMP"' EXIT
@@ -108,7 +136,7 @@ rc=0
 shell_lib_suite_run "$SLS_ARGS_DIR" $SLS_ARGS_SKIPS || rc=$?
 exit "$rc"
 RUNNER
-  OUT=$(bash --noprofile --norc -eo pipefail "$script" 2>&1); ST=$?
+  OUT=$("${STEP_ARGV[@]}" "$script" 2>&1); ST=$?
   return 0
 }
 
@@ -136,7 +164,7 @@ run_suite_bare() {
 # shellcheck disable=SC2086
 shell_lib_suite_run "$SLS_ARGS_DIR" $SLS_ARGS_SKIPS
 RUNNERBARE
-  OUT=$(bash --noprofile --norc -eo pipefail "$script" 2>&1); ST=$?
+  OUT=$("${STEP_ARGV[@]}" "$script" 2>&1); ST=$?
   return 0
 }
 
@@ -177,8 +205,8 @@ want_contains "bare position: the census still printed" "found 3, skipped 0 (non
 
 # --- obligation 2: the predecessors, measured rather than described ----------
 # test.yml's loop as it stood, verbatim, with only `tools/lib` replaced by the
-# fixture dir — run under `bash --noprofile --norc -eo pipefail`, which is
-# GitHub's documented invocation for a step declaring no `shell:`.
+# fixture dir — run under the invocation derived from the workflow above, which
+# for a step declaring no `shell:` is `bash -e`.
 echo ""
 echo "== the two predecessors, run under GitHub's own default shell =="
 export SLS_DIR="$TMP/mixed"
@@ -189,7 +217,7 @@ for t in "$SLS_DIR"/*_test.sh; do
   bash "$t"
 done
 OLDCI
-old_out=$(bash --noprofile --norc -eo pipefail "$TMP/old-ci-loop.sh" 2>&1); old_st=$?
+old_out=$("${STEP_ARGV[@]}" "$TMP/old-ci-loop.sh" 2>&1); old_st=$?
 want_status "test.yml's old loop still goes red" 1 "$old_st" "$old_out"
 want_contains "...having run the first file" "RAN a_test.sh" "$old_out"
 # The load-bearing half of the pair. If bash ever stopped aborting here — a
@@ -212,14 +240,14 @@ for t in "$SLS_EMPTY"/*_test.sh; do
 done
 exit "$rc"
 OLDPF
-oldpf_out=$(bash --noprofile --norc -eo pipefail "$TMP/old-preflight-loop.sh" 2>&1); oldpf_st=$?
+oldpf_out=$("${STEP_ARGV[@]}" "$TMP/old-preflight-loop.sh" 2>&1); oldpf_st=$?
 want_status "preflight's old loop passed an EMPTY corpus silently" 0 "$oldpf_st" "$oldpf_out"
 want_absent "...saying nothing at all about it" "found" "$oldpf_out"
 
 # ...and CI's old loop over the same empty corpus did not pass, but did not say
-# what was wrong either: nullglob is OFF by default (and `-eo pipefail` does not
-# change it), so the loop iterated once with the literal pattern and died on a
-# missing file. Non-zero, and unattributable.
+# what was wrong either: nullglob is OFF by default (and neither `-e` nor
+# `shell: bash`'s `-o pipefail` changes it), so the loop iterated once with the
+# literal pattern and died on a missing file. Non-zero, and unattributable.
 cat >"$TMP/old-ci-empty.sh" <<'OLDCIE'
 for t in "$SLS_EMPTY"/*_test.sh; do
   case "$t" in */posix-lint_test.sh) continue ;; esac
@@ -227,7 +255,7 @@ for t in "$SLS_EMPTY"/*_test.sh; do
   bash "$t"
 done
 OLDCIE
-oldcie_out=$(bash --noprofile --norc -eo pipefail "$TMP/old-ci-empty.sh" 2>&1); oldcie_st=$?
+oldcie_out=$("${STEP_ARGV[@]}" "$TMP/old-ci-empty.sh" 2>&1); oldcie_st=$?
 want_status "CI's old loop over an empty corpus died on the literal glob" 127 "$oldcie_st" "$oldcie_out"
 want_contains "...reading as a missing file, not as an empty corpus" "No such file or directory" "$oldcie_out"
 
@@ -295,7 +323,7 @@ rc=0
 shell_lib_suite_run "$SLS_MUT_DIR" || rc=$?
 exit "$rc"
 MUT
-  mut_out=$(bash --noprofile --norc -eo pipefail "$TMP/run-mut.sh" 2>&1); mut_st=$?
+  mut_out=$("${STEP_ARGV[@]}" "$TMP/run-mut.sh" 2>&1); mut_st=$?
   want_status "a loop that skips a file without counting it" 2 "$mut_st" "$mut_out"
   want_contains "...is refused by the census" "the census does not add up: 2 ran + 0 skipped != 3 found" "$mut_out"
 fi
@@ -311,17 +339,22 @@ want_absent "...and the real library over the same corpus does not" "census does
 # cannot come back unnoticed. It reads the files rather than running them.
 echo ""
 echo "== both callers really do call the one implementation =="
-WF=.github/workflows/test.yml
 if [[ ! -f "$WF" ]]; then
   fail "the call-site check could run" "$WF" "not found"
 else
-  # Vacuity guard first: a scan that stopped finding the step reads exactly
-  # like a workflow with no duplication in it.
-  step=$(awk '/^      - name: Test the shared shell libs$/{found=1} found{print}' "$WF")
+  # Read through the same library that derived the invocation, so this scan and
+  # the invocation above cannot be talking about two different steps. Vacuity
+  # guard first: a scan that stopped finding the step reads exactly like a
+  # workflow with no duplication in it, and workflow-step.sh REFUSES rather
+  # than returning an empty body for a step it cannot find.
+  if ! step=$(workflow_step_body "$WF" "$STEP"); then
+    fail "the scan finds the step in $WF" "a '$STEP' step" "workflow-step refused (above) — the scan has gone blind, not the workflow clean"
+    step=""
+  fi
   if [[ -z "$step" ]]; then
-    fail "the scan finds the step in $WF" "a 'Test the shared shell libs' step" "no such step — the scan has gone blind, not the workflow clean"
+    :
   else
-    pass "the scan reads $WF's 'Test the shared shell libs' step"
+    pass "the scan reads $WF's '$STEP' step"
     want_contains "...and it calls the shared runner" "shell_lib_suite_run tools/lib posix-lint_test.sh" "$step"
     want_absent "...rather than carrying its own loop" 'for t in tools/lib/*_test.sh' "$step"
     want_contains "...keeping \$? reachable under GitHub's implicit -e" '|| rc=$?' "$step"

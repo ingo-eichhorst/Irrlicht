@@ -1,0 +1,13 @@
+name: Step declares bash
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Plain step
+        run: |
+          echo untouched
+      - name: Declaring step
+        shell: bash
+        run: |
+          echo one

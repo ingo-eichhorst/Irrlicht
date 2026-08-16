@@ -75,9 +75,15 @@ need awk
 need sed
 need bash
 need wc
+need grep
 
 WF=.github/workflows/replaydata-deletion-guard.yml
 STEP='Detect deletions of load-bearing replaydata'
+
+# The step's body AND the shell it runs under both come from the workflow file,
+# through tools/lib/workflow-step.sh — see the invocation block below.
+# shellcheck source=workflow-step.sh
+. tools/lib/workflow-step.sh
 
 TMP=$(mktemp -d -t replaydata-deletion-guard) || exit 1
 trap 'rm -rf "$TMP"' EXIT
@@ -121,24 +127,39 @@ LIVE=replaydata/agents/claudecode/scenarios/1-1_live
 ORPHAN=replaydata/agents/claudecode/scenarios/9-9_orphan
 
 # ---------------------------------------------------------------------------
-# The harness: stubs, then a body, run under the shell GitHub gives a step.
+# The invocation, DERIVED from the workflow rather than spelled here (#1650).
 #
-# GitHub invokes a step declaring no `shell:` as
-# `bash --noprofile --norc -e -o pipefail {0}`. Running these bodies under
-# anything else would grade a different program — the whole `|| true` question
-# is about what errexit does and does not reach.
+# GitHub has two bash invocations and this file used to state the wrong one as
+# fact: a step DECLARING `shell: bash` gets
+# `bash --noprofile --norc -e -o pipefail {0}`, but a step declaring nothing —
+# which is what this workflow's step does — gets `bash -e {0}`. No
+# `--noprofile`, no `--norc`, and **no pipefail**; measured off run
+# 31960152598's own header for THIS step:
 #
-# `git` and `jq` are shell FUNCTIONS rather than PATH shims so the body's own
-# lines survive byte-for-byte. `command -v` finds functions, which is what
-# neutralises the step's `command -v jq || sudo apt-get install …` line without
-# editing it; `sudo` is stubbed to a loud 99 so that if the jq shim ever stops
-# matching, this file fails noisily instead of quietly shelling out to apt-get
-# on whatever machine it is running on.
+#     guard  Detect deletions of load-bearing replaydata   shell: /usr/bin/bash -e {0}
 #
-# An unmodelled git subcommand returns a loud, distinctive 99 naming the call
-# instead of a quiet 0: a stub that silently answered "fine" to something it
-# does not model would make every arm below pass for a reason unrelated to its
-# obligation.
+# The step sets `set -euo pipefail` on its own first line, so what it actually
+# runs with is unchanged either way — but the harness must not be the thing
+# that supplies it, because then a step that dropped that line would still be
+# graded under pipefail here and swallow a mid-pipeline failure in CI. Reading
+# the invocation out of the workflow is what keeps the two in step;
+# workflow-step.sh REFUSES rather than defaulting when it cannot find the step,
+# which is why this is a hard exit and not a fallback.
+if ! STEP_SHELL=$(workflow_step_shell "$WF" "$STEP"); then
+  echo "FAIL: replaydata-deletion-guard_test — could not derive the shell $WF gives '$STEP' (refusal above); nothing below would have graded the real program" >&2
+  exit 1
+fi
+read -r -a STEP_ARGV <<<"$STEP_SHELL"
+echo "== $WF :: '$STEP' runs under \`$STEP_SHELL\` (derived) =="
+
+# ---------------------------------------------------------------------------
+# The harness: stubs, then a body, run under that shell.
+#
+# `git` is a shell FUNCTION rather than a PATH shim so the body's own lines
+# survive byte-for-byte. An unmodelled git subcommand returns a loud,
+# distinctive 99 naming the call instead of a quiet 0: a stub that silently
+# answered "fine" to something it does not model would make every arm below
+# pass for a reason unrelated to its obligation.
 #
 # STUB_ARGV_FILE records the argv of every `git diff` the body performs, so an
 # arm can assert the step ACTUALLY DIFFED rather than exited before looking —
@@ -152,8 +173,6 @@ STUB_DIFF_MODE='$3'
 STUB_DELETIONS='$4'
 STUB_MISSING=' $5 '
 STUB_ARGV_FILE='$TMP/git-diff-argv'
-jq() { :; }
-sudo() { echo "STUB: unmodelled call: sudo \$*" >&2; return 99; }
 git() {
   case "\$1" in
     rev-parse)
@@ -202,7 +221,7 @@ run_body() {
   # half the arms below — is data, not an abort. Toggling errexit here would
   # leave it on for the rest of the file, which is the option-you-cannot-see
   # family the sibling issues (#1633, #1635) are made of.
-  OUT=$(cd "$CHECKOUT" && bash --noprofile --norc -e -o pipefail "$script" 2>&1)
+  OUT=$(cd "$CHECKOUT" && "${STEP_ARGV[@]}" "$script" 2>&1)
   ST=$?
   ARGV=$(cat "$TMP/git-diff-argv" 2>/dev/null || true)
   return 0
@@ -286,25 +305,16 @@ echo "== $WF: $STEP =="
 if [[ ! -f "$WF" ]]; then
   fail "$WF is readable" "the workflow file" "not found — the step check could not run"
 else
-  # Extract the named step's `run: |` body and dedent it. Keyed on the step
-  # NAME, so a body that moved within the file is still found and a step that
-  # was renamed is a loud refusal rather than a silent zero-line body.
-  awk -v want="$STEP" '
-    !inblock && $0 ~ /^[[:space:]]*-[[:space:]]+name:[[:space:]]*/ {
-      n = $0; sub(/^[[:space:]]*-[[:space:]]+name:[[:space:]]*/, "", n)
-      gsub(/^["'"'"']|["'"'"']$/, "", n)
-      cur = (n == want)
-      next
-    }
-    !inblock && cur && $0 ~ /^[[:space:]]*run:[[:space:]]*\|[[:space:]]*$/ {
-      inblock = 1; ind = match($0, /[^ ]/); next
-    }
-    inblock {
-      if ($0 ~ /^[[:space:]]*$/) { print ""; next }
-      if (match($0, /[^ ]/) <= ind) { inblock = 0; cur = 0; next }
-      print substr($0, ind + 2)
-    }
-  ' "$WF" >"$TMP/step-body-raw.sh"
+  # Extract the named step's `run: |` body and dedent it — through the same
+  # library that derived the invocation above, so the shell this file grades
+  # under and the body it grades cannot come from two different steps. Keyed on
+  # the step NAME, so a body that moved within the file is still found and a
+  # step that was renamed is a loud refusal rather than a silent zero-line body.
+  if ! workflow_step_body "$WF" "$STEP" >"$TMP/step-body-raw.sh"; then
+    fail "the '$STEP' step body was extracted from $WF" \
+         "the step's run: | body" "workflow-step refused (above) — the scan has gone blind, not the step clean"
+    : >"$TMP/step-body-raw.sh"
+  fi
 
   # The extraction has to have found something. A scan that silently stopped
   # matching reads exactly like a workflow with no hazard in it, and every arm

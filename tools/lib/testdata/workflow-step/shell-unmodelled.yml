@@ -1,0 +1,10 @@
+name: Step declares a shell this library does not model
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Powershell step
+        shell: pwsh
+        run: |
+          Write-Output one

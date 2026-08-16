@@ -63,10 +63,17 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "FAIL: ars-badge-push_test �
 need git
 need mktemp
 need awk
+need sed
+need grep
 need bash
 
 WF=.github/workflows/ars.yml
 STEP='Commit badge update'
+
+# The step's body AND the shell it runs under both come from the workflow file,
+# through tools/lib/workflow-step.sh — see the invocation block below.
+# shellcheck source=workflow-step.sh
+. tools/lib/workflow-step.sh
 
 TMP=$(mktemp -d -t ars-badge-push) || exit 1
 trap 'rm -rf "$TMP"' EXIT
@@ -90,12 +97,30 @@ want_absent() { # label needle haystack
 }
 
 # ---------------------------------------------------------------------------
-# The harness: stubs, then a body, run under the shell GitHub gives a step.
+# The invocation, DERIVED from the workflow rather than spelled here (#1650).
 #
-# GitHub invokes a step declaring no `shell:` as
-# `bash --noprofile --norc -e -o pipefail {0}`. `-e` is what makes the
-# suppression inside the `&&` list observable at all, so running these bodies
-# under anything else would grade a different program.
+# GitHub has two bash invocations and this file used to state the wrong one as
+# fact: a step DECLARING `shell: bash` gets
+# `bash --noprofile --norc -e -o pipefail {0}`, but a step declaring nothing —
+# which is what ars.yml's steps do — gets `bash -e {0}`. No `--noprofile`, no
+# `--norc`, and **no pipefail**; measured off run 31960152598's own step header.
+# `-e` is what makes the errexit suppression inside the `&&` list observable at
+# all and is present either way, so this file's obligations are unaffected —
+# but supplying pipefail to a body production runs without is a FALSE GREEN in
+# the direction that matters: a pipeline whose left-hand command fails is
+# graded as an abort here and swallowed in CI. So the invocation is read out of
+# the workflow, and a step that later gains `shell: bash` moves this harness
+# with it. workflow-step.sh REFUSES rather than defaulting when it cannot find
+# the step, which is why this is a hard exit and not a fallback.
+if ! STEP_SHELL=$(workflow_step_shell "$WF" "$STEP"); then
+  echo "FAIL: ars-badge-push_test — could not derive the shell $WF gives '$STEP' (refusal above); nothing below would have graded the real program" >&2
+  exit 1
+fi
+read -r -a STEP_ARGV <<<"$STEP_SHELL"
+echo "== $WF :: '$STEP' runs under \`$STEP_SHELL\` (derived) =="
+
+# ---------------------------------------------------------------------------
+# The harness: stubs, then a body, run under that shell.
 #
 # `git` and `sleep` are shell FUNCTIONS rather than PATH shims so the body's
 # own lines survive byte-for-byte — in particular `sleep $((i * 3))`, which
@@ -134,7 +159,7 @@ run_body() {
   # outcome of half the arms below — is data, not an abort. Toggling errexit
   # here would leave it ON for the rest of the file, which is the
   # option-you-cannot-see family the sibling issues (#1633, #1635) are made of.
-  OUT=$(bash --noprofile --norc -e -o pipefail "$script" 2>&1)
+  OUT=$("${STEP_ARGV[@]}" "$script" 2>&1)
   ST=$?
   return 0
 }
@@ -171,25 +196,16 @@ echo "== $WF: $STEP =="
 if [[ ! -f "$WF" ]]; then
   fail "$WF is readable" "the workflow file" "not found — the step check could not run"
 else
-  # Extract the named step's `run: |` body and dedent it. Keyed on the step
-  # NAME, so a body that moved within the file is still found and a step that
-  # was renamed is a loud refusal rather than a silent zero-line body.
-  awk -v want="$STEP" '
-    !inblock && $0 ~ /^[[:space:]]*-[[:space:]]+name:[[:space:]]*/ {
-      n = $0; sub(/^[[:space:]]*-[[:space:]]+name:[[:space:]]*/, "", n)
-      gsub(/^["'"'"']|["'"'"']$/, "", n)
-      cur = (n == want)
-      next
-    }
-    !inblock && cur && $0 ~ /^[[:space:]]*run:[[:space:]]*\|[[:space:]]*$/ {
-      inblock = 1; ind = match($0, /[^ ]/); next
-    }
-    inblock {
-      if ($0 ~ /^[[:space:]]*$/) { print ""; next }
-      if (match($0, /[^ ]/) <= ind) { inblock = 0; cur = 0; next }
-      print substr($0, ind + 2)
-    }
-  ' "$WF" >"$TMP/step-body.sh"
+  # Extract the named step's `run: |` body and dedent it — through the same
+  # library that derived the invocation above, so the shell this file grades
+  # under and the body it grades cannot come from two different steps. Keyed on
+  # the step NAME, so a body that moved within the file is still found and a
+  # step that was renamed is a loud refusal rather than a silent zero-line body.
+  if ! workflow_step_body "$WF" "$STEP" >"$TMP/step-body.sh"; then
+    fail "the '$STEP' step body was extracted from $WF" \
+         "the step's run: | body" "workflow-step refused (above) — the scan has gone blind, not the step clean"
+    : >"$TMP/step-body.sh"
+  fi
 
   # The extraction has to have found something. A scan that silently stopped
   # matching reads exactly like a workflow with no hazard in it, and every
