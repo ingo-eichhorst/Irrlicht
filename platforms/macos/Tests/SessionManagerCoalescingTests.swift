@@ -17,15 +17,18 @@ final class SessionManagerCoalescingTests: XCTestCase {
     typealias AgentGroup = SessionManager.AgentGroup
 
     private var sut: SessionManager!
-    private var originalProjectGroupOrder: Any?
+
+    /// This suite's own preference store (#1662). `seedLocalApiGroups` →
+    /// `orderedGroups` PERSISTS `projectGroupOrder`, which under `swift test`
+    /// meant writing the developer's real `com.apple.dt.xctest.tool` domain and
+    /// putting it back in a `tearDown` the aborting runs skip — measured, that
+    /// domain was left holding this developer's actual project names. An
+    /// injected store has nothing to restore.
+    private let defaults = InMemoryDefaults()
 
     override func setUp() async throws {
         try await super.setUp()
-        // seedLocalApiGroups persists projectGroupOrder to UserDefaults; snapshot
-        // + restore so the developer's real order survives the run (same pattern
-        // as the apiGroups tests).
-        originalProjectGroupOrder = UserDefaults.standard.object(forKey: "projectGroupOrder")
-        sut = SessionManager()
+        sut = SessionManager(defaults: defaults)
         // Long windows so the trailing timer never fires mid-test — flushes are
         // driven explicitly via flushPendingUIRefreshForTests().
         sut.uiRefreshInterval = 1000
@@ -33,11 +36,6 @@ final class SessionManagerCoalescingTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        if let originalProjectGroupOrder {
-            UserDefaults.standard.set(originalProjectGroupOrder, forKey: "projectGroupOrder")
-        } else {
-            UserDefaults.standard.removeObject(forKey: "projectGroupOrder")
-        }
         sut = nil
         try await super.tearDown()
     }

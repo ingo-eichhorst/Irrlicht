@@ -7,26 +7,29 @@ final class SoundPlayerTests: XCTestCase {
 
     // MARK: - resolveNotificationSound
 
+    /// The sound choice is read from a store this test owns, not from
+    /// `UserDefaults.standard` (#1662) — which under `swift test` is the
+    /// developer's real `com.apple.dt.xctest.tool` domain, and which these
+    /// three cases wrote and then cleaned up in a `defer` that #1523's aborts,
+    /// the 240s tree kill and `--budget` all skip.
     func testResolveBuiltInProducesNamedSound() throws {
-        let defaults = UserDefaults.standard
+        let defaults = InMemoryDefaults()
         let event = NotificationEvent.ready
         defaults.set(SoundChoice.chime.rawValue, forKey: event.soundKey)
-        defer { defaults.removeObject(forKey: event.soundKey) }
 
-        let sound = SessionManager.resolveNotificationSound(for: event)
+        let sound = SessionManager.resolveNotificationSound(for: event, defaults: defaults)
         XCTAssertNotNil(sound, "built-in choice should produce a UNNotificationSound")
     }
 
     func testResolveNoneAndSpeakReturnNil() {
-        let defaults = UserDefaults.standard
+        let defaults = InMemoryDefaults()
         let event = NotificationEvent.waiting
-        defer { defaults.removeObject(forKey: event.soundKey) }
 
         defaults.set(SoundChoice.none.rawValue, forKey: event.soundKey)
-        XCTAssertNil(SessionManager.resolveNotificationSound(for: event))
+        XCTAssertNil(SessionManager.resolveNotificationSound(for: event, defaults: defaults))
 
         defaults.set(SoundChoice.speak(.default).rawValue, forKey: event.soundKey)
-        XCTAssertNil(SessionManager.resolveNotificationSound(for: event))
+        XCTAssertNil(SessionManager.resolveNotificationSound(for: event, defaults: defaults))
     }
 
     // MARK: - SpokenVoice / voice(for:)
@@ -67,17 +70,16 @@ final class SoundPlayerTests: XCTestCase {
     }
 
     func testResolveMissingCustomFallsBackToPing() {
-        let defaults = UserDefaults.standard
+        let defaults = InMemoryDefaults()
         let event = NotificationEvent.contextPressure
         let missing = SoundChoice.custom(installedFilename: "IrrlichtCustom-doesnotexist.caf", displayPath: "/tmp/x.mp3")  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
         defaults.set(missing.rawValue, forKey: event.soundKey)
-        defer { defaults.removeObject(forKey: event.soundKey) }
 
         // We can't introspect UNNotificationSound's name, so the assertion is
         // limited to "produces a non-nil fallback rather than crashing or
         // returning nil." Combined with the explicit Ping branch in
         // resolveNotificationSound, this guards against the regression.
-        let sound = SessionManager.resolveNotificationSound(for: event)
+        let sound = SessionManager.resolveNotificationSound(for: event, defaults: defaults)
         XCTAssertNotNil(sound, "missing custom should fall back to Ping, not nil")
     }
 

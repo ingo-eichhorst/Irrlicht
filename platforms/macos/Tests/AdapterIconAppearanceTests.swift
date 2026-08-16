@@ -28,44 +28,27 @@ import SwiftUI
 final class AdapterIconAppearanceTests: XCTestCase {
     private var sessionManager: SessionManager!
     private var savedRegistry: [String: AgentBranding] = [:]
-    private var savedDefaults: [String: Any?] = [:]
 
-    /// The `@AppStorage` keys `SessionRowView` reads. Pinned for the same
-    /// reason `SessionRowSnapshotTests` pins them: they live in
-    /// `UserDefaults.standard`, so an unpinned render depends on whatever the
-    /// xctest domain happens to hold — including a value a previous run left
-    /// behind after being killed before `tearDown` (#1523 does exactly that).
-    /// `debugMode` is the one that matters most here: it adds a line to the
-    /// row's VStack inside a fixed-height frame, shifting the metrics line up
-    /// and out of the icon probe box.
-    private static let pinnedDefaults: [String: Any] = [
-        "displayMode": "context",
-        "debugMode": false,
-        "showCostDisplay": false,
-        "summaryDisplayMode": SummaryDisplayMode.waiting.rawValue,
-        ContextPressureThreshold.valueKey: 80,
-        ContextPressureThreshold.unitKey: ContextPressureThreshold.Unit.percent.rawValue,
-    ]
+    /// This suite's own preference store (#1662). It replaces a six-key
+    /// snapshot-and-restore over the REAL `com.apple.dt.xctest.tool` domain,
+    /// which depended on a `tearDown` that #1523's aborts, the 240s tree kill
+    /// and `--budget` all skip. Empty is the right content: every key
+    /// `SessionRowView` reads then resolves at its own `@AppStorage` default,
+    /// which is what the deleted dictionary was assigning. `debugMode` is the
+    /// one that matters most here — it adds a line to the row's VStack inside a
+    /// fixed-height frame, shifting the metrics line up and out of the icon
+    /// probe box — and it defaults to `false`.
+    private let defaults = InMemoryDefaults()
 
     override func setUp() async throws {
         try await super.setUp()
-        let defaults = UserDefaults.standard
-        for (key, value) in Self.pinnedDefaults {
-            savedDefaults[key] = defaults.object(forKey: key)
-            defaults.set(value, forKey: key)
-        }
-        sessionManager = SessionManager()
+        sessionManager = SessionManager(defaults: defaults)
         savedRegistry = AgentRegistry.byName
         AgentRegistry.byName["antigravity"] = TestAgentBranding.antigravity
     }
 
     override func tearDown() async throws {
         AgentRegistry.byName = savedRegistry
-        let defaults = UserDefaults.standard
-        for (key, value) in savedDefaults {
-            if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
-        }
-        savedDefaults = [:]
         sessionManager = nil
         try await super.tearDown()
     }
@@ -197,16 +180,18 @@ final class AdapterIconAppearanceTests: XCTestCase {
         return measured
     }
 
+    /// Built through `PinnedSnapshotHost` — the type every other snapshot suite
+    /// hosts through — rather than a hand-rolled `NSHostingView`, so this suite
+    /// inherits the preference pin (#1662) the way it already inherits the
+    /// appearance one, instead of re-implementing it. The appearance is still
+    /// this suite's own subject and is passed through.
     private func host(_ session: SessionState, appearance: NSAppearance.Name) -> NSView {
-        let wrapped = SessionRowView(session: session, agentNumber: 1)
-            .environmentObject(sessionManager)
-            .frame(width: 350, height: 48)
-            .background(Color(NSColor.windowBackgroundColor))
-        let hosting = NSHostingView(rootView: wrapped)
-        hosting.appearance = NSAppearance(named: appearance)
-        hosting.frame = CGRect(x: 0, y: 0, width: 350, height: 48)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+        PinnedSnapshotHost(
+            SessionRowView(session: session, agentNumber: 1)
+                .environmentObject(sessionManager)
+                .frame(width: 350, height: 48)
+                .background(Color(NSColor.windowBackgroundColor)),
+            width: 350, height: 48, appearance: appearance, defaults: defaults).view
     }
 
     private func loadAntigravityGhost() throws -> SessionState {

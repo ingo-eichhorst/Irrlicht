@@ -163,10 +163,28 @@ extension View {
 /// classification from that same string, so such a suite loses the scale pin,
 /// the locale pin and its CI classification together, as one visible failure
 /// there.
+/// #1662 moved the **preferences** pin here for the third time, and it is the
+/// one where "a picture of the machine" was most literally true: `@AppStorage`
+/// resolves `UserDefaults.standard`, which under `swift test` is the
+/// `com.apple.dt.xctest.tool` domain — a real, persistent plist that every
+/// previous run of this suite wrote into. `GroupViewSnapshotTests` and
+/// `SessionRowSnapshotTests` each held eight of those keys open by hand in
+/// `setUp` and put them back in `tearDown`, which fails in three ways at once:
+/// it is per-suite rather than a property of the snapshot strategy, it pins a
+/// SMALLER set than the views read (nine more keys sat in that domain
+/// unpinned, one of them holding the developer's real project names), and a
+/// `tearDown` does not run for the runs that need it most — #1523 aborts the
+/// process, `swift-suite.sh` kills the tree at 240s and `--budget` kills the
+/// gate. `PinnedAppStorageSnapshotTests` grades this object.
 struct PinnedSnapshotHost {
     /// The laid-out hosting view. Read it to inspect what was rendered; pass
     /// the `PinnedSnapshotHost` itself to `assertSnapshot`.
     let view: NSView
+
+    /// The store every `@AppStorage` in the hosted subtree resolved through.
+    /// Read it to assert what a render was driven by; write to it BEFORE
+    /// constructing the host to drive a render.
+    let defaults: InMemoryDefaults
 
     /// Host `content` at a fixed size, appearance and locale.
     ///
@@ -183,17 +201,33 @@ struct PinnedSnapshotHost {
     ///     `HistoryViewSnapshotTests`' own `setUp` until this parameter
     ///     existed, which is exactly the "one suite remembers" shape the
     ///     locale pin was moved here to stop.
+    ///   - defaults: the preference store `@AppStorage` resolves through
+    ///     (#1662). Typed `InMemoryDefaults`, **not** `UserDefaults`, so
+    ///     `.standard` is not expressible here: a `.pinnedImage` snapshot
+    ///     cannot photograph the machine's preferences even by passing the
+    ///     wrong argument. The default is a fresh, empty store, so an
+    ///     unspecified key renders at the `@AppStorage` declaration's own
+    ///     default — which is what the committed references were recorded
+    ///     under, so adopting this regenerated none of them. A suite that
+    ///     forgets to pass its store gets ISOLATION and a visible failure
+    ///     ("my pinned value did not reach the view"), never a reference that
+    ///     silently encodes someone's Settings.
     init(_ content: some View,
          width: CGFloat,
          height: CGFloat,
          appearance: NSAppearance.Name = .darkAqua,
          locale: Locale = PinnedLocaleSnapshot.referenceLocale,
-         timeZone: TimeZone = PinnedTimeZoneSnapshot.referenceTimeZone) {
+         timeZone: TimeZone = PinnedTimeZoneSnapshot.referenceTimeZone,
+         defaults: InMemoryDefaults = InMemoryDefaults()) {
         let hosting = NSHostingView(
-            rootView: content.pinnedLocale(locale).pinnedTimeZone(timeZone, locale: locale))
+            rootView: content
+                .pinnedLocale(locale)
+                .pinnedTimeZone(timeZone, locale: locale)
+                .defaultAppStorage(defaults))
         hosting.appearance = NSAppearance(named: appearance)
         hosting.frame = CGRect(x: 0, y: 0, width: width, height: height)
         hosting.layoutSubtreeIfNeeded()
         self.view = hosting
+        self.defaults = defaults
     }
 }

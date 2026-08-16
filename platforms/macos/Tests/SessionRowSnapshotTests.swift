@@ -6,13 +6,25 @@ import SnapshotTesting
 @MainActor
 final class SessionRowSnapshotTests: XCTestCase {
     private var sessionManager: SessionManager!
-    private var originalDisplayMode: Any?
-    private var originalDebugMode: Any?
-    private var originalShowCost: Any?
-    private var originalThresholdValue: Any?
-    private var originalThresholdUnit: Any?
-    private var originalSummaryDisplayMode: Any?
     private var savedAgentRegistry: [String: AgentBranding] = [:]
+
+    /// This suite's own preference store (#1662). It replaces a `setUp` that
+    /// overwrote six keys in the REAL `com.apple.dt.xctest.tool` domain —
+    /// `displayMode`, `debugMode`, `showCostDisplay`, both
+    /// `ContextPressureThreshold` keys and `summaryDisplayMode` — and a
+    /// `tearDown` that put them back, which the runs that abort (#1523), get
+    /// their tree killed at 240s or run out of `--budget` never reached.
+    ///
+    /// Empty on purpose: every one of those keys resolves to the value the
+    /// deleted `setUp` was assigning. `debugMode` and `showCostDisplay` default
+    /// to `false`; `ContextPressureThreshold` defaults to 80 percent (#689);
+    /// `displayMode` defaults to `DisplayMode.context`, which is what the old
+    /// pin's lowercase `"context"` decoded to as well (it is not a valid raw
+    /// value — `DisplayMode.context.rawValue` is `"Context"` — so it fell back
+    /// to the same case); and `SessionManager` reads `summaryDisplayMode` from
+    /// this store, where absent means `.waiting`, the pre-#985 default the old
+    /// `setUp` pinned. So no reference moved.
+    private let defaults = InMemoryDefaults()
 
     override func setUp() async throws {
         try await super.setUp()
@@ -54,46 +66,12 @@ final class SessionRowSnapshotTests: XCTestCase {
             </svg>
             """
         )
-        // SessionRowView reads several keys via @AppStorage (UserDefaults.standard).
-        // Snapshot + restore so the developer's defaults survive the test run.
-        let defaults = UserDefaults.standard
-        originalDisplayMode = defaults.object(forKey: "displayMode")
-        originalDebugMode = defaults.object(forKey: "debugMode")
-        originalShowCost = defaults.object(forKey: "showCostDisplay")
-        originalThresholdValue = defaults.object(forKey: ContextPressureThreshold.valueKey)
-        originalThresholdUnit = defaults.object(forKey: ContextPressureThreshold.unitKey)
-        originalSummaryDisplayMode = defaults.object(forKey: "summaryDisplayMode")
-        defaults.set("context", forKey: "displayMode")
-        defaults.set(false, forKey: "debugMode")
-        defaults.set(false, forKey: "showCostDisplay")
-        // Pin the context-pressure threshold so the alert snapshot is independent
-        // of the developer's Settings (issue #689 made it configurable).
-        defaults.set(80, forKey: ContextPressureThreshold.valueKey)
-        defaults.set(ContextPressureThreshold.Unit.percent.rawValue, forKey: ContextPressureThreshold.unitKey)
-        // summaryDisplayMode persists (#799, mode added #985) — pin it so
-        // SessionManager's init value doesn't depend on the developer's real
-        // toggle state. "waiting" matches the pre-#985 default (not collapsed).
-        defaults.set(SummaryDisplayMode.waiting.rawValue, forKey: "summaryDisplayMode")
-        sessionManager = SessionManager()
+        sessionManager = SessionManager(defaults: defaults)
     }
 
     override func tearDown() async throws {
-        restore(key: "displayMode", value: originalDisplayMode)
-        restore(key: "debugMode", value: originalDebugMode)
-        restore(key: "showCostDisplay", value: originalShowCost)
-        restore(key: ContextPressureThreshold.valueKey, value: originalThresholdValue)
-        restore(key: ContextPressureThreshold.unitKey, value: originalThresholdUnit)
-        restore(key: "summaryDisplayMode", value: originalSummaryDisplayMode)
         AgentRegistry.byName = savedAgentRegistry
         try await super.tearDown()
-    }
-
-    private func restore(key: String, value: Any?) {
-        if let value {
-            UserDefaults.standard.set(value, forKey: key)
-        } else {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
     }
 
     // A fixed, far-past instant: anything timestamped here reads as "stale" to
@@ -195,13 +173,14 @@ final class SessionRowSnapshotTests: XCTestCase {
         // current system appearance (Color(NSColor.windowBackgroundColor)
         // adapts otherwise) — most tests pin dark aqua; the light-mode pill
         // contrast tests below (issue #984) pin aqua instead. The host also
-        // pins the locale (#1630).
+        // pins the locale (#1630) and the preference store every `@AppStorage`
+        // in the subtree resolves through (#1662).
         PinnedSnapshotHost(
             view
                 .environmentObject(sessionManager)
                 .frame(width: 350, height: height)
                 .background(Color(NSColor.windowBackgroundColor)),
-            width: 350, height: height, appearance: appearance)
+            width: 350, height: height, appearance: appearance, defaults: defaults)
     }
 
     /// Decodes a daemon-shaped session fixture (issue #757). Accepts either a
@@ -322,7 +301,7 @@ final class SessionRowSnapshotTests: XCTestCase {
     }
 
     private func snapshotHistoryMode(_ mode: String, testName: String = #function) {
-        UserDefaults.standard.set(mode, forKey: "displayMode")
+        defaults.set(mode, forKey: "displayMode")
         let session = makeSession(state: .working, metrics: makeMetrics())
         sessionManager.stateHistory[session.id] = sampleHistory()
         let view = host(session)

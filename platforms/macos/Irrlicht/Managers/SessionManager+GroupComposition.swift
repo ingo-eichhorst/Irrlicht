@@ -224,12 +224,12 @@ extension SessionManager {
     // MARK: - Project Group Order Management
 
     func loadProjectGroupOrder() {
-        projectGroupOrder = UserDefaults.standard.stringArray(forKey: projectGroupOrderKey) ?? []
+        projectGroupOrder = defaults.stringArray(forKey: projectGroupOrderKey) ?? []
         print("📋 Loaded project group order with \(projectGroupOrder.count) groups")
     }
 
     func saveProjectGroupOrder() {
-        UserDefaults.standard.set(projectGroupOrder, forKey: projectGroupOrderKey)
+        defaults.set(projectGroupOrder, forKey: projectGroupOrderKey)
         print("💾 Saved project group order with \(projectGroupOrder.count) groups")
     }
 

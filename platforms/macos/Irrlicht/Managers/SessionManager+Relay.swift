@@ -11,10 +11,10 @@ import Foundation
 // merge, so the same daemon reached over both paths shows once.
 
 extension SessionManager {
-    var useLocalDaemon: Bool { UserDefaults.standard.bool(forKey: "useLocalDaemon") }
-    var useRelayServer: Bool { UserDefaults.standard.bool(forKey: "useRelayServer") }
+    var useLocalDaemon: Bool { defaults.bool(forKey: "useLocalDaemon") }
+    var useRelayServer: Bool { defaults.bool(forKey: "useRelayServer") }
     var relayServerURL: String {
-        (UserDefaults.standard.string(forKey: "relayServerURL") ?? "")
+        (defaults.string(forKey: "relayServerURL") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
