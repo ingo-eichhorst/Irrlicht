@@ -22,6 +22,12 @@ name: Replaydata deletion guard
 #   - renames (git mv, incl. the id-prefix folder rename) — never counted as
 #     deletions.
 #
+# There is a THIRD outcome besides fail and pass, and it is a FAILURE: the
+# guard could not read a diff at all. Everything that could leave `$deletions`
+# empty for a reason other than "nothing was deleted" is a named refusal in the
+# step below, because an empty `$deletions` is this guard's success condition
+# and so an inability to look is otherwise byte-identical to a clean PR (#1645).
+#
 # Background: #268 Phase 1 introduced a blanket scenarios/+regression guard; it
 # was later made folder-granular + cell-aware so the pipeline can retire orphan
 # recordings and drop scenarios/ assessment.json, while still protecting every
@@ -53,11 +59,68 @@ jobs:
           head="${{ github.event.pull_request.head.sha }}"
           echo "Comparing merge-base($base, $head) ...head $head"
 
+          # -------------------------------------------------------------------
+          # THE REFUSALS (#1645). This step FAILS on "$violations is non-empty",
+          # and $violations is empty in two completely different situations: the
+          # diff was clean, and no diff was ever read. Each block below turns one
+          # way of not reading a diff into a loud failure, so that the second
+          # situation stops printing the first one's PASS line.
+          #
+          # Refusal 1 — no pull_request context. `on: workflow_dispatch` (above)
+          # has no `github.event.pull_request`, so BOTH expressions expand to the
+          # empty string and the diff below becomes `git diff "..."`, which git
+          # reads as HEAD...HEAD: exit 0, no output, PASS — having compared a
+          # commit with itself. Measured on git 2.50.1, and reachable by anyone
+          # pressing "Run workflow".
+          if [ -z "$base" ] || [ -z "$head" ]; then
+            echo "::error::deletion guard REFUSED: no pull_request context (base='$base', head='$head'), so there is no base...head diff to read. This is NOT a pass — nothing was examined. Run this guard from a pull request."
+            exit 1
+          fi
+
+          # Refusal 2 — an object this checkout does not have. `fetch-depth: 0`
+          # on the checkout above makes it unlikely, not impossible (a base
+          # branch force-pushed or deleted between the event and this job leaves
+          # base.sha unreachable from every ref the checkout fetched), and it is
+          # one edit to that step away from ordinary. Checked per side so the log
+          # names WHICH commit is missing. `&& return 0` keeps the failing
+          # rev-parse inside an && list, where errexit does not apply, so the
+          # message below is what reports it rather than a bare abort.
+          require_commit() { # <label> <sha>
+            git rev-parse --verify --quiet "$2^{commit}" >/dev/null && return 0
+            echo "::error::deletion guard REFUSED: the $1 commit $2 is not present in this checkout, so the base...head diff cannot be computed. This is NOT a pass — nothing was examined."
+            exit 1
+          }
+          require_commit base "$base"
+          require_commit head "$head"
+
           # Three-dot (base...head) diffs from the MERGE BASE to head — only what
           # this branch changed since it forked (avoids phantom deletions on
           # stale branches). --diff-filter=D = deletions; --find-renames=50% keeps
           # git mv as a rename (not a delete), documented + stable.
-          deletions=$(git diff --name-only --diff-filter=D --find-renames=50% "$base...$head" -- 'replaydata/**' || true)
+          #
+          # Refusal 3 — the diff itself. Until #1645 this line ended in
+          # `|| true`, which turned a git that FAILED into an empty $deletions —
+          # this guard's success condition. The classification loop then read
+          # nothing, $violations stayed empty, and the step printed
+          # "OK: no disallowed deletions" and exited 0 having examined no diff at
+          # all; a git exiting 128 was byte-for-byte a clean PR. Captured with
+          # `if !` rather than left to the `set -e` above for two reasons:
+          # errexit is suppressed inside an `if` condition, so the status is ours
+          # to read, and the message then names what could not be done where a
+          # bare abort names only a line.
+          if ! deletions=$(git diff --name-only --diff-filter=D --find-renames=50% "$base...$head" -- 'replaydata/**'); then
+            echo "::error::deletion guard REFUSED: git could not diff $base...$head (see the fatal above), so the guard examined NOTHING. This is NOT a pass."
+            exit 1
+          fi
+
+          # "Nothing was deleted" and "nothing was read" are now different exit
+          # statuses. This makes them different STRINGS in the log too, which is
+          # what someone reading a green run actually sees.
+          deleted_count=0
+          if [ -n "$deletions" ]; then
+            deleted_count=$(printf '%s\n' "$deletions" | wc -l | tr -d ' ')
+          fi
+          echo "Examined $deleted_count deleted path(s) under replaydata/."
 
           # A scenarios/ recording folder is a LIVE cell iff it holds a
           # metadata.json at HEAD (the working tree == HEAD; we checked it out).
@@ -125,4 +188,4 @@ jobs:
             exit 1
           fi
 
-          echo "OK: no disallowed deletions (orphan recordings, assessment.json, and renames are permitted)."
+          echo "OK: examined $deleted_count deleted path(s), none disallowed (orphan recordings, assessment.json, and renames are permitted)."

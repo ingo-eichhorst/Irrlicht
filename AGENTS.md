@@ -1027,6 +1027,50 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `$?`-keyed rule, and #1639 about the sibling family. `preflight.sh`'s `tools`
   trigger gains `ars.yml`, its fourth widening for this reason (#1591, #1629,
   #1639), because that assertion lives entirely inside that gate.
+- The replaydata deletion guard:
+  `tools/lib/replaydata-deletion-guard_test.sh` does to
+  `.github/workflows/replaydata-deletion-guard.yml`'s "Detect deletions of
+  load-bearing replaydata" step what the bullet above does to ars.yml —
+  extracts it and EXECUTES it against a git stub, under the same
+  `bash --noprofile --norc -e -o pipefail`. It is the same family's most
+  expensive member, because that workflow is a **merge gate**: before #1645 its
+  diff was captured as `deletions=$(git diff … || true)`, and an empty
+  `$deletions` is the gate's SUCCESS condition — so a git exiting 128 produced
+  no violations, printed `OK: no disallowed deletions` and exited 0, permitting
+  exactly the #268 deletion the gate exists to refuse. **Where** the defect sat
+  is the part worth carrying: this block was spot-checked and cleared TWICE
+  during #1639 and #1641, both times on the strength of the classification
+  LOOP, which is genuinely fine. The statement that decides the step's status
+  is the loop's INPUT, one line above it — a `case` walk over `$deletions` can
+  only ever be as good as `$deletions`, and nothing in the loop can see that it
+  was handed an empty string by a failure rather than by a clean PR.
+  Three outcomes now, never two: deletions found and disallowed (fail), no
+  deletions (pass), and **could not determine** (fail, naming why). Three
+  refusals implement the third, and the second of them is a SECOND measured
+  hazard rather than defensive padding — `on: workflow_dispatch` carries no
+  `github.event.pull_request`, so both `${{ }}` expressions expand to the empty
+  string and `git diff "..."` is `HEAD...HEAD`: exit 0, no output, PASS. That is
+  measured against real git in the lock, not stubbed, since a claim about how
+  git parses `...` has to be made by git. Note honestly what each refusal
+  independently buys: deleting the empty-context one still leaves the run
+  failing, because an empty sha does not rev-parse either — what it uniquely
+  buys is the DIAGNOSIS ("no pull_request context" rather than "the base commit
+  is not present in this checkout", which points at the checkout instead of the
+  trigger). The commit-presence refusal is the one that is defensive: with
+  `fetch-depth: 0` no ordinary condition was found that makes `base.sha`
+  unreachable, so unlike the other two it is not backed by a reproduction, only
+  by the observation that it is one edit to the checkout step away.
+  Two more things about the lock. `cell_is_live` reads the WORKING TREE, so
+  "live cell" and "orphan cell" are properties of the directory a body runs
+  in — every arm executes against a throwaway tree under `$TMP`, and the real
+  deletion-guarded catalog is never touched. And what the stub CANNOT grade is
+  said out loud: `git mv` is permitted because git's own rename detection
+  reports an R that `--diff-filter=D` drops, not because of anything the step
+  does, and detection is ON by default in modern git — so `--find-renames=50%`
+  pins the threshold, not the behaviour, and that arm grades the invocation the
+  step makes rather than claiming the step implements renaming.
+  `preflight.sh`'s `tools` trigger gains this workflow, its fifth widening for
+  this reason (#1591, #1629, #1639, #1641).
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh` — gated in CI by linux.yml, and run
   natively as `tools/preflight.sh`'s `replay fixtures` gate, so golden drift

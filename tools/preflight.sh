@@ -449,7 +449,13 @@ if want tools; then
   # and executes it, so the assertion that an exhausted push-retry fails the
   # step lives entirely in this gate — and a commit editing only ars.yml is
   # once again exactly the one that breaks it.
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^\.github/workflows/(ars|macos-swift|test)\.yml$' \
+  # .github/workflows/replaydata-deletion-guard.yml joins them for the fifth
+  # time (#1645): replaydata-deletion-guard_test.sh EXTRACTS that workflow's
+  # "Detect deletions of load-bearing replaydata" step and executes it, so the
+  # assertion that an unreadable diff REFUSES rather than printing the pass
+  # line lives entirely in this gate. Same story, fifth file: a commit editing
+  # only that workflow is exactly the one that breaks it.
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^\.github/workflows/(ars|macos-swift|replaydata-deletion-guard|test)\.yml$' \
                   "tools/lib shell-lib tests" shell_lib_tests
 fi
 
