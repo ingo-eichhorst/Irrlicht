@@ -94,18 +94,37 @@ jobs:
       # the pre-push hook. Their local gate is that same hook, which
       # `git push --no-verify` disables — so CI has to run them independently,
       # or the checks guarding the gate ride on the gate they guard.
+      #
+      # The loop lives in tools/lib/shell-lib-suite.sh, which tools/preflight.sh's
+      # `tools` gate calls too — ONE implementation, for the reason
+      # macos-swift.yml gives for sharing swift-suite.sh: CI and the pre-push
+      # hook judge a run by the same rules rather than by two implementations
+      # that can disagree. They did disagree, and this was the wrong half
+      # (#1639): the loop was written inline here with no `|| rc=1`, and this
+      # file declares no `shell:` and no `defaults:`, so it ran under GitHub's
+      # default `bash --noprofile --norc -eo pipefail`. The FIRST failing file
+      # aborted the step, every later file in glob order never ran, and nothing
+      # in the log distinguished that from a clean run — one push per red file.
+      # The runner prints a census (found / skipped / ran / failed) and refuses
+      # an empty corpus, so "it all passed" cannot be read off a loop that
+      # stopped early or found nothing.
+      #
+      # posix-lint_test.sh drives tools/posix-lint.sh, which REQUIRES a static
+      # bashism linter and refuses to pass without one (#1423 is about a gate
+      # that passed having checked nothing, so it fails rather than skipping).
+      # This runner is macos-latest, whose image ships neither shellcheck nor
+      # checkbashisms — which is the same reason the gate itself lives in
+      # linux.yml. Both run there. Installing a linter here would cost every PR
+      # 20-40s to re-test what linux.yml already tested. Naming it as a skip
+      # ARGUMENT rather than as a `case` pattern in a copied loop is what makes
+      # it fail loudly if it ever stops matching a real file.
+      #
+      # `|| rc=$?` rather than a bare call: it is the spelling that keeps the
+      # status under the `-e` above (`|| true` would not — it hands back
+      # `true`'s status, silently reporting every failing run as 0).
       - name: Test the shared shell libs
         run: |
-          for t in tools/lib/*_test.sh; do
-            # posix-lint_test.sh drives tools/posix-lint.sh, which REQUIRES a
-            # static bashism linter and refuses to pass without one (#1423 is
-            # about a gate that passed having checked nothing, so it fails
-            # rather than skipping). This runner is macos-latest, whose image
-            # ships neither shellcheck nor checkbashisms — which is the same
-            # reason the gate itself lives in linux.yml. Both run there.
-            # Installing a linter here would cost every PR 20-40s to re-test
-            # what linux.yml already tested.
-            case "$t" in */posix-lint_test.sh) continue ;; esac
-            echo "== $t =="
-            bash "$t"
-          done
+          rc=0
+          . tools/lib/shell-lib-suite.sh
+          shell_lib_suite_run tools/lib posix-lint_test.sh || rc=$?
+          exit "$rc"

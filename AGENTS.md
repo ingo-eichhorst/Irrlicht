@@ -948,13 +948,48 @@ Before marking a ticket done, run the full suite — every layer must pass:
     being walked surfaces as its recipes naming nothing rather than as silence.
   - Its own mutation evidence is committed (`tw_fixture_correct` /
     `tw_fixture_aborts` / `tw_fixture_leaks`, four synthetic bijection cases,
-    and a real walk over a directory holding three of the four libraries). The
+    and a real walk over a directory holding three of the libraries,
+    swift-suite.sh deliberately not among them — phrased that way rather than
+    as "three of the four" because #1639 added a fifth and made that count
+    stale). The
     fixtures matter in both directions: a leaked `set +e` is a *working* fix for
     the return value, so obligation (a) passes it and only (b) objects.
   What it buys over a hand-written lock was measured on this repo: deleting
   `_budget_kill_tree`'s own guard reddens the tripwire and leaves
   `gate-budget_test.sh`'s whole `-e` block green, because that helper is only
   ever reached through a region `budget_run` guards separately.
+- The shell-lib suite runner: `tools/lib/shell-lib-suite.sh` is the ONE
+  implementation behind test.yml's "Test the shared shell libs" step and
+  `tools/preflight.sh`'s `tools` gate. Before #1639 those were two copies of
+  the same loop that disagreed about the only thing that matters: preflight's
+  collected every file's status, CI's had no `|| rc=1` and — test.yml declaring
+  no `shell:` and no `defaults:`, so GitHub's `bash --noprofile --norc -eo
+  pipefail` applies — aborted on the FIRST failing file with every later file
+  in glob order never run and nothing in the log saying so. One round trip per
+  red file, on suites that take seconds each. The sharing follows
+  `macos-swift.yml`'s own reason for sharing `swift-suite.sh`: CI and the
+  pre-push hook judge a run by the same rules rather than by two
+  implementations that can disagree. Three things about it are load-bearing.
+  It prints a **census** — found / skipped / ran / failed — because "they all
+  passed" and "the loop stopped early" had no distinguishing line in either
+  predecessor. An **empty corpus is a named refusal** (status 2, distinct from
+  1) rather than either predecessor's answer, both measured: CI's loop iterated
+  once with the literal unexpanded pattern (nullglob is off by default and
+  `-eo pipefail` does not change it) and died with `No such file or directory`,
+  while preflight's `[[ -e "$t" ]] || continue` filtered that out and returned
+  0, passing silently. And the two callers' one remaining scope difference —
+  CI skips `posix-lint_test.sh`, which needs a linter the macos image lacks —
+  is an **argument** that is validated against the corpus before anything runs,
+  so a skip that stops matching a real file is a refusal instead of a `case`
+  pattern quietly matching nothing. Its tests are
+  `tools/lib/shell-lib-suite_test.sh`, which grades the runner in BARE
+  STATEMENT position as well as under `|| rc=$?`: bash suppresses errexit for a
+  function's whole body when the call sits in a `||` position, so a runner that
+  ran its files as bare `bash "$f"` statements is invisible from the `||` shape
+  and from the CI step itself. Both predecessors are emitted verbatim there and
+  re-measured on every run, which doubles as the vacuity guard — if bash ever
+  stopped aborting, the fix would be protecting nothing and would pass for the
+  wrong reason.
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh` — gated in CI by linux.yml, and run
   natively as `tools/preflight.sh`'s `replay fixtures` gate, so golden drift
