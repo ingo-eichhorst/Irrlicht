@@ -834,13 +834,24 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `tools/lib/testdata/skill-lint/` — so the assertions never move when a real
   skill file is edited, and `testdata/` is excluded from the gate's own walk
   because those fixtures are deliberately corrupt.
-- POSIX shell scripts: `tools/posix-lint.sh` checks every tracked file whose
-  **first line** is a `#!/bin/sh` shebang — today `site/install.sh`,
+- POSIX shell scripts: `tools/posix-lint.sh` checks every file git knows
+  about — tracked, plus **untracked and not gitignored** (#1611) — whose
+  **first line** is a `#!/bin/sh` shebang; today `site/install.sh`,
   `tools/linux-replay-entrypoint.sh` and `tools/git-hooks/shim` (#1591 brought
   the third into scope, which is the whole reason that file was written in
   POSIX sh rather than bash). Line 1 only, because
   `tools/lib/install-uninstall_test.sh` is a bash file that writes `#!/bin/sh`
   stubs inside a heredoc, and a content grep would try to lint it as POSIX sh.
+  The untracked half is #1611 and it is #1591's own consequence one layer
+  down: once `changed_files_vs_origin_main` counted untracked files, a brand
+  new `#!/bin/sh` script DID put this gate in scope, and a gate walking
+  `git ls-files` then could not see the file that summoned it — `ALL PASS`
+  over a file it never read, this gate's founding incident arriving through
+  file selection. Untracked paths join the SAME stream and the SAME loop as
+  tracked ones rather than getting a second walk, so the `testdata/` exclusion
+  and the line-1 rule cannot apply to only half the set; the mis-implementation
+  is not hypothetical — measured, a second walk lints the deliberately-corrupt
+  fixture corpus and the linter's own bash source.
   It runs two different kinds of check on each file: a real POSIX shell's
   parser (`dash -n`) and **every** static bashism linter installed —
   `shellcheck --shell=sh` filtered to its POSIX-compatibility codes
