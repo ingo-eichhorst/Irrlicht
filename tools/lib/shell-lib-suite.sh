@@ -184,6 +184,7 @@ shell_lib_suite_run() {
   # a count of what was actually executed is the single line that tells a
   # truncated run from a clean one — which is the defect this file exists to
   # remove, and it had no line of its own in either predecessor.
+  skipped_names="${skipped_names# }"
   printf 'shell-lib-suite: %s — found %d, skipped %d (%s), ran %d, failed %d\n' \
     "$dir" "$found" "$skipped" "${skipped_names:-none}" "$ran" "$failed"
   if [ -n "$failed_names" ]; then

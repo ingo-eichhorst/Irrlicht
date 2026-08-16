@@ -251,7 +251,7 @@ run_suite "$TMP/skip" b_test.sh
 want_status "a skip that matches" 0 "$ST" "$OUT"
 want_absent "...excludes exactly that file" "RAN b_test.sh" "$OUT"
 want_contains "...runs its neighbours" "RAN a_test.sh" "$OUT"
-want_contains "...and the census accounts for it" "found 3, skipped 1 ( b_test.sh), ran 2, failed 0" "$OUT"
+want_contains "...and the census accounts for it" "found 3, skipped 1 (b_test.sh), ran 2, failed 0" "$OUT"
 
 # The mutation for obligation 4: the same call with a name nothing matches.
 # This is what a rename or a deletion of posix-lint_test.sh looks like from
