@@ -191,11 +191,10 @@ extension SessionManager {
         case .none, .speak:
             return nil
         case .custom(let installedFilename, _):
-            let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
-            let path = library?
+            let path = AppHome.library
                 .appendingPathComponent("Sounds")
                 .appendingPathComponent(installedFilename).path
-            if let path, FileManager.default.fileExists(atPath: path) {
+            if FileManager.default.fileExists(atPath: path) {
                 return UNNotificationSound(named: UNNotificationSoundName(installedFilename))
             }
             return UNNotificationSound(named: UNNotificationSoundName("Ping.aiff"))

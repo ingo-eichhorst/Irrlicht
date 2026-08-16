@@ -84,6 +84,237 @@ SWIFT_SUITE_TIMEOUT="${SWIFT_SUITE_TIMEOUT:-240}"
 # fooled an abort-check run against this very issue's output.
 SWIFT_SUITE_GREP_OPTS="-a"
 
+# ---------------------------------------------------------------------------
+# The real-home witness (#1669, #1670; the class #1661 opened)
+# ---------------------------------------------------------------------------
+#
+# A test run must not leave anything behind in the developer's home. Three
+# instances of the same defect have now shipped: 1136 preference plists
+# (#1661), a fixture plus an OVERWRITTEN session-order.json in the live
+# daemon's directory (#1669), and installed audio in ~/Library/Sounds (#1670).
+#
+# Each was fixed at its source. This is the standing check that the class has
+# not been re-entered — and it lives in the shell rather than in the suite for
+# one reason: it is the only place that still runs when the suite does NOT
+# finish. XCTest's stall detector `abort()`s the process (#1523),
+# swift_suite_run kills the tree at SWIFT_SUITE_TIMEOUT, and
+# `preflight.sh --budget` kills the gate. Those are exactly the runs where a
+# `defer`-based cleanup is skipped, i.e. the runs on which #1670 actually
+# leaks — so an in-process assertion is absent precisely when it is needed.
+#
+# It reads. It never deletes, moves, or writes anything under the home. That is
+# not a stylistic preference: a sweep of "files the tests probably left" is what
+# removed ~1895 files from a real ~/Library/Preferences while #1661 was being
+# fixed. Nothing here has a removal path at all.
+#
+# WHAT IS WATCHED, and why it is not more:
+#
+#   Library/Preferences  #1661's directory. 126-130 entries, 3ms to list.
+#   Library/Sounds       #1670's directory. 2 long-standing entries.
+#
+# NEITHER IS NOISE-FREE, and the honest version of the measurement matters more
+# than the flattering one. Measured on the author's machine:
+#
+#   0 additions   across each of two ~2 minute windows bracketing a full
+#                 352-test suite run (one of them also a cold `swift build`)
+#   4 additions   across one 870s window of ordinary interactive use —
+#                 com.apple.bluetooth, com.apple.DuetExpertCenter.MagicalMoments,
+#                 com.apple.voicetrigger, com.googlecode.iterm2. All background
+#                 daemons, none ours, all in Library/Preferences.
+#                 Library/Sounds took 0 over the same window.
+#
+# So the noise is a function of the WINDOW, which is the one variable here that
+# is under our control — hence tools/preflight.sh brackets the `swift test`
+# invocation only, not the build before it. At the measured background rate
+# (~1 new plist per 218s of active use) a ~5s healthy run carries a ~2% chance
+# of naming a stray plist.
+#
+# That residual is accepted rather than filtered, and the reason is #1661
+# itself: its 1136 leaked files were named `<uuid>.plist`, so no name-based
+# filter could have distinguished them from background churn without also
+# hiding them. A guard that answers "something appeared, here is its name" is
+# one a reader can judge in two seconds; a guard with an allowlist is one that
+# would have missed the incident it exists for.
+#
+# `Library/Application Support/Irrlicht` is deliberately NOT watched, and the
+# reason is not noise — it measured 0 additions over the same window. It is
+# that a new-entry witness CANNOT see #1669: the worst of that defect is an
+# overwrite of a file that already exists, which adds no entry, and the level
+# that would see the rest (`instances/`) is written continuously by the live
+# daemon (measured: two files modified inside 60s with nothing of ours
+# running). Watching it would report clean while the defect happened, which is
+# worse than not watching it. That instance is locked on the resolved path
+# instead, by `platforms/macos/Tests/RealHomeIsolationTests.swift`.
+#
+# The whole ~/Library was considered and rejected in #1668 with the
+# measurement: 6s over 887,491 files, and 24 of 41 changed entries were
+# unrelated third-party churn (Google, WhatsApp, Claude, VS Code).
+SWIFT_SUITE_WITNESSED_DIRS=("Library/Preferences" "Library/Sounds")
+
+# swift_suite_witness_home — the home to watch.
+#
+# From the PASSWORD DATABASE, not `$HOME`. bash's `~user` expansion consults
+# getpwnam, so it answers the real home even when `HOME` has been moved — and
+# `HOME` being moved is not hypothetical here, since redirecting it is one of
+# the things a future fix in this area might do. A witness that followed `HOME`
+# would then watch an empty temp directory, find nothing, and report clean
+# forever.
+#
+# SWIFT_SUITE_WITNESS_HOME overrides it, and exists for ONE caller:
+# tools/lib/swift-suite_test.sh, which has to plant a file under a watched
+# directory to prove the witness can fail. Planting one in the real home to
+# test a guard against planting files in the real home is not a joke this
+# repository can afford.
+swift_suite_witness_home() {
+  if [[ -n "${SWIFT_SUITE_WITNESS_HOME:-}" ]]; then
+    printf '%s\n' "$SWIFT_SUITE_WITNESS_HOME"
+    return 0
+  fi
+  local user home
+  user=$(id -un 2>/dev/null) || return 1
+  [[ -n "$user" ]] || return 1
+  eval "home=~$user" 2>/dev/null || return 1
+  [[ -n "$home" && "$home" != "~$user" ]] || return 1
+  printf '%s\n' "$home"
+}
+
+# _swift_suite_witness_slug <relative-dir> — a filename-safe key.
+_swift_suite_witness_slug() {
+  printf '%s\n' "${1//\//_}"
+}
+
+# _swift_suite_witness_snapshot <statedir> <phase> — list every watched
+# directory into <statedir>/<slug>.<phase>.
+#
+# The first line of each file is a STATE marker, and the three states are kept
+# apart on purpose. "the directory is not there" and "the directory is there and
+# empty" are different facts — a run that CREATES ~/Library/Sounds is #1670's
+# other half — and "the directory is there and could not be read" must never
+# read as either. A missing home is a failure of the snapshot itself.
+_swift_suite_witness_snapshot() {
+  local statedir="$1" phase="$2" home dir slug target
+  home=$(swift_suite_witness_home) || {
+    printf 'UNREADABLE\n' > "$statedir/HOME.$phase"
+    return 1
+  }
+  printf '%s\n' "$home" > "$statedir/HOME.$phase"
+  local entries
+  for dir in "${SWIFT_SUITE_WITNESSED_DIRS[@]}"; do
+    slug=$(_swift_suite_witness_slug "$dir")
+    target="$home/$dir"
+    if [[ ! -e "$target" ]]; then
+      printf 'ABSENT\n' > "$statedir/$slug.$phase"
+      continue
+    fi
+    # Captured rather than redirected straight to the file: `ls` failing after
+    # it has already written a partial listing would otherwise leave a file
+    # that looks like a successful snapshot.
+    if entries=$(ls -A "$target" 2>/dev/null); then
+      printf 'PRESENT\n%s' "${entries:+$entries$'\n'}" > "$statedir/$slug.$phase"
+    else
+      printf 'UNREADABLE\n' > "$statedir/$slug.$phase"
+    fi
+  done
+  return 0
+}
+
+# swift_suite_witness_before <statedir> — snapshot ahead of the run.
+#
+# Always returns 0. A snapshot that could not be taken is recorded rather than
+# raised, so the caller runs the suite either way and the diagnosis lands in
+# swift_suite_witness_verdict — one place that decides, instead of two that can
+# disagree about what an unreadable directory means.
+swift_suite_witness_before() {
+  local statedir="${1:-}"
+  [[ -n "$statedir" && -d "$statedir" ]] || { echo "swift_suite_witness_before: needs an existing <statedir>" >&2; return 1; }
+  _swift_suite_witness_snapshot "$statedir" before || :
+  return 0
+}
+
+# swift_suite_witness_verdict <statedir> — 0 only if the run demonstrably added
+# nothing to any watched directory. Non-zero if it added something, if
+# something vanished, or if the witness could not look.
+swift_suite_witness_verdict() {
+  local statedir="${1:-}" ok=0 looked=0 dir slug before after added removed bstate astate
+  [[ -n "$statedir" && -d "$statedir" ]] || { echo "swift_suite_witness_verdict: needs an existing <statedir>" >&2; return 1; }
+
+  if [[ ! -f "$statedir/HOME.before" ]]; then
+    echo "real-home witness: no 'before' snapshot exists — the run was NOT witnessed." >&2
+    echo "  A clean report here would mean 'nothing was measured', not 'nothing was written'." >&2
+    return 1
+  fi
+  _swift_suite_witness_snapshot "$statedir" after || :
+
+  for dir in "${SWIFT_SUITE_WITNESSED_DIRS[@]}"; do
+    slug=$(_swift_suite_witness_slug "$dir")
+    before="$statedir/$slug.before"
+    after="$statedir/$slug.after"
+    if [[ ! -f "$before" || ! -f "$after" ]]; then
+      echo "real-home witness: ~/$dir was never snapshotted — it is unwitnessed, not clean." >&2
+      ok=1
+      continue
+    fi
+    bstate=$(head -1 "$before" 2>/dev/null); astate=$(head -1 "$after" 2>/dev/null)
+    if [[ "$bstate" == "UNREADABLE" || "$astate" == "UNREADABLE" ]]; then
+      echo "real-home witness: ~/$dir could not be listed — this run is unwitnessed there." >&2
+      echo "  Inability to look must not print the same thing as finding nothing." >&2
+      ok=1
+      continue
+    fi
+    if [[ "$bstate" == "PRESENT" && "$astate" == "ABSENT" ]]; then
+      echo "real-home witness: ~/$dir EXISTED before the run and is gone now." >&2
+      echo "  Something in the suite removed a directory from the developer's home (#1661)." >&2
+      ok=1
+      continue
+    fi
+    # A directory that appeared is itself the finding — #1670 creates
+    # ~/Library/Sounds on a machine that never installed a custom sound.
+    if [[ "$bstate" == "ABSENT" && "$astate" == "PRESENT" ]]; then
+      echo "real-home witness: the run CREATED ~/$dir, which did not exist before it." >&2
+      ok=1
+    fi
+    # An `if`, not `[[ … ]] && looked=1`: the `&&` form returns non-zero when
+    # the condition is false, which under a CALLER's `set -e` aborts the
+    # function mid-loop — the failure mode #1633 documents for this same file.
+    if [[ "$bstate" == "PRESENT" || "$astate" == "PRESENT" ]]; then
+      looked=1
+    fi
+    added=$(comm -13 <(tail -n +2 "$before" | sort) <(tail -n +2 "$after" | sort))
+    removed=$(comm -23 <(tail -n +2 "$before" | sort) <(tail -n +2 "$after" | sort))
+    if [[ -n "$added" ]]; then
+      echo "real-home witness: the run left $(printf '%s\n' "$added" | wc -l | tr -d ' ') new entr(y/ies) in ~/$dir:" >&2
+      printf '%s\n' "$added" | sed 's/^/    + /' >&2
+      echo "  A test must leave nothing in the developer's home (#1661, #1669, #1670)." >&2
+      echo "  Background daemons also write here — a com.apple.* or third-party plist" >&2
+      echo "  appearing during the run is churn, measured at roughly one per 218s of" >&2
+      echo "  active use. Re-run to tell that apart from something this repo wrote;" >&2
+      echo "  ours will reappear every time. Nothing here deletes anything either way." >&2
+      ok=1
+    fi
+    if [[ -n "$removed" ]]; then
+      echo "real-home witness: the run REMOVED $(printf '%s\n' "$removed" | wc -l | tr -d ' ') entr(y/ies) from ~/$dir:" >&2
+      printf '%s\n' "$removed" | sed 's/^/    - /' >&2
+      echo "  Nothing in this repository is allowed to delete from the developer's home." >&2
+      ok=1
+    fi
+  done
+
+  # The vacuity guard. Every watched directory absent or empty is what a
+  # witness pointed at the wrong home looks like, and it would report a clean
+  # delta on every run forever.
+  if (( looked == 0 )); then
+    echo "real-home witness: not one watched directory was present with anything in it." >&2
+    echo "  Home read as: $(cat "$statedir/HOME.before" 2>/dev/null). Watched: ${SWIFT_SUITE_WITNESSED_DIRS[*]}" >&2
+    echo "  That is what a witness looking at the wrong place reports, so it is a failure." >&2
+    ok=1
+  fi
+
+  if (( ok == 0 )); then
+    echo "real-home witness: no new entries in ${SWIFT_SUITE_WITNESSED_DIRS[*]} under $(cat "$statedir/HOME.before")"
+  fi
+  return "$ok"
+}
+
 # swift_suite_completed <log> — did the test bundle report its own result?
 swift_suite_completed() {
   grep $SWIFT_SUITE_GREP_OPTS -qE "Test Suite '.*\.xctest' (passed|failed) at" "$1"

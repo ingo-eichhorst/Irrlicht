@@ -13,7 +13,7 @@ extension SessionManager {
     func writeDebugState() {
         guard isDebugMode else { return }
 
-        let debugDir = FileManager.default.homeDirectoryForCurrentUser
+        let debugDir = AppHome.url
             .appendingPathComponent(".irrlicht")
         let debugFile = debugDir.appendingPathComponent("debug-state.json")
 
