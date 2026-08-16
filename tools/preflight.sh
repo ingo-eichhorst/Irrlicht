@@ -416,7 +416,12 @@ if want tools; then
   # tools/git-hooks/ is in it for the same reason (#1591): git-hooks_test.sh
   # covers the shim and the hook scripts, and neither matches `^tools/[^/]*\.sh$`
   # — they are extensionless files one directory down.
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$' \
+  # .github/workflows/macos-swift.yml is in it for the same reason again
+  # (#1629): swift-suite_test.sh asserts that every step there reading `$?`
+  # disarms GitHub's `-e` first, and a commit editing only that workflow is
+  # exactly the commit that breaks the invariant — so leaving it out would skip
+  # the check precisely when it matters.
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^\.github/workflows/macos-swift\.yml$' \
                   "tools/lib shell-lib tests" shell_lib_tests
 fi
 
