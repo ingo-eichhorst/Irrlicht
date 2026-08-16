@@ -261,6 +261,17 @@ jobs:
       - name: Collect the skipped suites' pixels
         shell: bash
         run: |
+          # `+e` is load-bearing here, not tidiness. GitHub runs `shell: bash`
+          # as `bash --noprofile --norc -e -o pipefail {0}`, so `-e` is ALREADY
+          # on and `set -uo pipefail` does not clear it. Measured on this job's
+          # first run: the failing subshell below killed the step instantly —
+          # no check ran, no `::error::` line printed, and the images survived
+          # only because the upload steps are `if: always()`. A step whose
+          # entire purpose is to run assertions that fail cannot inherit
+          # abort-on-first-failure. (The `swift-test` step above has the same
+          # shape, where it silently swallows `swift_suite_verdict`'s
+          # diagnosis; filed as #1629, not fixed here.)
+          set +e
           set -uo pipefail
           . tools/lib/swift-suite.sh
           log="$RUNNER_TEMP/swift-snapshot-evidence.log"
@@ -298,15 +309,24 @@ jobs:
           cp -R platforms/macos/Tests/__Snapshots__ "$SNAPSHOT_ARTIFACTS/__References__"
 
           primitives=$(find "$SNAPSHOT_ARTIFACTS/RasterPrimitiveEvidence" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
+          # How many to expect is DERIVED — RasterPrimitiveEvidenceTests writes
+          # one manifest line per primitive it publishes. A literal here would
+          # be a number describing that fixture without being produced by it,
+          # and would read as coverage the day someone adds a seventh.
+          expected=$(wc -l < "$SNAPSHOT_ARTIFACTS/RasterPrimitiveEvidence/manifest.txt" 2>/dev/null | tr -d ' ')
+          expected="${expected:-0}"
           failed=$(find "$SNAPSHOT_ARTIFACTS" -name '*.png' \
                      -not -path '*/RasterPrimitiveEvidence/*' \
                      -not -path '*/__References__/*' 2>/dev/null | wc -l | tr -d ' ')
-          echo "collected $failed failure image(s) and $primitives primitive image(s)"
-          echo "collected $failed failure image(s) and $primitives primitive image(s)" >> "$GITHUB_STEP_SUMMARY"
+          echo "collected $failed failure image(s) and $primitives of $expected primitive image(s)"
+          echo "collected $failed failure image(s) and $primitives of $expected primitive image(s)" >> "$GITHUB_STEP_SUMMARY"
 
           # An empty result and a clean result must not print the same thing.
-          if [ "$primitives" -lt 4 ]; then
-            echo "::error::RasterPrimitiveEvidenceTests published $primitives image(s), expected 4 — the fixture did not run."
+          if [ "$expected" -lt 1 ]; then
+            echo "::error::RasterPrimitiveEvidenceTests wrote no manifest — the fixture did not run at all, so the count below cannot be judged."
+            bad=1
+          elif [ "$primitives" -ne "$expected" ]; then
+            echo "::error::RasterPrimitiveEvidenceTests published $primitives image(s) against $expected declared in its manifest."
             bad=1
           fi
           if [ "$failed" -lt 1 ]; then

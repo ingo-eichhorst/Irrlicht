@@ -30,8 +30,13 @@ jobs:
       - name: Run the skipped suites under every installed Xcode
         shell: bash
         run: |
+          # +e: GitHub's `shell: bash` sets -e, and every iteration below runs
+          # a suite that is EXPECTED to fail. The first attempt probed exactly
+          # one Xcode and then died. Same defect as #1629.
+          set +e
           set -u
           sw_vers
+          echo "installed Xcodes:"; ls -d /Applications/Xcode*.app
           for xc in /Applications/Xcode*.app; do
             [ -d "$xc" ] || continue
             echo "=============================================================="

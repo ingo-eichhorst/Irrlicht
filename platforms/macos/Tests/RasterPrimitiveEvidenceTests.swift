@@ -3,7 +3,7 @@ import CryptoKit
 import SwiftUI
 import XCTest
 
-/// Renders four one-thing-each views through the snapshot rasteriser and
+/// Renders six one-thing-each views through the snapshot rasteriser and
 /// publishes their pixels, so #1615's hypothesis can be answered from bytes
 /// instead of from which suites happen to pass.
 ///
@@ -16,7 +16,8 @@ import XCTest
 /// 2/14 — and a `SessionRowView` carries a brand icon, a state icon, three
 /// fonts and a gradient at once, so it cannot say which of them moved.
 ///
-/// These four can. Each renders exactly one thing over an opaque flat ground:
+/// These six can. Each renders exactly one thing over an opaque flat ground,
+/// as a 3 × 2 matrix — three kinds of mark, each painted twice:
 ///
 ///   `fill`      a solid rectangle. No antialiasing anywhere. The CONTROL: if
 ///               this differs, nothing below it is about glyphs.
@@ -29,6 +30,11 @@ import XCTest
 ///               VERSION moves with the OS, so it can differ where `text` does
 ///               not.
 ///
+/// …and then `fill-dynamic`, `text-dynamic`, `sfsymbol-dynamic`: the same
+/// three painted with `Color.secondary` rather than an explicit sRGB triple.
+/// That column is the second axis, and it is the one that turned out to
+/// matter — see its comment at the declaration.
+///
 /// ## Why it asserts nothing about a reference
 ///
 /// There is deliberately no committed reference PNG and no `assertSnapshot`
@@ -39,7 +45,7 @@ import XCTest
 /// `ImageSnapshotCIScopeTests`'s sense (nothing here says `as: .pinnedImage`)
 /// and is classified there as evidence-only rather than skipped-or-passing.
 ///
-/// What it does assert is that the mechanism ran: four distinct rasters, each
+/// What it does assert is that the mechanism ran: six distinct rasters, each
 /// with the pixel dimensions the pinned scale implies, each written to disk,
 /// and each carrying the KIND of content it claims. A fixture that quietly
 /// rendered four blank views would otherwise publish four identical hashes and
@@ -109,6 +115,49 @@ final class RasterPrimitiveEvidenceTests: XCTestCase {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 22))
                         .foregroundColor(Color(red: 0.95, green: 0.95, blue: 0.95))
+                }
+            )
+        },
+
+        // The second column of the matrix: the same three shapes painted with
+        // `Color.secondary` instead of an explicit sRGB triple.
+        //
+        // Added after the first CI run, and the reason is the finding: all
+        // three above came back byte-identical between the runner and the
+        // reference Mac, while the elements that DO differ in the real suites
+        // are a `.secondary`-tinted `questionmark.circle` and a `.secondary`
+        // chart label. `Color.secondary` is a dynamic, TRANSLUCENT system
+        // colour (label white at ~55% in dark mode), so a difference here and
+        // not above separates "glyphs rasterise differently" — which the first
+        // column already refutes — from "a translucent dynamic colour resolves
+        // or composites differently", which nothing else in the fixture can
+        // reach. `fill-dynamic` is the arm that decides whether antialiasing
+        // is involved at all: it has no edge anywhere.
+        Primitive(name: "fill-dynamic", flat: true) {
+            AnyView(
+                ZStack {
+                    Color(red: 0.10, green: 0.10, blue: 0.12)
+                    Rectangle().fill(Color.secondary)
+                }
+            )
+        },
+        Primitive(name: "text-dynamic", flat: false) {
+            AnyView(
+                ZStack {
+                    Color(red: 0.10, green: 0.10, blue: 0.12)
+                    Text("Irrlicht 0123")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                }
+            )
+        },
+        Primitive(name: "sfsymbol-dynamic", flat: false) {
+            AnyView(
+                ZStack {
+                    Color(red: 0.10, green: 0.10, blue: 0.12)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 22))
+                        .foregroundColor(.secondary)
                 }
             )
         },
@@ -225,5 +274,16 @@ final class RasterPrimitiveEvidenceTests: XCTestCase {
         XCTAssertEqual(digests.count, Self.primitives.count, "a primitive produced no digest")
         XCTAssertEqual(Set(digests.values).count, Self.primitives.count,
                        "two primitives rasterised to identical bytes — the fixture is not rendering what it claims")
+
+        // How many images the collecting job should find. Written rather than
+        // restated in the workflow, because a count typed into a shell script
+        // is a number that documents this fixture without being produced by it
+        // — the exact drift `AGENTS.md` records for the replay figures. Adding
+        // a seventh primitive here moves the workflow's expectation with it.
+        let manifest = Self.primitives.map(\.name).joined(separator: "\n") + "\n"
+        let manifestURL = dir.appendingPathComponent("manifest.txt")
+        try manifest.write(to: manifestURL, atomically: true, encoding: .utf8)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manifestURL.path),
+                      "no manifest at \(manifestURL.path)")
     }
 }
