@@ -23,18 +23,16 @@ final class HistoryViewSnapshotTests: XCTestCase {
         try await super.tearDown()
     }
 
-    private func host(_ view: some View, height: CGFloat) -> NSView {
+    private func host(_ view: some View, height: CGFloat) -> PinnedSnapshotHost {
         let width = SessionListView.panelWidth
-        let wrapped = view
-            .frame(width: width, height: height)
-            .background(Color(NSColor.windowBackgroundColor))
-        let hosting = NSHostingView(rootView: wrapped)
-        // Pin to dark aqua so snapshots don't depend on the current system
-        // appearance (matches SessionRowSnapshotTests).
-        hosting.appearance = NSAppearance(named: .darkAqua)
-        hosting.frame = CGRect(x: 0, y: 0, width: width, height: height)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+        // `PinnedSnapshotHost` pins dark aqua so snapshots don't depend on the
+        // current system appearance (matches SessionRowSnapshotTests), and the
+        // locale (#1630).
+        return PinnedSnapshotHost(
+            view
+                .frame(width: width, height: height)
+                .background(Color(NSColor.windowBackgroundColor)),
+            width: width, height: height)
     }
 
     /// host() wraps its view directly in `.frame(width:)`, which alone bounds
@@ -47,7 +45,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
     /// frame → ScrollView { VStack { view } }, matching HistoryView.content
     /// verbatim — so a regression in the grid's width-clamping modifier shows
     /// up as an image diff here even though it wouldn't via host().
-    private func hostInScrollingTab(_ view: some View, height: CGFloat) -> NSView {
+    private func hostInScrollingTab(_ view: some View, height: CGFloat) -> PinnedSnapshotHost {
         let width = SessionListView.panelWidth
         let wrapped = ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -56,11 +54,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
         }
         .frame(width: width, height: height)
         .background(Color(NSColor.windowBackgroundColor))
-        let hosting = NSHostingView(rootView: wrapped)
-        hosting.appearance = NSAppearance(named: .darkAqua)
-        hosting.frame = CGRect(x: 0, y: 0, width: width, height: height)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+        return PinnedSnapshotHost(wrapped, width: width, height: height)
     }
 
     /// Four daily buckets (bucketSeconds = 86400 → M/d axis labels), three

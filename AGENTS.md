@@ -1362,6 +1362,49 @@ Before marking a ticket done, run the full suite — every layer must pass:
   2× and 3× through one view instead — whatever the host's scale is, at most one
   arm can agree with it. A host-independence lock that can only be checked on
   one host is not a lock.
+  **Scale was not the only such value: the LOCALE was one too** (#1630).
+  `BackchannelRulesView`'s threshold field renders through `format: .number`, so
+  its reference PNG read `150.000` — a picture of the recording contributor's
+  `de_DE` regional settings, where a runner renders `150,000`. Three things
+  there are worth carrying and none is the obvious one. **The fix the issue
+  proposed does not work**: `TextField(_:value:format:)` ignores `\.locale`, so
+  `.environment(\.locale, …)` on the hosted view leaves the field reading
+  `150.000` while `@Environment(\.locale)` inside that same subtree reports
+  `en_US` — a pin that is set and reaches nothing, which is the vacuous green
+  this section is about, arriving inside its own fix. A product seam was
+  therefore unavoidable; it is `\.formatLocale`
+  (`Irrlicht/Views/FormatLocaleEnvironment.swift`), defaulting to
+  `Locale.autoupdatingCurrent`, which is *by construction* the locale a bare
+  `.number` already resolved through — deliberately NOT `\.locale`, which SwiftUI
+  derives from bundle localizations and which would have been a user-visible
+  change of unknown sign. **The pinned locale is `de_DE`** for the same reason
+  `referenceScale` is 2: it is what the committed references were recorded
+  under, so #1630 regenerated NO reference and the untouched 53-PNG set is
+  itself the evidence that neither the seam nor the pin changed any rendering.
+  Any other choice buys a cosmetic preference with a re-record — the move
+  #1034/#1044 got wrong. And the pin is a **type, not a modifier plus a
+  guard**: `Snapshotting.pinnedImage` is declared over `PinnedSnapshotHost`,
+  whose only initializer applies the pin, so a suite that forgets is a compile
+  error. The first draft applied the modifier by hand in seven host helpers and
+  added a source scan to police it — a guard over an API the same change
+  invented (#1390's lesson), and it flagged `ImageSnapshotCIScopeTests` and
+  `RasterPrimitiveEvidenceTests` on its first run for merely saying the words.
+  What the type cannot close is a suite that stops using `.pinnedImage`
+  altogether; that string is also what `ImageSnapshotCIScopeTests` derives its
+  CI classification from, so such a suite loses both pins and its CI
+  classification together, as one visible failure there.
+  Measured while doing it: **exactly one** committed reference is
+  locale-dependent — pinning `en_US` instead reddens
+  `testBackchannelRuleContextTokens` and nothing else in the other 52, and
+  `format: .number` at `BackchannelRulesView.swift:149` is the only
+  `FormatStyle` in the app (every other numeric render is `String(format:)`,
+  which takes no locale, or an `Int` interpolation, which carries no grouping).
+  The sibling family that is NOT closed is **timezone**: `HistoryFormat`'s
+  formatters pin `en_US_POSIX` but never set `timeZone`, and 8 of the 14
+  `HistoryViewSnapshotTests` references contain their output, held only by that
+  suite's own `setUp` — #1659, kept separate because a process-global
+  `private static let DateFormatter` is not reachable from the view environment
+  the way a `FormatStyle` is, so it needs its own seam rather than a second key.
   The suite also aborts intermittently (#1523) in a way that **truncates the
   run** while every suite that did report says "0 failures" — so the exit code
   is the only reliable signal, never the last totals line you can see. That is

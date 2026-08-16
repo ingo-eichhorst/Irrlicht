@@ -23,7 +23,7 @@ final class UnappliedGrantsBannerRenderTests: XCTestCase {
                        key: "hooks", title: "Install hooks", reason: reason)
     }
 
-    private func host(_ items: [UnappliedGrant]) throws -> NSView {
+    private func host(_ items: [UnappliedGrant]) throws -> PinnedSnapshotHost {
         let summary = try XCTUnwrap(UnappliedGrantSummary(items: items))
         // Composited over the panel's own background, because the banner's
         // fill is a 12%-alpha wash: hosted on transparency it lands on white
@@ -32,11 +32,7 @@ final class UnappliedGrantsBannerRenderTests: XCTestCase {
         // that and made the reason text unreadable.
         let root = UnappliedGrantsBanner(summary: summary, onReview: {})
             .background(Color(NSColor.windowBackgroundColor))
-        let hosting = NSHostingView(rootView: root)
-        hosting.appearance = NSAppearance(named: .darkAqua)
-        hosting.frame = CGRect(x: 0, y: 0, width: SessionListView.panelWidth, height: 120)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+        return PinnedSnapshotHost(root, width: SessionListView.panelWidth, height: 120)
     }
 
     /// One unapplied grant: singular headline, the cause spelled out, and a
@@ -82,7 +78,7 @@ final class UnappliedGrantsBannerAbsenceTests: XCTestCase {
 @MainActor
 final class SessionListUnappliedGrantsWiringTests: XCTestCase {
 
-    private func host(_ snap: PermissionsSnapshot?) -> NSView {
+    private func host(_ snap: PermissionsSnapshot?) -> PinnedSnapshotHost {
         let manager = SessionManager()
         manager.permissionsSnapshot = snap
         let view = SessionListView()
@@ -93,11 +89,7 @@ final class SessionListUnappliedGrantsWiringTests: XCTestCase {
             // `true` default armed a modal NSAlert one second later and hung
             // whichever unrelated test next spun the main run loop.
             .environmentObject(UpdateManager(startingUpdater: false))
-        let hosting = NSHostingView(rootView: view)
-        hosting.appearance = NSAppearance(named: .darkAqua)
-        hosting.frame = CGRect(x: 0, y: 0, width: SessionListView.panelWidth, height: 420)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+        return PinnedSnapshotHost(view, width: SessionListView.panelWidth, height: 420)
     }
 
     private var unapplied: PermissionsSnapshot {

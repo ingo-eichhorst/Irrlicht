@@ -58,18 +58,16 @@ final class GroupViewSnapshotTests: XCTestCase {
         )
     }
 
-    private func host(_ view: some View, height: CGFloat = 48) -> NSView {
-        let wrapped = view
-            .environmentObject(sessionManager)
-            .frame(width: 350, height: height)
-            .background(Color(NSColor.windowBackgroundColor))
-        let hosting = NSHostingView(rootView: wrapped)
-        // Pin to dark aqua so snapshots don't depend on the current system
-        // appearance (Color(NSColor.windowBackgroundColor) adapts otherwise).
-        hosting.appearance = NSAppearance(named: .darkAqua)
-        hosting.frame = CGRect(x: 0, y: 0, width: 350, height: height)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+    private func host(_ view: some View, height: CGFloat = 48) -> PinnedSnapshotHost {
+        // `PinnedSnapshotHost` pins the appearance — so snapshots don't depend
+        // on the current system appearance, which `Color(NSColor.windowBackgroundColor)`
+        // otherwise adapts to — and the locale (#1630).
+        PinnedSnapshotHost(
+            view
+                .environmentObject(sessionManager)
+                .frame(width: 350, height: height)
+                .background(Color(NSColor.windowBackgroundColor)),
+            width: 350, height: height)
     }
 
     private func seedThreeGroups() -> [SessionManager.AgentGroup] {
