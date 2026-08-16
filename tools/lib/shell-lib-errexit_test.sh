@@ -343,6 +343,18 @@ row 'gosec-report.sh::gosec_report_check' 'gosec_report_check (a clean report)' 
     '. tools/lib/gosec-report.sh' \
     'gosec_report_check tools/lib/testdata/gosec-report/clean.json tripwire >/dev/null 2>&1'
 
+# Driven against a THROWAWAY corpus, never against tools/lib itself: this
+# function runs every `*_test.sh` it finds, and this file is one of them, so
+# pointing it at the real directory would re-enter the whole suite (and this
+# tripwire) once per row. Both statuses are distinctive — 0 for a corpus that
+# passes, 2 for the refusal — so neither can be confused with an errexit abort.
+row 'shell-lib-suite.sh::shell_lib_suite_run' 'shell_lib_suite_run (a corpus that all passes)' 0 \
+    '. tools/lib/shell-lib-suite.sh; mkdir -p "$TW_TMP/suite-ok"; printf "exit 0\n" >"$TW_TMP/suite-ok/a_test.sh"' \
+    'shell_lib_suite_run "$TW_TMP/suite-ok" >/dev/null'
+row 'shell-lib-suite.sh::shell_lib_suite_run' 'shell_lib_suite_run (refuses an empty corpus)' 2 \
+    '. tools/lib/shell-lib-suite.sh; mkdir -p "$TW_TMP/suite-empty"' \
+    'shell_lib_suite_run "$TW_TMP/suite-empty" >/dev/null 2>&1'
+
 row 'swift-suite.sh::swift_suite_completed' 'swift_suite_completed' 0 \
     '. tools/lib/swift-suite.sh' \
     'swift_suite_completed tools/lib/testdata/swift-suite/clean.log'
@@ -520,7 +532,9 @@ case "$b" in
 esac
 
 # --- and the discovery half, mutated for real ------------------------------
-# A scratch lib dir carrying three of the four libraries. Every recipe of the
+# A scratch lib dir carrying three of the libraries, swift-suite.sh
+# deliberately not among them — phrased that way rather than as "three of the
+# four" because a fifth library (#1639) made that count stale. Every recipe of the
 # missing one must come back ORPHAN, which is what "a library stopped being
 # walked" looks like from here. Without this the bijection is only ever graded
 # against hand-written lists.

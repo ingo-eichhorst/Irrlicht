@@ -152,6 +152,16 @@ fi
   echo "cannot load $SCRIPT_DIR/lib/gate-budget.sh — refusing to run a budgeted gate set with no budget" >&2
   exit 2
 }
+# ---- the shared shell-lib suite runner (#1639) ----------------------------
+# Sourced unconditionally and fatally, for the same reason as the budget above:
+# `shell_lib_tests` would otherwise be an unbound command, and a `tools` gate
+# that cannot run must not be able to look like one that found nothing.
+# shellcheck source=lib/shell-lib-suite.sh
+. "$SCRIPT_DIR/lib/shell-lib-suite.sh" || {
+  echo "cannot load $SCRIPT_DIR/lib/shell-lib-suite.sh — refusing to run the shell-lib gate blind" >&2
+  exit 2
+}
+
 budget_open "$BUDGET" || exit 2
 if budget_is_bounded; then
   echo "budget: this run is bounded to ${BUDGET}s of wall clock in total."
@@ -346,13 +356,22 @@ web_tree() {
 }
 
 # -- tools (mirrors test.yml's "Test the shared shell libs" step) ------------
+# Not a mirror any more — the SAME implementation (#1639). This used to be a
+# second copy of the loop, and the two copies disagreed about the one thing
+# that matters: this one collected every file's status, CI's aborted on the
+# first failing file with the rest never run and nothing saying so. One
+# implementation, for the reason macos-swift.yml gives for sharing
+# swift-suite.sh: CI and the pre-push hook judge a run by the same rules rather
+# than by two implementations that can disagree.
+#
+# The one difference that remains is deliberate and is now an ARGUMENT: CI
+# passes `posix-lint_test.sh` as a skip because the macos runner ships no
+# static bashism linter (linux.yml runs that file). A developer machine is
+# expected to have one — the `posix` gate above refuses rather than skipping
+# without it — so nothing is skipped here.
 shell_lib_tests() {
-  local rc=0 t
-  for t in tools/lib/*_test.sh; do
-    [[ -e "$t" ]] || continue
-    bash "$t" || rc=1
-  done
-  return "$rc"
+  shell_lib_suite_run tools/lib
+  return $?
 }
 
 # ===========================================================================
@@ -421,7 +440,11 @@ if want tools; then
   # disarms GitHub's `-e` first, and a commit editing only that workflow is
   # exactly the commit that breaks the invariant — so leaving it out would skip
   # the check precisely when it matters.
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^\.github/workflows/macos-swift\.yml$' \
+  # .github/workflows/test.yml joins them for the third time (#1639):
+  # shell-lib-suite_test.sh asserts that its "Test the shared shell libs" step
+  # goes through the shared runner rather than growing its own loop back, and a
+  # commit editing only that workflow is again exactly the one that breaks it.
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^\.github/workflows/(macos-swift|test)\.yml$' \
                   "tools/lib shell-lib tests" shell_lib_tests
 fi
 
