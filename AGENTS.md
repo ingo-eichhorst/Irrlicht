@@ -991,9 +991,9 @@ Before marking a ticket done, run the full suite — every layer must pass:
   re-measured on every run, which doubles as the vacuity guard — if bash ever
   stopped aborting, the fix would be protecting nothing and would pass for the
   wrong reason.
-- The ARS badge push: `tools/lib/ars-badge-push_test.sh` EXTRACTS
-  `.github/workflows/ars.yml`'s "Commit badge update" step out of the workflow
-  file and EXECUTES it against a git stub, under the invocation that step
+- The ARS badge job: `tools/lib/ars-badge-push_test.sh` EXTRACTS each of
+  `.github/workflows/ars.yml`'s three `run:` steps out of the workflow
+  file and EXECUTES it against a stub, under the invocation that step
   actually gets — DERIVED from the workflow, today `bash -e` (see "Which bash a
   workflow step gets" below; this bullet claimed
   `bash --noprofile --norc -e -o pipefail` until #1650). Behavioural rather
@@ -1030,6 +1030,44 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `$?`-keyed rule, and #1639 about the sibling family. `preflight.sh`'s `tools`
   trigger gains `ars.yml`, its fourth widening for this reason (#1591, #1629,
   #1639), because that assertion lives entirely inside that gate.
+  **The two steps ABOVE it produced the same symptom for the same reason**
+  (#1644): `ars scan … || true` followed by a `cat` that succeeds, then an
+  extract step whose `if [ -n "$ARS_BADGE" ]` skipped in silence — three green
+  steps, `No badge changes to commit`, and a frozen badge. The `|| true` was
+  **not** protecting a legitimate low-score exit, and that had to be checked
+  rather than assumed because the issue proposed leaving it in place: pinned
+  v0.0.9 returns `ExitError{Code: 2}` only under `if p.threshold > 0`, this
+  invocation passes no `--threshold`, and there is no `.arsrc.yml` to supply
+  one — measured, the pinned binary scoring `./core` at 7.9/10 exits 0. So the
+  scan's status is now read (`|| scan_status=$?`, never a bare `; rc=$?`, the
+  line #1629's implicit `-e` never reaches) and three outcomes are
+  distinguished where there were two: the scan FAILED / it succeeded with no
+  badge line in its output / the badge was extracted. Three things about the
+  shape are worth carrying. Each refusal asserts the other two's WORDING is
+  ABSENT, because a shared non-zero is satisfied by three refusals that all
+  fire together — measured: deleting the missing-badge refusal leaves the step
+  exiting 1 via the URL refusal, so every status arm stays green and only the
+  wording arms go red. The last guard is the same defect one level down —
+  `sed` exits 0 having matched nothing, so the file is re-read for the URL just
+  written, which is also what tells the legitimate no-op of an unchanged score
+  (the URL is present, because it was written back identically) from a rewrite
+  that landed nowhere; deleting THAT refusal is not merely silent, since the
+  empty `$ARS_URL` then deletes README's badge URL outright (measured). And a
+  failed scan **fails the job**, because this workflow gates nothing: it runs
+  post-merge on `main`, no PR and no merge depends on it, and its own "Install
+  ARS CLI" step already fails the job for the likeliest transient cause (a
+  `go install` outage) — a scan that could not run was the one failure here
+  that was silent.
+  Audited while there, per "dismissals carry evidence": the only statement left
+  in this job whose status is read more narrowly than it is produced is
+  `git diff --staged --quiet`, whose three-valued status (0 / 1 / error) an
+  `if` reads as two-valued — and the misread routes to the `else` branch, where
+  `git commit` with nothing staged exits 1 and errexit aborts the step.
+  Measured under `bash -e` rather than argued: it degrades to a LOUD failure,
+  never a silent pass. `git config` / `git add` / `git commit` are simple
+  commands in bare statement position, so errexit already decides on them (also
+  measured), and no `run:` block in this workflow reads a `${{ }}` expansion, so
+  #1645's second hazard has no instance here.
 - The replaydata deletion guard:
   `tools/lib/replaydata-deletion-guard_test.sh` does to
   `.github/workflows/replaydata-deletion-guard.yml`'s "Detect deletions of

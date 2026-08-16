@@ -31,23 +31,78 @@ jobs:
         run: go install github.com/ingo-eichhorst/agent-readyness/cmd/ars@e0ce48b9644df71b8f41b11c8c5655e3efa59660
 
       - name: Run ARS scan
+        # `|| true` used to sit on the scan, and the step's last statement was
+        # `cat` — which succeeds. So ANY failure of `ars scan` (a missing CLI, a
+        # renamed flag, a panic) ended this step at status 0 with an error
+        # message where the badge should be, the next step's grep matched
+        # nothing, its `if` was skipped, and "Commit badge update" reported
+        # `No badge changes to commit`: three green steps and a README badge
+        # silently frozen at its previous score (#1644).
+        #
+        # The `|| true` was NOT protecting a legitimate non-zero. `ars scan`
+        # exits non-zero for a low score only when a threshold is set — pinned
+        # v0.0.9's internal/pipeline/pipeline.go guards it with
+        # `if p.threshold > 0 && … Composite < p.threshold { ExitError{Code: 2} }`,
+        # the flag is documented as "minimum composite score (exit code 2 if
+        # below)", this invocation passes no `--threshold`, and the repo carries
+        # no `.arsrc.yml` for `projectCfg.Scoring.Threshold` to supply one.
+        # Measured: the pinned binary scoring ./core at 7.9/10 — below the 8.1
+        # the README showed at the time — exits 0. So every non-zero here is a
+        # real failure and the job should say so.
+        #
+        # `|| scan_status=$?` rather than a bare `ars …; scan_status=$?`: the
+        # runner gives this step `bash -e {0}`, under which the bare form aborts
+        # at the failing command and never reaches the capture (#1629 is that
+        # exact trap). An `||` list suppresses errexit, so the status is ours to
+        # read. `cat` runs before the verdict, so the scan's own output is in
+        # the log on both paths.
         run: |
-          ars scan ./core --no-llm --badge > ars-output.txt 2>&1 || true
+          scan_status=0
+          ars scan ./core --no-llm --badge > ars-output.txt 2>&1 || scan_status=$?
           cat ars-output.txt
+          if [ "$scan_status" -ne 0 ]; then
+            echo "::error::ARS scan FAILED (exit $scan_status). No score was produced, so README.md was NOT updated and still shows the previous score. The scan's own output is above."
+            exit 1
+          fi
 
       - name: Extract and update ARS badge
+        # Three outcomes, never two — the same discipline #1645 put on the
+        # deletion guard. The badge was extracted and written (pass); the scan
+        # produced output with no badge in it (fail, naming that the output
+        # format changed); the rewrite did not land in README.md (fail, naming
+        # that). Each `if [ -n … ]` below used to be a silent skip whose only
+        # trace was a `No badge changes to commit` in the NEXT step.
+        #
+        # The last guard is the one that is easy to leave out and is the same
+        # defect one level down: `sed` exits 0 having matched nothing, so a
+        # README whose badge line was reformatted (or removed, or a URL carrying
+        # a `&` that sed re-reads as the whole match) leaves the file untouched
+        # while this step prints "README updated". Re-reading the file for the
+        # URL just written is what tells "the score did not change" — where the
+        # rewrite is a no-op because it wrote the same URL back, and README
+        # therefore CONTAINS it — from "nothing was rewritten".
         run: |
           ARS_BADGE=$(grep "img.shields.io/badge/ARS" ars-output.txt | head -1 || echo "")
           echo "ARS Badge line: $ARS_BADGE"
-
-          if [ -n "$ARS_BADGE" ]; then
-            ARS_URL=$(echo "$ARS_BADGE" | grep -o 'https://img\.shields\.io/badge/ARS[^)]*' | head -1 || echo "")
-            echo "ARS URL: $ARS_URL"
-            if [ -n "$ARS_URL" ]; then
-              sed -i "s|https://img.shields.io/badge/ARS-[^)]*|${ARS_URL}|g" README.md
-              echo "README updated with ARS badge URL"
-            fi
+          if [ -z "$ARS_BADGE" ]; then
+            echo "::error::the ARS scan succeeded but its output carries no img.shields.io/badge/ARS line, so there is no score to write. README.md was NOT updated and still shows the previous score — most likely \`--badge\` stopped emitting one, or the output format changed. Full scan output:"
+            cat ars-output.txt
+            exit 1
           fi
+
+          ARS_URL=$(echo "$ARS_BADGE" | grep -o 'https://img\.shields\.io/badge/ARS[^)]*' | head -1 || echo "")
+          echo "ARS URL: $ARS_URL"
+          if [ -z "$ARS_URL" ]; then
+            echo "::error::a badge line was found but no https://img.shields.io/badge/ARS… URL could be read out of it, so README.md was NOT updated. The line was: $ARS_BADGE"
+            exit 1
+          fi
+
+          sed -i "s|https://img.shields.io/badge/ARS-[^)]*|${ARS_URL}|g" README.md
+          if ! grep -qF "$ARS_URL" README.md; then
+            echo "::error::README.md does not contain the badge URL this step just wrote, so the badge is NOT updated. Either README.md carries no https://img.shields.io/badge/ARS-… URL for the rewrite to match, or the rewrite produced something else. Wanted: $ARS_URL"
+            exit 1
+          fi
+          echo "README updated with ARS badge URL"
 
       - name: Commit badge update
         run: |

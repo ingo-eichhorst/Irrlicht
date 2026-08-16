@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# ars-badge-push_test.sh — the lock on .github/workflows/ars.yml's
-# "Commit badge update" step (#1641).
+# ars-badge-push_test.sh — the lock on .github/workflows/ars.yml's badge job.
+#
+# The filename predates its scope. It was written for the "Commit badge update"
+# step (#1641) and grew to cover "Run ARS scan" and "Extract and update ARS
+# badge" (#1644) — the two steps that PRODUCE the badge that step pushes. One
+# harness per workflow rather than one per step, because the three share a
+# workflow file, a `workflow_step_shell` derivation, an assertion vocabulary
+# and one preflight trigger; splitting them would duplicate all four and let
+# the copies disagree, which is what tools/lib/workflow-step.sh exists to stop.
+# Renaming the file was declined as pure churn against five commits of history.
 #
 # ---------------------------------------------------------------------------
 # What is being asserted, and why each obligation exists
@@ -40,6 +48,51 @@
 #      attempt succeeds must exit 0 AND show that the first two were retried.
 #   4. the clean paths still pass: nothing staged, and a first-attempt push.
 #
+# ---------------------------------------------------------------------------
+# #1644 — the two steps ABOVE it, same job, same symptom
+#
+# The badge that step pushes is produced by "Run ARS scan" and "Extract and
+# update ARS badge", and both used to answer "I could not look" with the same
+# bytes as "there was nothing to do":
+#
+#     ars scan ./core --no-llm --badge > ars-output.txt 2>&1 || true
+#     cat ars-output.txt
+#
+# `|| true` swallows any failure and the block's last statement is `cat`, which
+# succeeds. `ars-output.txt` then holds an error, the extract step's `grep`
+# matches nothing, its `if [ -n "$ARS_BADGE" ]` is skipped in silence, README is
+# untouched, and "Commit badge update" reports `No badge changes to commit`.
+# Three green steps and a badge frozen at its previous score.
+#
+# The obligations added for it:
+#
+#   5. the defect is re-MEASURED, not described: both pre-#1644 bodies are
+#      emitted verbatim and run against a failing `ars`, and both still exit 0
+#      with README unchanged. The permanent vacuity guard for 6-11 — if that
+#      ever stopped reproducing, they would all pass for the wrong reason.
+#   6. a FAILED scan is no longer green, and the step says the badge was not
+#      updated. The scan's own output is still printed, on both paths, or the
+#      failure has no diagnosis in the log.
+#   7. a scan that SUCCEEDS is still green (the vacuity guard for 6 — a step
+#      that failed unconditionally would satisfy 6 perfectly).
+#   8. a NORMAL run still rewrites the badge: the real README.md, the real
+#      extract body, a new score in, the new URL in the file and the old one
+#      gone. The vacuity guard for 9-11, and the only arm that would notice the
+#      whole step being replaced by `exit 1`.
+#   9. output with NO badge line is a named failure — the third outcome the
+#      issue is about, since it means `--badge` stopped emitting one rather
+#      than that the score was unchanged.
+#  10. a badge line carrying no extractable URL is its OWN named failure.
+#  11. a rewrite that did not land in README.md is its OWN named failure. `sed`
+#      exits 0 having matched nothing, so this is the same defect one level
+#      down, and re-reading the file for the URL just written is what
+#      distinguishes it from the legitimate no-op of an unchanged score.
+#
+#  9-11 additionally assert that each refusal does NOT print the other two's
+#  wording. Three refusals that all fire together, or all print the same
+#  sentence, would satisfy every arm above while leaving the operator exactly
+#  where the `if` skips left them: a red step and no idea which thing broke.
+#
 # Deliberately NOT a general workflow linter, and the measurement is the
 # honest part. Over this repo's 19 multi-line `run:` blocks, a rule keyed on
 # "the block's last statement is echo/sleep/cat/printf" flags 6 and MISSES
@@ -69,6 +122,8 @@ need bash
 
 WF=.github/workflows/ars.yml
 STEP='Commit badge update'
+SCAN_STEP='Run ARS scan'
+EXTRACT_STEP='Extract and update ARS badge'
 
 # The step's body AND the shell it runs under both come from the workflow file,
 # through tools/lib/workflow-step.sh — see the invocation block below.
@@ -112,12 +167,32 @@ want_absent() { # label needle haystack
 # the workflow, and a step that later gains `shell: bash` moves this harness
 # with it. workflow-step.sh REFUSES rather than defaulting when it cannot find
 # the step, which is why this is a hard exit and not a fallback.
-if ! STEP_SHELL=$(workflow_step_shell "$WF" "$STEP"); then
-  echo "FAIL: ars-badge-push_test — could not derive the shell $WF gives '$STEP' (refusal above); nothing below would have graded the real program" >&2
-  exit 1
-fi
-read -r -a STEP_ARGV <<<"$STEP_SHELL"
-echo "== $WF :: '$STEP' runs under \`$STEP_SHELL\` (derived) =="
+#
+# Derived once per step, never once per file: the three steps are independent
+# declarations and any one of them could gain a `shell:` on its own.
+#
+# `derive_or_die` writes to a GLOBAL rather than printing its answer, because
+# the obvious `x=$(derive_or_die …)` spelling runs the function in a subshell,
+# where its `exit 1` exits only that subshell and the caller carries on with an
+# empty invocation — a refusal that does not refuse, in a file about exactly
+# that.
+DERIVED=
+derive_or_die() { # <step-name> -> sets DERIVED, or exits
+  if ! DERIVED=$(workflow_step_shell "$WF" "$1"); then
+    echo "FAIL: ars-badge-push_test — could not derive the shell $WF gives '$1' (refusal above); nothing below would have graded the real program" >&2
+    exit 1
+  fi
+}
+use_shell() { read -r -a STEP_ARGV <<<"$1"; }
+
+derive_or_die "$STEP";         STEP_SHELL="$DERIVED"
+derive_or_die "$SCAN_STEP";    SCAN_SHELL="$DERIVED"
+derive_or_die "$EXTRACT_STEP"; EXTRACT_SHELL="$DERIVED"
+use_shell "$STEP_SHELL"
+echo "== $WF: derived step invocations =="
+echo "   '$STEP' -> \`$STEP_SHELL\`"
+echo "   '$SCAN_STEP' -> \`$SCAN_SHELL\`"
+echo "   '$EXTRACT_STEP' -> \`$EXTRACT_SHELL\`"
 
 # ---------------------------------------------------------------------------
 # The harness: stubs, then a body, run under that shell.
@@ -256,6 +331,300 @@ else
     # ...and the strip must not have eaten the code, or the arm above is
     # vacuous: an empty haystack contains no needle.
     want_contains "...checked against the step's real code, not an empty strip" "git push" "$code"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# #1644 — the two steps that PRODUCE the badge "Commit badge update" pushes.
+#
+# Every case runs in a throwaway directory holding exactly what the runner's
+# workspace holds at that point (an `ars-output.txt`, a `README.md`), so the
+# repo's real README.md is never written to. The one arm that grades the real
+# README COPIES it in — that arm is the reason `sed`'s pattern is checked
+# against the file it actually has to match rather than against a fixture
+# written to match it.
+
+want_file_contains() { # label needle file
+  if grep -qF "$2" "$3" 2>/dev/null; then pass "$1"
+  else fail "$1" "$3 containing: $2" "$(flat "$(cat "$3" 2>/dev/null)")"; fi
+  return 0
+}
+want_file_absent() { # label needle file
+  if grep -qF "$2" "$3" 2>/dev/null; then fail "$1" "$3 NOT containing: $2" "$(flat "$(cat "$3" 2>/dev/null)")"
+  else pass "$1"; fi
+  return 0
+}
+
+# The `ars` stub prints ./.ars-stdout and returns the status it was built with.
+# A subcommand it does not model answers a loud, distinctive 99 naming the call,
+# and a MISSING ./.ars-stdout a 98 — never a quiet 0, which is what would make
+# every arm below pass for a reason unrelated to its obligation.
+ars_stub() { # $1 = status the stub returns for `ars scan`
+  cat <<STUB
+ars() {
+  case "\$1" in
+    scan) cat ./.ars-stdout || { echo "STUB: no ./.ars-stdout in \$(pwd)" >&2; return 98; }
+          return $1 ;;
+    *)    echo "STUB: unmodelled call: ars \$*" >&2; return 99 ;;
+  esac
+}
+STUB
+}
+
+# GNU vs BSD `sed -i`. ars.yml runs on ubuntu-latest, where `-i` takes no
+# argument; this harness runs wherever the shell-lib suite runs, which includes
+# test.yml's macos-latest runner and every developer's Mac, where BSD sed reads
+# the SCRIPT as `-i`'s backup suffix. Measured on this machine:
+# `sed -i "s|a|b|g" f` -> `sed: 1: "…": invalid command code f`, file unchanged.
+# So `-i` is re-expressed portably over the REAL sed, preserving the script
+# semantics this file grades — in particular that a script matching nothing
+# rewrites the file with identical bytes and exits 0, which is obligation 11's
+# whole subject. Any other `-i` form is a loud refusal, not a quiet 0.
+sed_shim() {
+  cat <<'STUB'
+sed() {
+  if [ "$1" = "-i" ]; then
+    if [ "$#" -ne 3 ]; then echo "STUB: unmodelled sed -i form: sed $*" >&2; return 99; fi
+    command sed "$2" "$3" >"$3.stub.new" || return $?
+    command mv "$3.stub.new" "$3" || return $?
+    return 0
+  fi
+  command sed "$@"
+}
+STUB
+}
+
+CASE=
+new_case() { # <name> -> sets CASE to a fresh, empty directory
+  CASE="$TMP/case-$1"
+  rm -rf "$CASE"
+  mkdir -p "$CASE" || { echo "FAIL: ars-badge-push_test — cannot create case dir $CASE" >&2; exit 1; }
+  { ars_stub "${2:-0}"; sed_shim; } >"$CASE/.prelude"
+}
+
+run_step() { # <workdir> <shell-string> <body-file> -> sets OUT / ST
+  local dir="$1" body="$3" script="$1/.step.sh"
+  use_shell "$2"
+  { cat "$dir/.prelude"; cat "$body"; } >"$script"
+  # Same reasoning as run_body: no `set +e` toggle, because a non-zero inner
+  # status is the EXPECTED outcome of most arms here and is data, not an abort.
+  OUT=$(cd "$dir" && "${STEP_ARGV[@]}" .step.sh 2>&1)
+  ST=$?
+  return 0
+}
+
+extract_body() { # <step-name> <min-non-blank-lines> <outfile> -> 0 on success
+  local name="$1" min="$2" out="$3" lines
+  if ! workflow_step_body "$WF" "$name" >"$out"; then
+    fail "the '$name' step body was extracted from $WF" \
+         "the step's run: | body" "workflow-step refused (above) — the scan has gone blind, not the step clean"
+    return 1
+  fi
+  lines=$(grep -cve '^[[:space:]]*$' "$out")
+  if [[ "${lines:-0}" -lt "$min" ]]; then
+    fail "the '$name' step body was extracted from $WF" \
+         "at least $min non-blank lines" "$lines — the scan has gone blind, not the step clean"
+    return 1
+  fi
+  pass "extracted the '$name' step body from $WF ($lines non-blank lines)"
+  return 0
+}
+
+# The four refusals must be told apart by their WORDING, not only by a shared
+# non-zero. Three refusals printing the same sentence would satisfy every
+# status arm below and leave an operator exactly where the silent `if` skips
+# left them: something is red, and no idea which thing broke.
+P_SCANFAIL='ARS scan FAILED'
+P_NOBADGE='carries no img.shields.io/badge/ARS line'
+P_NOURL='could be read out of it'
+P_NOWRITE='does not contain the badge URL this step just wrote'
+
+SCAN_ERR='ars: command failed: no such subcommand'
+NEW_URL='https://img.shields.io/badge/ARS-Agent--Ready%209.9%2F10-brightgreen'
+badge_output() { # <url> -> a plausible `ars scan --badge` tail
+  printf 'Badge\n----------------------------------------\n[![ARS](%s)](https://github.com/ingo-eichhorst/agent-readyness)\n' "$1"
+}
+
+# The real README is read, not assumed: if it carries no ARS badge URL there is
+# nothing for this workflow to rewrite, and obligations 8 and 5 would both be
+# grading a fixture written to match the pattern under test.
+OLD_URL=$(grep -o 'https://img\.shields\.io/badge/ARS[^)]*' README.md | head -1 || echo "")
+
+echo ""
+echo "== $WF: $SCAN_STEP / $EXTRACT_STEP =="
+
+if [[ -z "$OLD_URL" ]]; then
+  fail "README.md carries an ARS badge URL for the badge job to rewrite" \
+       "one https://img.shields.io/badge/ARS-… URL in README.md" \
+       "none — either the badge was removed (this job then has nothing to do and should say so) or this scan has gone blind"
+elif [[ "$OLD_URL" == "$NEW_URL" ]]; then
+  fail "the fixture score differs from README's, or the rewrite arm is vacuous" \
+       "a NEW_URL unlike README's current badge" "both are $OLD_URL"
+else
+  pass "read README.md's current badge URL ($OLD_URL)"
+
+  # -------------------------------------------------------------------------
+  # Obligation 5 — the pre-#1644 bodies, verbatim, re-measured on every run.
+  #
+  # Committed rather than quoted in the issue, per AGENTS.md: "a number which
+  # documents behaviour but is not produced by it drifts silently". This is
+  # also the vacuity guard for 6-11: if `|| true` + a trailing `cat` ever
+  # stopped exiting 0, the fix would be protecting nothing.
+  cat >"$TMP/pre1644-scan.sh" <<'OLD'
+ars scan ./core --no-llm --badge > ars-output.txt 2>&1 || true
+cat ars-output.txt
+OLD
+  cat >"$TMP/pre1644-extract.sh" <<'OLD'
+ARS_BADGE=$(grep "img.shields.io/badge/ARS" ars-output.txt | head -1 || echo "")
+echo "ARS Badge line: $ARS_BADGE"
+
+if [ -n "$ARS_BADGE" ]; then
+  ARS_URL=$(echo "$ARS_BADGE" | grep -o 'https://img\.shields\.io/badge/ARS[^)]*' | head -1 || echo "")
+  echo "ARS URL: $ARS_URL"
+  if [ -n "$ARS_URL" ]; then
+    sed -i "s|https://img.shields.io/badge/ARS-[^)]*|${ARS_URL}|g" README.md
+    echo "README updated with ARS badge URL"
+  fi
+fi
+OLD
+
+  echo ""
+  echo "-- the pre-#1644 bodies (the defect, re-measured) --"
+  new_case pre1644 1
+  printf '%s\n' "$SCAN_ERR" >"$CASE/.ars-stdout"
+  cp README.md "$CASE/README.md"
+  run_step "$CASE" "$SCAN_SHELL" "$TMP/pre1644-scan.sh"
+  if [[ "$ST" -eq 0 ]]; then
+    pass "the old scan body still exits 0 with a failing \`ars\` — the hazard is real"
+  else
+    fail "the old scan body exits 0 with a failing \`ars\` (the hazard this pins)" \
+         "exit 0" "exit $ST — the hazard is GONE, so re-derive the fix rather than trusting it :: $(flat "$OUT")"
+  fi
+  run_step "$CASE" "$EXTRACT_SHELL" "$TMP/pre1644-extract.sh"
+  want_status "...and the old extract body over that error output" 0 "$ST" "$OUT"
+  want_file_contains "...leaving README.md's badge exactly as it was" "$OLD_URL" "$CASE/README.md"
+
+  # -------------------------------------------------------------------------
+  # Obligations 6-7 — the REAL "Run ARS scan" step, extracted and executed.
+  echo ""
+  echo "-- $SCAN_STEP --"
+  # A floor of 2, not of "however many lines the fixed step has": the pre-#1644
+  # body was two lines, so a higher floor would report the mutation that
+  # RESTORES it as "the scan has gone blind" rather than as obligation 6 going
+  # red — a negative result for the wrong reason reads as coverage it is not.
+  # `workflow_step_body` already refuses a zero-line body, which is the blindness
+  # this floor exists on top of.
+  if extract_body "$SCAN_STEP" 2 "$TMP/scan-body.sh"; then
+    new_case scanfail 3
+    printf '%s\n' "$SCAN_ERR" >"$CASE/.ars-stdout"
+    run_step "$CASE" "$SCAN_SHELL" "$TMP/scan-body.sh"
+    if [[ "$ST" -eq 0 ]]; then
+      fail "a failing \`ars scan\` fails the step" "a non-zero exit" "exit 0 :: $(flat "$OUT")"
+    else
+      pass "a failing \`ars scan\` fails the step (exit $ST)"
+    fi
+    want_contains "...as a workflow error annotation, so it surfaces on the run" "::error::" "$OUT"
+    want_contains "...naming the scan as what failed" "$P_SCANFAIL" "$OUT"
+    want_contains "...and that the badge was therefore not updated" "NOT updated" "$OUT"
+    # Without this the failure has no diagnosis anywhere: `ars`'s own message is
+    # redirected into the file, so a step that exits 1 without printing it is a
+    # red X over an empty log.
+    want_contains "...with the scan's own output still in the log" "$SCAN_ERR" "$OUT"
+
+    # Obligation 7, the vacuity guard: a step that failed unconditionally would
+    # satisfy every arm above.
+    new_case scanok 0
+    badge_output "$NEW_URL" >"$CASE/.ars-stdout"
+    run_step "$CASE" "$SCAN_SHELL" "$TMP/scan-body.sh"
+    want_status "a succeeding \`ars scan\` still passes" 0 "$ST" "$OUT"
+    want_absent "...with no error annotation" "::error::" "$OUT"
+    want_file_contains "...having captured the scan output for the next step" "$NEW_URL" "$CASE/ars-output.txt"
+
+    # `|| true` is the false fix for this family and is refused by name — it is
+    # what the step used to carry. Comments are stripped first for the same
+    # reason the push arm strips them: the workflow's prose explains why it is
+    # not used, and a raw scan fails on the sentence saying the right thing.
+    code=$(grep -v '^[[:space:]]*#' "$TMP/scan-body.sh")
+    want_absent "the scan step does not reach for \`|| true\`" "|| true" "$code"
+    want_contains "...checked against the step's real code, not an empty strip" "ars scan" "$code"
+  fi
+
+  # -------------------------------------------------------------------------
+  # Obligations 8-11 — the REAL "Extract and update ARS badge" step.
+  echo ""
+  echo "-- $EXTRACT_STEP --"
+  if extract_body "$EXTRACT_STEP" 8 "$TMP/extract-body.sh"; then
+    # Obligation 8, the vacuity guard for 9-11: a fix that refuses everything
+    # is indistinguishable from one that works until something still works.
+    # Graded against the REAL README.md, so the `sed` pattern is checked
+    # against the file it has to match.
+    new_case extractok 0
+    badge_output "$NEW_URL" >"$CASE/ars-output.txt"
+    cp README.md "$CASE/README.md"
+    run_step "$CASE" "$EXTRACT_SHELL" "$TMP/extract-body.sh"
+    want_status "a normal run still updates the badge" 0 "$ST" "$OUT"
+    want_contains "...and says so" "README updated with ARS badge URL" "$OUT"
+    want_file_contains "...having written the new URL into README.md" "$NEW_URL" "$CASE/README.md"
+    want_file_absent "...and replaced the old one rather than appending" "$OLD_URL" "$CASE/README.md"
+    want_absent "...with no error annotation" "::error::" "$OUT"
+
+    # Obligation 9 — output with no badge line at all.
+    new_case nobadge 0
+    printf '%s\n' "$SCAN_ERR" >"$CASE/ars-output.txt"
+    cp README.md "$CASE/README.md"
+    run_step "$CASE" "$EXTRACT_SHELL" "$TMP/extract-body.sh"
+    if [[ "$ST" -eq 0 ]]; then
+      fail "output with no badge line fails the step" "a non-zero exit" "exit 0 :: $(flat "$OUT")"
+    else
+      pass "output with no badge line fails the step (exit $ST)"
+    fi
+    want_contains "...as a workflow error annotation" "::error::" "$OUT"
+    want_contains "...naming the missing badge line specifically" "$P_NOBADGE" "$OUT"
+    want_contains "...and printing the output it could not read a badge out of" "$SCAN_ERR" "$OUT"
+    want_absent "...not confused with the unreadable-URL refusal" "$P_NOURL" "$OUT"
+    want_absent "...nor with the rewrite-did-not-land refusal" "$P_NOWRITE" "$OUT"
+    want_file_contains "...leaving README.md's badge untouched" "$OLD_URL" "$CASE/README.md"
+
+    # Obligation 10 — a badge line whose URL cannot be read. Same shape one
+    # level down, and the issue asked for it by name.
+    new_case nourl 0
+    printf '[![ARS](img.shields.io/badge/ARS-unparseable)](x)\n' >"$CASE/ars-output.txt"
+    cp README.md "$CASE/README.md"
+    run_step "$CASE" "$EXTRACT_SHELL" "$TMP/extract-body.sh"
+    if [[ "$ST" -eq 0 ]]; then
+      fail "a badge line with no extractable URL fails the step" "a non-zero exit" "exit 0 :: $(flat "$OUT")"
+    else
+      pass "a badge line with no extractable URL fails the step (exit $ST)"
+    fi
+    want_contains "...naming the unreadable URL specifically" "$P_NOURL" "$OUT"
+    want_absent "...not confused with the missing-badge-line refusal" "$P_NOBADGE" "$OUT"
+    want_absent "...nor with the rewrite-did-not-land refusal" "$P_NOWRITE" "$OUT"
+    want_file_contains "...leaving README.md's badge untouched" "$OLD_URL" "$CASE/README.md"
+
+    # Obligation 11 — the rewrite that matched nothing. `sed` exits 0 having
+    # matched nothing, so before #1644 this printed "README updated" over an
+    # unchanged file and the push step then reported `No badge changes`.
+    new_case nowrite 0
+    badge_output "$NEW_URL" >"$CASE/ars-output.txt"
+    printf '# Irrlicht\n\nA README carrying no ARS badge at all.\n' >"$CASE/README.md"
+    run_step "$CASE" "$EXTRACT_SHELL" "$TMP/extract-body.sh"
+    if [[ "$ST" -eq 0 ]]; then
+      fail "a rewrite that matched nothing fails the step" "a non-zero exit" "exit 0 :: $(flat "$OUT")"
+    else
+      pass "a rewrite that matched nothing fails the step (exit $ST)"
+    fi
+    want_contains "...naming the unwritten README specifically" "$P_NOWRITE" "$OUT"
+    want_absent "...and does NOT claim the README was updated" "README updated with ARS badge URL" "$OUT"
+    want_absent "...not confused with the missing-badge-line refusal" "$P_NOBADGE" "$OUT"
+    want_absent "...nor with the unreadable-URL refusal" "$P_NOURL" "$OUT"
+
+    # The step's two `|| echo ""` are deliberate and stay — they keep an empty
+    # capture readable so the named refusal above can report it, rather than
+    # letting errexit abort with a line number. `|| true` is the different
+    # thing, and the one this family keeps having to refuse.
+    code=$(grep -v '^[[:space:]]*#' "$TMP/extract-body.sh")
+    want_absent "the extract step does not reach for \`|| true\`" "|| true" "$code"
+    want_contains "...checked against the step's real code, not an empty strip" "sed -i" "$code"
   fi
 fi
 
