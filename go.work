@@ -5,6 +5,5 @@ use (
 	./tools/eta-research
 	./tools/onboarding-factory
 	./tools/seed-demo-sessions
-	./tools/starhistory
 	./tools/wsload
 )
