@@ -81,32 +81,32 @@ final class GroupViewSnapshotTests: XCTestCase {
     func testFirstOfThreeUpChevronDisabled() {
         let groups = seedThreeGroups()
         let view = host(GroupView(group: groups[0]))
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testMiddleOfThreeBothChevronsEnabled() {
         let groups = seedThreeGroups()
         let view = host(GroupView(group: groups[1]))
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testLastOfThreeDownChevronDisabled() {
         let groups = seedThreeGroups()
         let view = host(GroupView(group: groups[2]))
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testSingleGroupNoChevrons() {
         let solo = makeGroup(name: "solo")
         sessionManager.apiGroups = [solo]
         let view = host(GroupView(group: solo))
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testSubGroupNoChevrons() {
         _ = seedThreeGroups()
         let view = host(GroupView(group: makeGroup(name: "nested"), depth: 1))
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     /// A transient PID=0 antigravity ghost (ready, no metrics) sitting alongside
@@ -134,6 +134,6 @@ final class GroupViewSnapshotTests: XCTestCase {
         let group = SessionManager.AgentGroup(name: "app", agents: [real, ghost])
         sessionManager.apiGroups = [group]
         let view = host(GroupView(group: group), height: 160)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 }

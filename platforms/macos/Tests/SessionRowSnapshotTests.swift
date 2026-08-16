@@ -242,7 +242,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             SessionRowView(session: makeSession(state: .ready, metrics: makeMetrics()), agentNumber: 3)
         }
         let view = host(rows, height: 144)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testWaitingStateShowsQuestionBlock() {
@@ -251,7 +251,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(lastText: "Should I run the migration?")
         )
         let view = host(session, height: 72)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     /// Issue #979 — the question pill used to be pinned to a single line
@@ -267,7 +267,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             )
         )
         let view = host(session, height: 96)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     /// Issue #984 — the question pill's text color used to be a fixed hex
@@ -281,7 +281,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(lastText: "Should I run the migration?")
         )
         let view = hostLight(session, height: 72)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testCollapsedHidesSummaryBlocks() {
@@ -294,7 +294,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(lastText: "Should I run the migration?")
         )
         let view = host(session, height: 48)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     /// Issue #985 — waiting mode gates the question pill by session state: a
@@ -307,13 +307,13 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(lastText: "Should I run the migration?")
         )
         let view = host(session, height: 48)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testContextBarShowsTokenLabel() {
         let session = makeSession(state: .working, metrics: makeMetrics())
         let view = host(session)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     private func sampleHistory() -> [String] {
@@ -328,7 +328,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         let session = makeSession(state: .working, metrics: makeMetrics())
         sessionManager.stateHistory[session.id] = sampleHistory()
         let view = host(session)
-        assertSnapshot(of: view, as: .image, testName: testName)
+        assertSnapshot(of: view, as: .pinnedImage, testName: testName)
     }
 
     func testHistoryBar1MinPreservesModelLabel() {
@@ -371,7 +371,7 @@ final class SessionRowSnapshotTests: XCTestCase {
     /// reach for `SNAPSHOT_TESTING_RECORD` before reading it.
     func testGhostRowPID0NilMetrics() {
         let session = makeSession(state: .ready, metrics: nil, pid: 0, adapter: "antigravity")
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     // MARK: - Badges and markers
@@ -382,7 +382,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             agentNumber: 1,
             activeSubagentCount: 3
         )
-        assertSnapshot(of: host(row), as: .image)
+        assertSnapshot(of: host(row), as: .pinnedImage)
     }
 
     func testBackgroundMoonDetached() {
@@ -391,7 +391,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(),
             background: BackgroundAgent(name: "nightly refactor", detached: true)
         )
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     func testBackgroundMoonNonDetached() {
@@ -400,7 +400,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(),
             background: BackgroundAgent(name: "nightly refactor", detached: false)
         )
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     func testCacheBloatBadgeAttributed() {
@@ -412,7 +412,7 @@ final class SessionRowSnapshotTests: XCTestCase {
                 cacheBloatExplanation: "This session is creating prompt-cache tokens well above normal for this project — it's getting less benefit from caching and costing more per turn. Likely tied to claude-code 2.1.143 +14K cache tokens vs 2.1.98. Common causes: an agent update that changed context construction, large or varying pasted content each turn, or frequent context resets (e.g. /clear)."
             )
         )
-        assertSnapshot(of: host(session, height: 72), as: .image)
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 
     // #813: no version attribution → the badge falls back to a compact label
@@ -426,7 +426,7 @@ final class SessionRowSnapshotTests: XCTestCase {
                 cacheBloatExplanation: "This session is creating prompt-cache tokens well above normal for this project — it's getting less benefit from caching and costing more per turn. Common causes: an agent update that changed context construction, large or varying pasted content each turn, or frequent context resets (e.g. /clear)."
             )
         )
-        assertSnapshot(of: host(session, height: 72), as: .image)
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 
     func testContextPressureAlert() {
@@ -435,7 +435,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             state: .working,
             metrics: makeMetrics(tokens: 920_000, pressure: "critical", utilization: 92)
         )
-        assertSnapshot(of: host(session, height: 72), as: .image)
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 
     func testRoleOrchestratorRow() {
@@ -447,19 +447,19 @@ final class SessionRowSnapshotTests: XCTestCase {
             workerName: "witness-1",
             workerID: "bead-12345678ab"
         )
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     func testRelayCloudOnline() {
         sessionManager.relayDaemons = ["mac-studio": "Mac Studio"]
         let session = makeSession(state: .working, metrics: makeMetrics(), daemonID: "mac-studio")
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     func testRelayCloudOfflineFade() {
         sessionManager.offlineDaemons = ["mac-studio": "Mac Studio"]
         let session = makeSession(state: .ready, metrics: makeMetrics(), daemonID: "mac-studio")
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     /// Progress chip without a projection (taskCompletionEta nil): renders the
@@ -477,7 +477,7 @@ final class SessionRowSnapshotTests: XCTestCase {
                 )
             )
         )
-        assertSnapshot(of: host(session, height: 72), as: .image)
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 
     /// All rounds reported done while the session is still working: the chip
@@ -498,7 +498,7 @@ final class SessionRowSnapshotTests: XCTestCase {
                 )
             )
         )
-        assertSnapshot(of: host(session, height: 72), as: .image)
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 
     // MARK: - Fixture-driven rendering (issue #757)
@@ -510,13 +510,13 @@ final class SessionRowSnapshotTests: XCTestCase {
     /// no longer (issue #1509).
     func testFixtureAntigravityGhost() throws {
         let session = try loadSession("antigravity-ghost.json")
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     /// Drives a render from a bare daemon `SessionState` object (no envelope) —
     /// a substantive working Claude Code session with high context fill.
     func testFixtureWorkingClaude() throws {
         let session = try loadSession("working-claude.json")
-        assertSnapshot(of: host(session, height: 72), as: .image)
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 }
