@@ -835,8 +835,10 @@ Before marking a ticket done, run the full suite — every layer must pass:
   skill file is edited, and `testdata/` is excluded from the gate's own walk
   because those fixtures are deliberately corrupt.
 - POSIX shell scripts: `tools/posix-lint.sh` checks every tracked file whose
-  **first line** is a `#!/bin/sh` shebang — today `site/install.sh` and
-  `tools/linux-replay-entrypoint.sh`. Line 1 only, because
+  **first line** is a `#!/bin/sh` shebang — today `site/install.sh`,
+  `tools/linux-replay-entrypoint.sh` and `tools/git-hooks/shim` (#1591 brought
+  the third into scope, which is the whole reason that file was written in
+  POSIX sh rather than bash). Line 1 only, because
   `tools/lib/install-uninstall_test.sh` is a bash file that writes `#!/bin/sh`
   stubs inside a heredoc, and a content grep would try to lint it as POSIX sh.
   It runs two different kinds of check on each file: a real POSIX shell's
@@ -1151,8 +1153,41 @@ one command in a pipeline exited zero.
 
 `tools/install-git-hooks.sh` (run once per clone; worktrees share the parent
 repo's hooks automatically) wires `tools/preflight.sh`'s fast gates as a
-pre-push hook, so a push that would fail CI is rejected locally instead. The
-hook runs `tools/preflight.sh --changed --budget 540`, which scopes every gate
+pre-push hook, so a push that would fail CI is rejected locally instead. What
+it installs into the shared `.git/hooks/<name>` is neither the hook script nor
+a symlink to it, but a copy of `tools/git-hooks/shim`, which resolves the
+**pushing** working tree at run time and execs *that* tree's
+`tools/git-hooks/<name>` (#1591). Before that, the installed hook was a symlink
+into the MAIN checkout, so every worktree's push ran the main checkout's
+script — meaning a hook change in a worktree did not govern that worktree's own
+push, and anything under `tools/git-hooks/` was untestable from the branch that
+changed it. PR #1590 rewrote the hook to bound its own runtime and its own push
+ran the old unbounded one, hitting the exact defect it was fixing. Three
+consequences worth knowing:
+
+- **The shim is now the one link a `git pull` cannot update.** Changing
+  `tools/git-hooks/shim` means re-running the installer; changing
+  `tools/git-hooks/pre-push` does not. That is the right way round — the shim
+  resolves a path and execs, and has no reason to change. The installer
+  overwrites whatever it finds (an older symlink install, a hand-edited copy,
+  a stale shim), so re-running it is always safe and a second run in a row
+  installs nothing.
+- **A revision that genuinely carries no hook passes, loudly**, on stderr —
+  a bisect, or a branch predating the file, has no gate there to skip, and
+  refusing would only make `git bisect` hostile.
+- **A hook missing from the tree while `HEAD` still carries it refuses**, as
+  does one present but not executable. That is a broken working tree, not a
+  revision without the hook, and a gate skipped because a file was invisible is
+  this repo's most-repeated failure shape.
+
+`tools/lib/git-hooks_test.sh` covers both halves in throwaway repos (bare
+origin + main checkout + linked worktree, pushing over a filesystem path), and
+carries the mutation beside the assertion: one case installs the pre-#1591
+symlink and pins the OPPOSITE outcome from the identical rig, so an assertion
+that the worktree's refusing hook ran cannot be satisfied by a rig where
+nothing ran at all.
+
+The hook runs `tools/preflight.sh --changed --budget 540`, which scopes every gate
 to the packages and web trees the push's diff actually touches (vs
 `origin/main`), so a typical push finishes in seconds rather than re-running
 the whole suite. A large or cross-cutting diff (or a `go.mod`/`go.sum` change,
@@ -1210,7 +1245,13 @@ actually reads. Without that second layer a pure-Go push paid for an `npm
 audit` of both web trees and was rejected by a pre-existing advisory it could
 not have caused (#1213) — forcing `--no-verify`, which disables every other
 gate too. Both layers read the same changed set, from
-`tools/lib/changed-files.sh`; its unit tests run in the `tools` gate.
+`tools/lib/changed-files.sh`; its unit tests run in the `tools` gate. That set
+counts **untracked, non-ignored** files as well as committed, staged and
+unstaged ones (#1591). It did not until then: `git diff` cannot see a file
+that was never added and `--cached` only catches it once staged, so a
+newly written script selected no gates at all while the function's own doc
+said uncommitted work counted. Invisible to the pre-push hook — a file has to
+be committed to be pushed — and wrong for every manual `--changed` run.
 
 Two of the failure modes it won't catch: environment-specific timing flakes
 that only manifest on loaded Linux CI runners (not this machine), and true
