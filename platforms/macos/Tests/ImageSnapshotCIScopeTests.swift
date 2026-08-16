@@ -167,6 +167,19 @@ final class ImageSnapshotCIScopeTests: XCTestCase {
         var filters: Set<String> = []
     }
 
+    /// Every identifier introduced by `flag` on one line, e.g. every
+    /// `--skip <Name>`.
+    private static func names(after flag: String, in line: Substring) -> Set<String> {
+        var found: Set<String> = []
+        var rest = line
+        while let r = rest.range(of: flag) {
+            rest = rest[r.upperBound...]
+            let name = rest.prefix { $0.isLetter || $0.isNumber || $0 == "_" }
+            if !name.isEmpty { found.insert(String(name)) }
+        }
+        return found
+    }
+
     /// Every `swift test` command the workflow runs.
     ///
     /// Per-invocation rather than one union over the file, and that is the
@@ -195,18 +208,8 @@ final class ImageSnapshotCIScopeTests: XCTestCase {
             }
             guard current != nil else { continue }
 
-            var rest = code
-            while let r = rest.range(of: "--skip ") {
-                rest = rest[r.upperBound...]
-                let name = rest.prefix { $0.isLetter || $0.isNumber || $0 == "_" }
-                if !name.isEmpty { current?.skips.insert(String(name)) }
-            }
-            rest = code
-            while let r = rest.range(of: "--filter ") {
-                rest = rest[r.upperBound...]
-                let name = rest.prefix { $0.isLetter || $0.isNumber || $0 == "_" }
-                if !name.isEmpty { current?.filters.insert(String(name)) }
-            }
+            current?.skips.formUnion(Self.names(after: "--skip ", in: code))
+            current?.filters.formUnion(Self.names(after: "--filter ", in: code))
 
             // A shell continuation is what holds one command's arguments
             // together across lines; the first line that does not end in `\`
