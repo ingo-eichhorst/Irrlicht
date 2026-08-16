@@ -25,9 +25,11 @@ import XCTest
 /// wide enough to absorb this drift as also wide enough to pass a missing
 /// architecture segment.
 ///
-/// So CI runs everything else — 270 of 318 tests, against 0 before — and these
+/// So CI runs everything else — 272 of 320 tests, against 0 before — and these
 /// suites stay gated on a developer Mac by `tools/preflight.sh --only swift`,
-/// where they demonstrably pass.
+/// where they demonstrably pass. Both figures are read off runs rather than
+/// added up from the table below; the first draft added them up and was two
+/// low, having forgotten the tests in this very file.
 ///
 /// ## Why this test exists
 ///

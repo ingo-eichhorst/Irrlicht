@@ -152,10 +152,13 @@ jobs:
       # cross-checks it against these very arguments, so a new one fails there
       # rather than reddening an unrelated PR's check.
       #
-      # This still gates 270 of 318 tests, against 0 before. Two image-snapshot
-      # suites are deliberately NOT skipped — they pass on a runner, and their
-      # passing is itself evidence that the residual is content-dependent
-      # rather than a blanket toolchain difference.
+      # This still gates 272 of 320 tests, against 0 before — measured, on this
+      # workflow's own run, not derived from the list above by hand (the first
+      # draft of this comment said "270 of 318" and was stale by exactly the
+      # two tests the tripwire itself adds). Two image-snapshot suites are
+      # deliberately NOT skipped — they pass on a runner, and their passing is
+      # itself evidence that the residual is content-dependent rather than a
+      # blanket toolchain difference.
       - name: Test (bounded, streamed under a pty)
         shell: bash
         run: |
