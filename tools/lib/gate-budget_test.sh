@@ -239,6 +239,130 @@ pkill -f "$fixture" 2>/dev/null
 rm -f "$fixture" "$leafpid"
 
 echo ""
+echo "== budget_run under the CALLER's \`-e\` (#1635) =="
+# gate-budget.sh is SOURCED (tools/preflight.sh), so budget_run runs with
+# whatever shell options its caller happens to have. Unlike #1633's sibling
+# defect this broke the ORDINARY path as well as the timeout one, and what it
+# produced there is a false accusation: the backgrounded child inherits errexit
+# and dies on a command that exits non-zero BEFORE writing the status file that
+# is its "it finished" signal (gate-budget.sh's own comment above it), so
+# budget_run polls to the full deadline and reports a TIMEOUT for a command
+# that exited in milliseconds. Measured on the unfixed library: `exit 3` came
+# back 1 after 19.55s, with BUDGET_LAST_TIMED_OUT never set — every failing
+# gate reported as a timeout it was not, and every gate behind it as NOT RUN.
+#
+# Everything below is driven under `bash --noprofile --norc -e -o pipefail`,
+# which is GitHub's own `shell: bash` invocation, in TWO different calling
+# shapes because bash's errexit-context rule makes each blind to the other's
+# defect:
+#
+#   the STATUS is read in a BARE statement position, the shape this library's
+#            header documents. Called from a `||` or an `if`, bash ignores -e
+#            for the whole function body — and, measured, for the backgrounded
+#            child too — so the hazard cannot fire there and every assertion
+#            below would pass against the unfixed library.
+#   the LEAK is read where a line after the call still runs, which under -e a
+#            bare non-zero return does not: the caller aborts on it. A `||`
+#            position still EXECUTES any `set` the body performs, so that is
+#            exactly where a library that turned -e off and forgot becomes
+#            visible.
+#
+# BUDGET_LAST_TIMED_OUT is read in the bare shape anyway, through an EXIT trap:
+# the flag is the signal preflight.sh classifies on, and reading it in a `||`
+# probe would read it in the one shape where it was never wrong.
+e_lib="$DIR/gate-budget.sh"
+e_marker=$(mktemp -t gate-budget-e-marker)
+e_flag=$(mktemp -t gate-budget-e-flag)
+e_before=$(mktemp -t gate-budget-e-opts-before)
+e_after=$(mktemp -t gate-budget-e-opts-after)
+export E_LIB="$e_lib" E_MARKER="$e_marker" E_FLAG="$e_flag" \
+       E_OPTS_BEFORE="$e_before" E_OPTS_AFTER="$e_after"
+
+# --- the ordinary path: a command that fails INSTANTLY ----------------------
+rm -f "$e_marker" "$e_flag"
+start=$SECONDS
+e_out=$(bash --noprofile --norc -e -o pipefail /dev/stdin 2>&1 <<'PROBE'
+set -uo pipefail
+. "$E_LIB"
+BUDGET_POLL_SECONDS=0.05
+BUDGET_TERM_GRACE_SECONDS=1
+# Runs even when errexit aborts the shell, which is the only way to read the
+# flag from the bare shape a correct 3 also aborts on.
+trap 'echo "$BUDGET_LAST_TIMED_OUT" > "$E_FLAG"' EXIT
+budget_run 20 bash -c ': > "$E_MARKER"; exit 3'
+PROBE
+)
+e_rc=$?
+elapsed=$((SECONDS - start))
+
+# A verification that could not run must not read as one that found nothing:
+# an inner shell that died before ever launching the command (a bad path, a
+# source that failed) also exits 1, which is byte-identical to the defect.
+if [[ -e "$e_marker" ]]; then
+  pass "the -e probe actually ran its command (the fixture left its marker)"
+else
+  fail "the -e probe never launched its command, so the assertions below measured something else" \
+       "a marker at $e_marker" "no marker; it printed: $e_out"
+fi
+assert_eq "a command that exits 3 returns 3 under the caller's -e" "3" "$e_rc"
+assert_le "...and does not burn the budget waiting for a command that already exited" "8" "$elapsed"
+assert_eq "...and does not set the timeout flag" "0" "$(cat "$e_flag" 2>/dev/null)"
+
+# --- the timeout path -------------------------------------------------------
+rm -f "$e_marker" "$e_flag"
+e_out=$(bash --noprofile --norc -e -o pipefail /dev/stdin 2>&1 <<'PROBE'
+set -uo pipefail
+. "$E_LIB"
+BUDGET_POLL_SECONDS=0.05
+BUDGET_TERM_GRACE_SECONDS=1
+trap 'echo "$BUDGET_LAST_TIMED_OUT" > "$E_FLAG"' EXIT
+budget_run 2 bash -c ': > "$E_MARKER"; sleep 60'
+PROBE
+)
+e_rc=$?
+if [[ -e "$e_marker" ]]; then
+  pass "the -e timeout probe actually ran its command (the fixture left its marker)"
+else
+  fail "the -e timeout probe never launched its command" \
+       "a marker at $e_marker" "no marker; it printed: $e_out"
+fi
+assert_eq "an over-budget command returns BUDGET_TIMEOUT_RC under the caller's -e" \
+          "$BUDGET_TIMEOUT_RC" "$e_rc"
+assert_eq "...and DOES set the timeout flag" "1" "$(cat "$e_flag" 2>/dev/null)"
+
+# --- and none of it is paid for by leaking the caller's options -------------
+# `set +o` REDIRECTED TO A FILE, never `$(set +o)`: bash 3.2 — /bin/bash on
+# macOS — reports errexit and nounset as OFF inside a command substitution no
+# matter what the parent has (measured on 3.2.57), so a probe built the obvious
+# way is byte-identical before and after and can never see a leak. `set` is a
+# builtin, so redirecting it does not fork. Both paths are driven in the one
+# probe, because a `set +e` added to either would leak from either.
+rm -f "$e_before" "$e_after"
+leak_out=$(bash --noprofile --norc -e -o pipefail /dev/stdin 2>&1 <<'PROBE'
+set -uo pipefail
+. "$E_LIB"
+BUDGET_POLL_SECONDS=0.05
+BUDGET_TERM_GRACE_SECONDS=1
+set +o > "$E_OPTS_BEFORE"
+ordinary=0; budget_run 20 bash -c 'exit 3' || ordinary=$?
+timedout=0; budget_run 2 bash -c 'sleep 60' || timedout=$?
+set +o > "$E_OPTS_AFTER"
+echo "leak probe: ordinary=$ordinary timeout=$timedout"
+PROBE
+)
+if [[ ! -s "$e_before" || ! -s "$e_after" ]]; then
+  fail "the option-leak probe recorded no before/after option dump — it could not run" \
+       "two non-empty dumps" "it printed: $leak_out"
+elif diff "$e_before" "$e_after" >/dev/null 2>&1; then
+  pass "the caller's shell options are unchanged across the call"
+else
+  fail "budget_run LEAKED a shell option change back to its caller" "no diff" \
+       "$(diff "$e_before" "$e_after" | tr '\n' ' ')"
+fi
+rm -f "$e_marker" "$e_flag" "$e_before" "$e_after"
+unset E_LIB E_MARKER E_FLAG E_OPTS_BEFORE E_OPTS_AFTER
+
+echo ""
 echo "== end to end: tools/preflight.sh names the gate that ran out of time =="
 # One mutated COPY of preflight.sh, with the gofmt gate's command replaced by a
 # sleep. gofmt is the first gate of the go group, so `--only go --budget 3`
