@@ -276,5 +276,123 @@ else
   rm -f "$log" "$SWIFT_SUITE_GRANDCHILD_PIDFILE"
 fi
 
+# ---------------------------------------------------------------------------
+# The CALLING shape, under the shell GitHub actually runs steps with (#1629).
+#
+# Everything above tests swift_suite_verdict's JUDGEMENT. The two cases below
+# test whether it gets to speak at all — a property of the caller, and one that
+# was false in CI for the whole of macos-swift.yml's life. GitHub invokes
+# `shell: bash` as `bash --noprofile --norc -e -o pipefail {0}`, so `-e` is
+# ALREADY on, the step's own `set -uo pipefail` does not clear it, and the
+# failing subshell aborted the step before `rc=$?` could run. A hang and an
+# ordinary assertion failure therefore printed the same thing —
+# `Process completed with exit code 1` — which is the exact ambiguity this
+# whole file exists to remove.
+#
+# Deliberately NOT a general workflow linter, and the scope is the honest part.
+# Measured against this repo's three occurrences of the hazard, a check keyed
+# on `$?` would have caught two: the third (a `for` loop over every installed
+# Xcode that died on its second iteration) captures no `$?` anywhere, and
+# neither does a cleanup line after a command allowed to fail. The majority of
+# the hazard has no mechanical signature, so a linter's green would claim
+# coverage it does not have. This is a lock on the ONE call site that exists.
+echo "== the calling shape under GitHub's \`shell: bash\` (#1629) =="
+
+# macos-swift.yml's step reduced to its decisive lines, pointed at a committed
+# fixture so the real verdict function is what does or does not speak.
+calling_shape() {
+  local guard=""
+  [[ "$1" == guarded ]] && guard="set +e"
+  bash --noprofile --norc -e -o pipefail /dev/stdin 2>&1 <<EOF
+$guard
+set -uo pipefail
+. tools/lib/swift-suite.sh
+( exit 124 )
+rc=\$?
+swift_suite_verdict "\$rc" "$DATA/hung.log"
+EOF
+}
+
+# Captured into a variable rather than piped into grep, and that is not style.
+# This file runs under `set -o pipefail`, and `calling_shape` legitimately exits
+# non-zero (the verdict returns 1 for a hang) — so `calling_shape … | grep -q`
+# reports NOMATCH even when grep matched, because pipefail hands back the
+# left-hand status. Caught exactly that way while writing this, which is the
+# same shell-option-you-cannot-see family as the defect under test.
+bare_out=$(calling_shape bare)
+guarded_out=$(calling_shape guarded)
+
+# The vacuity guard, and it is the load-bearing half of the pair: if bash (or a
+# future runner spelling) ever stopped aborting here, the `set +e` pinned below
+# would be protecting nothing and the guarded case would pass for the wrong
+# reason. Absence of the hazard and absence of the check must not look alike.
+if grep -aq 'HUNG' <<<"$bare_out"; then
+  fail "bare shape: the verdict spoke under -e — the hazard this pins is gone, so re-derive the fix rather than trusting it"
+else
+  pass "bare shape: -e swallows the verdict before rc=\$? runs (the defect, still real)"
+fi
+
+if grep -aq 'HUNG: no exit within' <<<"$guarded_out"; then
+  pass "guarded shape: \`set +e\` lets swift_suite_verdict diagnose the hang"
+else
+  fail "guarded shape: \`set +e\` did not restore the verdict; it printed:
+$guarded_out"
+fi
+
+# ...and the workflow actually carries that line, in EVERY step that reads `$?`.
+#
+# `|| rc=$?` is accepted alongside `set +e` because it is the other spelling
+# that keeps the code; `|| true` is deliberately NOT accepted, because it lets
+# the capture run but leaves `$?` holding `true`'s status, silently reporting
+# every failing run as 0. Measured all three ways.
+WF=.github/workflows/macos-swift.yml
+if [[ ! -f "$WF" ]]; then
+  fail "$WF not found — the call-site check could not run"
+else
+  shape=$(awk '
+    function flush() {
+      if (inblock && cap) {
+        seen++
+        if (!guard) { printf "  offending run: block at %s:%d\n", FILENAME, blockline; bad++ }
+      }
+      inblock=0; cap=0; guard=0
+    }
+    {
+      match($0, /^ */); ind = RLENGTH
+      if (inblock && $0 !~ /^[[:space:]]*$/ && ind <= runind) flush()
+      if (!inblock && $0 ~ /^[[:space:]]*run:[[:space:]]*\|/) {
+        inblock=1; runind=ind; blockline=NR; next
+      }
+      if (inblock) {
+        stripped = $0; sub(/^[[:space:]]*/, "", stripped)
+        if (stripped ~ /^#/) next
+        if (stripped ~ /^set \+e([[:space:]]|$)/) guard=1
+        # An assignment from $? that is NOT the right-hand side of a `||`.
+        if (stripped ~ /[A-Za-z_][A-Za-z0-9_]*=\$\?/ &&
+            stripped !~ /\|\|[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\$\?/) cap=1
+      }
+    }
+    END { flush(); printf "SEEN %d\nBAD %d\n", seen+0, bad+0 }
+  ' "$WF")
+  seen_caps=$(sed -n 's/^SEEN //p' <<<"$shape")
+  bad_caps=$(sed -n 's/^BAD //p' <<<"$shape")
+
+  # Vacuity guard: a parse that stopped finding the blocks reads exactly like a
+  # workflow with no hazard in it. Two is what the file carries today
+  # (swift-test and swift-snapshot-evidence); a THIRD is fine, zero or one is
+  # the check having gone blind.
+  if [[ "${seen_caps:-0}" -lt 2 ]]; then
+    fail "found only ${seen_caps:-0} run: block(s) capturing \$? in $WF — expected at least 2; the scan has gone blind, not the workflow clean"
+  else
+    pass "scan reads $WF: $seen_caps run: block(s) capture \$?"
+    if [[ "${bad_caps:-1}" -eq 0 ]]; then
+      pass "every one of them disarms -e first (\`set +e\`) — swift_suite_verdict can run"
+    else
+      fail "$bad_caps run: block(s) read \$? under GitHub's -e, so the capture is unreachable:
+$(grep -a 'offending run: block' <<<"$shape")"
+    fi
+  fi
+fi
+
 if [[ "$rc" -eq 0 ]]; then echo "swift-suite_test: ALL PASS"; else echo "swift-suite_test: FAILURES" >&2; fi
 exit "$rc"

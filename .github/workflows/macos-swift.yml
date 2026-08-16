@@ -191,6 +191,32 @@ jobs:
       - name: Test (bounded, streamed under a pty)
         shell: bash
         run: |
+          # `set +e` is load-bearing, not tidiness, and it has to come FIRST.
+          # GitHub runs `shell: bash` as
+          # `bash --noprofile --norc -e -o pipefail {0}`, so `-e` is ALREADY on
+          # and the `set -uo pipefail` below does not clear it. Without this
+          # line the failing subshell aborts the step *there*: `rc=$?` never
+          # runs and `swift_suite_verdict` is never called — which is the
+          # entire reason this step goes through the harness at all rather than
+          # invoking the suite directly. Every diagnosis the block above
+          # promises (the 240s hang headline, `last test to start`, TRUNCATED,
+          # `Executed 0 tests`, signal 6) was therefore unreachable in CI for
+          # the whole of this workflow's life, so a hang and an ordinary
+          # assertion failure printed the same thing: `Process completed with
+          # exit code 1`, and nothing else (#1629).
+          #
+          # Measured on a probe run carrying a deliberately hanging test, not
+          # reasoned about: the step log ended at that test's `started.` line
+          # and went straight to `##[error]Process completed with exit code 1`,
+          # with not one line of the verdict in between.
+          #
+          # `|| true` on the subshell looks like an alternative and is not. It
+          # does let `rc=$?` run, but `$?` is then `true`'s status, so the real
+          # code is lost and the verdict would judge every failing run as 0 —
+          # silently downgrading a hang to a pass. `set +e` and
+          # `( … ) || rc=$?` are the only two spellings that keep the code;
+          # measured, all three ways.
+          set +e
           set -uo pipefail
           . tools/lib/swift-suite.sh
           log="$RUNNER_TEMP/swift-test.log"
@@ -275,9 +301,11 @@ jobs:
           # no check ran, no `::error::` line printed, and the images survived
           # only because the upload steps are `if: always()`. A step whose
           # entire purpose is to run assertions that fail cannot inherit
-          # abort-on-first-failure. (The `swift-test` step above has the same
-          # shape, where it silently swallows `swift_suite_verdict`'s
-          # diagnosis; filed as #1629, not fixed here.)
+          # abort-on-first-failure. (The `swift-test` step above has the
+          # same shape and now carries the same line for the same reason: for
+          # the whole of this workflow's life before #1629 it swallowed
+          # `swift_suite_verdict`'s diagnosis entirely, so a hang there was
+          # indistinguishable from an assertion failure.)
           set +e
           set -uo pipefail
           . tools/lib/swift-suite.sh
