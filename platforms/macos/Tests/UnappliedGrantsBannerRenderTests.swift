@@ -43,7 +43,7 @@ final class UnappliedGrantsBannerRenderTests: XCTestCase {
     /// Review button — with no dismiss control anywhere on it.
     func testSingleUnappliedGrantRenders() throws {
         assertSnapshot(of: try host([grant("claude-code", "Claude Code", installFailed)]),
-                       as: .image, named: "one-unapplied")
+                       as: .pinnedImage, named: "one-unapplied")
     }
 
     /// Two grants failing for DIFFERENT reasons — an install failure
@@ -55,7 +55,7 @@ final class UnappliedGrantsBannerRenderTests: XCTestCase {
         assertSnapshot(of: try host([
             grant("claude-code", "Claude Code", installFailed),
             grant("codex", "Codex", versionFloor),
-        ]), as: .image, named: "two-diagnoses")
+        ]), as: .pinnedImage, named: "two-diagnoses")
     }
 }
 
@@ -88,7 +88,11 @@ final class SessionListUnappliedGrantsWiringTests: XCTestCase {
         let view = SessionListView()
             .environmentObject(manager)
             .environmentObject(GasTownProvider())
-            .environmentObject(UpdateManager())
+            // Explicit, though `UpdateManager` now refuses to start Sparkle
+            // under XCTest regardless (#1530): this is the call site whose
+            // `true` default armed a modal NSAlert one second later and hung
+            // whichever unrelated test next spun the main run loop.
+            .environmentObject(UpdateManager(startingUpdater: false))
         let hosting = NSHostingView(rootView: view)
         hosting.appearance = NSAppearance(named: .darkAqua)
         hosting.frame = CGRect(x: 0, y: 0, width: SessionListView.panelWidth, height: 420)
@@ -105,7 +109,7 @@ final class SessionListUnappliedGrantsWiringTests: XCTestCase {
     }
 
     func testPanelShowsTheBannerWhenAGrantIsUnapplied() {
-        assertSnapshot(of: host(unapplied), as: .image, named: "panel-with-banner")
+        assertSnapshot(of: host(unapplied), as: .pinnedImage, named: "panel-with-banner")
     }
 
     /// Control: the same panel with a healthy snapshot draws no strip at
@@ -113,6 +117,6 @@ final class SessionListUnappliedGrantsWiringTests: XCTestCase {
     /// aggregate and nothing else.
     func testPanelShowsNoBannerWhenHealthy() {
         assertSnapshot(of: host(PermissionsSnapshot(mode: "ask", agents: [])),
-                       as: .image, named: "panel-healthy")
+                       as: .pinnedImage, named: "panel-healthy")
     }
 }
